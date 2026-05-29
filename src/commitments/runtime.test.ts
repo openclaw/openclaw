@@ -13,16 +13,32 @@ import {
 import { loadCommitmentStore } from "./store.js";
 import type { CommitmentExtractionBatchResult, CommitmentExtractionItem } from "./types.js";
 
-const runEmbeddedPiAgentMock = vi.hoisted(() => vi.fn());
+const runEmbeddedAgentMock = vi.hoisted(() => vi.fn());
 const resolveDefaultModelMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../agents/pi-embedded.js", () => ({
-  runEmbeddedPiAgent: runEmbeddedPiAgentMock,
+vi.mock("../agents/embedded-agent.js", () => ({
+  runEmbeddedAgent: runEmbeddedAgentMock,
 }));
 
 vi.mock("./model-selection.runtime.js", () => ({
   resolveCommitmentDefaultModelRef: resolveDefaultModelMock,
 }));
+
+function requireFirstEmbeddedAgentRequest(): {
+  provider?: string;
+  model?: string;
+  disableTools?: boolean;
+} {
+  const [call] = runEmbeddedAgentMock.mock.calls;
+  if (!call) {
+    throw new Error("expected embedded OpenClaw agent extraction request");
+  }
+  const [request] = call;
+  if (!request || typeof request !== "object" || Array.isArray(request)) {
+    throw new Error("expected embedded OpenClaw agent extraction request");
+  }
+  return request as { provider?: string; model?: string; disableTools?: boolean };
+}
 
 describe("commitment extraction runtime", () => {
   const tmpDirs: string[] = [];
@@ -30,7 +46,7 @@ describe("commitment extraction runtime", () => {
 
   afterEach(async () => {
     resetCommitmentExtractionRuntimeForTests();
-    runEmbeddedPiAgentMock.mockReset();
+    runEmbeddedAgentMock.mockReset();
     resolveDefaultModelMock.mockReset();
     vi.useRealTimers();
     vi.unstubAllEnvs();
@@ -176,7 +192,7 @@ describe("commitment extraction runtime", () => {
         },
       },
     };
-    runEmbeddedPiAgentMock.mockResolvedValue({
+    runEmbeddedAgentMock.mockResolvedValue({
       payloads: [{ text: '{"candidates":[]}' }],
     });
     resolveDefaultModelMock.mockReturnValue({
@@ -203,8 +219,8 @@ describe("commitment extraction runtime", () => {
 
     await expect(drainCommitmentExtractionQueue()).resolves.toBe(1);
     expect(resolveDefaultModelMock).toHaveBeenCalledWith({ cfg, agentId: "main" });
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    const request = runEmbeddedPiAgentMock.mock.calls[0]?.[0];
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+    const request = requireFirstEmbeddedAgentRequest();
     expect(request.provider).toBe("openai-codex");
     expect(request.model).toBe("gpt-5.5");
     expect(request.disableTools).toBe(true);

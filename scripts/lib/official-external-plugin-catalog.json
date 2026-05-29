@@ -45,7 +45,8 @@
         "install": {
           "npmSpec": "@openclaw/brave-plugin",
           "defaultChoice": "npm",
-          "minHostVersion": ">=2026.4.10"
+          "minHostVersion": ">=2026.4.10",
+          "allowInvalidConfigRecovery": true
         }
       }
     },
@@ -103,6 +104,24 @@
       }
     },
     {
+      "name": "@openclaw/diffs-language-pack",
+      "description": "OpenClaw diffs viewer syntax highlighting language pack",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "diffs-language-pack",
+          "label": "Diff Viewer Language Pack"
+        },
+        "install": {
+          "npmSpec": "@openclaw/diffs-language-pack",
+          "clawhubSpec": "clawhub:@openclaw/diffs-language-pack",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.5.27"
+        }
+      }
+    },
+    {
       "name": "@openclaw/google-meet",
       "description": "OpenClaw Google Meet participant plugin",
       "source": "official",
@@ -150,6 +169,23 @@
           "npmSpec": "@openclaw/memory-lancedb",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.4.10"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/openshell-sandbox",
+      "description": "OpenClaw OpenShell sandbox backend",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "openshell",
+          "label": "OpenShell Sandbox"
+        },
+        "install": {
+          "npmSpec": "@openclaw/openshell-sandbox",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.5.12-beta.1"
         }
       }
     },

@@ -47,6 +47,7 @@ function createBindingResolverTestPlugin(params: {
   id: ChannelId;
   config: Partial<ChannelPlugin["config"]>;
   resolveBindingAccountId?: NonNullable<ChannelPlugin["setup"]>["resolveBindingAccountId"];
+  forceAccountBinding?: boolean;
 }): BindingResolverTestPlugin {
   return {
     id: params.id,
@@ -56,6 +57,7 @@ function createBindingResolverTestPlugin(params: {
       selectionLabel: params.id,
       docsPath: `/channels/${params.id}`,
       blurb: "test stub.",
+      ...(params.forceAccountBinding ? { forceAccountBinding: true } : {}),
     },
     capabilities: { chatTypes: ["direct"] },
     config: {
@@ -93,6 +95,14 @@ vi.mock("../channels/plugins/bundled.js", () => {
       "telegram",
       createBindingResolverTestPlugin({ id: "telegram", config: { listAccountIds: () => [] } }),
     ],
+    [
+      "whatsapp",
+      createBindingResolverTestPlugin({
+        id: "whatsapp",
+        config: { listAccountIds: () => ["default", "biz"] },
+        forceAccountBinding: true,
+      }),
+    ],
   ]);
   return {
     getBundledChannelSetupPlugin: (channel: string) => {
@@ -118,6 +128,14 @@ describe("agents bind/unbind commands", () => {
     pluginRegistryMocks.listPluginContributionIds.mockClear();
   });
 
+  function firstWrittenConfig(): { bindings?: unknown } {
+    const call = writeConfigFileMock.mock.calls[0];
+    if (!call) {
+      throw new Error("expected config write");
+    }
+    return call[0] as { bindings?: unknown };
+  }
+
   it("lists all bindings by default", async () => {
     readConfigFileSnapshotMock.mockResolvedValue({
       ...baseConfigSnapshot,
@@ -131,9 +149,8 @@ describe("agents bind/unbind commands", () => {
 
     await agentsBindingsCommand({}, runtime);
 
-    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("main <- matrix"));
     expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining("ops <- telegram accountId=work"),
+      ["Routing bindings:", "- main <- matrix", "- ops <- telegram accountId=work"].join("\n"),
     );
   });
 
@@ -146,11 +163,25 @@ describe("agents bind/unbind commands", () => {
     await agentsBindCommand({ bind: ["telegram"] }, runtime);
 
     expect(writeConfigFileMock).toHaveBeenCalledTimes(1);
-    const writtenConfig = writeConfigFileMock.mock.calls[0]?.[0] as
-      | { bindings?: unknown }
-      | undefined;
+    const writtenConfig = firstWrittenConfig();
     expect(writtenConfig?.bindings).toStrictEqual([
       { type: "route", agentId: "main", match: { channel: "telegram" } },
+    ]);
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it("uses a wildcard account binding for multi-account channels", async () => {
+    readConfigFileSnapshotMock.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: {},
+    });
+
+    await agentsBindCommand({ bind: ["whatsapp"] }, runtime);
+
+    expect(writeConfigFileMock).toHaveBeenCalledTimes(1);
+    const writtenConfig = firstWrittenConfig();
+    expect(writtenConfig?.bindings).toStrictEqual([
+      { type: "route", agentId: "main", match: { channel: "whatsapp", accountId: "*" } },
     ]);
     expect(runtime.exit).not.toHaveBeenCalled();
   });
@@ -164,9 +195,7 @@ describe("agents bind/unbind commands", () => {
     await agentsBindCommand({ bind: ["external-chat:work"] }, runtime);
 
     expect(writeConfigFileMock).toHaveBeenCalledTimes(1);
-    const writtenConfig = writeConfigFileMock.mock.calls[0]?.[0] as
-      | { bindings?: unknown }
-      | undefined;
+    const writtenConfig = firstWrittenConfig();
     expect(writtenConfig?.bindings).toStrictEqual([
       {
         type: "route",
@@ -193,9 +222,7 @@ describe("agents bind/unbind commands", () => {
     await agentsUnbindCommand({ agent: "ops", all: true }, runtime);
 
     expect(writeConfigFileMock).toHaveBeenCalledTimes(1);
-    const writtenConfig = writeConfigFileMock.mock.calls[0]?.[0] as
-      | { bindings?: unknown }
-      | undefined;
+    const writtenConfig = firstWrittenConfig();
     expect(writtenConfig?.bindings).toStrictEqual([
       { agentId: "main", match: { channel: "matrix" } },
     ]);

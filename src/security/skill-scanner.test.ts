@@ -98,6 +98,7 @@ function normalizeSkillScanOptions(
     maxFiles?: number;
     maxFileBytes?: number;
     includeFiles?: readonly string[];
+    onlyIncludeFiles?: boolean;
     excludeTestFiles?: boolean;
   }>,
 ): SkillScanOptions | undefined {
@@ -108,6 +109,7 @@ function normalizeSkillScanOptions(
     ...(options.maxFiles != null ? { maxFiles: options.maxFiles } : {}),
     ...(options.maxFileBytes != null ? { maxFileBytes: options.maxFileBytes } : {}),
     ...(options.includeFiles ? { includeFiles: [...options.includeFiles] } : {}),
+    ...(options.onlyIncludeFiles != null ? { onlyIncludeFiles: options.onlyIncludeFiles } : {}),
     ...(options.excludeTestFiles != null ? { excludeTestFiles: options.excludeTestFiles } : {}),
   };
 }
@@ -131,6 +133,7 @@ type SummaryCase = {
     maxFiles?: number;
     maxFileBytes?: number;
     includeFiles?: readonly string[];
+    onlyIncludeFiles?: boolean;
     excludeTestFiles?: boolean;
   }>;
   expected: {
@@ -138,6 +141,7 @@ type SummaryCase = {
     critical?: number;
     warn?: number;
     info?: number;
+    truncated?: boolean;
     findingCount?: number;
     maxFindings?: number;
     expectedRuleId?: string;
@@ -529,7 +533,21 @@ describe("scanDirectoryWithSummary", () => {
       options: { maxFiles: 2 },
       expected: {
         scannedFiles: 2,
+        truncated: true,
         maxFindings: 2,
+      },
+    },
+    {
+      name: "does not mark scans truncated when file count exactly matches maxFiles",
+      files: {
+        "a.js": `const x = eval("a");`,
+        "b.js": `const x = eval("b");`,
+      },
+      options: { maxFiles: 2 },
+      expected: {
+        scannedFiles: 2,
+        truncated: false,
+        findingCount: 2,
       },
     },
     {
@@ -570,6 +588,21 @@ describe("scanDirectoryWithSummary", () => {
         expectedPresent: true,
       },
     },
+    {
+      name: "scans only included files when onlyIncludeFiles is set",
+      files: {
+        "entry.js": `export const ok = true;`,
+        "scripts/harness.js": `const x = eval("hack");`,
+      },
+      options: {
+        includeFiles: ["entry.js"],
+        onlyIncludeFiles: true,
+      },
+      expected: {
+        scannedFiles: 1,
+        findingCount: 0,
+      },
+    },
   ];
 
   it("summarizes directory scan results", async () => {
@@ -590,6 +623,9 @@ describe("scanDirectoryWithSummary", () => {
         }
         if (testCase.expected.info != null) {
           expect(summary.info).toBe(testCase.expected.info);
+        }
+        if (testCase.expected.truncated != null) {
+          expect(summary.truncated).toBe(testCase.expected.truncated);
         }
         if (testCase.expected.findingCount != null) {
           expect(summary.findings).toHaveLength(testCase.expected.findingCount);
@@ -626,7 +662,13 @@ describe("scanDirectoryWithSummary", () => {
     });
 
     try {
-      await expect(scanDirectoryWithSummary(root)).rejects.toMatchObject({ code: "EACCES" });
+      let thrown: unknown;
+      try {
+        await scanDirectoryWithSummary(root);
+      } catch (error) {
+        thrown = error;
+      }
+      expect((thrown as NodeJS.ErrnoException | undefined)?.code).toBe("EACCES");
     } finally {
       spy.mockRestore();
     }
@@ -660,7 +702,13 @@ describe("scanDirectoryWithSummary", () => {
     const spy = mockStatPermissionDeniedFor(filePath);
 
     try {
-      await expect(scanDirectory(root)).rejects.toMatchObject({ code: "EACCES" });
+      let thrown: unknown;
+      try {
+        await scanDirectory(root);
+      } catch (error) {
+        thrown = error;
+      }
+      expect((thrown as NodeJS.ErrnoException | undefined)?.code).toBe("EACCES");
     } finally {
       spy.mockRestore();
     }

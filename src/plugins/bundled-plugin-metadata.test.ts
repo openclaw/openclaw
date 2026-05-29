@@ -1,6 +1,9 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { expectNoReaddirSyncDuring } from "../test-utils/fs-scan-assertions.js";
+import { listGitTrackedFiles, toRepoRelativePath } from "../test-utils/repo-files.js";
 import { collectBundledChannelConfigs } from "./bundled-channel-config-metadata.js";
 import {
   type BundledPluginMetadata,
@@ -36,6 +39,7 @@ const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
   "diagnostics-otel",
   "diagnostics-prometheus",
   "diffs",
+  "diffs-language-pack",
   "file-transfer",
   "google-meet",
   "llm-task",
@@ -43,11 +47,13 @@ const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
   "memory-wiki",
   "openshell",
   "phone-control",
+  "policy",
   "skill-workshop",
   "talk-voice",
   "thread-ownership",
   "voice-call",
   "webhooks",
+  "workboard",
 ] as const;
 const EXPECTED_EMPTY_CONFIG_GATEWAY_STARTUP_PLUGIN_IDS = [
   "acpx",
@@ -131,13 +137,71 @@ function listRepoBundledPluginMetadata(): readonly BundledPluginMetadata[] {
 
 function listRepoBundledPluginManifestsUncached() {
   const bundledPluginsDir = path.join(repoRoot, "extensions");
+  return listRepoBundledPluginManifestDirs().flatMap((dirName) => {
+    const result = loadPluginManifest(path.join(bundledPluginsDir, dirName), false);
+    return result.ok ? [{ dirName, manifest: result.manifest }] : [];
+  });
+}
+
+function listRepoBundledPluginManifestDirs(): string[] {
+  const externalDirs = listExternalRepoBundledPluginManifestDirs();
+  if (externalDirs) {
+    return externalDirs;
+  }
+  const bundledPluginsDir = path.join(repoRoot, "extensions");
   return fs
     .readdirSync(bundledPluginsDir, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
-    .flatMap((entry) => {
-      const result = loadPluginManifest(path.join(bundledPluginsDir, entry.name), false);
-      return result.ok ? [{ dirName: entry.name, manifest: result.manifest }] : [];
-    });
+    .map((entry) => entry.name)
+    .toSorted();
+}
+
+function listExternalRepoBundledPluginManifestDirs(): string[] | null {
+  const manifestFiles =
+    listGitRepoBundledPluginManifestFiles() ?? listFindRepoBundledPluginManifestFiles();
+  if (!manifestFiles) {
+    return null;
+  }
+  return manifestFiles
+    .flatMap((file) => {
+      const match = /^extensions\/([^/]+)\/openclaw\.plugin\.json$/u.exec(file);
+      return match?.[1] ? [match[1]] : [];
+    })
+    .toSorted();
+}
+
+function listGitRepoBundledPluginManifestFiles(): string[] | null {
+  return listGitTrackedFiles({ repoRoot, pathspecs: "extensions/*/openclaw.plugin.json" });
+}
+
+function listFindRepoBundledPluginManifestFiles(): string[] | null {
+  const result = spawnSync(
+    "find",
+    [
+      path.join(repoRoot, "extensions"),
+      "-maxdepth",
+      "2",
+      "-type",
+      "f",
+      "-name",
+      "openclaw.plugin.json",
+    ],
+    {
+      cwd: repoRoot,
+      encoding: "utf8",
+      maxBuffer: 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"],
+    },
+  );
+  if (result.status !== 0) {
+    return null;
+  }
+  return result.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((file) => toRepoRelativePath(repoRoot, file))
+    .toSorted();
 }
 
 function listRepoBundledPluginManifests() {
@@ -261,6 +325,15 @@ function createInstalledPluginIndexForManifests(
 }
 
 describe("bundled plugin metadata", () => {
+  it("lists bundled plugin manifests without scanning extension directories in-process", () => {
+    expectNoReaddirSyncDuring(() => {
+      const manifests = listRepoBundledPluginManifestsUncached();
+
+      expect(manifests.length).toBeGreaterThan(0);
+      expect(manifests.every((entry) => entry.dirName.length > 0)).toBe(true);
+    });
+  });
+
   it(
     "matches the runtime metadata snapshot",
     { timeout: BUNDLED_PLUGIN_METADATA_TEST_TIMEOUT_MS },
@@ -453,9 +526,12 @@ describe("bundled plugin metadata", () => {
 
   it("keeps config schemas on all bundled plugin manifests", () => {
     for (const entry of listRepoBundledPluginMetadata()) {
-      expect(entry.manifest.configSchema).not.toBeNull();
-      expect(typeof entry.manifest.configSchema).toBe("object");
-      expect(Array.isArray(entry.manifest.configSchema)).toBe(false);
+      const { configSchema } = entry.manifest;
+      if (configSchema === null) {
+        throw new Error(`expected ${entry.manifest.id} config schema`);
+      }
+      expect(typeof configSchema).toBe("object");
+      expect(Array.isArray(configSchema)).toBe(false);
     }
   });
 
@@ -479,8 +555,8 @@ describe("bundled plugin metadata", () => {
       ({ manifest }) => manifest.id === "voice-call",
     );
 
-    expect(entry?.manifest.commandAliases).toContainEqual({ name: "voicecall" });
-    expect(entry?.manifest.activation?.onCommands).toContain("voicecall");
+    expect(entry?.manifest.commandAliases).toStrictEqual([{ name: "voicecall" }]);
+    expect(entry?.manifest.activation?.onCommands).toStrictEqual(["voicecall"]);
   });
 
   it("keeps empty-config Gateway startup narrower than declared startup sidecars", () => {
@@ -542,6 +618,22 @@ describe("bundled plugin metadata", () => {
     expectGeneratedPathResolution(tempRoot, path.join("dist", "extensions", "plugin", "index.js"));
   });
 
+  it("uses dist-runtime generated paths before source fallback when packaged dist is absent", () => {
+    const tempRoot = createGeneratedPluginTempRoot("openclaw-bundled-plugin-runtime-metadata-");
+    const pluginRoot = path.join(tempRoot, "extensions", "plugin");
+    const runtimePluginRoot = path.join(tempRoot, "dist-runtime", "extensions", "plugin");
+
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.mkdirSync(runtimePluginRoot, { recursive: true });
+    fs.writeFileSync(path.join(pluginRoot, "index.ts"), "export {};\n", "utf8");
+    fs.writeFileSync(path.join(runtimePluginRoot, "index.js"), "export {};\n", "utf8");
+
+    expectGeneratedPathResolution(
+      tempRoot,
+      path.join("dist-runtime", "extensions", "plugin", "index.js"),
+    );
+  });
+
   it("resolves plugin-local generated entry paths when the plugin dir is provided", () => {
     const tempRoot = createGeneratedPluginTempRoot("openclaw-bundled-plugin-metadata-local-");
     const pluginRoot = path.join(tempRoot, "extensions", "alpha");
@@ -562,6 +654,56 @@ describe("bundled plugin metadata", () => {
       "alpha",
       path.join("dist", "extensions", "alpha", "index.js"),
     );
+  });
+
+  it("keeps generated entry path resolution inside bundled plugin roots", () => {
+    const tempRoot = createGeneratedPluginTempRoot("openclaw-bundled-plugin-path-contained-");
+    const sourcePluginRoot = path.join(tempRoot, "extensions", "alpha");
+    const distPluginRoot = path.join(tempRoot, "dist", "extensions", "alpha");
+    const absoluteEscape = path.join(tempRoot, "absolute.js");
+    const absolutePluginEntry = path.join(sourcePluginRoot, "index.ts");
+
+    fs.mkdirSync(sourcePluginRoot, { recursive: true });
+    fs.mkdirSync(distPluginRoot, { recursive: true });
+    fs.writeFileSync(absolutePluginEntry, "export {};\n", "utf8");
+    fs.writeFileSync(path.join(tempRoot, "extensions", "escape.ts"), "export {};\n", "utf8");
+    fs.writeFileSync(
+      path.join(tempRoot, "dist", "extensions", "escape.js"),
+      "export {};\n",
+      "utf8",
+    );
+    fs.writeFileSync(absoluteEscape, "export {};\n", "utf8");
+
+    expect(
+      resolveBundledPluginGeneratedPath(
+        tempRoot,
+        {
+          source: absolutePluginEntry,
+          built: absolutePluginEntry,
+        },
+        "alpha",
+      ),
+    ).toBe(absolutePluginEntry);
+    expect(
+      resolveBundledPluginGeneratedPath(
+        tempRoot,
+        {
+          source: "../escape.ts",
+          built: "../escape.js",
+        },
+        "alpha",
+      ),
+    ).toBeNull();
+    expect(
+      resolveBundledPluginGeneratedPath(
+        tempRoot,
+        {
+          source: absoluteEscape,
+          built: absoluteEscape,
+        },
+        "alpha",
+      ),
+    ).toBeNull();
   });
 
   it("scans direct plugin-tree overrides and resolves generated paths from that scan dir", () => {
@@ -692,6 +834,38 @@ describe("bundled plugin metadata", () => {
         preferBuilt: true,
       }),
     ).toBe(path.join(distPluginRoot, "index.js"));
+  });
+
+  it("keeps bundled repo entry path resolution inside the plugin directory", () => {
+    const tempRoot = createGeneratedPluginTempRoot("openclaw-bundled-plugin-repo-contained-");
+    const pluginRoot = path.join(tempRoot, "extensions", "alpha");
+
+    writeJson(path.join(pluginRoot, "package.json"), {
+      name: "@openclaw/alpha",
+      version: "0.0.1",
+      openclaw: {
+        extensions: ["../escape.ts"],
+      },
+    });
+    writeJson(path.join(pluginRoot, "openclaw.plugin.json"), {
+      id: "alpha",
+      configSchema: { type: "object" },
+    });
+    fs.writeFileSync(path.join(tempRoot, "extensions", "escape.ts"), "export {};\n", "utf8");
+    fs.mkdirSync(path.join(tempRoot, "dist", "extensions"), { recursive: true });
+    fs.writeFileSync(
+      path.join(tempRoot, "dist", "extensions", "escape.js"),
+      "export {};\n",
+      "utf8",
+    );
+
+    expect(
+      resolveBundledPluginRepoEntryPath({
+        rootDir: tempRoot,
+        pluginId: "alpha",
+        preferBuilt: true,
+      }),
+    ).toBeNull();
   });
 
   it("merges runtime channel schema metadata with manifest-owned channel config fields", () => {

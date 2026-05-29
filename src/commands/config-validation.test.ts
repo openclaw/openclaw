@@ -46,7 +46,11 @@ describe("requireValidConfigSnapshot", () => {
   }
 
   function requireFirstLog(runtime: ReturnType<typeof createRuntime>): string {
-    const [message] = runtime.log.mock.calls[0] ?? [];
+    const [call] = runtime.log.mock.calls;
+    if (!call) {
+      throw new Error("expected runtime log message");
+    }
+    const [message] = call;
     if (message === undefined) {
       throw new Error("expected runtime log message");
     }
@@ -77,9 +81,13 @@ describe("requireValidConfigSnapshot", () => {
     expect(config).toEqual({ plugins: {} });
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
-    const logMessage = requireFirstLog(runtime);
-    expect(logMessage).toContain("Plugin compatibility: 1 notice.");
-    expect(logMessage).toContain("legacy-plugin still uses legacy before_agent_start");
+    expect(requireFirstLog(runtime)).toBe(
+      [
+        "Plugin compatibility: 1 notice.",
+        "- legacy-plugin still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
+        "Review: openclaw doctor",
+      ].join("\n"),
+    );
   });
 
   it("blocks invalid config before emitting compatibility advice", async () => {
@@ -99,5 +107,55 @@ describe("requireValidConfigSnapshot", () => {
     expect(runtime.error).toHaveBeenCalled();
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(runtime.log).not.toHaveBeenCalled();
+  });
+
+  it("replaces doctor fix advice for plugin packaging compiled-output failures", async () => {
+    readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: false,
+      config: {},
+      issues: [
+        {
+          path: "plugins.slots.memory",
+          message: "plugin not found: source-only-pack",
+        },
+      ],
+      warnings: [
+        {
+          path: "plugins",
+          message:
+            "plugin source-only-pack: installed plugin package requires compiled runtime output for TypeScript entry index.ts: expected ./dist/index.js. This is a plugin packaging issue, not a local config problem.",
+        },
+      ],
+      legacyIssues: [],
+    });
+    const runtime = createRuntime();
+
+    const config = await requireValidConfigSnapshot(runtime);
+
+    expect(config).toBeNull();
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("plugin not found"));
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Fix: This is a plugin packaging issue, not a local config problem.\nUpdate or reinstall the plugin after the publisher ships compiled JavaScript, or disable/uninstall the plugin until then.",
+    );
+    expect(runtime.error).not.toHaveBeenCalledWith("Fix: openclaw doctor --fix");
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("keeps doctor fix advice for normal invalid config failures", async () => {
+    readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: false,
+      config: {},
+      issues: [{ path: "gateway.mode", message: "Expected 'local' or 'remote'" }],
+      legacyIssues: [],
+    });
+    const runtime = createRuntime();
+
+    const config = await requireValidConfigSnapshot(runtime);
+
+    expect(config).toBeNull();
+    expect(runtime.error).toHaveBeenCalledWith("Fix: openclaw doctor --fix");
+    expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 });

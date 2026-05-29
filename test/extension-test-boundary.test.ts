@@ -3,6 +3,8 @@ import path from "node:path";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "../src/plugin-sdk/test-helpers/public-artifacts.js";
+import { expectNoReaddirSyncDuring } from "../src/test-utils/fs-scan-assertions.js";
+import { listGitTrackedFiles, toRepoRelativePath } from "../src/test-utils/repo-files.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const ALLOWED_EXTENSION_PUBLIC_SURFACE_BASENAMES = new Set(
@@ -18,7 +20,23 @@ const BROAD_PUBLIC_SOURCE_ARTIFACT_BASENAMES = new Set(["api.js", "runtime-api.j
 const ROOTDIR_BOUNDARY_CANARY_RE =
   /(^|\/)__rootdir_boundary_canary__\.(?:[cm]?ts|[cm]?js|tsx|jsx)$/u;
 
+function listGitFiles(dir: string): string[] | null {
+  const relativeRoot = toRepoRelativePath(repoRoot, dir);
+  if (!relativeRoot || relativeRoot.startsWith("..") || path.isAbsolute(relativeRoot)) {
+    return null;
+  }
+  return listGitTrackedFiles({ repoRoot, pathspecs: relativeRoot });
+}
+
 function walk(dir: string, entries: string[] = []): string[] {
+  const gitFiles = listGitFiles(dir);
+  if (gitFiles) {
+    entries.push(
+      ...gitFiles.filter((file) => file.endsWith(".test.ts") || file.endsWith(".test.tsx")),
+    );
+    return entries;
+  }
+
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const fullPath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
@@ -31,12 +49,25 @@ function walk(dir: string, entries: string[] = []): string[] {
     if (!entry.name.endsWith(".test.ts") && !entry.name.endsWith(".test.tsx")) {
       continue;
     }
-    entries.push(path.relative(repoRoot, fullPath).replaceAll(path.sep, "/"));
+    entries.push(toRepoRelativePath(repoRoot, fullPath));
   }
   return entries;
 }
 
 function walkCode(dir: string, entries: string[] = []): string[] {
+  const gitFiles = listGitFiles(dir);
+  if (gitFiles) {
+    entries.push(
+      ...gitFiles.filter((file) => {
+        if (!file.endsWith(".ts") && !file.endsWith(".tsx")) {
+          return false;
+        }
+        return !ROOTDIR_BOUNDARY_CANARY_RE.test(file);
+      }),
+    );
+    return entries;
+  }
+
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const fullPath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
@@ -49,7 +80,7 @@ function walkCode(dir: string, entries: string[] = []): string[] {
     if (!entry.name.endsWith(".ts") && !entry.name.endsWith(".tsx")) {
       continue;
     }
-    const relativePath = path.relative(repoRoot, fullPath).replaceAll(path.sep, "/");
+    const relativePath = toRepoRelativePath(repoRoot, fullPath);
     if (ROOTDIR_BOUNDARY_CANARY_RE.test(relativePath)) {
       continue;
     }
@@ -100,6 +131,15 @@ function getImportBasename(importPath: string): string {
 }
 
 function collectBundledPluginIds(): Set<string> {
+  const extensionFiles = listGitFiles(path.join(repoRoot, "extensions"));
+  if (extensionFiles) {
+    return new Set(
+      extensionFiles
+        .map((file) => /^extensions\/([^/]+)\//u.exec(file)?.[1])
+        .filter((pluginId): pluginId is string => Boolean(pluginId)),
+    );
+  }
+
   return new Set(
     fs
       .readdirSync(path.join(repoRoot, "extensions"), { withFileTypes: true })
@@ -145,6 +185,18 @@ function isAllowedCoreContractSuite(file: string, imports: readonly string[]): b
 }
 
 describe("non-extension test boundaries", () => {
+  it("lists boundary scan files from git without walking repo roots", () => {
+    expectNoReaddirSyncDuring(() => {
+      const srcTests = walk(path.join(repoRoot, "src"));
+      const srcCode = walkCode(path.join(repoRoot, "src"));
+      const pluginIds = collectBundledPluginIds();
+
+      expect(srcTests.length).toBeGreaterThan(0);
+      expect(srcCode.length).toBeGreaterThan(0);
+      expect(pluginIds.size).toBeGreaterThan(0);
+    });
+  });
+
   it("keeps plugin-owned behavior suites under the bundled plugin tree", () => {
     const testFiles = [
       ...walk(path.join(repoRoot, "src")),

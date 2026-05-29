@@ -28,6 +28,7 @@ type DispatchReplyWithBufferedBlockDispatcherResult = Awaited<
 >;
 type DeliverRepliesFn = typeof import("./bot/delivery.js").deliverReplies;
 type DeliverRepliesParams = Parameters<DeliverRepliesFn>[0];
+type LoadModelCatalogFn = typeof import("openclaw/plugin-sdk/agent-runtime").loadModelCatalog;
 type MatchPluginCommandFn = typeof import("./bot-native-commands.runtime.js").matchPluginCommand;
 
 const dispatchReplyResult: DispatchReplyWithBufferedBlockDispatcherResult = {
@@ -52,6 +53,16 @@ const sessionMocks = vi.hoisted(() => ({
 }));
 const commandAuthMocks = vi.hoisted(() => ({
   resolveCommandArgMenu: vi.fn(),
+}));
+const agentRuntimeMocks = vi.hoisted(() => ({
+  loadModelCatalog: vi.fn<LoadModelCatalogFn>(async () => [
+    {
+      provider: "openai",
+      id: "gpt-5.5",
+      name: "GPT-5.5",
+      reasoning: true,
+    },
+  ]),
 }));
 const pluginRuntimeMocks = vi.hoisted(() => ({
   executePluginCommand: vi.fn(async () => ({ text: "ok" })),
@@ -167,6 +178,15 @@ vi.mock("openclaw/plugin-sdk/command-auth-native", async () => {
   return {
     ...actual,
     resolveCommandArgMenu: commandAuthMocks.resolveCommandArgMenu,
+  };
+});
+vi.mock("openclaw/plugin-sdk/agent-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/agent-runtime")>(
+    "openclaw/plugin-sdk/agent-runtime",
+  );
+  return {
+    ...actual,
+    loadModelCatalog: agentRuntimeMocks.loadModelCatalog,
   };
 });
 vi.mock("./bot-native-commands.runtime.js", async () => {
@@ -456,6 +476,14 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function firstMockArg(mockFn: ReturnType<typeof vi.fn>, label: string, callIndex = 0): unknown {
+  const call = mockFn.mock.calls.at(callIndex);
+  if (!call) {
+    throw new Error(`expected ${label} call ${callIndex}`);
+  }
+  return call.at(0);
+}
+
 function expectRecordFields(
   value: unknown,
   expected: Record<string, unknown>,
@@ -524,6 +552,14 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     persistentBindingMocks.ensureConfiguredBindingRouteReady.mockClear();
     persistentBindingMocks.ensureConfiguredBindingRouteReady.mockResolvedValue({ ok: true });
     commandAuthMocks.resolveCommandArgMenu.mockClear();
+    agentRuntimeMocks.loadModelCatalog.mockClear().mockResolvedValue([
+      {
+        provider: "openai",
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        reasoning: true,
+      },
+    ]);
     sessionMocks.loadSessionStore.mockClear().mockReturnValue({});
     sessionMocks.recordSessionMetaFromInbound.mockClear().mockResolvedValue(undefined);
     sessionMocks.resolveAndPersistSessionFile.mockClear().mockImplementation(async (params) => {
@@ -701,6 +737,36 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
   });
 
+  it("hydrates runtime catalog metadata for thinking menu defaults", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5" },
+        },
+      },
+    } as OpenClawConfig;
+    sessionMocks.loadSessionStore.mockReturnValue({});
+
+    const { handler, sendMessage } = registerAndResolveCommandHandler({
+      commandName: "think",
+      cfg,
+      allowFrom: ["*"],
+    });
+    await handler(createTelegramPrivateCommandContext());
+
+    expect(agentRuntimeMocks.loadModelCatalog).toHaveBeenCalledWith({
+      config: cfg,
+    });
+    expectSendMessageCall({
+      sendMessage,
+      chatId: 100,
+      textIncludes: "Current thinking level: medium.\nChoose level for /think.",
+      requireReplyMarkup: true,
+      label: "runtime catalog thinking menu",
+    });
+    expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+  });
+
   it("uses target model thinking defaults before global thinking defaults", async () => {
     const cfg = {
       agents: {
@@ -809,7 +875,13 @@ describe("registerTelegramNativeCommands — session metadata", () => {
 
     expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
     const dispatcherOptions = requireRecord(
-      replyMocks.dispatchReplyWithBufferedBlockDispatcher.mock.calls[0]?.[0].dispatcherOptions,
+      requireRecord(
+        firstMockArg(
+          replyMocks.dispatchReplyWithBufferedBlockDispatcher,
+          "dispatchReplyWithBufferedBlockDispatcher",
+        ),
+        "dispatch reply params",
+      ).dispatcherOptions,
       "dispatcher options",
     );
     expect(dispatcherOptions.beforeDeliver).toBeTypeOf("function");
@@ -843,7 +915,7 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     });
     await handler(createTelegramPrivateCommandContext());
 
-    const deliveredCall = deliveryMocks.deliverReplies.mock.calls[0]?.[0] as
+    const deliveredCall = firstMockArg(deliveryMocks.deliverReplies, "deliverReplies") as
       | DeliverRepliesParams
       | undefined;
     const deliveredPayload = deliveredCall?.replies?.[0];
@@ -912,7 +984,7 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     });
     await handler(createTelegramPrivateCommandContext());
 
-    const deliveredCall = deliveryMocks.deliverReplies.mock.calls[0]?.[0] as
+    const deliveredCall = firstMockArg(deliveryMocks.deliverReplies, "deliverReplies") as
       | DeliverRepliesParams
       | undefined;
     const deliveryParams = requireValue(deliveredCall, "silent error delivery params");
@@ -1215,6 +1287,7 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     sessionMocks.resolveStorePath.mockReturnValue("/tmp/openclaw-sessions/sessions.json");
     sessionMocks.loadSessionStore.mockReturnValue({
       "agent:main:telegram:group:-1001234567890:topic:42": {
+        authProfileOverride: "openai-codex:owner@example.com",
         sessionId: "sess-topic",
         updatedAt: 1,
       },
@@ -1250,7 +1323,7 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     );
 
     expectRecordFields(
-      sessionMocks.resolveAndPersistSessionFile.mock.calls[0]?.[0],
+      firstMockArg(sessionMocks.resolveAndPersistSessionFile, "resolveAndPersistSessionFile"),
       {
         sessionId: "sess-topic",
         sessionKey: "agent:main:telegram:group:-1001234567890:topic:42",
@@ -1266,6 +1339,7 @@ describe("registerTelegramNativeCommands — session metadata", () => {
         sessionKey: "agent:main:telegram:group:-1001234567890:topic:42",
         sessionId: "sess-topic",
         sessionFile: path.resolve("/tmp/openclaw-sessions", "sess-topic-topic-42.jsonl"),
+        authProfileId: "openai-codex:owner@example.com",
         messageThreadId: 42,
       },
       "plugin command params",
@@ -1302,7 +1376,9 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     await handler(createTelegramPrivateCommandContext({ match: "status" }));
 
     const deliveryCall = requireValue(
-      deliveryMocks.deliverReplies.mock.calls[0]?.[0],
+      firstMockArg(deliveryMocks.deliverReplies, "deliverReplies") as
+        | DeliverRepliesParams
+        | undefined,
       "empty response delivery params",
     );
     expect(deliveryCall.replies).toEqual([{ text: "No response generated. Please try again." }]);

@@ -36,11 +36,39 @@ vi.mock("openclaw/plugin-sdk/provider-http", () => ({
 function requireOpenRouterPostBody(): {
   messages?: Array<{ content?: unknown }>;
 } {
-  const request = postJsonRequestMock.mock.calls[0]?.[0];
-  if (!request) {
+  const request = requireOpenRouterPostRequest();
+  return request.body as { messages?: Array<{ content?: unknown }> };
+}
+
+function requireOpenRouterPostRequest(): Record<string, unknown> {
+  const [call] = postJsonRequestMock.mock.calls;
+  if (!call) {
     throw new Error("expected OpenRouter image generation request");
   }
-  return request.body as { messages?: Array<{ content?: unknown }> };
+  const [request] = call;
+  if (!request || typeof request !== "object" || Array.isArray(request)) {
+    throw new Error("expected OpenRouter image generation request");
+  }
+  return request as Record<string, unknown>;
+}
+
+function requireOpenRouterConfigRequest(): Record<string, unknown> {
+  const [call] = resolveProviderHttpRequestConfigMock.mock.calls;
+  if (!call) {
+    throw new Error("expected OpenRouter image config request");
+  }
+  const [request] = call;
+  if (!request || typeof request !== "object" || Array.isArray(request)) {
+    throw new Error("expected OpenRouter image config request");
+  }
+  return request;
+}
+
+function requireHeaders(value: unknown): Headers {
+  if (!(value instanceof Headers)) {
+    throw new Error("expected OpenRouter image request headers");
+  }
+  return value;
 }
 
 function requireGeneratedImage(
@@ -114,20 +142,22 @@ describe("openrouter image generation provider", () => {
           providers: {
             openrouter: {
               baseUrl: "https://custom.openrouter.test/api/v1",
+              models: [],
             },
           },
         },
-      } as never,
+      },
     });
 
     expect(resolveApiKeyForProviderMock).toHaveBeenCalledOnce();
-    expect(resolveApiKeyForProviderMock.mock.calls[0]?.[0]).toEqual({
+    expect(resolveApiKeyForProviderMock).toHaveBeenCalledWith({
       provider: "openrouter",
       cfg: {
         models: {
           providers: {
             openrouter: {
               baseUrl: "https://custom.openrouter.test/api/v1",
+              models: [],
             },
           },
         },
@@ -136,7 +166,7 @@ describe("openrouter image generation provider", () => {
       store: undefined,
     });
     expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledOnce();
-    expect(resolveProviderHttpRequestConfigMock.mock.calls[0]?.[0]).toEqual({
+    expect(requireOpenRouterConfigRequest()).toEqual({
       baseUrl: "https://custom.openrouter.test/api/v1",
       defaultBaseUrl: "https://openrouter.ai/api/v1",
       allowPrivateNetwork: false,
@@ -150,19 +180,16 @@ describe("openrouter image generation provider", () => {
       transport: "http",
     });
     expect(postJsonRequestMock).toHaveBeenCalledOnce();
-    const request = postJsonRequestMock.mock.calls[0]?.[0];
-    if (!request) {
-      throw new Error("expected OpenRouter image generation request");
-    }
-    expect(request.headers).toBeInstanceOf(Headers);
-    expect(Object.fromEntries(request.headers.entries())).toEqual({
+    const request = requireOpenRouterPostRequest();
+    const headers = requireHeaders(request.headers);
+    expect(Object.fromEntries(headers.entries())).toEqual({
       authorization: "Bearer openrouter-key",
       "http-referer": "https://openclaw.ai",
       "x-openrouter-title": "OpenClaw",
     });
     expect(request).toEqual({
       url: "https://custom.openrouter.test/api/v1/chat/completions",
-      headers: request.headers,
+      headers,
       body: {
         model: "google/gemini-3.1-flash-image-preview",
         messages: [
@@ -188,6 +215,44 @@ describe("openrouter image generation provider", () => {
     expect(image.buffer.toString()).toBe("png-one");
     expect(image.mimeType).toBe("image/png");
     expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("uses a 180s default timeout when no request timeout is provided", async () => {
+    const release = vi.fn(async () => {});
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                images: [
+                  {
+                    imageUrl: {
+                      url: `data:image/png;base64,${Buffer.from("png-one").toString("base64")}`,
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+      },
+      release,
+    });
+
+    const provider = buildOpenRouterImageGenerationProvider();
+    await provider.generateImage({
+      provider: "openrouter",
+      model: "google/gemini-3.1-flash-image-preview",
+      prompt: "draw a sticker",
+      cfg: {},
+    });
+
+    expect(postJsonRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timeoutMs: 180_000,
+      }),
+    );
   });
 
   it("sends reference images as data URLs for edit-style requests", async () => {
@@ -219,7 +284,7 @@ describe("openrouter image generation provider", () => {
       model: "google/gemini-3.1-flash-image-preview",
       prompt: "turn this into watercolor",
       inputImages: [{ buffer: Buffer.from("source-image"), mimeType: "image/png" }],
-      cfg: {} as never,
+      cfg: {},
     });
 
     const body = requireOpenRouterPostBody();
@@ -235,6 +300,25 @@ describe("openrouter image generation provider", () => {
     const image = requireGeneratedImage(result, 0);
     expect(image.buffer.toString()).toBe("webp-one");
     expect(image.mimeType).toBe("image/webp");
+  });
+
+  it("wraps wrong-shape successful OpenRouter image responses", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({ choices: { message: {} } }),
+      },
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildOpenRouterImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "openrouter",
+        model: "google/gemini-3.1-flash-image-preview",
+        prompt: "bad shape",
+        cfg: {},
+      }),
+    ).rejects.toThrow("OpenRouter image generation response malformed");
   });
 
   it("extracts image fallbacks from string content and raw b64 parts", () => {
@@ -256,5 +340,22 @@ describe("openrouter image generation provider", () => {
     });
 
     expect(images.map((image) => image.buffer.toString())).toEqual(["png-inline", "raw-inline"]);
+  });
+
+  it("rejects invalid raw image parts in strict extraction mode", () => {
+    expect(() =>
+      extractOpenRouterImagesFromResponse(
+        {
+          choices: [
+            {
+              message: {
+                content: [{ b64_json: "not-base64!" }],
+              },
+            },
+          ],
+        },
+        { malformedResponseError: "OpenRouter image generation response malformed" },
+      ),
+    ).toThrow("OpenRouter image generation response malformed");
   });
 });

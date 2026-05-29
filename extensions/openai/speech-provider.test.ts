@@ -97,6 +97,64 @@ describe("buildOpenAISpeechProvider", () => {
     });
   });
 
+  it("drops malformed speech speed values", () => {
+    const provider = buildOpenAISpeechProvider();
+    const resolved = provider.resolveConfig?.({
+      cfg: {} as never,
+      timeoutMs: 30_000,
+      rawConfig: {
+        providers: {
+          openai: {
+            speed: 4.5,
+          },
+        },
+      },
+    });
+
+    expect(resolved?.speed).toBeUndefined();
+  });
+
+  it("passes custom endpoint speech speeds through", () => {
+    const provider = buildOpenAISpeechProvider();
+    const resolved = provider.resolveConfig?.({
+      cfg: {} as never,
+      timeoutMs: 30_000,
+      rawConfig: {
+        providers: {
+          openai: {
+            baseUrl: "https://tts.example.com/v1",
+            speed: 4.5,
+          },
+        },
+      },
+    });
+
+    expect(resolved?.speed).toBe(4.5);
+  });
+
+  it("uses talk base url overrides when validating speech speed", () => {
+    const provider = buildOpenAISpeechProvider();
+
+    const resolvedConfig = provider.resolveTalkConfig?.({
+      cfg: {} as never,
+      timeoutMs: 30_000,
+      baseTtsConfig: {
+        providers: {
+          openai: {
+            apiKey: "sk-base",
+          },
+        },
+      },
+      talkProviderConfig: {
+        baseUrl: "https://tts.example.com/v1",
+        speed: 4.5,
+      },
+    });
+
+    expect(resolvedConfig?.baseUrl).toBe("https://tts.example.com/v1");
+    expect(resolvedConfig?.speed).toBe(4.5);
+  });
+
   it("parses OpenAI directive tokens against the resolved base url", () => {
     const provider = buildOpenAISpeechProvider();
 
@@ -137,27 +195,24 @@ describe("buildOpenAISpeechProvider", () => {
   it("preserves talk responseFormat overrides", () => {
     const provider = buildOpenAISpeechProvider();
 
-    expect(
-      provider.resolveTalkConfig?.({
-        cfg: {} as never,
-        timeoutMs: 30_000,
-        baseTtsConfig: {
-          providers: {
-            openai: {
-              apiKey: "sk-base",
-              responseFormat: "mp3",
-            },
+    const resolvedConfig = provider.resolveTalkConfig?.({
+      cfg: {} as never,
+      timeoutMs: 30_000,
+      baseTtsConfig: {
+        providers: {
+          openai: {
+            apiKey: "sk-base",
+            responseFormat: "mp3",
           },
         },
-        talkProviderConfig: {
-          apiKey: "sk-talk",
-          responseFormat: " WAV ",
-        },
-      }),
-    ).toMatchObject({
-      apiKey: "sk-talk",
-      responseFormat: "wav",
+      },
+      talkProviderConfig: {
+        apiKey: "sk-talk",
+        responseFormat: " WAV ",
+      },
     });
+    expect(resolvedConfig?.apiKey).toBe("sk-talk");
+    expect(resolvedConfig?.responseFormat).toBe("wav");
   });
 
   it("maps Talk speak params onto OpenAI speech overrides", () => {
@@ -236,16 +291,41 @@ describe("buildOpenAISpeechProvider", () => {
     expect(result.voiceCompatible).toBe(false);
   });
 
+  it("applies the configured media byte cap to synthesized audio", async () => {
+    const provider = buildOpenAISpeechProvider();
+    globalThis.fetch = vi.fn(
+      async () => new Response(new Uint8Array(2048), { status: 200 }),
+    ) as unknown as typeof fetch;
+
+    await expect(
+      provider.synthesize({
+        text: "hello",
+        cfg: {
+          agents: {
+            defaults: {
+              mediaMaxMb: 0.001,
+            },
+          },
+        } as never,
+        providerConfig: {
+          apiKey: "sk-test",
+          model: "gpt-4o-mini-tts",
+          voice: "alloy",
+        },
+        target: "audio-file",
+        timeoutMs: 1_000,
+      }),
+    ).rejects.toThrow("OpenAI TTS audio response exceeds");
+  });
+
   it("applies provider overrides to telephony synthesis", async () => {
     const provider = buildOpenAISpeechProvider();
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
       const body = parseRequestBody(init);
-      expect(body).toMatchObject({
-        model: "tts-1",
-        voice: "nova",
-        speed: 1.25,
-        response_format: "pcm",
-      });
+      expect(body.model).toBe("tts-1");
+      expect(body.voice).toBe("nova");
+      expect(body.speed).toBe(1.25);
+      expect(body.response_format).toBe("pcm");
       return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
     });
     globalThis.fetch = fetchMock as unknown as typeof fetch;
@@ -298,12 +378,10 @@ describe("buildOpenAISpeechProvider", () => {
     const provider = buildOpenAISpeechProvider();
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
       const body = parseRequestBody(init);
-      expect(body).toMatchObject({
-        model: "custom-tts",
-        voice: "custom-voice",
-        lang: "en-US",
-        response_format: "mp3",
-      });
+      expect(body.model).toBe("custom-tts");
+      expect(body.voice).toBe("custom-voice");
+      expect(body.lang).toBe("en-US");
+      expect(body.response_format).toBe("mp3");
       return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
     });
     globalThis.fetch = fetchMock as unknown as typeof fetch;

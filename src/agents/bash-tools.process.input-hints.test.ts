@@ -29,7 +29,9 @@ function textOf(result: ProcessToolResult): string {
 }
 
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  expect(record).toBeDefined();
+  if (!record || typeof record !== "object") {
+    throw new Error("Expected record");
+  }
   const actual = record as Record<string, unknown>;
   for (const [key, value] of Object.entries(expected)) {
     expect(actual[key]).toEqual(value);
@@ -41,7 +43,7 @@ function installWritableStdin(
   state?: { writableEnded?: boolean; writableFinished?: boolean; destroyed?: boolean },
 ) {
   session.stdin = {
-    write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => cb?.(null)),
+    write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => cb?.(null)),
     end: vi.fn(),
     destroyed: state?.destroyed ?? false,
     writableEnded: state?.writableEnded,

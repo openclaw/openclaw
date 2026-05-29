@@ -206,7 +206,7 @@ describe("diffs tool", () => {
         before: "one\n",
         after: "two\n",
         mode: "file",
-        ttlSeconds: 1,
+        ttlSeconds: "1",
       });
       const filePath = requireString(readDetails(result).filePath, "filePath");
       await fs.access(filePath);
@@ -236,7 +236,8 @@ describe("diffs tool", () => {
         mode: "file",
       });
       const filePath = (result?.details as Record<string, unknown>).filePath as string;
-      await expect(fs.stat(filePath)).resolves.toBeDefined();
+      const stat = await fs.stat(filePath);
+      expect(stat.isFile()).toBe(true);
 
       vi.setSystemTime(new Date(now.getTime() + 61_000));
       await store.cleanupExpired();
@@ -262,8 +263,8 @@ describe("diffs tool", () => {
       after: "two\n",
       mode: "file",
       imageQuality: "hq",
-      imageScale: 2.4,
-      imageMaxWidth: 1100,
+      imageScale: "2.4",
+      imageMaxWidth: "1100",
     });
 
     expect((result?.details as Record<string, unknown>).fileQuality).toBe("hq");

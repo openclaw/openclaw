@@ -5,9 +5,11 @@ import {
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import { listProfilesForProvider } from "./auth-profiles/profile-list.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
+import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY } from "./tool-policy.js";
 import {
   hasSnapshotCapabilityAvailability,
   hasSnapshotProviderEnvAvailability,
@@ -79,12 +81,28 @@ export function mergeFactoryPolicyList(
   ...lists: Array<string[] | undefined>
 ): string[] | undefined {
   const merged = lists.flatMap((list) => (Array.isArray(list) ? list : []));
-  return merged.length > 0 ? Array.from(new Set(merged)) : undefined;
+  return merged.length > 0 ? uniqueStrings(merged) : undefined;
+}
+
+function mergeBuiltInFactoryAllowlist(...lists: Array<string[] | undefined>): string[] | undefined {
+  const allowlist = mergeFactoryPolicyList(...lists);
+  if (
+    !allowlist?.some(
+      (entry) => typeof entry === "string" && entry.trim() === DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
+    )
+  ) {
+    return allowlist;
+  }
+  const withoutDefaultPluginMarker = allowlist.filter(
+    (entry) => typeof entry !== "string" || entry.trim() !== DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
+  );
+  return uniqueStrings(["*", ...withoutDefaultPluginMarker]);
 }
 
 export function resolveImageToolFactoryAvailable(params: {
   config?: OpenClawConfig;
   agentDir?: string;
+  workspaceDir?: string;
   modelHasVision?: boolean;
   authStore?: AuthProfileStore;
 }): boolean {
@@ -96,6 +114,7 @@ export function resolveImageToolFactoryAvailable(params: {
   }
   const snapshot = loadCapabilityMetadataSnapshot({
     config: params.config,
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   });
   return (
     hasSnapshotCapabilityAvailability({
@@ -153,7 +172,10 @@ export function resolveOptionalMediaToolFactoryPlan(params: {
   toolDenylist?: string[];
 }): OptionalMediaToolFactoryPlan {
   const defaults = params.config?.agents?.defaults;
-  const toolAllowlist = mergeFactoryPolicyList(params.config?.tools?.allow, params.toolAllowlist);
+  const toolAllowlist = mergeBuiltInFactoryAllowlist(
+    params.config?.tools?.allow,
+    params.toolAllowlist,
+  );
   const toolDenylist = mergeFactoryPolicyList(params.config?.tools?.deny, params.toolDenylist);
   const allowImageGenerate = isToolAllowedByFactoryPolicy({
     toolName: "image_generate",

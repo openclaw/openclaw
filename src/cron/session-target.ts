@@ -9,7 +9,7 @@ export function assertSafeCronSessionTargetId(sessionId: string): string {
   if (!trimmed) {
     throw new Error(INVALID_CRON_SESSION_TARGET_ID_ERROR);
   }
-  if (trimmed.includes("/") || trimmed.includes("\\") || trimmed.includes("\0")) {
+  if (trimmed.includes("\0")) {
     throw new Error(INVALID_CRON_SESSION_TARGET_ID_ERROR);
   }
   return trimmed;
@@ -22,6 +22,17 @@ export function resolveCronSessionTargetSessionKey(
     return undefined;
   }
   return assertSafeCronSessionTargetId(sessionTarget.slice(8));
+}
+
+export function resolveCronCurrentSessionTarget(params: {
+  sessionTarget?: string | null;
+  sessionKey?: string | null;
+}): string | undefined {
+  if (params.sessionTarget !== "current") {
+    return params.sessionTarget ?? undefined;
+  }
+  const sessionKey = params.sessionKey?.trim();
+  return sessionKey ? `session:${assertSafeCronSessionTargetId(sessionKey)}` : "isolated";
 }
 
 export function resolveCronDeliverySessionKey(job: {

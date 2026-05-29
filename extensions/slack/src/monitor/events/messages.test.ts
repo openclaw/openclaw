@@ -89,6 +89,14 @@ function makeAssistantChangedEvent(overrides?: { user?: string }) {
       user: "U_BOT",
       text: "assistant wrapped user text",
       metadata: { event_payload: { user } },
+      assistant_thread: {
+        channel_id: "D1",
+        thread_ts: "123.000",
+        context: {
+          channel_id: "C123",
+          team_id: "T123",
+        },
+      },
     },
     previous_message: { ts: "123.456", user: "U_BOT" },
     event_ts: "123.789",
@@ -221,14 +229,13 @@ describe("registerSlackMessageEvents", () => {
     });
 
     expect(handleSlackMessage).toHaveBeenCalledTimes(1);
-    expect(handleSlackMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        subtype: "thread_broadcast",
-        channel: "C1",
-        user: "U1",
-      }),
-      { source: "message" },
-    );
+    const call = handleSlackMessage.mock.calls.at(0) as unknown as
+      | [{ subtype?: string; channel?: string; user?: string }, { source?: string }]
+      | undefined;
+    expect(call?.[0]?.subtype).toBe("thread_broadcast");
+    expect(call?.[0]?.channel).toBe("C1");
+    expect(call?.[0]?.user).toBe("U1");
+    expect(call?.[1]).toEqual({ source: "message" });
     expect(messageQueueMock).not.toHaveBeenCalled();
   });
 
@@ -240,17 +247,36 @@ describe("registerSlackMessageEvents", () => {
     });
 
     expect(handleSlackMessage).toHaveBeenCalledTimes(1);
-    expect(handleSlackMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "D1",
-        channel_type: "im",
-        user: "UREAL123",
-        text: "assistant wrapped user text",
-        ts: "123.456",
-        thread_ts: "123.000",
-      }),
-      { source: "message" },
-    );
+    const call = handleSlackMessage.mock.calls.at(0) as unknown as
+      | [
+          {
+            channel?: string;
+            channel_type?: string;
+            user?: string;
+            text?: string;
+            ts?: string;
+            thread_ts?: string;
+            assistant_thread?: Record<string, unknown>;
+          },
+          { source?: string },
+        ]
+      | undefined;
+    const message = call?.[0];
+    expect(message?.channel).toBe("D1");
+    expect(message?.channel_type).toBe("im");
+    expect(message?.user).toBe("UREAL123");
+    expect(message?.text).toBe("assistant wrapped user text");
+    expect(message?.ts).toBe("123.456");
+    expect(message?.thread_ts).toBe("123.000");
+    expect(message?.assistant_thread).toEqual({
+      channel_id: "D1",
+      thread_ts: "123.000",
+      context: {
+        channel_id: "C123",
+        team_id: "T123",
+      },
+    });
+    expect(call?.[1]).toEqual({ source: "message" });
     expect(messageQueueMock).not.toHaveBeenCalled();
   });
 

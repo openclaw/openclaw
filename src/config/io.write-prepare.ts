@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
+import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { isRecord } from "../utils.js";
 import { applyMergePatch } from "./merge-patch.js";
 import { normalizeAgentModelMapForConfig, normalizeAgentModelRefForConfig } from "./model-input.js";
@@ -104,11 +105,8 @@ function getPathValue(value: unknown, path: string[]): unknown {
   let current = value;
   for (const segment of path) {
     if (Array.isArray(current)) {
-      if (!isNumericPathSegment(segment)) {
-        return undefined;
-      }
-      const index = Number.parseInt(segment, 10);
-      if (!Number.isFinite(index) || index < 0 || index >= current.length) {
+      const index = parseArrayIndexPathSegment(segment);
+      if (index === undefined || index >= current.length) {
         return undefined;
       }
       current = current[index];
@@ -128,11 +126,8 @@ function setPathValue(value: unknown, path: string[], nextValue: unknown): unkno
   }
   const [head, ...tail] = path;
   if (Array.isArray(value)) {
-    if (!isNumericPathSegment(head)) {
-      return value;
-    }
-    const index = Number.parseInt(head, 10);
-    if (!Number.isFinite(index) || index < 0 || index >= value.length) {
+    const index = parseArrayIndexPathSegment(head);
+    if (index === undefined || index >= value.length) {
       return value;
     }
     const next = [...value];
@@ -181,11 +176,8 @@ function setPathValueCreatingParents(value: unknown, path: string[], nextValue: 
   }
   const [head, ...tail] = path;
   if (Array.isArray(value) || isNumericPathSegment(head)) {
-    if (!isNumericPathSegment(head)) {
-      return value;
-    }
-    const index = Number.parseInt(head, 10);
-    if (!Number.isFinite(index) || index < 0) {
+    const index = parseArrayIndexPathSegment(head);
+    if (index === undefined) {
       return value;
     }
     const next = Array.isArray(value) ? [...value] : [];
@@ -333,26 +325,86 @@ function normalizeAgentModelConfigForWrite(value: unknown): unknown {
   return mutated ? next : value;
 }
 
-function normalizeAgentDefaultModelRefsForWrite(config: unknown): unknown {
-  const defaults = getPathValue(config, ["agents", "defaults"]);
-  if (!isRecord(defaults)) {
+const AGENT_MODEL_CONFIG_KEYS = [
+  "model",
+  "imageModel",
+  "imageGenerationModel",
+  "videoGenerationModel",
+  "musicGenerationModel",
+  "voiceModel",
+  "pdfModel",
+] as const;
+
+function normalizeModelConfigPathForWrite(config: unknown, path: string[]): unknown {
+  const value = getPathValue(config, path);
+  if (value === undefined) {
+    return config;
+  }
+  const normalizedModel = normalizeAgentModelConfigForWrite(value);
+  return normalizedModel !== value ? setPathValue(config, path, normalizedModel) : config;
+}
+
+function normalizeModelStringPathForWrite(config: unknown, path: string[]): unknown {
+  const value = getPathValue(config, path);
+  if (typeof value !== "string") {
+    return config;
+  }
+  const normalized = normalizeAgentModelRefForConfig(value);
+  return normalized !== value ? setPathValue(config, path, normalized) : config;
+}
+
+function normalizeAgentModelRefsAtPathForWrite(config: unknown, path: string[]): unknown {
+  const agent = getPathValue(config, path);
+  if (!isRecord(agent)) {
     return config;
   }
 
   let next = config;
-  if (Object.prototype.hasOwnProperty.call(defaults, "model")) {
-    const normalizedModel = normalizeAgentModelConfigForWrite(defaults.model);
-    if (normalizedModel !== defaults.model) {
-      next = setPathValue(next, ["agents", "defaults", "model"], normalizedModel);
-    }
+  for (const key of AGENT_MODEL_CONFIG_KEYS) {
+    next = normalizeModelConfigPathForWrite(next, [...path, key]);
   }
-  if (isRecord(defaults.models)) {
-    const normalizedModels = normalizeAgentModelMapForConfig(defaults.models);
-    if (normalizedModels !== defaults.models) {
-      next = setPathValue(next, ["agents", "defaults", "models"], normalizedModels);
+  next = normalizeModelStringPathForWrite(next, [...path, "heartbeat", "model"]);
+  next = normalizeModelConfigPathForWrite(next, [...path, "subagents", "model"]);
+  next = normalizeModelStringPathForWrite(next, [...path, "compaction", "model"]);
+  next = normalizeModelStringPathForWrite(next, [...path, "compaction", "memoryFlush", "model"]);
+
+  const models = getPathValue(next, [...path, "models"]);
+  if (isRecord(models)) {
+    const normalizedModels = normalizeAgentModelMapForConfig(models);
+    if (normalizedModels !== models) {
+      next = setPathValue(next, [...path, "models"], normalizedModels);
     }
   }
   return next;
+}
+
+function normalizeAgentListModelRefsForWrite(config: unknown): unknown {
+  const list = getPathValue(config, ["agents", "list"]);
+  if (!Array.isArray(list)) {
+    return config;
+  }
+
+  let mutated = false;
+  const nextList = list.map((agent) => {
+    if (!isRecord(agent)) {
+      return agent;
+    }
+
+    const normalized = normalizeAgentModelRefsAtPathForWrite({ agent }, ["agent"]) as {
+      agent: unknown;
+    };
+    if (normalized.agent !== agent) {
+      mutated = true;
+      return normalized.agent;
+    }
+    return agent;
+  });
+
+  return mutated ? setPathValue(config, ["agents", "list"], nextList) : config;
+}
+
+function normalizeToolsModelRefsForWrite(config: unknown): unknown {
+  return normalizeModelConfigPathForWrite(config, ["tools", "subagents", "model"]);
 }
 
 function normalizeModelProviderCatalogRefsForWrite(config: unknown): unknown {
@@ -395,7 +447,13 @@ function normalizeModelProviderCatalogRefsForWrite(config: unknown): unknown {
 }
 
 function normalizeModelRefsForWrite(config: unknown): unknown {
-  return normalizeModelProviderCatalogRefsForWrite(normalizeAgentDefaultModelRefsForWrite(config));
+  return normalizeModelProviderCatalogRefsForWrite(
+    normalizeToolsModelRefsForWrite(
+      normalizeAgentListModelRefsForWrite(
+        normalizeAgentModelRefsAtPathForWrite(config, ["agents", "defaults"]),
+      ),
+    ),
+  );
 }
 
 function preserveUntouchedIncludes(params: {
@@ -423,11 +481,8 @@ function hasPathValue(value: unknown, path: readonly string[]): boolean {
   }
   const [head, ...tail] = path;
   if (Array.isArray(value)) {
-    if (!isNumericPathSegment(head)) {
-      return false;
-    }
-    const index = Number.parseInt(head, 10);
-    if (!Number.isFinite(index) || index < 0 || index >= value.length) {
+    const index = parseArrayIndexPathSegment(head);
+    if (index === undefined || index >= value.length) {
       return false;
     }
     return tail.length === 0 || hasPathValue(value[index], tail);
@@ -455,8 +510,8 @@ function mergeMissingExplicitValues(
     let changed = false;
     const next = [...currentValue];
     for (const [key, childExplicitValue] of Object.entries(explicitValue)) {
-      const index = Number.parseInt(key, 10);
-      if (!Number.isFinite(index) || index < 0) {
+      const index = parseArrayIndexPathSegment(key);
+      if (index === undefined) {
         continue;
       }
       if (index >= next.length || next[index] === undefined) {
@@ -622,7 +677,11 @@ export function formatConfigValidationFailure(pathLabel: string, issueMessage: s
 }
 
 function isNumericPathSegment(raw: string): boolean {
-  return /^[0-9]+$/.test(raw);
+  return parseArrayIndexPathSegment(raw) !== undefined;
+}
+
+function parseArrayIndexPathSegment(raw: string): number | undefined {
+  return parseConfigPathArrayIndex(raw);
 }
 
 function isWritePlainObject(value: unknown): value is Record<string, unknown> {
@@ -654,11 +713,8 @@ function unsetPathForWriteAt(
   const isLeaf = depth === pathSegments.length - 1;
 
   if (Array.isArray(value)) {
-    if (!isNumericPathSegment(segment)) {
-      return { changed: false, value };
-    }
-    const index = Number.parseInt(segment, 10);
-    if (!Number.isFinite(index) || index < 0 || index >= value.length) {
+    const index = parseArrayIndexPathSegment(segment);
+    if (index === undefined || index >= value.length) {
       return { changed: false, value };
     }
     if (isLeaf) {

@@ -9,9 +9,12 @@ const { BrowserProfileUnavailableError } = await import("../errors.js");
 const { registerBrowserBasicRoutes } = await import("./basic.js");
 
 function createExistingSessionProfileState(params?: {
-  isHttpReachable?: () => Promise<boolean>;
-  isTransportAvailable?: () => Promise<boolean>;
-  isReachable?: () => Promise<boolean>;
+  isHttpReachable?: (timeoutMs?: number) => Promise<boolean>;
+  isTransportAvailable?: (timeoutMs?: number) => Promise<boolean>;
+  isReachable?: (
+    timeoutMs?: number,
+    options?: { ephemeral?: boolean; signal?: AbortSignal },
+  ) => Promise<boolean>;
 }) {
   return {
     resolved: {
@@ -41,7 +44,19 @@ function createExistingSessionProfileState(params?: {
   };
 }
 
-function createManagedProfileState() {
+function readFirstReachabilityCall(
+  isReachable: ReturnType<typeof vi.fn>,
+): [number | undefined, { ephemeral?: boolean; signal?: AbortSignal } | undefined] {
+  const [call] = isReachable.mock.calls as Array<
+    [number | undefined, { ephemeral?: boolean; signal?: AbortSignal } | undefined]
+  >;
+  if (!call) {
+    throw new Error("expected reachability probe call");
+  }
+  return call;
+}
+
+function createManagedProfileState(profileOverrides?: Record<string, unknown>) {
   return {
     resolved: {
       enabled: true,
@@ -65,6 +80,7 @@ function createManagedProfileState() {
           headless: false,
           headlessSource: "default",
           attachOnly: false,
+          ...profileOverrides,
         },
         isHttpReachable: async () => false,
         isTransportAvailable: async () => false,
@@ -200,6 +216,19 @@ describe("basic browser routes", () => {
     expect(body.headlessSource).toBe("request");
   });
 
+  it("redacts CDP URL credentials from status responses", async () => {
+    const response = await callBasicRouteWithState({
+      query: { profile: "openclaw" },
+      state: createManagedProfileState({
+        cdpUrl: "http://openclaw:relay-token@127.0.0.1:18800",
+      }),
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = responseBodyRecord(response);
+    expect(body.cdpUrl).toBe("http://127.0.0.1:18800");
+  });
+
   it("maps existing-session status failures to JSON browser errors", async () => {
     const response = await callBasicRouteWithState({
       state: createExistingSessionProfileState({
@@ -276,7 +305,7 @@ describe("basic browser routes", () => {
     expect(ensureBrowserAvailable).not.toHaveBeenCalled();
   });
 
-  it("treats attach-only profiles as running when transport is available even if page reachability is false", async () => {
+  it("reports pageReady=false when Chrome MCP transport is up but page tools are unreachable", async () => {
     const response = await callBasicRouteWithState({
       state: createExistingSessionProfileState({
         isTransportAvailable: async () => true,
@@ -291,26 +320,115 @@ describe("basic browser routes", () => {
     expect(body.transport).toBe("chrome-mcp");
     expect(body.running).toBe(true);
     expect(body.cdpReady).toBe(true);
+    expect(body.pageReady).toBe(false);
   });
 
-  it("probes Chrome MCP transport only once for status", async () => {
+  it("reports pageReady=false when the page-reachability probe throws", async () => {
+    const response = await callBasicRouteWithState({
+      state: createExistingSessionProfileState({
+        isTransportAvailable: async () => true,
+        isReachable: async () => {
+          throw new Error('Chrome MCP "list_pages" timed out after 5000ms.');
+        },
+      }),
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = responseBodyRecord(response);
+    expect(body.cdpReady).toBe(true);
+    expect(body.pageReady).toBe(false);
+  });
+
+  it("reports pageReady=true when both transport and page tools succeed", async () => {
     const isHttpReachable = vi.fn(async () => true);
     const isTransportAvailable = vi.fn(async () => true);
+    const isReachable = vi.fn(async () => true);
 
     const response = await callBasicRouteWithState({
       state: createExistingSessionProfileState({
         isHttpReachable,
         isTransportAvailable,
+        isReachable,
       }),
     });
 
     expect(response.statusCode).toBe(200);
     expect(isTransportAvailable).toHaveBeenCalledTimes(1);
     expect(isTransportAvailable).toHaveBeenCalledWith(5_000);
+    const [timeoutMs, reachabilityOptions] = readFirstReachabilityCall(isReachable);
+    expect(timeoutMs).toBeGreaterThan(0);
+    expect(timeoutMs).toBeLessThanOrEqual(7_000);
+    expect(reachabilityOptions?.ephemeral).toBe(true);
+    expect(reachabilityOptions?.signal).toBeInstanceOf(AbortSignal);
     expect(isHttpReachable).not.toHaveBeenCalled();
     const body = responseBodyRecord(response);
     expect(body.cdpHttp).toBe(true);
     expect(body.cdpReady).toBe(true);
+    expect(body.pageReady).toBe(true);
     expect(body.running).toBe(true);
+  });
+
+  it("keeps Chrome MCP page-readiness inside the status budget", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const isReachable = vi.fn(async () => true);
+    try {
+      const response = await callBasicRouteWithState({
+        state: createExistingSessionProfileState({
+          isTransportAvailable: async () => {
+            vi.setSystemTime(4_000);
+            return true;
+          },
+          isReachable,
+        }),
+      });
+
+      expect(response.statusCode).toBe(200);
+      const [timeoutMs, reachabilityOptions] = readFirstReachabilityCall(isReachable);
+      expect(timeoutMs).toBe(4_000);
+      expect(reachabilityOptions?.ephemeral).toBe(true);
+      expect(reachabilityOptions?.signal).toBeInstanceOf(AbortSignal);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("page-readiness probe runs in ephemeral mode so status does not seed a cached session", async () => {
+    const isReachable = vi.fn<
+      (
+        timeoutMs?: number,
+        options?: { ephemeral?: boolean; signal?: AbortSignal },
+      ) => Promise<boolean>
+    >(async () => true);
+
+    await callBasicRouteWithState({
+      state: createExistingSessionProfileState({
+        isTransportAvailable: async () => true,
+        isReachable,
+      }),
+    });
+
+    expect(isReachable).toHaveBeenCalledTimes(1);
+    const [, reachabilityOptions] = readFirstReachabilityCall(isReachable);
+    expect(reachabilityOptions?.ephemeral).toBe(true);
+    expect(reachabilityOptions?.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("skips the page-reachability probe when transport is unavailable", async () => {
+    const isReachable = vi.fn(async () => true);
+
+    const response = await callBasicRouteWithState({
+      state: createExistingSessionProfileState({
+        isTransportAvailable: async () => false,
+        isReachable,
+      }),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(isReachable).not.toHaveBeenCalled();
+    const body = responseBodyRecord(response);
+    expect(body.cdpReady).toBe(false);
+    expect(body.pageReady).toBe(false);
+    expect(body.running).toBe(false);
   });
 });

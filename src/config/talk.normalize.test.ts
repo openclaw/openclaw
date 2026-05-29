@@ -43,10 +43,12 @@ describe("talk normalization", () => {
           },
         },
         model: "gpt-realtime",
-        voice: "alloy",
+        speakerVoice: "alloy",
+        speakerVoiceId: "voice-123",
         mode: "realtime",
         transport: "webrtc",
         brain: "agent-consult",
+        consultRouting: "force-agent-consult",
       },
       interruptOnSpeech: true,
     });
@@ -67,10 +69,12 @@ describe("talk normalization", () => {
           },
         },
         model: "gpt-realtime",
-        voice: "alloy",
+        speakerVoice: "alloy",
+        speakerVoiceId: "voice-123",
         mode: "realtime",
         transport: "webrtc",
         brain: "agent-consult",
+        consultRouting: "force-agent-consult",
       },
       interruptOnSpeech: true,
     });
@@ -140,16 +144,27 @@ describe("talk normalization", () => {
         providers: {
           openai: {
             model: "gpt-realtime",
-            voice: "alloy",
+            speakerVoice: "alloy",
           },
         },
         instructions: " Speak with crisp diction. ",
       },
     });
 
-    expect(payload?.realtime).toMatchObject({
-      provider: "openai",
-      instructions: "Speak with crisp diction.",
+    expect(payload?.realtime?.provider).toBe("openai");
+    expect(payload?.realtime?.instructions).toBe("Speak with crisp diction.");
+  });
+
+  it("maps legacy realtime voice to speakerVoice while preserving legacy output", () => {
+    const normalized = normalizeTalkSection({
+      realtime: {
+        voice: " alloy ",
+      },
+    });
+
+    expect(normalized?.realtime).toEqual({
+      speakerVoice: "alloy",
+      voice: "alloy",
     });
   });
 

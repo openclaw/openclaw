@@ -1,7 +1,8 @@
+import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../../runtime-api.js";
 import type { GraphThreadMessage } from "../graph-thread.js";
-import { _resetThreadParentContextCachesForTest } from "../thread-parent-context.js";
+import { resetThreadParentContextCachesForTest } from "../thread-parent-context.js";
 import "./message-handler-mock-support.test-support.js";
 import { getRuntimeApiMockState } from "./message-handler-mock-support.test-support.js";
 import { createMSTeamsMessageHandler } from "./message-handler.js";
@@ -84,6 +85,11 @@ describe("msteams monitor handler authz", () => {
     cfg: OpenClawConfig,
     options: {
       hasControlCommand?: PluginRuntime["channel"]["text"]["hasControlCommand"];
+      isControlCommandMessage?: PluginRuntime["channel"]["commands"]["isControlCommandMessage"];
+      shouldComputeCommandAuthorized?: PluginRuntime["channel"]["commands"]["shouldComputeCommandAuthorized"];
+      shouldHandleTextCommands?: PluginRuntime["channel"]["commands"]["shouldHandleTextCommands"];
+      createInboundDebouncer?: PluginRuntime["channel"]["debounce"]["createInboundDebouncer"];
+      resolveInboundDebounceMs?: PluginRuntime["channel"]["debounce"]["resolveInboundDebounceMs"];
     } = {},
   ) {
     const readAllowFromStore = vi.fn(async () => ["attacker-aad"]);
@@ -100,6 +106,11 @@ describe("msteams monitor handler authz", () => {
         accountId: "default",
       })),
       hasControlCommand: options.hasControlCommand,
+      isControlCommandMessage: options.isControlCommandMessage,
+      shouldComputeCommandAuthorized: options.shouldComputeCommandAuthorized,
+      shouldHandleTextCommands: options.shouldHandleTextCommands,
+      createInboundDebouncer: options.createInboundDebouncer,
+      resolveInboundDebounceMs: options.resolveInboundDebounceMs,
     });
   }
 
@@ -110,7 +121,7 @@ describe("msteams monitor handler authz", () => {
     graphThreadMockState.fetchThreadReplies.mockReset();
     // Parent-context LRU + per-session dedupe are module-level; clear between
     // cases so stale parent fetches from earlier tests don't bleed in.
-    _resetThreadParentContextCachesForTest();
+    resetThreadParentContextCachesForTest();
   }
 
   function createThreadMessage(params: {
@@ -268,26 +279,41 @@ describe("msteams monitor handler authz", () => {
     const { deps } = createDeps(createThreadAllowlistConfig({ groupAllowFrom: ["alice-aad"] }));
     const handler = createMSTeamsMessageHandler(deps);
     await handler(createChannelThreadActivity({ attachments: [createQuoteAttachment()] }));
-    return runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mock.calls[0]?.[0]
-      ?.ctxPayload;
+    return firstSettledDispatch().ctxPayload;
   }
 
   function recordFromMockCall(value: unknown): Record<string, unknown> {
-    expect(value).toBeDefined();
+    if (!value || typeof value !== "object") {
+      throw new Error("Expected mock call record");
+    }
     return value as Record<string, unknown>;
   }
 
   function mockCallArg(mocked: unknown, callIndex: number, argIndex: number): unknown {
     const calls = (mocked as { mock?: { calls?: unknown[][] } }).mock?.calls;
-    expect(calls?.[callIndex]).toBeDefined();
-    return calls?.[callIndex]?.[argIndex];
+    const call = calls?.[callIndex];
+    if (!call) {
+      throw new Error(`Expected mock call at index ${callIndex}`);
+    }
+    return call[argIndex];
+  }
+
+  function firstSettledDispatch(): { ctxPayload?: unknown } {
+    const dispatched = mockCallArg(
+      runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher,
+      0,
+      0,
+    );
+    return recordFromMockCall(dispatched) as { ctxPayload?: unknown };
   }
 
   function logMeta(logFn: unknown, message: string): Record<string, unknown> {
     const calls = (logFn as { mock?: { calls?: Array<[unknown, unknown?]> } }).mock?.calls ?? [];
     const call = calls.find(([loggedMessage]) => loggedMessage === message);
-    expect(call).toBeDefined();
-    return recordFromMockCall(call?.[1]);
+    if (!call) {
+      throw new Error(`Expected log message: ${message}`);
+    }
+    return recordFromMockCall(call[1]);
   }
 
   it("does not treat DM pairing-store entries as group allowlist entries", async () => {
@@ -415,7 +441,7 @@ describe("msteams monitor handler authz", () => {
       tenantId: "tenant-1",
       aadObjectId: "new-user-aad",
       channelId: "msteams",
-      serviceUrl: "https://smba.trafficmanager.net/amer/",
+      serviceUrl: "https://smba.trafficmanager.net/amer",
       locale: "en-US",
       timezone: "America/New_York",
     });
@@ -479,6 +505,48 @@ describe("msteams monitor handler authz", () => {
     const storedConversation = recordFromMockCall(storedRef.conversation);
     expect(storedConversation.id).toBe("19:team-channel@thread.tacv2");
     expect(storedConversation.tenantId).toBe("tenant-from-channel-data");
+  });
+
+  it("does not persist blocked serviceUrl hosts in conversation references", async () => {
+    const { conversationStore, deps } = createDeps({
+      channels: {
+        msteams: {
+          dmPolicy: "allowlist",
+          allowFrom: ["sender-aad"],
+        },
+      },
+    } as OpenClawConfig);
+
+    const handler = createMSTeamsMessageHandler(deps);
+    await handler({
+      activity: {
+        id: "msg-blocked-service-url",
+        type: "message",
+        text: "hello",
+        from: {
+          id: "sender-id",
+          aadObjectId: "sender-aad",
+          name: "Sender",
+        },
+        recipient: {
+          id: "bot-id",
+          name: "Bot",
+        },
+        conversation: {
+          id: "a:personal-chat",
+          conversationType: "personal",
+        },
+        channelId: "msteams",
+        serviceUrl: "https://attacker.example.com/teams/",
+        channelData: {},
+        attachments: [],
+      },
+      sendActivity: vi.fn(async () => undefined),
+    } as unknown as Parameters<typeof handler>[0]);
+
+    expect(conversationStore.upsert).toHaveBeenCalledTimes(1);
+    const storedRef = recordFromMockCall(mockCallArg(conversationStore.upsert, 0, 1));
+    expect("serviceUrl" in storedRef).toBe(false);
   });
 
   it("stores no tenantId when channelData.tenant is missing", async () => {
@@ -591,6 +659,163 @@ describe("msteams monitor handler authz", () => {
     expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).not.toHaveBeenCalled();
   });
 
+  it("does not drop inline command-looking group text from non-command-authorized senders", async () => {
+    resetThreadMocks();
+    const isControlCommandMessage = vi.fn(() => false);
+    const shouldComputeCommandAuthorized = vi.fn(() => true);
+    const { deps } = createDeps(
+      {
+        commands: { useAccessGroups: true },
+        channels: {
+          msteams: {
+            groupPolicy: "open",
+            requireMention: false,
+          },
+        },
+      } as OpenClawConfig,
+      {
+        isControlCommandMessage,
+        shouldComputeCommandAuthorized,
+      },
+    );
+
+    const handler = createMSTeamsMessageHandler(deps);
+    await handler(createAttackerGroupActivity({ text: "hello /status" }));
+
+    expect(isControlCommandMessage).toHaveBeenCalledWith("hello /status", deps.cfg);
+    expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).toHaveBeenCalledTimes(
+      1,
+    );
+    const dispatched = firstSettledDispatch();
+    const ctxPayload = recordFromMockCall(dispatched.ctxPayload);
+    expect(ctxPayload.BodyForAgent).toBe("hello /status");
+    expect(ctxPayload.CommandAuthorized).toBe(false);
+  });
+
+  it("flushes pending group text before authorizing a bare abort without a mention", async () => {
+    resetThreadMocks();
+    const isBareAbort = vi.fn((text?: string) =>
+      ["abort", "stop"].includes(text?.trim().toLowerCase() ?? ""),
+    );
+    const { deps } = createDeps(
+      {
+        commands: { useAccessGroups: false },
+        messages: { inbound: { debounceMs: 60_000 } },
+        channels: {
+          msteams: {
+            groupPolicy: "open",
+            requireMention: true,
+          },
+        },
+      } as OpenClawConfig,
+      {
+        hasControlCommand: vi.fn(() => false),
+        isControlCommandMessage: isBareAbort,
+        shouldComputeCommandAuthorized: isBareAbort,
+        shouldHandleTextCommands: vi.fn(() => true),
+        createInboundDebouncer,
+        resolveInboundDebounceMs: vi.fn(() => 60_000),
+      },
+    );
+
+    const handler = createMSTeamsMessageHandler(deps);
+    await handler(createAttackerGroupActivity({ text: "pending text" }));
+    expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).not.toHaveBeenCalled();
+
+    await handler(createAttackerGroupActivity({ text: "abort" }));
+
+    expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).toHaveBeenCalledTimes(
+      1,
+    );
+    const dispatched = firstSettledDispatch();
+    const ctxPayload = recordFromMockCall(dispatched.ctxPayload);
+    expect(ctxPayload.BodyForAgent).toBe("abort");
+    expect(ctxPayload.CommandAuthorized).toBe(true);
+  });
+
+  it("marks skipped channel message system events as non-owner", async () => {
+    resetThreadMocks();
+    const { deps, enqueueSystemEvent } = createDeps({
+      channels: {
+        msteams: {
+          groupPolicy: "open",
+          requireMention: true,
+        },
+      },
+    } as OpenClawConfig);
+
+    const handler = createMSTeamsMessageHandler(deps);
+    await handler(
+      createMessageActivity({
+        id: "msg-skip-mention",
+        text: "please run the deployment",
+        from: {
+          id: "member-id",
+          aadObjectId: "member-aad",
+          name: "Member",
+        },
+        conversation: {
+          id: "19:channel@thread.tacv2",
+          conversationType: "channel",
+        },
+        channelData: {
+          team: { id: "team123", name: "Team 123" },
+          channel: { name: "General" },
+        },
+      }),
+    );
+
+    expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).not.toHaveBeenCalled();
+    const systemEventCall = enqueueSystemEvent.mock.calls.find(
+      ([text]) => typeof text === "string" && text.includes("please run the deployment"),
+    );
+    if (!systemEventCall) {
+      throw new Error("expected skipped Teams message system event");
+    }
+    expect(systemEventCall[1]).toMatchObject({});
+  });
+
+  it("keeps dispatched primary message system events owner-neutral", async () => {
+    resetThreadMocks();
+    const { deps, enqueueSystemEvent } = createDeps({
+      channels: {
+        msteams: {
+          groupPolicy: "open",
+          requireMention: false,
+        },
+      },
+    } as OpenClawConfig);
+
+    const handler = createMSTeamsMessageHandler(deps);
+    await handler(
+      createMessageActivity({
+        id: "msg-active",
+        text: "please check the build",
+        from: {
+          id: "member-id",
+          aadObjectId: "member-aad",
+          name: "Member",
+        },
+        conversation: {
+          id: "19:channel@thread.tacv2",
+          conversationType: "channel",
+        },
+        channelData: {
+          team: { id: "team123", name: "Team 123" },
+          channel: { name: "General" },
+        },
+      }),
+    );
+
+    expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).toHaveBeenCalled();
+    const systemEventCall = enqueueSystemEvent.mock.calls.find(
+      ([text]) => typeof text === "string" && text.includes("please check the build"),
+    );
+    if (!systemEventCall) {
+      throw new Error("expected active Teams message system event");
+    }
+  });
+
   it("authorizes text control commands from static access groups", async () => {
     resetThreadMocks();
     const hasControlCommand = vi.fn(() => true);
@@ -617,8 +842,7 @@ describe("msteams monitor handler authz", () => {
     await handler(createAttackerGroupActivity({ text: "/config set foo bar" }));
 
     expect(conversationStore.upsert).toHaveBeenCalled();
-    const dispatched =
-      runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mock.calls[0]?.[0];
+    const dispatched = firstSettledDispatch();
     expect(recordFromMockCall(dispatched?.ctxPayload).CommandAuthorized).toBe(true);
   });
 
@@ -648,11 +872,7 @@ describe("msteams monitor handler authz", () => {
     const handler = createMSTeamsMessageHandler(deps);
     await handler(createChannelThreadActivity());
 
-    const dispatched =
-      runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mock.calls[0]?.[0];
-    if (!dispatched) {
-      throw new Error("expected authorized thread message to dispatch");
-    }
+    const dispatched = firstSettledDispatch();
     const ctxPayload = recordFromMockCall(dispatched.ctxPayload);
     expect(ctxPayload.BodyForAgent).toBe(
       "[Thread history]\nAlice: Allowed context\n[/Thread history]\n\nCurrent message",
@@ -692,8 +912,7 @@ describe("msteams monitor handler authz", () => {
     const handler = createMSTeamsMessageHandler(deps);
     await handler(createChannelThreadActivity());
 
-    const dispatched =
-      runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mock.calls[0]?.[0];
+    const dispatched = firstSettledDispatch();
     expect(recordFromMockCall(dispatched?.ctxPayload).BodyForAgent).toBe(
       "[Thread history]\nAlice: Allowlisted by display name\n[/Thread history]\n\nCurrent message",
     );
@@ -709,8 +928,12 @@ describe("msteams monitor handler authz", () => {
     );
 
     const ctx = recordFromMockCall(ctxPayload);
-    expect(ctx.ReplyToBody).toBe("Quoted body");
-    expect(ctx.ReplyToSender).toBe("Alice");
+    expect(ctx.SupplementalContext).toMatchObject({
+      quote: {
+        body: "Quoted body",
+        sender: "Alice",
+      },
+    });
   });
 
   it("drops quote context when attachment metadata disagrees with a blocked parent sender", async () => {
@@ -723,8 +946,7 @@ describe("msteams monitor handler authz", () => {
     );
 
     const ctx = recordFromMockCall(ctxPayload);
-    expect(ctx.ReplyToBody).toBeUndefined();
-    expect(ctx.ReplyToSender).toBeUndefined();
+    expect(ctx.SupplementalContext).toEqual({});
     expect(ctx.BodyForAgent).toBe("Current message");
   });
 });

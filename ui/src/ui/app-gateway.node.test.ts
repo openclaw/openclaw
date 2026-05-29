@@ -1,7 +1,8 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { GATEWAY_EVENT_UPDATE_AVAILABLE } from "../../../src/gateway/events.js";
-import { ConnectErrorDetailCodes } from "../../../src/gateway/protocol/connect-error-details.js";
+import type { ActivityEntry } from "./activity-model.ts";
 import { connectGateway, resolveControlUiClientVersion } from "./app-gateway.ts";
 import type { GatewayHelloOk } from "./gateway.ts";
 
@@ -48,6 +49,9 @@ vi.mock("./gateway.ts", async (importOriginal) => {
       }
       if (method === "models.authStatus") {
         return { ts: 0, providers: [] };
+      }
+      if (method === "sessions.list") {
+        return { count: 0, sessions: [] };
       }
       return {};
     });
@@ -114,10 +118,13 @@ vi.mock("./controllers/control-ui-bootstrap.ts", () => ({
 
 type TestGatewayHost = Parameters<typeof connectGateway>[0] & {
   chatMessages: unknown[];
+  chatQueue: import("./ui-types.ts").ChatQueueItem[];
+  chatQueueBySession: Record<string, import("./ui-types.ts").ChatQueueItem[]>;
   chatSideResult: unknown;
   chatSideResultTerminalRuns: Set<string>;
   chatStream: string | null;
   chatToolMessages: Record<string, unknown>[];
+  activityEntries: ActivityEntry[];
   toolStreamById: Map<string, unknown>;
   toolStreamOrder: string[];
 };
@@ -164,7 +171,9 @@ function createHost(): TestGatewayHost {
     sessionKey: "main",
     chatMessages: [],
     chatQueue: [],
+    chatQueueBySession: {},
     chatToolMessages: [],
+    activityEntries: [],
     chatStreamSegments: [],
     chatStream: null,
     chatStreamStartedAt: null,
@@ -177,6 +186,7 @@ function createHost(): TestGatewayHost {
     refreshSessionsAfterChat: new Set<string>(),
     chatSideResultTerminalRuns: new Set<string>(),
     execApprovalQueue: [],
+    execApprovalBusy: false,
     execApprovalError: null,
     updateAvailable: null,
     updateComplete: new Promise(() => undefined),
@@ -266,6 +276,89 @@ describe("connectGateway", () => {
     secondClient.emitEvent({ event: "presence", payload: { presence: [{ host: "active" }] } });
     expect(host.eventLogBuffer).toHaveLength(1);
     expect(host.eventLogBuffer[0]?.event).toBe("presence");
+  });
+
+  it("marks orphaned run state interrupted after reconnect hello", () => {
+    vi.useFakeTimers();
+    try {
+      const host = createHost() as TestGatewayHost & {
+        chatRunStatus?: unknown;
+        chatStreamStartedAt?: number | null;
+        compactionStatus?: unknown;
+        compactionClearTimer?: ReturnType<typeof setTimeout> | null;
+        fallbackStatus?: unknown;
+        fallbackClearTimer?: ReturnType<typeof setTimeout> | null;
+        sessionsResult?: {
+          ts: number;
+          path: string;
+          count: number;
+          defaults: Record<string, unknown>;
+          sessions: Array<Record<string, unknown>>;
+        };
+      };
+      host.chatRunId = "run-1";
+      host.chatStream = "Working...";
+      host.chatStreamStartedAt = 100;
+      host.compactionStatus = {
+        phase: "active",
+        runId: "run-1",
+        startedAt: 100,
+        completedAt: null,
+      };
+      host.compactionClearTimer = setTimeout(() => undefined, 1_000);
+      host.fallbackStatus = {
+        selected: "openai/gpt-5.5",
+        active: "anthropic/claude-sonnet-4-6",
+        attempts: [],
+        occurredAt: 100,
+      };
+      host.fallbackClearTimer = setTimeout(() => undefined, 1_000);
+      host.toolStreamById.set("tool-1", {} as never);
+      host.toolStreamOrder = ["tool-1"];
+      host.chatToolMessages = [{ role: "assistant" }];
+      host.sessionsResult = {
+        ts: 0,
+        path: "",
+        count: 1,
+        defaults: {},
+        sessions: [
+          {
+            key: "main",
+            kind: "direct",
+            updatedAt: 1,
+            hasActiveRun: true,
+            status: "running",
+            startedAt: 100,
+          },
+        ],
+      };
+
+      connectGateway(host);
+      const client = requireGatewayClient();
+      client.emitHello();
+
+      expect(host.chatRunId).toBeNull();
+      expect(host.chatStream).toBeNull();
+      expect(host.chatStreamStartedAt).toBeNull();
+      expect(host.compactionStatus).toBeNull();
+      expect(host.compactionClearTimer).toBeNull();
+      expect(host.fallbackStatus).toBeNull();
+      expect(host.fallbackClearTimer).toBeNull();
+      expect(host.toolStreamOrder).toStrictEqual([]);
+      expect(host.chatToolMessages).toStrictEqual([]);
+      expect(host.chatRunStatus).toMatchObject({
+        phase: "interrupted",
+        runId: "run-1",
+        sessionKey: "main",
+      });
+      expect(host.sessionsResult.sessions[0]).toMatchObject({
+        hasActiveRun: false,
+        status: "killed",
+        abortedLastRun: true,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("applies update.available only from active client", () => {
@@ -364,9 +457,10 @@ describe("connectGateway", () => {
 
     await vi.waitFor(() => {
       expect(host.pendingUpdateExpectedVersion).toBeNull();
-      expect(host.updateStatusBanner?.text).toContain(
-        "Update installed but running version did not change",
-      );
+      expect(host.updateStatusBanner).toEqual({
+        tone: "danger",
+        text: "Update installed but running version did not change — restart may have been blocked. Expected v2.0.0, running v1.0.0.",
+      });
     });
   });
 
@@ -450,6 +544,94 @@ describe("connectGateway", () => {
     ]);
   });
 
+  it("clears stale approval modal errors without interrupting an in-flight local resolve", () => {
+    const { host, client } = connectHostGateway();
+
+    client.emitEvent({
+      event: "exec.approval.requested",
+      payload: {
+        id: "approval-external-1",
+        request: {
+          command: "pnpm test",
+          host: "gateway",
+        },
+        createdAtMs: Date.now(),
+        expiresAtMs: Date.now() + 60_000,
+      },
+    });
+    host.execApprovalError = "Approval failed: approval already resolved";
+    host.execApprovalBusy = true;
+
+    client.emitEvent({
+      event: "exec.approval.resolved",
+      payload: { id: "approval-external-1", decision: "allow-once" },
+    });
+
+    expect(host.execApprovalQueue).toHaveLength(0);
+    expect(host.execApprovalError).toBeNull();
+    expect(host.execApprovalBusy).toBe(true);
+  });
+
+  it("clears active approval errors when event-enqueued approvals expire", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-25T00:00:00.000Z"));
+    try {
+      const { host, client } = connectHostGateway();
+      const queuedExpiresAtMs = Date.now() + 60_000;
+      const activeExpiresAtMs = Date.now() + 1_000;
+
+      client.emitEvent({
+        event: "exec.approval.requested",
+        payload: {
+          id: "approval-queued",
+          request: {
+            command: "pnpm test",
+            host: "gateway",
+          },
+          createdAtMs: Date.now(),
+          expiresAtMs: queuedExpiresAtMs,
+        },
+      });
+      client.emitEvent({
+        event: "exec.approval.requested",
+        payload: {
+          id: "approval-active-expiring",
+          request: {
+            command: "pnpm check:changed",
+            host: "gateway",
+          },
+          createdAtMs: Date.now() + 1,
+          expiresAtMs: activeExpiresAtMs,
+        },
+      });
+      host.execApprovalError = "Approval failed: Error: gateway unavailable";
+
+      vi.advanceTimersByTime(1_500);
+
+      expect(host.execApprovalQueue.map((entry) => entry.id)).toEqual(["approval-queued"]);
+      expect(host.execApprovalError).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears pending session reload timers when the active client closes", () => {
+    vi.useFakeTimers();
+    try {
+      const { host, client } = connectHostGateway();
+      const pendingReload = vi.fn();
+      host.sessionsChangedReloadTimer = globalThis.setTimeout(pendingReload, 1_000);
+
+      client.emitClose({ code: 1005 });
+
+      expect(host.sessionsChangedReloadTimer).toBeNull();
+      vi.advanceTimersByTime(1_000);
+      expect(pendingReload).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("preserves pending approval requests across reconnect", () => {
     const host = createHost();
     host.execApprovalQueue = [
@@ -488,7 +670,7 @@ describe("connectGateway", () => {
     });
 
     expect(host.lastErrorCode).toBe(ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH);
-    expect(host.lastError).toContain("gateway token mismatch");
+    expect(host.lastError).toBe("gateway token mismatch");
   });
 
   it("maps TypeError fetch failures to actionable auth rate-limit guidance", () => {
@@ -508,7 +690,7 @@ describe("connectGateway", () => {
     });
 
     expect(host.lastErrorCode).toBe(ConnectErrorDetailCodes.AUTH_RATE_LIMITED);
-    expect(host.lastError).toContain("too many failed authentication attempts");
+    expect(host.lastError).toBe("too many failed authentication attempts");
   });
 
   it("maps generic fetch failures to actionable device identity guidance", () => {
@@ -528,7 +710,9 @@ describe("connectGateway", () => {
     });
 
     expect(host.lastErrorCode).toBe(ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED);
-    expect(host.lastError).toContain("device identity required");
+    expect(host.lastError).toBe(
+      "device identity required (use HTTPS/localhost or allow insecure auth explicitly)",
+    );
   });
 
   it("maps generic fetch failures to actionable origin guidance", () => {
@@ -548,7 +732,9 @@ describe("connectGateway", () => {
     });
 
     expect(host.lastErrorCode).toBe(ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED);
-    expect(host.lastError).toContain("origin not allowed");
+    expect(host.lastError).toBe(
+      "origin not allowed (open the Control UI from the gateway host or allow it in gateway.controlUi.allowedOrigins)",
+    );
   });
 
   it("preserves specific close errors even when auth detail codes are present", () => {
@@ -588,7 +774,9 @@ describe("connectGateway", () => {
       },
     });
 
-    expect(host.lastError).toContain("gateway token mismatch");
+    expect(host.lastError).toBe(
+      "unauthorized: gateway token mismatch (open the dashboard URL and paste the token in Control UI settings)",
+    );
     expect(host.lastErrorCode).toBe("AUTH_TOKEN_MISMATCH");
   });
 
@@ -761,6 +949,76 @@ describe("connectGateway", () => {
     expect(host.pendingAbort).toBeNull();
   });
 
+  it("retries reconnectable queued chat sends after reconnect hello", async () => {
+    const host = createHost();
+    host.chatQueue = [
+      {
+        id: "pending-send",
+        text: "retry this prompt",
+        createdAt: 1,
+        sendRunId: "run-retry-1",
+        sendState: "waiting-reconnect",
+        sessionKey: "main",
+      },
+    ];
+
+    connectGateway(host);
+    const client = requireGatewayClient();
+
+    client.emitHello();
+
+    await vi.waitFor(() => {
+      expect(client.request).toHaveBeenCalledWith("chat.send", {
+        sessionKey: "main",
+        message: "retry this prompt",
+        deliver: false,
+        idempotencyKey: "run-retry-1",
+        attachments: undefined,
+      });
+    });
+    await vi.waitFor(() => {
+      expect(host.chatQueue).toStrictEqual([]);
+      expect(host.chatRunId).toBe("run-retry-1");
+    });
+  });
+
+  it("retries saved-session queued chat sends after reconnect hello", async () => {
+    const host = createHost();
+    host.sessionKey = "other";
+    host.chatQueueBySession = {
+      main: [
+        {
+          id: "pending-send-main",
+          text: "retry main prompt",
+          createdAt: 1,
+          sendRunId: "run-retry-main",
+          sendState: "waiting-reconnect",
+          sessionKey: "main",
+        },
+      ],
+    };
+
+    connectGateway(host);
+    const client = requireGatewayClient();
+
+    client.emitHello();
+
+    await vi.waitFor(() => {
+      expect(client.request).toHaveBeenCalledWith("chat.send", {
+        sessionKey: "main",
+        message: "retry main prompt",
+        deliver: false,
+        idempotencyKey: "run-retry-main",
+        attachments: undefined,
+      });
+    });
+    await vi.waitFor(() => {
+      expect(host.chatQueueBySession.main).toBeUndefined();
+      expect(host.chatMessages).toStrictEqual([]);
+      expect(host.chatRunId).toBeNull();
+    });
+  });
+
   it("logs and drops stale queued chat abort failures after reconnect", async () => {
     const host = createHost();
     host.pendingAbort = { runId: "run-stale", sessionKey: "main" };
@@ -826,6 +1084,50 @@ describe("connectGateway", () => {
     expect(loadChatHistoryMock).not.toHaveBeenCalled();
   });
 
+  it("renders session-scoped tool events for externally started runs", () => {
+    const { host, client } = connectHostGateway();
+
+    client.emitEvent({
+      event: "session.tool",
+      payload: {
+        runId: "external-run-1",
+        seq: 1,
+        stream: "tool",
+        ts: 123,
+        sessionKey: "main",
+        data: {
+          toolCallId: "session-tool-1",
+          name: "exec",
+          phase: "start",
+          args: { command: "pwd" },
+        },
+      },
+    });
+
+    expect(host.toolStreamOrder).toStrictEqual(["session-tool-1"]);
+    const entry = host.toolStreamById.get("session-tool-1") as
+      | { args?: unknown; name?: string; runId?: string; sessionKey?: string }
+      | undefined;
+    expect(entry).toMatchObject({
+      args: { command: "pwd" },
+      name: "exec",
+      runId: "external-run-1",
+      sessionKey: "main",
+    });
+    expect(host.activityEntries).toHaveLength(1);
+    expect(host.activityEntries[0]).toMatchObject({
+      toolCallId: "session-tool-1",
+      runId: "external-run-1",
+      sessionKey: "main",
+      toolName: "exec",
+      status: "running",
+      hiddenArgumentCount: 1,
+      summary: "exec running; 1 argument hidden",
+    });
+    expect(JSON.stringify(host.activityEntries[0])).not.toContain("pwd");
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+  });
+
   it("stores BTW side results for the active session", () => {
     const { host, client } = connectHostGateway();
 
@@ -841,12 +1143,13 @@ describe("connectGateway", () => {
       },
     });
 
-    expect(host.chatSideResult).toMatchObject({
-      kind: "btw",
-      runId: "btw-run-1",
-      question: "what changed?",
-      text: "Only the UI layer is missing support.",
-    });
+    const sideResult = host.chatSideResult as
+      | { kind?: string; runId?: string; question?: string; text?: string }
+      | undefined;
+    expect(sideResult?.kind).toBe("btw");
+    expect(sideResult?.runId).toBe("btw-run-1");
+    expect(sideResult?.question).toBe("what changed?");
+    expect(sideResult?.text).toBe("Only the UI layer is missing support.");
     expect(host.chatSideResultTerminalRuns.has("btw-run-1")).toBe(true);
   });
 
@@ -984,6 +1287,55 @@ describe("connectGateway", () => {
         content: [{ type: "text", text: "Final answer" }],
       },
     ]);
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps source-reply finals live even when message tool events were seen", () => {
+    const { host, client } = connectHostGateway();
+    host.chatRunId = "main-run-with-message-tool";
+    host.chatMessages = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "Hey there" }],
+        timestamp: 100,
+      },
+    ];
+    emitToolResultEvent(client);
+    expect(host.toolStreamOrder).toHaveLength(1);
+    loadChatHistoryMock.mockClear();
+
+    client.emitEvent({
+      event: "session.message",
+      payload: {
+        sessionKey: "main",
+      },
+    });
+    client.emitEvent({
+      event: "chat",
+      payload: {
+        runId: "main-run-with-message-tool",
+        sessionKey: "main",
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Final answer" }],
+        },
+      },
+    });
+
+    expect(host.chatRunId).toBeNull();
+    expect(host.chatMessages).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "Hey there" }],
+        timestamp: 100,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Final answer" }],
+      },
+    ]);
+    expect(host.toolStreamOrder).toHaveLength(1);
     expect(loadChatHistoryMock).not.toHaveBeenCalled();
   });
 

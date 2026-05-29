@@ -13,9 +13,12 @@ import {
   type FollowupRun,
   type QueueSettings,
 } from "./queue.js";
+import { createReplyOperation, testing as replyRunTesting } from "./reply-run-registry.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 type AgentRunParams = {
+  sessionId?: string;
+  sessionFile?: string;
   onPartialReply?: (payload: { text?: string }) => Promise<void> | void;
   onAssistantMessageStart?: () => Promise<void> | void;
   onReasoningStream?: (payload: { text?: string }) => Promise<void> | void;
@@ -26,8 +29,9 @@ type AgentRunParams = {
 };
 
 const state = vi.hoisted(() => ({
-  compactEmbeddedPiSessionMock: vi.fn(),
-  runEmbeddedPiAgentMock: vi.fn(),
+  compactEmbeddedAgentSessionMock: vi.fn(),
+  queueEmbeddedAgentMessageMock: vi.fn(),
+  runEmbeddedAgentMock: vi.fn(),
 }));
 
 function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
@@ -41,8 +45,6 @@ function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean):
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(value).toBeTypeOf("object");
-  expect(value).not.toBeNull();
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`expected ${label} to be an object`);
   }
@@ -51,7 +53,6 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
 
 function mockCallArgs(mock: ReturnType<typeof vi.fn>, label: string, callIndex = 0): unknown[] {
   const call = mock.mock.calls[callIndex] as unknown[] | undefined;
-  expect(call).toBeDefined();
   if (!call) {
     throw new Error(`expected ${label} mock call ${callIndex}`);
   }
@@ -93,10 +94,15 @@ vi.mock("../../agents/model-fallback.js", () => ({
     Array.isArray((err as { attempts?: unknown[] }).attempts),
 }));
 
-vi.mock("../../agents/pi-embedded.js", () => ({
-  compactEmbeddedPiSession: (params: unknown) => state.compactEmbeddedPiSessionMock(params),
-  queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
-  runEmbeddedPiAgent: (params: unknown) => state.runEmbeddedPiAgentMock(params),
+vi.mock("../../agents/embedded-agent.js", () => ({
+  compactEmbeddedAgentSession: (params: unknown) => state.compactEmbeddedAgentSessionMock(params),
+  queueEmbeddedAgentMessage: vi.fn().mockReturnValue(false),
+  runEmbeddedAgent: (params: unknown) => state.runEmbeddedAgentMock(params),
+}));
+
+vi.mock("../../agents/embedded-agent-runner/runs.js", () => ({
+  queueEmbeddedAgentMessage: (sessionId: string, prompt: string, options: unknown) =>
+    state.queueEmbeddedAgentMessageMock(sessionId, prompt, options),
 }));
 
 vi.mock("./queue.js", () => ({
@@ -113,17 +119,20 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  state.compactEmbeddedPiSessionMock.mockReset();
-  state.compactEmbeddedPiSessionMock.mockResolvedValue({
+  replyRunTesting.resetReplyRunRegistry();
+  state.compactEmbeddedAgentSessionMock.mockReset();
+  state.compactEmbeddedAgentSessionMock.mockResolvedValue({
     ok: true,
     compacted: false,
     reason: "test-default",
   });
-  state.runEmbeddedPiAgentMock.mockReset();
-  state.runEmbeddedPiAgentMock.mockResolvedValue({
+  state.runEmbeddedAgentMock.mockReset();
+  state.runEmbeddedAgentMock.mockResolvedValue({
     payloads: [{ text: "final" }],
     meta: { agentMeta: { usage: { input: 1, output: 1 } } },
   });
+  state.queueEmbeddedAgentMessageMock.mockReset();
+  state.queueEmbeddedAgentMessageMock.mockReturnValue(false);
   vi.mocked(enqueueFollowupRun).mockClear();
   vi.mocked(refreshQueuedFollowupSession).mockClear();
   vi.mocked(scheduleFollowupDrain).mockClear();
@@ -141,6 +150,8 @@ function createMinimalRun(params?: {
   blockStreamingEnabled?: boolean;
   isActive?: boolean;
   isRunActive?: () => boolean;
+  isStreaming?: boolean;
+  shouldSteer?: boolean;
   shouldFollowup?: boolean;
   resolvedQueueMode?: string;
   sessionCtx?: Partial<TemplateContext>;
@@ -196,11 +207,11 @@ function createMinimalRun(params?: {
         followupRun,
         queueKey: "main",
         resolvedQueue,
-        shouldSteer: false,
+        shouldSteer: params?.shouldSteer ?? false,
         shouldFollowup: params?.shouldFollowup ?? false,
         isActive: params?.isActive ?? false,
         isRunActive: params?.isRunActive,
-        isStreaming: false,
+        isStreaming: params?.isStreaming ?? false,
         opts,
         typing,
         sessionEntry: params?.sessionEntry,
@@ -221,6 +232,78 @@ function createMinimalRun(params?: {
 }
 
 describe("runReplyAgent heartbeat followup guard", () => {
+  it("drops heartbeat runs when reply-lane admission finds an active owner", async () => {
+    const active = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "active-session",
+      resetTriggered: false,
+    });
+    const { run, typing } = createMinimalRun({
+      opts: { isHeartbeat: true },
+      isActive: false,
+      shouldFollowup: false,
+    });
+
+    const result = await run();
+
+    expect(result).toBeUndefined();
+    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(typing.cleanup).toHaveBeenCalledTimes(1);
+    active.complete();
+  });
+
+  it("runs visible turns with the session id returned by admission", async () => {
+    const active = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "pre-compact-session",
+      resetTriggered: false,
+    });
+    active.setPhase("preflight_compacting");
+    const sessionStore = {
+      main: {
+        sessionId: "pre-compact-session",
+        sessionFile: "/tmp/pre-compact.jsonl",
+        updatedAt: Date.now(),
+      },
+    };
+    const { run } = createMinimalRun({
+      runOverrides: { sessionId: "stale-session" },
+      sessionStore,
+    });
+
+    const pending = run();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    active.updateSessionId("post-compact-session");
+    sessionStore.main = {
+      sessionId: "post-compact-session",
+      sessionFile: "/tmp/post-compact.jsonl",
+      updatedAt: Date.now(),
+    };
+    active.complete();
+    await pending;
+
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+    const [call] = mockCallArgs(state.runEmbeddedAgentMock, "run embedded agent");
+    expect((call as AgentRunParams).sessionId).toBe("post-compact-session");
+    expect((call as AgentRunParams).sessionFile).toBe("/tmp/post-compact.jsonl");
+  });
+
+  it("drops runs when reply-lane admission sees an already-aborted caller", async () => {
+    const abortController = new AbortController();
+    abortController.abort();
+    const { run, typing } = createMinimalRun({
+      opts: { abortSignal: abortController.signal },
+      isActive: false,
+      shouldFollowup: false,
+    });
+
+    const result = await run();
+
+    expect(result).toBeUndefined();
+    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(typing.cleanup).toHaveBeenCalledTimes(1);
+  });
+
   it("drops heartbeat runs when another run is active", async () => {
     const { run, typing } = createMinimalRun({
       opts: { isHeartbeat: true },
@@ -233,7 +316,27 @@ describe("runReplyAgent heartbeat followup guard", () => {
 
     expect(result).toBeUndefined();
     expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
-    expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(typing.cleanup).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops heartbeat runs before steering active streams", async () => {
+    state.queueEmbeddedAgentMessageMock.mockReturnValueOnce(true);
+    const { run, typing } = createMinimalRun({
+      opts: { isHeartbeat: true },
+      isActive: true,
+      isStreaming: true,
+      shouldSteer: true,
+      shouldFollowup: true,
+      resolvedQueueMode: "collect",
+    });
+
+    const result = await run();
+
+    expect(result).toBeUndefined();
+    expect(state.queueEmbeddedAgentMessageMock).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
+    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(typing.cleanup).toHaveBeenCalledTimes(1);
   });
 
@@ -249,7 +352,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
 
     expect(result).toBeUndefined();
     expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
-    expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
   it("keeps typing alive when a followup is queued behind a live active run", async () => {
@@ -266,7 +369,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(result).toBeUndefined();
     expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(scheduleFollowupDrain)).not.toHaveBeenCalled();
-    expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(typing.startTypingLoop).toHaveBeenCalledTimes(1);
     expect(typing.refreshTypingTtl).toHaveBeenCalledTimes(1);
     expect(typing.cleanup).not.toHaveBeenCalled();
@@ -286,7 +389,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(result).toBeUndefined();
     expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(scheduleFollowupDrain)).toHaveBeenCalledTimes(1);
-    expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(typing.cleanup).toHaveBeenCalledTimes(1);
   });
 
@@ -295,7 +398,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
     const persistSpy = vi
       .spyOn(accounting, "persistRunSessionUsage")
       .mockRejectedValueOnce(new Error("persist exploded"));
-    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "ok" }],
       meta: { agentMeta: { usage: { input: 1, output: 1 } } },
     });
@@ -330,7 +433,7 @@ describe("runReplyAgent pending final delivery capture", () => {
     };
     const sessionStore = { main: sessionEntry };
     const storePath = await createSessionStoreFile(sessionEntry);
-    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "private final" }],
       meta: {},
     });
@@ -358,7 +461,7 @@ describe("runReplyAgent pending final delivery capture", () => {
     };
     const sessionStore = { main: sessionEntry };
     const storePath = await createSessionStoreFile(sessionEntry);
-    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "denied final" }],
       meta: {},
     });
@@ -384,7 +487,7 @@ describe("runReplyAgent pending final delivery capture", () => {
     };
     const sessionStore = { main: sessionEntry };
     const storePath = await createSessionStoreFile(sessionEntry);
-    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "hidden reasoning", isReasoning: true }, { text: "visible final" }],
       meta: {},
     });
@@ -410,7 +513,7 @@ describe("runReplyAgent pending final delivery capture", () => {
     };
     const sessionStore = { main: sessionEntry };
     const storePath = await createSessionStoreFile(sessionEntry);
-    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "Sent daily summary to channel." }],
       meta: {},
     });
@@ -441,7 +544,7 @@ describe("runReplyAgent pending final delivery capture", () => {
     const sessionStore = { main: sessionEntry };
     const storePath = await createSessionStoreFile(sessionEntry);
     const longRemainder = "Sent daily digest to channel. ".repeat(12).trimEnd(); // ~360 chars, > 300
-    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: `HEARTBEAT_OK ${longRemainder}` }],
       meta: {},
     });
@@ -465,7 +568,7 @@ describe("runReplyAgent pending final delivery capture", () => {
 describe("runReplyAgent typing (heartbeat)", () => {
   it("signals typing for normal runs", async () => {
     const onPartialReply = vi.fn();
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
       await params.onPartialReply?.({ text: "hi" });
       return { payloads: [{ text: "final" }], meta: {} };
     });
@@ -482,7 +585,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
   it("never signals typing for heartbeat runs", async () => {
     const onPartialReply = vi.fn();
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
       await params.onPartialReply?.({ text: "hi" });
       return { payloads: [{ text: "final" }], meta: {} };
     });
@@ -508,7 +611,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       "utf-8",
     );
     try {
-      state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      state.runEmbeddedAgentMock.mockResolvedValueOnce({
         payloads: [{ text: "HEARTBEAT_OK" }],
         meta: {},
       });
@@ -561,7 +664,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
     for (const testCase of cases) {
       const onPartialReply = vi.fn();
-      state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
         for (const text of testCase.partials) {
           await params.onPartialReply?.({ text });
         }
@@ -595,11 +698,35 @@ describe("runReplyAgent typing (heartbeat)", () => {
     }
   });
 
+  it("keeps final text blocks after partial preview streaming", async () => {
+    const onPartialReply = vi.fn();
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      await params.onPartialReply?.({ text: "First block\n\nSecond block" });
+      return {
+        payloads: [{ text: "First block" }, { text: "Second block" }],
+        meta: {},
+      };
+    });
+
+    const { run } = createMinimalRun({
+      opts: { onPartialReply },
+      typingMode: "message",
+    });
+
+    const result = await run();
+
+    expect(onPartialReply).toHaveBeenCalledWith({ text: "First block\n\nSecond block" });
+    expect(result).toEqual([
+      expect.objectContaining({ text: "First block" }),
+      expect.objectContaining({ text: "Second block" }),
+    ]);
+  });
+
   it("suppresses narrated silent-turn partials, block replies, and final payloads", async () => {
     const onPartialReply = vi.fn();
     const onBlockReply = vi.fn();
     const onReasoningStream = vi.fn();
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
       expect(params.silentExpected).toBe(true);
       await params.onReasoningStream?.({ text: "Reasoning:\nI am trying to send NO_REPLY now." });
       await params.onPartialReply?.({ text: "I am trying to send NO_REPLY now." });
@@ -624,7 +751,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const onPartialReply = vi.fn();
     const onBlockReply = vi.fn();
     const onReasoningStream = vi.fn();
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
       expect(params.silentExpected).toBe(true);
       await params.onReasoningStream?.({ text: "Reasoning:\nNO_REPLY" });
       await params.onPartialReply?.({ text: "NO_REPLY" });
@@ -646,7 +773,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 
   it("does not start typing on assistant message start without prior text in message mode", async () => {
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
       await params.onAssistantMessageStart?.();
       return { payloads: [{ text: "final" }], meta: {} };
     });
@@ -661,7 +788,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 
   it("starts typing from reasoning stream in thinking mode", async () => {
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
       await params.onReasoningStream?.({ text: "Reasoning:\n_step_" });
       await params.onPartialReply?.({ text: "hi" });
       return { payloads: [{ text: "final" }], meta: {} };
@@ -679,7 +806,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
   it("keeps assistant partial streaming enabled when reasoning mode is stream", async () => {
     const onPartialReply = vi.fn();
     const onReasoningStream = vi.fn();
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
       await params.onReasoningStream?.({ text: "Reasoning:\n_step_" });
       await params.onPartialReply?.({ text: "answer chunk" });
       return { payloads: [{ text: "final" }], meta: {} };
@@ -696,7 +823,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 
   it("suppresses typing in never mode", async () => {
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
       await params.onPartialReply?.({ text: "hi" });
       return { payloads: [{ text: "final" }], meta: {} };
     });
@@ -712,7 +839,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
   it("signals typing on normalized block replies", async () => {
     const onBlockReply = vi.fn();
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
       await params.onBlockReply?.({ text: "\n\nchunk", mediaUrls: [] });
       return { payloads: [{ text: "final" }], meta: {} };
     });
@@ -726,13 +853,41 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
     expect(typing.startTypingOnText).toHaveBeenCalledWith("chunk");
     expect(onBlockReply).toHaveBeenCalled();
-    const [blockPayload, blockOpts] = onBlockReply.mock.calls[0] ?? [];
+    const [blockPayload, blockOpts] = onBlockReply.mock.calls.at(0) ?? [];
     const blockPayloadRecord = requireRecord(blockPayload, "block payload");
     expect(blockPayloadRecord.text).toBe("chunk");
     expect(blockPayloadRecord.audioAsVoice).toBe(false);
     const blockOptions = requireRecord(blockOpts, "block options");
     expect(blockOptions.abortSignal).toBeInstanceOf(AbortSignal);
     expect(blockOptions.timeoutMs).toBeTypeOf("number");
+  });
+
+  it("strips workflow function response scaffolding from final delivery", async () => {
+    state.runEmbeddedAgentMock.mockImplementationOnce(async () => ({
+      payloads: [
+        {
+          text: [
+            "Visible intro.",
+            "<function_calls>",
+            '<invoke name="exec"><parameter name="command">node scripts/search.mjs</parameter></invoke>',
+            "</function_calls>",
+            "<function_response>",
+            'Searching for: "what skills matter most in the age of AI"',
+            "...",
+            "</function_response>",
+            "Visible answer.",
+          ].join("\n"),
+        },
+      ],
+      meta: {},
+    }));
+
+    const { run } = createMinimalRun();
+    const res = await run();
+    const payloads = Array.isArray(res) ? res : res ? [res] : [];
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("Visible intro.\n\n\nVisible answer.");
   });
 
   it("handles typing for normal and silent tool results", async () => {
@@ -751,7 +906,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
     for (const testCase of cases) {
       const onToolResult = vi.fn();
-      state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
         await params.onToolResult?.({ text: testCase.toolText, mediaUrls: [] });
         return { payloads: [{ text: "final" }], meta: {} };
       });
@@ -781,7 +936,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
   it("preserves channelData on forwarded tool results", async () => {
     const onToolResult = vi.fn();
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
       await params.onToolResult?.({
         text: "Approval required.\n\n```txt\n/approve 117ba06d allow-once\n```",
         channelData: {
@@ -815,7 +970,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
   it("forwards media-only tool results without typing text", async () => {
     const onToolResult = vi.fn();
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
       await params.onToolResult?.({
         mediaUrls: ["/tmp/generated.png"],
       });
@@ -841,7 +996,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
   it("retries transient HTTP failures once with timer-driven backoff", async () => {
     vi.useFakeTimers();
     let calls = 0;
-    state.runEmbeddedPiAgentMock.mockImplementation(async () => {
+    state.runEmbeddedAgentMock.mockImplementation(async () => {
       calls += 1;
       if (calls === 1) {
         throw new Error("502 Bad Gateway");
@@ -862,10 +1017,10 @@ describe("runReplyAgent typing (heartbeat)", () => {
     vi.useRealTimers();
   });
 
-  it("announces model fallback only when verbose mode is enabled", async () => {
+  it("announces model fallback transitions across verbose levels", async () => {
     const cases = [
-      { name: "verbose on", verbose: "on" as const, expectNotice: true },
-      { name: "verbose off", verbose: "off" as const, expectNotice: false },
+      { name: "verbose on", verbose: "on" as const },
+      { name: "verbose off", verbose: "off" as const },
     ] as const;
     for (const testCase of cases) {
       const sessionEntry: SessionEntry = {
@@ -873,7 +1028,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
         updatedAt: Date.now(),
       };
       const sessionStore = { main: sessionEntry };
-      state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      state.runEmbeddedAgentMock.mockResolvedValueOnce({
         payloads: [{ text: "final" }],
         meta: {},
       });
@@ -919,18 +1074,705 @@ describe("runReplyAgent typing (heartbeat)", () => {
       const payload = Array.isArray(res)
         ? (res[0] as { text?: string })
         : (res as { text?: string });
-      if (testCase.expectNotice) {
-        expect(payload.text, testCase.name).toContain("Model Fallback:");
-        expect(payload.text, testCase.name).toContain("deepinfra/moonshotai/Kimi-K2.5");
-        expect(sessionEntry.fallbackNoticeReason, testCase.name).toBe("rate limit");
-        continue;
-      }
-      expect(payload.text, testCase.name).not.toContain("Model Fallback:");
+      expect(payload.text, testCase.name).toContain("Model Fallback:");
+      expect(payload.text, testCase.name).toContain("deepinfra/moonshotai/Kimi-K2.5");
+      expect(sessionEntry.fallbackNoticeReason, testCase.name).toBe("rate limit");
       expect(
         phases.filter((phase) => phase === "fallback"),
         testCase.name,
       ).toHaveLength(1);
       expect(phases, testCase.name).toContain("fallback_step");
+    }
+  });
+
+  it("does not persist active fallback state for internal subagent announce fallback", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      modelProvider: "openai-codex",
+      model: "gpt-5.5",
+      responseUsage: "tokens",
+    };
+    const sessionStore = { main: sessionEntry };
+    const storeRoot = await mkdtemp(join(tmpdir(), "openclaw-internal-fallback-"));
+    const storePath = join(storeRoot, "sessions.json");
+    await writeFile(storePath, JSON.stringify(sessionStore), "utf-8");
+    try {
+      state.runEmbeddedAgentMock.mockResolvedValueOnce({
+        payloads: [{ text: "subagent timed out" }],
+        meta: {
+          agentMeta: {
+            usage: {
+              input: 100,
+              output: 50,
+            },
+          },
+        },
+      });
+      vi.spyOn(modelFallbackModule, "runWithModelFallback").mockImplementationOnce(async (args) => {
+        const { run, onFallbackStep } = args;
+        await onFallbackStep?.({
+          fallbackStepType: "fallback_step",
+          fallbackStepFromModel: "openai/gpt-5.5",
+          fallbackStepToModel: "google/gemini-2.5-flash",
+          fallbackStepFromFailureReason: "timeout",
+          fallbackStepFinalOutcome: "succeeded",
+        });
+        return {
+          result: await run("google", "gemini-2.5-flash"),
+          provider: "google",
+          model: "gemini-2.5-flash",
+          attempts: [
+            {
+              provider: "openai-codex",
+              model: "gpt-5.5",
+              error: "codex app-server attempt timed out",
+              reason: "timeout",
+            },
+          ],
+        };
+      });
+
+      const { run } = createMinimalRun({
+        sessionEntry,
+        sessionStore,
+        sessionKey: "main",
+        storePath,
+        runOverrides: {
+          inputProvenance: {
+            kind: "inter_session",
+            sourceSessionKey: "agent:codex:subagent:c34fca91",
+            sourceChannel: "__internal__",
+            sourceTool: "subagent_announce",
+          },
+        },
+      });
+      const res = await run();
+
+      expect(sessionEntry.modelProvider).toBe("openai-codex");
+      expect(sessionEntry.model).toBe("gpt-5.5");
+      expect(sessionEntry.providerOverride).toBeUndefined();
+      expect(sessionEntry.modelOverride).toBeUndefined();
+      expect(sessionEntry.modelOverrideSource).toBeUndefined();
+      expect(sessionEntry.fallbackNoticeSelectedModel).toBeUndefined();
+      expect(sessionEntry.fallbackNoticeActiveModel).toBeUndefined();
+      expect(sessionEntry.fallbackNoticeReason).toBeUndefined();
+      const persistedStore = JSON.parse(await readFile(storePath, "utf-8"));
+      expect(persistedStore.main.modelProvider).toBe("openai-codex");
+      expect(persistedStore.main.model).toBe("gpt-5.5");
+      expect(persistedStore.main.providerOverride).toBeUndefined();
+      expect(persistedStore.main.modelOverride).toBeUndefined();
+      expect(persistedStore.main.modelOverrideSource).toBeUndefined();
+      expect(persistedStore.main.fallbackNoticeSelectedModel).toBeUndefined();
+      expect(persistedStore.main.fallbackNoticeActiveModel).toBeUndefined();
+      const payloads = Array.isArray(res) ? res : res ? [res] : [];
+      expect(payloads.some((payload) => payload.text?.includes("Model Fallback:"))).toBe(false);
+      expect(payloads.some((payload) => payload.text?.includes("Usage:"))).toBe(false);
+    } finally {
+      await rm(storeRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("surfaces empty internal fallback failures without persisting visible fallback state", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      modelProvider: "openai-codex",
+      model: "gpt-5.5",
+    };
+    const sessionStore = { main: sessionEntry };
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {},
+    });
+    vi.spyOn(modelFallbackModule, "runWithModelFallback").mockImplementationOnce(async (args) => {
+      const { run, onFallbackStep } = args;
+      await onFallbackStep?.({
+        fallbackStepType: "fallback_step",
+        fallbackStepFromModel: "openai/gpt-5.5",
+        fallbackStepToModel: "google/gemini-2.5-flash",
+        fallbackStepFromFailureReason: "timeout",
+        fallbackStepFinalOutcome: "succeeded",
+      });
+      return {
+        result: await run("google", "gemini-2.5-flash"),
+        provider: "google",
+        model: "gemini-2.5-flash",
+        attempts: [
+          {
+            provider: "openai-codex",
+            model: "gpt-5.5",
+            error: "codex app-server attempt timed out",
+            reason: "timeout",
+          },
+        ],
+      };
+    });
+
+    const { run } = createMinimalRun({
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      runOverrides: {
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:codex:subagent:c34fca91",
+          sourceChannel: "__internal__",
+          sourceTool: "subagent_announce",
+        },
+      },
+    });
+    const res = await run();
+
+    const payload = Array.isArray(res) ? res[0] : res;
+    expect(payload?.isError).toBe(true);
+    expect(payload?.text).toContain("Fallback used google/gemini-2.5-flash");
+    expect(sessionEntry.modelProvider).toBe("openai-codex");
+    expect(sessionEntry.model).toBe("gpt-5.5");
+    expect(sessionEntry.providerOverride).toBeUndefined();
+    expect(sessionEntry.modelOverride).toBeUndefined();
+    expect(sessionEntry.modelOverrideSource).toBeUndefined();
+    expect(sessionEntry.fallbackNoticeSelectedModel).toBeUndefined();
+    expect(sessionEntry.fallbackNoticeActiveModel).toBeUndefined();
+    expect(sessionEntry.fallbackNoticeReason).toBeUndefined();
+  });
+
+  it("keeps fallback transition notices when block streaming has no final text", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const onBlockReply = vi.fn();
+
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      await params.onBlockReply?.({ text: "streamed answer" });
+      return { payloads: [], meta: {} };
+    });
+    const fallbackSpy = vi
+      .spyOn(modelFallbackModule, "runWithModelFallback")
+      .mockImplementationOnce(
+        async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+          result: await run("deepinfra", "moonshotai/Kimi-K2.5"),
+          provider: "deepinfra",
+          model: "moonshotai/Kimi-K2.5",
+          attempts: [
+            {
+              provider: "fireworks",
+              model: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
+              error: "Provider fireworks is in cooldown (all profiles unavailable)",
+              reason: "rate_limit",
+            },
+          ],
+        }),
+      );
+    try {
+      const { run } = createMinimalRun({
+        blockStreamingEnabled: true,
+        opts: { onBlockReply },
+        sessionEntry,
+        sessionStore,
+        sessionKey: "main",
+      });
+      const res = await run();
+      const payloads = Array.isArray(res) ? res : res ? [res] : [];
+
+      expect(onBlockReply).toHaveBeenCalled();
+      expect(payloads).toHaveLength(1);
+      expect(payloads[0]?.text).toContain("Model Fallback:");
+      expect(payloads[0]?.text).not.toContain("streamed answer");
+    } finally {
+      fallbackSpy.mockRestore();
+    }
+  });
+
+  it("threads fallback notices without consuming the first assistant reply slot", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "final" }],
+      meta: {},
+    });
+    const fallbackSpy = vi
+      .spyOn(modelFallbackModule, "runWithModelFallback")
+      .mockImplementationOnce(
+        async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+          result: await run("deepinfra", "moonshotai/Kimi-K2.5"),
+          provider: "deepinfra",
+          model: "moonshotai/Kimi-K2.5",
+          attempts: [
+            {
+              provider: "fireworks",
+              model: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
+              error: "Provider fireworks is in cooldown (all profiles unavailable)",
+              reason: "rate_limit",
+            },
+          ],
+        }),
+      );
+    try {
+      const { run } = createMinimalRun({
+        sessionEntry,
+        sessionStore,
+        sessionKey: "main",
+        runOverrides: {
+          config: {
+            channels: {
+              whatsapp: {
+                replyToMode: "first",
+              },
+            },
+          },
+        },
+      });
+      const res = await run();
+      const payloads = Array.isArray(res) ? res : res ? [res] : [];
+
+      expect(payloads).toHaveLength(2);
+      expect(payloads[0]?.text).toContain("Model Fallback:");
+      expect(payloads[0]?.replyToId).toBe("msg");
+      expect(payloads[1]?.text).toBe("final");
+      expect(payloads[1]?.replyToId).toBe("msg");
+    } finally {
+      fallbackSpy.mockRestore();
+    }
+  });
+
+  it("surfaces a configured backend failure when fallback produces no visible reply", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "NO_REPLY" }],
+      meta: {},
+    });
+    const fallbackSpy = vi
+      .spyOn(modelFallbackModule, "runWithModelFallback")
+      .mockImplementationOnce(
+        async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+          result: await run("openai-codex", "gpt-5.5"),
+          provider: "openai-codex",
+          model: "gpt-5.5",
+          attempts: [
+            {
+              provider: "lmstudio",
+              model: "gemma-4-e4b-it",
+              error: "Connection error.",
+              reason: "timeout",
+            },
+          ],
+        }),
+      );
+
+    try {
+      const { run } = createMinimalRun({
+        runOverrides: {
+          provider: "lmstudio",
+          model: "gemma-4-e4b-it",
+        },
+        sessionCtx: {
+          Provider: "discord",
+          OriginatingChannel: "discord",
+          MessageSid: "1503645939964055592",
+        },
+      });
+      const res = await run();
+      const payload = Array.isArray(res) ? res[0] : res;
+
+      expect(payload?.isError).toBe(true);
+      expect(payload?.text).toContain("configured model backend lmstudio/gemma-4-e4b-it");
+      expect(payload?.text).toContain("Fallback used openai-codex/gpt-5.5");
+      expect(payload?.text).toContain("no visible reply");
+    } finally {
+      fallbackSpy.mockRestore();
+    }
+  });
+
+  it("surfaces a configured backend failure when fallback returns no payloads", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {},
+    });
+    const fallbackSpy = vi
+      .spyOn(modelFallbackModule, "runWithModelFallback")
+      .mockImplementationOnce(
+        async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+          result: await run("openai-codex", "gpt-5.5"),
+          provider: "openai-codex",
+          model: "gpt-5.5",
+          attempts: [
+            {
+              provider: "lmstudio",
+              model: "gemma-4-e4b-it",
+              error: "Connection error.",
+              reason: "timeout",
+            },
+          ],
+        }),
+      );
+
+    try {
+      const { run } = createMinimalRun({
+        runOverrides: {
+          provider: "lmstudio",
+          model: "gemma-4-e4b-it",
+        },
+        sessionCtx: {
+          Provider: "discord",
+          OriginatingChannel: "discord",
+          MessageSid: "1503645939964055592",
+        },
+      });
+      const res = await run();
+      const payload = Array.isArray(res) ? res[0] : res;
+
+      expect(payload?.isError).toBe(true);
+      expect(payload?.text).toContain("configured model backend lmstudio/gemma-4-e4b-it");
+      expect(payload?.text).toContain("Fallback used openai-codex/gpt-5.5");
+      expect(payload?.text).toContain("no visible reply");
+    } finally {
+      fallbackSpy.mockRestore();
+    }
+  });
+
+  it("surfaces a persisted configured backend failure when the active fallback is silent", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      providerOverride: "openai-codex",
+      modelOverride: "gpt-5.5",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "lmstudio",
+      modelOverrideFallbackOriginModel: "gemma-4-e4b-it",
+    };
+    const sessionStore = { main: sessionEntry };
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "NO_REPLY" }],
+      meta: {},
+    });
+
+    const { run } = createMinimalRun({
+      runOverrides: {
+        provider: "openai-codex",
+        model: "gpt-5.5",
+      },
+      sessionEntry,
+      sessionStore,
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        MessageSid: "1503677587568722061",
+      },
+    });
+    const res = await run();
+    const payload = Array.isArray(res) ? res[0] : res;
+
+    expect(payload?.isError).toBe(true);
+    expect(payload?.text).toContain("configured model backend lmstudio/gemma-4-e4b-it");
+    expect(payload?.text).toContain("Fallback used openai-codex/gpt-5.5");
+    expect(payload?.text).toContain("no visible reply");
+  });
+
+  it("announces fallback without silence failure when fallback already replied through a messaging tool", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "already sent" }],
+      messagingToolSentTexts: ["already sent"],
+      messagingToolSentTargets: [{ tool: "message", provider: "discord", to: "channel:C1" }],
+      meta: {},
+    });
+    const fallbackSpy = vi
+      .spyOn(modelFallbackModule, "runWithModelFallback")
+      .mockImplementationOnce(
+        async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+          result: await run("openai-codex", "gpt-5.5"),
+          provider: "openai-codex",
+          model: "gpt-5.5",
+          attempts: [
+            {
+              provider: "lmstudio",
+              model: "gemma-4-e4b-it",
+              error: "Connection error.",
+              reason: "timeout",
+            },
+          ],
+        }),
+      );
+
+    try {
+      const { run } = createMinimalRun({
+        runOverrides: {
+          provider: "lmstudio",
+          model: "gemma-4-e4b-it",
+          messageProvider: "discord",
+        },
+        sessionCtx: {
+          Provider: "discord",
+          OriginatingChannel: "discord",
+          OriginatingTo: "channel:C1",
+          AccountId: "primary",
+          MessageSid: "1503645939964055592",
+        },
+      });
+
+      const res = await run();
+      const payload = Array.isArray(res) ? res[0] : res;
+
+      expect(payload?.isError).not.toBe(true);
+      expect(payload?.text).toContain("Model Fallback:");
+      expect(payload?.text).not.toContain("no visible reply");
+    } finally {
+      fallbackSpy.mockRestore();
+    }
+  });
+
+  it("does not treat whitespace-only messaging evidence as fallback delivery", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "NO_REPLY" }],
+      messagingToolSentTexts: ["  "],
+      messagingToolSentMediaUrls: ["\t"],
+      messagingToolSentTargets: [
+        { tool: "message", provider: "discord", to: "channel:C1", text: "  " },
+      ],
+      meta: {},
+    });
+    const fallbackSpy = vi
+      .spyOn(modelFallbackModule, "runWithModelFallback")
+      .mockImplementationOnce(
+        async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+          result: await run("openai-codex", "gpt-5.5"),
+          provider: "openai-codex",
+          model: "gpt-5.5",
+          attempts: [
+            {
+              provider: "lmstudio",
+              model: "gemma-4-e4b-it",
+              error: "Connection error.",
+              reason: "timeout",
+            },
+          ],
+        }),
+      );
+
+    try {
+      const { run } = createMinimalRun({
+        runOverrides: {
+          provider: "lmstudio",
+          model: "gemma-4-e4b-it",
+          messageProvider: "discord",
+        },
+        sessionCtx: {
+          Provider: "discord",
+          OriginatingChannel: "discord",
+          OriginatingTo: "channel:C1",
+          AccountId: "primary",
+          MessageSid: "1503645939964055592",
+        },
+      });
+      const res = await run();
+      const payload = Array.isArray(res) ? res[0] : res;
+
+      expect(payload?.isError).toBe(true);
+      expect(payload?.text).toContain("configured model backend lmstudio/gemma-4-e4b-it");
+      expect(payload?.text).toContain("Fallback used openai-codex/gpt-5.5");
+    } finally {
+      fallbackSpy.mockRestore();
+    }
+  });
+
+  it("announces fallback without silence failure when fallback already completed a cron side effect", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "NO_REPLY" }],
+      successfulCronAdds: 1,
+      meta: {},
+    });
+    const fallbackSpy = vi
+      .spyOn(modelFallbackModule, "runWithModelFallback")
+      .mockImplementationOnce(
+        async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+          result: await run("openai-codex", "gpt-5.5"),
+          provider: "openai-codex",
+          model: "gpt-5.5",
+          attempts: [
+            {
+              provider: "lmstudio",
+              model: "gemma-4-e4b-it",
+              error: "Connection error.",
+              reason: "timeout",
+            },
+          ],
+        }),
+      );
+
+    try {
+      const { run } = createMinimalRun({
+        runOverrides: {
+          provider: "lmstudio",
+          model: "gemma-4-e4b-it",
+          messageProvider: "discord",
+        },
+        sessionCtx: {
+          Provider: "discord",
+          OriginatingChannel: "discord",
+          OriginatingTo: "channel:C1",
+          AccountId: "primary",
+          MessageSid: "1503645939964055592",
+        },
+      });
+
+      const res = await run();
+      const payload = Array.isArray(res) ? res[0] : res;
+
+      expect(payload?.isError).not.toBe(true);
+      expect(payload?.text).toContain("Model Fallback:");
+      expect(payload?.text).not.toContain("no visible reply");
+    } finally {
+      fallbackSpy.mockRestore();
+    }
+  });
+
+  it("announces fallback without silence failure when fallback committed target-only messaging delivery", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "NO_REPLY" }],
+      messagingToolSentTargets: [{ tool: "message", provider: "discord", to: "channel:C1" }],
+      meta: {},
+    });
+    const fallbackSpy = vi
+      .spyOn(modelFallbackModule, "runWithModelFallback")
+      .mockImplementationOnce(
+        async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+          result: await run("openai-codex", "gpt-5.5"),
+          provider: "openai-codex",
+          model: "gpt-5.5",
+          attempts: [
+            {
+              provider: "lmstudio",
+              model: "gemma-4-e4b-it",
+              error: "Connection error.",
+              reason: "timeout",
+            },
+          ],
+        }),
+      );
+
+    try {
+      const { run } = createMinimalRun({
+        runOverrides: {
+          provider: "lmstudio",
+          model: "gemma-4-e4b-it",
+          messageProvider: "discord",
+        },
+        sessionCtx: {
+          Provider: "discord",
+          OriginatingChannel: "discord",
+          OriginatingTo: "channel:C1",
+          AccountId: "primary",
+          MessageSid: "1503645939964055592",
+        },
+      });
+
+      const res = await run();
+      const payload = Array.isArray(res) ? res[0] : res;
+
+      expect(payload?.isError).not.toBe(true);
+      expect(payload?.text).toContain("Model Fallback:");
+      expect(payload?.text).not.toContain("no visible reply");
+    } finally {
+      fallbackSpy.mockRestore();
+    }
+  });
+
+  it("announces fallback without silence failure when fallback already delivered an approval prompt", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      didSendDeterministicApprovalPrompt: true,
+      meta: {},
+    });
+    const fallbackSpy = vi
+      .spyOn(modelFallbackModule, "runWithModelFallback")
+      .mockImplementationOnce(
+        async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+          result: await run("openai-codex", "gpt-5.5"),
+          provider: "openai-codex",
+          model: "gpt-5.5",
+          attempts: [
+            {
+              provider: "lmstudio",
+              model: "gemma-4-e4b-it",
+              error: "Connection error.",
+              reason: "timeout",
+            },
+          ],
+        }),
+      );
+
+    try {
+      const { run } = createMinimalRun({
+        runOverrides: {
+          provider: "lmstudio",
+          model: "gemma-4-e4b-it",
+        },
+        sessionCtx: {
+          Provider: "discord",
+          OriginatingChannel: "discord",
+          MessageSid: "1503645939964055592",
+        },
+      });
+
+      const res = await run();
+      const payload = Array.isArray(res) ? res[0] : res;
+
+      expect(payload?.isError).not.toBe(true);
+      expect(payload?.text).toContain("Model Fallback:");
+      expect(payload?.text).not.toContain("no visible reply");
+    } finally {
+      fallbackSpy.mockRestore();
+    }
+  });
+
+  it("preserves intentional fallback silence when the turn permits silent replies", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "NO_REPLY" }],
+      meta: {},
+    });
+    const fallbackSpy = vi
+      .spyOn(modelFallbackModule, "runWithModelFallback")
+      .mockImplementationOnce(
+        async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+          result: await run("openai-codex", "gpt-5.5"),
+          provider: "openai-codex",
+          model: "gpt-5.5",
+          attempts: [
+            {
+              provider: "lmstudio",
+              model: "gemma-4-e4b-it",
+              error: "Connection error.",
+              reason: "timeout",
+            },
+          ],
+        }),
+      );
+
+    try {
+      const { run } = createMinimalRun({
+        runOverrides: {
+          provider: "lmstudio",
+          model: "gemma-4-e4b-it",
+          allowEmptyAssistantReplyAsSilent: true,
+        },
+        sessionCtx: {
+          Provider: "discord",
+          OriginatingChannel: "discord",
+          OriginatingTo: "channel:C1",
+          ChatType: "channel",
+          WasMentioned: false,
+          MessageSid: "1503645939964055592",
+        },
+      });
+
+      await expect(run()).resolves.toBeUndefined();
+    } finally {
+      fallbackSpy.mockRestore();
     }
   });
 
@@ -941,7 +1783,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     };
     const sessionStore = { main: sessionEntry };
 
-    state.runEmbeddedPiAgentMock.mockResolvedValue({
+    state.runEmbeddedAgentMock.mockResolvedValue({
       payloads: [{ text: "final" }],
       meta: {},
     });
@@ -997,7 +1839,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const sessionStore = { main: sessionEntry };
     let callCount = 0;
 
-    state.runEmbeddedPiAgentMock.mockResolvedValue({
+    state.runEmbeddedAgentMock.mockResolvedValue({
       payloads: [{ text: "final" }],
       meta: {},
     });
@@ -1067,7 +1909,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const sessionStore = { main: sessionEntry };
     let callCount = 0;
 
-    state.runEmbeddedPiAgentMock.mockResolvedValue({
+    state.runEmbeddedAgentMock.mockResolvedValue({
       payloads: [{ text: "final" }],
       meta: {},
     });
@@ -1139,7 +1981,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     }
   });
 
-  it("emits fallback lifecycle events while verbose is off", async () => {
+  it("announces fallback transitions and emits lifecycle events while verbose is off", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
@@ -1147,7 +1989,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const sessionStore = { main: sessionEntry };
     let callCount = 0;
 
-    state.runEmbeddedPiAgentMock.mockResolvedValue({
+    state.runEmbeddedAgentMock.mockResolvedValue({
       payloads: [{ text: "final" }],
       meta: {},
     });
@@ -1207,8 +2049,8 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
       const firstText = Array.isArray(first) ? first[0]?.text : first?.text;
       const secondText = Array.isArray(second) ? second[0]?.text : second?.text;
-      expect(firstText).not.toContain("Model Fallback:");
-      expect(secondText).not.toContain("Model Fallback cleared:");
+      expect(firstText).toContain("Model Fallback:");
+      expect(secondText).toContain("Model Fallback cleared:");
       expect(countMatching(phases, (phase) => phase === "fallback")).toBe(1);
       expect(countMatching(phases, (phase) => phase === "fallback_cleared")).toBe(1);
     } finally {
@@ -1247,7 +2089,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       };
       const sessionStore = { main: sessionEntry };
 
-      state.runEmbeddedPiAgentMock.mockResolvedValue({
+      state.runEmbeddedAgentMock.mockResolvedValue({
         payloads: [{ text: "final" }],
         meta: {},
       });
@@ -1298,7 +2140,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const storePath = join(dir, "sessions.json");
     await writeFile(storePath, JSON.stringify({ main: sessionEntry }), "utf8");
 
-    state.runEmbeddedPiAgentMock.mockResolvedValue({
+    state.runEmbeddedAgentMock.mockResolvedValue({
       payloads: [{ text: "final" }],
       meta: {
         agentMeta: {
@@ -1342,7 +2184,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 
   it("surfaces overflow fallback when embedded run returns empty payloads", async () => {
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => ({
+    state.runEmbeddedAgentMock.mockImplementationOnce(async () => ({
       payloads: [],
       meta: {
         durationMs: 1,
@@ -1359,12 +2201,13 @@ describe("runReplyAgent typing (heartbeat)", () => {
     if (!payload) {
       throw new Error("expected payload");
     }
-    expect(payload.text).toContain("conversation is too large");
+    expect(payload.text).toContain("Auto-compaction could not recover this turn");
+    expect(payload.text).toContain("reserveTokensFloor");
     expect(payload.text).toContain("/new");
   });
 
   it("surfaces overflow fallback when embedded payload text is whitespace-only", async () => {
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => ({
+    state.runEmbeddedAgentMock.mockImplementationOnce(async () => ({
       payloads: [{ text: "   \n\t  ", isError: true }],
       meta: {
         durationMs: 1,
@@ -1381,12 +2224,13 @@ describe("runReplyAgent typing (heartbeat)", () => {
     if (!payload) {
       throw new Error("expected payload");
     }
-    expect(payload.text).toContain("conversation is too large");
+    expect(payload.text).toContain("Auto-compaction could not recover this turn");
+    expect(payload.text).toContain("reserveTokensFloor");
     expect(payload.text).toContain("/new");
   });
 
   it("returns friendly message for role ordering errors thrown as exceptions", async () => {
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
+    state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
       throw new Error("400 Incorrect role information");
     });
 
@@ -1394,12 +2238,12 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const res = await run();
 
     const payload = requireRecord(res, "ordering conflict payload");
-    expect(payload.text).toContain("Message ordering conflict");
+    expect(payload.text).toContain("model provider rejected the conversation state");
     expect(payload.text).not.toContain("400");
   });
 
   it("rewrites Bun socket errors into friendly text", async () => {
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => ({
+    state.runEmbeddedAgentMock.mockImplementationOnce(async () => ({
       payloads: [
         {
           text: "TypeError: The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()",

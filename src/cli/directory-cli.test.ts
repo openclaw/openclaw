@@ -50,10 +50,24 @@ vi.mock("../runtime.js", () => ({
 }));
 
 function requireRecord(value: unknown): Record<string, unknown> {
-  expect(value).toBeTruthy();
+  if (!value) {
+    throw new Error("expected record");
+  }
   expect(typeof value).toBe("object");
   expect(Array.isArray(value)).toBe(false);
   return value as Record<string, unknown>;
+}
+
+function firstMockArg(mockFn: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } }): unknown {
+  const call = mockFn.mock.calls[0];
+  if (!call) {
+    throw new Error("expected mock to be called");
+  }
+  return call[0];
+}
+
+function firstRecordArg(mockFn: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } }) {
+  return requireRecord(firstMockArg(mockFn));
 }
 
 function runtimeErrors(): string[] {
@@ -107,16 +121,19 @@ describe("registerDirectoryCli", () => {
       from: "user",
     });
 
-    const installArgs = requireRecord(mocks.resolveInstallableChannelPlugin.mock.calls[0]?.[0]);
+    expect(mocks.resolveInstallableChannelPlugin).toHaveBeenCalledTimes(1);
+    const installArgs = firstRecordArg(mocks.resolveInstallableChannelPlugin);
     expect(installArgs.rawChannel).toBe("demo-directory");
     expect(installArgs.allowInstall).toBe(true);
-    const replaceArgs = requireRecord(mocks.replaceConfigFile.mock.calls[0]?.[0]);
+    expect(mocks.replaceConfigFile).toHaveBeenCalledTimes(1);
+    const replaceArgs = firstRecordArg(mocks.replaceConfigFile);
     expect(replaceArgs.nextConfig).toEqual({
       channels: {},
       plugins: { entries: { "demo-directory": { enabled: true } } },
     });
     expect(replaceArgs.baseHash).toBe("config-1");
-    expect(requireRecord(self.mock.calls[0]?.[0]).accountId).toBe("default");
+    expect(self).toHaveBeenCalledTimes(1);
+    expect(firstRecordArg(self).accountId).toBe("default");
     expect(runtimeState.defaultRuntime.log).toHaveBeenCalledWith(
       JSON.stringify({ id: "self-1", name: "Family Phone" }, null, 2),
     );
@@ -153,7 +170,8 @@ describe("registerDirectoryCli", () => {
       cfg: autoEnabledConfig,
       channel: null,
     });
-    expect(requireRecord(self.mock.calls[0]?.[0]).cfg).toBe(autoEnabledConfig);
+    expect(self).toHaveBeenCalledTimes(1);
+    expect(firstRecordArg(self).cfg).toBe(autoEnabledConfig);
     expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
       nextConfig: autoEnabledConfig,
       baseHash: "config-1",
@@ -192,7 +210,8 @@ describe("registerDirectoryCli", () => {
       { from: "user" },
     );
 
-    const listPeersLiveArgs = requireRecord(listPeersLive.mock.calls[0]?.[0]);
+    expect(listPeersLive).toHaveBeenCalledTimes(1);
+    const listPeersLiveArgs = firstRecordArg(listPeersLive);
     expect(listPeersLiveArgs.accountId).toBe("default");
     expect(listPeersLiveArgs.query).toBe("ada");
     expect(listPeersLiveArgs.limit).toBe(5);
@@ -221,7 +240,8 @@ describe("registerDirectoryCli", () => {
       from: "user",
     });
 
-    expect(requireRecord(listGroups.mock.calls[0]?.[0]).accountId).toBe("default");
+    expect(listGroups).toHaveBeenCalledTimes(1);
+    expect(firstRecordArg(listGroups).accountId).toBe("default");
     expect(runtimeState.defaultRuntime.log).toHaveBeenCalledWith(
       JSON.stringify([{ id: "channel:config", kind: "group" }], null, 2),
     );
@@ -247,7 +267,8 @@ describe("registerDirectoryCli", () => {
       }),
     ).rejects.toThrow("exit:1");
 
-    const installArgs = requireRecord(mocks.resolveInstallableChannelPlugin.mock.calls[0]?.[0]);
+    expect(mocks.resolveInstallableChannelPlugin).toHaveBeenCalledTimes(1);
+    const installArgs = firstRecordArg(mocks.resolveInstallableChannelPlugin);
     expect(installArgs.rawChannel).toBe("openclaw-weixin");
     expect(installArgs.allowInstall).toBe(true);
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
@@ -256,5 +277,47 @@ describe("registerDirectoryCli", () => {
         message.includes("Channel openclaw-weixin does not support directory peers"),
       ),
     ).toBe(true);
+  });
+
+  it.each([
+    ["peers list", ["directory", "peers", "list", "--channel", "slack", "--limit", "5x"]],
+    ["groups list", ["directory", "groups", "list", "--channel", "slack", "--limit", "5x"]],
+    [
+      "group members",
+      [
+        "directory",
+        "groups",
+        "members",
+        "--channel",
+        "slack",
+        "--group-id",
+        "group-1",
+        "--limit",
+        "5x",
+      ],
+    ],
+  ])("rejects partial directory limit for %s", async (_label, args) => {
+    mocks.resolveInstallableChannelPlugin.mockResolvedValue({
+      cfg: { channels: { slack: {} } },
+      channelId: "slack",
+      plugin: {
+        id: "slack",
+        directory: {
+          listPeers: vi.fn().mockResolvedValue([]),
+          listGroups: vi.fn().mockResolvedValue([]),
+          listGroupMembers: vi.fn().mockResolvedValue([]),
+        },
+      },
+      configChanged: false,
+    });
+
+    const program = new Command().name("openclaw");
+    registerDirectoryCli(program);
+
+    await expect(program.parseAsync(args, { from: "user" })).rejects.toThrow("exit:1");
+
+    expect(runtimeErrors().join("\n")).toContain("--limit must be a positive integer.");
+    expect(mocks.resolveInstallableChannelPlugin).not.toHaveBeenCalled();
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
   });
 });

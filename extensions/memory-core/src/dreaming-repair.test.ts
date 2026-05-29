@@ -142,7 +142,9 @@ describe("dreaming artifact repair", () => {
     await expectPathMissing(path.join(workspaceDir, "memory", ".dreams", "session-ingestion.json"));
     await expect(fs.readFile(dreamsPath, "utf-8")).resolves.toContain("# Dream Diary");
     const archivedEntries = await fs.readdir(archiveDir);
-    expect(archivedEntries).toContainEqual(expect.stringMatching(/^session-corpus\./));
-    expect(archivedEntries).toContainEqual(expect.stringMatching(/^session-ingestion\.json\./));
+    expect(archivedEntries.filter((entry) => entry.startsWith("session-corpus."))).not.toEqual([]);
+    expect(
+      archivedEntries.filter((entry) => entry.startsWith("session-ingestion.json.")),
+    ).not.toEqual([]);
   });
 });

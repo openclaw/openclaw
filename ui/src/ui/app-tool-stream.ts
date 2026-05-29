@@ -1,6 +1,8 @@
+import { updateActivityFromToolEvent, type ActivityEntry } from "./activity-model.ts";
 import { createChatModelOverride } from "./chat-model-ref.ts";
 import type { ChatModelOverride } from "./chat-model-ref.types.ts";
 import { formatUnknownText, truncateText } from "./format.ts";
+import { buildAgentMainSessionKey, DEFAULT_AGENT_ID, DEFAULT_MAIN_KEY } from "./session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 
 const TOOL_STREAM_LIMIT = 50;
@@ -14,6 +16,16 @@ export type AgentEventPayload = {
   ts: number;
   sessionKey?: string;
   data: Record<string, unknown>;
+};
+
+export type SessionOperationEventPayload = {
+  operationId?: string;
+  operation?: string;
+  phase?: string;
+  sessionKey?: string;
+  ts?: number;
+  completed?: boolean;
+  reason?: string;
 };
 
 export type ToolStreamEntry = {
@@ -30,6 +42,11 @@ export type ToolStreamEntry = {
 
 type ToolStreamHost = {
   sessionKey: string;
+  hello?: {
+    snapshot?: {
+      sessionDefaults?: SessionDefaultsSnapshot;
+    };
+  } | null;
   chatRunId: string | null;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
@@ -37,8 +54,15 @@ type ToolStreamHost = {
   toolStreamById: Map<string, ToolStreamEntry>;
   toolStreamOrder: string[];
   chatToolMessages: Record<string, unknown>[];
+  activityEntries?: ActivityEntry[];
   toolStreamSyncTimer: number | null;
   chatModelOverrides?: Record<string, ChatModelOverride | null>;
+};
+
+type SessionDefaultsSnapshot = {
+  defaultAgentId?: string;
+  mainKey?: string;
+  mainSessionKey?: string;
 };
 
 function toTrimmedString(value: unknown): string | null {
@@ -219,6 +243,49 @@ function syncSessionStatusModelOverride(host: ToolStreamHost, data: Record<strin
   };
 }
 
+function readSessionDefaults(host: ToolStreamHost): SessionDefaultsSnapshot | undefined {
+  return host.hello?.snapshot?.sessionDefaults;
+}
+
+function resolveDefaultMainSessionKey(host: ToolStreamHost): string {
+  const defaults = readSessionDefaults(host);
+  const configuredMain = toTrimmedString(defaults?.mainSessionKey);
+  if (configuredMain) {
+    return configuredMain;
+  }
+  return buildAgentMainSessionKey({
+    agentId: toTrimmedString(defaults?.defaultAgentId) ?? DEFAULT_AGENT_ID,
+    mainKey: toTrimmedString(defaults?.mainKey) ?? DEFAULT_MAIN_KEY,
+  });
+}
+
+function normalizeSessionKeyForEventComparison(
+  host: ToolStreamHost,
+  value?: string,
+): string | null {
+  const raw = toTrimmedString(value);
+  if (!raw) {
+    return null;
+  }
+  const defaults = readSessionDefaults(host);
+  const mainKey = toTrimmedString(defaults?.mainKey) ?? DEFAULT_MAIN_KEY;
+  const defaultAgentId = toTrimmedString(defaults?.defaultAgentId) ?? DEFAULT_AGENT_ID;
+  const canonicalMain = resolveDefaultMainSessionKey(host);
+  const aliases = new Set(
+    [
+      DEFAULT_MAIN_KEY,
+      mainKey,
+      canonicalMain,
+      buildAgentMainSessionKey({ agentId: defaultAgentId, mainKey: DEFAULT_MAIN_KEY }),
+      buildAgentMainSessionKey({ agentId: defaultAgentId, mainKey }),
+    ].map((entry) => normalizeLowercaseStringOrEmpty(entry)),
+  );
+  const normalizedRaw = normalizeLowercaseStringOrEmpty(raw);
+  return aliases.has(normalizedRaw)
+    ? normalizeLowercaseStringOrEmpty(canonicalMain)
+    : normalizedRaw;
+}
+
 function buildToolStreamMessage(entry: ToolStreamEntry): Record<string, unknown> {
   const content: Array<Record<string, unknown>> = [];
   content.push({
@@ -314,9 +381,11 @@ type CompactionHost = ToolStreamHost & {
   compactionClearTimer?: number | null;
   fallbackStatus?: FallbackStatus | null;
   fallbackClearTimer?: number | null;
+  requestUpdate?: () => void;
 };
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
+const COMPACTION_ACTIVE_STALE_TIMEOUT_MS = 5 * 60_000;
 const FALLBACK_TOAST_DURATION_MS = 8000;
 
 function clearCompactionTimer(host: CompactionHost) {
@@ -326,11 +395,23 @@ function clearCompactionTimer(host: CompactionHost) {
   }
 }
 
-function scheduleCompactionClear(host: CompactionHost) {
+function scheduleCompactionClear(
+  host: CompactionHost,
+  delayMs = COMPACTION_TOAST_DURATION_MS,
+  expected?: { phase?: CompactionStatus["phase"]; runId?: string | null },
+) {
   host.compactionClearTimer = window.setTimeout(() => {
+    const current = host.compactionStatus;
+    if (expected?.phase && current?.phase !== expected.phase) {
+      return;
+    }
+    if (expected?.runId && current?.runId !== expected.runId) {
+      return;
+    }
     host.compactionStatus = null;
     host.compactionClearTimer = null;
-  }, COMPACTION_TOAST_DURATION_MS);
+    host.requestUpdate?.();
+  }, delayMs);
 }
 
 function setCompactionComplete(host: CompactionHost, runId: string) {
@@ -340,7 +421,58 @@ function setCompactionComplete(host: CompactionHost, runId: string) {
     startedAt: host.compactionStatus?.startedAt ?? null,
     completedAt: Date.now(),
   };
-  scheduleCompactionClear(host);
+  scheduleCompactionClear(host, COMPACTION_TOAST_DURATION_MS, { phase: "complete", runId });
+}
+
+export function handleSessionOperationEvent(
+  host: ToolStreamHost,
+  payload?: SessionOperationEventPayload,
+) {
+  if (!payload || payload.operation !== "compact") {
+    return;
+  }
+  const sessionKey = toTrimmedString(payload.sessionKey);
+  if (
+    !sessionKey ||
+    normalizeSessionKeyForEventComparison(host, sessionKey) !==
+      normalizeSessionKeyForEventComparison(host, host.sessionKey)
+  ) {
+    return;
+  }
+
+  const operationId = toTrimmedString(payload.operationId) ?? `session-compact:${sessionKey}`;
+  const compactionHost = host as CompactionHost;
+
+  if (payload.phase === "start") {
+    clearCompactionTimer(compactionHost);
+    compactionHost.compactionStatus = {
+      phase: "active",
+      runId: operationId,
+      startedAt: Date.now(),
+      completedAt: null,
+    };
+    scheduleCompactionClear(compactionHost, COMPACTION_ACTIVE_STALE_TIMEOUT_MS, {
+      phase: "active",
+      runId: operationId,
+    });
+    return;
+  }
+
+  if (payload.phase !== "end") {
+    return;
+  }
+  if (
+    compactionHost.compactionStatus?.runId &&
+    compactionHost.compactionStatus.runId !== operationId
+  ) {
+    return;
+  }
+  clearCompactionTimer(compactionHost);
+  if (payload.completed === true) {
+    setCompactionComplete(compactionHost, operationId);
+    return;
+  }
+  compactionHost.compactionStatus = null;
 }
 
 export function handleCompactionEvent(host: CompactionHost, payload: AgentEventPayload) {
@@ -357,6 +489,10 @@ export function handleCompactionEvent(host: CompactionHost, payload: AgentEventP
       startedAt: Date.now(),
       completedAt: null,
     };
+    scheduleCompactionClear(host, COMPACTION_ACTIVE_STALE_TIMEOUT_MS, {
+      phase: "active",
+      runId: payload.runId,
+    });
     return;
   }
   if (phase === "end") {
@@ -369,6 +505,10 @@ export function handleCompactionEvent(host: CompactionHost, payload: AgentEventP
         startedAt: host.compactionStatus?.startedAt ?? Date.now(),
         completedAt: null,
       };
+      scheduleCompactionClear(host, COMPACTION_ACTIVE_STALE_TIMEOUT_MS, {
+        phase: "retrying",
+        runId: payload.runId,
+      });
       return;
     }
     if (completed) {
@@ -410,7 +550,11 @@ function resolveAcceptedSession(
   },
 ): { accepted: boolean; sessionKey?: string } {
   const sessionKey = typeof payload.sessionKey === "string" ? payload.sessionKey : undefined;
-  if (sessionKey && sessionKey !== host.sessionKey) {
+  if (
+    sessionKey &&
+    normalizeSessionKeyForEventComparison(host, sessionKey) !==
+      normalizeSessionKeyForEventComparison(host, host.sessionKey)
+  ) {
     return { accepted: false };
   }
   if (!host.chatRunId && options?.allowSessionScopedWhenIdle && sessionKey) {
@@ -530,6 +674,7 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   if (!toolCallId) {
     return;
   }
+  updateActivityFromToolEvent(host, { ...payload, data });
   const name = typeof data.name === "string" ? data.name : "tool";
   const phase = typeof data.phase === "string" ? data.phase : "";
   const args = phase === "start" ? data.args : undefined;

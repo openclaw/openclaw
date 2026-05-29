@@ -15,9 +15,28 @@ beforeAll(async () => {
 
 installProviderHttpMockCleanup();
 
+function requireFirstPostJsonRequest(): unknown {
+  const [call] = postJsonRequestMock.mock.calls;
+  if (!call) {
+    throw new Error("expected DeepInfra video request");
+  }
+  return call[0];
+}
+
 describe("deepinfra video generation provider", () => {
   it("declares explicit mode capabilities", () => {
     expectExplicitVideoGenerationCapabilities(buildDeepInfraVideoGenerationProvider());
+  });
+
+  it("uses the current DeepInfra text-to-video fallback model first", () => {
+    const provider = buildDeepInfraVideoGenerationProvider();
+
+    expect(provider.defaultModel).toBe("Pixverse/Pixverse-T2V");
+    expect(provider.models?.slice(0, 3)).toEqual([
+      "Pixverse/Pixverse-T2V",
+      "Pixverse/Pixverse-T2V-HD",
+      "Wan-AI/Wan2.6-T2V",
+    ]);
   });
 
   it("creates native text-to-video requests and returns the hosted output URL", async () => {
@@ -66,7 +85,7 @@ describe("deepinfra video generation provider", () => {
       ],
     ]);
     expect(postJsonRequestMock).toHaveBeenCalledOnce();
-    const [postRequest] = postJsonRequestMock.mock.calls[0] ?? [];
+    const postRequest = requireFirstPostJsonRequest();
     const postRequestHeaders = Reflect.get(postRequest ?? {}, "headers");
     expect(postRequestHeaders).toBeInstanceOf(Headers);
     expect(Object.fromEntries((postRequestHeaders as Headers).entries())).toEqual({
@@ -104,6 +123,85 @@ describe("deepinfra video generation provider", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
+  it("does not forward malformed video seed values", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({
+          video_url: "/generated/video.mp4",
+          request_id: "req_seed",
+          inference_status: { status: "succeeded" },
+        }),
+      },
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildDeepInfraVideoGenerationProvider();
+    await provider.generateVideo({
+      provider: "deepinfra",
+      model: "deepinfra/Pixverse/Pixverse-T2V",
+      prompt: "A bicycle weaving through a rainy neon street",
+      cfg: {},
+      providerOptions: {
+        seed: 1.5,
+      },
+    });
+
+    expect(postJsonRequestMock).toHaveBeenCalledOnce();
+    const postRequest = requireFirstPostJsonRequest();
+    expect(Reflect.get(Reflect.get(postRequest ?? {}, "body") ?? {}, "seed")).toBeUndefined();
+  });
+
+  it("drops malformed response seed metadata", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({
+          video_url: "/generated/video.mp4",
+          request_id: "req_bad_seed",
+          seed: 1.5,
+          inference_status: { status: "succeeded" },
+        }),
+      },
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildDeepInfraVideoGenerationProvider();
+    const result = await provider.generateVideo({
+      provider: "deepinfra",
+      model: "deepinfra/Pixverse/Pixverse-T2V",
+      prompt: "A bicycle weaving through a rainy neon street",
+      cfg: {},
+    });
+
+    expect(result.metadata).toEqual({
+      requestId: "req_bad_seed",
+      seed: undefined,
+      status: "succeeded",
+    });
+  });
+
+  it("reports malformed native video JSON as a provider error", async () => {
+    const release = vi.fn(async () => {});
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => {
+          throw new SyntaxError("Unexpected token");
+        },
+      },
+      release,
+    });
+
+    const provider = buildDeepInfraVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "deepinfra",
+        model: "deepinfra/Pixverse/Pixverse-T2V",
+        prompt: "A bicycle weaving through a rainy neon street",
+        cfg: {},
+      }),
+    ).rejects.toThrow("DeepInfra video generation failed: malformed JSON response");
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   it("names base64 WebM data URL outputs from the MIME type", async () => {
     postJsonRequestMock.mockResolvedValue({
       response: {
@@ -134,5 +232,64 @@ describe("deepinfra video generation provider", () => {
       mimeType: "video/webm",
       fileName: "video-1.webm",
     });
+  });
+
+  it("accepts DeepInfra video array responses", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({
+          videos: [{ url: "/generated/video-array.mp4" }],
+          request_id: "req_array",
+          status: "succeeded",
+        }),
+      },
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildDeepInfraVideoGenerationProvider();
+    const result = await provider.generateVideo({
+      provider: "deepinfra",
+      model: "deepinfra/google/veo-3.1-fast",
+      prompt: "A videos array response",
+      cfg: {},
+    });
+
+    expect(result.videos).toEqual([
+      {
+        url: "https://api.deepinfra.com/generated/video-array.mp4",
+        mimeType: "video/mp4",
+        fileName: "video-1.mp4",
+      },
+    ]);
+    expect(result.metadata).toEqual({
+      requestId: "req_array",
+      seed: undefined,
+      status: "succeeded",
+    });
+  });
+
+  it("rejects malformed base64 data URL video outputs", async () => {
+    const release = vi.fn(async () => undefined);
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({
+          video_url: "data:video/webm;base64,not-base64!",
+          request_id: "req_bad_base64",
+          inference_status: { status: "succeeded" },
+        }),
+      },
+      release,
+    });
+
+    const provider = buildDeepInfraVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "deepinfra",
+        model: "deepinfra/Pixverse/Pixverse-T2V",
+        prompt: "A malformed WebM data URL",
+        cfg: {},
+      }),
+    ).rejects.toThrow("DeepInfra video response returned malformed data URL base64");
+    expect(release).toHaveBeenCalledOnce();
   });
 });

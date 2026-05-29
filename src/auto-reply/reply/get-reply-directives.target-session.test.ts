@@ -115,10 +115,13 @@ function parseInlineDirectivesForTest(body: string) {
 
 function mockCallInput(mock: { mock: { calls: unknown[][] } }, index = 0): Record<string, unknown> {
   const call = mock.mock.calls[index];
-  expect(call).toBeDefined();
-  const input = call?.[0];
-  expect(typeof input).toBe("object");
-  expect(input).not.toBeNull();
+  if (!call) {
+    throw new Error(`Expected mock call ${index}`);
+  }
+  const input = call[0];
+  if (!input || typeof input !== "object") {
+    throw new Error(`expected mock input ${index}`);
+  }
   return input as Record<string, unknown>;
 }
 
@@ -142,6 +145,8 @@ async function resolveHelloWithModelDefaults(params: {
   sessionEntry?: SessionEntry;
   agentCfg?: { reasoningDefault?: "off" | "on" | "stream" };
   commandAuthorized?: boolean;
+  provider?: string;
+  model?: string;
   ctx?: Parameters<typeof buildTestCtx>[0];
 }) {
   const resolveDefaultThinkingLevel = vi.fn(async () => params.defaultThinking);
@@ -187,8 +192,8 @@ async function resolveHelloWithModelDefaults(params: {
     defaultProvider: "openai",
     defaultModel: "gpt-4o-mini",
     aliasIndex: { byAlias: new Map(), byKey: new Map() },
-    provider: "openai",
-    model: "gpt-4o-mini",
+    provider: params.provider ?? "openai",
+    model: params.model ?? "gpt-4o-mini",
     hasResolvedHeartbeatModelOverride: false,
     typing: makeTypingController(),
     opts: undefined,

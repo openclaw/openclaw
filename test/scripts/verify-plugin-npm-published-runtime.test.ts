@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { collectPluginNpmPublishedRuntimeErrors } from "../../scripts/verify-plugin-npm-published-runtime.mjs";
+import {
+  collectPluginNpmPublishedRuntimeErrors,
+  resolveNpmPackFilename,
+} from "../../scripts/verify-plugin-npm-published-runtime.mjs";
 
 describe("collectPluginNpmPublishedRuntimeErrors", () => {
   it("flags published plugin packages with TypeScript entries and no compiled runtime output", () => {
@@ -86,5 +89,92 @@ describe("collectPluginNpmPublishedRuntimeErrors", () => {
     ).toEqual([
       "@openclaw/whatsapp@2026.5.3 package.json openclaw.runtimeExtensions[0] must be a non-empty string",
     ]);
+  });
+
+  it("flags published plugin packages with TypeScript setup entries and no compiled setup runtime", () => {
+    expect(
+      collectPluginNpmPublishedRuntimeErrors({
+        packageJson: {
+          name: "@openclaw/line",
+          version: "2026.5.3",
+          openclaw: {
+            extensions: ["./index.ts"],
+            runtimeExtensions: ["./dist/index.js"],
+            setupEntry: "./setup-entry.ts",
+          },
+        },
+        files: ["package.json", "index.ts", "dist/index.js", "setup-entry.ts"],
+      }),
+    ).toEqual([
+      "@openclaw/line@2026.5.3 requires compiled runtime output for TypeScript entry ./setup-entry.ts: expected ./dist/setup-entry.js, ./dist/setup-entry.mjs, ./dist/setup-entry.cjs, ./setup-entry.js, ./setup-entry.mjs, ./setup-entry.cjs",
+    ]);
+  });
+
+  it("accepts published plugin packages with explicit runtimeSetupEntry", () => {
+    expect(
+      collectPluginNpmPublishedRuntimeErrors({
+        packageJson: {
+          name: "@openclaw/qqbot",
+          version: "2026.5.3",
+          openclaw: {
+            extensions: ["./index.ts"],
+            runtimeExtensions: ["./dist/index.js"],
+            setupEntry: "./setup-entry.ts",
+            runtimeSetupEntry: "./dist/setup-entry.js",
+          },
+        },
+        files: ["package.json", "dist/index.js", "dist/setup-entry.js"],
+      }),
+    ).toStrictEqual([]);
+  });
+
+  it("flags missing explicit runtimeSetupEntry outputs", () => {
+    expect(
+      collectPluginNpmPublishedRuntimeErrors({
+        packageJson: {
+          name: "@openclaw/matrix",
+          version: "2026.5.3",
+          openclaw: {
+            extensions: ["./index.ts"],
+            runtimeExtensions: ["./dist/index.js"],
+            setupEntry: "./setup-entry.ts",
+            runtimeSetupEntry: "./dist/setup-entry.js",
+          },
+        },
+        files: ["package.json", "dist/index.js"],
+      }),
+    ).toEqual(["@openclaw/matrix@2026.5.3 runtime setup entry not found: ./dist/setup-entry.js"]);
+  });
+
+  it("flags runtimeSetupEntry without setupEntry", () => {
+    expect(
+      collectPluginNpmPublishedRuntimeErrors({
+        packageJson: {
+          name: "@openclaw/twitch",
+          version: "2026.5.3",
+          openclaw: {
+            extensions: ["./index.ts"],
+            runtimeExtensions: ["./dist/index.js"],
+            runtimeSetupEntry: "./dist/setup-entry.js",
+          },
+        },
+        files: ["package.json", "dist/index.js", "dist/setup-entry.js"],
+      }),
+    ).toEqual([
+      "@openclaw/twitch@2026.5.3 package.json openclaw.runtimeSetupEntry requires openclaw.setupEntry",
+    ]);
+  });
+});
+
+describe("resolveNpmPackFilename", () => {
+  it("uses the final tarball filename from plain npm pack output", () => {
+    const noisyOutput = [
+      "npm notice",
+      "npm notice package: @openclaw/msteams@2026.5.24-beta.1",
+      "openclaw-msteams-2026.5.24-beta.1.tgz",
+      "",
+    ].join("\n");
+
+    expect(resolveNpmPackFilename(noisyOutput)).toBe("openclaw-msteams-2026.5.24-beta.1.tgz");
   });
 });

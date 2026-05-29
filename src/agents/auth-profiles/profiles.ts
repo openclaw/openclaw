@@ -18,6 +18,10 @@ function resetSuccessfulUsageStats(
   return {
     ...existing,
     errorCount: 0,
+    blockedUntil: undefined,
+    blockedReason: undefined,
+    blockedSource: undefined,
+    blockedModel: undefined,
     cooldownUntil: undefined,
     cooldownReason: undefined,
     cooldownModel: undefined,
@@ -102,22 +106,35 @@ export async function promoteAuthProfileInOrder(params: {
   });
 }
 
+function normalizeAuthProfileCredential(credential: AuthProfileCredential): AuthProfileCredential {
+  if (credential.type === "api_key") {
+    if (typeof credential.key !== "string") {
+      return credential;
+    }
+    const { key: _key, ...rest } = credential;
+    const key = normalizeSecretInput(credential.key);
+    return {
+      ...rest,
+      ...(key ? { key } : {}),
+    };
+  }
+  if (credential.type === "token") {
+    if (typeof credential.token !== "string") {
+      return credential;
+    }
+    const { token: _token, ...rest } = credential;
+    const token = normalizeSecretInput(credential.token);
+    return { ...rest, ...(token ? { token } : {}) };
+  }
+  return credential;
+}
+
 export function upsertAuthProfile(params: {
   profileId: string;
   credential: AuthProfileCredential;
   agentDir?: string;
 }): void {
-  const credential =
-    params.credential.type === "api_key"
-      ? {
-          ...params.credential,
-          ...(typeof params.credential.key === "string"
-            ? { key: normalizeSecretInput(params.credential.key) }
-            : {}),
-        }
-      : params.credential.type === "token"
-        ? { ...params.credential, token: normalizeSecretInput(params.credential.token) }
-        : params.credential;
+  const credential = normalizeAuthProfileCredential(params.credential);
   const store = ensureAuthProfileStoreForLocalUpdate(params.agentDir);
   store.profiles[params.profileId] = credential;
   saveAuthProfileStore(store, params.agentDir, {
@@ -131,10 +148,15 @@ export async function upsertAuthProfileWithLock(params: {
   credential: AuthProfileCredential;
   agentDir?: string;
 }): Promise<AuthProfileStore | null> {
+  const credential = normalizeAuthProfileCredential(params.credential);
   return await updateAuthProfileStoreWithLock({
     agentDir: params.agentDir,
+    saveOptions: {
+      filterExternalAuthProfiles: false,
+      syncExternalCli: false,
+    },
     updater: (store) => {
-      store.profiles[params.profileId] = params.credential;
+      store.profiles[params.profileId] = credential;
       return true;
     },
   });
@@ -179,6 +201,27 @@ export async function removeProviderAuthProfilesWithLock(params: {
         store.usageStats = undefined;
       }
       return changed;
+    },
+  });
+}
+
+export async function clearLastGoodProfileWithLock(params: {
+  provider: string;
+  profileId: string;
+  agentDir?: string;
+}): Promise<AuthProfileStore | null> {
+  const providerKey = resolveProviderIdForAuth(params.provider);
+  return await updateAuthProfileStoreWithLock({
+    agentDir: params.agentDir,
+    updater: (store) => {
+      if (store.lastGood?.[providerKey] !== params.profileId) {
+        return false;
+      }
+      delete store.lastGood[providerKey];
+      if (Object.keys(store.lastGood).length === 0) {
+        store.lastGood = undefined;
+      }
+      return true;
     },
   });
 }

@@ -3,7 +3,9 @@ import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "./prompt-overlay.js";
 import { codexProviderDiscovery } from "./provider-discovery.js";
 import { buildCodexProvider, buildCodexProviderCatalog } from "./provider.js";
 import { CodexAppServerClient } from "./src/app-server/client.js";
+import type { listCodexAppServerModels } from "./src/app-server/models.js";
 import {
+  createIsolatedCodexAppServerClient,
   getSharedCodexAppServerClient,
   resetSharedCodexAppServerClientForTests,
 } from "./src/app-server/shared-client.js";
@@ -16,11 +18,7 @@ afterEach(() => {
 function expectStaticFallbackCatalog(
   result: Awaited<ReturnType<typeof buildCodexProviderCatalog>>,
 ) {
-  expect(result.provider.models.map((model) => model.id)).toEqual([
-    "gpt-5.5",
-    "gpt-5.4-mini",
-    "gpt-5.2",
-  ]);
+  expect(result.provider.models.map((model) => model.id)).toEqual(["gpt-5.5", "gpt-5.4-mini"]);
 }
 
 function createFakeCodexClient(): CodexAppServerClient {
@@ -32,10 +30,41 @@ function createFakeCodexClient(): CodexAppServerClient {
   } as unknown as CodexAppServerClient;
 }
 
+const TEST_CODEX_APP_SERVER_CONFIG = {
+  appServer: {
+    command: "/tmp/openclaw-test-codex",
+  },
+};
+
+async function listTestCodexAppServerModels(
+  options: Parameters<typeof listCodexAppServerModels>[0] = {},
+) {
+  expect(options.sharedClient).toBe(false);
+  const client = await createIsolatedCodexAppServerClient({
+    startOptions: options.startOptions,
+    timeoutMs: options.timeoutMs,
+    authProfileId: null,
+  });
+  try {
+    await client.request(
+      "model/list",
+      {
+        limit: options.limit ?? null,
+        cursor: options.cursor ?? null,
+        includeHidden: options.includeHidden ?? null,
+      },
+      { timeoutMs: options.timeoutMs },
+    );
+    return { models: [] };
+  } finally {
+    client.close();
+  }
+}
+
 function expectRecordFields(value: unknown, expected: Record<string, unknown>) {
-  expect(value).toBeDefined();
-  expect(typeof value).toBe("object");
-  expect(value).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error("Expected record");
+  }
   const actual = value as Record<string, unknown>;
   for (const [key, expectedValue] of Object.entries(expected)) {
     expect(actual[key]).toEqual(expectedValue);
@@ -170,8 +199,8 @@ describe("codex provider", () => {
       .mockResolvedValueOnce({
         models: [
           {
-            id: "gpt-5.2",
-            model: "gpt-5.2",
+            id: "gpt-5.5",
+            model: "gpt-5.5",
             hidden: false,
             inputModalities: ["text"],
             supportedReasoningEfforts: [],
@@ -194,7 +223,7 @@ describe("codex provider", () => {
       limit: 100,
       sharedClient: false,
     });
-    expect(result.provider.models.map((model) => model.id)).toEqual(["gpt-5.4", "gpt-5.2"]);
+    expect(result.provider.models.map((model) => model.id)).toEqual(["gpt-5.4", "gpt-5.5"]);
   });
 
   it("reports discovery failures before using the fallback catalog", async () => {
@@ -232,6 +261,8 @@ describe("codex provider", () => {
 
     await buildCodexProviderCatalog({
       env: { OPENCLAW_CODEX_DISCOVERY_LIVE: "1" },
+      pluginConfig: TEST_CODEX_APP_SERVER_CONFIG,
+      listModels: listTestCodexAppServerModels,
     });
 
     expect(client.close).toHaveBeenCalledTimes(1);
@@ -244,9 +275,21 @@ describe("codex provider", () => {
       .mockReturnValueOnce(activeClient)
       .mockReturnValueOnce(discoveryClient);
 
-    await getSharedCodexAppServerClient({ timeoutMs: 1000 });
+    await getSharedCodexAppServerClient({
+      startOptions: {
+        transport: "stdio",
+        command: "/tmp/openclaw-test-codex",
+        commandSource: "config",
+        args: ["app-server", "--listen", "stdio://"],
+        headers: {},
+      },
+      timeoutMs: 1000,
+      authProfileId: null,
+    });
     await buildCodexProviderCatalog({
       env: { OPENCLAW_CODEX_DISCOVERY_LIVE: "1" },
+      pluginConfig: TEST_CODEX_APP_SERVER_CONFIG,
+      listModels: listTestCodexAppServerModels,
     });
 
     expect(activeClient.close).not.toHaveBeenCalled();
@@ -353,7 +396,7 @@ describe("codex provider", () => {
 
     expect(
       result && "provider" in result ? result.provider.models.map((model) => model.id) : [],
-    ).toEqual(["gpt-5.5", "gpt-5.4-mini", "gpt-5.2"]);
+    ).toEqual(["gpt-5.5", "gpt-5.4-mini"]);
   });
 
   it("adds the GPT-5 prompt overlay to Codex provider runs", () => {

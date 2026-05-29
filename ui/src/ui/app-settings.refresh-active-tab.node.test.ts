@@ -1,33 +1,28 @@
 // @vitest-environment node
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type CronRunsLoadStatus = "ok" | "error" | "skipped";
 
 function createDeferred<T = void>() {
   let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
-  const promise = new Promise<T>((res) => {
+  let reject: ((reason?: unknown) => void) | undefined;
+  const promise = new Promise<T>((res, rej) => {
     resolve = res;
+    reject = rej;
   });
-  if (!resolve) {
+  if (!resolve || !reject) {
     throw new Error("Expected deferred resolver to be initialized");
   }
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 async function raceWithNextMacrotask(promise: Promise<unknown>): Promise<"resolved" | "pending"> {
-  let timer: NodeJS.Timeout | undefined;
-  try {
-    return await Promise.race([
-      promise.then(() => "resolved" as const),
-      new Promise<"pending">((resolve) => {
-        timer = setTimeout(() => resolve("pending"), 0);
-      }),
-    ]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
+  return await Promise.race([
+    promise.then(() => "resolved" as const),
+    new Promise<"pending">((resolve) => {
+      setImmediate(() => resolve("pending"));
+    }),
+  ]);
 }
 
 const mocks = vi.hoisted(() => ({
@@ -39,7 +34,7 @@ const mocks = vi.hoisted(() => ({
   loadAgentIdentityMock: vi.fn(async () => {}),
   loadAgentSkillsMock: vi.fn(async () => {}),
   loadAgentsMock: vi.fn(async () => {}),
-  loadChannelsMock: vi.fn<(_host: unknown, _probe: boolean) => Promise<void>>(async () => {}),
+  loadChannelsMock: vi.fn<(hostValue: unknown, _probe: boolean) => Promise<void>>(async () => {}),
   loadConfigMock: vi.fn(async () => {}),
   loadConfigSchemaMock: vi.fn(async () => {}),
   loadCronStatusMock: vi.fn(async () => {}),
@@ -55,10 +50,25 @@ const mocks = vi.hoisted(() => ({
   loadSessionsMock: vi.fn(async () => {}),
   loadSkillsMock: vi.fn(async () => {}),
   loadUsageMock: vi.fn(async () => {}),
+  loadWorkboardMock: vi.fn(async () => {}),
+  startDebugPollingMock: vi.fn(),
+  startLogsPollingMock: vi.fn(),
+  startNodesPollingMock: vi.fn(),
+  stopDebugPollingMock: vi.fn(),
+  stopLogsPollingMock: vi.fn(),
+  stopNodesPollingMock: vi.fn(),
 }));
 
 vi.mock("./app-chat.ts", () => ({
   refreshChat: mocks.refreshChatMock,
+}));
+vi.mock("./app-polling.ts", () => ({
+  startDebugPolling: mocks.startDebugPollingMock,
+  startLogsPolling: mocks.startLogsPollingMock,
+  startNodesPolling: mocks.startNodesPollingMock,
+  stopDebugPolling: mocks.stopDebugPollingMock,
+  stopLogsPolling: mocks.stopLogsPollingMock,
+  stopNodesPolling: mocks.stopNodesPollingMock,
 }));
 vi.mock("./app-scroll.ts", () => ({
   scheduleChatScroll: mocks.scheduleChatScrollMock,
@@ -112,6 +122,7 @@ vi.mock("./controllers/presence.ts", () => ({
 }));
 vi.mock("./controllers/sessions.ts", () => ({
   loadSessions: mocks.loadSessionsMock,
+  syncSelectedSessionMessageSubscription: vi.fn(),
 }));
 vi.mock("./controllers/skills.ts", () => ({
   loadSkills: mocks.loadSkillsMock,
@@ -119,8 +130,11 @@ vi.mock("./controllers/skills.ts", () => ({
 vi.mock("./controllers/usage.ts", () => ({
   loadUsage: mocks.loadUsageMock,
 }));
+vi.mock("./controllers/workboard.ts", () => ({
+  loadWorkboard: mocks.loadWorkboardMock,
+}));
 
-import { refreshActiveTab, setTab } from "./app-settings.ts";
+import { loadChannelsTab, refreshActiveTab, setTab } from "./app-settings.ts";
 
 function createHost() {
   return {
@@ -141,6 +155,7 @@ function createHost() {
     updateComplete: Promise.resolve(),
     cronRunsScope: "all",
     cronRunsJobId: null as string | null,
+    sessionsChangedReloadTimer: null as number | ReturnType<typeof globalThis.setTimeout> | null,
     sessionKey: "main",
     settings: {},
     basePath: "",
@@ -169,12 +184,14 @@ function expectBufferedPerformanceEvent(
       return candidate.payload?.[key] === expected;
     });
   });
-  expect(entry).toBeDefined();
-  for (const [key, expected] of Object.entries(expectedPayload)) {
-    expect(entry?.payload?.[key]).toBe(expected);
+  if (!entry) {
+    throw new Error(`Expected performance event ${event}`);
   }
-  expect(entry?.payload?.durationMs).toBeTypeOf("number");
-  return entry?.payload;
+  for (const [key, expected] of Object.entries(expectedPayload)) {
+    expect(entry.payload?.[key]).toBe(expected);
+  }
+  expect(entry.payload?.durationMs).toBeTypeOf("number");
+  return entry.payload;
 }
 
 describe("refreshActiveTab", () => {
@@ -182,6 +199,10 @@ describe("refreshActiveTab", () => {
     for (const fn of Object.values(mocks)) {
       fn.mockReset();
     }
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   const expectCommonAgentsTabRefresh = (host: ReturnType<typeof createHost>) => {
@@ -233,10 +254,20 @@ describe("refreshActiveTab", () => {
     expectCommonAgentsTabRefresh(host);
     expect(mocks.loadChannelsMock).toHaveBeenCalledWith(host, false);
     expect(mocks.loadCronStatusMock).toHaveBeenCalledOnce();
-    expect(mocks.loadCronJobsPageMock).toHaveBeenCalledOnce();
+    expect(mocks.loadCronJobsPageMock).toHaveBeenCalledWith(host, { tableFilters: false });
     expect(mocks.loadCronRunsMock).toHaveBeenCalledWith(host, "job-123");
     expect(mocks.loadAgentFilesMock).not.toHaveBeenCalled();
     expect(mocks.loadAgentSkillsMock).not.toHaveBeenCalled();
+  });
+
+  it("loads the Channels tab without automatic live probes", async () => {
+    const host = createHost();
+
+    await loadChannelsTab(host as never);
+
+    expect(mocks.loadChannelsMock).toHaveBeenCalledWith(host, false);
+    expect(mocks.loadConfigSchemaMock).toHaveBeenCalledWith(host);
+    expect(mocks.loadConfigMock).toHaveBeenCalledWith(host);
   });
 
   it("refreshes logs tab by resetting bottom-follow and scheduling scroll", async () => {
@@ -269,6 +300,53 @@ describe("refreshActiveTab", () => {
     sessions.resolve();
   });
 
+  it("loads config before rendering session Workboard actions", async () => {
+    const host = createHost();
+    host.tab = "sessions";
+
+    await refreshActiveTab(host as never);
+
+    expect(mocks.loadConfigMock).toHaveBeenCalledOnce();
+    expect(mocks.loadSessionsMock).toHaveBeenCalledOnce();
+  });
+
+  it("refreshes workboard cards with config, sessions, and agents", async () => {
+    const host = createHost();
+    host.tab = "workboard";
+
+    await refreshActiveTab(host as never);
+
+    expect(mocks.loadConfigMock).toHaveBeenCalledWith(host);
+    expect(mocks.loadSessionsMock).toHaveBeenCalledWith(host);
+    expect(mocks.loadAgentsMock).toHaveBeenCalledWith(host);
+    expect(mocks.loadWorkboardMock).toHaveBeenCalledWith({
+      host,
+      client: host.client,
+      force: true,
+      requestUpdate: host.requestUpdate,
+    });
+  });
+
+  it("starts node polling on Nodes tab entry and clears pending session reloads on tab changes", () => {
+    vi.useFakeTimers();
+    const host = createHost();
+    host.tab = "overview";
+    const pendingReload = vi.fn();
+    host.sessionsChangedReloadTimer = globalThis.setTimeout(pendingReload, 1_000);
+
+    setTab(host as never, "nodes");
+
+    expect(host.sessionsChangedReloadTimer).toBeNull();
+    expect(mocks.startNodesPollingMock).toHaveBeenCalledWith(host);
+    expect(mocks.stopLogsPollingMock).toHaveBeenCalledWith(host);
+    expect(mocks.stopDebugPollingMock).toHaveBeenCalledWith(host);
+    vi.advanceTimersByTime(1_000);
+    expect(pendingReload).not.toHaveBeenCalled();
+
+    setTab(host as never, "sessions");
+    expect(mocks.stopNodesPollingMock).toHaveBeenCalledWith(host);
+  });
+
   it("does not wait for secondary overview refreshes before resolving", async () => {
     const host = createHost();
     host.tab = "overview";
@@ -281,6 +359,23 @@ describe("refreshActiveTab", () => {
     expect(mocks.loadChannelsMock).toHaveBeenCalled();
     expect(mocks.loadSessionsMock).toHaveBeenCalled();
     expect(mocks.loadUsageMock).toHaveBeenCalled();
+  });
+
+  it("skips overview usage refresh if the user leaves while primary loaders run", async () => {
+    const host = createHost();
+    host.tab = "overview";
+    const channels = createDeferred();
+    mocks.loadChannelsMock.mockReturnValueOnce(channels.promise);
+
+    const refresh = refreshActiveTab(host as never);
+    await Promise.resolve();
+    host.tab = "sessions";
+    channels.resolve();
+
+    await refresh;
+
+    expect(mocks.loadUsageMock).not.toHaveBeenCalled();
+    expect(mocks.loadSkillsMock).toHaveBeenCalledOnce();
   });
 
   it("does not wait for config schema before resolving config tab refresh", async () => {
@@ -304,31 +399,69 @@ describe("refreshActiveTab", () => {
     });
   });
 
-  it("renders channels from the cheap snapshot before starting slow probes", async () => {
+  it("loads scoped settings snapshots before starting the schema refresh", async () => {
+    const host = createHost();
+    host.tab = "communications";
+    const config = createDeferred();
+    mocks.loadConfigMock.mockReturnValueOnce(config.promise);
+
+    const refresh = refreshActiveTab(host as never);
+    await Promise.resolve();
+
+    expect(mocks.loadConfigMock).toHaveBeenCalledOnce();
+    expect(mocks.loadConfigSchemaMock).not.toHaveBeenCalled();
+    await expect(raceWithNextMacrotask(refresh)).resolves.toBe("pending");
+
+    config.resolve();
+    await refresh;
+
+    await vi.waitFor(() => {
+      expect(mocks.loadConfigSchemaMock).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("loads config, sessions, and agents before rendering the Workboard tab", async () => {
+    const host = createHost();
+    host.tab = "workboard";
+
+    await refreshActiveTab(host as never);
+
+    expect(mocks.loadConfigMock).toHaveBeenCalledOnce();
+    expect(mocks.loadSessionsMock).toHaveBeenCalledOnce();
+    expect(mocks.loadAgentsMock).toHaveBeenCalledOnce();
+    expect(mocks.loadConfigSchemaMock).not.toHaveBeenCalled();
+  });
+
+  it("does not start the deferred schema refresh when scoped settings fail to load", async () => {
+    const host = createHost();
+    host.tab = "communications";
+    const error = new Error("config unavailable");
+    mocks.loadConfigMock.mockRejectedValueOnce(error);
+
+    await expect(refreshActiveTab(host as never)).rejects.toBe(error);
+    await Promise.resolve();
+
+    expect(mocks.loadConfigSchemaMock).not.toHaveBeenCalled();
+  });
+
+  it("renders channels from the cheap snapshot without waiting for config schema", async () => {
     const host = createHost();
     host.tab = "channels";
     const schema = createDeferred();
-    const channelProbe = createDeferred();
     mocks.loadConfigSchemaMock.mockReturnValueOnce(schema.promise);
-    mocks.loadChannelsMock.mockImplementation(async (_host, probe) => {
-      if (probe) {
-        await channelProbe.promise;
-      }
-    });
 
     const refresh = refreshActiveTab(host as never);
     const outcome = await raceWithNextMacrotask(refresh);
 
     expect(outcome).toBe("resolved");
-    expect(mocks.loadChannelsMock.mock.calls.map(([, probe]) => probe)).toEqual([false, true]);
+    expect(mocks.loadChannelsMock.mock.calls.map(([, probe]) => probe)).toEqual([false]);
     expect(mocks.loadConfigMock).toHaveBeenCalledOnce();
     expect(host.requestUpdate).not.toHaveBeenCalled();
 
     schema.resolve();
-    channelProbe.resolve();
 
     await vi.waitFor(() => {
-      expect(host.requestUpdate).toHaveBeenCalledTimes(2);
+      expect(host.requestUpdate).toHaveBeenCalledOnce();
     });
   });
 
@@ -361,8 +494,58 @@ describe("refreshActiveTab", () => {
     expect(outcome).toBe("resolved");
     expect(mocks.loadChannelsMock).toHaveBeenCalledWith(host, false);
     expect(mocks.loadCronStatusMock).toHaveBeenCalledOnce();
-    expect(mocks.loadCronJobsPageMock).toHaveBeenCalledOnce();
+    expect(mocks.loadCronJobsPageMock).toHaveBeenCalledWith(host, { tableFilters: true });
     expect(mocks.loadCronRunsMock).toHaveBeenCalledOnce();
+  });
+
+  it("refreshes model auth status on the chat tab for the quota pill", async () => {
+    const host = createHost();
+    host.tab = "chat";
+
+    await refreshActiveTab(host as never);
+
+    expect(mocks.refreshChatMock).toHaveBeenCalledOnce();
+    expect(mocks.loadModelAuthStatusStateMock).toHaveBeenCalledWith(host);
+    expect(mocks.scheduleChatScrollMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not wait for quota status before scrolling the chat tab", async () => {
+    const host = createHost();
+    host.tab = "chat";
+    const quotaRefresh = createDeferred();
+    mocks.loadModelAuthStatusStateMock.mockReturnValueOnce(quotaRefresh.promise);
+
+    const refresh = refreshActiveTab(host as never);
+    const outcome = await raceWithNextMacrotask(refresh);
+
+    expect(outcome).toBe("resolved");
+    expect(mocks.refreshChatMock).toHaveBeenCalledOnce();
+    expect(mocks.scheduleChatScrollMock).toHaveBeenCalledOnce();
+
+    quotaRefresh.resolve();
+    await quotaRefresh.promise;
+  });
+
+  it("preserves chat refresh failures while loading quota status", async () => {
+    const host = createHost();
+    host.tab = "chat";
+    mocks.refreshChatMock.mockRejectedValueOnce(new Error("chat refresh failed"));
+
+    await expect(refreshActiveTab(host as never)).rejects.toThrow("chat refresh failed");
+
+    expect(mocks.loadModelAuthStatusStateMock).toHaveBeenCalledWith(host);
+    expect(mocks.scheduleChatScrollMock).not.toHaveBeenCalled();
+  });
+
+  it("contains quota status failures on the chat tab", async () => {
+    const host = createHost();
+    host.tab = "chat";
+    mocks.loadModelAuthStatusStateMock.mockRejectedValueOnce(new Error("quota failed"));
+
+    await expect(refreshActiveTab(host as never)).resolves.toBeUndefined();
+
+    expect(mocks.refreshChatMock).toHaveBeenCalledOnce();
+    expect(mocks.scheduleChatScrollMock).toHaveBeenCalledOnce();
   });
 
   it("records failed cron runs status from the controller outcome", async () => {

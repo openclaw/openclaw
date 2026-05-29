@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  __resetDiscordDirectoryCacheForTest,
+  resetDiscordDirectoryCacheForTest,
   resolveDiscordDirectoryUserId,
 } from "./directory-cache.js";
 import * as directoryLive from "./directory-live.js";
@@ -16,9 +16,9 @@ function expectTargetFields(
   target: unknown,
   expected: { kind: string; id: string; normalized?: string },
 ): void {
-  expect(target).toBeDefined();
-  expect(typeof target).toBe("object");
-  expect(target).not.toBeNull();
+  if (!target || typeof target !== "object") {
+    throw new Error("Expected target record");
+  }
   const actual = target as Record<string, unknown>;
   expect(actual.kind).toBe(expected.kind);
   expect(actual.id).toBe(expected.id);
@@ -103,7 +103,7 @@ describe("resolveDiscordTarget", () => {
 
   beforeEach(() => {
     vi.restoreAllMocks();
-    __resetDiscordDirectoryCacheForTest();
+    resetDiscordDirectoryCacheForTest();
   });
 
   it("returns a resolved user for usernames", async () => {

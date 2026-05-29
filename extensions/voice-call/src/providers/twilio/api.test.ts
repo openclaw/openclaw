@@ -10,6 +10,26 @@ vi.mock("../../../api.js", () => ({
 
 import { TwilioApiError, twilioApiRequest } from "./api.js";
 
+type FetchGuardRequest = {
+  url?: string;
+  init?: RequestInit;
+  auditContext?: string;
+  policy?: unknown;
+  timeoutMs?: number;
+};
+
+function requireFirstFetchGuardRequest(): FetchGuardRequest {
+  const [call] = fetchWithSsrFGuardMock.mock.calls;
+  if (!call) {
+    throw new Error("expected guarded fetch call");
+  }
+  const [request] = call;
+  if (!request || typeof request !== "object" || Array.isArray(request)) {
+    throw new Error("expected guarded fetch request");
+  }
+  return request as FetchGuardRequest;
+}
+
 describe("twilioApiRequest", () => {
   afterEach(() => {
     fetchWithSsrFGuardMock.mockReset();
@@ -35,8 +55,7 @@ describe("twilioApiRequest", () => {
       }),
     ).resolves.toEqual({ sid: "CA123" });
 
-    const [{ url, init, auditContext, policy, timeoutMs }] =
-      fetchWithSsrFGuardMock.mock.calls[0] ?? [];
+    const { url, init, auditContext, policy, timeoutMs } = requireFirstFetchGuardRequest();
     expect(url).toBe("https://api.twilio.com/Calls.json");
     expect(auditContext).toBe("voice-call.twilio.api");
     expect(policy).toEqual({ allowedHostnames: ["api.twilio.com"] });
@@ -106,6 +125,25 @@ describe("twilioApiRequest", () => {
         body: {},
       }),
     ).rejects.toThrow("Twilio API error: 400 bad request");
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("wraps malformed json success responses with an owned error", async () => {
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response("{not json", { status: 200 }),
+      release,
+    });
+
+    await expect(
+      twilioApiRequest({
+        baseUrl: "https://api.twilio.com",
+        accountSid: "AC123",
+        authToken: "secret",
+        endpoint: "/Calls.json",
+        body: {},
+      }),
+    ).rejects.toThrow("Twilio API returned malformed JSON.");
     expect(release).toHaveBeenCalledTimes(1);
   });
 

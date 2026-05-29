@@ -23,7 +23,7 @@ describe("usage-helpers", () => {
       usage: { totalTokens: 100, totalCost: 0 },
     };
     const matches = filterSessionsByQuery([session], "key:agent:main:cron*");
-    expect(matches.sessions).toHaveLength(1);
+    expect(matches.sessions).toEqual([session]);
   });
 
   it("supports numeric filters like minTokens/maxTokens", () => {
@@ -33,21 +33,33 @@ describe("usage-helpers", () => {
     expect(filterSessionsByQuery([a, b], "maxTokens:10").sessions).toEqual([b]);
   });
 
+  it("rejects non-decimal numeric filter values", () => {
+    const session = { key: "a", usage: { totalTokens: 10_000, totalCost: 0 } };
+
+    expect(filterSessionsByQuery([session], "minTokens:1k").sessions).toEqual([session]);
+    expect(filterSessionsByQuery([session], "minTokens:1e3").warnings).toEqual([
+      "Invalid number for minTokens",
+    ]);
+    expect(filterSessionsByQuery([session], "minTokens:0x1000").warnings).toEqual([
+      "Invalid number for minTokens",
+    ]);
+    expect(filterSessionsByQuery([session], "minTokens:9007199254740993").warnings).toEqual([
+      "Invalid number for minTokens",
+    ]);
+  });
+
   it("warns on unknown keys and invalid numbers", () => {
     const session = { key: "a", usage: { totalTokens: 10, totalCost: 0 } };
     const res = filterSessionsByQuery([session], "wat:1 minTokens:wat");
-    expect(res.warnings).toEqual([
-      expect.stringContaining("Unknown filter"),
-      expect.stringContaining("Invalid number"),
-    ]);
+    expect(res.warnings).toEqual(["Unknown filter: wat", "Invalid number for minTokens"]);
   });
 
   it("parses tool summaries from compact session logs", () => {
     const res = parseToolSummary(
       "[Tool: read]\n[Tool Result]\n[Tool: exec]\n[Tool: read]\n[Tool Result]",
     );
-    expect(res.summary).toContain("read");
-    expect(res.summary).toContain("exec");
+    expect(res.summary).toBe("Tools: read×2, exec×1 (3 calls)");
+    expect(res.cleanContent).toBe("");
     const firstTool = requireFirstTool(res.tools);
     expect(firstTool[0]).toBe("read");
     expect(firstTool[1]).toBe(2);

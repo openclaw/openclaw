@@ -9,8 +9,9 @@ import {
 } from "./provider-model-shared.js";
 
 function expectFields(value: unknown, expected: Record<string, unknown>): void {
-  expect(value).toBeTypeOf("object");
-  expect(value).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error("expected fields object");
+  }
   const record = value as Record<string, unknown>;
   for (const [key, expectedValue] of Object.entries(expected)) {
     expect(record[key], key).toEqual(expectedValue);
@@ -278,6 +279,14 @@ describe("buildProviderReplayFamilyHooks", () => {
 });
 
 describe("resolveClaudeThinkingProfile", () => {
+  it("leaves Opus 4.8 thinking off by default with xhigh/adaptive/max options", () => {
+    const profile = resolveClaudeThinkingProfile("claude-opus-4-8");
+    expectFields(profile, {
+      defaultLevel: "off",
+    });
+    expectLevelIdsInclude(profile, ["xhigh", "adaptive", "max"]);
+  });
+
   it("exposes Opus 4.7 thinking levels for direct and proxied Claude providers", () => {
     const directProfile = resolveClaudeThinkingProfile("claude-opus-4-7");
     expectFields(directProfile, {

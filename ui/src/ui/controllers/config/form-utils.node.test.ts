@@ -5,6 +5,7 @@ import { coerceFormValues } from "./form-coerce.ts";
 import {
   cloneConfigObject,
   removePathValue,
+  sanitizeRedactedFormForSubmit,
   serializeConfigForm,
   setPathValue,
 } from "./form-utils.ts";
@@ -132,6 +133,134 @@ describe("form-utils preserves numeric types", () => {
     expectNumericModelCore(first);
     expect(typeof first.cost).toBe("object");
     expect(typeof (first.cost as Record<string, unknown>).input).toBe("number");
+  });
+});
+
+describe("sanitizeRedactedFormForSubmit", () => {
+  it("drops loaded redacted placeholders for paths missing from original raw config", () => {
+    const form = {
+      gateway: {
+        mode: "remote",
+        remote: {
+          token: "__OPENCLAW_REDACTED__",
+        },
+      },
+    };
+    const originalForm = {
+      gateway: {
+        mode: "remote",
+        remote: {
+          token: "__OPENCLAW_REDACTED__",
+        },
+      },
+    };
+
+    expect(
+      sanitizeRedactedFormForSubmit(
+        form,
+        originalForm,
+        '{\n  gateway: {\n    mode: "remote"\n  }\n}\n',
+      ),
+    ).toEqual({
+      gateway: {
+        mode: "remote",
+      },
+    });
+  });
+
+  it("preserves loaded redacted placeholders that exist in original raw config", () => {
+    const form = {
+      gateway: {
+        mode: "remote",
+        remote: {
+          token: "__OPENCLAW_REDACTED__",
+        },
+      },
+    };
+    const originalForm = cloneConfigObject(form);
+
+    expect(
+      sanitizeRedactedFormForSubmit(
+        form,
+        originalForm,
+        '{\n  gateway: {\n    mode: "remote",\n    remote: {\n      token: "__OPENCLAW_REDACTED__"\n    }\n  }\n}\n',
+      ),
+    ).toEqual(form);
+  });
+
+  it("keeps newly entered sentinel literals so gateway validation rejects them", () => {
+    const form = {
+      gateway: {
+        remote: {
+          token: "__OPENCLAW_REDACTED__",
+        },
+      },
+    };
+    const originalForm = {
+      gateway: {
+        remote: {},
+      },
+    };
+
+    expect(
+      sanitizeRedactedFormForSubmit(
+        form,
+        originalForm,
+        "{\n  gateway: {\n    remote: {}\n  }\n}\n",
+      ),
+    ).toEqual(form);
+  });
+
+  it("prunes empty object parents when they are absent from original raw config", () => {
+    const form = {
+      gateway: {
+        remote: {
+          nested: {
+            token: "__OPENCLAW_REDACTED__",
+          },
+        },
+      },
+      ui: { theme: "dark" },
+    };
+    const originalForm = cloneConfigObject(form);
+
+    expect(
+      sanitizeRedactedFormForSubmit(form, originalForm, '{\n  ui: { theme: "dark" }\n}\n'),
+    ).toEqual({
+      ui: { theme: "dark" },
+    });
+  });
+
+  it("does not reindex arrays when a loaded scalar array sentinel is unrestorable", () => {
+    const form = {
+      channels: {
+        slack: {
+          tokens: ["__OPENCLAW_REDACTED__", "second-token"],
+        },
+      },
+    };
+    const originalForm = cloneConfigObject(form);
+
+    expect(
+      sanitizeRedactedFormForSubmit(
+        form,
+        originalForm,
+        '{\n  channels: { slack: { tokens: ["second-token"] } }\n}\n',
+      ),
+    ).toEqual(form);
+  });
+
+  it("leaves the form unchanged when original raw config cannot be parsed", () => {
+    const form = {
+      gateway: {
+        remote: {
+          token: "__OPENCLAW_REDACTED__",
+        },
+      },
+    };
+    const originalForm = cloneConfigObject(form);
+
+    expect(sanitizeRedactedFormForSubmit(form, originalForm, "{")).toEqual(form);
   });
 });
 
@@ -490,5 +619,85 @@ describe("coerceFormValues", () => {
     const form = { flag: "true" };
     const coerced = coerceFormValues(form, schema) as Record<string, unknown>;
     expect(coerced.flag).toBe(true);
+  });
+
+  it("returns undefined for empty string with minLength constraint", () => {
+    const schema: JsonSchema = {
+      type: "object",
+      properties: {
+        baseUrl: { type: "string", minLength: 1 },
+      },
+    };
+    const form = { baseUrl: "" };
+    const coerced = coerceFormValues(form, schema) as Record<string, unknown>;
+
+    expect(coerced.baseUrl).toBeUndefined();
+    expect("baseUrl" in coerced).toBe(false);
+  });
+
+  it("returns empty string when no minLength constraint", () => {
+    const schema: JsonSchema = {
+      type: "object",
+      properties: {
+        description: { type: "string" },
+      },
+    };
+    const form = { description: "" };
+    const coerced = coerceFormValues(form, schema) as Record<string, unknown>;
+
+    expect(coerced.description).toBe("");
+    expect("description" in coerced).toBe(true);
+  });
+
+  it("returns non-empty string with minLength constraint unchanged", () => {
+    const schema: JsonSchema = {
+      type: "object",
+      properties: {
+        baseUrl: { type: "string", minLength: 1 },
+      },
+    };
+    const form = { baseUrl: "https://api.example.com" };
+    const coerced = coerceFormValues(form, schema) as Record<string, unknown>;
+
+    expect(coerced.baseUrl).toBe("https://api.example.com");
+  });
+
+  it("handles minLength: 0 as no constraint (empty string allowed)", () => {
+    const schema: JsonSchema = {
+      type: "object",
+      properties: {
+        optional: { type: "string", minLength: 0 },
+      },
+    };
+    const form = { optional: "" };
+    const coerced = coerceFormValues(form, schema) as Record<string, unknown>;
+
+    expect(coerced.optional).toBe("");
+  });
+
+  it("clears empty nested string field with minLength in object graph", () => {
+    const schema: JsonSchema = {
+      type: "object",
+      properties: {
+        provider: {
+          type: "object",
+          properties: {
+            baseUrl: { type: "string", minLength: 1 },
+            apiKey: { type: "string" },
+          },
+        },
+      },
+    };
+    const form = {
+      provider: {
+        baseUrl: "",
+        apiKey: "test-key",
+      },
+    };
+    const coerced = coerceFormValues(form, schema) as Record<string, unknown>;
+    const provider = coerced.provider as Record<string, unknown>;
+
+    expect("baseUrl" in provider).toBe(false);
+    expect(provider.apiKey).toBe("test-key");
   });
 });

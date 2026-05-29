@@ -88,10 +88,12 @@ const createRegistry = (diagnostics: PluginDiagnostic[]): PluginRegistry => ({
   commands: [],
   providers: [],
   modelCatalogProviders: [],
+  embeddingProviders: [],
   speechProviders: [],
   realtimeTranscriptionProviders: [],
   realtimeVoiceProviders: [],
   mediaUnderstandingProviders: [],
+  transcriptSourceProviders: [],
   imageGenerationProviders: [],
   musicGenerationProviders: [],
   videoGenerationProviders: [],
@@ -104,6 +106,7 @@ const createRegistry = (diagnostics: PluginDiagnostic[]): PluginRegistry => ({
   textTransforms: [],
   agentHarnesses: [],
   gatewayHandlers: {},
+  gatewayMethodDescriptors: [],
   httpRoutes: [],
   cliRegistrars: [],
   services: [],
@@ -205,6 +208,18 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value;
 }
 
+function getLastMockFirstArg(
+  mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } },
+  label: string,
+): unknown {
+  const calls = mock.mock.calls;
+  const call = calls[calls.length - 1];
+  if (!call) {
+    throw new Error(`Expected ${label} mock to have at least one call`);
+  }
+  return call[0];
+}
+
 function readRecordField(record: Record<string, unknown>, key: string, label: string) {
   const value = record[key];
   if (!isRecord(value)) {
@@ -214,7 +229,10 @@ function readRecordField(record: Record<string, unknown>, key: string, label: st
 }
 
 function getLastPluginLoadOptions(): Record<string, unknown> {
-  return requireRecord(loadOpenClawPlugins.mock.calls.at(-1)?.[0], "plugin load options");
+  return requireRecord(
+    getLastMockFirstArg(loadOpenClawPlugins, "plugin load"),
+    "plugin load options",
+  );
 }
 
 function getLastPluginLoadOption(key: string) {
@@ -222,12 +240,16 @@ function getLastPluginLoadOption(key: string) {
 }
 
 function getLastDispatchedContext(): GatewayRequestContext | undefined {
-  const call = handleGatewayRequest.mock.calls.at(-1)?.[0];
+  const call = getLastMockFirstArg(handleGatewayRequest, "gateway request") as
+    | HandleGatewayRequestOptions
+    | undefined;
   return call?.context;
 }
 
 function getLastDispatchedParams(): Record<string, unknown> | undefined {
-  const call = handleGatewayRequest.mock.calls.at(-1)?.[0];
+  const call = getLastMockFirstArg(handleGatewayRequest, "gateway request") as
+    | HandleGatewayRequestOptions
+    | undefined;
   return call?.req?.params as Record<string, unknown> | undefined;
 }
 
@@ -236,13 +258,17 @@ function getRequiredLastDispatchedParams(): Record<string, unknown> {
 }
 
 function getLastDispatchedClientScopes(): string[] {
-  const call = handleGatewayRequest.mock.calls.at(-1)?.[0];
+  const call = getLastMockFirstArg(handleGatewayRequest, "gateway request") as
+    | HandleGatewayRequestOptions
+    | undefined;
   const scopes = call?.client?.connect?.scopes;
   return Array.isArray(scopes) ? scopes : [];
 }
 
 function getLastDispatchedClientInternal(): Record<string, unknown> {
-  const call = handleGatewayRequest.mock.calls.at(-1)?.[0];
+  const call = getLastMockFirstArg(handleGatewayRequest, "gateway request") as
+    | HandleGatewayRequestOptions
+    | undefined;
   return (call?.client?.internal ?? {}) as Record<string, unknown>;
 }
 
@@ -252,7 +278,7 @@ function getLastPluginLoadLogger(): {
   error: (message: string) => void;
   debug?: (message: string) => void;
 } {
-  const call = loadOpenClawPlugins.mock.calls.at(-1)?.[0] as
+  const call = getLastMockFirstArg(loadOpenClawPlugins, "plugin load") as
     | {
         logger?: {
           info: (message: string) => void;
@@ -292,7 +318,7 @@ async function createSubagentRuntime(
     coreGatewayHandlers: {},
     baseMethods: [],
   });
-  const call = loadOpenClawPlugins.mock.calls.at(-1)?.[0] as
+  const call = getLastMockFirstArg(loadOpenClawPlugins, "plugin load") as
     | { runtimeOptions?: { allowGatewaySubagentBinding?: boolean } }
     | undefined;
   if (call?.runtimeOptions?.allowGatewaySubagentBinding !== true) {
@@ -943,7 +969,7 @@ describe("loadGatewayPlugins", () => {
         }),
       ),
     ).rejects.toThrow(
-      'plugin "voice-call" is not trusted for fallback provider/model override requests. See https://docs.openclaw.ai/tools/plugin#runtime-helpers and search for: plugins.entries.<id>.subagent.allowModelOverride',
+      'plugin "voice-call" is not trusted for fallback provider/model override requests. See https://docs.openclaw.ai/plugins/sdk-runtime#api-runtime-subagent and search for: plugins.entries.<id>.subagent.allowModelOverride',
     );
   });
 

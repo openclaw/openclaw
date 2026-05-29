@@ -51,14 +51,19 @@ type MockCalls = {
 };
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(typeof value, label).toBe("object");
-  expect(value, label).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
   return value as Record<string, unknown>;
 }
 
 function expectCommandOptions(command: MockCalls, expected: Record<string, unknown>) {
   expect(command.mock.calls).toHaveLength(1);
-  const [options, actualRuntime] = command.mock.calls[0] ?? [];
+  const call = command.mock.calls[0];
+  if (!call) {
+    throw new Error("expected command call");
+  }
+  const [options, actualRuntime] = call;
   expect(actualRuntime).toBe(runtime);
   const optionsRecord = requireRecord(options, "command options");
   for (const [key, value] of Object.entries(expected)) {
@@ -236,6 +241,74 @@ describe("registerStatusHealthSessionsCommands", () => {
     });
   });
 
+  it("dispatches sessions list as an alias for bare sessions (regression for #81139)", async () => {
+    await runCli(["sessions", "list"]);
+
+    expect(sessionsCommand).toHaveBeenCalledTimes(1);
+    expectCommandOptions(sessionsCommand, {
+      json: false,
+      allAgents: false,
+      agent: undefined,
+      store: undefined,
+    });
+  });
+
+  it("forwards sessions parent options through the list alias", async () => {
+    await runCli([
+      "sessions",
+      "--json",
+      "--verbose",
+      "--store",
+      "/tmp/sessions.json",
+      "--agent",
+      "work",
+      "--all-agents",
+      "--active",
+      "120",
+      "--limit",
+      "25",
+      "list",
+    ]);
+
+    expect(setVerbose).toHaveBeenCalledWith(true);
+    expectCommandOptions(sessionsCommand, {
+      json: true,
+      store: "/tmp/sessions.json",
+      agent: "work",
+      allAgents: true,
+      active: "120",
+      limit: "25",
+    });
+  });
+
+  it("forwards sessions list-side options", async () => {
+    await runCli([
+      "sessions",
+      "list",
+      "--json",
+      "--verbose",
+      "--store",
+      "/tmp/sessions.json",
+      "--agent",
+      "work",
+      "--all-agents",
+      "--active",
+      "120",
+      "--limit",
+      "25",
+    ]);
+
+    expect(setVerbose).toHaveBeenCalledWith(true);
+    expectCommandOptions(sessionsCommand, {
+      json: true,
+      store: "/tmp/sessions.json",
+      agent: "work",
+      allAgents: true,
+      active: "120",
+      limit: "25",
+    });
+  });
+
   it("runs sessions cleanup subcommand with forwarded options", async () => {
     await runCli([
       "sessions",
@@ -358,6 +431,16 @@ describe("registerStatusHealthSessionsCommands", () => {
       code: "stale_running",
       limit: 5,
     });
+  });
+
+  it("rejects partially numeric tasks audit limits", async () => {
+    await runCli(["tasks", "--json", "audit", "--limit", "5abc"]);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "--limit must be a positive integer, for example --limit 25.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(tasksAuditCommand).not.toHaveBeenCalled();
   });
 
   it("routes tasks flow commands through the TaskFlow handlers", async () => {

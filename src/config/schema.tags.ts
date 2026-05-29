@@ -55,7 +55,9 @@ const TAG_OVERRIDES: Record<string, ConfigTag[]> = {
   "gateway.controlUi.dangerouslyDisableDeviceAuth": ["security", "access", "network", "advanced"],
   "gateway.controlUi.allowInsecureAuth": ["security", "access", "network", "advanced"],
   "gateway.nodes.pairing.autoApproveCidrs": ["security", "access", "network", "advanced"],
+  "proxy.tls.caFile": ["security", "network", "storage", "advanced"],
   "tools.exec.applyPatch.workspaceOnly": ["tools", "security", "access", "advanced"],
+  "tools.exec.mode": ["tools", "security", "access"],
 };
 
 const PREFIX_RULES: Array<{ prefix: string; tags: ConfigTag[] }> = [

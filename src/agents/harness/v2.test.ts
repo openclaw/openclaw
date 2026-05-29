@@ -1,12 +1,15 @@
-import type { Api, Model } from "@earendil-works/pi-ai";
+import type { Api, Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
+import type { ContextEngine } from "../../context-engine/types.js";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
   type DiagnosticEventMetadata,
   type DiagnosticEventPayload,
 } from "../../infra/diagnostic-events.js";
-import type { EmbeddedRunAttemptResult } from "../pi-embedded-runner/run/types.js";
+import type { EmbeddedRunAttemptResult } from "../embedded-agent-runner/run/types.js";
+import { createOpenClawAgentHarness } from "./builtin-openclaw.js";
 import type { AgentHarness, AgentHarnessAttemptParams } from "./types.js";
 import type { AgentHarnessV2 } from "./v2.js";
 import { adaptAgentHarnessToV2, runAgentHarnessV2LifecycleAttempt } from "./v2.js";
@@ -22,7 +25,7 @@ function createAttemptParams(): AgentHarnessAttemptParams {
     timeoutMs: 5_000,
     provider: "codex",
     modelId: "gpt-5.4",
-    model: { id: "gpt-5.4", provider: "codex" } as Model<Api>,
+    model: { id: "gpt-5.4", provider: "codex" } as Model,
     authStorage: {} as never,
     authProfileStore: { version: 1, profiles: {} },
     modelRegistry: {} as never,
@@ -66,6 +69,29 @@ function createAttemptResult(): EmbeddedRunAttemptResult {
   };
 }
 
+function createContextEngineRequiringAssembly(): ContextEngine {
+  return {
+    info: {
+      id: "lossless-claw",
+      name: "Lossless",
+      hostRequirements: {
+        "agent-run": {
+          requiredCapabilities: ["assemble-before-prompt"],
+        },
+      },
+    },
+    async ingest() {
+      return { ingested: true };
+    },
+    async assemble({ messages }) {
+      return { messages, estimatedTokens: 0 };
+    },
+    async compact() {
+      return { ok: true, compacted: false };
+    },
+  };
+}
+
 async function flushDiagnosticEvents(): Promise<void> {
   await new Promise<void>((resolve) => setImmediate(resolve));
 }
@@ -85,7 +111,9 @@ function captureDiagnosticEvents(): {
 
 function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0): unknown {
   const call = mock.mock.calls[index];
-  expect(call).toBeDefined();
+  if (!call) {
+    throw new Error(`Expected mock call at index ${index}`);
+  }
   return call[0];
 }
 
@@ -146,6 +174,51 @@ describe("AgentHarness V2 compatibility adapter", () => {
       "outcome:started",
       "cleanup:started",
     ]);
+  });
+
+  it("rejects V1-adapted harnesses that do not advertise required context-engine capabilities", async () => {
+    const params = createAttemptParams();
+    params.contextEngine = createContextEngineRequiringAssembly();
+    const runAttempt = vi.fn(async () => createAttemptResult());
+    const harness = adaptAgentHarnessToV2({
+      id: "custom",
+      label: "Custom",
+      supports: () => ({ supported: true }),
+      runAttempt,
+    });
+
+    await expect(runAgentHarnessV2LifecycleAttempt(harness, params)).rejects.toThrow(
+      'Context engine "lossless-claw" cannot run operation "agent-run" on agent harness "custom".',
+    );
+    expect(runAttempt).not.toHaveBeenCalled();
+  });
+
+  it("allows V1-adapted harnesses that advertise required context-engine capabilities", async () => {
+    const params = createAttemptParams();
+    params.contextEngine = createContextEngineRequiringAssembly();
+    const result = createAttemptResult();
+    const runAttempt = vi.fn(async () => result);
+    const harness = adaptAgentHarnessToV2({
+      id: "codex",
+      label: "Codex",
+      contextEngineHostCapabilities: ["assemble-before-prompt"],
+      supports: () => ({ supported: true }),
+      runAttempt,
+    });
+
+    await expect(runAgentHarnessV2LifecycleAttempt(harness, params)).resolves.toEqual({
+      ...result,
+      agentHarnessId: "codex",
+    });
+    expect(runAttempt).toHaveBeenCalledOnce();
+  });
+
+  it("advertises OpenClaw embedded host capabilities through the V1 adapter", async () => {
+    const harness = createOpenClawAgentHarness();
+
+    expect(harness.contextEngineHostCapabilities).toEqual(
+      OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST.capabilities,
+    );
   });
 
   it("emits trusted harness lifecycle diagnostics for successful attempts", async () => {

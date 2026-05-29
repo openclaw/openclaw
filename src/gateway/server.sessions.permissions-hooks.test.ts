@@ -3,8 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
+import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../packages/gateway-protocol/src/client-info.js";
 import { isSessionPatchEvent } from "../hooks/internal-hooks.js";
-import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
 import {
   connectOk,
   rpcReq,
@@ -23,21 +26,26 @@ import {
 const { createSessionStoreDir, openClient, getHarness } = setupGatewaySessionsTestHarness();
 
 function requireRecord(value: unknown): Record<string, unknown> {
-  expect(value).toBeTruthy();
-  expect(typeof value).toBe("object");
-  expect(Array.isArray(value)).toBe(false);
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Expected record");
+  }
   return value as Record<string, unknown>;
 }
 
 function requireFirstCallArg(mock: { mock: { calls: readonly (readonly unknown[])[] } }) {
-  const call = mock.mock.calls[0];
-  expect(call).toBeTruthy();
-  return call?.[0];
+  const call = mock.mock.calls.at(0);
+  if (!call) {
+    throw new Error("Expected first mock call");
+  }
+  return call[0];
 }
 
 test("webchat clients cannot patch, delete, compact, or restore sessions", async () => {
   const { dir } = await createSessionStoreDir();
   const fixture = await createCheckpointFixture(dir);
+  if (!fixture.preCompactionSession || !fixture.preCompactionSessionFile) {
+    throw new Error("expected legacy checkpoint fixture");
+  }
 
   await writeSessionStore({
     entries: {

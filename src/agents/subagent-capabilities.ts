@@ -6,7 +6,15 @@ import {
   isSubagentSessionKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import {
+  resolveIntegerOption,
+  resolveNonNegativeIntegerOption,
+} from "../shared/number-coercion.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import {
+  normalizeInheritedToolAllowlist,
+  normalizeInheritedToolDenylist,
+} from "./inherited-tool-deny.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { normalizeSubagentSessionKey } from "./subagent-session-key.js";
 
@@ -26,6 +34,8 @@ type SessionCapabilityEntry = {
   subagentRole?: unknown;
   subagentControlScope?: unknown;
   spawnedBy?: unknown;
+  inheritedToolAllow?: unknown;
+  inheritedToolDeny?: unknown;
 };
 
 export type SessionCapabilityStore = Record<
@@ -36,6 +46,8 @@ export type SessionCapabilityStore = Record<
     subagentRole?: unknown;
     subagentControlScope?: unknown;
     spawnedBy?: unknown;
+    inheritedToolAllow?: unknown;
+    inheritedToolDeny?: unknown;
   }
 >;
 
@@ -137,11 +149,12 @@ function resolveSubagentRoleForDepth(params: {
   depth: number;
   maxSpawnDepth?: number;
 }): SubagentSessionRole {
-  const depth = Number.isInteger(params.depth) ? Math.max(0, params.depth) : 0;
-  const maxSpawnDepth =
-    typeof params.maxSpawnDepth === "number" && Number.isFinite(params.maxSpawnDepth)
-      ? Math.max(1, Math.floor(params.maxSpawnDepth))
-      : DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
+  const depth = resolveNonNegativeIntegerOption(params.depth, 0);
+  const maxSpawnDepth = resolveIntegerOption(
+    params.maxSpawnDepth,
+    DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
+    { min: 1 },
+  );
   if (depth <= 0) {
     return "main";
   }
@@ -153,10 +166,11 @@ function resolveSubagentControlScopeForRole(role: SubagentSessionRole): Subagent
 }
 
 export function resolveSubagentCapabilities(params: { depth: number; maxSpawnDepth?: number }) {
+  const depth = resolveNonNegativeIntegerOption(params.depth, 0);
   const role = resolveSubagentRoleForDepth(params);
   const controlScope = resolveSubagentControlScopeForRole(role);
   return {
-    depth: Math.max(0, Math.floor(params.depth)),
+    depth,
     role,
     controlScope,
     canSpawn: role === "main" || role === "orchestrator",
@@ -292,4 +306,44 @@ export function resolveStoredSubagentCapabilities(
     canSpawn: role === "main" || role === "orchestrator",
     canControlChildren: controlScope === "children",
   };
+}
+
+export function resolveStoredSubagentInheritedToolDenylist(
+  sessionKey: string | undefined | null,
+  opts?: {
+    cfg?: OpenClawConfig;
+    store?: SessionCapabilityStore;
+  },
+): string[] {
+  const normalizedSessionKey = normalizeSubagentSessionKey(sessionKey);
+  if (!normalizedSessionKey || !shouldInspectStoredSubagentEnvelope(normalizedSessionKey)) {
+    return [];
+  }
+  const store = resolveSubagentCapabilityStore(normalizedSessionKey, opts);
+  const entry = resolveSessionCapabilityEntry({
+    sessionKey: normalizedSessionKey,
+    cfg: opts?.cfg,
+    store,
+  });
+  return normalizeInheritedToolDenylist(entry?.inheritedToolDeny);
+}
+
+export function resolveStoredSubagentInheritedToolAllowlist(
+  sessionKey: string | undefined | null,
+  opts?: {
+    cfg?: OpenClawConfig;
+    store?: SessionCapabilityStore;
+  },
+): string[] {
+  const normalizedSessionKey = normalizeSubagentSessionKey(sessionKey);
+  if (!normalizedSessionKey || !shouldInspectStoredSubagentEnvelope(normalizedSessionKey)) {
+    return [];
+  }
+  const store = resolveSubagentCapabilityStore(normalizedSessionKey, opts);
+  const entry = resolveSessionCapabilityEntry({
+    sessionKey: normalizedSessionKey,
+    cfg: opts?.cfg,
+    store,
+  });
+  return normalizeInheritedToolAllowlist(entry?.inheritedToolAllow);
 }

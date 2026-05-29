@@ -24,9 +24,10 @@ export type ProviderWizardOption = {
   groupId: string;
   groupLabel: string;
   groupHint?: string;
-  onboardingScopes?: Array<"text-inference" | "image-generation">;
+  onboardingScopes?: Array<"text-inference" | "image-generation" | "music-generation">;
   assistantPriority?: number;
   assistantVisibility?: "visible" | "manual-only";
+  onboardingFeatured?: boolean;
 };
 
 export type ProviderModelPickerEntry = {
@@ -119,6 +120,7 @@ function buildSetupOptionForMethod(params: {
     ...(params.wizard.assistantVisibility
       ? { assistantVisibility: params.wizard.assistantVisibility }
       : {}),
+    ...(params.wizard.onboardingFeatured ? { onboardingFeatured: true } : {}),
   };
 }
 

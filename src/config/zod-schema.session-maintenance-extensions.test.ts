@@ -3,16 +3,17 @@ import { SessionSchema } from "./zod-schema.session.js";
 
 describe("SessionSchema maintenance extensions", () => {
   it("accepts session write-lock acquire timeout", () => {
-    expect(
-      SessionSchema.safeParse({
-        writeLock: {
-          acquireTimeoutMs: 60_000,
-        },
-      }),
-    ).toMatchObject({ success: true });
+    const result = SessionSchema.safeParse({
+      writeLock: {
+        acquireTimeoutMs: 60_000,
+        staleMs: 1_800_000,
+        maxHoldMs: 300_000,
+      },
+    });
+    expect(result.success).toBe(true);
   });
 
-  it("rejects invalid session write-lock acquire timeout values", () => {
+  it("rejects invalid session write-lock timeout values", () => {
     expect(() =>
       SessionSchema.parse({
         writeLock: {
@@ -20,28 +21,42 @@ describe("SessionSchema maintenance extensions", () => {
         },
       }),
     ).toThrow(/acquireTimeoutMs|number/i);
+
+    expect(() =>
+      SessionSchema.parse({
+        writeLock: {
+          staleMs: 0,
+        },
+      }),
+    ).toThrow(/staleMs|number/i);
+
+    expect(() =>
+      SessionSchema.parse({
+        writeLock: {
+          maxHoldMs: 0,
+        },
+      }),
+    ).toThrow(/maxHoldMs|number/i);
   });
 
   it("accepts valid maintenance extensions", () => {
-    expect(
-      SessionSchema.safeParse({
-        maintenance: {
-          resetArchiveRetention: "14d",
-          maxDiskBytes: "500mb",
-          highWaterBytes: "350mb",
-        },
-      }),
-    ).toMatchObject({ success: true });
+    const result = SessionSchema.safeParse({
+      maintenance: {
+        resetArchiveRetention: "14d",
+        maxDiskBytes: "500mb",
+        highWaterBytes: "350mb",
+      },
+    });
+    expect(result.success).toBe(true);
   });
 
   it("accepts disabling reset archive cleanup", () => {
-    expect(
-      SessionSchema.safeParse({
-        maintenance: {
-          resetArchiveRetention: false,
-        },
-      }),
-    ).toMatchObject({ success: true });
+    const result = SessionSchema.safeParse({
+      maintenance: {
+        resetArchiveRetention: false,
+      },
+    });
+    expect(result.success).toBe(true);
   });
 
   it("rejects invalid maintenance extension values", () => {

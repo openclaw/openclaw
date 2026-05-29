@@ -42,7 +42,9 @@ function isOptionalAttachments(value: unknown): value is IMessagePayload["attach
     return (
       isOptionalString(attachment.original_path) &&
       isOptionalString(attachment.mime_type) &&
-      isOptionalBoolean(attachment.missing)
+      isOptionalBoolean(attachment.missing) &&
+      isOptionalString(attachment.transfer_name) &&
+      isOptionalString(attachment.uti)
     );
   });
 }
@@ -70,6 +72,9 @@ export function parseIMessageNotification(raw: unknown): IMessagePayload | null 
     !isOptionalString(message.reply_to_sender) ||
     !isOptionalString(message.created_at) ||
     !isOptionalBoolean(message.is_reaction) ||
+    !isOptionalBoolean(message.is_tapback) ||
+    !isOptionalString(message.associated_message_guid) ||
+    !isOptionalNumber(message.associated_message_type) ||
     !isOptionalString(message.reaction_type) ||
     !isOptionalString(message.reaction_emoji) ||
     !isOptionalBoolean(message.is_reaction_add) ||

@@ -55,6 +55,34 @@ import Testing
         #expect(problem?.actionCommand == "openclaw devices approve req-123")
     }
 
+    @Test func scopeMismatchMapsToPairingOrRepairProblem() {
+        let error = GatewayConnectAuthError(
+            message: "device token scope mismatch",
+            detailCode: GatewayConnectAuthDetailCode.authScopeMismatch.rawValue,
+            canRetryWithDeviceToken: false)
+
+        let problem = GatewayConnectionProblemMapper.map(error: error)
+
+        #expect(error.detail == .authScopeMismatch)
+        #expect(error.isNonRecoverable)
+        #expect(problem?.kind == .deviceTokenScopeMismatch)
+        #expect(problem?.needsPairingApproval == true)
+        #expect(problem?.needsCredentialUpdate == false)
+    }
+
+    @Test func tokenMismatchSuggestsOnboardingReset() {
+        let error = GatewayConnectAuthError(
+            message: "token mismatch",
+            detailCode: GatewayConnectAuthDetailCode.authTokenMismatch.rawValue,
+            canRetryWithDeviceToken: false)
+
+        let problem = GatewayConnectionProblemMapper.map(error: error)
+
+        #expect(problem?.kind == .gatewayAuthTokenMismatch)
+        #expect(problem?.suggestsOnboardingReset == true)
+        #expect(problem?.needsCredentialUpdate == true)
+    }
+
     @Test func cancelledTransportDoesNotReplaceStructuredPairingProblem() {
         let pairing = GatewayConnectAuthError(
             message: "pairing required",

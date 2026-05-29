@@ -117,6 +117,67 @@ describe("video-generation runtime", () => {
     ]);
   });
 
+  it("uses configured video-generation timeout when call omits timeoutMs", async () => {
+    let seenTimeoutMs: number | undefined;
+    providers = [
+      {
+        id: "video-plugin",
+        capabilities: {},
+        async generateVideo(req: { timeoutMs?: number }) {
+          seenTimeoutMs = req.timeoutMs;
+          return {
+            videos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
+            model: "vid-v1",
+          };
+        },
+      },
+    ];
+
+    await runGenerateVideo({
+      cfg: {
+        agents: {
+          defaults: {
+            videoGenerationModel: { primary: "video-plugin/vid-v1", timeoutMs: 300_000 },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "animate a cat",
+    });
+
+    expect(seenTimeoutMs).toBe(300_000);
+  });
+
+  it("uses provider default video-generation timeout when the call and config omit timeoutMs", async () => {
+    let seenTimeoutMs: number | undefined;
+    providers = [
+      {
+        id: "video-plugin",
+        defaultTimeoutMs: 600_000,
+        capabilities: {},
+        async generateVideo(req: { timeoutMs?: number }) {
+          seenTimeoutMs = req.timeoutMs;
+          return {
+            videos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
+            model: "vid-v1",
+          };
+        },
+      },
+    ];
+
+    await runGenerateVideo({
+      cfg: {
+        agents: {
+          defaults: {
+            videoGenerationModel: { primary: "video-plugin/vid-v1" },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "animate a cat",
+    });
+
+    expect(seenTimeoutMs).toBe(600_000);
+  });
+
   it("does not list providers when explicit config disables auto provider fallback", async () => {
     const provider: VideoGenerationProvider = {
       id: "video-plugin",
@@ -424,10 +485,69 @@ describe("video-generation runtime", () => {
     });
     expect(seenCapabilityLookupTimeoutMs).toBe(5_000);
     expect(seenSupportedDurationHint).toEqual([5]);
-    expect(result.ignoredOverrides).toContainEqual({ key: "audio", value: true });
-    expect(result.normalization?.durationSeconds?.requested).toBe(6);
-    expect(result.normalization?.durationSeconds?.applied).toBe(5);
-    expect(result.normalization?.durationSeconds?.supportedValues).toEqual([5]);
+    expect(result.ignoredOverrides).toEqual([{ key: "audio", value: true }]);
+    expect(result.normalization).toEqual({
+      durationSeconds: {
+        requested: 6,
+        applied: 5,
+        supportedValues: [5],
+      },
+    });
+  });
+
+  it("lets selected-model capabilities clear inherited providerOptions before fallback", async () => {
+    providers = [
+      {
+        id: "openrouter",
+        defaultModel: "google/veo-3.1",
+        capabilities: {
+          providerOptions: { seed: "number" },
+        },
+        resolveModelCapabilities: async () => ({
+          providerOptions: {} as Record<string, VideoGenerationProviderOptionType>,
+        }),
+        isConfigured: () => true,
+        async generateVideo() {
+          throw new Error("should not be called");
+        },
+      },
+      {
+        id: "byteplus",
+        defaultModel: "seedance-1-0-pro-250528",
+        capabilities: {
+          providerOptions: { seed: "number" },
+        },
+        isConfigured: () => true,
+        async generateVideo(req) {
+          expect(req.providerOptions).toEqual({ seed: 42 });
+          return {
+            videos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
+            model: "seedance-1-0-pro-250528",
+          };
+        },
+      },
+    ];
+
+    const result = await runGenerateVideo({
+      cfg: {
+        agents: {
+          defaults: {
+            videoGenerationModel: {
+              primary: "openrouter/google/veo-3.1",
+              fallbacks: ["byteplus/seedance-1-0-pro-250528"],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "animate a cat",
+      providerOptions: { seed: 42 },
+    });
+
+    expect(result.provider).toBe("byteplus");
+    expect(result.attempts).toHaveLength(1);
+    const attempt = requireAttempt(result, 0);
+    expect(attempt.provider).toBe("openrouter");
+    expect(attempt.error).toMatch(/does not accept providerOptions/);
   });
 
   it("skips providers that cannot satisfy reference audio inputs and falls back", async () => {

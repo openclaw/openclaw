@@ -82,7 +82,7 @@ describe("runQaDockerUp", () => {
       expect(calls).toEqual([
         `pnpm qa:lab:build @${repoRoot}`,
         `docker compose -f ${composeFile} down --remove-orphans @${repoRoot}`,
-        expect.stringContaining(`docker compose -f ${composeFile} up --build -d @${repoRoot}`),
+        `docker compose -f ${composeFile} up --build -d @${repoRoot}`,
         `docker compose -f ${composeFile} ps --format json openclaw-qa-gateway @${repoRoot}`,
       ]);
       expect(fetchCalls).toEqual([
@@ -124,7 +124,7 @@ describe("runQaDockerUp", () => {
       ]);
       const compose = await readFile(path.join(outputDir, "docker-compose.qa.yml"), "utf8");
       expect(compose).toContain(":/opt/openclaw-qa-lab-ui:ro");
-      expect(compose).toContain("      - --ui-dist-dir");
+      expect(compose).toContain("--ui-dist-dir /opt/openclaw-qa-lab-ui");
     } finally {
       await rm(outputDir, { recursive: true, force: true });
     }

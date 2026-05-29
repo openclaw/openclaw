@@ -443,7 +443,11 @@ describe("exec notifyOnExit suppression", () => {
     const [message, options] = requireSystemEventCall();
     expect(message).toContain("partial output");
     expect(options.sessionKey).toBe("agent:main:main");
-    expect(requestHeartbeatMock).toHaveBeenCalled();
+    expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
+    const heartbeat = requireHeartbeatCall();
+    expect(heartbeat.coalesceMs).toBe(0);
+    expect(heartbeat.reason).toBe("exec-event");
+    expect(heartbeat.sessionKey).toBe("agent:main:main");
   });
 
   it("still notifies for no-output background exec timeouts", async () => {
@@ -452,7 +456,11 @@ describe("exec notifyOnExit suppression", () => {
     const [message, options] = requireSystemEventCall();
     expect(message).toContain("Exec failed");
     expect(options.sessionKey).toBe("agent:main:main");
-    expect(requestHeartbeatMock).toHaveBeenCalled();
+    expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
+    const heartbeat = requireHeartbeatCall();
+    expect(heartbeat.coalesceMs).toBe(0);
+    expect(heartbeat.reason).toBe("exec-event");
+    expect(heartbeat.sessionKey).toBe("agent:main:main");
   });
 });
 
@@ -481,7 +489,6 @@ describe("emitExecSystemEvent", () => {
         to: "telegram:-100123:topic:47",
         threadId: 47,
       },
-      trusted: false,
     });
     const heartbeat = requireHeartbeatCall();
     expect(heartbeat.coalesceMs).toBe(0);
@@ -499,15 +506,14 @@ describe("emitExecSystemEvent", () => {
     expect(enqueueSystemEventMock).toHaveBeenCalledWith("Exec finished", {
       sessionKey: "agent:ops:primary",
       contextKey: "exec:run-cron",
-      trusted: false,
     });
-    expect(requestHeartbeatMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        coalesceMs: 0,
-        reason: "exec-event",
-        sessionKey: "agent:ops:primary",
-      }),
-    );
+    expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
+    const [[heartbeatParams]] = requestHeartbeatMock.mock.calls as unknown as Array<
+      [{ coalesceMs?: number; reason?: string; sessionKey?: string }]
+    >;
+    expect(heartbeatParams.coalesceMs).toBe(0);
+    expect(heartbeatParams.reason).toBe("exec-event");
+    expect(heartbeatParams.sessionKey).toBe("agent:ops:primary");
   });
 
   it("routes global-scope cron-run events to the global queue and preserves the agent wake target", () => {
@@ -520,16 +526,46 @@ describe("emitExecSystemEvent", () => {
     expect(enqueueSystemEventMock).toHaveBeenCalledWith("Exec finished", {
       sessionKey: "global",
       contextKey: "exec:run-global",
-      trusted: false,
     });
-    expect(requestHeartbeatMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "ops",
-        coalesceMs: 0,
-        reason: "exec-event",
-      }),
-    );
-    expect(requestHeartbeatMock.mock.calls[0]?.[0]).not.toHaveProperty("sessionKey");
+    expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
+    const [[heartbeatParams]] = requestHeartbeatMock.mock.calls as unknown as Array<
+      [{ agentId?: string; coalesceMs?: number; reason?: string }]
+    >;
+    expect(heartbeatParams.agentId).toBe("ops");
+    expect(heartbeatParams.coalesceMs).toBe(0);
+    expect(heartbeatParams.reason).toBe("exec-event");
+    expect(requireHeartbeatCall()).not.toHaveProperty("sessionKey");
+  });
+
+  it("routes single-owner dmScope=main direct exec events to the agent main session", () => {
+    emitExecSystemEvent("Exec finished", {
+      sessionKey: "agent:main:telegram:default:direct:123",
+      contextKey: "exec:run-dm",
+      deliveryContext: {
+        channel: "telegram",
+        to: "123",
+      },
+      eventRouting: {
+        dmScope: "main",
+        allowFrom: ["123"],
+        channel: "telegram",
+        accountId: "default",
+      },
+    });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith("Exec finished", {
+      sessionKey: "agent:main:main",
+      contextKey: "exec:run-dm",
+      deliveryContext: {
+        channel: "telegram",
+        to: "123",
+      },
+    });
+    expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
+    const heartbeat = requireHeartbeatCall();
+    expect(heartbeat.coalesceMs).toBe(0);
+    expect(heartbeat.reason).toBe("exec-event");
+    expect(heartbeat.sessionKey).toBe("agent:main:main");
   });
 
   it("keeps wake unscoped for non-agent session keys", () => {
@@ -541,7 +577,6 @@ describe("emitExecSystemEvent", () => {
     expect(enqueueSystemEventMock).toHaveBeenCalledWith("Exec finished", {
       sessionKey: "global",
       contextKey: "exec:run-global",
-      trusted: false,
     });
     const heartbeat = requireHeartbeatCall();
     expect(heartbeat.coalesceMs).toBe(0);
@@ -555,6 +590,20 @@ describe("emitExecSystemEvent", () => {
     });
 
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatMock).not.toHaveBeenCalled();
+  });
+
+  it("skips heartbeat wake for subagent session keys", () => {
+    emitExecSystemEvent("Exec finished", {
+      sessionKey: "agent:main:subagent:abc-123",
+      contextKey: "exec:run-sub",
+    });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith("Exec finished", {
+      sessionKey: "agent:main:subagent:abc-123",
+      contextKey: "exec:run-sub",
+      deliveryContext: undefined,
+    });
     expect(requestHeartbeatMock).not.toHaveBeenCalled();
   });
 });
@@ -667,5 +716,92 @@ describe("buildExecExitOutcome", () => {
     expect(outcome.timedOut).toBe(true);
     expect(outcome.reason).toContain("background=true");
     expect(outcome.reason).toContain("Do not rely on shell backgrounding");
+  });
+});
+
+describe("runExecProcess POSIX command wrapper", () => {
+  it("wraps command with PATH export if OPENCLAW_PREPEND_PATH is present", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    supervisorMock.spawn.mockResolvedValueOnce({
+      runId: "mock-run",
+      startedAtMs: Date.now(),
+      wait: async () => ({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 0,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+      cancel: vi.fn(),
+    });
+
+    const run = await runExecProcess({
+      command: "echo test",
+      workdir: "/tmp",
+      env: { PATH: "/usr/bin" },
+      pathPrepend: ["/custom/bin", "/opt/bin"],
+      usePty: false,
+      warnings: [],
+      maxOutput: 1000,
+      pendingMaxOutput: 1000,
+      notifyOnExit: false,
+      timeoutSec: null,
+    });
+
+    expect(supervisorMock.spawn).toHaveBeenCalledTimes(1);
+    const spawnCall = supervisorMock.spawn.mock.calls[0][0];
+
+    const commandStr = spawnCall.argv.join(" ");
+    expect(commandStr).toContain(
+      'export PATH="${OPENCLAW_PREPEND_PATH}${PATH:+:$PATH}"; unset OPENCLAW_PREPEND_PATH; echo test',
+    );
+  });
+
+  it("does not wrap command on Windows", async () => {
+    if (process.platform !== "win32") {
+      return;
+    }
+
+    supervisorMock.spawn.mockResolvedValueOnce({
+      runId: "mock-run",
+      startedAtMs: Date.now(),
+      wait: async () => ({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 0,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+      cancel: vi.fn(),
+    });
+
+    const run = await runExecProcess({
+      command: "echo test",
+      workdir: "C:\\tmp",
+      env: { Path: "C:\\Windows\\System32" },
+      pathPrepend: ["C:\\custom\\bin"],
+      usePty: false,
+      warnings: [],
+      maxOutput: 1000,
+      pendingMaxOutput: 1000,
+      notifyOnExit: false,
+      timeoutSec: null,
+    });
+
+    expect(supervisorMock.spawn).toHaveBeenCalledTimes(1);
+    const spawnCall = supervisorMock.spawn.mock.calls[0][0];
+
+    const commandStr = spawnCall.argv.join(" ");
+    expect(commandStr).not.toContain("export PATH=");
+    expect(commandStr).toContain("echo test");
   });
 });

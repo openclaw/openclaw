@@ -52,6 +52,7 @@ function createState(overrides: Partial<AppViewState> = {}): AppViewState {
       navCollapsed: false,
       navGroupsCollapsed: {},
       borderRadius: 50,
+      textScale: 100,
       chatFocusMode: false,
       chatShowThinking: false,
       chatShowToolCalls: true,
@@ -200,6 +201,7 @@ function createState(overrides: Partial<AppViewState> = {}): AppViewState {
     importCustomTheme: vi.fn(),
     clearCustomTheme: vi.fn(),
     setBorderRadius: vi.fn(),
+    setTextScale: vi.fn(),
     applySettings: vi.fn(),
     applyLocalUserIdentity: vi.fn(),
     loadOverview: vi.fn(),
@@ -241,6 +243,16 @@ describe("renderApp assistant avatar routing", () => {
     expect(shell?.style.getPropertyValue("--chat-message-max-width")).toBe("min(1280px, 82%)");
   });
 
+  it("marks the logs route so the page can hand scroll ownership to the log stream", () => {
+    const container = document.createElement("div");
+
+    render(renderApp(createState({ tab: "logs" })), container);
+
+    const content = container.querySelector<HTMLElement>("main.content");
+    expect(content?.classList.contains("content--logs")).toBe(true);
+    expect(content?.classList.contains("content--chat")).toBe(false);
+  });
+
   it("passes security quick setting fields to Quick Settings", () => {
     const state = createState({
       configForm: {
@@ -260,10 +272,11 @@ describe("renderApp assistant avatar routing", () => {
     quickSettingsProps.current?.onToolProfileChange?.("full");
 
     expect(state.configForm?.browser).toEqual({ enabled: true });
-    expect(state.configForm?.tools).toMatchObject({
-      profile: "full",
-      exec: { security: "full" },
-    });
+    const tools = state.configForm?.tools as
+      | { profile?: string; exec?: { security?: string } }
+      | undefined;
+    expect(tools?.profile).toBe("full");
+    expect(tools?.exec?.security).toBe("full");
   });
 
   it("renders stale cron state containing a job without a payload", () => {

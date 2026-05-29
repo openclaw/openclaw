@@ -72,8 +72,16 @@ function detailRecord(result: unknown): Record<string, unknown> {
   return details as Record<string, unknown>;
 }
 
+function mockCall(mock: { mock: { calls: unknown[][] } }, index: number, label: string) {
+  const call = mock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected ${label}`);
+  }
+  return call;
+}
+
 function firstMockArg(mock: { mock: { calls: unknown[][] } }): Record<string, unknown> {
-  const arg = mock.mock.calls[0]?.[0];
+  const arg = mockCall(mock, 0, "first mock call")[0];
   if (!arg || typeof arg !== "object" || Array.isArray(arg)) {
     throw new Error("expected first mock argument object");
   }
@@ -106,8 +114,8 @@ describe("skill-workshop", () => {
 
     expect(tool).toBeNull();
     expect(on.mock.calls.map(([hook]) => hook)).toEqual(["before_prompt_build", "agent_end"]);
-    expect(typeof on.mock.calls[0]?.[1]).toBe("function");
-    expect(typeof on.mock.calls[1]?.[1]).toBe("function");
+    expect(typeof mockCall(on, 0, "before_prompt_build hook registration")[1]).toBe("function");
+    expect(typeof mockCall(on, 1, "agent_end hook registration")[1]).toBe("function");
   });
 
   it("detects user corrections and creates an animated GIF proposal", async () => {
@@ -717,7 +725,7 @@ describe("skill-workshop", () => {
       path.join(workspaceDir, "skills", "qa-scenario-workflow", "SKILL.md"),
       "---\nname: qa-scenario-workflow\ndescription: QA notes.\n---\n\n## Workflow\n\n- Run smoke tests.\n",
     );
-    const runEmbeddedPiAgent = vi.fn(async () => ({
+    const runEmbeddedAgent = vi.fn(async () => ({
       payloads: [
         {
           text: JSON.stringify({
@@ -738,7 +746,7 @@ describe("skill-workshop", () => {
         agent: {
           defaults: { provider: "openai", model: "gpt-5.4" },
           resolveAgentDir: () => path.join(workspaceDir, ".agent"),
-          runEmbeddedPiAgent,
+          runEmbeddedAgent,
         },
         state: {
           resolveStateDir: () => stateDir,
@@ -769,7 +777,7 @@ describe("skill-workshop", () => {
     expect(proposal?.change.kind === "append" ? proposal.change.section : undefined).toBe(
       "Workflow",
     );
-    const reviewerRequest = firstMockArg(runEmbeddedPiAgent);
+    const reviewerRequest = firstMockArg(runEmbeddedAgent);
     expect(reviewerRequest.disableTools).toBe(true);
     expect(reviewerRequest.toolsAllow).toEqual([]);
     expect(reviewerRequest.provider).toBe("openai");
@@ -779,7 +787,7 @@ describe("skill-workshop", () => {
   it("uses the configured agent default for reviewer fallback", async () => {
     const workspaceDir = await makeTempDir();
     const stateDir = await makeTempDir();
-    const runEmbeddedPiAgent = vi.fn(async () => ({
+    const runEmbeddedAgent = vi.fn(async () => ({
       payloads: [{ text: JSON.stringify({ action: "none" }) }],
       meta: {},
     }));
@@ -795,7 +803,7 @@ describe("skill-workshop", () => {
         agent: {
           defaults: { provider: "openai", model: "gpt-5.4" },
           resolveAgentDir: () => path.join(workspaceDir, ".agent"),
-          runEmbeddedPiAgent,
+          runEmbeddedAgent,
         },
         state: {
           resolveStateDir: () => stateDir,
@@ -820,7 +828,7 @@ describe("skill-workshop", () => {
       messages: [{ role: "user", content: "Remember this repeatable fix." }],
     });
 
-    const reviewerRequest = firstMockArg(runEmbeddedPiAgent);
+    const reviewerRequest = firstMockArg(runEmbeddedAgent);
     expect(reviewerRequest.provider).toBe("openai-codex");
     expect(reviewerRequest.model).toBe("gpt-5.5");
   });
@@ -828,7 +836,7 @@ describe("skill-workshop", () => {
   it("infers reviewer fallback provider for a bare configured model", async () => {
     const workspaceDir = await makeTempDir();
     const stateDir = await makeTempDir();
-    const runEmbeddedPiAgent = vi.fn(async () => ({
+    const runEmbeddedAgent = vi.fn(async () => ({
       payloads: [{ text: JSON.stringify({ action: "none" }) }],
       meta: {},
     }));
@@ -862,7 +870,7 @@ describe("skill-workshop", () => {
         agent: {
           defaults: { provider: "openai", model: "gpt-5.4" },
           resolveAgentDir: () => path.join(workspaceDir, ".agent"),
-          runEmbeddedPiAgent,
+          runEmbeddedAgent,
         },
         state: {
           resolveStateDir: () => stateDir,
@@ -887,7 +895,7 @@ describe("skill-workshop", () => {
       messages: [{ role: "user", content: "Remember this bare-model default." }],
     });
 
-    const reviewerRequest = firstMockArg(runEmbeddedPiAgent);
+    const reviewerRequest = firstMockArg(runEmbeddedAgent);
     expect(reviewerRequest.provider).toBe("openai-codex");
     expect(reviewerRequest.model).toBe("gpt-5.5");
   });
@@ -895,7 +903,7 @@ describe("skill-workshop", () => {
   it("runs reviewer after threshold and queues the proposal", async () => {
     const workspaceDir = await makeTempDir();
     const stateDir = await makeTempDir();
-    const runEmbeddedPiAgent = vi.fn(async () => ({
+    const runEmbeddedAgent = vi.fn(async () => ({
       payloads: [
         {
           text: JSON.stringify({
@@ -918,7 +926,7 @@ describe("skill-workshop", () => {
           defaults: { provider: "openai", model: "gpt-5.4" },
           resolveAgentWorkspaceDir: () => workspaceDir,
           resolveAgentDir: () => path.join(workspaceDir, ".agent"),
-          runEmbeddedPiAgent,
+          runEmbeddedAgent,
         },
         state: {
           resolveStateDir: () => stateDir,
@@ -939,7 +947,7 @@ describe("skill-workshop", () => {
 
     const store = new SkillWorkshopStore({ stateDir, workspaceDir });
     expect(await store.list("pending")).toHaveLength(1);
-    expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
+    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
   });
 
   it("quarantines unsafe tool suggestions with scan metadata", async () => {
@@ -975,7 +983,7 @@ describe("skill-workshop", () => {
     const proposal = details.proposal as SkillProposal | undefined;
     expect(proposal?.status).toBe("quarantined");
     expect(proposal?.quarantineReason).toContain("prompt");
-    expect(proposal?.scanFindings?.some((finding) => finding.severity === "critical")).toBe(true);
+    expect(proposal?.scanFindings?.map((finding) => finding.severity)).toContain("critical");
     const store = new SkillWorkshopStore({ stateDir, workspaceDir });
     expect(await store.list("quarantined")).toHaveLength(1);
   });

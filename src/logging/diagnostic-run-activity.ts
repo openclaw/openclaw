@@ -7,7 +7,7 @@ import {
 type SessionActivity = {
   sessionId?: string;
   sessionKey?: string;
-  activeEmbeddedRun: boolean;
+  activeEmbeddedRuns: Set<string>;
   activeTools: Map<string, ActiveTool>;
   activeModelCalls: Set<string>;
   lastProgressAt: number;
@@ -26,8 +26,19 @@ type DiagnosticToolStartedActivityEvent = Pick<
   "runId" | "sessionId" | "sessionKey" | "toolName" | "toolCallId"
 >;
 
+type DiagnosticModelStartedActivityEvent = Pick<
+  Extract<DiagnosticEventPayload, { type: "model.call.started" }>,
+  "runId" | "sessionId" | "sessionKey" | "provider" | "model"
+>;
+
+type DiagnosticRunProgressActivityEvent = Pick<
+  Extract<DiagnosticEventPayload, { type: "run.progress" }>,
+  "runId" | "sessionId" | "sessionKey" | "reason"
+>;
+
 export type DiagnosticSessionActivitySnapshot = {
   activeWorkKind?: DiagnosticSessionActiveWorkKind;
+  hasActiveEmbeddedRun?: boolean;
   activeToolName?: string;
   activeToolCallId?: string;
   activeToolAgeMs?: number;
@@ -81,12 +92,14 @@ function replaceSessionActivityReferences(source: SessionActivity, target: Sessi
 function mergeSessionActivity(target: SessionActivity, source: SessionActivity): void {
   target.sessionId ??= source.sessionId;
   target.sessionKey ??= source.sessionKey;
-  target.activeEmbeddedRun ||= source.activeEmbeddedRun;
+  for (const key of source.activeEmbeddedRuns) {
+    target.activeEmbeddedRuns.add(key);
+  }
   for (const [key, tool] of source.activeTools) {
     target.activeTools.set(key, tool);
   }
-  for (const call of source.activeModelCalls) {
-    target.activeModelCalls.add(call);
+  for (const key of source.activeModelCalls) {
+    target.activeModelCalls.add(key);
   }
   if (source.lastProgressAt > target.lastProgressAt) {
     target.lastProgressAt = source.lastProgressAt;
@@ -133,7 +146,7 @@ function resolveSessionActivity(params: {
   const created: SessionActivity = {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
-    activeEmbeddedRun: false,
+    activeEmbeddedRuns: new Set(),
     activeTools: new Map(),
     activeModelCalls: new Set(),
     lastProgressAt: Date.now(),
@@ -192,9 +205,7 @@ function recordToolEnded(
   touchSessionActivity(activity, `tool:${event.toolName}:ended`);
 }
 
-function recordModelStarted(
-  event: Extract<DiagnosticEventPayload, { type: "model.call.started" }>,
-): void {
+function recordModelStarted(event: DiagnosticModelStartedActivityEvent): void {
   const activity = resolveSessionActivity({ ...event, create: true });
   if (!activity) {
     return;
@@ -214,12 +225,16 @@ function recordModelEnded(
   touchSessionActivity(activity, "model_call:ended");
 }
 
-function recordRunProgress(event: Extract<DiagnosticEventPayload, { type: "run.progress" }>): void {
-  const activity = resolveSessionActivity({ ...event, create: true });
+function recordRunProgress(event: DiagnosticRunProgressActivityEvent): void {
+  markDiagnosticRunProgress(event);
+}
+
+export function markDiagnosticRunProgress(params: DiagnosticRunProgressActivityEvent): void {
+  const activity = resolveSessionActivity({ ...params, create: true });
   if (!activity) {
     return;
   }
-  touchSessionActivity(activity, event.reason);
+  touchSessionActivity(activity, params.reason);
 }
 
 function recordRunCompleted(
@@ -232,34 +247,43 @@ function recordRunCompleted(
   activityByRunId.delete(event.runId);
   activity.activeTools.clear();
   activity.activeModelCalls.clear();
-  activity.activeEmbeddedRun = false;
+  activity.activeEmbeddedRuns.clear();
   touchSessionActivity(activity, "run:completed");
 }
 
 export function markDiagnosticEmbeddedRunStarted(params: {
   sessionId: string;
   sessionKey?: string;
+  workKey?: string;
 }): void {
   const activity = resolveSessionActivity({ ...params, create: true });
   if (!activity) {
     return;
   }
-  activity.activeEmbeddedRun = true;
+  activity.activeEmbeddedRuns.add(resolveEmbeddedRunWorkKey(params));
   touchSessionActivity(activity, "embedded_run:started");
 }
 
 export function markDiagnosticEmbeddedRunEnded(params: {
   sessionId: string;
   sessionKey?: string;
+  workKey?: string;
+  clearRunActivity?: boolean;
 }): void {
   const activity = resolveSessionActivity(params);
   if (!activity) {
     return;
   }
-  activity.activeEmbeddedRun = false;
-  activity.activeTools.clear();
-  activity.activeModelCalls.clear();
+  activity.activeEmbeddedRuns.delete(resolveEmbeddedRunWorkKey(params));
+  if (params.clearRunActivity !== false) {
+    activity.activeTools.clear();
+    activity.activeModelCalls.clear();
+  }
   touchSessionActivity(activity, "embedded_run:ended");
+}
+
+function resolveEmbeddedRunWorkKey(params: { sessionId: string; workKey?: string }): string {
+  return params.workKey ?? params.sessionId;
 }
 
 export function getDiagnosticSessionActivitySnapshot(
@@ -276,7 +300,7 @@ export function getDiagnosticSessionActivitySnapshot(
     activeWorkKind = "tool_call";
   } else if (activity.activeModelCalls.size > 0) {
     activeWorkKind = "model_call";
-  } else if (activity.activeEmbeddedRun) {
+  } else if (activity.activeEmbeddedRuns.size > 0) {
     activeWorkKind = "embedded_run";
   }
 
@@ -286,9 +310,9 @@ export function getDiagnosticSessionActivitySnapshot(
       activeTool = tool;
     }
   }
-
   return {
     activeWorkKind,
+    ...(activity.activeEmbeddedRuns.size > 0 ? { hasActiveEmbeddedRun: true } : {}),
     activeToolName: activeTool?.toolName,
     activeToolCallId: activeTool?.toolCallId,
     activeToolAgeMs: activeTool ? Math.max(0, now - activeTool.startedAt) : undefined,
@@ -297,17 +321,8 @@ export function getDiagnosticSessionActivitySnapshot(
   };
 }
 
-export function markDiagnosticRunProgressForTest(params: {
-  sessionId?: string;
-  sessionKey?: string;
-  runId?: string;
-  reason: string;
-}): void {
-  const activity = resolveSessionActivity({ ...params, create: true });
-  if (!activity) {
-    return;
-  }
-  touchSessionActivity(activity, params.reason);
+export function markDiagnosticRunProgressForTest(params: DiagnosticRunProgressActivityEvent): void {
+  markDiagnosticRunProgress(params);
 }
 
 export function markDiagnosticToolStartedForTest(params: {
@@ -320,35 +335,53 @@ export function markDiagnosticToolStartedForTest(params: {
   recordToolStarted(params);
 }
 
+export function markDiagnosticModelStartedForTest(
+  params: DiagnosticModelStartedActivityEvent,
+): void {
+  recordModelStarted(params);
+}
+
 export function resetDiagnosticRunActivityForTest(): void {
   activityByRef.clear();
   activityByRunId.clear();
+  unregisterDiagnosticRunActivityListener?.();
+  unregisterDiagnosticRunActivityListener = undefined;
+  registerDiagnosticRunActivityListener();
 }
 
-onInternalDiagnosticEvent((event) => {
-  switch (event.type) {
-    case "tool.execution.started":
-      recordToolStarted(event);
-      return;
-    case "tool.execution.completed":
-    case "tool.execution.error":
-    case "tool.execution.blocked":
-      recordToolEnded(event);
-      return;
-    case "model.call.started":
-      recordModelStarted(event);
-      return;
-    case "model.call.completed":
-    case "model.call.error":
-      recordModelEnded(event);
-      return;
-    case "run.progress":
-      recordRunProgress(event);
-      return;
-    case "run.completed":
-      recordRunCompleted(event);
-      return;
-    default:
-      return;
+let unregisterDiagnosticRunActivityListener: (() => void) | undefined;
+
+function registerDiagnosticRunActivityListener(): void {
+  if (unregisterDiagnosticRunActivityListener) {
+    return;
   }
-});
+  unregisterDiagnosticRunActivityListener = onInternalDiagnosticEvent((event) => {
+    switch (event.type) {
+      case "tool.execution.started":
+        recordToolStarted(event);
+        return;
+      case "tool.execution.completed":
+      case "tool.execution.error":
+      case "tool.execution.blocked":
+        recordToolEnded(event);
+        return;
+      case "model.call.started":
+        recordModelStarted(event);
+        return;
+      case "model.call.completed":
+      case "model.call.error":
+        recordModelEnded(event);
+        return;
+      case "run.progress":
+        recordRunProgress(event);
+        return;
+      case "run.completed":
+        recordRunCompleted(event);
+        return;
+      default:
+        return;
+    }
+  });
+}
+
+registerDiagnosticRunActivityListener();

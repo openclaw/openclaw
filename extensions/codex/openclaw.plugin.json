@@ -1,7 +1,7 @@
 {
   "id": "codex",
   "name": "Codex",
-  "description": "Codex app-server harness and Codex-managed GPT model catalog.",
+  "description": "OpenClaw Codex app-server harness and model provider plugin with a Codex-managed GPT catalog.",
   "providers": ["codex"],
   "contracts": {
     "mediaUnderstandingProviders": ["codex"],
@@ -101,7 +101,7 @@
           },
           "allow_destructive_actions": {
             "type": "boolean",
-            "default": false
+            "default": true
           },
           "plugins": {
             "type": "object",
@@ -133,8 +133,7 @@
         "properties": {
           "mode": {
             "type": "string",
-            "enum": ["yolo", "guardian"],
-            "default": "yolo"
+            "enum": ["yolo", "guardian"]
           },
           "transport": {
             "type": "string",
@@ -161,6 +160,10 @@
             "type": "array",
             "items": { "type": "string" }
           },
+          "codeModeOnly": {
+            "type": "boolean",
+            "default": false
+          },
           "requestTimeoutMs": {
             "type": "number",
             "minimum": 1,
@@ -170,6 +173,10 @@
             "type": "number",
             "minimum": 1,
             "default": 60000
+          },
+          "postToolRawAssistantCompletionIdleTimeoutMs": {
+            "type": "number",
+            "minimum": 1
           },
           "approvalPolicy": {
             "type": "string",
@@ -186,6 +193,16 @@
           "serviceTier": { "type": ["string", "null"] },
           "defaultWorkspaceDir": {
             "type": "string"
+          },
+          "experimental": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "sandboxExecServer": {
+                "type": "boolean",
+                "default": false
+              }
+            }
           }
         }
       }
@@ -272,7 +289,7 @@
     },
     "codexPlugins.allow_destructive_actions": {
       "label": "Allow Destructive Plugin Actions",
-      "help": "Default policy for plugin app write or destructive action elicitations. Defaults to false.",
+      "help": "Default policy for plugin app write or destructive action elicitations. Defaults to true.",
       "advanced": true
     },
     "codexPlugins.plugins": {
@@ -287,7 +304,7 @@
     },
     "appServer.mode": {
       "label": "Execution Mode",
-      "help": "Use yolo for unchained local execution or guardian for Codex guardian-reviewed approvals.",
+      "help": "Legacy Codex app-server preset. Prefer tools.exec.mode=auto for normalized Guardian-reviewed approvals.",
       "advanced": true
     },
     "appServer.transport": {
@@ -326,6 +343,11 @@
       "help": "Environment variable names removed from the spawned stdio app-server process after overrides are applied.",
       "advanced": true
     },
+    "appServer.codeModeOnly": {
+      "label": "Code Mode Only",
+      "help": "Expose Codex's code-mode-only tool surface. OpenClaw dynamic tools remain available through Codex nested tool calls.",
+      "advanced": true
+    },
     "appServer.requestTimeoutMs": {
       "label": "Request Timeout",
       "help": "Maximum time to wait for Codex app-server control-plane requests.",
@@ -333,7 +355,12 @@
     },
     "appServer.turnCompletionIdleTimeoutMs": {
       "label": "Turn Completion Idle Timeout",
-      "help": "Maximum quiet time after a turn-scoped Codex app-server request before OpenClaw interrupts the turn while waiting for turn/completed.",
+      "help": "Maximum quiet time after Codex accepts a turn or after a turn-scoped app-server request before OpenClaw interrupts the turn while waiting for turn/completed.",
+      "advanced": true
+    },
+    "appServer.postToolRawAssistantCompletionIdleTimeoutMs": {
+      "label": "Post-Tool Raw Assistant Completion Idle Timeout",
+      "help": "Completion-idle guard after a tool handoff when Codex emits raw assistant completion or progress without turn/completed. Defaults to the assistant completion idle timeout when unset.",
       "advanced": true
     },
     "appServer.approvalPolicy": {
@@ -359,6 +386,16 @@
     "appServer.defaultWorkspaceDir": {
       "label": "Default Workspace",
       "help": "Workspace used by /codex bind when --cwd is omitted.",
+      "advanced": true
+    },
+    "appServer.experimental": {
+      "label": "Experimental",
+      "help": "Experimental Codex app-server integrations.",
+      "advanced": true
+    },
+    "appServer.experimental.sandboxExecServer": {
+      "label": "Sandbox Exec Server",
+      "help": "Route native Codex execution through an OpenClaw sandbox-backed exec-server when OpenClaw sandboxing is active.",
       "advanced": true
     }
   }

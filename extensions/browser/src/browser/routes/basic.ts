@@ -1,3 +1,4 @@
+import { redactCdpUrl } from "../cdp.helpers.js";
 import { snapshotAria } from "../cdp.js";
 import { getChromeMcpPid } from "../chrome-mcp.js";
 import { resolveBrowserExecutableForPlatform } from "../chrome.executables.js";
@@ -19,7 +20,29 @@ import {
 
 const STATUS_CDP_HTTP_TIMEOUT_MS = 300;
 const STATUS_CDP_TRANSPORT_TIMEOUT_MS = 600;
+const STATUS_CHROME_MCP_TOTAL_TIMEOUT_MS = 7_000;
 const STATUS_CHROME_MCP_TRANSPORT_TIMEOUT_MS = 5_000;
+
+function remainingChromeMcpStatusTimeoutMs(startedAtMs: number): number {
+  return Math.max(1, STATUS_CHROME_MCP_TOTAL_TIMEOUT_MS - (Date.now() - startedAtMs));
+}
+
+async function probeChromeMcpPageReady(profileCtx: ProfileContext, timeoutMs: number) {
+  const abort = new AbortController();
+  const timer = setTimeout(() => {
+    abort.abort(new Error(`Chrome MCP page-readiness probe timed out after ${timeoutMs}ms.`));
+  }, timeoutMs);
+  try {
+    return await profileCtx.isReachable(timeoutMs, {
+      ephemeral: true,
+      signal: abort.signal,
+    });
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 function handleBrowserRouteError(res: BrowserResponse, err: unknown) {
   const mapped = toBrowserErrorResponse(err);
@@ -27,6 +50,17 @@ function handleBrowserRouteError(res: BrowserResponse, err: unknown) {
     return jsonError(res, mapped.status, mapped.message);
   }
   jsonError(res, 500, String(err));
+}
+
+async function sendBasicJsonResponse(params: {
+  res: BrowserResponse;
+  run: () => Promise<unknown>;
+}) {
+  try {
+    params.res.json(await params.run());
+  } catch (err) {
+    return handleBrowserRouteError(params.res, err);
+  }
 }
 
 async function withBasicProfileRoute(params: {
@@ -44,6 +78,29 @@ async function withBasicProfileRoute(params: {
   } catch (err) {
     return handleBrowserRouteError(params.res, err);
   }
+}
+
+function registerBasicProfilePost(
+  app: BrowserRouteRegistrar,
+  ctx: BrowserRouteContext,
+  path: string,
+  run: (params: {
+    req: BrowserRequest;
+    res: BrowserResponse;
+    profileCtx: ProfileContext;
+  }) => Promise<void>,
+) {
+  app.post(
+    path,
+    asyncBrowserRoute(async (req, res) => {
+      await withBasicProfileRoute({
+        req,
+        res,
+        ctx,
+        run: async (profileCtx) => await run({ req, res, profileCtx }),
+      });
+    }),
+  );
 }
 
 async function withProfilesServiceMutation(params: {
@@ -74,15 +131,33 @@ async function buildBrowserStatus(req: BrowserRequest, ctx: BrowserRouteContext)
   }
 
   const capabilities = getBrowserProfileCapabilities(profileCtx.profile);
-  const [cdpHttp, cdpReady] = capabilities.usesChromeMcp
+  const [cdpHttp, cdpReady, pageReady] = capabilities.usesChromeMcp
     ? await (async () => {
-        const ready = await profileCtx.isTransportAvailable(STATUS_CHROME_MCP_TRANSPORT_TIMEOUT_MS);
-        return [ready, ready] as const;
+        const statusStartedAtMs = Date.now();
+        const transportReady = await profileCtx.isTransportAvailable(
+          STATUS_CHROME_MCP_TRANSPORT_TIMEOUT_MS,
+        );
+        if (!transportReady) {
+          return [false, false, false] as const;
+        }
+        // Status-safe page probe: ephemeral so a passive status call does not seed
+        // a persistent cached Chrome MCP session. Keep the whole status route inside
+        // the public client timeout; page probe failures degrade to pageReady=false.
+        const pageReachable = await probeChromeMcpPageReady(
+          profileCtx,
+          remainingChromeMcpStatusTimeoutMs(statusStartedAtMs),
+        );
+        return [transportReady, transportReady, pageReachable] as const;
       })()
-    : await Promise.all([
-        profileCtx.isHttpReachable(STATUS_CDP_HTTP_TIMEOUT_MS),
-        profileCtx.isTransportAvailable(STATUS_CDP_TRANSPORT_TIMEOUT_MS),
-      ]);
+    : await (async () => {
+        const [http, ready] = await Promise.all([
+          profileCtx.isHttpReachable(STATUS_CDP_HTTP_TIMEOUT_MS),
+          profileCtx.isTransportAvailable(STATUS_CDP_TRANSPORT_TIMEOUT_MS),
+        ]);
+        // For managed CDP profiles, the transport check already includes a WS
+        // handshake against the page, so pageReady mirrors cdpReady.
+        return [http, ready, ready] as const;
+      })();
 
   const profileState = current.profiles.get(profileCtx.profile.name);
   let detectedBrowser: string | null = null;
@@ -118,11 +193,12 @@ async function buildBrowserStatus(req: BrowserRequest, ctx: BrowserRouteContext)
     running: cdpReady,
     cdpReady,
     cdpHttp,
+    pageReady,
     pid: capabilities.usesChromeMcp
       ? getChromeMcpPid(profileCtx.profile.name)
       : (profileState?.running?.pid ?? null),
     cdpPort: capabilities.usesChromeMcp ? null : profileCtx.profile.cdpPort,
-    cdpUrl: capabilities.usesChromeMcp ? null : profileCtx.profile.cdpUrl,
+    cdpUrl: capabilities.usesChromeMcp ? null : (redactCdpUrl(profileCtx.profile.cdpUrl) ?? null),
     chosenBrowser: profileState?.running?.exe.kind ?? null,
     detectedBrowser,
     detectedExecutablePath,
@@ -248,94 +324,56 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
   app.get(
     "/",
     asyncBrowserRoute(async (req, res) => {
-      try {
-        res.json(await buildBrowserStatus(req, ctx));
-      } catch (err) {
-        const mapped = toBrowserErrorResponse(err);
-        if (mapped) {
-          return jsonError(res, mapped.status, mapped.message);
-        }
-        jsonError(res, 500, String(err));
-      }
+      await sendBasicJsonResponse({
+        res,
+        run: async () => await buildBrowserStatus(req, ctx),
+      });
     }),
   );
 
   app.get(
     "/doctor",
     asyncBrowserRoute(async (req, res) => {
-      try {
-        const status = await buildBrowserStatus(req, ctx);
-        const report = buildBrowserDoctorReport({ status });
-        if (toBoolean(req.query.deep) === true || toBoolean(req.query.live) === true) {
-          report.checks.push(await runBrowserLiveProbe(req, ctx));
-          report.ok = report.checks.every((check) => check.status !== "fail");
-        }
-        res.json(report);
-      } catch (err) {
-        const mapped = toBrowserErrorResponse(err);
-        if (mapped) {
-          return jsonError(res, mapped.status, mapped.message);
-        }
-        jsonError(res, 500, String(err));
-      }
+      await sendBasicJsonResponse({
+        res,
+        run: async () => {
+          const status = await buildBrowserStatus(req, ctx);
+          const report = buildBrowserDoctorReport({ status });
+          if (toBoolean(req.query.deep) === true || toBoolean(req.query.live) === true) {
+            report.checks.push(await runBrowserLiveProbe(req, ctx));
+            report.ok = report.checks.every((check) => check.status !== "fail");
+          }
+          return report;
+        },
+      });
     }),
   );
 
   // Start browser (profile-aware)
-  app.post(
-    "/start",
-    asyncBrowserRoute(async (req, res) => {
-      await withBasicProfileRoute({
-        req,
-        res,
-        ctx,
-        run: async (profileCtx) => {
-          const headlessOverride = parseHeadlessStartOverride({ req, res, profileCtx });
-          if (!headlessOverride.ok) {
-            return;
-          }
-          await profileCtx.ensureBrowserAvailable({ headless: headlessOverride.headless });
-          res.json({ ok: true, profile: profileCtx.profile.name });
-        },
-      });
-    }),
-  );
+  registerBasicProfilePost(app, ctx, "/start", async ({ req, res, profileCtx }) => {
+    const headlessOverride = parseHeadlessStartOverride({ req, res, profileCtx });
+    if (!headlessOverride.ok) {
+      return;
+    }
+    await profileCtx.ensureBrowserAvailable({ headless: headlessOverride.headless });
+    res.json({ ok: true, profile: profileCtx.profile.name });
+  });
 
   // Stop browser (profile-aware)
-  app.post(
-    "/stop",
-    asyncBrowserRoute(async (req, res) => {
-      await withBasicProfileRoute({
-        req,
-        res,
-        ctx,
-        run: async (profileCtx) => {
-          const result = await profileCtx.stopRunningBrowser();
-          res.json({
-            ok: true,
-            stopped: result.stopped,
-            profile: profileCtx.profile.name,
-          });
-        },
-      });
-    }),
-  );
+  registerBasicProfilePost(app, ctx, "/stop", async ({ res, profileCtx }) => {
+    const result = await profileCtx.stopRunningBrowser();
+    res.json({
+      ok: true,
+      stopped: result.stopped,
+      profile: profileCtx.profile.name,
+    });
+  });
 
   // Reset profile (profile-aware)
-  app.post(
-    "/reset-profile",
-    asyncBrowserRoute(async (req, res) => {
-      await withBasicProfileRoute({
-        req,
-        res,
-        ctx,
-        run: async (profileCtx) => {
-          const result = await profileCtx.resetProfile();
-          res.json({ ok: true, profile: profileCtx.profile.name, ...result });
-        },
-      });
-    }),
-  );
+  registerBasicProfilePost(app, ctx, "/reset-profile", async ({ res, profileCtx }) => {
+    const result = await profileCtx.resetProfile();
+    res.json({ ok: true, profile: profileCtx.profile.name, ...result });
+  });
 
   // Create a new profile
   app.post(

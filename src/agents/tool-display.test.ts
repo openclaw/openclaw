@@ -1,7 +1,49 @@
 import { describe, expect, it } from "vitest";
+import { resolveToolSearchCodeDisplayTarget } from "./tool-display-common.js";
 import { formatToolDetail, formatToolSummary, resolveToolDisplay } from "./tool-display.js";
 
 describe("tool display details", () => {
+  it("summarizes tool-search code targets from described tool ids", () => {
+    expect(
+      resolveToolSearchCodeDisplayTarget({
+        code: "const tool = await openclaw.tools.describe('openclaw:core:exec'); return await openclaw.tools.call(tool.id, { command: 'echo hi' });",
+      }),
+    ).toEqual({
+      toolName: "openclaw:core:exec",
+      displayToolName: "exec",
+      displayArgs: { command: "echo hi" },
+      detail: "echo hi",
+      bridgeVerb: "call",
+    });
+  });
+
+  it("normalizes direct tool-search catalog ids to native display names and args", () => {
+    expect(
+      resolveToolSearchCodeDisplayTarget({
+        code: 'return await openclaw.tools.call("openclaw:core:exec", { command: "echo hi" });',
+      }),
+    ).toEqual({
+      toolName: "openclaw:core:exec",
+      displayToolName: "exec",
+      displayArgs: { command: "echo hi" },
+      detail: "echo hi",
+      bridgeVerb: "call",
+    });
+  });
+
+  it("preserves JS numeric literals in tool-search call args", () => {
+    expect(
+      resolveToolSearchCodeDisplayTarget({
+        code: 'return await openclaw.tools.call("web_search", { query: "OpenClaw", count: 1e3, limit: +3, threshold: .5 });',
+      })?.displayArgs,
+    ).toEqual({
+      query: "OpenClaw",
+      count: 1000,
+      limit: 3,
+      threshold: 0.5,
+    });
+  });
+
   it("skips zero/false values for optional detail fields", () => {
     const detail = formatToolDetail(
       resolveToolDisplay({

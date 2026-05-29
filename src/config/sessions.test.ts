@@ -5,9 +5,12 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 import {
+  applySessionStoreEntryPatch,
   buildGroupDisplayName,
   deriveSessionKey,
   loadSessionStore,
+  patchSessionEntry,
+  recordSessionMetaFromInbound,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   resolveSessionKey,
@@ -16,6 +19,7 @@ import {
   updateLastRoute,
   updateSessionStore,
   updateSessionStoreEntry,
+  upsertSessionEntry,
 } from "./sessions.js";
 
 describe("sessions", () => {
@@ -105,7 +109,13 @@ describe("sessions", () => {
   }
 
   async function expectPathMissing(targetPath: string): Promise<void> {
-    await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+    let error: { code?: unknown } | undefined;
+    try {
+      await fs.stat(targetPath);
+    } catch (err) {
+      error = err as { code?: unknown };
+    }
+    expect(error?.code).toBe("ENOENT");
   }
 
   const deriveSessionKeyCases = [
@@ -437,6 +447,70 @@ describe("sessions", () => {
     expect(store[mainSessionKey]?.lastTo).toBe("99999");
   });
 
+  it("updateLastRoute skips persistence when the route is unchanged", async () => {
+    const mainSessionKey = "agent:main:main";
+    const entry = buildMainSessionEntry({
+      route: {
+        channel: "telegram",
+        target: { to: "99999" },
+      },
+      deliveryContext: {
+        channel: "telegram",
+        to: "99999",
+      },
+      lastChannel: "telegram",
+      lastTo: "99999",
+    });
+    const { storePath } = await createSessionStoreFixture({
+      prefix: "updateLastRoute-noop",
+      entries: {
+        [mainSessionKey]: entry,
+      },
+    });
+    const before = await fs.readFile(storePath, "utf-8");
+
+    const result = await updateLastRoute({
+      storePath,
+      sessionKey: mainSessionKey,
+      deliveryContext: {
+        channel: "telegram",
+        to: "99999",
+      },
+    });
+
+    expect(result).toEqual(entry);
+    if (result) {
+      result.lastTo = "mutated";
+    }
+    expect(loadSessionStore(storePath, { clone: false })[mainSessionKey]?.lastTo).toBe("99999");
+    await expect(fs.readFile(storePath, "utf-8")).resolves.toBe(before);
+  });
+
+  it("recordSessionMetaFromInbound skips persistence when there is no metadata patch", async () => {
+    const mainSessionKey = "agent:main:main";
+    const entry = buildMainSessionEntry();
+    const { storePath } = await createSessionStoreFixture({
+      prefix: "recordSessionMetaFromInbound-noop",
+      entries: {
+        [mainSessionKey]: entry,
+      },
+    });
+    const before = await fs.readFile(storePath, "utf-8");
+
+    const result = await recordSessionMetaFromInbound({
+      storePath,
+      sessionKey: mainSessionKey,
+      ctx: {},
+    });
+
+    expect(result).toEqual(entry);
+    if (result) {
+      result.sessionId = "mutated";
+    }
+    expect(loadSessionStore(storePath, { clone: false })[mainSessionKey]?.sessionId).toBe("sess-1");
+    await expect(fs.readFile(storePath, "utf-8")).resolves.toBe(before);
+  });
+
   it("updateSessionStoreEntry preserves existing fields when patching", async () => {
     const sessionKey = "agent:main:main";
     const { storePath } = await createSessionStoreFixture({
@@ -456,6 +530,34 @@ describe("sessions", () => {
       update: async () => ({ updatedAt: 200 }),
     });
 
+    const store = loadSessionStore(storePath);
+    expect(store[sessionKey]?.updatedAt).toBeGreaterThanOrEqual(200);
+    expect(store[sessionKey]?.reasoningLevel).toBe("on");
+  });
+
+  it("applySessionStoreEntryPatch applies a precomputed patch without a callback", async () => {
+    const sessionKey = "agent:main:main";
+    const { storePath } = await createSessionStoreFixture({
+      prefix: "applySessionStoreEntryPatch",
+      entries: {
+        [sessionKey]: {
+          sessionId: "sess-1",
+          updatedAt: 100,
+          reasoningLevel: "on",
+        },
+      },
+    });
+
+    const result = await applySessionStoreEntryPatch({
+      storePath,
+      sessionKey,
+      patch: {
+        updatedAt: 200,
+        thinkingLevel: "high",
+      },
+    });
+
+    expect(result?.thinkingLevel).toBe("high");
     const store = loadSessionStore(storePath);
     expect(store[sessionKey]?.updatedAt).toBeGreaterThanOrEqual(200);
     expect(store[sessionKey]?.reasoningLevel).toBe("on");
@@ -493,10 +595,132 @@ describe("sessions", () => {
       sessionKey,
       update: async () => null,
     });
-    expect(result).toEqual(expect.objectContaining({ sessionId: "sess-1", thinkingLevel: "low" }));
+    expect(result?.sessionId).toBe("sess-1");
+    expect(result?.thinkingLevel).toBe("low");
 
     const store = loadSessionStore(storePath);
     expect(store[sessionKey]?.thinkingLevel).toBe("low");
+  });
+
+  it("updateSessionStoreEntry persists callback mutations returned as patches", async () => {
+    const sessionKey = "agent:main:main";
+    const { storePath } = await createSessionStoreFixture({
+      prefix: "updateSessionStoreEntry-mutated-patch",
+      entries: {
+        [sessionKey]: {
+          sessionId: "sess-1",
+          updatedAt: 123,
+          displayName: "before",
+        },
+      },
+    });
+
+    await updateSessionStoreEntry({
+      storePath,
+      sessionKey,
+      update: async (entry) => {
+        entry.displayName = "after";
+        return { displayName: entry.displayName };
+      },
+    });
+
+    expect(loadSessionStore(storePath)[sessionKey]?.displayName).toBe("after");
+  });
+
+  it("patchSessionEntry can preserve activity for metadata-only updates", async () => {
+    const sessionKey = "agent:main:main";
+    const { storePath } = await createSessionStoreFixture({
+      prefix: "patchSessionEntry-preserve-activity",
+      entries: {
+        [sessionKey]: {
+          sessionId: "sess-1",
+          updatedAt: 100,
+          pluginDebugEntries: [{ pluginId: "other", lines: ["keep"] }],
+        },
+      },
+    });
+
+    await patchSessionEntry({
+      storePath,
+      sessionKey,
+      preserveActivity: true,
+      update: () => ({
+        pluginDebugEntries: [{ pluginId: "active-memory", lines: ["status"] }],
+      }),
+    });
+
+    const store = loadSessionStore(storePath);
+    expect(store[sessionKey]?.updatedAt).toBe(100);
+    expect(store[sessionKey]?.pluginDebugEntries).toEqual([
+      { pluginId: "active-memory", lines: ["status"] },
+    ]);
+  });
+
+  it("patchSessionEntry can replace an entry so deleted fields stay deleted", async () => {
+    const sessionKey = "agent:main:main";
+    const { storePath } = await createSessionStoreFixture({
+      prefix: "patchSessionEntry-replace-entry",
+      entries: {
+        [sessionKey]: {
+          sessionId: "sess-1",
+          updatedAt: 100,
+          model: "old-model",
+          modelProvider: "old-provider",
+        },
+      },
+    });
+
+    await patchSessionEntry({
+      storePath,
+      sessionKey,
+      replaceEntry: true,
+      update: (entry) => {
+        const next = { ...entry, providerOverride: "openai" };
+        delete next.model;
+        delete next.modelProvider;
+        return next;
+      },
+    });
+
+    const store = loadSessionStore(storePath);
+    expect(store[sessionKey]?.providerOverride).toBe("openai");
+    expect(store[sessionKey]?.model).toBeUndefined();
+    expect(store[sessionKey]?.modelProvider).toBeUndefined();
+  });
+
+  it("upsertSessionEntry preserves existing ACP metadata by default", async () => {
+    const sessionKey = "agent:main:main";
+    const acp = {
+      backend: "codex",
+      agent: "main",
+      runtimeSessionName: "runtime-session",
+      mode: "persistent" as const,
+      state: "idle" as const,
+      lastActivityAt: 100,
+    };
+    const { storePath } = await createSessionStoreFixture({
+      prefix: "upsertSessionEntry-acp",
+      entries: {
+        [sessionKey]: {
+          sessionId: "sess-1",
+          updatedAt: 100,
+          acp,
+        },
+      },
+    });
+
+    await upsertSessionEntry({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "sess-2",
+        updatedAt: 200,
+      },
+    });
+
+    const store = loadSessionStore(storePath);
+    expect(store[sessionKey]?.sessionId).toBe("sess-2");
+    expect(store[sessionKey]?.acp).toStrictEqual(acp);
   });
 
   it("updateSessionStore preserves concurrent additions", async () => {
@@ -847,7 +1071,37 @@ describe("sessions", () => {
     expect(store[mainSessionKey]?.thinkingLevel).toBe("high");
   });
 
-  it("updateSessionStore uses the writer-owned mutable cache without disk read or parse", async () => {
+  it("updateSessionStoreEntry can skip maintenance for existing-entry metadata writes", async () => {
+    const mainSessionKey = "agent:main:main";
+    const staleSessionKey = "agent:main:stale";
+    const { storePath } = await createSessionStoreFixture({
+      prefix: "updateSessionStoreEntry-skip-maintenance",
+      entries: {
+        [mainSessionKey]: {
+          sessionId: "sess-1",
+          updatedAt: Date.now(),
+          thinkingLevel: "low",
+        },
+        [staleSessionKey]: {
+          sessionId: "sess-stale",
+          updatedAt: 1,
+        },
+      },
+    });
+
+    await updateSessionStoreEntry({
+      storePath,
+      sessionKey: mainSessionKey,
+      skipMaintenance: true,
+      update: async () => ({ thinkingLevel: "high" }),
+    });
+
+    const store = loadSessionStore(storePath);
+    expect(store[mainSessionKey]?.thinkingLevel).toBe("high");
+    expect(store[staleSessionKey]?.sessionId).toBe("sess-stale");
+  });
+
+  it("updateSessionStore uses the writer-owned mutable cache without disk read", async () => {
     const mainSessionKey = "agent:main:main";
     const { storePath } = await createSessionStoreFixture({
       prefix: "updateSessionStore-mutable-cache",
@@ -863,7 +1117,6 @@ describe("sessions", () => {
     expect(loadSessionStore(storePath)[mainSessionKey]?.thinkingLevel).toBe("low");
 
     const readSpy = vi.spyOn(fsSync, "readFileSync");
-    const parseSpy = vi.spyOn(JSON, "parse");
     try {
       await updateSessionStore(
         storePath,
@@ -881,10 +1134,8 @@ describe("sessions", () => {
       );
 
       expect(readSpy).not.toHaveBeenCalled();
-      expect(parseSpy).not.toHaveBeenCalled();
     } finally {
       readSpy.mockRestore();
-      parseSpy.mockRestore();
     }
 
     const store = loadSessionStore(storePath, { skipCache: true });

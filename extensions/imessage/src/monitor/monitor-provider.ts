@@ -1,28 +1,32 @@
 import fs from "node:fs/promises";
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
+import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import {
   createChannelInboundDebouncer,
+  resolveEnvelopeFormatOptions,
+  runChannelInboundEvent,
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
   deliverInboundReplyWithMessageSendContext,
   createChannelMessageReplyPipeline,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
+import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import { normalizeScpRemoteHost } from "openclaw/plugin-sdk/host-runtime";
-import { runInboundReplyTurn } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { isInboundPathAllowed, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
 import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
 import { createReplyDispatcherWithTyping } from "openclaw/plugin-sdk/reply-runtime";
 import { settleReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
+import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, logVerbose, shouldLogVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -35,6 +39,8 @@ import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/sess
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { resolveIMessageAccount } from "../accounts.js";
+import { pollPendingIMessageApprovalReactions } from "../approval-reaction-poller.js";
+import { maybeResolveIMessageApprovalReaction } from "../approval-reactions.js";
 import { markIMessageChatRead, sendIMessageTyping } from "../chat.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "../client.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "../constants.js";
@@ -51,9 +57,11 @@ import { sendMessageIMessage } from "../send.js";
 import { normalizeIMessageHandle } from "../targets.js";
 import { attachIMessageMonitorAbortHandler } from "./abort-handler.js";
 import { runIMessageCatchup } from "./catchup-bridge.js";
-import { resolveCatchupConfig } from "./catchup.js";
+import { advanceIMessageCatchupCursor, resolveCatchupConfig } from "./catchup.js";
 import { combineIMessagePayloads } from "./coalesce.js";
+import { repairIMessageConversationAnchor } from "./conversation-repair.js";
 import { createIMessageEchoCachingSend, deliverReplies } from "./deliver.js";
+import { resolveIMessageDmHistoryContext, resolveIMessageDmHistoryLimit } from "./dm-history.js";
 import { createSentMessageCache } from "./echo-cache.js";
 import {
   warnGroupAllowlistDropPerChatOnce,
@@ -61,10 +69,13 @@ import {
 } from "./group-allowlist-warnings.js";
 import {
   buildIMessageInboundContext,
+  resolveIMessageReactionContext,
   resolveIMessageInboundDecision,
 } from "./inbound-processing.js";
 import { createLoopRateLimiter } from "./loop-rate-limiter.js";
+import { stageIMessageAttachments } from "./media-staging.js";
 import { parseIMessageNotification } from "./parse-notification.js";
+import { enqueueIMessageReactionSystemEvent } from "./reaction-system-event.js";
 import { normalizeAllowList, resolveRuntime } from "./runtime.js";
 import { createSelfChatCache } from "./self-chat-cache.js";
 import type { IMessagePayload, MonitorIMessageOpts } from "./types.js";
@@ -72,6 +83,23 @@ import { sanitizeIMessageWatchErrorPayload } from "./watch-error-log.js";
 
 const WATCH_SUBSCRIBE_MAX_ATTEMPTS = 3;
 const WATCH_SUBSCRIBE_RETRY_DELAY_MS = 1_000;
+const APPROVAL_REACTION_POLL_INTERVAL_MS = 2_000;
+const APPROVAL_REACTION_DISCOVERY_INTERVAL_MS = 60_000;
+
+function isIMessagePluginPayloadAttachment(attachment: {
+  original_path?: string | null;
+  transfer_name?: string | null;
+  uti?: string | null;
+}): boolean {
+  const attachmentPath = attachment.original_path?.trim().toLowerCase() ?? "";
+  const transferName = attachment.transfer_name?.trim().toLowerCase() ?? "";
+  const uti = attachment.uti?.trim().toLowerCase() ?? "";
+  return (
+    attachmentPath.endsWith(".pluginpayloadattachment") ||
+    transferName.endsWith(".pluginpayloadattachment") ||
+    uti === "com.apple.messages.pluginpayloadattachment"
+  );
+}
 
 async function detectRemoteHostFromCliPath(cliPath: string): Promise<string | undefined> {
   try {
@@ -129,16 +157,6 @@ function isRetriableWatchSubscribeStartupError(error: unknown): boolean {
   );
 }
 
-function formatIMessageReactionText(message: IMessagePayload): string | undefined {
-  if (!message.is_reaction) {
-    return undefined;
-  }
-  const action = message.is_reaction_add === false ? "removed" : "added";
-  const emoji = message.reaction_emoji?.trim() || message.reaction_type?.trim() || "reaction";
-  const target = message.reacted_to_guid?.trim();
-  return target ? `${action} ${emoji} reaction to [id:${target}]` : `${action} ${emoji} reaction`;
-}
-
 async function waitForWatchSubscribeRetryDelay(params: {
   ms: number;
   abortSignal?: AbortSignal;
@@ -180,11 +198,12 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   const loopRateLimiter = createLoopRateLimiter();
   const textLimit = resolveTextChunkLimit(cfg, "imessage", accountInfo.accountId);
   const allowFrom = normalizeAllowList(opts.allowFrom ?? imessageCfg.allowFrom);
+  const configuredGroupAllowFrom = opts.groupAllowFrom ?? imessageCfg.groupAllowFrom;
   const groupAllowFrom = normalizeAllowList(
-    opts.groupAllowFrom ??
-      imessageCfg.groupAllowFrom ??
+    configuredGroupAllowFrom ??
       (imessageCfg.allowFrom && imessageCfg.allowFrom.length > 0 ? imessageCfg.allowFrom : []),
   );
+  const allowLegacyConversationAllowFromForGroup = configuredGroupAllowFrom == null;
   const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
   const { groupPolicy, providerMissingFallbackApplied } = resolveOpenProviderRuntimeGroupPolicy({
     providerConfigPresent: cfg.channels?.imessage !== undefined,
@@ -204,6 +223,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     log: (message) => runtime.log?.(warn(message)),
   });
   const dmPolicy = imessageCfg.dmPolicy ?? "pairing";
+  const catchupCfg = resolveCatchupConfig(imessageCfg.catchup);
   const includeAttachments = opts.includeAttachments ?? imessageCfg.includeAttachments ?? false;
   const mediaMaxBytes = (opts.mediaMaxMb ?? imessageCfg.mediaMaxMb ?? 16) * 1024 * 1024;
   const cliPath = opts.cliPath ?? imessageCfg.cliPath ?? "imsg";
@@ -282,6 +302,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     },
     shouldDebounce: (entry) => {
       const msg = entry.message;
+      if (resolveIMessageReactionContext(msg, (msg.text ?? "").trim())) {
+        return false;
+      }
       // From-me messages are cached, not processed — never debounce.
       if (msg.is_from_me === true) {
         return false;
@@ -300,7 +323,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       return shouldDebounceTextInbound({
         text: msg.text,
         cfg,
-        hasMedia: Boolean(msg.attachments && msg.attachments.length > 0),
+        hasMedia: Boolean(
+          msg.attachments?.some((attachment) => !isIMessagePluginPayloadAttachment(attachment)),
+        ),
       });
     },
     onFlush: async (entries) => {
@@ -328,6 +353,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
 
   let client: IMessageRpcClient | undefined;
   let detachAbortHandler = () => {};
+  let liveCatchupCursorAdvanceEnabled = false;
+  let startupCatchupInProgress = false;
+  const pendingLiveCatchupCursorAdvances: Array<{ lastSeenMs: number; lastSeenRowid: number }> = [];
   const getActiveClient = () => {
     if (!client) {
       throw new Error("imessage monitor client not initialized");
@@ -335,13 +363,102 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     return client;
   };
 
-  async function handleMessageNow(message: IMessagePayload) {
-    const reactionText = formatIMessageReactionText(message);
-    const messageText = (reactionText ?? message.text ?? "").trim();
+  async function repairMessageConversationAnchor(
+    message: IMessagePayload,
+  ): Promise<IMessagePayload | null> {
+    return await repairIMessageConversationAnchor({
+      client: getActiveClient(),
+      message,
+      runtime,
+    });
+  }
+
+  function resolveLiveCatchupCursor(
+    message: IMessagePayload,
+  ): { lastSeenMs: number; lastSeenRowid: number } | null {
+    const coalescedCursor = (
+      message as {
+        coalescedCatchupCursor?: { lastSeenMs?: unknown; lastSeenRowid?: unknown };
+      }
+    ).coalescedCatchupCursor;
+    const rowid =
+      typeof coalescedCursor?.lastSeenRowid === "number" &&
+      Number.isFinite(coalescedCursor.lastSeenRowid)
+        ? coalescedCursor.lastSeenRowid
+        : typeof message.id === "number" && Number.isFinite(message.id)
+          ? message.id
+          : null;
+    const dateMs =
+      typeof coalescedCursor?.lastSeenMs === "number" && Number.isFinite(coalescedCursor.lastSeenMs)
+        ? coalescedCursor.lastSeenMs
+        : typeof message.created_at === "string"
+          ? Date.parse(message.created_at)
+          : Number.NaN;
+    if (rowid === null || !Number.isFinite(dateMs)) {
+      return null;
+    }
+    return { lastSeenMs: dateMs, lastSeenRowid: rowid };
+  }
+
+  async function maybeAdvanceLiveCatchupCursor(message: IMessagePayload): Promise<void> {
+    if (!catchupCfg.enabled) {
+      return;
+    }
+    const cursor = resolveLiveCatchupCursor(message);
+    if (!cursor) {
+      return;
+    }
+    if (!liveCatchupCursorAdvanceEnabled) {
+      if (startupCatchupInProgress) {
+        pendingLiveCatchupCursorAdvances.push(cursor);
+      }
+      return;
+    }
+    try {
+      await advanceIMessageCatchupCursor(accountInfo.accountId, cursor, catchupCfg);
+    } catch (err) {
+      runtime.error?.(`imessage catchup: failed to advance live cursor: ${String(err)}`);
+    }
+  }
+
+  async function flushPendingLiveCatchupCursorAdvances(): Promise<void> {
+    for (const cursor of pendingLiveCatchupCursorAdvances.splice(0)) {
+      try {
+        await advanceIMessageCatchupCursor(accountInfo.accountId, cursor, catchupCfg);
+      } catch (err) {
+        runtime.error?.(`imessage catchup: failed to advance pending live cursor: ${String(err)}`);
+      }
+    }
+  }
+
+  async function handleMessageNow(
+    message: IMessagePayload,
+    options: { advanceCatchupCursor?: boolean } = {},
+  ) {
+    await handleMessageNowInner(message);
+    if (options.advanceCatchupCursor !== false) {
+      await maybeAdvanceLiveCatchupCursor(message);
+    }
+  }
+
+  async function handleMessageNowInner(rawMessage: IMessagePayload) {
+    const message = await repairMessageConversationAnchor(rawMessage);
+    if (!message) {
+      return;
+    }
+
+    const messageText = (message.text ?? "").trim();
 
     const attachments = includeAttachments ? (message.attachments ?? []) : [];
     const effectiveAttachmentRoots = remoteHost ? remoteAttachmentRoots : attachmentRoots;
     const validAttachments = attachments.filter((entry) => {
+      if (isIMessagePluginPayloadAttachment(entry)) {
+        // Apple rich-link previews arrive as opaque .pluginPayloadAttachment
+        // files. The useful URL remains in message.text/attributedBody; treating
+        // the preview blob as media creates noisy phantom attachments and can
+        // keep split-send URL previews out of the text debounce path.
+        return false;
+      }
       const attachmentPath = entry?.original_path?.trim();
       if (!attachmentPath || entry?.missing) {
         return false;
@@ -352,19 +469,38 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       logVerbose(`imessage: dropping inbound attachment outside allowed roots: ${attachmentPath}`);
       return false;
     });
-    const firstAttachment = validAttachments[0];
-    const mediaPath = firstAttachment?.original_path ?? undefined;
-    const mediaType = firstAttachment?.mime_type ?? undefined;
-    // Build arrays for all attachments (for multi-image support)
-    const mediaPaths = validAttachments.map((a) => a.original_path).filter(Boolean) as string[];
-    const mediaTypes = validAttachments.map((a) => a.mime_type ?? undefined);
-    const kind = kindFromMime(mediaType ?? undefined);
+    const rawMediaAttachments = validAttachments.flatMap((a) => {
+      const attachmentPath = a.original_path?.trim();
+      return attachmentPath
+        ? [{ path: attachmentPath, contentType: a.mime_type ?? undefined }]
+        : [];
+    });
+    const placeholderMediaType = rawMediaAttachments[0]?.contentType;
+    const kind = kindFromMime(placeholderMediaType ?? undefined);
     const placeholder = kind
       ? `<media:${kind}>`
       : validAttachments.length
         ? "<media:attachment>"
         : "";
     const bodyText = messageText || placeholder;
+
+    // Approval reaction shortcut: if the inbound tapback resolves a pending
+    // approval prompt, route it through the gateway and skip the normal
+    // dispatch pipeline. This bypasses reactionNotifications gating so
+    // approvals still work when general reaction surfacing is off, and it
+    // bypasses allowFrom/dmPolicy because the approval-reactions module
+    // enforces its own actor authorization via channels.imessage.allowFrom.
+    if (
+      await maybeResolveIMessageApprovalReaction({
+        cfg,
+        accountId: accountInfo.accountId,
+        message,
+        bodyText,
+        logVerboseMessage: logVerbose,
+      })
+    ) {
+      return;
+    }
 
     const storeAllowFrom = await readChannelAllowFromStore(
       "imessage",
@@ -380,6 +516,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       bodyText,
       allowFrom,
       groupAllowFrom,
+      allowLegacyConversationAllowFromForGroup,
       groupPolicy,
       dmPolicy,
       storeAllowFrom,
@@ -387,6 +524,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       groupHistories,
       echoCache: sentMessageCache,
       selfChatCache,
+      reactionNotifications: imessageCfg.reactionNotifications,
       logVerbose,
     });
 
@@ -472,14 +610,51 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       return;
     }
 
+    if (decision.kind === "reaction") {
+      enqueueIMessageReactionSystemEvent({ decision, runtime, logVerbose });
+      return;
+    }
+
     const storePath = resolveStorePath(cfg.session?.store, {
       agentId: decision.route.agentId,
     });
+    const stagedAttachments = remoteHost
+      ? []
+      : await stageIMessageAttachments(validAttachments, {
+          maxBytes: mediaMaxBytes,
+          allowedRoots: effectiveAttachmentRoots,
+          deps: { logVerbose },
+        });
+    const mediaAttachments = remoteHost ? rawMediaAttachments : stagedAttachments;
+    const firstAttachment = mediaAttachments[0];
+    const mediaPath = firstAttachment?.path ?? undefined;
+    const mediaType = firstAttachment?.contentType ?? undefined;
+    // Build arrays for all attachments (for multi-image support)
+    const mediaPaths = mediaAttachments.map((a) => a.path).filter(Boolean);
+    const mediaTypes = mediaAttachments.map((a) => a.contentType ?? undefined);
     const previousTimestamp = readSessionUpdatedAt({
       storePath,
       sessionKey: decision.route.sessionKey,
     });
-    const { ctxPayload, chatTarget } = buildIMessageInboundContext({
+    const dmHistoryLimit = !decision.isGroup
+      ? resolveIMessageDmHistoryLimit({
+          config: imessageCfg,
+          sender: decision.sender,
+          senderNormalized: decision.senderNormalized,
+        })
+      : 0;
+    const dmHistory =
+      !decision.isGroup && dmHistoryLimit > 0 && !previousTimestamp
+        ? await resolveIMessageDmHistoryContext({
+            client: getActiveClient(),
+            message,
+            senderNormalized: decision.senderNormalized,
+            limit: dmHistoryLimit,
+            envelopeOptions: resolveEnvelopeFormatOptions(cfg),
+            logVerbose,
+          })
+        : undefined;
+    const { ctxPayload, chatTarget } = await buildIMessageInboundContext({
       cfg,
       decision,
       message,
@@ -487,6 +662,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       remoteHost,
       historyLimit,
       groupHistories,
+      dmHistory,
       media: {
         path: mediaPath,
         type: mediaType,
@@ -633,8 +809,12 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         runtime.error?.(danger(`imessage ${info.kind} reply failed: ${String(err)}`));
       },
     });
+    const inboundLastRouteSessionKey = resolveInboundLastRouteSessionKey({
+      route: decision.route,
+      sessionKey: decision.route.sessionKey,
+    });
 
-    await runInboundReplyTurn({
+    await runChannelInboundEvent({
       channel: "imessage",
       accountId: decision.route.accountId,
       raw: decision,
@@ -658,12 +838,14 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
             updateLastRoute:
               !decision.isGroup && updateTarget
                 ? {
-                    sessionKey: decision.route.mainSessionKey,
+                    sessionKey: inboundLastRouteSessionKey,
                     channel: "imessage",
                     to: updateTarget,
                     accountId: decision.route.accountId,
                     mainDmOwnerPin:
-                      pinnedMainDmOwner && decision.senderNormalized
+                      inboundLastRouteSessionKey === decision.route.mainSessionKey &&
+                      pinnedMainDmOwner &&
+                      decision.senderNormalized
                         ? {
                             ownerRecipient: pinnedMainDmOwner,
                             senderRecipient: decision.senderNormalized,
@@ -730,7 +912,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       runtime.error?.(`imessage: dropping malformed RPC message payload (keys=${shape})`);
       return;
     }
-    await inboundDebouncer.enqueue({ message });
+    const repairedMessage = await repairMessageConversationAnchor(message);
+    if (!repairedMessage) {
+      return;
+    }
+    await inboundDebouncer.enqueue({ message: repairedMessage });
   };
 
   await waitForTransportReady({
@@ -853,15 +1039,59 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     return;
   }
 
+  // Register the iMessage approval native runtime context with the gateway so
+  // proactive exec/plugin approval prompts can be delivered through the
+  // imessageApprovalCapability's lazy nativeRuntime adapter. Without this
+  // registration the adapter's `Boolean(context)` gates always fail and the
+  // gateway can never push native approval prompts to iMessage targets — only
+  // the reaction shortcut and `/approve` text fallback would work.
+  const approvalContextLease = opts.channelRuntime
+    ? registerChannelRuntimeContext({
+        channelRuntime: opts.channelRuntime,
+        channelId: "imessage",
+        accountId: accountInfo.accountId,
+        capability: CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
+        context: { accountId: accountInfo.accountId },
+        abortSignal: abort,
+      })
+    : undefined;
+  let approvalReactionPollInFlight = false;
+  const pollApprovalReactions = async (allowRecentChatDiscovery = false) => {
+    if (approvalReactionPollInFlight) {
+      return;
+    }
+    approvalReactionPollInFlight = true;
+    try {
+      await pollPendingIMessageApprovalReactions({
+        client: activeClient,
+        cfg,
+        accountId: accountInfo.accountId,
+        allowRecentChatDiscovery,
+        logVerboseMessage: logVerbose,
+      });
+    } catch (err) {
+      logVerbose(`imessage: approval reaction poll failed: ${String(err)}`);
+    } finally {
+      approvalReactionPollInFlight = false;
+    }
+  };
+  const approvalReactionPollTimer = setInterval(() => {
+    void pollApprovalReactions();
+  }, APPROVAL_REACTION_POLL_INTERVAL_MS);
+  const approvalReactionDiscoveryTimer = setInterval(() => {
+    void pollApprovalReactions(true);
+  }, APPROVAL_REACTION_DISCOVERY_INTERVAL_MS);
+  void pollApprovalReactions(true);
+
   // Catchup runs once between watch.subscribe and the live dispatch loop.
   // Anything that arrives during the catchup pass itself flows through
   // `handleMessage` -> `handleMessageNow`; the inbound-dedupe cache absorbs
   // any overlap with replayed rows. Disabled by default — opt-in via
   // `channels.imessage.catchup.enabled`. See issue #78649.
-  const catchupCfg = resolveCatchupConfig(imessageCfg.catchup);
   if (catchupCfg.enabled && !abort?.aborted) {
+    startupCatchupInProgress = true;
     try {
-      await runIMessageCatchup({
+      const catchupSummary = await runIMessageCatchup({
         client: activeClient,
         accountId: accountInfo.accountId,
         config: catchupCfg,
@@ -871,13 +1101,23 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         // from before the gateway gap therefore arrive as separate turns
         // rather than coalesced. Live notifications continue to flow through
         // the debouncer.
-        dispatchPayload: (message) => handleMessageNow(message),
+        dispatchPayload: (message) => handleMessageNow(message, { advanceCatchupCursor: false }),
         runtime,
       });
+      liveCatchupCursorAdvanceEnabled =
+        catchupSummary.querySucceeded && catchupSummary.fullyCaughtUp;
+      if (liveCatchupCursorAdvanceEnabled) {
+        await flushPendingLiveCatchupCursorAdvances();
+      } else {
+        pendingLiveCatchupCursorAdvances.length = 0;
+      }
     } catch (err) {
+      pendingLiveCatchupCursorAdvances.length = 0;
       // Catchup is opt-in recovery — surface the error but do not block the
       // monitor. The live dispatch loop is already up and running.
       runtime.error?.(`imessage catchup: pass failed: ${String(err)}`);
+    } finally {
+      startupCatchupInProgress = false;
     }
   }
 
@@ -890,6 +1130,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     runtime.error?.(danger(`imessage: monitor failed: ${String(err)}`));
     throw err;
   } finally {
+    clearInterval(approvalReactionPollTimer);
+    clearInterval(approvalReactionDiscoveryTimer);
+    approvalContextLease?.dispose();
     detachAbortHandler();
     await activeClient.stop();
   }

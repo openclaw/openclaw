@@ -28,9 +28,9 @@ function firstMessageContent(group: MessageGroup): unknown[] {
 }
 
 function requireRecord(value: unknown): Record<string, unknown> {
-  expect(value).toBeTruthy();
-  expect(typeof value).toBe("object");
-  expect(Array.isArray(value)).toBe(false);
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Expected a non-array record");
+  }
   return value as Record<string, unknown>;
 }
 
@@ -198,6 +198,29 @@ describe("buildChatItems", () => {
     ]);
   });
 
+  it("deduplicates accumulated stream snapshots around tool cards", () => {
+    const items = buildChatItems(
+      createProps({
+        streamSegments: [
+          { text: "First thought.", ts: 1 },
+          { text: "First thought. After tool.", ts: 3 },
+        ],
+        toolMessages: [
+          { role: "toolResult", content: "Tool one", timestamp: 2 },
+          { role: "toolResult", content: "Tool two", timestamp: 4 },
+        ],
+        stream: "First thought. After tool. Final sentence.",
+        streamStartedAt: 5,
+      }),
+    );
+
+    expect(items.filter((item) => item.kind === "stream")).toMatchObject([
+      { text: "First thought." },
+      { text: "After tool." },
+      { text: "Final sentence." },
+    ]);
+  });
+
   it("suppresses metadata-only history messages before grouping", () => {
     const groups = messageGroups({
       messages: [
@@ -236,6 +259,53 @@ describe("buildChatItems", () => {
     expect(messageRecord(groups[groups.length - 1]).content).toBe("message 104");
   });
 
+  it("budgets rendered history by tool-result content size", () => {
+    const largeOutput = "x".repeat(100_000);
+    const items = buildChatItems(
+      createProps({
+        messages: Array.from({ length: 6 }, (_, index) => ({
+          role: "assistant",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: `tool-${index}`,
+              content: largeOutput,
+            },
+          ],
+          timestamp: index,
+        })),
+      }),
+    );
+
+    const groups = items.filter((item) => item.kind === "group");
+    const noticeGroup = requireGroup(items[0]);
+    expect(messageRecord(noticeGroup).content).toBe("Showing last 2 messages (4 hidden).");
+    expect(groups).toHaveLength(2);
+    expect(groups[1].messages).toHaveLength(2);
+    expect(messageRecord(groups[1], 0).timestamp).toBe(4);
+    expect(messageRecord(groups[1], 1).timestamp).toBe(5);
+  });
+
+  it("does not crash when history contains malformed entries", () => {
+    const items = buildChatItems(
+      createProps({
+        messages: [
+          null,
+          undefined,
+          {
+            role: "assistant",
+            content: "still visible",
+            timestamp: 1,
+          },
+        ],
+      }),
+    );
+
+    const groups = items.filter((item) => item.kind === "group");
+    expect(groups).toHaveLength(1);
+    expect(messageRecord(groups[0]).content).toBe("still visible");
+  });
+
   it("does not collapse duplicate text messages separated by another message", () => {
     const groups = messageGroups({
       messages: [
@@ -270,6 +340,74 @@ describe("buildChatItems", () => {
     expect(groups).toHaveLength(1);
     expect(groups[0].messages).toHaveLength(2);
     expect(groups[0].messages[0].duplicateCount).toBeUndefined();
+  });
+
+  it("orders live tool messages before newer history messages", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Newer history reply." }],
+          timestamp: 2_000,
+        },
+      ],
+      toolMessages: [
+        {
+          role: "tool",
+          toolCallId: "call-older-tool",
+          toolName: "shell",
+          content: "Older live tool output.",
+          timestamp: 1_000,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(2);
+    expect(groups.map((group) => group.role)).toEqual(["tool", "assistant"]);
+    expect(messageRecord(groups[0]).content).toBe("Older live tool output.");
+    expect(messageRecord(groups[1]).content).toStrictEqual([
+      { type: "text", text: "Newer history reply." },
+    ]);
+  });
+
+  it("orders completed stream segments before newer history messages", () => {
+    const items = buildChatItems(
+      createProps({
+        messages: [
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "Newer history reply." }],
+            timestamp: 2_000,
+          },
+        ],
+        streamSegments: [{ text: "Older streamed output.", ts: 1_000 }],
+      }),
+    );
+
+    expect(items).toHaveLength(2);
+    expect(items[0]).toMatchObject({
+      kind: "stream",
+      text: "Older streamed output.",
+      startedAt: 1_000,
+    });
+    expect(requireGroup(items[1]).role).toBe("assistant");
+  });
+
+  it("orders timestamped chat items before history messages without timestamps", () => {
+    const items = buildChatItems(
+      createProps({
+        messages: [{ role: "assistant", content: "Missing timestamp." }],
+        streamSegments: [{ text: "Timestamped stream.", ts: Number.MAX_SAFE_INTEGER }],
+      }),
+    );
+
+    expect(items).toHaveLength(2);
+    expect(items[0]).toMatchObject({
+      kind: "stream",
+      text: "Timestamped stream.",
+      startedAt: Number.MAX_SAFE_INTEGER,
+    });
+    expect(messageRecord(requireGroup(items[1])).content).toBe("Missing timestamp.");
   });
 
   it("attaches lifted canvas previews to the nearest assistant turn", () => {
@@ -438,7 +576,10 @@ describe("buildChatItems", () => {
       ],
     });
 
-    const canvasBlocks = canvasBlocksIn(groups[0]);
+    const assistantGroup = groups.find((group) => group.role === "assistant");
+    expect(assistantGroup).toBeDefined();
+
+    const canvasBlocks = canvasBlocksIn(assistantGroup as MessageGroup);
     expect(canvasBlocks).toHaveLength(1);
     const canvasBlock = requireRecord(canvasBlocks[0]);
     const preview = requireRecord(canvasBlock.preview);
@@ -467,7 +608,7 @@ describe("buildChatItems", () => {
     expect(divider.kind).toBe("divider");
     expect(divider.label).toBe("Compacted history");
     expect(divider.description).toBe(
-      "Earlier turns are preserved in a compaction checkpoint. Open session checkpoints to branch or restore that pre-compaction view.",
+      "The compacted transcript is preserved as a checkpoint. Open session checkpoints to branch or restore from that compacted view.",
     );
     const action = requireRecord(divider.action);
     expect(action.kind).toBe("session-checkpoints");

@@ -32,16 +32,13 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
   };
 });
 
-vi.mock("@earendil-works/pi-ai/oauth", () => ({
-  getOAuthApiKey: vi.fn(),
-  getOAuthProviders: () => [],
-  loginOpenAICodex: vi.fn(),
-  refreshOpenAICodexToken: vi.fn(),
+vi.mock("./openai-codex-oauth-flow.runtime.js", () => ({
+  refreshOpenAICodexToken: runtimeMocks.refreshOpenAICodexToken,
 }));
 
 import { createOpenAICodexProviderRuntime } from "./openai-codex-provider.runtime.js";
 
-const _registerOpenAIPlugin = async () =>
+const registerOpenAIPluginForTest = async () =>
   registerProviderPlugin({
     plugin,
     id: "openai",
@@ -140,7 +137,9 @@ function mockOpenAIImageApiResponse(params: {
 
 function firstMockArg(mocked: unknown): Record<string, unknown> {
   const arg = (mocked as { mock?: { calls?: unknown[][] } }).mock?.calls?.[0]?.[0];
-  expect(arg).toBeDefined();
+  if (!arg || typeof arg !== "object") {
+    throw new Error("Expected first mock argument");
+  }
   return arg as Record<string, unknown>;
 }
 

@@ -5,6 +5,7 @@ import {
   uploadToConsentUrl,
   validateConsentUploadUrl,
 } from "./file-consent.js";
+import { buildUserAgent } from "./user-agent.js";
 
 // Helper: a resolveFn that returns a public IP by default
 const publicResolve = async () => ({ address: "13.107.136.10" });
@@ -15,6 +16,14 @@ const multiResolve = (ips: string[]) => async () => ips.map((address) => ({ addr
 // Helper: a resolveFn that fails
 const failingResolve = async () => {
   throw new Error("DNS failure");
+};
+
+const firstFetchCall = (fetchFn: ReturnType<typeof vi.fn<typeof fetch>>) => {
+  const [call] = fetchFn.mock.calls;
+  if (!call) {
+    throw new Error("expected fetch call");
+  }
+  return call;
 };
 
 // ─── isPrivateOrReservedIP ───────────────────────────────────────────────────
@@ -271,13 +280,13 @@ describe("uploadToConsentUrl", () => {
     });
 
     expect(fetchFn).toHaveBeenCalledOnce();
-    const [url, opts] = fetchFn.mock.calls[0];
+    const [url, opts] = firstFetchCall(fetchFn);
     expect(url).toBe("https://contoso.sharepoint.com/upload");
     expect(opts?.method).toBe("PUT");
     expect(opts?.headers).toEqual({
       "Content-Range": "bytes 0-4/5",
       "Content-Type": "application/octet-stream",
-      "User-Agent": expect.stringMatching(/^teams\.ts\[apps\]\/.+ OpenClaw\/.+$/),
+      "User-Agent": buildUserAgent(),
     });
     expect(opts?.body).toEqual(new Uint8Array(Buffer.from("hello")));
   });
@@ -311,7 +320,7 @@ describe("uploadToConsentUrl", () => {
   });
 
   it("allows upload to a valid SharePoint URL and performs PUT", async () => {
-    const mockFetch = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    const mockFetch = vi.fn<typeof fetch>(async () => new Response(null, { status: 200 }));
     const buffer = Buffer.from("file content");
 
     await uploadToConsentUrl({
@@ -323,10 +332,17 @@ describe("uploadToConsentUrl", () => {
     });
 
     expect(mockFetch).toHaveBeenCalledOnce();
-    const [url, opts] = mockFetch.mock.calls[0];
+    const [url, opts] = firstFetchCall(mockFetch);
     expect(url).toBe("https://contoso.sharepoint.com/sites/uploads/file.pdf");
-    expect(opts.method).toBe("PUT");
-    expect(opts.headers["Content-Type"]).toBe("application/pdf");
+    expect(opts).toEqual({
+      method: "PUT",
+      headers: {
+        "User-Agent": buildUserAgent(),
+        "Content-Type": "application/pdf",
+        "Content-Range": "bytes 0-11/12",
+      },
+      body: new Uint8Array(buffer),
+    });
   });
 
   it("throws on non-OK response after passing validation", async () => {

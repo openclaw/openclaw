@@ -13,7 +13,6 @@ describe("command-analysis lazy command explainer", () => {
       commandText: "python3 -c 'print(1)'",
     });
 
-    expect(summary).not.toBeNull();
     if (!summary) {
       throw new Error("expected command analysis summary");
     }

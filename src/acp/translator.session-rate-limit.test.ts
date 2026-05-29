@@ -6,8 +6,8 @@ import type {
   SetSessionModeRequest,
 } from "@agentclientprotocol/sdk";
 import { describe, expect, it, vi } from "vitest";
+import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import type { GatewayClient } from "../gateway/client.js";
-import type { EventFrame } from "../gateway/protocol/index.js";
 import { createInMemorySessionStore } from "./session.js";
 import { AcpGatewayAgent } from "./translator.js";
 import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
@@ -105,7 +105,8 @@ function createChatFinalEvent(sessionKey: string): EventFrame {
 }
 
 async function expectOversizedPromptRejected(params: { sessionId: string; text: string }) {
-  const request = vi.fn(async () => ({ ok: true })) as GatewayClient["request"];
+  const requestMock = vi.fn(async (_method: string) => ({ ok: true }));
+  const request = requestMock as GatewayClient["request"];
   const sessionStore = createInMemorySessionStore();
   const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
     sessionStore,
@@ -115,7 +116,7 @@ async function expectOversizedPromptRejected(params: { sessionId: string; text: 
   await expect(agent.prompt(createPromptRequest(params.sessionId, params.text))).rejects.toThrow(
     /maximum allowed size/i,
   );
-  expect(request).not.toHaveBeenCalledWith("chat.send", expect.anything(), expect.anything());
+  expect(requestMock.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
   const session = sessionStore.getSession(params.sessionId);
   expect(session?.activeRunId).toBeNull();
   expect(session?.abortController).toBeNull();
@@ -126,8 +127,9 @@ async function expectOversizedPromptRejected(params: { sessionId: string; text: 
 type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(value, label).toBeTypeOf("object");
-  expect(value, label).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
   return value as Record<string, unknown>;
 }
 
@@ -138,9 +140,11 @@ function configOptions(value: unknown) {
 
 function expectConfigOption(options: unknown, id: string, fields: Record<string, unknown>) {
   const option = configOptions(options).find((candidate) => candidate.id === id);
-  expect(option, `config option ${id}`).toBeDefined();
+  if (!option) {
+    throw new Error(`Expected config option ${id}`);
+  }
   for (const [field, value] of Object.entries(fields)) {
-    expect(option?.[field]).toEqual(value);
+    expect(option[field]).toEqual(value);
   }
 }
 
@@ -205,13 +209,33 @@ describe("acp session creation rate limit", () => {
 
     sessionStore.clearAllSessionsForTest();
   });
+
+  it("falls back for non-finite session creation rate limit overrides", async () => {
+    const sessionStore = createInMemorySessionStore();
+    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(), {
+      sessionStore,
+      sessionCreateRateLimit: {
+        maxRequests: Number.NaN,
+        windowMs: Number.NaN,
+      },
+    });
+
+    await expect(agent.newSession(createNewSessionRequest())).resolves.toMatchObject({
+      sessionId: expect.any(String),
+    });
+    await expect(agent.newSession(createNewSessionRequest())).resolves.toMatchObject({
+      sessionId: expect.any(String),
+    });
+
+    sessionStore.clearAllSessionsForTest();
+  });
 });
 
 describe("acp unsupported bridge session setup", () => {
   it("rejects per-session MCP servers on newSession", async () => {
     const sessionStore = createInMemorySessionStore();
     const connection = createAcpConnection();
-    const sessionUpdate = connection.__sessionUpdateMock;
+    const sessionUpdate = connection["__sessionUpdateMock"];
     const agent = new AcpGatewayAgent(connection, createAcpGateway(), {
       sessionStore,
     });
@@ -231,7 +255,7 @@ describe("acp unsupported bridge session setup", () => {
   it("rejects per-session MCP servers on loadSession", async () => {
     const sessionStore = createInMemorySessionStore();
     const connection = createAcpConnection();
-    const sessionUpdate = connection.__sessionUpdateMock;
+    const sessionUpdate = connection["__sessionUpdateMock"];
     const agent = new AcpGatewayAgent(connection, createAcpGateway(), {
       sessionStore,
     });
@@ -259,7 +283,14 @@ describe("acp session UX bridge behavior", () => {
     const result = await agent.newSession(createNewSessionRequest());
 
     expect(result.modes?.currentModeId).toBe("adaptive");
-    expect(result.modes?.availableModes.map((mode) => mode.id)).toContain("adaptive");
+    expect(result.modes?.availableModes.map((mode) => mode.id)).toStrictEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "adaptive",
+    ]);
     expectConfigOption(result.configOptions, "thought_level", {
       currentValue: "adaptive",
       category: "thought_level",
@@ -275,7 +306,7 @@ describe("acp session UX bridge behavior", () => {
   it("replays user text, assistant text, and hidden assistant thinking on loadSession", async () => {
     const sessionStore = createInMemorySessionStore();
     const connection = createAcpConnection();
-    const sessionUpdate = connection.__sessionUpdateMock;
+    const sessionUpdate = connection["__sessionUpdateMock"];
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.list") {
         return {
@@ -378,6 +409,10 @@ describe("acp session UX bridge behavior", () => {
         sessionUpdate: "session_info_update",
         title: "Fix ACP bridge",
         updatedAt: "2024-03-09T16:00:00.000Z",
+        _meta: {
+          sessionKey: "agent:main:work",
+          kind: "direct",
+        },
       },
     });
     expect(sessionUpdate).toHaveBeenCalledWith({
@@ -399,7 +434,7 @@ describe("acp session UX bridge behavior", () => {
   it("falls back to an empty transcript when sessions.get fails during loadSession", async () => {
     const sessionStore = createInMemorySessionStore();
     const connection = createAcpConnection();
-    const sessionUpdate = connection.__sessionUpdateMock;
+    const sessionUpdate = connection["__sessionUpdateMock"];
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.list") {
         return {
@@ -469,7 +504,7 @@ describe("acp setSessionMode bridge behavior", () => {
   it("emits current mode and thought-level config updates after a successful mode change", async () => {
     const sessionStore = createInMemorySessionStore();
     const connection = createAcpConnection();
-    const sessionUpdate = connection.__sessionUpdateMock;
+    const sessionUpdate = connection["__sessionUpdateMock"];
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.list") {
         return {
@@ -525,7 +560,7 @@ describe("acp setSessionConfigOption bridge behavior", () => {
   it("updates the thought-level config option and returns refreshed options", async () => {
     const sessionStore = createInMemorySessionStore();
     const connection = createAcpConnection();
-    const sessionUpdate = connection.__sessionUpdateMock;
+    const sessionUpdate = connection["__sessionUpdateMock"];
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.list") {
         return {
@@ -582,7 +617,7 @@ describe("acp setSessionConfigOption bridge behavior", () => {
   it("updates non-mode ACP config options through gateway session patches", async () => {
     const sessionStore = createInMemorySessionStore();
     const connection = createAcpConnection();
-    const sessionUpdate = connection.__sessionUpdateMock;
+    const sessionUpdate = connection["__sessionUpdateMock"];
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.list") {
         return {
@@ -633,7 +668,7 @@ describe("acp setSessionConfigOption bridge behavior", () => {
   it("updates fast mode ACP config options through gateway session patches", async () => {
     const sessionStore = createInMemorySessionStore();
     const connection = createAcpConnection();
-    const sessionUpdate = connection.__sessionUpdateMock;
+    const sessionUpdate = connection["__sessionUpdateMock"];
     const request = vi.fn(async (method: string, _params?: unknown) => {
       if (method === "sessions.list") {
         return {
@@ -690,7 +725,7 @@ describe("acp setSessionConfigOption bridge behavior", () => {
   it("accepts forwarded timeout config options without failing OpenClaw ACP bridge turns", async () => {
     const sessionStore = createInMemorySessionStore();
     const connection = createAcpConnection();
-    const request = vi.fn(async (method: string) => {
+    const requestMock = vi.fn(async (method: string) => {
       if (method === "sessions.list") {
         return {
           ts: Date.now(),
@@ -715,7 +750,8 @@ describe("acp setSessionConfigOption bridge behavior", () => {
       }
       expect(method).not.toBe("sessions.patch");
       return { ok: true };
-    }) as GatewayClient["request"];
+    });
+    const request = requestMock as GatewayClient["request"];
     const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
       sessionStore,
     });
@@ -727,7 +763,7 @@ describe("acp setSessionConfigOption bridge behavior", () => {
     );
     expect(Array.isArray(result.configOptions)).toBe(true);
 
-    expect(request).not.toHaveBeenCalledWith("sessions.patch", expect.anything());
+    expect(requestMock.mock.calls.some(([method]) => method === "sessions.patch")).toBe(false);
 
     sessionStore.clearAllSessionsForTest();
   });
@@ -789,7 +825,7 @@ describe("acp tool streaming bridge behavior", () => {
   it("maps Gateway tool partial output and file locations into ACP tool updates", async () => {
     const sessionStore = createInMemorySessionStore();
     const connection = createAcpConnection();
-    const sessionUpdate = connection.__sessionUpdateMock;
+    const sessionUpdate = connection["__sessionUpdateMock"];
     const request = vi.fn(async (method: string) => {
       if (method === "chat.send") {
         return new Promise(() => {});
@@ -900,7 +936,7 @@ describe("acp session metadata and usage updates", () => {
   it("emits a fresh usage snapshot after prompt completion when gateway totals are available", async () => {
     const sessionStore = createInMemorySessionStore();
     const connection = createAcpConnection();
-    const sessionUpdate = connection.__sessionUpdateMock;
+    const sessionUpdate = connection["__sessionUpdateMock"];
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.list") {
         return {
@@ -950,6 +986,10 @@ describe("acp session metadata and usage updates", () => {
         sessionUpdate: "session_info_update",
         title: "Usage session",
         updatedAt: "2024-03-09T16:02:03.000Z",
+        _meta: {
+          sessionKey: "usage-session",
+          kind: "direct",
+        },
       },
     });
     expect(sessionUpdate).toHaveBeenCalledWith({
@@ -971,7 +1011,7 @@ describe("acp session metadata and usage updates", () => {
   it("still resolves prompts when snapshot updates fail after completion", async () => {
     const sessionStore = createInMemorySessionStore();
     const connection = createAcpConnection();
-    const sessionUpdate = connection.__sessionUpdateMock;
+    const sessionUpdate = connection["__sessionUpdateMock"];
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.list") {
         return {
@@ -1044,7 +1084,7 @@ describe("acp final chat snapshots", () => {
   async function createSnapshotHarness() {
     const sessionStore = createInMemorySessionStore();
     const connection = createAcpConnection();
-    const sessionUpdate = connection.__sessionUpdateMock;
+    const sessionUpdate = connection["__sessionUpdateMock"];
     const request = vi.fn(async (method: string) => {
       if (method === "chat.send") {
         return new Promise(() => {});

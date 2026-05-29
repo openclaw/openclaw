@@ -1,5 +1,6 @@
 import type {
   ChannelPreviewStreamingConfig,
+  ChannelStreamingProgressConfig,
   ContextVisibilityMode,
   DmPolicy,
   GroupPolicy,
@@ -17,6 +18,13 @@ import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./typ
 import type { TtsConfig } from "./types.tts.js";
 
 export type DiscordStreamMode = "off" | "partial" | "block" | "progress";
+export type DiscordStreamingProgressConfig = ChannelStreamingProgressConfig & {
+  /** Include assistant commentary/preamble text in the progress draft. Default: false. */
+  commentary?: boolean;
+};
+export type DiscordChannelStreamingConfig = Omit<ChannelPreviewStreamingConfig, "progress"> & {
+  progress?: DiscordStreamingProgressConfig;
+};
 
 export type DiscordPluralKitConfig = {
   enabled?: boolean;
@@ -129,18 +137,31 @@ export type DiscordVoiceAutoJoinConfig = {
   channelId: string;
 };
 
+export type DiscordVoiceAllowedChannelConfig = {
+  /** Guild ID that owns the voice channel. */
+  guildId: string;
+  /** Voice channel ID allowed for realtime voice sessions. */
+  channelId: string;
+};
+
 export type DiscordVoiceMode = "stt-tts" | "agent-proxy" | "bidi";
 
 export type DiscordVoiceRealtimeConsultPolicy = "auto" | "always";
 
 export type DiscordVoiceRealtimeToolPolicy = "safe-read-only" | "owner" | "none";
 
+export type DiscordVoiceRealtimeBootstrapContextFile = "IDENTITY.md" | "USER.md" | "SOUL.md";
+
 export type DiscordVoiceRealtimeConfig = {
   /** Realtime voice provider id, for example "openai". */
   provider?: string;
   /** Provider realtime session model, for example "gpt-realtime-2". */
   model?: string;
-  /** Provider realtime output voice, for example "cedar". */
+  /** Provider realtime output voice name, for example "cedar". */
+  speakerVoice?: string;
+  /** Provider realtime output voice id. */
+  speakerVoiceId?: string;
+  /** @deprecated Use speakerVoice. */
   voice?: string;
   /** System instructions passed to the realtime provider. */
   instructions?: string;
@@ -148,6 +169,12 @@ export type DiscordVoiceRealtimeConfig = {
   toolPolicy?: DiscordVoiceRealtimeToolPolicy;
   /** Whether bidi should force the OpenClaw agent brain for every substantive turn. */
   consultPolicy?: DiscordVoiceRealtimeConsultPolicy;
+  /** Require a wake name before OpenAI agent-proxy realtime Discord voice responds. */
+  requireWakeName?: boolean;
+  /** Wake names that allow OpenAI agent-proxy realtime Discord voice to respond. Defaults to the routed agent name, then agent id. */
+  wakeNames?: string[];
+  /** Agent profile bootstrap files to include in realtime provider instructions. Defaults to IDENTITY.md, USER.md, and SOUL.md; set [] to disable. */
+  bootstrapContextFiles?: DiscordVoiceRealtimeBootstrapContextFile[];
   /** Allow Discord speaker-start events to interrupt active realtime playback. */
   bargeIn?: boolean;
   /** Minimum assistant playback duration before a barge-in truncates audio. Default: 250ms; set 0 for immediate interruption. */
@@ -178,6 +205,12 @@ export type DiscordVoiceConfig = {
   realtime?: DiscordVoiceRealtimeConfig;
   /** Voice channels to auto-join on startup. */
   autoJoin?: DiscordVoiceAutoJoinConfig[];
+  /** If false, configured followUsers are ignored without removing the saved user list. */
+  followUsersEnabled?: boolean;
+  /** Discord user IDs whose current voice channel the bot should follow. */
+  followUsers?: string[];
+  /** Voice channels the bot is allowed to join or remain in. Unset means any voice channel is allowed. */
+  allowedChannels?: DiscordVoiceAllowedChannelConfig[];
   /** Enable/disable DAVE end-to-end encryption (default: true; Discord may require this). */
   daveEncryption?: boolean;
   /** Consecutive decrypt failures before DAVE session reinitialization (default: 24). */
@@ -186,7 +219,7 @@ export type DiscordVoiceConfig = {
   connectTimeoutMs?: number;
   /** Grace period for Discord voice reconnect signalling after a disconnect (default: 15000). */
   reconnectGraceMs?: number;
-  /** Silence grace after Discord reports a speaker ended before finalizing STT capture (default: 2500). */
+  /** Silence grace after Discord reports a speaker ended before finalizing STT capture (default: 2000). */
   captureSilenceGraceMs?: number;
   /** Optional TTS overrides for Discord voice output. */
   tts?: TtsConfig;
@@ -212,6 +245,8 @@ export type DiscordExecApprovalConfig = {
 export type DiscordAgentComponentsConfig = {
   /** Enable agent-controlled interactive components (buttons, select menus). Default: true. */
   enabled?: boolean;
+  /** Time in milliseconds before sent Discord component callbacks expire. Default: 1800000. */
+  ttlMs?: number;
 };
 
 export type DiscordUiComponentsConfig = {
@@ -312,6 +347,20 @@ export type DiscordAccountConfig = {
   /** Allow bot-authored messages to trigger replies (default: false). Set "mentions" to gate on mentions. */
   allowBots?: boolean | "mentions";
   /**
+   * Sliding-window guard that suppresses runaway two-bot exchanges. Default on
+   * whenever `allowBots` lets bot messages reach dispatch. See #58789.
+   */
+  botLoopProtection?: {
+    /** Enable the bot-pair sliding-window guard (default: true when allowBots is set). */
+    enabled?: boolean;
+    /** Maximum messages a single bot pair may exchange in the configured window. Default: 20. */
+    maxEventsPerWindow?: number;
+    /** Sliding window length in seconds. Default: 60. */
+    windowSeconds?: number;
+    /** Cooldown seconds applied to a bot pair after the limit is hit. Default: 60. */
+    cooldownSeconds?: number;
+  };
+  /**
    * Break-glass override: allow mutable identity matching (names/tags/slugs) in allowlists.
    * Default behavior is ID-only matching.
    */
@@ -332,8 +381,13 @@ export type DiscordAccountConfig = {
   contextVisibility?: ContextVisibilityMode;
   /** Outbound text chunk size (chars). Default: 2000. */
   textChunkLimit?: number;
+  /**
+   * Suppress Discord-generated link embeds for outbound messages. Default: true.
+   * Explicit `embeds` payloads are still sent normally.
+   */
+  suppressEmbeds?: boolean;
   /** Streaming + chunking settings. Prefer this nested shape over legacy flat keys. */
-  streaming?: ChannelPreviewStreamingConfig;
+  streaming?: DiscordChannelStreamingConfig;
   /**
    * Soft max line count per Discord message.
    * Discord clients can clip/collapse very tall messages; splitting by lines

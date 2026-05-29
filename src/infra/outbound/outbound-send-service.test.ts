@@ -104,8 +104,9 @@ type MockCalls = {
 };
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(typeof value, label).toBe("object");
-  expect(value, label).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
   return value as Record<string, unknown>;
 }
 
@@ -641,12 +642,21 @@ describe("executeSendAction", () => {
         channel: "discord",
         params: { to: "channel:123", message: "hello" },
         dryRun: false,
+        sessionKey: "discord-session",
+        inboundEventKind: "room_event",
       },
       to: "channel:123",
       message: "hello",
     });
 
-    expect(prepareSendPayload).toHaveBeenCalled();
+    expect(prepareSendPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ctx: expect.objectContaining({
+          sessionKey: "discord-session",
+          inboundEventKind: "room_event",
+        }),
+      }),
+    );
     expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
     const sendArgs = expectSingleCallFields(mocks.sendMessage, {
       channel: "discord",

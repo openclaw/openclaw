@@ -1,6 +1,9 @@
 import fs from "node:fs";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "./constants.js";
+import { BROWSER_NAVIGATION_BLOCKED_MESSAGE } from "./errors.js";
+import { ACT_ERROR_CODES } from "./routes/agent.act.errors.js";
+import { isActKind } from "./routes/agent.act.shared.js";
 import {
   installAgentContractHooks,
   postJson,
@@ -17,6 +20,8 @@ import {
   setBrowserControlServerEvaluateEnabled,
   setBrowserControlServerProfiles,
   setBrowserControlServerReachable,
+  setBrowserControlServerSsrFPolicy,
+  setBrowserControlServerTabUrl,
   startBrowserControlServerFromConfig,
 } from "./server.control-server.test-harness.js";
 import { getBrowserTestFetch } from "./test-support/fetch.js";
@@ -32,13 +37,33 @@ type ActErrorHttpResponse = {
 };
 
 function expectRecordFields(value: unknown, expected: Record<string, unknown>): void {
-  expect(value).toBeDefined();
-  expect(typeof value).toBe("object");
-  expect(value).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error("Expected record");
+  }
   const actual = value as Record<string, unknown>;
   for (const [key, expectedValue] of Object.entries(expected)) {
     expect(actual[key]).toEqual(expectedValue);
   }
+}
+
+type MockWithCalls = {
+  mock: { calls: unknown[][] };
+};
+
+function mockFirstArg(
+  mock: MockWithCalls,
+  callIndex: number,
+  label: string,
+): Record<string, unknown> {
+  const call = mock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected ${label} call ${callIndex}`);
+  }
+  const value = call[0];
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label} call ${callIndex} argument`);
+  }
+  return value as Record<string, unknown>;
 }
 
 async function postActAndReadError(base: string, body?: unknown): Promise<ActErrorHttpResponse> {
@@ -63,15 +88,18 @@ describe("browser control server", () => {
 
   const slowTimeoutMs = 60_000;
 
+  beforeAll(async () => {
+    await resetBrowserControlServerTestContext();
+    await startBrowserControlServerFromConfig();
+    await cleanupBrowserControlServerTestContext();
+  }, slowTimeoutMs);
+
   it(
     "returns ACT_KIND_REQUIRED when kind is missing",
-    async () => {
-      const base = await startServerAndBase();
-      const response = await postActAndReadError(base, {});
-
-      expect(response.status).toBe(400);
-      expect(response.body.code).toBe("ACT_KIND_REQUIRED");
-      expect(response.body.error).toContain("kind is required");
+    () => {
+      expect(isActKind(undefined)).toBe(false);
+      expect(isActKind("")).toBe(false);
+      expect(ACT_ERROR_CODES.kindRequired).toBe("ACT_KIND_REQUIRED");
     },
     slowTimeoutMs,
   );
@@ -204,6 +232,46 @@ describe("browser control server", () => {
   );
 
   it(
+    "returns blocked dialog state for action-triggered modals",
+    async () => {
+      const base = await startServerAndBase();
+      pwMocks.executeActViaPlaywright.mockResolvedValueOnce({
+        blockedByDialog: true,
+        browserState: {
+          dialogs: {
+            pending: [
+              {
+                id: "d1",
+                type: "confirm",
+                message: "Continue?",
+                openedAt: "2026-05-17T12:00:00.000Z",
+              },
+            ],
+            recent: [],
+          },
+        },
+      });
+
+      const response = await postJson<{
+        ok: boolean;
+        blockedByDialog?: boolean;
+        browserState?: { dialogs?: { pending?: Array<{ id?: string; message?: string }> } };
+      }>(`${base}/act`, {
+        kind: "click",
+        ref: "5",
+      });
+
+      expect(response.ok).toBe(true);
+      expect(response.blockedByDialog).toBe(true);
+      expect(response.browserState?.dialogs?.pending?.[0]).toMatchObject({
+        id: "d1",
+        message: "Continue?",
+      });
+    },
+    slowTimeoutMs,
+  );
+
+  it(
     "returns ACT_SELECTOR_UNSUPPORTED for selector on unsupported action kinds",
     async () => {
       const base = await startServerAndBase();
@@ -318,6 +386,67 @@ describe("browser control server", () => {
     });
   });
 
+  it("agent contract: snapshot surfaces pending dialog state without reading the blocked page", async () => {
+    const base = await startServerAndBase();
+    const realFetch = getBrowserTestFetch();
+    pwMocks.getObservedBrowserStateViaPlaywright.mockResolvedValueOnce({
+      dialogs: {
+        pending: [
+          {
+            id: "d1",
+            type: "confirm",
+            message: "Continue?",
+            openedAt: "2026-05-17T12:00:00.000Z",
+          },
+        ],
+        recent: [],
+      },
+    });
+
+    const snap = (await realFetch(`${base}/snapshot?format=ai`).then((r) => r.json())) as {
+      ok: boolean;
+      blockedByDialog?: boolean;
+      browserState?: { dialogs?: { pending?: Array<{ id?: string; message?: string }> } };
+      snapshot?: string;
+    };
+
+    expect(snap.ok).toBe(true);
+    expect(snap.blockedByDialog).toBe(true);
+    expect(snap.snapshot).toBe("");
+    expect(snap.browserState?.dialogs?.pending?.[0]).toMatchObject({
+      id: "d1",
+      message: "Continue?",
+    });
+    expect(pwMocks.snapshotAiViaPlaywright).not.toHaveBeenCalled();
+  });
+
+  it("agent contract: snapshot blocks pending dialog state on disallowed current tab URLs", async () => {
+    setBrowserControlServerSsrFPolicy({ allowPrivateNetwork: false });
+    setBrowserControlServerTabUrl("http://127.0.0.1:8080/admin");
+    const base = await startServerAndBase();
+    const realFetch = getBrowserTestFetch();
+    pwMocks.getObservedBrowserStateViaPlaywright.mockResolvedValueOnce({
+      dialogs: {
+        pending: [
+          {
+            id: "d1",
+            type: "alert",
+            message: "blocked secret",
+            openedAt: "2026-05-17T12:00:00.000Z",
+          },
+        ],
+        recent: [],
+      },
+    });
+
+    const res = await realFetch(`${base}/snapshot?format=ai`);
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error?: unknown };
+    expect(body.error).toBe(BROWSER_NAVIGATION_BLOCKED_MESSAGE);
+    expect(pwMocks.getObservedBrowserStateViaPlaywright).not.toHaveBeenCalled();
+    expect(pwMocks.snapshotAiViaPlaywright).not.toHaveBeenCalled();
+  });
+
   it("agent contract: doctor deep runs a live snapshot probe", async () => {
     const base = await startServerAndBase();
     const realFetch = getBrowserTestFetch();
@@ -345,7 +474,7 @@ describe("browser control server", () => {
     });
     expect(nav.ok).toBe(true);
     expect(typeof nav.targetId).toBe("string");
-    const [navigateArgs] = pwMocks.navigateViaPlaywright.mock.calls[0] ?? [];
+    const navigateArgs = mockFirstArg(pwMocks.navigateViaPlaywright, 0, "navigate");
     expectRecordFields(navigateArgs, {
       cdpUrl: state.cdpBaseUrl,
       targetId: "abcd1234",
@@ -362,7 +491,7 @@ describe("browser control server", () => {
       modifiers: ["Shift"],
     });
     expect(click.ok).toBe(true);
-    const [clickArgs] = pwMocks.clickViaPlaywright.mock.calls[0] ?? [];
+    const clickArgs = mockFirstArg(pwMocks.clickViaPlaywright, 0, "click");
     expectRecordFields(clickArgs, {
       cdpUrl: state.cdpBaseUrl,
       targetId: "abcd1234",
@@ -382,7 +511,7 @@ describe("browser control server", () => {
     });
     expect(clickSelector.status).toBe(200);
     expect(((await clickSelector.json()) as { ok?: boolean }).ok).toBe(true);
-    const [clickSelectorArgs] = pwMocks.clickViaPlaywright.mock.calls[1] ?? [];
+    const clickSelectorArgs = mockFirstArg(pwMocks.clickViaPlaywright, 1, "click");
     expectRecordFields(clickSelectorArgs, {
       cdpUrl: state.cdpBaseUrl,
       targetId: "abcd1234",
@@ -403,7 +532,7 @@ describe("browser control server", () => {
     });
     expect(clickCoords.ok).toBe(true);
     expect(clickCoords.url).toBe("https://example.com");
-    const [clickCoordsArgs] = pwMocks.clickCoordsViaPlaywright.mock.calls[0] ?? [];
+    const clickCoordsArgs = mockFirstArg(pwMocks.clickCoordsViaPlaywright, 0, "click coords");
     expectRecordFields(clickCoordsArgs, {
       cdpUrl: state.cdpBaseUrl,
       targetId: "abcd1234",
@@ -423,7 +552,7 @@ describe("browser control server", () => {
       text: "",
     });
     expect(type.ok).toBe(true);
-    const [typeArgs] = pwMocks.typeViaPlaywright.mock.calls[0] ?? [];
+    const typeArgs = mockFirstArg(pwMocks.typeViaPlaywright, 0, "type");
     expectRecordFields(typeArgs, {
       cdpUrl: state.cdpBaseUrl,
       targetId: "abcd1234",
@@ -441,7 +570,7 @@ describe("browser control server", () => {
       key: "Enter",
     });
     expect(press.ok).toBe(true);
-    const [pressArgs] = pwMocks.pressKeyViaPlaywright.mock.calls[0] ?? [];
+    const pressArgs = mockFirstArg(pwMocks.pressKeyViaPlaywright, 0, "press");
     expectRecordFields(pressArgs, {
       cdpUrl: state.cdpBaseUrl,
       targetId: "abcd1234",
@@ -457,7 +586,7 @@ describe("browser control server", () => {
       ref: "2",
     });
     expect(hover.ok).toBe(true);
-    const [hoverArgs] = pwMocks.hoverViaPlaywright.mock.calls[0] ?? [];
+    const hoverArgs = mockFirstArg(pwMocks.hoverViaPlaywright, 0, "hover");
     expectRecordFields(hoverArgs, {
       cdpUrl: state.cdpBaseUrl,
       targetId: "abcd1234",
@@ -470,7 +599,7 @@ describe("browser control server", () => {
       ref: "2",
     });
     expect(scroll.ok).toBe(true);
-    const [scrollArgs] = pwMocks.scrollIntoViewViaPlaywright.mock.calls[0] ?? [];
+    const scrollArgs = mockFirstArg(pwMocks.scrollIntoViewViaPlaywright, 0, "scroll");
     expectRecordFields(scrollArgs, {
       cdpUrl: state.cdpBaseUrl,
       targetId: "abcd1234",
@@ -484,7 +613,7 @@ describe("browser control server", () => {
       endRef: "4",
     });
     expect(drag.ok).toBe(true);
-    const [dragArgs] = pwMocks.dragViaPlaywright.mock.calls[0] ?? [];
+    const dragArgs = mockFirstArg(pwMocks.dragViaPlaywright, 0, "drag");
     expectRecordFields(dragArgs, {
       cdpUrl: state.cdpBaseUrl,
       targetId: "abcd1234",

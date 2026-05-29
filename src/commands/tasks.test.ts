@@ -11,6 +11,7 @@ import {
   resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
 } from "../tasks/task-registry.js";
+import * as taskRegistryMaintenance from "../tasks/task-registry.maintenance.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { tasksAuditCommand, tasksMaintenanceCommand } from "./tasks.js";
@@ -21,6 +22,12 @@ function createRuntime(): RuntimeEnv {
     error: vi.fn(),
     exit: vi.fn(),
   } as unknown as RuntimeEnv;
+}
+
+function readFirstJsonLog(runtime: RuntimeEnv): unknown {
+  const calls = vi.mocked(runtime.log).mock.calls;
+  const [message] = calls[0] ?? [];
+  return JSON.parse(String(message));
 }
 
 const zeroTaskAuditCounts = {
@@ -90,7 +97,7 @@ describe("tasks commands", () => {
       const runtime = createRuntime();
       await tasksAuditCommand({ json: true }, runtime);
 
-      const payload = JSON.parse(String(vi.mocked(runtime.log).mock.calls[0]?.[0])) as {
+      const payload = readFirstJsonLog(runtime) as {
         summary: {
           total: number;
           errors: number;
@@ -118,16 +125,188 @@ describe("tasks commands", () => {
       const limitedRuntime = createRuntime();
       await tasksAuditCommand({ json: true, limit: 1 }, limitedRuntime);
 
-      const limitedPayload = JSON.parse(
-        String(vi.mocked(limitedRuntime.log).mock.calls[0]?.[0]),
-      ) as {
-        findings: Array<{ kind: string; code: string; token?: string }>;
+      const limitedPayload = readFirstJsonLog(limitedRuntime) as { findings: unknown[] };
+
+      expect(limitedPayload.findings).toStrictEqual([
+        {
+          kind: "task_flow",
+          severity: "error",
+          code: "stale_running",
+          detail: "running TaskFlow has not advanced recently",
+          ageMs: 45 * 60_000,
+          status: "running",
+          token: runningFlow.flowId,
+          flow: JSON.parse(JSON.stringify(runningFlow)),
+        },
+      ]);
+    });
+  });
+
+  it("explains stale running tasks retained by backing sessions in maintenance JSON", async () => {
+    await withTaskCommandStateDir(async (state) => {
+      const now = Date.now();
+      vi.useFakeTimers();
+      vi.setSystemTime(now - 45 * 60_000);
+      const childSessionKey = "agent:main:subagent:child-retained";
+      const task = createTaskRecord({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey,
+        runId: "run-retained-child",
+        status: "running",
+        task: "Review retained child session",
+      });
+      vi.setSystemTime(now);
+
+      const sessionsDir = state.sessionsDir("main");
+      await fs.mkdir(sessionsDir, { recursive: true });
+      await fs.writeFile(
+        path.join(sessionsDir, "sessions.json"),
+        JSON.stringify(
+          {
+            [childSessionKey]: {
+              sessionId: "child-retained",
+              updatedAt: now,
+            },
+          },
+          null,
+          2,
+        ),
+        "utf8",
+      );
+
+      const runtime = createRuntime();
+      await tasksMaintenanceCommand({ json: true, apply: false }, runtime);
+
+      const payload = readFirstJsonLog(runtime) as {
+        diagnostics: {
+          staleRunningTasks: Array<{
+            taskId: string;
+            decision: string;
+            reason: string;
+            childSessionKey?: string;
+          }>;
+        };
       };
 
-      expect(limitedPayload.findings).toHaveLength(1);
-      expect(limitedPayload.findings[0]?.kind).toBe("task_flow");
-      expect(limitedPayload.findings[0]?.code).toBe("stale_running");
-      expect(limitedPayload.findings[0]?.token).toBe(runningFlow.flowId);
+      expect(payload.diagnostics.staleRunningTasks).toContainEqual(
+        expect.objectContaining({
+          taskId: task.taskId,
+          decision: "retained",
+          reason: "backing_session_present",
+          childSessionKey,
+        }),
+      );
+    });
+  });
+
+  it("explains task maintenance decisions before applying session registry pruning", async () => {
+    await withTaskCommandStateDir(async (state) => {
+      const now = Date.now();
+      vi.useFakeTimers();
+      vi.setSystemTime(now - 45 * 60_000);
+      const childSessionKey = "agent:main:cron:done-job:run:old-run";
+      const task = createTaskRecord({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey,
+        runId: "run-backed-before-session-sweep",
+        status: "running",
+        task: "Review old cron child session",
+      });
+      vi.setSystemTime(now);
+
+      const sessionsDir = state.sessionsDir("main");
+      const storePath = path.join(sessionsDir, "sessions.json");
+      await fs.mkdir(sessionsDir, { recursive: true });
+      await fs.writeFile(
+        storePath,
+        JSON.stringify(
+          {
+            [childSessionKey]: {
+              sessionId: "old-run",
+              updatedAt: now - 8 * 24 * 60 * 60_000,
+            },
+          },
+          null,
+          2,
+        ),
+        "utf8",
+      );
+
+      const runtime = createRuntime();
+      await tasksMaintenanceCommand({ json: true, apply: true }, runtime);
+
+      const payload = readFirstJsonLog(runtime) as {
+        maintenance: {
+          tasks: { reconciled: number };
+          sessions: { pruned: number };
+        };
+        diagnostics: {
+          staleRunningTasks: Array<{
+            taskId: string;
+            decision: string;
+            reason: string;
+            childSessionKey?: string;
+          }>;
+        };
+      };
+
+      expect(payload.maintenance.tasks.reconciled).toBe(0);
+      expect(payload.maintenance.sessions.pruned).toBe(1);
+      expect(payload.diagnostics.staleRunningTasks).toContainEqual(
+        expect.objectContaining({
+          taskId: task.taskId,
+          decision: "retained",
+          reason: "backing_session_present",
+          childSessionKey,
+        }),
+      );
+
+      const updated = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<string, unknown>;
+      expect(updated[childSessionKey]).toBeUndefined();
+    });
+  });
+
+  it("does not build JSON-only diagnostics for text maintenance output", async () => {
+    await withTaskCommandStateDir(async () => {
+      const diagnosticsSpy = vi.spyOn(
+        taskRegistryMaintenance,
+        "getTaskRegistryMaintenanceDiagnostics",
+      );
+      const runtime = createRuntime();
+
+      await tasksMaintenanceCommand({ json: false, apply: false }, runtime);
+
+      expect(diagnosticsSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  it("explains retained lost task cleanup timing in maintenance text output", async () => {
+    await withTaskCommandStateDir(async () => {
+      const cleanupAfter = Date.now() + 60_000;
+      createTaskRecord({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "run-retained-lost",
+        status: "lost",
+        task: "Retained lost task",
+        cleanupAfter,
+      });
+
+      const runtime = createRuntime();
+      await tasksMaintenanceCommand({ json: false, apply: true }, runtime);
+
+      const joined = vi
+        .mocked(runtime.log)
+        .mock.calls.map(([line]) => String(line))
+        .join("\n");
+      expect(joined).toContain(
+        `Retained lost tasks: 1 retained until ${new Date(cleanupAfter).toISOString()}; maintenance will prune after cleanupAfter.`,
+      );
     });
   });
 
@@ -147,7 +326,7 @@ describe("tasks commands", () => {
       const runtime = createRuntime();
       await tasksMaintenanceCommand({ json: true, apply: false }, runtime);
 
-      const payload = JSON.parse(String(vi.mocked(runtime.log).mock.calls[0]?.[0])) as {
+      const payload = readFirstJsonLog(runtime) as {
         mode: string;
         maintenance: { taskFlows: { pruned: number } };
         auditBefore: {
@@ -254,7 +433,7 @@ describe("tasks commands", () => {
       const runtime = createRuntime();
       await tasksMaintenanceCommand({ json: true, apply: true }, runtime);
 
-      const payload = JSON.parse(String(vi.mocked(runtime.log).mock.calls[0]?.[0])) as {
+      const payload = readFirstJsonLog(runtime) as {
         maintenance: {
           sessions: {
             pruned: number;
@@ -270,9 +449,15 @@ describe("tasks commands", () => {
 
       const updated = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<string, unknown>;
       expect(updated["agent:main:cron:done-job:run:old-run"]).toBeUndefined();
-      expect(updated["agent:main:cron:running-job:run:old-run"]).toBeDefined();
-      expect(updated["agent:main:cron:done-job:run:recent-run"]).toBeDefined();
-      expect(updated["agent:main:telegram:dm:old"]).toBeDefined();
+      for (const key of [
+        "agent:main:cron:running-job:run:old-run",
+        "agent:main:cron:done-job:run:recent-run",
+        "agent:main:telegram:dm:old",
+      ]) {
+        if (updated[key] === undefined) {
+          throw new Error(`Expected preserved session ${key}`);
+        }
+      }
     });
   });
 });

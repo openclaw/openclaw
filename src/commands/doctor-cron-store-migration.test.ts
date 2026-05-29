@@ -142,6 +142,72 @@ describe("normalizeStoredCronJobs", () => {
     expect(result.issues.legacyPayloadKind).toBeUndefined();
   });
 
+  it("removes unrepairable persisted schedule and payload shapes", () => {
+    const jobs = [
+      makeLegacyJob({
+        id: "valid",
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: 1 },
+        payload: { kind: "systemEvent", text: "tick" },
+      }),
+      makeLegacyJob({
+        id: "bad-schedule",
+        schedule: { kind: "cron", expr: [] },
+        payload: { kind: "systemEvent", text: "tick" },
+      }),
+      makeLegacyJob({
+        id: "bad-payload",
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: 1 },
+        payload: { kind: "agentTurn", message: ["tick"] },
+      }),
+      makeLegacyJob({
+        id: "missing-schedule",
+        schedule: undefined,
+        payload: { kind: "systemEvent", text: "tick" },
+      }),
+      makeLegacyJob({
+        id: "missing-payload",
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: 1 },
+        payload: undefined,
+      }),
+      makeLegacyJob({
+        id: "incomplete-system-payload",
+        schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
+        payload: { kind: "systemEvent" },
+      }),
+    ];
+
+    const result = normalizeStoredCronJobs(jobs);
+
+    expect(result.mutated).toBe(true);
+    expect(result.issues.invalidSchedule).toBe(2);
+    expect(result.issues.invalidPayload).toBe(3);
+    expect(jobs.map((job) => job.id)).toEqual(["valid"]);
+    expect(result.jobs.map((job) => job.id)).toEqual(["valid"]);
+  });
+
+  it("does not normalize unsupported payload kinds into runnable cron jobs", () => {
+    const jobs = [
+      makeLegacyJob({
+        id: "legacy-command-kind",
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: 1 },
+        payload: { kind: "command", command: "echo daily" },
+      }),
+      makeLegacyJob({
+        id: "legacy-agentmessage-kind",
+        schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
+        sessionTarget: "isolated",
+        payload: { kind: "agentmessage", message: "summarize" },
+      }),
+    ];
+
+    const result = normalizeStoredCronJobs(jobs);
+
+    expect(result.mutated).toBe(true);
+    expect(result.issues.invalidPayload).toBe(2);
+    expect(jobs).toEqual([]);
+    expect(result.jobs).toEqual([]);
+  });
+
   it("normalizes whitespace-padded and non-canonical payload kinds", () => {
     const jobs = [
       {

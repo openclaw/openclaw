@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { OAuthCredentials } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OAuthCredentials } from "../llm/utils/oauth/types.js";
 import {
   applyAuthProfileConfig,
   upsertApiKeyProfile,
@@ -33,36 +33,45 @@ vi.mock("../config/paths.js", () => ({
 vi.mock("../agents/auth-profiles/profiles.js", async () => {
   const fs = await import("node:fs");
   const path = await import("node:path");
-  return {
-    upsertAuthProfile: (params: { profileId: string; credential: unknown; agentDir?: string }) => {
-      const stateDir = process.env.OPENCLAW_STATE_DIR ?? "/tmp/openclaw-state";
-      const agentDir = params.agentDir ?? path.join(stateDir, "agents", "main", "agent");
-      const file = path.join(agentDir, "auth-profiles.json");
-      fs.mkdirSync(agentDir, { recursive: true });
-      const existing = (() => {
-        try {
-          return JSON.parse(fs.readFileSync(file, "utf8")) as {
-            version?: number;
-            profiles?: Record<string, unknown>;
-          };
-        } catch {
-          return { version: 1, profiles: {} };
-        }
-      })();
-      fs.writeFileSync(
-        file,
-        `${JSON.stringify(
-          {
-            version: existing.version ?? 1,
-            profiles: {
-              ...existing.profiles,
-              [params.profileId]: params.credential,
-            },
+  const upsert = (params: { profileId: string; credential: unknown; agentDir?: string }) => {
+    const stateDir = process.env.OPENCLAW_STATE_DIR ?? "/tmp/openclaw-state";
+    const agentDir = params.agentDir ?? path.join(stateDir, "agents", "main", "agent");
+    const file = path.join(agentDir, "auth-profiles.json");
+    fs.mkdirSync(agentDir, { recursive: true });
+    const existing = (() => {
+      try {
+        return JSON.parse(fs.readFileSync(file, "utf8")) as {
+          version?: number;
+          profiles?: Record<string, unknown>;
+        };
+      } catch {
+        return { version: 1, profiles: {} };
+      }
+    })();
+    fs.writeFileSync(
+      file,
+      `${JSON.stringify(
+        {
+          version: existing.version ?? 1,
+          profiles: {
+            ...existing.profiles,
+            [params.profileId]: params.credential,
           },
-          null,
-          2,
-        )}\n`,
-      );
+        },
+        null,
+        2,
+      )}\n`,
+    );
+  };
+  return {
+    upsertAuthProfile: upsert,
+    upsertAuthProfileWithLock: async (params: {
+      profileId: string;
+      credential: unknown;
+      agentDir?: string;
+    }) => {
+      upsert(params);
+      return { version: 1, profiles: {} };
     },
   };
 });
@@ -79,11 +88,17 @@ vi.mock("../agents/provider-auth-aliases.js", () => ({
 
 vi.mock("../secrets/provider-env-vars.js", () => ({
   getProviderEnvVars: vi.fn((provider: string) => providerEnvVarsById[provider] ?? []),
+  resolveProviderAuthLookupMaps: () => ({
+    aliasMap: {},
+    envCandidateMap: {},
+    authEvidenceMap: {},
+  }),
 }));
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(typeof value, label).toBe("object");
-  expect(value, label).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
   return value as Record<string, unknown>;
 }
 
@@ -109,7 +124,6 @@ describe("writeOAuthCredentials", () => {
   const lifecycle = createAuthTestLifecycle([
     "OPENCLAW_STATE_DIR",
     "OPENCLAW_AGENT_DIR",
-    "PI_CODING_AGENT_DIR",
     "OPENCLAW_OAUTH_DIR",
   ]);
 
@@ -157,7 +171,6 @@ describe("writeOAuthCredentials", () => {
     await fs.mkdir(workerAgentDir, { recursive: true });
 
     process.env.OPENCLAW_AGENT_DIR = kidAgentDir;
-    process.env.PI_CODING_AGENT_DIR = kidAgentDir;
 
     const creds = {
       refresh: "refresh-sync",
@@ -192,7 +205,6 @@ describe("writeOAuthCredentials", () => {
     await fs.mkdir(kidAgentDir, { recursive: true });
 
     process.env.OPENCLAW_AGENT_DIR = kidAgentDir;
-    process.env.PI_CODING_AGENT_DIR = kidAgentDir;
 
     const creds = {
       refresh: "refresh-kid",
@@ -260,7 +272,6 @@ describe("upsertApiKeyProfile secret refs", () => {
   const lifecycle = createAuthTestLifecycle([
     "OPENCLAW_STATE_DIR",
     "OPENCLAW_AGENT_DIR",
-    "PI_CODING_AGENT_DIR",
     "MOONSHOT_API_KEY",
     "OPENAI_API_KEY",
     "CLOUDFLARE_AI_GATEWAY_API_KEY",
@@ -403,11 +414,7 @@ describe("upsertApiKeyProfile secret refs", () => {
 });
 
 describe("upsertApiKeyProfile", () => {
-  const lifecycle = createAuthTestLifecycle([
-    "OPENCLAW_STATE_DIR",
-    "OPENCLAW_AGENT_DIR",
-    "PI_CODING_AGENT_DIR",
-  ]);
+  const lifecycle = createAuthTestLifecycle(["OPENCLAW_STATE_DIR", "OPENCLAW_AGENT_DIR"]);
 
   afterEach(async () => {
     await lifecycle.cleanup();

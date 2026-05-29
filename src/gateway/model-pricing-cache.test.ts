@@ -59,7 +59,7 @@ vi.mock("../plugins/manifest-metadata-scan.js", async (importOriginal) => {
 
 import { getGatewayModelPricingHealth } from "./model-pricing-cache-state.js";
 import {
-  __resetGatewayModelPricingCacheForTest,
+  resetGatewayModelPricingCacheForTest,
   collectConfiguredModelPricingRefs,
   getCachedGatewayModelPricing,
   refreshGatewayModelPricingCache,
@@ -97,7 +97,7 @@ function requireAbortSignal(signal: RequestInit["signal"] | undefined): AbortSig
 
 describe("model-pricing-cache", () => {
   beforeEach(() => {
-    __resetGatewayModelPricingCacheForTest();
+    resetGatewayModelPricingCacheForTest();
     pluginManifestRegistryMocks.manifestRegistry = undefined;
     pluginManifestRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockClear();
     pluginManifestRegistryMocks.listOpenClawPluginManifestMetadata.mockClear();
@@ -105,7 +105,7 @@ describe("model-pricing-cache", () => {
   });
 
   afterEach(() => {
-    __resetGatewayModelPricingCacheForTest();
+    resetGatewayModelPricingCacheForTest();
     loggingState.rawConsole = null;
     resetLogger();
   });
@@ -118,6 +118,7 @@ describe("model-pricing-cache", () => {
           imageModel: { primary: "google/gemini-3-pro" },
           compaction: { model: "opus" },
           heartbeat: { model: "xai/grok-4" },
+          subagents: { model: { primary: "anthropic/claude-haiku-4-5" } },
           models: {
             "openai/gpt-5.4": { alias: "gpt" },
             "anthropic/claude-opus-4-6": { alias: "opus" },
@@ -144,7 +145,6 @@ describe("model-pricing-cache", () => {
         mappings: [{ model: "zai/glm-5" }],
       },
       tools: {
-        subagents: { model: { primary: "anthropic/claude-haiku-4-5" } },
         media: {
           models: [{ provider: "google", model: "gemini-2.5-pro" }],
           image: {
@@ -452,6 +452,87 @@ describe("model-pricing-cache", () => {
     });
   });
 
+  it("records malformed remote pricing catalog JSON as source failures", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "custom/gpt-remote" },
+        },
+      },
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "https://models.example/v1",
+            api: "openai-completions",
+            models: [{ id: "gpt-remote" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const fetchImpl = withFetchPreconnect(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("openrouter.ai")) {
+        return new Response("{not json", {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+
+    const health = getGatewayModelPricingHealth();
+    expect(health.state).toBe("degraded");
+    expect(health.sources).toHaveLength(1);
+    expect(health.sources[0]?.source).toBe("openrouter");
+    expect(health.sources[0]?.state).toBe("degraded");
+    expect(health.sources[0]?.detail).toContain("OpenRouter pricing response is malformed JSON");
+  });
+
+  it("records malformed pricing content-length headers as source failures", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "custom/gpt-remote" },
+        },
+      },
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "https://models.example/v1",
+            api: "openai-completions",
+            models: [{ id: "gpt-remote" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const fetchImpl = withFetchPreconnect(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("openrouter.ai")) {
+        return new Response(JSON.stringify({ data: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json", "Content-Length": "1e3" },
+        });
+      }
+      return new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+
+    const health = getGatewayModelPricingHealth();
+    expect(health.state).toBe("degraded");
+    expect(health.sources).toHaveLength(1);
+    expect(health.sources[0]?.source).toBe("openrouter");
+    expect(health.sources[0]?.detail).toContain("invalid content-length header: 1e3");
+  });
+
   it("records and clears scheduled refresh rejections for health surfaces", async () => {
     vi.useFakeTimers();
     try {
@@ -573,6 +654,7 @@ describe("model-pricing-cache", () => {
       agents: {
         defaults: {
           model: { primary: "anthropic/claude-opus-4-6" },
+          subagents: { model: { primary: "zai/glm-openrouter-test" } },
         },
         list: [
           {
@@ -580,9 +662,6 @@ describe("model-pricing-cache", () => {
             model: { primary: "openrouter/anthropic/claude-sonnet-4-6" },
           },
         ],
-      },
-      tools: {
-        subagents: { model: { primary: "zai/glm-openrouter-test" } },
       },
     } as unknown as OpenClawConfig;
 

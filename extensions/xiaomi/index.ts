@@ -1,8 +1,14 @@
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
+import {
+  applyModelCompatPatch,
+  buildProviderReplayFamilyHooks,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import { PROVIDER_LABELS } from "openclaw/plugin-sdk/provider-usage";
 import { applyXiaomiConfig, XIAOMI_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildXiaomiProvider } from "./provider-catalog.js";
 import { buildXiaomiSpeechProvider } from "./speech-provider.js";
+import { createMiMoThinkingWrapper } from "./stream.js";
+import { resolveMiMoThinkingProfile } from "./thinking.js";
 
 const PROVIDER_ID = "xiaomi";
 
@@ -29,6 +35,15 @@ export default defineSingleProviderPluginEntry({
     catalog: {
       buildProvider: buildXiaomiProvider,
     },
+    ...buildProviderReplayFamilyHooks({
+      family: "openai-compatible",
+      dropReasoningFromHistory: false,
+    }),
+    normalizeResolvedModel: ({ model }) =>
+      applyModelCompatPatch(model, { omitEmptyArrayItems: true }),
+    wrapStreamFn: (ctx) => createMiMoThinkingWrapper(ctx.streamFn, ctx.thinkingLevel),
+    resolveThinkingProfile: ({ modelId }) => resolveMiMoThinkingProfile(modelId),
+    isModernModelRef: ({ modelId }) => Boolean(resolveMiMoThinkingProfile(modelId)),
     resolveUsageAuth: async (ctx) => {
       const apiKey = ctx.resolveApiKeyFromConfigAndStore({
         envDirect: [ctx.env.XIAOMI_API_KEY],

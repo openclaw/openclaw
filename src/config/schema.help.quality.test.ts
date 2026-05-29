@@ -28,6 +28,7 @@ const ROOT_SECTIONS = [
   "approvals",
   "session",
   "cron",
+  "transcripts",
   "hooks",
   "web",
   "channels",
@@ -251,6 +252,7 @@ const TARGET_KEYS = [
   "messages.groupChat",
   "messages.groupChat.mentionPatterns",
   "messages.groupChat.historyLimit",
+  "messages.groupChat.unmentionedInbound",
   "messages.groupChat.visibleReplies",
   "messages.queue",
   "messages.queue.mode",
@@ -271,6 +273,11 @@ const TARGET_KEYS = [
   "channels.defaults.heartbeat.showOk",
   "channels.defaults.heartbeat.showAlerts",
   "channels.defaults.heartbeat.useIndicator",
+  "channels.defaults.botLoopProtection",
+  "channels.defaults.botLoopProtection.enabled",
+  "channels.defaults.botLoopProtection.maxEventsPerWindow",
+  "channels.defaults.botLoopProtection.windowSeconds",
+  "channels.defaults.botLoopProtection.cooldownSeconds",
   "gateway",
   "gateway.mode",
   "gateway.bind",
@@ -296,6 +303,7 @@ const TARGET_KEYS = [
   "tools.deny",
   "tools.exec",
   "tools.exec.host",
+  "tools.exec.mode",
   "tools.exec.security",
   "tools.exec.ask",
   "tools.exec.node",
@@ -387,6 +395,7 @@ const TARGET_KEYS = [
   "models.providers.*.contextWindow",
   "models.providers.*.contextTokens",
   "models.providers.*.maxTokens",
+  "models.providers.*.region",
   "models.providers.*.headers",
   "models.providers.*.models",
   "agents",
@@ -434,15 +443,7 @@ const ENUM_EXPECTATIONS: Record<string, string[]> = {
   "hooks.mappings[].wakeMode": ['"now"', '"next-heartbeat"'],
   "hooks.gmail.tailscale.mode": ['"off"', '"serve"', '"funnel"'],
   "hooks.gmail.thinking": ['"off"', '"minimal"', '"low"', '"medium"', '"high"'],
-  "messages.queue.mode": [
-    '"steer"',
-    '"followup"',
-    '"collect"',
-    '"steer-backlog"',
-    '"steer+backlog"',
-    '"queue"',
-    '"interrupt"',
-  ],
+  "messages.queue.mode": ['"steer"', '"followup"', '"collect"', '"interrupt"'],
   "messages.queue.drop": ['"old"', '"new"', '"summarize"'],
   "channels.defaults.groupPolicy": ['"open"', '"disabled"', '"allowlist"'],
   "channels.defaults.contextVisibility": ['"all"', '"allowlist"', '"allowlist_quote"'],
@@ -500,6 +501,7 @@ const TOOLS_HOOKS_TARGET_KEYS = [
   "tools.byProvider",
   "tools.exec.approvalRunningNoticeMs",
   "tools.exec.strictInlineEval",
+  "tools.exec.commandHighlighting",
   "tools.links.enabled",
   "tools.links.maxLinks",
   "tools.links.models",
@@ -709,10 +711,18 @@ describe("config help copy quality", () => {
     expect(/raw|unnormalized/i.test(rawKeyPrefix)).toBe(true);
   });
 
-  it("documents session write-lock acquire timeout defaults", () => {
+  it("documents session write-lock policy defaults", () => {
     const acquireTimeout = FIELD_HELP["session.writeLock.acquireTimeoutMs"];
     expect(acquireTimeout.includes("60000")).toBe(true);
     expect(/transcript|lock/i.test(acquireTimeout)).toBe(true);
+
+    const stale = FIELD_HELP["session.writeLock.staleMs"];
+    expect(stale.includes("1800000")).toBe(true);
+    expect(stale.includes("OPENCLAW_SESSION_WRITE_LOCK_STALE_MS")).toBe(true);
+
+    const maxHold = FIELD_HELP["session.writeLock.maxHoldMs"];
+    expect(maxHold.includes("300000")).toBe(true);
+    expect(maxHold.includes("OPENCLAW_SESSION_WRITE_LOCK_MAX_HOLD_MS")).toBe(true);
   });
 
   it("documents session maintenance duration/size examples and deprecations", () => {
@@ -782,7 +792,7 @@ describe("config help copy quality", () => {
 
     const queueMode = FIELD_HELP["messages.queue.mode"];
     expect(queueMode.includes('"interrupt"')).toBe(true);
-    expect(queueMode.includes('"steer+backlog"')).toBe(true);
+    expect(queueMode.includes('"steer"')).toBe(true);
   });
 
   it("documents gateway bind modes and web reconnect semantics", () => {
@@ -863,9 +873,11 @@ describe("config help copy quality", () => {
     expect(/mid-turn|tool loop|default:\s*false/i.test(midTurnPrecheck)).toBe(true);
 
     const postCompactionSections = FIELD_HELP["agents.defaults.compaction.postCompactionSections"];
+    expect(/opt-in|Leave unset/i.test(postCompactionSections)).toBe(true);
     expect(/Session Startup|Red Lines/i.test(postCompactionSections)).toBe(true);
     expect(/Every Session|Safety/i.test(postCompactionSections)).toBe(true);
     expect(/\[\]|disable/i.test(postCompactionSections)).toBe(true);
+    expect(/duplicate project context/i.test(postCompactionSections)).toBe(true);
 
     const compactionModel = FIELD_HELP["agents.defaults.compaction.model"];
     expect(/provider\/model|different model|primary agent model/i.test(compactionModel)).toBe(true);

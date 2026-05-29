@@ -5,12 +5,12 @@ import {
   registerTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { afterEach, describe, expect, it } from "vitest";
-import { loadSessionStore, updateSessionStore, type SessionEntry } from "../../config/sessions.js";
-import { APPROVALS_SCOPE, READ_SCOPE, WRITE_SCOPE } from "../../gateway/operator-scopes.js";
 import {
   validatePluginsUiDescriptorsParams,
   validateSessionsPluginPatchParams,
-} from "../../gateway/protocol/index.js";
+} from "../../../packages/gateway-protocol/src/index.js";
+import { loadSessionStore, updateSessionStore, type SessionEntry } from "../../config/sessions.js";
+import { APPROVALS_SCOPE, READ_SCOPE, WRITE_SCOPE } from "../../gateway/operator-scopes.js";
 import { buildGatewaySessionRow } from "../../gateway/session-utils.js";
 import { withTempConfig } from "../../gateway/test-temp-config.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
@@ -45,9 +45,7 @@ import { runTrustedToolPolicies } from "../trusted-tool-policy.js";
 import { registerHostHookFixture, registerTrustedHostHookFixture } from "./host-hook-fixture.js";
 
 async function waitForPluginEventHandlers(): Promise<void> {
-  await new Promise<void>((resolve) => {
-    setTimeout(resolve, 0);
-  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
 function requireFirstCommandRegistration(
@@ -78,7 +76,9 @@ function diagnosticSummaries(diagnostics: readonly unknown[]) {
 }
 
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  expect(record).toBeDefined();
+  if (!record || typeof record !== "object") {
+    throw new Error("Expected record");
+  }
   const actual = record as Record<string, unknown>;
   for (const [key, value] of Object.entries(expected)) {
     expect(actual[key]).toEqual(value);
@@ -1586,6 +1586,14 @@ describe("host-hook fixture plugin contract", () => {
         handler: () => ({ text: "unused" }),
       }),
     ).toBe("Command requiredScopes contains unknown operator scope: operator.unknown");
+    expect(
+      validatePluginCommandDefinition({
+        name: "invalid-owner-status-fixture",
+        description: "Invalid owner status exposure.",
+        exposeSenderIsOwner: "yes" as never,
+        handler: () => ({ text: "unused" }),
+      }),
+    ).toBe("Command exposeSenderIsOwner must be a boolean");
 
     await expect(
       executePluginCommand({
@@ -1715,7 +1723,7 @@ describe("host-hook fixture plugin contract", () => {
         api.registerAgentEventSubscription({
           id: "delayed",
           streams: ["tool"],
-          async handle(_event, ctx) {
+          async handle(eventValue, ctx) {
             await new Promise<void>((resolve) => {
               releaseToolHandler = resolve;
             });

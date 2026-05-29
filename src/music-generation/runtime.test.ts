@@ -85,6 +85,36 @@ describe("music-generation runtime", () => {
     ]);
   });
 
+  it("uses configured music-generation timeout when call omits timeoutMs", async () => {
+    let seenTimeoutMs: number | undefined;
+    providers = [
+      {
+        id: "music-plugin",
+        capabilities: {},
+        async generateMusic(req: { timeoutMs?: number }) {
+          seenTimeoutMs = req.timeoutMs;
+          return {
+            tracks: [{ buffer: Buffer.from("mp3-bytes"), mimeType: "audio/mpeg" }],
+            model: "track-v1",
+          };
+        },
+      },
+    ];
+
+    await runGenerateMusic({
+      cfg: {
+        agents: {
+          defaults: {
+            musicGenerationModel: { primary: "music-plugin/track-v1", timeoutMs: 300_000 },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "play a synth line",
+    });
+
+    expect(seenTimeoutMs).toBe(300_000);
+  });
+
   it("does not list providers when explicit config disables auto provider fallback", async () => {
     const provider: MusicGenerationProvider = {
       id: "music-plugin",
@@ -251,6 +281,64 @@ describe("music-generation runtime", () => {
     ]);
   });
 
+  it("ignores model-specific unsupported lyrics and instrumental overrides", async () => {
+    let seenRequest:
+      | {
+          lyrics?: string;
+          instrumental?: boolean;
+        }
+      | undefined;
+    providers = [
+      {
+        id: "fal",
+        capabilities: {
+          generate: {
+            supportsLyrics: true,
+            supportsLyricsByModel: {
+              "fal-ai/stable-audio-25/text-to-audio": false,
+            },
+            supportsInstrumental: true,
+            supportsInstrumentalByModel: {
+              "fal-ai/stable-audio-25/text-to-audio": false,
+            },
+          },
+        },
+        generateMusic: async (req) => {
+          seenRequest = {
+            lyrics: req.lyrics,
+            instrumental: req.instrumental,
+          };
+          return {
+            tracks: [{ buffer: Buffer.from("wav-bytes"), mimeType: "audio/wav" }],
+            model: "fal-ai/stable-audio-25/text-to-audio",
+          };
+        },
+      },
+    ];
+
+    const result = await runGenerateMusic({
+      cfg: {
+        agents: {
+          defaults: {
+            musicGenerationModel: { primary: "fal/fal-ai/stable-audio-25/text-to-audio" },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "orchestral hit",
+      lyrics: "rise up",
+      instrumental: true,
+    });
+
+    expect(seenRequest).toEqual({
+      lyrics: undefined,
+      instrumental: undefined,
+    });
+    expect(result.ignoredOverrides).toEqual([
+      { key: "lyrics", value: "rise up" },
+      { key: "instrumental", value: true },
+    ]);
+  });
+
   it("uses mode-specific capabilities for edit requests", async () => {
     let seenRequest:
       | {
@@ -365,8 +453,6 @@ describe("music-generation runtime", () => {
       durationSeconds: 30,
     });
     expect(result.ignoredOverrides).toStrictEqual([]);
-    expect(result.normalization).toBeDefined();
-    expect(result.metadata).toBeDefined();
     if (!result.normalization || !result.metadata) {
       throw new Error("Expected normalization and metadata");
     }

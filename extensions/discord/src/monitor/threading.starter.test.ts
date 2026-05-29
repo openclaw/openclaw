@@ -1,10 +1,7 @@
 import { StickerFormatType } from "discord-api-types/v10";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType, type Client } from "../internal/discord.js";
-import {
-  __resetDiscordThreadStarterCacheForTest,
-  resolveDiscordThreadStarter,
-} from "./threading.js";
+import { resetDiscordThreadStarterCacheForTest, resolveDiscordThreadStarter } from "./threading.js";
 
 type ResolvedThreadStarter = NonNullable<Awaited<ReturnType<typeof resolveDiscordThreadStarter>>>;
 
@@ -76,6 +73,14 @@ function requireThreadStarter(
   return result;
 }
 
+function firstRestGetPath(get: ReturnType<typeof vi.fn>): unknown {
+  const [call] = get.mock.calls;
+  if (!call) {
+    throw new Error("expected Discord REST GET call");
+  }
+  return call[0];
+}
+
 async function resolveStarter(params: {
   message: ThreadStarterRestMessage;
   parentId?: string;
@@ -98,7 +103,7 @@ async function resolveStarter(params: {
 
 describe("resolveDiscordThreadStarter", () => {
   beforeEach(() => {
-    __resetDiscordThreadStarterCacheForTest();
+    resetDiscordThreadStarterCacheForTest();
   });
 
   it("falls back to joined embed title and description when content is empty", async () => {
@@ -258,7 +263,7 @@ describe("resolveDiscordThreadStarter", () => {
 
     expect(requireThreadStarter(result).text).toBe("starter content");
     expect(get).toHaveBeenCalledTimes(1);
-    expect(get.mock.calls[0]?.[0]).toBe("/channels/thread-1/messages/thread-1");
+    expect(firstRestGetPath(get)).toBe("/channels/thread-1/messages/thread-1");
   });
 
   it("returns null when content, embeds, and snapshots are all empty", async () => {

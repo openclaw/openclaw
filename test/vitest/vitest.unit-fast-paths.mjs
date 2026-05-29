@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -120,7 +121,6 @@ export const forcedUnitFastTestFiles = [
   "src/node-host/invoke-system-run-plan.test.ts",
   "src/node-host/invoke-system-run.test.ts",
   "src/pairing/pairing-challenge.test.ts",
-  "src/pairing/allow-from-store-read.test.ts",
   "src/pairing/pairing-store.test.ts",
   "src/pairing/setup-code.test.ts",
   "src/plugin-activation-boundary.test.ts",
@@ -201,6 +201,11 @@ export const forcedUnitFastTestFiles = [
 ];
 const forcedUnitFastTestFileSet = new Set(forcedUnitFastTestFiles);
 const unitFastCandidateExactFiles = [...pluginSdkLightTestFiles, ...commandsLightTestFiles];
+const unitFastCandidateExactFileSet = new Set(unitFastCandidateExactFiles);
+const unitFastSourceExactFileSet = new Set([
+  ...pluginSdkLightSourceFiles,
+  ...commandsLightSourceFiles,
+]);
 const broadUnitFastCandidateGlobs = [
   "src/**/*.test.ts",
   "packages/**/*.test.ts",
@@ -283,6 +288,15 @@ function matchesAnyGlob(file, patterns) {
   return patterns.some((pattern) => path.matchesGlob(file, pattern));
 }
 
+function isUnitFastCandidateFile(file) {
+  return (
+    forcedUnitFastTestFileSet.has(file) ||
+    unitFastCandidateExactFileSet.has(file) ||
+    (matchesAnyGlob(file, unitFastCandidateGlobs) &&
+      !matchesAnyGlob(file, broadUnitFastCandidateSkipGlobs))
+  );
+}
+
 function walkFiles(directory, files = []) {
   let entries;
   try {
@@ -309,15 +323,32 @@ function walkFiles(directory, files = []) {
 
 const walkedTestFilesByCwd = new Map();
 
+function collectRepoTestFilesFromGit(cwd) {
+  const result = spawnSync("git", ["ls-files", "--", "src", "packages", "test"], {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (result.status !== 0) {
+    return null;
+  }
+  return result.stdout
+    .split("\n")
+    .map((file) => normalizeRepoPath(file.trim()))
+    .filter((file) => file.endsWith(".test.ts"));
+}
+
 function collectRepoTestFiles(cwd) {
   const normalizedCwd = normalizeRepoPath(cwd);
   const cached = walkedTestFilesByCwd.get(normalizedCwd);
   if (cached) {
     return cached;
   }
-  const files = ["src", "packages", "test"]
-    .flatMap((directory) => walkFiles(path.join(cwd, directory)))
-    .map((file) => normalizeRepoPath(path.relative(cwd, file)));
+  const files =
+    collectRepoTestFilesFromGit(cwd) ??
+    ["src", "packages", "test"]
+      .flatMap((directory) => walkFiles(path.join(cwd, directory)))
+      .map((file) => normalizeRepoPath(path.relative(cwd, file)));
   walkedTestFilesByCwd.set(normalizedCwd, files);
   return files;
 }
@@ -393,7 +424,7 @@ export function collectUnitFastTestFileAnalysis(cwd = process.cwd(), options = {
 
 let cachedUnitFastTestFiles = null;
 let cachedUnitFastTestFileSet = null;
-let cachedSourceToUnitFastTestFile = null;
+const cachedSingleUnitFastTestFileResults = new Map();
 
 export function getUnitFastTestFiles() {
   if (cachedUnitFastTestFiles !== null) {
@@ -413,18 +444,31 @@ function getUnitFastTestFileSet() {
   return cachedUnitFastTestFileSet;
 }
 
-function getSourceToUnitFastTestFile() {
-  if (cachedSourceToUnitFastTestFile !== null) {
-    return cachedSourceToUnitFastTestFile;
+function isUnitFastTestFileOnDemand(file, cwd = process.cwd()) {
+  const normalized = normalizeRepoPath(file);
+  const cacheKey = `${normalizeRepoPath(cwd)}\0${normalized}`;
+  if (cachedSingleUnitFastTestFileResults.has(cacheKey)) {
+    return cachedSingleUnitFastTestFileResults.get(cacheKey);
   }
-  const unitFastTestFileSet = getUnitFastTestFileSet();
-  cachedSourceToUnitFastTestFile = new Map(
-    [...pluginSdkLightSourceFiles, ...commandsLightSourceFiles].flatMap((sourceFile) => {
-      const testFile = sourceFile.replace(/\.ts$/u, ".test.ts");
-      return unitFastTestFileSet.has(testFile) ? [[sourceFile, testFile]] : [];
-    }),
-  );
-  return cachedSourceToUnitFastTestFile;
+
+  if (!isUnitFastCandidateFile(normalized)) {
+    cachedSingleUnitFastTestFileResults.set(cacheKey, false);
+    return false;
+  }
+
+  let source = "";
+  try {
+    source = fs.readFileSync(path.join(cwd, normalized), "utf8");
+  } catch {
+    cachedSingleUnitFastTestFileResults.set(cacheKey, false);
+    return false;
+  }
+
+  const result =
+    forcedUnitFastTestFileSet.has(normalized) ||
+    classifyUnitFastTestFileContent(source).length === 0;
+  cachedSingleUnitFastTestFileResults.set(cacheKey, result);
+  return result;
 }
 
 export function isUnitFastTestFile(file) {
@@ -433,13 +477,16 @@ export function isUnitFastTestFile(file) {
 
 export function resolveUnitFastTestIncludePattern(file) {
   const normalized = normalizeRepoPath(file);
-  const unitFastTestFileSet = getUnitFastTestFileSet();
-  if (unitFastTestFileSet.has(normalized)) {
+  if (isUnitFastTestFileOnDemand(normalized)) {
     return normalized;
   }
   const siblingTestFile = normalized.replace(/\.ts$/u, ".test.ts");
-  if (unitFastTestFileSet.has(siblingTestFile)) {
+  if (isUnitFastTestFileOnDemand(siblingTestFile)) {
     return siblingTestFile;
   }
-  return getSourceToUnitFastTestFile().get(normalized) ?? null;
+  if (unitFastSourceExactFileSet.has(normalized)) {
+    const exactTestFile = normalized.replace(/\.ts$/u, ".test.ts");
+    return isUnitFastTestFileOnDemand(exactTestFile) ? exactTestFile : null;
+  }
+  return null;
 }

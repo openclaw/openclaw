@@ -16,7 +16,7 @@ import {
   resolveSupportedThinkingLevelMock,
   resetRunCronIsolatedAgentTurnHarness,
   restoreFastTestEnv,
-  runEmbeddedPiAgentMock,
+  runEmbeddedAgentMock,
   runWithModelFallbackMock,
   updateSessionStoreMock,
   runCliAgentMock,
@@ -81,9 +81,9 @@ function createDeferred<T = void>() {
 }
 
 function requireRecord(value: unknown): Record<string, unknown> {
-  expect(value).toBeTruthy();
-  expect(typeof value).toBe("object");
-  expect(Array.isArray(value)).toBe(false);
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Expected a non-array record");
+  }
   return value as Record<string, unknown>;
 }
 
@@ -164,12 +164,12 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
   });
 
   it("passes the cron payload model to the embedded agent runner", async () => {
-    // Use passthrough so runEmbeddedPiAgentMock actually gets called
+    // Use passthrough so runEmbeddedAgentMock actually gets called
     runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => {
       const result = await run(provider, model);
       return { result, provider, model, attempts: [] };
     });
-    runEmbeddedPiAgentMock.mockResolvedValue({
+    runEmbeddedAgentMock.mockResolvedValue({
       payloads: [{ text: "summary done" }],
       meta: { agentMeta: { usage: { input: 10, output: 20 } } },
     });
@@ -177,11 +177,9 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
     const result = await runCronIsolatedAgentTurn(makeParams());
 
     expect(result.status).toBe("ok");
-    const embeddedCall = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as
-      | { provider?: string; model?: string }
-      | undefined;
-    expect(embeddedCall?.provider).toBe("google");
-    expect(embeddedCall?.model).toBe("gemini-2.0-flash");
+    const embeddedCall = firstMockArg(runEmbeddedAgentMock);
+    expect(embeddedCall.provider).toBe("google");
+    expect(embeddedCall.model).toBe("gemini-2.0-flash");
   });
 
   it("forwards isolated cron execution phase updates from embedded runs", async () => {
@@ -189,7 +187,7 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
       const result = await run(provider, model);
       return { result, provider, model, attempts: [] };
     });
-    runEmbeddedPiAgentMock.mockImplementation(async ({ onExecutionPhase }) => {
+    runEmbeddedAgentMock.mockImplementation(async ({ onExecutionPhase }) => {
       onExecutionPhase?.({
         phase: "model_call_started",
         provider: "google",
@@ -331,7 +329,7 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
     expect(catalogEntry.id).toBe("qwen3:0.6b");
     expect(catalogEntry.reasoning).toBe(true);
 
-    const embeddedCall = firstMockArg(runEmbeddedPiAgentMock);
+    const embeddedCall = firstMockArg(runEmbeddedAgentMock);
     expect(embeddedCall.provider).toBe("ollama");
     expect(embeddedCall.model).toBe("qwen3:0.6b");
     expect(embeddedCall.thinkLevel).toBe("medium");

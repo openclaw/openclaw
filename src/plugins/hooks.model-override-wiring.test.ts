@@ -90,7 +90,7 @@ describe("model override pipeline wiring", () => {
     catchErrors?: boolean;
   }) {
     const handlerSpy = vi.fn(
-      (_event: PluginHookBeforeModelResolveEvent) =>
+      (eventValue: PluginHookBeforeModelResolveEvent) =>
         ({
           modelOverride: "demo-local-model",
           providerOverride: "demo-local-provider",
@@ -258,9 +258,7 @@ describe("model override pipeline wiring", () => {
 
         await expect(resultPromise).resolves.toEqual({ prependContext: "fast" });
         expect(logger.error).toHaveBeenCalledWith(
-          expect.stringContaining(
-            "[hooks] before_prompt_build handler from slow-plugin failed: timed out after 5ms",
-          ),
+          "[hooks] before_prompt_build handler from slow-plugin failed: timed out after 5ms",
         );
       } finally {
         vi.useRealTimers();

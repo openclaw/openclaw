@@ -1,9 +1,18 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
+import {
+  clearCurrentPluginMetadataSnapshot,
+  setCurrentPluginMetadataSnapshot,
+} from "../plugins/current-plugin-metadata-snapshot.js";
+import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
+import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { writeSkill, writeWorkspaceSkills } from "./skills.e2e-test-helpers.js";
 import {
   restoreMockSkillsHomeEnv,
@@ -52,6 +61,104 @@ let envSnapshot: SkillsHomeEnvSnapshot;
 let tempRoot = "";
 let workspaceCaseIndex = 0;
 
+function createWorkspacePluginRegistry(workspaceDir: string): PluginManifestRegistry {
+  const extensionsRoot = path.join(workspaceDir, ".openclaw", "extensions");
+  const plugins: PluginManifestRecord[] = [];
+  for (const id of ["open-prose", "browser"]) {
+    const rootDir = path.join(extensionsRoot, id);
+    const manifestPath = path.join(rootDir, "openclaw.plugin.json");
+    if (!fsSync.existsSync(manifestPath)) {
+      continue;
+    }
+    const manifest = JSON.parse(fsSync.readFileSync(manifestPath, "utf8")) as {
+      id?: string;
+      enabledByDefault?: boolean;
+      skills?: string[];
+      configSchema?: Record<string, unknown>;
+    };
+    plugins.push({
+      id: manifest.id ?? id,
+      origin: id === "browser" ? "bundled" : "workspace",
+      enabledByDefault: manifest.enabledByDefault,
+      channels: [],
+      providers: [],
+      cliBackends: [],
+      legacyPluginIds: [],
+      kind: [],
+      skills: manifest.skills ?? ["./skills"],
+      hooks: [],
+      rootDir,
+      source: rootDir,
+      manifestPath,
+      configSchema: manifest.configSchema,
+    });
+  }
+  return { plugins, diagnostics: [] };
+}
+
+function createWorkspacePluginMetadataSnapshot(params: {
+  workspaceDir: string;
+  config?: OpenClawConfig;
+  manifestRegistry: PluginManifestRegistry;
+}): PluginMetadataSnapshot {
+  const policyHash = resolveInstalledPluginIndexPolicyHash(params.config);
+  const ownerMaps = {
+    channels: new Map(),
+    channelConfigs: new Map(),
+    providers: new Map(),
+    modelCatalogProviders: new Map(),
+    cliBackends: new Map(),
+    setupProviders: new Map(),
+    commandAliases: new Map(),
+    contracts: new Map(),
+  };
+  return {
+    policyHash,
+    workspaceDir: params.workspaceDir,
+    index: {
+      version: 1,
+      hostContractVersion: "test",
+      compatRegistryVersion: "test",
+      migrationVersion: 1,
+      policyHash,
+      generatedAtMs: 1,
+      installRecords: {},
+      plugins: [],
+      diagnostics: [],
+    },
+    registryDiagnostics: [],
+    manifestRegistry: params.manifestRegistry,
+    plugins: params.manifestRegistry.plugins,
+    diagnostics: params.manifestRegistry.diagnostics,
+    byPluginId: new Map(params.manifestRegistry.plugins.map((plugin) => [plugin.id, plugin])),
+    normalizePluginId: (pluginId) => pluginId,
+    owners: ownerMaps,
+    metrics: {
+      registrySnapshotMs: 0,
+      manifestRegistryMs: 0,
+      ownerMapsMs: 0,
+      totalMs: 0,
+      indexPluginCount: 0,
+      manifestPluginCount: params.manifestRegistry.plugins.length,
+    },
+  };
+}
+
+function setWorkspacePluginMetadataSnapshot(workspaceDir: string, config?: OpenClawConfig): void {
+  const manifestRegistry = createWorkspacePluginRegistry(workspaceDir);
+  setCurrentPluginMetadataSnapshot(
+    createWorkspacePluginMetadataSnapshot({
+      workspaceDir,
+      manifestRegistry,
+      ...(config === undefined ? {} : { config }),
+    }),
+    {
+      workspaceDir,
+      ...(config === undefined ? {} : { config }),
+    },
+  );
+}
+
 function collectMatching<T>(items: readonly T[], predicate: (item: T) => boolean): T[] {
   const matches: T[] = [];
   for (const item of items) {
@@ -90,10 +197,16 @@ function captureWarningLogger() {
   return warn;
 }
 
+function firstWarningLine(warn: ReturnType<typeof vi.fn>): string {
+  const [line] = warn.mock.calls[0] ?? [];
+  return String(line);
+}
+
 function loadTestWorkspaceSkillEntries(
   workspaceDir: string,
   opts?: Parameters<typeof loadWorkspaceSkillEntries>[1],
 ) {
+  setWorkspacePluginMetadataSnapshot(workspaceDir, opts?.config);
   return loadWorkspaceSkillEntries(workspaceDir, {
     managedSkillsDir: path.join(workspaceDir, ".managed"),
     bundledSkillsDir: "",
@@ -110,6 +223,7 @@ beforeAll(async () => {
 });
 
 afterEach(async () => {
+  clearCurrentPluginMetadataSnapshot();
   setLoggerOverride(null);
   loggingState.rawConsole = null;
   resetLogger();
@@ -256,10 +370,18 @@ describe("loadWorkspaceSkillEntries", () => {
       description: "Hidden prompt entry",
       frontmatterExtra: "disable-model-invocation: true",
     });
+    const bomSkillDir = path.join(workspaceDir, "skills", "bom-skill");
+    await fs.mkdir(bomSkillDir, { recursive: true });
+    await fs.writeFile(
+      path.join(bomSkillDir, "SKILL.md"),
+      "\uFEFF---\nname: bom-skill\ndescription: BOM-prefixed skill\n---\n\n# BOM skill\n",
+      "utf8",
+    );
 
     const entries = loadTestWorkspaceSkillEntries(workspaceDir);
 
     expect(entries.map((entry) => entry.skill.name)).toContain("fallback-name");
+    expect(entries.map((entry) => entry.skill.name)).toContain("bom-skill");
     const hiddenEntry = entries.find((entry) => entry.skill.name === "hidden-skill");
 
     expect(hiddenEntry?.invocation?.disableModelInvocation).toBe(true);
@@ -368,8 +490,7 @@ describe("loadWorkspaceSkillEntries", () => {
       expect(entries.map((entry) => entry.skill.name)).not.toContain("outside-skill");
       expect(entries.map((entry) => entry.skill.name)).not.toContain("outside-file-skill");
       expect(entries.map((entry) => entry.skill.name)).not.toContain("symlink-target");
-      const [line] = warn.mock.calls[0] ?? [];
-      const warningLine = String(line);
+      const warningLine = firstWarningLine(warn);
       expect(warningLine).toContain("Skipping escaped skill path outside its configured root:");
       expect(warningLine).toContain("reason=symlink-escape");
       expect(warningLine).toContain("source=openclaw-workspace");
@@ -391,9 +512,9 @@ describe("loadWorkspaceSkillEntries", () => {
         name: skillName,
         description: "Manager skill",
       });
-      const personalSkillsDir = path.join(fakeHome, ".agents", "skills");
-      await fs.mkdir(personalSkillsDir, { recursive: true });
-      const symlinkPath = path.join(personalSkillsDir, skillName);
+      const workspaceSkillsDir = path.join(workspaceDir, "skills");
+      await fs.mkdir(workspaceSkillsDir, { recursive: true });
+      const symlinkPath = path.join(workspaceSkillsDir, skillName);
       await fs.symlink(targetSkillDir, symlinkPath, "dir");
       const warn = captureWarningLogger();
 
@@ -417,6 +538,73 @@ describe("loadWorkspaceSkillEntries", () => {
   );
 
   it.runIf(process.platform !== "win32")(
+    "loads managed skill directory symlinks outside the managed root",
+    async () => {
+      const workspaceDir = await createTempWorkspaceDir();
+      const managedDir = path.join(workspaceDir, ".managed");
+      const skillName = `managed-${++workspaceCaseIndex}`;
+      const targetSkillDir = path.join(tempRoot, `${skillName}-target`, skillName);
+      await writeSkill({
+        dir: targetSkillDir,
+        name: skillName,
+        description: "Managed symlink target",
+      });
+      await fs.mkdir(managedDir, { recursive: true });
+      const symlinkPath = path.join(managedDir, skillName);
+      await fs.symlink(targetSkillDir, symlinkPath, "dir");
+      const warn = captureWarningLogger();
+
+      try {
+        const entries = loadTestWorkspaceSkillEntries(workspaceDir, {
+          managedSkillsDir: managedDir,
+        });
+
+        expect(entries.map((entry) => entry.skill.name)).toContain(skillName);
+        expect(warn).not.toHaveBeenCalled();
+      } finally {
+        await fs.unlink(symlinkPath).catch(() => undefined);
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "keeps SKILL.md containment for managed symlinked skill directories",
+    async () => {
+      const workspaceDir = await createTempWorkspaceDir();
+      const managedDir = path.join(workspaceDir, ".managed");
+      const skillName = `managed-file-link-${++workspaceCaseIndex}`;
+      const targetSkillDir = path.join(tempRoot, `${skillName}-target`, skillName);
+      const outsideDir = path.join(tempRoot, `${skillName}-outside`);
+      await fs.mkdir(targetSkillDir, { recursive: true });
+      await fs.mkdir(outsideDir, { recursive: true });
+      await writeSkill({
+        dir: outsideDir,
+        name: skillName,
+        description: "Escaped metadata",
+      });
+      await fs.symlink(path.join(outsideDir, "SKILL.md"), path.join(targetSkillDir, "SKILL.md"));
+      await fs.mkdir(managedDir, { recursive: true });
+      const symlinkPath = path.join(managedDir, skillName);
+      await fs.symlink(targetSkillDir, symlinkPath, "dir");
+      const warn = captureWarningLogger();
+
+      try {
+        const entries = loadTestWorkspaceSkillEntries(workspaceDir, {
+          managedSkillsDir: managedDir,
+        });
+
+        expect(entries.map((entry) => entry.skill.name)).not.toContain(skillName);
+        const warningLine = firstWarningLine(warn);
+        expect(warningLine).toContain("Skipping escaped skill path outside its configured root:");
+        expect(warningLine).toContain("source=openclaw-managed");
+        expect(warningLine).toContain("reason=symlink-escape");
+      } finally {
+        await fs.unlink(symlinkPath).catch(() => undefined);
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "calls out bundled symlink escapes with compact home-relative paths",
     async () => {
       const { workspaceDir, bundledDir, requestedPath } = await createEscapedBundledSkillFixture();
@@ -427,8 +615,7 @@ describe("loadWorkspaceSkillEntries", () => {
       });
 
       expect(entries.map((entry) => entry.skill.name)).not.toContain("outside-bundled-skill");
-      const [line] = warn.mock.calls[0] ?? [];
-      const warningLine = String(line);
+      const warningLine = firstWarningLine(warn);
       expect(warningLine).toContain("Skipping escaped skill path outside its configured root:");
       expect(warningLine).toContain("source=openclaw-bundled");
       expect(warningLine).toContain("reason=bundled-symlink-escape");
@@ -451,8 +638,7 @@ describe("loadWorkspaceSkillEntries", () => {
         bundledSkillsDir: bundledDir,
       });
 
-      const [line] = warn.mock.calls[0] ?? [];
-      const warningLine = String(line);
+      const warningLine = firstWarningLine(warn);
       expect(warningLine).toContain("root=~/workspace/.bundled");
       expect(warningLine).toContain("requested=~/workspace/.bundled/escaped-bundled-skill");
       expect(warningLine).toContain("resolved=~/outside/outside-bundled-skill");
@@ -545,15 +731,479 @@ describe("loadWorkspaceSkillEntries", () => {
       expect(names).toEqual(["valid-skill"]);
     });
 
-    it("does not descend more than two levels (skills/a/b/c/SKILL.md is ignored)", async () => {
+    it("loads earlier grouped skills before later direct siblings hit the source cap", async () => {
+      const workspaceDir = await createTempWorkspaceDir();
+      await writeSkill({
+        dir: path.join(workspaceDir, "skills", "00-group", "grouped"),
+        name: "grouped-skill",
+        description: "Grouped skill before direct siblings",
+      });
+      await writeSkill({
+        dir: path.join(workspaceDir, "skills", "01-direct"),
+        name: "direct-skill",
+        description: "Direct sibling after grouped skill",
+      });
+
+      const names = loadTestWorkspaceSkillEntries(workspaceDir, {
+        config: {
+          skills: {
+            limits: {
+              maxCandidatesPerRoot: 10,
+              maxSkillsLoadedPerSource: 1,
+            },
+          },
+        },
+      }).map((entry) => entry.skill.name);
+
+      expect(names).toEqual(["grouped-skill"]);
+    });
+
+    it("keeps later grouped siblings discoverable when an earlier group is noisy", async () => {
+      const workspaceDir = await createTempWorkspaceDir();
+      async function createNoisyTree(dir: string, depth: number): Promise<void> {
+        if (depth === 0) {
+          return;
+        }
+        for (const name of ["00-a", "01-b"]) {
+          const childDir = path.join(dir, name);
+          await fs.mkdir(childDir, { recursive: true });
+          await createNoisyTree(childDir, depth - 1);
+        }
+      }
+      await createNoisyTree(path.join(workspaceDir, "skills", "00-noisy"), 6);
+      await writeSkill({
+        dir: path.join(workspaceDir, "skills", "01-later", "later-skill"),
+        name: "later-skill",
+        description: "Grouped sibling after a noisy tree",
+      });
+
+      const names = loadTestWorkspaceSkillEntries(workspaceDir, {
+        config: {
+          skills: {
+            limits: {
+              maxCandidatesPerRoot: 2,
+              maxSkillsLoadedPerSource: 10,
+            },
+          },
+        },
+      }).map((entry) => entry.skill.name);
+
+      expect(names).toContain("later-skill");
+    });
+
+    it("discovers deeply nested SKILL.md files within the Codex-compatible depth", async () => {
       const workspaceDir = await createTempWorkspaceDir();
       await writeSkill({
         dir: path.join(workspaceDir, "skills", "a", "b", "c"),
-        name: "too-deep",
-        description: "Should not be discovered (depth 3)",
+        name: "deep-skill",
+        description: "Discovered through grouped folders",
       });
 
       const names = loadTestWorkspaceSkillEntries(workspaceDir).map((entry) => entry.skill.name);
+      expect(names).toContain("deep-skill");
+    });
+
+    it("discovers deeply nested skills in configured roots named skills", async () => {
+      const workspaceDir = await createTempWorkspaceDir();
+      const parentDir = await createTempWorkspaceDir();
+      const skillsDir = path.join(parentDir, "skills");
+      await writeSkill({
+        dir: path.join(skillsDir, "d0", "d1", "d2", "d3", "d4", "d5"),
+        name: "configured-deep-skill",
+        description: "Depth 6 from configured skills root",
+      });
+
+      const names = loadTestWorkspaceSkillEntries(workspaceDir, {
+        config: {
+          skills: {
+            load: { extraDirs: [skillsDir] },
+          },
+        },
+      }).map((entry) => entry.skill.name);
+
+      expect(names).toContain("configured-deep-skill");
+    });
+
+    it("uses the nested skills folder as the depth root for repo-style extra dirs", async () => {
+      const workspaceDir = await createTempWorkspaceDir();
+      const repoDir = await createTempWorkspaceDir();
+      await writeSkill({
+        dir: path.join(repoDir, "skills", "d0", "d1", "d2", "d3", "d4", "d5"),
+        name: "repo-depth-skill",
+        description: "Depth 6 from nested skills root",
+      });
+
+      const names = loadTestWorkspaceSkillEntries(workspaceDir, {
+        config: {
+          skills: {
+            load: { extraDirs: [repoDir] },
+          },
+        },
+      }).map((entry) => entry.skill.name);
+
+      expect(names).toContain("repo-depth-skill");
+    });
+
+    it("ignores invalid outside candidates when resolving repo-style extra dirs", async () => {
+      const workspaceDir = await createTempWorkspaceDir();
+      const repoDir = await createTempWorkspaceDir();
+      await fs.mkdir(path.join(repoDir, "examples", "bad"), { recursive: true });
+      await fs.writeFile(
+        path.join(repoDir, "examples", "bad", "SKILL.md"),
+        "---\nname: bad\n---\n",
+      );
+      await writeSkill({
+        dir: path.join(repoDir, "skills", "group", "valid"),
+        name: "repo-nested-skill",
+        description: "Valid nested repo skill",
+      });
+
+      const names = loadTestWorkspaceSkillEntries(workspaceDir, {
+        config: {
+          skills: {
+            load: { extraDirs: [repoDir] },
+          },
+        },
+      }).map((entry) => entry.skill.name);
+
+      expect(names).toContain("repo-nested-skill");
+      expect(names).not.toContain("bad");
+    });
+
+    it("ignores invalid root SKILL.md files when resolving repo-style extra dirs", async () => {
+      const workspaceDir = await createTempWorkspaceDir();
+      const repoDir = await createTempWorkspaceDir();
+      await fs.writeFile(path.join(repoDir, "SKILL.md"), "---\nname: bad\n---\n");
+      await writeSkill({
+        dir: path.join(repoDir, "examples", "valid"),
+        name: "outside-valid-skill",
+        description: "Valid outside repo skill",
+      });
+      await writeSkill({
+        dir: path.join(repoDir, "skills", "group", "valid"),
+        name: "repo-nested-skill",
+        description: "Valid nested repo skill",
+      });
+
+      const names = loadTestWorkspaceSkillEntries(workspaceDir, {
+        config: {
+          skills: {
+            load: { extraDirs: [repoDir] },
+          },
+        },
+      }).map((entry) => entry.skill.name);
+
+      expect(names).toContain("repo-nested-skill");
+      expect(names).not.toContain("outside-valid-skill");
+      expect(names).not.toContain("bad");
+    });
+
+    it("treats invalid outside SKILL.md files as terminal during repo-root detection", async () => {
+      const workspaceDir = await createTempWorkspaceDir();
+      const repoDir = await createTempWorkspaceDir();
+      await fs.mkdir(path.join(repoDir, "examples", "bad", "child"), { recursive: true });
+      await fs.writeFile(
+        path.join(repoDir, "examples", "bad", "SKILL.md"),
+        "---\nname: bad\n---\n",
+      );
+      await writeSkill({
+        dir: path.join(repoDir, "examples", "bad", "child"),
+        name: "outside-child",
+        description: "Valid child hidden behind invalid terminal parent",
+      });
+      await writeSkill({
+        dir: path.join(repoDir, "skills", "group", "valid"),
+        name: "repo-nested-skill",
+        description: "Valid nested repo skill",
+      });
+
+      const names = loadTestWorkspaceSkillEntries(workspaceDir, {
+        config: {
+          skills: {
+            load: { extraDirs: [repoDir] },
+          },
+        },
+      }).map((entry) => entry.skill.name);
+
+      expect(names).toContain("repo-nested-skill");
+      expect(names).not.toContain("outside-child");
+    });
+
+    it.runIf(process.platform !== "win32")(
+      "does not follow outside symlink dirs during repo-root detection",
+      async () => {
+        const workspaceDir = await createTempWorkspaceDir();
+        const repoDir = await createTempWorkspaceDir();
+        const outsideDir = await createTempWorkspaceDir();
+        await writeSkill({
+          dir: path.join(outsideDir, "linked"),
+          name: "outside-linked-skill",
+          description: "Outside linked skill",
+        });
+        await fs.mkdir(path.join(repoDir, "examples"), { recursive: true });
+        await fs.symlink(outsideDir, path.join(repoDir, "examples", "linked"), "dir");
+        await writeSkill({
+          dir: path.join(repoDir, "skills", "group", "valid"),
+          name: "repo-nested-skill",
+          description: "Valid nested repo skill",
+        });
+
+        const names = loadTestWorkspaceSkillEntries(workspaceDir, {
+          config: {
+            skills: {
+              load: { extraDirs: [repoDir] },
+            },
+          },
+        }).map((entry) => entry.skill.name);
+
+        expect(names).toContain("repo-nested-skill");
+        expect(names).not.toContain("outside-linked-skill");
+      },
+    );
+
+    it.runIf(process.platform !== "win32")(
+      "keeps configured roots with possible symlink skills outside nested skills",
+      async () => {
+        const workspaceDir = await createTempWorkspaceDir();
+        const repoDir = await createTempWorkspaceDir();
+        const targetRoot = path.join(tempRoot, `linked-root-${workspaceCaseIndex++}`);
+        const targetSkillDir = path.join(targetRoot, "linked-skill");
+        await writeSkill({
+          dir: targetSkillDir,
+          name: "linked-skill",
+          description: "Allowed linked skill",
+        });
+        await fs.mkdir(path.join(repoDir, "group"), { recursive: true });
+        await fs.symlink(targetSkillDir, path.join(repoDir, "group", "linked-skill"), "dir");
+        await writeSkill({
+          dir: path.join(repoDir, "skills", "group", "valid"),
+          name: "repo-nested-skill",
+          description: "Valid nested repo skill",
+        });
+
+        const names = loadTestWorkspaceSkillEntries(workspaceDir, {
+          config: {
+            skills: {
+              load: {
+                allowSymlinkTargets: [targetRoot],
+                extraDirs: [repoDir],
+              },
+            },
+          },
+        }).map((entry) => entry.skill.name);
+
+        expect(names).toContain("linked-skill");
+        expect(names).toContain("repo-nested-skill");
+      },
+    );
+
+    it("keeps a configured direct skill root even when it has nested skill fixtures", async () => {
+      const workspaceDir = await createTempWorkspaceDir();
+      const skillDir = await createTempWorkspaceDir();
+      await writeSkill({
+        dir: skillDir,
+        name: "direct-root",
+        description: "Configured direct skill root",
+      });
+      await writeSkill({
+        dir: path.join(skillDir, "skills", "examples", "fixture"),
+        name: "fixture-skill",
+        description: "Nested fixture skill should not replace the root",
+      });
+
+      const names = loadTestWorkspaceSkillEntries(workspaceDir, {
+        config: {
+          skills: {
+            load: { extraDirs: [skillDir] },
+          },
+        },
+      }).map((entry) => entry.skill.name);
+
+      expect(names).toContain("direct-root");
+      expect(names).not.toContain("fixture-skill");
+    });
+
+    it("does not re-root extra dirs from ignored nested skill files", async () => {
+      const workspaceDir = await createTempWorkspaceDir();
+      const repoDir = await createTempWorkspaceDir();
+      await writeSkill({
+        dir: path.join(repoDir, "valid"),
+        name: "valid-root-skill",
+        description: "Direct child skill under configured root",
+      });
+      await writeSkill({
+        dir: path.join(repoDir, "skills", "node_modules", "pkg"),
+        name: "ignored-package-skill",
+        description: "Ignored nested dependency fixture",
+      });
+
+      const names = loadTestWorkspaceSkillEntries(workspaceDir, {
+        config: {
+          skills: {
+            load: { extraDirs: [repoDir] },
+          },
+        },
+      }).map((entry) => entry.skill.name);
+
+      expect(names).toContain("valid-root-skill");
+      expect(names).not.toContain("ignored-package-skill");
+    });
+
+    it("keeps direct child skills when a configured root also has a skills child", async () => {
+      const workspaceDir = await createTempWorkspaceDir();
+      const skillRootDir = await createTempWorkspaceDir();
+      await writeSkill({
+        dir: path.join(skillRootDir, "valid"),
+        name: "valid-root-skill",
+        description: "Direct child skill under configured root",
+      });
+      await writeSkill({
+        dir: path.join(skillRootDir, "skills", "examples", "fixture"),
+        name: "fixture-skill",
+        description: "Nested fixture should not replace the configured root",
+      });
+
+      const names = loadTestWorkspaceSkillEntries(workspaceDir, {
+        config: {
+          skills: {
+            load: { extraDirs: [skillRootDir] },
+          },
+        },
+      }).map((entry) => entry.skill.name);
+
+      expect(names).toContain("valid-root-skill");
+      expect(names).toContain("fixture-skill");
+    });
+
+    it("keeps nested skills when top-level candidate cap is filled by direct skills", async () => {
+      const workspaceDir = await createTempWorkspaceDir();
+      const skillRootDir = await createTempWorkspaceDir();
+      await writeSkill({
+        dir: path.join(skillRootDir, "00-valid"),
+        name: "valid-root-skill",
+        description: "Direct child skill under configured root",
+      });
+      await writeSkill({
+        dir: path.join(skillRootDir, "skills", "examples", "fixture"),
+        name: "fixture-skill",
+        description: "Nested fixture should still be scanned",
+      });
+
+      const names = loadTestWorkspaceSkillEntries(workspaceDir, {
+        config: {
+          skills: {
+            load: { extraDirs: [skillRootDir] },
+            limits: {
+              maxCandidatesPerRoot: 1,
+              maxSkillsLoadedPerSource: 10,
+            },
+          },
+        },
+      }).map((entry) => entry.skill.name);
+
+      expect(names).toContain("valid-root-skill");
+      expect(names).toContain("fixture-skill");
+    });
+
+    it("keeps nested skills depth when a configured root also has direct skills", async () => {
+      const workspaceDir = await createTempWorkspaceDir();
+      const skillRootDir = await createTempWorkspaceDir();
+      await writeSkill({
+        dir: path.join(skillRootDir, "valid"),
+        name: "valid-root-skill",
+        description: "Direct child skill under configured root",
+      });
+      await writeSkill({
+        dir: path.join(skillRootDir, "skills", "d0", "d1", "d2", "d3", "d4", "d5"),
+        name: "deep-nested-skill",
+        description: "Depth 6 from nested skills root",
+      });
+
+      const names = loadTestWorkspaceSkillEntries(workspaceDir, {
+        config: {
+          skills: {
+            load: { extraDirs: [skillRootDir] },
+          },
+        },
+      }).map((entry) => entry.skill.name);
+
+      expect(names).toContain("valid-root-skill");
+      expect(names).toContain("deep-nested-skill");
+    });
+
+    it("keeps configured root grouping outside skills within watcher depth", async () => {
+      const workspaceDir = await createTempWorkspaceDir();
+      const skillRootDir = await createTempWorkspaceDir();
+      await writeSkill({
+        dir: path.join(skillRootDir, "group", "within-depth"),
+        name: "within-depth",
+        description: "Depth 2 from configured root",
+      });
+      await writeSkill({
+        dir: path.join(skillRootDir, "group", "d1", "too-deep"),
+        name: "too-deep",
+        description: "Depth 3 from configured root",
+      });
+      await writeSkill({
+        dir: path.join(skillRootDir, "skills", "d0", "d1", "d2", "d3", "d4", "d5"),
+        name: "deep-nested-skill",
+        description: "Depth 6 from nested skills root",
+      });
+
+      const names = loadTestWorkspaceSkillEntries(workspaceDir, {
+        config: {
+          skills: {
+            load: { extraDirs: [skillRootDir] },
+          },
+        },
+      }).map((entry) => entry.skill.name);
+
+      expect(names).toContain("within-depth");
+      expect(names).toContain("deep-nested-skill");
+      expect(names).not.toContain("too-deep");
+    });
+
+    it("keeps grouped child skills when a configured root also has a skills child", async () => {
+      const workspaceDir = await createTempWorkspaceDir();
+      const skillRootDir = await createTempWorkspaceDir();
+      await writeSkill({
+        dir: path.join(skillRootDir, "group", "valid"),
+        name: "valid-grouped-skill",
+        description: "Grouped child skill under configured root",
+      });
+      await writeSkill({
+        dir: path.join(skillRootDir, "skills", "examples", "fixture"),
+        name: "fixture-skill",
+        description: "Nested fixture should not replace the configured root",
+      });
+
+      const names = loadTestWorkspaceSkillEntries(workspaceDir, {
+        config: {
+          skills: {
+            load: { extraDirs: [skillRootDir] },
+          },
+        },
+      }).map((entry) => entry.skill.name);
+
+      expect(names).toContain("valid-grouped-skill");
+      expect(names).toContain("fixture-skill");
+    });
+
+    it("does not descend beyond the bounded grouped skill depth", async () => {
+      const workspaceDir = await createTempWorkspaceDir();
+      await writeSkill({
+        dir: path.join(workspaceDir, "skills", "d0", "d1", "d2", "d3", "d4", "d5"),
+        name: "within-depth",
+        description: "Depth 6 loads",
+      });
+      await writeSkill({
+        dir: path.join(workspaceDir, "skills", "e0", "e1", "e2", "e3", "e4", "e5", "e6"),
+        name: "too-deep",
+        description: "Depth 7 does not load",
+      });
+
+      const names = loadTestWorkspaceSkillEntries(workspaceDir).map((entry) => entry.skill.name);
+      expect(names).toContain("within-depth");
       expect(names).not.toContain("too-deep");
     });
 
@@ -572,15 +1222,13 @@ describe("loadWorkspaceSkillEntries", () => {
       expect(names).not.toContain("too-deep");
     });
 
-    it("prefers the immediate SKILL.md and does not descend when one is present", async () => {
+    it("treats an immediate SKILL.md as terminal and does not descend", async () => {
       const workspaceDir = await createTempWorkspaceDir();
-      // skills/group/SKILL.md exists -> treat group as the skill itself.
       await writeSkill({
         dir: path.join(workspaceDir, "skills", "group"),
         name: "group",
         description: "Direct skill at the group level",
       });
-      // skills/group/inner/SKILL.md should NOT be loaded as a separate skill.
       await writeSkill({
         dir: path.join(workspaceDir, "skills", "group", "inner"),
         name: "inner",

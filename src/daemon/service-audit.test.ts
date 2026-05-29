@@ -50,6 +50,27 @@ function createGatewayAudit({
   });
 }
 
+async function writeSystemdUnitForAudit(home: string, lines: string[]) {
+  const unitDir = path.join(home, ".config", "systemd", "user");
+  const unitPath = path.join(unitDir, "openclaw-gateway.service");
+  await fs.mkdir(unitDir, { recursive: true });
+  await fs.writeFile(
+    unitPath,
+    [
+      "[Unit]",
+      "Description=OpenClaw Gateway",
+      "[Service]",
+      ...lines,
+      "ExecStart=/usr/bin/node gateway",
+      "",
+      "[Install]",
+      "WantedBy=default.target",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+}
+
 function expectTokenAudit(
   audit: Awaited<ReturnType<typeof auditGatewayServiceConfig>>,
   {
@@ -212,6 +233,71 @@ describe("auditGatewayServiceConfig", () => {
     expect(issue?.detail).toContain("/opt/pnpm/bin");
   });
 
+  it("accepts an expected active OpenClaw bin even when it looks package-managed", async () => {
+    const expectedServicePath = [
+      "/opt/homebrew/opt/node/bin",
+      "/Users/testuser/Library/pnpm",
+      "/opt/homebrew/bin",
+      "/opt/homebrew/sbin",
+      "/usr/local/bin",
+      "/usr/bin",
+      "/bin",
+      "/usr/sbin",
+      "/sbin",
+    ].join(":");
+
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "/Users/testuser" },
+      platform: "darwin",
+      expectedServicePath,
+      command: {
+        programArguments: [
+          "/opt/homebrew/opt/node/bin/node",
+          "/opt/openclaw/dist/index.js",
+          "gateway",
+        ],
+        environment: { PATH: expectedServicePath },
+      },
+    });
+
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayPathMissingDirs)).toBe(false);
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayPathNonMinimal)).toBe(false);
+  });
+
+  it("still flags unrelated non-minimal PATH entries beside the expected active bin", async () => {
+    const expectedServicePath = [
+      "/opt/homebrew/opt/node/bin",
+      "/Users/testuser/Library/pnpm",
+      "/opt/homebrew/bin",
+      "/opt/homebrew/sbin",
+      "/usr/local/bin",
+      "/usr/bin",
+      "/bin",
+      "/usr/sbin",
+      "/sbin",
+    ].join(":");
+
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "/Users/testuser" },
+      platform: "darwin",
+      expectedServicePath,
+      command: {
+        programArguments: [
+          "/opt/homebrew/opt/node/bin/node",
+          "/opt/openclaw/dist/index.js",
+          "gateway",
+        ],
+        environment: { PATH: `${expectedServicePath}:/Users/testuser/.asdf/shims` },
+      },
+    });
+
+    const issue = audit.issues.find(
+      (entry) => entry.code === SERVICE_AUDIT_CODES.gatewayPathNonMinimal,
+    );
+    expect(issue?.detail).not.toContain("/Users/testuser/Library/pnpm");
+    expect(issue?.detail).toContain("/Users/testuser/.asdf/shims");
+  });
+
   it("accepts Linux fnm aliases/default without requiring the legacy current symlink", async () => {
     const env = {
       HOME: "/tmp/openclaw-testuser",
@@ -267,6 +353,9 @@ describe("auditGatewayServiceConfig", () => {
     expect(
       readGatewayServiceCommandPort(["/usr/bin/node", "entry.js", "gateway", "--port=0"]),
     ).toBe(undefined);
+    expect(
+      readGatewayServiceCommandPort(["/usr/bin/node", "entry.js", "gateway", "--port=65536"]),
+    ).toBe(undefined);
   });
 
   it("flags gateway service port drift from the expected config port", async () => {
@@ -283,9 +372,32 @@ describe("auditGatewayServiceConfig", () => {
     const issue = audit.issues.find(
       (entry) => entry.code === SERVICE_AUDIT_CODES.gatewayPortMismatch,
     );
-    expect(issue).toMatchObject({
+    expect(issue).toStrictEqual({
+      code: SERVICE_AUDIT_CODES.gatewayPortMismatch,
       message: "Gateway service port does not match current gateway config.",
       detail: "18789 -> 18888",
+      level: "recommended",
+    });
+  });
+
+  it("flags explicit invalid gateway service ports", async () => {
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "/tmp" },
+      platform: "win32",
+      expectedPort: 18888,
+      command: {
+        programArguments: ["/usr/bin/node", "entry.js", "gateway", "--port=65536"],
+        environment: {},
+      },
+    });
+
+    const issue = audit.issues.find(
+      (entry) => entry.code === SERVICE_AUDIT_CODES.gatewayPortMismatch,
+    );
+    expect(issue).toStrictEqual({
+      code: SERVICE_AUDIT_CODES.gatewayPortMismatch,
+      message: "Gateway service port does not match current gateway config.",
+      detail: "65536 -> 18888",
       level: "recommended",
     });
   });
@@ -310,6 +422,73 @@ describe("auditGatewayServiceConfig", () => {
       serviceToken: "old-token",
     });
     expectTokenAudit(audit, { embedded: true, mismatch: true });
+  });
+
+  it.each(["process", "none"])(
+    `warns when KillMode is %s in explicit unit file`,
+    async (killMode) => {
+      const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-audit-killmode-"));
+      await writeSystemdUnitForAudit(home, [
+        "After=network-online.target",
+        "Wants=network-online.target",
+        "RestartSec=5",
+        `KillMode=${killMode}`,
+      ]);
+
+      const audit = await auditGatewayServiceConfig({
+        env: { HOME: home },
+        platform: "linux",
+        command: {
+          programArguments: ["/usr/bin/node", "gateway"],
+          environment: { PATH: "/usr/bin:/bin" },
+        },
+      });
+      expect(
+        audit.issues.some(
+          (entry) => entry.code === SERVICE_AUDIT_CODES.systemdKillModeProcessOrNone,
+        ),
+      ).toBe(true);
+    },
+  );
+
+  it("does not warn when KillMode is control-group", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-audit-killmode-"));
+    await writeSystemdUnitForAudit(home, [
+      "After=network-online.target",
+      "Wants=network-online.target",
+      "RestartSec=5",
+      "KillMode=control-group",
+    ]);
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: home },
+      platform: "linux",
+      command: {
+        programArguments: ["/usr/bin/node", "gateway"],
+        environment: { PATH: "/usr/bin:/bin" },
+      },
+    });
+    expect(
+      audit.issues.some((entry) => entry.code === SERVICE_AUDIT_CODES.systemdKillModeProcessOrNone),
+    ).toBe(false);
+  });
+
+  it("accepts systemd RestartSec values with seconds suffixes", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-audit-restartsec-"));
+    await writeSystemdUnitForAudit(home, [
+      "After=network-online.target",
+      "Wants=network-online.target",
+      "RestartSec=5s",
+      "KillMode=control-group",
+    ]);
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: home },
+      platform: "linux",
+      command: {
+        programArguments: ["/usr/bin/node", "gateway"],
+        environment: { PATH: "/usr/bin:/bin" },
+      },
+    });
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.systemdRestartSec)).toBe(false);
   });
 
   it("flags embedded service token even when it matches config token", async () => {
@@ -497,9 +676,12 @@ describe("checkTokenDrift", () => {
 
   it("detects drift when config has token but service has different token", () => {
     const result = checkTokenDrift({ serviceToken: "old-token", configToken: "new-token" });
-    expect(result).toMatchObject({
+    expect(result).toStrictEqual({
       code: SERVICE_AUDIT_CODES.gatewayTokenDrift,
-      message: expect.stringContaining("differs from service token"),
+      message:
+        "Config token differs from service token. The daemon will use the old token after restart.",
+      detail: "Run `openclaw gateway install --force` to sync the token.",
+      level: "recommended",
     });
   });
 

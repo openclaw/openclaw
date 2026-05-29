@@ -31,9 +31,10 @@ const createDiscordRestClient = vi.fn<typeof discordClientModule.createDiscordRe
 
 let maybeSendBindingMessage: typeof import("./thread-bindings.discord-api.js").maybeSendBindingMessage;
 let resolveChannelIdForBinding: typeof import("./thread-bindings.discord-api.js").resolveChannelIdForBinding;
+let isDiscordThreadGoneError: typeof import("./thread-bindings.discord-api.js").isDiscordThreadGoneError;
 
 beforeAll(async () => {
-  ({ maybeSendBindingMessage, resolveChannelIdForBinding } =
+  ({ isDiscordThreadGoneError, maybeSendBindingMessage, resolveChannelIdForBinding } =
     await import("./thread-bindings.discord-api.js"));
 });
 
@@ -46,6 +47,14 @@ function resolveTestChannelIdForBinding(
     cfg: EMPTY_DISCORD_TEST_CONFIG,
     ...params,
   });
+}
+
+function firstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
+  const call = mock.mock.calls.at(0);
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
 }
 
 describe("resolveChannelIdForBinding", () => {
@@ -112,7 +121,7 @@ describe("resolveChannelIdForBinding", () => {
     });
 
     expect(resolved).toBe("123456789012345678");
-    const route = JSON.stringify(restGet.mock.calls[0]?.[0] ?? null);
+    const route = JSON.stringify(firstMockCall(restGet, "REST get")[0] ?? null);
     expect(route).toContain("123456789012345678");
     expect(route).not.toContain("channel:");
   });
@@ -148,9 +157,12 @@ describe("resolveChannelIdForBinding", () => {
       threadId: "thread-1",
     });
 
-    const createDiscordRestClientCalls = createDiscordRestClient.mock.calls as unknown[][];
     expect(
-      (createDiscordRestClientCalls[0]?.[0] as { cfg?: OpenClawConfig } | undefined)?.cfg,
+      (
+        firstMockCall(createDiscordRestClient, "createDiscordRestClient")[0] as
+          | { cfg?: OpenClawConfig }
+          | undefined
+      )?.cfg,
     ).toBe(cfg);
   });
 
@@ -182,6 +194,14 @@ describe("resolveChannelIdForBinding", () => {
     });
 
     expect(resolved).toBe("forum-1");
+  });
+});
+
+describe("isDiscordThreadGoneError", () => {
+  it("rejects malformed fractional Discord status values", () => {
+    expect(isDiscordThreadGoneError({ status: 403.5 })).toBe(false);
+    expect(isDiscordThreadGoneError({ statusCode: "404.5" })).toBe(false);
+    expect(isDiscordThreadGoneError({ statusCode: "+404" })).toBe(true);
   });
 });
 
@@ -223,7 +243,7 @@ describe("maybeSendBindingMessage", () => {
     });
 
     expect(sendWebhookMessageDiscord).toHaveBeenCalledTimes(1);
-    expect(sendWebhookMessageDiscord.mock.calls[0]).toEqual([
+    expect(firstMockCall(sendWebhookMessageDiscord, "sendWebhookMessageDiscord")).toEqual([
       "hello webhook",
       {
         cfg,

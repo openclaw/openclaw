@@ -1,7 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { evaluateShellAllowlist, normalizeSafeBins } from "./exec-approvals-allowlist.js";
+import {
+  evaluateExecAllowlist,
+  evaluateShellAllowlist,
+  normalizeSafeBins,
+} from "./exec-approvals-allowlist.js";
 import {
   analyzeArgvCommand,
   analyzeShellCommand,
@@ -23,21 +27,14 @@ function expectAnalyzedShellCommand(
   return res;
 }
 
-function createSkillPreludeFixture(options: { withWrapper?: boolean } = {}) {
+function createSkillWrapperFixture() {
   const skillRoot = makeTempDir();
-  const skillDir = path.join(skillRoot, "skills", "gog");
-  const skillPath = path.join(skillDir, "SKILL.md");
   const wrapperPath = path.join(skillRoot, "bin", "gog-wrapper");
 
-  fs.mkdirSync(skillDir, { recursive: true });
-  fs.writeFileSync(skillPath, "# gog\n");
+  fs.mkdirSync(path.dirname(wrapperPath), { recursive: true });
+  fs.writeFileSync(wrapperPath, "#!/bin/sh\n", { mode: 0o755 });
 
-  if (options.withWrapper) {
-    fs.mkdirSync(path.dirname(wrapperPath), { recursive: true });
-    fs.writeFileSync(wrapperPath, "#!/bin/sh\n", { mode: 0o755 });
-  }
-
-  return { skillRoot, skillPath, wrapperPath };
+  return { skillRoot, wrapperPath };
 }
 
 describe("exec approvals shell analysis", () => {
@@ -216,6 +213,7 @@ describe("exec approvals shell analysis", () => {
     it("still rejects unquoted metacharacters on Windows", () => {
       const cases = [
         "ping 127.0.0.1 -n 1 & whoami",
+        "node allowed.js; unlisted.exe",
         "echo hello | clip",
         "node tool.js > output.txt",
         "for /f %i in (file.txt) do echo %i",
@@ -565,9 +563,9 @@ describe("exec approvals shell analysis", () => {
   describe("shell allowlist (chained commands)", () => {
     it.each([
       {
-        allowlist: [{ pattern: "/usr/bin/obsidian-cli" }, { pattern: "/usr/bin/head" }],
+        allowlist: [{ pattern: "/usr/bin/obsidian-cli" }, { pattern: "/opt/openclaw-test/head" }],
         command:
-          "/usr/bin/obsidian-cli print-default && /usr/bin/obsidian-cli search foo | /usr/bin/head",
+          "/usr/bin/obsidian-cli print-default && /usr/bin/obsidian-cli search foo | /opt/openclaw-test/head",
         expectedAnalysisOk: true,
         expectedAllowlistSatisfied: true,
       },
@@ -608,13 +606,76 @@ describe("exec approvals shell analysis", () => {
       expect(result.allowlistSatisfied).toBe(testCase.expectedAllowlistSatisfied);
     });
 
-    it("allows the skill display prelude when a later skill wrapper is allowlisted", () => {
+    it("allows a direct skill wrapper command when the wrapper is allowlisted", () => {
       if (process.platform === "win32") {
         return;
       }
-      const { skillRoot, skillPath, wrapperPath } = createSkillPreludeFixture({
-        withWrapper: true,
+      const { skillRoot, wrapperPath } = createSkillWrapperFixture();
+
+      const result = evaluateShellAllowlist({
+        command: `${wrapperPath} calendar events primary --today --json`,
+        allowlist: [{ pattern: wrapperPath }],
+        safeBins: new Set(),
+        cwd: skillRoot,
       });
+
+      expect(result.analysisOk).toBe(true);
+      expect(result.allowlistSatisfied).toBe(true);
+      expect(result.segmentSatisfiedBy).toEqual(["allowlist"]);
+    });
+
+    it.each([
+      {
+        name: "BSD script transcript",
+        command: "script ~/.zshenv git log -1 --format='payload'",
+        platform: "darwin" as const,
+        blockedWrapper: "script",
+      },
+      {
+        name: "GNU time output file",
+        command: "/usr/bin/time -o ~/.bashrc -a -f 'payload' git status",
+        platform: "linux" as const,
+        blockedWrapper: "time",
+      },
+    ])("rejects side-effecting dispatch wrapper allowlist bypasses for $name", (testCase) => {
+      const result = evaluateShellAllowlist({
+        command: testCase.command,
+        allowlist: [{ pattern: "git" }],
+        safeBins: new Set(),
+        cwd: "/tmp",
+        platform: testCase.platform,
+      });
+
+      expect(result.analysisOk).toBe(true);
+      expect(result.allowlistSatisfied).toBe(false);
+      expect(result.segments[0]?.resolution?.policyBlocked).toBe(true);
+      expect(result.segments[0]?.resolution?.blockedWrapper).toBe(testCase.blockedWrapper);
+      expect(result.segmentSatisfiedBy).toEqual([null]);
+    });
+
+    it("keeps GNU time transparent when it only reports to stderr", () => {
+      const result = evaluateShellAllowlist({
+        command: "/usr/bin/time -p git status",
+        allowlist: [{ pattern: "git" }],
+        safeBins: new Set(),
+        cwd: "/tmp",
+        platform: "linux",
+      });
+
+      expect(result.analysisOk).toBe(true);
+      expect(result.allowlistSatisfied).toBe(true);
+      expect(result.segmentSatisfiedBy).toEqual(["allowlist"]);
+    });
+
+    it("rejects the legacy skill display prelude when only the wrapper is allowlisted", () => {
+      if (process.platform === "win32") {
+        return;
+      }
+      const { skillRoot, wrapperPath } = createSkillWrapperFixture();
+      const skillDir = path.join(skillRoot, "skills", "gog");
+      const skillPath = path.join(skillDir, "SKILL.md");
+      fs.mkdirSync(skillDir, { recursive: true });
+      fs.writeFileSync(skillPath, "# gog\n");
 
       const result = evaluateShellAllowlist({
         command: `cat ${skillPath} && printf '\\n---CMD---\\n' && ${wrapperPath} calendar events primary --today --json`,
@@ -624,72 +685,16 @@ describe("exec approvals shell analysis", () => {
       });
 
       expect(result.analysisOk).toBe(true);
-      expect(result.allowlistSatisfied).toBe(true);
-      expect(result.segmentSatisfiedBy).toEqual(["skillPrelude", "skillPrelude", "allowlist"]);
-    });
-
-    it("does not treat arbitrary allowlisted binaries as trusted skill wrappers", () => {
-      if (process.platform === "win32") {
-        return;
-      }
-      const { skillRoot, skillPath } = createSkillPreludeFixture();
-
-      const result = evaluateShellAllowlist({
-        command: `cat ${skillPath} && printf '\\n---CMD---\\n' && /bin/echo calendar events primary --today --json`,
-        allowlist: [{ pattern: "/bin/echo" }],
-        safeBins: new Set(),
-        cwd: skillRoot,
-      });
-
-      expect(result.analysisOk).toBe(true);
       expect(result.allowlistSatisfied).toBe(false);
       expect(result.segmentSatisfiedBy).toEqual([null]);
     });
 
-    it("still rejects the skill display prelude when no trusted skill command follows", () => {
-      if (process.platform === "win32") {
-        return;
-      }
-      const { skillRoot, skillPath } = createSkillPreludeFixture();
-
-      const result = evaluateShellAllowlist({
-        command: `cat ${skillPath} && printf '\\n---CMD---\\n'`,
-        allowlist: [],
-        safeBins: new Set(),
-        cwd: skillRoot,
-      });
-
-      expect(result.analysisOk).toBe(true);
-      expect(result.allowlistSatisfied).toBe(false);
-      expect(result.segmentSatisfiedBy).toEqual([null]);
-    });
-
-    it("rejects the skill display prelude when a trusted wrapper is not reachable", () => {
-      if (process.platform === "win32") {
-        return;
-      }
-      const { skillRoot, skillPath, wrapperPath } = createSkillPreludeFixture({
-        withWrapper: true,
-      });
-
-      const result = evaluateShellAllowlist({
-        command: `cat ${skillPath} && printf '\\n---CMD---\\n' && false && ${wrapperPath} calendar events primary --today --json`,
-        allowlist: [{ pattern: wrapperPath }],
-        safeBins: new Set(),
-        cwd: skillRoot,
-      });
-
-      expect(result.analysisOk).toBe(true);
-      expect(result.allowlistSatisfied).toBe(false);
-      expect(result.segmentSatisfiedBy).toEqual([null]);
-    });
-
-    it.each(['/usr/bin/echo "foo && bar"', '/usr/bin/echo "foo\\" && bar"'])(
+    it.each(['/opt/openclaw-test/echo "foo && bar"', '/opt/openclaw-test/echo "foo\\" && bar"'])(
       "respects quoted chain separator for %s",
       (command) => {
         const result = evaluateShellAllowlist({
           command,
-          allowlist: [{ pattern: "/usr/bin/echo" }],
+          allowlist: [{ pattern: "/opt/openclaw-test/echo" }],
           safeBins: new Set(),
           cwd: "/tmp",
         });
@@ -707,6 +712,240 @@ describe("exec approvals shell analysis", () => {
       });
       expect(result.analysisOk).toBe(false);
       expect(result.allowlistSatisfied).toBe(false);
+    });
+
+    it("does not satisfy bare wrapper allowlist entries for inline cmd payloads", () => {
+      const dir = makeTempDir();
+      const cmdPath = path.join(dir, "cmd.exe");
+      fs.writeFileSync(cmdPath, "");
+      fs.chmodSync(cmdPath, 0o755);
+      try {
+        const result = evaluateShellAllowlist({
+          command: "cmd.exe -c echo sample",
+          allowlist: [{ pattern: cmdPath }],
+          safeBins: new Set(),
+          cwd: dir,
+          env: makePathEnv(dir),
+          platform: "win32",
+        });
+        expect(result.analysisOk).toBe(true);
+        expect(result.allowlistSatisfied).toBe(false);
+        expect(result.segmentAllowlistEntries).toEqual([null]);
+        expect(result.segmentSatisfiedBy).toEqual([null]);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("evaluates inline cmd payloads against the inner executable", () => {
+      const dir = makeTempDir();
+      const cmdPath = path.join(dir, "cmd.exe");
+      const nodePath = path.join(dir, "node.exe");
+      for (const file of [cmdPath, nodePath]) {
+        fs.writeFileSync(file, "");
+        fs.chmodSync(file, 0o755);
+      }
+      try {
+        const result = evaluateShellAllowlist({
+          command: "cmd.exe -c node.exe app.js",
+          allowlist: [{ pattern: nodePath }],
+          safeBins: new Set(),
+          cwd: dir,
+          env: makePathEnv(dir),
+          platform: "win32",
+        });
+        expect(result.analysisOk).toBe(true);
+        expect(result.allowlistSatisfied).toBe(true);
+        expect(result.allowlistMatches.map((entry) => entry.pattern)).toEqual([nodePath]);
+        expect(result.segmentAllowlistEntries).toEqual([null]);
+        expect(result.segmentSatisfiedBy).toEqual(["allowlist"]);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("rejects Windows inline cmd payloads with PowerShell command separators", () => {
+      const dir = makeTempDir();
+      const cmdPath = path.join(dir, "cmd.exe");
+      const allowedPath = path.join(dir, "allowed.exe");
+      for (const file of [cmdPath, allowedPath]) {
+        fs.writeFileSync(file, "");
+        fs.chmodSync(file, 0o755);
+      }
+      try {
+        const env = makePathEnv(dir);
+        const analysis = analyzeArgvCommand({
+          argv: ["cmd.exe", "/c", "pwsh", "-Command", "allowed.exe;", "unlisted.exe"],
+          cwd: dir,
+          env,
+        });
+        expect(analysis.ok).toBe(true);
+        const result = evaluateExecAllowlist({
+          analysis,
+          allowlist: [{ pattern: allowedPath }],
+          safeBins: new Set(),
+          cwd: dir,
+          env,
+          platform: "win32",
+        });
+        expect(result.allowlistSatisfied).toBe(false);
+        expect(result.segmentAllowlistEntries).toEqual([null]);
+        expect(result.segmentSatisfiedBy).toEqual([null]);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("rejects PowerShell inline argv payloads with trailing command tokens", () => {
+      const dir = makeTempDir();
+      const allowedPath = path.join(dir, "allowed.exe");
+      fs.writeFileSync(allowedPath, "");
+      fs.chmodSync(allowedPath, 0o755);
+      try {
+        const env = makePathEnv(dir);
+        const analysis = analyzeArgvCommand({
+          argv: ["pwsh", "-Command", "allowed.exe", ";", "unlisted.exe"],
+          cwd: dir,
+          env,
+        });
+        expect(analysis.ok).toBe(true);
+        const result = evaluateExecAllowlist({
+          analysis,
+          allowlist: [{ pattern: allowedPath }],
+          safeBins: new Set(),
+          cwd: dir,
+          env,
+          platform: "win32",
+        });
+        expect(result.allowlistSatisfied).toBe(false);
+        expect(result.segmentAllowlistEntries).toEqual([null]);
+        expect(result.segmentSatisfiedBy).toEqual([null]);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it.each([
+      {
+        name: "extra script argument",
+        scriptArgs: ["-ExtraArg"],
+        argPattern: "^\x00\x00$",
+        expected: false,
+      },
+      {
+        name: "empty script argument",
+        scriptArgs: [""],
+        argPattern: "^\x00\x00$",
+        expected: false,
+      },
+      {
+        name: "empty script argument after dispatch unwrap",
+        wrapperPrefix: ["env"],
+        scriptArgs: [""],
+        argPattern: "^\x00\x00$",
+        expected: false,
+      },
+      {
+        name: "semicolon data argument",
+        scriptArgs: ["literal;data"],
+        argPattern: "^literal;data\x00$",
+        expected: true,
+      },
+    ])(
+      "preserves PowerShell file argv for $name",
+      ({ wrapperPrefix = [], scriptArgs, argPattern, expected }) => {
+        const dir = makeTempDir();
+        const pwshPath = path.join(dir, "pwsh");
+        const scriptPath = path.join(dir, "script.ps1");
+        for (const file of [pwshPath, scriptPath]) {
+          fs.writeFileSync(file, "");
+          fs.chmodSync(file, 0o755);
+        }
+        try {
+          const env = makePathEnv(dir);
+          const analysis = analyzeArgvCommand({
+            argv: [...wrapperPrefix, "pwsh", "-File", scriptPath, ...scriptArgs],
+            cwd: dir,
+            env,
+          });
+          expect(analysis.ok).toBe(true);
+          const result = evaluateExecAllowlist({
+            analysis,
+            allowlist: [{ pattern: scriptPath, argPattern }],
+            safeBins: new Set(),
+            cwd: dir,
+            env,
+            platform: "win32",
+          });
+          expect(result.allowlistSatisfied).toBe(expected);
+          if (!expected) {
+            expect(result.segmentAllowlistEntries).toEqual([null]);
+            expect(result.segmentSatisfiedBy).toEqual([null]);
+          }
+        } finally {
+          fs.rmSync(dir, { recursive: true, force: true });
+        }
+      },
+    );
+
+    it.each([
+      { name: "slash encoded-command alias", argv: ["pwsh", "/ec", "ZQBjAGgAbwA="] },
+      { name: "encoded-command prefix abbreviation", argv: ["pwsh", "-en", "ZQBjAGgAbwA="] },
+      {
+        name: "error action alias before command",
+        argv: ["pwsh", "-ea", "stop", "-Command", "inline_payload"],
+      },
+      {
+        name: "execution policy alias before command",
+        argv: ["pwsh", "-ep", "Bypass", "-Command", "inline_payload"],
+      },
+      {
+        name: "custom pipe name before encoded-command alias",
+        argv: ["pwsh", "-cus", "pipe-name", "-ec", "ZQBjAGgAbwA="],
+      },
+      {
+        name: "token alias before command",
+        argv: ["pwsh", "-to", "token-value", "-Command", "inline_payload"],
+      },
+      {
+        name: "utc timestamp alias before command",
+        argv: ["pwsh", "-utc", "1234", "-Command", "inline_payload"],
+      },
+      {
+        name: "encoded arguments prefix before command",
+        argv: ["pwsh", "-encodeda", "YQByAGcA", "-Command", "inline_payload"],
+      },
+      {
+        name: "command with args full form",
+        argv: ["pwsh", "-CommandWithArgs", "inline_payload"],
+      },
+      {
+        name: "unrecognized shell wrapper argv",
+        argv: ["pwsh", "-UnrecognizedCommandForm", "inline_payload"],
+      },
+    ])("does not satisfy bare wrapper allowlist entries for PowerShell $name", ({ argv }) => {
+      const dir = makeTempDir();
+      const pwshPath = path.join(dir, "pwsh");
+      fs.writeFileSync(pwshPath, "");
+      fs.chmodSync(pwshPath, 0o755);
+      try {
+        const env = makePathEnv(dir);
+        const analysis = analyzeArgvCommand({ argv, cwd: dir, env });
+        expect(analysis.ok).toBe(true);
+        const result = evaluateExecAllowlist({
+          analysis,
+          allowlist: [{ pattern: pwshPath }],
+          safeBins: new Set(),
+          cwd: dir,
+          env,
+          platform: "win32",
+        });
+        expect(result.allowlistSatisfied).toBe(false);
+        expect(result.segmentAllowlistEntries).toEqual([null]);
+        expect(result.segmentSatisfiedBy).toEqual([null]);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
     });
 
     it("satisfies allowlist when bare * wildcard is present", () => {
@@ -772,7 +1011,7 @@ describe("exec approvals shell analysis", () => {
           const printfPath = binPath("printf");
           const gogPath = binPath("gog-wrapper");
           const result = evaluateShellAllowlist({
-            command: `${shellPath} -c "cat SKILL.md && printf '---CMD---' && gog-wrapper calendar events"`,
+            command: `${shellPath} -c "cat README.md && printf ready && gog-wrapper calendar events"`,
             allowlist: [{ pattern: catPath }, { pattern: printfPath }, { pattern: gogPath }],
             safeBins: new Set(),
             cwd: dir,
@@ -797,7 +1036,7 @@ describe("exec approvals shell analysis", () => {
           const catPath = binPath("cat");
           const gogPath = binPath("gog-wrapper");
           const result = evaluateShellAllowlist({
-            command: `${shellPath} -c "cat SKILL.md && rm -rf / && gog-wrapper calendar events"`,
+            command: `${shellPath} -c "cat README.md && rm -rf / && gog-wrapper calendar events"`,
             allowlist: [{ pattern: catPath }, { pattern: gogPath }],
             safeBins: new Set(),
             cwd: dir,
@@ -884,6 +1123,7 @@ describe("matchAllowlist with argPattern", () => {
   const resolution = {
     rawExecutable: "python3",
     resolvedPath: "/usr/bin/python3",
+    resolvedRealPath: "/usr/bin/python3",
     executableName: "python3",
   };
 
@@ -1004,7 +1244,8 @@ describe("Windows rebuildShellCommandFromSource", () => {
       platform: "win32",
     });
     expect(result.ok).toBe(true);
-    expect(result.command).toEqual(expect.stringMatching(/\S/));
+    expect(typeof result.command).toBe("string");
+    expect(result.command?.trim().length).toBeGreaterThan(0);
   });
 
   it("rejects Windows commands with unsafe tokens", () => {

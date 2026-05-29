@@ -26,6 +26,8 @@ const mocks = vi.hoisted(() => {
     waitForGatewayReachable: vi.fn(),
     resolveControlUiLinks: vi.fn(),
     summarizeExistingConfig: vi.fn(),
+    promptAuthConfig: vi.fn(),
+    promptGatewayConfig: vi.fn(),
     promptRemoteGatewayConfig: vi.fn(async (cfg: OpenClawConfig) => ({
       ...cfg,
       gateway: { mode: "remote", remote: { url: "wss://gateway.example.test" } },
@@ -86,11 +88,11 @@ vi.mock("./health-format.js", () => ({
 }));
 
 vi.mock("./configure.gateway.js", () => ({
-  promptGatewayConfig: vi.fn(),
+  promptGatewayConfig: mocks.promptGatewayConfig,
 }));
 
 vi.mock("./configure.gateway-auth.js", () => ({
-  promptAuthConfig: vi.fn(),
+  promptAuthConfig: mocks.promptAuthConfig,
 }));
 
 vi.mock("./configure.channels.js", () => ({
@@ -202,15 +204,29 @@ function setupBaseWizardState(config: OpenClawConfig = {}) {
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(value, label).toBeTypeOf("object");
-  expect(value, label).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
   return value as Record<string, unknown>;
 }
 
+function mockCallArg(
+  mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } },
+  label: string,
+  callIndex = 0,
+): unknown {
+  const call = mock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`Expected ${label} call ${callIndex}`);
+  }
+  return call[0];
+}
+
 function requireWriteConfig(callIndex = 0) {
-  const call = mocks.writeConfigFile.mock.calls.at(callIndex);
-  expect(call, "writeConfigFile call").toBeDefined();
-  return requireRecord(call?.[0], "written config");
+  return requireRecord(
+    mockCallArg(mocks.writeConfigFile, "writeConfigFile", callIndex),
+    "written config",
+  );
 }
 
 function getGateway(config: Record<string, unknown>) {
@@ -262,6 +278,13 @@ describe("runConfigureWizard", () => {
     ]);
     mocks.setupSearch.mockReset();
     mocks.setupSearch.mockImplementation(async (cfg: OpenClawConfig) => cfg);
+    mocks.promptAuthConfig.mockReset();
+    mocks.promptAuthConfig.mockImplementation(async (cfg: OpenClawConfig) => cfg);
+    mocks.promptGatewayConfig.mockReset();
+    mocks.promptGatewayConfig.mockImplementation(async (cfg: OpenClawConfig) => ({
+      config: cfg,
+      port: 18789,
+    }));
   });
 
   it("persists gateway.mode=local when only the run mode is selected", async () => {
@@ -314,6 +337,46 @@ describe("runConfigureWizard", () => {
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
+  it("does not gate model-only configure behind Gateway run-mode selection", async () => {
+    setupBaseWizardState();
+
+    await runConfigureWizard({ command: "configure", sections: ["model"] }, createRuntime());
+
+    expect(mocks.promptAuthConfig).toHaveBeenCalledOnce();
+    expect(mocks.clackSelect).not.toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Where will the Gateway run?" }),
+    );
+    expect(mocks.probeGatewayReachable).not.toHaveBeenCalledWith(
+      expect.objectContaining({ timeoutMs: 300 }),
+    );
+    expect(mocks.ensureControlUiAssetsBuilt).not.toHaveBeenCalled();
+    expect(mocks.resolveControlUiLinks).not.toHaveBeenCalled();
+    expect(requireWriteConfig().gateway).toBeUndefined();
+  });
+
+  it("runs model-only configure for existing remote Gateway configs", async () => {
+    setupBaseWizardState({
+      gateway: { mode: "remote", remote: { url: "wss://gateway.example.test" } },
+    });
+
+    await runConfigureWizard({ command: "configure", sections: ["model"] }, createRuntime());
+
+    expect(mocks.promptAuthConfig).toHaveBeenCalledOnce();
+    expect(mocks.promptRemoteGatewayConfig).not.toHaveBeenCalled();
+    expect(getGateway(requireWriteConfig()).mode).toBe("remote");
+    expect(mocks.ensureControlUiAssetsBuilt).not.toHaveBeenCalled();
+    expect(mocks.resolveControlUiLinks).not.toHaveBeenCalled();
+    expect(mocks.probeGatewayReachable).not.toHaveBeenCalled();
+    expect(mocks.note).toHaveBeenCalledWith(
+      [
+        "Remote Gateway:",
+        "wss://gateway.example.test",
+        "Docs: https://docs.openclaw.ai/gateway/remote",
+      ].join("\n"),
+      "Gateway",
+    );
+  });
+
   it("persists provider-owned web search config changes returned by setupSearch", async () => {
     setupBaseWizardState();
     mocks.setupSearch.mockImplementation(async (cfg: OpenClawConfig) =>
@@ -323,14 +386,17 @@ describe("runConfigureWizard", () => {
       })(cfg),
     );
     queueWizardPrompts({
-      select: ["local"],
+      select: [],
       confirm: [true, false],
     });
 
     await runWebConfigureWizard();
 
-    const setupConfig = requireRecord(mocks.setupSearch.mock.calls[0]?.[0], "setupSearch config");
-    expect(getGateway(setupConfig).mode).toBe("local");
+    const setupConfig = requireRecord(
+      mockCallArg(mocks.setupSearch, "setupSearch"),
+      "setupSearch config",
+    );
+    expect(setupConfig.gateway).toBeUndefined();
     const written = requireWriteConfig();
     const search = getWebSearch(written);
     expect(search.provider).toBe("firecrawl");
@@ -348,16 +414,18 @@ describe("runConfigureWizard", () => {
     setupBaseWizardState();
     mocks.resolveSearchProviderOptions.mockReturnValue([]);
     queueWizardPrompts({
-      select: ["local"],
+      select: [],
       confirm: [true, false],
     });
 
     await expect(runWebConfigureWizard()).resolves.toBeUndefined();
 
     expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining(
+      [
         "No web search providers are currently available under this plugin policy.",
-      ),
+        "Enable plugins or remove deny rules, then rerun configure.",
+        "Docs: https://docs.openclaw.ai/tools/web",
+      ].join("\n"),
       "Web search",
     );
     expect(getWebSearch(requireWriteConfig()).enabled).toBe(false);
@@ -366,14 +434,14 @@ describe("runConfigureWizard", () => {
   it("does not load managed search provider options when web search is disabled", async () => {
     setupBaseWizardState();
     queueWizardPrompts({
-      select: ["local"],
+      select: [],
       confirm: [false, true],
     });
 
     await runWebConfigureWizard();
 
     const ownersRequest = requireRecord(
-      mocks.resolvePluginContributionOwners.mock.calls[0]?.[0],
+      mockCallArg(mocks.resolvePluginContributionOwners, "plugin owner request"),
       "plugin owner request",
     );
     expect(ownersRequest.contribution).toBe("contracts");
@@ -385,7 +453,7 @@ describe("runConfigureWizard", () => {
   it("defers channel status checks until a channel is selected", async () => {
     setupBaseWizardState();
     queueWizardPrompts({
-      select: ["local", "configure"],
+      select: ["configure"],
       confirm: [],
     });
 
@@ -393,7 +461,7 @@ describe("runConfigureWizard", () => {
 
     const setupChannelsCall = mocks.setupChannels.mock.calls[0] as Array<unknown> | undefined;
     const setupChannelsConfig = requireRecord(setupChannelsCall?.[0], "setupChannels config");
-    expect(getGateway(setupChannelsConfig).mode).toBe("local");
+    expect(setupChannelsConfig.gateway).toBeUndefined();
     const setupChannelsOptions = requireRecord(setupChannelsCall?.[3], "setupChannels options");
     expect(setupChannelsOptions.deferStatusUntilSelection).toBe(true);
     expect(setupChannelsOptions.skipStatusNote).toBe(true);
@@ -420,7 +488,7 @@ describe("runConfigureWizard", () => {
       })(cfg),
     );
     queueWizardPrompts({
-      select: ["local"],
+      select: [],
       confirm: [true, false],
     });
 
@@ -442,7 +510,7 @@ describe("runConfigureWizard", () => {
       },
     });
     queueWizardPrompts({
-      select: ["local", "cached"],
+      select: ["cached"],
       confirm: [true, true, false, true],
     });
 
@@ -508,7 +576,7 @@ describe("runConfigureWizard", () => {
     };
     setupBaseWizardState(baseConfig);
     queueWizardPrompts({
-      select: ["local"],
+      select: [],
       confirm: [],
     });
 
@@ -589,7 +657,7 @@ describe("runConfigureWizard", () => {
     expect(mocks.readConfigFileSnapshot).toHaveBeenCalledTimes(3);
 
     // Verify plugin-written nested config survived the retry merge.
-    const retryCall = mocks.replaceConfigFile.mock.calls[1][0] as {
+    const retryCall = mockCallArg(mocks.replaceConfigFile, "replaceConfigFile", 1) as {
       nextConfig: Record<string, unknown>;
     };
     const agents = requireRecord(retryCall.nextConfig.agents, "agents config");

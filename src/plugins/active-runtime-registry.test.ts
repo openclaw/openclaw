@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
-import { __testing, clearPluginLoaderCache } from "./loader.js";
+import { testing, clearPluginLoaderCache } from "./loader.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
@@ -41,6 +41,62 @@ describe("getLoadedRuntimePluginRegistry", () => {
     ).toBe(emptyRegistry);
   });
 
+  it("does not treat disabled plugin records as an empty plugin scope", () => {
+    const disabledRegistry = createEmptyPluginRegistry();
+    disabledRegistry.plugins.push({
+      id: "disabled",
+      status: "disabled",
+    } as never);
+    setActivePluginRegistry(disabledRegistry, "disabled", "default", "/tmp/ws");
+
+    expect(
+      getLoadedRuntimePluginRegistry({
+        workspaceDir: "/tmp/ws",
+        requiredPluginIds: [],
+      }),
+    ).toBeUndefined();
+  });
+
+  it("does not treat diagnostics as loaded plugin records", () => {
+    const failedRegistry = createEmptyPluginRegistry();
+    failedRegistry.plugins.push({
+      id: "failed",
+      status: "error",
+    } as never);
+    failedRegistry.diagnostics.push({
+      level: "error",
+      pluginId: "failed",
+      message: "failed to load",
+    } as never);
+    setActivePluginRegistry(failedRegistry, "failed", "default", "/tmp/ws");
+
+    expect(
+      getLoadedRuntimePluginRegistry({
+        workspaceDir: "/tmp/ws",
+        requiredPluginIds: ["failed"],
+      }),
+    ).toBeUndefined();
+  });
+
+  it("does not treat setup-only registrations as loaded plugin records", () => {
+    const setupRegistry = createEmptyPluginRegistry();
+    setupRegistry.plugins.push({
+      id: "setup-only",
+      status: "disabled",
+    } as never);
+    setupRegistry.channelSetups.push({
+      pluginId: "setup-only",
+    } as never);
+    setActivePluginRegistry(setupRegistry, "setup-only", "default", "/tmp/ws");
+
+    expect(
+      getLoadedRuntimePluginRegistry({
+        workspaceDir: "/tmp/ws",
+        requiredPluginIds: ["setup-only"],
+      }),
+    ).toBeUndefined();
+  });
+
   it("does not reuse workspace-agnostic registries for workspace-specific requests", () => {
     setActivePluginRegistry(createRegistryWithPlugin("demo"), "demo");
 
@@ -63,7 +119,7 @@ describe("getLoadedRuntimePluginRegistry", () => {
       onlyPluginIds: ["demo"],
       workspaceDir: "/tmp/ws",
     };
-    const { cacheKey } = __testing.resolvePluginLoadCacheContext(loadOptions);
+    const { cacheKey } = testing.resolvePluginLoadCacheContext(loadOptions);
     setActivePluginRegistry(registry, cacheKey, "default", "/tmp/ws");
 
     expect(

@@ -1,14 +1,18 @@
-import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { configureSqliteWalMaintenance, type SqliteWalMaintenance } from "../infra/sqlite-wal.js";
-import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import {
   resolveTaskFlowRegistryDir,
   resolveTaskFlowRegistrySqlitePath,
 } from "./task-flow-registry.paths.js";
 import type { TaskFlowRegistryStoreSnapshot } from "./task-flow-registry.store.types.js";
 import type { TaskFlowRecord, TaskFlowSyncMode, JsonValue } from "./task-flow-registry.types.js";
+import {
+  ensureSqliteStorePermissions,
+  normalizeSqliteNumber,
+  parseDeliveryContextJson,
+  parseSqliteJsonValue,
+} from "./task-registry.sqlite.shared.js";
 
 type FlowRegistryRow = {
   flow_id: string;
@@ -49,29 +53,30 @@ type FlowRegistryDatabase = {
 let cachedDatabase: FlowRegistryDatabase | null = null;
 const FLOW_REGISTRY_DIR_MODE = 0o700;
 const FLOW_REGISTRY_FILE_MODE = 0o600;
-const FLOW_REGISTRY_SIDECAR_SUFFIXES = ["", "-shm", "-wal"] as const;
-
-function normalizeNumber(value: number | bigint | null): number | undefined {
-  if (typeof value === "bigint") {
-    return Number(value);
-  }
-  return typeof value === "number" ? value : undefined;
-}
+const FLOW_RUNS_COLUMNS = `
+  flow_id TEXT PRIMARY KEY,
+  shape TEXT,
+  sync_mode TEXT NOT NULL DEFAULT 'managed',
+  owner_key TEXT NOT NULL,
+  requester_origin_json TEXT,
+  controller_id TEXT,
+  revision INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL,
+  notify_policy TEXT NOT NULL,
+  goal TEXT NOT NULL,
+  current_step TEXT,
+  blocked_task_id TEXT,
+  blocked_summary TEXT,
+  state_json TEXT,
+  wait_json TEXT,
+  cancel_requested_at INTEGER,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  ended_at INTEGER
+`;
 
 function serializeJson(value: unknown): string | null {
   return value === undefined ? null : JSON.stringify(value);
-}
-
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Persisted JSON columns are typed by the receiving field.
-function parseJsonValue<T>(raw: string | null): T | undefined {
-  if (!raw?.trim()) {
-    return undefined;
-  }
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return undefined;
-  }
 }
 
 function rowToSyncMode(row: FlowRegistryRow): TaskFlowSyncMode {
@@ -82,18 +87,18 @@ function rowToSyncMode(row: FlowRegistryRow): TaskFlowSyncMode {
 }
 
 function rowToFlowRecord(row: FlowRegistryRow): TaskFlowRecord {
-  const endedAt = normalizeNumber(row.ended_at);
-  const cancelRequestedAt = normalizeNumber(row.cancel_requested_at);
-  const requesterOrigin = parseJsonValue<DeliveryContext>(row.requester_origin_json);
-  const stateJson = parseJsonValue<JsonValue>(row.state_json);
-  const waitJson = parseJsonValue<JsonValue>(row.wait_json);
+  const endedAt = normalizeSqliteNumber(row.ended_at);
+  const cancelRequestedAt = normalizeSqliteNumber(row.cancel_requested_at);
+  const requesterOrigin = parseDeliveryContextJson(row.requester_origin_json);
+  const stateJson = parseSqliteJsonValue<JsonValue>(row.state_json);
+  const waitJson = parseSqliteJsonValue<JsonValue>(row.wait_json);
   return {
     flowId: row.flow_id,
     syncMode: rowToSyncMode(row),
     ownerKey: row.owner_key,
     ...(requesterOrigin ? { requesterOrigin } : {}),
     ...(row.controller_id ? { controllerId: row.controller_id } : {}),
-    revision: normalizeNumber(row.revision) ?? 0,
+    revision: normalizeSqliteNumber(row.revision) ?? 0,
     status: row.status,
     notifyPolicy: row.notify_policy,
     goal: row.goal,
@@ -103,8 +108,8 @@ function rowToFlowRecord(row: FlowRegistryRow): TaskFlowRecord {
     ...(stateJson !== undefined ? { stateJson } : {}),
     ...(waitJson !== undefined ? { waitJson } : {}),
     ...(cancelRequestedAt != null ? { cancelRequestedAt } : {}),
-    createdAt: normalizeNumber(row.created_at) ?? 0,
-    updatedAt: normalizeNumber(row.updated_at) ?? 0,
+    createdAt: normalizeSqliteNumber(row.created_at) ?? 0,
+    updatedAt: normalizeSqliteNumber(row.updated_at) ?? 0,
     ...(endedAt != null ? { endedAt } : {}),
   };
 }
@@ -227,28 +232,70 @@ function hasFlowRunsColumn(db: DatabaseSync, columnName: string): boolean {
   return rows.some((row) => row.name === columnName);
 }
 
+function rebuildLegacyFlowRunsTable(db: DatabaseSync) {
+  // Older live registries can retain owner_session_key TEXT NOT NULL even after owner_key is
+  // added. Current inserts do not write owner_session_key, so SQLite rejects mirrored flow rows
+  // until the table is rebuilt into the canonical schema.
+  db.exec(`
+    DROP TABLE IF EXISTS flow_runs_canonical_migration;
+    CREATE TABLE flow_runs_canonical_migration (
+      ${FLOW_RUNS_COLUMNS}
+    );
+    INSERT INTO flow_runs_canonical_migration (
+      flow_id,
+      sync_mode,
+      owner_key,
+      requester_origin_json,
+      controller_id,
+      revision,
+      status,
+      notify_policy,
+      goal,
+      current_step,
+      blocked_task_id,
+      blocked_summary,
+      state_json,
+      wait_json,
+      cancel_requested_at,
+      created_at,
+      updated_at,
+      ended_at
+    )
+    SELECT
+      flow_id,
+      CASE
+        WHEN sync_mode = 'task_mirrored' THEN 'task_mirrored'
+        ELSE 'managed'
+      END,
+      COALESCE(NULLIF(trim(owner_key), ''), owner_session_key),
+      requester_origin_json,
+      CASE
+        WHEN sync_mode = 'task_mirrored' THEN NULL
+        ELSE COALESCE(NULLIF(trim(controller_id), ''), 'core/legacy-restored')
+      END,
+      COALESCE(revision, 0),
+      status,
+      notify_policy,
+      goal,
+      current_step,
+      blocked_task_id,
+      blocked_summary,
+      state_json,
+      wait_json,
+      cancel_requested_at,
+      created_at,
+      updated_at,
+      ended_at
+    FROM flow_runs;
+    DROP TABLE flow_runs;
+    ALTER TABLE flow_runs_canonical_migration RENAME TO flow_runs;
+  `);
+}
+
 function ensureSchema(db: DatabaseSync) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS flow_runs (
-      flow_id TEXT PRIMARY KEY,
-      shape TEXT,
-      sync_mode TEXT NOT NULL DEFAULT 'managed',
-      owner_key TEXT NOT NULL,
-      requester_origin_json TEXT,
-      controller_id TEXT,
-      revision INTEGER NOT NULL DEFAULT 0,
-      status TEXT NOT NULL,
-      notify_policy TEXT NOT NULL,
-      goal TEXT NOT NULL,
-      current_step TEXT,
-      blocked_task_id TEXT,
-      blocked_summary TEXT,
-      state_json TEXT,
-      wait_json TEXT,
-      cancel_requested_at INTEGER,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL,
-      ended_at INTEGER
+      ${FLOW_RUNS_COLUMNS}
     );
   `);
   if (!hasFlowRunsColumn(db, "owner_key") && hasFlowRunsColumn(db, "owner_session_key")) {
@@ -313,22 +360,47 @@ function ensureSchema(db: DatabaseSync) {
   if (!hasFlowRunsColumn(db, "cancel_requested_at")) {
     db.exec(`ALTER TABLE flow_runs ADD COLUMN cancel_requested_at INTEGER;`);
   }
+  if (hasFlowRunsColumn(db, "owner_session_key")) {
+    // Populate the canonical fields before rebuilding so existing rows survive the legacy-column
+    // drop, including pre-sync-mode single-task flows and older managed flows with no controller.
+    db.exec(`
+      UPDATE flow_runs
+      SET owner_key = owner_session_key
+      WHERE (owner_key IS NULL OR trim(owner_key) = '')
+    `);
+    db.exec(`
+      UPDATE flow_runs
+      SET sync_mode = CASE
+        WHEN shape = 'single_task' THEN 'task_mirrored'
+        ELSE 'managed'
+      END
+      WHERE sync_mode IS NULL OR trim(sync_mode) = ''
+    `);
+    db.exec(`
+      UPDATE flow_runs
+      SET revision = 0
+      WHERE revision IS NULL
+    `);
+    db.exec(`
+      UPDATE flow_runs
+      SET controller_id = 'core/legacy-restored'
+      WHERE sync_mode = 'managed'
+        AND (controller_id IS NULL OR trim(controller_id) = '')
+    `);
+    rebuildLegacyFlowRunsTable(db);
+  }
   db.exec(`CREATE INDEX IF NOT EXISTS idx_flow_runs_status ON flow_runs(status);`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_flow_runs_owner_key ON flow_runs(owner_key);`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_flow_runs_updated_at ON flow_runs(updated_at);`);
 }
 
 function ensureFlowRegistryPermissions(pathname: string) {
-  const dir = resolveTaskFlowRegistryDir(process.env);
-  mkdirSync(dir, { recursive: true, mode: FLOW_REGISTRY_DIR_MODE });
-  chmodSync(dir, FLOW_REGISTRY_DIR_MODE);
-  for (const suffix of FLOW_REGISTRY_SIDECAR_SUFFIXES) {
-    const candidate = `${pathname}${suffix}`;
-    if (!existsSync(candidate)) {
-      continue;
-    }
-    chmodSync(candidate, FLOW_REGISTRY_FILE_MODE);
-  }
+  ensureSqliteStorePermissions({
+    dir: resolveTaskFlowRegistryDir(process.env),
+    pathname,
+    dirMode: FLOW_REGISTRY_DIR_MODE,
+    fileMode: FLOW_REGISTRY_FILE_MODE,
+  });
 }
 
 function openFlowRegistryDatabase(): FlowRegistryDatabase {

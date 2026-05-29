@@ -156,15 +156,17 @@ async function expectRemoteMarketplaceError(params: { manifest: unknown; expecte
 
 function installPluginInput(callIndex = 0): Record<string, unknown> {
   const input = installPluginFromPathMock.mock.calls[callIndex]?.[0];
-  expect(typeof input).toBe("object");
-  expect(input).not.toBeNull();
+  if (!input || typeof input !== "object") {
+    throw new Error(`expected install plugin input ${callIndex}`);
+  }
   return input as Record<string, unknown>;
 }
 
 function fetchGuardInput(callIndex = 0): Record<string, unknown> {
   const input = fetchWithSsrFGuardMock.mock.calls[callIndex]?.[0];
-  expect(typeof input).toBe("object");
-  expect(input).not.toBeNull();
+  if (!input || typeof input !== "object") {
+    throw new Error(`expected fetch guard input ${callIndex}`);
+  }
   return input as Record<string, unknown>;
 }
 
@@ -176,8 +178,9 @@ function expectMarketplaceInstallSuccess(
     marketplaceSource?: string;
   },
 ) {
-  expect(typeof result).toBe("object");
-  expect(result).not.toBeNull();
+  if (!result || typeof result !== "object") {
+    throw new Error("expected marketplace install result");
+  }
   const record = result as Record<string, unknown>;
   expect(record.ok).toBe(true);
   expect(record.pluginId).toBe(params.pluginId ?? "frontend-design");
@@ -817,6 +820,50 @@ describe("marketplace plugins", () => {
           "download too large: 268435457 bytes (limit: 268435456 bytes)",
       });
       expect(arrayBuffer).not.toHaveBeenCalled();
+      expect(installPluginFromPathMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("rejects malformed archive content-length headers before streaming", async () => {
+    await withTempDir("openclaw-marketplace-test-", async (rootDir) => {
+      const reader = {
+        read: vi.fn(),
+        cancel: vi.fn(async () => undefined),
+        releaseLock: vi.fn(),
+      };
+      fetchWithSsrFGuardMock.mockResolvedValueOnce({
+        response: {
+          ok: true,
+          status: 200,
+          body: {
+            getReader: () => reader,
+          } as unknown as Response["body"],
+          headers: new Headers({ "content-length": "1e9" }),
+        } as unknown as Response,
+        finalUrl: "https://cdn.example.com/releases/frontend-design.tgz",
+        release: vi.fn(async () => undefined),
+      });
+      const manifestPath = await writeMarketplaceManifest(rootDir, {
+        plugins: [
+          {
+            name: "frontend-design",
+            source: "https://example.com/frontend-design.tgz",
+          },
+        ],
+      });
+
+      const result = await installPluginFromMarketplace({
+        marketplace: manifestPath,
+        plugin: "frontend-design",
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        error:
+          "failed to download https://example.com/frontend-design.tgz: " +
+          "invalid content-length header: 1e9",
+      });
+      expect(reader.read).not.toHaveBeenCalled();
       expect(installPluginFromPathMock).not.toHaveBeenCalled();
     });
   });

@@ -2,12 +2,13 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import type { Model } from "@earendil-works/pi-ai";
+import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   attachModelProviderLocalService,
   ensureModelProviderLocalService,
   getModelProviderLocalService,
+  hasLocalServiceProcessExited,
   stopManagedProviderLocalServicesForTest,
 } from "./provider-local-service.js";
 
@@ -29,16 +30,23 @@ async function freePort(): Promise<number> {
 }
 
 async function waitForProbeFailure(url: string): Promise<void> {
-  const deadline = Date.now() + 2_000;
-  while (Date.now() < deadline) {
-    try {
-      await fetch(url);
-    } catch {
-      return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 50));
+  try {
+    await expect
+      .poll(
+        async () => {
+          try {
+            await fetch(url);
+            return false;
+          } catch {
+            return true;
+          }
+        },
+        { timeout: 2_000, interval: 50 },
+      )
+      .toBe(true);
+  } catch {
+    throw new Error("local service still responded after idle stop");
   }
-  throw new Error("local service still responded after idle stop");
 }
 
 describe("provider local service", () => {
@@ -56,6 +64,12 @@ describe("provider local service", () => {
       command: process.execPath,
       args: ["--version"],
     });
+  });
+
+  it("treats signaled local service children as exited", () => {
+    expect(hasLocalServiceProcessExited({ exitCode: null, signalCode: "SIGTERM" })).toBe(true);
+    expect(hasLocalServiceProcessExited({ exitCode: 0, signalCode: null })).toBe(true);
+    expect(hasLocalServiceProcessExited({ exitCode: null, signalCode: null })).toBe(false);
   });
 
   it("starts an on-demand local service and stops it after idle", async () => {
@@ -82,9 +96,11 @@ describe("provider local service", () => {
 
     const lease = await ensureModelProviderLocalService(model);
 
-    expect(lease).toBeDefined();
+    if (!lease) {
+      throw new Error("Expected provider local service lease");
+    }
     expect((await fetch(healthUrl)).ok).toBe(true);
-    lease?.release();
+    lease.release();
     await waitForProbeFailure(healthUrl);
   });
 
@@ -114,7 +130,9 @@ describe("provider local service", () => {
       "X-Tenant": "acme",
     });
 
-    expect(lease).toBeDefined();
+    if (!lease) {
+      throw new Error("Expected provider local service lease");
+    }
     expect((await fetch(healthUrl)).status).toBe(401);
     expect(
       (
@@ -276,9 +294,11 @@ describe("provider local service", () => {
       expect((await fetch(healthUrl)).status).toBe(503);
 
       const secondLease = await ensureModelProviderLocalService(model);
-      expect(secondLease).toBeDefined();
+      if (!secondLease) {
+        throw new Error("Expected restarted provider local service lease");
+      }
       expect((await fetch(healthUrl)).ok).toBe(true);
-      secondLease?.release();
+      secondLease.release();
 
       const starts = (await fs.readFile(startsPath, "utf8")).trim().split("\n");
       expect(starts).toHaveLength(2);
@@ -306,6 +326,29 @@ describe("provider local service", () => {
     const startedAt = Date.now();
     await expect(ensureModelProviderLocalService(model)).rejects.toThrow(
       "local-fast-exit local service exited before readiness with code 17",
+    );
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
+  });
+
+  it("reports a local service startup signal exit without waiting for readiness timeout", async () => {
+    const port = await freePort();
+    const model = attachModelProviderLocalService(
+      {
+        id: "demo",
+        provider: "local-signal-exit",
+        api: "openai-completions",
+        baseUrl: `http://127.0.0.1:${port}/v1`,
+      } as unknown as Model<"openai-completions">,
+      {
+        command: process.execPath,
+        args: ["-e", "process.kill(process.pid, 'SIGTERM')"],
+        readyTimeoutMs: 60_000,
+      },
+    );
+
+    const startedAt = Date.now();
+    await expect(ensureModelProviderLocalService(model)).rejects.toThrow(
+      "local-signal-exit local service exited before readiness with signal SIGTERM",
     );
     expect(Date.now() - startedAt).toBeLessThan(5_000);
   });

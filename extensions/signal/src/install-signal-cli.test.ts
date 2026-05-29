@@ -83,7 +83,12 @@ function requireAsset(asset: ReleaseAsset | undefined, label: string): ReleaseAs
 }
 
 async function expectPathMissing(targetPath: string): Promise<void> {
-  await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+  try {
+    await fs.access(targetPath);
+    throw new Error(`expected ${targetPath} to be missing`);
+  } catch (error) {
+    expect((error as { code?: string }).code).toBe("ENOENT");
+  }
 }
 
 describe("looksLikeArchive", () => {
@@ -214,6 +219,24 @@ describe("downloadToFile", () => {
     expect(fetchResult.release).toHaveBeenCalledTimes(1);
   });
 
+  it.each(["1e3", "0x10", `1${"0".repeat(309)}`])(
+    "ignores malformed declared archive lengths: %s",
+    async (contentLength) => {
+      const fetchResult = okDownloadResponse("archive", {
+        headers: { "content-length": contentLength },
+      });
+      fetchWithSsrFGuardMock.mockResolvedValue(fetchResult);
+
+      await withTempFile(async (filePath) => {
+        await downloadToFile("https://example.com/signal-cli.tgz", filePath, 5, 8);
+
+        await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("archive");
+      });
+
+      expect(fetchResult.release).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it("aborts streamed archives above the download cap and removes partial files", async () => {
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
@@ -238,18 +261,30 @@ describe("downloadToFile", () => {
 });
 
 describe("installSignalCliFromRelease", () => {
+  it("returns an installer error when GitHub release metadata is malformed JSON", async () => {
+    const fetchResult = okDownloadResponse("{not json", {
+      headers: { "content-type": "application/json" },
+    });
+    fetchWithSsrFGuardMock.mockResolvedValue(fetchResult);
+
+    const result = await installSignalCliFromRelease({ log: vi.fn() } as unknown as RuntimeEnv);
+
+    expect(result).toEqual({
+      ok: false,
+      error: "Failed to parse signal-cli release info.",
+    });
+    expect(fetchResult.release).toHaveBeenCalledTimes(1);
+  });
+
   it("bounds the release metadata request with an explicit timeout", async () => {
     const fetchResult = okDownloadResponse(JSON.stringify({ tag_name: "v0.14.3", assets: [] }), {
       headers: { "content-type": "application/json" },
     });
     fetchWithSsrFGuardMock.mockResolvedValue(fetchResult);
 
-    await expect(
-      installSignalCliFromRelease({ log: vi.fn() } as unknown as RuntimeEnv),
-    ).resolves.toMatchObject({
-      ok: false,
-      error: "No compatible release asset found for this platform.",
-    });
+    const result = await installSignalCliFromRelease({ log: vi.fn() } as unknown as RuntimeEnv);
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("No compatible release asset found for this platform.");
 
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith({
       url: "https://api.github.com/repos/AsamK/signal-cli/releases/latest",

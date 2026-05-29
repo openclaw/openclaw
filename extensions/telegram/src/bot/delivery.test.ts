@@ -103,7 +103,9 @@ function mockMediaLoad(fileName: string, contentType: string, data: string) {
 }
 
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  expect(record).toBeDefined();
+  if (!record || typeof record !== "object") {
+    throw new Error("Expected record");
+  }
   const actual = record as Record<string, unknown>;
   for (const [key, value] of Object.entries(expected)) {
     expect(actual[key]).toEqual(value);
@@ -112,11 +114,21 @@ function expectRecordFields(record: unknown, expected: Record<string, unknown>) 
 }
 
 function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex: number, argIndex: number) {
-  const call = mock.mock.calls[callIndex];
+  const call = mock.mock.calls.at(callIndex);
   if (!call) {
     throw new Error(`Expected mock call ${callIndex}`);
   }
   return call[argIndex];
+}
+
+function firstMockCallArg(mock: ReturnType<typeof vi.fn>, argIndex: number) {
+  return mockCallArg(mock, 0, argIndex);
+}
+
+function firstSendText(mock: ReturnType<typeof vi.fn>) {
+  const text = firstMockCallArg(mock, 1);
+  expect(text).toBeTypeOf("string");
+  return text as string;
 }
 
 function createSendMessageHarness(messageId = 4) {
@@ -227,7 +239,7 @@ describe("deliverReplies", () => {
 
     expect(runtime.error).toHaveBeenCalledTimes(1);
     expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(sendMessage.mock.calls[0]?.[1]).toBe("hello");
+    expect(firstMockCallArg(sendMessage, 1)).toBe("hello");
   });
 
   it("mirrors delivered replies once after successful sends", async () => {
@@ -274,8 +286,8 @@ describe("deliverReplies", () => {
       bot,
     });
 
-    expect(sendMessage.mock.calls[0]?.[0]).toBe("123");
-    expect(sendMessage.mock.calls[0]?.[1]).toBe("Plugin bind approval required");
+    expect(firstMockCallArg(sendMessage, 0)).toBe("123");
+    expect(firstMockCallArg(sendMessage, 1)).toBe("Plugin bind approval required");
     expectRecordFields(mockCallArg(sendMessage, 0, 2), {
       reply_markup: {
         inline_keyboard: [
@@ -307,8 +319,35 @@ describe("deliverReplies", () => {
     });
 
     expect(runtime.error).not.toHaveBeenCalled();
-    expect(sendMessage.mock.calls[0]?.[0]).toBe("123");
-    expect(sendMessage.mock.calls[0]?.[1]).toContain("Retry");
+    expect(firstMockCallArg(sendMessage, 0)).toBe("123");
+    expect(firstMockCallArg(sendMessage, 1)).toContain("Retry");
+    expectRecordFields(mockCallArg(sendMessage, 0, 2), {
+      reply_markup: {
+        inline_keyboard: [[{ text: "Retry", callback_data: "cmd:retry" }]],
+      },
+    });
+  });
+
+  it("uses presentation button labels as fallback text for presentation-only replies", async () => {
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 4, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [
+        {
+          presentation: {
+            blocks: [{ type: "buttons", buttons: [{ label: "Retry", value: "cmd:retry" }] }],
+          },
+        },
+      ],
+      runtime,
+      bot,
+    });
+
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(firstMockCallArg(sendMessage, 0)).toBe("123");
+    expect(firstMockCallArg(sendMessage, 1)).toContain("Retry");
     expectRecordFields(mockCallArg(sendMessage, 0, 2), {
       reply_markup: {
         inline_keyboard: [[{ text: "Retry", callback_data: "cmd:retry" }]],
@@ -359,7 +398,9 @@ describe("deliverReplies", () => {
       bot,
     });
 
-    expect(mockCallArg(messageHookRunner.runMessageSending, 0, 0)).toBeDefined();
+    if (mockCallArg(messageHookRunner.runMessageSending, 0, 0) === undefined) {
+      throw new Error("Expected message_sending hook payload");
+    }
     expectRecordFields(mockCallArg(messageHookRunner.runMessageSending, 0, 1), {
       channelId: "telegram",
       accountId: "work",
@@ -388,8 +429,8 @@ describe("deliverReplies", () => {
       silent: true,
     });
 
-    expect(sendMessage.mock.calls[0]?.[0]).toBe("123");
-    expect(typeof sendMessage.mock.calls[0]?.[1]).toBe("string");
+    expect(firstMockCallArg(sendMessage, 0)).toBe("123");
+    firstSendText(sendMessage);
     expectRecordFields(mockCallArg(sendMessage, 0, 2), { disable_notification: true });
   });
 
@@ -438,7 +479,7 @@ describe("deliverReplies", () => {
     expect(triggerInternalHook).not.toHaveBeenCalled();
   });
 
-  it("rewrites exact NO_REPLY for direct Telegram sessions", async () => {
+  it("suppresses exact NO_REPLY for direct Telegram sessions", async () => {
     const runtime = createRuntime(false);
     const sendMessage = vi.fn().mockResolvedValue({ message_id: 12, chat: { id: "123" } });
     const bot = createBot({ sendMessage });
@@ -450,13 +491,10 @@ describe("deliverReplies", () => {
       bot,
     });
 
-    expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(sendMessage.mock.calls[0]?.[1]).toBeTypeOf("string");
-    expect(sendMessage.mock.calls[0]?.[1]).not.toBe("");
-    expect(sendMessage.mock.calls[0]?.[1]?.trim()).not.toBe("NO_REPLY");
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("uses the policy session key for exact NO_REPLY policy", async () => {
+  it("uses the policy session key when suppressing exact NO_REPLY", async () => {
     const runtime = createRuntime(false);
     const sendMessage = vi.fn().mockResolvedValue({ message_id: 121, chat: { id: "123" } });
     const bot = createBot({ sendMessage });
@@ -469,10 +507,7 @@ describe("deliverReplies", () => {
       bot,
     });
 
-    expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(sendMessage.mock.calls[0]?.[1]).toBeTypeOf("string");
-    expect(sendMessage.mock.calls[0]?.[1]).not.toBe("");
-    expect(sendMessage.mock.calls[0]?.[1]?.trim()).not.toBe("NO_REPLY");
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 
   it("suppresses exact NO_REPLY for group Telegram sessions", async () => {
@@ -627,8 +662,10 @@ describe("deliverReplies", () => {
       bot,
     });
 
-    expect(sendPhoto.mock.calls[0]?.[0]).toBe("123");
-    expect(sendPhoto.mock.calls[0]?.[1]).toBeDefined();
+    expect(firstMockCallArg(sendPhoto, 0)).toBe("123");
+    if (firstMockCallArg(sendPhoto, 1) === undefined) {
+      throw new Error("Expected Telegram photo media");
+    }
     expectRecordFields(mockCallArg(sendPhoto, 0, 2), {
       caption: "hi <b>boss</b>",
       parse_mode: "HTML",
@@ -653,8 +690,10 @@ describe("deliverReplies", () => {
     });
 
     expect(probeVideoDimensions).toHaveBeenCalledWith(Buffer.from("video"));
-    expect(sendVideo.mock.calls[0]?.[0]).toBe("123");
-    expect(sendVideo.mock.calls[0]?.[1]).toBeDefined();
+    expect(firstMockCallArg(sendVideo, 0)).toBe("123");
+    if (firstMockCallArg(sendVideo, 1) === undefined) {
+      throw new Error("Expected Telegram video media");
+    }
     expectRecordFields(mockCallArg(sendVideo, 0, 2), {
       caption: "hi <b>boss</b>",
       parse_mode: "HTML",
@@ -680,8 +719,10 @@ describe("deliverReplies", () => {
     });
 
     expect(probeVideoDimensions).not.toHaveBeenCalled();
-    expect(sendAnimation.mock.calls[0]?.[0]).toBe("123");
-    expect(sendAnimation.mock.calls[0]?.[1]).toBeDefined();
+    expect(firstMockCallArg(sendAnimation, 0)).toBe("123");
+    if (firstMockCallArg(sendAnimation, 1) === undefined) {
+      throw new Error("Expected Telegram animation media");
+    }
     const options = mockCallArg(sendAnimation, 0, 2) as Record<string, unknown>;
     expect(typeof options.width).not.toBe("number");
     expect(typeof options.height).not.toBe("number");
@@ -710,6 +751,33 @@ describe("deliverReplies", () => {
     });
   });
 
+  it("passes the configured media byte cap to media loading", async () => {
+    const runtime = createRuntime();
+    const sendPhoto = vi.fn().mockResolvedValue({
+      message_id: 13,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendPhoto });
+    const mediaMaxBytes = 50 * 1024 * 1024;
+
+    mockMediaLoad("photo.jpg", "image/jpeg", "image");
+
+    await deliverReplies({
+      replies: [{ mediaUrl: "https://example.com/photo.jpg" }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "off",
+      textLimit: 4000,
+      mediaMaxBytes,
+    });
+
+    expect(loadWebMedia).toHaveBeenCalledWith("https://example.com/photo.jpg", {
+      maxBytes: mediaMaxBytes,
+    });
+  });
+
   it("includes link_preview_options when linkPreview is false", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn().mockResolvedValue({
@@ -725,8 +793,8 @@ describe("deliverReplies", () => {
       linkPreview: false,
     });
 
-    expect(sendMessage.mock.calls[0]?.[0]).toBe("123");
-    expect(typeof sendMessage.mock.calls[0]?.[1]).toBe("string");
+    expect(firstMockCallArg(sendMessage, 0)).toBe("123");
+    firstSendText(sendMessage);
     expectRecordFields(mockCallArg(sendMessage, 0, 2), {
       link_preview_options: { is_disabled: true },
     });
@@ -742,8 +810,8 @@ describe("deliverReplies", () => {
       thread: { id: 42, scope: "dm" },
     });
 
-    expect(sendMessage.mock.calls[0]?.[0]).toBe("123");
-    expect(typeof sendMessage.mock.calls[0]?.[1]).toBe("string");
+    expect(firstMockCallArg(sendMessage, 0)).toBe("123");
+    firstSendText(sendMessage);
     expectRecordFields(mockCallArg(sendMessage, 0, 2), { message_thread_id: 42 });
   });
 
@@ -762,7 +830,7 @@ describe("deliverReplies", () => {
     ).rejects.toThrow("message thread not found");
 
     expect(sendMessage).toHaveBeenCalledTimes(1);
-    expectRecordFields(sendMessage.mock.calls[0]?.[2], { message_thread_id: 42 });
+    expectRecordFields(mockCallArg(sendMessage, 0, 2), { message_thread_id: 42 });
     expect(runtime.error).toHaveBeenCalledTimes(1);
   });
 
@@ -843,7 +911,7 @@ describe("deliverReplies", () => {
     ).rejects.toThrow("message thread not found");
 
     expect(sendPhoto).toHaveBeenCalledTimes(1);
-    expectRecordFields(sendPhoto.mock.calls[0]?.[2], { message_thread_id: 42 });
+    expectRecordFields(mockCallArg(sendPhoto, 0, 2), { message_thread_id: 42 });
     expect(runtime.error).toHaveBeenCalledTimes(1);
   });
 
@@ -857,9 +925,9 @@ describe("deliverReplies", () => {
       linkPreview: true,
     });
 
-    expect(sendMessage.mock.calls[0]?.[0]).toBe("123");
-    expect(typeof sendMessage.mock.calls[0]?.[1]).toBe("string");
-    expect(sendMessage.mock.calls[0]?.[2]).not.toHaveProperty("link_preview_options");
+    expect(firstMockCallArg(sendMessage, 0)).toBe("123");
+    firstSendText(sendMessage);
+    expect(mockCallArg(sendMessage, 0, 2)).not.toHaveProperty("link_preview_options");
   });
 
   it("falls back to plain text when markdown renders to empty HTML in threaded mode", async () => {
@@ -887,9 +955,9 @@ describe("deliverReplies", () => {
     });
 
     expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(sendMessage.mock.calls[0]?.[0]).toBe("123");
-    expect(sendMessage.mock.calls[0]?.[1]).toBe(">");
-    expectRecordFields(sendMessage.mock.calls[0]?.[2], { message_thread_id: 42 });
+    expect(firstMockCallArg(sendMessage, 0)).toBe("123");
+    expect(firstMockCallArg(sendMessage, 1)).toBe(">");
+    expectRecordFields(mockCallArg(sendMessage, 0, 2), { message_thread_id: 42 });
   });
 
   it("skips whitespace-only text replies without calling Telegram", async () => {
@@ -930,9 +998,9 @@ describe("deliverReplies", () => {
       replyQuoteEntities: [{ type: "bold", offset: 0, length: 6 }],
     });
 
-    expect(sendMessage.mock.calls[0]?.[0]).toBe("123");
-    expect(typeof sendMessage.mock.calls[0]?.[1]).toBe("string");
-    expectRecordFields(sendMessage.mock.calls[0]?.[2], {
+    expect(firstMockCallArg(sendMessage, 0)).toBe("123");
+    firstSendText(sendMessage);
+    expectRecordFields(mockCallArg(sendMessage, 0, 2), {
       reply_parameters: {
         message_id: 500,
         quote: " quoted text\n",
@@ -941,7 +1009,7 @@ describe("deliverReplies", () => {
         allow_sending_without_reply: true,
       },
     });
-    expect(sendMessage.mock.calls[0]?.[2]).not.toHaveProperty("reply_to_message_id");
+    expect(mockCallArg(sendMessage, 0, 2)).not.toHaveProperty("reply_to_message_id");
   });
 
   it("uses the native quote candidate that matches each reply target", async () => {
@@ -966,7 +1034,7 @@ describe("deliverReplies", () => {
       },
     });
 
-    expectRecordFields(sendMessage.mock.calls[0]?.[2], {
+    expectRecordFields(mockCallArg(sendMessage, 0, 2), {
       reply_parameters: {
         message_id: 500,
         quote: "first quote",
@@ -974,7 +1042,7 @@ describe("deliverReplies", () => {
         allow_sending_without_reply: true,
       },
     });
-    expectRecordFields(sendMessage.mock.calls[1]?.[2], {
+    expectRecordFields(mockCallArg(sendMessage, 1, 2), {
       reply_parameters: {
         message_id: 501,
         quote: "second quote",
@@ -1010,18 +1078,18 @@ describe("deliverReplies", () => {
       });
 
       expect(sendMessage).toHaveBeenCalledTimes(2);
-      expectRecordFields(sendMessage.mock.calls[0][2], {
+      expectRecordFields(mockCallArg(sendMessage, 0, 2), {
         reply_parameters: {
           message_id: 500,
           quote: " quoted text\n",
           allow_sending_without_reply: true,
         },
       });
-      expectRecordFields(sendMessage.mock.calls[1][2], {
+      expectRecordFields(mockCallArg(sendMessage, 1, 2), {
         reply_to_message_id: 500,
         allow_sending_without_reply: true,
       });
-      expect(sendMessage.mock.calls[1][2]).not.toHaveProperty("reply_parameters");
+      expect(mockCallArg(sendMessage, 1, 2)).not.toHaveProperty("reply_parameters");
     }
   });
 
@@ -1042,13 +1110,13 @@ describe("deliverReplies", () => {
       replyQuoteText: "quoted text",
     });
 
-    expect(sendMessage.mock.calls[0]?.[0]).toBe("123");
-    expect(typeof sendMessage.mock.calls[0]?.[1]).toBe("string");
-    expectRecordFields(sendMessage.mock.calls[0]?.[2], {
+    expect(firstMockCallArg(sendMessage, 0)).toBe("123");
+    firstSendText(sendMessage);
+    expectRecordFields(mockCallArg(sendMessage, 0, 2), {
       reply_to_message_id: 501,
       allow_sending_without_reply: true,
     });
-    expect(sendMessage.mock.calls[0][2]).not.toHaveProperty("reply_parameters");
+    expect(mockCallArg(sendMessage, 0, 2)).not.toHaveProperty("reply_parameters");
   });
 
   it("omits native quote parameters when reply mode suppresses the reply", async () => {
@@ -1068,8 +1136,8 @@ describe("deliverReplies", () => {
       replyQuoteText: "quoted text",
     });
 
-    expect(sendMessage.mock.calls[0][2]).not.toHaveProperty("reply_parameters");
-    expect(sendMessage.mock.calls[0][2]).not.toHaveProperty("reply_to_message_id");
+    expect(mockCallArg(sendMessage, 0, 2)).not.toHaveProperty("reply_parameters");
+    expect(mockCallArg(sendMessage, 0, 2)).not.toHaveProperty("reply_to_message_id");
   });
 
   it("uses legacy reply id when quote text has no quoted message id", async () => {
@@ -1088,13 +1156,13 @@ describe("deliverReplies", () => {
       replyQuoteText: "quoted text",
     });
 
-    expect(sendMessage.mock.calls[0]?.[0]).toBe("123");
-    expect(typeof sendMessage.mock.calls[0]?.[1]).toBe("string");
-    expectRecordFields(sendMessage.mock.calls[0]?.[2], {
+    expect(firstMockCallArg(sendMessage, 0)).toBe("123");
+    firstSendText(sendMessage);
+    expectRecordFields(mockCallArg(sendMessage, 0, 2), {
       reply_to_message_id: 501,
       allow_sending_without_reply: true,
     });
-    expect(sendMessage.mock.calls[0][2]).not.toHaveProperty("reply_parameters");
+    expect(mockCallArg(sendMessage, 0, 2)).not.toHaveProperty("reply_parameters");
   });
 
   it("falls back to text when sendVoice fails with VOICE_MESSAGES_FORBIDDEN", async () => {
@@ -1120,9 +1188,101 @@ describe("deliverReplies", () => {
     expect(sendVoice).toHaveBeenCalledTimes(1);
     // Fallback to text succeeded
     expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(sendMessage.mock.calls[0]?.[0]).toBe("123");
-    expect(sendMessage.mock.calls[0]?.[1]).toContain("Hello there");
-    expect(sendMessage.mock.calls[0]?.[2]).toBeDefined();
+    expect(firstMockCallArg(sendMessage, 0)).toBe("123");
+    expect(firstMockCallArg(sendMessage, 1)).toContain("Hello there");
+    if (firstMockCallArg(sendMessage, 2) === undefined) {
+      throw new Error("Expected Telegram fallback text options");
+    }
+  });
+
+  it("uses spokenText only after voice rejection", async () => {
+    const { runtime, sendVoice, sendMessage, bot } = createVoiceFailureHarness({
+      voiceError: createVoiceMessagesForbiddenError(),
+      sendMessageResult: {
+        message_id: 5,
+        chat: { id: "123" },
+      },
+    });
+    const transcriptMirror = vi.fn();
+
+    mockMediaLoad("note.ogg", "audio/ogg", "voice");
+
+    await deliverWith({
+      replies: [
+        {
+          mediaUrl: "https://example.com/note.ogg",
+          audioAsVoice: true,
+          spokenText: "Hidden voice fallback",
+        },
+      ],
+      runtime,
+      bot,
+      transcriptMirror,
+    });
+
+    expect(sendVoice).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(firstMockCallArg(sendMessage, 1)).toContain("Hidden voice fallback");
+    expect(transcriptMirror).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "Hidden voice fallback" }),
+    );
+  });
+
+  it("runs message_sending hooks over spokenText voice fallback content", async () => {
+    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sending");
+    messageHookRunner.runMessageSending.mockResolvedValue({ content: "Rewritten voice fallback" });
+    const { runtime, sendVoice, sendMessage, bot } = createVoiceFailureHarness({
+      voiceError: createVoiceMessagesForbiddenError(),
+      sendMessageResult: {
+        message_id: 5,
+        chat: { id: "123" },
+      },
+    });
+
+    mockMediaLoad("note.ogg", "audio/ogg", "voice");
+
+    await deliverWith({
+      replies: [
+        {
+          mediaUrl: "https://example.com/note.ogg",
+          audioAsVoice: true,
+          spokenText: "Hidden voice fallback",
+        },
+      ],
+      runtime,
+      bot,
+    });
+
+    expectRecordFields(mockCallArg(messageHookRunner.runMessageSending, 0, 0), {
+      content: "Hidden voice fallback",
+    });
+    expect(sendVoice).toHaveBeenCalledTimes(1);
+    expect((firstMockCallArg(sendVoice, 2) as { caption?: unknown }).caption).toBeUndefined();
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(firstMockCallArg(sendMessage, 1)).toContain("Rewritten voice fallback");
+  });
+
+  it("does not render spokenText as a successful voice caption", async () => {
+    const runtime = createRuntime(false);
+    const sendVoice = vi.fn().mockResolvedValue({ message_id: 8, chat: { id: "123" } });
+    const bot = createBot({ sendVoice });
+
+    mockMediaLoad("note.ogg", "audio/ogg", "voice");
+
+    await deliverWith({
+      replies: [
+        {
+          mediaUrl: "https://example.com/note.ogg",
+          audioAsVoice: true,
+          spokenText: "Hidden voice fallback",
+        },
+      ],
+      runtime,
+      bot,
+    });
+
+    expect(sendVoice).toHaveBeenCalledTimes(1);
+    expect((firstMockCallArg(sendVoice, 2) as { caption?: unknown }).caption).toBeUndefined();
   });
 
   it("keeps disable_notification on voice fallback text when silent is true", async () => {
@@ -1146,9 +1306,9 @@ describe("deliverReplies", () => {
     });
 
     expect(sendVoice).toHaveBeenCalledTimes(1);
-    expect(sendMessage.mock.calls[0]?.[0]).toBe("123");
-    expect(sendMessage.mock.calls[0]?.[1]).toContain("Hello there");
-    expectRecordFields(sendMessage.mock.calls[0]?.[2], { disable_notification: true });
+    expect(firstMockCallArg(sendMessage, 0)).toBe("123");
+    expect(firstMockCallArg(sendMessage, 1)).toContain("Hello there");
+    expectRecordFields(mockCallArg(sendMessage, 0, 2), { disable_notification: true });
   });
 
   it("voice fallback applies reply-to only on first chunk when replyToMode is first", async () => {
@@ -1186,7 +1346,7 @@ describe("deliverReplies", () => {
 
     expect(sendVoice).toHaveBeenCalledTimes(1);
     expect(sendMessage.mock.calls.length).toBeGreaterThanOrEqual(2);
-    expectRecordFields(sendMessage.mock.calls[0][2], {
+    expectRecordFields(mockCallArg(sendMessage, 0, 2), {
       reply_parameters: {
         message_id: 77,
         quote: "quoted context",
@@ -1196,9 +1356,9 @@ describe("deliverReplies", () => {
         inline_keyboard: [[{ text: "Ack", callback_data: "ack" }]],
       },
     });
-    expect(sendMessage.mock.calls[1][2]).not.toHaveProperty("reply_to_message_id", 77);
-    expect(sendMessage.mock.calls[1][2]).not.toHaveProperty("reply_parameters");
-    expect(sendMessage.mock.calls[1][2]).not.toHaveProperty("reply_markup");
+    expect(mockCallArg(sendMessage, 1, 2)).not.toHaveProperty("reply_to_message_id", 77);
+    expect(mockCallArg(sendMessage, 1, 2)).not.toHaveProperty("reply_parameters");
+    expect(mockCallArg(sendMessage, 1, 2)).not.toHaveProperty("reply_markup");
   });
 
   it("rethrows non-VOICE_MESSAGES_FORBIDDEN errors from sendVoice", async () => {
@@ -1243,12 +1403,12 @@ describe("deliverReplies", () => {
 
     expect(sendMessage.mock.calls.length).toBeGreaterThanOrEqual(2);
     // First chunk should have reply_to_message_id
-    expectRecordFields(sendMessage.mock.calls[0][2], {
+    expectRecordFields(mockCallArg(sendMessage, 0, 2), {
       reply_to_message_id: 700,
       allow_sending_without_reply: true,
     });
     // Second chunk should NOT have reply_to_message_id
-    expect(sendMessage.mock.calls[1][2]).not.toHaveProperty("reply_to_message_id");
+    expect(mockCallArg(sendMessage, 1, 2)).not.toHaveProperty("reply_to_message_id");
   });
 
   it("replyToMode 'all' applies reply-to to every text chunk", async () => {
@@ -1302,12 +1462,12 @@ describe("deliverReplies", () => {
 
     expect(sendPhoto).toHaveBeenCalledTimes(2);
     // First media should have reply_to_message_id
-    expectRecordFields(sendPhoto.mock.calls[0][2], {
+    expectRecordFields(mockCallArg(sendPhoto, 0, 2), {
       reply_to_message_id: 900,
       allow_sending_without_reply: true,
     });
     // Second media should NOT have reply_to_message_id
-    expect(sendPhoto.mock.calls[1][2]).not.toHaveProperty("reply_to_message_id");
+    expect(mockCallArg(sendPhoto, 1, 2)).not.toHaveProperty("reply_to_message_id");
   });
 
   it("pins the first delivered text message when telegram pin is requested", async () => {

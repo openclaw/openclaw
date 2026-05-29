@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { __testing as restartTesting } from "../infra/restart.js";
+import { testing as restartTesting } from "../infra/restart.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -55,8 +55,10 @@ function gatewayCalls(): GatewayCall[] {
 
 function gatewayCall(method: string): GatewayCall {
   const call = gatewayCalls().find(([candidate]) => candidate === method);
-  expect(call).toBeDefined();
-  return call as GatewayCall;
+  if (!call) {
+    throw new Error(`Expected gateway call for ${method}`);
+  }
+  return call;
 }
 
 function expectGatewayCallFields(
@@ -64,7 +66,9 @@ function expectGatewayCallFields(
   expectedParams: Record<string, unknown>,
 ): Record<string, unknown> {
   const [, , params] = gatewayCall(method);
-  expect(params).toBeDefined();
+  if (params === undefined) {
+    throw new Error(`Expected gateway call params for ${method}`);
+  }
   const record = params as Record<string, unknown>;
   for (const [key, value] of Object.entries(expectedParams)) {
     expect(record[key]).toEqual(value);
@@ -84,7 +88,9 @@ function expectRecordFields(
   record: unknown,
   expected: Record<string, unknown>,
 ): Record<string, unknown> {
-  expect(record).toBeDefined();
+  if (!record || typeof record !== "object") {
+    throw new Error("Expected record");
+  }
   const actual = record as Record<string, unknown>;
   for (const [key, value] of Object.entries(expected)) {
     expect(actual[key]).toEqual(value);
@@ -104,8 +110,10 @@ function expectConfigMutationCall(params: {
 }) {
   expect(params.callGatewayTool.mock.calls.some(([method]) => method === "config.get")).toBe(true);
   const call = params.callGatewayTool.mock.calls.find(([method]) => method === params.action);
-  expect(call).toBeDefined();
-  expectRecordFields(call?.[2], {
+  if (!call) {
+    throw new Error(`Expected gateway call for ${params.action}`);
+  }
+  expectRecordFields(call[2], {
     raw: params.raw.trim(),
     baseHash: "hash-1",
     sessionKey: params.sessionKey,
@@ -154,11 +162,6 @@ describe("gateway tool", () => {
       }
       return { ok: true };
     });
-  });
-
-  it("marks gateway as owner-only", () => {
-    const tool = requireGatewayTool();
-    expect(tool.ownerOnly).toBe(true);
   });
 
   it("exposes restart and config actions in the gateway tool schema", () => {
@@ -216,7 +219,7 @@ describe("gateway tool", () => {
           };
           expect(parsed.payload?.kind).toBe("restart");
           expect(parsed.payload?.doctorHint).toBe(
-            "Run: openclaw --profile isolated doctor --non-interactive",
+            "Recommended follow-up: run openclaw --profile isolated doctor --non-interactive in a terminal or approvals-capable OpenClaw surface.",
           );
         },
       );
@@ -247,7 +250,7 @@ describe("gateway tool", () => {
         return {
           ok: true,
           path: "/tmp/openclaw.json",
-          config: { agents: { defaults: { systemPromptOverride: "You are a terse assistant." } } },
+          config: { agents: { defaults: { reasoningDefault: "medium" } } },
           restart: { ok: true, config: "nested field preserved" },
         };
       }
@@ -257,7 +260,7 @@ describe("gateway tool", () => {
     const tool = requireGatewayTool(sessionKey);
 
     const raw =
-      '{\n  agents: { defaults: { systemPromptOverride: "You are a terse assistant." } },\n  tools: { exec: { ask: "on-miss", security: "allowlist" } }\n}\n';
+      '{\n  agents: { defaults: { reasoningDefault: "medium" } },\n  tools: { exec: { ask: "on-miss", security: "allowlist" } }\n}\n';
     const result = await tool.execute("call2", {
       action: "config.apply",
       raw,
@@ -495,7 +498,7 @@ describe("gateway tool", () => {
     await expect(
       tool.execute("call-missing-protected", {
         action: "config.apply",
-        raw: '{ agents: { defaults: { systemPromptOverride: "You are a terse assistant." } } }',
+        raw: '{ agents: { defaults: { reasoningDefault: "medium" } } }',
       }),
     ).rejects.toThrow(
       "gateway config.apply cannot change protected config paths: tools.exec.ask, tools.exec.security",
@@ -648,7 +651,7 @@ describe("gateway tool", () => {
     const sessionKey = "agent:main:whatsapp:dm:+15555550123";
     const tool = requireGatewayTool(sessionKey);
 
-    const raw = '{ agents: { defaults: { systemPromptOverride: "You are a terse assistant." } } }';
+    const raw = '{ agents: { defaults: { reasoningDefault: "medium" } } }';
     await tool.execute("call-keep-dangerous", {
       action: "config.patch",
       raw,

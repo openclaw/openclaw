@@ -17,6 +17,7 @@ import {
   resolveStorePath,
 } from "./paths.js";
 import { cloneSessionStoreRecord } from "./store-cache.js";
+import { collectSessionMaintenancePreserveKeys } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   capEntryCount,
@@ -93,6 +94,73 @@ export type SessionsCleanupRunResult = {
   }>;
   appliedSummaries: SessionCleanupSummary[];
 };
+
+const EMPTY_TRANSCRIPT_MAX_BYTES = 4096;
+
+function isTranscriptMessageRole(role: unknown): boolean {
+  return (
+    role === "user" ||
+    role === "assistant" ||
+    role === "tool" ||
+    role === "toolResult" ||
+    role === "system"
+  );
+}
+
+function isTranscriptMessageRecord(entry: unknown): boolean {
+  if (!entry || typeof entry !== "object") {
+    return false;
+  }
+  const record = entry as { message?: unknown; role?: unknown; type?: unknown };
+  if (record.type === "message") {
+    return true;
+  }
+  if (
+    record.type === undefined &&
+    record.message &&
+    typeof record.message === "object" &&
+    isTranscriptMessageRole((record.message as { role?: unknown }).role)
+  ) {
+    return true;
+  }
+  return record.type === undefined && isTranscriptMessageRole(record.role);
+}
+
+function transcriptHasNoMessageRecords(transcriptPath: string): boolean {
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(transcriptPath);
+  } catch {
+    return false;
+  }
+  if (!stat.isFile() || stat.size > EMPTY_TRANSCRIPT_MAX_BYTES) {
+    return false;
+  }
+
+  let raw: string;
+  try {
+    raw = fs.readFileSync(transcriptPath, "utf-8");
+  } catch {
+    return false;
+  }
+
+  const lines = raw.split(/\r?\n/u).filter((line) => line.trim().length > 0);
+  if (lines.length === 0) {
+    return true;
+  }
+  for (const line of lines) {
+    let entry: unknown;
+    try {
+      entry = JSON.parse(line) as unknown;
+    } catch {
+      return false;
+    }
+    if (isTranscriptMessageRecord(entry)) {
+      return false;
+    }
+  }
+  return true;
+}
 
 export function resolveSessionCleanupAction(params: {
   key: string;
@@ -205,10 +273,25 @@ function pruneMissingTranscriptEntries(params: {
   let removed = 0;
   for (const [key, entry] of Object.entries(params.store)) {
     if (!entry?.sessionId) {
+      if (parseAgentSessionKey(key)) {
+        continue;
+      }
+      delete params.store[key];
+      removed += 1;
+      params.onPruned?.(key);
       continue;
     }
-    const transcriptPath = resolveSessionFilePath(entry.sessionId, entry, sessionPathOpts);
-    if (!fs.existsSync(transcriptPath)) {
+    let transcriptPath: string | undefined;
+    try {
+      transcriptPath = resolveSessionFilePath(entry.sessionId, entry, sessionPathOpts);
+    } catch {
+      // Malformed legacy rows cannot resolve a transcript path; --fix-missing prunes them.
+    }
+    if (
+      !transcriptPath ||
+      !fs.existsSync(transcriptPath) ||
+      transcriptHasNoMessageRecords(transcriptPath)
+    ) {
       delete params.store[key];
       removed += 1;
       params.onPruned?.(key);
@@ -276,14 +359,17 @@ async function previewStoreCleanup(params: {
           },
         })
       : 0;
+  const preserveSessionKeys = collectSessionMaintenancePreserveKeys([params.activeKey]);
   const pruned = pruneStaleEntries(previewStore, params.maintenance.pruneAfterMs, {
     log: false,
+    preserveKeys: preserveSessionKeys,
     onPruned: ({ key }) => {
       staleKeys.add(key);
     },
   });
   const capped = capEntryCount(previewStore, params.maintenance.maxEntries, {
     log: false,
+    preserveKeys: preserveSessionKeys,
     onCapped: ({ key }) => {
       cappedKeys.add(key);
     },
@@ -313,6 +399,7 @@ async function previewStoreCleanup(params: {
     store: previewStore,
     storePath: params.target.storePath,
     activeSessionKey: params.activeKey,
+    preserveKeys: preserveSessionKeys,
     maintenance: params.maintenance,
     warnOnly: false,
     dryRun: true,

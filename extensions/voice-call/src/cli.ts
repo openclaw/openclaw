@@ -5,7 +5,11 @@ import { format } from "node:util";
 import type { Command } from "commander";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { MAX_TCP_PORT, parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
+import {
+  isRecord,
+  normalizeOptionalLowercaseString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sleep } from "../api.js";
 import { validateProviderConfig, type VoiceCallConfig } from "./config.js";
 import type { VoiceCallRuntime } from "./runtime.js";
@@ -56,11 +60,12 @@ const voiceCallCliDeps = {
   callGatewayFromCli,
 };
 
-export const __testing = {
+export const testing = {
   setCallGatewayFromCliForTests(next?: typeof callGatewayFromCli): void {
     voiceCallCliDeps.callGatewayFromCli = next ?? callGatewayFromCli;
   },
   isGatewayUnavailableForLocalFallback,
+  parseVoiceCallIntOption,
 };
 
 function writeStdoutLine(...values: unknown[]): void {
@@ -71,8 +76,18 @@ function writeStdoutJson(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+function parseVoiceCallIntOption(
+  raw: string | undefined,
+  optionName: string,
+  opts?: { min?: number; max?: number },
+): number {
+  const min = opts?.min ?? 0;
+  const value = raw?.trim() ?? "";
+  const parsed = parseStrictNonNegativeInteger(value);
+  if (parsed === undefined || parsed < min || (opts?.max !== undefined && parsed > opts.max)) {
+    throw new Error(`Invalid numeric value for ${optionName}: ${raw ?? ""}`);
+  }
+  return parsed;
 }
 
 function isGatewayUnavailableForLocalFallback(err: unknown): boolean {
@@ -708,8 +723,8 @@ export function registerVoiceCallCli(params: {
     .option("--poll <ms>", "Poll interval in ms", "250")
     .action(async (options: { file: string; since?: string; poll?: string }) => {
       const file = options.file;
-      const since = Math.max(0, Number(options.since ?? 0));
-      const pollMs = Math.max(50, Number(options.poll ?? 250));
+      const since = parseVoiceCallIntOption(options.since, "--since", { min: 0 });
+      const pollMs = parseVoiceCallIntOption(options.poll, "--poll", { min: 50 });
 
       if (!fs.existsSync(file)) {
         logger.error(`No log file at ${file}`);
@@ -758,7 +773,7 @@ export function registerVoiceCallCli(params: {
     .option("--last <n>", "Analyze last N records", "200")
     .action(async (options: { file: string; last?: string }) => {
       const file = options.file;
-      const last = Math.max(1, Number(options.last ?? 200));
+      const last = parseVoiceCallIntOption(options.last, "--last", { min: 1 });
 
       if (!fs.existsSync(file)) {
         throw new Error("No log file at " + file);
@@ -805,7 +820,11 @@ export function registerVoiceCallCli(params: {
     .action(
       async (options: { mode?: string; port?: string; path?: string; servePath?: string }) => {
         const mode = resolveMode(options.mode ?? "funnel");
-        const servePort = Number(options.port ?? config.serve.port ?? 3334);
+        const servePort = parseVoiceCallIntOption(
+          options.port ?? String(config.serve.port ?? 3334),
+          "--port",
+          { min: 1, max: MAX_TCP_PORT },
+        );
         const servePath = options.servePath ?? config.serve.path ?? "/voice/webhook";
         const tsPath = options.path ?? config.tailscale?.path ?? servePath;
 
@@ -845,3 +864,4 @@ export function registerVoiceCallCli(params: {
       },
     );
 }
+export { testing as __testing };

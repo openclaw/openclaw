@@ -26,9 +26,7 @@ import { createPluginRecord } from "../status.test-helpers.js";
 import type { OpenClawPluginApi } from "../types.js";
 
 async function waitForPluginEventHandlers(): Promise<void> {
-  await new Promise<void>((resolve) => {
-    setTimeout(resolve, 0);
-  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
 function expectNoCleanupFailures(result: Awaited<ReturnType<typeof runPluginHostCleanup>>): void {
@@ -40,7 +38,9 @@ function requireFailureByHookId(
   hookId: string,
 ) {
   const failure = result.failures.find((entry) => entry.hookId === hookId);
-  expect(failure).toBeTruthy();
+  if (!failure) {
+    throw new Error(`Expected cleanup failure for hook ${hookId}`);
+  }
   return failure;
 }
 
@@ -249,7 +249,7 @@ describe("plugin run context lifecycle", () => {
         api.registerAgentEventSubscription({
           id: "delayed",
           streams: ["tool"],
-          async handle(_event, ctx) {
+          async handle(eventValue, ctx) {
             ctx.setRunContext("before-terminal", { visible: true });
             await new Promise<void>((resolve) => {
               releaseToolHandler = resolve;

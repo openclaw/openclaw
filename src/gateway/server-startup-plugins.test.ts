@@ -91,8 +91,8 @@ const loadPluginLookUpTable = vi.hoisted(() =>
   vi.fn((_params: unknown) => ({
     manifestRegistry: pluginManifestRegistry,
     startup: {
-      configuredDeferredChannelPluginIds: [],
-      pluginIds: ["telegram"],
+      configuredDeferredChannelPluginIds: [] as string[],
+      pluginIds: ["telegram"] as string[],
     },
     metrics: pluginLookUpTableMetrics,
   })),
@@ -141,6 +141,10 @@ vi.mock("./server-methods-list.js", () => ({
   listGatewayMethods: () => ["ping"],
 }));
 
+vi.mock("./methods/core-descriptors.js", () => ({
+  listCoreGatewayMethodNames: () => ["ping", "config.openFile"],
+}));
+
 vi.mock("./server-methods.js", () => ({
   coreGatewayHandlers: {},
 }));
@@ -163,9 +167,11 @@ function createLog() {
 }
 
 function firstCallArg<T>(mock: { mock: { calls: unknown[][] } }, _type?: (value: T) => T): T {
-  const call = mock.mock.calls[0];
-  expect(call).toBeDefined();
-  return call?.[0] as T;
+  const call = mock.mock.calls.at(0);
+  if (!call) {
+    throw new Error("Expected first mock call");
+  }
+  return call[0] as T;
 }
 
 describe("prepareGatewayPluginBootstrap startup plugins", () => {
@@ -176,8 +182,8 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
     loadPluginLookUpTable.mockClear().mockReturnValue({
       manifestRegistry: pluginManifestRegistry,
       startup: {
-        configuredDeferredChannelPluginIds: [],
-        pluginIds: ["telegram"],
+        configuredDeferredChannelPluginIds: [] as string[],
+        pluginIds: ["telegram"] as string[],
       },
       metrics: pluginLookUpTableMetrics,
     });
@@ -282,8 +288,12 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
     const startupInput = firstCallArg<{
       activationSourceConfig?: OpenClawConfig;
       cfg?: OpenClawConfig;
+      baseMethods?: string[];
+      coreGatewayMethodNames?: string[];
     }>(loadGatewayStartupPlugins);
     expect(startupInput.activationSourceConfig).toBe(sourceConfig);
+    expect(startupInput.baseMethods).toEqual(["ping"]);
+    expect(startupInput.coreGatewayMethodNames).toEqual(["ping", "config.openFile"]);
     expect(startupInput.cfg?.channels?.telegram?.enabled).toBe(true);
     expect(startupInput.cfg?.channels?.telegram?.dmPolicy).toBe("pairing");
     expect(startupInput.cfg?.channels?.telegram?.groupPolicy).toBe("allowlist");
@@ -296,6 +306,87 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
       dreaming: { enabled: false },
     });
   });
+
+  it("loads only deferred setup-runtime plugins during pre-bind bootstrap", async () => {
+    loadPluginLookUpTable.mockReturnValueOnce({
+      manifestRegistry: pluginManifestRegistry,
+      startup: {
+        configuredDeferredChannelPluginIds: ["slack"] as string[],
+        pluginIds: ["slack", "memory-core"] as string[],
+      },
+      metrics: {
+        ...pluginLookUpTableMetrics,
+        startupPluginCount: 2,
+        deferredChannelPluginCount: 1,
+      },
+    });
+    const cfg = {
+      channels: {
+        slack: { enabled: true, token: "token" },
+      },
+    } as OpenClawConfig;
+    const log = createLog();
+    const { prepareGatewayPluginBootstrap } = await import("./server-startup-plugins.js");
+
+    const result = await prepareGatewayPluginBootstrap({
+      cfgAtStart: cfg,
+      startupRuntimeConfig: cfg,
+      minimalTestGateway: false,
+      log,
+      loadRuntimePlugins: false,
+      loadSetupRuntimePlugins: true,
+    });
+
+    expect(result.runtimePluginsLoaded).toBe(false);
+    const startupInput = firstCallArg<{
+      pluginIds?: string[];
+      preferSetupRuntimeForChannelPlugins?: boolean;
+      suppressPluginInfoLogs?: boolean;
+    }>(loadGatewayStartupPlugins);
+    expect(startupInput.pluginIds).toEqual(["slack"]);
+    expect(startupInput.preferSetupRuntimeForChannelPlugins).toBe(true);
+    expect(startupInput.suppressPluginInfoLogs).toBe(true);
+  });
+
+  it("does not use setup-runtime preference for full bootstrap loads", async () => {
+    loadPluginLookUpTable.mockReturnValueOnce({
+      manifestRegistry: pluginManifestRegistry,
+      startup: {
+        configuredDeferredChannelPluginIds: ["slack"] as string[],
+        pluginIds: ["slack", "memory-core"] as string[],
+      },
+      metrics: {
+        ...pluginLookUpTableMetrics,
+        startupPluginCount: 2,
+        deferredChannelPluginCount: 1,
+      },
+    });
+    const cfg = {
+      channels: {
+        slack: { enabled: true, token: "token" },
+      },
+    } as OpenClawConfig;
+    const log = createLog();
+    const { prepareGatewayPluginBootstrap } = await import("./server-startup-plugins.js");
+
+    const result = await prepareGatewayPluginBootstrap({
+      cfgAtStart: cfg,
+      startupRuntimeConfig: cfg,
+      minimalTestGateway: false,
+      log,
+    });
+
+    expect(result.runtimePluginsLoaded).toBe(true);
+    const startupInput = firstCallArg<{
+      pluginIds?: string[];
+      preferSetupRuntimeForChannelPlugins?: boolean;
+      suppressPluginInfoLogs?: boolean;
+    }>(loadGatewayStartupPlugins);
+    expect(startupInput.pluginIds).toEqual(["slack", "memory-core"]);
+    expect(startupInput.preferSetupRuntimeForChannelPlugins).toBe(false);
+    expect(startupInput.suppressPluginInfoLogs).toBe(false);
+  });
+
   it("bypasses plugin lookup when plugins are globally disabled", async () => {
     const cfg = {
       channels: {

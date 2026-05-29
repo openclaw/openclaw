@@ -11,6 +11,15 @@ export type ChatAbortControllerEntry = {
   expiresAtMs: number;
   ownerConnId?: string;
   ownerDeviceId?: string;
+  providerId?: string;
+  authProviderId?: string;
+  abortStopReason?: string;
+  /**
+   * Controls only the sessions.list active-run projection. Terminal lifecycle
+   * clears this before chat.send settles, while the entry stays as the retry
+   * idempotency guard until normal cleanup removes it.
+   */
+  projectSessionActive?: boolean;
   /**
    * Which RPC owns this registration. Absent (undefined) is treated as
    * `"chat-send"` so pre-existing callers that constructed entries without
@@ -29,6 +38,15 @@ type RegisteredChatAbortController = {
 
 export function isChatStopCommandText(text: string): boolean {
   return isAbortRequestText(text);
+}
+
+function createChatAbortSignalReason(stopReason: string | undefined): Error | undefined {
+  if (stopReason !== "timeout") {
+    return undefined;
+  }
+  const reason = new Error("chat run timed out");
+  reason.name = "TimeoutError";
+  return reason;
 }
 
 function resolveChatRunExpiresAtMs(params: {
@@ -75,6 +93,8 @@ export function registerChatAbortController(params: {
   timeoutMs: number;
   ownerConnId?: string;
   ownerDeviceId?: string;
+  providerId?: string;
+  authProviderId?: string;
   kind?: ChatAbortControllerEntry["kind"];
   now?: number;
   expiresAtMs?: number;
@@ -101,18 +121,25 @@ export function registerChatAbortController(params: {
       params.expiresAtMs ?? resolveChatRunExpiresAtMs({ now, timeoutMs: params.timeoutMs }),
     ownerConnId: params.ownerConnId,
     ownerDeviceId: params.ownerDeviceId,
+    providerId: normalizeProviderIdForActiveRun(params.providerId),
+    authProviderId: normalizeProviderIdForActiveRun(params.authProviderId),
+    projectSessionActive: true,
     kind: params.kind,
   };
   params.chatAbortControllers.set(params.runId, entry);
   return { controller, registered: true, entry, cleanup };
 }
 
+function normalizeProviderIdForActiveRun(providerId: string | undefined): string | undefined {
+  const trimmed = providerId?.trim().toLowerCase();
+  return trimmed || undefined;
+}
+
 export type ChatAbortOps = {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   chatRunBuffers: Map<string, string>;
-  chatDeltaSentAt: Map<string, number>;
-  chatDeltaLastBroadcastLen: Map<string, number>;
   chatAbortedRuns: Map<string, number>;
+  clearChatRunState: (runId: string) => void;
   removeChatRun: (
     sessionId: string,
     clientRunId: string,
@@ -171,11 +198,12 @@ export function abortChatRunById(
   const bufferedText = ops.chatRunBuffers.get(runId);
   const partialText = bufferedText && bufferedText.trim() ? bufferedText : undefined;
   ops.chatAbortedRuns.set(runId, Date.now());
-  active.controller.abort();
+  if (stopReason) {
+    active.abortStopReason = stopReason;
+  }
+  active.controller.abort(createChatAbortSignalReason(stopReason));
   ops.chatAbortControllers.delete(runId);
-  ops.chatRunBuffers.delete(runId);
-  ops.chatDeltaSentAt.delete(runId);
-  ops.chatDeltaLastBroadcastLen.delete(runId);
+  ops.clearChatRunState(runId);
   const removed = ops.removeChatRun(runId, runId, sessionKey);
   broadcastChatAborted(ops, { runId, sessionKey, stopReason, partialText });
   emitAgentEvent({
@@ -196,4 +224,51 @@ export function abortChatRunById(
     ops.agentRunSeq.delete(removed.clientRunId);
   }
   return { aborted: true };
+}
+
+export function updateChatRunProvider(
+  chatAbortControllers: Map<string, ChatAbortControllerEntry>,
+  params: {
+    runId: string;
+    providerId?: string;
+    authProviderId?: string;
+  },
+): boolean {
+  const entry = chatAbortControllers.get(params.runId);
+  if (!entry) {
+    return false;
+  }
+  entry.providerId = normalizeProviderIdForActiveRun(params.providerId);
+  entry.authProviderId = normalizeProviderIdForActiveRun(params.authProviderId);
+  return true;
+}
+
+export function abortChatRunsForProvider(
+  ops: ChatAbortOps,
+  params: {
+    providerId: string;
+    stopReason?: string;
+  },
+): { runIds: string[] } {
+  const providerId = normalizeProviderIdForActiveRun(params.providerId);
+  if (!providerId) {
+    return { runIds: [] };
+  }
+  const matches = [...ops.chatAbortControllers.entries()].filter(
+    ([, entry]) =>
+      normalizeProviderIdForActiveRun(entry.authProviderId) === providerId ||
+      normalizeProviderIdForActiveRun(entry.providerId) === providerId,
+  );
+  const runIds: string[] = [];
+  for (const [runId, entry] of matches) {
+    const result = abortChatRunById(ops, {
+      runId,
+      sessionKey: entry.sessionKey,
+      stopReason: params.stopReason,
+    });
+    if (result.aborted) {
+      runIds.push(runId);
+    }
+  }
+  return { runIds };
 }

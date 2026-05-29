@@ -131,6 +131,41 @@ describe("createBlockReplyDeliveryHandler", () => {
     );
   });
 
+  it("sends presentation-only block replies when block streaming is disabled", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    const directlySentBlockKeys = new Set<string>();
+    const presentation = {
+      blocks: [{ type: "buttons" as const, buttons: [{ label: "Open", value: "open" }] }],
+    };
+
+    const handler = createBlockReplyDeliveryHandler({
+      onBlockReply,
+      normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
+      applyReplyToMode: (payload) => payload,
+      typingSignals: {
+        signalTextDelta: vi.fn(async () => {}),
+      } as unknown as TypingSignaler,
+      blockStreamingEnabled: false,
+      blockReplyPipeline: null,
+      directlySentBlockKeys,
+    });
+
+    await handler({ presentation });
+
+    const expectedPayload = {
+      presentation,
+      text: undefined,
+      mediaUrl: undefined,
+      mediaUrls: undefined,
+      replyToId: undefined,
+      replyToCurrent: undefined,
+      replyToTag: undefined,
+      audioAsVoice: false,
+    };
+    expect(onBlockReply).toHaveBeenCalledWith(expectedPayload);
+    expect(directlySentBlockKeys).toEqual(new Set([createBlockReplyContentKey(expectedPayload)]));
+  });
+
   it("keeps text-only block replies buffered when block streaming is disabled", async () => {
     const onBlockReply = vi.fn(async () => {});
 
@@ -220,11 +255,9 @@ describe("createBlockReplyDeliveryHandler", () => {
       parseMode: "auto",
     });
 
-    expect(normalized.payload).toMatchObject({
-      text: "Result",
-      mediaUrl: "./image.png",
-      mediaUrls: ["./image.png"],
-    });
+    expect(normalized.payload.text).toBe("Result");
+    expect(normalized.payload.mediaUrl).toBe("./image.png");
+    expect(normalized.payload.mediaUrls).toEqual(["./image.png"]);
   });
 
   it("parses lowercase media directives in block replies before path normalization", () => {
@@ -234,11 +267,9 @@ describe("createBlockReplyDeliveryHandler", () => {
       parseMode: "auto",
     });
 
-    expect(normalized.payload).toMatchObject({
-      text: undefined,
-      mediaUrl: "./report.pdf",
-      mediaUrls: ["./report.pdf"],
-    });
+    expect(normalized.payload.text).toBeUndefined();
+    expect(normalized.payload.mediaUrl).toBe("./report.pdf");
+    expect(normalized.payload.mediaUrls).toEqual(["./report.pdf"]);
   });
 
   it("does not mark plain replies as explicit reply_to_current opt-outs", () => {
@@ -278,6 +309,43 @@ describe("createBlockReplyDeliveryHandler", () => {
 
     expect(blockReplyPipeline.enqueue).toHaveBeenCalledWith({
       text: "Result",
+      mediaUrl: absPath,
+      mediaUrls: [absPath],
+      replyToId: undefined,
+      replyToCurrent: undefined,
+      replyToTag: false,
+      audioAsVoice: false,
+    });
+  });
+
+  it("suppresses generated media-failure warning text for silent block replies", async () => {
+    const blockReplyPipeline = {
+      enqueue: vi.fn(),
+    } as unknown as BlockReplyPipelineLike;
+    const absPath = path.join("/tmp/home", "openclaw", "survived.png");
+
+    const handler = createBlockReplyDeliveryHandler({
+      onBlockReply: vi.fn(async () => {}),
+      normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
+      applyReplyToMode: (payload) => payload,
+      normalizeMediaPaths: async (payload) => ({
+        ...payload,
+        text: "⚠️ Media failed.",
+        mediaUrl: absPath,
+        mediaUrls: [absPath],
+      }),
+      typingSignals: {
+        signalTextDelta: vi.fn(async () => {}),
+      } as unknown as TypingSignaler,
+      blockStreamingEnabled: true,
+      blockReplyPipeline,
+      directlySentBlockKeys: new Set(),
+    });
+
+    await handler({ text: "NO_REPLY\nMEDIA: ./missing.png\nMEDIA: ./survived.png" });
+
+    expect(blockReplyPipeline.enqueue).toHaveBeenCalledWith({
+      text: undefined,
       mediaUrl: absPath,
       mediaUrls: [absPath],
       replyToId: undefined,

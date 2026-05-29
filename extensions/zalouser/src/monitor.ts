@@ -12,9 +12,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   DEFAULT_GROUP_HISTORY_LIMIT,
   type HistoryEntry,
-  buildPendingHistoryContextFromMap,
-  clearHistoryEntriesIfEnabled,
-  recordPendingHistoryEntryIfEnabled,
+  createChannelHistoryWindow,
 } from "openclaw/plugin-sdk/reply-history";
 import {
   deliverTextOrMediaReply,
@@ -488,6 +486,9 @@ async function processMessage(
     },
   });
   const historyKey = isGroup ? route.sessionKey : undefined;
+  const channelHistory = createChannelHistoryWindow({
+    historyMap: historyState.groupHistories,
+  });
 
   const requireMention = isGroup
     ? resolveGroupRequireMention({
@@ -537,8 +538,7 @@ async function processMessage(
     return;
   }
   if (isGroup && mentionDecision.shouldSkip) {
-    recordPendingHistoryEntryIfEnabled({
-      historyMap: historyState.groupHistories,
+    channelHistory.record({
       historyKey: historyKey ?? "",
       limit: historyState.historyLimit,
       entry:
@@ -586,8 +586,7 @@ async function processMessage(
   });
   const combinedBody =
     isGroup && historyKey
-      ? buildPendingHistoryContextFromMap({
-          historyMap: historyState.groupHistories,
+      ? channelHistory.buildPendingContext({
           historyKey,
           limit: historyState.historyLimit,
           currentMessage: body,
@@ -605,11 +604,10 @@ async function processMessage(
       : body;
   const inboundHistory =
     isGroup && historyKey && historyState.historyLimit > 0
-      ? (historyState.groupHistories.get(historyKey) ?? []).map((entry) => ({
-          sender: entry.sender,
-          body: entry.body,
-          timestamp: entry.timestamp,
-        }))
+      ? channelHistory.buildInboundHistory({
+          historyKey,
+          limit: historyState.historyLimit,
+        })
       : undefined;
 
   const normalizedTo = isGroup ? `zalouser:group:${chatId}` : `zalouser:${chatId}`;
@@ -623,7 +621,7 @@ async function processMessage(
     cliMsgId: message.cliMsgId,
   });
 
-  const ctxPayload = core.channel.turn.buildContext({
+  const ctxPayload = core.channel.inbound.buildContext({
     channel: "zalouser",
     accountId: route.accountId,
     messageId: messageSid,
@@ -638,10 +636,6 @@ async function processMessage(
       kind: isGroup ? "group" : "direct",
       id: chatId,
       label: fromLabel,
-      routePeer: {
-        kind: isGroup ? "group" : "direct",
-        id: chatId,
-      },
     },
     route: {
       agentId: route.agentId,
@@ -659,7 +653,6 @@ async function processMessage(
       rawBody,
       commandBody,
       inboundHistory,
-      envelopeFrom: fromLabel,
     },
     extra: {
       BodyForCommands: commandBody,
@@ -668,6 +661,9 @@ async function processMessage(
       GroupMembers: isGroup ? groupMembers : undefined,
       WasMentioned: isGroup ? mentionDecision.effectiveWasMentioned : undefined,
       CommandAuthorized: commandAuthorized,
+      ReplyToId: message.quotedGlobalMsgId || undefined,
+      ReplyToBody: message.quotedBody || undefined,
+      ReplyToIsQuote: message.quotedGlobalMsgId ? true : undefined,
     },
   });
 
@@ -688,7 +684,7 @@ async function processMessage(
     },
   };
 
-  await core.channel.turn.runAssembled({
+  await core.channel.inbound.dispatchReply({
     channel: "zalouser",
     accountId: account.accountId,
     cfg: config,
@@ -749,8 +745,7 @@ async function processMessage(
     },
   });
   if (isGroup && historyKey) {
-    clearHistoryEntriesIfEnabled({
-      historyMap: historyState.groupHistories,
+    channelHistory.clear({
       historyKey,
       limit: historyState.historyLimit,
     });
@@ -1026,7 +1021,7 @@ export async function monitorZalouserProvider(
   return { stop };
 }
 
-export const __testing = {
+export const testing = {
   processMessage: async (params: {
     message: ZaloInboundMessage;
     account: ResolvedZalouserAccount;
@@ -1057,3 +1052,4 @@ export const __testing = {
     );
   },
 };
+export { testing as __testing };

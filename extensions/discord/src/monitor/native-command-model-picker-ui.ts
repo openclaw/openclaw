@@ -25,8 +25,10 @@ import {
   type DiscordModelPickerPreferenceScope,
 } from "./model-picker-preferences.js";
 import {
+  findProviderBucketLocation,
   loadDiscordModelPickerData,
   renderDiscordModelPickerModelsView,
+  resolveDiscordModelPickerPageForModel,
   toDiscordModelPickerMessagePayload,
   type DiscordModelPickerCommandContext,
 } from "./model-picker.js";
@@ -83,12 +85,6 @@ function buildDiscordModelPickerCurrentModel(
   defaultModel: string,
 ): string {
   return `${defaultProvider}/${defaultModel}`;
-}
-
-function resolveConfiguredAgentRuntimeId(value: {
-  agentRuntime?: { id?: unknown };
-}): string | undefined {
-  return normalizeOptionalString(value.agentRuntime?.id);
 }
 
 export function buildDiscordModelPickerAllowedModelRefs(
@@ -277,19 +273,9 @@ export function resolveDiscordModelPickerCurrentRuntime(params: {
     if (sessionRuntime) {
       return sessionRuntime;
     }
-  } catch {
-    // Fall through to configured defaults when the session store is unavailable.
-  }
+  } catch {}
 
-  const agentRuntime = resolveConfiguredAgentRuntimeId(
-    params.cfg.agents?.list?.find(
-      (entry) => normalizeOptionalString(entry.id) === params.route.agentId,
-    ) ?? {},
-  );
-  if (agentRuntime) {
-    return agentRuntime;
-  }
-  return resolveConfiguredAgentRuntimeId(params.cfg.agents?.defaults ?? {}) ?? "auto";
+  return "auto";
 }
 
 export async function replyWithDiscordModelPickerProviders(params: {
@@ -327,19 +313,32 @@ export async function replyWithDiscordModelPickerProviders(params: {
     allowedModelRefs: buildDiscordModelPickerAllowedModelRefs(data),
     limit: 5,
   });
-  const currentProvider = splitDiscordModelRef(currentModel ?? "")?.provider;
+  const parsedCurrentRef = splitDiscordModelRef(currentModel ?? "");
   const initialProvider =
-    currentProvider && data.byProvider.has(currentProvider)
-      ? currentProvider
+    parsedCurrentRef && data.byProvider.has(parsedCurrentRef.provider)
+      ? parsedCurrentRef.provider
       : (data.providers[0] ?? data.resolvedDefault.provider);
+  const initialResolved =
+    parsedCurrentRef && parsedCurrentRef.provider === initialProvider
+      ? resolveDiscordModelPickerPageForModel({
+          data,
+          provider: initialProvider,
+          model: parsedCurrentRef.model,
+        })
+      : { page: 1 };
+  const initialPage = initialResolved.page;
+  const initialModelBucket = initialResolved.bucket;
+  const initialProviderLocation = findProviderBucketLocation(data, initialProvider);
 
   const rendered = renderDiscordModelPickerModelsView({
     command: params.command,
     userId: params.userId,
     data,
     provider: initialProvider,
-    page: 1,
-    providerPage: 1,
+    page: initialPage,
+    providerPage: initialProviderLocation?.page ?? 1,
+    providerBucket: initialProviderLocation?.bucket,
+    modelBucket: initialModelBucket,
     currentModel,
     currentRuntime,
     quickModels,

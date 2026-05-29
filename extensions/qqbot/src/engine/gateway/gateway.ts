@@ -15,6 +15,7 @@ import {
 import { setRefIndex } from "../ref/store.js";
 import { runDiagnostics } from "../utils/diagnostics.js";
 import { runWithRequestContext } from "../utils/request-context.js";
+import { createActiveCfgProvider } from "./active-cfg.js";
 import { GatewayConnection } from "./gateway-connection.js";
 import { buildInboundContext, clearGroupPendingHistory } from "./inbound-pipeline.js";
 import { createInteractionHandler } from "./interaction-handler.js";
@@ -95,6 +96,11 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
     ? (groupOpts.sessionStoreReader ?? createNodeSessionStoreReader())
     : undefined;
 
+  // Live config provider: per-inbound lookup so binding edits applied
+  // through the CLI take effect without a gateway restart (#69546).
+  const activeCfgProvider = createActiveCfgProvider({ fallback: ctx.cfg });
+
+  // ---- 7. Message handler ----
   const handleMessage = async (event: QueuedMessage): Promise<void> => {
     log?.info(`Processing message from ${event.senderId}: ${event.content}`, {
       accountId: account.accountId,
@@ -110,9 +116,11 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
       direction: "inbound",
     });
 
+    const activeCfg = activeCfgProvider.getActiveCfg();
+
     const inbound = await buildInboundContext(event, {
       account,
-      cfg: ctx.cfg,
+      cfg: activeCfg,
       log,
       runtime,
       startTyping: (ev) => startTypingForEvent(ev, account, log),
@@ -156,7 +164,7 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
           targetId: inbound.peerId,
           chatType: event.type,
         },
-        () => dispatchOutbound(inbound, { runtime, cfg: ctx.cfg, account, log }),
+        () => dispatchOutbound(inbound, { runtime, cfg: activeCfg, account, log }),
       );
     } catch (err) {
       log?.error(`Message processing failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -173,7 +181,10 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
     }
   };
 
-  const handleInteraction = createInteractionHandler(account, ctx.runtime, log);
+  const handleInteraction = createInteractionHandler(account, ctx.runtime, log, {
+    getActiveCfg: () => activeCfgProvider.getActiveCfg(),
+    resolveCommandAuthorized: (params) => adapters.access.resolveSlashCommandAuthorization(params),
+  });
 
   const connection = new GatewayConnection({
     account,
@@ -210,7 +221,7 @@ async function startTypingForEvent(
   try {
     const creds = accountToCreds(account);
     const rawNotifyFn = createRawInputNotifyFn(account.appId);
-    try {
+    const sendNotifyAndStartKeepAlive = async () => {
       const resp = await senderSendInputNotify({
         openid: event.senderId,
         creds,
@@ -227,26 +238,14 @@ async function startTypingForEvent(
       );
       keepAlive.start();
       return { refIdx: resp.refIdx, keepAlive };
+    };
+    try {
+      return await sendNotifyAndStartKeepAlive();
     } catch (notifyErr) {
       const errMsg = String(notifyErr);
       if (errMsg.includes("token") || errMsg.includes("401") || errMsg.includes("11244")) {
         clearTokenCache(account.appId);
-        const resp = await senderSendInputNotify({
-          openid: event.senderId,
-          creds,
-          msgId: event.messageId,
-          inputSecond: TYPING_INPUT_SECOND,
-        });
-        const keepAlive = new TypingKeepAlive(
-          () => getAccessToken(account.appId, account.clientSecret),
-          () => clearTokenCache(account.appId),
-          rawNotifyFn,
-          event.senderId,
-          event.messageId,
-          log,
-        );
-        keepAlive.start();
-        return { refIdx: resp.refIdx, keepAlive };
+        return await sendNotifyAndStartKeepAlive();
       }
       throw notifyErr;
     }

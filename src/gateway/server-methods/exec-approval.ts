@@ -1,7 +1,18 @@
+import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
+import {
+  ErrorCodes,
+  errorShape,
+  formatValidationErrors,
+  validateExecApprovalGetParams,
+  validateExecApprovalRequestParams,
+  validateExecApprovalResolveParams,
+} from "../../../packages/gateway-protocol/src/index.js";
+import { resolveExecCommandHighlighting } from "../../config/exec-command-highlighting.js";
 import { resolveCommandAnalysisSummaryForDisplay } from "../../infra/command-analysis/explain.js";
 import {
   resolveExecApprovalCommandDisplay,
   sanitizeExecApprovalDisplayText,
+  sanitizeExecApprovalDisplayTextWithStatus,
   sanitizeExecApprovalWarningText,
 } from "../../infra/exec-approval-command-display.js";
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
@@ -21,22 +32,15 @@ import { resolveSystemRunApprovalRequestContext } from "../../infra/system-run-a
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import {
-  ErrorCodes,
-  errorShape,
-  formatValidationErrors,
-  validateExecApprovalGetParams,
-  validateExecApprovalRequestParams,
-  validateExecApprovalResolveParams,
-} from "../protocol/index.js";
-import {
   handleApprovalWaitDecision,
   handlePendingApprovalRequest,
   handleApprovalResolve,
   isApprovalDecision,
+  isApprovalRecordVisibleToClient,
   respondPendingApprovalLookupError,
   resolvePendingApprovalRecord,
 } from "./approval-shared.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayClient, GatewayRequestHandlers } from "./types.js";
 
 const APPROVAL_ALLOW_ALWAYS_UNAVAILABLE_DETAILS = {
   reason: "APPROVAL_ALLOW_ALWAYS_UNAVAILABLE",
@@ -44,7 +48,12 @@ const APPROVAL_ALLOW_ALWAYS_UNAVAILABLE_DETAILS = {
 const RESERVED_PLUGIN_APPROVAL_ID_PREFIX = "plugin:";
 
 type ExecApprovalIosPushDelivery = {
-  handleRequested?: (request: ExecApprovalRequest) => Promise<boolean>;
+  handleRequested?: (
+    request: ExecApprovalRequest,
+    opts?: {
+      isTargetVisible?: (target: { deviceId: string; scopes: readonly string[] }) => boolean;
+    },
+  ) => Promise<boolean>;
   handleResolved?: (resolved: ExecApprovalResolved) => Promise<void>;
   handleExpired?: (request: ExecApprovalRequest) => Promise<void>;
 };
@@ -83,7 +92,7 @@ export function createExecApprovalHandlers(
   opts?: { forwarder?: ExecApprovalForwarder; iosPushDelivery?: ExecApprovalIosPushDelivery },
 ): GatewayRequestHandlers {
   return {
-    "exec.approval.get": async ({ params, respond }) => {
+    "exec.approval.get": async ({ params, respond, client }) => {
       if (!validateExecApprovalGetParams(params)) {
         respond(
           false,
@@ -101,6 +110,7 @@ export function createExecApprovalHandlers(
       const resolved = resolvePendingApprovalRecord({
         manager,
         inputId: p.id,
+        client,
         exposeAmbiguousPrefixError: true,
       });
       if (!resolved.ok) {
@@ -125,15 +135,18 @@ export function createExecApprovalHandlers(
         undefined,
       );
     },
-    "exec.approval.list": async ({ respond }) => {
+    "exec.approval.list": async ({ respond, client }) => {
       respond(
         true,
-        manager.listPendingRecords().map((record) => ({
-          id: record.id,
-          request: record.request,
-          createdAtMs: record.createdAtMs,
-          expiresAtMs: record.expiresAtMs,
-        })),
+        manager
+          .listPendingRecords()
+          .filter((record) => isApprovalRecordVisibleToClient({ record, client }))
+          .map((record) => ({
+            id: record.id,
+            request: record.request,
+            createdAtMs: record.createdAtMs,
+            expiresAtMs: record.expiresAtMs,
+          })),
         undefined,
       );
     },
@@ -174,6 +187,8 @@ export function createExecApprovalHandlers(
         turnSourceTo?: string;
         turnSourceAccountId?: string;
         turnSourceThreadId?: string | number;
+        requireDeliveryRoute?: boolean;
+        suppressDelivery?: boolean;
         timeoutMs?: number;
         twoPhase?: boolean;
       };
@@ -241,6 +256,27 @@ export function createExecApprovalHandlers(
       }
       const envBinding = buildSystemRunApprovalEnvBinding(p.env);
       const warningText = normalizeOptionalString(p.warningText);
+      const runtimeConfig =
+        typeof context.getRuntimeConfig === "function" ? context.getRuntimeConfig() : {};
+      const commandHighlighting = resolveExecCommandHighlighting({
+        config: runtimeConfig,
+        agentId: effectiveAgentId,
+      });
+      const sanitizedCommandDisplay =
+        sanitizeExecApprovalDisplayTextWithStatus(effectiveCommandText);
+      if (sanitizedCommandDisplay.truncated || sanitizedCommandDisplay.oversized) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "command exceeds exec approval display limit", {
+            details: {
+              reason: "EXEC_APPROVAL_COMMAND_DISPLAY_LIMIT",
+            },
+          }),
+        );
+        return;
+      }
+      const sanitizedCommandText = sanitizedCommandDisplay.text;
       const commandAnalysis = resolveCommandAnalysisSummaryForDisplay({
         host,
         commandText: effectiveCommandText,
@@ -248,9 +284,8 @@ export function createExecApprovalHandlers(
         cwd: effectiveCwd,
         sanitizeText: sanitizeExecApprovalWarningText,
       });
-      const sanitizedCommandText = sanitizeExecApprovalDisplayText(effectiveCommandText);
       const commandSpans =
-        sanitizedCommandText === effectiveCommandText
+        commandHighlighting && sanitizedCommandText === effectiveCommandText
           ? normalizeCommandSpans(p.commandSpans, sanitizedCommandText.length)
           : undefined;
       const systemRunBinding =
@@ -334,6 +369,9 @@ export function createExecApprovalHandlers(
         requestEventName: "exec.approval.requested",
         requestEvent,
         twoPhase,
+        approvalKind: "exec",
+        requireDeliveryRoute: p.requireDeliveryRoute,
+        suppressDelivery: p.suppressDelivery,
         deliverRequest: () => {
           const deliveryTasks: Array<Promise<boolean>> = [];
           if (opts?.forwarder) {
@@ -348,12 +386,26 @@ export function createExecApprovalHandlers(
           }
           if (opts?.iosPushDelivery?.handleRequested) {
             deliveryTasks.push(
-              opts.iosPushDelivery.handleRequested(requestEvent).catch((err) => {
-                context.logGateway?.error?.(
-                  `exec approvals: iOS push request failed: ${String(err)}`,
-                );
-                return false;
-              }),
+              opts.iosPushDelivery
+                .handleRequested(requestEvent, {
+                  isTargetVisible: (target) =>
+                    isApprovalRecordVisibleToClient({
+                      record,
+                      client: {
+                        connect: {
+                          client: { id: GATEWAY_CLIENT_IDS.IOS_APP },
+                          device: { id: target.deviceId },
+                          scopes: [...target.scopes],
+                        },
+                      } as GatewayClient,
+                    }),
+                })
+                .catch((err) => {
+                  context.logGateway?.error?.(
+                    `exec approvals: iOS push request failed: ${String(err)}`,
+                  );
+                  return false;
+                }),
             );
           }
           if (deliveryTasks.length === 0) {
@@ -375,10 +427,11 @@ export function createExecApprovalHandlers(
         afterDecisionErrorLabel: "exec approvals: iOS push expire failed",
       });
     },
-    "exec.approval.waitDecision": async ({ params, respond }) => {
+    "exec.approval.waitDecision": async ({ params, respond, client }) => {
       await handleApprovalWaitDecision({
         manager,
         inputId: (params as { id?: string }).id,
+        client,
         respond,
       });
     },

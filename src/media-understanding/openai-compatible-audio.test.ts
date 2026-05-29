@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { VERSION } from "../version.js";
 import {
   createRequestCaptureJsonFetch,
   installPinnedHostnameTestHooks,
@@ -24,8 +25,8 @@ describe("transcribeOpenAiCompatibleAudio", () => {
 
     const headers = new Headers(getRequest().init?.headers);
     expect(headers.get("originator")).toBe("openclaw");
-    expect(headers.get("version")).toEqual(expect.stringMatching(/\S/u));
-    expect(headers.get("user-agent")).toMatch(/^openclaw\//);
+    expect(headers.get("version")).toBe(VERSION);
+    expect(headers.get("user-agent")).toBe(`openclaw/${VERSION}`);
   });
 
   it("does not add hidden attribution headers on custom OpenAI-compatible hosts", async () => {
@@ -69,5 +70,39 @@ describe("transcribeOpenAiCompatibleAudio", () => {
     const file = (form as FormData).get("file");
     expect(file).toBeInstanceOf(File);
     expect((file as File).name).toBe("voice-note.m4a");
+  });
+
+  it("wraps malformed transcription JSON with a stable provider error", async () => {
+    const fetchFn = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response("{ nope"));
+
+    await expect(
+      transcribeOpenAiCompatibleAudio({
+        buffer: Buffer.from("audio"),
+        fileName: "note.mp3",
+        apiKey: "test-key",
+        timeoutMs: 1000,
+        fetchFn,
+        provider: "openai",
+        defaultBaseUrl: "https://api.openai.com/v1",
+        defaultModel: "gpt-4o-transcribe",
+      }),
+    ).rejects.toThrow("Audio transcription failed: malformed JSON response");
+  });
+
+  it("rejects non-object successful transcription JSON with a stable provider error", async () => {
+    const fetchFn = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(JSON.stringify([])));
+
+    await expect(
+      transcribeOpenAiCompatibleAudio({
+        buffer: Buffer.from("audio"),
+        fileName: "note.mp3",
+        apiKey: "test-key",
+        timeoutMs: 1000,
+        fetchFn,
+        provider: "openai",
+        defaultBaseUrl: "https://api.openai.com/v1",
+        defaultModel: "gpt-4o-transcribe",
+      }),
+    ).rejects.toThrow("Audio transcription failed: malformed JSON response");
   });
 });

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NON_ENV_SECRETREF_MARKER } from "../../agents/model-auth-markers.js";
+import { resolveEnvApiKey } from "../../agents/model-auth.js";
 import { withEnv } from "../../test-utils/env.js";
 import { resolveProviderAuthOverview } from "./list.auth-overview.js";
 
@@ -57,7 +58,7 @@ vi.mock("../../agents/model-auth.js", () => {
         provider: string;
       }) => {
         const apiKey = resolveConfigKey(params.cfg, params.provider);
-        if (!apiKey || apiKey === "secretref-managed") {
+        if (!apiKey || apiKey === "secretref-managed" || apiKey.startsWith("oauth:")) {
           return null;
         }
         if (apiKey === "OPENAI_API_KEY") {
@@ -94,6 +95,7 @@ function resolveOpenAiOverview(apiKey: string) {
 describe("resolveProviderAuthOverview", () => {
   beforeEach(() => {
     persistedStores.clear();
+    vi.mocked(resolveEnvApiKey).mockClear();
   });
 
   it("labels token profiles that only have tokenRef", () => {
@@ -188,6 +190,18 @@ describe("resolveProviderAuthOverview", () => {
     expect(overview.modelsJson?.value).toContain(`marker(${NON_ENV_SECRETREF_MARKER})`);
   });
 
+  it("treats OAuth delegation markers as effective models.json auth", () => {
+    const overview = withEnv({ OPENAI_API_KEY: undefined }, () =>
+      resolveOpenAiOverview("oauth:openai-codex"),
+    );
+
+    expect(overview.effective).toEqual({
+      kind: "models.json",
+      detail: "marker(oauth:openai-codex)",
+    });
+    expect(overview.modelsJson?.value).toBe("marker(oauth:openai-codex)");
+  });
+
   it("keeps env-var-shaped models.json values masked to avoid accidental plaintext exposure", () => {
     const overview = withEnv({ OPENAI_API_KEY: undefined }, () =>
       resolveOpenAiOverview("OPENAI_API_KEY"),
@@ -213,5 +227,45 @@ describe("resolveProviderAuthOverview", () => {
         process.env.OPENAI_API_KEY = prior;
       }
     }
+  });
+
+  it("keeps setup fallback when precomputed auth maps do not cover the provider", () => {
+    resolveProviderAuthOverview({
+      provider: "amazon-bedrock",
+      cfg: {},
+      store: { version: 1, profiles: {} } as never,
+      modelsPath: "/tmp/models.json",
+      aliasMap: {},
+      envCandidateMap: { openai: ["OPENAI_API_KEY"] },
+      authEvidenceMap: {},
+    });
+
+    expect(resolveEnvApiKey).toHaveBeenCalledWith(
+      "amazon-bedrock",
+      process.env,
+      expect.objectContaining({
+        skipSetupProviderFallback: false,
+      }),
+    );
+  });
+
+  it("skips setup fallback when precomputed auth maps cover the provider", () => {
+    resolveProviderAuthOverview({
+      provider: "openai",
+      cfg: {},
+      store: { version: 1, profiles: {} } as never,
+      modelsPath: "/tmp/models.json",
+      aliasMap: {},
+      envCandidateMap: { openai: ["OPENAI_API_KEY"] },
+      authEvidenceMap: {},
+    });
+
+    expect(resolveEnvApiKey).toHaveBeenCalledWith(
+      "openai",
+      process.env,
+      expect.objectContaining({
+        skipSetupProviderFallback: true,
+      }),
+    );
   });
 });

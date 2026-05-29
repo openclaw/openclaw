@@ -34,6 +34,24 @@ type ParsedLineWebhookPayload = {
   events: unknown;
 };
 
+function firstMockCall(
+  mock: { mock: { calls: Array<readonly unknown[]> } },
+  label: string,
+): readonly unknown[] {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
+function firstParsedPayload(
+  mock: { mock: { calls: Array<readonly unknown[]> } },
+  label: string,
+): ParsedLineWebhookPayload {
+  return firstMockCall(mock, label)[0] as ParsedLineWebhookPayload;
+}
+
 type RuntimeEnvMock = RuntimeEnv & {
   error: ReturnType<typeof vi.fn<(...args: unknown[]) => void>>;
   exit: ReturnType<typeof vi.fn<(code: number) => void>>;
@@ -234,9 +252,9 @@ async function expectSignedRawBodyWins(params: { rawBody: string | Buffer; signe
 
   expect(res.status).toHaveBeenCalledWith(200);
   expect(onEvents).toHaveBeenCalledTimes(1);
-  const processedBody = (
-    onEvents.mock.calls[0] as unknown as [{ events?: Array<{ source?: { userId?: string } }> }]
-  )?.[0];
+  const processedBody = firstMockCall(onEvents, "LINE webhook events")[0] as {
+    events?: Array<{ source?: { userId?: string } }>;
+  };
   expect(processedBody?.events?.[0]?.source?.userId).toBe(params.signedUserId);
   expect(processedBody?.events?.[0]?.source?.userId).not.toBe("tampered-user");
 }
@@ -285,7 +303,7 @@ describe("LINE webhook shared POST contract", () => {
   );
 
   it.each(sharedWebhookPostContractCases)(
-    "$name returns 500 when event processing fails and does not acknowledge with 200",
+    "$name acknowledges signed events before failed background processing is logged",
     async ({ invoke }) => {
       const result = await invoke({
         failWith: new Error("transient failure"),
@@ -293,10 +311,12 @@ describe("LINE webhook shared POST contract", () => {
         signed: true,
       });
 
-      expect(result.status).toBe(500);
-      expect(result.body).toEqual({ error: "Internal server error" });
+      expect(result.status).toBe(200);
+      expect(result.body).toEqual({ status: "ok" });
       expect(result.dispatched).toHaveBeenCalledTimes(1);
-      expect(result.runtimeError).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => {
+        expect(result.runtimeError).toHaveBeenCalledTimes(1);
+      });
     },
   );
 });
@@ -414,11 +434,11 @@ describe("createLineNodeWebhookHandler", () => {
 
     expect(res.statusCode).toBe(200);
     expect(bot.handleWebhook).toHaveBeenCalledTimes(1);
-    const [payload] = bot.handleWebhook.mock.calls[0] as unknown as [ParsedLineWebhookPayload];
+    const payload = firstParsedPayload(bot.handleWebhook, "LINE node webhook payload");
     expect(payload.events).toEqual([{ type: "message" }]);
   });
 
-  it("releases authenticated requests before event processing completes", async () => {
+  it("acknowledges signed event requests before event processing completes", async () => {
     const rawBody = JSON.stringify({ events: [{ type: "message" }] });
     let releaseAuthenticated: (() => void) | undefined;
     const bot = {
@@ -447,14 +467,14 @@ describe("createLineNodeWebhookHandler", () => {
       expect(bot.handleWebhook).toHaveBeenCalledTimes(1);
     });
 
-    expect(res.headersSent).toBe(false);
+    await request;
+
+    expect(res.statusCode).toBe(200);
+    expect(res.headersSent).toBe(true);
     if (!releaseAuthenticated) {
       throw new Error("Expected LINE authenticated request release callback to be initialized");
     }
     releaseAuthenticated();
-    await request;
-
-    expect(res.statusCode).toBe(200);
   });
 
   it("returns 400 for invalid JSON payload even when signature is valid", async () => {
@@ -494,7 +514,7 @@ describe("createLineWebhookMiddleware", () => {
     const { res, onEvents } = await invokeWebhook({ body });
     expect(res.status).toHaveBeenCalledWith(200);
     expect(onEvents).toHaveBeenCalledTimes(1);
-    const [payload] = onEvents.mock.calls[0] as unknown as [ParsedLineWebhookPayload];
+    const payload = firstParsedPayload(onEvents, "LINE middleware payload");
     expect(payload.events).toEqual(expectedEvents);
   });
 

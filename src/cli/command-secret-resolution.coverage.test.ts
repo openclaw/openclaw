@@ -10,6 +10,7 @@ const SECRET_TARGET_CALLSITES = [
   "src/commands/channels/resolve.ts",
   "src/commands/channels/shared.ts",
   "src/commands/message.ts",
+  "src/cli/capability-cli.ts",
   "src/commands/models/load-config.ts",
   "src/commands/status-all.ts",
   "src/commands/status.scan.ts",
@@ -20,6 +21,7 @@ function hasSupportedTargetIdsWiring(source: string): boolean {
     source.includes("resolveAgentRuntimeConfig(") ||
     /targetIds:\s*get[A-Za-z0-9_]+\(\)/m.test(source) ||
     /targetIds:\s*getAgentRuntimeCommandSecretTargetIds\(/m.test(source) ||
+    /targetIds:\s*getCapabilityWeb(Fetch|Search)CommandSecretTargetIds\(/m.test(source) ||
     /targetIds:\s*scopedTargets\.targetIds/m.test(source) ||
     source.includes("collectStatusScanOverview({")
   );

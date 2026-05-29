@@ -68,36 +68,41 @@ async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();
 }
 
+function createAgentWithSession(query: ManualAsyncIterator) {
+  const agent = new ClaudeAcpAgent({
+    sessionUpdate: vi.fn(),
+    extNotification: vi.fn(),
+  } as unknown as ConstructorParameters<typeof ClaudeAcpAgent>[0]);
+  agent.sessions["session-1"] = {
+    cancelled: false,
+    accumulatedUsage: {
+      inputTokens: 0,
+      outputTokens: 0,
+      cachedReadTokens: 0,
+      cachedWriteTokens: 0,
+    },
+    contextWindowSize: 200_000,
+    cwd: "/tmp",
+    emitRawSDKMessages: false,
+    input: {
+      push: vi.fn(),
+      end: vi.fn(),
+    },
+    nextPendingOrder: 0,
+    pendingMessages: new Map(),
+    promptRunning: false,
+    query,
+    settingsManager: {
+      dispose: vi.fn(),
+    },
+  } as unknown as (typeof agent.sessions)[string];
+  return agent;
+}
+
 describe("patched claude-agent-acp completion", () => {
   it("does not resolve a prompt on idle before the result message", async () => {
     const query = new ManualAsyncIterator();
-    const agent = new ClaudeAcpAgent({
-      sessionUpdate: vi.fn(),
-      extNotification: vi.fn(),
-    } as unknown as ConstructorParameters<typeof ClaudeAcpAgent>[0]);
-    agent.sessions["session-1"] = {
-      cancelled: false,
-      accumulatedUsage: {
-        inputTokens: 0,
-        outputTokens: 0,
-        cachedReadTokens: 0,
-        cachedWriteTokens: 0,
-      },
-      contextWindowSize: 200_000,
-      cwd: "/tmp",
-      emitRawSDKMessages: false,
-      input: {
-        push: vi.fn(),
-        end: vi.fn(),
-      },
-      nextPendingOrder: 0,
-      pendingMessages: new Map(),
-      promptRunning: false,
-      query,
-      settingsManager: {
-        dispose: vi.fn(),
-      },
-    } as unknown as (typeof agent.sessions)[string];
+    const agent = createAgentWithSession(query);
 
     let resolved = false;
     const promptPromise = agent
@@ -119,44 +124,15 @@ describe("patched claude-agent-acp completion", () => {
     expect(resolved).toBe(false);
 
     query.push(makeIdleMessage());
-    await expect(promptPromise).resolves.toMatchObject({
-      stopReason: "end_turn",
-      usage: {
-        inputTokens: 1,
-        outputTokens: 1,
-      },
-    });
+    const result = await promptPromise;
+    expect(result.stopReason).toBe("end_turn");
+    expect(result.usage?.inputTokens).toBe(1);
+    expect(result.usage?.outputTokens).toBe(1);
   });
 
   it("does not resolve a prompt after a task-notification result goes idle", async () => {
     const query = new ManualAsyncIterator();
-    const agent = new ClaudeAcpAgent({
-      sessionUpdate: vi.fn(),
-      extNotification: vi.fn(),
-    } as unknown as ConstructorParameters<typeof ClaudeAcpAgent>[0]);
-    agent.sessions["session-1"] = {
-      cancelled: false,
-      accumulatedUsage: {
-        inputTokens: 0,
-        outputTokens: 0,
-        cachedReadTokens: 0,
-        cachedWriteTokens: 0,
-      },
-      contextWindowSize: 200_000,
-      cwd: "/tmp",
-      emitRawSDKMessages: false,
-      input: {
-        push: vi.fn(),
-        end: vi.fn(),
-      },
-      nextPendingOrder: 0,
-      pendingMessages: new Map(),
-      promptRunning: false,
-      query,
-      settingsManager: {
-        dispose: vi.fn(),
-      },
-    } as unknown as (typeof agent.sessions)[string];
+    const agent = createAgentWithSession(query);
 
     let resolved = false;
     const promptPromise = agent
@@ -182,12 +158,9 @@ describe("patched claude-agent-acp completion", () => {
     expect(resolved).toBe(false);
 
     query.push(makeIdleMessage());
-    await expect(promptPromise).resolves.toMatchObject({
-      stopReason: "end_turn",
-      usage: {
-        inputTokens: 2,
-        outputTokens: 2,
-      },
-    });
+    const result = await promptPromise;
+    expect(result.stopReason).toBe("end_turn");
+    expect(result.usage?.inputTokens).toBe(2);
+    expect(result.usage?.outputTokens).toBe(2);
   });
 });

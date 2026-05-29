@@ -1,14 +1,21 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { GoogleGenAI, Modality } from "@google/genai";
 import { chromium, type Browser } from "playwright";
-import { createServer, type ViteDevServer } from "vite";
+import { createServer } from "vite";
 import { buildOpenAIRealtimeVoiceProvider } from "../../extensions/openai/realtime-voice-provider.ts";
+import {
+  parseStrictIntegerOption,
+  previewForDevToolLog,
+  redactJsonValueForDevToolLog,
+} from "../lib/dev-tooling-safety.ts";
 
 const OPENAI_REALTIME_MODEL =
   process.env.OPENCLAW_REALTIME_OPENAI_MODEL?.trim() || "gpt-realtime-2";
 const OPENAI_REALTIME_VOICE = process.env.OPENCLAW_REALTIME_OPENAI_VOICE?.trim() || "alloy";
+const DEFAULT_OPENAI_HTTP_TIMEOUT_MS = 30_000;
 const GOOGLE_REALTIME_MODEL =
   process.env.OPENCLAW_REALTIME_GOOGLE_MODEL?.trim() ||
   "gemini-2.5-flash-native-audio-preview-12-2025";
@@ -22,53 +29,109 @@ type SmokeResult = {
   details?: Record<string, unknown>;
 };
 
+type TimeoutOptions<T> = {
+  label: string;
+  timeoutMs: number;
+  run: (signal: AbortSignal) => Promise<T>;
+};
+
+type OpenAIHttpOptions = {
+  fetchImpl?: typeof fetch;
+  timeoutMs?: number;
+};
+
 function getEnv(name: string): string | undefined {
   const value = process.env[name]?.trim();
   return value ? value : undefined;
 }
 
 function shortError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return previewForDevToolLog(error instanceof Error ? error.message : String(error), 800);
 }
 
 async function readBoundedText(response: Response): Promise<string> {
   const text = await response.text();
-  return text.length > 600 ? `${text.slice(0, 600)}...` : text;
+  return previewForDevToolLog(text, 600);
+}
+
+function resolveOpenAIHttpTimeoutMs(
+  raw = process.env.OPENCLAW_REALTIME_OPENAI_HTTP_TIMEOUT_MS,
+): number {
+  return parseStrictIntegerOption({
+    fallback: DEFAULT_OPENAI_HTTP_TIMEOUT_MS,
+    label: "OPENCLAW_REALTIME_OPENAI_HTTP_TIMEOUT_MS",
+    min: 1,
+    raw,
+  });
+}
+
+async function withTimeout<T>(options: TimeoutOptions<T>): Promise<T> {
+  const controller = new AbortController();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<T>((_resolve, reject) => {
+    timeout = setTimeout(() => {
+      const error = new Error(`${options.label} exceeded timeout of ${options.timeoutMs}ms`);
+      reject(error);
+      controller.abort(error);
+    }, options.timeoutMs);
+  });
+  try {
+    return await Promise.race([options.run(controller.signal), timeoutPromise]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
 }
 
 function printResult(result: SmokeResult): void {
-  console.log(`${result.name}: ${result.ok ? "ok" : "failed"}`, result.details ?? {});
+  console.log(
+    `${result.name}: ${result.ok ? "ok" : "failed"}`,
+    redactJsonValueForDevToolLog(result.details ?? {}),
+  );
 }
 
 function compareStrings(left: string | undefined, right: string | undefined): number {
   return (left ?? "").localeCompare(right ?? "");
 }
 
-async function createOpenAIClientSecret(apiKey: string): Promise<string> {
-  const response = await fetch("https://api.openai.com/v1/realtime/client_secrets", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      session: {
-        type: "realtime",
-        model: OPENAI_REALTIME_MODEL,
-        audio: {
-          output: { voice: OPENAI_REALTIME_VOICE },
+async function createOpenAIClientSecret(
+  apiKey: string,
+  options: OpenAIHttpOptions = {},
+): Promise<string> {
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const timeoutMs = options.timeoutMs ?? resolveOpenAIHttpTimeoutMs();
+  const payload = await withTimeout({
+    label: "OpenAI Realtime client secret request",
+    timeoutMs,
+    run: async (signal) => {
+      const response = await fetchImpl("https://api.openai.com/v1/realtime/client_secrets", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
         },
-      },
-    }),
+        body: JSON.stringify({
+          session: {
+            type: "realtime",
+            model: OPENAI_REALTIME_MODEL,
+            audio: {
+              output: { voice: OPENAI_REALTIME_VOICE },
+            },
+          },
+        }),
+        signal,
+      });
+      if (!response.ok) {
+        throw new Error(
+          `OpenAI Realtime client secret failed (${response.status}): ${await readBoundedText(
+            response,
+          )}`,
+        );
+      }
+      return (await response.json()) as Record<string, unknown>;
+    },
   });
-  if (!response.ok) {
-    throw new Error(
-      `OpenAI Realtime client secret failed (${response.status}): ${await readBoundedText(
-        response,
-      )}`,
-    );
-  }
-  const payload = (await response.json()) as Record<string, unknown>;
   const nested =
     payload.client_secret && typeof payload.client_secret === "object"
       ? (payload.client_secret as Record<string, unknown>)
@@ -123,79 +186,118 @@ async function smokeOpenAIBackendBridge(apiKey: string): Promise<SmokeResult> {
 
 async function smokeOpenAIWebRtc(browser: Browser, apiKey: string): Promise<SmokeResult> {
   try {
-    const clientSecret = await createOpenAIClientSecret(apiKey);
+    const openAIHttpTimeoutMs = resolveOpenAIHttpTimeoutMs();
+    const clientSecret = await createOpenAIClientSecret(apiKey, { timeoutMs: openAIHttpTimeoutMs });
     const context = await browser.newContext({
       permissions: ["microphone"],
     });
-    const page = await context.newPage();
-    const result = await page.evaluate(
-      async ({ clientSecret: secret }) => {
-        let media: MediaStream;
-        if (navigator.mediaDevices?.getUserMedia) {
-          media = await navigator.mediaDevices.getUserMedia({ audio: true });
-        } else {
-          const audioContext = new AudioContext();
-          const destination = audioContext.createMediaStreamDestination();
-          const oscillator = audioContext.createOscillator();
-          oscillator.connect(destination);
-          oscillator.start();
-          media = destination.stream;
-        }
-        const peer = new RTCPeerConnection();
-        for (const track of media.getAudioTracks()) {
-          peer.addTrack(track, media);
-        }
-        const channel = peer.createDataChannel("oai-events");
-        const connectionState = new Promise<string>((resolve) => {
-          const timeout = window.setTimeout(() => resolve(peer.connectionState), 12_000);
-          peer.addEventListener("connectionstatechange", () => {
-            if (peer.connectionState === "connected" || peer.connectionState === "failed") {
-              window.clearTimeout(timeout);
-              resolve(peer.connectionState);
+    try {
+      const page = await context.newPage();
+      await page.evaluate("globalThis.__name = (fn) => fn");
+      const result = await page.evaluate(
+        async ({ clientSecret: secret, timeoutMs }) => {
+          const withBrowserTimeout = async <T>(
+            label: string,
+            run: (signal: AbortSignal) => Promise<T>,
+          ): Promise<T> => {
+            const controller = new AbortController();
+            let timeout: number | undefined;
+            const timeoutPromise = new Promise<T>((_resolve, reject) => {
+              timeout = window.setTimeout(() => {
+                const error = new Error(`${label} exceeded timeout of ${timeoutMs}ms`);
+                reject(error);
+                controller.abort(error);
+              }, timeoutMs);
+            });
+            try {
+              return await Promise.race([run(controller.signal), timeoutPromise]);
+            } finally {
+              if (timeout !== undefined) {
+                window.clearTimeout(timeout);
+              }
             }
-          });
-          channel.addEventListener("open", () => {
-            window.clearTimeout(timeout);
-            resolve(peer.connectionState || "data-channel-open");
-          });
-        });
-        const offer = await peer.createOffer();
-        await peer.setLocalDescription(offer);
-        const response = await fetch("https://api.openai.com/v1/realtime/calls", {
-          method: "POST",
-          body: offer.sdp,
-          headers: {
-            Authorization: `Bearer ${secret}`,
-            "Content-Type": "application/sdp",
-          },
-        });
-        if (!response.ok) {
-          throw new Error(`OpenAI Realtime SDP offer failed (${response.status})`);
-        }
-        const answer = await response.text();
-        await peer.setRemoteDescription({ type: "answer", sdp: answer });
-        const state = await connectionState;
-        peer.close();
-        media.getTracks().forEach((track) => track.stop());
-        return {
-          answerHasAudio: answer.includes("m=audio"),
-          remoteDescriptionApplied: peer.remoteDescription?.type === "answer",
-          connectionState: state,
-        };
-      },
-      { clientSecret },
-    );
-    await context.close();
-    return {
-      name: "openai-webrtc-browser",
-      ok: result.answerHasAudio && result.remoteDescriptionApplied,
-      details: {
-        model: OPENAI_REALTIME_MODEL,
-        answerHasAudio: result.answerHasAudio,
-        remoteDescriptionApplied: result.remoteDescriptionApplied,
-        connectionState: result.connectionState,
-      },
-    };
+          };
+          let media: MediaStream | undefined;
+          let peer: RTCPeerConnection | undefined;
+          try {
+            if (navigator.mediaDevices?.getUserMedia) {
+              media = await navigator.mediaDevices.getUserMedia({ audio: true });
+            } else {
+              const audioContext = new AudioContext();
+              const destination = audioContext.createMediaStreamDestination();
+              const oscillator = audioContext.createOscillator();
+              oscillator.connect(destination);
+              oscillator.start();
+              media = destination.stream;
+            }
+            peer = new RTCPeerConnection();
+            for (const track of media.getAudioTracks()) {
+              peer.addTrack(track, media);
+            }
+            const channel = peer.createDataChannel("oai-events");
+            const connectionState = new Promise<string>((resolve) => {
+              const timeout = window.setTimeout(
+                () => resolve(peer?.connectionState ?? "timeout"),
+                12_000,
+              );
+              peer?.addEventListener("connectionstatechange", () => {
+                if (peer?.connectionState === "connected" || peer?.connectionState === "failed") {
+                  window.clearTimeout(timeout);
+                  resolve(peer.connectionState);
+                }
+              });
+              channel.addEventListener("open", () => {
+                window.clearTimeout(timeout);
+                resolve(peer?.connectionState || "data-channel-open");
+              });
+            });
+            const offer = await peer.createOffer();
+            await peer.setLocalDescription(offer);
+            const answer = await withBrowserTimeout(
+              "OpenAI Realtime SDP offer request",
+              async (signal) => {
+                const response = await fetch("https://api.openai.com/v1/realtime/calls", {
+                  method: "POST",
+                  body: offer.sdp,
+                  headers: {
+                    Authorization: `Bearer ${secret}`,
+                    "Content-Type": "application/sdp",
+                  },
+                  signal,
+                });
+                if (!response.ok) {
+                  throw new Error(`OpenAI Realtime SDP offer failed (${response.status})`);
+                }
+                return await response.text();
+              },
+            );
+            await peer.setRemoteDescription({ type: "answer", sdp: answer });
+            const state = await connectionState;
+            return {
+              answerHasAudio: answer.includes("m=audio"),
+              remoteDescriptionApplied: peer.remoteDescription?.type === "answer",
+              connectionState: state,
+            };
+          } finally {
+            peer?.close();
+            media?.getTracks().forEach((track) => track.stop());
+          }
+        },
+        { clientSecret, timeoutMs: openAIHttpTimeoutMs },
+      );
+      return {
+        name: "openai-webrtc-browser",
+        ok: result.answerHasAudio && result.remoteDescriptionApplied,
+        details: {
+          model: OPENAI_REALTIME_MODEL,
+          answerHasAudio: result.answerHasAudio,
+          remoteDescriptionApplied: result.remoteDescriptionApplied,
+          connectionState: result.connectionState,
+        },
+      };
+    } finally {
+      await context.close();
+    }
   } catch (error) {
     return { name: "openai-webrtc-browser", ok: false, details: { error: shortError(error) } };
   }
@@ -331,10 +433,13 @@ async function smokeGoogleLiveBrowserWs(browser: Browser, apiKey: string): Promi
 }
 
 async function smokeGatewayRelayBrowser(browser: Browser): Promise<SmokeResult> {
-  let server: ViteDevServer | undefined;
+  let server: Awaited<ReturnType<typeof createServer>> | undefined;
   const dir = await mkdtemp(path.join(tmpdir(), "openclaw-realtime-talk-"));
   try {
     const repoRoot = process.cwd().replaceAll("\\", "/");
+    const relayModulePath = JSON.stringify(
+      `/@fs/${repoRoot}/ui/src/ui/chat/realtime-talk-gateway-relay.ts`,
+    );
     await writeFile(
       path.join(dir, "index.html"),
       '<!doctype html><meta charset="utf-8"><script type="module" src="/main.ts"></script>',
@@ -342,7 +447,7 @@ async function smokeGatewayRelayBrowser(browser: Browser): Promise<SmokeResult> 
     await writeFile(
       path.join(dir, "main.ts"),
       `
-import { GatewayRelayRealtimeTalkTransport } from "/@fs/${repoRoot}/ui/src/ui/chat/realtime-talk-gateway-relay.ts";
+const { GatewayRelayRealtimeTalkTransport } = await import(${relayModulePath});
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const listeners = new Set();
@@ -436,11 +541,11 @@ try {
   await delay(400);
   transport.stop();
   await delay(100);
-  window.__relaySmokeResult = { requests, statuses, transcripts };
-  window.__relaySmokeDone = true;
+  window.relaySmokeResult = { requests, statuses, transcripts };
+  window.relaySmokeDone = true;
 } catch (error) {
-  window.__relaySmokeResult = { error: error instanceof Error ? error.message : String(error), requests, statuses, transcripts };
-  window.__relaySmokeDone = true;
+  window.relaySmokeResult = { error: error instanceof Error ? error.message : String(error), requests, statuses, transcripts };
+  window.relaySmokeDone = true;
 }
 `,
     );
@@ -459,10 +564,16 @@ try {
     await context.grantPermissions(["microphone"], { origin: url });
     const page = await context.newPage();
     await page.goto(url);
-    await page.waitForFunction(() => globalThis.__relaySmokeDone === true, undefined, {
-      timeout: 15_000,
-    });
-    const result = (await page.evaluate(() => globalThis.__relaySmokeResult)) as {
+    await page.waitForFunction(
+      () => (globalThis as Record<string, unknown>).relaySmokeDone === true,
+      undefined,
+      {
+        timeout: 15_000,
+      },
+    );
+    const result = (await page.evaluate(
+      () => (globalThis as Record<string, unknown>).relaySmokeResult,
+    )) as {
       error?: string;
       requests?: Array<{ method?: string }>;
       statuses?: Array<{ status?: string }>;
@@ -558,4 +669,14 @@ async function main(): Promise<void> {
   }
 }
 
-await main();
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  await main().catch((error) => {
+    console.error(shortError(error));
+    process.exitCode = 1;
+  });
+}
+
+export const testing = {
+  createOpenAIClientSecret,
+  resolveOpenAIHttpTimeoutMs,
+};

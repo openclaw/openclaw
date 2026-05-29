@@ -98,6 +98,20 @@ If you deploy the OpenClaw Gateway itself as a Docker container, it orchestrates
 
 - **Config requires host paths**: The `openclaw.json` `workspace` configuration MUST contain the **Host's absolute path** (e.g. `/home/user/.openclaw/workspaces`), not the internal Gateway container path. When OpenClaw asks the Docker daemon to spawn a sandbox, the daemon evaluates paths relative to the Host OS namespace, not the Gateway namespace.
 - **FS bridge parity (identical volume map)**: The OpenClaw Gateway native process also writes heartbeat and bridge files to the `workspace` directory. Because the Gateway evaluates the exact same string (the host path) from within its own containerized environment, the Gateway deployment MUST include an identical volume map linking the host namespace natively (`-v /home/user/.openclaw:/home/user/.openclaw`).
+- **Codex code mode**: When an OpenClaw sandbox is active, OpenClaw disables Codex app-server native Code Mode, user MCP servers, and app-backed plugin execution for that turn because those native surfaces run from the Gateway-host app-server process instead of the OpenClaw sandbox backend. Shell access is exposed through OpenClaw sandbox-backed tools such as `sandbox_exec` and `sandbox_process` when the normal exec/process tools are available. Do not mount the host Docker socket into agent sandbox containers or custom Codex sandboxes.
+
+On Ubuntu/AppArmor hosts, Codex `workspace-write` can fail before shell startup
+when you intentionally run native Codex `workspace-write` without active
+OpenClaw sandboxing and the service user is not allowed to create unprivileged
+user namespaces. When Docker sandbox egress is disabled (`network: "none"`, the
+default), Codex also needs an unprivileged network namespace. Common symptoms are
+`bwrap: setting up uid map: Permission denied` and
+`bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted`. Run
+`openclaw doctor`; if it reports a Codex bwrap namespace probe failure, prefer
+an AppArmor profile that grants the required namespaces to the OpenClaw service
+process. `kernel.apparmor_restrict_unprivileged_userns=0` is a host-wide
+fallback with security tradeoffs; use it only when that host posture is
+acceptable.
 
 If you map paths internally without absolute host parity, OpenClaw natively throws an `EACCES` permission error attempting to write its heartbeat inside the container environment because the fully qualified path string doesn't exist natively.
 </Warning>
@@ -485,6 +499,7 @@ Paths:
     - `readOnlyRoot: true` prevents writes; set `readOnlyRoot: false` or bake a custom image.
     - `user` must be root for package installs (omit `user` or set `user: "0:0"`).
     - Sandbox exec does **not** inherit host `process.env`. Use `agents.defaults.sandbox.docker.env` (or a custom image) for skill API keys.
+    - Values in `agents.defaults.sandbox.docker.env` are passed as explicit Docker container environment variables. Anyone with Docker daemon access can inspect them with Docker metadata commands such as `docker inspect`. Use a custom image, mounted secret file, or another secret delivery path if that metadata exposure is not acceptable.
 
   </Accordion>
 </AccordionGroup>

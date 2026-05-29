@@ -78,8 +78,8 @@ describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#889
   });
 
   it("builds Telegram payloads through the shared channel turn context", async () => {
-    const { buildChannelTurnContext } = await import("openclaw/plugin-sdk/channel-inbound");
-    const buildChannelTurnContextMock = vi.fn(buildChannelTurnContext);
+    const { buildChannelInboundEventContext } = await import("openclaw/plugin-sdk/channel-inbound");
+    const buildChannelInboundEventContextMock = vi.fn(buildChannelInboundEventContext);
 
     const ctx = await buildCtx({
       message: {
@@ -93,33 +93,25 @@ describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#889
         },
       },
       sessionRuntime: {
-        buildChannelTurnContext: buildChannelTurnContextMock,
+        buildChannelInboundEventContext:
+          buildChannelInboundEventContextMock as unknown as typeof buildChannelInboundEventContext,
       },
     });
 
     expect(ctx?.ctxPayload.ReplyToBody).toBe("parent");
-    expect(buildChannelTurnContextMock).toHaveBeenCalledOnce();
-    expect(buildChannelTurnContextMock.mock.calls[0]?.[0]).toMatchObject({
-      channel: "telegram",
-      from: "telegram:1234",
-      message: {
-        rawBody: "hello",
-        bodyForAgent: "hello",
-      },
-      reply: {
-        to: "telegram:1234",
-        originatingTo: "telegram:1234",
-        replyToId: "9",
-      },
-      supplemental: {
-        quote: {
-          id: "9",
-          body: "parent",
-          sender: "Bob",
-          senderAllowed: true,
-        },
-      },
-    });
+    expect(buildChannelInboundEventContextMock).toHaveBeenCalledOnce();
+    const [turnOptions] = buildChannelInboundEventContextMock.mock.calls.at(0) ?? [];
+    expect(turnOptions?.channel).toBe("telegram");
+    expect(turnOptions?.from).toBe("telegram:1234");
+    expect(turnOptions?.message.rawBody).toBe("hello");
+    expect(turnOptions?.message.bodyForAgent).toBe("hello");
+    expect(turnOptions?.reply?.to).toBe("telegram:1234");
+    expect(turnOptions?.reply?.originatingTo).toBeUndefined();
+    expect(turnOptions?.reply?.replyToId).toBe("9");
+    expect(turnOptions?.supplemental?.quote?.id).toBe("9");
+    expect(turnOptions?.supplemental?.quote?.body).toBe("parent");
+    expect(turnOptions?.supplemental?.quote?.sender).toBe("Bob");
+    expect(turnOptions?.supplemental?.quote?.senderAllowed).toBe(true);
   });
 
   it("does not pass threadId for regular DM without topic", async () => {

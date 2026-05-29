@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  pinActivePluginChannelRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   buildCommandText,
@@ -15,10 +19,11 @@ import {
   parseCommandArgs,
   resolveCommandArgChoices,
   resolveCommandArgMenu,
+  resolveTextCommand,
   serializeCommandArgs,
   shouldHandleTextCommands,
 } from "./commands-registry.js";
-import type { ChatCommandDefinition } from "./commands-registry.types.js";
+import type { ChatCommandDefinition, NativeCommandSpec } from "./commands-registry.types.js";
 
 type NativeCommandNameResolver = (params: { commandKey: string; defaultName: string }) => string;
 
@@ -82,12 +87,27 @@ function installOllamaThinkingProvider() {
   setActivePluginRegistry(registry);
 }
 
+function createNativeCommandsRegistry(id: "discord" | "slack") {
+  return createTestRegistry([
+    {
+      pluginId: id,
+      plugin: createChannelTestPluginBase({
+        id,
+        capabilities: { nativeCommands: true, chatTypes: ["direct"] },
+      }),
+      source: "test",
+    },
+  ]);
+}
+
 beforeEach(() => {
   vi.doUnmock("../channels/plugins/index.js");
+  resetPluginRuntimeStateForTest();
   setActivePluginRegistry(createTestRegistry([]));
 });
 
 afterEach(() => {
+  resetPluginRuntimeStateForTest();
   setActivePluginRegistry(createTestRegistry([]));
 });
 
@@ -127,10 +147,7 @@ function requireNativeCommand(name: string, provider?: string): ChatCommandDefin
   return command;
 }
 
-function requireNativeSpec(
-  specs: readonly { name: string; acceptsArgs?: boolean; descriptionLocalizations?: unknown }[],
-  name: string,
-) {
+function requireNativeSpec(specs: readonly NativeCommandSpec[], name: string) {
   const spec = specs.find((candidate) => candidate.name === name);
   if (!spec) {
     throw new Error(`Expected native command spec "${name}"`);
@@ -212,7 +229,20 @@ describe("commands registry", () => {
     expect(btw.textAliases).toEqual(["/btw", "/side"]);
     expect(normalizeCommandBody("/side what changed?")).toBe("/btw what changed?");
     expect(requireNativeCommand("side").key).toBe("btw");
-    expect(requireNativeSpec(listNativeCommandSpecs(), "side").acceptsArgs).toBe(true);
+    const sideNativeSpec = requireNativeSpec(listNativeCommandSpecs(), "side");
+    expect(sideNativeSpec.acceptsArgs).toBe(true);
+    expect(sideNativeSpec.isAlias).toBe(true);
+  });
+
+  it("matches text command names case-insensitively without changing args", () => {
+    expect(normalizeCommandBody("/STATUS")).toBe("/status");
+    expect(normalizeCommandBody("/Model OpenAI-Codex/GPT-5.5")).toBe("/model OpenAI-Codex/GPT-5.5");
+    expect(normalizeCommandBody("/T HIGH")).toBe("/think HIGH");
+
+    expect(resolveTextCommand("/COMPACT Keep CaseSensitivePath")?.command.key).toBe("compact");
+    expect(resolveTextCommand("/COMPACT Keep CaseSensitivePath")?.args).toBe(
+      "Keep CaseSensitivePath",
+    );
   });
 
   it("filters commands based on config flags", () => {
@@ -455,6 +485,61 @@ describe("commands registry", () => {
     ).toBe(true);
   });
 
+  it("refreshes dock commands when pinned-empty fallback active registry changes", () => {
+    const pinnedEmptyRegistry = createTestRegistry([]);
+    setActivePluginRegistry(pinnedEmptyRegistry);
+    pinActivePluginChannelRegistry(pinnedEmptyRegistry);
+
+    setActivePluginRegistry(createNativeCommandsRegistry("discord"));
+    const discordCommandKeys = commandKeySet(listChatCommands());
+    expect(discordCommandKeys.has("dock:discord")).toBe(true);
+    expect(discordCommandKeys.has("dock:slack")).toBe(false);
+
+    setActivePluginRegistry(createNativeCommandsRegistry("slack"));
+    const slackCommandKeys = commandKeySet(listChatCommands());
+    expect(slackCommandKeys.has("dock:discord")).toBe(false);
+    expect(slackCommandKeys.has("dock:slack")).toBe(true);
+  });
+
+  it("refreshes text-command gating when pinned-empty fallback active registry changes", () => {
+    const cfg = { commands: { text: false } };
+    const pinnedEmptyRegistry = createTestRegistry([]);
+    setActivePluginRegistry(pinnedEmptyRegistry);
+    pinActivePluginChannelRegistry(pinnedEmptyRegistry);
+
+    setActivePluginRegistry(createNativeCommandsRegistry("discord"));
+    expect(
+      shouldHandleTextCommands({
+        cfg,
+        surface: "discord",
+        commandSource: "text",
+      }),
+    ).toBe(false);
+    expect(
+      shouldHandleTextCommands({
+        cfg,
+        surface: "slack",
+        commandSource: "text",
+      }),
+    ).toBe(true);
+
+    setActivePluginRegistry(createNativeCommandsRegistry("slack"));
+    expect(
+      shouldHandleTextCommands({
+        cfg,
+        surface: "discord",
+        commandSource: "text",
+      }),
+    ).toBe(true);
+    expect(
+      shouldHandleTextCommands({
+        cfg,
+        surface: "slack",
+        commandSource: "text",
+      }),
+    ).toBe(false);
+  });
+
   it("normalizes telegram-style command mentions for the current bot", () => {
     expect(normalizeCommandBody("/help@openclaw", { botUsername: "openclaw" })).toBe("/help");
     expect(
@@ -518,7 +603,6 @@ describe("commands registry args", () => {
     };
 
     const args = parseCommandArgs(command, "set foo bar baz");
-    expect(args).toBeDefined();
     if (!args) {
       throw new Error("Expected parsed command args");
     }
@@ -623,8 +707,10 @@ describe("commands registry args", () => {
     const seenChoice = requireSeenChoice(seen);
     expect(seenChoice.commandKey).toBe("think");
     expect(seenChoice.argName).toBe("level");
-    expect(seenChoice.provider).toEqual(expect.stringMatching(/\S/));
-    expect(seenChoice.model).toEqual(expect.stringMatching(/\S/));
+    expect(typeof seenChoice.provider).toBe("string");
+    expect(seenChoice.provider?.trim().length).toBeGreaterThan(0);
+    expect(typeof seenChoice.model).toBe("string");
+    expect(seenChoice.model?.trim().length).toBeGreaterThan(0);
     expect(seenChoice.catalogLength).toBe(0);
   });
 

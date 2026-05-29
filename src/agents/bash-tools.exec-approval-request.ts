@@ -4,7 +4,17 @@ import type {
   ExecSecurity,
   SystemRunApprovalPlan,
 } from "../infra/exec-approvals.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { normalizeExecutableToken } from "../infra/exec-wrapper-tokens.js";
+import {
+  isShellWrapperExecutable,
+  POSIX_SHELL_WRAPPERS,
+  resolveShellWrapperTransportArgv,
+} from "../infra/shell-wrapper-resolution.js";
+import { asFiniteNumber } from "../shared/number-coercion.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString as parseString,
+} from "../shared/string-coerce.js";
 import {
   DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS,
   DEFAULT_APPROVAL_TIMEOUT_MS,
@@ -15,6 +25,7 @@ type ExecApprovalCommandSpansRuntime =
   typeof import("./bash-tools.exec-approval-request.runtime.js");
 
 let execApprovalCommandSpansRuntimePromise: Promise<ExecApprovalCommandSpansRuntime> | null = null;
+const POSIX_COMMAND_HIGHLIGHT_SHELLS: ReadonlySet<string> = POSIX_SHELL_WRAPPERS;
 
 function loadExecApprovalCommandSpansRuntime(): Promise<ExecApprovalCommandSpansRuntime> {
   execApprovalCommandSpansRuntimePromise ??=
@@ -42,6 +53,8 @@ export type RequestExecApprovalDecisionParams = {
   turnSourceTo?: string;
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
+  requireDeliveryRoute?: boolean;
+  suppressDelivery?: boolean;
 };
 
 type ExecApprovalRequestToolParams = RequestExecApprovalDecisionParams & {
@@ -72,6 +85,8 @@ function buildExecApprovalRequestToolParams(
     turnSourceTo: params.turnSourceTo,
     turnSourceAccountId: params.turnSourceAccountId,
     turnSourceThreadId: params.turnSourceThreadId,
+    requireDeliveryRoute: params.requireDeliveryRoute,
+    suppressDelivery: params.suppressDelivery,
     timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
     twoPhase: true,
   };
@@ -92,12 +107,8 @@ function parseDecision(value: unknown): ParsedDecision {
   return { present: true, value: typeof decision === "string" ? decision : null };
 }
 
-function parseString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
-}
-
 function parseExpiresAtMs(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return asFiniteNumber(value);
 }
 
 export type ExecApprovalRegistration = {
@@ -178,6 +189,7 @@ type HostExecApprovalParams = {
   ask: ExecAsk;
   warningText?: string;
   commandSpans?: ExecApprovalCommandSpan[];
+  commandHighlighting?: boolean;
   agentId?: string;
   resolvedPath?: string;
   sessionKey?: string;
@@ -185,6 +197,8 @@ type HostExecApprovalParams = {
   turnSourceTo?: string;
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
+  requireDeliveryRoute?: boolean;
+  suppressDelivery?: boolean;
 };
 
 type ExecApprovalRequesterContext = {
@@ -234,12 +248,40 @@ async function resolveCommandSpans(
   }
 }
 
+function hasUnsupportedShellArgv(argv: readonly string[] | undefined): boolean {
+  if (!argv?.length) {
+    return false;
+  }
+  const shellWrapperArgv = resolveShellWrapperTransportArgv([...argv]) ?? argv;
+  const executable = shellWrapperArgv[0];
+  if (!executable) {
+    return false;
+  }
+  const normalizedExecutable = normalizeExecutableToken(executable);
+  return (
+    isShellWrapperExecutable(normalizedExecutable) &&
+    !POSIX_COMMAND_HIGHLIGHT_SHELLS.has(normalizedExecutable)
+  );
+}
+
+function shouldSkipGeneratedCommandSpans(params: HostExecApprovalParams): boolean {
+  if (params.host === "gateway" && process.platform === "win32") {
+    return true;
+  }
+  const argv = params.commandArgv?.length ? params.commandArgv : params.systemRunPlan?.argv;
+  return hasUnsupportedShellArgv(argv);
+}
+
 async function buildHostApprovalDecisionParams(
   params: HostExecApprovalParams,
 ): Promise<RequestExecApprovalDecisionParams> {
   const commandSpans =
-    params.commandSpans ??
-    (await resolveCommandSpans(params.command ?? params.systemRunPlan?.commandText));
+    params.commandHighlighting === true
+      ? (params.commandSpans ??
+        (shouldSkipGeneratedCommandSpans(params)
+          ? undefined
+          : await resolveCommandSpans(params.command ?? params.systemRunPlan?.commandText)))
+      : undefined;
   return {
     id: params.approvalId,
     command: params.command,
@@ -258,6 +300,8 @@ async function buildHostApprovalDecisionParams(
       sessionKey: params.sessionKey,
     }),
     resolvedPath: params.resolvedPath,
+    requireDeliveryRoute: params.requireDeliveryRoute,
+    suppressDelivery: params.suppressDelivery,
     ...buildExecApprovalTurnSourceContext(params),
   };
 }

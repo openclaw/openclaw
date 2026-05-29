@@ -6,7 +6,7 @@ import type { AcpInitializeSessionInput } from "../acp/control-plane/manager.typ
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  __testing as sessionBindingServiceTesting,
+  testing as sessionBindingServiceTesting,
   registerSessionBindingAdapter,
   type SessionBindingAdapterCapabilities,
   type SessionBindingPlacement,
@@ -331,12 +331,34 @@ function expectRecordFields(
   record: unknown,
   expected: Record<string, unknown>,
 ): Record<string, unknown> {
-  expect(record).toBeDefined();
+  if (!record || typeof record !== "object") {
+    throw new Error("Expected record");
+  }
   const actual = record as Record<string, unknown>;
   for (const [key, value] of Object.entries(expected)) {
     expect(actual[key]).toEqual(value);
   }
   return actual;
+}
+
+function firstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error(`Expected ${label} to be called`);
+  }
+  return call;
+}
+
+function latestMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
+  const call = mock.mock.calls[mock.mock.calls.length - 1];
+  if (!call) {
+    throw new Error(`Expected ${label} to be called`);
+  }
+  return call;
+}
+
+function latestBindingInput(): Record<string, unknown> {
+  return expectRecordFields(latestMockCall(hoisted.sessionBindingBindMock, "session bind")[0], {});
 }
 
 function gatewayRequests(): Array<{ method?: string; params?: Record<string, unknown> }> {
@@ -347,8 +369,10 @@ function gatewayRequests(): Array<{ method?: string; params?: Record<string, unk
 
 function gatewayRequest(method: string): { method?: string; params?: Record<string, unknown> } {
   const request = gatewayRequests().find((candidate) => candidate.method === method);
-  expect(request).toBeDefined();
-  return request as { method?: string; params?: Record<string, unknown> };
+  if (!request) {
+    throw new Error(`Expected gateway request for ${method}`);
+  }
+  return request;
 }
 
 function expectGatewayMethodNotCalled(method: string): void {
@@ -360,7 +384,10 @@ function expectSessionPatchFields(expected: Record<string, unknown>): void {
 }
 
 function expectInitializeSessionFields(expected: Record<string, unknown>): Record<string, unknown> {
-  return expectRecordFields(hoisted.initializeSessionMock.mock.calls[0]?.[0], expected);
+  return expectRecordFields(
+    firstMockCall(hoisted.initializeSessionMock, "session initialization")[0],
+    expected,
+  );
 }
 
 function expectBindingCallFields(expected: {
@@ -369,7 +396,7 @@ function expectBindingCallFields(expected: {
   placement?: string;
   targetKind?: string;
 }): Record<string, unknown> {
-  const input = expectRecordFields(hoisted.sessionBindingBindMock.mock.calls.at(-1)?.[0], {
+  const input = expectRecordFields(latestBindingInput(), {
     ...(expected.placement ? { placement: expected.placement } : {}),
     ...(expected.targetKind ? { targetKind: expected.targetKind } : {}),
   });
@@ -759,6 +786,20 @@ describe("spawnAcpDirect", () => {
       targetKind: "session",
       placement: "child",
     });
+    const patchCallIndex = hoisted.callGatewayMock.mock.calls.findIndex(
+      (call: unknown[]) => (call[0] as { method?: string }).method === "sessions.patch",
+    );
+    const agentCallIndex = hoisted.callGatewayMock.mock.calls.findIndex(
+      (call: unknown[]) => (call[0] as { method?: string }).method === "agent",
+    );
+    const patchCallOrder = hoisted.callGatewayMock.mock.invocationCallOrder[patchCallIndex];
+    const initializeCallOrder = hoisted.initializeSessionMock.mock.invocationCallOrder[0];
+    const agentCallOrder = hoisted.callGatewayMock.mock.invocationCallOrder[agentCallIndex];
+    expect(typeof patchCallOrder).toBe("number");
+    expect(typeof initializeCallOrder).toBe("number");
+    expect(typeof agentCallOrder).toBe("number");
+    expect(patchCallOrder < initializeCallOrder).toBe(true);
+    expect(initializeCallOrder < agentCallOrder).toBe(true);
     expectResolvedIntroTextInBindMetadata();
 
     const agentCall = gatewayRequest("agent");
@@ -1187,6 +1228,78 @@ describe("spawnAcpDirect", () => {
     );
 
     expectAcceptedSpawn(result);
+  });
+
+  it("allows configured ACP harness ids when subagent allowlist contains wildcard", async () => {
+    replaceSpawnConfig({
+      ...hoisted.state.cfg,
+      acp: {
+        ...hoisted.state.cfg.acp,
+        allowedAgents: ["codex", "writer"],
+      },
+      agents: {
+        ...hoisted.state.cfg.agents,
+        list: [
+          {
+            id: "main",
+            default: true,
+            subagents: {
+              allowAgents: ["*"],
+            },
+          },
+        ],
+      },
+    });
+
+    const result = await spawnAcpDirect(
+      createSpawnRequest({
+        agentId: "writer",
+      }),
+      {
+        ...createRequesterContext(),
+        agentSessionKey: "agent:main:subagent:parent",
+      },
+    );
+
+    expectAcceptedSpawn(result);
+  });
+
+  it("rejects unconfigured ACP harness ids when subagent allowlist contains wildcard", async () => {
+    replaceSpawnConfig({
+      ...hoisted.state.cfg,
+      acp: {
+        ...hoisted.state.cfg.acp,
+        allowedAgents: [],
+      },
+      agents: {
+        ...hoisted.state.cfg.agents,
+        list: [
+          {
+            id: "main",
+            default: true,
+            subagents: {
+              allowAgents: ["*"],
+            },
+          },
+        ],
+      },
+    });
+
+    const result = await spawnAcpDirect(
+      createSpawnRequest({
+        agentId: "writer",
+      }),
+      {
+        ...createRequesterContext(),
+        agentSessionKey: "agent:main:subagent:parent",
+      },
+    );
+
+    const failed = expectFailedSpawn(result, "forbidden");
+    expect(failed.errorCode).toBe("subagent_policy");
+    expect(failed.error).toBe(
+      'agentId "writer" is not in the configured agent registry (allowed: main)',
+    );
   });
 
   it("rejects ACP spawns to agents outside the subagent allowlist", async () => {
@@ -1938,11 +2051,14 @@ describe("spawnAcpDirect", () => {
     expect(accepted.streamLogPath).toBeUndefined();
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
     if (expectTranscriptPersistence) {
-      expectRecordFields(hoisted.resolveSessionTranscriptFileMock.mock.calls[0]?.[0], {
-        sessionId: "sess-123",
-        storePath: "/tmp/codex-sessions.json",
-        agentId: "codex",
-      });
+      expectRecordFields(
+        firstMockCall(hoisted.resolveSessionTranscriptFileMock, "transcript file resolution")[0],
+        {
+          sessionId: "sess-123",
+          storePath: "/tmp/codex-sessions.json",
+          agentId: "codex",
+        },
+      );
     }
     expectAgentGatewayCall(expectedAgentCall);
   });
@@ -2158,7 +2274,7 @@ describe("spawnAcpDirect", () => {
     expect(relayRuns).toContain(agentCall?.params?.idempotencyKey);
     expect(relayRuns).toContain(accepted.runId);
     const streamPathInput = expectRecordFields(
-      hoisted.resolveAcpSpawnStreamLogPathMock.mock.calls[0]?.[0],
+      firstMockCall(hoisted.resolveAcpSpawnStreamLogPathMock, "stream log path resolution")[0],
       {},
     );
     expect(streamPathInput.childSessionKey).toMatch(/^agent:codex:acp:/);
@@ -2626,10 +2742,9 @@ describe("spawnAcpDirect", () => {
         conversationId: "6098642967",
       },
     });
-    const bindCall = hoisted.sessionBindingBindMock.mock.calls.at(-1)?.[0] as
-      | { conversation?: { parentConversationId?: string } }
-      | undefined;
-    expect(bindCall?.conversation?.parentConversationId).toBeUndefined();
+    const bindCall = latestBindingInput();
+    const conversation = expectRecordFields(bindCall.conversation, {});
+    expect(conversation.parentConversationId).toBeUndefined();
   });
 
   it("preserves topic-qualified Telegram targets without a separate threadId", async () => {
@@ -2692,6 +2807,15 @@ describe("spawnAcpDirect", () => {
     expect(expectFailedSpawn(result, "error").error).toContain("agent dispatch failed");
     expect(relayHandle.dispose).toHaveBeenCalledTimes(1);
     expect(relayHandle.notifyStarted).not.toHaveBeenCalled();
+    expect(hoisted.cleanupFailedAcpSpawnMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimeCloseHandle: expect.objectContaining({
+          handle: expect.objectContaining({
+            backend: "acpx",
+          }),
+        }),
+      }),
+    );
   });
 
   it('rejects streamTo="parent" without requester session context', async () => {

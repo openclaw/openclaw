@@ -1,5 +1,6 @@
 import type { SessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import type { SessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import { asPositiveSafeInteger } from "../shared/number-coercion.js";
 import { projectChatDisplayMessage } from "./chat-display-projection.js";
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import type {
@@ -42,6 +43,7 @@ function buildGatewaySessionSnapshot(params: {
     origin: sessionRow.origin,
     spawnedBy: sessionRow.spawnedBy,
     spawnedWorkspaceDir: sessionRow.spawnedWorkspaceDir,
+    spawnedCwd: sessionRow.spawnedCwd,
     forkedFromParent: sessionRow.forkedFromParent,
     spawnDepth: sessionRow.spawnDepth,
     subagentRole: sessionRow.subagentRole,
@@ -118,17 +120,22 @@ async function handleTranscriptUpdateBroadcast(
   if (connIds.size === 0) {
     return;
   }
-  const { entry, storePath } = loadSessionEntry(sessionKey);
-  const messageSeq = entry?.sessionId
-    ? await readSessionMessageCountAsync(entry.sessionId, storePath, entry.sessionFile)
-    : undefined;
+  let messageSeq = asPositiveSafeInteger(update.messageSeq);
+  if (messageSeq === undefined) {
+    const { entry, storePath } = loadSessionEntry(sessionKey);
+    messageSeq = entry?.sessionId
+      ? asPositiveSafeInteger(
+          await readSessionMessageCountAsync(entry.sessionId, storePath, entry.sessionFile),
+        )
+      : undefined;
+  }
   const sessionSnapshot = buildGatewaySessionSnapshot({
     sessionRow: loadGatewaySessionRow(sessionKey, { transcriptUsageMaxBytes: 64 * 1024 }),
     includeSession: true,
   });
   const rawMessage = attachOpenClawTranscriptMeta(update.message, {
     ...(typeof update.messageId === "string" ? { id: update.messageId } : {}),
-    ...(typeof messageSeq === "number" ? { seq: messageSeq } : {}),
+    ...(messageSeq !== undefined ? { seq: messageSeq } : {}),
   });
   const message = projectChatDisplayMessage(rawMessage);
   if (message) {
@@ -138,12 +145,13 @@ async function handleTranscriptUpdateBroadcast(
         sessionKey,
         message,
         ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),
-        ...(typeof messageSeq === "number" ? { messageSeq } : {}),
+        ...(messageSeq !== undefined ? { messageSeq } : {}),
         ...sessionSnapshot,
       },
       connIds,
       { dropIfSlow: true },
     );
+    return;
   }
 
   const sessionEventConnIds = params.sessionEventSubscribers.getAll();
@@ -157,7 +165,7 @@ async function handleTranscriptUpdateBroadcast(
       phase: "message",
       ts: Date.now(),
       ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),
-      ...(typeof messageSeq === "number" ? { messageSeq } : {}),
+      ...(messageSeq !== undefined ? { messageSeq } : {}),
       ...sessionSnapshot,
     },
     sessionEventConnIds,

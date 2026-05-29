@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderExternalAuthProfile } from "../../plugins/types.js";
 import {
-  __testing,
+  testing,
   overlayExternalOAuthProfiles,
   shouldPersistExternalOAuthProfile,
 } from "./external-auth.js";
@@ -58,11 +58,11 @@ describe("auth external oauth helpers", () => {
     resolveExternalAuthProfilesWithPluginsMock.mockReturnValue([]);
     readCodexCliCredentialsCachedMock.mockReset();
     readCodexCliCredentialsCachedMock.mockReturnValue(null);
-    __testing.setResolveExternalAuthProfilesForTest(resolveExternalAuthProfilesWithPluginsMock);
+    testing.setResolveExternalAuthProfilesForTest(resolveExternalAuthProfilesWithPluginsMock);
   });
 
   afterEach(() => {
-    __testing.resetResolveExternalAuthProfilesForTest();
+    testing.resetResolveExternalAuthProfilesForTest();
   });
 
   it("overlays provider-managed runtime oauth profiles onto the store", () => {
@@ -96,7 +96,7 @@ describe("auth external oauth helpers", () => {
     });
 
     const resolveParams = requireRecord(
-      resolveExternalAuthProfilesWithPluginsMock.mock.calls[0]?.[0],
+      resolveExternalAuthProfilesWithPluginsMock.mock.calls.at(0)?.[0],
       "resolve external auth params",
     );
     expect(resolveParams.config).toBe(cfg);
@@ -207,21 +207,21 @@ describe("auth external oauth helpers", () => {
       }),
     );
 
-    expect(overlaid.profiles["openai-codex:default"]).toMatchObject({
-      access: "fresh-cli-access-token",
-      refresh: "fresh-cli-refresh-token",
-      accountId: "acct-cli",
+    const overlaidProfile = overlaid.profiles["openai-codex:default"];
+    expect(overlaidProfile?.type).toBe("oauth");
+    if (!overlaidProfile || overlaidProfile.type !== "oauth") {
+      throw new Error("expected overlaid OAuth profile");
+    }
+    expect(overlaidProfile.access).toBe("fresh-cli-access-token");
+    expect(overlaidProfile.refresh).toBe("fresh-cli-refresh-token");
+    expect(overlaidProfile.accountId).toBe("acct-cli");
+    const managedCredential = readManagedExternalCliCredential({
+      profileId: "openai-codex:default",
+      credential: tokenlessCredential,
     });
-    expect(
-      readManagedExternalCliCredential({
-        profileId: "openai-codex:default",
-        credential: tokenlessCredential,
-      }),
-    ).toMatchObject({
-      access: "fresh-cli-access-token",
-      refresh: "fresh-cli-refresh-token",
-      accountId: "acct-cli",
-    });
+    expect(managedCredential?.access).toBe("fresh-cli-access-token");
+    expect(managedCredential?.refresh).toBe("fresh-cli-refresh-token");
+    expect(managedCredential?.accountId).toBe("acct-cli");
   });
 
   it("keeps healthy local oauth even when external cli has a fresher token", () => {

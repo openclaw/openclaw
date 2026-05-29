@@ -1,6 +1,14 @@
 import path from "node:path";
-import { assertOkOrThrowHttpError } from "../agents/provider-http-errors.js";
-export { assertOkOrThrowHttpError } from "../agents/provider-http-errors.js";
+import {
+  assertOkOrThrowHttpError,
+  createProviderHttpError,
+  readProviderJsonObjectResponse,
+} from "../agents/provider-http-errors.js";
+export {
+  assertOkOrThrowHttpError,
+  readProviderJsonObjectResponse,
+  readProviderJsonResponse,
+} from "../agents/provider-http-errors.js";
 import type {
   ProviderRequestCapability,
   ProviderRequestTransport,
@@ -8,13 +16,18 @@ import type {
 import {
   buildProviderRequestDispatcherPolicy,
   resolveProviderRequestPolicyConfig,
-  type ProviderRequestTransportOverrides,
+  type ModelProviderRequestTransportOverrides,
   type ResolvedProviderRequestConfig,
 } from "../agents/provider-request-config.js";
 import type { GuardedFetchMode, GuardedFetchResult } from "../infra/net/fetch-guard.js";
 import { fetchWithSsrFGuard, GUARDED_FETCH_MODE } from "../infra/net/fetch-guard.js";
 import { shouldUseEnvHttpProxyForUrl } from "../infra/net/proxy-env.js";
 import type { LookupFn, PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
+import {
+  executeProviderOperationWithRetry,
+  type ProviderOperationRetryStage,
+  type TransientProviderRetryConfig,
+} from "../provider-runtime/operation-retry.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 export { fetchWithTimeout };
 export { normalizeBaseUrl } from "../agents/provider-request-config.js";
@@ -66,6 +79,17 @@ export type ProviderOperationDeadline = {
   timeoutMs?: number;
 };
 
+export type ProviderOperationTimeoutMs = number | (() => number);
+
+type GuardedProviderRequestParams = {
+  pinDns?: boolean;
+  allowPrivateNetwork?: boolean;
+  ssrfPolicy?: SsrFPolicy;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
+  auditContext?: string;
+  mode?: GuardedFetchMode;
+};
+
 export function createProviderOperationDeadline(params: {
   timeoutMs?: number;
   label: string;
@@ -100,6 +124,13 @@ export function resolveProviderOperationTimeoutMs(params: {
   return Math.max(1, Math.min(params.defaultTimeoutMs, remainingMs));
 }
 
+export function createProviderOperationTimeoutResolver(params: {
+  deadline: ProviderOperationDeadline;
+  defaultTimeoutMs: number;
+}): () => number {
+  return () => resolveProviderOperationTimeoutMs(params);
+}
+
 export async function waitProviderOperationPollInterval(params: {
   deadline: ProviderOperationDeadline;
   pollIntervalMs: number;
@@ -116,34 +147,62 @@ export async function waitProviderOperationPollInterval(params: {
   await new Promise((resolve) => setTimeout(resolve, Math.min(params.pollIntervalMs, remainingMs)));
 }
 
-export async function pollProviderOperationJson<TPayload>(params: {
-  url: string;
-  headers: Headers;
-  deadline: ProviderOperationDeadline;
-  defaultTimeoutMs: number;
-  fetchFn: typeof fetch;
-  maxAttempts: number;
-  pollIntervalMs: number;
-  requestFailedMessage: string;
-  timeoutMessage: string;
-  isComplete: (payload: TPayload) => boolean;
-  getFailureMessage?: (payload: TPayload) => string | undefined;
-}): Promise<TPayload> {
+export async function pollProviderOperationJson<TPayload>(
+  params: {
+    url: string;
+    headers: Headers | (() => Headers);
+    deadline: ProviderOperationDeadline;
+    defaultTimeoutMs: number;
+    fetchFn: typeof fetch;
+    maxAttempts: number;
+    pollIntervalMs: number;
+    requestFailedMessage: string;
+    timeoutMessage: string;
+    isComplete: (payload: TPayload) => boolean;
+    getFailureMessage?: (payload: TPayload) => string | undefined;
+  } & GuardedProviderRequestParams,
+): Promise<TPayload> {
   for (let attempt = 0; attempt < params.maxAttempts; attempt += 1) {
-    const response = await fetchWithTimeout(
-      params.url,
-      {
-        method: "GET",
-        headers: params.headers,
-      },
-      resolveProviderOperationTimeoutMs({
-        deadline: params.deadline,
-        defaultTimeoutMs: params.defaultTimeoutMs,
-      }),
-      params.fetchFn,
-    );
-    await assertOkOrThrowHttpError(response, params.requestFailedMessage);
-    const payload = (await response.json()) as TPayload;
+    const init = {
+      method: "GET",
+      headers: typeof params.headers === "function" ? params.headers() : params.headers,
+    };
+    const timeoutMs = createProviderOperationTimeoutResolver({
+      deadline: params.deadline,
+      defaultTimeoutMs: params.defaultTimeoutMs,
+    });
+    const guardedOptions = resolveGuardedRequestOptions(params);
+    const payload = guardedOptions
+      ? await (async () => {
+          const result = await fetchGuardedProviderOperationResponse({
+            stage: "poll",
+            url: params.url,
+            init,
+            timeoutMs,
+            fetchFn: params.fetchFn,
+            requestFailedMessage: params.requestFailedMessage,
+            guardedOptions,
+          });
+          try {
+            return (await readProviderJsonObjectResponse(
+              result.response,
+              params.requestFailedMessage,
+            )) as TPayload;
+          } finally {
+            await result.release();
+          }
+        })()
+      : ((await readProviderJsonObjectResponse(
+          await fetchProviderOperationResponse({
+            stage: "poll",
+            url: params.url,
+            init,
+            timeoutMs,
+            fetchFn: params.fetchFn,
+            requestFailedMessage: params.requestFailedMessage,
+          }),
+          params.requestFailedMessage,
+        )) as TPayload);
     if (params.isComplete(payload)) {
       return payload;
     }
@@ -157,6 +216,66 @@ export async function pollProviderOperationJson<TPayload>(params: {
     });
   }
   throw new Error(params.timeoutMessage);
+}
+
+export async function fetchProviderOperationResponse(params: {
+  stage: ProviderOperationRetryStage;
+  url: string;
+  init?: RequestInit;
+  timeoutMs?: ProviderOperationTimeoutMs;
+  fetchFn: typeof fetch;
+  provider?: string;
+  requestFailedMessage?: string;
+  retry?: TransientProviderRetryConfig;
+}): Promise<Response> {
+  return await executeProviderOperationWithRetry({
+    provider: params.provider ?? "provider-http",
+    stage: params.stage,
+    retry: params.retry,
+    operation: async () => {
+      const response = await fetchWithTimeout(
+        params.url,
+        params.init ?? {},
+        resolveProviderOperationRequestTimeoutMs(params.timeoutMs),
+        params.fetchFn,
+      );
+      if (params.requestFailedMessage) {
+        await assertOkOrThrowHttpError(response, params.requestFailedMessage);
+      }
+      return response;
+    },
+  });
+}
+
+export async function fetchProviderDownloadResponse(params: {
+  url: string;
+  init?: RequestInit;
+  timeoutMs?: ProviderOperationTimeoutMs;
+  fetchFn: typeof fetch;
+  provider?: string;
+  requestFailedMessage: string;
+  retry?: TransientProviderRetryConfig;
+}): Promise<Response> {
+  return await fetchProviderOperationResponse({
+    stage: "download",
+    url: params.url,
+    init: params.init,
+    timeoutMs: params.timeoutMs,
+    fetchFn: params.fetchFn,
+    provider: params.provider,
+    requestFailedMessage: params.requestFailedMessage,
+    retry: params.retry,
+  });
+}
+
+function resolveProviderOperationRequestTimeoutMs(
+  timeoutMs: ProviderOperationTimeoutMs | undefined,
+): number {
+  const resolved = typeof timeoutMs === "function" ? timeoutMs() : timeoutMs;
+  if (typeof resolved !== "number" || !Number.isFinite(resolved) || resolved <= 0) {
+    return DEFAULT_GUARDED_HTTP_TIMEOUT_MS;
+  }
+  return resolved;
 }
 
 function resolveGuardedHttpTimeoutMs(timeoutMs: number | undefined): number {
@@ -183,7 +302,7 @@ export function resolveProviderHttpRequestConfig(params: {
   allowPrivateNetwork?: boolean;
   headers?: HeadersInit;
   defaultHeaders?: Record<string, string>;
-  request?: ProviderRequestTransportOverrides;
+  request?: ModelProviderRequestTransportOverrides;
   provider?: string;
   api?: string;
   capability?: ProviderRequestCapability;
@@ -317,9 +436,9 @@ export async function fetchWithTimeoutGuarded(
   });
 }
 
-type GuardedPostRequestOptions = NonNullable<Parameters<typeof fetchWithTimeoutGuarded>[4]>;
+type GuardedProviderRequestOptions = NonNullable<Parameters<typeof fetchWithTimeoutGuarded>[4]>;
 
-function mergeGuardedPostSsrfPolicy(params: {
+function mergeGuardedRequestSsrfPolicy(params: {
   ssrfPolicy?: SsrFPolicy;
   allowPrivateNetwork?: boolean;
 }): SsrFPolicy | undefined {
@@ -332,14 +451,9 @@ function mergeGuardedPostSsrfPolicy(params: {
   return { ...params.ssrfPolicy, allowPrivateNetwork: true };
 }
 
-function resolveGuardedPostRequestOptions(params: {
-  pinDns?: boolean;
-  allowPrivateNetwork?: boolean;
-  ssrfPolicy?: SsrFPolicy;
-  dispatcherPolicy?: PinnedDispatcherPolicy;
-  auditContext?: string;
-  mode?: GuardedFetchMode;
-}): GuardedPostRequestOptions | undefined {
+function resolveGuardedRequestOptions(
+  params: GuardedProviderRequestParams,
+): GuardedProviderRequestOptions | undefined {
   if (
     !params.allowPrivateNetwork &&
     !params.ssrfPolicy &&
@@ -350,7 +464,7 @@ function resolveGuardedPostRequestOptions(params: {
   ) {
     return undefined;
   }
-  const ssrfPolicy = mergeGuardedPostSsrfPolicy(params);
+  const ssrfPolicy = mergeGuardedRequestSsrfPolicy(params);
   return {
     ...(ssrfPolicy ? { ssrfPolicy } : {}),
     ...(params.pinDns !== undefined ? { pinDns: params.pinDns } : {}),
@@ -360,97 +474,197 @@ function resolveGuardedPostRequestOptions(params: {
   };
 }
 
-export async function postTranscriptionRequest(params: {
+async function fetchGuardedProviderOperationResponse(params: {
+  stage: ProviderOperationRetryStage;
   url: string;
-  headers: Headers;
-  body: BodyInit;
-  timeoutMs?: number;
+  init: RequestInit;
+  timeoutMs?: ProviderOperationTimeoutMs;
   fetchFn: typeof fetch;
-  pinDns?: boolean;
-  allowPrivateNetwork?: boolean;
-  ssrfPolicy?: SsrFPolicy;
-  dispatcherPolicy?: PinnedDispatcherPolicy;
-  auditContext?: string;
+  provider?: string;
+  requestFailedMessage?: string;
+  retry?: TransientProviderRetryConfig;
+  guardedOptions: GuardedProviderRequestOptions;
+}): Promise<GuardedFetchResult> {
+  return await executeProviderOperationWithRetry({
+    provider: params.provider ?? "provider-http",
+    stage: params.stage,
+    retry: params.retry,
+    operation: async () => {
+      const result = await fetchWithTimeoutGuarded(
+        params.url,
+        params.init,
+        resolveProviderOperationRequestTimeoutMs(params.timeoutMs),
+        params.fetchFn,
+        params.guardedOptions,
+      );
+      try {
+        if (params.requestFailedMessage) {
+          await assertOkOrThrowHttpError(result.response, params.requestFailedMessage);
+        }
+        return result;
+      } catch (error) {
+        await result.release();
+        throw error;
+      }
+    },
+  });
+}
+
+type GuardedPostRequestRetryOptions = {
   /**
-   * Override the guarded-fetch mode. Defaults to an auto-upgrade to
-   * `TRUSTED_ENV_PROXY` when `HTTP_PROXY`/`HTTPS_PROXY` is configured in the
-   * environment; pass `"strict"` to force pinned-DNS even inside a proxy.
+   * POST requests default to no retry because many provider endpoints create
+   * billable jobs. Pass "read" only for read/analysis POST endpoints.
    */
-  mode?: GuardedFetchMode;
-}) {
-  return fetchWithTimeoutGuarded(
-    params.url,
-    {
+  retryStage?: ProviderOperationRetryStage;
+  retry?: TransientProviderRetryConfig;
+};
+
+export async function postTranscriptionRequest(
+  params: {
+    url: string;
+    headers: Headers;
+    body: BodyInit;
+    timeoutMs?: number;
+    fetchFn: typeof fetch;
+    pinDns?: boolean;
+    allowPrivateNetwork?: boolean;
+    ssrfPolicy?: SsrFPolicy;
+    dispatcherPolicy?: PinnedDispatcherPolicy;
+    auditContext?: string;
+    /**
+     * Override the guarded-fetch mode. Defaults to an auto-upgrade to
+     * `TRUSTED_ENV_PROXY` when `HTTP_PROXY`/`HTTPS_PROXY` is configured in the
+     * environment; pass `"strict"` to force pinned-DNS even inside a proxy.
+     */
+    mode?: GuardedFetchMode;
+  } & GuardedPostRequestRetryOptions,
+) {
+  return await postGuardedRequest({
+    url: params.url,
+    init: {
       method: "POST",
       headers: params.headers,
       body: params.body,
     },
-    params.timeoutMs,
-    params.fetchFn,
-    resolveGuardedPostRequestOptions(params),
-  );
+    timeoutMs: params.timeoutMs,
+    fetchFn: params.fetchFn,
+    guardedOptions: resolveGuardedRequestOptions(params),
+    retryStage: params.retryStage,
+    retry: params.retry,
+  });
 }
 
-export async function postJsonRequest(params: {
+async function postGuardedRequest(params: {
   url: string;
-  headers: Headers;
-  body: unknown;
+  init: RequestInit;
   timeoutMs?: number;
   fetchFn: typeof fetch;
-  pinDns?: boolean;
-  allowPrivateNetwork?: boolean;
-  ssrfPolicy?: SsrFPolicy;
-  dispatcherPolicy?: PinnedDispatcherPolicy;
-  auditContext?: string;
-  /**
-   * Override the guarded-fetch mode. Defaults to an auto-upgrade to
-   * `TRUSTED_ENV_PROXY` when `HTTP_PROXY`/`HTTPS_PROXY` is configured in the
-   * environment; pass `"strict"` to force pinned-DNS even inside a proxy.
-   */
-  mode?: GuardedFetchMode;
+  guardedOptions?: GuardedProviderRequestOptions;
+  retryStage?: ProviderOperationRetryStage;
+  retry?: TransientProviderRetryConfig;
 }) {
-  return fetchWithTimeoutGuarded(
-    params.url,
-    {
+  const operation = async () => {
+    const result = await fetchWithTimeoutGuarded(
+      params.url,
+      params.init,
+      params.timeoutMs,
+      params.fetchFn,
+      params.guardedOptions,
+    );
+    if (params.retryStage && isTransientProviderHttpStatus(result.response.status)) {
+      try {
+        throw await createProviderHttpError(result.response, "provider POST request failed", {
+          statusPrefix: "HTTP ",
+        });
+      } finally {
+        await result.release();
+      }
+    }
+    return result;
+  };
+  if (!params.retryStage) {
+    return await operation();
+  }
+  return await executeProviderOperationWithRetry({
+    provider: "provider-http",
+    stage: params.retryStage,
+    retry: params.retry,
+    operation,
+  });
+}
+
+function isTransientProviderHttpStatus(status: number): boolean {
+  return status === 500 || status === 502 || status === 503 || status === 504;
+}
+
+export async function postJsonRequest(
+  params: {
+    url: string;
+    headers: Headers;
+    body: unknown;
+    timeoutMs?: number;
+    fetchFn: typeof fetch;
+    pinDns?: boolean;
+    allowPrivateNetwork?: boolean;
+    ssrfPolicy?: SsrFPolicy;
+    dispatcherPolicy?: PinnedDispatcherPolicy;
+    auditContext?: string;
+    /**
+     * Override the guarded-fetch mode. Defaults to an auto-upgrade to
+     * `TRUSTED_ENV_PROXY` when `HTTP_PROXY`/`HTTPS_PROXY` is configured in the
+     * environment; pass `"strict"` to force pinned-DNS even inside a proxy.
+     */
+    mode?: GuardedFetchMode;
+  } & GuardedPostRequestRetryOptions,
+) {
+  return await postGuardedRequest({
+    url: params.url,
+    init: {
       method: "POST",
       headers: params.headers,
       body: JSON.stringify(params.body),
     },
-    params.timeoutMs,
-    params.fetchFn,
-    resolveGuardedPostRequestOptions(params),
-  );
+    timeoutMs: params.timeoutMs,
+    fetchFn: params.fetchFn,
+    guardedOptions: resolveGuardedRequestOptions(params),
+    retryStage: params.retryStage,
+    retry: params.retry,
+  });
 }
 
-export async function postMultipartRequest(params: {
-  url: string;
-  headers: Headers;
-  body: BodyInit;
-  timeoutMs?: number;
-  fetchFn: typeof fetch;
-  pinDns?: boolean;
-  allowPrivateNetwork?: boolean;
-  ssrfPolicy?: SsrFPolicy;
-  dispatcherPolicy?: PinnedDispatcherPolicy;
-  auditContext?: string;
-  /**
-   * Override the guarded-fetch mode. Defaults to an auto-upgrade to
-   * `TRUSTED_ENV_PROXY` when `HTTP_PROXY`/`HTTPS_PROXY` is configured in the
-   * environment; pass `"strict"` to force pinned-DNS even inside a proxy.
-   */
-  mode?: GuardedFetchMode;
-}) {
-  return fetchWithTimeoutGuarded(
-    params.url,
-    {
+export async function postMultipartRequest(
+  params: {
+    url: string;
+    headers: Headers;
+    body: BodyInit;
+    timeoutMs?: number;
+    fetchFn: typeof fetch;
+    pinDns?: boolean;
+    allowPrivateNetwork?: boolean;
+    ssrfPolicy?: SsrFPolicy;
+    dispatcherPolicy?: PinnedDispatcherPolicy;
+    auditContext?: string;
+    /**
+     * Override the guarded-fetch mode. Defaults to an auto-upgrade to
+     * `TRUSTED_ENV_PROXY` when `HTTP_PROXY`/`HTTPS_PROXY` is configured in the
+     * environment; pass `"strict"` to force pinned-DNS even inside a proxy.
+     */
+    mode?: GuardedFetchMode;
+  } & GuardedPostRequestRetryOptions,
+) {
+  return await postGuardedRequest({
+    url: params.url,
+    init: {
       method: "POST",
       headers: params.headers,
       body: params.body,
     },
-    params.timeoutMs,
-    params.fetchFn,
-    resolveGuardedPostRequestOptions(params),
-  );
+    timeoutMs: params.timeoutMs,
+    fetchFn: params.fetchFn,
+    guardedOptions: resolveGuardedRequestOptions(params),
+    retryStage: params.retryStage,
+    retry: params.retry,
+  });
 }
 
 export async function readErrorResponse(res: Response): Promise<string | undefined> {

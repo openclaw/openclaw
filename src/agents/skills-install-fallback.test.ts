@@ -27,10 +27,10 @@ vi.mock("./skills.js", async (importOriginal) => {
 });
 
 let installSkill: typeof import("./skills-install.js").installSkill;
-let skillsInstallTesting: typeof import("./skills-install.js").__testing;
+let skillsInstallTesting: typeof import("./skills-install.js").testing;
 
 async function loadSkillsInstallModulesForTest() {
-  ({ installSkill, __testing: skillsInstallTesting } = await import("./skills-install.js"));
+  ({ installSkill, testing: skillsInstallTesting } = await import("./skills-install.js"));
 }
 
 function makeSkillEntry(
@@ -66,6 +66,25 @@ function assertNoAptGetFallbackCalls() {
   expect(aptCalls).toHaveLength(0);
 }
 
+function commandCallAt(
+  index: number,
+): [
+  string[],
+  { env?: NodeJS.ProcessEnv | Record<string, string | undefined>; timeoutMs?: number },
+] {
+  const call =
+    index < 0
+      ? runCommandWithTimeoutMock.mock.calls[runCommandWithTimeoutMock.mock.calls.length + index]
+      : runCommandWithTimeoutMock.mock.calls[index];
+  if (!call) {
+    throw new Error(`Expected command call ${index}`);
+  }
+  return call as [
+    string[],
+    { env?: NodeJS.ProcessEnv | Record<string, string | undefined>; timeoutMs?: number },
+  ];
+}
+
 describe("skills-install fallback edge cases", () => {
   let workspaceDir: string;
 
@@ -90,6 +109,7 @@ describe("skills-install fallback edge cases", () => {
     skillsInstallTesting.setDepsForTest({
       hasBinary: (bin: string) => hasBinaryMock(bin),
       resolveBrewExecutable: () => undefined,
+      isContainerEnvironment: () => false,
     });
   });
 
@@ -141,9 +161,7 @@ describe("skills-install fallback edge cases", () => {
 
       expect(result.ok, testCase.label).toBe(false);
       testCase.assert(result);
-      const sudoCall = runCommandWithTimeoutMock.mock.calls[0] as
-        | [string[], { timeoutMs?: number }]
-        | undefined;
+      const sudoCall = commandCallAt(0);
       expect(sudoCall?.[0], testCase.label).toEqual(["sudo", "-n", "true"]);
       expect(sudoCall?.[1]?.timeoutMs, testCase.label).toBe(5_000);
       assertNoAptGetFallbackCalls();
@@ -164,6 +182,40 @@ describe("skills-install fallback edge cases", () => {
 
     // Verify NO curl command was attempted (no auto-install)
     expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+  });
+
+  it("returns container-specific guidance when brew is missing in a Linux container", async () => {
+    const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    skillsInstallTesting.setDepsForTest({
+      hasBinary: (bin: string) => hasBinaryMock(bin),
+      resolveBrewExecutable: () => undefined,
+      isContainerEnvironment: () => true,
+    });
+    mockAvailableBinaries([]);
+    try {
+      skillsMocks.loadWorkspaceSkillEntries.mockReturnValueOnce([
+        makeSkillEntry(workspaceDir, "brew-tool-container", {
+          kind: "brew",
+          formula: "openai-whisper",
+        }),
+      ]);
+
+      const result = await installSkill({
+        workspaceDir,
+        skillName: "brew-tool-container",
+        installId: "deps",
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.message).toContain("Linux container");
+      expect(result.message).toContain("Build a custom image");
+      expect(result.message).toContain("openai-whisper");
+      expect(result.message).not.toContain("https://brew.sh");
+      expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(process, "platform", originalPlatformDescriptor);
+    }
   });
 
   it("does not use HOMEBREW_PREFIX as a brew bin fallback for go installs", async () => {
@@ -205,19 +257,13 @@ describe("skills-install fallback edge cases", () => {
       });
 
       expect(result.ok).toBe(true);
-      const brewInstallCall = runCommandWithTimeoutMock.mock.calls[0] as
-        | [string[], { timeoutMs?: number }]
-        | undefined;
-      const brewPrefixCall = runCommandWithTimeoutMock.mock.calls[1] as
-        | [string[], { timeoutMs?: number }]
-        | undefined;
+      const brewInstallCall = commandCallAt(0);
+      const brewPrefixCall = commandCallAt(1);
       expect(brewInstallCall?.[0]).toEqual(["/safe/homebrew/bin/brew", "install", "go"]);
       expect(brewInstallCall?.[1]?.timeoutMs).toBe(300_000);
       expect(brewPrefixCall?.[0]).toEqual(["/safe/homebrew/bin/brew", "--prefix"]);
       expect(brewPrefixCall?.[1]?.timeoutMs).toBe(30_000);
-      const finalCall = runCommandWithTimeoutMock.mock.calls.at(-1) as
-        | [string[], { env?: NodeJS.ProcessEnv }]
-        | undefined;
+      const finalCall = commandCallAt(-1);
       expect(finalCall?.[0]).toEqual(["go", "install", "example.com/tool@latest"]);
       expect(finalCall?.[1]?.env?.GOBIN).not.toBe(path.join(maliciousPrefix, "bin"));
     } finally {
@@ -257,9 +303,7 @@ describe("skills-install fallback edge cases", () => {
       });
 
       expect(result.ok).toBe(true);
-      const firstCall = runCommandWithTimeoutMock.mock.calls[0] as
-        | [string[], { timeoutMs?: number; env?: Record<string, string | undefined> }]
-        | undefined;
+      const firstCall = commandCallAt(0);
       expect(firstCall?.[0]).toEqual(["uv", "tool", "install", "example-package"]);
       expect(firstCall?.[1]?.timeoutMs).toBe(10_000);
       const envArg = firstCall?.[1]?.env;

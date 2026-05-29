@@ -5,7 +5,7 @@ import { createToolFactoryHarness, type ToolLike } from "./tool-factory-test-har
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
 const resolveFeishuToolAccountMock = vi.hoisted(() => vi.fn());
-const fetchRemoteMediaMock = vi.hoisted(() => vi.fn());
+const readRemoteMediaBufferMock = vi.hoisted(() => vi.fn());
 const loadWebMediaMock = vi.hoisted(() => vi.fn());
 const convertMock = vi.hoisted(() => vi.fn());
 const documentCreateMock = vi.hoisted(() => vi.fn());
@@ -40,7 +40,7 @@ vi.spyOn(runtimeModule, "getFeishuRuntime").mockImplementation(
     ({
       channel: {
         media: {
-          fetchRemoteMedia: fetchRemoteMediaMock,
+          readRemoteMediaBuffer: readRemoteMediaBufferMock,
           saveMediaBuffer: vi.fn(),
         },
       },
@@ -64,16 +64,19 @@ type ToolResultWithDetails = {
 const WORKSPACE_ROOT = path.resolve("/workspace");
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(value, label).toBeTypeOf("object");
-  expect(value, label).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
   return value as Record<string, unknown>;
 }
 
 function callArg(mock: unknown, callIndex: number, argIndex: number, label: string) {
   const calls = (mock as { mock?: { calls?: Array<Array<unknown>> } }).mock?.calls ?? [];
   const call = calls.at(callIndex);
-  expect(call, label).toBeDefined();
-  return call?.[argIndex];
+  if (!call) {
+    throw new Error(`Expected ${label}`);
+  }
+  return call[argIndex];
 }
 
 function expectLoadWebMediaCall(fileName: string, localRoots: unknown[] | undefined) {
@@ -232,10 +235,7 @@ describe("feishu_doc image fetch hardening", () => {
     expect(blockDescendantCreateMock).toHaveBeenCalledTimes(1);
     const call = blockDescendantCreateMock.mock.calls[0]?.[0];
     expect(call?.data.children_id).toEqual(["h1", "t1", "h2"]);
-    for (const block of blocks) {
-      expect(call?.data.descendants).toContainEqual(block);
-    }
-    expect(call?.data.descendants).toHaveLength(3);
+    expect(call?.data.descendants).toEqual(blocks);
 
     expect(result.details.blocks_added).toBe(3);
   });
@@ -389,7 +389,7 @@ describe("feishu_doc image fetch hardening", () => {
 
   it("skips image upload when markdown image URL is blocked", async () => {
     const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    fetchRemoteMediaMock.mockRejectedValueOnce(
+    readRemoteMediaBufferMock.mockRejectedValueOnce(
       new Error("Blocked: resolves to private/internal IP address"),
     );
 
@@ -401,7 +401,7 @@ describe("feishu_doc image fetch hardening", () => {
       content: "![x](https://x.test/image.png)",
     });
 
-    expect(fetchRemoteMediaMock).toHaveBeenCalled();
+    expect(readRemoteMediaBufferMock).toHaveBeenCalled();
     expect(driveUploadAllMock).not.toHaveBeenCalled();
     expect(blockPatchMock).not.toHaveBeenCalled();
     expect(result.details.images_processed).toBe(0);

@@ -95,6 +95,7 @@ methods:
 | `api.registerAgentHarness(...)`                  | Experimental low-level agent executor |
 | `api.registerCliBackend(...)`                    | Local CLI inference backend           |
 | `api.registerChannel(...)`                       | Messaging channel                     |
+| `api.registerEmbeddingProvider(...)`             | Reusable vector embedding provider    |
 | `api.registerSpeechProvider(...)`                | Text-to-speech / STT synthesis        |
 | `api.registerRealtimeTranscriptionProvider(...)` | Streaming realtime transcription      |
 | `api.registerRealtimeVoiceProvider(...)`         | Duplex realtime voice sessions        |
@@ -105,7 +106,19 @@ methods:
 | `api.registerWebFetchProvider(...)`              | Web fetch / scrape provider           |
 | `api.registerWebSearchProvider(...)`             | Web search                            |
 
+Embedding providers registered with `api.registerEmbeddingProvider(...)` must
+also be listed in `contracts.embeddingProviders` in the plugin manifest. This
+is the generic embedding surface for reusable vector generation. Memory search
+can consume this generic provider surface. The older
+`api.registerMemoryEmbeddingProvider(...)` and
+`contracts.memoryEmbeddingProviders` seam is deprecated compatibility while
+existing memory-specific providers migrate.
+
 ### Tools and commands
+
+Use [`defineToolPlugin`](/plugins/tool-plugins) for simple tool-only plugins
+with fixed tool names. Use `api.registerTool(...)` directly for mixed plugins
+or fully dynamic tool registration.
 
 | Method                          | What it registers                             |
 | ------------------------------- | --------------------------------------------- |
@@ -115,6 +128,27 @@ methods:
 Plugin commands can set `agentPromptGuidance` when the agent needs a short,
 command-owned routing hint. Keep that text about the command itself; do not add
 provider- or plugin-specific policy to core prompt builders.
+
+Guidance entries may be legacy strings, which apply to every prompt surface, or
+structured entries:
+
+```ts
+agentPromptGuidance: [
+  "Global command hint.",
+  { text: "Only show this in the main OpenClaw prompt.", surfaces: ["openclaw_main"] },
+];
+```
+
+Structured `surfaces` may include `openclaw_main`, `codex_app_server`,
+`cli_backend`, `acp_backend`, or `subagent`. `pi_main` remains a deprecated alias
+for `openclaw_main`. Omit `surfaces` for intentional all-surface guidance. Do
+not pass an empty `surfaces` array; it is rejected so accidental scope loss does
+not become global prompt text.
+
+Native Codex app-server developer instructions are stricter than other prompt
+surfaces: only guidance explicitly scoped to `codex_app_server` is promoted into
+that higher-priority lane. Legacy string guidance and unscoped structured
+guidance remain available to non-Codex prompt surfaces for compatibility.
 
 ### Infrastructure
 
@@ -223,9 +257,9 @@ Examples of non-Plan consumers:
   seam for async output reducers such as tokenjuice.
 
 Bundled plugins must declare `contracts.agentToolResultMiddleware` for each
-targeted runtime, for example `["pi", "codex"]`. External plugins
+targeted runtime, for example `["openclaw", "codex"]`. External plugins
 cannot register this middleware; keep normal OpenClaw plugin hooks for work
-that does not need pre-model tool-result timing. The old Pi-only embedded
+that does not need pre-model tool-result timing. The old embedded-runner-only
 extension factory registration path has been removed.
 </Accordion>
 
@@ -320,9 +354,9 @@ descriptor-backed placeholders for parse-time lazy loading.
 ### CLI backend registration
 
 `api.registerCliBackend(...)` lets a plugin own the default config for a local
-AI CLI backend such as `codex-cli`.
+AI CLI backend such as `claude-cli` or `my-cli`.
 
-- The backend `id` becomes the provider prefix in model refs like `codex-cli/gpt-5`.
+- The backend `id` becomes the provider prefix in model refs like `my-cli/gpt-5`.
 - The backend `config` uses the same shape as `agents.defaults.cliBackends.<id>`.
 - User config still wins. OpenClaw merges `agents.defaults.cliBackends.<id>` over the
   plugin default before running the CLI.
@@ -345,7 +379,7 @@ For an end-to-end authoring guide, see
 | `api.registerMemoryFlushPlan(resolver)`    | Memory flush plan resolver                                                                                                                                |
 | `api.registerMemoryRuntime(runtime)`       | Memory runtime adapter                                                                                                                                    |
 
-### Memory embedding adapters
+### Deprecated memory embedding adapters
 
 | Method                                         | What it registers                              |
 | ---------------------------------------------- | ---------------------------------------------- |
@@ -361,12 +395,12 @@ For an end-to-end authoring guide, see
 - `MemoryFlushPlan.model` can pin the flush turn to an exact `provider/model`
   reference, such as `ollama/qwen3:8b`, without inheriting the active fallback
   chain.
-- `registerMemoryEmbeddingProvider` lets the active memory plugin register one
-  or more embedding adapter ids (for example `openai`, `gemini`, or a custom
-  plugin-defined id).
-- User config such as `agents.defaults.memorySearch.provider` and
-  `agents.defaults.memorySearch.fallback` resolves against those registered
-  adapter ids.
+- `registerMemoryEmbeddingProvider` is deprecated. New embedding providers
+  should use `api.registerEmbeddingProvider(...)` and
+  `contracts.embeddingProviders`.
+- Existing memory-specific providers continue to work during the migration
+  window, but plugin inspection reports this as compatibility debt for
+  non-bundled plugins.
 
 ### Events and lifecycle
 

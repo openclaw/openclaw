@@ -1,15 +1,27 @@
-import type { Api, Model } from "@earendil-works/pi-ai";
+import {
+  isCloudMetadataIpAddress,
+  isLinkLocalIpAddress,
+  parseCanonicalIpAddress,
+} from "@openclaw/net-policy/ip";
 import {
   fetchWithSsrFGuard,
   withTrustedEnvProxyGuardedFetchMode,
 } from "../infra/net/fetch-guard.js";
 import { shouldUseEnvHttpProxyForUrl } from "../infra/net/proxy-env.js";
 import {
+  mergeSsrFPolicies,
   ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist,
+  ssrfPolicyFromHttpBaseUrlAllowedOrigin,
   type SsrFPolicy,
 } from "../infra/net/ssrf.js";
+import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveDebugProxySettings } from "../proxy-capture/env.js";
+import {
+  asFiniteNumberInRange,
+  parseStrictFiniteNumber,
+  parseStrictNonNegativeInteger,
+} from "../shared/number-coercion.js";
 import { emitModelTransportDebug } from "./model-transport-debug.js";
 import { formatModelTransportDebugUrl } from "./model-transport-url.js";
 import {
@@ -25,6 +37,10 @@ import {
 
 const DEFAULT_MAX_SDK_RETRY_WAIT_SECONDS = 60;
 const log = createSubsystemLogger("provider-transport-fetch");
+const BLOCKED_EXACT_ORIGIN_TRUST_HOSTNAME_LABELS = new Set(["instance-data"]);
+const PLAIN_DECIMAL_NUMBER_RE = /^\d+(?:\.\d+)?$/;
+const RETRY_AFTER_HTTP_DATE_RE =
+  /^(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT|(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), \d{2}-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{2} \d{2}:\d{2}:\d{2} GMT|(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [ \d]\d \d{2}:\d{2}:\d{2} \d{4})$/;
 
 function hasReadableSseData(block: string): boolean {
   const dataLines = block
@@ -77,18 +93,20 @@ function sanitizeOpenAISdkSseResponse(
       },
       async pull(controller) {
         try {
-          const chunk = await reader?.read();
-          if (!chunk || chunk.done) {
-            buffer += decoder.decode();
-            const data = buffer.trim();
-            if (data) {
-              controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+          for (;;) {
+            const chunk = await reader?.read();
+            if (!chunk || chunk.done) {
+              buffer += decoder.decode();
+              const data = buffer.trim();
+              if (data) {
+                controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+              }
+              controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+              controller.close();
+              return;
             }
-            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-            controller.close();
-            return;
+            buffer += decoder.decode(chunk.value, { stream: true });
           }
-          buffer += decoder.decode(chunk.value, { stream: true });
         } catch (error) {
           controller.error(error);
         }
@@ -118,12 +136,13 @@ function sanitizeOpenAISdkSseResponse(
   const enqueueSanitized = (
     controller: ReadableStreamDefaultController<Uint8Array>,
     text: string,
-  ) => {
+  ): number => {
+    let enqueued = 0;
     buffer += text;
     for (;;) {
       const boundary = findSseEventBoundary(buffer);
       if (!boundary) {
-        return;
+        return enqueued;
       }
       const block = buffer.slice(0, boundary.index);
       const separator = buffer.slice(boundary.index, boundary.index + boundary.length);
@@ -132,6 +151,7 @@ function sanitizeOpenAISdkSseResponse(
       // messages. Drop those malformed keepalive-style blocks before it parses.
       if (hasReadableSseData(block)) {
         controller.enqueue(encoder.encode(`${block}${separator}`));
+        enqueued += 1;
       }
     }
   };
@@ -142,20 +162,28 @@ function sanitizeOpenAISdkSseResponse(
     },
     async pull(controller) {
       try {
-        const chunk = await reader?.read();
-        if (!chunk || chunk.done) {
-          const tail = decoder.decode();
-          if (tail) {
-            enqueueSanitized(controller, tail);
+        for (;;) {
+          const chunk = await reader?.read();
+          if (!chunk || chunk.done) {
+            const tail = decoder.decode();
+            if (tail) {
+              enqueueSanitized(controller, tail);
+            }
+            if (buffer && hasReadableSseData(buffer)) {
+              controller.enqueue(encoder.encode(buffer));
+            }
+            buffer = "";
+            controller.close();
+            return;
           }
-          if (buffer && hasReadableSseData(buffer)) {
-            controller.enqueue(encoder.encode(buffer));
+          const enqueued = enqueueSanitized(
+            controller,
+            decoder.decode(chunk.value, { stream: true }),
+          );
+          if (enqueued > 0) {
+            return;
           }
-          buffer = "";
-          controller.close();
-          return;
         }
-        enqueueSanitized(controller, decoder.decode(chunk.value, { stream: true }));
       } catch (error) {
         controller.error(error);
       }
@@ -170,6 +198,17 @@ function sanitizeOpenAISdkSseResponse(
     statusText: response.statusText,
     headers: response.headers,
   });
+}
+
+function shouldSanitizeOpenAISdkSseResponse(model: Model): boolean {
+  if (model.provider !== "openai") {
+    return true;
+  }
+  try {
+    return new URL(model.baseUrl).hostname.toLowerCase() !== "api.openai.com";
+  } catch {
+    return true;
+  }
 }
 
 async function requestBodyHasStreamTrue(
@@ -187,12 +226,7 @@ async function requestBodyHasStreamTrue(
   }
 
   let text: string | undefined;
-  if (request) {
-    text = await request
-      .clone()
-      .text()
-      .catch(() => undefined);
-  } else if (typeof init?.body === "string") {
+  if (typeof init?.body === "string") {
     text = init.body;
   }
   if (!text) {
@@ -208,9 +242,13 @@ async function requestBodyHasStreamTrue(
 function parseRetryAfterSeconds(headers: Headers): number | undefined {
   const retryAfterMs = headers.get("retry-after-ms");
   if (retryAfterMs) {
-    const milliseconds = Number.parseFloat(retryAfterMs);
-    if (Number.isFinite(milliseconds) && milliseconds >= 0) {
-      return milliseconds / 1000;
+    const trimmedRetryAfterMs = retryAfterMs.trim();
+    if (/^\d+(?:\.\d+)?$/.test(trimmedRetryAfterMs)) {
+      const milliseconds = asFiniteNumberInRange(parseStrictFiniteNumber(trimmedRetryAfterMs), {
+        min: 0,
+        max: Number.MAX_SAFE_INTEGER,
+      });
+      return milliseconds === undefined ? Number.POSITIVE_INFINITY : milliseconds / 1000;
     }
   }
 
@@ -219,12 +257,17 @@ function parseRetryAfterSeconds(headers: Headers): number | undefined {
     return undefined;
   }
 
-  const seconds = Number.parseFloat(retryAfter);
-  if (Number.isFinite(seconds) && seconds >= 0) {
-    return seconds;
+  const trimmedRetryAfterSeconds = retryAfter.trim();
+  if (/^\d+$/.test(trimmedRetryAfterSeconds)) {
+    return parseStrictNonNegativeInteger(trimmedRetryAfterSeconds) ?? Number.POSITIVE_INFINITY;
   }
 
-  const retryAt = Date.parse(retryAfter);
+  const trimmedRetryAfter = trimmedRetryAfterSeconds;
+  if (!RETRY_AFTER_HTTP_DATE_RE.test(trimmedRetryAfter)) {
+    return undefined;
+  }
+
+  const retryAt = Date.parse(trimmedRetryAfter);
   if (Number.isNaN(retryAt)) {
     return undefined;
   }
@@ -242,8 +285,16 @@ function resolveMaxSdkRetryWaitSeconds(): number | undefined {
     return undefined;
   }
 
-  const seconds = Number.parseFloat(raw);
-  if (Number.isFinite(seconds) && seconds > 0) {
+  if (!PLAIN_DECIMAL_NUMBER_RE.test(raw)) {
+    return DEFAULT_MAX_SDK_RETRY_WAIT_SECONDS;
+  }
+
+  const seconds = asFiniteNumberInRange(parseStrictFiniteNumber(raw), {
+    min: 0,
+    minExclusive: true,
+    max: Number.MAX_SAFE_INTEGER,
+  });
+  if (seconds !== undefined) {
     return seconds;
   }
 
@@ -331,7 +382,7 @@ function buildManagedResponse(
   });
 }
 
-function resolveModelRequestPolicy(model: Model<Api>) {
+function resolveModelRequestPolicy(model: Model) {
   const debugProxy = resolveDebugProxySettings();
   let explicitDebugProxyUrl: string | undefined;
   if (debugProxy.enabled && debugProxy.proxyUrl) {
@@ -362,7 +413,7 @@ function resolveModelRequestPolicy(model: Model<Api>) {
 }
 
 export function resolveModelRequestTimeoutMs(
-  model: Model<Api>,
+  model: Model,
   timeoutMs: number | undefined,
 ): number | undefined {
   if (timeoutMs !== undefined) {
@@ -374,7 +425,21 @@ export function resolveModelRequestTimeoutMs(
     : undefined;
 }
 
-function resolveHttpHostname(value: unknown): string | undefined {
+function buildModelRequestSignal(
+  baseSignal: AbortSignal | undefined,
+  timeoutMs: number | undefined,
+): AbortSignal | undefined {
+  if (timeoutMs === undefined) {
+    return baseSignal;
+  }
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  if (!baseSignal) {
+    return timeoutSignal;
+  }
+  return AbortSignal.any([baseSignal, timeoutSignal]);
+}
+
+function resolveHttpOrigin(value: unknown): string | undefined {
   if (typeof value !== "string" || !value.trim()) {
     return undefined;
   }
@@ -383,37 +448,91 @@ function resolveHttpHostname(value: unknown): string | undefined {
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
       return undefined;
     }
-    return parsed.hostname.toLowerCase();
+    parsed.hostname = parsed.hostname.replace(/\.+$/, "");
+    return parsed.origin.toLowerCase();
   } catch {
     return undefined;
   }
 }
 
+function normalizeProviderOriginHostname(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value.trim()) {
+    return undefined;
+  }
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return undefined;
+    }
+    const normalized = parsed.hostname.trim().toLowerCase().replace(/\.+$/, "");
+    return normalized || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function canImplicitlyTrustConfiguredBaseUrlOrigin(value: unknown): value is string {
+  const hostname = normalizeProviderOriginHostname(value);
+  if (!hostname) {
+    return false;
+  }
+  const labels = hostname.split(".").filter(Boolean);
+  return (
+    !labels.some(
+      (label) =>
+        label.includes("metadata") || BLOCKED_EXACT_ORIGIN_TRUST_HOSTNAME_LABELS.has(label),
+    ) &&
+    !isLinkLocalIpAddress(hostname) &&
+    !isCloudMetadataIpAddress(hostname)
+  );
+}
+
+function canApplyFakeIpHostnamePolicy(value: unknown): value is string {
+  const hostname = normalizeProviderOriginHostname(value);
+  if (!hostname) {
+    return false;
+  }
+  const labels = hostname.split(".").filter(Boolean);
+  return (
+    !labels.some(
+      (label) =>
+        label.includes("metadata") || BLOCKED_EXACT_ORIGIN_TRUST_HOSTNAME_LABELS.has(label),
+    ) && !parseCanonicalIpAddress(hostname)
+  );
+}
+
 function resolveModelTransportSsrFPolicy(params: {
-  model: Model<Api>;
+  model: Model;
   url: string;
   allowPrivateNetwork?: boolean;
+  trustConfiguredBaseUrlOrigin?: boolean;
 }): SsrFPolicy | undefined {
   const baseUrl = (params.model as { baseUrl?: unknown }).baseUrl;
-  const baseHostname = resolveHttpHostname(baseUrl);
-  const requestHostname = resolveHttpHostname(params.url);
+  const baseOrigin = resolveHttpOrigin(baseUrl);
+  const requestOrigin = resolveHttpOrigin(params.url);
+  const requestMatchesBaseOrigin =
+    typeof baseUrl === "string" && Boolean(baseOrigin) && requestOrigin === baseOrigin;
+  const baseUrlOriginPolicy =
+    requestMatchesBaseOrigin &&
+    params.trustConfiguredBaseUrlOrigin &&
+    canImplicitlyTrustConfiguredBaseUrlOrigin(baseUrl)
+      ? ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl)
+      : undefined;
+  // Fake-IP trust is hostname-scoped and orthogonal to exact-origin private-IP trust.
+  // It is for DNS hostnames only and does not allow literal private IPs by itself.
   const fakeIpPolicy =
-    typeof baseUrl === "string" && baseHostname && requestHostname === baseHostname
+    requestMatchesBaseOrigin && canApplyFakeIpHostnamePolicy(baseUrl)
       ? ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist(baseUrl)
       : undefined;
-
-  if (fakeIpPolicy) {
-    return {
-      ...fakeIpPolicy,
-      ...(params.allowPrivateNetwork ? { allowPrivateNetwork: true } : {}),
-    };
-  }
-
-  return params.allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined;
+  return mergeSsrFPolicies(
+    baseUrlOriginPolicy,
+    fakeIpPolicy,
+    params.allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined,
+  );
 }
 
 export function buildGuardedModelFetch(
-  model: Model<Api>,
+  model: Model,
   timeoutMs?: number,
   options?: { sanitizeSse?: boolean },
 ): typeof fetch {
@@ -454,6 +573,12 @@ export function buildGuardedModelFetch(
       model,
       url,
       allowPrivateNetwork: requestConfig.allowPrivateNetwork,
+      // Only operator-configured custom/local endpoints get exact-origin trust;
+      // known public/native providers keep the default rebinding checks.
+      trustConfiguredBaseUrlOrigin:
+        !requestConfig.privateNetworkExplicitlyDenied &&
+        (requestConfig.policy?.endpointClass === "custom" ||
+          requestConfig.policy?.endpointClass === "local"),
     });
     const requestInit =
       request &&
@@ -465,10 +590,13 @@ export function buildGuardedModelFetch(
         signal: request.signal,
         ...(request.body ? ({ duplex: "half" } as const) : {}),
       } satisfies RequestInit & { duplex?: "half" });
-    const synthesizeJsonAsSse = await requestBodyHasStreamTrue(request, requestInit ?? init);
+    const baseInit = requestInit ?? init;
+    const synthesizeJsonAsSse = await requestBodyHasStreamTrue(request, baseInit);
+    const baseSignal = baseInit?.signal ?? undefined;
+    const localServiceSignal = buildModelRequestSignal(baseSignal, requestTimeoutMs);
     const guardedFetchOptions = {
       url,
-      init: requestInit ?? init,
+      init: baseInit,
       capture: {
         meta: {
           provider: model.provider,
@@ -478,6 +606,7 @@ export function buildGuardedModelFetch(
       },
       dispatcherPolicy,
       timeoutMs: requestTimeoutMs,
+      ...(baseSignal ? { signal: baseSignal } : {}),
       // Provider transport intentionally keeps the secure default and never
       // replays unsafe request bodies across cross-origin redirects.
       allowCrossOriginUnsafeRedirectReplay: false,
@@ -489,15 +618,15 @@ export function buildGuardedModelFetch(
     emitModelTransportDebug(
       log,
       `[model-fetch] start provider=${model.provider} api=${model.api} model=${model.id} ` +
-        `method=${(requestInit ?? init)?.method ?? "GET"} url=${formatModelTransportDebugUrl(url)} timeoutMs=${requestTimeoutMs} ` +
+        `method=${baseInit?.method ?? "GET"} url=${formatModelTransportDebugUrl(url)} timeoutMs=${requestTimeoutMs} ` +
         `proxy=${dispatcherPolicy ? "configured" : useEnvProxy ? "env" : "none"} ` +
         `policy=${policy ? "custom" : "default"}`,
     );
     try {
       localServiceLease = await ensureModelProviderLocalService(
         model,
-        (requestInit ?? init)?.headers,
-        (requestInit ?? init)?.signal,
+        baseInit?.headers,
+        localServiceSignal,
       );
       result = await fetchWithSsrFGuard(
         useEnvProxy
@@ -534,7 +663,7 @@ export function buildGuardedModelFetch(
       result.refreshTimeout,
       localServiceLease,
     );
-    return options?.sanitizeSse === false
+    return options?.sanitizeSse === false || !shouldSanitizeOpenAISdkSseResponse(model)
       ? response
       : sanitizeOpenAISdkSseResponse(response, { synthesizeJsonAsSse });
   };

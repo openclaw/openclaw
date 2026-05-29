@@ -9,6 +9,18 @@ vi.mock("./secure-random.js", () => ({
   generateSecureFraction: randomMocks.generateSecureFraction,
 }));
 
+function firstMockArg(mock: { mock: { calls: readonly unknown[][] } }): Record<string, unknown> {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error("expected mock call");
+  }
+  const [arg] = call;
+  if (typeof arg !== "object" || arg === null || Array.isArray(arg)) {
+    throw new Error("expected mock call argument to be an object");
+  }
+  return arg as Record<string, unknown>;
+}
+
 type NumberRetryCase = {
   name: string;
   fn: ReturnType<typeof vi.fn>;
@@ -153,11 +165,11 @@ describe("retryAsync", () => {
     }
     expect(res).toBe("ok");
     expect(onRetry).toHaveBeenCalledOnce();
-    const retryEvent = onRetry.mock.calls[0]?.[0];
-    expect(retryEvent?.attempt).toBe(1);
-    expect(retryEvent?.maxAttempts).toBe(2);
-    expect(retryEvent?.err).toBe(err);
-    expect(retryEvent?.label).toBe("telegram");
+    const retryEvent = firstMockArg(onRetry);
+    expect(retryEvent.attempt).toBe(1);
+    expect(retryEvent.maxAttempts).toBe(2);
+    expect(retryEvent.err).toBe(err);
+    expect(retryEvent.label).toBe("telegram");
   });
 
   it("retries immediately when the resolved delay is zero", async () => {

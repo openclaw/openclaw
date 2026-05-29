@@ -124,6 +124,19 @@ describe("channel registry pinning", () => {
     expect(isPluginRegistryRetired(startup)).toBe(true);
   });
 
+  it("falls back to the active channel registry when the pinned registry is empty", () => {
+    const startup = createEmptyPluginRegistry();
+    const { registry: replacement } = createRegistryWithChannel("replacement-channel");
+    setActivePluginRegistry(startup);
+    pinActivePluginChannelRegistry(startup);
+
+    const channelVersionBeforeSwap = getActivePluginChannelRegistryVersion();
+    setActivePluginRegistry(replacement);
+
+    expectActiveChannelRegistry(replacement);
+    expect(getActivePluginChannelRegistryVersion()).not.toBe(channelVersionBeforeSwap);
+  });
+
   it("re-pin invalidates cached channel lookups", () => {
     const { first, second } = createChannelRegistryPair();
     const { registry: setup, plugin: setupPlugin } = first;
@@ -213,6 +226,33 @@ describe("channel registry pinning", () => {
 
     // The outbound loader must still find the telegram adapter from the pinned registry.
     const adapter = await loadChannelOutboundAdapter("telegram");
+    expect(adapter).toBe(outboundAdapter);
+  });
+
+  it("loadChannelOutboundAdapter falls back to active registry when pinned setup entry cannot send", async () => {
+    const outboundAdapter = { sendText: async () => ({ messageId: "1" }) };
+    const startup = createEmptyPluginRegistry();
+    startup.channels = [
+      {
+        pluginId: "discord",
+        plugin: { id: "discord", meta: {} },
+        source: "setup",
+      },
+    ] as never;
+    const replacement = createEmptyPluginRegistry();
+    replacement.channels = [
+      {
+        pluginId: "discord",
+        plugin: { id: "discord", meta: {}, outbound: outboundAdapter },
+        source: "runtime",
+      },
+    ] as never;
+
+    setActivePluginRegistry(startup);
+    pinActivePluginChannelRegistry(startup);
+    setActivePluginRegistry(replacement);
+
+    const adapter = await loadChannelOutboundAdapter("discord");
     expect(adapter).toBe(outboundAdapter);
   });
 

@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   resolveOutboundSessionRoute: vi.fn(),
   ensureOutboundSessionEntry: vi.fn(async () => undefined),
   resolveMessageChannelSelection: vi.fn(),
+  dispatchChannelMessageAction: vi.fn(),
   sendPoll: vi.fn<
     () => Promise<{
       messageId: string;
@@ -42,6 +43,10 @@ vi.mock("../../channels/plugins/index.js", () => ({
   getLoadedChannelPlugin: mocks.getChannelPlugin,
   getChannelPlugin: mocks.getChannelPlugin,
   normalizeChannelId: (value: string) => (value === "webchat" ? null : value),
+}));
+
+vi.mock("../../channels/plugins/message-action-dispatch.js", () => ({
+  dispatchChannelMessageAction: mocks.dispatchChannelMessageAction,
 }));
 
 const TEST_AGENT_WORKSPACE = "/tmp/openclaw-test-workspace";
@@ -163,6 +168,16 @@ async function runPollWithClient(
   return { respond };
 }
 
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 async function runMessageActionRequest(
   params: Record<string, unknown>,
   client?: { connect?: { scopes?: string[] } } | null,
@@ -184,6 +199,13 @@ function deliveryCall(index = 0): Record<string, any> | undefined {
   return calls[index]?.[0];
 }
 
+function appendTranscriptCall(index = 0): Record<string, any> | undefined {
+  const calls = mocks.appendAssistantMessageToSessionTranscript.mock.calls as unknown as Array<
+    [Record<string, any>]
+  >;
+  return calls[index]?.[0];
+}
+
 function firstRespondCall(respond: ReturnType<typeof vi.fn>) {
   const calls = respond.mock.calls as unknown as Array<
     [
@@ -193,12 +215,27 @@ function firstRespondCall(respond: ReturnType<typeof vi.fn>) {
       Record<string, any> | undefined,
     ]
   >;
-  return calls[0];
+  const call = calls[0];
+  if (!call) {
+    throw new Error("Expected respond call");
+  }
+  return call;
 }
 
-function pollCall(index = 0): Record<string, any> | undefined {
+function lastDispatchChannelMessageActionCall(): Record<string, any> | undefined {
+  const calls = mocks.dispatchChannelMessageAction.mock.calls as unknown as Array<
+    [Record<string, any>]
+  >;
+  return calls.at(-1)?.[0];
+}
+
+function pollCall(index = 0): Record<string, any> {
   const calls = mocks.sendPoll.mock.calls as unknown as Array<[Record<string, any>]>;
-  return calls[index]?.[0];
+  const call = calls[index]?.[0];
+  if (!call) {
+    throw new Error(`Expected poll call at index ${index}`);
+  }
+  return call;
 }
 
 function outboundRouteCall(index = 0): Record<string, any> | undefined {
@@ -256,8 +293,197 @@ describe("gateway send mirroring", () => {
       channel: "slack",
       configured: ["slack"],
     });
+    mocks.dispatchChannelMessageAction.mockResolvedValue({
+      details: { action: "handled" },
+    });
     mocks.sendPoll.mockResolvedValue({ messageId: "poll-1" });
-    mocks.getChannelPlugin.mockReturnValue({ outbound: { sendPoll: mocks.sendPoll } });
+    mocks.getChannelPlugin.mockReturnValue({
+      actions: { handleAction: true },
+      outbound: { sendPoll: mocks.sendPoll },
+    });
+  });
+
+  it("dedupes concurrent message.action requests while inflight", async () => {
+    const context = makeContext();
+    const firstRespond = vi.fn();
+    const secondRespond = vi.fn();
+    const actionDeferred = createDeferred<{ details: { action: string } }>();
+    mocks.dispatchChannelMessageAction.mockReturnValueOnce(actionDeferred.promise);
+
+    const firstRequest = sendHandlers["message.action"]({
+      params: {
+        channel: "slack",
+        action: "poll",
+        params: { question: "Q?" },
+        idempotencyKey: "idem-action-concurrent",
+      } as never,
+      respond: firstRespond,
+      context,
+      req: { type: "req", id: "1", method: "message.action" },
+      client: null as never,
+      isWebchatConnect: () => false,
+    });
+
+    const secondRequest = sendHandlers["message.action"]({
+      params: {
+        channel: "slack",
+        action: "poll",
+        params: { question: "Q?" },
+        idempotencyKey: "idem-action-concurrent",
+      } as never,
+      respond: secondRespond,
+      context,
+      req: { type: "req", id: "2", method: "message.action" },
+      client: null as never,
+      isWebchatConnect: () => false,
+    });
+
+    await Promise.resolve();
+    expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledTimes(1);
+
+    actionDeferred.resolve({ details: { action: "handled" } });
+    await Promise.all([firstRequest, secondRequest]);
+
+    expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledTimes(1);
+    expect(firstRespond).toHaveBeenCalledTimes(1);
+    expect(secondRespond).toHaveBeenCalledTimes(1);
+    const firstCall = firstRespondCall(firstRespond);
+    expect(firstCall?.[0]).toBe(true);
+    expect(firstCall?.[1]).toEqual({ action: "handled" });
+    expect(firstCall?.[2]).toBeUndefined();
+    expect(firstCall?.[3]?.channel).toBe("slack");
+    expect(firstCall?.[3]?.cached).toBeUndefined();
+    const secondCall = firstRespondCall(secondRespond);
+    expect(secondCall?.[0]).toBe(true);
+    expect(secondCall?.[1]).toEqual({ action: "handled" });
+    expect(secondCall?.[2]).toBeUndefined();
+    expect(secondCall?.[3]?.channel).toBe("slack");
+    expect(secondCall?.[3]?.cached).toBe(true);
+  });
+
+  it("dedupes concurrent send requests while inflight", async () => {
+    const context = makeContext();
+    const firstRespond = vi.fn();
+    const secondRespond = vi.fn();
+    const deliveryDeferred = createDeferred<Array<{ messageId: string; channel: string }>>();
+    mocks.deliverOutboundPayloads.mockReturnValueOnce(deliveryDeferred.promise);
+
+    const firstRequest = sendHandlers.send({
+      params: {
+        to: "channel:C1",
+        message: "hi",
+        channel: "slack",
+        idempotencyKey: "idem-send-concurrent",
+      } as never,
+      respond: firstRespond,
+      context,
+      req: { type: "req", id: "1", method: "send" },
+      client: null as never,
+      isWebchatConnect: () => false,
+    });
+
+    const secondRequest = sendHandlers.send({
+      params: {
+        to: "channel:C1",
+        message: "hi",
+        channel: "slack",
+        idempotencyKey: "idem-send-concurrent",
+      } as never,
+      respond: secondRespond,
+      context,
+      req: { type: "req", id: "2", method: "send" },
+      client: null as never,
+      isWebchatConnect: () => false,
+    });
+
+    await vi.waitFor(() => {
+      expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    });
+
+    deliveryDeferred.resolve([{ messageId: "m-concurrent", channel: "slack" }]);
+    await Promise.all([firstRequest, secondRequest]);
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expect(firstRespond).toHaveBeenCalledTimes(1);
+    expect(secondRespond).toHaveBeenCalledTimes(1);
+    const firstCall = firstRespondCall(firstRespond);
+    expect(firstCall?.[0]).toBe(true);
+    expect(firstCall?.[1]?.messageId).toBe("m-concurrent");
+    expect(firstCall?.[1]?.runId).toBe("idem-send-concurrent");
+    expect(firstCall?.[2]).toBeUndefined();
+    expect(firstCall?.[3]?.channel).toBe("slack");
+    expect(firstCall?.[3]?.cached).toBeUndefined();
+    const secondCall = firstRespondCall(secondRespond);
+    expect(secondCall?.[0]).toBe(true);
+    expect(secondCall?.[1]?.messageId).toBe("m-concurrent");
+    expect(secondCall?.[1]?.runId).toBe("idem-send-concurrent");
+    expect(secondCall?.[2]).toBeUndefined();
+    expect(secondCall?.[3]?.channel).toBe("slack");
+    expect(secondCall?.[3]?.cached).toBe(true);
+  });
+
+  it("dedupes concurrent poll requests while inflight", async () => {
+    const context = makeContext();
+    const firstRespond = vi.fn();
+    const secondRespond = vi.fn();
+    const pollDeferred = createDeferred<{ messageId: string; pollId: string }>();
+    mocks.sendPoll.mockReturnValueOnce(pollDeferred.promise);
+
+    const firstRequest = sendHandlers.poll({
+      params: {
+        to: "channel:C1",
+        question: "Q?",
+        options: ["A", "B"],
+        channel: "slack",
+        idempotencyKey: "idem-poll-concurrent",
+      } as never,
+      respond: firstRespond,
+      context,
+      req: { type: "req", id: "1", method: "poll" },
+      client: null as never,
+      isWebchatConnect: () => false,
+    });
+
+    const secondRequest = sendHandlers.poll({
+      params: {
+        to: "channel:C1",
+        question: "Q?",
+        options: ["A", "B"],
+        channel: "slack",
+        idempotencyKey: "idem-poll-concurrent",
+      } as never,
+      respond: secondRespond,
+      context,
+      req: { type: "req", id: "2", method: "poll" },
+      client: null as never,
+      isWebchatConnect: () => false,
+    });
+
+    await Promise.resolve();
+    expect(mocks.sendPoll).toHaveBeenCalledTimes(1);
+
+    pollDeferred.resolve({ messageId: "poll-concurrent", pollId: "poll-1" });
+    await Promise.all([firstRequest, secondRequest]);
+
+    expect(mocks.sendPoll).toHaveBeenCalledTimes(1);
+    expect(firstRespond).toHaveBeenCalledTimes(1);
+    expect(secondRespond).toHaveBeenCalledTimes(1);
+    const firstCall = firstRespondCall(firstRespond);
+    expect(firstCall?.[0]).toBe(true);
+    expect(firstCall?.[1]?.messageId).toBe("poll-concurrent");
+    expect(firstCall?.[1]?.pollId).toBe("poll-1");
+    expect(firstCall?.[1]?.runId).toBe("idem-poll-concurrent");
+    expect(firstCall?.[2]).toBeUndefined();
+    expect(firstCall?.[3]?.channel).toBe("slack");
+    expect(firstCall?.[3]?.cached).toBeUndefined();
+    const secondCall = firstRespondCall(secondRespond);
+    expect(secondCall?.[0]).toBe(true);
+    expect(secondCall?.[1]?.messageId).toBe("poll-concurrent");
+    expect(secondCall?.[1]?.pollId).toBe("poll-1");
+    expect(secondCall?.[1]?.runId).toBe("idem-poll-concurrent");
+    expect(secondCall?.[2]).toBeUndefined();
+    expect(secondCall?.[3]?.channel).toBe("slack");
+    expect(secondCall?.[3]?.cached).toBe(true);
   });
 
   it("accepts media-only sends without message", async () => {
@@ -426,7 +652,6 @@ describe("gateway send mirroring", () => {
 
     expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith({
       config: {},
-      env: process.env,
     });
     expect(mocks.resolveMessageChannelSelection).toHaveBeenCalledWith({
       cfg: autoEnabledConfig,
@@ -468,9 +693,12 @@ describe("gateway send mirroring", () => {
       { connect: { scopes: ["operator.admin"] } },
     );
 
-    expect(pollCall()?.cfg).toBeDefined();
-    expect(pollCall()?.to).toBe("resolved");
-    expect(pollCall()?.gatewayClientScopes).toEqual(["operator.admin"]);
+    const call = pollCall();
+    if (call.cfg === undefined) {
+      throw new Error("Expected poll delivery config");
+    }
+    expect(call.to).toBe("resolved");
+    expect(call.gatewayClientScopes).toEqual(["operator.admin"]);
   });
 
   it("forwards an empty gateway scope array into outbound poll delivery", async () => {
@@ -485,9 +713,12 @@ describe("gateway send mirroring", () => {
       { connect: { scopes: [] } },
     );
 
-    expect(pollCall()?.cfg).toBeDefined();
-    expect(pollCall()?.to).toBe("resolved");
-    expect(pollCall()?.gatewayClientScopes).toEqual([]);
+    const call = pollCall();
+    if (call.cfg === undefined) {
+      throw new Error("Expected poll delivery config");
+    }
+    expect(call.to).toBe("resolved");
+    expect(call.gatewayClientScopes).toEqual([]);
   });
 
   it("includes optional poll delivery identifiers in the gateway payload", async () => {
@@ -532,10 +763,12 @@ describe("gateway send mirroring", () => {
 
     expect(mocks.resolveMessageChannelSelection).toHaveBeenCalled();
     const response = firstRespondCall(respond);
-    expect(response?.[0]).toBe(true);
-    expect(response?.[1]).toBeDefined();
-    expect(response?.[2]).toBeUndefined();
-    expect(response?.[3]).toEqual({ channel: "slack" });
+    expect(response[0]).toBe(true);
+    if (response[1] === undefined) {
+      throw new Error("Expected poll missing-channel response payload");
+    }
+    expect(response[2]).toBeUndefined();
+    expect(response[3]).toEqual({ channel: "slack" });
   });
 
   it("returns invalid request when poll channel selection is ambiguous", async () => {
@@ -787,13 +1020,10 @@ describe("gateway send mirroring", () => {
       idempotencyKey: "idem-send-options",
     });
 
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
-      expect.objectContaining({
-        forceDocument: true,
-        silent: true,
-        formatting: { parseMode: "HTML" },
-      }),
-    );
+    const options = mocks.deliverOutboundPayloads.mock.calls.at(0)?.[0];
+    expect(options?.forceDocument).toBe(true);
+    expect(options?.silent).toBe(true);
+    expect(options?.formatting).toEqual({ parseMode: "HTML" });
   });
 
   it("updates mirror session keys and delivery thread ids when Slack routing derives a thread", async () => {
@@ -1019,6 +1249,18 @@ describe("gateway send mirroring", () => {
       ]),
       "send-test-message-action",
     );
+    mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
+      jsonResult({
+        ok: true,
+        messageId: "wamid.1",
+        requesterSenderId: "trusted-user",
+        currentMessageId: "wamid.1",
+        currentGraphChannelId: "graph:team/chan",
+        replyToMode: "first",
+        hasRepliedRef: true,
+        skipCrossContextDecoration: true,
+      }),
+    );
 
     const { respond } = await runMessageActionRequest({
       channel: "whatsapp",
@@ -1029,6 +1271,7 @@ describe("gateway send mirroring", () => {
         emoji: "✅",
       },
       requesterSenderId: "trusted-user",
+      inboundTurnKind: "room_event",
       toolContext: {
         currentGraphChannelId: "graph:team/chan",
         currentChannelProvider: "whatsapp",
@@ -1055,10 +1298,646 @@ describe("gateway send mirroring", () => {
       undefined,
       { channel: "whatsapp" },
     );
+    expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledWith(
+      expect.objectContaining({ inboundEventKind: "room_event" }),
+    );
+  });
+
+  it("mirrors successful source-conversation message.action sends into the assistant transcript", async () => {
+    const telegramPlugin: ChannelPlugin = {
+      id: "telegram",
+      meta: {
+        id: "telegram",
+        label: "Telegram",
+        selectionLabel: "Telegram",
+        docsPath: "/channels/telegram",
+        blurb: "Telegram source send transcript mirror test plugin.",
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => ["default"],
+        resolveAccount: () => ({ enabled: true }),
+        isConfigured: () => true,
+      },
+      actions: {
+        describeMessageTool: () => ({ actions: ["send"] }),
+        supportsAction: ({ action }) => action === "send",
+        handleAction: async () => jsonResult({ ok: true, messageId: "tg-1" }),
+      },
+      threading: {
+        resolveCurrentChannelId: ({ to, threadId }) =>
+          threadId == null ? to : `${to}:topic:${threadId}`,
+      },
+    };
+    mocks.getChannelPlugin.mockReturnValue(telegramPlugin);
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramPlugin }]),
+      "send-test-source-message-action-mirror",
+    );
+    mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
+      jsonResult({ ok: true, messageId: "tg-1" }),
+    );
+
+    const { respond } = await runMessageActionRequest({
+      channel: "telegram",
+      action: "send",
+      params: {
+        to: "chat-123",
+        message: "visible source reply",
+      },
+      sessionKey: "agent:main:telegram:direct:chat-123",
+      agentId: "main",
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "chat-123",
+      },
+      idempotencyKey: "idem-source-message-action",
+    });
+
+    expect(firstRespondCall(respond)[0]).toBe(true);
+    expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionKey: "agent:main:telegram:direct:chat-123",
+      text: "visible source reply",
+      mediaUrls: undefined,
+      idempotencyKey: "idem-source-message-action",
+      config: {},
+    });
+  });
+
+  it("mirrors accepted source send text aliases", async () => {
+    mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
+      jsonResult({ ok: true, messageId: "tg-content-1" }),
+    );
+
+    const { respond } = await runMessageActionRequest({
+      channel: "telegram",
+      action: "send",
+      params: {
+        to: "chat-123",
+        content: "visible content alias reply",
+      },
+      sessionKey: "agent:main:telegram:direct:chat-123",
+      agentId: "main",
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "chat-123",
+      },
+      idempotencyKey: "idem-content-source-message-action",
+    });
+
+    expect(firstRespondCall(respond)[0]).toBe(true);
+    expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionKey: "agent:main:telegram:direct:chat-123",
+      text: "visible content alias reply",
+      mediaUrls: undefined,
+      idempotencyKey: "idem-content-source-message-action",
+      config: {},
+    });
+  });
+
+  it("keeps delivered source sends successful when transcript mirroring fails", async () => {
+    mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
+      jsonResult({ ok: true, messageId: "tg-mirror-failed" }),
+    );
+    mocks.appendAssistantMessageToSessionTranscript.mockRejectedValueOnce(
+      new Error("transcript unavailable"),
+    );
+
+    const { respond } = await runMessageActionRequest({
+      channel: "telegram",
+      action: "send",
+      params: {
+        to: "chat-123",
+        message: "visible source reply",
+      },
+      sessionKey: "agent:main:telegram:direct:chat-123",
+      agentId: "main",
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "chat-123",
+      },
+      idempotencyKey: "idem-source-message-action-mirror-failed",
+    });
+
+    const call = firstRespondCall(respond);
+    expect(call[0]).toBe(true);
+    expect(call[1]).toEqual({ ok: true, messageId: "tg-mirror-failed" });
+    expect(call[2]).toBeUndefined();
+    expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledOnce();
+  });
+
+  it("mirrors caption-only source sends with media", async () => {
+    mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
+      jsonResult({ ok: true, messageId: "tg-caption-1" }),
+    );
+
+    const { respond } = await runMessageActionRequest({
+      channel: "telegram",
+      action: "send",
+      params: {
+        to: "chat-123",
+        mediaUrl: "https://example.com/image.png",
+        caption: "visible media caption",
+      },
+      sessionKey: "agent:main:telegram:direct:chat-123",
+      agentId: "main",
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "chat-123",
+      },
+      idempotencyKey: "idem-caption-source-message-action",
+    });
+
+    expect(firstRespondCall(respond)[0]).toBe(true);
+    expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionKey: "agent:main:telegram:direct:chat-123",
+      text: "visible media caption",
+      mediaUrls: ["https://example.com/image.png"],
+      idempotencyKey: "idem-caption-source-message-action",
+      config: {},
+    });
+  });
+
+  it("waits for source transcript mirroring before responding to message.action", async () => {
+    const telegramPlugin: ChannelPlugin = {
+      id: "telegram",
+      meta: {
+        id: "telegram",
+        label: "Telegram",
+        selectionLabel: "Telegram",
+        docsPath: "/channels/telegram",
+        blurb: "Telegram async source send transcript mirror test plugin.",
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => ["default"],
+        resolveAccount: () => ({ enabled: true }),
+        isConfigured: () => true,
+      },
+      actions: {
+        describeMessageTool: () => ({ actions: ["send"] }),
+        supportsAction: ({ action }) => action === "send",
+        handleAction: async () => jsonResult({ ok: true, messageId: "tg-async-1" }),
+      },
+    };
+    const mirrorDeferred = createDeferred<{ ok: boolean; sessionFile: string }>();
+    mocks.getChannelPlugin.mockReturnValue(telegramPlugin);
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramPlugin }]),
+      "send-test-source-message-action-async-mirror",
+    );
+    mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
+      jsonResult({ ok: true, messageId: "tg-async-1" }),
+    );
+    mocks.appendAssistantMessageToSessionTranscript.mockReturnValueOnce(mirrorDeferred.promise);
+
+    const respond = vi.fn();
+    const request = sendHandlers["message.action"]({
+      params: {
+        channel: "telegram",
+        action: "send",
+        params: {
+          to: "chat-123",
+          message: "visible media caption",
+        },
+        sessionKey: "agent:main:telegram:direct:chat-123",
+        agentId: "main",
+        toolContext: {
+          currentChannelProvider: "telegram",
+          currentChannelId: "chat-123",
+        },
+        idempotencyKey: "idem-async-source-message-action",
+      } as never,
+      respond,
+      context: makeContext(),
+      req: { type: "req", id: "1", method: "message.action" },
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    await vi.waitFor(() => {
+      expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledTimes(1);
+    });
+    expect(respond).not.toHaveBeenCalled();
+
+    mirrorDeferred.resolve({ ok: true, sessionFile: "x" });
+    await request;
+
+    expect(firstRespondCall(respond)[0]).toBe(true);
+  });
+
+  it("preserves source transcript mirror order before message.action responses", async () => {
+    const telegramPlugin: ChannelPlugin = {
+      id: "telegram",
+      meta: {
+        id: "telegram",
+        label: "Telegram",
+        selectionLabel: "Telegram",
+        docsPath: "/channels/telegram",
+        blurb: "Telegram ordered async source send transcript mirror test plugin.",
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => ["default"],
+        resolveAccount: () => ({ enabled: true }),
+        isConfigured: () => true,
+      },
+      actions: {
+        describeMessageTool: () => ({ actions: ["send"] }),
+        supportsAction: ({ action }) => action === "send",
+        handleAction: async () => jsonResult({ ok: true, messageId: "tg-ordered" }),
+      },
+    };
+    const firstMirrorDeferred = createDeferred<{ ok: boolean; sessionFile: string }>();
+    mocks.getChannelPlugin.mockReturnValue(telegramPlugin);
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramPlugin }]),
+      "send-test-source-message-action-ordered-async-mirror",
+    );
+    mocks.dispatchChannelMessageAction.mockResolvedValue(
+      jsonResult({ ok: true, messageId: "tg-ordered" }),
+    );
+    mocks.appendAssistantMessageToSessionTranscript
+      .mockReturnValueOnce(firstMirrorDeferred.promise)
+      .mockResolvedValueOnce({ ok: true, sessionFile: "x" });
+
+    const firstRespond = vi.fn();
+    const secondRespond = vi.fn();
+    const first = sendHandlers["message.action"]({
+      params: {
+        channel: "telegram",
+        action: "send",
+        params: {
+          to: "chat-123",
+          message: "first visible reply",
+        },
+        sessionKey: "agent:main:telegram:direct:chat-123",
+        agentId: "main",
+        toolContext: {
+          currentChannelProvider: "telegram",
+          currentChannelId: "chat-123",
+        },
+        idempotencyKey: "idem-ordered-source-message-action-1",
+      } as never,
+      respond: firstRespond,
+      context: makeContext(),
+      req: { type: "req", id: "1", method: "message.action" },
+      client: null,
+      isWebchatConnect: () => false,
+    });
+    await vi.waitFor(() => {
+      expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledTimes(1);
+    });
+    const second = sendHandlers["message.action"]({
+      params: {
+        channel: "telegram",
+        action: "send",
+        params: {
+          to: "chat-123",
+          message: "second visible reply",
+        },
+        sessionKey: "agent:main:telegram:direct:chat-123",
+        agentId: "main",
+        toolContext: {
+          currentChannelProvider: "telegram",
+          currentChannelId: "chat-123",
+        },
+        idempotencyKey: "idem-ordered-source-message-action-2",
+      } as never,
+      respond: secondRespond,
+      context: makeContext(),
+      req: { type: "req", id: "2", method: "message.action" },
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledTimes(1);
+    expect(firstRespond).not.toHaveBeenCalled();
+    expect(secondRespond).not.toHaveBeenCalled();
+    expect(appendTranscriptCall(0)).toEqual(
+      expect.objectContaining({ text: "first visible reply" }),
+    );
+
+    firstMirrorDeferred.resolve({ ok: true, sessionFile: "x" });
+    await first;
+    await second;
+
+    expect(firstRespondCall(firstRespond)[0]).toBe(true);
+    expect(firstRespondCall(secondRespond)[0]).toBe(true);
+    expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledTimes(2);
+    expect(appendTranscriptCall(1)).toEqual(
+      expect.objectContaining({ text: "second visible reply" }),
+    );
+  });
+
+  it("mirrors presentation-only source-conversation message.action sends", async () => {
+    const telegramPlugin: ChannelPlugin = {
+      id: "telegram",
+      meta: {
+        id: "telegram",
+        label: "Telegram",
+        selectionLabel: "Telegram",
+        docsPath: "/channels/telegram",
+        blurb: "Telegram source send rich transcript mirror test plugin.",
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => ["default"],
+        resolveAccount: () => ({ enabled: true }),
+        isConfigured: () => true,
+      },
+      actions: {
+        describeMessageTool: () => ({ actions: ["send"] }),
+        supportsAction: ({ action }) => action === "send",
+        handleAction: async () => jsonResult({ ok: true, messageId: "tg-rich-1" }),
+      },
+      threading: {
+        resolveCurrentChannelId: ({ to, threadId }) =>
+          threadId == null ? to : `${to}:topic:${threadId}`,
+      },
+    };
+    mocks.getChannelPlugin.mockReturnValue(telegramPlugin);
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramPlugin }]),
+      "send-test-rich-source-message-action-mirror",
+    );
+    mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
+      jsonResult({ ok: true, messageId: "tg-rich-1" }),
+    );
+
+    const { respond } = await runMessageActionRequest({
+      channel: "telegram",
+      action: "send",
+      params: {
+        to: "chat-123",
+        presentation: {
+          title: "Approval needed",
+          blocks: [
+            { type: "text", text: "Review the deployment request" },
+            {
+              type: "buttons",
+              buttons: [
+                { label: "Approve", value: "approve" },
+                { label: "Reject", value: "reject" },
+              ],
+            },
+          ],
+        },
+      },
+      sessionKey: "agent:main:telegram:direct:chat-123",
+      agentId: "main",
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "chat-123",
+      },
+      idempotencyKey: "idem-rich-source-message-action",
+    });
+
+    expect(firstRespondCall(respond)[0]).toBe(true);
+    expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionKey: "agent:main:telegram:direct:chat-123",
+      text: "Approval needed\nReview the deployment request\nApprove\nReject",
+      mediaUrls: undefined,
+      idempotencyKey: "idem-rich-source-message-action",
+      config: {},
+    });
+  });
+
+  it("mirrors title-only source-conversation presentation sends", async () => {
+    const telegramPlugin: ChannelPlugin = {
+      id: "telegram",
+      meta: {
+        id: "telegram",
+        label: "Telegram",
+        selectionLabel: "Telegram",
+        docsPath: "/channels/telegram",
+        blurb: "Telegram source send title-only transcript mirror test plugin.",
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => ["default"],
+        resolveAccount: () => ({ enabled: true }),
+        isConfigured: () => true,
+      },
+      actions: {
+        describeMessageTool: () => ({ actions: ["send"] }),
+        supportsAction: ({ action }) => action === "send",
+        handleAction: async () => jsonResult({ ok: true, messageId: "tg-title-1" }),
+      },
+    };
+    mocks.getChannelPlugin.mockReturnValue(telegramPlugin);
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramPlugin }]),
+      "send-test-title-only-source-message-action-mirror",
+    );
+    mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
+      jsonResult({ ok: true, messageId: "tg-title-1" }),
+    );
+
+    const { respond } = await runMessageActionRequest({
+      channel: "telegram",
+      action: "send",
+      params: {
+        to: "chat-123",
+        presentation: {
+          title: "Title-only approval",
+        },
+      },
+      sessionKey: "agent:main:telegram:direct:chat-123",
+      agentId: "main",
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "chat-123",
+      },
+      idempotencyKey: "idem-title-only-source-message-action",
+    });
+
+    expect(firstRespondCall(respond)[0]).toBe(true);
+    expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionKey: "agent:main:telegram:direct:chat-123",
+      text: "Title-only approval",
+      mediaUrls: undefined,
+      idempotencyKey: "idem-title-only-source-message-action",
+      config: {},
+    });
+  });
+
+  it("mirrors auto-threaded Telegram source sends into the topic transcript", async () => {
+    const telegramTopicPlugin: ChannelPlugin = {
+      id: "telegram",
+      meta: {
+        id: "telegram",
+        label: "Telegram",
+        selectionLabel: "Telegram",
+        docsPath: "/channels/telegram",
+        blurb: "Telegram topic source send transcript mirror test plugin.",
+      },
+      capabilities: { chatTypes: ["group"] },
+      config: {
+        listAccountIds: () => ["default"],
+        resolveAccount: () => ({ enabled: true }),
+        isConfigured: () => true,
+      },
+      actions: {
+        describeMessageTool: () => ({ actions: ["send"] }),
+        supportsAction: ({ action }) => action === "send",
+        handleAction: async () => jsonResult({ ok: true, messageId: "tg-topic-1" }),
+      },
+      threading: {
+        resolveCurrentChannelId: ({ to, threadId }) =>
+          threadId == null ? to : `${to}:topic:${threadId}`,
+      },
+    };
+    mocks.getChannelPlugin.mockReturnValue(telegramTopicPlugin);
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramTopicPlugin }]),
+      "send-test-topic-source-message-action-mirror",
+    );
+    mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
+      jsonResult({ ok: true, messageId: "tg-topic-1" }),
+    );
+
+    const { respond } = await runMessageActionRequest({
+      channel: "telegram",
+      action: "send",
+      params: {
+        to: "chat-123",
+        message: "visible topic source reply",
+        messageThreadId: "77",
+      },
+      sessionKey: "agent:main:telegram:group:chat-123:topic:77",
+      agentId: "main",
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "chat-123:topic:77",
+        currentThreadTs: "77",
+      },
+      idempotencyKey: "idem-topic-source-message-action",
+    });
+
+    expect(firstRespondCall(respond)[0]).toBe(true);
+    expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionKey: "agent:main:telegram:group:chat-123:topic:77",
+      text: "visible topic source reply",
+      mediaUrls: undefined,
+      idempotencyKey: "idem-topic-source-message-action",
+      config: {},
+    });
+  });
+
+  it("does not mirror topic context when delivery params target the parent chat", async () => {
+    const telegramTopicPlugin: ChannelPlugin = {
+      id: "telegram",
+      meta: {
+        id: "telegram",
+        label: "Telegram",
+        selectionLabel: "Telegram",
+        docsPath: "/channels/telegram",
+        blurb: "Telegram parent send transcript mirror test plugin.",
+      },
+      capabilities: { chatTypes: ["group"] },
+      config: {
+        listAccountIds: () => ["default"],
+        resolveAccount: () => ({ enabled: true }),
+        isConfigured: () => true,
+      },
+      actions: {
+        describeMessageTool: () => ({ actions: ["send"] }),
+        supportsAction: ({ action }) => action === "send",
+        handleAction: async () => jsonResult({ ok: true, messageId: "tg-parent-1" }),
+      },
+      threading: {
+        resolveCurrentChannelId: ({ to, threadId }) =>
+          threadId == null ? to : `${to}:topic:${threadId}`,
+      },
+    };
+    mocks.getChannelPlugin.mockReturnValue(telegramTopicPlugin);
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramTopicPlugin }]),
+      "send-test-topic-context-parent-message-action-mirror",
+    );
+    mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
+      jsonResult({ ok: true, messageId: "tg-parent-1" }),
+    );
+
+    const { respond } = await runMessageActionRequest({
+      channel: "telegram",
+      action: "send",
+      params: {
+        to: "chat-123",
+        message: "visible parent source reply",
+      },
+      sessionKey: "agent:main:telegram:group:chat-123:topic:77",
+      agentId: "main",
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "chat-123:topic:77",
+        currentThreadTs: "77",
+      },
+      idempotencyKey: "idem-topic-context-parent-message-action",
+    });
+
+    expect(firstRespondCall(respond)[0]).toBe(true);
+    expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+  });
+
+  it("does not mirror message.action sends to a different target", async () => {
+    mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
+      jsonResult({ ok: true, messageId: "tg-external" }),
+    );
+
+    const { respond } = await runMessageActionRequest({
+      channel: "telegram",
+      action: "send",
+      params: {
+        to: "other-chat",
+        message: "external visible reply",
+      },
+      sessionKey: "agent:main:telegram:direct:chat-123",
+      agentId: "main",
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "chat-123",
+      },
+      idempotencyKey: "idem-external-message-action",
+    });
+
+    expect(firstRespondCall(respond)[0]).toBe(true);
+    expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+  });
+
+  it("does not mirror explicitly failed message.action sends", async () => {
+    mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
+      jsonResult({ ok: false, error: "delivery failed" }),
+    );
+
+    const { respond } = await runMessageActionRequest({
+      channel: "telegram",
+      action: "send",
+      params: {
+        to: "chat-123",
+        message: "failed source reply",
+      },
+      sessionKey: "agent:main:telegram:direct:chat-123",
+      agentId: "main",
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "chat-123",
+      },
+      idempotencyKey: "idem-failed-message-action",
+    });
+
+    expect(firstRespondCall(respond)[0]).toBe(true);
+    expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
   });
 
   it("passes agent-scoped media roots to gateway message actions", async () => {
-    let capturedMediaLocalRoots: readonly string[] | undefined;
     const mediaActionPlugin: ChannelPlugin = {
       id: "telegram",
       meta: {
@@ -1077,10 +1956,7 @@ describe("gateway send mirroring", () => {
       actions: {
         describeMessageTool: () => ({ actions: ["sendAttachment"] }),
         supportsAction: ({ action }) => action === "sendAttachment",
-        handleAction: async ({ mediaLocalRoots }) => {
-          capturedMediaLocalRoots = mediaLocalRoots;
-          return jsonResult({ ok: true });
-        },
+        handleAction: async () => jsonResult({ ok: true }),
       },
     };
     mocks.getChannelPlugin.mockReturnValue(mediaActionPlugin);
@@ -1089,100 +1965,20 @@ describe("gateway send mirroring", () => {
       "send-test-message-action-media-roots",
     );
 
-    const { respond } = await runMessageActionRequest({
-      channel: "telegram",
-      action: "sendAttachment",
-      params: { chatId: "123", mediaUrl: `${TEST_AGENT_WORKSPACE}/render.png` },
-      agentId: "work",
-      idempotencyKey: "idem-message-action-media-roots",
-    });
-
-    expect(firstRespondCall(respond)?.[0]).toBe(true);
-    expect(capturedMediaLocalRoots).toEqual(expect.arrayContaining([TEST_AGENT_WORKSPACE]));
-  });
-
-  it("forces senderIsOwner=false for narrowly-scoped callers but honors it for full operators", async () => {
-    const capture = { senderIsOwner: undefined as boolean | undefined };
-    const reactPlugin: ChannelPlugin = {
-      id: "whatsapp",
-      meta: {
-        id: "whatsapp",
-        label: "WhatsApp",
-        selectionLabel: "WhatsApp",
-        docsPath: "/channels/whatsapp",
-        blurb: "WhatsApp owner-derivation test plugin.",
-      },
-      capabilities: { chatTypes: ["direct"], reactions: true },
-      config: {
-        listAccountIds: () => ["default"],
-        resolveAccount: () => ({ enabled: true }),
-        isConfigured: () => true,
-      },
-      actions: {
-        describeMessageTool: () => ({ actions: ["react"] }),
-        supportsAction: ({ action }) => action === "react",
-        handleAction: async ({ senderIsOwner }) => {
-          capture.senderIsOwner = senderIsOwner;
-          return jsonResult({ ok: true });
-        },
-      },
-    };
-    mocks.getChannelPlugin.mockReturnValue(reactPlugin);
-
-    // Narrowly-scoped caller (e.g. gateway-forwarding least-privilege path
-    // that only requests operator.write): wire senderIsOwner=true must be
-    // forced to false so a non-admin scoped caller cannot unlock owner-only
-    // channel actions.
-    setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "whatsapp", source: "test", plugin: reactPlugin }]),
-      "send-test-owner-derive-non-admin",
-    );
-    await runMessageActionRequest(
+    const { respond } = await runMessageActionRequest(
       {
-        channel: "whatsapp",
-        action: "react",
-        params: { chatJid: "+15551234567", messageId: "wamid.x", emoji: "✅" },
-        senderIsOwner: true,
-        idempotencyKey: "idem-owner-derive-non-admin",
+        channel: "telegram",
+        action: "sendAttachment",
+        params: { chatId: "123", mediaUrl: `${TEST_AGENT_WORKSPACE}/render.png` },
+        agentId: "work",
+        idempotencyKey: "idem-message-action-media-roots",
       },
       { connect: { scopes: ["operator.write"] } },
     );
-    expect(capture.senderIsOwner).toBe(false);
 
-    // Full operator (admin-scoped): the trusted runtime is allowed to
-    // forward the real channel-sender ownership bit. Wire true → true.
-    setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "whatsapp", source: "test", plugin: reactPlugin }]),
-      "send-test-owner-derive-admin-true",
-    );
-    await runMessageActionRequest(
-      {
-        channel: "whatsapp",
-        action: "react",
-        params: { chatJid: "+15551234567", messageId: "wamid.y", emoji: "✅" },
-        senderIsOwner: true,
-        idempotencyKey: "idem-owner-derive-admin-true",
-      },
-      { connect: { scopes: ["operator.admin"] } },
-    );
-    expect(capture.senderIsOwner).toBe(true);
-
-    // Full operator forwarding a non-owner sender: wire false → false
-    // (admin scope does not inflate ownership on its own).
-    setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "whatsapp", source: "test", plugin: reactPlugin }]),
-      "send-test-owner-derive-admin-false",
-    );
-    await runMessageActionRequest(
-      {
-        channel: "whatsapp",
-        action: "react",
-        params: { chatJid: "+15551234567", messageId: "wamid.z", emoji: "✅" },
-        senderIsOwner: false,
-        idempotencyKey: "idem-owner-derive-admin-false",
-      },
-      { connect: { scopes: ["operator.admin"] } },
-    );
-    expect(capture.senderIsOwner).toBe(false);
+    expect(firstRespondCall(respond)[0]).toBe(true);
+    const actionCall = lastDispatchChannelMessageActionCall();
+    expect(actionCall?.mediaLocalRoots).toContain(TEST_AGENT_WORKSPACE);
+    expect(actionCall?.gatewayClientScopes).toEqual(["operator.write"]);
   });
 });

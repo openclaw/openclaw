@@ -59,7 +59,6 @@ function findSession(
     (candidate): candidate is Record<string, unknown> =>
       isRecord(candidate) && candidate.key === sessionKey,
   );
-  expect(session, sessionKey).toBeDefined();
   if (!session) {
     throw new Error(`Missing session ${sessionKey}`);
   }
@@ -253,6 +252,42 @@ test("sessions.list marks sessions with active abortable runs", async () => {
   const payload = expectRespondPayload(respond);
   const session = findSession(payload, "agent:main:main");
   expect(session.hasActiveRun).toBe(true);
+});
+
+test("sessions.list ignores terminal abortable runs kept for retry guards", async () => {
+  await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-main"),
+    },
+  });
+
+  const respond = vi.fn();
+  const sessionsHandlers = await getSessionsHandlers();
+  const { getRuntimeConfig } = await getGatewayConfigModule();
+  await sessionsHandlers["sessions.list"]({
+    req: {
+      type: "req",
+      id: "req-sessions-list-terminal-run",
+      method: "sessions.list",
+      params: {},
+    },
+    params: {},
+    respond,
+    client: null,
+    isWebchatConnect: () => false,
+    context: {
+      getRuntimeConfig,
+      loadGatewayModelCatalog: async () => [],
+      chatAbortControllers: new Map([
+        ["run-1", { sessionKey: "agent:main:main", projectSessionActive: false }],
+      ]),
+    } as never,
+  });
+
+  const payload = expectRespondPayload(respond);
+  const session = findSession(payload, "agent:main:main");
+  expect(session.hasActiveRun).toBe(false);
 });
 
 test("sessions.list yields before responding during bulk transcript hydration", async () => {
@@ -533,6 +568,7 @@ test("sessions.changed mutation events include subagent ownership metadata", asy
       "subagent:child": sessionStoreEntry("sess-child", {
         spawnedBy: "agent:main:main",
         spawnedWorkspaceDir: "/tmp/subagent-workspace",
+        spawnedCwd: "/tmp/task-repo",
         forkedFromParent: true,
         spawnDepth: 2,
         subagentRole: "orchestrator",
@@ -569,6 +605,7 @@ test("sessions.changed mutation events include subagent ownership metadata", asy
     reason: "patch",
     spawnedBy: "agent:main:main",
     spawnedWorkspaceDir: "/tmp/subagent-workspace",
+    spawnedCwd: "/tmp/task-repo",
     forkedFromParent: true,
     spawnDepth: 2,
     subagentRole: "orchestrator",

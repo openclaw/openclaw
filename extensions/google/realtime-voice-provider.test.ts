@@ -59,8 +59,30 @@ function lastConnectParams(): MockGoogleLiveConnectParams {
 
 function sentAudio(index = 0): { data?: unknown; mimeType?: unknown } {
   const audio = session.sendRealtimeInput.mock.calls[index]?.[0]?.audio;
-  expect(audio).toBeDefined();
+  if (!audio) {
+    throw new Error(`Expected sent audio at index ${index}`);
+  }
   return audio as { data?: unknown; mimeType?: unknown };
+}
+
+function requireFirstMockArg(mock: ReturnType<typeof vi.fn>, label: string): unknown {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`expected ${label}`);
+  }
+  return call[0];
+}
+
+function requireFirstError(mock: ReturnType<typeof vi.fn>): { message?: string } {
+  const error = requireFirstMockArg(mock, "Google Live error");
+  if (!error || typeof error !== "object" || Array.isArray(error)) {
+    throw new Error("expected Google Live error");
+  }
+  return error as { message?: string };
+}
+
+function requireFirstAudio(mock: ReturnType<typeof vi.fn>): unknown {
+  return requireFirstMockArg(mock, "Google Live audio");
 }
 
 describe("buildGoogleRealtimeVoiceProvider", () => {
@@ -290,6 +312,55 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     expect(lastConnectParams().config).not.toHaveProperty("temperature");
   });
 
+  it("drops malformed VAD timing values before connecting", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: {
+        apiKey: "gemini-key",
+        prefixPaddingMs: -1,
+        silenceDurationMs: 250.5,
+      },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    await bridge.connect();
+
+    expect(lastConnectParams().config).not.toHaveProperty("realtimeInputConfig");
+  });
+
+  it("drops malformed thinking budgets before connecting", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: {
+        apiKey: "gemini-key",
+        thinkingBudget: 24_576.5,
+      },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    await bridge.connect();
+
+    expect(lastConnectParams().config).not.toHaveProperty("thinkingConfig");
+  });
+
+  it("passes Google Live dynamic thinking budget through", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: {
+        apiKey: "gemini-key",
+        thinkingBudget: -1,
+      },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    await bridge.connect();
+
+    expect(lastConnectParams().config.thinkingConfig).toEqual({ thinkingBudget: -1 });
+  });
+
   it("creates constrained browser sessions for Google Live Talk", async () => {
     const provider = buildGoogleRealtimeVoiceProvider();
 
@@ -318,7 +389,7 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     });
 
     expect(createTokenMock).toHaveBeenCalledTimes(1);
-    const tokenConfig = createTokenMock.mock.calls[0]?.[0] as {
+    const tokenConfig = requireFirstMockArg(createTokenMock, "Google Live auth token config") as {
       config?: {
         liveConnectConstraints?: {
           config?: {
@@ -443,7 +514,7 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
       });
 
       expect(onClose).not.toHaveBeenCalled();
-      const error = onError.mock.calls[0]?.[0] as { message?: string };
+      const error = requireFirstError(onError);
       expect(error.message).toContain("reconnecting 1/3");
 
       await vi.advanceTimersByTimeAsync(250);
@@ -625,8 +696,9 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     });
 
     expect(onAudio).toHaveBeenCalledTimes(1);
-    expect(onAudio.mock.calls[0]?.[0]).toBeInstanceOf(Buffer);
-    expect(onAudio.mock.calls[0]?.[0]).toHaveLength(80);
+    const audio = requireFirstAudio(onAudio);
+    expect(audio).toBeInstanceOf(Buffer);
+    expect(audio).toHaveLength(80);
   });
 
   it("can keep Google PCM output as PCM16 24 kHz audio", async () => {
@@ -658,7 +730,7 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     });
 
     expect(onAudio).toHaveBeenCalledTimes(1);
-    expect(onAudio.mock.calls[0]?.[0]).toEqual(pcm24k);
+    expect(requireFirstAudio(onAudio)).toEqual(pcm24k);
   });
 
   it("does not forward Google thought text as assistant transcript", async () => {
@@ -786,7 +858,7 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     bridge.submitToolResult("missing-call", { result: "ok" });
 
     expect(session.sendToolResponse).not.toHaveBeenCalled();
-    const error = onError.mock.calls[0]?.[0] as { message?: string };
+    const error = requireFirstError(onError);
     expect(error.message).toBe(
       "Google Live function response is missing a matching function call for missing-call",
     );

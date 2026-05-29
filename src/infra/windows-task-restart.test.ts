@@ -45,6 +45,14 @@ function decodeCmdPathArg(value: string): string {
   return withoutQuotes.replace(/\^!/g, "!").replace(/%%/g, "%");
 }
 
+function requireFirstMockCall<T>(mock: { mock: { calls: T[][] } }, label: string): T[] {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
 afterEach(() => {
   envSnapshot.restore();
   for (const scriptPath of createdScriptPaths) {
@@ -96,12 +104,14 @@ describe("relaunchGatewayScheduledTask", () => {
     expect(result.method).toBe("schtasks");
     expect(result.tried).toContain('schtasks /Run /TN "OpenClaw Gateway (work)"');
     expect(result.tried).toContain(`cmd.exe /d /s /c ${seenCommandArg}`);
-    const spawnCall = spawnMock.mock.calls[0];
-    expect(spawnCall?.[0]).toBe("cmd.exe");
-    expect(spawnCall?.[1]).toEqual(["/d", "/s", "/c", expect.any(String)]);
-    expect(spawnCall?.[2]?.detached).toBe(true);
-    expect(spawnCall?.[2]?.stdio).toBe("ignore");
-    expect(spawnCall?.[2]?.windowsHide).toBe(true);
+    const spawnCall = requireFirstMockCall(spawnMock, "restart helper spawn");
+    expect(spawnCall[0]).toBe("cmd.exe");
+    expect(spawnCall[1]).toStrictEqual(["/d", "/s", "/c", seenCommandArg]);
+    expect(spawnCall[2]).toStrictEqual({
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    });
     expect(unref).toHaveBeenCalledOnce();
 
     const scriptPath = [...createdScriptPaths][0];
@@ -179,11 +189,26 @@ describe("relaunchGatewayScheduledTask", () => {
 
     relaunchGatewayScheduledTask({ OPENCLAW_PROFILE: "work" });
 
-    expect(spawnMock).toHaveBeenCalledWith(
-      "cmd.exe",
-      ["/d", "/s", "/c", expect.stringMatching(/^".*&.*"$/)],
-      expect.any(Object),
-    );
+    expect(spawnMock).toHaveBeenCalledOnce();
+    const spawnCall = requireFirstMockCall(spawnMock, "restart helper spawn");
+    const commandArgs = spawnCall[1];
+    if (!Array.isArray(commandArgs)) {
+      throw new Error("expected cmd.exe argument array");
+    }
+    const commandArg = commandArgs[3];
+    if (typeof commandArg !== "string") {
+      throw new Error("expected quoted restart helper path");
+    }
+    expect(spawnCall[0]).toBe("cmd.exe");
+    expect(commandArgs).toStrictEqual(["/d", "/s", "/c", commandArg]);
+    expect(commandArg.startsWith('"')).toBe(true);
+    expect(commandArg.endsWith('"')).toBe(true);
+    expect(commandArg).toContain("&");
+    expect(spawnCall[2]).toStrictEqual({
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    });
   });
 
   it("includes startup fallback", () => {

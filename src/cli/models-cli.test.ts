@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   modelsAuthAddCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthListCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthLoginCommand: vi.fn().mockResolvedValue(undefined),
+  modelsAuthPasteApiKeyCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthPasteTokenCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthSetupTokenCommand: vi.fn().mockResolvedValue(undefined),
 }));
@@ -19,6 +20,7 @@ const {
   modelsAuthAddCommand,
   modelsAuthListCommand,
   modelsAuthLoginCommand,
+  modelsAuthPasteApiKeyCommand,
   modelsAuthPasteTokenCommand,
   modelsAuthSetupTokenCommand,
   modelsSetCommand,
@@ -35,6 +37,7 @@ vi.mock("../commands/models/list.status-command.js", () => ({
 vi.mock("../commands/models/auth.js", () => ({
   modelsAuthAddCommand: mocks.modelsAuthAddCommand,
   modelsAuthLoginCommand: mocks.modelsAuthLoginCommand,
+  modelsAuthPasteApiKeyCommand: mocks.modelsAuthPasteApiKeyCommand,
   modelsAuthPasteTokenCommand: mocks.modelsAuthPasteTokenCommand,
   modelsAuthSetupTokenCommand: mocks.modelsAuthSetupTokenCommand,
 }));
@@ -78,6 +81,7 @@ describe("models cli", () => {
     modelsAuthAddCommand.mockClear();
     modelsAuthListCommand.mockClear();
     modelsAuthLoginCommand.mockClear();
+    modelsAuthPasteApiKeyCommand.mockClear();
     modelsAuthPasteTokenCommand.mockClear();
     modelsAuthSetupTokenCommand.mockClear();
     modelsSetCommand.mockClear();
@@ -111,13 +115,14 @@ describe("models cli", () => {
     expected: Record<string, unknown>,
   ) {
     expect(command).toHaveBeenCalledTimes(1);
-    const options = command.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
-    const context = command.mock.calls[0]?.[1];
+    const [options, context] = command.mock.calls[0] ?? [];
+    const optionRecord = options as Record<string, unknown> | undefined;
     for (const [key, value] of Object.entries(expected)) {
-      expect(options?.[key]).toEqual(value);
+      expect(optionRecord?.[key]).toEqual(value);
     }
-    expect(typeof context).toBe("object");
-    expect(context).not.toBeNull();
+    if (!context || typeof context !== "object") {
+      throw new Error("expected command context");
+    }
   }
 
   it("registers github-copilot login command", async () => {
@@ -180,6 +185,12 @@ describe("models cli", () => {
       expected: { agent: "poe", provider: "anthropic" },
     },
     {
+      label: "paste-api-key",
+      args: ["models", "auth", "--agent", "poe", "paste-api-key", "--provider", "openai-codex"],
+      command: modelsAuthPasteApiKeyCommand,
+      expected: { agent: "poe", provider: "openai-codex" },
+    },
+    {
       label: "login-github-copilot",
       args: ["models", "auth", "--agent", "poe", "login-github-copilot", "--yes"],
       command: modelsAuthLoginCommand,
@@ -189,6 +200,39 @@ describe("models cli", () => {
     await runModelsCommand(args);
 
     expectCommandOptions(command, expected);
+  });
+
+  it("passes --method through models auth login", async () => {
+    await runModelsCommand([
+      "models",
+      "auth",
+      "login",
+      "--provider",
+      "openai",
+      "--method",
+      "api-key",
+    ]);
+
+    expectCommandOptions(modelsAuthLoginCommand, {
+      provider: "openai",
+      method: "api-key",
+    });
+  });
+
+  it("maps --device-code to the provider device-code auth method", async () => {
+    await runModelsCommand([
+      "models",
+      "auth",
+      "login",
+      "--provider",
+      "openai-codex",
+      "--device-code",
+    ]);
+
+    expectCommandOptions(modelsAuthLoginCommand, {
+      provider: "openai-codex",
+      method: "device-code",
+    });
   });
 
   it("passes list-specific --agent and --json to models auth list", async () => {

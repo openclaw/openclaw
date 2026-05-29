@@ -57,7 +57,7 @@ function parseFetchBody(index = 0): Record<string, unknown> {
 
 function expectMockLogNotContains(mock: ReturnType<typeof vi.fn>, expected: string): void {
   const messages = mock.mock.calls.map((call) => String(call[0] ?? ""));
-  expect(messages.every((message) => !message.includes(expected))).toBe(true);
+  expect(messages.join("\n")).not.toContain(expected);
 }
 
 // Minimal WebSocket mock for connection-log assertions.
@@ -288,7 +288,9 @@ describe("containerRestRequest", () => {
 
     // The timeout is enforced via AbortController, so we verify the call was made with a signal
     expect(mockFetch).toHaveBeenCalled();
-    expect(requireFetchCall()[1].signal).toBeDefined();
+    if (requireFetchCall()[1].signal === undefined) {
+      throw new Error("expected fetch call to include an abort signal");
+    }
   });
 });
 
@@ -339,6 +341,26 @@ describe("containerSendMessage", () => {
     ).rejects.toThrow("Signal REST send returned invalid timestamp");
   });
 
+  it.each(["0x18bcfe56800", "1700000000000.5"])(
+    "rejects non-decimal integer send timestamp %s",
+    async (timestamp) => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ timestamp }),
+      });
+
+      await expect(
+        containerSendMessage({
+          baseUrl: "http://localhost:8080",
+          account: "+14259798283",
+          recipients: ["+15550001111"],
+          message: "Hello world",
+        }),
+      ).rejects.toThrow("Signal REST send returned invalid timestamp");
+    },
+  );
+
   it("uses container styled text mode when styles are provided", async () => {
     mockFetch.mockResolvedValue({
       ok: true,
@@ -375,8 +397,7 @@ describe("containerSendMessage", () => {
       textStyles: [{ start: 0, length: 4, style: "BOLD" }],
     });
 
-    const callArgs = mockFetch.mock.calls[0];
-    const body = JSON.parse(callArgs[1].body);
+    const body = parseFetchBody();
     expect(body.message).toBe("**Bold** \\* not italic");
   });
 
@@ -395,8 +416,7 @@ describe("containerSendMessage", () => {
       textStyles: [{ start: 0, length: 4, style: "BOLD" }],
     });
 
-    const callArgs = mockFetch.mock.calls[0];
-    const body = JSON.parse(callArgs[1].body);
+    const body = parseFetchBody();
     expect(body.message).toBe("**Bold** C:\\Temp\\file and /foo\\bar/");
   });
 
@@ -425,10 +445,11 @@ describe("containerSendMessage", () => {
       attachments: [tmpFile],
     });
 
-    const callArgs = mockFetch.mock.calls[0];
-    const body = JSON.parse(callArgs[1].body);
+    const body = parseFetchBody();
     expect(body.attachments).toBeUndefined();
-    expect(body.base64_attachments).toBeDefined();
+    if (!Array.isArray(body.base64_attachments)) {
+      throw new Error("expected base64 attachments array");
+    }
     expect(body.base64_attachments).toHaveLength(1);
     expect(body.base64_attachments[0]).toMatch(
       /^data:image\/jpeg;filename=test-image\.jpg;base64,/,
@@ -617,6 +638,24 @@ describe("containerFetchAttachment", () => {
         maxResponseBytes: 4,
       }),
     ).rejects.toThrow("Signal REST attachment exceeded size limit");
+    expect(arrayBuffer).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed content-length before reading attachments", async () => {
+    const arrayBuffer = vi.fn();
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers({ "content-length": "0x3" }),
+      arrayBuffer,
+    });
+
+    await expect(
+      containerFetchAttachment("attachment-123", {
+        baseUrl: "http://localhost:8080",
+        maxResponseBytes: 4,
+      }),
+    ).rejects.toThrow("invalid content-length header: 0x3");
     expect(arrayBuffer).not.toHaveBeenCalled();
   });
 

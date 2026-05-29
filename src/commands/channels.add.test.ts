@@ -124,15 +124,21 @@ function listConfiguredAccountIds(
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(value, label).toBeTypeOf("object");
-  expect(value, label).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
   return value as Record<string, unknown>;
 }
 
 function mockArg(source: MockCallSource, callIndex: number, argIndex: number, label: string) {
   const call = source.mock.calls[callIndex];
-  expect(call, label).toBeDefined();
-  return call?.[argIndex];
+  if (!call) {
+    throw new Error(`Expected mock call: ${label}`);
+  }
+  if (argIndex >= call.length) {
+    throw new Error(`Expected mock call argument ${argIndex}: ${label}`);
+  }
+  return call[argIndex];
 }
 
 function writtenConfig(index = 0) {
@@ -154,6 +160,10 @@ function setupOptions() {
     mockArg(channelWizardMocks.setupChannels, 0, 3, "setup options"),
     "setup options",
   );
+}
+
+function setupChannelArg(index: number) {
+  return mockArg(channelWizardMocks.setupChannels, 0, index, `setup channel arg ${index}`);
 }
 
 function applyAccountConfigCall(fn: MockCallSource, index = 0) {
@@ -448,9 +458,9 @@ describe("channelsAddCommand", () => {
     await channelsAddCommand({}, runtime, { hasFlags: false });
 
     expect(channelWizardMocks.prompter.intro).toHaveBeenCalledWith("Channel setup");
-    expect(channelWizardMocks.setupChannels.mock.calls[0]?.[0]).toBe(config);
-    expect(channelWizardMocks.setupChannels.mock.calls[0]?.[1]).toBe(runtime);
-    expect(channelWizardMocks.setupChannels.mock.calls[0]?.[2]).toBe(channelWizardMocks.prompter);
+    expect(setupChannelArg(0)).toBe(config);
+    expect(setupChannelArg(1)).toBe(runtime);
+    expect(setupChannelArg(2)).toBe(channelWizardMocks.prompter);
     expect(setupOptions().deferStatusUntilSelection).toBe(true);
     expect(setupOptions().skipStatusNote).toBe(true);
     expect(setupOptions().promptAccountIds).toBe(true);
@@ -698,6 +708,84 @@ describe("channelsAddCommand", () => {
     expectExternalChatEnabledConfigWrite();
   });
 
+  it("installs same-id externalized channel plugins before non-interactive add", async () => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+    setActivePluginRegistry(createTestRegistry());
+    const catalogEntry: ChannelPluginCatalogEntry = {
+      id: "whatsapp",
+      pluginId: "whatsapp",
+      meta: {
+        id: "whatsapp",
+        label: "WhatsApp",
+        selectionLabel: "WhatsApp",
+        docsPath: "/channels/whatsapp",
+        blurb: "WhatsApp channel",
+      },
+      install: {
+        npmSpec: "@openclaw/whatsapp",
+      },
+    };
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([catalogEntry]);
+    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
+      createTestRegistry([
+        {
+          pluginId: "whatsapp",
+          plugin: {
+            ...createChannelTestPluginBase({
+              id: "whatsapp",
+              label: "WhatsApp",
+              docsPath: "/channels/whatsapp",
+            }),
+            setup: {
+              applyAccountConfig: ({ cfg, accountId, input }: ApplyAccountConfigParams) => ({
+                ...cfg,
+                channels: {
+                  ...cfg.channels,
+                  whatsapp: {
+                    enabled: true,
+                    accounts: {
+                      [accountId]: {
+                        enabled: true,
+                        authDir: input.authDir,
+                      },
+                    },
+                  },
+                },
+              }),
+            },
+          },
+          source: "test",
+        },
+      ]),
+    );
+
+    await channelsAddCommand(
+      {
+        channel: "whatsapp",
+        account: "work",
+        authDir: "/tmp/openclaw-wa-auth",
+      },
+      runtime,
+      { hasFlags: true },
+    );
+
+    expect(installCall().entry).toBe(catalogEntry);
+    expect(installCall().promptInstall).toBe(false);
+    expect(snapshotCall().pluginId).toBe("whatsapp");
+    expect(writtenChannel("whatsapp")).toEqual({
+      enabled: true,
+      accounts: {
+        work: {
+          enabled: true,
+          authDir: "/tmp/openclaw-wa-auth",
+        },
+      },
+    });
+    expect(refreshCall().reason).toBe("source-changed");
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
   it("uses setup-entry snapshots when an already loaded channel plugin has no setup adapter", async () => {
     configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
     setActivePluginRegistry(
@@ -745,9 +833,7 @@ describe("channelsAddCommand", () => {
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledTimes(1);
     expect(writtenChannel("telegram").enabled).toBe(true);
     expect(writtenChannel("telegram").botToken).toBe("123456:token");
-    expect(runtime.error).not.toHaveBeenCalledWith(
-      expect.stringContaining("Channel telegram does not support non-interactive add"),
-    );
+    expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 
@@ -790,10 +876,41 @@ describe("channelsAddCommand", () => {
     expect(getBundledChannelSetupPlugin).toHaveBeenCalledWith("telegram");
     expect(writtenChannel("telegram").enabled).toBe(true);
     expect(writtenChannel("telegram").botToken).toBe("123456:token");
-    expect(runtime.error).not.toHaveBeenCalledWith(
-      expect.stringContaining("Channel telegram does not support non-interactive add"),
-    );
+    expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed numeric channel setup options before plugin setup", async () => {
+    const applyAccountConfig = vi.fn(({ cfg, input }: ApplyAccountConfigParams) => ({
+      ...cfg,
+      channels: {
+        ...cfg.channels,
+        matrix: {
+          enabled: true,
+          initialSyncLimit: input.initialSyncLimit,
+        },
+      },
+    }));
+    const plugin = {
+      ...createChannelTestPluginBase({ id: "matrix", label: "Matrix" }),
+      setup: { applyAccountConfig },
+    };
+    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "matrix", plugin, source: "test" }]));
+
+    await expect(
+      channelsAddCommand(
+        {
+          channel: "matrix",
+          initialSyncLimit: "10x",
+        },
+        runtime,
+        { hasFlags: true },
+      ),
+    ).rejects.toThrow("--initial-sync-limit must be a non-negative integer.");
+
+    expect(applyAccountConfig).not.toHaveBeenCalled();
+    expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
   });
 
   it("falls back from untrusted workspace catalog shadows when adding by alias", async () => {
@@ -1023,7 +1140,10 @@ describe("channelsAddCommand", () => {
     expect(configMocks.writeConfigFile.mock.invocationCallOrder[0]).toBeLessThan(
       afterAccountConfigWritten.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
-    const hookCall = requireRecord(afterAccountConfigWritten.mock.calls[0]?.[0], "hook call");
+    const hookCall = requireRecord(
+      mockArg(afterAccountConfigWritten, 0, 0, "hook call"),
+      "hook call",
+    );
     expect(hookCall.previousCfg).toBe(baseConfigSnapshot.config);
     expect(requireRecord(hookCall.cfg, "hook config").channels).toEqual({
       signal: {

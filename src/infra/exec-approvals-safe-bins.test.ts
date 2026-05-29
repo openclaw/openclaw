@@ -19,6 +19,7 @@ import {
   SAFE_BIN_PROFILES,
   resolveSafeBinProfiles,
 } from "./exec-safe-bin-policy.js";
+import { buildTrustedSafeBinDirs } from "./exec-safe-bin-trust.js";
 
 describe("exec approvals safe bins", () => {
   type SafeBinCase = {
@@ -224,6 +225,30 @@ describe("exec approvals safe bins", () => {
       setup: (cwd) => fs.writeFileSync(path.join(cwd, "secret.json"), "{}"),
     },
     {
+      name: "blocks POSIX parameter expansion in safe-bin value tokens",
+      argv: ["head", "-c${IFS}16${IFS}${OPENCLAW_CONFIG_PATH}"],
+      resolvedPath: "/usr/bin/head",
+      expected: false,
+      safeBins: ["head"],
+      executableName: "head",
+    },
+    {
+      name: "blocks POSIX parameter expansion in safe-bin long option values",
+      argv: ["head", "--bytes=${IFS}16"],
+      resolvedPath: "/usr/bin/head",
+      expected: false,
+      safeBins: ["head"],
+      executableName: "head",
+    },
+    {
+      name: "blocks POSIX parameter expansion in safe-bin positional tokens",
+      argv: ["tr", "${IFS}", "_"],
+      resolvedPath: "/usr/bin/tr",
+      expected: false,
+      safeBins: ["tr"],
+      executableName: "tr",
+    },
+    {
       name: "blocks safe bins resolved from untrusted directories",
       argv: ["jq", ".foo"],
       resolvedPath: "/tmp/evil-bin/jq",
@@ -306,6 +331,44 @@ describe("exec approvals safe bins", () => {
       trustedSafeBinDirs: new Set(["/custom/bin"]),
     });
     expect(ok).toBe(true);
+  });
+
+  it("checks safe-bin trusted dirs against the real executable identity", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const resolution = {
+      rawExecutable: "jq",
+      resolvedPath: "/opt/homebrew/bin/jq",
+      resolvedRealPath: "/opt/homebrew/Cellar/jq/1.7.1/bin/jq",
+      executableName: "jq",
+    };
+    expect(
+      isSafeBinUsage({
+        argv: ["jq", ".foo"],
+        resolution,
+        safeBins: normalizeSafeBins(["jq"]),
+        trustedSafeBinDirs: new Set(["/opt/homebrew/bin"]),
+      }),
+    ).toBe(false);
+    expect(
+      isSafeBinUsage({
+        argv: ["jq", ".foo"],
+        resolution,
+        safeBins: normalizeSafeBins(["jq"]),
+        trustedSafeBinDirs: buildTrustedSafeBinDirs({
+          extraDirs: ["/opt/homebrew/Cellar/jq/1.7.1/bin"],
+        }),
+      }),
+    ).toBe(true);
+    expect(
+      isSafeBinUsage({
+        argv: ["jq", ".foo"],
+        resolution,
+        safeBins: normalizeSafeBins(["jq"]),
+        trustedSafeBinDirs: new Set(["/tmp/other-bin"]),
+      }),
+    ).toBe(false);
   });
 
   it("supports injected platform for deterministic safe-bin checks", () => {
@@ -400,21 +463,23 @@ describe("exec approvals safe bins", () => {
       argv: ["echo", "hello"],
       resolution: {
         rawExecutable: "echo",
-        resolvedPath: "/bin/echo",
+        resolvedPath: "/opt/openclaw-test/bin/echo",
         executableName: "echo",
       },
       safeBins: normalizeSafeBins(["echo"]),
       safeBinProfiles,
+      trustedSafeBinDirs: new Set(["/opt/openclaw-test/bin"]),
     });
     const deny = isSafeBinUsage({
       argv: ["echo", "hello", "world"],
       resolution: {
         rawExecutable: "echo",
-        resolvedPath: "/bin/echo",
+        resolvedPath: "/opt/openclaw-test/bin/echo",
         executableName: "echo",
       },
       safeBins: normalizeSafeBins(["echo"]),
       safeBinProfiles,
+      trustedSafeBinDirs: new Set(["/opt/openclaw-test/bin"]),
     });
     expect(allow).toBe(true);
     expect(deny).toBe(false);

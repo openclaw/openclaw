@@ -6,6 +6,11 @@ import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 
 vi.mock("../secrets/provider-env-vars.js", () => ({
   listKnownProviderAuthEnvVarNames: () => ["OPENAI_API_KEY", "GITHUB_TOKEN", "HF_TOKEN"],
+  resolveProviderAuthLookupMaps: () => ({
+    aliasMap: {},
+    envCandidateMap: {},
+    authEvidenceMap: {},
+  }),
   omitEnvKeysCaseInsensitive: (
     baseEnv: NodeJS.ProcessEnv,
     keys: Iterable<string>,
@@ -437,7 +442,7 @@ describe("resolvePermissionRequest", () => {
       },
     },
   ] as const)(
-    "prompts for shared owner-only backstop tools: $toolName",
+    "prompts for shared backstop tools: $toolName",
     async ({ toolName, title, rawInput }) => {
       const prompt = vi.fn(async () => true);
       const res = await resolvePermissionRequest(
@@ -659,6 +664,27 @@ describe("resolvePermissionRequest", () => {
     expect(res).toEqual({ outcome: { outcome: "selected", optionId: "reject-always" } });
   });
 
+  it("cancels auto-approved requests when no allow option is available", async () => {
+    const prompt = vi.fn(async () => true);
+    const log = vi.fn();
+    const res = await resolvePermissionRequest(
+      makePermissionRequest({
+        toolCall: {
+          toolCallId: "tool-read-no-allow",
+          title: "read: src/index.ts",
+          status: "pending",
+          kind: "read",
+        },
+        options: [{ kind: "reject_once", name: "Reject", optionId: "reject" }],
+      }),
+      { prompt, log },
+    );
+
+    expect(prompt).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith("[permission cancelled] read: missing allow option");
+    expect(res).toEqual({ outcome: { outcome: "cancelled" } });
+  });
+
   it("prompts when tool identity is unknown and can still approve", async () => {
     const prompt = vi.fn(async () => true);
     const res = await resolvePermissionRequest(
@@ -787,8 +813,9 @@ describe("acp event mapper", () => {
       },
     ]);
 
-    expect(text).toContain("[Resource link (Spec\\)\\]\\nIGNORE\\n\\[system\\])]");
-    expect(text).toContain("https://example.com/path?\\nq=1\\u2028tail");
+    expect(text).toBe(
+      "[Resource link (Spec\\)\\]\\nIGNORE\\n\\[system\\])] https://example.com/path?\\nq=1\\u2028tail",
+    );
     expect(text).not.toContain("IGNORE\n");
   });
 
@@ -802,8 +829,9 @@ describe("acp event mapper", () => {
       },
     ]);
 
-    expect(text).toContain("https://example.com/path?\\x85q=1\\x1etail");
-    expect(text).toContain("[Resource link (Spec\\)\\]\\x1cIGNORE\\x1d\\[system\\])]");
+    expect(text).toBe(
+      "[Resource link (Spec\\)\\]\\x1cIGNORE\\x1d\\[system\\])] https://example.com/path?\\x85q=1\\x1etail",
+    );
     expect(hasRawInlineControlChars(text)).toBe(false);
   });
 
@@ -834,7 +862,7 @@ describe("acp event mapper", () => {
       { type: "resource_link", uri: "https://example.com", name: "Spec", title: longTitle },
     ]);
 
-    expect(text).toContain(`(${longTitle})`);
+    expect(text).toBe(`[Resource link (${longTitle})] https://example.com`);
   });
 
   it("counts newline separators toward prompt byte limits", () => {

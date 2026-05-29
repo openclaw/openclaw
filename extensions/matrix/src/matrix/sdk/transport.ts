@@ -1,3 +1,4 @@
+import { parseMediaContentLength } from "openclaw/plugin-sdk/media-runtime";
 import { MatrixMediaSizeLimitError } from "../media-errors.js";
 import { readResponseWithLimit } from "./read-response-with-limit.js";
 import {
@@ -66,6 +67,24 @@ function toFetchUrl(resource: RequestInfo | URL): string {
     return resource;
   }
   return resource.url;
+}
+
+const MATRIX_STATE_AFTER_SYNC_PARAM = "org.matrix.msc4222.use_state_after";
+
+function withoutMatrixStateAfterSyncParam(rawUrl: string): string {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return rawUrl;
+  }
+
+  if (!url.pathname.endsWith("/sync") || !url.searchParams.has(MATRIX_STATE_AFTER_SYNC_PARAM)) {
+    return rawUrl;
+  }
+
+  url.searchParams.delete(MATRIX_STATE_AFTER_SYNC_PARAM);
+  return url.toString();
 }
 
 function buildBufferedResponse(params: {
@@ -213,7 +232,7 @@ export function createMatrixGuardedFetch(params: {
   dispatcherPolicy?: PinnedDispatcherPolicy;
 }): typeof fetch {
   return (async (resource: RequestInfo | URL, init?: RequestInit) => {
-    const url = toFetchUrl(resource);
+    const url = withoutMatrixStateAfterSyncParam(toFetchUrl(resource));
     const { signal, ...requestInit } = init ?? {};
     const { response, release } = await fetchWithMatrixGuardedRedirects({
       url,
@@ -300,8 +319,8 @@ export async function performMatrixRequest(params: {
     if (params.raw) {
       const contentLength = response.headers.get("content-length");
       if (params.maxBytes && contentLength) {
-        const length = Number(contentLength);
-        if (Number.isFinite(length) && length > params.maxBytes) {
+        const length = parseMediaContentLength(contentLength);
+        if (length !== null && length > params.maxBytes) {
           throw new MatrixMediaSizeLimitError(
             `Matrix media exceeds configured size limit (${length} bytes > ${params.maxBytes} bytes)`,
           );

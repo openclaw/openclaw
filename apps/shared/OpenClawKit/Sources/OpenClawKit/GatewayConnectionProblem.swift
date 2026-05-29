@@ -10,6 +10,7 @@ public struct GatewayConnectionProblem: Equatable, Sendable {
         case gatewayAuthPasswordNotConfigured
         case bootstrapTokenInvalid
         case deviceTokenMismatch
+        case deviceTokenScopeMismatch
         case pairingRequired
         case pairingRoleUpgradeRequired
         case pairingScopeUpgradeRequired
@@ -97,7 +98,7 @@ public struct GatewayConnectionProblem: Equatable, Sendable {
     public var needsPairingApproval: Bool {
         switch self.kind {
         case .pairingRequired, .pairingRoleUpgradeRequired, .pairingScopeUpgradeRequired,
-             .pairingMetadataUpgradeRequired:
+             .pairingMetadataUpgradeRequired, .deviceTokenScopeMismatch:
             true
         default:
             false
@@ -118,6 +119,10 @@ public struct GatewayConnectionProblem: Equatable, Sendable {
         default:
             false
         }
+    }
+
+    public var suggestsOnboardingReset: Bool {
+        self.kind == .gatewayAuthTokenMismatch
     }
 
     public var statusText: String {
@@ -321,6 +326,20 @@ public enum GatewayConnectionProblemMapper {
                 message: authError.userMessageOverride
                     ?? "The gateway rejected the stored device token for this role.",
                 actionLabel: authError.actionLabel ?? "Repair pairing",
+                actionCommand: authError.actionCommand ?? pairingCommand,
+                docsURL: self.docsURL(authError.docsURLString, fallback: "https://docs.openclaw.ai/gateway/pairing"),
+                requestId: authError.requestId,
+                retryable: false,
+                pauseReconnect: true,
+                authError: authError)
+        case .authScopeMismatch:
+            return self.problem(
+                kind: .deviceTokenScopeMismatch,
+                owner: .both,
+                title: authError.titleOverride ?? "Device permissions need approval",
+                message: authError.userMessageOverride
+                    ?? "The gateway accepted this device token but rejected the requested operator scopes.",
+                actionLabel: authError.actionLabel ?? "Review pairing",
                 actionCommand: authError.actionCommand ?? pairingCommand,
                 docsURL: self.docsURL(authError.docsURLString, fallback: "https://docs.openclaw.ai/gateway/pairing"),
                 requestId: authError.requestId,

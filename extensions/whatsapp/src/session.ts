@@ -1,12 +1,11 @@
 import { randomUUID } from "node:crypto";
-import fsSync from "node:fs";
 import type { Agent } from "node:https";
-import { HttpsProxyAgent } from "https-proxy-agent";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { VERSION } from "openclaw/plugin-sdk/cli-runtime";
 import {
-  resolveEnvHttpProxyUrl,
-  shouldUseEnvHttpProxyForUrl,
+  createHttp1EnvHttpProxyAgent,
+  createHttp1ProxyAgent,
+  createNodeProxyAgent,
 } from "openclaw/plugin-sdk/fetch-runtime";
 import { danger, success } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger, toPinoLikeLogger } from "openclaw/plugin-sdk/runtime-env";
@@ -18,10 +17,12 @@ import {
   resolveWebCredsBackupPath,
   resolveWebCredsPath,
 } from "./auth-store.js";
+import { assertWebCredsPathRegularFileOrMissing } from "./creds-files.js";
 import {
   enqueueCredsSave,
   waitForCredsSaveQueueWithTimeout,
   writeCredsJsonAtomically,
+  writeWebCredsRawAtomically,
 } from "./creds-persistence.js";
 import { renderQrTerminal } from "./qr-terminal.js";
 import { getStatusCode } from "./session-errors.js";
@@ -53,7 +54,6 @@ export {
   WHATSAPP_AUTH_UNSTABLE_CODE,
   WhatsAppAuthUnstableError,
   type WhatsAppWebAuthState,
-  WA_WEB_AUTH_DIR,
   webAuthExists,
 } from "./auth-store.js";
 export {
@@ -67,6 +67,10 @@ const LOGGED_OUT_STATUS = DisconnectReason?.loggedOut ?? 401;
 const WHATSAPP_WEBSOCKET_PROXY_TARGET = "https://mmg.whatsapp.net/";
 const CREDS_FLUSH_TIMEOUT_MESSAGE =
   "Queued WhatsApp creds save did not finish before auth bootstrap; skipping repair and continuing with primary creds.";
+
+async function rejectUnsafeWebCredsPath(authDir: string): Promise<void> {
+  await assertWebCredsPathRegularFileOrMissing(resolveWebCredsPath(authDir));
+}
 
 function enqueueSaveCreds(
   authDir: string,
@@ -96,12 +100,11 @@ async function safeSaveCreds(
     if (raw) {
       try {
         JSON.parse(raw);
-        fsSync.copyFileSync(credsPath, backupPath);
-        try {
-          fsSync.chmodSync(backupPath, 0o600);
-        } catch {
-          // best-effort on platforms that support it
-        }
+        await writeWebCredsRawAtomically({
+          filePath: backupPath,
+          content: raw,
+          tempPrefix: ".creds.backup",
+        });
       } catch {
         // keep existing backup
       }
@@ -141,14 +144,17 @@ export async function createWaSocket(
   );
   const logger = toPinoLikeLogger(baseLogger, verbose ? "info" : "silent");
   const authDir = resolveUserPath(opts.authDir ?? resolveDefaultWebAuthDir());
+  await rejectUnsafeWebCredsPath(authDir);
   await ensureDir(authDir);
   const sessionLogger = getChildLogger({ module: "web-session" });
   const queueResult = await waitForCredsSaveQueueWithTimeout(authDir);
   if (queueResult === "timed_out") {
     sessionLogger.warn({ authDir }, CREDS_FLUSH_TIMEOUT_MESSAGE);
   } else {
+    await rejectUnsafeWebCredsPath(authDir);
     await restoreCredsFromBackupIfNeeded(authDir);
   }
+  await rejectUnsafeWebCredsPath(authDir);
   const { state } = await useMultiFileAuthState(authDir);
   const saveCreds = async () => {
     await writeCredsJsonAtomically(authDir, state.creds);
@@ -225,15 +231,15 @@ export async function createWaSocket(
 async function resolveEnvProxyAgent(
   logger: ReturnType<typeof getChildLogger>,
 ): Promise<Agent | undefined> {
-  if (!shouldUseEnvHttpProxyForUrl(WHATSAPP_WEBSOCKET_PROXY_TARGET)) {
-    return undefined;
-  }
-  const proxyUrl = resolveEnvHttpProxyUrl("https");
-  if (!proxyUrl) {
-    return undefined;
-  }
   try {
-    const agent = new HttpsProxyAgent(proxyUrl) as Agent;
+    const agent = createNodeProxyAgent({
+      mode: "env",
+      targetUrl: WHATSAPP_WEBSOCKET_PROXY_TARGET,
+      protocol: "https",
+    }) as Agent | undefined;
+    if (!agent) {
+      return undefined;
+    }
     logger.info("Using ambient env proxy for WhatsApp WebSocket connection");
     return agent;
   } catch (error) {
@@ -255,10 +261,7 @@ async function resolveEnvFetchDispatcher(
     return undefined;
   }
   try {
-    const { EnvHttpProxyAgent, ProxyAgent } = await import("undici");
-    return proxyUrl
-      ? new ProxyAgent({ allowH2: false, uri: proxyUrl })
-      : new EnvHttpProxyAgent({ allowH2: false });
+    return proxyUrl ? createHttp1ProxyAgent({ uri: proxyUrl }) : createHttp1EnvHttpProxyAgent();
   } catch (error) {
     logger.warn(
       { error: String(error) },
@@ -269,6 +272,15 @@ async function resolveEnvFetchDispatcher(
 }
 
 function resolveProxyUrlFromAgent(agent: unknown): string | undefined {
+  if (
+    typeof agent === "object" &&
+    agent !== null &&
+    "getProxyForUrl" in agent &&
+    typeof agent.getProxyForUrl === "function"
+  ) {
+    const proxyUrl = agent.getProxyForUrl(WHATSAPP_WEBSOCKET_PROXY_TARGET);
+    return typeof proxyUrl === "string" && proxyUrl.length > 0 ? proxyUrl : undefined;
+  }
   if (typeof agent !== "object" || agent === null || !("proxy" in agent)) {
     return undefined;
   }

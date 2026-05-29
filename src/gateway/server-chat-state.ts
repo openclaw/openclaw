@@ -1,6 +1,13 @@
+import type { AgentEventPayload } from "../infra/agent-events.js";
+
 export type ChatRunEntry = {
   sessionKey: string;
   clientRunId: string;
+};
+
+export type BufferedAgentEvent = {
+  sessionKey?: string;
+  payload: AgentEventPayload & { spawnedBy?: string };
 };
 
 export type ChatRunRegistry = {
@@ -67,10 +74,16 @@ export type ChatRunState = {
   registry: ChatRunRegistry;
   rawBuffers: Map<string, string>;
   buffers: Map<string, string>;
+  /** Last time any buffered assistant text changed, including suppressed raw buffers. */
+  bufferUpdatedAt: Map<string, number>;
   deltaSentAt: Map<string, number>;
   /** Length of text at the time of the last broadcast, used to avoid duplicate flushes. */
   deltaLastBroadcastLen: Map<string, number>;
+  deltaLastBroadcastText: Map<string, string>;
+  agentDeltaSentAt: Map<string, number>;
+  bufferedAgentEvents: Map<string, BufferedAgentEvent>;
   abortedRuns: Map<string, number>;
+  clearRun: (runId: string) => void;
   clear: () => void;
 };
 
@@ -78,16 +91,37 @@ export function createChatRunState(): ChatRunState {
   const registry = createChatRunRegistry();
   const rawBuffers = new Map<string, string>();
   const buffers = new Map<string, string>();
+  const bufferUpdatedAt = new Map<string, number>();
   const deltaSentAt = new Map<string, number>();
   const deltaLastBroadcastLen = new Map<string, number>();
+  const deltaLastBroadcastText = new Map<string, string>();
+  const agentDeltaSentAt = new Map<string, number>();
+  const bufferedAgentEvents = new Map<string, BufferedAgentEvent>();
   const abortedRuns = new Map<string, number>();
+
+  const clearRun = (runId: string) => {
+    rawBuffers.delete(runId);
+    buffers.delete(runId);
+    bufferUpdatedAt.delete(runId);
+    deltaSentAt.delete(runId);
+    deltaLastBroadcastLen.delete(runId);
+    deltaLastBroadcastText.delete(runId);
+    for (const key of [runId, `${runId}:assistant`, `${runId}:thinking`]) {
+      agentDeltaSentAt.delete(key);
+      bufferedAgentEvents.delete(key);
+    }
+  };
 
   const clear = () => {
     registry.clear();
     rawBuffers.clear();
     buffers.clear();
+    bufferUpdatedAt.clear();
     deltaSentAt.clear();
     deltaLastBroadcastLen.clear();
+    deltaLastBroadcastText.clear();
+    agentDeltaSentAt.clear();
+    bufferedAgentEvents.clear();
     abortedRuns.clear();
   };
 
@@ -95,9 +129,14 @@ export function createChatRunState(): ChatRunState {
     registry,
     rawBuffers,
     buffers,
+    bufferUpdatedAt,
     deltaSentAt,
     deltaLastBroadcastLen,
+    deltaLastBroadcastText,
+    agentDeltaSentAt,
+    bufferedAgentEvents,
     abortedRuns,
+    clearRun,
     clear,
   };
 }
