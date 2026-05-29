@@ -430,20 +430,30 @@ export async function recoverStaleTelegramSpooledUpdateClaims(params: {
     if (params.shouldRecover) {
       const { value } = await readJsonFileWithFallback<unknown>(claimedPath, null);
       const parsed = parseSpooledUpdate(value, claimedPath);
-      if (
-        parsed &&
-        !(await params.shouldRecover({
-          ...parsed,
-          pendingPath,
-        }))
-      ) {
+      // A null parse means the claim file vanished or is unreadable; a concurrent
+      // op already owns it, so never blind-rename it back to pending below.
+      if (!parsed || !(await params.shouldRecover({ ...parsed, pendingPath }))) {
         continue;
       }
     }
-    if (await pathExists(pendingPath)) {
-      await unlinkIfPresent(claimedPath);
-    } else {
-      await fs.rename(claimedPath, pendingPath);
+    try {
+      if (await pathExists(pendingPath)) {
+        await unlinkIfPresent(claimedPath);
+      } else {
+        await fs.rename(claimedPath, pendingPath);
+      }
+    } catch (err) {
+      // TOCTOU: another drain lane, release, fail, or process removed/recreated
+      // the claim between readdir and rename. Mirror releaseTelegramSpooledUpdateClaim.
+      const code = (err as { code?: string }).code;
+      if (code === "ENOENT") {
+        continue;
+      }
+      if (code === "EEXIST") {
+        await unlinkIfPresent(claimedPath);
+        continue;
+      }
+      throw err;
     }
     recovered += 1;
   }

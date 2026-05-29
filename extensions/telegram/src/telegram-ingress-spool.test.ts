@@ -242,6 +242,69 @@ describe("Telegram ingress spool", () => {
     });
   });
 
+  it("recovers cleanly when a processing file vanishes mid-recovery (ENOENT race)", async () => {
+    await withTempSpool(async (spoolDir) => {
+      await writeTelegramSpooledUpdate({
+        spoolDir,
+        update: { update_id: 60, message: { text: "racing" } },
+      });
+      const update = (await listTelegramSpooledUpdates({ spoolDir }))[0];
+      if (!update) {
+        throw new Error("Expected a spooled update");
+      }
+      const claimed = await claimTelegramSpooledUpdate(update);
+      if (!claimed) {
+        throw new Error("Expected a claimed update");
+      }
+
+      // Simulate a concurrent drain lane / release / multi-process recovery
+      // removing the .processing file in the window before the recovery rename.
+      const recovered = await recoverStaleTelegramSpooledUpdateClaims({
+        spoolDir,
+        staleMs: 0,
+        shouldRecover: async () => {
+          await fs.rm(claimed.path, { force: true });
+          return true;
+        },
+      });
+
+      expect(recovered).toBe(0);
+      expect(await fs.readdir(spoolDir)).toEqual([]);
+    });
+  });
+
+  it("skips an unreadable claim during active drain instead of renaming it", async () => {
+    await withTempSpool(async (spoolDir) => {
+      await writeTelegramSpooledUpdate({
+        spoolDir,
+        update: { update_id: 61, message: { text: "corrupt" } },
+      });
+      const update = (await listTelegramSpooledUpdates({ spoolDir }))[0];
+      if (!update) {
+        throw new Error("Expected a spooled update");
+      }
+      const claimed = await claimTelegramSpooledUpdate(update);
+      if (!claimed) {
+        throw new Error("Expected a claimed update");
+      }
+      await fs.writeFile(claimed.path, "{ not valid json");
+
+      let shouldRecoverCalls = 0;
+      const recovered = await recoverStaleTelegramSpooledUpdateClaims({
+        spoolDir,
+        staleMs: 0,
+        shouldRecover: () => {
+          shouldRecoverCalls += 1;
+          return true;
+        },
+      });
+
+      expect(recovered).toBe(0);
+      expect(shouldRecoverCalls).toBe(0);
+      expect(await fs.readdir(spoolDir)).toEqual(["0000000000000061.json.processing"]);
+    });
+  });
+
   it("does not treat stale claims with reused pids as live-owned", () => {
     const now = Date.now();
     expect(
