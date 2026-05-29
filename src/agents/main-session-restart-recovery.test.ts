@@ -19,6 +19,19 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: vi.fn(async () => ({ runId: "run-resumed" })),
 }));
 
+vi.mock("./embedded-agent-runner/runs.js", () => ({
+  isEmbeddedAgentRunActive: vi.fn(() => false),
+  isEmbeddedAgentRunHandleActive: vi.fn(() => false),
+}));
+
+vi.mock("./embedded-agent-runner/lanes.js", () => ({
+  resolveEmbeddedSessionLane: vi.fn(() => null),
+}));
+
+vi.mock("../process/command-queue.js", () => ({
+  getCommandLaneSnapshot: vi.fn(() => ({ activeCount: 0, queuedCount: 0 })),
+}));
+
 let tmpDir: string;
 
 beforeEach(async () => {
@@ -531,7 +544,7 @@ describe("main-session-restart-recovery", () => {
     expect(store["agent:main:main"]?.pendingFinalDeliveryText).toBe("The final answer is 42.");
   });
 
-  it("does not scan ordinary running sessions without the restart-aborted marker", async () => {
+  it("recovers stale running sessions without the restart-aborted marker", async () => {
     const sessionsDir = await makeSessionsDir();
     await writeStore(sessionsDir, {
       "agent:main:main": {
@@ -547,8 +560,34 @@ describe("main-session-restart-recovery", () => {
 
     const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
 
-    expect(result).toEqual({ recovered: 0, failed: 0, skipped: 0 });
+    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    expect(callGateway).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips markerless running sessions with an active embedded run", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "active run" },
+      { role: "toolResult", content: "done" },
+    ]);
+
+    // Simulate the current process having an active run for this session
+    const { isEmbeddedAgentRunActive } = await import("./embedded-agent-runner/runs.js");
+    const spy = vi.mocked(isEmbeddedAgentRunActive);
+    spy.mockReturnValue(true);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 0, failed: 0, skipped: 1 });
     expect(callGateway).not.toHaveBeenCalled();
+    spy.mockReturnValue(false);
   });
 
   it("fails marked sessions whose transcript tail cannot be resumed", async () => {

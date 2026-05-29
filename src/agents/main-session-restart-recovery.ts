@@ -20,10 +20,16 @@ import { callGateway } from "../gateway/call.js";
 import { readSessionMessagesAsync } from "../gateway/session-utils.fs.js";
 import { resolveGatewaySessionStoreTarget } from "../gateway/session-utils.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { getCommandLaneSnapshot } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import { isAcpSessionKey, isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { deliveryContextFromSession } from "../utils/delivery-context.shared.js";
+import { resolveEmbeddedSessionLane } from "./embedded-agent-runner/lanes.js";
+import {
+  isEmbeddedAgentRunActive,
+  isEmbeddedAgentRunHandleActive,
+} from "./embedded-agent-runner/runs.js";
 import { resolveAgentSessionDirs } from "./session-dirs.js";
 import type { SessionLockInspection } from "./session-write-lock.js";
 
@@ -456,8 +462,36 @@ async function recoverStore(params: {
   for (const [sessionKey, entry] of Object.entries(store).toSorted(([a], [b]) =>
     a.localeCompare(b),
   )) {
-    if (!entry || entry.status !== "running" || entry.abortedLastRun !== true) {
+    if (!entry || entry.status !== "running") {
       continue;
+    }
+    // After a restart, any session still marked "running" is stale — the
+    // process that owned the run is gone.  Previously we required
+    // `abortedLastRun === true`, but runs that die without cleanup leave
+    // the flag unset, so we now recover those too.
+    //
+    // For markerless rows we verify the current process has no live work
+    // for this session (no active embedded run, no active lane task).
+    // At recovery time (post-ready + delay), any run started by the
+    // current process would already be registered in memory, so an
+    // empty check confirms the row is stale from the old process.
+    if (!entry.abortedLastRun) {
+      const hasActiveRun =
+        (typeof entry.sessionId === "string" && isEmbeddedAgentRunActive(entry.sessionId)) ||
+        isEmbeddedAgentRunHandleActive(sessionKey);
+      const sessionLane = resolveEmbeddedSessionLane(sessionKey);
+      const hasActiveLane = sessionLane
+        ? getCommandLaneSnapshot(sessionLane).activeCount > 0
+        : false;
+      if (hasActiveRun || hasActiveLane) {
+        result.skipped++;
+        continue;
+      }
+      // Mark the flag so downstream helpers (markSessionFailed /
+      // resumeMainSession) see the expected precondition.  Note: this
+      // only mutates the in-memory entry; downstream helpers re-load
+      // the store and set the flag themselves when persisting.
+      entry.abortedLastRun = true;
     }
     if (shouldSkipMainRecovery(entry, sessionKey)) {
       result.skipped++;

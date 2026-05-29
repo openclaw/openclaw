@@ -102,6 +102,7 @@ import {
   readSessionPreviewItemsFromTranscript,
   resolveDeletedAgentIdFromSessionKey,
   resolveFreshestSessionEntryFromStoreKeys,
+  resolveFreshestSessionStoreMatchFromStoreKeys,
   resolveGatewaySessionStoreTarget,
   resolveSessionDisplayModelIdentityRef,
   resolveSessionModelRef,
@@ -1905,6 +1906,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       }
     }
     let abortedRunId: string | null = null;
+    let abortRespondedOk = false;
     await chatHandlers["chat.abort"]({
       req,
       params: {
@@ -1916,6 +1918,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           respond(ok, payload, error, meta);
           return;
         }
+        abortRespondedOk = true;
         const runIds =
           payload &&
           typeof payload === "object" &&
@@ -1965,6 +1968,55 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         sessionKey: canonicalKey,
         reason: "abort",
       });
+    } else if (abortRespondedOk) {
+      // Heal stale "running" session entries when no active run exists.
+      // This handles the case where a run dies without cleaning up the
+      // persisted session status, leaving the lane stuck in "running".
+      // Use the scoped abort key (already agent-ownership-checked) as the
+      // primary heal target, and include the original requested key only
+      // when it passed the alias ownership check earlier.
+      const cfg = context.getRuntimeConfig();
+      const healTarget = resolveGatewaySessionStoreTarget({
+        cfg,
+        key,
+        ...(requestedKeyAliases?.[0] ? {} : {}),
+      });
+      const healStoreKeys = new Set(healTarget.storeKeys);
+      if (requestedKeyAliases) {
+        for (const alias of requestedKeyAliases) {
+          healStoreKeys.add(alias);
+        }
+      }
+      const store = loadSessionStore(healTarget.storePath);
+      const freshest = resolveFreshestSessionStoreMatchFromStoreKeys(
+        store,
+        Array.from(healStoreKeys),
+      );
+      if (freshest?.entry?.status === "running") {
+        const snapshotUpdatedAt = freshest.entry.updatedAt;
+        const staleKey = freshest.key;
+        await updateSessionStore(healTarget.storePath, (s) => {
+          const current = s[staleKey];
+          // Guard: only clear if the row hasn't changed since we checked
+          // (prevents clearing a row that a newly-started run just claimed).
+          if (
+            current?.status === "running" &&
+            current.updatedAt === snapshotUpdatedAt &&
+            !hasTrackedActiveSessionRun({
+              context,
+              requestedKey: staleKey,
+              canonicalKey,
+            })
+          ) {
+            current.status = undefined;
+            current.abortedLastRun = false;
+          }
+        });
+        emitSessionsChanged(context, {
+          sessionKey: canonicalKey,
+          reason: "abort",
+        });
+      }
     }
   },
   "sessions.patch": async ({ params, respond, context, client, isWebchatConnect }) => {

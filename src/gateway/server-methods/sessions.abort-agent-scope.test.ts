@@ -3,6 +3,8 @@ import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 const chatAbortMock = vi.fn();
 const resolveSessionKeyForRunMock = vi.fn();
+const loadSessionStoreMock = vi.fn().mockReturnValue({});
+const updateSessionStoreMock = vi.fn();
 
 vi.mock("../server-session-key.js", () => ({
   resolveSessionKeyForRun: (...args: unknown[]) => resolveSessionKeyForRunMock(...args),
@@ -14,11 +16,24 @@ vi.mock("./chat.js", () => ({
   },
 }));
 
+vi.mock("../../config/sessions.js", async () => {
+  const actual = await vi.importActual<typeof import("../../config/sessions.js")>("../../config/sessions.js");
+  return {
+    ...actual,
+    loadSessionStore: (...args: unknown[]) => loadSessionStoreMock(...args),
+    updateSessionStore: (...args: unknown[]) => updateSessionStoreMock(...args),
+  };
+});
+
 vi.mock("../session-utils.js", async () => {
   const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
   return {
     ...actual,
     loadSessionEntry: (sessionKey: string) => ({ canonicalKey: sessionKey }),
+    resolveGatewaySessionStoreTarget: ({ key }: { key: string }) => ({
+      storePath: `/tmp/test-store-${key}.json`,
+      storeKeys: [key],
+    }),
   };
 });
 
@@ -40,6 +55,8 @@ describe("sessions.abort agent scope", () => {
   beforeEach(() => {
     chatAbortMock.mockReset();
     resolveSessionKeyForRunMock.mockReset();
+    loadSessionStoreMock.mockReset().mockReturnValue({});
+    updateSessionStoreMock.mockReset();
   });
 
   it("does not abort an active run whose session key belongs to another requested agent", async () => {
@@ -266,5 +283,168 @@ describe("sessions.abort agent scope", () => {
         params: { sessionKey: "main", runId: undefined },
       }),
     );
+  });
+
+  it("heals a stale running session entry when abort finds no active run", async () => {
+    const frozenAt = Date.now();
+    chatAbortMock.mockImplementation(async ({ respond: abortRespond }: { respond: (...args: unknown[]) => void }) => {
+      abortRespond(true, { runIds: [] });
+    });
+    const staleRow = { sessionId: "sess-stuck", status: "running", updatedAt: frozenAt, abortedLastRun: false };
+    loadSessionStoreMock.mockReturnValue({
+      main: staleRow,
+    });
+    // Mock updateSessionStore to execute the callback so we can verify mutations
+    updateSessionStoreMock.mockImplementation(async (_path: string, updater: (s: Record<string, unknown>) => void) => {
+      const mockStore: Record<string, Record<string, unknown>> = {
+        main: { ...staleRow },
+      };
+      updater(mockStore);
+      // Verify the callback actually clears the stale state
+      expect(mockStore.main.status).toBeUndefined();
+      expect(mockStore.main.abortedLastRun).toBe(false);
+    });
+    const context = {
+      chatAbortControllers: new Map(),
+      getRuntimeConfig: () => ({
+        agents: { list: [{ id: "main", default: true }] },
+      }),
+      dedupe: new Map(),
+      getSessionEventSubscriberConnIds: () => new Set(),
+      broadcastToConnIds: () => {},
+    } as unknown as GatewayRequestContext;
+    const respond = vi.fn() as unknown as RespondFn;
+
+    await sessionsHandlers["sessions.abort"]({
+      req: { id: "req-heal" } as never,
+      params: { key: "main" },
+      respond,
+      context,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ ok: true, status: "no-active-run" }),
+      undefined,
+      undefined,
+    );
+    expect(updateSessionStoreMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not clear a row that was updated after the snapshot (race guard)", async () => {
+    const originalTime = Date.now();
+    chatAbortMock.mockImplementation(async ({ respond: abortRespond }: { respond: (...args: unknown[]) => void }) => {
+      abortRespond(true, { runIds: [] });
+    });
+    loadSessionStoreMock.mockReturnValue({
+      main: { sessionId: "sess-race", status: "running", updatedAt: originalTime, abortedLastRun: false },
+    });
+    // Simulate the row being updated (new run started) between snapshot and callback
+    updateSessionStoreMock.mockImplementation(async (_path: string, updater: (s: Record<string, unknown>) => void) => {
+      const mockStore: Record<string, Record<string, unknown>> = {
+        main: { sessionId: "sess-race", status: "running", updatedAt: originalTime + 5000, abortedLastRun: false },
+      };
+      updater(mockStore);
+      // Row should NOT be cleared because updatedAt changed
+      expect(mockStore.main.status).toBe("running");
+    });
+    const context = {
+      chatAbortControllers: new Map(),
+      getRuntimeConfig: () => ({
+        agents: { list: [{ id: "main", default: true }] },
+      }),
+      dedupe: new Map(),
+      getSessionEventSubscriberConnIds: () => new Set(),
+      broadcastToConnIds: () => {},
+    } as unknown as GatewayRequestContext;
+    const respond = vi.fn() as unknown as RespondFn;
+
+    await sessionsHandlers["sessions.abort"]({
+      req: { id: "req-race" } as never,
+      params: { key: "main" },
+      respond,
+      context,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(updateSessionStoreMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not heal session entry when status is not running", async () => {
+    chatAbortMock.mockImplementation(async ({ respond: abortRespond }: { respond: (...args: unknown[]) => void }) => {
+      abortRespond(true, { runIds: [] });
+    });
+    loadSessionStoreMock.mockReturnValue({
+      main: { sessionId: "sess-idle", status: undefined, updatedAt: Date.now() },
+    });
+    const context = {
+      chatAbortControllers: new Map(),
+      getRuntimeConfig: () => ({
+        agents: { list: [{ id: "main", default: true }] },
+      }),
+      dedupe: new Map(),
+    } as unknown as GatewayRequestContext;
+    const respond = vi.fn() as unknown as RespondFn;
+
+    await sessionsHandlers["sessions.abort"]({
+      req: { id: "req-noop" } as never,
+      params: { key: "main" },
+      respond,
+      context,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(updateSessionStoreMock).not.toHaveBeenCalled();
+  });
+
+  it("heals a stale running row stored under a raw legacy alias key", async () => {
+    const frozenAt = Date.now();
+    chatAbortMock.mockImplementation(async ({ respond: abortRespond }: { respond: (...args: unknown[]) => void }) => {
+      abortRespond(true, { runIds: [] });
+    });
+    // Row is stored under raw "main" (legacy alias), not "agent:main:main"
+    const staleRow = { sessionId: "sess-legacy", status: "running", updatedAt: frozenAt, abortedLastRun: false };
+    loadSessionStoreMock.mockReturnValue({
+      main: staleRow,
+    });
+    updateSessionStoreMock.mockImplementation(async (_path: string, updater: (s: Record<string, unknown>) => void) => {
+      const mockStore: Record<string, Record<string, unknown>> = {
+        main: { ...staleRow },
+      };
+      updater(mockStore);
+      expect(mockStore.main.status).toBeUndefined();
+    });
+    const context = {
+      chatAbortControllers: new Map(),
+      getRuntimeConfig: () => ({
+        agents: { list: [{ id: "main", default: true }] },
+      }),
+      dedupe: new Map(),
+      getSessionEventSubscriberConnIds: () => new Set(),
+      broadcastToConnIds: () => {},
+    } as unknown as GatewayRequestContext;
+    const respond = vi.fn() as unknown as RespondFn;
+
+    // Request with raw key "main" (not scoped)
+    await sessionsHandlers["sessions.abort"]({
+      req: { id: "req-legacy" } as never,
+      params: { key: "main" },
+      respond,
+      context,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ ok: true, status: "no-active-run" }),
+      undefined,
+      undefined,
+    );
+    expect(updateSessionStoreMock).toHaveBeenCalledTimes(1);
   });
 });
