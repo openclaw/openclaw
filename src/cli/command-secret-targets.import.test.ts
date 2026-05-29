@@ -183,6 +183,10 @@ describe("command secret targets module import", () => {
     );
 
     expect(targets.has("agents.defaults.memorySearch.remote.apiKey")).toBe(true);
+    expect(targets.has("gateway.auth.token")).toBe(true);
+    expect(targets.has("gateway.auth.password")).toBe(true);
+    expect(targets.has("gateway.remote.token")).toBe(true);
+    expect(targets.has("gateway.remote.password")).toBe(true);
     expect(targets.has("channels.telegram.botToken")).toBe(false);
     expect(listReadOnlyChannelPluginsForConfig).not.toHaveBeenCalled();
     expect(listSecretTargetRegistryEntries).not.toHaveBeenCalled();

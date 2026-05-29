@@ -57,6 +57,10 @@ const STATIC_TTS_TARGET_IDS = [
 const STATIC_STATUS_TARGET_IDS = [
   "agents.defaults.memorySearch.remote.apiKey",
   "agents.list[].memorySearch.remote.apiKey",
+  "gateway.auth.token",
+  "gateway.auth.password",
+  "gateway.remote.token",
+  "gateway.remote.password",
 ] as const;
 const STATIC_SECURITY_AUDIT_TARGET_IDS = [
   "gateway.auth.token",
