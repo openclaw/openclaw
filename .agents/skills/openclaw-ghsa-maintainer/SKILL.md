@@ -85,4 +85,4 @@ jq -r .description < /tmp/ghsa.refetch.json | rg '\\\\n'
 - Publishing fails with HTTP 422 if required fields are missing or the private fork still has open PRs.
 - A payload that looks correct in shell can still be wrong if Markdown was assembled with escaped newline strings.
 - Advisory PATCH sequencing matters; separate field updates when GHSA API constraints require it.
-- Public hardening/no-publish comments and draft text should avoid raw commit hashes. Prefer release versions, PRs, patched-version fields, or "the fix on main"; keep full SHAs in internal evidence unless publishing a real CVE/GHSA needs them.
+- Public hardening/no-publish comments and draft text should avoid raw commit hashes, PR titles/numbers, and fix-mechanism summaries. Prefer patched-version fields or release-only wording; keep SHAs, PRs, and implementation notes in internal evidence.

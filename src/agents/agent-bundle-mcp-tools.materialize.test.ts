@@ -1,3 +1,4 @@
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { validateToolArguments } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { getPluginToolMeta } from "../plugins/tools.js";
@@ -18,6 +19,7 @@ function makeToolRuntime(
   params: {
     tools?: McpCatalogTool[];
     serverName?: string;
+    result?: CallToolResult;
     resultText?: string;
   } = {},
 ): SessionMcpRuntime {
@@ -51,10 +53,23 @@ function makeToolRuntime(
       },
       tools,
     }),
-    callTool: async () => ({
-      content: [{ type: "text", text: params.resultText ?? "FROM-BUNDLE" }],
-      isError: false,
+    peekCatalog: () => ({
+      version: 1,
+      generatedAt: 0,
+      servers: {
+        [serverName]: {
+          serverName,
+          launchSummary: serverName,
+          toolCount: tools.length,
+        },
+      },
+      tools,
     }),
+    callTool: async () =>
+      params.result ?? {
+        content: [{ type: "text", text: params.resultText ?? "FROM-BUNDLE" }],
+        isError: false,
+      },
     dispose: async () => {},
   };
 }
@@ -72,6 +87,44 @@ describe("createBundleMcpToolRuntime", () => {
     expect(result.details).toEqual({
       mcpServer: "bundleProbe",
       mcpTool: "bundle_probe",
+    });
+  });
+
+  it("keeps structuredContent visible when MCP tools also return text content", async () => {
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: makeToolRuntime({
+        result: {
+          content: [{ type: "text", text: "pong" }],
+          structuredContent: {
+            threadId: "019e6cdb-8e7f-7cb2-891f-9edb689f6fc7",
+            content: "pong",
+          },
+          isError: false,
+        },
+      }),
+    });
+
+    const result = await runtime.tools[0].execute("call-bundle-probe", {}, undefined, undefined);
+
+    expectTextContentBlock(
+      result.content[0],
+      `structuredContent:\n${JSON.stringify(
+        {
+          threadId: "019e6cdb-8e7f-7cb2-891f-9edb689f6fc7",
+          content: "pong",
+        },
+        null,
+        2,
+      )}`,
+    );
+    expect(result.content).toHaveLength(1);
+    expect(result.details).toEqual({
+      mcpServer: "bundleProbe",
+      mcpTool: "bundle_probe",
+      structuredContent: {
+        threadId: "019e6cdb-8e7f-7cb2-891f-9edb689f6fc7",
+        content: "pong",
+      },
     });
   });
 

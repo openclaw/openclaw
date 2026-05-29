@@ -94,9 +94,10 @@ Keep tone firm, specific, non-defensive.
 
 ## Public Wording Hygiene
 
-- Keep raw commit hashes out of hardening/no-publish close comments and public advisory text. Use the shipped version, planned patched version, PR, or "the fix on main" instead.
-- Keep exact commit SHAs in internal notes and verification files. Include raw SHAs in a public advisory only when publishing a real vulnerability and the SHA materially helps downstream tracking.
-- For hardening/no-publish outcomes, do not add exploit-heavy details or a "Fix Commit(s)" section. Thank reporters, preserve credit, state the `SECURITY.md` boundary, and say clearly that the GHSA will close without publication.
+- Keep raw commit hashes, PR titles/numbers, and fix-mechanism summaries out of public advisory text. Use the patched release/version field only.
+- Keep exact commit SHAs, PRs, and implementation notes in internal notes and verification files.
+- For hardening/no-publish outcomes, do not add exploit-heavy details, "Fixed by" text, or a "Fix Commit(s)" section. Thank reporters, preserve credit, state the `SECURITY.md` boundary, and say clearly that the GHSA will close without publication.
+- For published CVE/GHSA text, prefer `### Patched Versions` with the fixed release. Do not explain how the patch works unless Peter explicitly asks for that public detail.
 - Keep GHSA ids out of changelog and release-note wording unless Peter explicitly asks.
 
 ## Discussion Mode

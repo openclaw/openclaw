@@ -118,6 +118,9 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
     expect(payload.text).toContain("Exec approval required\nID: exec-approval-123");
     expect(payload.text).toContain("Pending command:\n```sh\ntouch /tmp/foo\n```");
     expect(payload.text).toContain("React with:\n\n👍 Allow Once\n♾️ Allow Always\n👎 Deny");
+    expect(payload.text).toContain("Allow Once: /approve exec-approval-123 allow-once");
+    expect(payload.text).toContain("Allow Always: /approve exec-approval-123 allow-always");
+    expect(payload.text).toContain("Deny: /approve exec-approval-123 deny");
     expect(
       payload.text
         ?.trim()
@@ -165,6 +168,8 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
     expect(payload.text).toContain("Title: Use 1Password");
     expect(payload.text).toContain("React with:\n\n👍 Allow Once\n👎 Deny");
     expect(payload.text).not.toContain("♾️ Allow Always");
+    expect(payload.text).toContain("Allow Once: /approve plugin:approval-123 allow-once");
+    expect(payload.text).toContain("Deny: /approve plugin:approval-123 deny");
     expect(payload.text).toContain(
       "Allow Always is unavailable because the effective policy requires approval every time.",
     );
@@ -179,7 +184,7 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
     });
   });
 
-  it("keeps plugin command actions visible without reaction bindings", () => {
+  it("keeps plugin command actions visible for custom prompt views", () => {
     const payload = buildApprovalPendingPromptPayload({
       request: {
         ...pluginRequest,
@@ -192,28 +197,25 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
       view: {
         approvalKind: "plugin",
         approvalId: "plugin:agentkit",
+        phase: "pending",
         title: "World proof required for exec",
+        description: null,
+        metadata: [],
         severity: "warning",
+        expiresAtMs: 61_000,
         actions: [
           {
-            kind: "command",
-            label: "Verify once",
-            command: "/agentkit approve plugin:agentkit allow-once",
-            style: "success",
-          },
-          {
-            kind: "decision",
             decision: "deny",
             label: "Deny",
             command: "/approve plugin:agentkit deny",
             style: "danger",
           },
         ],
-      } as never,
+      },
       nowMs: 1_000,
     });
 
-    expect(payload.text).toContain("Verify once: /agentkit approve plugin:agentkit allow-once");
+    expect(payload.text).toContain("Deny: /approve plugin:agentkit deny");
     expect(payload.text).toContain("/approve plugin:agentkit deny");
     expect(payload.text).toContain("👎 Deny");
     expect(payload.text).not.toContain("👍 Allow Once");

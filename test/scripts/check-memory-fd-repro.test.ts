@@ -3,12 +3,106 @@ import { describe, expect, it, vi } from "vitest";
 import {
   GATEWAY_READY_OUTPUT_MAX_CHARS,
   hasChildExited,
+  parseArgs,
+  readNumber,
+  readPositiveNumber,
   stopGatewayWithRuntime,
   updateGatewayReadyOutputState,
   waitForGatewayReady,
 } from "../../scripts/check-memory-fd-repro.mjs";
 
+function withEnv<T>(env: Record<string, string | undefined>, callback: () => T): T {
+  const previous = new Map<string, string | undefined>();
+  for (const [key, value] of Object.entries(env)) {
+    previous.set(key, process.env[key]);
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+  try {
+    return callback();
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
 describe("check-memory-fd-repro", () => {
+  it("parses file, fd, and timing limits as strict integers", () => {
+    expect(readNumber("0", "limit")).toBe(0);
+    expect(readNumber(" 42 ", "limit")).toBe(42);
+    expect(readPositiveNumber("1", "limit")).toBe(1);
+
+    expect(() => readNumber("1.5", "limit")).toThrow("limit must be a non-negative integer");
+    expect(() => readNumber("1e3", "limit")).toThrow("limit must be a non-negative integer");
+    expect(() => readNumber("10files", "limit")).toThrow("limit must be a non-negative integer");
+    expect(() => readPositiveNumber("0", "limit")).toThrow("limit must be greater than 0");
+  });
+
+  it("rejects loose numeric environment limits before generating files", () => {
+    expect(
+      withEnv(
+        {
+          OPENCLAW_MEMORY_FD_REPRO_FILES: "17",
+          OPENCLAW_MEMORY_FD_REPRO_MAX_WORKSPACE_REG_FDS: "0",
+          OPENCLAW_MEMORY_FD_REPRO_SAMPLE_DELAY_MS: "0",
+        },
+        () => parseArgs([]),
+      ),
+    ).toMatchObject({
+      fileCount: 17,
+      maxWorkspaceRegFds: 0,
+      sampleDelayMs: 0,
+    });
+
+    expect(() =>
+      withEnv({ OPENCLAW_MEMORY_FD_REPRO_FILES: "17files" }, () => parseArgs([])),
+    ).toThrow("OPENCLAW_MEMORY_FD_REPRO_FILES must be a non-negative integer");
+    expect(() =>
+      withEnv({ OPENCLAW_MEMORY_FD_REPRO_TIMEOUT_MS: "1e3" }, () => parseArgs([])),
+    ).toThrow("OPENCLAW_MEMORY_FD_REPRO_TIMEOUT_MS must be a non-negative integer");
+  });
+
+  it("lets explicit CLI numeric flags override malformed inherited env defaults", () => {
+    expect(
+      withEnv(
+        {
+          OPENCLAW_MEMORY_FD_REPRO_FILES: "17files",
+          OPENCLAW_MEMORY_FD_REPRO_MAX_WORKSPACE_REG_FDS: "4fds",
+          OPENCLAW_MEMORY_FD_REPRO_TIMEOUT_MS: "1e3",
+          OPENCLAW_MEMORY_FD_REPRO_SAMPLE_DELAY_MS: "soon",
+          OPENCLAW_MEMORY_FD_REPRO_SETTLE_DELAY_MS: "later",
+        },
+        () =>
+          parseArgs([
+            "--files",
+            "20",
+            "--max-workspace-reg-fds",
+            "4",
+            "--invoke-timeout-ms",
+            "1000",
+            "--sample-delay-ms",
+            "0",
+            "--settle-delay-ms",
+            "0",
+          ]),
+      ),
+    ).toMatchObject({
+      fileCount: 20,
+      invokeTimeoutMs: 1000,
+      maxWorkspaceRegFds: 4,
+      sampleDelayMs: 0,
+      settleDelayMs: 0,
+    });
+  });
+
   it("treats signaled gateway children as exited", () => {
     expect(hasChildExited({ exitCode: null, signalCode: "SIGTERM" })).toBe(true);
     expect(hasChildExited({ exitCode: 0, signalCode: null })).toBe(true);

@@ -112,12 +112,8 @@ describe("buildQaGatewayConfig", () => {
     });
 
     expect(getPrimaryModel(cfg.agents?.defaults?.model)).toBe("openai/gpt-5.5");
-    expect(getModelFallbacks(cfg.agents?.defaults?.model)).toEqual([
-      "anthropic/claude-opus-4-7",
-    ]);
-    expect(getModelFallbacks(cfg.agents?.list?.[0]?.model)).toEqual([
-      "anthropic/claude-opus-4-7",
-    ]);
+    expect(getModelFallbacks(cfg.agents?.defaults?.model)).toEqual(["anthropic/claude-opus-4-7"]);
+    expect(getModelFallbacks(cfg.agents?.list?.[0]?.model)).toEqual(["anthropic/claude-opus-4-7"]);
     expect(cfg.models?.providers?.openai?.api).toBe("openai-responses");
     expect(cfg.models?.providers?.openai?.request).toEqual({ allowPrivateNetwork: true });
     expect(cfg.models?.providers?.openai?.models.map((model) => model.id)).toContain("gpt-5.5");

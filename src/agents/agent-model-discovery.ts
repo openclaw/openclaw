@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { Model } from "../llm/types.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { normalizeModelCompat } from "../plugins/provider-model-compat.js";
 import {
   applyProviderResolvedTransportWithPlugin,
@@ -31,6 +32,8 @@ type DiscoveredProviderRuntimeModelLike = Omit<ProviderRuntimeModelLike, "api"> 
 
 type DiscoverModelsOptions = {
   providerFilter?: string;
+  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "owners">;
+  workspaceDir?: string;
   normalizeModels?: boolean;
 };
 
@@ -84,7 +87,12 @@ function createOpenClawModelRegistry(
   agentDir: string,
   options?: DiscoverModelsOptions,
 ): AgentModelRegistry {
-  const registry = ModelRegistry.create(authStorage, modelsJsonPath);
+  const registry = ModelRegistry.create(authStorage, modelsJsonPath, {
+    ...(options?.pluginMetadataSnapshot
+      ? { pluginMetadataSnapshot: options.pluginMetadataSnapshot }
+      : {}),
+    ...(options?.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
+  });
   const getAll = registry.getAll.bind(registry);
   const getAvailable = registry.getAvailable.bind(registry);
   const find = registry.find.bind(registry);

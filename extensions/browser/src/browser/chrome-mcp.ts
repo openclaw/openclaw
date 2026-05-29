@@ -123,6 +123,18 @@ const pendingSessions = new Map<string, Promise<ChromeMcpSession>>();
 let sessionFactory: ChromeMcpSessionFactory | null = null;
 let chromeMcpProcessCleanupDepsForTest: ChromeMcpProcessCleanupDeps | null = null;
 
+export function decodeChromeMcpStderrTail(buffer: Buffer): string {
+  if (buffer.length <= CHROME_MCP_STDERR_MAX_BYTES) {
+    return buffer.toString("utf8").trim();
+  }
+
+  let start = buffer.length - CHROME_MCP_STDERR_MAX_BYTES;
+  while (start < buffer.length && (buffer[start] & 0xc0) === 0x80) {
+    start++;
+  }
+  return buffer.subarray(start).toString("utf8").trim();
+}
+
 function asPages(value: unknown): ChromeMcpStructuredPage[] {
   if (!Array.isArray(value)) {
     return [];
@@ -408,7 +420,7 @@ function drainStderr(transport: StdioClientTransport): () => string {
     }
   });
   stream.on("error", () => {});
-  return () => Buffer.concat(chunks).toString("utf8").trim().slice(-CHROME_MCP_STDERR_MAX_BYTES);
+  return () => decodeChromeMcpStderrTail(Buffer.concat(chunks));
 }
 
 function redactChromeMcpDiagnosticText(text: string): string {

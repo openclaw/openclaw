@@ -4,7 +4,7 @@ import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_MODEL_ALIASES } from "./cli-constants
 const DEFAULT_CLAUDE_MODEL_BY_FAMILY: Record<string, string> = {
   opus: "claude-opus-4-7",
   sonnet: "claude-sonnet-4-6",
-  haiku: "claude-sonnet-4-6",
+  haiku: "claude-haiku-4-5",
 };
 
 export type ClaudeCliAnthropicModelRefs = {
@@ -117,6 +117,10 @@ function upgradeOldClaudeModelId(normalized: string): string | null {
   if (normalized.startsWith("claude-sonnet-4-6") || normalized.startsWith("claude-sonnet-4.6")) {
     return null;
   }
+  // claude-haiku-4-5 is a current production model and must not be migrated.
+  if (normalized.startsWith("claude-haiku-4-5") || normalized.startsWith("claude-haiku-4.5")) {
+    return null;
+  }
   if (
     normalized === "claude-opus-4" ||
     hasAnyRetiredVersionPrefix(normalized, [
@@ -140,8 +144,6 @@ function upgradeOldClaudeModelId(normalized: string): string | null {
       "claude-sonnet-4.1",
       "claude-sonnet-4-0",
       "claude-sonnet-4.0",
-      "claude-haiku-4-5",
-      "claude-haiku-4.5",
     ]) ||
     /^claude-sonnet-4-20\d{6}/.test(normalized)
   ) {
@@ -172,7 +174,6 @@ function upgradeOldClaudeModelId(normalized: string): string | null {
     normalized === "sonnet-3.7" ||
     normalized === "sonnet-3.5" ||
     normalized === "sonnet-3" ||
-    normalized === "haiku-4.5" ||
     normalized === "haiku-3.5" ||
     normalized === "haiku-3"
   ) {
