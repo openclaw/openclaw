@@ -86,6 +86,8 @@ const REPAIRABLE_PACKAGE_ENTRY_DIAGNOSTIC_MARKERS = [
   "requires compiled runtime output",
 ] as const;
 const VERSION_BOUND_RUNTIME_PLUGIN_IDS = new Set(["codex"]);
+const OPENCLAW_UNCORRECTED_STABLE_VERSION_RE = /^(\d{4}\.[1-9]\d?\.[1-9]\d?)$/;
+const OPENCLAW_BETA_COMPANION_VERSION_RE = /^(\d{4}\.[1-9]\d?\.[1-9]\d?)-beta\.[1-9]\d*$/;
 
 function shouldFallbackClawHubToNpm(params: {
   result: { ok: false; code?: string };
@@ -538,18 +540,38 @@ function resolveInstalledRuntimePackageVersion(params: {
 function installedRuntimePackageVersionIsStale(params: {
   installedVersion: string | undefined;
   currentVersion: string;
+  updateChannel: UpdateChannel;
 }): boolean {
   if (!params.installedVersion) {
+    return false;
+  }
+  if (
+    params.updateChannel === "beta" &&
+    betaCompanionMatchesCurrentStableVersion({
+      installedVersion: params.installedVersion,
+      currentVersion: params.currentVersion,
+    })
+  ) {
     return false;
   }
   const comparison = compareOpenClawReleaseVersions(params.installedVersion, params.currentVersion);
   return comparison === null ? params.installedVersion !== params.currentVersion : comparison < 0;
 }
 
+function betaCompanionMatchesCurrentStableVersion(params: {
+  installedVersion: string;
+  currentVersion: string;
+}): boolean {
+  const installedBase = OPENCLAW_BETA_COMPANION_VERSION_RE.exec(params.installedVersion)?.[1];
+  const currentBase = OPENCLAW_UNCORRECTED_STABLE_VERSION_RE.exec(params.currentVersion)?.[1];
+  return Boolean(installedBase && currentBase && installedBase === currentBase);
+}
+
 function collectInstalledPluginIdsWithStaleVersionBoundRuntimePackages(params: {
   snapshot: PluginMetadataSnapshot;
   installRecords: Record<string, PluginInstallRecord>;
   configuredPluginIds: ReadonlySet<string>;
+  updateChannel: UpdateChannel;
 }): Set<string> {
   const pluginIds = new Set<string>();
   const currentVersion = normalizeOptionalLowercaseString(VERSION);
@@ -576,6 +598,7 @@ function collectInstalledPluginIdsWithStaleVersionBoundRuntimePackages(params: {
       installedRuntimePackageVersionIsStale({
         installedVersion,
         currentVersion,
+        updateChannel: params.updateChannel,
       })
     ) {
       pluginIds.add(candidate.pluginId);
@@ -1202,6 +1225,10 @@ async function repairMissingPluginInstalls(params: {
       configuredChannelIds: params.channelIds,
     });
   const records = params.baselineRecords ?? (await loadInstalledPluginIndexInstallRecords({ env }));
+  const updateChannel = resolveRegistryUpdateChannel({
+    configChannel: normalizeUpdateChannel(params.cfg.update?.channel),
+    currentVersion: VERSION,
+  });
   const installedPluginIdsWithRepairablePackageDiagnostics =
     collectInstalledPluginIdsWithRepairablePackageDiagnostics({
       snapshot,
@@ -1212,6 +1239,7 @@ async function repairMissingPluginInstalls(params: {
       snapshot,
       installRecords: records,
       configuredPluginIds: params.pluginIds,
+      updateChannel,
     });
   const installedPluginIdsWithRepairablePackages = new Set([
     ...installedPluginIdsWithRepairablePackageDiagnostics,
@@ -1231,10 +1259,6 @@ async function repairMissingPluginInstalls(params: {
   const warnings: string[] = [];
   const failedPluginIds = new Set<string>();
   const deferredPluginIds = new Set<string>();
-  const updateChannel = resolveRegistryUpdateChannel({
-    configChannel: normalizeUpdateChannel(params.cfg.update?.channel),
-    currentVersion: VERSION,
-  });
   const preferNpmInstalls = isLegacyPackageUpdateDoctorPass(env);
   let nextRecords = records;
 
