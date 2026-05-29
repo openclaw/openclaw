@@ -45,6 +45,7 @@ import {
 } from "../diagnostic-events.js";
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
+import { sanitizeAssistantForDelivery } from "./assistant-delivery-sanitizer.js";
 import { resolveOutboundChannelMessageAdapter } from "./channel-resolution.js";
 import {
   OutboundDeliveryError,
@@ -800,9 +801,12 @@ function normalizePayloadsForChannelDelivery(
     const normalizedPayload = handler.normalizePayload
       ? handler.normalizePayload(sanitizedPayload)
       : sanitizedPayload;
-    const normalized = normalizedPayload
+    const deliverySanitizedPayload = normalizedPayload
+      ? sanitizeAssistantForDelivery(normalizedPayload, { role: "assistant" })
+      : null;
+    const normalized = deliverySanitizedPayload
       ? normalizeEmptyPayloadForDelivery(
-          stripInternalRuntimeScaffoldingFromPayload(normalizedPayload),
+          stripInternalRuntimeScaffoldingFromPayload(deliverySanitizedPayload),
         )
       : null;
     if (normalized) {
@@ -1588,9 +1592,12 @@ async function deliverOutboundPayloadsCore(
       const normalizedEffectivePayload = handler.normalizePayload
         ? handler.normalizePayload(renderedPayload)
         : renderedPayload;
-      const effectivePayload = normalizedEffectivePayload
+      const deliverySanitizedEffectivePayload = normalizedEffectivePayload
+        ? sanitizeAssistantForDelivery(normalizedEffectivePayload, { role: "assistant" })
+        : null;
+      const effectivePayload = deliverySanitizedEffectivePayload
         ? normalizeEmptyPayloadForDelivery(
-            stripInternalRuntimeScaffoldingFromPayload(normalizedEffectivePayload),
+            stripInternalRuntimeScaffoldingFromPayload(deliverySanitizedEffectivePayload),
           )
         : null;
       if (!effectivePayload) {
