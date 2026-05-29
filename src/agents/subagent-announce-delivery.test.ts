@@ -351,6 +351,7 @@ async function deliverSlackChannelAnnouncement(params: {
   internalEvents?: AgentInternalEvent[];
   sourceTool?: string;
   runtimeConfig?: Record<string, unknown>;
+  requesterAbandoned?: boolean;
 }) {
   const origin = {
     channel: "slack",
@@ -364,6 +365,7 @@ async function deliverSlackChannelAnnouncement(params: {
       sessionId: params.sessionId,
       isActive: params.isActive,
     }),
+    isRequesterSessionAbandoned: () => params.requesterAbandoned === true,
     getRuntimeConfig: () => (params.runtimeConfig ?? {}) as never,
     sendMessage: params.sendMessage ?? runtimeSendMessage,
     ...(params.queueEmbeddedAgentMessageWithOutcome
@@ -2993,6 +2995,63 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it("hands inactive isolated cron run media completions back to the requester agent", async () => {
+    const callGateway = createGatewayMock({ status: "started" });
+    const sendMessage = createSendMessageMock();
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(true);
+    const internalEvents: AgentInternalEvent[] = [
+      {
+        type: "task_completion",
+        source: "image_generation",
+        childSessionKey: "image_generate:task-123",
+        childSessionId: "task-123",
+        announceType: "image generation task",
+        taskLabel: "daily media",
+        status: "ok",
+        statusLabel: "completed successfully",
+        result: "Generated 1 image.\nMEDIA:/tmp/generated-daily.png",
+        mediaUrls: ["/tmp/generated-daily.png"],
+        replyInstruction: "Deliver the generated image through the requester run.",
+      },
+    ];
+
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sendMessage,
+      queueEmbeddedAgentMessageWithOutcome,
+      sessionId: "inactive-cron-run-session",
+      isActive: false,
+      requesterSessionKey: "agent:main:cron:daily-media:run:run-123",
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-inactive-cron-media",
+      sourceTool: "image_generate",
+      internalEvents,
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    expectGatewayAgentParams(callGateway, {
+      sessionKey: "agent:main:cron:daily-media:run:run-123",
+      message: "child done",
+      deliver: false,
+      sourceReplyDeliveryMode: "message_tool_only",
+      idempotencyKey: "announce-inactive-cron-media",
+    });
+    const agentParams = mockCallArg(callGateway, 0, 0).params as Record<string, unknown>;
+    expect(agentParams.internalEvents).toBe(internalEvents);
+    expect(agentParams.inputProvenance).toEqual({
+      kind: "inter_session",
+      sourceSessionKey: undefined,
+      sourceChannel: "webchat",
+      sourceTool: "image_generate",
+    });
+  });
+
   it("directly delivers stale isolated cron run media completions", async () => {
     const callGateway = createGatewayMock();
     const sendMessage = createSendMessageMock();
@@ -3003,6 +3062,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       queueEmbeddedAgentMessageWithOutcome,
       sessionId: "stale-cron-run-session",
       isActive: false,
+      requesterAbandoned: true,
       requesterSessionKey: "agent:main:cron:daily-media:run:run-123",
       expectsCompletionMessage: true,
       directIdempotencyKey: "announce-stale-cron-media",

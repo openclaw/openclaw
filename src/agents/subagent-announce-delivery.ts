@@ -1073,13 +1073,13 @@ async function sendSubagentAnnounceDirectly(params: {
       completionRouteRequiresMessageToolDelivery ||
       (agentMediatedCompletion && expectedMediaUrls.length > 0);
     const requesterActivity = resolveRequesterSessionActivity(canonicalRequesterSessionKey);
-    if (
+    const requesterSessionAbandoned =
       params.expectsCompletionMessage &&
       subagentAnnounceDeliveryDeps.isRequesterSessionAbandoned(
         canonicalRequesterSessionKey,
         requesterActivity.sessionId,
-      )
-    ) {
+      );
+    if (requesterSessionAbandoned && !isCronRunSessionKey(canonicalRequesterSessionKey)) {
       return {
         delivered: false,
         path: "none",
@@ -1165,9 +1165,11 @@ async function sendSubagentAnnounceDirectly(params: {
       isCronRunSessionKey(canonicalRequesterSessionKey) &&
       !resolveRequesterSessionActivity(canonicalRequesterSessionKey).isActive
     ) {
-      const generatedMediaDelivery = await tryGeneratedMediaDirectDelivery();
-      if (generatedMediaDelivery) {
-        return generatedMediaDelivery;
+      if (requesterSessionAbandoned) {
+        const generatedMediaDelivery = await tryGeneratedMediaDirectDelivery();
+        if (generatedMediaDelivery) {
+          return generatedMediaDelivery;
+        }
       }
       if (!agentMediatedCompletion) {
         return {
