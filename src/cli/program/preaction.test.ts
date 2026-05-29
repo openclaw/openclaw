@@ -140,9 +140,19 @@ describe("registerPreActionHooks", () => {
       .action(() => {});
     programLocal.command("completion").action(() => {});
     programLocal.command("secrets").action(() => {});
-    programLocal
-      .command("agents")
+    const agents = programLocal.command("agents");
+    agents
       .command("list")
+      .option("--json")
+      .action(() => {});
+    agents
+      .command("add")
+      .argument("[name]")
+      .option("--workspace <dir>")
+      .option("--model <id>")
+      .option("--agent-dir <dir>")
+      .option("--bind <channel[:accountId]>", "Route binding")
+      .option("--non-interactive")
       .option("--json")
       .action(() => {});
     programLocal.command("configure").action(() => {});
@@ -523,6 +533,53 @@ describe("registerPreActionHooks", () => {
 
     expect(routeLogsToStderrMock).toHaveBeenCalledOnce();
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+  });
+
+  it("does not preload plugins for agents add config-only flow but does for interactive add", async () => {
+    await runPreAction({
+      parseArgv: [
+        "agents",
+        "add",
+        "alpha",
+        "--workspace",
+        "/tmp/agent-workspace",
+        "--non-interactive",
+        "--json",
+      ],
+      processArgv: [
+        "node",
+        "openclaw",
+        "agents",
+        "add",
+        "alpha",
+        "--workspace",
+        "/tmp/agent-workspace",
+        "--non-interactive",
+        "--json",
+      ],
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["agents", "add"],
+      suppressDoctorStdout: true,
+    });
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+
+    vi.clearAllMocks();
+
+    await runPreAction({
+      parseArgv: ["agents", "add", "alpha"],
+      processArgv: ["node", "openclaw", "agents", "add", "alpha"],
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["agents", "add"],
+    });
+    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
+      scope: "all",
+    });
   });
 
   it("does not preload plugins for remote agent JSON output", async () => {

@@ -184,6 +184,45 @@ describe("command-path-policy", () => {
     }
   });
 
+  it("applies argv-sensitive startup policy for add agent config-only flows", () => {
+    const agentsAddPolicy = resolveCliCommandPathPolicy(["agents", "add"]);
+    expect(agentsAddPolicy).toEqual({
+      ...DEFAULT_EXPECTED_POLICY,
+      loadPlugins: agentsAddPolicy.loadPlugins,
+      networkProxy: "bypass",
+    });
+    expectLoadPluginsResolver(agentsAddPolicy);
+
+    expect(
+      agentsAddPolicy.loadPlugins({
+        argv: ["node", "openclaw", "agents", "add", "alpha"],
+        commandPath: ["agents", "add"],
+        jsonOutputMode: false,
+      }),
+    ).toBe(true);
+    expect(
+      agentsAddPolicy.loadPlugins({
+        argv: ["node", "openclaw", "agents", "add", "alpha", "--json"],
+        commandPath: ["agents", "add"],
+        jsonOutputMode: true,
+      }),
+    ).toBe(true);
+    expect(
+      agentsAddPolicy.loadPlugins({
+        argv: ["node", "openclaw", "agents", "add", "alpha", "--model", "gpt-4"],
+        commandPath: ["agents", "add"],
+        jsonOutputMode: false,
+      }),
+    ).toBe(false);
+    expect(
+      agentsAddPolicy.loadPlugins({
+        argv: ["node", "openclaw", "agents", "add", "alpha", "--model=gpt-4"],
+        commandPath: ["agents", "add"],
+        jsonOutputMode: true,
+      }),
+    ).toBe(false);
+  });
+
   it("resolves mixed startup-only rules", () => {
     expectResolvedPolicy(["configure"], {
       bypassConfigGuard: true,

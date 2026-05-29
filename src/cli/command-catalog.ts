@@ -1,4 +1,22 @@
-import { hasFlag } from "./argv.js";
+import { getFlagValue, hasFlag } from "./argv.js";
+
+const AGENTS_ADD_CONFIG_ONLY_FLAGS = [
+  // Mirrors register.agent.ts hasExplicitOptions: these flags select the
+  // config-only add path after startup policy has already been resolved.
+  "--workspace",
+  "--model",
+  "--agent-dir",
+  "--bind",
+  "--non-interactive",
+] as const;
+
+function hasAgentsAddConfigOnlyArgFlag(argv: string[], flag: string): boolean {
+  return hasFlag(argv, flag) || getFlagValue(argv, flag) !== undefined;
+}
+
+function hasAgentsAddConfigOnlyFlags(argv: string[]): boolean {
+  return AGENTS_ADD_CONFIG_ONLY_FLAGS.some((flag) => hasAgentsAddConfigOnlyArgFlag(argv, flag));
+}
 
 export type CliCommandPluginLoadPolicy =
   | "never"
@@ -73,6 +91,13 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   },
   { commandPath: ["directory"], policy: { loadPlugins: "always" } },
   { commandPath: ["agents"], policy: { loadPlugins: "always", networkProxy: "bypass" } },
+  {
+    commandPath: ["agents", "add"],
+    exact: true,
+    policy: {
+      loadPlugins: ({ argv }) => !hasAgentsAddConfigOnlyFlags(argv),
+    },
+  },
   {
     commandPath: ["agents"],
     exact: true,

@@ -163,6 +163,58 @@ describe("command-startup-policy", () => {
         jsonOutputMode: true,
       }),
     ).toBe(false);
+    expect(
+      shouldLoadPluginsForCommandPath({
+        argv: ["node", "openclaw", "agents", "add", "alpha"],
+        commandPath: ["agents", "add"],
+        jsonOutputMode: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldLoadPluginsForCommandPath({
+        argv: ["node", "openclaw", "agents", "add", "alpha", "--json"],
+        commandPath: ["agents", "add"],
+        jsonOutputMode: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldLoadPluginsForCommandPath({
+        argv: ["node", "openclaw", "agents", "add", "alpha", "--", "--workspace", "ignored"],
+        commandPath: ["agents", "add"],
+        jsonOutputMode: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldLoadPluginsForCommandPath({
+        argv: ["node", "openclaw", "agents", "add", "alpha", "--workspace", "/tmp/workspace"],
+        commandPath: ["agents", "add"],
+        jsonOutputMode: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldLoadPluginsForCommandPath({
+        argv: ["node", "openclaw", "agents", "add", "alpha", "--workspace=/tmp/workspace"],
+        commandPath: ["agents", "add"],
+        jsonOutputMode: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldLoadPluginsForCommandPath({
+        argv: [
+          "node",
+          "openclaw",
+          "agents",
+          "add",
+          "alpha",
+          "--workspace",
+          "/tmp/workspace",
+          "--non-interactive",
+          "--json",
+        ],
+        commandPath: ["agents", "add"],
+        jsonOutputMode: true,
+      }),
+    ).toBe(false);
   });
 
   it("matches banner suppression policy", () => {
