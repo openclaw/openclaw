@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { resolveToolSearchCodeDisplayTarget } from "./tool-display-common.js";
+import { resolveExecDetail } from "./tool-display-exec.js";
 import { formatToolDetail, formatToolSummary, resolveToolDisplay } from "./tool-display.js";
 
 describe("tool display details", () => {
@@ -496,5 +497,60 @@ describe("tool display details", () => {
 
       expect(detail).not.toContain("node:");
     }
+  });
+});
+
+describe("compactRawCommand middle truncation", () => {
+  it("preserves start and end of long commands", () => {
+    // Use an unknown binary so resolveExecDetail returns the compact raw form directly.
+    const longCommand =
+      "/opt/custom/bin/my-processor --input /data/warehouse/2024/q1/transactions/raw/batch_001.csv --output /data/warehouse/2024/q1/transactions/processed/batch_001_clean.csv";
+    const result = resolveExecDetail({ command: longCommand });
+    // Should contain the start of the command
+    expect(result).toContain("/opt/custom/bin/my-processor");
+    // Should contain the end (filename)
+    expect(result).toContain("batch_001_clean.csv");
+    // Should contain the ellipsis for middle truncation
+    expect(result).toContain("…");
+    // Ellipsis should be in the middle, not at the end
+    expect(result).not.toMatch(/…$/);
+  });
+
+  it("does not truncate short commands", () => {
+    // Use an unknown binary so resolveExecDetail returns the compact raw form directly.
+    const result = resolveExecDetail({ command: "/opt/custom/bin/my-tool --version" });
+    expect(result).toBe("/opt/custom/bin/my-tool --version");
+  });
+});
+
+describe("coerceDisplayValue middle truncation", () => {
+  it("preserves start and end of long string values", () => {
+    const longPath =
+      "/usr/local/share/very/deeply/nested/directory/structure/" +
+      "a".repeat(150) +
+      "/important-file.txt";
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "sessions_spawn",
+        args: { task: longPath },
+      }),
+    );
+    // Should contain the start of the path
+    expect(detail).toContain("/usr/local/share/");
+    // Should contain the end (filename)
+    expect(detail).toContain("important-file.txt");
+    // Should contain the ellipsis for middle truncation
+    expect(detail).toContain("…");
+  });
+
+  it("does not truncate short string values", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "sessions_spawn",
+        args: { task: "short-task-name" },
+      }),
+    );
+    expect(detail).toBe("short-task-name");
+    expect(detail).not.toContain("…");
   });
 });

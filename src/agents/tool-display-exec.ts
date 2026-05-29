@@ -433,7 +433,8 @@ function compactRawCommand(raw: string, maxLength = 120): string {
   if (oneLine.length <= maxLength) {
     return oneLine;
   }
-  return `${oneLine.slice(0, Math.max(0, maxLength - 1))}…`;
+  const half = Math.floor((maxLength - 1) / 2);
+  return `${oneLine.slice(0, half)}…${oneLine.slice(-(maxLength - 1 - half))}`;
 }
 
 export type ToolDetailMode = "explain" | "raw";

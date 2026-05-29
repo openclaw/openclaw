@@ -121,7 +121,8 @@ function coerceDisplayValue(
       return undefined;
     }
     if (firstLine.length > maxStringChars) {
-      return `${firstLine.slice(0, Math.max(0, maxStringChars - 3))}…`;
+      const half = Math.floor((maxStringChars - 1) / 2);
+      return `${firstLine.slice(0, half)}…${firstLine.slice(-(maxStringChars - 1 - half))}`;
     }
     return firstLine;
   }
