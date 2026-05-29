@@ -1159,6 +1159,47 @@ extension TestChatTransportState {
         }
     }
 
+    @Test func dedupesGatewayEchoOfLocalUserMessage() async throws {
+        let (transport, vm) = await makeViewModel(historyResponses: [historyPayload()])
+
+        await MainActor.run { vm.load() }
+        try await waitUntil("bootstrap history loaded") { await MainActor.run { vm.messages.isEmpty } }
+
+        await sendUserMessage(vm, text: "echo me")
+        try await waitUntil("optimistic user message visible") {
+            await MainActor.run {
+                vm.messages.count == 1 && vm.messages.first?.content.first?.text == "echo me"
+            }
+        }
+
+        // Gateway echoes the same user turn over the session-message stream with a
+        // server-assigned timestamp that differs from the optimistic local one.
+        transport.emit(
+            .sessionMessage(
+                OpenClawSessionMessageEventPayload(
+                    sessionKey: "agent:main:main",
+                    message: OpenClawChatMessage(
+                        role: "user",
+                        content: [
+                            OpenClawChatMessageContent(
+                                type: "text",
+                                text: "echo me",
+                                mimeType: nil,
+                                fileName: nil,
+                                content: nil),
+                        ],
+                        timestamp: Date().timeIntervalSince1970 * 1000 + 5_000),
+                    messageId: "srv-echo-1",
+                    messageSeq: 1)))
+
+        try await Task.sleep(nanoseconds: 50_000_000)
+        #expect(await MainActor.run {
+            vm.messages.filter { msg in
+                msg.role == "user" && msg.content.first?.text == "echo me"
+            }.count == 1
+        })
+    }
+
     @Test func ignoresExternalSessionUserMessageForOtherSession() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let (transport, vm) = await makeViewModel(historyResponses: [historyPayload()])

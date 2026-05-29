@@ -393,6 +393,37 @@ public final class OpenClawChatViewModel {
         return [role, toolCallId, toolName, contentFingerprint].joined(separator: "|")
     }
 
+    // Reuse the most recent local user row with identical content for an incoming
+    // user echo: keep its id so SwiftUI does not drop/re-create the row, but adopt
+    // the server's canonical fields. Returns nil when the incoming message is not a
+    // user turn, or when no local row matches (a user turn from another client),
+    // both of which must follow the normal append/reconcile path.
+    private static func adoptLocalUserEcho(
+        in messages: [OpenClawChatMessage],
+        incoming: OpenClawChatMessage) -> [OpenClawChatMessage]?
+    {
+        guard let incomingKey = Self.userRefreshIdentityKey(for: incoming) else { return nil }
+        guard let matchIndex = messages.lastIndex(where: { existing in
+            Self.userRefreshIdentityKey(for: existing) == incomingKey
+        }) else {
+            return nil
+        }
+
+        let existing = messages[matchIndex]
+        var updated = messages
+        updated[matchIndex] = OpenClawChatMessage(
+            id: existing.id,
+            role: incoming.role,
+            content: incoming.content,
+            timestamp: incoming.timestamp ?? existing.timestamp,
+            toolCallId: incoming.toolCallId,
+            toolName: incoming.toolName,
+            usage: incoming.usage,
+            stopReason: incoming.stopReason,
+            errorMessage: incoming.errorMessage)
+        return Self.dedupeMessages(updated)
+    }
+
     private static func reconcileMessageIDs(
         previous: [OpenClawChatMessage],
         incoming: [OpenClawChatMessage]) -> [OpenClawChatMessage]
@@ -1264,6 +1295,19 @@ public final class OpenClawChatViewModel {
         guard let message = payload.message else { return }
 
         let sanitized = Self.stripInboundMetadata(from: message)
+
+        // The active client also receives the gateway's echo of the user turn it
+        // just sent. performSend already appended an optimistic row carrying a
+        // local client timestamp, while the echo carries a server timestamp, so
+        // the timestamp-keyed identity/dedupe paths below never collapse them.
+        // Adopt the server record onto the matching optimistic row instead of
+        // appending a duplicate. Assistant and tool messages return nil here and
+        // fall through, so live updates keep streaming during pending runs.
+        if let adopted = Self.adoptLocalUserEcho(in: self.messages, incoming: sanitized) {
+            self.messages = adopted
+            return
+        }
+
         let reconciled = Self.reconcileMessageIDs(previous: self.messages, incoming: self.messages + [sanitized])
         self.messages = Self.dedupeMessages(reconciled)
     }
