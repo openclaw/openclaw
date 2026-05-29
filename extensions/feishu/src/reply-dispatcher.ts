@@ -37,6 +37,8 @@ function shouldUseCard(text: string): boolean {
 const TYPING_INDICATOR_MAX_AGE_MS = 2 * 60_000;
 const MS_EPOCH_MIN = 1_000_000_000_000;
 const STREAMING_START_FAILURE_BACKOFF_MS = 60_000;
+const NO_VISIBLE_REPLY_FALLBACK_TEXT =
+  "⚠️ This reply completed without visible content. The turn may have been interrupted; please retry or ask me to recover from recent context.";
 const streamingStartBackoffUntilByAccount = new Map<string, number>();
 
 function isStreamingStartBackedOff(accountId: string, now = Date.now()): boolean {
@@ -128,6 +130,7 @@ type CreateFeishuReplyDispatcherParams = {
   /** Epoch ms when the inbound message was created. Used to suppress typing
    *  indicators on old/replayed messages after context compaction (#30418). */
   messageCreateTimeMs?: number;
+  sessionKey?: string;
 };
 
 export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherParams) {
@@ -244,7 +247,13 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let streamingStartPromise: Promise<void> | null = null;
   let streamingClosedForReply = false;
   let streamingCloseErroredForReply = false;
+  let visibleReplySent = false;
+  let skippedFinalReason: string | null = null;
   type StreamTextUpdateMode = "snapshot" | "delta";
+
+  const markVisibleReplySent = () => {
+    visibleReplySent = true;
+  };
 
   const formatReasoningPrefix = (thinking: string): string => {
     if (!thinking) {
@@ -398,6 +407,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         const text = buildCombinedStreamText(reasoningText, streamText);
         const finalNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
         await streaming.close(text, { note: finalNote });
+        markVisibleReplySent();
         // Track the raw streamed text so the duplicate-final check in deliver()
         // can skip the redundant text delivery that arrives after onIdle closes
         // the streaming card.
@@ -458,6 +468,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         chunk,
         isFirst: index === 0,
       });
+      markVisibleReplySent();
     }
     if (paramsLocal.infoKind === "final") {
       deliveredFinalTexts.add(paramsLocal.text);
@@ -529,15 +540,54 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     });
   };
 
+  const ensureNoVisibleReplyFallback = async (reason: string): Promise<boolean> => {
+    if (visibleReplySent) {
+      return false;
+    }
+    if (skippedFinalReason === "silent") {
+      params.runtime.log?.(
+        `feishu[${account.accountId}]: no-visible-reply fallback skipped for intentional silence (${reason})`,
+      );
+      return false;
+    }
+    await sendMessageFeishu({
+      cfg,
+      to: chatId,
+      text: NO_VISIBLE_REPLY_FALLBACK_TEXT,
+      replyToMessageId: sendReplyToMessageId,
+      replyInThread: effectiveReplyInThread,
+      allowTopLevelReplyFallback,
+      accountId,
+    });
+    markVisibleReplySent();
+    params.runtime.error?.(
+      `feishu[${account.accountId}]: sent no-visible-reply fallback (${reason})`,
+    );
+    return true;
+  };
+
   const { dispatcher, replyOptions, markDispatchIdle } =
     core.channel.reply.createReplyDispatcherWithTyping({
       responsePrefix: prefixContext.responsePrefix,
       responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
       humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, agentId),
+      silentReplyContext: {
+        cfg,
+        sessionKey: params.sessionKey,
+        surface: "feishu",
+        conversationType: chatId.startsWith("oc_") ? "group" : "direct",
+      },
+      onSkip: (_payload, info) => {
+        if (info.kind === "final") {
+          skippedFinalReason = info.reason;
+        }
+      },
       onReplyStart: async () => {
         deliveredFinalTexts.clear();
         streamingClosedForReply = false;
         streamingCloseErroredForReply = false;
+        visibleReplySent = false;
+        skippedFinalReason = null;
         if (streamingEnabled && renderMode === "card") {
           startStreaming();
         }
@@ -778,5 +828,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         : undefined,
     },
     markDispatchIdle,
+    ensureNoVisibleReplyFallback,
+    getVisibleReplyState: () => ({
+      visibleReplySent,
+      skippedFinalReason,
+    }),
   };
 }

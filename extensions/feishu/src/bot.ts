@@ -1501,6 +1501,7 @@ export async function handleFeishuMessage(params: {
             accountId: account.accountId,
             identity,
             messageCreateTimeMs,
+            sessionKey: agentSessionKey,
           });
 
           log(
@@ -1652,7 +1653,7 @@ export async function handleFeishuMessage(params: {
         storePath,
         sessionKey: route.sessionKey,
       });
-      const { dispatcher, replyOptions, markDispatchIdle } = createFeishuReplyDispatcher({
+      const { dispatcher, replyOptions, markDispatchIdle, ensureNoVisibleReplyFallback } = createFeishuReplyDispatcher({
         cfg,
         agentId: route.agentId,
         runtime: runtime as RuntimeEnv,
@@ -1666,6 +1667,7 @@ export async function handleFeishuMessage(params: {
         accountId: account.accountId,
         identity,
         messageCreateTimeMs,
+        sessionKey: route.sessionKey,
       });
 
       log(`feishu[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);
@@ -1733,6 +1735,9 @@ export async function handleFeishuMessage(params: {
       }
       const { dispatchResult } = turnResult;
       const { queuedFinal, counts } = dispatchResult;
+      if (counts.final === 0) {
+        await ensureNoVisibleReplyFallback("dispatch-complete-zero-final");
+      }
 
       log(
         `feishu[${account.accountId}]: dispatch complete (queuedFinal=${queuedFinal}, replies=${counts.final})`,

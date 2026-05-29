@@ -1574,6 +1574,71 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
   });
 
+  it("sends a no-visible-reply fallback when no visible output was delivered", async () => {
+    const runtime = createRuntimeLogger();
+    const { result } = createDispatcherHarness({ runtime });
+
+    await expect(result.ensureNoVisibleReplyFallback("empty-complete")).resolves.toBe(true);
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expect(String(firstMockArg(sendMessageFeishuMock, "send message params").text)).toContain(
+      "interrupted before I could send a visible reply",
+    );
+    expect(result.getVisibleReplyState()).toEqual({
+      visibleReplySent: true,
+      skippedFinalReason: null,
+    });
+  });
+
+  it("does not send no-visible-reply fallback after an intentional silent final", async () => {
+    const runtime = createRuntimeLogger();
+    const { result, options } = createDispatcherHarness({ runtime, sessionKey: "main" });
+
+    options.onSkip?.({ text: "NO_REPLY" }, { kind: "final", reason: "silent" });
+    await expect(result.ensureNoVisibleReplyFallback("empty-complete")).resolves.toBe(false);
+
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(result.getVisibleReplyState()).toEqual({
+      visibleReplySent: false,
+      skippedFinalReason: "silent",
+    });
+  });
+
+  it("does not send no-visible-reply fallback after visible streaming close", async () => {
+    const runtime = createRuntimeLogger();
+    const { result, options } = createDispatcherHarness({ runtime });
+
+    await options.deliver({ text: "```md\nvisible answer\n```" }, { kind: "final" });
+    await options.onIdle?.();
+    await expect(result.ensureNoVisibleReplyFallback("zero-final-count")).resolves.toBe(false);
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(result.getVisibleReplyState()).toEqual({
+      visibleReplySent: true,
+      skippedFinalReason: null,
+    });
+  });
+
+  it("resets no-visible-reply state at each reply start", async () => {
+    const runtime = createRuntimeLogger();
+    const { result, options } = createDispatcherHarness({ runtime });
+
+    options.onSkip?.({ text: "NO_REPLY" }, { kind: "final", reason: "silent" });
+    expect(result.getVisibleReplyState()).toEqual({
+      visibleReplySent: false,
+      skippedFinalReason: "silent",
+    });
+
+    await options.onReplyStart?.();
+
+    expect(result.getVisibleReplyState()).toEqual({
+      visibleReplySent: false,
+      skippedFinalReason: null,
+    });
+  });
+
   it("cleans streaming state even when close throws", async () => {
     const origPush = streamingInstances.push.bind(streamingInstances);
     streamingInstances.push = (...args: StreamingSessionStub[]) => {
