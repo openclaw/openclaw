@@ -505,6 +505,58 @@ describe("mattermostPlugin", () => {
       expect(options.accountId).toBe("default");
       expect(options.replyToId).toBe("post-root");
     });
+
+    it("rejects a send carrying attachments[] instead of silently dropping the file", async () => {
+      const cfg = createMattermostTestConfig();
+
+      await expect(
+        mattermostPlugin.actions?.handleAction?.(
+          createMattermostActionContext({
+            action: "send",
+            params: {
+              to: "channel:CHAN1",
+              message: "see attached",
+              attachments: [{ filePath: "/tmp/report.md" }],
+            },
+            cfg,
+            accountId: "default",
+          }),
+        ),
+      ).rejects.toThrow(/attachment/i);
+      expect(sendMessageMattermostMock).not.toHaveBeenCalled();
+    });
+
+    it("rejects a send carrying a top-level filePath attachment", async () => {
+      const cfg = createMattermostTestConfig();
+
+      await expect(
+        mattermostPlugin.actions?.handleAction?.(
+          createMattermostActionContext({
+            action: "send",
+            params: { to: "channel:CHAN1", message: "doc", filePath: "/tmp/report.md" },
+            cfg,
+            accountId: "default",
+          }),
+        ),
+      ).rejects.toThrow(/attachment/i);
+      expect(sendMessageMattermostMock).not.toHaveBeenCalled();
+    });
+
+    it("still uploads media supplied as a string URL", async () => {
+      const cfg = createMattermostTestConfig();
+
+      await mattermostPlugin.actions?.handleAction?.(
+        createMattermostActionContext({
+          action: "send",
+          params: { to: "channel:CHAN1", message: "pic", media: "https://example.com/x.png" },
+          cfg,
+          accountId: "default",
+        }),
+      );
+
+      const options = expectSingleMattermostSend("channel:CHAN1", "pic");
+      expect(options.mediaUrl).toBe("https://example.com/x.png");
+    });
   });
 
   describe("outbound", () => {

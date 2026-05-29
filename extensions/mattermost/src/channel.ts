@@ -275,6 +275,19 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
     const mediaUrl =
       typeof params.media === "string" ? params.media.trim() || undefined : undefined;
 
+    // The tool send path can only upload media supplied as a string `media`
+    // URL. If the caller passed a file attachment (filePath, path, buffer, or
+    // attachments[]) that we will not upload, fail loudly instead of silently
+    // posting text-only and reporting success with an empty file_ids post.
+    // (#87930)
+    if (!mediaUrl && hasUnsupportedMattermostAttachmentInput(params)) {
+      throw new Error(
+        "Mattermost send received a file attachment (filePath, path, buffer, or attachments[]) " +
+          "that the message tool send path cannot upload; it only supports `media` as a string URL. " +
+          "Refusing to report success without attaching the file.",
+      );
+    }
+
     const result = await (
       await loadMattermostChannelRuntime()
     ).sendMessageMattermost(to, message, {
@@ -324,6 +337,23 @@ function parseMattermostReactActionParams(params: Record<string, unknown>): {
     emojiName,
     remove: params.remove === true,
   };
+}
+
+/**
+ * The Mattermost `message` tool send path only uploads media supplied as a
+ * string `media` URL. Detect attachment-bearing inputs (filePath, path, buffer,
+ * or attachments[]) that this path silently drops so the handler can fail
+ * loudly instead of reporting success with an empty `file_ids` post. (#87930)
+ */
+function hasUnsupportedMattermostAttachmentInput(params: Record<string, unknown>): boolean {
+  const nonEmptyString = (value: unknown): boolean =>
+    typeof value === "string" && value.trim().length > 0;
+  return (
+    nonEmptyString(params.filePath) ||
+    nonEmptyString(params.path) ||
+    nonEmptyString(params.buffer) ||
+    (Array.isArray(params.attachments) && params.attachments.length > 0)
+  );
 }
 
 const mattermostOutbound: ChannelOutboundAdapter = {

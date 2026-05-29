@@ -7,6 +7,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Cron: retry recurring jobs after transient model rate limits before waiting for the next scheduled slot.
+- Mattermost: fail with a clear error when a `message` tool send carries a file attachment (`filePath`, `path`, `buffer`, or `attachments[]`) that the send path cannot upload, instead of reporting success with no file attached. (#87930)
 
 ## 2026.5.28
 
