@@ -1,3 +1,4 @@
+import type { ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
 import {
   loadPluginManifestRegistry,
   registerProviderPlugin,
@@ -6,6 +7,12 @@ import {
 import { expectPassthroughReplayPolicy } from "openclaw/plugin-sdk/provider-test-contracts";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
+
+function createModelRegistry(): ModelRegistry {
+  return {
+    find: () => null,
+  } as unknown as ModelRegistry;
+}
 
 describe("opencode provider plugin", () => {
   it("registers image media understanding through the OpenCode plugin", async () => {
@@ -98,6 +105,7 @@ describe("opencode provider plugin", () => {
     const model = resolveDynamicModel({
       provider: "opencode",
       modelId: "deepseek-v4-flash-free",
+      modelRegistry: createModelRegistry(),
     });
     expect(model).toBeDefined();
     expect(model!.id).toBe("deepseek-v4-flash-free");
@@ -125,6 +133,7 @@ describe("opencode provider plugin", () => {
     const model = resolveDynamicModel({
       provider: "opencode",
       modelId: "claude-opus-4-6",
+      modelRegistry: createModelRegistry(),
     });
     expect(model).toBeDefined();
     expect(model!.id).toBe("claude-opus-4-6");
@@ -151,6 +160,7 @@ describe("opencode provider plugin", () => {
     const model = resolveDynamicModel({
       provider: "opencode",
       modelId: "nonexistent-model-xyz",
+      modelRegistry: createModelRegistry(),
     });
     expect(model).toBeUndefined();
   });
@@ -167,8 +177,9 @@ describe("opencode provider plugin", () => {
       throw new Error("Expected OpenCode provider augmentModelCatalog");
     }
 
-    const entries = augmentModelCatalog({
-      provider: "opencode",
+    const entries = await augmentModelCatalog({
+      env: {},
+      entries: [],
     });
     expect(entries).toBeDefined();
     expect(entries!.length).toBeGreaterThan(0);
