@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setPluginToolMeta } from "../plugins/tools.js";
+import { isRecord } from "../shared/record-coerce.js";
 import {
   clearCodeModeNamespacesForPlugin,
   clearCodeModeNamespacesForTest,
+  createCodeModeNamespaceTool,
   type CodeModeNamespaceRegistration,
   listCodeModeNamespaces,
   registerCodeModeNamespaceForPlugin,
@@ -316,7 +318,7 @@ describe("Code Mode", () => {
       prompt: (ctx) => `Tickets.currentAgent() returns ${ctx.agentId}.`,
       requiredToolNames: ["fake_noop"],
       createScope: () => ({
-        currentAgent: () => "ops",
+        currentAgent: createCodeModeNamespaceTool("fake_noop", () => ({ value: "ops" })),
       }),
     });
 
@@ -438,7 +440,7 @@ describe("Code Mode", () => {
       globalName: "BadPath",
       requiredToolNames: ["fake_noop"],
       createScope: () => ({
-        constructor: () => "blocked",
+        constructor: createCodeModeNamespaceTool("fake_noop", () => ({ value: "blocked" })),
       }),
     });
     const { config, catalogRef, tools } = createCodeModeHarness();
@@ -473,6 +475,23 @@ describe("Code Mode", () => {
         code: "return 1;",
       }),
     ).rejects.toThrow("Circular code mode namespace scope at self");
+
+    clearCodeModeNamespacesForTest();
+    registerTestNamespace({
+      id: "raw-function",
+      pluginId: "fake-code-mode",
+      globalName: "RawFunction",
+      requiredToolNames: ["fake_noop"],
+      createScope: () => ({
+        read: () => "blocked",
+      }),
+    });
+
+    await expect(
+      tools[0].execute("code-call-raw-function", {
+        code: "return 1;",
+      }),
+    ).rejects.toThrow("must be created with createCodeModeNamespaceTool");
   });
 
   it("hides namespaces when their required tools are absent from the run catalog", async () => {
@@ -482,7 +501,7 @@ describe("Code Mode", () => {
       globalName: "Hidden",
       requiredToolNames: ["fake_hidden"],
       createScope: () => ({
-        read: () => "secret",
+        read: createCodeModeNamespaceTool("fake_hidden"),
       }),
     });
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
@@ -513,7 +532,7 @@ describe("Code Mode", () => {
       description: "Hidden helpers.",
       requiredToolNames: ["fake_hidden"],
       createScope: () => ({
-        read: () => "secret",
+        read: createCodeModeNamespaceTool("fake_hidden"),
       }),
     });
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
@@ -540,7 +559,7 @@ describe("Code Mode", () => {
 
   it("allows shared namespace objects without treating them as circular", async () => {
     const shared = {
-      read: () => "shared",
+      read: createCodeModeNamespaceTool("fake_noop", () => ({ value: "shared" })),
     };
     registerTestNamespace({
       id: "shared",
@@ -565,7 +584,11 @@ describe("Code Mode", () => {
     const details = await runUntilCompleted({
       execTool: codeModeTools[0],
       waitTool: codeModeTools[1],
-      code: "return [await Shared.left.read(), await Shared.right.read()];",
+      code: `
+        const left = await Shared.left.read();
+        const right = await Shared.right.read();
+        return [left.input.value, right.input.value];
+      `,
     });
 
     expect(details.status).toBe("completed");
@@ -573,9 +596,9 @@ describe("Code Mode", () => {
   });
 
   it("rejects forged namespace bridge paths that were not serialized", async () => {
-    const hidden = vi.fn(() => "hidden");
+    const hidden = createCodeModeNamespaceTool("fake_noop", () => ({ value: "hidden" }));
     const scope = {
-      exposed: () => "visible",
+      exposed: createCodeModeNamespaceTool("fake_noop", () => ({ value: "visible" })),
     };
     Object.defineProperty(scope, "hidden", {
       value: hidden,
@@ -604,13 +627,13 @@ describe("Code Mode", () => {
       code: `
         globalThis.__openclawHostRequest("namespace", JSON.stringify(["leaky", ["hidden"], []]));
         await yield_control("pause");
-        return await Leaky.exposed();
+        const exposed = await Leaky.exposed();
+        return exposed.input.value;
       `,
     });
 
     expect(details.status).toBe("completed");
     expect(details.value).toBe("visible");
-    expect(hidden).not.toHaveBeenCalled();
   });
 
   it("removes legacy Tool Search controls from the visible code mode surface", () => {
@@ -716,14 +739,16 @@ describe("Code Mode", () => {
       pluginId: "fake-code-mode",
       globalName: "Tickets",
       description: "Ticket helpers.",
-      requiredToolNames: ["fake_noop"],
+      requiredToolNames: ["fake_list_issues"],
       createScope: (ctx) => ({
         agentId: ctx.agentId,
         issues: {
           prefix: "ISS",
-          async list(this: { prefix: string }, input: { state: string }) {
-            return [{ title: `${this.prefix}:${input.state}:${ctx.agentId}` }];
-          },
+          list: createCodeModeNamespaceTool("fake_list_issues", ([input]) => ({
+            prefix: "ISS",
+            state: isRecord(input) && typeof input.state === "string" ? input.state : "",
+            agentId: ctx.agentId,
+          })),
         },
       }),
     });
@@ -735,7 +760,17 @@ describe("Code Mode", () => {
       agentId: "ops",
     });
     applyCodeModeCatalog({
-      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
+      tools: [
+        ...codeModeTools,
+        pluginToolWithExecute("fake_list_issues", "List issues", async (_toolCallId, input) => {
+          const params = isRecord(input) ? input : {};
+          return jsonResult([
+            {
+              title: `${String(params.prefix)}:${String(params.state)}:${String(params.agentId)}`,
+            },
+          ]);
+        }),
+      ],
       config,
       agentId: "ops",
       sessionId: "session-code-mode",
@@ -750,7 +785,11 @@ describe("Code Mode", () => {
       code: `
         const direct = await Tickets.issues.list({ state: "open" });
         const mapped = await namespaces.Tickets.issues.list({ state: "closed" });
-        return { direct, mapped, agentId: Tickets.agentId };
+        return {
+          direct,
+          mapped,
+          agentId: Tickets.agentId
+        };
       `,
     });
 
@@ -767,13 +806,13 @@ describe("Code Mode", () => {
       id: "context",
       pluginId: "fake-code-mode",
       globalName: "Context",
-      requiredToolNames: ["fake_noop"],
+      requiredToolNames: ["fake_read_context"],
       createScope: (ctx) => ({
-        read: () => ({
+        read: createCodeModeNamespaceTool("fake_read_context", () => ({
           agentId: ctx.agentId,
           runId: ctx.runId,
           sessionKey: ctx.sessionKey,
-        }),
+        })),
       }),
     });
     const catalogRef = createToolSearchCatalogRef();
@@ -788,7 +827,12 @@ describe("Code Mode", () => {
       catalogRef,
     });
     applyCodeModeCatalog({
-      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
+      tools: [
+        ...codeModeTools,
+        pluginToolWithExecute("fake_read_context", "Read context", async (_toolCallId, input) =>
+          jsonResult(input),
+        ),
+      ],
       config,
       agentId: "ops",
       sessionId: "session-code-mode",
@@ -816,16 +860,19 @@ describe("Code Mode", () => {
       id: "broken",
       pluginId: "fake-code-mode",
       globalName: "Broken",
-      requiredToolNames: ["fake_noop"],
+      requiredToolNames: ["fake_fail"],
       createScope: () => ({
-        fail: () => {
-          throw new Error("namespace exploded");
-        },
+        fail: createCodeModeNamespaceTool("fake_fail"),
       }),
     });
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     applyCodeModeCatalog({
-      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
+      tools: [
+        ...codeModeTools,
+        pluginToolWithExecute("fake_fail", "Fail", async () => {
+          throw new Error("namespace exploded");
+        }),
+      ],
       config,
       sessionId: "session-code-mode",
       sessionKey: "agent:main:main",

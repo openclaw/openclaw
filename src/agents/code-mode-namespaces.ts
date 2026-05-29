@@ -2,6 +2,7 @@ import { isRecord } from "../shared/record-coerce.js";
 
 const FORBIDDEN_NAMESPACE_PATH_SEGMENTS = new Set(["__proto__", "constructor", "prototype"]);
 const NAMESPACE_PATH_KEY_SEPARATOR = "\u0000";
+const CODE_MODE_NAMESPACE_TOOL_CALL = Symbol.for("openclaw.codeMode.namespaceToolCall");
 const RESERVED_NAMESPACE_GLOBALS = new Set([
   "ALL_TOOLS",
   "Array",
@@ -38,6 +39,14 @@ export type CodeModeNamespaceContext = {
 };
 
 export type CodeModeNamespaceScope = Record<string, unknown>;
+
+export type CodeModeNamespaceToolInputMapper = (args: unknown[]) => unknown;
+
+export type CodeModeNamespaceToolCall = {
+  readonly [CODE_MODE_NAMESPACE_TOOL_CALL]: true;
+  readonly toolName: string;
+  readonly input?: CodeModeNamespaceToolInputMapper;
+};
 
 export type CodeModeNamespaceRegistration = {
   id: string;
@@ -81,7 +90,18 @@ type CodeModeNamespaceCatalogEntry = {
 
 export type CodeModeNamespaceRuntime = {
   descriptors: CodeModeNamespaceDescriptor[];
-  invoke(namespaceId: string, path: string[], args: unknown[]): Promise<unknown>;
+  invoke(
+    namespaceId: string,
+    path: string[],
+    args: unknown[],
+    executeTool: (params: {
+      pluginId: string;
+      toolName: string;
+      input: unknown;
+      namespaceId: string;
+      path: string[];
+    }) => Promise<unknown>,
+  ): Promise<unknown>;
 };
 
 type CodeModeNamespaceRegistryState = {
@@ -119,6 +139,30 @@ function normalizeRequiredToolNames(value: readonly string[] | undefined): strin
     names.add(name);
   }
   return [...names].toSorted();
+}
+
+export function createCodeModeNamespaceTool(
+  toolName: string,
+  input?: CodeModeNamespaceToolInputMapper,
+): CodeModeNamespaceToolCall {
+  const normalizedToolName = toolName.trim();
+  if (!normalizedToolName) {
+    throw new Error("Code mode namespace toolName must be non-empty.");
+  }
+  return {
+    [CODE_MODE_NAMESPACE_TOOL_CALL]: true,
+    toolName: normalizedToolName,
+    ...(input ? { input } : {}),
+  };
+}
+
+function isCodeModeNamespaceToolCall(value: unknown): value is CodeModeNamespaceToolCall {
+  const record = isRecord(value) ? (value as Record<PropertyKey, unknown>) : undefined;
+  return (
+    record?.[CODE_MODE_NAMESPACE_TOOL_CALL] === true &&
+    typeof record.toolName === "string" &&
+    record.toolName.trim().length > 0
+  );
 }
 
 function normalizeRegistration(
@@ -294,9 +338,14 @@ function serializeNamespaceScopeValue(
   stack = new WeakSet<object>(),
   callablePaths = new Set<string>(),
 ): SerializedCodeModeNamespaceValue {
-  if (typeof value === "function") {
+  if (isCodeModeNamespaceToolCall(value)) {
     callablePaths.add(namespacePathKey(path));
     return { kind: "function", path };
+  }
+  if (typeof value === "function") {
+    throw new Error(
+      `Code mode namespace function at ${path.join(".") || "(root)"} must be created with createCodeModeNamespaceTool.`,
+    );
   }
   if (value === null || typeof value !== "object") {
     return { kind: "value", value: toJsonSafe(value) };
@@ -383,7 +432,7 @@ export async function createCodeModeNamespaceRuntime(
   const byId = new Map(entries.map((entry) => [entry.registration.id, entry]));
   return {
     descriptors: entries.map((entry) => entry.descriptor),
-    async invoke(namespaceId, path, args) {
+    async invoke(namespaceId, path, args, executeTool) {
       const entry = byId.get(namespaceId);
       if (!entry) {
         throw new Error(`Unknown code mode namespace: ${namespaceId}`);
@@ -394,11 +443,23 @@ export async function createCodeModeNamespaceRuntime(
       if (!entry.callablePaths.has(namespacePathKey(path))) {
         throw new Error(`Code mode namespace path is not callable: ${path.join(".")}`);
       }
-      const { target, parent } = resolveNamespacePath(entry.scope, path);
-      if (typeof target !== "function") {
+      const { target } = resolveNamespacePath(entry.scope, path);
+      if (!isCodeModeNamespaceToolCall(target)) {
         throw new Error(`Code mode namespace path is not callable: ${path.join(".")}`);
       }
-      return toJsonSafe(await target.apply(parent, args));
+      if (!entry.registration.requiredToolNames.includes(target.toolName)) {
+        throw new Error(`Code mode namespace path targets undeclared tool: ${target.toolName}`);
+      }
+      const input = target.input ? await target.input(args) : (args[0] ?? {});
+      return toJsonSafe(
+        await executeTool({
+          pluginId: entry.registration.pluginId,
+          toolName: target.toolName,
+          input,
+          namespaceId,
+          path: [...path],
+        }),
+      );
     },
   };
 }

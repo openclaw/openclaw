@@ -5,6 +5,7 @@ import type { Model } from "../../packages/agent-core/src/llm.js";
 import type { AgentEvent, AgentTool } from "../../packages/agent-core/src/types.js";
 import {
   clearCodeModeNamespacesForPlugin,
+  createCodeModeNamespaceTool,
   registerCodeModeNamespaceForPlugin,
 } from "../../src/agents/code-mode-namespaces.js";
 import { applyCodeModeCatalog, createCodeModeTools } from "../../src/agents/code-mode.js";
@@ -254,37 +255,37 @@ function createFictionTools(service: FictionService): AnyAgentTool[] {
   ];
 }
 
-function registerFictionNamespace(service: FictionService): void {
-  clearCodeModeNamespacesForPlugin(PLUGIN_ID);
-  registerCodeModeNamespaceForPlugin(PLUGIN_ID, {
-    id: "fictions",
-    globalName: "Fictions",
-    description: "Fiction production service helpers.",
-    requiredToolNames: ["fictions_list_titles"],
-    prompt:
-      "Use Fictions.riskAudit(), Fictions.promoteIfReady(id, status), Fictions.unpaidOver(amount), and Fictions.snapshot().",
-    createScope: () => ({
-      snapshot: () => service.snapshot(),
-      riskAudit: () => {
-        const data = service.snapshot();
-        const highest = data.titles.toSorted((a, b) => b.riskScore - a.riskScore)[0];
-        if (!highest) {
-          return null;
-        }
-        return {
-          task: "risk-audit",
-          id: highest.id,
-          lead: highest.lead,
-          status: highest.status,
-          unresolvedDefects: data.defects.filter(
-            (defect) => defect.titleId === highest.id && defect.state === "open",
-          ).length,
-          blockedScenes: data.scenes
-            .filter((scene) => scene.titleId === highest.id && scene.blocked)
-            .map((scene) => scene.id),
-        };
-      },
-      promoteIfReady: (id: string, status: string) => {
+function createFictionNamespaceTools(service: FictionService): AnyAgentTool[] {
+  return [
+    makeTool("fictions_snapshot", "Return the complete fiction production snapshot.", {}, () =>
+      service.snapshot(),
+    ),
+    makeTool("fictions_risk_audit", "Return highest-risk title audit.", {}, () => {
+      const data = service.snapshot();
+      const highest = data.titles.toSorted((a, b) => b.riskScore - a.riskScore)[0];
+      if (!highest) {
+        return null;
+      }
+      return {
+        task: "risk-audit",
+        id: highest.id,
+        lead: highest.lead,
+        status: highest.status,
+        unresolvedDefects: data.defects.filter(
+          (defect) => defect.titleId === highest.id && defect.state === "open",
+        ).length,
+        blockedScenes: data.scenes
+          .filter((scene) => scene.titleId === highest.id && scene.blocked)
+          .map((scene) => scene.id),
+      };
+    }),
+    makeTool(
+      "fictions_promote_if_ready",
+      "Promote a title if dependencies and page count allow it.",
+      { id: Type.String(), status: Type.String() },
+      (params) => {
+        const id = stringParam(params, "id");
+        const status = stringParam(params, "status");
         const data = service.snapshot();
         const title = data.titles.find((entry) => entry.id === id);
         const scenes = data.scenes.filter((scene) => scene.titleId === id);
@@ -309,7 +310,13 @@ function registerFictionNamespace(service: FictionService): void {
           finalStatus: service.currentStatus(id) ?? null,
         };
       },
-      unpaidOver: (amount: number) => {
+    ),
+    makeTool(
+      "fictions_unpaid_over",
+      "Return unpaid invoices over a numeric threshold.",
+      { amount: Type.Number() },
+      (params) => {
+        const amount = typeof params.amount === "number" ? params.amount : 0;
         const data = service.snapshot();
         const invoices = data.invoices.filter(
           (invoice) => !invoice.paid && invoice.amount > amount,
@@ -320,6 +327,34 @@ function registerFictionNamespace(service: FictionService): void {
           totalUnpaidOver5000: invoices.reduce((sum, invoice) => sum + invoice.amount, 0),
         };
       },
+    ),
+  ];
+}
+
+function registerFictionNamespace(): void {
+  clearCodeModeNamespacesForPlugin(PLUGIN_ID);
+  registerCodeModeNamespaceForPlugin(PLUGIN_ID, {
+    id: "fictions",
+    globalName: "Fictions",
+    description: "Fiction production service helpers.",
+    requiredToolNames: [
+      "fictions_promote_if_ready",
+      "fictions_risk_audit",
+      "fictions_snapshot",
+      "fictions_unpaid_over",
+    ],
+    prompt:
+      "Use Fictions.riskAudit(), Fictions.promoteIfReady(id, status), Fictions.unpaidOver(amount), and Fictions.snapshot().",
+    createScope: () => ({
+      snapshot: createCodeModeNamespaceTool("fictions_snapshot"),
+      riskAudit: createCodeModeNamespaceTool("fictions_risk_audit"),
+      promoteIfReady: createCodeModeNamespaceTool("fictions_promote_if_ready", ([id, status]) => ({
+        id: typeof id === "string" ? id : "",
+        status: typeof status === "string" ? status : "",
+      })),
+      unpaidOver: createCodeModeNamespaceTool("fictions_unpaid_over", ([amount]) => ({
+        amount: typeof amount === "number" ? amount : 0,
+      })),
     }),
   });
 }
@@ -358,7 +393,7 @@ function toolsForMode(mode: Mode, service: FictionService): AgentTool[] {
     return fictionTools as AgentTool[];
   }
   if (mode === "code-namespace") {
-    registerFictionNamespace(service);
+    registerFictionNamespace();
   } else {
     clearCodeModeNamespacesForPlugin(PLUGIN_ID);
   }
@@ -382,9 +417,7 @@ function toolsForMode(mode: Mode, service: FictionService): AgentTool[] {
     catalogRef,
   });
   const catalogTools =
-    mode === "code-namespace"
-      ? fictionTools.filter((tool) => tool.name === "fictions_list_titles")
-      : fictionTools;
+    mode === "code-namespace" ? createFictionNamespaceTools(service) : fictionTools;
   return applyCodeModeCatalog({
     tools: [...codeModeTools, ...catalogTools],
     config,

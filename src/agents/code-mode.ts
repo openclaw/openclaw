@@ -541,6 +541,27 @@ async function runBridgeRequest(params: {
           namespaceId,
           path,
           Array.isArray(callArgs) ? callArgs : [],
+          async (request) => {
+            const entry = params.runtime
+              .all()
+              .find(
+                (candidate) =>
+                  candidate.name === request.toolName && candidate.sourceName === request.pluginId,
+              );
+            if (!entry) {
+              throw new ToolInputError(
+                `namespace tool is not visible in the run catalog: ${request.toolName}`,
+              );
+            }
+            const called = await params.runtime.call(entry.id, request.input, {
+              parentToolCallId: params.parentToolCallId,
+              signal: params.signal,
+              onUpdate: params.onUpdate,
+            });
+            return isRecord(called.result) && "details" in called.result
+              ? called.result.details
+              : called.result;
+          },
         );
         break;
       }

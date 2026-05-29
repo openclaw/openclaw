@@ -441,7 +441,7 @@ mode through the internal namespace registry. Code mode still exposes only
 `exec` and `wait` to the model; namespace calls are an ergonomic layer inside
 the QuickJS guest. There is no public plugin SDK namespace API yet: external
 plugin namespaces need a loader-owned contract so plugin identity and cached
-tool descriptors cannot drift from the host functions that back the namespace.
+tool descriptors cannot drift from the catalog tools that back the namespace.
 
 Guest code can then use either the direct global or the `namespaces` map:
 
@@ -459,6 +459,12 @@ behind a GitHub-owned loader contract that owns GitHub auth, REST or GraphQL
 clients, rate limits, write approvals, and tests. Core code mode only owns the
 sandbox and bridge.
 
+Namespace functions must be declared with the internal
+`createCodeModeNamespaceTool(toolName, inputMapper)` helper. The bridge maps the
+function call to that plugin-owned catalog tool and executes it through the
+normal tool lifecycle; arbitrary host callbacks are rejected before guest code
+runs.
+
 Namespace rules:
 
 - `globalName` must be a JavaScript identifier and cannot collide with built-in
@@ -467,8 +473,8 @@ Namespace rules:
 - scope objects are created per code-mode run from the current run context
   (`agentId`, session, run id, config, and catalog refs)
 - scope values are serialized into the guest as JSON-compatible values
-- scope functions execute on the host through the same suspend/resume bridge as
-  nested tool calls
+- scope functions execute through the same catalog tool path, policy hooks,
+  approvals, abort handling, and suspend/resume bridge as nested tool calls
 - host objects are never injected directly into QuickJS
 - namespace calls do not bypass plugin-owned auth, approval, or policy code
 
