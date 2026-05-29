@@ -44,7 +44,7 @@ const mocks = vi.hoisted(() => ({
   resolveBrowserControlAuth: vi.fn<() => BrowserControlAuth>(() => ({
     token: "loopback-token",
   })),
-  getBridgeAuthForPort: vi.fn<(port: number) => BridgeAuth | undefined>(() => undefined)
+  getBridgeAuthForPort: vi.fn<(port: number) => BridgeAuth | undefined>(() => undefined),
   startBrowserControlServiceFromConfig: vi.fn(async () => ({ ok: true })),
   dispatch: vi.fn(async (): Promise<BrowserDispatchResponse> => okDispatchResponse()),
 }));
