@@ -400,7 +400,10 @@ describe("exec host env validation", () => {
     ).rejects.toThrow(/SYSTEM_RUN_DENIED: argument matches tools\.exec\.denyPathPatterns/);
   });
 
-  it("does not use the gateway cwd for node denyPathPatterns when workdir is omitted", async () => {
+  it("hard-denies a bare relative deny target on the node host even when workdir is omitted", async () => {
+    // #74379 review: `**/.env` is a documented hard-deny example and must block
+    // `cat .env` on the node path where the gateway forwards no workdir. The
+    // globstar matches the bare basename, so the command never reaches the host.
     const tool = createExecTool({
       host: "node",
       security: "full",
@@ -408,20 +411,14 @@ describe("exec host env validation", () => {
       denyPathPatterns: ["**/.env"],
     });
 
-    const result = await tool.execute("call-node-no-workdir", {
-      command: "cat .env",
-      yieldMs: FOREGROUND_TEST_YIELD_MS,
-    });
-
-    expect(normalizeText(result.content.find((c) => c.type === "text")?.text)).toBe(
-      "node:default:cat .env",
-    );
-    expect(nodeHostMocks.executeNodeHostCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
+    await expect(
+      tool.execute("call-node-no-workdir", {
         command: "cat .env",
-        workdir: undefined,
+        yieldMs: FOREGROUND_TEST_YIELD_MS,
       }),
-    );
+    ).rejects.toThrow(/SYSTEM_RUN_DENIED: argument matches tools\.exec\.denyPathPatterns/);
+
+    expect(nodeHostMocks.executeNodeHostCommand).not.toHaveBeenCalled();
   });
 
   it("fails closed when sandbox host is explicitly configured without sandbox runtime", async () => {

@@ -113,14 +113,18 @@ describe("evaluateExecDenyPathMatch", () => {
     expect(match?.resolved).toBe("/work/project/.env");
   });
 
-  it("does not resolve bare relative args against the gateway cwd when cwd is absent", () => {
-    expect(
-      evaluateExecDenyPathMatch({
-        patterns: ["**/.env"],
-        argv: ["cat", ".env"],
-        homeDir: fakeHome,
-      }),
-    ).toBeNull();
+  it("denies a bare relative basename via a globstar pattern even without a cwd", () => {
+    // Regression for #74379 review: `**/.env` is documented as a hard-deny
+    // example and must block `cat .env` on the no-cwd node-host path, where the
+    // gateway forwards no workdir. A globstar matches zero leading segments, so
+    // the bare basename is denied without resolving it against any assumed cwd.
+    const match = evaluateExecDenyPathMatch({
+      patterns: ["**/.env"],
+      argv: ["cat", ".env"],
+      homeDir: fakeHome,
+    });
+    expect(match?.pattern).toBe("**/.env");
+    expect(match?.arg).toBe(".env");
   });
 
   it("does not match unrelated files in the same workspace", () => {

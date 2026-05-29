@@ -1,5 +1,5 @@
 import path from "node:path";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { expandHomePrefix, resolveEffectiveHomeDir } from "./home-dir.js";
 
 // Compile a glob pattern to a regex.
@@ -31,6 +31,15 @@ function compileDenyPathGlob(pattern: string): RegExp {
     if (ch === "*") {
       const next = pattern[i + 1];
       if (next === "*") {
+        // `**/` (globstar) matches zero or more leading path segments, so a
+        // bare basename like `.env` is matched by `**/.env`, not just
+        // `dir/.env` (#74379 review P1). A bare `**` (no trailing slash)
+        // still matches anything including `/`.
+        if (pattern[i + 2] === "/") {
+          regex += "(?:.*/)?";
+          i += 3;
+          continue;
+        }
         regex += ".*";
         i += 2;
         continue;
@@ -66,33 +75,6 @@ function normalizeMatchTarget(value: string): string {
     return normalizeLowercaseStringOrEmpty(stripped.replace(/\\/g, "/"));
   }
   return value.replace(/\\/g, "/");
-}
-
-function isPathLikeArg(arg: string): boolean {
-  if (typeof arg !== "string" || arg.length === 0) {
-    return false;
-  }
-  // Skip flags. `--token=secret` is not a path; the env-style assignment is
-  // also not a path. Bare `-` and `--` separators are not paths.
-  if (arg.startsWith("-")) {
-    return false;
-  }
-  if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(arg)) {
-    return false;
-  }
-  if (arg === "~" || arg.startsWith("~/") || arg.startsWith("~\\")) {
-    return true;
-  }
-  if (arg.startsWith("/") || arg.includes("/")) {
-    return true;
-  }
-  // Windows absolute or backslash-separated paths.
-  if (process.platform === "win32") {
-    if (/^[A-Za-z]:[\\/]/.test(arg) || arg.includes("\\")) {
-      return true;
-    }
-  }
-  return false;
 }
 
 function isSkippedCandidateArg(arg: string): boolean {
@@ -236,9 +218,11 @@ export function evaluateExecDenyPathMatch(params: {
     if (isSkippedCandidateArg(arg)) {
       continue;
     }
-    if (!cwd && !isPathLikeArg(arg)) {
-      continue;
-    }
+    // Every non-flag candidate is matched against the patterns, even a bare
+    // relative basename like `.env` with no cwd. Path-globs do not match
+    // non-path tokens (`echo`, `done`) anyway, and skipping bare relatives
+    // left the documented `**/.env` hard-deny unenforced on the no-cwd
+    // node-host path (#74379 review P1).
     const expanded = expandHomePrefix(arg, { home: homeDir });
     const resolved =
       cwd && !path.isAbsolute(expanded)
