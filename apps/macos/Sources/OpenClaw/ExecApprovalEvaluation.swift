@@ -417,11 +417,21 @@ enum ExecDenylistEvaluator {
 
     private static func isShellNetworkFetchArgv(_ argv: [String], depth: Int = 0) -> Bool {
         guard depth <= 8, !argv.isEmpty else { return false }
-        if self.isShellNetworkFetchExecutable(argv.first) {
+        let effectiveArgv = self.stripLeadingEnvAssignments(argv)
+        guard !effectiveArgv.isEmpty else { return false }
+        if self.isShellNetworkFetchExecutable(effectiveArgv.first) {
             return true
         }
-        guard let carried = self.carriedCommandArgv(argv) else { return false }
+        guard let carried = self.carriedCommandArgv(effectiveArgv) else { return false }
         return self.isShellNetworkFetchArgv(carried, depth: depth + 1)
+    }
+
+    private static func stripLeadingEnvAssignments(_ argv: [String]) -> [String] {
+        var index = 0
+        while index < argv.count, self.inlineEnvAssignment(argv[index]) != nil {
+            index += 1
+        }
+        return index == 0 ? argv : Array(argv.suffix(from: index))
     }
 
     private static func carriedCommandArgv(_ argv: [String]) -> [String]? {

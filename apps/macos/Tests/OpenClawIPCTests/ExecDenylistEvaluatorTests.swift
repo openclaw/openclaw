@@ -32,6 +32,8 @@ struct ExecDenylistEvaluatorTests {
         for (command, displayCommand) in [
             (["/usr/bin/env", "FOO=bar", "curl", "https://example.test/prompt"],
              "env FOO=bar curl https://example.test/prompt"),
+            (["/bin/sh", "-c", "FOO=bar curl https://example.test/prompt"],
+             "sh -c 'FOO=bar curl https://example.test/prompt'"),
             (["/usr/bin/sudo", "curl", "https://example.test/prompt"],
              "sudo curl https://example.test/prompt"),
             (["/bin/sh", "-c", "command curl https://example.test/prompt"],
