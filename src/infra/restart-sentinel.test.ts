@@ -158,6 +158,55 @@ describe("restart sentinel", () => {
     expect(result).toContain("Gateway restart");
   });
 
+  it("formats config write success notices as restart required when marked", () => {
+    const payload = {
+      kind: "config-patch" as const,
+      status: "ok" as const,
+      ts: Date.now(),
+      message: "Run restart-gateway.ps1 to apply config changes.",
+      stats: { mode: "config.patch", requiresRestart: true },
+    };
+
+    expect(formatRestartSentinelMessage(payload)).toBe(
+      [
+        "Gateway restart required (config.patch)",
+        "Run restart-gateway.ps1 to apply config changes.",
+      ].join("\n"),
+    );
+    expect(formatRestartSentinelMessage(payload, { state: "completed" })).toBe(
+      [
+        "Gateway restart completed (config.patch)",
+        "Run restart-gateway.ps1 to apply config changes.",
+      ].join("\n"),
+    );
+    expect(summarizeRestartSentinel(payload)).toBe("Gateway restart required (config.patch)");
+    expect(summarizeRestartSentinel(payload, { state: "completed" })).toBe(
+      "Gateway restart completed (config.patch)",
+    );
+
+    expect(
+      summarizeRestartSentinel({
+        kind: "config-apply",
+        status: "ok",
+        ts: Date.now(),
+        stats: { mode: "config.apply", requiresRestart: true },
+      }),
+    ).toBe("Gateway restart required (config.apply)");
+  });
+
+  it("does not mark hot-reloaded config patch notices as restart required", () => {
+    const payload = {
+      kind: "config-patch" as const,
+      status: "ok" as const,
+      ts: Date.now(),
+      stats: { mode: "config.patch", requiresRestart: false },
+    };
+
+    expect(summarizeRestartSentinel(payload)).toBe(
+      "Gateway restart config-patch ok (config.patch)",
+    );
+  });
+
   it("formats summary, distinct reason, and doctor hint together", () => {
     const payload = {
       kind: "config-patch" as const,

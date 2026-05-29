@@ -375,6 +375,33 @@ describe("config shared auth disconnects", () => {
     await flushConfigHandlerMicrotasks();
 
     expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledTimes(1);
+    const payload = restartSentinelMocks.writeRestartSentinel.mock.calls.at(-1)?.[0];
+    expect(payload?.stats?.requiresRestart).toBe(true);
+  });
+
+  it("marks hot-reloaded config.patch writes as not restart required", async () => {
+    const prevConfig: OpenClawConfig = {
+      gateway: {
+        channelHealthCheckMinutes: 10,
+      },
+    };
+    readConfigFileSnapshotForWriteMock.mockResolvedValue(createConfigWriteSnapshot(prevConfig));
+
+    const { options } = createConfigHandlerHarness({
+      method: "config.patch",
+      params: {
+        baseHash: "base-hash",
+        raw: JSON.stringify({ gateway: { channelHealthCheckMinutes: 15 } }),
+        restartDelayMs: 1_000,
+      },
+    });
+
+    await configHandlers["config.patch"](options);
+    await flushConfigHandlerMicrotasks();
+
+    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+    const payload = restartSentinelMocks.writeRestartSentinel.mock.calls.at(-1)?.[0];
+    expect(payload?.stats?.requiresRestart).toBe(false);
   });
 
   it("does not add an agent continuation from generic control-plane sessionKey params", async () => {

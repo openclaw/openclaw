@@ -127,19 +127,40 @@ function queueSharedGatewayAuthGenerationRefresh(
   });
 }
 
-function shouldScheduleDirectConfigRestart(params: {
+function isNoopConfigReloadPlan(plan: ReturnType<typeof buildGatewayReloadPlan>): boolean {
+  return (
+    !plan.restartGateway &&
+    plan.hotReasons.length === 0 &&
+    !plan.reloadHooks &&
+    !plan.restartGmailWatcher &&
+    !plan.restartCron &&
+    !plan.restartHeartbeat &&
+    !plan.restartHealthMonitor &&
+    !plan.reloadPlugins &&
+    !plan.disposeMcpRuntimes &&
+    plan.restartChannels.size === 0
+  );
+}
+
+function resolveConfigRestartRequirement(params: {
   changedPaths: string[];
   nextConfig: OpenClawConfig;
-}): boolean {
+}): { requiresRestart: boolean; scheduleDirectRestart: boolean } {
   const reloadSettings = resolveGatewayReloadSettings(params.nextConfig);
-  if (reloadSettings.mode === "off") {
-    return true;
-  }
   const plan = buildGatewayReloadPlan(params.changedPaths);
-  if (reloadSettings.mode === "hot" && plan.restartGateway) {
-    return true;
+  if (isNoopConfigReloadPlan(plan)) {
+    return { requiresRestart: false, scheduleDirectRestart: false };
   }
-  return false;
+  if (reloadSettings.mode === "off") {
+    return { requiresRestart: true, scheduleDirectRestart: true };
+  }
+  if (reloadSettings.mode === "restart") {
+    return { requiresRestart: true, scheduleDirectRestart: false };
+  }
+  if (plan.restartGateway) {
+    return { requiresRestart: true, scheduleDirectRestart: reloadSettings.mode === "hot" };
+  }
+  return { requiresRestart: false, scheduleDirectRestart: false };
 }
 
 function resolveConfigRestartRequest(params: unknown): {
@@ -175,6 +196,7 @@ function buildConfigRestartSentinelPayload(params: {
   kind: RestartSentinelPayload["kind"];
   mode: string;
   configPath: string;
+  requiresRestart: boolean;
   sessionKey: string | undefined;
   deliveryContext: ReturnType<typeof extractDeliveryInfo>["deliveryContext"];
   threadId: ReturnType<typeof extractDeliveryInfo>["threadId"];
@@ -192,6 +214,7 @@ function buildConfigRestartSentinelPayload(params: {
     stats: {
       mode: params.mode,
       root: params.configPath,
+      requiresRestart: params.requiresRestart,
     },
   };
 }
@@ -250,20 +273,22 @@ export async function resolveGatewayConfigRestartWriteResult(params: {
 }> {
   const { sessionKey, note, restartDelayMs, deliveryContext, threadId } =
     resolveConfigRestartRequest(params.requestParams);
+  const restartRequirement = resolveConfigRestartRequirement({
+    changedPaths: params.changedPaths,
+    nextConfig: params.nextConfig,
+  });
   const payload = buildConfigRestartSentinelPayload({
     kind: params.kind,
     mode: params.mode,
     configPath: params.configPath,
+    requiresRestart: restartRequirement.requiresRestart,
     sessionKey,
     deliveryContext,
     threadId,
     note,
   });
   const sentinelPath = await tryWriteRestartSentinelPayload(payload);
-  const restart = shouldScheduleDirectConfigRestart({
-    changedPaths: params.changedPaths,
-    nextConfig: params.nextConfig,
-  })
+  const restart = restartRequirement.scheduleDirectRestart
     ? scheduleGatewaySigusr1Restart({
         delayMs: restartDelayMs,
         reason: params.mode,
