@@ -12,13 +12,6 @@ const SCHEMAS = [
     schemaOutFile: "src/state/openclaw-state-schema.generated.ts",
     schemaExport: "OPENCLAW_STATE_SCHEMA_SQL",
   },
-  {
-    name: "openclaw-agent",
-    schema: "src/state/openclaw-agent-schema.sql",
-    outFile: "src/state/openclaw-agent-db.generated.d.ts",
-    schemaOutFile: "src/state/openclaw-agent-schema.generated.ts",
-    schemaExport: "OPENCLAW_AGENT_SCHEMA_SQL",
-  },
 ];
 
 const verify = process.argv.includes("--verify") || process.argv.includes("--check");
@@ -81,9 +74,10 @@ function generateTypes(db) {
     "",
     'import type { ColumnType } from "kysely";',
     "",
-    "export type Generated<T> = T extends ColumnType<infer S, infer I, infer U>",
-    "  ? ColumnType<S, I | undefined, U>",
-    "  : ColumnType<T, T | undefined, T>;",
+    "export type Generated<T> =",
+    "  T extends ColumnType<infer S, infer I, infer U>",
+    "    ? ColumnType<S, I | undefined, U>",
+    "    : ColumnType<T, T | undefined, T>;",
     "",
   ];
 

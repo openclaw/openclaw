@@ -39,7 +39,6 @@ const rawSqliteAllowPathGroups = {
     "src/infra/sqlite-pragma.test-support.ts",
     "src/infra/sqlite-transaction.ts",
     "src/infra/sqlite-wal.ts",
-    "src/state/openclaw-agent-db.ts",
     "src/state/openclaw-state-db.ts",
     "src/state/sqlite-schema-shape.test-support.ts",
   ],
@@ -53,7 +52,6 @@ const rawSqliteAllowPathGroups = {
     "src/infra/outbound/current-conversation-bindings.ts",
     "src/media/store.ts",
     "src/plugin-sdk/memory-core-host-engine-storage.ts",
-    "src/plugin-state/plugin-blob-store.ts",
     "src/plugin-state/plugin-state-store.sqlite.ts",
     "src/proxy-capture/store.sqlite.ts",
     "src/tasks/task-flow-registry.store.sqlite.ts",
@@ -146,8 +144,7 @@ function collectImports(sourceFile) {
       source.endsWith("node-sqlite.js") ||
       source.endsWith("sqlite-transaction.js") ||
       source.endsWith("sqlite-wal.js") ||
-      source.endsWith("openclaw-state-db.js") ||
-      source.endsWith("openclaw-agent-db.js")
+      source.endsWith("openclaw-state-db.js")
     ) {
       hasSqliteContext = true;
     }
