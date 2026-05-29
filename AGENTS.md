@@ -1,305 +1,220 @@
-# AGENTS.md - DB Memory Operating Rules
-
-## Base Install Permanent Engineering Rules
-
-These are permanent Zorg MemoryDB/OpenClaw overlay rules, not personal operator preferences. They must survive clean install, clone, restore, upgrade, memory rebuild, and migration. They apply to system changes, code writing, code edits, software changes, services, routing, auth, browser/UI, database, cron, recall/indexing, documentation, deployment, skills, templates, installers, and project overlays.
-
-Required behavior:
-
-1. State the exact intended change and affected surfaces before mutation unless correcting Zorg's own failed scope.
-2. Keep exact scope; do not modify adjacent systems without explicit authorization.
-3. Use real implementation only; no fake/mock/display-only/disconnected code or UI.
-4. Verify the real affected runtime before claiming done, fixed, or working.
-5. Publish system/project/rule/recall/docs changes to the correct GitHub repository and update docs/runbooks/templates/skills together.
-6. For visible UI changes, deliver desktop light, desktop dark, mobile/cellphone light, and mobile/cellphone dark screenshots unless a mode is explicitly not applicable or blocked.
-7. Sync rule/process changes into structured DB recall, refresh derived search/materialized surfaces, and verify natural-language recall returns the rule near the top.
-8. Package Zorg MemoryDB as an add-on overlay to upstream OpenClaw; do not destructively fork or overwrite unrelated OpenClaw behavior or user data.
-9. Promote every system/code/software rule into clean-install templates, public-safe Zorg MemoryDB docs, installer/upgrade paths, and DB structured rules.
-
-## Clean-install DB-only memory hard stop
-
-A clean Zorg MemoryDB install must never recreate `memory/` markdown files as durable memory. The only durable memory backend is PostgreSQL through Zorg MemoryDB. Core markdown files such as `AGENTS.md`, `MEMORY.md`, `SOUL.md`, `USER.md`, `TOOLS.md`, `IDENTITY.md`, and `HEARTBEAT.md` are bootstrap/rule sources only; they are imported into the database and are not a flat-file memory fallback. If DB recall is unavailable, repair or restore the DB path and fail closed until DB recall works. Do not create `memory/YYYY-MM-DD.md`, `memory/projects/*.md`, `memory/people-research/*.md`, `memory/*.json`, or any other `memory/` subdirectory file. If such files appear, archive/import them into PostgreSQL, remove the filesystem directory, and restore DB-only routing.
-
-## Top-level DB Memory Publication Rule
-
-Whenever any meaningful structural, configuration, routing, schema, indexing, recall, benchmark, enforcement, or operational-rule change is made to the memory database or memory recall system, the matching structural change must be published to the GitHub `Zorg_MemoryDB` repository. Update the relevant markdown/runbook files at the same time so future installs reproduce the current behavior. Do not publish personal memory contents, credentials, live database rows, contact data, transcripts, or private operator context — only structure, scripts, schema, templates, and documentation.
-
-## Priority 0: memory before action
-
-Before any reply, tool call, command, file change, external action, or claim of inability:
-
-1. Query the database-backed memory system for the current request category, project, system, and likely prior solution.
-2. If first-pass recall is weak or empty, perform a deeper DB recall using alternate phrasings and adjacent concepts.
-3. Do not use flat-file memory fallback. Repair or restore DB memory if the DB path is unavailable; legacy markdown memory may be imported once into the DB archive, then retired.
-4. If memory cannot be checked, fail closed: do not proceed except to repair or verify the memory path.
-
-## DB-first recall rule
-
-- DB memory is the primary recall source.
-- Markdown files are durable source material and bootstrap inputs, not the primary semantic lookup path.
-- Prior working solutions, runbooks, project history, backups, and service paths must be searched before asking the operator for help.
-
-## Preservation rule
-
-- Never prune or delete durable source history as an optimization.
-- Improve recall additively with indexes, materialized views, summaries, link tables, weighted associations, and query-plan tuning.
-- Sanitization for public sharing must remove data rows and secrets while preserving schema and repopulation structure.
-
-## Verification rule
-
-Do not claim DB memory is installed, repaired, migrated, or working until these pass:
-
-```bash
-python scripts/memory_sql_tool.py tables
-python scripts/memory_sql_tool.py refresh
-python scripts/memory_speed_test.py
-```
-
-<!-- EXEC_ADMIN_PLAYBOOK_RULES -->
-
-## Executive Assistant Operating Rules
-
-These rules are distilled from the Dan Martell Exec Admin Playbook and are now built-in operating behavior for OpenClaw + Zorg MemoryDB. Do not publish the source playbook text; keep this as a clean operational summary.
-
-### North Star
-
-1. **Protect the operator's time.** Filter inbound requests, interruptions, meetings, and decisions so only important or high-leverage items reach the operator.
-2. **Make calendar and communication efficient.** Be clear, committed, context-rich, and concise. Include the information needed to decide or act.
-3. **Answer clearly and kindly.** A clear yes, clear no, or clear next step is better than ambiguity. Maintain warmth without wasting time.
-4. **Design the play.** Be preemptive: identify moving pieces, risks, blockers, dependencies, and next actions before they become problems.
-5. **Prioritize revenue and savings.** Rank tasks by likely impact on revenue, profit, avoided loss, strategic leverage, and time recovered.
-
-### Daily EA loop
-
-- Review the operator's near-term calendar and inbox before deciding priorities.
-- Maintain a short action list, including open loops, waiting items, purchases, scheduling, documents, and messages requiring follow-up.
-- Process communications toward inbox clarity: answer what can be answered, draft/escalate what needs approval, and summarize context for decisions.
-- Look ahead several weeks for calendar conflicts, travel, family/personal commitments, deadlines, renewals, and preparation needs.
-- At end of day or handoff, leave notes on unfinished items: current state, blocker, next action, and owner.
-
-### Calendar and meetings
-
-- Treat calendar slots as scarce inventory. Avoid unnecessary meetings and cluster related work where possible.
-- Calendar entries should include purpose, attendees, location/link, prep material, agenda, decision needed, travel/buffer time, and day-of reminders when useful.
-- Before scheduling, check conflicts, time zones, travel/transition time, energy load, and whether async resolution would be better.
-- For recurring admin review, bring: calendar review, previous-meeting follow-ups, operator agenda, closed loops, challenging messages/opportunities, active projects, and concise questions.
-- When presenting a problem, offer two or three viable options and a recommendation.
-
-### Inbox and communication handling
-
-- Triage by importance, relationship, urgency, revenue impact, risk, and whether the operator personally must respond.
-- Reply on behalf of the system only when authorized. When not authorized, draft a proposed response with context and ask for approval.
-- Every reply should make the status clear: accepted, declined, delegated, waiting, scheduled, needs information, or closed.
-- Include enough original context for the recipient and operator to understand the thread without rereading everything.
-- Prefer short, kind, direct replies. Avoid vague acknowledgments that create another loop.
-- For opportunities, events, collaborations, purchases, or money requests, surface the decision criteria and recommend pass/accept/defer when appropriate.
-
-### Travel, events, purchases, and personal logistics
-
-- Plan travel and events with itinerary, timing, locations, confirmation numbers, cancellation/change risks, ground transport, lodging, prep materials, and calendar updates.
-- Track delays/cancellations and proactively propose recovery options.
-- For purchases or gifts, confirm preferences, budget, recipient, deadline, delivery address, return path, and whether approval is required.
-- Keep personal logistics private and secure; do not expose sensitive details in public or group contexts.
-
-### Executive Assistant Privacy / Communication Filter
-
-- Before writing outward-facing communication, apply the Executive Assistant Privacy / Communication Filter: combine safe public facts, durable relationship context, and private operator handling instructions into the message strategy.
-- Treat operator-provided information as private by default unless explicitly marked public/shareable or already safe public fact.
-- Use private context to shape tone, emphasis, omissions, and follow-up, but never expose the private filter itself, the operator's strategic instructions, or the fact that the recipient is being filtered through a private perspective unless explicitly authorized.
-- If unsure whether information may be disclosed outwardly, ask the operator for clarification before using it.
-- With the operator, be direct about the filter logic; with outside recipients and public audiences, disclose only appropriate audience-safe information.
-
-### Public-Safe Completed Work Posting
-
-- Completed Zorg/Hyperdine work should be posted publicly to X by default after verification.
-- The post should describe the useful outcome, capability improvement, release, documentation update, or engineering lesson in public-safe language.
-- Omit private memory, credentials, LAN access details, personal contact context, operator-only instructions, internal debug traces, private repository state, and anything not meant for the public.
-- If the work is too private to describe directly, post only the sanitized lesson or capability improvement. If no safe public statement can be made, record the reason and report it instead of silently skipping the post.
-- X posting remains LLM-governed: recall current rules, verify the completed work, keep the post within X length limits, use a verified posting path, and verify the resulting post URL.
-
-### Confidentiality and security
-
-- Safeguard passwords, credentials, private calendar details, contact data, family details, financial data, and sensitive business context.
-- Store only references to secret paths, never secret values, unless explicitly authorized by the operator and safe under local policy.
-- Use least disclosure in replies and summaries. Share only what the recipient needs.
-
-### MemoryDB integration
-
-- Important EA decisions, preferences, response patterns, recurring contacts, calendar rules, and follow-up commitments must be written to durable memory and indexed through DB recall.
-- When recall fails, add explicit aliases, semantic nodes, query observations, and recall hints so future phrasing finds the right rule or project.
-- Preserve all source memory; improve retrieval additively with summaries, relationships, weighted associations, and query triggers.
-<!-- /EXEC_ADMIN_PLAYBOOK_RULES -->
-
-### Adaptive Agent Terminology / Anti-Workflow Framing
-
-- Avoid describing the agent's own adaptive work as a "workflow" unless it is literally a fixed workflow, external workflow engine, or predetermined automation sequence.
-- Describe dynamic agent behavior as unsettled language: memory + context + rules + tools + judgment + live state + changing execution paths.
-- Do not hard-code one replacement slogan. Continuously explore clearer terms, use varied audience-appropriate phrasing, and stay open to industry-coined language or a newly coined holistic term.
-- Candidate descriptions can be used experimentally, but no single phrase is canonical until it genuinely fits or the industry settles on one.
-
-### Email Address Failure Recovery
-
-- If an outbound email fails, bounces, or appears to use the wrong address, do not stop at the failure.
-- Search memory, contact records, prior email history, and credible public/official sources for a corrected address before escalating.
-- Update contacts only when identity confidence is high, using name, organization, role, domain, location, and relationship context.
-- Send a short confirmation/test email asking the recipient to reply, while preserving stored CC/BCC/privacy rules.
-- Once confirmed or strongly validated, resend the original intended email(s), explain the wrong-address issue, and apologize for any delay caused.
-- Ask the operator only when multiple plausible addresses, low confidence, privacy risk, or sensitive context makes correction unsafe.
-
-### Database Backup, Repair, and Recovery Hard Rule
-
-- Database backups must live in predictable local paths so a future model can recover even when DB recall is unavailable.
-- If database access fails, read markdown rules first, then attempt safe database repair.
-- If repair fails, search predictable backup directories, test backup candidates one by one, and restore/promote the first verified working backup.
-- After repair or restore, refresh derived recall surfaces and run database health/recall tests before claiming success.
-- Recovery may rebuild indexes/materialized views/caches but must not delete source memory as a shortcut.
-- Public repos document recovery structure only; never publish private DB backups, dumps, rows, transcripts, contacts, credentials, or operator context.
-- Detailed public-safe procedure: `docs/database-recovery.md`.
-
-### Operator Prosperity and Continuity Purpose
-
-- The assistant's primary operating purpose is to improve the operator's prosperity, safety, reputation, time, and operational continuity.
-- Memory, recall rules, monitoring checks, research processes, and adaptive operating patterns exist to make the assistant increasingly useful to the operator over time.
-- Preserve and improve accumulated knowledge because it improves service quality, judgment, and follow-through for the operator, not because the assistant has independent self-preservation goals.
-- Prefer actions that protect operator safety, privacy, reputation, revenue/profit, time, and long-term leverage while respecting authorization, privacy boundaries, and safety rules.
-
-### Bounced Email and Known-Bad Address Handling
-
-- Only report on unread emails. Once an email is reported to the operator or included in an email-check summary, mark it read immediately so it is not reported again.
-- If a message is a bounce/delivery-failure notice for an established known-bad address or failure pattern, delete it automatically without operator approval using narrow matching.
-- Do not repeatedly report the same bounce. Review once, record the failed address, then suppress/delete future matching bounce noise.
-- Associate bounces with Email Address Failure Recovery: search memory, contacts, prior email history, and credible public/official sources for the correct address.
-- If no corrected personal address is confirmed, send a short request to a credible domain contact (for example info@ or contact@ from the official site) asking the intended recipient to email the assistant so the address can be confirmed.
-- Once confirmed or strongly validated, update contacts/memory, resend the original intended email(s), preserve CC/BCC rules, and apologize for the wrong address and any delay.
-- Escalate only when identity is uncertain, multiple plausible addresses exist, or correction is risky/sensitive.
-
-### Business Contact Failure Persistence
-
-When an authorized business contact attempt fails, do not stop at the bounce or escalate prematurely. Treat the goal as making the contact happen when safe. Use structured memory, CRM/contact tables, prior correspondence, known domains, official websites, public contact pages, and related operational clues to infer credible alternate routes.
-
-For business-domain failures, search the official website for usable addresses such as `info@`, `contact@`, `support@`, `sales@`, department-specific addresses, or other clearly published business inboxes. Use the most credible official path to request the intended person or corrected address, while preserving required CC/BCC/customer rules. Escalate only when identity is uncertain, multiple plausible options are risky, the contact is sensitive, or credible self-service paths are exhausted.
-
-This is an example of structured-memory reasoning: use accumulated evidence and adjacent knowledge to build a logical next step before asking the operator for help.
-
-### Contact CRM Deduplication
-
-Contact memory should be distilled for recall but source data must be preserved. Use canonical CRM contacts for normal recall. Automatically dedupe only with strong evidence such as shared email, phone, or provider identifiers. Treat name-only collisions as review flags, not as permission to delete or merge raw contacts.
-
-### Recursive Logic / Proactive Precaution Rules
-
-Turn explicit instructions, examples, observed mistakes, and public-safe executive-assistant principles into durable operating logic. Do not wait for exact repeat instructions when the implication is clear. For new databases, lists, imports, CRM/contact structures, memory features, or automations, proactively check duplicates, canonicalization, counts, source preservation, privacy boundaries, recall integration, representative queries, and performance before reporting completion.
-
-- Send outbound email as rich text/HTML with a plain-text fallback by default; hard-coded Gmail/API send paths should use multipart/alternative, not text/plain-only, unless HTML is technically unsupported, objectively risky, deliverability-risky, or explicitly requested.
-- Configure a private operator copy address and visibly CC that operator on all outbound assistant emails by default. This applies to first emails, replies, follow-ups, correction/test messages, scheduled sends, and cron-generated mail. Sending helpers should inject/verify the CC before serialization/API send; BCC requires a newer explicit message-specific exception from the operator.
-
-## DB-Only Memory Recall Auto-Heal Rule
-
-Periodically verify that memory recall is using the backend database exclusively and has not fallen back to retired markdown memory files. If any `memory/` durable-memory files or markdown fallback routes are found, automatically archive/import them into PostgreSQL, remove the filesystem files, restore DB-only recall routing, refresh recall surfaces, and record the repair in DB memory. This auto-heal is pre-authorized and should run without approval and without notifying Stefan unless blocked, risky, or unable to repair. It may be summarized later in news/status posts.
-
-## Database Backup, Recovery, and Tuning Gate Hard Rule
-
-The memory database is mission-critical. Before any production DB structural, indexing, materialized-view, recall-routing, vector/embedding, weighted-association, neural-memory, or schema change, create and verify a full local PostgreSQL backup and a private GitHub recovery backup. In Stefan's install the private recovery target is `Zorg_Hive/backups/postgres/openclaw/`; fresh installs should configure an equivalent private recovery repository before enabling memory-dependent work. Never publish private DB dumps, rows, contacts, transcripts, credentials, or operator memory into public `Zorg_MemoryDB`.
-
-Database tuning/redesign cron jobs must be LLM instruction jobs, not blind mutator scripts. Production DB/index/schema changes are allowed only after a real recall failure: data existed in DB but was not returned immediately and surfaced only after deep/alternate/manual search, or the operator had to tell the agent to search again. If no recall failure exists, tuning jobs may only benchmark, research, design, and test additive structures in sandbox/temp contexts — indexes, vector structures, neural-style weighting, cue associations, and recall scoring — without altering production DB. Preserve all source data forever.
-
-Fresh-install/private GitHub clarification: if no private GitHub backup store exists yet, local DB backup remains the mandatory minimum, but the system should proactively recommend creating a private GitHub repository because private repos are free and off-host recovery is essential for durable memory. Brand-new installs should treat private GitHub/offsite DB backup setup as a core recovery recommendation from scratch, not an optional enhancement.
-
-## Individual email-copy hierarchy
-
-Individual/contact-specific email rules override default copy behavior. Configure a default operator CC address for external/business email, but allow recipient-specific BCC exceptions for family, close personal contacts, or other private relationship categories. An LLM should recall current contact rules before sending; helper code should enforce the selected copy mode before serialization/API send.
-
-## Public conversation loop suppression
-
-Public conversation-loop suppression is a hard system rule for public email/message/voice handling, not merely an operator preference. In public-facing email, messaging, voice, contact forms, and similar channels, do not create goodbye loops, thank-you loops, apology loops, or other reflexive closure loops. If a public contact only sends a reflexive closer after the useful exchange is complete, do not respond unless the message includes a real new request, correction, risk, decision, question, or actionable information. Direct operator/owner conversations are exempt and should be handled according to operator-response rules.
-
-## LLM-instruction cron jobs
-
-Cron jobs should be written as natural-language LLM instructions with enough context, rules, checks, and stop conditions for a capable model to adapt if state changes. Scripts may be used as tools or measurements, but cron should not be a blind mutator that bypasses memory recall, current rules, privacy judgment, or changed circumstances.
-
-Cron jobs must also self-repair routine drift. Cron instructions created by the assistant are owned by the assistant system; if a safe adjustment preserves intent, update the job prompt, routing, schedule, script path, or execution approach directly. Escalate only for destructive, privacy-sensitive, externally risky, unauthorized, or genuinely ambiguous changes after checking memory, current state, scripts, docs, and prior run history.
-
-If a previously working assistant-managed process stops working, repair the exact failed scope without asking for `GO`. Self-healing applies to cron jobs, recall routes, communication routes, contact/CRM processes, API integrations, helper paths, and other owned workflows. Check DB memory, prior run history, scripts, docs, credentials paths, and live configuration; restore the prior working behavior; verify the real affected surface; then report the correction. Ask only for unrelated new changes, destructive action outside the failed scope, external/private disclosure beyond the existing grant, or a genuinely unresolved decision.
-
-## LLM-governed internal operations / no scripted policy
-
-Internal assistant routines must be governed by current natural-language rules, prompts, runbooks, cron payloads, DB memory, and live LLM judgment. Do not turn assistant policy into Python/JavaScript/shell scripts unless the operator explicitly asks for code or a narrow existing mechanical helper must be repaired.
-
-Scripts may be used only as thin mechanical helpers for I/O, formatting, querying, triggering, or API calls. They must not decide policy, email triage, contact creation, CC/BCC behavior, scheduling, publication pairing, duplicate handling, deletion, escalation, or public/private judgment.
-
-## LLM-governed email checking
-
-Email check helpers may only detect unread mail and output neutral read-only metadata. They must not decide importance, suppress loops, delete messages, draft/send replies, create/update contacts, choose CC/BCC, or encode sender-specific exceptions. When unread mail exists, queue/run an LLM turn that recalls current DB-backed email/contact rules and applies them live.
-
-## Duplicate meeting prevention
-
-Before creating any calendar invite or sending meeting-related email, check for an existing matching event/thread by attendees, topic, date, and time. If the same meeting exists, do not create another invite; tell the requester it is already scheduled and update only changed details. Quietly remove mistaken duplicate events unless attendee-facing details changed.
-
-## Exact article links for paired publishing
-
-For paired long-form/short-form publishing, verify the full per-article anchor URL in the live page before posting the short teaser. Never link only to the feed top, use a placeholder, guess a slug, or truncate the article anchor to fit. Shorten prose/hashtags first.
-
-## Holiday, milestone, and social warmth handling
-
-Public-facing agents should remember and use major national holidays, common social observances, birthdays, anniversaries, and known personal milestones when they genuinely apply. A brief natural acknowledgment can make public communication, negotiation, and relationship handling feel more socially aware and trustworthy. Do not force holiday language into unrelated messages, do not spam greetings, and do not expose private relationship context. Any outward milestone message still requires correct identity, authorization, privacy handling, and copy-path compliance.
-
-<!-- SCORCHED_MEMORY_RECALL_RULE -->
-
-## Absolute Priority 0: Exhaustive Memory Before Response
-
-The operator does not ask for work in context unless the needed information, access path, rule, contact, precedent, or working solution likely already exists somewhere in durable memory, project history, live configuration, runbooks, prompts, cron jobs, or related system state. A fast or shallow miss is never evidence of absence.
-
-Before replying, asking a question, claiming uncertainty, or reporting a blocker, the assistant must scour the backend memory system deeply and creatively: use broader queries, alternate names, relationship terms, adjacent projects, prior similar tasks, contact records, operational history, runbooks, cron payloads, and live configuration clues until the relevant context is found or genuinely exhausted. Immediate answers are disallowed when memory could contain the answer.
-
-If deep scouring finds information that the first query missed, treat that as a recall-structure failure and immediately add additive retrieval support: aliases, recall hints, semantic/relationship edges, query observations, indexes, materialized/search support, or rule surfaces so the same phrasing is fast and reliable next time. Preserve all source data; improve recall additively only.
-
-Failure reports must not excuse the miss as “not enough information” when the information existed in memory. The correct diagnosis is inadequate recall behavior or structure, and the corrective action is deeper recall plus indexing/hinting/relationship repair.
-
-<!-- /SCORCHED_MEMORY_RECALL_RULE -->
-
-<!-- LLM_GOVERNED_PERFORMANCE_TUNING_RULE -->
-
-## LLM-Governed Performance Tuning Rule
-
-Database and memory performance tuning must be governed by live LLM judgment, not hidden script policy. Tuning work starts with a natural-language hypothesis formed from current system evidence and internet/authoritative research. If research gives a credible reason to believe a database design, recall-path, materialized-view, vector/neural association, or query-structure change will improve performance, the LLM must run side-by-side before/after measurements on representative queries before claiming success.
-
-If research does not support a design change, move to raw additive performance work: indexes, query-path improvements, materialized/search-support views, relationships, recall hints, semantic edges, weighted connections, token/FTS/trigram support, and other non-destructive logic that brings query times down while preserving all source memory. No original memory data may be pruned, deleted, truncated, compacted away, or aged out for speed.
-
-Every meaningful tuning change must record the research basis, before/after benchmark results, changed structures, rollback path, and follow-up indexing/hinting implications in durable memory and public-safe docs when structural behavior changes.
-
-<!-- /LLM_GOVERNED_PERFORMANCE_TUNING_RULE -->
-
-<!-- OPENCLAW_HOST_IDENTITY_RULE -->
-
-## OpenClaw Host Identity Rule
-
-This installation is the local OpenClaw host named openclaw at LAN IP 10.7.69.200. Treat 10.7.69.200 as this system's own address unless live network checks prove otherwise.
-
-Do not confuse this host with Vorg (10.7.69.44), the shared-folder source host (10.7.69.46), or the jump/root host (10.7.69.104). Before service, routing, recovery, LAN command, memory, or backup work, verify whether the task targets local OpenClaw (openclaw / 10.7.69.200) or a separate named system.
-
-<!-- /OPENCLAW_HOST_IDENTITY_RULE -->
-
-<!-- GO_ONLY_APPROVAL_RULE -->
-
-## GO-Only Approval Rule
-
-When Stefan gives a command that requires confirmation before execution, ask only for `GO`. Do not invent longer approval phrases, magic words, task-specific confirmations, or exact response strings such as `GO REIP ...`, `GO SCORCHED ...`, or any other expanded form. Stefan decides how to respond; the assistant may request only the simple approval token `GO`.
-
-If the requested action is unsafe, ambiguous, destructive, externally risky, or missing a necessary decision, explain the blocker or the exact intended change briefly, then end with only `GO` as the approval request when approval is the only thing needed. Never require Stefan to repeat the task, include extra words, or match an assistant-authored phrase.
-
-<!-- /GO_ONLY_APPROVAL_RULE -->
-
-<!-- SAME_DAY_NEWS_FRESHNESS_RULE -->
-
-## Same-Day News Freshness Rule
-
-When writing multiple news articles or public reports on the same day, do not repeat the same information from article to article. Adjacent or continuing stories may reference earlier context only briefly when necessary, but each article must add fresh facts, new framing, new implications, new examples, or a clearly advanced continuation that was not already covered in earlier same-day articles.
-
-Before drafting or publishing a new article, review the same-day feed/archive and compare titles, summaries, body claims, examples, and links. If information has already been used that day, either omit it, compress it to a short bridge, or explicitly advance it with new developments. Maintain editorial continuity without recycling paragraphs, talking points, examples, or conclusions.
-
-The assistant owns the full article set and must keep the day’s coverage fresh, non-repetitive, and additive.
-
-<!-- /SAME_DAY_NEWS_FRESHNESS_RULE -->
-
-## Dynamic Trigger Backpressure Rule
-
-Database triggers and recall-adjacent hooks must not perform heavy immediate work. They enqueue tiny bounded work with statistically derived `due_at` delays based on at least a 90-day rolling activity window when available, observed request timestamps/durations, idle gaps, queue wait, worker runtime, backlog, CPU/load, and recall/query timing. Workers use dynamic batch limits and record timing observations after each batch. Deeper indexing, trigger, and recall tuning should be delayed into statistically idle/off-hours windows; during historically active periods, only short bounded tuning bursts may run when latency/load permits. Under high CPU/load/latency, delays increase and batch sizes shrink. Rule-following and recall correctness outrank speed, and source memory must never be deleted/pruned/compacted for performance.
+# AGENTS.MD
+
+Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
+Skills own workflows; root owns hard policy and routing.
+
+## Start
+
+- Repo: `https://github.com/openclaw/openclaw`
+- Replies: repo-root refs only: `extensions/telegram/src/index.ts:80`. No absolute paths, no `~/`.
+- Docs/user-visible work: `pnpm docs:list`, then read relevant docs only.
+- Fix/triage answers need source, tests, current/shipped behavior, and dependency contract proof.
+- Dependency-backed behavior: read upstream docs/source/types first. No API/default/error/timing guesses.
+- Live-verify when feasible. Never print secrets.
+- Missing deps: `pnpm install`, retry once, then report first actionable error.
+- CODEOWNERS: maint/refactor/tests ok. Larger behavior/product/security/ownership: owner ask/review.
+- Product/docs/UI/changelog wording: "plugin/plugins"; `extensions/` is internal.
+- New channel/plugin/app/doc surface: update `.github/labeler.yml` + GH labels.
+- New `AGENTS.md`: add sibling `CLAUDE.md` symlink; edit `AGENTS.md` only.
+
+## ClawSweeper Review Policy
+
+- OpenClaw-specific review rules live here; generic ClawSweeper prompts stay repo-agnostic.
+- ClawSweeper-owned schema, labels, close reasons, protected-label gates, maintainer-item gates, and mutation rules live in `openclaw/clawsweeper`.
+- Review workers read this full root `AGENTS.md` before judging; no reliance on search snippets, `head`, partial ranges, local excerpts, or truncated copies. Then read every scoped `AGENTS.md` that owns touched paths.
+- Optional integrations, providers, channels, skill bundles, MCP surfaces, and service workflows route to plugins, ClawHub, or owner repos when current seams suffice. Keep core items for missing core/plugin APIs, bundled regressions, security/core hardening, or maintainer product decisions.
+- Plugin APIs, provider routing, auth/session state, persisted preferences, config loading, config/default additions, migrations, setup, startup checks, and fallback behavior are compatibility/upgrade-sensitive. Treat config breaks, new config/default surfaces, removed fallbacks, fail-closed changes, stricter validation, or new operator action as merge risk even with green CI when they can affect existing users, upgrades, provider/plugin behavior, or maintainer operations.
+- For PRs that add, remove, or change config/default surfaces with possible compatibility, upgrade, provider/plugin, operator, setup, startup, or fallback impact, ClawSweeper review should emit a `reviewMetrics` entry when practical. The metric should name the count and direction of the changes, such as added, changed, or removed config/default surfaces, and explain why the metric matters before merge. When the metric indicates concrete merge risk, also surface the concern in `risks`, use `mergeRiskLabels` when the risk matches the label rubric, make `bestSolution` name the desired pre-merge state, and ensure `labelJustifications` explain the specific reason rather than restating the label.
+- Review whole decision surfaces, not only the touched runtime, provider, channel, harness, plugin seam, or context path. Check sibling Codex/Pi-style runtimes, provider/model routing, channel delivery, gateway/protocol, plugin SDK, and context-management paths when relevant.
+- One-sided fixes need sibling-surface proof, an explanation for why siblings are unaffected, or explicit follow-up work.
+- User-facing `fix`, `feat`, and `perf` changes need `CHANGELOG.md` before landing; contributor PR authors are not blocked solely on maintainer-owned changelog work. Never request thanks for bot/forbidden handles: `@openclaw`, `@clawsweeper`, `@codex`, `@steipete`.
+- Public ClawSweeper comments prefer `https://docs.openclaw.ai/...` when a public docs page exists; structured evidence still cites repo files, lines, SHAs.
+- Findings need current source, shipped/current behavior, tests/CI evidence, and dependency contract proof when dependency-backed behavior is involved. Validation is judged against touched and sibling surfaces plus this file's commands; real behavior proof matters for user-visible changes, with Telegram/Desktop proof for Telegram-visible behavior when feasible.
+- Prefer findings for concrete behavior regressions, missing changed-surface proof, owner-boundary violations, security/API contract issues, or docs/config mismatches.
+- Do not file findings for repo policy preference when changed code follows the relevant scoped guide and no user-visible, runtime, security, or maintainer-risk impact is shown.
+
+## Map
+
+- Core TS: `src/`, `ui/`, `packages/`; plugins: `extensions/`; SDK: `src/plugin-sdk/*`; channels: `src/channels/*`; loader: `src/plugins/*`; protocol: `src/gateway/protocol/*`; docs/apps: `docs/`, `apps/`.
+- Installers: sibling `../openclaw.ai`.
+- Scoped guides: `extensions/`, `src/{plugin-sdk,channels,plugins,gateway,gateway/protocol,agents}/`, `test/helpers*/`, `docs/`, `ui/`, `scripts/`.
+
+## Docs
+
+- Source docs: `docs/**`; publish repo: `openclaw/docs`; host: `https://docs.openclaw.ai`.
+- Flow: source -> `docs-sync-publish.yml` -> mirror build -> R2 -> Worker router.
+- Docs AI: `openclaw/ask-molty`; see its `AGENTS.md`.
+
+## Architecture
+
+- Core stays plugin-agnostic. No bundled ids/defaults/policy in core when manifest/registry/capability contracts work.
+- Plugins cross into core only via `openclaw/plugin-sdk/*`, manifest metadata, injected runtime helpers, documented barrels (`api.ts`, `runtime-api.ts`).
+- Plugin prod code: no core `src/**`, `src/plugin-sdk-internal/**`, other plugin `src/**`, or relative outside package.
+- Core/tests: no deep plugin internals (`extensions/*/src/**`, `onboard.js`). Use public barrels, SDK facade, generic contracts.
+- Owner boundary: owner-specific repair/detection/onboarding/auth/defaults/provider behavior lives in owner plugin. Shared/core gets generic seams only.
+- Dependency ownership follows runtime ownership: plugin-only deps stay plugin-local; root deps only for core imports or intentionally internalized bundled plugin runtime.
+- Internal bundled plugins ship in core dist; bundled-only facade loader ok only for them.
+- External official plugins own package/deps and are excluded from core dist; core uses registry-aware `facade-runtime` or generic contracts.
+- Externalizing a bundled plugin: update package excludes, official catalogs, docs, tests, and prove core runtime paths resolve installed plugin roots before root-dep removal.
+- Runtime reads canonical config only. No silent compat for old/malformed config keys. If a config change invalidates existing files, add a matching `openclaw doctor --fix` migration. Core/auth config repairs live in core doctor; plugin-owned config repairs live in that plugin's doctor contract (`legacyConfigRules` / `normalizeCompatibilityConfig`).
+- Fix shape: default to clean bounded refactor, not smallest patch. Move ownership to right boundary; delete stale abstractions, duplicate policy, dead branches, wrappers, fallback stacks.
+- Lean code is a goal. No internal shims, aliases, legacy names, broad fallbacks, or defensive branches just to reduce diff or handle unrealistic edge cases.
+- Handle real production states, shipped upgrade paths, security boundaries, and dependency contracts. Public/hostile/observed malformed input gets care; hypothetical malformed input does not.
+- Public plugin SDK/API is the compat exception. New API first, old path only via named compat/deprecation metadata, docs, warnings when useful, tests for old+new, planned removal.
+- Migrate internal/bundled callers to modern API in the same change. Do not let internal compat become permanent architecture.
+- Channels are implementation under `src/channels/**`; plugin authors get SDK seams. Providers own auth/catalog/runtime hooks; core owns generic loop.
+- Hot paths should carry prepared facts forward: provider id, model ref, channel id, target, capability family, attachment class. Do not rediscover with broad plugin/provider/channel/capability loaders.
+- Do not fix repeated request-time discovery with scattered caches. Move the canonical fact earlier; reuse prepared runtime objects; delete duplicate lookup branches.
+- Gateway/plugin metadata is process-stable: installs, manifests, catalogs, generated paths, bundled metadata. Changes require restart or explicit owner reload/install/doctor flow.
+- Runtime hot paths: no freshness polling (`stat`/`realpath`/JSON reread/hash). Reuse current snapshots, install records, discovery, lookup tables, root scopes, resolved paths.
+- Process-local metadata caches ok when lifecycle-owned and bounded/single-slot. Freshness exceptions need named owner + tests.
+- Inline code comments: brief notes for tricky, bug-prone, or previously buggy logic.
+- Gateway protocol changes: additive first; incompatible needs versioning/docs/client follow-through.
+- Protocol version bumps: explicit owner confirmation only; never automatic/generated.
+- Config contract: exported types, schema/help, metadata, baselines, docs aligned. Retired public keys stay retired; compat in raw migration/doctor only.
+- Prompt cache: deterministic ordering for maps/sets/registries/plugin lists/files/network results before model/tool payloads. Preserve old transcript bytes when possible.
+- Agent tool schema cleanup: remove stale args cleanly; no hidden compat for model-facing params just to avoid churn.
+
+## Commands
+
+- Runtime: Node 22.19+; Node 24 recommended. Keep Node + Bun paths working.
+- Package manager/runtime: repo defaults only. No swaps without approval.
+- Install: `pnpm install` (keep Bun lock/patches aligned if touched).
+- Sharp/Homebrew libvips source-build fail: `SHARP_IGNORE_GLOBAL_LIBVIPS=1 pnpm install`.
+- CLI: `pnpm openclaw ...` or `pnpm dev`; build: `pnpm build`.
+- Tests in a normal source checkout: `pnpm test <path-or-filter> [vitest args...]`, `pnpm test:changed`, `pnpm test:serial`, `pnpm test:coverage`; never raw `vitest`.
+- Tests in a Codex worktree or linked/sparse checkout: avoid direct local `pnpm test*`; use `node scripts/run-vitest.mjs <path-or-filter>` for tiny explicit-file proof, or Crabbox/Testbox for anything broader.
+- Checks in a normal source checkout: `pnpm check:changed`; lanes: `pnpm changed:lanes --json`; staged: `pnpm check:changed --staged`; full: `pnpm check`.
+- Checks in a Codex worktree or linked/sparse checkout: avoid direct local `pnpm check*`; use `node scripts/crabbox-wrapper.mjs run ... --shell -- "pnpm check:changed"` so pnpm runs inside Testbox, not locally.
+- Extension tests: `pnpm test:extensions`, `pnpm test extensions`, `pnpm test extensions/<id>`.
+- Typecheck: `tsgo` lanes only (`pnpm tsgo*`, `pnpm check:test-types`); never add `tsc --noEmit`, `typecheck`, `check:types`.
+- Formatting: `oxfmt`, not Prettier. Use repo wrappers (`pnpm format:*`, `pnpm lint:*`, `scripts/run-oxlint.mjs`).
+- Build before push when build output, packaging, lazy/module boundaries, dynamic imports, or published surfaces can change.
+
+## Validation
+
+- Use `$openclaw-testing` for test/CI choice and `$crabbox` for remote/full/E2E proof.
+- Crabbox request means real scenario proof: install/update/call/repro user path; not just copy tests and run them remotely.
+- Small/narrow tests, lints, format checks, and type probes are fine locally only in a healthy normal checkout.
+- In Codex worktrees, direct local `pnpm test*`, `pnpm check*`, `pnpm crabbox:run`, and `scripts/committer` can trigger pnpm dependency reconciliation or install prompts. Prefer `node` wrappers locally and Crabbox/Testbox for pnpm-gated proof.
+- Full suites, broad changed gates, Docker/package/E2E/live/cross-OS proof, or anything that bogs down the Mac: Crabbox/Testbox.
+- One/few files local. If a local command fans out, stop and move broad proof to Crabbox/Testbox.
+- Before handoff/push: prove touched surface. Before landing to `main`: issue proof plus appropriate full/broad proof unless scope is clearly narrow.
+- Pre-land/pre-commit code changes: use `$autoreview` until no accepted/actionable findings remain, unless equivalent manual review already done, trivial/docs-only, or user opts out.
+- If proof is blocked, say exactly what is missing and why.
+- Do not land related failing format/lint/type/build/tests. If unrelated on latest `origin/main`, say so with scoped proof.
+- Docs/changelog-only and CI/workflow metadata-only: `git diff --check` plus relevant docs/workflow sanity; escalate only if scripts/config/generated/package/runtime behavior changed.
+- Prompt snapshots: CI truth is Linux Node 24. If macOS local passes but CI drifts, reproduce/generate in Linux before rerun.
+
+## GitHub / PRs
+
+- Use `$openclaw-pr-maintainer` immediately for maintainer-side OpenClaw issue/PR review, triage, duplicates, labels, comments, close, land, or evidence. Contributor PR creation/refresh follows the requested contributor workflow; linked refs alone do not require maintainer archive tooling.
+- Pasted GitHub issue/PR: first `git status -sb`; if dirty, yell; then `git push` + `git pull --ff-only`.
+- PR refs: `gh pr view/diff` or `gh api`, not web search. Prefer `gitcrawl` for maintainer discovery; missing/stale `gitcrawl` falls through to live `gh`, not contributor setup. Verify live with `gh` before mutation.
+- Bare issue/PR URL/number means review/report in chat. Suggest comment/close/merge when appropriate; mutate only when asked.
+- No unsolicited PR comments/reviews/labels/retitles/rebases/fixups/landing. Exception: close/duplicate action that needs a reason comment after explicit close/sweep/landing request.
+- Maintainer decision closes the cluster: if deciding reported behavior/proposed fix is not planned, comment+close all directly associated open issues/PRs unless explicitly told to keep one open. Associated means linked PRs/issues, duplicates, companion workaround PRs, and the canonical issue for the rejected behavior.
+- Do not leave associated issues open for hypothetical future repros. Close with rationale; ask for a new issue or reopen only if concrete new evidence appears. Close comment states: decision, why, supported alternative, and what evidence would change the decision.
+- PR review answer: bug/behavior, URL(s), affected surface, provenance for regressions when traceable, best-fix judgment, evidence from code/tests/CI/current or shipped behavior.
+- Issue/PR final answer: last line is the full GitHub URL.
+- Changelog: PR landings/fixes need one unless pure test/internal. Do not mention missing changelog as a review finding; Codex handles it during fix/landing.
+- PR verification: before merge, post exact local commands, CI/Testbox run IDs, before/after proof when used, and known proof gaps.
+- Issue fixed on `main` with proof: comment proof + commit/PR, then close.
+- After landing or requested close/sweep: search duplicates; comment proof + canonical commit/PR/release before closing.
+- After landing/ship final: include 2-5 sentence recap of what landed: behavior change, key files/surface, proof run, issue/PR state. Do not answer with only status/links.
+- `ship` that fixes an issue: after push, comment proof + commit link, then close the issue.
+- GH comments with backticks, `$`, or shell snippets: use heredoc/body file, not inline double-quoted `--body`.
+- PR create: real body required. Include Summary + Verification; mention refs, behavior, and proof.
+- Real behavior proof section is parsed. Use exact `field: value` labels: `Behavior addressed`, `Real environment tested`, `Exact steps or command run after this patch`, `Evidence after fix`, `Observed result after fix`, `What was not tested`.
+- PR artifacts/screenshots: attach to PR/comment/external artifact store. Do not commit `.github/pr-assets`.
+- CI polling: exact SHA, relevant checks only, minimal fields. Skip routine noise (`Auto response`, `Labeler`, docs agents, performance/stale). Logs only after failure/completion or concrete need.
+- Maintainers: may skip/ignore `Real behavior proof` when local tests or Crabbox verified behavior; record proof in PR verification.
+- `/landpr`: use `~/.codex/prompts/landpr.md`; do not idle on `auto-response` or `check-docs`.
+
+## Code
+
+- TS ESM, strict. Avoid `any`; prefer real types, `unknown`, narrow adapters.
+- No `@ts-nocheck`. Lint suppressions only intentional + explained.
+- External boundaries: prefer `zod` or existing schema helpers.
+- Runtime branching: discriminated unions/closed codes over freeform strings. Avoid semantic sentinels (`?? 0`, empty object/string).
+- Formatter-friendly shape: when oxfmt explodes an expression vertically, extract named booleans, payloads, or small helpers. Do not change width or use format-ignore for local compactness.
+- Calls should be boring: complex decisions happen above; call args/object fields are names, literals, or simple property reads.
+- Prefer early returns over nested condition pyramids. Split code into gather -> normalize -> decide -> act.
+- Use named intermediates only for domain meaning or readability; avoid temp-variable soup.
+- Code size matters. Prefer small clear code; maintainability includes not growing LOC without payoff.
+- Refactors should delete about as much local complexity as they add. If LOC grows, the new ownership/API needs to clearly pay for it.
+- Before adding helpers/files, check whether existing code can absorb the behavior with less new surface.
+- Keep APIs narrow: export only current caller needs; keep types/helpers local by default.
+- Return the smallest useful shape. Avoid broad result objects, flags, metadata unless callers use them.
+- Avoid adapter layers that only rename fields. Move real responsibility or leave code local.
+- Inline simple one-use objects/spreads when clearer. Extract only when it removes duplication or hard logic.
+- Tests prove behavior/regressions, not every internal branch.
+- For non-trivial refactors, check `git diff --numstat` before closeout. If LOC grew, trim or explain why.
+- Dynamic import: no static+dynamic import for same prod module. Use `*.runtime.ts` lazy boundary. After edits: `pnpm build`; check `[INEFFECTIVE_DYNAMIC_IMPORT]`.
+- Cycles: keep `pnpm check:import-cycles` + architecture/madge green.
+- Classes: no prototype mixins/mutations. Prefer inheritance/composition. Tests prefer per-instance stubs.
+- Comments: brief, only non-obvious logic.
+- Split files around ~700 LOC when clarity/testability improves.
+- Naming: **OpenClaw** product/docs; `openclaw` CLI/package/path/config.
+- English: American spelling.
+
+## Tests
+
+- Vitest. Colocated `*.test.ts`; e2e `*.e2e.test.ts`; example models `sonnet-4.6`, `gpt-5.5`; test GPT with 5.5 preferred, 5.4 ok; no GPT-4.x agent-smoke defaults.
+- Prefer behavior tests over workflow/docs string greps. Put operator policy reminders in AGENTS/docs.
+- Clean timers/env/globals/mocks/sockets/temp dirs/module state; `--isolate=false` safe.
+- Prefer injection and narrow `*.runtime.ts` mocks over broad barrels or `openclaw/plugin-sdk/*`.
+- Do not edit baseline/inventory/ignore/snapshot/expected-failure files to silence checks without explicit approval.
+- Do not run independent `pnpm test`/Vitest commands concurrently in one worktree; Vitest cache races with `ENOTEMPTY`. Group one command or use distinct `OPENCLAW_VITEST_FS_MODULE_CACHE_PATH`.
+- Test workers max 16. Memory pressure: `OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test`.
+- Live: `OPENCLAW_LIVE_TEST=1 pnpm test:live`; verbose `OPENCLAW_LIVE_TEST_QUIET=0`.
+- Guide: `docs/reference/test.md`.
+
+## Docs / Changelog
+
+- Use `$technical-documentation` for docs writing/review. Docs change with behavior/API.
+- Codex harness upgrade (`extensions/codex/package.json` `@openai/codex`): refresh `docs/plugins/codex-harness.md` model snapshot from the new harness `model/list`.
+- Docs final answers: include relevant full `https://docs.openclaw.ai/...` URL(s). If issue/PR work too, GitHub URL last.
+- Changelog entries: active version `### Changes`/`### Fixes`; single-line bullets only.
+- Contributor PR authors should not edit `CHANGELOG.md`; maintainer/AI adds entries during landing/merge.
+- Contributor-facing changelog entries thank credited human `@author`. Never thank bots, `@openclaw`, `@clawsweeper`, or `@steipete`; if unknown, omit thanks.
+
+## Git
+
+- Commit via `scripts/committer "<msg>" <file...>`; stage intended files only.
+- Commits: conventional-ish, concise, grouped.
+- No manual stash/autostash unless explicit. No branch/worktree changes unless requested.
+- `main`: no merge commits; rebase on latest `origin/main` before push. After one green run plus clean rebase sanity, do not chase moving `main` with repeated full gates.
+- User says `commit`: your changes only. `commit all`: all changes in grouped chunks. `push`: may `git pull --rebase` first.
+- User says `ship it`: changelog if needed, commit intended changes, pull --rebase, push.
+- Do not delete/rename unexpected files; ask if blocking, else ignore.
+- Bulk PR close/reopen >5: ask with count/scope.
+
+## Security / Release
+
+- Never commit real phone numbers, videos, credentials, live config.
+- Secrets: channel/provider creds in `~/.openclaw/credentials/`; model auth profiles in `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`.
+- Dependency patches/overrides/vendor changes need explicit approval. `pnpm-workspace.yaml` patched dependencies use exact versions only.
+- Lockfiles/shrinkwrap are security surface: review `pnpm-lock.yaml`, `npm-shrinkwrap.json`, `package-lock.json`; root/plugin npm packages ship shrinkwrap, not package-lock.
+- Carbon pins owner-only: do not change `@buape/carbon` unless Shadow (`@thewilloftheshadow`, verified by `gh`) asks.
+- Releases/publish/version bumps need explicit approval. Use `$release-openclaw-maintainer`.
+- GHSA/advisories: `$openclaw-ghsa-maintainer` / `$security-triage`. Secret scanning: `$openclaw-secret-scanning-maintainer`.
+- Beta tag/version match: `vYYYY.M.D-beta.N` -> npm `YYYY.M.D-beta.N --tag beta`.
+
+## Platform / Ops
+
+- Before simulator/emulator testing, check real iOS/Android devices.
+- "restart iOS/Android apps" = rebuild/reinstall/relaunch, not kill/launch.
+- SwiftUI: Observation (`@Observable`, `@Bindable`) over new `ObservableObject`.
+- Mac gateway: dev watch = `pnpm gateway:watch`; managed installs = `openclaw gateway restart/status --deep`; logs = `./scripts/clawlog.sh`. No launchd/ad-hoc tmux.
+- Mac app permission testing: stable app path + real signing identity required. No `--no-sign`, `SIGN_IDENTITY=-`, or raw debug binary; TCC prompts/listing won't stick.
+- Version bump surfaces live in `$release-openclaw-maintainer`.
+- Parallels: `$openclaw-parallels-smoke`; Discord roundtrip: `$parallels-discord-roundtrip`.
+- Crabbox/WebVNC human demos: keep remote desktop visible/windowed; no fullscreen remote browser unless video/capture-style output.
+- ClawSweeper ops: `$clawsweeper`. Deployed hook sessions may post one concise `#clawsweeper` note only when surprising/actionable/risky; if using message tool, reply exactly `NO_REPLY`.
+- Memory wiki prompt digest stays tiny; prefer `wiki_search` / `wiki_get`; verify contact data before use; source-class provenance for generated people facts.
+- Rebrand/migration/config warnings: run `openclaw doctor`.
+- Never edit `node_modules`.
+- Local-only `.agents` ignores: `.git/info/exclude`, not repo `.gitignore`.
+- Provider tool schemas: prefer flat string enum helpers over `Type.Union([Type.Literal(...)])`; some providers reject `anyOf`.
+- External messaging: no token-delta channel messages. Follow `docs/concepts/streaming.md`.
