@@ -21,6 +21,7 @@ import {
 } from "../../sessions/user-turn-transcript.js";
 import { buildWorkspaceSkillSnapshot } from "../../skills/loading/workspace.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
+import { resolveUserPath } from "../../utils.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import { ensureAuthProfileStore } from "../auth-profiles/store.js";
@@ -504,13 +505,14 @@ export function runAgentAttempt(params: {
       : undefined);
   if (!isRawModelRun && isCliProvider(cliExecutionProvider, params.cfg)) {
     const cliSessionBinding = getCliSessionBinding(params.sessionEntry, cliExecutionProvider);
+    const cliProcessCwd = params.cwd ? resolveUserPath(params.cwd) : params.workspaceDir;
     const resolveReusableCliSessionBinding = async () => {
       if (
         !isClaudeCliProvider(cliExecutionProvider) ||
         !cliSessionBinding?.sessionId ||
         (await claudeCliSessionTranscriptHasContent({
           sessionId: cliSessionBinding.sessionId,
-          workspaceDir: params.workspaceDir,
+          workspaceDir: cliProcessCwd,
         }))
       ) {
         return cliSessionBinding;
