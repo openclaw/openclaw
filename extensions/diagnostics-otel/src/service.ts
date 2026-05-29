@@ -898,11 +898,7 @@ function assignOtelModelContentAttributes(
     );
   }
   if (policy.systemPrompt) {
-    assignOtelContentAttribute(
-      attributes,
-      "openclaw.content.system_prompt",
-      content?.systemPrompt,
-    );
+    assignOtelContentAttribute(attributes, "openclaw.content.system_prompt", content?.systemPrompt);
   }
 }
 
@@ -1315,6 +1311,10 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         unit: "1",
         description: "Messages queued for processing",
       });
+      const messageBusyOutcomeCounter = meter.createCounter("openclaw.message.busy", {
+        unit: "1",
+        description: "Busy-session message outcomes (steer, follow-up, interrupt, drop)",
+      });
       const messageReceivedCounter = meter.createCounter("openclaw.message.received", {
         unit: "1",
         description: "Inbound messages received",
@@ -1475,13 +1475,10 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           description: "Tool execution duration",
         },
       );
-      const toolExecutionBlockedCounter = meter.createCounter(
-        "openclaw.tool.execution.blocked",
-        {
-          unit: "1",
-          description: "Tool executions blocked by policy or sandbox diagnostics",
-        },
-      );
+      const toolExecutionBlockedCounter = meter.createCounter("openclaw.tool.execution.blocked", {
+        unit: "1",
+        description: "Tool executions blocked by policy or sandbox diagnostics",
+      });
       const execProcessDurationHistogram = meter.createHistogram("openclaw.exec.duration_ms", {
         unit: "ms",
         description: "Exec process duration",
@@ -1955,6 +1952,18 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         if (typeof evt.queueDepth === "number") {
           queueDepthHistogram.record(evt.queueDepth, attrs);
         }
+      };
+
+      const recordMessageBusyOutcome = (
+        evt: Extract<DiagnosticEventPayload, { type: "message.busy.outcome" }>,
+      ) => {
+        messageBusyOutcomeCounter.add(1, {
+          "openclaw.channel": lowCardinalityAttr(evt.channel),
+          "openclaw.source": lowCardinalityAttr(evt.source),
+          "openclaw.queue.outcome": evt.outcome,
+          "openclaw.queue.reason": lowCardinalityAttr(evt.reason, "none"),
+          ...(evt.queueMode ? { "openclaw.queue.mode": evt.queueMode } : {}),
+        });
       };
 
       const recordMessageReceived = (
@@ -3077,6 +3086,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               return;
             case "message.queued":
               recordMessageQueued(evt);
+              return;
+            case "message.busy.outcome":
+              recordMessageBusyOutcome(evt);
               return;
             case "message.received":
               recordMessageReceived(evt);

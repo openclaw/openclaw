@@ -92,6 +92,26 @@ export type DiagnosticMessageQueuedEvent = DiagnosticBaseEvent & {
   queueDepth?: number;
 };
 
+export type DiagnosticMessageBusyOutcome =
+  | "active_run_steer_accepted"
+  | "active_run_steer_rejected"
+  | "followup_enqueued"
+  | "collect_enqueued"
+  | "interrupt_started"
+  | "dropped";
+
+export type DiagnosticMessageBusyOutcomeEvent = DiagnosticBaseEvent & {
+  type: "message.busy.outcome";
+  outcome: DiagnosticMessageBusyOutcome;
+  sessionKey?: string;
+  sessionId?: string;
+  channel?: string;
+  queueMode?: string;
+  reason?: string;
+  source: string;
+  runtimeFamily?: string;
+};
+
 export type DiagnosticMessageReceivedEvent = DiagnosticBaseEvent & {
   type: "message.received";
   sessionKey?: string;
@@ -649,6 +669,7 @@ export type DiagnosticEventPayload =
   | DiagnosticWebhookProcessedEvent
   | DiagnosticWebhookErrorEvent
   | DiagnosticMessageQueuedEvent
+  | DiagnosticMessageBusyOutcomeEvent
   | DiagnosticMessageReceivedEvent
   | DiagnosticMessageDispatchStartedEvent
   | DiagnosticMessageDispatchCompletedEvent

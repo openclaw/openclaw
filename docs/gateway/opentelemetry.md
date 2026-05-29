@@ -201,6 +201,7 @@ message bodies are also approved for export.
 - `openclaw.webhook.error` (counter, attrs: `openclaw.channel`, `openclaw.webhook`)
 - `openclaw.webhook.duration_ms` (histogram, attrs: `openclaw.channel`, `openclaw.webhook`)
 - `openclaw.message.queued` (counter, attrs: `openclaw.channel`, `openclaw.source`)
+- `openclaw.message.busy` (counter, attrs: `openclaw.channel`, `openclaw.source`, `openclaw.queue.outcome`, `openclaw.queue.reason`, optional `openclaw.queue.mode`)
 - `openclaw.message.received` (counter, attrs: `openclaw.channel`, `openclaw.source`)
 - `openclaw.message.dispatch.started` (counter, attrs: `openclaw.channel`, `openclaw.source`)
 - `openclaw.message.dispatch.completed` (counter, attrs: `openclaw.channel`, `openclaw.outcome`, `openclaw.reason`, `openclaw.source`)
@@ -356,7 +357,7 @@ to them directly without OTLP export.
 **Message flow**
 
 - `webhook.received` / `webhook.processed` / `webhook.error`
-- `message.queued` / `message.processed`
+- `message.queued` / `message.busy.outcome` / `message.processed`
 - `message.delivery.started` / `message.delivery.completed` / `message.delivery.error`
 
 **Queue and session**

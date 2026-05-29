@@ -792,4 +792,58 @@ describe("diagnostic-events", () => {
     expect(isDiagnosticsEnabled({ diagnostics: { enabled: false } } as never)).toBe(false);
     expect(isDiagnosticsEnabled({ diagnostics: { enabled: true } } as never)).toBe(true);
   });
+
+  it("emits busy-message outcome events with outcome and session fields", () => {
+    const events: DiagnosticEventPayload[] = [];
+    const stop = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+
+    emitDiagnosticEvent({
+      type: "message.busy.outcome",
+      outcome: "active_run_steer_accepted",
+      sessionKey: "agent:main:main",
+      sessionId: "sess-1",
+      channel: "telegram",
+      source: "inbound",
+      queueMode: "steer",
+    });
+    emitDiagnosticEvent({
+      type: "message.busy.outcome",
+      outcome: "active_run_steer_rejected",
+      sessionId: "sess-1",
+      source: "slash_steer",
+      reason: "no_active_run",
+    });
+    emitDiagnosticEvent({
+      type: "message.busy.outcome",
+      outcome: "followup_enqueued",
+      sessionId: "sess-2",
+      source: "inbound",
+      queueMode: "followup",
+    });
+    stop();
+
+    expect(events).toHaveLength(3);
+    expect(events[0]).toMatchObject({
+      type: "message.busy.outcome",
+      outcome: "active_run_steer_accepted",
+      sessionKey: "agent:main:main",
+      sessionId: "sess-1",
+      channel: "telegram",
+      source: "inbound",
+      queueMode: "steer",
+    });
+    expect(events[1]).toMatchObject({
+      type: "message.busy.outcome",
+      outcome: "active_run_steer_rejected",
+      reason: "no_active_run",
+      source: "slash_steer",
+    });
+    expect(events[2]).toMatchObject({
+      type: "message.busy.outcome",
+      outcome: "followup_enqueued",
+      queueMode: "followup",
+    });
+  });
 });

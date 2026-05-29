@@ -31,6 +31,7 @@ import {
   stopDiagnosticStabilityRecorder,
 } from "./diagnostic-stability.js";
 import {
+  logBusyMessageOutcome,
   logSessionStateChange,
   logMessageQueued,
   diagnosticLogger,
@@ -2185,5 +2186,63 @@ describe("diagnostic stability snapshots", () => {
     const [event] = getDiagnosticStabilitySnapshot({ limit: 10 }).events;
     expect(event).not.toHaveProperty("sessionKey");
     expect(event).not.toHaveProperty("sessionId");
+  });
+});
+
+describe("logBusyMessageOutcome", () => {
+  beforeEach(() => {
+    resetDiagnosticStateForTest();
+    resetDiagnosticEventsForTest();
+    setDiagnosticsEnabledForProcess(true);
+  });
+
+  afterEach(() => {
+    resetDiagnosticStateForTest();
+    resetDiagnosticEventsForTest();
+  });
+
+  it("emits message.busy.outcome diagnostic events", () => {
+    const events: DiagnosticEventPayload[] = [];
+    const stop = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+
+    logBusyMessageOutcome({
+      outcome: "followup_enqueued",
+      sessionKey: "agent:main:main",
+      sessionId: "sess-1",
+      channel: "telegram",
+      source: "inbound",
+      queueMode: "followup",
+    });
+
+    stop();
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: "message.busy.outcome",
+      outcome: "followup_enqueued",
+      sessionKey: "agent:main:main",
+      sessionId: "sess-1",
+      channel: "telegram",
+      source: "inbound",
+      queueMode: "followup",
+    });
+  });
+
+  it("does not emit when diagnostics are disabled for the process", () => {
+    const events: DiagnosticEventPayload[] = [];
+    const stop = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    setDiagnosticsEnabledForProcess(false);
+
+    logBusyMessageOutcome({
+      outcome: "dropped",
+      sessionId: "sess-1",
+      source: "inbound",
+    });
+
+    stop();
+    expect(events).toHaveLength(0);
   });
 });

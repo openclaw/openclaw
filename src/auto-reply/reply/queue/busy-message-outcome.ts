@@ -1,4 +1,5 @@
 import type { EmbeddedAgentQueueFailureReason } from "../../../agents/embedded-agent-runner/runs.js";
+import { logBusyMessageOutcome } from "../../../logging/diagnostic.js";
 import { resolveGlobalMap } from "../../../shared/global-singleton.js";
 import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import type { QueueMode } from "./types.js";
@@ -83,6 +84,16 @@ export function recordBusyMessageOutcome(input: RecordBusyMessageOutcomeInput): 
   };
   BUSY_MESSAGE_OUTCOMES_BY_SESSION_KEY.set(sessionKey, record);
   BUSY_MESSAGE_OUTCOMES_BY_SESSION_ID.set(sessionId, record);
+  logBusyMessageOutcome({
+    outcome: record.kind,
+    sessionKey: record.sessionKey,
+    sessionId: record.sessionId,
+    channel: record.channel,
+    queueMode: record.queueMode,
+    reason: record.reason,
+    source: record.source,
+    runtimeFamily: record.runtimeFamily,
+  });
 }
 
 export function getLastBusyMessageOutcome(
