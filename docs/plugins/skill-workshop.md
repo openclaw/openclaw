@@ -84,10 +84,25 @@ Minimal safe config:
 
 With this config:
 
-- the `skill_workshop` tool is available
+- the `skill_workshop` tool is registered by the plugin
 - explicit reusable corrections are queued as pending proposals
 - threshold-based reviewer passes can propose skill updates
 - no skill file is written until a pending proposal is applied
+
+Manual `skill_workshop` calls still follow the active tool policy. If your
+agent uses `tools.profile: "coding"`, add the exact tool to the policy:
+
+```json5
+{
+  tools: {
+    profile: "coding",
+    alsoAllow: ["skill_workshop"],
+  },
+}
+```
+
+Use `alsoAllow: ["group:plugins"]` only when the agent should be allowed to use
+all currently loaded plugin-owned tools.
 
 Use automatic writes only in trusted workspaces:
 
@@ -646,15 +661,15 @@ Inspect quarantined proposals:
 
 Common symptoms:
 
-| Symptom                               | Likely cause                                                                        | Check                                                                |
-| ------------------------------------- | ----------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| Tool is unavailable                   | Plugin entry is not enabled                                                         | `plugins.entries.skill-workshop.enabled` and `openclaw plugins list` |
-| No automatic proposal appears         | `autoCapture: false`, `reviewMode: "off"`, or thresholds not met                    | Config, proposal status, Gateway logs                                |
-| Heuristic did not capture             | User wording did not match correction patterns                                      | Use explicit `skill_workshop.suggest` or enable LLM reviewer         |
-| Reviewer did not create a proposal    | Reviewer returned `none`, invalid JSON, or timed out                                | Gateway logs, `reviewTimeoutMs`, thresholds                          |
-| Proposal is not applied               | `approvalPolicy: "pending"`                                                         | `list_pending`, then `apply`                                         |
-| Proposal disappeared from pending     | Duplicate proposal reused, max pending pruning, or was applied/rejected/quarantined | `status`, `list_pending` with status filters, `list_quarantine`      |
-| Skill file exists but model misses it | Skill snapshot not refreshed or skill gating excludes it                            | `openclaw skills` status and workspace skill eligibility             |
+| Symptom                               | Likely cause                                                                        | Check                                                                                                        |
+| ------------------------------------- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| Tool is unavailable                   | Plugin entry is not enabled, or the active tool policy hides plugin tools           | `plugins.entries.skill-workshop.enabled`, `openclaw plugins list`, and `tools.alsoAllow: ["skill_workshop"]` |
+| No automatic proposal appears         | `autoCapture: false`, `reviewMode: "off"`, or thresholds not met                    | Config, proposal status, Gateway logs                                                                        |
+| Heuristic did not capture             | User wording did not match correction patterns                                      | Use explicit `skill_workshop.suggest` or enable LLM reviewer                                                 |
+| Reviewer did not create a proposal    | Reviewer returned `none`, invalid JSON, or timed out                                | Gateway logs, `reviewTimeoutMs`, thresholds                                                                  |
+| Proposal is not applied               | `approvalPolicy: "pending"`                                                         | `list_pending`, then `apply`                                                                                 |
+| Proposal disappeared from pending     | Duplicate proposal reused, max pending pruning, or was applied/rejected/quarantined | `status`, `list_pending` with status filters, `list_quarantine`                                              |
+| Skill file exists but model misses it | Skill snapshot not refreshed or skill gating excludes it                            | `openclaw skills` status and workspace skill eligibility                                                     |
 
 Relevant logs:
 
