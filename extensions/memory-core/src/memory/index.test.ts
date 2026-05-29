@@ -510,6 +510,68 @@ describe("memory index", () => {
     }
   });
 
+  it("runs identity reindex before targeted session sync after provider cutover", async () => {
+    try {
+      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state-targeted-cutover"));
+      const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
+      await fs.mkdir(sessionsDir, { recursive: true });
+      const sessionFile = path.join(sessionsDir, "session-targeted-cutover.jsonl");
+      await fs.writeFile(
+        sessionFile,
+        [
+          JSON.stringify({
+            type: "session",
+            id: "session-targeted-cutover",
+            timestamp: "2026-04-07T15:24:04.113Z",
+          }),
+          JSON.stringify({
+            type: "message",
+            message: {
+              role: "assistant",
+              timestamp: "2026-04-07T15:25:04.113Z",
+              content: [{ type: "text", text: "Targeted cutover marker." }],
+            },
+          }),
+        ].join("\n") + "\n",
+        "utf8",
+      );
+
+      const dbPath = path.join(workspaceDir, "index-targeted-session-cutover.sqlite");
+      const oldCfg = createCfg({
+        storePath: dbPath,
+        sources: ["memory", "sessions"],
+        sessionMemory: true,
+        model: "old-embed",
+      });
+      const oldManager = await getFreshManager(oldCfg);
+      await oldManager.sync({ reason: "test", force: true });
+      await oldManager.close?.();
+
+      const nextCfg = createCfg({
+        storePath: dbPath,
+        sources: ["memory", "sessions"],
+        sessionMemory: true,
+        provider: "gemini",
+        model: "new-embed",
+      });
+      const nextManager = await getFreshManager(nextCfg);
+      try {
+        expect(nextManager.status().dirty).toBe(true);
+
+        await nextManager.sync({ reason: "test", sessionFiles: [sessionFile] });
+
+        expect(nextManager.status().dirty).toBe(false);
+        expect(nextManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+        const results = await nextManager.search("alpha");
+        expect(results.some((result) => result.path.endsWith("memory/2026-01-12.md"))).toBe(true);
+      } finally {
+        await nextManager.close?.();
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("closes embedding providers when memory index managers close", async () => {
     const cfg = createCfg({
       storePath: indexMainPath,

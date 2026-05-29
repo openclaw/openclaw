@@ -1737,31 +1737,6 @@ export abstract class MemoryManagerSyncOps {
     if (params?.reason === "cli" && !params.force && !hasTargetSessionFiles) {
       await this.markSessionStartupCatchupDirtyFiles();
     }
-    const targetedSessionSync = await runMemoryTargetedSessionSync({
-      hasSessionSource: this.sources.has("sessions"),
-      targetSessionFiles,
-      reason: params?.reason,
-      progress: progress ?? undefined,
-      useUnsafeReindex:
-        process.env.OPENCLAW_TEST_FAST === "1" &&
-        process.env.OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX === "1",
-      sessionsDirtyFiles: this.sessionsDirtyFiles,
-      syncSessionFiles: async (targetedParams) => {
-        await this.syncSessionFiles(targetedParams);
-      },
-      shouldFallbackOnError: (err) => this.shouldFallbackOnError(err),
-      activateFallbackProvider: async (reason) => await this.activateFallbackProvider(reason),
-      runSafeReindex: async (reindexParams) => {
-        await this.runSafeReindex(reindexParams);
-      },
-      runUnsafeReindex: async (reindexParams) => {
-        await this.runUnsafeReindex(reindexParams);
-      },
-    });
-    if (targetedSessionSync.handled) {
-      this.sessionsDirty = targetedSessionSync.sessionsDirty;
-      return;
-    }
     const indexIdentity = resolveMemoryIndexIdentityState({
       meta,
       // Also detects provider→FTS-only transitions so orphaned old-model FTS rows are cleaned up.
@@ -1784,6 +1759,33 @@ export abstract class MemoryManagerSyncOps {
     });
     const needsFullReindex =
       (params?.force && !hasTargetSessionFiles) || indexIdentity.status !== "valid";
+    if (!needsFullReindex) {
+      const targetedSessionSync = await runMemoryTargetedSessionSync({
+        hasSessionSource: this.sources.has("sessions"),
+        targetSessionFiles,
+        reason: params?.reason,
+        progress: progress ?? undefined,
+        useUnsafeReindex:
+          process.env.OPENCLAW_TEST_FAST === "1" &&
+          process.env.OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX === "1",
+        sessionsDirtyFiles: this.sessionsDirtyFiles,
+        syncSessionFiles: async (targetedParams) => {
+          await this.syncSessionFiles(targetedParams);
+        },
+        shouldFallbackOnError: (err) => this.shouldFallbackOnError(err),
+        activateFallbackProvider: async (reason) => await this.activateFallbackProvider(reason),
+        runSafeReindex: async (reindexParams) => {
+          await this.runSafeReindex(reindexParams);
+        },
+        runUnsafeReindex: async (reindexParams) => {
+          await this.runUnsafeReindex(reindexParams);
+        },
+      });
+      if (targetedSessionSync.handled) {
+        this.sessionsDirty = targetedSessionSync.sessionsDirty;
+        return;
+      }
+    }
     try {
       if (needsFullReindex) {
         if (
