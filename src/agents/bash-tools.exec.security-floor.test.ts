@@ -325,7 +325,7 @@ describe("exec security floor", () => {
       expect.objectContaining({
         command: "pwd",
         host: "gateway",
-        reason: "approval-required",
+        reason: "allowlist-miss",
       }),
     );
     expect(result.details.status).toBe("approval-pending");
@@ -367,7 +367,7 @@ describe("exec security floor", () => {
         expect.objectContaining({
           command: "pwd",
           host: "gateway",
-          reason: "approval-required",
+          reason: "allowlist-miss",
         }),
       );
       expect(result.details.status).toBe("approval-pending");
