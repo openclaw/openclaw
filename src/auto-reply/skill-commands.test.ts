@@ -127,15 +127,15 @@ vi.mock("./commands-registry.js", () => ({
   listChatCommands: () => [],
 }));
 
-vi.mock("../skills/command-specs.js", () => ({
+vi.mock("../skills/discovery/command-specs.js", () => ({
   buildWorkspaceSkillCommandSpecs,
 }));
 
-vi.mock("../skills/remote.js", () => ({
+vi.mock("../skills/runtime/remote.js", () => ({
   getRemoteSkillEligibility: () => ({}),
 }));
 
-vi.mock("../skills/agent-filter.js", () => ({
+vi.mock("../skills/discovery/agent-filter.js", () => ({
   resolveEffectiveAgentSkillFilter: (
     cfg: {
       agents?: {

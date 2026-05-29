@@ -7,7 +7,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { expandHomePrefix } from "../infra/home-dir.js";
 import { isRecord } from "../shared/record-coerce.js";
-import { resolveBundledSkillsDir } from "../skills/bundled-dir.js";
+import { resolveBundledSkillsDir } from "../skills/loading/bundled-dir.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
 

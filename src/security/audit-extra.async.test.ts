@@ -9,7 +9,7 @@ import {
 } from "./audit-extra.async.js";
 import * as skillScanner from "./skill-scanner.js";
 
-vi.mock("../skills/index.js", () => ({
+vi.mock("../skills/loading/workspace.js", () => ({
   loadWorkspaceSkillEntries: (workspaceDir: string) => {
     const sep = workspaceDir.includes("\\") ? "\\" : "/";
     const baseDir = `${workspaceDir}${sep}skills${sep}evil-skill`;

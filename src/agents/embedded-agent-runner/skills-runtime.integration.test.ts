@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { writePluginWithSkill } from "../../skills/skill-plugin-fixtures.test-support.js";
+import { writePluginWithSkill } from "../../skills/test-support/skill-plugin-fixtures.test-support.js";
 import { resolveEmbeddedRunSkillEntries } from "./skills-runtime.js";
 
 const tempDirs: string[] = [];

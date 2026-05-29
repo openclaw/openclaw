@@ -13,7 +13,7 @@ import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
-import { createCanonicalFixtureSkill } from "../skills/test-helpers.js";
+import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
 import {
   runBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,

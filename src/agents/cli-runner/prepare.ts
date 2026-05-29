@@ -21,7 +21,7 @@ import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-con
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { uniqueStrings } from "../../shared/string-normalization.js";
-import { resolveSkillsPromptForRun } from "../../skills/workspace.js";
+import { resolveSkillsPromptForRun } from "../../skills/loading/workspace.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { externalCliDiscoveryForProviderAuth } from "../auth-profiles/external-cli-discovery.js";

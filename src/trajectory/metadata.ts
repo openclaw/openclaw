@@ -11,7 +11,7 @@ import {
 } from "../logging/diagnostic-support-redaction.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { getActivePluginRegistry, listImportedRuntimePluginIds } from "../plugins/runtime.js";
-import type { SkillSnapshot } from "../skills/index.js";
+import type { SkillSnapshot } from "../skills/types.js";
 import { VERSION } from "../version.js";
 
 type BuildTrajectoryRunMetadataParams = {

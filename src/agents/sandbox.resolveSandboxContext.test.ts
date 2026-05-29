@@ -37,11 +37,11 @@ vi.mock("./exec-defaults.js", () => ({
   canExecRequestNode: vi.fn(() => false),
 }));
 
-vi.mock("../skills/remote.js", () => ({
+vi.mock("../skills/runtime/remote.js", () => ({
   getRemoteSkillEligibility: vi.fn(() => ({ note: "test-remote" })),
 }));
 
-vi.mock("../skills/workspace.js", () => ({
+vi.mock("../skills/loading/workspace.js", () => ({
   syncSkillsToWorkspace: syncSkillsToWorkspaceMock,
 }));
 

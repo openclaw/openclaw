@@ -18,8 +18,11 @@ import {
   resolveClawHubSkillVerificationTarget,
   searchSkillsFromClawHub,
   updateSkillsFromClawHub,
-} from "../skills/clawhub.js";
-import { installSkillFromSource, isSkillSourceInstallSpec } from "../skills/source-install.js";
+} from "../skills/lifecycle/clawhub.js";
+import {
+  installSkillFromSource,
+  isSkillSourceInstallSpec,
+} from "../skills/lifecycle/source-install.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import { CONFIG_DIR } from "../utils.js";
@@ -35,7 +38,7 @@ export type {
 export { formatSkillInfo, formatSkillsCheck, formatSkillsList } from "./skills-cli.format.js";
 
 type SkillStatusReport = Awaited<
-  ReturnType<(typeof import("../skills/status.js"))["buildWorkspaceSkillStatus"]>
+  ReturnType<(typeof import("../skills/discovery/status.js"))["buildWorkspaceSkillStatus"]>
 >;
 type ResolvedClawHubSkillVerificationTarget = Extract<
   Awaited<ReturnType<typeof resolveClawHubSkillVerificationTarget>>,
@@ -76,7 +79,7 @@ async function loadSkillsStatusReport(
   options?: ResolveSkillsWorkspaceOptions,
 ): Promise<SkillStatusReport> {
   const { config, workspaceDir, agentId } = resolveSkillsWorkspace(options);
-  const { buildWorkspaceSkillStatus } = await import("../skills/status.js");
+  const { buildWorkspaceSkillStatus } = await import("../skills/discovery/status.js");
   return buildWorkspaceSkillStatus(workspaceDir, { config, agentId });
 }
 

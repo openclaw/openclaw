@@ -592,16 +592,16 @@ vi.mock("./provider-auth-aliases.js", () => ({
     provider.trim().toLowerCase() === "codex-cli" ? "openai-codex" : provider.trim().toLowerCase(),
 }));
 
-vi.mock("../skills/agent-filter.js", () => ({
+vi.mock("../skills/discovery/agent-filter.js", () => ({
   resolveEffectiveAgentSkillFilter: (_cfg: unknown, agentId: string) =>
     state.resolveAgentSkillsFilterMock(_cfg, agentId),
 }));
 
-vi.mock("../skills/remote.js", () => ({
+vi.mock("../skills/runtime/remote.js", () => ({
   getRemoteSkillEligibility: () => ({ eligible: false }),
 }));
 
-vi.mock("../skills/session-snapshot.js", () => ({
+vi.mock("../skills/runtime/session-snapshot.js", () => ({
   resolveReusableWorkspaceSkillSnapshot: (params: {
     workspaceDir: string;
     existingSnapshot?: { resolvedSkills?: unknown };

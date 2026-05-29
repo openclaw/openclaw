@@ -8,9 +8,9 @@ import {
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
 import { uniqueStrings } from "../shared/string-normalization.js";
-import { resolveEffectiveAgentSkillFilter } from "../skills/agent-filter.js";
-import { buildWorkspaceSkillCommandSpecs } from "../skills/command-specs.js";
-import { getRemoteSkillEligibility } from "../skills/remote.js";
+import { resolveEffectiveAgentSkillFilter } from "../skills/discovery/agent-filter.js";
+import { buildWorkspaceSkillCommandSpecs } from "../skills/discovery/command-specs.js";
+import { getRemoteSkillEligibility } from "../skills/runtime/remote.js";
 import type { SkillCommandSpec } from "../skills/types.js";
 import { listReservedChatSlashCommandNames } from "./skill-commands-base.js";
 export {

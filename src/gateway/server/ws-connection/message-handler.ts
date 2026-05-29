@@ -84,7 +84,7 @@ import {
 } from "../../../shared/device-bootstrap-profile.js";
 import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import { uniqueStrings } from "../../../shared/string-normalization.js";
-import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../../skills/remote.js";
+import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../../skills/runtime/remote.js";
 import {
   isBrowserOperatorUiClient,
   isGatewayCliClient,

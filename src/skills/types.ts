@@ -1,4 +1,4 @@
-import type { Skill } from "./skill-contract.js";
+import type { Skill } from "./loading/skill-contract.js";
 
 export type SkillInstallSpec = {
   id?: string;

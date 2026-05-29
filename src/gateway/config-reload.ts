@@ -8,7 +8,7 @@ import {
   loadInstalledPluginIndexInstallRecords,
   loadInstalledPluginIndexInstallRecordsSync,
 } from "../plugins/installed-plugin-index-records.js";
-import { bumpSkillsSnapshotVersion } from "../skills/refresh-state.js";
+import { bumpSkillsSnapshotVersion } from "../skills/runtime/refresh-state.js";
 import { diffConfigPaths } from "./config-diff.js";
 import {
   buildGatewayReloadPlan,

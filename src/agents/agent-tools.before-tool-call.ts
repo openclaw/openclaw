@@ -31,7 +31,10 @@ import {
   type PluginHookToolKind,
 } from "../plugins/types.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
-import { resolveSkillTelemetrySource, resolveSkillTelemetrySourceValue } from "../skills/source.js";
+import {
+  resolveSkillTelemetrySource,
+  resolveSkillTelemetrySourceValue,
+} from "../skills/loading/source.js";
 import type { SkillSnapshot, SkillTelemetrySource } from "../skills/types.js";
 import { isPlainObject } from "../utils.js";
 import { adjustedParamsByToolCallId } from "./agent-tools.before-tool-call.state.js";

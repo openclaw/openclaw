@@ -22,11 +22,11 @@ vi.mock("../../agents/sandbox.js", () => ({
   resolveSandboxRuntimeStatus: vi.fn(() => ({ sandboxed: false, mode: "off" })),
 }));
 
-vi.mock("../../skills/remote.js", () => ({
+vi.mock("../../skills/runtime/remote.js", () => ({
   getRemoteSkillEligibility: vi.fn(() => false),
 }));
 
-vi.mock("../../skills/session-snapshot.js", () => ({
+vi.mock("../../skills/runtime/session-snapshot.js", () => ({
   resolveReusableWorkspaceSkillSnapshot: vi.fn(() => ({
     snapshot: { prompt: "", skills: [], resolvedSkills: [] },
     shouldRefresh: false,

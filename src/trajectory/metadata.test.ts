@@ -6,7 +6,7 @@ import {
 } from "../logging/diagnostic-support-redaction.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import type { SkillSnapshot } from "../skills/index.js";
+import type { SkillSnapshot } from "../skills/types.js";
 
 type ResolvedSkillEntry = NonNullable<SkillSnapshot["resolvedSkills"]>[number];
 

@@ -4,4 +4,4 @@ export {
   registerSkillsChangeListener,
   shouldRefreshSnapshotForVersion,
   type SkillsChangeEvent,
-} from "../skills/refresh-state.js";
+} from "../skills/runtime/refresh-state.js";

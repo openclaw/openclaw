@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { SkillStatusEntry } from "../skills/status.js";
+import type { SkillStatusEntry } from "../skills/discovery/status.js";
 import {
   CORE_HEALTH_CHECKS,
   createCoreHealthChecks,

@@ -13,8 +13,8 @@ import { buildConfiguredAgentSystemPrompt } from "../../agents/system-prompt-con
 import { buildSystemPromptParams } from "../../agents/system-prompt-params.js";
 import type { WorkspaceBootstrapFile } from "../../agents/workspace.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../plugins/command-registry-state.js";
-import { getRemoteSkillEligibility } from "../../skills/remote.js";
-import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/session-snapshot.js";
+import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
+import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/session-snapshot.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 

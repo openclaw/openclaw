@@ -16,7 +16,7 @@ import {
 import {
   getSkillsSnapshotVersion,
   resetSkillsRefreshStateForTest,
-} from "../skills/refresh-state.js";
+} from "../skills/runtime/refresh-state.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   buildGatewayReloadPlan,

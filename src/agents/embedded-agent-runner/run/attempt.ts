@@ -52,11 +52,11 @@ import { getPluginToolMeta } from "../../../plugins/tools.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../../sessions/input-provenance.js";
 import { normalizeOptionalString } from "../../../shared/string-coerce.js";
+import { resolveSkillsPromptForRun } from "../../../skills/loading/workspace.js";
 import {
   applySkillEnvOverrides,
   applySkillEnvOverridesFromSnapshot,
-} from "../../../skills/env-overrides.js";
-import { resolveSkillsPromptForRun } from "../../../skills/workspace.js";
+} from "../../../skills/runtime/env-overrides.js";
 import {
   buildTrajectoryArtifacts,
   buildTrajectoryRunMetadata,

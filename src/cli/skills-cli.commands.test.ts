@@ -178,7 +178,7 @@ vi.mock("../agents/agent-scope.js", () => ({
     mocks.resolveAgentWorkspaceDirMock(config, agentId),
 }));
 
-vi.mock("../skills/clawhub.js", () => ({
+vi.mock("../skills/lifecycle/clawhub.js", () => ({
   searchSkillsFromClawHub: (...args: unknown[]) => mocks.searchSkillsFromClawHubMock(...args),
   installSkillFromClawHub: (...args: unknown[]) => mocks.installSkillFromClawHubMock(...args),
   updateSkillsFromClawHub: (...args: unknown[]) => mocks.updateSkillsFromClawHubMock(...args),
@@ -194,7 +194,7 @@ vi.mock("../infra/clawhub.js", () => ({
   fetchClawHubSkillCard: (...args: unknown[]) => mocks.fetchClawHubSkillCardMock(...args),
 }));
 
-vi.mock("../skills/source-install.js", () => ({
+vi.mock("../skills/lifecycle/source-install.js", () => ({
   installSkillFromSource: (...args: unknown[]) => mocks.installSkillFromSourceMock(...args),
   isSkillSourceInstallSpec: (raw: string) =>
     raw.startsWith("git:") ||
@@ -204,7 +204,7 @@ vi.mock("../skills/source-install.js", () => ({
     raw.startsWith("/"),
 }));
 
-vi.mock("../skills/status.js", () => ({
+vi.mock("../skills/discovery/status.js", () => ({
   buildWorkspaceSkillStatus: (workspaceDir: string, options?: unknown) =>
     mocks.buildWorkspaceSkillStatusMock(workspaceDir, options),
 }));

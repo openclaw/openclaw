@@ -2,14 +2,14 @@ import { existsSync } from "node:fs";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { SkillStatusEntry } from "../skills/discovery/status.js";
+import { buildWorkspaceSkillStatus } from "../skills/discovery/status.js";
 import {
   detectGhConfigDirMismatch,
   formatGhConfigDirMismatchHint,
   type GhConfigDiscoveryInput,
   type GhConfigDiscoveryResult,
-} from "../skills/gh-config-discovery.js";
-import type { SkillStatusEntry } from "../skills/status.js";
-import { buildWorkspaceSkillStatus } from "../skills/status.js";
+} from "../skills/lifecycle/gh-config-discovery.js";
 import { note } from "../terminal/note.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 import {

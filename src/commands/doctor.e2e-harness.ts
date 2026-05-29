@@ -242,7 +242,7 @@ vi.mock("@clack/prompts", () => ({
   select,
 }));
 
-vi.mock("../skills/status.js", () => ({
+vi.mock("../skills/discovery/status.js", () => ({
   buildWorkspaceSkillStatus: () => ({ skills: [] }),
 }));
 

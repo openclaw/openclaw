@@ -1,10 +1,3 @@
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
-import type { SkillsInstallPreferences } from "./types.js";
-
 export {
   hasBinary,
   isBundledSkillAllowed,
@@ -13,8 +6,12 @@ export {
   resolveConfigPath,
   resolveRuntimePlatform,
   resolveSkillConfig,
-} from "./config.js";
-export { applySkillEnvOverrides, applySkillEnvOverridesFromSnapshot } from "./env-overrides.js";
+  resolveSkillsInstallPreferences,
+} from "./loading/config.js";
+export {
+  applySkillEnvOverrides,
+  applySkillEnvOverridesFromSnapshot,
+} from "./runtime/env-overrides.js";
 export type {
   OpenClawSkillMetadata,
   SkillEligibilityContext,
@@ -32,41 +29,37 @@ export {
   loadWorkspaceSkillEntries,
   resolveSkillsPromptForRun,
   syncSkillsToWorkspace,
-} from "./workspace.js";
-export { buildWorkspaceSkillCommandSpecs } from "./command-specs.js";
+} from "./loading/workspace.js";
+export { buildWorkspaceSkillCommandSpecs } from "./discovery/command-specs.js";
 export type {
   LoadSkillsFromDirOptions,
   LoadSkillsOptions,
   LoadSkillsResult,
   Skill,
   SkillFrontmatter,
-} from "./session.js";
-export { formatSkillsForPrompt as formatSessionSkillsForPrompt, loadSkills } from "./session.js";
-export type { SkillIndex, SkillIndexEntry } from "./registry.js";
-export { buildSkillIndex, skillIndexEntries, skillIndexResolvedSkills } from "./registry.js";
-export type { SkillSourceKind, SkillTrustInfo, SkillWritablePolicy } from "./trust.js";
+} from "./loading/session.js";
+export {
+  formatSkillsForPrompt as formatSessionSkillsForPrompt,
+  loadSkills,
+} from "./loading/session.js";
+export type { SkillIndex, SkillIndexEntry } from "./discovery/registry.js";
+export {
+  buildSkillIndex,
+  skillIndexEntries,
+  skillIndexResolvedSkills,
+} from "./discovery/registry.js";
+export type { SkillSourceKind, SkillTrustInfo, SkillWritablePolicy } from "./discovery/trust.js";
 export {
   classifySkillSourceKind,
   resolveSkillOwner,
   resolveSkillTrustInfo,
   resolveSkillWritablePolicy,
-} from "./trust.js";
-export type { SkillIndexRequest, SkillSnapshotBuildOptions } from "./service.js";
+} from "./discovery/trust.js";
+export type { SkillIndexRequest, SkillSnapshotBuildOptions } from "./discovery/service.js";
 export {
   SkillsService,
   buildSkillIndexCacheKey,
   buildSkillSnapshotFromIndex,
   buildWorkspaceSkillSnapshot,
   skillsService,
-} from "./service.js";
-
-export function resolveSkillsInstallPreferences(config?: OpenClawConfig): SkillsInstallPreferences {
-  const raw = config?.skills?.install;
-  const preferBrew = raw?.preferBrew ?? true;
-  const manager = normalizeLowercaseStringOrEmpty(normalizeOptionalString(raw?.nodeManager));
-  const nodeManager: SkillsInstallPreferences["nodeManager"] =
-    manager === "pnpm" || manager === "yarn" || manager === "bun" || manager === "npm"
-      ? manager
-      : "npm";
-  return { preferBrew, nodeManager };
-}
+} from "./discovery/service.js";

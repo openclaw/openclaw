@@ -8,8 +8,8 @@ import type { ResourceDiagnostic } from "./diagnostics.js";
 
 export type { ResourceCollision, ResourceDiagnostic } from "./diagnostics.js";
 
-import type { Skill } from "../../skills/session.js";
-import { loadSkills } from "../../skills/session.js";
+import type { Skill } from "../../skills/loading/session.js";
+import { loadSkills } from "../../skills/loading/session.js";
 import { canonicalizePath, isLocalPath } from "../utils/paths.js";
 import { createEventBus, type EventBus } from "./event-bus.js";
 import {

@@ -28,18 +28,18 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { buildWorkspaceSkillStatus } from "../../skills/discovery/status.js";
 import {
   installSkillFromClawHub,
   readLocalSkillCardContentSync,
   searchSkillsFromClawHub,
   updateSkillsFromClawHub,
-} from "../../skills/clawhub.js";
-import { installSkill } from "../../skills/install.js";
-import { getRemoteSkillEligibility } from "../../skills/remote.js";
-import { buildWorkspaceSkillStatus } from "../../skills/status.js";
+} from "../../skills/lifecycle/clawhub.js";
+import { installSkill } from "../../skills/lifecycle/install.js";
+import { installUploadedSkillArchive } from "../../skills/lifecycle/upload-install.js";
+import { loadWorkspaceSkillEntries } from "../../skills/loading/workspace.js";
+import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
 import type { SkillEntry } from "../../skills/types.js";
-import { installUploadedSkillArchive } from "../../skills/upload-install.js";
-import { loadWorkspaceSkillEntries } from "../../skills/workspace.js";
 import { updateSkillConfigEntry } from "./skills-config-mutations.js";
 import { skillsUploadHandlers } from "./skills-upload.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";

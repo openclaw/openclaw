@@ -39,9 +39,9 @@ import {
 import { resolveSendPolicy } from "../sessions/send-policy.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { resolveEffectiveAgentSkillFilter } from "../skills/agent-filter.js";
-import type { getRemoteSkillEligibility } from "../skills/remote.js";
-import type { resolveReusableWorkspaceSkillSnapshot } from "../skills/session-snapshot.js";
+import { resolveEffectiveAgentSkillFilter } from "../skills/discovery/agent-filter.js";
+import type { getRemoteSkillEligibility } from "../skills/runtime/remote.js";
+import type { resolveReusableWorkspaceSkillSnapshot } from "../skills/runtime/session-snapshot.js";
 import type { SkillSnapshot } from "../skills/types.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import { createTrajectoryRuntimeRecorder } from "../trajectory/runtime.js";
@@ -156,8 +156,8 @@ const execDefaultsRuntimeLoader = createLazyImportLoader<ExecDefaultsRuntime>(
 );
 const skillsRuntimeLoader = createLazyImportLoader<SkillsRuntime>(async () => {
   const [remote, sessionSnapshot] = await Promise.all([
-    import("../skills/remote.js"),
-    import("../skills/session-snapshot.js"),
+    import("../skills/runtime/remote.js"),
+    import("../skills/runtime/session-snapshot.js"),
   ]);
   return {
     getRemoteSkillEligibility: remote.getRemoteSkillEligibility,

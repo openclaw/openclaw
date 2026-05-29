@@ -3,12 +3,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveEmbeddedRunSkillEntries } from "../../agents/embedded-agent-runner/skills-runtime.js";
-import type { Skill } from "../../skills/skill-contract.js";
+import type { Skill } from "../../skills/loading/skill-contract.js";
 import {
   hydrateResolvedSkills,
   hydrateResolvedSkillsAsync,
-} from "../../skills/snapshot-hydration.js";
-import { createCanonicalFixtureSkill } from "../../skills/test-helpers.js";
+} from "../../skills/runtime/snapshot-hydration.js";
+import { createCanonicalFixtureSkill } from "../../skills/test-support/test-helpers.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import type { SessionEntry, SessionSkillPromptRef, SessionSkillSnapshot } from "./types.js";
 

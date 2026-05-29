@@ -4,8 +4,8 @@ import {
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "../../config/config.js";
+import * as skillsWorkspaceModule from "../../skills/loading/workspace.js";
 import type { SkillSnapshot } from "../../skills/types.js";
-import * as skillsWorkspaceModule from "../../skills/workspace.js";
 import { resolveEmbeddedRunSkillEntries } from "./skills-runtime.js";
 
 describe("resolveEmbeddedRunSkillEntries", () => {

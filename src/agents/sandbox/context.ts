@@ -55,8 +55,8 @@ async function ensureSandboxWorkspaceLayout(params: {
       try {
         const [{ syncSkillsToWorkspace }, { getRemoteSkillEligibility }, { canExecRequestNode }] =
           await Promise.all([
-            import("../../skills/workspace.js"),
-            import("../../skills/remote.js"),
+            import("../../skills/loading/workspace.js"),
+            import("../../skills/runtime/remote.js"),
             import("../exec-defaults.js"),
           ]);
         await syncSkillsToWorkspace({

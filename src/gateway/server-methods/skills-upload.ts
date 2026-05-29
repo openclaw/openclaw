@@ -12,8 +12,11 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import {
   areUploadedSkillArchivesEnabled,
   UPLOADED_SKILL_ARCHIVES_DISABLED_MESSAGE,
-} from "../../skills/upload-install.js";
-import { defaultSkillUploadStore, SkillUploadRequestError } from "../../skills/upload-store.js";
+} from "../../skills/lifecycle/upload-install.js";
+import {
+  defaultSkillUploadStore,
+  SkillUploadRequestError,
+} from "../../skills/lifecycle/upload-store.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 function uploadErrorShape(

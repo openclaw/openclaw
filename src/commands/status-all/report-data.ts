@@ -4,8 +4,8 @@ import { readLastGatewayErrorLine } from "../../daemon/diagnostics.js";
 import { inspectPortUsage } from "../../infra/ports.js";
 import { readRestartSentinel } from "../../infra/restart-sentinel.js";
 import { buildPluginCompatibilityNotices } from "../../plugins/status.js";
-import { getRemoteSkillEligibility } from "../../skills/remote.js";
-import { buildWorkspaceSkillStatus } from "../../skills/status.js";
+import { buildWorkspaceSkillStatus } from "../../skills/discovery/status.js";
+import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
 import { buildStatusAllOverviewRows } from "../status-overview-rows.ts";
 import {
   buildStatusOverviewSurfaceFromOverview,

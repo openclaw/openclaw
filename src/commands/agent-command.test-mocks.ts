@@ -239,20 +239,23 @@ vi.mock("../agents/workspace.js", () => ({
   ensureAgentWorkspace: vi.fn(async ({ dir }: { dir: string }) => ({ dir })),
 }));
 
-vi.mock("../skills/index.js", () => ({
+vi.mock("../skills/discovery/service.js", () => ({
   buildWorkspaceSkillSnapshot: vi.fn(() => undefined),
+}));
+
+vi.mock("../skills/loading/workspace.js", () => ({
   loadWorkspaceSkillEntries: vi.fn(() => []),
 }));
 
-vi.mock("../skills/remote.js", () => ({
+vi.mock("../skills/runtime/remote.js", () => ({
   getRemoteSkillEligibility: vi.fn(() => undefined),
 }));
 
-vi.mock("../skills/agent-filter.js", () => ({
+vi.mock("../skills/discovery/agent-filter.js", () => ({
   resolveEffectiveAgentSkillFilter: vi.fn(() => undefined),
 }));
 
-vi.mock("../skills/session-snapshot.js", () => ({
+vi.mock("../skills/runtime/session-snapshot.js", () => ({
   resolveReusableWorkspaceSkillSnapshot: vi.fn(
     (params?: { existingSnapshot?: unknown; skillFilter?: string[] }) => ({
       snapshot: params?.existingSnapshot ?? {

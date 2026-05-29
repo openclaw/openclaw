@@ -47,7 +47,7 @@ import {
   recordRemoteNodeInfo,
   refreshRemoteNodeBins,
   removeRemoteNodeInfo,
-} from "../../skills/remote.js";
+} from "../../skills/runtime/remote.js";
 import { createKnownNodeCatalog, getKnownNode, listKnownNodes } from "../node-catalog.js";
 import {
   isForegroundRestrictedPluginNodeCommand,
