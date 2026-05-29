@@ -5,6 +5,7 @@
  * error handling and priority ordering.
  */
 
+import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import { formatHookErrorForLog } from "../hooks/fire-and-forget.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { concatOptionalTextSegments } from "../shared/text/join-segments.js";
@@ -31,6 +32,7 @@ import type {
   PluginHookReplyPayloadSendingContext,
   PluginHookReplyPayloadSendingEvent,
   PluginHookReplyPayloadSendingResult,
+  PluginHookReplyPayload,
   PluginHookReplyDispatchContext,
   PluginHookReplyDispatchEvent,
   PluginHookReplyDispatchResult,
@@ -102,6 +104,7 @@ export type {
   PluginHookReplyPayloadSendingContext,
   PluginHookReplyPayloadSendingEvent,
   PluginHookReplyPayloadSendingResult,
+  PluginHookReplyPayload,
   PluginHookReplyDispatchContext,
   PluginHookReplyDispatchEvent,
   PluginHookReplyDispatchResult,
@@ -309,6 +312,19 @@ export function createHookRunner(
   const lastDefined = <T>(prev: T | undefined, next: T | undefined): T | undefined => next ?? prev;
   const stickyTrue = (prev?: boolean, next?: boolean): true | undefined =>
     prev === true || next === true ? true : undefined;
+  const toPluginReplyPayload = (payload: ReplyPayload): PluginHookReplyPayload => {
+    const { trustedLocalMedia: _trustedLocalMedia, ...visiblePayload } = payload;
+    return visiblePayload;
+  };
+  const acceptPluginReplyPayload = (
+    previous: ReplyPayload,
+    next: PluginHookReplyPayload,
+  ): ReplyPayload => {
+    const { trustedLocalMedia: _trustedLocalMedia, ...safePayload } = next as ReplyPayload;
+    return previous.trustedLocalMedia === true
+      ? { ...safePayload, trustedLocalMedia: true }
+      : safePayload;
+  };
 
   const mergeBeforeModelResolve = (
     acc: PluginHookBeforeModelResolveResult | undefined,
@@ -1070,7 +1086,7 @@ export function createHookRunner(
 
     logger?.debug?.(`[hooks] running reply_payload_sending (${hooks.length} handlers, sequential)`);
 
-    let currentPayload = event.payload;
+    let currentPayload: ReplyPayload = event.payload;
     let result: PluginHookReplyPayloadSendingResult | undefined;
 
     for (const hook of hooks) {
@@ -1079,7 +1095,9 @@ export function createHookRunner(
           event: PluginHookReplyPayloadSendingEvent,
           ctx: PluginHookReplyPayloadSendingContext,
         ) => Promise<PluginHookReplyPayloadSendingResult | void>;
-        const promise = Promise.resolve(handler({ ...event, payload: currentPayload }, ctx));
+        const promise = Promise.resolve(
+          handler({ ...event, payload: toPluginReplyPayload(currentPayload) }, ctx),
+        );
         const timeoutMs = getModifyingHookTimeoutMs("reply_payload_sending", hook);
         const handlerResult = timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
 
@@ -1088,11 +1106,11 @@ export function createHookRunner(
         }
 
         if (handlerResult.payload !== undefined) {
-          currentPayload = handlerResult.payload;
+          currentPayload = acceptPluginReplyPayload(currentPayload, handlerResult.payload);
         }
 
         result = {
-          payload: currentPayload,
+          payload: currentPayload as PluginHookReplyPayload,
           cancel: stickyTrue(result?.cancel, handlerResult.cancel),
           reason: lastDefined(result?.reason, handlerResult.reason),
         };

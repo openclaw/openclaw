@@ -23,6 +23,8 @@ import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/m
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
+import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
+import { runReplyPayloadSendingHook } from "./reply-payload-sending-hook.js";
 import {
   formatBtwTextForExternalDelivery,
   shouldSuppressReasoningPayload,
@@ -71,11 +73,19 @@ export type RouteReplyParams = {
   isGroup?: boolean;
   /** Group or channel identifier for correlation with received events */
   groupId?: string;
+  /** Reply lane for reply_payload_sending hooks. */
+  replyKind?: ReplyDispatchKind;
+  /** Agent run id for hook context. */
+  runId?: string;
 };
 
 export type RouteReplyResult = {
   /** Whether the reply was sent successfully. */
   ok: boolean;
+  /** True when a hook intentionally suppressed provider delivery. */
+  suppressed?: boolean;
+  /** Suppression reason when delivery was intentionally skipped. */
+  reason?: "cancelled_by_reply_payload_sending_hook";
   /** Optional message ID from the provider. */
   messageId?: string;
   /** Error message if the send failed. */
@@ -133,7 +143,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
   if (!normalized) {
     return { ok: true };
   }
-  const externalPayload: ReplyPayload = {
+  let externalPayload: ReplyPayload = {
     ...normalized,
     text: formatBtwTextForExternalDelivery(normalized),
   };
@@ -148,8 +158,8 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
   if (mediaUrls.length === 0 && externalPayload.mediaUrl) {
     mediaUrls = [externalPayload.mediaUrl];
   }
-  const replyToId = externalPayload.replyToId;
-  const hasChannelData = messaging?.hasStructuredReplyPayload?.({
+  let replyToId = externalPayload.replyToId;
+  let hasChannelData = messaging?.hasStructuredReplyPayload?.({
     payload: externalPayload,
   });
 
@@ -181,6 +191,59 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
   }
   if (abortSignal?.aborted) {
     return { ok: false, error: "Reply routing aborted" };
+  }
+
+  const hookedPayload = await runReplyPayloadSendingHook({
+    payload: externalPayload,
+    kind: params.replyKind ?? "final",
+    channel: channelId,
+    sessionKey: params.sessionKey,
+    runId: params.runId,
+    context: {
+      channelId,
+      ...(accountId ? { accountId } : {}),
+      conversationId: to,
+      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+      ...(params.requesterSenderId ? { senderId: params.requesterSenderId } : {}),
+      ...(params.runId ? { runId: params.runId } : {}),
+    },
+  });
+  if (!hookedPayload) {
+    return {
+      ok: true,
+      suppressed: true,
+      reason: "cancelled_by_reply_payload_sending_hook",
+    };
+  }
+  externalPayload = hookedPayload;
+
+  text = externalPayload.text ?? "";
+  mediaUrls = [];
+  for (const url of externalPayload.mediaUrls ?? []) {
+    if (url) {
+      mediaUrls.push(url);
+    }
+  }
+  if (mediaUrls.length === 0 && externalPayload.mediaUrl) {
+    mediaUrls = [externalPayload.mediaUrl];
+  }
+  replyToId = externalPayload.replyToId;
+  hasChannelData = messaging?.hasStructuredReplyPayload?.({
+    payload: externalPayload,
+  });
+  if (
+    !hasReplyPayloadContent(
+      {
+        ...externalPayload,
+        text,
+        mediaUrls,
+      },
+      {
+        hasChannelData,
+      },
+    )
+  ) {
+    return { ok: true };
   }
 
   const replyTransport =

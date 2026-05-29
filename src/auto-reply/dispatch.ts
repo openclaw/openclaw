@@ -31,6 +31,10 @@ import {
   type ReplyDispatcherWithTypingOptions,
 } from "./reply/reply-dispatcher.js";
 import type { ReplyDispatcher } from "./reply/reply-dispatcher.types.js";
+import {
+  hasReplyPayloadSendingHooks,
+  runReplyPayloadSendingHook,
+} from "./reply/reply-payload-sending-hook.js";
 import type { FinalizedMsgContext, MsgContext } from "./templating.js";
 import type { GetReplyOptions, ReplyPayload } from "./types.js";
 
@@ -327,8 +331,7 @@ function buildReplyPayloadSendingBeforeDeliver(
   ctx: MsgContext | FinalizedMsgContext,
   opts?: { runId?: string },
 ): ReplyDispatchBeforeDeliver | undefined {
-  const hookRunner = getGlobalHookRunner();
-  if (!hookRunner?.hasHooks("reply_payload_sending")) {
+  if (!hasReplyPayloadSendingHooks()) {
     return undefined;
   }
 
@@ -336,24 +339,17 @@ function buildReplyPayloadSendingBeforeDeliver(
   const hookCtx = deriveInboundMessageHookContext(finalized);
 
   return async (payload: ReplyPayload, info): Promise<ReplyPayload | null> => {
-    const result = await hookRunner.runReplyPayloadSending(
-      {
-        payload,
-        kind: info.kind,
-        channel: finalized.Surface ?? finalized.Provider,
-        sessionKey: finalized.SessionKey,
-        runId: opts?.runId,
-      },
-      {
+    return runReplyPayloadSendingHook({
+      payload,
+      kind: info.kind,
+      channel: finalized.Surface ?? finalized.Provider,
+      sessionKey: finalized.SessionKey,
+      runId: opts?.runId,
+      context: {
         ...toPluginMessageContext(hookCtx),
         runId: opts?.runId,
       },
-    );
-
-    if (result?.cancel) {
-      return null;
-    }
-    return result?.payload ?? payload;
+    });
   };
 }
 

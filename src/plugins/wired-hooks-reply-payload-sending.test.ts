@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
+import type { PluginHookReplyPayload } from "./hook-types.js";
 import { createHookRunnerWithRegistry } from "./hooks.test-helpers.js";
 
 const replyPayloadSendingEvent = {
@@ -122,5 +123,59 @@ describe("reply_payload_sending hook runner", () => {
     expect(firstErrorLog(logger)).toEqual([
       "[hooks] reply_payload_sending handler from test-plugin failed: boom",
     ]);
+  });
+
+  it("does not expose trusted local media to plugins", async () => {
+    const handler = vi
+      .fn()
+      .mockImplementation(async (event: { payload: PluginHookReplyPayload }) => {
+        expect("trustedLocalMedia" in event.payload).toBe(false);
+        return {
+          payload: {
+            ...event.payload,
+            text: "plugin changed",
+            trustedLocalMedia: true,
+          } as ReplyPayload,
+        };
+      });
+    const { runner } = createHookRunnerWithRegistry([
+      { hookName: "reply_payload_sending", handler },
+    ]);
+
+    const result = await runner.runReplyPayloadSending(
+      {
+        ...replyPayloadSendingEvent,
+        payload: { text: "hello" } satisfies ReplyPayload,
+      },
+      replyPayloadSendingCtx,
+    );
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect((result?.payload as ReplyPayload | undefined)?.trustedLocalMedia).toBeUndefined();
+    expect(result?.payload).toMatchObject({ text: "plugin changed" });
+  });
+
+  it("preserves runtime-owned trusted local media across plugin edits", async () => {
+    const handler = vi
+      .fn()
+      .mockImplementation(async (event: { payload: PluginHookReplyPayload }) => {
+        expect("trustedLocalMedia" in event.payload).toBe(false);
+        return { payload: { ...event.payload, text: "plugin changed" } };
+      });
+    const { runner } = createHookRunnerWithRegistry([
+      { hookName: "reply_payload_sending", handler },
+    ]);
+
+    const result = await runner.runReplyPayloadSending(
+      {
+        ...replyPayloadSendingEvent,
+        payload: { text: "hello", trustedLocalMedia: true } as unknown as PluginHookReplyPayload,
+      },
+      replyPayloadSendingCtx,
+    );
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect((result?.payload as ReplyPayload | undefined)?.trustedLocalMedia).toBe(true);
+    expect(result?.payload).toMatchObject({ text: "plugin changed" });
   });
 });

@@ -409,8 +409,12 @@ Decision rules:
 - Rewritten `content` continues to lower-priority hooks unless a later hook
   cancels delivery.
 - `reply_payload_sending` runs after payload normalization and before channel
-  delivery. Handlers run sequentially and each handler sees the latest payload
-  produced by higher-priority handlers.
+  delivery, including replies routed back to the originating channel. Handlers
+  run sequentially and each handler sees the latest payload produced by
+  higher-priority handlers.
+- `reply_payload_sending` payloads do not expose runtime trust markers such as
+  `trustedLocalMedia`; plugins can edit payload shape but cannot grant local
+  media trust.
 - `message_sending` can return `cancelReason` and bounded `metadata` with a
   cancellation. New message lifecycle APIs expose this as a suppressed delivery
   outcome with reason `cancelled_by_message_sending_hook`; legacy direct

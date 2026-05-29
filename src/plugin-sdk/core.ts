@@ -148,6 +148,7 @@ export type {
   PluginHookReplyPayloadSendingContext,
   PluginHookReplyPayloadSendingEvent,
   PluginHookReplyPayloadSendingResult,
+  PluginHookReplyPayload,
   PluginHookReplyDispatchContext,
   PluginHookReplyDispatchEvent,
   PluginHookReplyDispatchResult,

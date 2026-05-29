@@ -14,6 +14,12 @@ import { SILENT_REPLY_TOKEN } from "../tokens.js";
 
 const mocks = vi.hoisted(() => ({
   deliverOutboundPayloads: vi.fn(),
+  hookRunner: undefined as
+    | {
+        hasHooks: ReturnType<typeof vi.fn>;
+        runReplyPayloadSending: ReturnType<typeof vi.fn>;
+      }
+    | undefined,
 }));
 
 vi.mock("../../infra/outbound/deliver-runtime.js", () => ({
@@ -24,6 +30,10 @@ vi.mock("../../infra/outbound/deliver-runtime.js", () => ({
 vi.mock("../../infra/outbound/deliver.js", () => ({
   deliverOutboundPayloads: mocks.deliverOutboundPayloads,
   deliverOutboundPayloadsInternal: mocks.deliverOutboundPayloads,
+}));
+
+vi.mock("../../plugins/hook-runner-global.js", () => ({
+  getGlobalHookRunner: () => mocks.hookRunner,
 }));
 
 const { routeReply } = await import("./route-reply.js");
@@ -207,6 +217,7 @@ describe("routeReply", () => {
     );
     mocks.deliverOutboundPayloads.mockReset();
     mocks.deliverOutboundPayloads.mockResolvedValue([]);
+    mocks.hookRunner = undefined;
   });
 
   afterEach(() => {
@@ -253,6 +264,79 @@ describe("routeReply", () => {
       to: "channel:C123",
     });
     expect(lastDeliveryPayload().text).toBe(`${SILENT_REPLY_TOKEN} -- (why am I here?)`);
+  });
+
+  it("runs reply payload hooks before routed delivery", async () => {
+    mocks.hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "reply_payload_sending"),
+      runReplyPayloadSending: vi.fn(async ({ payload }) => ({
+        payload: {
+          ...payload,
+          text: `${payload.text} + hooked`,
+          presentation: {
+            blocks: [{ type: "buttons", buttons: [{ label: "Proceed", value: "action:proceed" }] }],
+          },
+        },
+      })),
+    };
+
+    const res = await routeReply({
+      payload: { text: "hello" },
+      channel: "telegram",
+      to: "chat-1",
+      accountId: "acct-1",
+      sessionKey: "agent:test",
+      requesterSenderId: "sender-1",
+      cfg: {} as never,
+      replyKind: "block",
+      runId: "run-1",
+    });
+
+    expect(res.ok).toBe(true);
+    expect(lastDeliveryPayload()).toMatchObject({
+      text: "hello + hooked",
+      presentation: {
+        blocks: [{ type: "buttons", buttons: [{ label: "Proceed", value: "action:proceed" }] }],
+      },
+    });
+    expect(mocks.hookRunner.runReplyPayloadSending).toHaveBeenCalledWith(
+      {
+        payload: expect.objectContaining({ text: "hello" }),
+        kind: "block",
+        channel: "telegram",
+        sessionKey: "agent:test",
+        runId: "run-1",
+      },
+      {
+        channelId: "telegram",
+        accountId: "acct-1",
+        conversationId: "chat-1",
+        sessionKey: "agent:test",
+        senderId: "sender-1",
+        runId: "run-1",
+      },
+    );
+  });
+
+  it("suppresses routed delivery when reply payload hooks cancel", async () => {
+    mocks.hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "reply_payload_sending"),
+      runReplyPayloadSending: vi.fn(async () => ({ cancel: true, reason: "blocked" })),
+    };
+
+    const res = await routeReply({
+      payload: { text: "hello" },
+      channel: "telegram",
+      to: "chat-1",
+      cfg: {} as never,
+    });
+
+    expect(res).toEqual({
+      ok: true,
+      suppressed: true,
+      reason: "cancelled_by_reply_payload_sending_hook",
+    });
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
   it("passes policySessionKey through to outbound delivery targets", async () => {

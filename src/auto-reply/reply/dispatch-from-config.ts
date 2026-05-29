@@ -129,8 +129,7 @@ import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
 import { claimInboundDedupe, commitInboundDedupe, releaseInboundDedupe } from "./inbound-dedupe.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
-import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
-import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
+import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
 import { replyRunRegistry, type ReplyOperation } from "./reply-run-registry.js";
 import { isReplyProfilerEnabled } from "./reply-timing-tracker.js";
 import { admitReplyTurn, resolveReplyTurnKind } from "./reply-turn-admission.js";
@@ -1298,7 +1297,7 @@ export async function dispatchReplyFromConfig(
 
   const routeReplyToOriginating = async (
     payload: ReplyPayload,
-    options?: { abortSignal?: AbortSignal; mirror?: boolean },
+    options?: { abortSignal?: AbortSignal; mirror?: boolean; kind?: ReplyDispatchKind },
   ) => {
     if (!shouldRouteToOriginating || !routeReplyChannel || !routeReplyTo || !routeReplyRuntime) {
       return null;
@@ -1329,8 +1328,13 @@ export async function dispatchReplyFromConfig(
       mirror: options?.mirror,
       isGroup,
       groupId,
+      replyKind: options?.kind ?? "final",
+      runId: params.replyOptions?.runId,
     });
   };
+
+  const isRoutedReplyDelivered = (result: { ok: boolean; suppressed?: boolean }) =>
+    result.ok && result.suppressed !== true;
 
   /**
    * Helper to send a payload via route-reply (async).
@@ -1342,6 +1346,7 @@ export async function dispatchReplyFromConfig(
     payload: ReplyPayload,
     abortSignal?: AbortSignal,
     mirror?: boolean,
+    kind: ReplyDispatchKind = "tool",
   ): Promise<void> => {
     // Keep the runtime guard explicit because this helper is called from nested
     // reply callbacks where TypeScript cannot narrow shouldRouteToOriginating.
@@ -1355,6 +1360,7 @@ export async function dispatchReplyFromConfig(
     const result = await routeReplyToOriginating(payload, {
       abortSignal: effectiveAbortSignal,
       mirror,
+      kind,
     });
     if (result && !result.ok) {
       logVerbose(`dispatch-from-config: route-reply failed: ${result.error ?? "unknown error"}`);
@@ -1368,7 +1374,9 @@ export async function dispatchReplyFromConfig(
     if (suppressAutomaticSourceDelivery) {
       return false;
     }
-    const result = await routeReplyToOriginating(payload);
+    const result = await routeReplyToOriginating(payload, {
+      kind: mode === "terminal" ? "final" : "tool",
+    });
     if (result) {
       if (!result.ok) {
         logVerbose(
@@ -1740,7 +1748,7 @@ export async function dispatchReplyFromConfig(
         const result = await routeReplyToOriginating(payload);
         if (result) {
           queuedFinal = result.ok;
-          if (result.ok) {
+          if (isRoutedReplyDelivered(result)) {
             routedFinalCount += 1;
           }
           if (!result.ok) {
@@ -1843,6 +1851,7 @@ export async function dispatchReplyFromConfig(
       throwIfFinalDeliveryAborted();
       const result = await routeReplyToOriginating(normalizedPayload, {
         abortSignal,
+        kind: "final",
       });
       if (result) {
         if (!result.ok) {
@@ -1850,7 +1859,7 @@ export async function dispatchReplyFromConfig(
             `dispatch-from-config: route-reply (final) failed: ${result.error ?? "unknown error"}`,
           );
         }
-        if (result.ok) {
+        if (isRoutedReplyDelivered(result)) {
           await mirrorInternalSourceReplyToTranscript({
             metadata: sourceReplyTranscriptMirror,
             cfg,
@@ -1858,7 +1867,7 @@ export async function dispatchReplyFromConfig(
         }
         return {
           queuedFinal: result.ok,
-          routedFinalCount: result.ok ? 1 : 0,
+          routedFinalCount: isRoutedReplyDelivered(result) ? 1 : 0,
         };
       }
       throwIfFinalDeliveryAborted();
@@ -2535,7 +2544,7 @@ export async function dispatchReplyFromConfig(
                   return;
                 }
                 if (shouldRouteToOriginating) {
-                  await sendPayloadAsync(normalizedPayload, context?.abortSignal, false);
+                  await sendPayloadAsync(normalizedPayload, context?.abortSignal, false, "block");
                 } else {
                   markInboundDedupeReplayUnsafe();
                   const delivered = dispatcher.sendBlockReply(normalizedPayload);
@@ -2703,10 +2712,11 @@ export async function dispatchReplyFromConfig(
             throwIfDispatchOperationAborted();
             const result = await routeReplyToOriginating(normalizedTtsOnlyPayload, {
               abortSignal: getDispatchAbortSignal(),
+              kind: "final",
             });
             if (result) {
               queuedFinal = result.ok || queuedFinal;
-              if (result.ok) {
+              if (isRoutedReplyDelivered(result)) {
                 routedFinalCount += 1;
               }
               if (!result.ok) {

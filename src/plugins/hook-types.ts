@@ -431,24 +431,18 @@ export type PluginHookReplyDispatchResult = {
 };
 
 export type PluginHookReplyPayloadSendingEvent = {
-  payload: ReplyPayload;
+  payload: PluginHookReplyPayload;
   kind: ReplyDispatchKind;
   channel?: string;
   sessionKey?: string;
   runId?: string;
 };
 
-export type PluginHookReplyPayloadSendingContext = {
-  channelId?: string;
-  accountId?: string;
-  conversationId?: string;
-  sessionKey?: string;
-  senderId?: string;
-  runId?: string;
-};
+export type PluginHookReplyPayload = Omit<ReplyPayload, "trustedLocalMedia">;
+export type PluginHookReplyPayloadSendingContext = PluginHookMessageContext;
 
 export type PluginHookReplyPayloadSendingResult = {
-  payload?: ReplyPayload;
+  payload?: PluginHookReplyPayload;
   cancel?: boolean;
   reason?: string;
 };
