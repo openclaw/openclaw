@@ -14,6 +14,57 @@
 export const INTERLEAVED_LINE_MAX_CHARS = 200;
 
 /**
+ * Budget for the *visible* portion of the interleaved message. Telegram caps a
+ * message at 4096 chars and the durable draft stream STOPS editing (freezes)
+ * the moment a render exceeds that — so the lane must spill into a continuation
+ * message before reaching it. Held well under 4096 to leave room for the
+ * "Thinking" header, the rolling-timer suffix, and HTML/markdown expansion.
+ */
+export const INTERLEAVED_MESSAGE_MAX_CHARS = 3900;
+
+/**
+ * When the message fills up and spills into a fresh continuation message, carry
+ * roughly this many trailing chars (snapped to a line boundary) into the new
+ * message so recent progress stays visible across the break instead of leaving
+ * a hard gap.
+ */
+export const INTERLEAVED_SPILL_OVERLAP_CHARS = 600;
+
+/**
+ * Decide whether the accumulated body has outgrown the *current* message and, if
+ * so, where the continuation message should start. `offset` is how many leading
+ * chars of `body` already live in prior (rotated-away) messages; the visible
+ * portion is `body.slice(offset)`. Returns the new offset (advanced, snapped to
+ * a line boundary, carrying `overlapChars` of trailing context) when a spill is
+ * needed, else the unchanged offset. Pure so the dispatch can rotate the draft
+ * stream deterministically and it can be unit-tested without the harness.
+ */
+export function computeInterleavedSpill(params: {
+  body: string;
+  offset: number;
+  maxChars?: number;
+  overlapChars?: number;
+}): { offset: number; spilled: boolean } {
+  const maxChars = params.maxChars ?? INTERLEAVED_MESSAGE_MAX_CHARS;
+  const overlap = params.overlapChars ?? INTERLEAVED_SPILL_OVERLAP_CHARS;
+  const offset = Math.max(0, Math.min(params.offset, params.body.length));
+  if (params.body.length - offset <= maxChars) {
+    return { offset, spilled: false };
+  }
+  let newOffset = Math.max(offset, params.body.length - overlap);
+  const nl = params.body.indexOf("\n", newOffset);
+  if (nl >= 0 && nl < params.body.length - 1) {
+    newOffset = nl + 1;
+  }
+  // A single line longer than the overlap window leaves no clean boundary — fall
+  // back to a hard advance so the continuation is guaranteed to start smaller.
+  if (newOffset <= offset) {
+    newOffset = Math.max(offset, params.body.length - Math.min(overlap, maxChars));
+  }
+  return { offset: newOffset, spilled: newOffset > offset };
+}
+
+/**
  * Gate for the interleaved lane. It is enabled only when preview tool progress
  * is already enabled (so it inherits all existing group/DM/visibility gating),
  * the operator explicitly opted in, and a reasoning lane exists to render into.
@@ -62,13 +113,27 @@ export function renderInterleavedMessage(params: {
   body: string;
   timerStartedAt?: number;
   now?: number;
+  maxChars?: number;
 }): string {
   const now = params.now ?? Date.now();
   const timerSuffix =
     params.timerStartedAt !== undefined
       ? `\n_${Math.floor((now - params.timerStartedAt) / 1000)}s — still running_`
       : "";
-  return `Thinking\n\n${params.body.trimEnd()}${timerSuffix}`;
+  let body = params.body.trimEnd();
+  // Safety net: spill-by-offset keeps the visible body small in the normal case,
+  // but a single append larger than a whole message could still overflow. Cap
+  // the body to the most-recent content (line boundary) so a render NEVER
+  // exceeds the limit and freezes the stream; a leading ellipsis marks the trim.
+  if (params.maxChars !== undefined) {
+    const budget = params.maxChars - "Thinking\n\n".length - timerSuffix.length - 2;
+    if (budget > 0 && body.length > budget) {
+      const tail = body.slice(body.length - budget);
+      const nl = tail.indexOf("\n");
+      body = `…\n${nl >= 0 ? tail.slice(nl + 1) : tail}`;
+    }
+  }
+  return `Thinking\n\n${body}${timerSuffix}`;
 }
 
 /**

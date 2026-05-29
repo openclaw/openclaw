@@ -2,8 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   appendInterleavedDelta,
   appendStatusLine,
+  computeInterleavedSpill,
   emptyInterleavedStreamState,
   INTERLEAVED_LINE_MAX_CHARS,
+  INTERLEAVED_MESSAGE_MAX_CHARS,
+  INTERLEAVED_SPILL_OVERLAP_CHARS,
   renderInterleavedMessage,
   resolveInterleavedProgressEnabled,
   resolveInterleavedToolLine,
@@ -416,5 +419,73 @@ describe("stripFinalAnswerFromInterleavedBody", () => {
   it("is a no-op for empty final text", () => {
     const body = "_thinking_\nsome commentary";
     expect(stripFinalAnswerFromInterleavedBody({ body, finalText: "" })).toBe(body);
+  });
+});
+
+describe("computeInterleavedSpill", () => {
+  it("does not spill while the visible body fits within one message", () => {
+    const body = "x".repeat(INTERLEAVED_MESSAGE_MAX_CHARS - 10);
+    expect(computeInterleavedSpill({ body, offset: 0 })).toEqual({ offset: 0, spilled: false });
+  });
+
+  it("spills into a continuation, advancing the offset and carrying recent context", () => {
+    // Lines of 100 chars each so there are clean boundaries to snap to.
+    const line = `${"y".repeat(99)}\n`;
+    const body = line.repeat(60); // 6000 chars, well over the cap
+    const result = computeInterleavedSpill({ body, offset: 0 });
+    expect(result.spilled).toBe(true);
+    expect(result.offset).toBeGreaterThan(0);
+    // The continuation's visible portion must fit a fresh message...
+    expect(body.length - result.offset).toBeLessThanOrEqual(INTERLEAVED_MESSAGE_MAX_CHARS);
+    // ...and carry a meaningful window of recent context (~overlap, line-snapped).
+    expect(body.length - result.offset).toBeGreaterThan(300);
+    expect(body.length - result.offset).toBeLessThanOrEqual(INTERLEAVED_SPILL_OVERLAP_CHARS);
+    // Offset lands on a line boundary (start of a line).
+    expect(result.offset === 0 || body[result.offset - 1] === "\n").toBe(true);
+  });
+
+  it("repeated spills keep every continuation under the cap as the body grows", () => {
+    const line = `${"z".repeat(120)}\n`;
+    let body = "";
+    let offset = 0;
+    for (let i = 0; i < 200; i += 1) {
+      body += line;
+      const result = computeInterleavedSpill({ body, offset });
+      offset = result.offset;
+      expect(body.length - offset).toBeLessThanOrEqual(INTERLEAVED_MESSAGE_MAX_CHARS);
+    }
+    // It actually rotated forward over the run rather than freezing at 0.
+    expect(offset).toBeGreaterThan(0);
+  });
+
+  it("force-advances when a single line is longer than the overlap window", () => {
+    const body = "q".repeat(INTERLEAVED_MESSAGE_MAX_CHARS + 2000); // one giant unbroken line
+    const result = computeInterleavedSpill({ body, offset: 0 });
+    expect(result.spilled).toBe(true);
+    expect(body.length - result.offset).toBeLessThanOrEqual(INTERLEAVED_MESSAGE_MAX_CHARS);
+  });
+});
+
+describe("renderInterleavedMessage length cap", () => {
+  it("never exceeds maxChars even for an oversized body (tail-capped with marker)", () => {
+    const body = "a".repeat(10_000);
+    const rendered = renderInterleavedMessage({
+      body,
+      maxChars: INTERLEAVED_MESSAGE_MAX_CHARS,
+      timerStartedAt: 1_000,
+      now: 4_000,
+    });
+    expect(rendered.length).toBeLessThanOrEqual(INTERLEAVED_MESSAGE_MAX_CHARS);
+    expect(rendered.startsWith("Thinking\n\n")).toBe(true);
+    expect(rendered).toContain("…");
+    expect(rendered.endsWith("3s — still running_")).toBe(true);
+  });
+
+  it("leaves a within-budget body untouched (no marker, no truncation)", () => {
+    const rendered = renderInterleavedMessage({
+      body: "short body",
+      maxChars: INTERLEAVED_MESSAGE_MAX_CHARS,
+    });
+    expect(rendered).toBe("Thinking\n\nshort body");
   });
 });

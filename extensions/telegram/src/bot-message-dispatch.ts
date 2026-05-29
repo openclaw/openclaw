@@ -114,7 +114,9 @@ import { beginTelegramInboundEventDeliveryCorrelation } from "./inbound-event-de
 import {
   appendInterleavedDelta,
   appendStatusLine,
+  computeInterleavedSpill,
   emptyInterleavedStreamState,
+  INTERLEAVED_MESSAGE_MAX_CHARS,
   renderInterleavedMessage,
   resolveInterleavedProgressEnabled,
   resolveInterleavedToolLine,
@@ -1236,6 +1238,11 @@ export const dispatchTelegramMessage = async ({
   const interleavedToolArgsEnabled =
     interleavedProgressEnabled && telegramCfg.streaming?.preview?.interleavedToolArgs === true;
   let interleavedBody = "";
+  // Chars of `interleavedBody` already committed to prior (spilled-away)
+  // messages. The current message renders `interleavedBody.slice(offset)`; when
+  // that outgrows one Telegram message the lane rotates to a fresh message and
+  // this advances, so each message only ever grows (append-only) until rotation.
+  let interleavedRenderOffset = 0;
   // Delta-append checkpoints, one per stream. The reasoning and commentary
   // streams are tracked separately so each converts its own cumulative
   // snapshots to deltas; appends are chronological, so no checkpoint reset is
@@ -1259,9 +1266,28 @@ export const dispatchTelegramMessage = async ({
     }
     reasoningLane.hasStreamedMessage = true;
     reasoningLane.finalized = true;
-    reasoningLane.lastPartialText = renderInterleavedMessage({
+    // Spill into a fresh continuation message before the current one outgrows
+    // Telegram's 4096-char cap (which would make the draft stream stop editing
+    // and freeze the lane). forceNewMessage() clears the stopped flag, bumps the
+    // generation, and resets the message id so the next update() sends a new
+    // message; the per-stream delta checkpoints stay intact, so the continuation
+    // appends only new content instead of re-dumping the whole transcript.
+    const spill = computeInterleavedSpill({
       body: interleavedBody,
+      offset: interleavedRenderOffset,
+    });
+    if (spill.spilled) {
+      interleavedRenderOffset = spill.offset;
+      interleavedPrevStatusLine = undefined;
+      reasoningLane.stream.forceNewMessage();
+      resetDraftLaneState(reasoningLane);
+      reasoningLane.hasStreamedMessage = true;
+      reasoningLane.finalized = true;
+    }
+    reasoningLane.lastPartialText = renderInterleavedMessage({
+      body: interleavedBody.slice(interleavedRenderOffset),
       timerStartedAt: interleavedTimerStartedAt,
+      maxChars: INTERLEAVED_MESSAGE_MAX_CHARS,
     });
     reasoningLane.stream.update(reasoningLane.lastPartialText);
     return true;
