@@ -48,7 +48,7 @@ describe("detectGhConfigDirMismatch", () => {
     });
   });
 
-  it("flags a mismatch when /root/.config/gh has hosts.yml but the agent HOME does not", () => {
+  it("does not guess /root by default when the agent HOME does not have gh auth", () => {
     const result = detectGhConfigDirMismatch(
       makeInput({
         env: { HOME: "/root/.openclaw/agents/main/agent/codex-home/home" },
@@ -56,20 +56,43 @@ describe("detectGhConfigDirMismatch", () => {
       }),
     );
     expect(result).toEqual({
-      kind: "mismatch",
+      kind: "no-known-auth",
       effectiveConfigDir: "/root/.openclaw/agents/main/agent/codex-home/home/.config/gh",
-      alternateConfigDir: "/root/.config/gh",
-      alternateHostsFile: "/root/.config/gh/hosts.yml",
-      alternateHomeHint: "/root",
-      suggestedEnvValue: "/root/.config/gh",
     });
   });
 
-  it("uses SUDO_USER home as a candidate when set", () => {
+  it("does not derive SUDO_USER home candidates unless explicitly configured", () => {
     const result = detectGhConfigDirMismatch(
       makeInput({
         env: { HOME: "/var/lib/openclaw/agent", SUDO_USER: "alice" },
         fileExists: fileSet("/home/alice/.config/gh/hosts.yml"),
+      }),
+    );
+    expect(result).toEqual({
+      kind: "no-known-auth",
+      effectiveConfigDir: "/var/lib/openclaw/agent/.config/gh",
+    });
+  });
+
+  it("does not derive USER home candidates unless explicitly configured", () => {
+    const result = detectGhConfigDirMismatch(
+      makeInput({
+        env: { HOME: "/var/lib/openclaw/agent", USER: "ops" },
+        fileExists: fileSet("/home/ops/.config/gh/hosts.yml"),
+      }),
+    );
+    expect(result).toEqual({
+      kind: "no-known-auth",
+      effectiveConfigDir: "/var/lib/openclaw/agent/.config/gh",
+    });
+  });
+
+  it("flags an explicit candidateOperatorHomes mismatch", () => {
+    const result = detectGhConfigDirMismatch(
+      makeInput({
+        env: { HOME: "/var/lib/openclaw/agent", SUDO_USER: "alice" },
+        fileExists: fileSet("/home/alice/.config/gh/hosts.yml"),
+        candidateOperatorHomes: ["/home/alice"],
       }),
     );
     expect(result).toEqual({
@@ -82,31 +105,40 @@ describe("detectGhConfigDirMismatch", () => {
     });
   });
 
-  it("uses USER home as a fallback candidate when SUDO_USER is missing", () => {
+  it("flags explicit OPENCLAW_GH_CONFIG_DISCOVERY_HOMES values", () => {
     const result = detectGhConfigDirMismatch(
       makeInput({
-        env: { HOME: "/var/lib/openclaw/agent", USER: "ops" },
-        fileExists: fileSet("/home/ops/.config/gh/hosts.yml"),
+        env: {
+          HOME: "/agent/home",
+          OPENCLAW_GH_CONFIG_DISCOVERY_HOMES: "/srv/automation,/home/operator",
+        },
+        fileExists: fileSet("/home/operator/.config/gh/hosts.yml"),
       }),
     );
     expect(result).toEqual({
       kind: "mismatch",
-      effectiveConfigDir: "/var/lib/openclaw/agent/.config/gh",
-      alternateConfigDir: "/home/ops/.config/gh",
-      alternateHostsFile: "/home/ops/.config/gh/hosts.yml",
-      alternateHomeHint: "/home/ops",
-      suggestedEnvValue: "/home/ops/.config/gh",
+      effectiveConfigDir: "/agent/home/.config/gh",
+      alternateConfigDir: "/home/operator/.config/gh",
+      alternateHostsFile: "/home/operator/.config/gh/hosts.yml",
+      alternateHomeHint: "/home/operator",
+      suggestedEnvValue: "/home/operator/.config/gh",
     });
   });
 
-  it("ignores USER=root since /root is already part of the default candidate set", () => {
+  it("ignores relative OPENCLAW_GH_CONFIG_DISCOVERY_HOMES entries", () => {
     const result = detectGhConfigDirMismatch(
       makeInput({
-        env: { HOME: "/agent/home", USER: "root" },
-        fileExists: fileSet("/root/.config/gh/hosts.yml"),
+        env: {
+          HOME: "/agent/home",
+          OPENCLAW_GH_CONFIG_DISCOVERY_HOMES: "relative-home",
+        },
+        fileExists: fileSet("relative-home/.config/gh/hosts.yml"),
       }),
     );
-    expect(result.kind).toBe("mismatch");
+    expect(result).toEqual({
+      kind: "no-known-auth",
+      effectiveConfigDir: "/agent/home/.config/gh",
+    });
   });
 
   it("returns 'no-known-auth' when no candidate has hosts.yml", () => {
@@ -260,6 +292,7 @@ describe("formatGhConfigDirMismatchHint", () => {
       "  Authenticated config:  /root/.config/gh (contains hosts.yml)",
       "  Authenticated HOME:    /root",
       "  Fix: set GH_CONFIG_DIR=/root/.config/gh on the OpenClaw service environment, then restart the gateway.",
+      "  Optional diagnostic: set OPENCLAW_GH_CONFIG_DISCOVERY_HOMES=<absolute-home> to check this path again.",
     ]);
   });
 
@@ -274,6 +307,9 @@ describe("formatGhConfigDirMismatchHint", () => {
     expect(lines.join("\n")).not.toContain("Authenticated HOME");
     expect(lines).toContain(
       "  Fix: set GH_CONFIG_DIR=/srv/automation/.config/gh on the OpenClaw service environment, then restart the gateway.",
+    );
+    expect(lines).toContain(
+      "  Optional diagnostic: set OPENCLAW_GH_CONFIG_DISCOVERY_HOMES=<absolute-home> to check this path again.",
     );
   });
 });

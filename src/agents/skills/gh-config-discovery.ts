@@ -8,7 +8,14 @@ function pathFor(platform: NodeJS.Platform) {
 // OpenClaw process is running with a different HOME (e.g. the per-agent
 // codex-home, a systemd service home, or a sudo'd shell). Without GH_CONFIG_DIR
 // the gh CLI looks at $XDG_CONFIG_HOME/gh or $HOME/.config/gh and reports
-// "not logged in", even though the operator HOME has a valid hosts.yml.
+// "not logged in", even though the operator HOME may have a valid hosts.yml.
+//
+// This helper intentionally does not guess broad operator-home paths by
+// default. Operators who want this diagnostic can provide explicit candidate
+// homes through candidateOperatorHomes in tests/callers or through the
+// OPENCLAW_GH_CONFIG_DISCOVERY_HOMES environment variable in production. The
+// diagnostic still only suggests setting GH_CONFIG_DIR; it never reads or copies
+// GitHub CLI auth material.
 // See https://github.com/openclaw/openclaw/issues/78063.
 
 export type GhConfigDiscoveryEnv = {
@@ -19,15 +26,17 @@ export type GhConfigDiscoveryEnv = {
   SUDO_USER?: string;
   USER?: string;
   USERPROFILE?: string;
+  OPENCLAW_GH_CONFIG_DISCOVERY_HOMES?: string;
 };
 
 export type GhConfigDiscoveryInput = {
   platform: NodeJS.Platform;
   env: GhConfigDiscoveryEnv;
   fileExists: (absolutePath: string) => boolean;
-  // Optional: well-known operator-home guesses to consider when looking for an
-  // alternate gh config dir. Defaults to a small Linux/macOS set; tests pass an
-  // explicit list to keep behavior deterministic.
+  // Optional: explicit operator-home directories to consider when looking for
+  // an alternate gh config dir. Defaults to the opt-in
+  // OPENCLAW_GH_CONFIG_DISCOVERY_HOMES env value; if that is unset, no
+  // alternate homes are probed.
   candidateOperatorHomes?: readonly string[];
 };
 
@@ -54,6 +63,7 @@ export type GhConfigDiscoveryResult =
   | ({ kind: "mismatch" } & GhConfigDirMismatch);
 
 const HOSTS_FILE = "hosts.yml";
+const OPERATOR_HOMES_ENV = "OPENCLAW_GH_CONFIG_DISCOVERY_HOMES";
 
 // gh config-dir lookup order, matching `gh help environment`.
 function resolveEffectiveGhConfigDir(input: GhConfigDiscoveryInput): string | undefined {
@@ -82,36 +92,31 @@ function resolveEffectiveGhConfigDir(input: GhConfigDiscoveryInput): string | un
   return pathFor(input.platform).join(home, ".config", "gh");
 }
 
+function parseExplicitCandidateOperatorHomes(
+  value: string | undefined,
+  platform: NodeJS.Platform,
+): string[] {
+  if (!value?.trim()) {
+    return [];
+  }
+  const pathApi = pathFor(platform);
+  return value
+    .split(/[\n,]/u)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0)
+    .filter((entry) => pathApi.isAbsolute(entry));
+}
+
 function defaultCandidateOperatorHomes(input: GhConfigDiscoveryInput): string[] {
-  const env = input.env;
-  const homes = new Set<string>();
-  // Common operator HOME on Linux servers running gateway as root.
-  if (input.platform !== "win32") {
-    homes.add("/root");
-  }
-  // sudo invocation: the original shell user's home is exposed through SUDO_USER.
-  if (env.SUDO_USER?.trim()) {
-    const sudoUser = env.SUDO_USER.trim();
-    homes.add(pathFor(input.platform).join("/home", sudoUser));
-    if (input.platform === "darwin") {
-      homes.add(pathFor(input.platform).join("/Users", sudoUser));
-    }
-  }
-  // USER fallback: works when HOME has been redirected but the login user is
-  // still on the env (e.g. systemd User= with PassEnvironment=USER).
-  if (env.USER?.trim()) {
-    const user = env.USER.trim();
-    if (user !== "root") {
-      if (input.platform === "darwin") {
-        homes.add(pathFor(input.platform).join("/Users", user));
-      } else if (input.platform !== "win32") {
-        homes.add(pathFor(input.platform).join("/home", user));
-      }
-    }
-  }
+  const homes = new Set(
+    parseExplicitCandidateOperatorHomes(
+      input.env.OPENCLAW_GH_CONFIG_DISCOVERY_HOMES,
+      input.platform,
+    ),
+  );
   // Drop the current process HOME from the candidate set; we want directories
   // that are NOT what gh would already consult.
-  const processHome = env.HOME?.trim();
+  const processHome = input.env.HOME?.trim();
   if (processHome) {
     homes.delete(processHome);
   }
@@ -170,6 +175,7 @@ export function formatGhConfigDirMismatchHint(mismatch: GhConfigDirMismatch): st
   }
   lines.push(
     `  Fix: set GH_CONFIG_DIR=${mismatch.suggestedEnvValue} on the OpenClaw service environment, then restart the gateway.`,
+    `  Optional diagnostic: set ${OPERATOR_HOMES_ENV}=<absolute-home> to check this path again.`,
   );
   return lines;
 }

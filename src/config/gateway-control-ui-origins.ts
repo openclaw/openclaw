@@ -32,15 +32,13 @@ export function buildDefaultControlUiAllowedOrigins(params: {
   bind: unknown;
   customBindHost?: string;
 }): string[] {
-  const origins = new Set<string>([
+  // Safe automatic defaults are loopback-only.  Non-loopback gateway binds still
+  // need CORS protection, but LAN/tailnet/custom browser origins must be
+  // configured explicitly by the operator instead of inferred from bind mode.
+  return [
     `http://localhost:${params.port}`,
     `http://127.0.0.1:${params.port}`,
-  ]);
-  const customBindHost = params.customBindHost?.trim();
-  if (params.bind === "custom" && customBindHost) {
-    origins.add(`http://${customBindHost}:${params.port}`);
-  }
-  return [...origins];
+  ];
 }
 
 export function ensureControlUiAllowedOriginsForNonLoopbackBind(
@@ -48,17 +46,17 @@ export function ensureControlUiAllowedOriginsForNonLoopbackBind(
   opts?: {
     defaultPort?: number;
     requireControlUiEnabled?: boolean;
-    /** Resolved runtime bind override. Mirrors Gateway runtime precedence:
-     *  explicit CLI/runtime bind wins over gateway.bind. */
+    // Resolved runtime bind override. Mirrors Gateway runtime precedence:
+    // explicit CLI/runtime bind wins over gateway.bind.
     runtimeBind?: unknown;
-    /** Resolved runtime port override. Mirrors Gateway runtime precedence:
-     *  explicit CLI/runtime port wins over gateway.port. */
+    // Resolved runtime port override. Mirrors Gateway runtime precedence:
+    // explicit CLI/runtime port wins over gateway.port.
     runtimePort?: unknown;
-    /** Optional container-detection callback.  When provided and `gateway.bind`
-     *  is unset, the function is called to determine whether the runtime will
-     *  default to `"auto"` (container) so that origins can be seeded
-     *  proactively.  Keeping this as an injected callback avoids a hard
-     *  dependency from the config layer on the gateway runtime layer. */
+    // Optional container-detection callback.  When provided and `gateway.bind`
+    // is unset, the function is called to determine whether the runtime will
+    // choose the container-friendly bind mode so loopback Control UI origins
+    // can be prepared proactively.  Keeping this as an injected callback avoids
+    // a hard dependency from the config layer on the gateway runtime layer.
     isContainerEnvironment?: () => boolean;
   },
 ): {
@@ -67,10 +65,10 @@ export function ensureControlUiAllowedOriginsForNonLoopbackBind(
   bind: GatewayNonLoopbackBindMode | null;
 } {
   const bind = opts?.runtimeBind ?? config.gateway?.bind;
-  // When bind is unset (undefined) and we are inside a container, the runtime
-  // will default to "auto" → 0.0.0.0 via defaultGatewayBindMode().  We must
-  // seed origins *before* resolveGatewayRuntimeConfig runs, otherwise the
-  // non-loopback Control UI origin check will hard-fail on startup.
+  // When bind is unset and the process is containerized, the runtime chooses
+  // the container-friendly bind mode.  Prepare loopback Control UI origins here
+  // so startup keeps a concrete CORS allowlist without granting remote browser
+  // origins implicitly.
   const effectiveBind: typeof bind =
     bind ?? (opts?.isContainerEnvironment?.() ? "auto" : undefined);
   if (!isGatewayNonLoopbackBindMode(effectiveBind)) {
