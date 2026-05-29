@@ -15,8 +15,7 @@ Cron is the Gateway's built-in scheduler. It persists jobs, wakes the agent at t
 <Steps>
   <Step title="Add a one-shot reminder">
     ```bash
-    openclaw cron add \
-      --name "Reminder" \
+    openclaw cron create "Reminder" \
       --at "2026-02-01T16:00:00Z" \
       --session main \
       --system-event "Reminder: check the cron docs draft" \
@@ -215,8 +214,7 @@ Failure notifications follow a separate destination path:
   </Tab>
   <Tab title="Recurring isolated job">
     ```bash
-    openclaw cron add \
-      --name "Morning brief" \
+    openclaw cron create "Morning brief" \
       --cron "0 7 * * *" \
       --tz "America/Los_Angeles" \
       --session isolated \
@@ -237,6 +235,14 @@ Failure notifications follow a separate destination path:
       --model "opus" \
       --thinking high \
       --announce
+    ```
+  </Tab>
+  <Tab title="Webhook output">
+    ```bash
+    openclaw cron create "Deploy digest" \
+      --cron "0 18 * * 1-5" \
+      --message "Summarize today's deploys as JSON." \
+      --webhook "https://example.invalid/openclaw/cron"
     ```
   </Tab>
 </Tabs>
@@ -411,11 +417,13 @@ openclaw cron runs --id <jobId> --run-id <runId>
 openclaw cron remove <jobId>
 
 # Agent selection (multi-agent setups)
-openclaw cron add --name "Ops sweep" --cron "0 6 * * *" --session isolated --message "Check ops queue" --agent ops
+openclaw cron create "Ops sweep" --cron "0 6 * * *" --session isolated --message "Check ops queue" --agent ops
 openclaw cron edit <jobId> --clear-agent
 ```
 
 `openclaw cron run <jobId>` returns after enqueueing the manual run. Use `--wait` for shutdown hooks, maintenance scripts, or other automation that must block until the queued run finishes. Wait mode polls the exact returned `runId`; it exits `0` for status `ok` and non-zero for `error`, `skipped`, or a wait timeout.
+
+`openclaw cron create` is an alias for `openclaw cron add`, and new jobs can use a positional name instead of `--name`. Use `--webhook <url>` on `cron add|create` or `cron edit` to POST the finished run payload to an HTTP endpoint. Webhook delivery cannot be combined with chat delivery flags such as `--announce`, `--channel`, `--to`, `--thread-id`, or `--account`.
 
 <Note>
 Model override note:

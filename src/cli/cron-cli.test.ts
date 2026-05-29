@@ -79,6 +79,7 @@ type CronUpdatePatch = {
 };
 
 type CronAddParams = {
+  name?: string;
   schedule?: { kind?: string; at?: string; staggerMs?: number };
   payload?: {
     model?: string;
@@ -396,6 +397,63 @@ describe("cron cli", () => {
     const params = addCall?.[2] as { delivery?: { mode?: string } };
 
     expect(params?.delivery?.mode).toBe("announce");
+  });
+
+  it("accepts positional cron create name with webhook delivery", async () => {
+    const params = await runCronAddAndGetParams([
+      "Webhook reminder",
+      "--at",
+      "20m",
+      "--system-event",
+      "Summarize the latest status",
+      "--webhook",
+      " https://example.invalid/openclaw ",
+    ]);
+
+    expect(params?.name).toBe("Webhook reminder");
+    expect(params?.sessionTarget).toBe("main");
+    expect(params?.delivery).toEqual({
+      mode: "webhook",
+      to: "https://example.invalid/openclaw",
+      channel: undefined,
+      threadId: undefined,
+      accountId: undefined,
+      bestEffort: undefined,
+    });
+  });
+
+  it("rejects ambiguous cron add names", async () => {
+    await expectCronCommandExit([
+      "cron",
+      "add",
+      "Positional",
+      "--name",
+      "Option",
+      "--cron",
+      "* * * * *",
+      "--system-event",
+      "tick",
+    ]);
+
+    expectRuntimeErrorContaining("Pass the cron job name either positionally or with --name");
+  });
+
+  it("rejects webhook delivery mixed with chat delivery on cron add", async () => {
+    await expectCronCommandExit([
+      "cron",
+      "add",
+      "Mixed delivery",
+      "--cron",
+      "* * * * *",
+      "--message",
+      "hello",
+      "--webhook",
+      "https://example.invalid/openclaw",
+      "--to",
+      "channel:C123",
+    ]);
+
+    expectRuntimeErrorContaining("--webhook cannot be combined with chat delivery options");
   });
 
   it("infers sessionTarget from payload when --session is omitted", async () => {
@@ -940,6 +998,44 @@ describe("cron cli", () => {
 
     expect(patch?.patch?.payload?.kind).toBe("agentTurn");
     expect(patch?.patch?.delivery?.mode).toBe("none");
+  });
+
+  it("sets webhook delivery without forcing an agentTurn payload on cron edit", async () => {
+    await runCronCommand([
+      "cron",
+      "edit",
+      "job-1",
+      "--webhook",
+      " https://example.invalid/cron ",
+      "--best-effort-deliver",
+    ]);
+
+    const patch = getGatewayCallParams<{
+      patch?: {
+        payload?: { kind?: string };
+        delivery?: { mode?: string; to?: string; bestEffort?: boolean };
+      };
+    }>("cron.update");
+
+    expect(patch?.patch?.payload).toBeUndefined();
+    expect(patch?.patch?.delivery).toEqual({
+      mode: "webhook",
+      to: "https://example.invalid/cron",
+      bestEffort: true,
+    });
+  });
+
+  it("rejects webhook delivery mixed with announce delivery on cron edit", async () => {
+    await expectCronCommandExit([
+      "cron",
+      "edit",
+      "job-1",
+      "--webhook",
+      "https://example.invalid/cron",
+      "--announce",
+    ]);
+
+    expectRuntimeErrorContaining("Choose at most one of --announce, --no-deliver, or --webhook");
   });
 
   it("updates delivery account without requiring --message on cron edit", async () => {
