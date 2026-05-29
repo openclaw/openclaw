@@ -55,6 +55,7 @@ type TrajectoryRuntimeRecorder = {
 };
 
 const writers = new Map<string, TrajectoryRuntimeWriter>();
+const windowFlushes = new Map<string, Promise<void>>();
 const MAX_TRAJECTORY_WRITERS = 100;
 const TRAJECTORY_RUNTIME_DATA_STRING_MAX_CHARS = 32_768;
 const TRAJECTORY_RUNTIME_DATA_ARRAY_MAX_ITEMS = 64;
@@ -259,87 +260,111 @@ function trimJsonlWindow(lines: string[], maxBytes: number): number {
   return bytes;
 }
 
+function readTrajectoryWindowLines(filePath: string, maxBytes: number): string[] {
+  try {
+    const raw = readRegularFileSync({
+      filePath,
+      maxBytes: TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
+    }).buffer.toString("utf8");
+    const lines = raw
+      .split(/\r?\n/u)
+      .filter((line) => line.length > 0)
+      .map((line) => `${line}\n`);
+    trimJsonlWindow(lines, maxBytes);
+    return lines;
+  } catch {
+    return [];
+  }
+}
+
+async function replaceTrajectoryWindow(params: {
+  filePath: string;
+  maxFileBytes: number;
+  appendedLines: string[];
+}): Promise<void> {
+  const dir = path.dirname(params.filePath);
+  const lines = readTrajectoryWindowLines(params.filePath, params.maxFileBytes);
+  lines.push(...params.appendedLines);
+  trimJsonlWindow(lines, params.maxFileBytes);
+  await fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
+  await writeSiblingTempFile({
+    dir,
+    chmodDir: false,
+    mode: 0o600,
+    tempPrefix: ".openclaw-trajectory-",
+    writeTemp: async (tempPath) => {
+      await fs.promises.writeFile(tempPath, lines.join(""), {
+        encoding: "utf8",
+        mode: 0o600,
+      });
+    },
+    resolveFinalPath: () => params.filePath,
+  });
+}
+
+async function queueTrajectoryWindowFlush(params: {
+  filePath: string;
+  maxFileBytes: number;
+  appendedLines: string[];
+}): Promise<void> {
+  const previous = windowFlushes.get(params.filePath) ?? Promise.resolve();
+  const current = previous
+    .catch(() => undefined)
+    .then(async () => {
+      await replaceTrajectoryWindow(params);
+    })
+    .finally(() => {
+      if (windowFlushes.get(params.filePath) === current) {
+        windowFlushes.delete(params.filePath);
+      }
+    });
+  windowFlushes.set(params.filePath, current);
+  await current;
+}
+
 function createTrajectoryWindowWriter(
   filePath: string,
   maxFileBytes: number,
 ): TrajectoryRuntimeWriter {
-  const dir = path.dirname(filePath);
-  let loaded = false;
-  let dirty = false;
-  let lines: string[] = [];
+  let pendingLines: string[] = [];
   let queuedBytes = 0;
   let pendingWrites = 0;
   let activeOperation: TrajectoryRuntimeWriterDiagnostics["activeOperation"] = "idle";
   let queue: Promise<unknown> = Promise.resolve();
 
-  const load = () => {
-    if (loaded) {
-      return;
-    }
-    loaded = true;
-    try {
-      const raw = readRegularFileSync({
-        filePath,
-        maxBytes: TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
-      }).buffer.toString("utf8");
-      lines = raw
-        .split(/\r?\n/u)
-        .filter((line) => line.length > 0)
-        .map((line) => `${line}\n`);
-      queuedBytes = trimJsonlWindow(lines, maxFileBytes);
-    } catch {
-      lines = [];
-      queuedBytes = 0;
-    }
-  };
-
   return {
     filePath,
     write: (line) => {
-      load();
       const lineBytes = Buffer.byteLength(line, "utf8");
       if (lineBytes > maxFileBytes) {
         return "dropped";
       }
-      lines.push(line);
+      pendingLines.push(line);
       queuedBytes += lineBytes;
-      queuedBytes = trimJsonlWindow(lines, maxFileBytes);
-      dirty = true;
+      queuedBytes = trimJsonlWindow(pendingLines, maxFileBytes);
       pendingWrites = 1;
       return "queued";
     },
     flush: async () => {
-      load();
-      if (!dirty) {
+      if (pendingLines.length === 0) {
         await queue;
         return;
       }
-      const content = lines.join("");
-      dirty = false;
+      const appendedLines = pendingLines;
+      pendingLines = [];
+      queuedBytes = 0;
       queue = queue
         .then(async () => {
-          activeOperation = "mkdir";
-          await fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
-        })
-        .then(async () => {
           activeOperation = "file-replace";
-          await writeSiblingTempFile({
-            dir,
-            chmodDir: false,
-            mode: 0o600,
-            tempPrefix: ".openclaw-trajectory-",
-            writeTemp: async (tempPath) => {
-              await fs.promises.writeFile(tempPath, content, {
-                encoding: "utf8",
-                mode: 0o600,
-              });
-            },
-            resolveFinalPath: () => filePath,
+          await queueTrajectoryWindowFlush({
+            filePath,
+            maxFileBytes,
+            appendedLines,
           });
         })
         .catch(() => undefined)
         .finally(() => {
-          pendingWrites = dirty ? 1 : 0;
+          pendingWrites = pendingLines.length > 0 ? 1 : 0;
           activeOperation = "idle";
         });
       await queue;

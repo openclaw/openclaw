@@ -194,6 +194,40 @@ describe("trajectory runtime", () => {
     },
   );
 
+  it("merges stale recorder flushes with newer runtime events", async () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const staleRecorder = createTrajectoryRuntimeRecorder({
+      sessionId: "session-1",
+      sessionFile,
+      maxRuntimeFileBytes: 2_400,
+    });
+
+    const staleRuntimeRecorder = expectTrajectoryRuntimeRecorder(staleRecorder);
+    staleRuntimeRecorder.recordEvent("prompt.submitted", {
+      marker: "old-recorder",
+      prompt: "x".repeat(260),
+    });
+
+    const newerRecorder = createTrajectoryRuntimeRecorder({
+      sessionId: "session-1",
+      sessionFile,
+      maxRuntimeFileBytes: 2_400,
+    });
+    const newerRuntimeRecorder = expectTrajectoryRuntimeRecorder(newerRecorder);
+    newerRuntimeRecorder.recordEvent("prompt.submitted", {
+      marker: "new-recorder",
+      prompt: "y".repeat(260),
+    });
+    await newerRuntimeRecorder.flush();
+    await staleRuntimeRecorder.flush();
+
+    const runtimeFile = resolveTrajectoryFilePath({ sessionFile, sessionId: "session-1" });
+    const raw = fs.readFileSync(runtimeFile, "utf8");
+    expect(raw).toContain("old-recorder");
+    expect(raw).toContain("new-recorder");
+  });
+
   it("describes queued writer state for cleanup timeout logs", () => {
     const recorder = createTrajectoryRuntimeRecorder({
       sessionId: "session-1",
