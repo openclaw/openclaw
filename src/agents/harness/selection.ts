@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import {
   resolveEffectiveToolPolicy,
@@ -490,11 +491,17 @@ export async function maybeCompactAgentHarnessSession(
   if (params.provider && isCliRuntimeProvider(params.provider, { config: params.config })) {
     return undefined;
   }
+  const runtimePolicySessionKey = params.sandboxSessionKey ?? params.sessionKey;
+  const runtimePolicyAgentId =
+    params.sandboxSessionKey && parseAgentSessionKey(params.sandboxSessionKey)
+      ? undefined
+      : params.agentId;
   const runtime = resolveConfiguredAgentHarnessPolicy({
     provider: params.provider,
     modelId: params.model,
     config: params.config,
-    sessionKey: params.sessionKey,
+    agentId: runtimePolicyAgentId,
+    sessionKey: runtimePolicySessionKey,
   }).runtime;
   if (isCliRuntimeAliasForProvider({ runtime, provider: params.provider, cfg: params.config })) {
     return undefined;
@@ -503,7 +510,8 @@ export async function maybeCompactAgentHarnessSession(
     provider: params.provider ?? "",
     modelId: params.model,
     config: params.config,
-    sessionKey: params.sessionKey,
+    agentId: runtimePolicyAgentId,
+    sessionKey: runtimePolicySessionKey,
   });
   if (!harness.compact) {
     if (harness.id !== "openclaw") {
