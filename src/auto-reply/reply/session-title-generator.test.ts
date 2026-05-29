@@ -55,11 +55,9 @@ describe("maybeGenerateSessionTitle", () => {
     resolveSessionTranscriptCandidates.mockReset();
     updateSessionStoreEntry.mockReset();
     generateConversationLabel.mockResolvedValue("Generated Title");
-    updateSessionStoreEntry.mockImplementation(
-      async (params: { update: () => Promise<unknown> | unknown }) => {
-        await params.update();
-      },
-    );
+    updateSessionStoreEntry.mockImplementation(async (params: { update: () => unknown }) => {
+      await params.update();
+    });
   });
 
   afterEach(() => {

@@ -8,7 +8,6 @@ import {
 } from "./bonjour-discovery.js";
 
 const WIDE_AREA_DOMAIN = "openclaw.internal.";
-
 function collectMatching<T, U>(
   items: readonly T[],
   predicate: (item: T) => boolean,
@@ -183,7 +182,8 @@ describe("bonjour-discovery", () => {
       run: run as unknown as typeof runCommandWithTimeout,
     });
 
-    const beacon = getOnlyBeacon(beacons);
+    expect(beacons).toHaveLength(1);
+    const beacon = findBeaconByInstance(beacons, "Studio Gateway");
     expect(beacon.domain).toBe("local.");
     expect(beacon.instanceName).toBe("Studio Gateway");
     expect(beacon.displayName).toBe("Peter’s Mac Studio");
@@ -326,7 +326,8 @@ describe("bonjour-discovery", () => {
       run: run as unknown as typeof runCommandWithTimeout,
     });
 
-    const beacon = getOnlyBeacon(beacons);
+    expect(beacons).toHaveLength(1);
+    const beacon = findBeaconByInstance(beacons, "studio-gateway");
     expect(beacon.domain).toBe(WIDE_AREA_DOMAIN);
     expect(beacon.instanceName).toBe("studio-gateway");
     expect(beacon.displayName).toBe("Studio");
