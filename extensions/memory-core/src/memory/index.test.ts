@@ -1102,6 +1102,73 @@ describe("memory index", () => {
     ).toBe("fallback-provider");
   });
 
+  it("clears identity dirty after status resolves the indexed fallback provider", async () => {
+    const dbPath = path.join(workspaceDir, "index-status-fallback-identity.sqlite");
+    const indexedCfg = createCfg({
+      storePath: dbPath,
+      provider: "fallback-provider",
+      model: "new-embed",
+    });
+    const indexedManager = await getFreshManager(indexedCfg);
+    await indexedManager.sync({ reason: "test", force: true });
+    await indexedManager.close?.();
+
+    const cfg = createCfg({
+      storePath: dbPath,
+      fallback: "fallback-provider",
+      model: "new-embed",
+    });
+    const { getRequiredMemoryIndexManager } = await import("./test-manager-helpers.js");
+    const manager = await getRequiredMemoryIndexManager({
+      cfg,
+      agentId: "main",
+      purpose: "status",
+    });
+    try {
+      expect(manager.status().dirty).toBe(true);
+
+      const fields = manager as unknown as {
+        provider: {
+          id: string;
+          model: string;
+          embedQuery: (text: string) => Promise<number[]>;
+          embedBatch: (texts: string[]) => Promise<number[][]>;
+          close: () => Promise<void>;
+        };
+        providerInitialized: boolean;
+        providerRuntime: {
+          id: string;
+          cacheKeyData: Record<string, unknown>;
+        };
+        providerKey: string;
+        computeProviderKey: () => string;
+      };
+      fields.provider = {
+        id: "fallback-provider",
+        model: "new-embed",
+        embedQuery: async () => [1, 0, 0, 0],
+        embedBatch: async (texts) => texts.map(() => [1, 0, 0, 0]),
+        close: async () => {},
+      };
+      fields.providerRuntime = {
+        id: "fallback-provider",
+        cacheKeyData: {
+          provider: "fallback-provider",
+          baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+          model: "new-embed",
+          headers: [],
+        },
+      };
+      fields.providerInitialized = true;
+      fields.providerKey = fields.computeProviderKey();
+
+      expect(manager.status().dirty).toBe(false);
+      expect(manager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+    } finally {
+      await manager.close?.();
+    }
+  });
+
   it("streams embedding cache rows during safe reindex", async () => {
     vi.stubEnv("OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX", "0");
     type EmbeddingCacheRow = {

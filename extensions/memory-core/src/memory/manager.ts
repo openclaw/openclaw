@@ -171,6 +171,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   protected override sessionsDirty = false;
   protected override sessionsDirtyFiles = new Set<string>();
   protected override sessionPendingFiles = new Set<string>();
+  private indexIdentityDirty = false;
   protected override sessionDeltas = new Map<
     string,
     { lastSize: number; pendingBytes: number; pendingMessages: number }
@@ -274,6 +275,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     });
     this.indexIdentityMismatchReason =
       initialIndexIdentity.status === "mismatched" ? initialIndexIdentity.reason : undefined;
+    this.indexIdentityDirty =
+      initialIndexIdentity.status === "mismatched" ||
+      (initialIndexIdentity.status === "missing" && this.sources.has("memory"));
     const transient = params.purpose === "status" || params.purpose === "cli";
     if (!transient) {
       this.ensureWatcher();
@@ -284,7 +288,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       hasMemorySource: this.sources.has("memory"),
       statusOnly: params.purpose === "status",
       hasIndexedMeta: Boolean(meta),
-      indexIdentityMismatched: initialIndexIdentity.status === "mismatched",
     });
     this.batch = this.resolveBatchConfig();
     if (!transient) {
@@ -396,12 +399,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       providerKeyKnown: params?.providerKeyKnown,
     });
     this.indexIdentityMismatchReason = state.status === "mismatched" ? state.reason : undefined;
-    if (
-      state.status === "mismatched" ||
-      (state.status === "missing" && this.sources.has("memory"))
-    ) {
-      this.dirty = true;
-    }
+    this.indexIdentityDirty =
+      state.status === "mismatched" || (state.status === "missing" && this.sources.has("memory"));
     return state;
   }
 
@@ -934,7 +933,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       backend: "builtin",
       files: aggregateState.files,
       chunks: aggregateState.chunks,
-      dirty: this.dirty || this.sessionsDirty,
+      dirty: this.dirty || this.sessionsDirty || this.indexIdentityDirty,
       workspaceDir: this.workspaceDir,
       dbPath: this.settings.store.path,
       provider: providerInfo.provider,
