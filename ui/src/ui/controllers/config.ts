@@ -1,6 +1,11 @@
 import { applyMergePatch } from "../../../../src/config/merge-patch.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
-import type { ConfigSchemaResponse, ConfigSnapshot, ConfigUiHints } from "../types.ts";
+import type {
+  ConfigSchemaResponse,
+  ConfigSnapshot,
+  ConfigUiHints,
+  UpdateAvailable,
+} from "../types.ts";
 import type { JsonSchema } from "../views/config-form.shared.ts";
 import { coerceFormValues } from "./config/form-coerce.ts";
 import {
@@ -39,6 +44,7 @@ export type ConfigState = {
   pendingUpdateExpectedVersion: string | null;
   updateStatusBanner: { tone: "danger" | "warn" | "info"; text: string } | null;
   lastError: string | null;
+  updateAvailable?: UpdateAvailable | null;
 };
 
 const autoAllowlistedPluginIdsByState = new WeakMap<ConfigState, Set<string>>();
@@ -284,7 +290,8 @@ export async function runUpdate(state: ConfigState) {
     });
     const status = res.result?.status ?? (res.ok === true ? "ok" : "error");
     if (res.ok === true) {
-      state.pendingUpdateExpectedVersion = res.result?.after?.version ?? null;
+      state.pendingUpdateExpectedVersion =
+        res.result?.after?.version ?? state.updateAvailable?.latestVersion ?? null;
       return;
     }
     state.pendingUpdateExpectedVersion = null;
