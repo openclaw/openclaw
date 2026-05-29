@@ -3,6 +3,7 @@ import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { consumePluginUiEntryPointLaunchToken } from "../plugin-ui-entry-launch-tokens.js";
+import { coreGatewayHandlers } from "../server-methods.js";
 import { pluginHostHookHandlers } from "./plugin-host-hooks.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -175,6 +176,71 @@ describe("pluginHostHookHandlers", () => {
     expect(respond.mock.calls[0]?.[1]?.path).toMatch(
       /^\/plugins\/notes-plugin\/\?__openclaw_plugin_entry=/,
     );
+  });
+
+  it("routes Control UI entry point RPCs through core gateway handlers", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.controlUiEntryPoints = [
+      {
+        pluginId: "notes-plugin",
+        pluginName: "Session Search",
+        source: "/tmp/notes-plugin/index.ts",
+        entryPoint: {
+          id: "sessions",
+          surface: "app-nav",
+          label: "Sessions",
+          path: "/plugins/notes-plugin/",
+          requiredScopes: ["operator.read"],
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    const listRespond = vi.fn();
+    await coreGatewayHandlers["plugins.uiEntryPoints"]({
+      params: {},
+      respond: listRespond,
+      client: {
+        connect: {
+          role: "operator",
+          scopes: ["operator.read"],
+        },
+      },
+    } as unknown as GatewayRequestHandlerOptions);
+
+    expect(listRespond.mock.calls[0]?.[1]).toMatchObject({
+      ok: true,
+      entryPoints: [
+        {
+          id: "sessions",
+          pluginId: "notes-plugin",
+          pluginName: "Session Search",
+          path: "/plugins/notes-plugin/",
+        },
+      ],
+    });
+
+    const launchRespond = vi.fn();
+    await coreGatewayHandlers["plugins.uiEntryPointLaunch"]({
+      params: {
+        id: "sessions",
+        pluginId: "notes-plugin",
+        path: "/plugins/notes-plugin/",
+      },
+      respond: launchRespond,
+      client: {
+        connect: {
+          role: "operator",
+          scopes: ["operator.read"],
+        },
+      },
+    } as unknown as GatewayRequestHandlerOptions);
+
+    expect(launchRespond.mock.calls[0]?.[0]).toBe(true);
+    expect(launchRespond.mock.calls[0]?.[1]).toMatchObject({
+      ok: true,
+      expiresInMs: 60_000,
+    });
   });
 
   it("mints Control UI entry launch tokens from entry scopes instead of caller scopes", () => {

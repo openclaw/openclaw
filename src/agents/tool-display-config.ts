@@ -249,32 +249,6 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
         },
       },
     },
-    transcripts: {
-      emoji: "📝",
-      title: "Transcripts",
-      actions: {
-        start: {
-          label: "start",
-          detailKeys: ["sessionId", "providerId", "title", "channelId", "meetingUrl"],
-        },
-        stop: {
-          label: "stop",
-          detailKeys: ["sessionId"],
-        },
-        status: {
-          label: "status",
-          detailKeys: ["providerId", "channelId", "meetingUrl"],
-        },
-        import: {
-          label: "import",
-          detailKeys: ["sessionId", "providerId", "title", "speakerLabel"],
-        },
-        summarize: {
-          label: "summarize",
-          detailKeys: ["sessionId"],
-        },
-      },
-    },
     update_plan: {
       emoji: "🗺️",
       title: "Update Plan",

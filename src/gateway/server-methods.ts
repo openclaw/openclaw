@@ -350,7 +350,12 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadNativeHookRelayHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: ["plugins.uiDescriptors", "plugins.sessionAction"],
+    methods: [
+      "plugins.uiDescriptors",
+      "plugins.uiEntryPoints",
+      "plugins.uiEntryPointLaunch",
+      "plugins.sessionAction",
+    ],
     loadHandlers: loadPluginHostHookHandlers,
   }),
   ...createLazyCoreHandlers({
