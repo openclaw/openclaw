@@ -225,6 +225,7 @@ export async function loadUsage(
         : undefined;
       return Promise.all([
         client.request("sessions.usage", {
+          agentId: "all",
           startDate,
           endDate,
           ...dateInterpretation,

@@ -212,6 +212,22 @@ describe("sessions.usage", () => {
     expect(sessions[0].agentId).toBe("opus");
   });
 
+  it("returns all agent sessions when agentId is 'all'", async () => {
+    const respond = await runSessionsUsage({ ...BASE_USAGE_RANGE, agentId: "all" });
+
+    expect(vi.mocked(loadCombinedSessionStoreForGateway)).toHaveBeenCalledWith(
+      TEST_RUNTIME_CONFIG,
+      {},
+    );
+    // Should discover sessions for all configured agents (main, opus)
+    expect(vi.mocked(discoverAllSessions)).toHaveBeenCalledTimes(2);
+
+    const sessions = expectSuccessfulSessionsUsage(respond);
+    expect(sessions).toHaveLength(2);
+    expect(sessions[0].agentId).toBe("opus");
+    expect(sessions[1].agentId).toBe("main");
+  });
+
   it("loads selected session summaries concurrently and reports cache refresh status", async () => {
     vi.mocked(discoverAllSessions).mockResolvedValueOnce([
       {

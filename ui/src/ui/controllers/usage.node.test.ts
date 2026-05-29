@@ -36,6 +36,7 @@ function createState(request: RequestFn, overrides: Partial<UsageState> = {}): U
 
 function expectSpecificTimezoneCalls(request: ReturnType<typeof vi.fn>, startCall: number): void {
   expect(request).toHaveBeenNthCalledWith(startCall, "sessions.usage", {
+    agentId: "all",
     startDate: "2026-02-16",
     endDate: "2026-02-16",
     mode: "specific",
@@ -85,6 +86,7 @@ describe("usage controller date interpretation params", () => {
     await loadUsage(state);
 
     expect(request).toHaveBeenNthCalledWith(1, "sessions.usage", {
+      agentId: "all",
       startDate: "2026-02-16",
       endDate: "2026-02-16",
       mode: "utc",
@@ -142,6 +144,7 @@ describe("usage controller date interpretation params", () => {
 
     expectSpecificTimezoneCalls(request, 1);
     expect(request).toHaveBeenNthCalledWith(3, "sessions.usage", {
+      agentId: "all",
       startDate: "2026-02-16",
       endDate: "2026-02-16",
       groupBy: "family",
@@ -158,6 +161,7 @@ describe("usage controller date interpretation params", () => {
     await loadUsage(state);
 
     expect(request).toHaveBeenNthCalledWith(5, "sessions.usage", {
+      agentId: "all",
       startDate: "2026-02-16",
       endDate: "2026-02-16",
       groupBy: "family",
@@ -204,6 +208,7 @@ describe("usage controller date interpretation params", () => {
 
     expectSpecificTimezoneCalls(request, 1);
     expect(request).toHaveBeenNthCalledWith(3, "sessions.usage", {
+      agentId: "all",
       startDate: "2026-02-16",
       endDate: "2026-02-16",
       mode: "specific",
@@ -222,6 +227,7 @@ describe("usage controller date interpretation params", () => {
     await loadUsage(state);
 
     expect(request).toHaveBeenNthCalledWith(5, "sessions.usage", {
+      agentId: "all",
       startDate: "2026-02-16",
       endDate: "2026-02-16",
       mode: "specific",

@@ -874,9 +874,12 @@ export const usageHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const effectiveAgentId = normalizeAgentId(
-      requestedAgentId ?? specificKeyAgentId ?? resolveDefaultAgentId(config),
-    );
+    const isAllAgents = requestedAgentId === "all";
+    const effectiveAgentId = isAllAgents
+      ? undefined
+      : normalizeAgentId(
+          requestedAgentId ?? specificKeyAgentId ?? resolveDefaultAgentId(config),
+        );
     const groupingMode: UsageGroupingMode =
       p.groupBy === "family" || p.includeHistorical === true ? "family" : "instance";
 
@@ -884,11 +887,9 @@ export const usageHandlers: GatewayRequestHandlers = {
     const { storePath, store } = loadCombinedSessionStoreForGateway(config, {
       agentId: effectiveAgentId,
     });
-    const scopedStore = filterSessionStoreByAgent({
-      config,
-      store,
-      agentId: effectiveAgentId,
-    });
+    const scopedStore = effectiveAgentId
+      ? filterSessionStoreByAgent({ config, store, agentId: effectiveAgentId })
+      : store;
     const now = Date.now();
 
     const mergedEntries: MergedEntry[] = [];
