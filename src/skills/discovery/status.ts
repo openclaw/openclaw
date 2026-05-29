@@ -242,6 +242,7 @@ function buildSkillStatus(
   config?: OpenClawConfig,
   prefs?: SkillsInstallPreferences,
   eligibility?: SkillEligibilityContext,
+  allowBundled?: string[],
   agentSkillFilter?: string[],
   workspaceDir?: string,
   clawhubLockRead?: ClawHubSkillsLockfileStatusRead,
@@ -250,7 +251,6 @@ function buildSkillStatus(
   const skillKey = indexed.skillKey;
   const skillConfig = resolveSkillConfig(config, skillKey);
   const disabled = skillConfig?.enabled === false;
-  const allowBundled = resolveBundledAllowlist(config);
   const blockedByAllowlist = !isBundledSkillAllowed(entry, allowBundled);
   const blockedByAgentFilter = agentSkillFilter !== undefined && !indexed.agentAllowed;
   const always = entry.metadata?.always === true;
@@ -339,6 +339,7 @@ export function buildWorkspaceSkillStatus(
       bundledSkillsDir: bundledContext.dir,
     });
   const prefs = resolveSkillsInstallPreferences(opts?.config);
+  const allowBundled = resolveBundledAllowlist(opts?.config);
   const clawhubLockRead = readClawHubSkillsLockfileStatusSync(workspaceDir);
   const skillIndexEntries = buildSkillIndexEntries(skillEntries, {
     bundledNames: bundledContext.names,
@@ -355,6 +356,7 @@ export function buildWorkspaceSkillStatus(
         opts?.config,
         prefs,
         opts?.eligibility,
+        allowBundled,
         agentSkillFilter,
         workspaceDir,
         clawhubLockRead,
