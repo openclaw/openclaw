@@ -1525,7 +1525,7 @@ function validateConfigObjectWithPluginsBase(
         continue;
       }
 
-      if ((coreChannelConfigIds as readonly string[]).includes(trimmed)) {
+      if (coreChannelConfigIds.includes(trimmed)) {
         continue;
       }
       const channelSchema = ensureChannelSchemas().get(trimmed)?.schema;
