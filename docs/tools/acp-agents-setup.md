@@ -78,7 +78,6 @@ Core ACP baseline:
       "kiro",
       "openclaw",
       "opencode",
-      "openclaw",
       "qwen",
     ],
     maxConcurrentSessions: 8,

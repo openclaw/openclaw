@@ -7,7 +7,7 @@ read_when:
   - You are wiring an agent to subscription Copilot (github / openclaw / copilot) and want it to run through the Copilot CLI
 ---
 
-The bundled `copilot` extension lets OpenClaw run embedded subscription
+The bundled `copilot` plugin lets OpenClaw run embedded subscription
 Copilot agent turns through the GitHub Copilot CLI (`@github/copilot-sdk`)
 instead of the built-in PI harness.
 
@@ -24,7 +24,7 @@ For the broader model/provider/runtime split, start with
 
 ## Requirements
 
-- OpenClaw with the bundled `copilot` extension available.
+- OpenClaw with the bundled `copilot` plugin available.
 - If your config uses `plugins.allow`, include `copilot` (the manifest
   id in `extensions/copilot/openclaw.plugin.json`). A restrictive
   allowlist that uses the npm-style `@openclaw/copilot` package name
@@ -39,7 +39,7 @@ For the broader model/provider/runtime split, start with
   no explicit home is set.
 
 `openclaw doctor` runs the bundled
-[doctor contract](#doctor-and-probes) for the extension; failures there are
+[doctor contract](#doctor-and-probes) for the plugin; failures there are
 the canonical way to confirm the environment is ready before opting an agent
 in.
 
