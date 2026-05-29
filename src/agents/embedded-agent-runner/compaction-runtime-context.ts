@@ -58,39 +58,43 @@ export function resolveEmbeddedCompactionTarget(params: {
 }): {
   provider: string | undefined;
   runtimeProvider?: string;
+  contextProvider?: string;
   model: string | undefined;
   authProfileId: string | undefined;
 } {
   const provider = params.provider?.trim() || params.defaultProvider;
   const model = params.modelId?.trim() || params.defaultModel;
   const override = params.config?.agents?.defaults?.compaction?.model?.trim();
-  const resolveRuntimeProvider = (
+  const resolveTargetProviders = (
     targetProvider: string | undefined,
     authProfileId: string | undefined,
   ) => {
     if (!targetProvider) {
-      return undefined;
+      return {};
     }
-    const harnessRuntime = shouldUseCodexRuntimeProviderForCompaction({
+    const useCodexHarnessRuntime = shouldUseCodexRuntimeProviderForCompaction({
       config: params.config,
       provider: targetProvider,
       harnessRuntime: params.harnessRuntime,
-    })
-      ? params.harnessRuntime
-      : "openclaw";
+    });
+    const harnessRuntime = useCodexHarnessRuntime ? params.harnessRuntime : "openclaw";
     const runtimeProvider = resolveSelectedOpenAIRuntimeProvider({
       provider: targetProvider,
       harnessRuntime: harnessRuntime ?? undefined,
       authProfileId,
       config: params.config,
     });
-    return runtimeProvider === targetProvider ? undefined : runtimeProvider;
+    const routedRuntimeProvider = runtimeProvider === targetProvider ? undefined : runtimeProvider;
+    return {
+      runtimeProvider: routedRuntimeProvider,
+      contextProvider: useCodexHarnessRuntime ? routedRuntimeProvider : undefined,
+    };
   };
   if (!override) {
     const authProfileId = params.authProfileId ?? undefined;
     return {
       provider,
-      runtimeProvider: resolveRuntimeProvider(provider, authProfileId),
+      ...resolveTargetProviders(provider, authProfileId),
       model,
       authProfileId,
     };
@@ -107,7 +111,7 @@ export function resolveEmbeddedCompactionTarget(params: {
         : (params.authProfileId ?? undefined);
     return {
       provider: overrideProvider,
-      runtimeProvider: resolveRuntimeProvider(overrideProvider, authProfileId),
+      ...resolveTargetProviders(overrideProvider, authProfileId),
       model: overrideModel,
       authProfileId,
     };
@@ -115,7 +119,7 @@ export function resolveEmbeddedCompactionTarget(params: {
   const authProfileId = params.authProfileId ?? undefined;
   return {
     provider,
-    runtimeProvider: resolveRuntimeProvider(provider, authProfileId),
+    ...resolveTargetProviders(provider, authProfileId),
     model: override,
     authProfileId,
   };

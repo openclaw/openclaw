@@ -247,6 +247,7 @@ function resolveFollowupContextConfigProvider(params: {
   return resolveContextConfigProviderForRuntime({
     provider,
     runtimeId: resolveFollowupAgentRuntimeId(params),
+    config: params.cfg,
   });
 }
 

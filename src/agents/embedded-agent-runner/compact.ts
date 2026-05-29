@@ -86,7 +86,6 @@ import {
 import { isFallbackSummaryError, runWithModelFallback } from "../model-fallback.js";
 import { supportsModelTools } from "../model-tool-support.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
-import { resolveContextConfigProviderForRuntime } from "../openai-codex-routing.js";
 import { wrapStreamFnTextTransforms } from "../plugin-text-transforms.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "../prompt-surface.js";
 import { registerProviderStreamForModel } from "../provider-stream.js";
@@ -509,6 +508,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
   // route OpenAI compaction through Codex OAuth when that runtime owns the session credentials.
   const provider = resolvedCompactionTarget.provider ?? DEFAULT_PROVIDER;
   const runtimeProvider = resolvedCompactionTarget.runtimeProvider ?? provider;
+  const contextConfigProvider = resolvedCompactionTarget.contextProvider ?? provider;
   const modelId = resolvedCompactionTarget.model ?? DEFAULT_MODEL;
   const authProfileId = resolvedCompactionTarget.authProfileId;
   let thinkLevel: ThinkLevel = params.thinkLevel ?? "off";
@@ -682,10 +682,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
     const runtimeModelWithContext = runtimeModel as ProviderRuntimeModel;
     const ctxInfo = resolveContextWindowInfo({
       cfg: params.config,
-      provider: resolveContextConfigProviderForRuntime({
-        provider,
-        runtimeId: selectedHarnessRuntime,
-      }),
+      provider: contextConfigProvider,
       modelId,
       modelContextTokens: readAgentModelContextTokens(runtimeModel),
       modelContextWindow: runtimeModelWithContext.contextWindow,

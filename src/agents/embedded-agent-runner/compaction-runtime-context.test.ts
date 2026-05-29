@@ -223,6 +223,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     });
     expect(result.provider).toBe("openai");
     expect(result.runtimeProvider).toBe("openai-codex");
+    expect(result.contextProvider).toBeUndefined();
     expect(result.model).toBe("gpt-5.4");
     expect(result.authProfileId).toBe("openai-codex:default");
   });
@@ -239,6 +240,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     });
     expect(result.provider).toBe("openai");
     expect(result.runtimeProvider).toBe("openai-codex");
+    expect(result.contextProvider).toBeUndefined();
     expect(result.model).toBe("gpt-5.5");
     expect(result.authProfileId).toBeUndefined();
   });
@@ -260,6 +262,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     });
     expect(result.provider).toBe("openai");
     expect(result.runtimeProvider).toBe("openai-codex");
+    expect(result.contextProvider).toBe("openai-codex");
     expect(result.model).toBe("gpt-5.5");
     expect(result.authProfileId).toBeUndefined();
   });
@@ -294,6 +297,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     });
     expect(result.provider).toBe("openai");
     expect(result.runtimeProvider).toBeUndefined();
+    expect(result.contextProvider).toBeUndefined();
     expect(result.model).toBe("gpt-5.5");
     expect(result.authProfileId).toBeUndefined();
   });
@@ -319,6 +323,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     });
     expect(result.provider).toBe("openai");
     expect(result.runtimeProvider).toBeUndefined();
+    expect(result.contextProvider).toBeUndefined();
     expect(result.model).toBe("gpt-5.5");
     expect(result.authProfileId).toBeUndefined();
   });
@@ -336,6 +341,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     });
     expect(result.provider).toBe("openai");
     expect(result.runtimeProvider).toBe("openai-codex");
+    expect(result.contextProvider).toBeUndefined();
     expect(result.model).toBe("gpt-5.4");
     expect(result.authProfileId).toBe("openai-codex:default");
   });
@@ -353,6 +359,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     });
     expect(result.provider).toBe("openai");
     expect(result.runtimeProvider).toBe("openai-codex");
+    expect(result.contextProvider).toBeUndefined();
     expect(result.model).toBe("gpt-5.4");
     expect(result.authProfileId).toBe("openai-codex:default");
   });
@@ -376,6 +383,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     });
     expect(result.provider).toBe("openai");
     expect(result.runtimeProvider).toBe("openai-codex");
+    expect(result.contextProvider).toBe("openai-codex");
     expect(result.model).toBe("gpt-5.4-mini");
     expect(result.authProfileId).toBeUndefined();
   });
