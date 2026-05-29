@@ -426,7 +426,7 @@ function applyFalImageGeometry(params: {
     const nativeAspectRatio = resolveNativeFalAspectRatio({
       schema: params.schema,
       aspectRatio: params.aspectRatio,
-      imageSize: params.hasInputImages && !params.size ? undefined : params.imageSize,
+      imageSize: params.size ? params.imageSize : undefined,
     });
     if (nativeAspectRatio) {
       params.requestBody.aspect_ratio = nativeAspectRatio;

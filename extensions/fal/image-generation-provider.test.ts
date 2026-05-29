@@ -390,6 +390,55 @@ describe("fal image-generation provider", () => {
     });
   });
 
+  it("does not synthesize Nano Banana 2 aspect ratio from resolution alone", async () => {
+    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "fal-test-key",
+      source: "env",
+      mode: "api-key",
+    });
+    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce({
+        response: new Response(
+          JSON.stringify({
+            images: [{ url: "https://v3.fal.media/files/example/nb2-auto.png" }],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+        release: vi.fn(async () => {}),
+      })
+      .mockResolvedValueOnce({
+        response: new Response(Buffer.from("nb2-auto-data"), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+        release: vi.fn(async () => {}),
+      });
+
+    const provider = buildFalImageGenerationProvider();
+    await provider.generateImage({
+      provider: "fal",
+      model: "fal-ai/nano-banana-2",
+      prompt: "auto aspect banana test",
+      cfg: {},
+      resolution: "2K",
+    });
+
+    expectFalJsonPost({
+      call: 1,
+      url: "https://fal.run/fal-ai/nano-banana-2",
+      body: {
+        prompt: "auto aspect banana test",
+        resolution: "2K",
+        num_images: 1,
+        output_format: "png",
+      },
+    });
+  });
+
   it("routes Nano Banana 2 edits through /edit with NB2 geometry", async () => {
     vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
       apiKey: "fal-test-key",
