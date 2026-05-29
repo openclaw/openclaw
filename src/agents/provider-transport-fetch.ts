@@ -1,4 +1,8 @@
-import type { Api, Model } from "@earendil-works/pi-ai";
+import {
+  isCloudMetadataIpAddress,
+  isLinkLocalIpAddress,
+  parseCanonicalIpAddress,
+} from "@openclaw/net-policy/ip";
 import {
   fetchWithSsrFGuard,
   withTrustedEnvProxyGuardedFetchMode,
@@ -10,13 +14,15 @@ import {
   ssrfPolicyFromHttpBaseUrlAllowedOrigin,
   type SsrFPolicy,
 } from "../infra/net/ssrf.js";
+import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveDebugProxySettings } from "../proxy-capture/env.js";
 import {
-  isCloudMetadataIpAddress,
-  isLinkLocalIpAddress,
-  parseCanonicalIpAddress,
-} from "../shared/net/ip.js";
+  asFiniteNumberInRange,
+  clampTimerTimeoutMs,
+  parseStrictFiniteNumber,
+  parseStrictNonNegativeInteger,
+} from "../shared/number-coercion.js";
 import { emitModelTransportDebug } from "./model-transport-debug.js";
 import { formatModelTransportDebugUrl } from "./model-transport-url.js";
 import {
@@ -33,6 +39,9 @@ import {
 const DEFAULT_MAX_SDK_RETRY_WAIT_SECONDS = 60;
 const log = createSubsystemLogger("provider-transport-fetch");
 const BLOCKED_EXACT_ORIGIN_TRUST_HOSTNAME_LABELS = new Set(["instance-data"]);
+const PLAIN_DECIMAL_NUMBER_RE = /^\d+(?:\.\d+)?$/;
+const RETRY_AFTER_HTTP_DATE_RE =
+  /^(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT|(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), \d{2}-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{2} \d{2}:\d{2}:\d{2} GMT|(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [ \d]\d \d{2}:\d{2}:\d{2} \d{4})$/;
 
 function hasReadableSseData(block: string): boolean {
   const dataLines = block
@@ -192,7 +201,7 @@ function sanitizeOpenAISdkSseResponse(
   });
 }
 
-function shouldSanitizeOpenAISdkSseResponse(model: Model<Api>): boolean {
+function shouldSanitizeOpenAISdkSseResponse(model: Model): boolean {
   if (model.provider !== "openai") {
     return true;
   }
@@ -234,9 +243,13 @@ async function requestBodyHasStreamTrue(
 function parseRetryAfterSeconds(headers: Headers): number | undefined {
   const retryAfterMs = headers.get("retry-after-ms");
   if (retryAfterMs) {
-    const milliseconds = Number.parseFloat(retryAfterMs);
-    if (Number.isFinite(milliseconds) && milliseconds >= 0) {
-      return milliseconds / 1000;
+    const trimmedRetryAfterMs = retryAfterMs.trim();
+    if (/^\d+(?:\.\d+)?$/.test(trimmedRetryAfterMs)) {
+      const milliseconds = asFiniteNumberInRange(parseStrictFiniteNumber(trimmedRetryAfterMs), {
+        min: 0,
+        max: Number.MAX_SAFE_INTEGER,
+      });
+      return milliseconds === undefined ? Number.POSITIVE_INFINITY : milliseconds / 1000;
     }
   }
 
@@ -245,12 +258,17 @@ function parseRetryAfterSeconds(headers: Headers): number | undefined {
     return undefined;
   }
 
-  const seconds = Number.parseFloat(retryAfter);
-  if (Number.isFinite(seconds) && seconds >= 0) {
-    return seconds;
+  const trimmedRetryAfterSeconds = retryAfter.trim();
+  if (/^\d+$/.test(trimmedRetryAfterSeconds)) {
+    return parseStrictNonNegativeInteger(trimmedRetryAfterSeconds) ?? Number.POSITIVE_INFINITY;
   }
 
-  const retryAt = Date.parse(retryAfter);
+  const trimmedRetryAfter = trimmedRetryAfterSeconds;
+  if (!RETRY_AFTER_HTTP_DATE_RE.test(trimmedRetryAfter)) {
+    return undefined;
+  }
+
+  const retryAt = Date.parse(trimmedRetryAfter);
   if (Number.isNaN(retryAt)) {
     return undefined;
   }
@@ -268,8 +286,16 @@ function resolveMaxSdkRetryWaitSeconds(): number | undefined {
     return undefined;
   }
 
-  const seconds = Number.parseFloat(raw);
-  if (Number.isFinite(seconds) && seconds > 0) {
+  if (!PLAIN_DECIMAL_NUMBER_RE.test(raw)) {
+    return DEFAULT_MAX_SDK_RETRY_WAIT_SECONDS;
+  }
+
+  const seconds = asFiniteNumberInRange(parseStrictFiniteNumber(raw), {
+    min: 0,
+    minExclusive: true,
+    max: Number.MAX_SAFE_INTEGER,
+  });
+  if (seconds !== undefined) {
     return seconds;
   }
 
@@ -357,7 +383,7 @@ function buildManagedResponse(
   });
 }
 
-function resolveModelRequestPolicy(model: Model<Api>) {
+function resolveModelRequestPolicy(model: Model) {
   const debugProxy = resolveDebugProxySettings();
   let explicitDebugProxyUrl: string | undefined;
   if (debugProxy.enabled && debugProxy.proxyUrl) {
@@ -388,16 +414,32 @@ function resolveModelRequestPolicy(model: Model<Api>) {
 }
 
 export function resolveModelRequestTimeoutMs(
-  model: Model<Api>,
+  model: Model,
   timeoutMs: number | undefined,
 ): number | undefined {
   if (timeoutMs !== undefined) {
-    return timeoutMs;
+    return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
+      ? clampTimerTimeoutMs(timeoutMs)
+      : undefined;
   }
   const modelTimeoutMs = (model as { requestTimeoutMs?: unknown }).requestTimeoutMs;
   return typeof modelTimeoutMs === "number" && Number.isFinite(modelTimeoutMs) && modelTimeoutMs > 0
-    ? Math.floor(modelTimeoutMs)
+    ? clampTimerTimeoutMs(modelTimeoutMs)
     : undefined;
+}
+
+function buildModelRequestSignal(
+  baseSignal: AbortSignal | undefined,
+  timeoutMs: number | undefined,
+): AbortSignal | undefined {
+  if (timeoutMs === undefined) {
+    return baseSignal;
+  }
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  if (!baseSignal) {
+    return timeoutSignal;
+  }
+  return AbortSignal.any([baseSignal, timeoutSignal]);
 }
 
 function resolveHttpOrigin(value: unknown): string | undefined {
@@ -463,7 +505,7 @@ function canApplyFakeIpHostnamePolicy(value: unknown): value is string {
 }
 
 function resolveModelTransportSsrFPolicy(params: {
-  model: Model<Api>;
+  model: Model;
   url: string;
   allowPrivateNetwork?: boolean;
   trustConfiguredBaseUrlOrigin?: boolean;
@@ -493,7 +535,7 @@ function resolveModelTransportSsrFPolicy(params: {
 }
 
 export function buildGuardedModelFetch(
-  model: Model<Api>,
+  model: Model,
   timeoutMs?: number,
   options?: { sanitizeSse?: boolean },
 ): typeof fetch {
@@ -551,10 +593,13 @@ export function buildGuardedModelFetch(
         signal: request.signal,
         ...(request.body ? ({ duplex: "half" } as const) : {}),
       } satisfies RequestInit & { duplex?: "half" });
-    const synthesizeJsonAsSse = await requestBodyHasStreamTrue(request, requestInit ?? init);
+    const baseInit = requestInit ?? init;
+    const synthesizeJsonAsSse = await requestBodyHasStreamTrue(request, baseInit);
+    const baseSignal = baseInit?.signal ?? undefined;
+    const localServiceSignal = buildModelRequestSignal(baseSignal, requestTimeoutMs);
     const guardedFetchOptions = {
       url,
-      init: requestInit ?? init,
+      init: baseInit,
       capture: {
         meta: {
           provider: model.provider,
@@ -564,6 +609,7 @@ export function buildGuardedModelFetch(
       },
       dispatcherPolicy,
       timeoutMs: requestTimeoutMs,
+      ...(baseSignal ? { signal: baseSignal } : {}),
       // Provider transport intentionally keeps the secure default and never
       // replays unsafe request bodies across cross-origin redirects.
       allowCrossOriginUnsafeRedirectReplay: false,
@@ -575,15 +621,15 @@ export function buildGuardedModelFetch(
     emitModelTransportDebug(
       log,
       `[model-fetch] start provider=${model.provider} api=${model.api} model=${model.id} ` +
-        `method=${(requestInit ?? init)?.method ?? "GET"} url=${formatModelTransportDebugUrl(url)} timeoutMs=${requestTimeoutMs} ` +
+        `method=${baseInit?.method ?? "GET"} url=${formatModelTransportDebugUrl(url)} timeoutMs=${requestTimeoutMs} ` +
         `proxy=${dispatcherPolicy ? "configured" : useEnvProxy ? "env" : "none"} ` +
         `policy=${policy ? "custom" : "default"}`,
     );
     try {
       localServiceLease = await ensureModelProviderLocalService(
         model,
-        (requestInit ?? init)?.headers,
-        (requestInit ?? init)?.signal,
+        baseInit?.headers,
+        localServiceSignal,
       );
       result = await fetchWithSsrFGuard(
         useEnvProxy

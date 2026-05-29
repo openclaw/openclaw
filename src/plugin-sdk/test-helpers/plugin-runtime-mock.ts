@@ -28,10 +28,10 @@ type DeepPartial<T> = {
         : T[K];
 };
 
-type BuildContextParams = Parameters<PluginRuntime["channel"]["turn"]["buildContext"]>[0];
-type BuildContextResult = ReturnType<PluginRuntime["channel"]["turn"]["buildContext"]>;
+type BuildContextParams = Parameters<PluginRuntime["channel"]["inbound"]["buildContext"]>[0];
+type BuildContextResult = ReturnType<PluginRuntime["channel"]["inbound"]["buildContext"]>;
 type UntrustedStructuredContextEntries = NonNullable<
-  BuildContextResult["UntrustedStructuredContext"]
+  Awaited<BuildContextResult>["UntrustedStructuredContext"]
 >;
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -139,6 +139,10 @@ export function createPluginRuntimeMediaMock(
 }
 
 export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = {}): PluginRuntime {
+  const runEmbeddedAgentMock = vi.fn().mockResolvedValue({
+    payloads: [],
+    meta: {},
+  }) as unknown as PluginRuntime["agent"]["runEmbeddedAgent"];
   const taskFlow = {
     bindSession: vi.fn(
       createTaskFlowSessionMock,
@@ -150,10 +154,10 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
   const dispatchAssembledChannelTurnMock = vi.fn(async (params: Record<string, unknown>) => {
     const ctxPayload = params.ctxPayload as Record<string, unknown>;
     const record = params.record as
-      | Parameters<PluginRuntime["channel"]["turn"]["runPrepared"]>[0]["record"]
+      | Parameters<PluginRuntime["channel"]["inbound"]["runPreparedReply"]>[0]["record"]
       | undefined;
     const recordInboundSession = params.recordInboundSession as Parameters<
-      PluginRuntime["channel"]["turn"]["runPrepared"]
+      PluginRuntime["channel"]["inbound"]["runPreparedReply"]
     >[0]["recordInboundSession"];
     const routeSessionKey = params.routeSessionKey as string;
     const storePath = params.storePath as string;
@@ -206,7 +210,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     };
   });
   const runPreparedChannelTurnMock = vi.fn(
-    async (params: Parameters<PluginRuntime["channel"]["turn"]["runPrepared"]>[0]) => {
+    async (params: Parameters<PluginRuntime["channel"]["inbound"]["runPreparedReply"]>[0]) => {
       try {
         await params.recordInboundSession({
           storePath: params.storePath,
@@ -242,9 +246,9 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         dispatchResult,
       };
     },
-  ) as unknown as PluginRuntime["channel"]["turn"]["runPrepared"];
+  ) as unknown as PluginRuntime["channel"]["inbound"]["runPreparedReply"];
   const runChannelTurnMock = vi.fn(
-    async (params: Parameters<PluginRuntime["channel"]["turn"]["run"]>[0]) => {
+    async (params: Parameters<PluginRuntime["channel"]["inbound"]["run"]>[0]) => {
       const input = await params.adapter.ingest(params.raw);
       if (!input) {
         return {
@@ -301,7 +305,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       await params.adapter.onFinalize?.(result);
       return result;
     },
-  ) as unknown as PluginRuntime["channel"]["turn"]["run"];
+  ) as unknown as PluginRuntime["channel"]["inbound"]["run"];
   const buildChannelInboundEventContextMock = vi.fn((params: BuildContextParams) => {
     const untrustedStructuredContext = resolveMockUntrustedStructuredContext(params);
     return {
@@ -340,8 +344,8 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         : false,
       ...params.extra,
       UntrustedStructuredContext: untrustedStructuredContext,
-    } as BuildContextResult;
-  }) as unknown as PluginRuntime["channel"]["turn"]["buildContext"];
+    } as Awaited<BuildContextResult>;
+  }) as unknown as PluginRuntime["channel"]["inbound"]["buildContext"];
   const base: PluginRuntime = {
     version: "1.0.0-test",
     config: {
@@ -401,14 +405,8 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
           { id: "high", label: "high" },
         ],
       })) as unknown as PluginRuntime["agent"]["resolveThinkingPolicy"],
-      runEmbeddedPiAgent: vi.fn().mockResolvedValue({
-        payloads: [],
-        meta: {},
-      }) as unknown as PluginRuntime["agent"]["runEmbeddedPiAgent"],
-      runEmbeddedAgent: vi.fn().mockResolvedValue({
-        payloads: [],
-        meta: {},
-      }) as unknown as PluginRuntime["agent"]["runEmbeddedAgent"],
+      runEmbeddedAgent: runEmbeddedAgentMock,
+      runEmbeddedPiAgent: runEmbeddedAgentMock,
       resolveAgentTimeoutMs: vi.fn(
         () => 30_000,
       ) as unknown as PluginRuntime["agent"]["resolveAgentTimeoutMs"],
@@ -720,28 +718,12 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       outbound: {
         loadAdapter: vi.fn() as unknown as PluginRuntime["channel"]["outbound"]["loadAdapter"],
       },
-      turn: {
+      inbound: {
         run: runChannelTurnMock,
-        runAssembled:
-          dispatchAssembledChannelTurnMock as unknown as PluginRuntime["channel"]["turn"]["runAssembled"],
-        runResolved: vi.fn(
-          async (params: Parameters<PluginRuntime["channel"]["turn"]["runResolved"]>[0]) =>
-            await runChannelTurnMock({
-              channel: params.channel,
-              accountId: params.accountId,
-              raw: params.raw,
-              log: params.log,
-              adapter: {
-                ingest: (raw) =>
-                  typeof params.input === "function" ? params.input(raw) : params.input,
-                resolveTurn: params.resolveTurn,
-              },
-            }),
-        ) as unknown as PluginRuntime["channel"]["turn"]["runResolved"],
+        dispatchReply:
+          dispatchAssembledChannelTurnMock as unknown as PluginRuntime["channel"]["inbound"]["dispatchReply"],
         buildContext: buildChannelInboundEventContextMock,
-        runPrepared: runPreparedChannelTurnMock,
-        dispatchAssembled:
-          dispatchAssembledChannelTurnMock as unknown as PluginRuntime["channel"]["turn"]["dispatchAssembled"],
+        runPreparedReply: runPreparedChannelTurnMock,
       },
       threadBindings: {
         setIdleTimeoutBySessionKey:
@@ -782,6 +764,9 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       openKeyedStore: vi.fn(() => {
         throw new Error("openKeyedStore mock is not configured");
       }) as unknown as PluginRuntime["state"]["openKeyedStore"],
+      openSyncKeyedStore: vi.fn(() => {
+        throw new Error("openSyncKeyedStore mock is not configured");
+      }) as unknown as PluginRuntime["state"]["openSyncKeyedStore"],
     },
     tasks: {
       runs: {

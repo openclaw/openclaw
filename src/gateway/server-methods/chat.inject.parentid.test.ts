@@ -17,7 +17,7 @@ function readTranscriptLines(transcriptPath: string): string[] {
 // Guardrail: Gateway-injected assistant transcript messages must attach to the
 // current leaf with a `parentId` and must not sever compaction history.
 describe("gateway chat.inject transcript writes", () => {
-  it("appends a Pi session entry that includes parentId", async () => {
+  it("appends a agent session entry that includes parentId", async () => {
     const { dir, transcriptPath } = createTranscriptFixtureSync({
       prefix: "openclaw-chat-inject-",
       sessionId: "sess-1",
@@ -101,12 +101,14 @@ describe("gateway chat.inject transcript writes", () => {
       sessionId: "sess-redact",
     });
     const fakeApiKey = "sk-proj-FAKEKEYFORTESTINGONLY1234567890";
-    const updates: Array<{ message?: unknown }> = [];
+    const updates: Array<{ message?: unknown; sessionKey?: string; agentId?: string }> = [];
     const unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
 
     try {
       const appended = await appendInjectedAssistantMessageToTranscript({
         transcriptPath,
+        sessionKey: "global",
+        agentId: "work",
         message: `Here is your key: ${fakeApiKey}`,
         config: { logging: { redactSensitive: "tools" } },
       });
@@ -114,6 +116,7 @@ describe("gateway chat.inject transcript writes", () => {
       expect(appended.ok).toBe(true);
       expect(JSON.stringify(appended.message)).not.toContain(fakeApiKey);
       expect(updates).toHaveLength(1);
+      expect(updates[0]).toMatchObject({ sessionKey: "global", agentId: "work" });
 
       const lines = readTranscriptLines(transcriptPath);
       const last = JSON.parse(lines.at(-1) as string) as { message?: unknown };

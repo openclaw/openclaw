@@ -128,9 +128,19 @@ describe("setupOfficialPluginInstalls", () => {
           hint: "OpenClaw diagnostics Prometheus exporter",
         },
         {
+          value: "diffs-language-pack",
+          label: "Diff Viewer Language Pack",
+          hint: "OpenClaw diffs viewer syntax highlighting language pack",
+        },
+        {
           value: "diffs",
           label: "Diffs",
           hint: "OpenClaw diff viewer plugin",
+        },
+        {
+          value: "copilot",
+          label: "GitHub Copilot agent runtime",
+          hint: "OpenClaw GitHub Copilot agent runtime plugin",
         },
         {
           value: "google-meet",
@@ -151,6 +161,11 @@ describe("setupOfficialPluginInstalls", () => {
           value: "openshell",
           label: "OpenShell Sandbox",
           hint: "OpenClaw OpenShell sandbox backend",
+        },
+        {
+          value: "pixverse",
+          label: "PixVerse",
+          hint: "OpenClaw PixVerse video generation provider plugin",
         },
         {
           value: "voice-call",

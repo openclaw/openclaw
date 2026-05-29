@@ -36,4 +36,53 @@ describe("MCP stdio connect timeout", () => {
     await rejection;
     expect(transport.close).toHaveBeenCalledOnce();
   });
+
+  it("waits for timed-out transport cleanup before rejecting", async () => {
+    vi.useFakeTimers();
+    let closeSettled = false;
+    const client = {
+      connect: vi.fn(() => new Promise<void>(() => undefined)),
+    };
+    const transport = {
+      close: vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            setTimeout(() => {
+              closeSettled = true;
+              resolve();
+            }, 25);
+          }),
+      ),
+    };
+
+    const result = connectMcpWithTimeout(client, transport, 100);
+    const rejection = expect(result).rejects.toThrow("MCP stdio connect timed out after 100ms");
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(transport.close).toHaveBeenCalledOnce();
+    expect(closeSettled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(25);
+    await rejection;
+    expect(closeSettled).toBe(true);
+  });
+
+  it("keeps the original timeout error when cleanup rejects", async () => {
+    vi.useFakeTimers();
+    const client = {
+      connect: vi.fn(() => new Promise<void>(() => undefined)),
+    };
+    const transport = {
+      close: vi.fn(async () => {
+        throw new Error("close failed");
+      }),
+    };
+
+    const result = connectMcpWithTimeout(client, transport, 100);
+    const rejection = expect(result).rejects.toThrow("MCP stdio connect timed out after 100ms");
+
+    await vi.advanceTimersByTimeAsync(100);
+    await rejection;
+    expect(transport.close).toHaveBeenCalledOnce();
+  });
 });

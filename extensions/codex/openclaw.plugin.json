@@ -1,7 +1,7 @@
 {
   "id": "codex",
   "name": "Codex",
-  "description": "Codex app-server harness and Codex-managed GPT model catalog.",
+  "description": "OpenClaw Codex app-server harness and model provider plugin with a Codex-managed GPT catalog.",
   "providers": ["codex"],
   "contracts": {
     "mediaUnderstandingProviders": ["codex"],
@@ -133,8 +133,7 @@
         "properties": {
           "mode": {
             "type": "string",
-            "enum": ["yolo", "guardian"],
-            "default": "yolo"
+            "enum": ["yolo", "guardian"]
           },
           "transport": {
             "type": "string",
@@ -305,7 +304,7 @@
     },
     "appServer.mode": {
       "label": "Execution Mode",
-      "help": "Use yolo for unchained local execution or guardian for Codex guardian-reviewed approvals.",
+      "help": "Legacy Codex app-server preset. Prefer tools.exec.mode=auto for normalized Guardian-reviewed approvals.",
       "advanced": true
     },
     "appServer.transport": {

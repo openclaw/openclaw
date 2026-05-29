@@ -20,13 +20,13 @@ import {
   INTERNAL_MESSAGE_CHANNEL,
 } from "../../utils/message-channel.js";
 import { listAgentIds } from "../agent-scope.js";
-import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import {
-  type EmbeddedPiQueueMessageOptions,
-  formatEmbeddedPiQueueFailureSummary,
-  queueEmbeddedPiMessageWithOutcomeAsync,
+  type EmbeddedAgentQueueMessageOptions,
+  formatEmbeddedAgentQueueFailureSummary,
+  queueEmbeddedAgentMessageWithOutcomeAsync,
   resolveActiveEmbeddedRunSessionId,
-} from "../pi-embedded-runner/runs.js";
+} from "../embedded-agent-runner/runs.js";
+import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import {
   type AgentWaitResult,
   readLatestAssistantReplySnapshot,
@@ -38,7 +38,7 @@ import {
   SESSIONS_SEND_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult, readStringParam } from "./common.js";
+import { jsonResult, readNonNegativeIntegerParam, readStringParam } from "./common.js";
 import {
   createSessionVisibilityGuard,
   createAgentToAgentPolicy,
@@ -55,7 +55,7 @@ const SessionsSendToolSchema = Type.Object({
   label: Type.Optional(Type.String({ minLength: 1, maxLength: SESSION_LABEL_MAX_LENGTH })),
   agentId: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
   message: Type.String(),
-  timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
+  timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
 });
 
 type GatewayCaller = typeof callGateway;
@@ -161,6 +161,12 @@ function isTerminalAgentWaitTimeout(result: AgentWaitResult): boolean {
   return result.endedAt !== undefined || Boolean(result.stopReason || result.livenessState);
 }
 
+function isPendingErrorAgentWaitTimeout(result: AgentWaitResult): boolean {
+  return (
+    result.pendingError === true && typeof result.error === "string" && result.error.trim() !== ""
+  );
+}
+
 async function startAgentRun(params: {
   callGateway: GatewayCaller;
   runId: string;
@@ -188,13 +194,13 @@ async function startAgentRun(params: {
     const messageText =
       typeof params.sendParams.message === "string" ? params.sendParams.message : undefined;
     if (activeRunSessionId && fallbackSessionKey && messageText) {
-      const queueOptions: EmbeddedPiQueueMessageOptions = {
+      const queueOptions: EmbeddedAgentQueueMessageOptions = {
         steeringMode: "all",
         debounceMs: 0,
         deliveryTimeoutMs: params.deliveryTimeoutMs,
         waitForTranscriptCommit: true,
       };
-      let queueOutcome = await queueEmbeddedPiMessageWithOutcomeAsync(
+      let queueOutcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
         activeRunSessionId,
         messageText,
         queueOptions,
@@ -202,7 +208,7 @@ async function startAgentRun(params: {
       if (!queueOutcome.queued && queueOutcome.reason === "transcript_commit_wait_unsupported") {
         const bestEffortQueueOptions = { ...queueOptions };
         delete bestEffortQueueOptions.waitForTranscriptCommit;
-        queueOutcome = await queueEmbeddedPiMessageWithOutcomeAsync(
+        queueOutcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
           activeRunSessionId,
           messageText,
           bestEffortQueueOptions,
@@ -230,7 +236,7 @@ async function startAgentRun(params: {
         };
       } catch (err) {
         const queueSummary =
-          formatEmbeddedPiQueueFailureSummary(queueOutcome) ?? "active run queue rejected";
+          formatEmbeddedAgentQueueFailureSummary(queueOutcome) ?? "active run queue rejected";
         throw new Error(`${queueSummary}; fallback_failed error=${formatErrorMessage(err)}`, {
           cause: err,
         });
@@ -277,6 +283,7 @@ export function createSessionsSendTool(opts?: {
       const params = args as Record<string, unknown>;
       const gatewayCall = opts?.callGateway ?? callGateway;
       const message = readStringParam(params, "message", { required: true });
+      const timeoutSeconds = readNonNegativeIntegerParam(params, "timeoutSeconds") ?? 30;
       const { cfg, mainKey, alias, effectiveRequesterKey, restrictToSpawned } =
         resolveSessionToolContext(opts);
 
@@ -429,10 +436,6 @@ export function createSessionsSendTool(opts?: {
       // Normalize sessionKey/sessionId input into a canonical session key.
       const resolvedKey = visibleSession.key;
       const displayKey = visibleSession.displayKey;
-      const timeoutSeconds =
-        typeof params.timeoutSeconds === "number" && Number.isFinite(params.timeoutSeconds)
-          ? Math.max(0, Math.floor(params.timeoutSeconds))
-          : 30;
       const timeoutMs = timeoutSeconds * 1000;
       const announceTimeoutMs = timeoutSeconds === 0 ? 30_000 : timeoutMs;
       const idempotencyKey = crypto.randomUUID();
@@ -620,6 +623,16 @@ export function createSessionsSendTool(opts?: {
       });
 
       if (result.status === "timeout") {
+        if (isPendingErrorAgentWaitTimeout(result)) {
+          startA2AFlow(undefined, runId);
+          return jsonResult({
+            runId,
+            status: "timeout",
+            error: result.error,
+            sessionKey: displayKey,
+            delivery,
+          });
+        }
         if (!isTerminalAgentWaitTimeout(result)) {
           startA2AFlow(undefined, runId);
           return jsonResult({

@@ -28,8 +28,10 @@ import {
 } from "../infra/node-commands.js";
 import {
   createPluginStateKeyedStore,
+  createPluginStateSyncKeyedStore,
   type OpenKeyedStoreOptions,
   type PluginStateKeyedStore,
+  type PluginStateSyncKeyedStore,
 } from "../plugin-state/plugin-state-store.js";
 import { normalizePluginGatewayMethodScope } from "../shared/gateway-method-policy.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -339,6 +341,8 @@ type PluginSideEffectGuard = {
 type PluginRegistrationCapabilities = {
   /** Broad registry writes that discovery and live activation both need. */
   capabilityHandlers: boolean;
+  /** Setup-runtime may publish pre-listen gateway surfaces without full activation. */
+  setupRuntimeHandlers: boolean;
   /** Runtime channel registration is suppressed for setup-only and tool discovery loads. */
   runtimeChannel: boolean;
 };
@@ -354,6 +358,7 @@ function resolvePluginRegistrationCapabilities(
   const capabilityHandlers = mode === "full" || mode === "discovery" || mode === "tool-discovery";
   return {
     capabilityHandlers,
+    setupRuntimeHandlers: mode === "setup-runtime",
     runtimeChannel: mode !== "setup-only" && mode !== "tool-discovery",
   };
 }
@@ -394,6 +399,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerModelCatalogProvider,
     registerSynthesizedTextModelCatalogProvider,
     registerSynthesizedMediaModelCatalogProvider,
+    registerSynthesizedVoiceModelCatalogProvider,
   } = createModelCatalogRegistrationHandlers({
     registry,
     pushDiagnostic,
@@ -1239,39 +1245,63 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   };
 
   const registerSpeechProvider = (record: PluginRecord, provider: SpeechProviderPlugin) => {
-    registerUniqueProviderLike({
+    const registered = registerUniqueProviderLike({
       record,
       provider,
       kindLabel: "speech provider",
       registrations: registry.speechProviders,
       ownedIds: record.speechProviderIds,
     });
+    if (registered) {
+      registerSynthesizedVoiceModelCatalogProvider({
+        record,
+        provider,
+        capabilities: { tts: true },
+        modes: ["tts"],
+      });
+    }
   };
 
   const registerRealtimeTranscriptionProvider = (
     record: PluginRecord,
     provider: RealtimeTranscriptionProviderPlugin,
   ) => {
-    registerUniqueProviderLike({
+    const registered = registerUniqueProviderLike({
       record,
       provider,
       kindLabel: "realtime transcription provider",
       registrations: registry.realtimeTranscriptionProviders,
       ownedIds: record.realtimeTranscriptionProviderIds,
     });
+    if (registered) {
+      registerSynthesizedVoiceModelCatalogProvider({
+        record,
+        provider,
+        capabilities: { realtime_transcription: true },
+        modes: ["realtime_transcription"],
+      });
+    }
   };
 
   const registerRealtimeVoiceProvider = (
     record: PluginRecord,
     provider: RealtimeVoiceProviderPlugin,
   ) => {
-    registerUniqueProviderLike({
+    const registered = registerUniqueProviderLike({
       record,
       provider,
       kindLabel: "realtime voice provider",
       registrations: registry.realtimeVoiceProviders,
       ownedIds: record.realtimeVoiceProviderIds,
     });
+    if (registered) {
+      registerSynthesizedVoiceModelCatalogProvider({
+        record,
+        provider,
+        capabilities: { realtime_voice: true },
+        modes: ["realtime_voice"],
+      });
+    }
   };
 
   const registerMediaUnderstandingProvider = (
@@ -1761,6 +1791,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
           pluginName: record.name,
           pluginRoot: record.rootDir,
           allowReservedCommandNames,
+          allowOwnerStatusExposure: canClaimReservedCommandOwnership(record),
         },
       );
       if (!result.ok) {
@@ -2544,18 +2575,27 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         };
         if (prop === "state") {
           const baseState = getRuntimeProperty();
+          const assertPluginStateAllowed = () => {
+            const record =
+              pluginRuntimeRecordById.get(pluginId) ??
+              registry.plugins.find((entry) => entry.id === pluginId);
+            if (record?.origin !== "bundled" && record?.trustedOfficialInstall !== true) {
+              throw new Error(
+                "openKeyedStore is only available for trusted plugins in this release.",
+              );
+            }
+          };
           return {
             ...baseState,
             openKeyedStore: <T>(options: OpenKeyedStoreOptions): PluginStateKeyedStore<T> => {
-              const record =
-                pluginRuntimeRecordById.get(pluginId) ??
-                registry.plugins.find((entry) => entry.id === pluginId);
-              if (record?.origin !== "bundled" && record?.trustedOfficialInstall !== true) {
-                throw new Error(
-                  "openKeyedStore is only available for trusted plugins in this release.",
-                );
-              }
+              assertPluginStateAllowed();
               return createPluginStateKeyedStore<T>(pluginId, options);
+            },
+            openSyncKeyedStore: <T>(
+              options: OpenKeyedStoreOptions,
+            ): PluginStateSyncKeyedStore<T> => {
+              assertPluginStateAllowed();
+              return createPluginStateSyncKeyedStore<T>(pluginId, options);
             },
           } satisfies PluginRuntime["state"];
         }
@@ -3079,6 +3119,13 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               },
               on: (hookName, handler, opts) =>
                 registerTypedHook(record, hookName, handler, opts, params.hookPolicy),
+            }
+          : {}),
+        ...(registrationCapabilities.setupRuntimeHandlers
+          ? {
+              registerHttpRoute: (routeParams) => registerHttpRoute(record, routeParams),
+              registerGatewayMethod: (method, handler, opts) =>
+                registerGatewayMethod(record, method, handler, opts),
             }
           : {}),
         // Allow setup-only/setup-runtime paths to surface parse-time CLI metadata

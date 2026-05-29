@@ -40,6 +40,10 @@ import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../../config/model-input.js";
+import {
+  parseStrictFiniteNumber,
+  parseStrictPositiveInteger,
+} from "../../infra/parse-finite-number.js";
 import { getShellEnvAppliedKeys, shouldEnableShellEnvFallback } from "../../infra/shell-env.js";
 import {
   captureCurrentPluginMetadataSnapshotState,
@@ -116,6 +120,28 @@ function loadTerminalTableRuntime(): Promise<TerminalTableRuntime> {
 
 function loadListProbeRuntime(): Promise<ListProbeRuntime> {
   return listProbeRuntimeLoader.load();
+}
+
+function parseOptionalPositiveFiniteOption(raw: unknown, label: string, fallback: number): number {
+  if (raw === undefined || raw === null || raw === "") {
+    return fallback;
+  }
+  const parsed = parseStrictFiniteNumber(raw);
+  if (parsed === undefined || parsed <= 0) {
+    throw new Error(`${label} must be a positive number.`);
+  }
+  return parsed;
+}
+
+function parseOptionalPositiveIntegerOption(raw: unknown, label: string, fallback: number): number {
+  if (raw === undefined || raw === null || raw === "") {
+    return fallback;
+  }
+  const parsed = parseStrictPositiveInteger(raw);
+  if (parsed === undefined) {
+    throw new Error(`${label} must be a positive integer.`);
+  }
+  return parsed;
 }
 
 function isCompletePluginMetadataSnapshot(value: unknown): value is PluginMetadataSnapshot {
@@ -599,18 +625,21 @@ export async function modelsStatusCommand(
         .map((value) => value.trim())
         .filter(Boolean);
     })();
-    const probeTimeoutMs = opts.probeTimeout ? Number(opts.probeTimeout) : 8000;
-    if (!Number.isFinite(probeTimeoutMs) || probeTimeoutMs <= 0) {
-      throw new Error("--probe-timeout must be a positive number (ms).");
-    }
-    const probeConcurrency = opts.probeConcurrency ? Number(opts.probeConcurrency) : 2;
-    if (!Number.isFinite(probeConcurrency) || probeConcurrency <= 0) {
-      throw new Error("--probe-concurrency must be > 0.");
-    }
-    const probeMaxTokens = opts.probeMaxTokens ? Number(opts.probeMaxTokens) : 8;
-    if (!Number.isFinite(probeMaxTokens) || probeMaxTokens <= 0) {
-      throw new Error("--probe-max-tokens must be > 0.");
-    }
+    const probeTimeoutMs = parseOptionalPositiveFiniteOption(
+      opts.probeTimeout,
+      "--probe-timeout",
+      8000,
+    );
+    const probeConcurrency = parseOptionalPositiveIntegerOption(
+      opts.probeConcurrency,
+      "--probe-concurrency",
+      2,
+    );
+    const probeMaxTokens = parseOptionalPositiveIntegerOption(
+      opts.probeMaxTokens,
+      "--probe-max-tokens",
+      8,
+    );
 
     const rawCandidates = [
       rawModel || resolvedLabel,

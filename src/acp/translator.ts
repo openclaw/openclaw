@@ -33,12 +33,13 @@ import type {
   ToolCallLocation,
   ToolKind,
 } from "@agentclientprotocol/sdk";
+import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import { BASE_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
 import type { GatewayClient } from "../gateway/client.js";
-import type { EventFrame } from "../gateway/protocol/index.js";
 import type { GatewaySessionRow, SessionsListResult } from "../gateway/session-utils.js";
 import {
   createFixedWindowRateLimiter,
+  resolveFixedWindowRateLimitInteger,
   type FixedWindowRateLimiter,
 } from "../infra/fixed-window-rate-limit.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
@@ -56,7 +57,7 @@ import {
   formatToolTitle,
   inferToolKind,
 } from "./event-mapper.js";
-import { readBool, readNumber, readString } from "./meta.js";
+import { readBool, readNonNegativeInteger, readNumber, readString } from "./meta.js";
 import {
   buildAcpPermissionRequest,
   parseGatewayExecApprovalEventData,
@@ -163,6 +164,7 @@ type GatewaySessionPresentationRow = Pick<
   | "subagentRole"
   | "subagentControlScope"
   | "spawnedWorkspaceDir"
+  | "spawnedCwd"
   | "displayName"
   | "label"
   | "derivedTitle"
@@ -611,13 +613,15 @@ export class AcpGatewayAgent implements Agent {
     this.sessionStore = opts.sessionStore ?? defaultAcpSessionStore;
     this.eventLedger = opts.eventLedger ?? createInMemoryAcpEventLedger();
     this.sessionCreateRateLimiter = createFixedWindowRateLimiter({
-      maxRequests: Math.max(
-        1,
-        opts.sessionCreateRateLimit?.maxRequests ?? SESSION_CREATE_RATE_LIMIT_DEFAULT_MAX_REQUESTS,
+      maxRequests: resolveFixedWindowRateLimitInteger(
+        opts.sessionCreateRateLimit?.maxRequests,
+        SESSION_CREATE_RATE_LIMIT_DEFAULT_MAX_REQUESTS,
+        { min: 1 },
       ),
-      windowMs: Math.max(
-        1_000,
-        opts.sessionCreateRateLimit?.windowMs ?? SESSION_CREATE_RATE_LIMIT_DEFAULT_WINDOW_MS,
+      windowMs: resolveFixedWindowRateLimitInteger(
+        opts.sessionCreateRateLimit?.windowMs,
+        SESSION_CREATE_RATE_LIMIT_DEFAULT_WINDOW_MS,
+        { min: 1_000 },
       ),
     });
   }
@@ -831,7 +835,10 @@ export class AcpGatewayAgent implements Agent {
           if (!requestedCwd) {
             return true;
           }
-          return normalizeOptionalString(session.spawnedWorkspaceDir) === requestedCwd;
+          return (
+            (normalizeOptionalString(session.spawnedCwd) ??
+              normalizeOptionalString(session.spawnedWorkspaceDir)) === requestedCwd
+          );
         })
         .map((session) => this.mapGatewaySessionToAcpSessionInfo(session, fallbackCwd));
       if (
@@ -1019,7 +1026,7 @@ export class AcpGatewayAgent implements Agent {
       idempotencyKey: runId,
       thinking: readString(params["_meta"], ["thinking", "thinkingLevel"]),
       deliver: readBool(params["_meta"], ["deliver"]),
-      timeoutMs: readNumber(params["_meta"], ["timeoutMs"]),
+      timeoutMs: readNonNegativeInteger(params["_meta"], ["timeoutMs"]),
     };
 
     return new Promise<PromptResponse>((resolve, reject) => {
@@ -1899,7 +1906,10 @@ export class AcpGatewayAgent implements Agent {
     session: GatewaySessionRow,
     fallbackCwd: string,
   ): SessionInfo {
-    const cwd = normalizeOptionalString(session.spawnedWorkspaceDir) ?? fallbackCwd;
+    const cwd =
+      normalizeOptionalString(session.spawnedCwd) ??
+      normalizeOptionalString(session.spawnedWorkspaceDir) ??
+      fallbackCwd;
     return {
       sessionId: session.key,
       cwd,
@@ -1966,6 +1976,7 @@ export class AcpGatewayAgent implements Agent {
       subagentRole: session.subagentRole,
       subagentControlScope: session.subagentControlScope,
       spawnedWorkspaceDir: session.spawnedWorkspaceDir,
+      spawnedCwd: session.spawnedCwd,
       displayName: session.displayName,
       label: session.label,
       derivedTitle: session.derivedTitle,

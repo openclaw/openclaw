@@ -56,6 +56,7 @@ import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { validateAnthropicSetupToken } from "../auth-token.js";
 import { repairCodexRuntimePluginInstallForModelSelection } from "../codex-runtime-plugin-install.js";
+import { repairCopilotRuntimePluginInstallForModelSelection } from "../copilot-runtime-plugin-install.js";
 import { isRemoteEnvironment } from "../oauth-env.js";
 import { loadValidConfigOrThrow, resolveKnownAgentId, updateConfig } from "./shared.js";
 
@@ -246,15 +247,18 @@ async function resolveModelsAuthContext(params?: {
   const agentDir = resolveAgentDir(config, agentId);
   const workspaceDir =
     resolveAgentWorkspaceDir(config, agentId) ?? resolveDefaultAgentWorkspaceDir();
+  const requestedProvider = params?.requestedProvider?.trim();
   const providers = resolvePluginProviders({
     config,
     workspaceDir,
     mode: "setup",
     includeUntrustedWorkspacePlugins: false,
-    bundledProviderAllowlistCompat: true,
     bundledProviderVitestCompat: true,
-    ...(params?.requestedProvider?.trim()
-      ? { providerRefs: [params.requestedProvider], activate: true }
+    ...(requestedProvider
+      ? {
+          providerRefs: [requestedProvider],
+          activate: true,
+        }
       : {}),
   });
   const authProviders = preferSetupAuthProviders({
@@ -433,7 +437,11 @@ async function persistProviderAuthResult(params: {
       cfg: updated,
       model: defaultModel,
     });
-    for (const warning of repaired.warnings) {
+    const copilotRepaired = await repairCopilotRuntimePluginInstallForModelSelection({
+      cfg: updated,
+      model: defaultModel,
+    });
+    for (const warning of [...repaired.warnings, ...copilotRepaired.warnings]) {
       params.runtime.error?.(warning);
     }
   }
@@ -587,22 +595,23 @@ export async function modelsAuthPasteTokenCommand(
   const profileId =
     normalizeOptionalString(opts.profileId) || resolveDefaultTokenProfileId(provider);
 
+  const validateTokenInput = (value: string | undefined): string | undefined => {
+    const trimmed = value?.trim();
+    if (!trimmed) {
+      return "Required";
+    }
+    if (provider === "anthropic") {
+      return validateAnthropicSetupToken(trimmed.replaceAll(/\s+/g, ""));
+    }
+    if (isOpenAICodexProvider(provider) && looksLikeOpenAIApiKey(trimmed)) {
+      return `That looks like an OpenAI API key. Use ${formatCliCommand("openclaw models auth paste-api-key --provider openai-codex")} for API-key auth.`;
+    }
+    return undefined;
+  };
   const tokenInput = await readPastedSecret({
     message: `Paste token for ${provider}`,
     masked: false,
-    validate: (value) => {
-      const trimmed = value?.trim();
-      if (!trimmed) {
-        return "Required";
-      }
-      if (provider === "anthropic") {
-        return validateAnthropicSetupToken(trimmed.replaceAll(/\s+/g, ""));
-      }
-      if (isOpenAICodexProvider(provider) && looksLikeOpenAIApiKey(trimmed)) {
-        return `That looks like an OpenAI API key. Use ${formatCliCommand("openclaw models auth paste-api-key --provider openai-codex")} for API-key auth.`;
-      }
-      return undefined;
-    },
+    validate: validateTokenInput,
   });
   const token =
     provider === "anthropic"

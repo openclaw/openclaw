@@ -7,6 +7,7 @@ import {
   createTelegramMessageCache,
   resetTelegramMessageCacheBucketsForTest,
   resolveTelegramMessageCachePath,
+  TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES,
   type TelegramMessageCachePersistentStore,
 } from "./message-cache.js";
 
@@ -24,7 +25,7 @@ type PersistedCacheValue = {
 
 let persistentStoreId = 0;
 
-function createMemoryPersistentStore(maxEntries = 1000): {
+function createMemoryPersistentStore(maxEntries = TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES): {
   bucketKey: string;
   entries: Map<string, PersistedCacheValue>;
   store: TelegramMessageCachePersistentStore;
@@ -402,6 +403,110 @@ describe("telegram message cache", () => {
     });
 
     expect(recent.map((entry) => entry.messageId)).toEqual(["9122", "9123", "9124"]);
+  });
+
+  it("does not partially parse malformed persisted thread ids", async () => {
+    const { bucketKey, entries, store } = createMemoryPersistentStore();
+    const cache = createTelegramMessageCache({ bucketKey, persistentStore: store });
+    await cache.record({
+      accountId: "default",
+      chatId: 7,
+      threadId: 100,
+      msg: {
+        chat: { id: 7, type: "supergroup", title: "Ops" },
+        message_id: 9126,
+        date: 1736389126,
+        text: "State topic message",
+        from: { id: 1, is_bot: false, first_name: "Nora" },
+      } as Message,
+    });
+
+    const persistedKey = entries.keys().next().value;
+    if (persistedKey === undefined) {
+      throw new Error("expected persisted Telegram message cache entry");
+    }
+    const persistedValue = entries.get(persistedKey);
+    if (persistedValue === undefined) {
+      throw new Error("expected persisted Telegram message cache value");
+    }
+    expect(persistedValue.threadId).toBe("100");
+    entries.set(persistedKey, { ...persistedValue, threadId: "0x64" });
+
+    resetTelegramMessageCacheBucketsForTest();
+    const reloadedCache = createTelegramMessageCache({ bucketKey, persistentStore: store });
+    const recent = await reloadedCache.recentBefore({
+      accountId: "default",
+      chatId: 7,
+      threadId: 100,
+      messageId: "9127",
+      limit: 10,
+    });
+
+    expect(recent).toEqual([]);
+  });
+
+  it("drops unsafe Telegram thread ids from live messages", async () => {
+    const { bucketKey, entries, store } = createMemoryPersistentStore();
+    const cache = createTelegramMessageCache({ bucketKey, persistentStore: store });
+    await cache.record({
+      accountId: "default",
+      chatId: 7,
+      msg: {
+        chat: { id: 7, type: "supergroup", title: "Ops" },
+        message_id: 9127,
+        message_thread_id: Number.MAX_SAFE_INTEGER + 1,
+        date: 1736389127,
+        text: "Unsafe topic message",
+        from: { id: 1, is_bot: false, first_name: "Nora" },
+      } as Message,
+    });
+
+    const persistedValue = entries.values().next().value;
+    if (persistedValue === undefined) {
+      throw new Error("expected persisted Telegram message cache value");
+    }
+    expect(persistedValue.threadId).toBeUndefined();
+
+    const topicRecent = await cache.recentBefore({
+      accountId: "default",
+      chatId: 7,
+      threadId: Number.MAX_SAFE_INTEGER + 1,
+      messageId: "9128",
+      limit: 10,
+    });
+    const unscopedRecent = await cache.recentBefore({
+      accountId: "default",
+      chatId: 7,
+      messageId: "9128",
+      limit: 10,
+    });
+
+    expect(topicRecent).toEqual([]);
+    expect(unscopedRecent.map((entry) => entry.messageId)).toEqual(["9127"]);
+  });
+
+  it("does not use unsafe message ids as recent-before cutoffs", async () => {
+    const cache = createTelegramMessageCache();
+    await cache.record({
+      accountId: "default",
+      chatId: 7,
+      msg: {
+        chat: { id: 7, type: "private", first_name: "Nora" },
+        message_id: 9124,
+        date: 1736380700,
+        text: "State message",
+        from: { id: 1, is_bot: false, first_name: "Nora" },
+      } as Message,
+    });
+
+    const recent = await cache.recentBefore({
+      accountId: "default",
+      chatId: 7,
+      messageId: "9007199254740992",
+      limit: 10,
+    });
+
+    expect(recent).toEqual([]);
   });
 
   it("reads legacy sidecar records as a persistent-store fallback", async () => {

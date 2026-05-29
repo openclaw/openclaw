@@ -277,8 +277,8 @@ function extractStateUpsertPersistenceOptions(): Array<{
     if (next?.state && payload.skipMaintenance && payload.takeCacheOwnership) {
       options.push({
         state: next.state,
-        ...(payload.skipMaintenance ? { skipMaintenance: true } : {}),
-        ...(payload.takeCacheOwnership ? { takeCacheOwnership: true } : {}),
+        skipMaintenance: true,
+        takeCacheOwnership: true,
       });
     }
   }

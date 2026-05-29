@@ -245,6 +245,13 @@ describe("buildMinimaxSpeechProvider", () => {
       expect(result.overrides).toBeUndefined();
     });
 
+    it("warns on non-decimal speed values", () => {
+      const result = parseDirectiveToken({ key: "speed", value: "0x1", policy });
+      expect(result.handled).toBe(true);
+      expect(result.warnings).toHaveLength(1);
+      expect(result.overrides).toBeUndefined();
+    });
+
     it("handles vol key", () => {
       const result = parseDirectiveToken({ key: "vol", value: "3", policy });
       expect(result.handled).toBe(true);
@@ -255,6 +262,13 @@ describe("buildMinimaxSpeechProvider", () => {
       const result = parseDirectiveToken({ key: "vol", value: "0", policy });
       expect(result.handled).toBe(true);
       expect(result.warnings).toHaveLength(1);
+    });
+
+    it("warns on non-decimal volume values", () => {
+      const result = parseDirectiveToken({ key: "vol", value: "0x3", policy });
+      expect(result.handled).toBe(true);
+      expect(result.warnings).toHaveLength(1);
+      expect(result.overrides).toBeUndefined();
     });
 
     it("handles volume alias", () => {
@@ -273,6 +287,13 @@ describe("buildMinimaxSpeechProvider", () => {
       const result = parseDirectiveToken({ key: "pitch", value: "20", policy });
       expect(result.handled).toBe(true);
       expect(result.warnings).toHaveLength(1);
+    });
+
+    it("warns on non-decimal pitch values", () => {
+      const result = parseDirectiveToken({ key: "pitch", value: "0x3", policy });
+      expect(result.handled).toBe(true);
+      expect(result.warnings).toHaveLength(1);
+      expect(result.overrides).toBeUndefined();
     });
 
     it("returns handled=false for unknown keys", () => {
@@ -446,6 +467,32 @@ describe("buildMinimaxSpeechProvider", () => {
       expect(voiceSetting.voice_id).toBe("custom_voice");
       expect(voiceSetting.speed).toBe(1.5);
       expect(voiceSetting.vol).toBe(1.5);
+      expect(voiceSetting.pitch).toBe(0);
+    });
+
+    it("drops malformed voice settings before synthesis", async () => {
+      const hexAudio = Buffer.from("audio").toString("hex");
+      const mockFetch = vi.mocked(globalThis.fetch);
+      mockFetch.mockResolvedValueOnce(
+        new Response(JSON.stringify({ data: { audio: hexAudio } }), { status: 200 }),
+      );
+
+      await provider.synthesize({
+        text: "Test",
+        cfg: {} as never,
+        providerConfig: {
+          apiKey: "sk-test",
+          speed: 3,
+          vol: -1,
+          pitch: 20,
+        },
+        target: "audio-file",
+        timeoutMs: 30000,
+      });
+
+      const voiceSetting = firstFetchBody().voice_setting as Record<string, unknown>;
+      expect(voiceSetting.speed).toBe(1);
+      expect(voiceSetting.vol).toBe(1);
       expect(voiceSetting.pitch).toBe(0);
     });
 

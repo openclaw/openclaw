@@ -12,9 +12,10 @@ import type {
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import {
   defineChannelMessageAdapter,
+  createRuntimeOutboundDelegates,
   type ChannelMessageSendResult,
   type MessageReceiptPartKind,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
   createAllowlistProviderGroupPolicyWarningCollector,
@@ -27,7 +28,7 @@ import {
 } from "openclaw/plugin-sdk/directory-runtime";
 import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
-import { createRuntimeOutboundDelegates } from "openclaw/plugin-sdk/outbound-runtime";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -139,6 +140,7 @@ const meta: ChannelMeta = {
   blurb: "飞书/Lark enterprise messaging.",
   aliases: ["lark"],
   order: 70,
+  preferSessionLookupForAnnounceTarget: true,
 };
 
 const loadFeishuChannelRuntime = createLazyRuntimeNamedExport(
@@ -556,17 +558,14 @@ function readFirstString(
   return undefined;
 }
 
-function readOptionalNumber(params: Record<string, unknown>, keys: string[]): number | undefined {
+function readOptionalPositiveInteger(
+  params: Record<string, unknown>,
+  keys: string[],
+): number | undefined {
   for (const key of keys) {
-    const value = params[key];
-    if (typeof value === "number" && Number.isFinite(value)) {
-      return value;
-    }
-    if (typeof value === "string" && value.trim()) {
-      const parsed = Number(value);
-      if (Number.isFinite(parsed)) {
-        return parsed;
-      }
+    const parsed = parseStrictPositiveInteger(params[key]);
+    if (parsed !== undefined) {
+      return parsed;
     }
   }
   return undefined;
@@ -939,7 +938,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
               chatId,
               startTime: readFirstString(ctx.params, ["startTime", "start_time"]),
               endTime: readFirstString(ctx.params, ["endTime", "end_time"]),
-              pageSize: readOptionalNumber(ctx.params, ["pageSize", "page_size"]),
+              pageSize: readOptionalPositiveInteger(ctx.params, ["pageSize", "page_size"]),
               pageToken: readFirstString(ctx.params, ["pageToken", "page_token"]),
               accountId: ctx.accountId ?? undefined,
             });
@@ -972,7 +971,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             const members = await runtime.getChatMembers(
               client,
               chatId,
-              readOptionalNumber(ctx.params, ["pageSize", "page_size"]),
+              readOptionalPositiveInteger(ctx.params, ["pageSize", "page_size"]),
               readFirstString(ctx.params, ["pageToken", "page_token"]),
               resolveFeishuMemberIdType(ctx.params),
             );
@@ -1009,7 +1008,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             const members = await runtime.getChatMembers(
               client,
               chatId,
-              readOptionalNumber(ctx.params, ["pageSize", "page_size"]),
+              readOptionalPositiveInteger(ctx.params, ["pageSize", "page_size"]),
               readFirstString(ctx.params, ["pageToken", "page_token"]),
               resolveFeishuMemberIdType(ctx.params),
             );
@@ -1024,7 +1023,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
           if (ctx.action === "channel-list") {
             const runtime = await loadFeishuChannelRuntime();
             const query = readFirstString(ctx.params, ["query"]);
-            const limit = readOptionalNumber(ctx.params, ["limit"]);
+            const limit = readOptionalPositiveInteger(ctx.params, ["limit"]);
             const scope = readFirstString(ctx.params, ["scope", "kind"]) ?? "all";
             if (
               scope === "groups" ||

@@ -320,6 +320,17 @@ function collectExplicitTestFileArgs(argv) {
   return files;
 }
 
+export function resolveExplicitTestFileNoPassArgs(argv) {
+  if (collectExplicitTestFileArgs(argv).length === 0) {
+    return argv;
+  }
+  const sentinelIndex = argv.indexOf("--");
+  if (sentinelIndex === -1) {
+    return [...argv, "--passWithNoTests=false"];
+  }
+  return [...argv.slice(0, sentinelIndex), "--passWithNoTests=false", ...argv.slice(sentinelIndex)];
+}
+
 function hasAlternateVitestRootArg(argv) {
   return argv.some(
     (arg) =>
@@ -565,7 +576,8 @@ function main(argv = process.argv.slice(2), env = process.env) {
   }
 
   const vitestArgs = resolveImplicitVitestArgs(argv);
-  const spawnEnv = resolveRunVitestSpawnEnv(env, vitestArgs);
+  const guardedVitestArgs = resolveExplicitTestFileNoPassArgs(vitestArgs);
+  const spawnEnv = resolveRunVitestSpawnEnv(env, guardedVitestArgs);
   let vitestCliEntry;
   try {
     vitestCliEntry = resolveVitestCliEntry();
@@ -583,11 +595,11 @@ function main(argv = process.argv.slice(2), env = process.env) {
       "node",
       ...resolveVitestNodeArgs(env),
       vitestCliEntry,
-      ...vitestArgs,
+      ...guardedVitestArgs,
     ],
     spawnParams: resolveVitestSpawnParams(spawnEnv),
     env: spawnEnv,
-    label: vitestArgs.join(" "),
+    label: guardedVitestArgs.join(" "),
   });
 
   child.on("exit", (code, signal) => {

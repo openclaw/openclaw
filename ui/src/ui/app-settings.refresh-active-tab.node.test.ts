@@ -50,6 +50,7 @@ const mocks = vi.hoisted(() => ({
   loadSessionsMock: vi.fn(async () => {}),
   loadSkillsMock: vi.fn(async () => {}),
   loadUsageMock: vi.fn(async () => {}),
+  loadWorkboardMock: vi.fn(async () => {}),
   startDebugPollingMock: vi.fn(),
   startLogsPollingMock: vi.fn(),
   startNodesPollingMock: vi.fn(),
@@ -128,6 +129,9 @@ vi.mock("./controllers/skills.ts", () => ({
 }));
 vi.mock("./controllers/usage.ts", () => ({
   loadUsage: mocks.loadUsageMock,
+}));
+vi.mock("./controllers/workboard.ts", () => ({
+  loadWorkboard: mocks.loadWorkboardMock,
 }));
 
 import { loadChannelsTab, refreshActiveTab, setTab } from "./app-settings.ts";
@@ -250,7 +254,7 @@ describe("refreshActiveTab", () => {
     expectCommonAgentsTabRefresh(host);
     expect(mocks.loadChannelsMock).toHaveBeenCalledWith(host, false);
     expect(mocks.loadCronStatusMock).toHaveBeenCalledOnce();
-    expect(mocks.loadCronJobsPageMock).toHaveBeenCalledOnce();
+    expect(mocks.loadCronJobsPageMock).toHaveBeenCalledWith(host, { tableFilters: false });
     expect(mocks.loadCronRunsMock).toHaveBeenCalledWith(host, "job-123");
     expect(mocks.loadAgentFilesMock).not.toHaveBeenCalled();
     expect(mocks.loadAgentSkillsMock).not.toHaveBeenCalled();
@@ -294,6 +298,33 @@ describe("refreshActiveTab", () => {
     });
 
     sessions.resolve();
+  });
+
+  it("loads config before rendering session Workboard actions", async () => {
+    const host = createHost();
+    host.tab = "sessions";
+
+    await refreshActiveTab(host as never);
+
+    expect(mocks.loadConfigMock).toHaveBeenCalledOnce();
+    expect(mocks.loadSessionsMock).toHaveBeenCalledOnce();
+  });
+
+  it("refreshes workboard cards with config, sessions, and agents", async () => {
+    const host = createHost();
+    host.tab = "workboard";
+
+    await refreshActiveTab(host as never);
+
+    expect(mocks.loadConfigMock).toHaveBeenCalledWith(host);
+    expect(mocks.loadSessionsMock).toHaveBeenCalledWith(host);
+    expect(mocks.loadAgentsMock).toHaveBeenCalledWith(host);
+    expect(mocks.loadWorkboardMock).toHaveBeenCalledWith({
+      host,
+      client: host.client,
+      force: true,
+      requestUpdate: host.requestUpdate,
+    });
   });
 
   it("starts node polling on Nodes tab entry and clears pending session reloads on tab changes", () => {
@@ -389,6 +420,18 @@ describe("refreshActiveTab", () => {
     });
   });
 
+  it("loads config, sessions, and agents before rendering the Workboard tab", async () => {
+    const host = createHost();
+    host.tab = "workboard";
+
+    await refreshActiveTab(host as never);
+
+    expect(mocks.loadConfigMock).toHaveBeenCalledOnce();
+    expect(mocks.loadSessionsMock).toHaveBeenCalledOnce();
+    expect(mocks.loadAgentsMock).toHaveBeenCalledOnce();
+    expect(mocks.loadConfigSchemaMock).not.toHaveBeenCalled();
+  });
+
   it("does not start the deferred schema refresh when scoped settings fail to load", async () => {
     const host = createHost();
     host.tab = "communications";
@@ -451,7 +494,7 @@ describe("refreshActiveTab", () => {
     expect(outcome).toBe("resolved");
     expect(mocks.loadChannelsMock).toHaveBeenCalledWith(host, false);
     expect(mocks.loadCronStatusMock).toHaveBeenCalledOnce();
-    expect(mocks.loadCronJobsPageMock).toHaveBeenCalledOnce();
+    expect(mocks.loadCronJobsPageMock).toHaveBeenCalledWith(host, { tableFilters: true });
     expect(mocks.loadCronRunsMock).toHaveBeenCalledOnce();
   });
 

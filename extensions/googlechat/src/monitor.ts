@@ -1,7 +1,7 @@
 import {
   recordChannelBotPairLoopAndCheckSuppression,
   type ChannelBotLoopProtectionFacts,
-} from "openclaw/plugin-sdk/inbound-reply-dispatch";
+} from "openclaw/plugin-sdk/channel-inbound";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawConfig } from "../runtime-api.js";
@@ -272,20 +272,21 @@ async function processMessageWithPipeline(params: {
   const fromLabel = isGroup
     ? space.displayName || `space:${spaceId}`
     : senderName || `user:${senderId}`;
+  const timestampMs = resolveGoogleChatTimestampMs(event.eventTime);
   const { storePath, body } = buildEnvelope({
     channel: "Google Chat",
     from: fromLabel,
-    timestamp: event.eventTime ? Date.parse(event.eventTime) : undefined,
+    timestamp: timestampMs,
     body: rawBody,
   });
 
   const replyThreadName = isGroup ? message.thread?.name : undefined;
-  const ctxPayload = core.channel.turn.buildContext({
+  const ctxPayload = core.channel.inbound.buildContext({
     channel: "googlechat",
     accountId: route.accountId,
     messageId: message.name,
     messageIdFull: message.name,
-    timestamp: event.eventTime ? Date.parse(event.eventTime) : undefined,
+    timestamp: timestampMs,
     from: `googlechat:${senderId}`,
     sender: {
       id: senderId,
@@ -296,10 +297,6 @@ async function processMessageWithPipeline(params: {
       kind: isGroup ? "channel" : "direct",
       id: spaceId,
       label: fromLabel,
-      routePeer: {
-        kind: isGroup ? "group" : "direct",
-        id: spaceId,
-      },
     },
     route: {
       agentId: route.agentId,
@@ -317,7 +314,6 @@ async function processMessageWithPipeline(params: {
       bodyForAgent: rawBody,
       rawBody,
       commandBody: rawBody,
-      envelopeFrom: fromLabel,
     },
     media:
       mediaPath || mediaType
@@ -373,14 +369,14 @@ async function processMessageWithPipeline(params: {
     }
   }
 
-  await core.channel.turn.run({
+  await core.channel.inbound.run({
     channel: "googlechat",
     accountId: route.accountId,
     raw: message,
     adapter: {
       ingest: () => ({
         id: message.name ?? spaceId,
-        timestamp: event.eventTime ? Date.parse(event.eventTime) : undefined,
+        timestamp: timestampMs,
         rawText: rawBody,
         textForAgent: rawBody,
         textForCommands: rawBody,

@@ -5,6 +5,11 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import {
+  parseNonNegativeInt,
+  parsePositiveInt,
+  parsePositiveNumber,
+} from "./lib/numeric-options.mjs";
 import { collectGatewayCpuObservations } from "./lib/plugin-gateway-gauntlet.mjs";
 import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mjs";
 
@@ -86,31 +91,10 @@ function parseArgs(argv) {
   if (options.qaScenarios.length === 0) {
     options.qaScenarios = [...DEFAULT_QA_SCENARIOS];
   }
+  if (options.skipStartup && options.skipQa) {
+    throw new Error("--skip-startup and --skip-qa cannot be used together");
+  }
   return options;
-}
-
-function parsePositiveInt(raw, label) {
-  const value = Number(raw);
-  if (!Number.isInteger(value) || value < 1) {
-    throw new Error(`${label} must be a positive integer`);
-  }
-  return value;
-}
-
-function parseNonNegativeInt(raw, label) {
-  const value = Number(raw);
-  if (!Number.isInteger(value) || value < 0) {
-    throw new Error(`${label} must be a non-negative integer`);
-  }
-  return value;
-}
-
-function parsePositiveNumber(raw, label) {
-  const value = Number(raw);
-  if (!Number.isFinite(value) || value <= 0) {
-    throw new Error(`${label} must be a positive number`);
-  }
-  return value;
 }
 
 function printHelp() {

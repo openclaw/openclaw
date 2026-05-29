@@ -81,7 +81,7 @@ export function resolveProviderVariant(model: string | undefined): MockOpenAiPro
     return "anthropic";
   }
   // Fall back to model-name prefix matching for bare model strings like
-  // `gpt-5.5` or `claude-opus-4-7`.
+  // `gpt-5.5` or `claude-opus-4-8`.
   if (/^(?:gpt-|o1-|openai-)/.test(trimmed)) {
     return "openai";
   }
@@ -555,6 +555,31 @@ function countImageInputs(value: unknown): number {
   return count;
 }
 
+function extractLatestImageUserTurn(input: ResponsesInputItem[]) {
+  const latestUserIndex = findLastUserIndex(input);
+  if (latestUserIndex < 0) {
+    return { text: "", imageInputCount: 0 };
+  }
+
+  const latestUserItem = input[latestUserIndex];
+  if (!latestUserItem) {
+    return { text: "", imageInputCount: 0 };
+  }
+
+  const imageTurnItems = [latestUserItem];
+  const imageInputCount = countImageInputs(imageTurnItems.map((item) => item.content));
+  if (imageInputCount === 0) {
+    return { text: "", imageInputCount: 0 };
+  }
+  return {
+    text: imageTurnItems
+      .map((item) => extractInputText(item.content as unknown[]))
+      .filter(Boolean)
+      .join("\n"),
+    imageInputCount,
+  };
+}
+
 function parseToolOutputJson(toolOutput: string): Record<string, unknown> | null {
   if (!toolOutput.trim()) {
     return null;
@@ -610,9 +635,17 @@ function readTargetFromPrompt(prompt: string) {
   return "repo/package.json";
 }
 
-function buildToolCallEventsWithArgs(name: string, args: Record<string, unknown>): StreamEvent[] {
+function execCommandFromToolProgressPrompt(prompt: string) {
+  return (
+    /call the exec tool exactly once with this exact command before answering:\s*`([^`]+)`/i
+      .exec(prompt)?.[1]
+      ?.trim() || null
+  );
+}
+
+function buildMockFunctionCall(name: string, args: Record<string, unknown>) {
   const serialized = JSON.stringify(args);
-  const callSuffix = createHash("sha1")
+  const callSuffix = createHash("sha256")
     .update(name)
     .update("\0")
     .update(serialized)
@@ -620,42 +653,46 @@ function buildToolCallEventsWithArgs(name: string, args: Record<string, unknown>
     .slice(0, 10);
   const callId = `call_mock_${name}_${callSuffix}`;
   const itemId = `fc_mock_${name}_${callSuffix}`;
+  const item = {
+    type: "function_call",
+    id: itemId,
+    call_id: callId,
+    name,
+    arguments: serialized,
+  };
+  return {
+    callId,
+    item,
+    itemId,
+    responseId: `resp_mock_${name}_${callSuffix}`,
+    serialized,
+  };
+}
+
+function buildToolCallEventsWithArgs(name: string, args: Record<string, unknown>): StreamEvent[] {
+  const call = buildMockFunctionCall(name, args);
   return [
     {
       type: "response.output_item.added",
       item: {
         type: "function_call",
-        id: itemId,
-        call_id: callId,
+        id: call.itemId,
+        call_id: call.callId,
         name,
         arguments: "",
       },
     },
-    { type: "response.function_call_arguments.delta", delta: serialized },
+    { type: "response.function_call_arguments.delta", delta: call.serialized },
     {
       type: "response.output_item.done",
-      item: {
-        type: "function_call",
-        id: itemId,
-        call_id: callId,
-        name,
-        arguments: serialized,
-      },
+      item: call.item,
     },
     {
       type: "response.completed",
       response: {
-        id: `resp_mock_${name}_${callSuffix}`,
+        id: call.responseId,
         status: "completed",
-        output: [
-          {
-            type: "function_call",
-            id: itemId,
-            call_id: callId,
-            name,
-            arguments: serialized,
-          },
-        ],
+        output: [call.item],
         usage: { input_tokens: 64, output_tokens: 16, total_tokens: 80 },
       },
     },
@@ -787,6 +824,12 @@ function extractLastCapture(text: string, pattern: RegExp) {
   return lastMatch?.[1]?.trim() || null;
 }
 
+function extractCaptures(text: string, pattern: RegExp) {
+  const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
+  const globalPattern = new RegExp(pattern.source, flags);
+  return Array.from(text.matchAll(globalPattern), (match) => match[1]?.trim()).filter(Boolean);
+}
+
 function extractLastMatchingUserText(texts: string[], pattern: RegExp) {
   for (let index = texts.length - 1; index >= 0; index -= 1) {
     const text = texts[index] ?? "";
@@ -837,6 +880,29 @@ function extractLabeledMarkerDirective(text: string, label: string) {
     text,
     new RegExp(`${escapedLabel}:\\s*([^\\s\\\`.,;:!?]+(?:-[^\\s\\\`.,;:!?]+)*)`, "i"),
   );
+}
+
+function extractBlockStreamingMarkerDirectives(text: string) {
+  const firstLabeledMarker = extractLabeledMarkerDirective(text, "first exact marker");
+  const secondLabeledMarker = extractLabeledMarkerDirective(text, "second exact marker");
+  if (firstLabeledMarker && secondLabeledMarker) {
+    return {
+      first: firstLabeledMarker,
+      second: secondLabeledMarker,
+    };
+  }
+
+  const markers = extractCaptures(text, /exact marker\b[^:\n]{0,120}:\s*`([^`]+)`/i);
+  if (markers.length < 2) {
+    return null;
+  }
+  const [first, second] = markers.slice(-2);
+  return first && second
+    ? {
+        first,
+        second,
+      }
+    : null;
 }
 
 function extractQuotedToolArg(text: string, name: string) {
@@ -1009,7 +1075,7 @@ function buildAssistantText(
     extractExactMarkerDirective(prompt) ?? extractExactMarkerDirective(allInputText);
   const finishExactlyDirective =
     extractFinishExactlyDirective(prompt) ?? extractFinishExactlyDirective(allInputText);
-  const imageInputCount = countImageInputs(input);
+  const latestImageUserTurn = extractLatestImageUserTurn(input);
   const activeMemorySummary = extractActiveMemorySummary(allInputText);
   const snackPreference = extractSnackPreference(activeMemorySummary ?? memorySnippet);
   const sessionsSpawnError = extractToolErrorForNamedCall({
@@ -1035,6 +1101,18 @@ function buildAssistantText(
   }
   if (isHeartbeatPrompt(prompt)) {
     return "HEARTBEAT_OK";
+  }
+  if (
+    /roundtrip image inspection check/i.test(latestImageUserTurn.text) &&
+    latestImageUserTurn.imageInputCount > 0
+  ) {
+    return "Protocol note: the generated attachment shows the same QA lighthouse scene from the previous step.";
+  }
+  if (
+    /image understanding check/i.test(latestImageUserTurn.text) &&
+    latestImageUserTurn.imageInputCount > 0
+  ) {
+    return "Protocol note: the attached image is split horizontally, with red on top and blue on the bottom.";
   }
   if (/\bmarker\b/i.test(allInputText) && exactReplyDirective) {
     return exactReplyDirective;
@@ -1117,12 +1195,6 @@ function buildAssistantText(
       "- Keep a local copy before using the asset.",
       "- Re-open the copied file for final verification.",
     ].join("\n");
-  }
-  if (/roundtrip image inspection check/i.test(prompt) && imageInputCount > 0) {
-    return "Protocol note: the generated attachment shows the same QA lighthouse scene from the previous step.";
-  }
-  if (/image understanding check/i.test(prompt) && imageInputCount > 0) {
-    return "Protocol note: the attached image is split horizontally, with red on top and blue on the bottom.";
   }
   if (
     /interrupted by a gateway reload/i.test(prompt) &&
@@ -1381,6 +1453,78 @@ function buildAssistantOutputItem(spec: MockAssistantMessageSpec) {
   } as const;
 }
 
+function appendAssistantMessageEvents(events: StreamEvent[], spec: MockAssistantMessageSpec) {
+  events.push({
+    type: "response.output_item.added",
+    item: {
+      type: "message",
+      id: spec.id,
+      role: "assistant",
+      ...(spec.phase ? { phase: spec.phase } : {}),
+      content: [],
+      status: "in_progress",
+    },
+  });
+  for (const delta of spec.streamDeltas ?? []) {
+    events.push({
+      type: "response.output_text.delta",
+      item_id: spec.id,
+      output_index: 0,
+      content_index: 0,
+      delta,
+    });
+  }
+  if ((spec.streamDeltas ?? []).length > 0) {
+    events.push({
+      type: "response.output_text.done",
+      item_id: spec.id,
+      output_index: 0,
+      content_index: 0,
+      text: spec.text,
+    });
+  }
+  events.push({
+    type: "response.output_item.done",
+    item: buildAssistantOutputItem(spec),
+  });
+}
+
+function buildAssistantThenToolCallEvents(
+  spec: MockAssistantMessageSpec,
+  name: string,
+  args: Record<string, unknown>,
+): StreamEvent[] {
+  const call = buildMockFunctionCall(name, args);
+  const message = buildAssistantOutputItem(spec);
+  const events: StreamEvent[] = [];
+  appendAssistantMessageEvents(events, spec);
+  events.push({
+    type: "response.output_item.added",
+    item: {
+      type: "function_call",
+      id: call.itemId,
+      call_id: call.callId,
+      name,
+      arguments: "",
+    },
+  });
+  events.push({ type: "response.function_call_arguments.delta", delta: call.serialized });
+  events.push({
+    type: "response.output_item.done",
+    item: call.item,
+  });
+  events.push({
+    type: "response.completed",
+    response: {
+      id: call.responseId,
+      status: "completed",
+      output: [message, call.item],
+      usage: { input_tokens: 64, output_tokens: 32, total_tokens: 96 },
+    },
+  });
+  return events;
+}
+
 function buildAssistantEvents(specsOrText: MockAssistantMessageSpec[] | string): StreamEvent[] {
   const specs =
     typeof specsOrText === "string"
@@ -1513,6 +1657,20 @@ function buildReasoningAndAssistantEvents(params: {
       },
     },
     {
+      type: "response.output_text.delta",
+      item_id: answerItem.id,
+      output_index: 1,
+      content_index: 0,
+      delta: params.answerText,
+    },
+    {
+      type: "response.output_text.done",
+      item_id: answerItem.id,
+      output_index: 1,
+      content_index: 0,
+      text: params.answerText,
+    },
+    {
       type: "response.output_item.done",
       item: answerItem,
     },
@@ -1551,14 +1709,14 @@ async function buildResponsesPayload(
     extractExactReplyDirective(prompt) ?? extractExactReplyDirective(allInputText);
   const exactMarkerDirective =
     extractExactMarkerDirective(prompt) ?? extractExactMarkerDirective(allInputText);
-  const firstExactMarkerDirective = extractLabeledMarkerDirective(
-    allInputText,
-    "first exact marker",
-  );
-  const secondExactMarkerDirective = extractLabeledMarkerDirective(
-    allInputText,
-    "second exact marker",
-  );
+  const blockStreamingPrompt =
+    extractLastMatchingUserText(extractAllUserTexts(input), QA_BLOCK_STREAMING_PROMPT_RE) ||
+    prompt ||
+    allInputText;
+  const blockStreamingMarkers =
+    extractBlockStreamingMarkerDirectives(blockStreamingPrompt) ??
+    extractBlockStreamingMarkerDirectives(allInputText);
+  const latestImageUserTurn = extractLatestImageUserTurn(input);
   const isGroupChat = allInputText.includes('"is_group_chat": true');
   const isBaselineUnmentionedChannelChatter = /\bno bot ping here\b/i.test(prompt);
   const hasReasoningOnlyRetryInstruction = allInputText.includes(QA_REASONING_ONLY_RETRY_NEEDLE);
@@ -1579,6 +1737,11 @@ async function buildResponsesPayload(
     return buildToolCallEventsWithArgs("read", {
       path: readTargetFromPrompt(toolProgressPrompt || prompt || allInputText),
     });
+  };
+  const buildToolProgressExecEvents = (pattern: RegExp) => {
+    const toolProgressPrompt = extractLastMatchingUserText(extractAllUserTexts(input), pattern);
+    const command = execCommandFromToolProgressPrompt(toolProgressPrompt || prompt || allInputText);
+    return command ? buildToolCallEventsWithArgs("exec", { command }) : null;
   };
   if (
     (QA_TOOL_SEARCH_PROMPT_RE.test(allInputText) ||
@@ -1636,6 +1799,22 @@ async function buildResponsesPayload(
   }
   if (/fanout worker beta/i.test(prompt)) {
     return buildAssistantEvents("BETA-OK");
+  }
+  if (
+    /roundtrip image inspection check/i.test(latestImageUserTurn.text) &&
+    latestImageUserTurn.imageInputCount > 0
+  ) {
+    return buildAssistantEvents(
+      "Protocol note: the generated attachment shows the same QA lighthouse scene from the previous step.",
+    );
+  }
+  if (
+    /image understanding check/i.test(latestImageUserTurn.text) &&
+    latestImageUserTurn.imageInputCount > 0
+  ) {
+    return buildAssistantEvents(
+      "Protocol note: the attached image is split horizontally, with red on top and blue on the bottom.",
+    );
   }
   if (QA_REASONING_ONLY_RECOVERY_PROMPT_RE.test(allInputText)) {
     if (!scenarioToolOutput) {
@@ -1750,27 +1929,34 @@ async function buildResponsesPayload(
   }
   if (QA_TOOL_PROGRESS_PROMPT_RE.test(allInputText) && toolProgressReplyDirective) {
     if (!toolOutput) {
-      return buildToolProgressReadEvents(QA_TOOL_PROGRESS_PROMPT_RE);
+      return (
+        buildToolProgressExecEvents(QA_TOOL_PROGRESS_PROMPT_RE) ??
+        buildToolProgressReadEvents(QA_TOOL_PROGRESS_PROMPT_RE)
+      );
     }
     return buildAssistantEvents(toolProgressReplyDirective);
   }
-  if (
-    QA_BLOCK_STREAMING_PROMPT_RE.test(allInputText) &&
-    firstExactMarkerDirective &&
-    secondExactMarkerDirective
-  ) {
+  if (QA_BLOCK_STREAMING_PROMPT_RE.test(allInputText) && blockStreamingMarkers) {
+    if (!toolOutput) {
+      return buildAssistantThenToolCallEvents(
+        {
+          id: "msg_mock_block_1",
+          phase: "final_answer",
+          streamDeltas: splitMockStreamingText(blockStreamingMarkers.first),
+          text: blockStreamingMarkers.first,
+        },
+        "read",
+        {
+          path: readTargetFromPrompt(blockStreamingPrompt),
+        },
+      );
+    }
     return buildAssistantEvents([
-      {
-        id: "msg_mock_block_1",
-        phase: "final_answer",
-        streamDeltas: splitMockStreamingText(firstExactMarkerDirective),
-        text: firstExactMarkerDirective,
-      },
       {
         id: "msg_mock_block_2",
         phase: "final_answer",
-        streamDeltas: splitMockStreamingText(secondExactMarkerDirective),
-        text: secondExactMarkerDirective,
+        streamDeltas: splitMockStreamingText(blockStreamingMarkers.second),
+        text: blockStreamingMarkers.second,
       },
     ]);
   }
@@ -2405,7 +2591,7 @@ async function buildResponsesPayload(
 //
 // The QA parity gate needs two comparable scenario runs: one against the
 // "candidate" (openai/gpt-5.5) and one against the "baseline"
-// (anthropic/claude-opus-4-7). The OpenAI mock above already dispatches all
+// (anthropic/claude-opus-4-8). The OpenAI mock above already dispatches all
 // the scenario prompt branches we care about. Rather than duplicating that
 // machinery, the /v1/messages route below translates Anthropic request
 // shapes into the shared ResponsesInputItem[] format, calls the same
@@ -2628,7 +2814,7 @@ function buildAnthropicMessageResponse(params: {
     id: `msg_mock_${Math.floor(Math.random() * 1_000_000).toString(16)}`,
     type: "message",
     role: "assistant",
-    model: params.model || "claude-opus-4-7",
+    model: params.model || "claude-opus-4-8",
     content,
     stop_reason: stopReason,
     stop_sequence: null,
@@ -2656,7 +2842,7 @@ function buildAnthropicMessageStreamEvents(params: {
         id: messageId,
         type: "message",
         role: "assistant",
-        model: params.model || "claude-opus-4-7",
+        model: params.model || "claude-opus-4-8",
         content: [],
         stop_reason: null,
         stop_sequence: null,
@@ -2755,7 +2941,7 @@ async function buildMessagesPayload(
   // which then confuses parity consumers that assume the mock always
   // echoes the real provider label. Normalize once and reuse everywhere.
   const normalizedModel =
-    typeof body.model === "string" && body.model.trim() !== "" ? body.model : "claude-opus-4-7";
+    typeof body.model === "string" && body.model.trim() !== "" ? body.model : "claude-opus-4-8";
   // Dispatch through the same scenario logic the /v1/responses route uses.
   // Preserve declared tools so route-specific adapters mirror what the
   // real provider request made available to the model.
@@ -2800,7 +2986,7 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
           { id: "gpt-5.5-alt", object: "model" },
           { id: "gpt-image-1", object: "model" },
           { id: "text-embedding-3-small", object: "model" },
-          { id: "claude-opus-4-7", object: "model" },
+          { id: "claude-opus-4-8", object: "model" },
           { id: "claude-sonnet-4-6", object: "model" },
         ],
       });

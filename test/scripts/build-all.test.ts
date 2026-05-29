@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 import {
   BUILD_ALL_PROFILES,
   BUILD_ALL_STEPS,
+  formatBuildAllDuration,
+  formatBuildAllTimingSummary,
   resolveBuildAllStepCacheState,
   resolveBuildAllStep,
   resolveBuildAllSteps,
@@ -62,24 +64,31 @@ function withBuildCacheFixture(
 describe("resolveBuildAllStep", () => {
   it("routes pnpm steps through the npm_execpath pnpm runner on Windows", () => {
     const step = getBuildAllStep("plugins:assets:build");
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pnpm-runner-"));
+    const npmExecPath = path.join(tempDir, "pnpm.cjs");
+    fs.writeFileSync(npmExecPath, "console.log('pnpm');\n");
 
-    const result = resolveBuildAllStep(step, {
-      platform: "win32",
-      nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
-      npmExecPath: "C:/Users/test/AppData/Local/pnpm/10.32.1/bin/pnpm.cjs",
-      env: {},
-    });
-
-    expect(result).toEqual({
-      command: "C:\\Program Files\\nodejs\\node.exe",
-      args: ["C:/Users/test/AppData/Local/pnpm/10.32.1/bin/pnpm.cjs", "plugins:assets:build"],
-      options: {
-        stdio: "inherit",
+    try {
+      const result = resolveBuildAllStep(step, {
+        platform: "win32",
+        nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
+        npmExecPath,
         env: {},
-        shell: false,
-        windowsVerbatimArguments: undefined,
-      },
-    });
+      });
+
+      expect(result).toEqual({
+        command: "C:\\Program Files\\nodejs\\node.exe",
+        args: [npmExecPath, "plugins:assets:build"],
+        options: {
+          stdio: "inherit",
+          env: {},
+          shell: false,
+          windowsVerbatimArguments: undefined,
+        },
+      });
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
   });
 
   it("keeps node steps on the current node binary", () => {
@@ -120,27 +129,34 @@ describe("resolveBuildAllStep", () => {
 
   it("adds heap headroom for plugin-sdk dts on Windows", () => {
     const step = getBuildAllStep("build:plugin-sdk:dts");
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pnpm-runner-"));
+    const npmExecPath = path.join(tempDir, "pnpm.cjs");
+    fs.writeFileSync(npmExecPath, "console.log('pnpm');\n");
 
-    const result = resolveBuildAllStep(step, {
-      platform: "win32",
-      nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
-      npmExecPath: "C:/Users/test/AppData/Local/pnpm/10.32.1/bin/pnpm.cjs",
-      env: { FOO: "bar" },
-    });
+    try {
+      const result = resolveBuildAllStep(step, {
+        platform: "win32",
+        nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
+        npmExecPath,
+        env: { FOO: "bar" },
+      });
 
-    expect(result).toEqual({
-      command: "C:\\Program Files\\nodejs\\node.exe",
-      args: ["C:/Users/test/AppData/Local/pnpm/10.32.1/bin/pnpm.cjs", "build:plugin-sdk:dts"],
-      options: {
-        stdio: "inherit",
-        env: {
-          FOO: "bar",
-          NODE_OPTIONS: "--max-old-space-size=4096",
+      expect(result).toEqual({
+        command: "C:\\Program Files\\nodejs\\node.exe",
+        args: [npmExecPath, "build:plugin-sdk:dts"],
+        options: {
+          stdio: "inherit",
+          env: {
+            FOO: "bar",
+            NODE_OPTIONS: "--max-old-space-size=8192",
+          },
+          shell: false,
+          windowsVerbatimArguments: undefined,
         },
-        shell: false,
-        windowsVerbatimArguments: undefined,
-      },
-    });
+      });
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
   });
 
   it("keeps plugin-sdk dts cache metadata aligned with declaration inputs", () => {
@@ -255,6 +271,26 @@ describe("resolveBuildAllSteps", () => {
 
   it("rejects unknown build profiles", () => {
     expect(() => resolveBuildAllSteps("wat")).toThrow("Unknown build profile: wat");
+  });
+});
+
+describe("build-all timing output", () => {
+  it("formats short and long phase durations compactly", () => {
+    expect(formatBuildAllDuration(42.4)).toBe("42ms");
+    expect(formatBuildAllDuration(1234)).toBe("1.23s");
+    expect(formatBuildAllDuration(12345)).toBe("12.3s");
+  });
+
+  it("summarizes phases slowest first with total time and status", () => {
+    expect(
+      formatBuildAllTimingSummary([
+        { label: "tsdown", status: "ran", durationMs: 99000 },
+        { label: "plugins:assets:copy", status: "cached", durationMs: 12 },
+        { label: "build:plugin-sdk:dts", status: "ran", durationMs: 34567 },
+      ]),
+    ).toBe(
+      "[build-all] phase timings: total 133.6s; slowest tsdown 99.0s; build:plugin-sdk:dts 34.6s; plugins:assets:copy (cached) 12ms",
+    );
   });
 });
 

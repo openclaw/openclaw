@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, vi } from "vitest";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles.js";
-import { resetSkillsRefreshForTest } from "../agents/skills/refresh.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions.js";
 import { resetSystemEventsForTest } from "../infra/system-events.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -8,14 +7,15 @@ import type { PluginProviderRegistration } from "../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { resetSkillsRefreshForTest } from "../skills/runtime/refresh.js";
 import {
   clearSessionAuthProfileOverrideMock,
-  compactEmbeddedPiSessionMock,
+  compactEmbeddedAgentSessionMock,
   loadModelCatalogMock,
   resolveCommandSecretRefsViaGatewayMock,
   resolveSessionAuthProfileOverrideMock,
   runDirectiveBehaviorReplyAgent,
-  runEmbeddedPiAgentMock,
+  runEmbeddedAgentMock,
   runDirectiveBehaviorPreparedReply,
   runPreparedReplyMock,
   runReplyAgentMock,
@@ -97,9 +97,9 @@ export function installDirectiveBehaviorE2EHooks() {
     resetSystemEventsForTest();
     resetPluginRuntimeStateForTest();
     setActivePluginRegistry(createDirectiveBehaviorProviderRegistry());
-    compactEmbeddedPiSessionMock.mockReset();
-    compactEmbeddedPiSessionMock.mockResolvedValue({ payloads: [], meta: {} });
-    runEmbeddedPiAgentMock.mockReset();
+    compactEmbeddedAgentSessionMock.mockReset();
+    compactEmbeddedAgentSessionMock.mockResolvedValue({ payloads: [], meta: {} });
+    runEmbeddedAgentMock.mockReset();
     loadModelCatalogMock.mockReset();
     loadModelCatalogMock.mockResolvedValue(DEFAULT_TEST_MODEL_CATALOG);
     resolveCommandSecretRefsViaGatewayMock.mockReset();

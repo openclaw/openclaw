@@ -28,6 +28,7 @@ import {
   type ProviderOperationRetryStage,
   type TransientProviderRetryConfig,
 } from "../provider-runtime/operation-retry.js";
+import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 export { fetchWithTimeout };
 export { normalizeBaseUrl } from "../agents/provider-request-config.js";
@@ -101,7 +102,7 @@ export function createProviderOperationDeadline(params: {
   ) {
     return { label: params.label };
   }
-  const timeoutMs = Math.floor(params.timeoutMs);
+  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
   return {
     deadlineAtMs: Date.now() + timeoutMs,
     label: params.label,
@@ -113,15 +114,16 @@ export function resolveProviderOperationTimeoutMs(params: {
   deadline: ProviderOperationDeadline;
   defaultTimeoutMs: number;
 }): number {
+  const defaultTimeoutMs = resolveTimerTimeoutMs(params.defaultTimeoutMs, 1);
   const deadlineAtMs = params.deadline.deadlineAtMs;
   if (typeof deadlineAtMs !== "number") {
-    return params.defaultTimeoutMs;
+    return defaultTimeoutMs;
   }
   const remainingMs = deadlineAtMs - Date.now();
   if (remainingMs <= 0) {
     throw new Error(`${params.deadline.label} timed out after ${params.deadline.timeoutMs}ms`);
   }
-  return Math.max(1, Math.min(params.defaultTimeoutMs, remainingMs));
+  return Math.max(1, Math.min(defaultTimeoutMs, remainingMs));
 }
 
 export function createProviderOperationTimeoutResolver(params: {
@@ -150,7 +152,7 @@ export async function waitProviderOperationPollInterval(params: {
 export async function pollProviderOperationJson<TPayload>(
   params: {
     url: string;
-    headers: Headers;
+    headers: Headers | (() => Headers);
     deadline: ProviderOperationDeadline;
     defaultTimeoutMs: number;
     fetchFn: typeof fetch;
@@ -165,7 +167,7 @@ export async function pollProviderOperationJson<TPayload>(
   for (let attempt = 0; attempt < params.maxAttempts; attempt += 1) {
     const init = {
       method: "GET",
-      headers: params.headers,
+      headers: typeof params.headers === "function" ? params.headers() : params.headers,
     };
     const timeoutMs = createProviderOperationTimeoutResolver({
       deadline: params.deadline,

@@ -17,6 +17,8 @@ let signalCheck: typeof import("./client.js").signalCheck;
 let signalRpcRequest: typeof import("./client.js").signalRpcRequest;
 let streamSignalEvents: typeof import("./client.js").streamSignalEvents;
 
+const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
+
 const servers: http.Server[] = [];
 
 async function readRequestBody(req: IncomingMessage): Promise<string> {
@@ -51,6 +53,7 @@ beforeAll(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(
     servers.splice(0).map(
       (server) =>
@@ -220,6 +223,24 @@ describe("signalRpcRequest", () => {
         timeoutMs: 25,
       }),
     ).rejects.toThrow("Signal HTTP exceeded deadline after 25ms");
+  });
+
+  it("caps oversized RPC request timeouts before scheduling", async () => {
+    const timeoutSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockReturnValue(1 as unknown as ReturnType<typeof setTimeout>);
+    vi.spyOn(globalThis, "clearTimeout").mockImplementation(() => undefined);
+    const baseUrl = await withSignalServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ jsonrpc: "2.0", result: { version: "0.13.22" }, id: "test-id" }));
+    });
+
+    await signalRpcRequest("version", undefined, {
+      baseUrl,
+      timeoutMs: MAX_TIMER_TIMEOUT_MS + 1_000_000,
+    });
+
+    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
   });
 });
 

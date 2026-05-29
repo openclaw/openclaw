@@ -1,8 +1,11 @@
+import { readBoundedResponseText } from "../lib/bounded-response.ts";
+
 type JsonObject = Record<string, unknown>;
 
 type TelegramBotApiOptions = {
   baseUrl?: string;
   fetchImpl?: (url: string, init: RequestInit) => Promise<Response>;
+  maxBodyBytes?: number;
   timeoutMs?: number;
 };
 
@@ -11,6 +14,10 @@ const DEFAULT_BASE_URL =
 const DEFAULT_TIMEOUT_MS = readPositiveInt(
   process.env.OPENCLAW_TELEGRAM_USER_BOT_API_TIMEOUT_MS,
   30000,
+);
+const DEFAULT_BODY_MAX_BYTES = readPositiveInt(
+  process.env.OPENCLAW_TELEGRAM_USER_BOT_API_BODY_MAX_BYTES,
+  1024 * 1024,
 );
 
 function readPositiveInt(raw: string | undefined, fallback: number) {
@@ -23,6 +30,18 @@ function optionalString(source: JsonObject, key: string) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+function taggedError(message: string, code: string) {
+  return Object.assign(new Error(message), { code });
+}
+
+function parseJsonPayload(rawPayload: string, label: string) {
+  try {
+    return JSON.parse(rawPayload) as JsonObject;
+  } catch (error) {
+    throw new Error(`${label} returned invalid JSON`, { cause: error });
+  }
+}
+
 export async function telegramBotApi(
   token: string,
   method: string,
@@ -31,10 +50,9 @@ export async function telegramBotApi(
 ) {
   const baseUrl = options.baseUrl ?? DEFAULT_BASE_URL;
   const timeoutMs = Math.max(1, options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
-  const timeoutError = Object.assign(
-    new Error(`Telegram Bot API ${method} timed out after ${timeoutMs}ms`),
-    { code: "ETIMEDOUT" },
-  );
+  const maxBodyBytes = Math.max(1, options.maxBodyBytes ?? DEFAULT_BODY_MAX_BYTES);
+  const label = `Telegram Bot API ${method}`;
+  const timeoutError = taggedError(`${label} timed out after ${timeoutMs}ms`, "ETIMEDOUT");
   const controller = new AbortController();
   let timeout: NodeJS.Timeout | undefined;
   const timeoutPromise = new Promise<never>((_, reject) => {
@@ -55,7 +73,13 @@ export async function telegramBotApi(
       }),
       timeoutPromise,
     ]);
-    const payload = (await Promise.race([response.json(), timeoutPromise])) as JsonObject;
+    const rawPayload = await readBoundedResponseText(response, label, maxBodyBytes, {
+      createTooLargeError(message) {
+        return taggedError(message, "ETOOBIG");
+      },
+      timeoutPromise,
+    });
+    const payload = parseJsonPayload(rawPayload, label);
     if (!response.ok || payload.ok !== true) {
       throw new Error(
         optionalString(payload, "description") ?? `${method} failed with HTTP ${response.status}`,
