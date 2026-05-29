@@ -3,6 +3,7 @@ import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "../infra/exec-approvals.js";
+import { DEFAULT_EXEC_DENYLIST_ENTRIES } from "../infra/exec-denylist.js";
 import { stripAnsi } from "../terminal/ansi.js";
 import { registerExecPolicyCli } from "./exec-policy-cli.js";
 
@@ -386,6 +387,48 @@ describe("exec-policy CLI", () => {
       ask: "off",
       askFallback: "allowlist",
     });
+  });
+
+  it("seeds managed denylist defaults when setting denylist security", async () => {
+    mocks.setApprovals({
+      version: 1,
+      defaults: {
+        security: "full",
+        ask: "off",
+        askFallback: "deny",
+      },
+      agents: {},
+    });
+
+    await runExecPolicyCommand(["exec-policy", "set", "--security", "denylist", "--json"]);
+
+    const approvals = mocks.getApprovals();
+    expect(approvals.defaults?.security).toBe("denylist");
+    expect(approvals.managedDefaults?.denylistVersion).toBe(1);
+    expect(approvals.agents?.["*"]?.denylist?.map((entry) => entry.pattern)).toEqual(
+      DEFAULT_EXEC_DENYLIST_ENTRIES.map((entry) => entry.pattern),
+    );
+  });
+
+  it("seeds managed denylist defaults when setting denylist ask fallback", async () => {
+    mocks.setApprovals({
+      version: 1,
+      defaults: {
+        security: "full",
+        ask: "always",
+        askFallback: "deny",
+      },
+      agents: {},
+    });
+
+    await runExecPolicyCommand(["exec-policy", "set", "--ask-fallback", "denylist", "--json"]);
+
+    const approvals = mocks.getApprovals();
+    expect(approvals.defaults?.askFallback).toBe("denylist");
+    expect(approvals.managedDefaults?.denylistVersion).toBe(1);
+    expect(approvals.agents?.["*"]?.denylist?.map((entry) => entry.pattern)).toEqual(
+      DEFAULT_EXEC_DENYLIST_ENTRIES.map((entry) => entry.pattern),
+    );
   });
 
   it("sanitizes terminal control content before rendering the text table", async () => {

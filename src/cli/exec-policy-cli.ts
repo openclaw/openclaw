@@ -14,6 +14,7 @@ import {
   readExecApprovalsSnapshot,
   restoreExecApprovalsSnapshot,
   saveExecApprovals,
+  ensureManagedDefaultDenylistRules,
   type ExecApprovalsFile,
   type ExecAsk,
   type ExecSecurity,
@@ -208,6 +209,9 @@ function applyApprovalsDefaults(
   }
   if (policy.askFallback !== undefined) {
     next.defaults.askFallback = policy.askFallback;
+  }
+  if (policy.security === "denylist" || policy.askFallback === "denylist") {
+    return ensureManagedDefaultDenylistRules(next);
   }
   return next;
 }
