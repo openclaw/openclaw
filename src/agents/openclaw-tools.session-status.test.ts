@@ -208,6 +208,7 @@ function createCommandsStatusRuntimeModuleMock() {
       includeTranscriptUsage?: boolean;
       taskLineOverride?: string;
       resolveDefaultThinkingLevel?: () => unknown;
+      resolvedReasoningLevel?: string;
     }) => {
       resolveQueueSettingsMock({
         channel: params.statusChannel,
@@ -240,6 +241,7 @@ function createCommandsStatusRuntimeModuleMock() {
           model: { primary },
           thinkingDefault:
             configuredAgent?.thinkingDefault ?? (await params.resolveDefaultThinkingLevel?.()),
+          reasoningDefault: params.resolvedReasoningLevel,
         },
         sessionEntry: params.sessionEntry,
         modelAuth,
@@ -471,6 +473,61 @@ describe("session_status tool", () => {
     await tool.execute("call-transcript-usage", {});
 
     expectRecordFields(mockCallArg(buildStatusMessageMock), { includeTranscriptUsage: true });
+  });
+
+  it("inherits configured reasoningDefault when the session has no override", async () => {
+    resetSessionStore({
+      main: {
+        sessionId: "s1",
+        updatedAt: 10,
+      },
+    });
+    mockConfig = {
+      ...createMockConfig(),
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+          models: {},
+          reasoningDefault: "stream",
+        },
+        list: [{ id: "main", reasoningDefault: "on" }],
+      },
+    };
+
+    const tool = getSessionStatusTool();
+    await tool.execute("call-reasoning-default", {});
+
+    const statusArg = mockCallArg(buildStatusMessageMock) as Record<string, unknown>;
+    const agent = statusArg.agent as Record<string, unknown>;
+    expect(agent.reasoningDefault).toBe("on");
+  });
+
+  it("keeps an explicit session reasoningLevel over configured defaults", async () => {
+    resetSessionStore({
+      main: {
+        sessionId: "s1",
+        updatedAt: 10,
+        reasoningLevel: "off",
+      },
+    });
+    mockConfig = {
+      ...createMockConfig(),
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+          models: {},
+          reasoningDefault: "stream",
+        },
+        list: [{ id: "main", reasoningDefault: "on" }],
+      },
+    };
+
+    const tool = getSessionStatusTool();
+    await tool.execute("call-reasoning-session", {});
+
+    const statusArg = mockCallArg(buildStatusMessageMock) as Record<string, unknown>;
+    const agent = statusArg.agent as Record<string, unknown>;
+    expect(agent.reasoningDefault).toBe("off");
   });
 
   it("passes spawned workspace to session_status auth labels", async () => {
