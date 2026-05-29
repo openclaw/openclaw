@@ -61,6 +61,7 @@ import { composeSystemPromptWithHookContext } from "../embedded-agent-runner/run
 import { buildCurrentInboundPrompt } from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
+import { ensureSystemPromptCacheBoundary } from "../system-prompt-cache-boundary.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt } from "../system-prompt.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
@@ -518,7 +519,7 @@ export async function prepareCliRunContext(
     });
     if (mediaTaskSystemPromptAddition) {
       systemPrompt = prependSystemPromptAddition({
-        systemPrompt,
+        systemPrompt: ensureSystemPromptCacheBoundary(systemPrompt),
         systemPromptAddition: mediaTaskSystemPromptAddition,
       });
     }

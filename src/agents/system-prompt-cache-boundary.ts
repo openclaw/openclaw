@@ -6,6 +6,14 @@ export function stripSystemPromptCacheBoundary(text: string): string {
   return text.replaceAll(SYSTEM_PROMPT_CACHE_BOUNDARY, "\n");
 }
 
+// Append the cache boundary when a prompt has none (e.g. a hook systemPrompt override),
+// so dynamic additions route into an uncached suffix instead of the cached prefix (#85203).
+export function ensureSystemPromptCacheBoundary(systemPrompt: string): string {
+  return systemPrompt.includes(SYSTEM_PROMPT_CACHE_BOUNDARY)
+    ? systemPrompt
+    : `${systemPrompt}${SYSTEM_PROMPT_CACHE_BOUNDARY}`;
+}
+
 export function splitSystemPromptCacheBoundary(
   text: string,
 ): { stablePrefix: string; dynamicSuffix: string } | undefined {

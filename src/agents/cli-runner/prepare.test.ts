@@ -17,6 +17,7 @@ import { hashCliSessionText } from "../cli-session.js";
 import { resetContextWindowCacheForTest } from "../context.js";
 import { buildActiveImageGenerationTaskPromptContextForSession } from "../image-generation-task-status.js";
 import { buildActiveMusicGenerationTaskPromptContextForSession } from "../music-generation-task-status.js";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../system-prompt-cache-boundary.js";
 import { buildActiveVideoGenerationTaskPromptContextForSession } from "../video-generation-task-status.js";
 import {
   prepareCliRunContext,
@@ -1091,7 +1092,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       });
 
       expect(context.systemPrompt).toBe(
-        `active image task\n\nactive video task\n\n${wrappedPluginSystemContext("hook prepend system")}\n\nhook system\n\nCurrent model identity: test-cli/test-model. If asked what model you are, answer with this value for the current run.`,
+        `${wrappedPluginSystemContext("hook prepend system")}\n\nhook system${SYSTEM_PROMPT_CACHE_BOUNDARY}active image task\n\nactive video task\n\nCurrent model identity: test-cli/test-model. If asked what model you are, answer with this value for the current run.`,
       );
       expect(mockBuildActiveImageGenerationTaskPromptContextForSession).toHaveBeenCalledWith(
         "agent:main:test",

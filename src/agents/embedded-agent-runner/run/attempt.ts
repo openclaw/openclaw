@@ -177,6 +177,7 @@ import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
 } from "../../subagent-capabilities.js";
+import { ensureSystemPromptCacheBoundary } from "../../system-prompt-cache-boundary.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt } from "../../system-prompt.js";
@@ -3365,7 +3366,7 @@ export async function runEmbeddedAttempt(
           if (mediaTaskSystemPromptAddition) {
             setActiveSessionSystemPrompt(
               prependSystemPromptAddition({
-                systemPrompt: systemPromptText,
+                systemPrompt: ensureSystemPromptCacheBoundary(systemPromptText),
                 systemPromptAddition: mediaTaskSystemPromptAddition,
               }),
             );

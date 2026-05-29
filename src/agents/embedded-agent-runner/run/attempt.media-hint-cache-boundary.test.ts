@@ -36,6 +36,7 @@ vi.mock("../../music-generation-task-status.js", () => musicGenerationTaskStatus
 vi.mock("../../video-generation-task-status.js", () => videoGenerationTaskStatusMocks);
 
 import {
+  ensureSystemPromptCacheBoundary,
   SYSTEM_PROMPT_CACHE_BOUNDARY,
   splitSystemPromptCacheBoundary,
 } from "../../system-prompt-cache-boundary.js";
@@ -51,8 +52,9 @@ const BASE = `Stable workspace prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic chan
 
 // Mirror the production composition order at attempt.ts:3288 / cli-runner/prepare.ts:
 // 1) compose base with the static hook prepend/append (above-boundary, cacheable),
-// 2) route the per-turn media task hints below the cache boundary.
-function composeTurn(opts: { activeImageTask: boolean }): string {
+// 2) ensure a cache boundary exists (covers marker-free hook systemPrompt overrides),
+// 3) route the per-turn media task hints below the cache boundary.
+function composeTurn(opts: { activeImageTask: boolean; base?: string; hook?: string }): string {
   imageGenerationTaskStatusMocks.buildActiveImageGenerationTaskPromptContextForSession.mockReturnValue(
     opts.activeImageTask ? MEDIA_HINT : undefined,
   );
@@ -62,18 +64,19 @@ function composeTurn(opts: { activeImageTask: boolean }): string {
   musicGenerationTaskStatusMocks.buildActiveMusicGenerationTaskPromptContextForSession.mockReturnValue(
     undefined,
   );
+  const base = opts.base ?? BASE;
   const composed =
     composeSystemPromptWithHookContext({
-      baseSystemPrompt: BASE,
-      prependSystemContext: HOOK,
-    }) ?? BASE;
+      baseSystemPrompt: base,
+      prependSystemContext: opts.hook ?? HOOK,
+    }) ?? base;
   const mediaTaskSystemPromptAddition = resolveAttemptMediaTaskSystemPromptAddition({
     sessionKey: "agent:main:discord:direct:123",
     trigger: "user",
   });
   return mediaTaskSystemPromptAddition
     ? prependSystemPromptAddition({
-        systemPrompt: composed,
+        systemPrompt: ensureSystemPromptCacheBoundary(composed),
         systemPromptAddition: mediaTaskSystemPromptAddition,
       })
     : composed;
@@ -95,5 +98,18 @@ describe("#85203 media task hints stay below the system-prompt cache boundary", 
     const split = splitSystemPromptCacheBoundary(composeTurn({ activeImageTask: true }));
     expect(split?.dynamicSuffix).toContain(MEDIA_HINT);
     expect(split?.stablePrefix ?? "").not.toContain(MEDIA_HINT);
+  });
+
+  // A hook that returns a full systemPrompt override produces a marker-free base; the
+  // ensureSystemPromptCacheBoundary wrap inserts a boundary so media still routes below it.
+  it("inserts a boundary for a marker-free hook systemPrompt override so media stays uncached", () => {
+    const OVERRIDE = "Custom hook system prompt override without a cache boundary";
+    const split = splitSystemPromptCacheBoundary(
+      composeTurn({ activeImageTask: true, base: OVERRIDE, hook: "" }),
+    );
+    expect(split).toBeDefined();
+    expect(split?.stablePrefix).toBe(OVERRIDE);
+    expect(split?.stablePrefix ?? "").not.toContain(MEDIA_HINT);
+    expect(split?.dynamicSuffix).toContain(MEDIA_HINT);
   });
 });
