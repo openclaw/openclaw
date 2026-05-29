@@ -216,6 +216,9 @@ Operational notes:
   delivery id, verify OpenClaw returns `202`, confirm the agent run id, and
   write back a Meego comment or send a channel notification. A CLI-created work
   item without a provider webhook delivery is not sufficient proof.
+- Use the Meego-specific 20-scenario matrix in
+  [Enterprise webhook validation and deployment](/plugins/webhooks-enterprise-validation#meego-real-e2e-scenario-matrix)
+  before marking the integration as production-ready.
 
 ### Jira issues
 
