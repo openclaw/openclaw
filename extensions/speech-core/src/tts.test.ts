@@ -262,6 +262,23 @@ describe("speech-core native voice-note routing", () => {
     });
   });
 
+  it("keeps provider-compatible mp3 voice-note synthesis as Telegram voice delivery", async () => {
+    await expectTtsPayloadResult({
+      channel: "telegram",
+      prefsName: "openclaw-speech-core-tts-telegram-mp3-test",
+      text: "This Telegram reply should be delivered as a native voice note.",
+      target: "voice-note",
+      audioAsVoice: true,
+      mediaExtension: "mp3",
+      providerResult: {
+        audioBuffer: Buffer.from("mp3"),
+        outputFormat: "mp3",
+        fileExtension: ".mp3",
+        voiceCompatible: true,
+      },
+    });
+  });
+
   it("keeps compatible audio-file synthesis deliverable as a voice memo", async () => {
     await expectTtsPayloadResult({
       channel: "voice-memo-chat",

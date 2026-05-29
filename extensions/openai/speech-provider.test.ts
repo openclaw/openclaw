@@ -324,7 +324,7 @@ describe("buildOpenAISpeechProvider", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("honors explicit responseFormat overrides and clears voice-note compatibility when not opus", async () => {
+  it("honors explicit responseFormat overrides and clears voice-note compatibility for wav", async () => {
     const provider = buildOpenAISpeechProvider();
     mockSpeechFetchExpectingFormat("wav");
 
@@ -345,6 +345,28 @@ describe("buildOpenAISpeechProvider", () => {
     expect(result.outputFormat).toBe("wav");
     expect(result.fileExtension).toBe(".wav");
     expect(result.voiceCompatible).toBe(false);
+  });
+
+  it("marks configured mp3 output as voice-compatible for voice-note synthesis", async () => {
+    const provider = buildOpenAISpeechProvider();
+    mockSpeechFetchExpectingFormat("mp3");
+
+    const result = await provider.synthesize({
+      text: "hello",
+      cfg: {} as never,
+      providerConfig: {
+        apiKey: "sk-test",
+        model: "gpt-4o-mini-tts",
+        voice: "alloy",
+        responseFormat: "mp3",
+      },
+      target: "voice-note",
+      timeoutMs: 1_000,
+    });
+
+    expect(result.outputFormat).toBe("mp3");
+    expect(result.fileExtension).toBe(".mp3");
+    expect(result.voiceCompatible).toBe(true);
   });
 
   it("passes extra_body config through to OpenAI-compatible speech requests", async () => {

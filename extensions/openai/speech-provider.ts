@@ -1,3 +1,4 @@
+import { isVoiceCompatibleAudio } from "openclaw/plugin-sdk/media-runtime";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
   SpeechDirectiveTokenParseContext,
@@ -95,6 +96,10 @@ function responseFormatToFileExtension(
     default:
       return ".mp3";
   }
+}
+
+function isOpenAISpeechVoiceCompatibleResponseFormat(format: OpenAiSpeechResponseFormat): boolean {
+  return isVoiceCompatibleAudio({ fileName: `speech${responseFormatToFileExtension(format)}` });
 }
 
 function readExtraBody(value: unknown): Record<string, unknown> | undefined {
@@ -332,7 +337,9 @@ export function buildOpenAISpeechProvider(): SpeechProviderPlugin {
         audioBuffer,
         outputFormat: responseFormat,
         fileExtension: responseFormatToFileExtension(responseFormat),
-        voiceCompatible: req.target === "voice-note" && responseFormat === "opus",
+        voiceCompatible:
+          req.target === "voice-note" &&
+          isOpenAISpeechVoiceCompatibleResponseFormat(responseFormat),
       };
     },
     synthesizeTelephony: async (req) => {
