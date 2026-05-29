@@ -15,6 +15,7 @@ const unitFastCandidateGlobs = [
   "packages/plugin-package-contract/**/*.test.ts",
   "src/acp/**/*.test.ts",
   "src/agents/**/*.test.ts",
+  "src/skills/**/*.test.ts",
   "src/auto-reply/**/*.test.ts",
   "src/bootstrap/**/*.test.ts",
   "src/channels/**/*.test.ts",
