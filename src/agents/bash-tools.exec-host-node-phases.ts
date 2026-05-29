@@ -246,6 +246,8 @@ export function buildNodeSystemRunInvoke(params: {
   suppressNotifyOnExit?: boolean;
   notifyOnExit?: boolean;
   systemRunPlan?: SystemRunApprovalPlan;
+  requestedSecurity?: ExecSecurity;
+  requestedAsk?: ExecAsk;
 }): Record<string, unknown> {
   const timeoutMs = resolveNodeRunTimeoutMs(params.target.runTimeoutSec);
   const runId = params.runId ?? crypto.randomUUID();
@@ -271,6 +273,8 @@ export function buildNodeSystemRunInvoke(params: {
         : {}),
       approved: params.approved,
       approvalDecision: params.approvalDecision ?? undefined,
+      requestedSecurity: params.requestedSecurity,
+      requestedAsk: params.requestedAsk,
       runId,
       suppressNotifyOnExit:
         params.suppressNotifyOnExit === true || params.notifyOnExit === false ? true : undefined,
