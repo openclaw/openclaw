@@ -76,6 +76,10 @@ const TOOLCALL_REPAIR_FREEFORM_SUCCESSOR_KEYS: Record<string, string> = {
   old_string: "new_string",
   oldText: "newText",
 };
+const TOOLCALL_REPAIR_TOOL_VALUE_SUCCESSOR_KEYS = new Map<
+  string,
+  ReadonlyMap<string, readonly string[]>
+>([["read", new Map([["path", ["offset", "limit"]]])]]);
 const TOOLCALL_REPAIR_JSON_STRING_ESCAPES: Record<string, string> = {
   '"': '"',
   "\\": "\\",
@@ -229,7 +233,41 @@ function readObjectMemberKeyAfterComma(raw: string, commaIndex: number): string 
   return key.value;
 }
 
-function shouldCloseSmartQuotedValueAt(raw: string, quoteIndex: number, valueKey: string): boolean {
+function normalizeToolCallRepairToolName(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (!/^[a-z0-9_-]{1,128}$/i.test(trimmed)) {
+    return undefined;
+  }
+  return trimmed.toLowerCase();
+}
+
+function extractToolNameFromLeadingPrefix(prefix: string): string | undefined {
+  const match = /(?:^|[.\s])(?:functions?|tools?)[._:/-]?([a-z0-9_-]+)/i.exec(prefix);
+  return match?.[1] ? normalizeToolCallRepairToolName(match[1]) : undefined;
+}
+
+function isToolSpecificValueSuccessor(params: {
+  toolName?: string;
+  valueKey: string;
+  nextKey: string;
+}): boolean {
+  const toolName = params.toolName;
+  if (!toolName) {
+    return false;
+  }
+  return (
+    TOOLCALL_REPAIR_TOOL_VALUE_SUCCESSOR_KEYS.get(toolName)
+      ?.get(params.valueKey)
+      ?.includes(params.nextKey) ?? false
+  );
+}
+
+function shouldCloseSmartQuotedValueAt(
+  raw: string,
+  quoteIndex: number,
+  valueKey: string,
+  toolName?: string,
+): boolean {
   const nextIndex = skipWhitespace(raw, quoteIndex + 1);
   const nextChar = raw[nextIndex];
   if (nextIndex >= raw.length || nextChar === "}") {
@@ -244,7 +282,10 @@ function shouldCloseSmartQuotedValueAt(raw: string, quoteIndex: number, valueKey
     return false;
   }
   if (!TOOLCALL_REPAIR_FREEFORM_VALUE_KEYS.has(valueKey)) {
-    return TOOLCALL_REPAIR_KNOWN_ARG_KEYS.has(nextKey);
+    return (
+      TOOLCALL_REPAIR_KNOWN_ARG_KEYS.has(nextKey) ||
+      isToolSpecificValueSuccessor({ toolName, valueKey, nextKey })
+    );
   }
   return TOOLCALL_REPAIR_FREEFORM_SUCCESSOR_KEYS[valueKey] === nextKey;
 }
@@ -261,11 +302,12 @@ function readSmartQuotedValue(
   raw: string,
   startIndex: number,
   key: string,
+  toolName?: string,
 ): ToolCallRepairJsonValue | undefined {
   let value = "";
   for (let i = startIndex + 1; i < raw.length; i += 1) {
     const char = raw[i];
-    if (isToolCallRepairSmartQuote(char) && shouldCloseSmartQuotedValueAt(raw, i, key)) {
+    if (isToolCallRepairSmartQuote(char) && shouldCloseSmartQuotedValueAt(raw, i, key, toolName)) {
       return { value: decodeSmartQuotedJsonStringEscapes(value), endIndex: i + 1 };
     }
     value += char;
@@ -366,13 +408,14 @@ function readObjectValue(
   raw: string,
   startIndex: number,
   key: string,
+  toolName?: string,
 ): ToolCallRepairJsonValue | undefined {
   const char = raw[startIndex];
   if (char === '"') {
     return readAsciiQuotedString(raw, startIndex);
   }
   if (isToolCallRepairSmartQuote(char)) {
-    return readSmartQuotedValue(raw, startIndex, key);
+    return readSmartQuotedValue(raw, startIndex, key, toolName);
   }
   if (key === "edits" && char === "[") {
     return readSmartQuotedEditArray(raw, startIndex);
@@ -383,6 +426,7 @@ function readObjectValue(
 function parseSmartQuotedToolCallObject(
   raw: string,
   startIndex: number,
+  toolName?: string,
 ): ToolCallRepairParsedObject | undefined {
   if (raw[startIndex] !== "{") {
     return undefined;
@@ -406,7 +450,7 @@ function parseSmartQuotedToolCallObject(
       return undefined;
     }
 
-    const value = readObjectValue(raw, skipWhitespace(raw, index + 1), key.value);
+    const value = readObjectValue(raw, skipWhitespace(raw, index + 1), key.value, toolName);
     if (!value) {
       return undefined;
     }
@@ -460,7 +504,10 @@ function tryExtractUsableToolCallArgumentsFromJson(
   };
 }
 
-function tryExtractSmartQuotedToolCallArguments(raw: string): ToolCallArgumentRepair | undefined {
+function tryExtractSmartQuotedToolCallArguments(
+  raw: string,
+  toolNameFromContext?: string,
+): ToolCallArgumentRepair | undefined {
   if (!/[\u201c\u201d\u201e\u201f]/.test(raw)) {
     return undefined;
   }
@@ -472,7 +519,11 @@ function tryExtractSmartQuotedToolCallArguments(raw: string): ToolCallArgumentRe
   if (!isAllowedToolCallRepairLeadingPrefix(leadingPrefix)) {
     return undefined;
   }
-  const parsed = parseSmartQuotedToolCallObject(raw, startIndex);
+  const parsed = parseSmartQuotedToolCallObject(
+    raw,
+    startIndex,
+    toolNameFromContext ?? extractToolNameFromLeadingPrefix(leadingPrefix),
+  );
   if (!parsed) {
     return undefined;
   }
@@ -491,7 +542,10 @@ function tryExtractSmartQuotedToolCallArguments(raw: string): ToolCallArgumentRe
   };
 }
 
-function tryExtractUsableToolCallArguments(raw: string): ToolCallArgumentRepair | undefined {
+function tryExtractUsableToolCallArguments(
+  raw: string,
+  toolNameFromContext?: string,
+): ToolCallArgumentRepair | undefined {
   if (!raw.trim()) {
     return undefined;
   }
@@ -506,8 +560,28 @@ function tryExtractUsableToolCallArguments(raw: string): ToolCallArgumentRepair 
   }
 
   return (
-    tryExtractUsableToolCallArgumentsFromJson(raw) ?? tryExtractSmartQuotedToolCallArguments(raw)
+    tryExtractUsableToolCallArgumentsFromJson(raw) ??
+    tryExtractSmartQuotedToolCallArguments(raw, toolNameFromContext)
   );
+}
+
+function readToolCallNameInMessage(message: unknown, contentIndex: number): string | undefined {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+  const block = content[contentIndex];
+  if (!block || typeof block !== "object") {
+    return undefined;
+  }
+  const typedBlock = block as { type?: unknown; name?: unknown };
+  if (!isToolCallBlockType(typedBlock.type) || typeof typedBlock.name !== "string") {
+    return undefined;
+  }
+  return normalizeToolCallRepairToolName(typedBlock.name);
 }
 
 function repairToolCallArgumentsInMessage(
@@ -635,7 +709,10 @@ function wrapStreamRepairMalformedToolCallArguments(
         repairedArgsByIndex.has(event.contentIndex);
       if (shouldReevaluateRepair) {
         const hadRepairState = repairedArgsByIndex.has(event.contentIndex);
-        const repair = tryExtractUsableToolCallArguments(nextPartialJson);
+        const toolName =
+          readToolCallNameInMessage(event.partial, event.contentIndex) ??
+          readToolCallNameInMessage(event.message, event.contentIndex);
+        const repair = tryExtractUsableToolCallArguments(nextPartialJson, toolName);
         if (repair) {
           if (
             !hadRepairState &&

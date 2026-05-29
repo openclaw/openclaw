@@ -61,6 +61,8 @@ async function runToolCallRepairCase(params: {
   delta: string;
   provider?: string;
   modelApi?: string;
+  includePreamble?: boolean;
+  preambleToolName?: string;
 }): Promise<ToolCallRepairCaseResult> {
   const toolName = params.toolName ?? "write";
   const partialToolCall = { type: "functionCall", name: toolName, arguments: {} };
@@ -77,12 +79,16 @@ async function runToolCallRepairCase(params: {
     baseFn: () =>
       createFakeStream({
         events: [
-          {
-            type: "toolcall_delta",
-            contentIndex: 0,
-            delta: `.functions.${toolName}:0 `,
-            partial: partialMessage,
-          },
+          ...(params.includePreamble === false
+            ? []
+            : [
+                {
+                  type: "toolcall_delta",
+                  contentIndex: 0,
+                  delta: `.functions.${params.preambleToolName ?? toolName}:0 `,
+                  partial: partialMessage,
+                },
+              ]),
           {
             type: "toolcall_delta",
             contentIndex: 0,
@@ -325,6 +331,84 @@ const re = /\d+/;
     });
 
     expectAllToolCallArgs(result, { path: "safe.txt" });
+  });
+
+  it("repairs smart-quoted non-freeform args before schema-specific option keys", async () => {
+    const result = await runToolCallRepairCase({
+      toolName: "read",
+      delta: "{“path”:“safe.txt”,“offset”:5,“limit”:20}",
+    });
+
+    expectAllToolCallArgs(result, { path: "safe.txt", offset: 5, limit: 20 });
+  });
+
+  it("repairs prefixless smart-quoted read args before schema-specific option keys", async () => {
+    const result = await runToolCallRepairCase({
+      toolName: "read",
+      delta: "{“path”:“safe.txt”,“offset”:5,“limit”:20}",
+      includePreamble: false,
+    });
+
+    expectAllToolCallArgs(result, { path: "safe.txt", offset: 5, limit: 20 });
+  });
+
+  it("repairs smart-quoted read args with a case-varied structured tool name", async () => {
+    const result = await runToolCallRepairCase({
+      toolName: "Read",
+      delta: "{“path”:“safe.txt”,“offset”:5,“limit”:20}",
+      includePreamble: false,
+    });
+
+    expectAllToolCallArgs(result, { path: "safe.txt", offset: 5, limit: 20 });
+  });
+
+  it("keeps unknown member-looking prose inside smart-quoted non-freeform args", async () => {
+    const result = await runToolCallRepairCase({
+      toolName: "grep",
+      delta: String.raw` {“pattern”:“Use ”, “foo”: “bar” in prose”,“path”:“safe.txt”}`,
+    });
+
+    expectAllToolCallArgs(result, {
+      pattern: "Use ”, “foo”: “bar” in prose",
+      path: "safe.txt",
+    });
+    expect(result.finalArgs).not.toHaveProperty("foo");
+  });
+
+  it("keeps known option-looking prose inside unrelated smart-quoted args", async () => {
+    const result = await runToolCallRepairCase({
+      toolName: "grep",
+      delta: String.raw` {“pattern”:“Use ”, “limit”: “bar” in prose”,“path”:“safe.txt”}`,
+    });
+
+    expectAllToolCallArgs(result, {
+      pattern: "Use ”, “limit”: “bar” in prose",
+      path: "safe.txt",
+    });
+    expect(result.finalArgs).not.toHaveProperty("limit");
+  });
+
+  it("uses the structured tool name over a mismatched smart-quote repair prefix", async () => {
+    const result = await runToolCallRepairCase({
+      toolName: "grep",
+      preambleToolName: "read",
+      delta: String.raw` {“pattern”:“Use ”, “limit”: “bar” in prose”,“path”:“safe.txt”}`,
+    });
+
+    expectAllToolCallArgs(result, {
+      pattern: "Use ”, “limit”: “bar” in prose",
+      path: "safe.txt",
+    });
+    expect(result.finalArgs).not.toHaveProperty("limit");
+  });
+
+  it("ignores inherited tool-name successor lookups while repairing smart-quoted args", async () => {
+    const result = await runToolCallRepairCase({
+      toolName: "constructor",
+      delta: "{“length”:“x”,“foo”:1}",
+    });
+
+    expectAllToolCallArgs(result, {});
   });
 
   it("decodes JSON escapes inside smart-quoted string args", async () => {
