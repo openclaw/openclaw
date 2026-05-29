@@ -26,7 +26,7 @@ async function createRealtimeServer(params?: {
   onText?: (payload: unknown) => void;
 }) {
   const server = createServer();
-  const wss = new WebSocketServer({ noServer: true });
+  const wss = new WebSocketServer({ maxPayload: 1024 * 1024, noServer: true });
   const clients = new Set<WebSocket>();
 
   server.on("upgrade", (request, socket, head) => {
