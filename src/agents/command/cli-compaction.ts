@@ -71,7 +71,6 @@ type NativeHarnessCliCompactionOutcome = {
   compacted: boolean;
   result?: EmbeddedAgentCompactResult;
   fallbackToContextEngine?: boolean;
-  skipped?: boolean;
   failureReason?: string;
 };
 type CliTranscriptCompactionOutcome = {
@@ -416,7 +415,7 @@ async function compactNativeHarnessCliTranscript(params: {
     if (isIntentionalNativeAutoCompactionSkip(result)) {
       return {
         compacted: false,
-        skipped: true,
+        fallbackToContextEngine: true,
         failureReason: CODEX_APP_SERVER_OWNS_AUTO_COMPACTION_REASON,
       };
     }
@@ -540,8 +539,6 @@ export async function runCliTurnCompactionLifecycle(params: {
       compacted = true;
       nativeCompactionResult = nativeOutcome.result;
       useContextEngineCompaction = false;
-    } else if (nativeOutcome.skipped) {
-      return params.sessionEntry;
     } else if (!nativeOutcome.fallbackToContextEngine) {
       throw new Error(
         `CLI native harness compaction failed for ${params.provider}/${params.model}: ${
