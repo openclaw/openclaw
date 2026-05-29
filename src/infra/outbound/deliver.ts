@@ -1620,7 +1620,7 @@ async function deliverOutboundPayloadsCore(
         to,
         channel,
         accountId,
-        replyToId: resolveCurrentReplyTo(payload).replyToId,
+        replyToId: resolveCurrentReplyTo(deliveryPayload).replyToId,
         threadId: params.threadId,
         sessionKey: sessionKeyForInternalHooks,
       });

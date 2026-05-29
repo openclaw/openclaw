@@ -1567,7 +1567,11 @@ describe("deliverOutboundPayloads", () => {
     hookMocks.runner.runReplyPayloadSending.mockImplementationOnce(async (event) => {
       const payload = (event as { payload: { text?: string } }).payload;
       return {
-        payload: { ...payload, text: `${payload.text} + payload-hook` },
+        payload: {
+          ...payload,
+          text: `${payload.text} + payload-hook`,
+          replyToId: "hooked-reply",
+        },
       };
     });
     hookMocks.runner.runMessageSending.mockResolvedValue({ content: "redacted" });
@@ -1581,7 +1585,7 @@ describe("deliverOutboundPayloads", () => {
       cfg: {},
       channel: "matrix",
       to: "!room",
-      payloads: [{ text: "secret" }],
+      payloads: [{ text: "secret", replyToId: "original-reply" }],
       deps: { matrix: sendText },
       replyPayloadSendingHook: {
         kind: "final",
@@ -1599,7 +1603,10 @@ describe("deliverOutboundPayloads", () => {
       expect.objectContaining({ channelId: "matrix", conversationId: "!room" }),
     );
     expect(hookMocks.runner.runMessageSending).toHaveBeenCalledWith(
-      expect.objectContaining({ content: "secret + payload-hook" }),
+      expect.objectContaining({
+        content: "secret + payload-hook",
+        replyToId: "hooked-reply",
+      }),
       expect.objectContaining({ channelId: "matrix", conversationId: "!room" }),
     );
     expect(requireMatrixSendCall(sendText)[1]).toBe("redacted");

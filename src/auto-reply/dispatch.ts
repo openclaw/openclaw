@@ -514,8 +514,8 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
     runId: params.replyOptions?.runId,
   });
   const globalBeforeDeliver = combineBeforeDeliverHooks(
-    buildMessageSendingBeforeDeliver(finalized),
     replyPayloadBeforeDeliver,
+    buildMessageSendingBeforeDeliver(finalized),
   );
   const configuredBeforeDeliver = params.dispatcherOptions.beforeDeliver
     ? combineBeforeDeliverHooks(params.dispatcherOptions.beforeDeliver, replyPayloadBeforeDeliver)
@@ -603,8 +603,8 @@ export async function dispatchInboundMessageWithDispatcher(params: {
     runId: params.replyOptions?.runId,
   });
   const globalBeforeDeliver = combineBeforeDeliverHooks(
-    buildMessageSendingBeforeDeliver(params.ctx),
     replyPayloadBeforeDeliver,
+    buildMessageSendingBeforeDeliver(params.ctx),
   );
   const composedBeforeDeliver = params.dispatcherOptions.beforeDeliver
     ? combineBeforeDeliverHooks(params.dispatcherOptions.beforeDeliver, replyPayloadBeforeDeliver)
