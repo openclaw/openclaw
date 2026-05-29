@@ -2358,6 +2358,82 @@ describe("config cli", () => {
       }
     });
 
+    it("does not revalidate untouched pluginIntegration providers when disabling plugins", async () => {
+      const pluginId = "secret-provider-proof";
+      const resolved = {
+        plugins: {
+          enabled: true,
+          entries: {
+            [pluginId]: { enabled: true },
+          },
+        },
+        secrets: {
+          providers: {
+            team: {
+              source: "exec",
+              pluginIntegration: { pluginId, integrationId: "vault" },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      const patch = writeTempJson5File("openclaw-config-plugin-disable", {
+        plugins: {
+          entries: {
+            [pluginId]: { enabled: false },
+          },
+        },
+      });
+      try {
+        await runConfigCommand(["config", "patch", "--file", patch]);
+      } finally {
+        fs.rmSync(patch, { force: true });
+      }
+
+      expect(firstWrittenConfig().plugins?.entries?.[pluginId]?.enabled).toBe(false);
+    });
+
+    it("validates pluginIntegration providers referenced by newly assigned SecretRefs", async () => {
+      const pluginId = "secret-provider-proof";
+      const resolved = {
+        gateway: {
+          auth: { mode: "token" },
+        },
+        secrets: {
+          providers: {
+            team: {
+              source: "exec",
+              pluginIntegration: { pluginId, integrationId: "vault" },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      const patch = writeTempJson5File("openclaw-config-plugin-provider-ref", {
+        gateway: {
+          auth: {
+            token: { source: "exec", provider: "team", id: "gateway/token" },
+          },
+        },
+      });
+      try {
+        await expect(
+          runConfigCommand(["config", "patch", "--file", patch, "--dry-run", "--json"]),
+        ).rejects.toThrow("__exit__:1");
+      } finally {
+        fs.rmSync(patch, { force: true });
+      }
+
+      const payload = lastMockArg(defaultRuntime.writeJson) as {
+        errors?: Array<{ message?: string }>;
+      };
+      const messages = payload.errors?.map((error) => error.message ?? "") ?? [];
+      expect(messages.some((message) => message.includes("secrets.providers.team"))).toBe(true);
+      expect(messages.some((message) => message.includes(`plugin "${pluginId}"`))).toBe(true);
+    });
+
     it("schema-validates SecretRef-only config patch operations", async () => {
       const resolved = {
         secrets: {

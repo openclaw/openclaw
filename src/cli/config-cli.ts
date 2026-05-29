@@ -1867,13 +1867,36 @@ function collectDryRunSchemaErrors(params: { config: OpenClawConfig }): ConfigSe
 
 function collectPluginIntegrationProviderErrors(params: {
   config: OpenClawConfig;
+  operations: ConfigSetOperation[];
 }): ConfigSetDryRunError[] {
   const providers = params.config.secrets?.providers ?? {};
+  let validateAllProviders = false;
+  const touchedProviderAliases = new Set<string>();
+  for (const operation of params.operations) {
+    if (operation.touchedProviderAlias) {
+      touchedProviderAliases.add(operation.touchedProviderAlias);
+    }
+    if (operation.assignedRef) {
+      touchedProviderAliases.add(operation.assignedRef.provider);
+    }
+    for (const ref of collectSecretRefsFromUnknown(operation.value)) {
+      touchedProviderAliases.add(ref.provider);
+    }
+    if (touchesSecretProviderCollection(operation.setPath)) {
+      validateAllProviders = true;
+    }
+  }
+  if (!validateAllProviders && touchedProviderAliases.size === 0) {
+    return [];
+  }
   const integrationProviders: Array<{
     alias: string;
     provider: PluginIntegrationSecretProviderConfig;
   }> = [];
   for (const [alias, provider] of Object.entries(providers)) {
+    if (!validateAllProviders && !touchedProviderAliases.has(alias)) {
+      continue;
+    }
     if (isPluginIntegrationSecretProviderConfig(provider)) {
       integrationProviders.push({ alias, provider });
     }
@@ -2023,6 +2046,7 @@ async function runConfigOperations(params: {
   );
   const pluginIntegrationProviderErrors = collectPluginIntegrationProviderErrors({
     config: nextConfig,
+    operations,
   });
 
   if (options.dryRun) {
