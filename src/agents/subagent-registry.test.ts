@@ -728,6 +728,70 @@ describe("subagent registry seam flow", () => {
     });
   });
 
+  it("allows in-flight cleanup timeout to be corrected by observed lifecycle start", async () => {
+    const createdAt = Date.parse("2026-03-24T11:59:00Z");
+    mod.registerSubagentRun({
+      runId: "run-cleanup-lock-observed-success",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "cleanup lock should not freeze stale timeout",
+      cleanup: "keep",
+      runTimeoutSeconds: 60,
+    });
+    const run = mod.getSubagentRunByChildSessionKey("agent:main:subagent:child");
+    expect(run).not.toBeNull();
+    Object.assign(run ?? {}, {
+      createdAt,
+      startedAt: createdAt,
+      sessionStartedAt: createdAt,
+      endedAt: createdAt + 60_000,
+      outcome: {
+        status: "timeout",
+        startedAt: createdAt,
+        endedAt: createdAt + 60_000,
+        elapsedMs: 60_000,
+      },
+      cleanupHandled: true,
+    });
+
+    const lastOnAgentEventCall = mocks.onAgentEvent.mock.calls[
+      mocks.onAgentEvent.mock.calls.length - 1
+    ] as unknown as
+      | [(evt: { runId: string; stream: string; data: Record<string, unknown> }) => void]
+      | undefined;
+    const lifecycleHandler = lastOnAgentEventCall?.[0];
+    expect(lifecycleHandler).toBeTypeOf("function");
+
+    lifecycleHandler?.({
+      runId: "run-cleanup-lock-observed-success",
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        startedAt: createdAt + 10_000,
+        endedAt: createdAt + 65_000,
+      },
+    });
+
+    await waitForFast(() => {
+      const correctedRun = mod
+        .listSubagentRunsForRequester("agent:main:main")
+        .find((entry) => entry.runId === "run-cleanup-lock-observed-success");
+      expect(correctedRun?.endedAt).toBe(createdAt + 65_000);
+      expectRecordFields(
+        correctedRun?.outcome,
+        {
+          status: "ok",
+          startedAt: createdAt + 10_000,
+          endedAt: createdAt + 65_000,
+          elapsedMs: 55_000,
+        },
+        "cleanup lock corrected lifecycle outcome",
+      );
+    });
+    expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
+  });
+
   it("caps lifecycle timeout events to the explicit run deadline", async () => {
     const startedAt = Date.now();
     mocks.callGateway.mockImplementation(async (request: { method?: string }) => {

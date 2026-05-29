@@ -96,12 +96,11 @@ function resolveSubagentRunDeadlineMs(
   return Number.isFinite(startedAt) ? startedAt + Math.floor(timeoutSeconds * 1000) : undefined;
 }
 
-function shouldPreserveExplicitRunTimeout(params: { entry: SubagentRunRecord }): boolean {
+function shouldPreservePublishedExplicitRunTimeout(params: { entry: SubagentRunRecord }): boolean {
   if (params.entry.outcome?.status !== "timeout" || typeof params.entry.endedAt !== "number") {
     return false;
   }
   if (
-    params.entry.cleanupHandled ||
     typeof params.entry.cleanupCompletedAt === "number" ||
     typeof params.entry.endedHookEmittedAt === "number" ||
     params.entry.delivery?.status === "delivered" ||
@@ -1088,7 +1087,7 @@ export function createSubagentRegistryLifecycleController(params: {
     let completionOutcome = completeParams.outcome;
     let completionReason = completeParams.reason;
     if (
-      shouldPreserveExplicitRunTimeout({
+      shouldPreservePublishedExplicitRunTimeout({
         entry,
       })
     ) {
