@@ -65,6 +65,20 @@ export type QueuedSessionDelivery = QueuedSessionDeliveryPayload & {
   retryCount: number;
   lastAttemptAt?: number;
   lastError?: string;
+  /**
+   * Wall-clock time the platform send was first attempted, mirroring the
+   * outbound queue's QueuedDelivery.platformSendStartedAt. Set together with
+   * {@link recoveryState} so recovery can refuse a blind replay of an entry
+   * whose first attempt may already have run a turn / sent a reply.
+   */
+  platformSendStartedAt?: number;
+  /**
+   * Recovery reconciliation marker, mirroring the outbound queue. When set, the
+   * entry was past the point where the delivery (turn re-run + platform send)
+   * had begun but had not been acked, so a blind replay could double-execute a
+   * non-idempotent turn. Recovery refuses to replay such entries.
+   */
+  recoveryState?: "send_attempt_started" | "unknown_after_send";
 };
 
 function buildEntryId(idempotencyKey?: string): string {
@@ -151,6 +165,59 @@ export async function failSessionDelivery(
   entry.retryCount += 1;
   entry.lastAttemptAt = Date.now();
   entry.lastError = error;
+  await writeQueueEntry(filePath, entry);
+}
+
+/**
+ * Persist the `send_attempt_started` recovery marker before the platform send
+ * begins. Mirrors markDeliveryPlatformSendAttemptStarted in the outbound queue:
+ * once this is durable, a crash before ack leaves evidence that the send may
+ * already have happened, so recovery refuses to blindly replay it.
+ */
+export async function markSessionDeliveryPlatformSendAttemptStarted(
+  id: string,
+  stateDir?: string,
+): Promise<void> {
+  const filePath = path.join(resolveSessionDeliveryQueueDir(stateDir), `${id}.json`);
+  const entry = await readQueueEntry(filePath);
+  entry.platformSendStartedAt = entry.platformSendStartedAt ?? Date.now();
+  entry.recoveryState = "send_attempt_started";
+  await writeQueueEntry(filePath, entry);
+}
+
+/**
+ * Persist the `unknown_after_send` recovery marker after the platform send has
+ * returned but before the entry is acked. Mirrors
+ * markDeliveryPlatformOutcomeUnknown in the outbound queue.
+ */
+export async function markSessionDeliveryPlatformOutcomeUnknown(
+  id: string,
+  stateDir?: string,
+): Promise<void> {
+  const filePath = path.join(resolveSessionDeliveryQueueDir(stateDir), `${id}.json`);
+  const entry = await readQueueEntry(filePath);
+  entry.platformSendStartedAt = entry.platformSendStartedAt ?? Date.now();
+  entry.recoveryState = "unknown_after_send";
+  await writeQueueEntry(filePath, entry);
+}
+
+/**
+ * Clear the recovery marker. Used when a recovery attempt concluded in-process
+ * with a thrown failure (as opposed to a crash): the attempt is over and
+ * replayable, so the send marker set before the attempt must not survive and
+ * cause the next recovery to refuse a blind replay.
+ */
+export async function clearSessionDeliveryRecoveryState(
+  id: string,
+  stateDir?: string,
+): Promise<void> {
+  const filePath = path.join(resolveSessionDeliveryQueueDir(stateDir), `${id}.json`);
+  const entry = await readQueueEntry(filePath);
+  if (entry.recoveryState === undefined && entry.platformSendStartedAt === undefined) {
+    return;
+  }
+  delete entry.recoveryState;
+  delete entry.platformSendStartedAt;
   await writeQueueEntry(filePath, entry);
 }
 

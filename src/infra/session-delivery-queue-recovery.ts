@@ -1,9 +1,12 @@
 import { formatErrorMessage } from "./errors.js";
 import {
   ackSessionDelivery,
+  clearSessionDeliveryRecoveryState,
   failSessionDelivery,
   loadPendingSessionDelivery,
   loadPendingSessionDeliveries,
+  markSessionDeliveryPlatformOutcomeUnknown,
+  markSessionDeliveryPlatformSendAttemptStarted,
   moveSessionDeliveryToFailed,
   type QueuedSessionDelivery,
 } from "./session-delivery-queue-storage.js";
@@ -95,6 +98,21 @@ export function isSessionDeliveryEligibleForRetry(
   return { eligible: false, remainingBackoffMs: nextEligibleAt - now };
 }
 
+async function moveSessionDeliveryToFailedWithEnoent(
+  id: string,
+  stateDir: string | undefined,
+): Promise<"moved-to-failed" | "already-gone" | "failed"> {
+  try {
+    await moveSessionDeliveryToFailed(id, stateDir);
+    return "moved-to-failed";
+  } catch (moveErr) {
+    if (getErrnoCode(moveErr) === "ENOENT") {
+      return "already-gone";
+    }
+    return "failed";
+  }
+}
+
 async function drainQueuedEntry(opts: {
   entry: QueuedSessionDelivery;
   deliver: DeliverSessionDeliveryFn;
@@ -103,8 +121,32 @@ async function drainQueuedEntry(opts: {
   onFailed?: (entry: QueuedSessionDelivery, errMsg: string) => void;
 }): Promise<"recovered" | "failed" | "moved-to-failed" | "already-gone"> {
   const { entry } = opts;
+  // An entry recovered with a send marker was past the point where the delivery
+  // (turn re-run + platform send) had begun but had not been acked. Without an
+  // adapter reconciliation capability we cannot tell whether the reply was
+  // already sent, so we refuse a blind replay and fail-safe to failed/ — exactly
+  // like the outbound queue does (delivery-queue-recovery.ts: "refusing blind
+  // replay without adapter reconciliation"). This prevents re-running a
+  // non-idempotent turn and re-sending its reply.
+  if (
+    entry.recoveryState === "send_attempt_started" ||
+    entry.recoveryState === "unknown_after_send"
+  ) {
+    const errMsg = `session delivery state is ${entry.recoveryState}; refusing blind replay without adapter reconciliation`;
+    opts.onFailed?.(entry, errMsg);
+    return moveSessionDeliveryToFailedWithEnoent(entry.id, opts.stateDir);
+  }
   try {
+    // Persist the send marker before invoking deliver so that a crash anywhere
+    // between here and the ack below leaves durable evidence that the delivery
+    // may already have run. The deliver fn is the production platform-send seam
+    // (it re-runs the turn and sends via dispatchAssembledChannelTurn /
+    // sendDurableMessageBatch).
+    await markSessionDeliveryPlatformSendAttemptStarted(entry.id, opts.stateDir);
     await opts.deliver(entry);
+    // Send returned but the entry is not yet acked: outcome is unknown until ack
+    // succeeds. Mirror the outbound queue's unknown_after_send marker.
+    await markSessionDeliveryPlatformOutcomeUnknown(entry.id, opts.stateDir);
     await ackSessionDelivery(entry.id, opts.stateDir);
     opts.onRecovered?.(entry);
     return "recovered";
@@ -112,6 +154,11 @@ async function drainQueuedEntry(opts: {
     const errMsg = formatErrorMessage(err);
     opts.onFailed?.(entry, errMsg);
     try {
+      // The attempt concluded in-process with a thrown failure (not a crash):
+      // clear the send marker so the entry stays replayable. A real crash never
+      // reaches this catch, so its marker survives and the next recovery refuses
+      // a blind replay.
+      await clearSessionDeliveryRecoveryState(entry.id, opts.stateDir);
       await failSessionDelivery(entry.id, errMsg, opts.stateDir);
       return "failed";
     } catch (failErr) {
