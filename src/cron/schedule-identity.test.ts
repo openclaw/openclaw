@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { cronSchedulingInputsEqual, tryCronScheduleIdentity } from "./schedule-identity.js";
+import type { CronJob } from "./types.js";
 
 describe("tryCronScheduleIdentity", () => {
   it("normalizes numeric schedule strings like execution does", () => {
@@ -14,10 +15,9 @@ describe("tryCronScheduleIdentity", () => {
 
     expect(stringNumeric).toBe(numeric);
     expect(
-      cronSchedulingInputsEqual(
-        { schedule: { kind: "every", everyMs: 60_000, anchorMs: 123 } },
-        { schedule: { kind: "every", everyMs: "60000", anchorMs: "123" } },
-      ),
+      cronSchedulingInputsEqual({ schedule: { kind: "every", everyMs: 60_000, anchorMs: 123 } }, {
+        schedule: { kind: "every", everyMs: "60000", anchorMs: "123" },
+      } as unknown as Pick<CronJob, "schedule">),
     ).toBe(true);
   });
 });
