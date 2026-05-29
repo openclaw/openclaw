@@ -348,7 +348,7 @@ export const FIELD_HELP: Record<string, string> = {
   "browser.profiles.*.mcpArgs":
     "Extra per-profile Chrome DevTools MCP arguments for existing-session attachment, such as --no-usage-statistics. Endpoint arguments here override the built-in auto-connect or browser URL selection.",
   "browser.profiles.*.driver":
-    'Per-profile browser driver mode. Use "openclaw" (or legacy "clawd") for CDP-based profiles, or use "existing-session" for Chrome DevTools MCP attachment on the selected host or browser node.',
+    'Per-profile browser driver mode. Use "openclaw" (or legacy "clawd") for CDP-based profiles, "existing-session" for Chrome DevTools MCP attachment on the selected host or browser node, or "browserbase" for keep-alive Browserbase sessions with per-attach connectUrl resolution (requires browserbaseSessionId and browserbaseApiKeyEnv).',
   "browser.profiles.*.executablePath":
     "Per-profile browser executable path for locally launched managed browser profiles. Overrides browser.executablePath and accepts paths starting with ~ for the OS home directory.",
   "browser.profiles.*.headless":
@@ -357,6 +357,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Per-profile attach-only override that skips local browser launch and only attaches to an existing CDP endpoint. Useful when one profile is externally managed but others are locally launched.",
   "browser.profiles.*.color":
     "Per-profile accent color for visual differentiation in dashboards and browser-related UI hints. Use distinct colors for high-signal operator recognition of active profiles.",
+  "browser.profiles.*.browserbaseSessionId":
+    'Per-profile Browserbase keep-alive session id (UUID). Required when driver="browserbase". OpenClaw fetches a fresh connectUrl from GET /v1/sessions/<id> on every CDP attach, eliminating the stale-signing-key fragility of static cdpUrl profiles. Mint a keep-alive session via POST /v1/sessions with keepAlive:true.',
+  "browser.profiles.*.browserbaseApiKeyEnv":
+    'Per-profile name of the environment variable holding the Browserbase API key. Required when driver="browserbase". Must be SHOUTING_SNAKE_CASE (e.g. "BROWSERBASE_API_KEY"). Read from process.env at attach time. SecretRef resolution is a follow-up; inject the env var via op run --env-file at gateway start to keep the key in 1Password.',
   "browser.evaluateEnabled":
     "Enables browser-side evaluate helpers for runtime script evaluation capabilities where supported. Keep disabled unless your workflows require evaluate semantics beyond snapshots/navigation.",
   "browser.snapshotDefaults":

@@ -30,6 +30,24 @@ export function getBrowserProfileCapabilities(
     };
   }
 
+  if (profile.driver === "browserbase") {
+    // Browserbase is a remote CDP under the hood, similar capability shape
+    // to a non-loopback openclaw driver, but always attachOnly + Playwright-
+    // backed. JSON tab endpoints and reset are not supported by Browserbase
+    // (it doesn't expose /json/* HTTP endpoints; everything goes through the
+    // signed WS connectUrl).
+    return {
+      mode: "remote-cdp",
+      isRemote: true,
+      usesChromeMcp: false,
+      usesPersistentPlaywright: true,
+      supportsPerTabWs: false,
+      supportsJsonTabEndpoints: false,
+      supportsReset: false,
+      supportsManagedTabLimit: false,
+    };
+  }
+
   if (!profile.cdpIsLoopback) {
     return {
       mode: "remote-cdp",

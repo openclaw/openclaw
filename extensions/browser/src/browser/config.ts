@@ -101,11 +101,15 @@ export type ResolvedBrowserProfile = {
   mcpCommand?: string;
   mcpArgs?: string[];
   color: string;
-  driver: "openclaw" | "existing-session";
+  driver: "openclaw" | "existing-session" | "browserbase";
   executablePath?: string;
   headless: boolean;
   headlessSource?: "profile" | "config" | "default";
   attachOnly: boolean;
+  /** Only populated when driver === "browserbase". */
+  browserbaseSessionId?: string;
+  /** Only populated when driver === "browserbase". */
+  browserbaseApiKeyEnv?: string;
 };
 
 const DEFAULT_BROWSER_CDP_PORT_RANGE_START = 18800;
@@ -206,6 +210,15 @@ function normalizeExistingSessionCdpUrl(
     cdpHost: parsed.hostname,
     cdpIsLoopback: isLoopbackHost(parsed.hostname),
   };
+}
+
+// Loose UUID v4-ish shape check. The Browserbase API itself rejects bad ids;
+// this catches obvious copy-paste mistakes (extra quotes, env-var-name pasted
+// in by accident, etc.) at config load time so the failure mode is legible.
+const UUID_SHAPE_RE =
+  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+function isUuidShaped(value: string): boolean {
+  return UUID_SHAPE_RE.test(value);
 }
 
 function hasLinuxDisplay(env: NodeJS.ProcessEnv): boolean {
@@ -335,10 +348,18 @@ export function resolveBrowserConfig(
   const gatewayPort = resolveGatewayPort(rootConfig);
   const controlPort = deriveDefaultBrowserControlPort(gatewayPort ?? DEFAULT_BROWSER_CONTROL_PORT);
   const defaultColor = normalizeHexColor(cfg?.color);
-  const remoteCdpTimeoutMs = normalizeTimeoutMs(cfg?.remoteCdpTimeoutMs, 1500);
+  // 2026-05-17: raised defaults based on real-world transcontinental
+  // remote-CDP topology (e.g. SFO-hosted Browserbase + Linux gateway).
+  // The previous 1500/2000 defaults were too aggressive: a healthy attach
+  // would complete the HTTP discovery in ~1.2s and the WS handshake in
+  // ~3-4s under transit jitter, leaving zero margin. Bumping the HTTP
+  // budget to 3000 and the handshake floor to 5000 matches what was
+  // already working under manual operator overrides. Loopback profiles
+  // are unaffected -- isLocalManagedProfile() never reads these.
+  const remoteCdpTimeoutMs = normalizeTimeoutMs(cfg?.remoteCdpTimeoutMs, 3000);
   const remoteCdpHandshakeTimeoutMs = normalizeTimeoutMs(
     cfg?.remoteCdpHandshakeTimeoutMs,
-    Math.max(2000, remoteCdpTimeoutMs * 2),
+    Math.max(5000, remoteCdpTimeoutMs * 2),
   );
   const localLaunchTimeoutMs = normalizeStartupTimeoutMs(
     cfg?.localLaunchTimeoutMs,
@@ -463,11 +484,60 @@ export function resolveProfile(
   let cdpHost = resolved.cdpHost;
   let cdpPort = profile.cdpPort ?? 0;
   let cdpUrl = "";
-  const driver = profile.driver === "existing-session" ? "existing-session" : "openclaw";
+  const driver: "openclaw" | "existing-session" | "browserbase" =
+    profile.driver === "existing-session"
+      ? "existing-session"
+      : profile.driver === "browserbase"
+        ? "browserbase"
+        : "openclaw";
   const headless = profile.headless ?? resolved.headless;
   const headlessSource =
     typeof profile.headless === "boolean" ? "profile" : resolved.headlessSource;
   const executablePath = normalizeExecutablePath(profile.executablePath) ?? resolved.executablePath;
+
+  if (driver === "browserbase") {
+    // Validation: we do NOT compute a cdpUrl here. The URL is fetched fresh
+    // on every CDP attach via `withResolvedCdpUrl` (see browserbase-session.ts).
+    // We only check that the static config is well-formed so that operator
+    // errors surface at config load, not on the first hot-path attach.
+    const sessionId = normalizeOptionalString(profile.browserbaseSessionId);
+    if (!sessionId) {
+      throw new Error(
+        `browser.profiles.${profileName}.browserbaseSessionId is required when driver="browserbase".`,
+      );
+    }
+    if (!isUuidShaped(sessionId)) {
+      throw new Error(
+        `browser.profiles.${profileName}.browserbaseSessionId must be a UUID-shaped string.`,
+      );
+    }
+    const apiKeyEnv = normalizeOptionalString(profile.browserbaseApiKeyEnv);
+    if (!apiKeyEnv) {
+      throw new Error(
+        `browser.profiles.${profileName}.browserbaseApiKeyEnv is required when driver="browserbase".`,
+      );
+    }
+    if (!/^[A-Z][A-Z0-9_]*$/.test(apiKeyEnv)) {
+      throw new Error(
+        `browser.profiles.${profileName}.browserbaseApiKeyEnv must be an UPPER_SNAKE_CASE env var name (matching /^[A-Z][A-Z0-9_]*$/).`,
+      );
+    }
+    return {
+      name: profileName,
+      cdpPort: 0,
+      cdpUrl: "",
+      cdpHost: "",
+      cdpIsLoopback: false,
+      color: profile.color,
+      driver,
+      executablePath,
+      headless,
+      headlessSource,
+      attachOnly: true,
+      browserbaseSessionId: sessionId,
+      browserbaseApiKeyEnv: apiKeyEnv,
+    };
+  }
 
   if (driver === "existing-session") {
     const existingSessionCdp = normalizeExistingSessionCdpUrl(rawProfileUrl, profileName);

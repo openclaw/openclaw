@@ -176,6 +176,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "browser.profiles.*.headless": "Browser Profile Headless Mode",
   "browser.profiles.*.attachOnly": "Browser Profile Attach-only Mode",
   "browser.profiles.*.color": "Browser Profile Accent Color",
+  "browser.profiles.*.browserbaseSessionId": "Browser Profile Browserbase Session ID",
+  "browser.profiles.*.browserbaseApiKeyEnv": "Browser Profile Browserbase API Key Env Var",
   tools: "Tools",
   "tools.allow": "Tool Allowlist",
   "tools.deny": "Tool Denylist",

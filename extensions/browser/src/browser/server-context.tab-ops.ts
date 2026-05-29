@@ -1,4 +1,5 @@
 import { resolveBrowserNavigationProxyMode } from "./browser-proxy-mode.js";
+import { withResolvedCdpUrl } from "./browserbase-session.js";
 import { resolveCdpControlPolicy } from "./cdp-reachability-policy.js";
 import { isSelectableCdpBrowserTarget } from "./cdp-target-filter.js";
 import { CDP_JSON_NEW_TIMEOUT_MS } from "./cdp-timeouts.js";
@@ -206,9 +207,12 @@ export function createProfileTabOps({
       const mod = await getPwAiModule({ mode: "strict" });
       const listPagesViaPlaywright = (mod as Partial<PwAiModule> | null)?.listPagesViaPlaywright;
       if (typeof listPagesViaPlaywright === "function") {
+        // Resolve a fresh Browserbase connectUrl per call. No-op for
+        // other drivers (returns the input profile unchanged).
+        const live = await withResolvedCdpUrl(profile);
         const ssrfPolicy = getCdpControlPolicy();
-        await assertCdpEndpointAllowed(profile.cdpUrl, ssrfPolicy);
-        const pages = await listPagesViaPlaywright({ cdpUrl: profile.cdpUrl, ssrfPolicy });
+        await assertCdpEndpointAllowed(live.cdpUrl, ssrfPolicy);
+        const pages = await listPagesViaPlaywright({ cdpUrl: live.cdpUrl, ssrfPolicy });
         return pages.filter(isSelectableCdpBrowserTarget).map((p) => ({
           targetId: p.targetId,
           title: p.title,
@@ -297,8 +301,11 @@ export function createProfileTabOps({
       const mod = await getPwAiModule({ mode: "strict" });
       const createPageViaPlaywright = (mod as Partial<PwAiModule> | null)?.createPageViaPlaywright;
       if (typeof createPageViaPlaywright === "function") {
+        // Resolve a fresh Browserbase connectUrl per call. No-op for
+        // other drivers.
+        const live = await withResolvedCdpUrl(profile);
         const page = await createPageViaPlaywright({
-          cdpUrl: profile.cdpUrl,
+          cdpUrl: live.cdpUrl,
           url,
           ...ssrfPolicyOpts,
         });

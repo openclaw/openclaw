@@ -591,23 +591,65 @@ export const OpenClawSchema = z
                 mcpCommand: z.string().optional(),
                 mcpArgs: z.array(z.string()).optional(),
                 driver: z
-                  .union([z.literal("openclaw"), z.literal("clawd"), z.literal("existing-session")])
+                  .union([
+                    z.literal("openclaw"),
+                    z.literal("clawd"),
+                    z.literal("existing-session"),
+                    z.literal("browserbase"),
+                  ])
                   .optional(),
                 headless: z.boolean().optional(),
                 executablePath: z.string().optional(),
                 attachOnly: z.boolean().optional(),
                 color: HexColorSchema,
+                browserbaseSessionId: z
+                  .string()
+                  .regex(
+                    /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/,
+                    "browserbaseSessionId must be a UUID",
+                  )
+                  .optional(),
+                browserbaseApiKeyEnv: z
+                  .string()
+                  .regex(
+                    /^[A-Z][A-Z0-9_]*$/,
+                    "browserbaseApiKeyEnv must be SHOUTING_SNAKE_CASE (start with A-Z, followed by A-Z/0-9/_)",
+                  )
+                  .optional(),
               })
               .strict()
               .refine(
-                (value) => value.driver === "existing-session" || value.cdpPort || value.cdpUrl,
+                (value) =>
+                  value.driver === "existing-session" ||
+                  value.driver === "browserbase" ||
+                  value.cdpPort ||
+                  value.cdpUrl,
                 {
-                  message: "Profile must set cdpPort or cdpUrl",
+                  message:
+                    'Profile must set cdpPort or cdpUrl (or use driver="browserbase"/"existing-session")',
                 },
               )
               .refine((value) => value.driver === "existing-session" || !value.userDataDir, {
                 message: 'Profile userDataDir is only supported with driver="existing-session"',
-              }),
+              })
+              .refine(
+                (value) =>
+                  value.driver !== "browserbase" ||
+                  (value.browserbaseSessionId && value.browserbaseApiKeyEnv),
+                {
+                  message:
+                    'Profile driver="browserbase" requires both browserbaseSessionId and browserbaseApiKeyEnv',
+                },
+              )
+              .refine(
+                (value) =>
+                  value.driver === "browserbase" ||
+                  (!value.browserbaseSessionId && !value.browserbaseApiKeyEnv),
+                {
+                  message:
+                    'browserbaseSessionId and browserbaseApiKeyEnv are only supported with driver="browserbase"',
+                },
+              ),
           )
           .optional(),
         extraArgs: z.array(z.string()).optional(),

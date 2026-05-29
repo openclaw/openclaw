@@ -482,6 +482,92 @@ Notes:
 - See the [Browserbase docs](https://docs.browserbase.com) for full API
   reference, SDK guides, and integration examples.
 
+#### Long-running and stateful Browserbase sessions
+
+The profile above (`cdpUrl: "wss://connect.browserbase.com?apiKey=..."`) is
+the **auto-create** mode: every CDP connect mints a fresh ephemeral session.
+That is the right shape for one-shot scraping and visual snapshots, but it is
+**not** suitable for work that depends on persisted browser state (logged-in
+sessions, multi-step legal-portal flows, slow file uploads/downloads, etc.).
+A fresh ephemeral session has an empty cookie jar, no saved auth, and no
+download history.
+
+For stateful work, mint a **keep-alive** session up front, copy the session
+id, and point OpenClaw at it with the dedicated `browserbase` driver:
+
+```json5
+{
+  browser: {
+    profiles: {
+      "browserbase-myaccount": {
+        driver: "browserbase",
+        browserbaseSessionId: "44589bac-33f0-4080-9eff-f1b3e3a0bf9c",
+        browserbaseApiKeyEnv: "BROWSERBASE_API_KEY",
+        color: "#F97316",
+      },
+    },
+  },
+}
+```
+
+Mint a keep-alive session by POSTing to the Browserbase API. The
+`keepAlive: true` flag is what stops the session from auto-expiring after
+five idle minutes:
+
+```bash
+curl -sS https://api.browserbase.com/v1/sessions \
+  -H "X-BB-API-Key: $BROWSERBASE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "projectId": "<your-browserbase-project-id>",
+        "keepAlive": true,
+        "browserSettings": {
+          "fingerprint": { "locales": ["en-US"] }
+        }
+      }' \
+  | jq -r '.id'
+```
+
+What the `browserbase` driver does at attach time:
+
+1. Reads the Browserbase API key from `process.env[browserbaseApiKeyEnv]`.
+   The value never lives in `openclaw.json`; only the env-var **name** does.
+2. Calls `GET https://api.browserbase.com/v1/sessions/<id>` with
+   `X-BB-API-Key: <key>`.
+3. Hands the freshly returned `connectUrl` to Playwright.
+
+This happens on **every** CDP attach. There is no caching, and the lack of
+caching is the whole point of the driver.
+
+**Why the static `cdpUrl: "wss://connect.browserbase.com?apiKey=..."`
+shape is fragile for keep-alive sessions.** When a Browserbase keep-alive
+session is first created, that static URL works fine. But the signing key
+embedded in the URL **rotates well before the session itself expires**. Any
+workflow that loads `openclaw.json` once at startup, snapshots `cdpUrl`, and
+relies on it for hours of attaches will start failing partway through with
+opaque CDP handshake errors. The `browserbase` driver sidesteps this
+entirely by fetching a fresh URL per attach — the API key (which does **not**
+rotate) is the only long-lived secret in the loop.
+
+Operational notes:
+
+- The driver validates the static config at OpenClaw startup:
+  `browserbaseSessionId` must be a UUID, and `browserbaseApiKeyEnv` must
+  match `/^[A-Z][A-Z0-9_]*$/`. Bad config fails loudly at load time, not on
+  the first attach.
+- When the keep-alive session is eventually retired (status moves out of
+  `RUNNING`) OpenClaw raises a `BrowserbaseSessionUnavailableError` naming
+  the session id and the current Browserbase status. The remediation is to
+  mint a new keep-alive session and update `browserbaseSessionId`.
+- **SecretRef caveat.** `browserbaseApiKeyEnv` is **not yet part of**
+  OpenClaw's SecretRef-supported credential surface; the runtime reads
+  `process.env` directly. Inject the key via your gateway's normal env
+  delivery (`op run`, systemd `EnvironmentFile=`, etc.). Adding the new
+  field to the SecretRef surface is tracked as a separate follow-up.
+- For an end-to-end walkthrough of the keep-alive mode and other long-
+  session patterns, see Browserbase's own docs:
+  <https://docs.browserbase.com/platform/browser/long-sessions/keep-alive>.
+
 ## Security
 
 Key ideas:

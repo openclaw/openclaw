@@ -264,14 +264,14 @@ async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, dee
 
 function usesChromeMcpTransport(params: {
   transport?: BrowserTransport;
-  driver?: "openclaw" | "existing-session";
+  driver?: "openclaw" | "existing-session" | "browserbase";
 }): boolean {
   return params.transport === "chrome-mcp" || params.driver === "existing-session";
 }
 
 function formatBrowserConnectionSummary(params: {
   transport?: BrowserTransport;
-  driver?: "openclaw" | "existing-session";
+  driver?: "openclaw" | "existing-session" | "browserbase";
   isRemote?: boolean;
   cdpPort?: number | null;
   cdpUrl?: string | null;
