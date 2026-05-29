@@ -120,6 +120,13 @@ describe("createCodexSupervisorTools", () => {
     await expect(
       toolByName(tools, "codex_sessions_list").execute("call-1", {
         include_stored: true,
+        max_stored_sessions: "2",
+      }),
+    ).rejects.toThrow("max_stored_sessions must be an integer");
+
+    await expect(
+      toolByName(tools, "codex_sessions_list").execute("call-2", {
+        include_stored: true,
         max_stored_sessions: 1001,
       }),
     ).rejects.toThrow("max_stored_sessions must be between 1 and 1000");
