@@ -28,10 +28,22 @@ import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { getPluginToolMeta } from "../../plugins/tools.js";
-import type { SkillCommandSpec } from "../../skills/types.js";
 import { resolveGatewayMessageChannel } from "../../utils/message-channel.js";
-import type { MsgContext } from "../templating.js";
-import { extractExplicitGroupId } from "./group-id.js";
+import type { SkillCommandSpec } from "../types.js";
+
+type SkillDispatchMessageContext = {
+  surface?: string;
+  provider?: string;
+  accountId?: string;
+  senderId?: string;
+  senderName?: string;
+  senderUsername?: string;
+  senderE164?: string;
+  originatingTo?: string;
+  to?: string;
+  messageThreadId?: string | number;
+  memberRoleIds?: string[];
+};
 
 /**
  * Policy-enforcement seam for skill `command-dispatch: tool` invocations.
@@ -39,7 +51,7 @@ import { extractExplicitGroupId } from "./group-id.js";
  * stays closed across allow/deny, group, sandbox, and subagent policy layers.
  */
 export function resolveSkillDispatchTools(params: {
-  ctx: MsgContext;
+  message: SkillDispatchMessageContext;
   cfg: OpenClawConfig;
   agentId: string;
   agentDir?: string;
@@ -53,10 +65,11 @@ export function resolveSkillDispatchTools(params: {
   skillCommand?: Pick<SkillCommandSpec, "name" | "skillName" | "skillSource"> & {
     toolName?: string;
   };
+  groupId?: string;
 }): AnyAgentTool[] {
   const channel =
-    resolveGatewayMessageChannel(params.ctx.Surface) ??
-    resolveGatewayMessageChannel(params.ctx.Provider) ??
+    resolveGatewayMessageChannel(params.message.surface) ??
+    resolveGatewayMessageChannel(params.message.provider) ??
     undefined;
   const {
     agentId: resolvedAgentId,
@@ -82,7 +95,7 @@ export function resolveSkillDispatchTools(params: {
     providerProfilePolicy,
     providerProfileAlsoAllow,
   );
-  const groupId = params.sessionEntry?.groupId ?? extractExplicitGroupId(params.ctx.From);
+  const groupId = params.sessionEntry?.groupId ?? params.groupId;
   const groupPolicy = resolveGroupToolPolicy({
     config: params.cfg,
     sessionKey: params.sessionKey,
@@ -91,20 +104,20 @@ export function resolveSkillDispatchTools(params: {
     groupId,
     groupChannel: params.sessionEntry?.groupChannel,
     groupSpace: params.sessionEntry?.space,
-    accountId: params.ctx.AccountId,
-    senderId: params.ctx.SenderId ?? params.senderId,
-    senderName: params.ctx.SenderName,
-    senderUsername: params.ctx.SenderUsername,
-    senderE164: params.ctx.SenderE164,
+    accountId: params.message.accountId,
+    senderId: params.message.senderId ?? params.senderId,
+    senderName: params.message.senderName,
+    senderUsername: params.message.senderUsername,
+    senderE164: params.message.senderE164,
   });
   const senderPolicy = resolveSenderToolPolicy({
     config: params.cfg,
     agentId: resolvedAgentId,
     messageProvider: channel,
-    senderId: params.ctx.SenderId ?? params.senderId,
-    senderName: params.ctx.SenderName,
-    senderUsername: params.ctx.SenderUsername,
-    senderE164: params.ctx.SenderE164,
+    senderId: params.message.senderId ?? params.senderId,
+    senderName: params.message.senderName,
+    senderUsername: params.message.senderUsername,
+    senderE164: params.message.senderE164,
   });
   const sandboxRuntime = resolveSandboxRuntimeStatus({
     cfg: params.cfg,
@@ -157,13 +170,13 @@ export function resolveSkillDispatchTools(params: {
   const tools = createOpenClawTools({
     agentSessionKey: params.sessionKey,
     agentChannel: channel,
-    agentAccountId: params.ctx.AccountId,
-    agentTo: params.ctx.OriginatingTo ?? params.ctx.To,
-    agentThreadId: params.ctx.MessageThreadId ?? undefined,
+    agentAccountId: params.message.accountId,
+    agentTo: params.message.originatingTo ?? params.message.to,
+    agentThreadId: params.message.messageThreadId ?? undefined,
     agentGroupId: groupId,
     agentGroupChannel: params.sessionEntry?.groupChannel,
     agentGroupSpace: params.sessionEntry?.space,
-    agentMemberRoleIds: params.ctx.MemberRoleIds,
+    agentMemberRoleIds: params.message.memberRoleIds,
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
     config: params.cfg,

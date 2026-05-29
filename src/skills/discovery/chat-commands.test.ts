@@ -3,10 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-let listSkillCommandsForAgents: typeof import("./skill-commands.js").listSkillCommandsForAgents;
-let listSkillCommandsForWorkspace: typeof import("./skill-commands.js").listSkillCommandsForWorkspace;
-let resolveSkillCommandInvocation: typeof import("./skill-commands.js").resolveSkillCommandInvocation;
-let skillCommandsTesting: typeof import("./skill-commands.js").testing;
+let listSkillCommandsForAgents: typeof import("./chat-commands.js").listSkillCommandsForAgents;
+let listSkillCommandsForWorkspace: typeof import("./chat-commands.js").listSkillCommandsForWorkspace;
+let resolveSkillCommandInvocation: typeof import("./chat-commands.js").resolveSkillCommandInvocation;
+let skillCommandsTesting: typeof import("./chat-commands.js").testing;
 
 const tempDirs: string[] = [];
 
@@ -123,19 +123,19 @@ function buildWorkspaceSkillCommandSpecs(
   });
 }
 
-vi.mock("./commands-registry.js", () => ({
-  listChatCommands: () => [],
+vi.mock("../../auto-reply/commands-registry.data.js", () => ({
+  getChatCommands: () => [],
 }));
 
-vi.mock("../skills/discovery/command-specs.js", () => ({
+vi.mock("./command-specs.js", () => ({
   buildWorkspaceSkillCommandSpecs,
 }));
 
-vi.mock("../skills/runtime/remote.js", () => ({
+vi.mock("../runtime/remote.js", () => ({
   getRemoteSkillEligibility: () => ({}),
 }));
 
-vi.mock("../skills/discovery/agent-filter.js", () => ({
+vi.mock("./agent-filter.js", () => ({
   resolveEffectiveAgentSkillFilter: (
     cfg: {
       agents?: {
@@ -159,7 +159,7 @@ beforeAll(async () => {
     listSkillCommandsForWorkspace,
     resolveSkillCommandInvocation,
     testing: skillCommandsTesting,
-  } = await import("./skill-commands.js"));
+  } = await import("./chat-commands.js"));
 });
 
 afterAll(async () => {

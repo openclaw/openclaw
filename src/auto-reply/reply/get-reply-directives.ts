@@ -50,7 +50,9 @@ type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 const commandsRegistryLoader = createLazyImportLoader(
   () => import("../commands-registry.runtime.js"),
 );
-const skillCommandsLoader = createLazyImportLoader(() => import("../skill-commands.runtime.js"));
+const skillCommandsLoader = createLazyImportLoader(
+  () => import("../../skills/discovery/chat-commands.runtime.js"),
+);
 
 function loadCommandsRegistry() {
   return commandsRegistryLoader.load();

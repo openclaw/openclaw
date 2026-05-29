@@ -9,8 +9,8 @@ import {
   scanDirectory,
   scanDirectoryWithSummary,
   scanSource,
-} from "./skill-scanner.js";
-import type { SkillScanOptions } from "./skill-scanner.js";
+} from "./scanner.js";
+import type { SkillScanOptions } from "./scanner.js";
 
 // ---------------------------------------------------------------------------
 // Helpers

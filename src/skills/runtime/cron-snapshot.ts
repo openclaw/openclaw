@@ -1,9 +1,9 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import type { SkillSnapshot } from "../../skills/types.js";
+import type { SkillSnapshot } from "../types.js";
 
 const skillsSnapshotRuntimeLoader = createLazyImportLoader(
-  () => import("./skills-snapshot.runtime.js"),
+  () => import("./cron-snapshot.runtime.js"),
 );
 
 async function loadSkillsSnapshotRuntime() {

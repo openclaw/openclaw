@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { hasErrnoCode } from "../infra/errors.js";
-import { isPathInside } from "./scan-paths.js";
+import { hasErrnoCode } from "../../infra/errors.js";
+import { isPathInside } from "../../security/scan-paths.js";
 
 // ---------------------------------------------------------------------------
 // Types

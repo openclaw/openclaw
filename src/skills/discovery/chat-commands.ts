@@ -1,22 +1,22 @@
 import fs from "node:fs";
-import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { canExecRequestNode } from "../agents/exec-defaults.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { logVerbose } from "../globals.js";
+import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { canExecRequestNode } from "../../agents/exec-defaults.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { logVerbose } from "../../globals.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
-} from "../shared/string-coerce.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
-import { resolveEffectiveAgentSkillFilter } from "../skills/discovery/agent-filter.js";
-import { buildWorkspaceSkillCommandSpecs } from "../skills/discovery/command-specs.js";
-import { getRemoteSkillEligibility } from "../skills/runtime/remote.js";
-import type { SkillCommandSpec } from "../skills/types.js";
-import { listReservedChatSlashCommandNames } from "./skill-commands-base.js";
+} from "../../shared/string-coerce.js";
+import { uniqueStrings } from "../../shared/string-normalization.js";
+import { getRemoteSkillEligibility } from "../runtime/remote.js";
+import type { SkillCommandSpec } from "../types.js";
+import { resolveEffectiveAgentSkillFilter } from "./agent-filter.js";
+import { listReservedChatSlashCommandNames } from "./chat-command-invocation.js";
+import { buildWorkspaceSkillCommandSpecs } from "./command-specs.js";
 export {
   listReservedChatSlashCommandNames,
   resolveSkillCommandInvocation,
-} from "./skill-commands-base.js";
+} from "./chat-command-invocation.js";
 
 export function listSkillCommandsForWorkspace(params: {
   workspaceDir: string;

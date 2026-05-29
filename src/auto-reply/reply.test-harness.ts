@@ -44,7 +44,7 @@ vi.mock("../commands-registry.runtime.js", () => ({
   listChatCommands: () => [],
 }));
 
-vi.mock("../skill-commands.runtime.js", () => ({
+vi.mock("../skills/discovery/chat-commands.runtime.js", () => ({
   listSkillCommandsForWorkspace: () => [],
 }));
 

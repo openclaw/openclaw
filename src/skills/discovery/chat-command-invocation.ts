@@ -1,9 +1,9 @@
+import { getChatCommands } from "../../auto-reply/commands-registry.data.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
-} from "../shared/string-coerce.js";
-import type { SkillCommandSpec } from "../skills/types.js";
-import { getChatCommands } from "./commands-registry.data.js";
+} from "../../shared/string-coerce.js";
+import type { SkillCommandSpec } from "../types.js";
 
 export function listReservedChatSlashCommandNames(extraNames: string[] = []): Set<string> {
   const reserved = new Set<string>();

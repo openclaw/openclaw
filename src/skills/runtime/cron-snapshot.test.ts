@@ -12,14 +12,14 @@ const {
   resolveEffectiveAgentSkillFilterMock: vi.fn(),
 }));
 
-vi.mock("./skills-snapshot.runtime.js", () => ({
+vi.mock("./cron-snapshot.runtime.js", () => ({
   canExecRequestNode: canExecRequestNodeMock,
   getRemoteSkillEligibility: getRemoteSkillEligibilityMock,
   resolveReusableWorkspaceSkillSnapshot: resolveReusableWorkspaceSkillSnapshotMock,
   resolveEffectiveAgentSkillFilter: resolveEffectiveAgentSkillFilterMock,
 }));
 
-const { resolveCronSkillsSnapshot } = await import("./skills-snapshot.js");
+const { resolveCronSkillsSnapshot } = await import("./cron-snapshot.js");
 
 describe("resolveCronSkillsSnapshot", () => {
   beforeEach(() => {

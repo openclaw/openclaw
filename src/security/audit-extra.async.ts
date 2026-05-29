@@ -20,9 +20,9 @@ import {
   normalizeTrimmedStringList,
   uniqueStrings,
 } from "../shared/string-normalization.js";
+import type { SkillScanFinding } from "../skills/security/scanner.js";
 import { shouldIgnoreInstalledPluginDirName } from "./installed-plugin-dirs.js";
 import { extensionUsesSkippedScannerPath, isPathInside } from "./scan-paths.js";
-import type { SkillScanFinding } from "./skill-scanner.js";
 import type { ExecFn } from "./windows-acl.js";
 
 export type SecurityAuditFinding = {
@@ -37,7 +37,7 @@ type CollectPluginsTrustFindingsParams = Parameters<
   typeof import("./audit-plugins-trust.js").collectPluginsTrustFindings
 >[0];
 type SkillScanSummary = Awaited<
-  ReturnType<typeof import("./skill-scanner.js").scanDirectoryWithSummary>
+  ReturnType<typeof import("../skills/security/scanner.js").scanDirectoryWithSummary>
 >;
 type ExecDockerRawFn = (
   args: string[],
@@ -60,7 +60,7 @@ let sandboxConstantsModulePromise:
   | undefined;
 let auditPluginsTrustModulePromise: Promise<typeof import("./audit-plugins-trust.js")> | undefined;
 let auditFsModulePromise: Promise<typeof import("./audit-fs.js")> | undefined;
-let skillScannerModulePromise: Promise<typeof import("./skill-scanner.js")> | undefined;
+let skillScannerModulePromise: Promise<typeof import("../skills/security/scanner.js")> | undefined;
 
 function loadSkillsModule() {
   skillsModulePromise ??= import("../skills/loading/workspace.js");
@@ -93,7 +93,7 @@ function loadSkillSourceModule() {
 }
 
 function loadSkillScannerModule() {
-  skillScannerModulePromise ??= import("./skill-scanner.js");
+  skillScannerModulePromise ??= import("../skills/security/scanner.js");
   return skillScannerModulePromise;
 }
 

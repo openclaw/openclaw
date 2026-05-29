@@ -21,11 +21,11 @@ import { stripStructuralPrefixes } from "./mentions.js";
 import type { createTypingController } from "./typing.js";
 
 type AgentDefaults = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> | undefined;
-type SkillCommandsRuntime = typeof import("../skill-commands.runtime.js");
+type SkillCommandsRuntime = typeof import("../../skills/discovery/chat-commands.runtime.js");
 
 const commandsRuntimeLoader = createLazyImportLoader(() => import("./commands.runtime.js"));
 const skillCommandsRuntimeLoader = createLazyImportLoader<SkillCommandsRuntime>(
-  () => import("../skill-commands.runtime.js"),
+  () => import("../../skills/discovery/chat-commands.runtime.js"),
 );
 const statusCommandRuntimeLoader = createLazyImportLoader(() => import("./commands-status.js"));
 

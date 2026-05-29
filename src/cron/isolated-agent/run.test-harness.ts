@@ -156,7 +156,7 @@ vi.mock("../../plugins/runtime-plugins.runtime.js", () => ({
   ensureRuntimePluginsLoaded: ensureRuntimePluginsLoadedMock,
 }));
 
-vi.mock("./skills-snapshot.runtime.js", () => ({
+vi.mock("../../skills/runtime/cron-snapshot.runtime.js", () => ({
   canExecRequestNode: vi.fn(() => false),
   getRemoteSkillEligibility: getRemoteSkillEligibilityMock,
   resolveEffectiveAgentSkillFilter: resolveAgentSkillsFilterMock,

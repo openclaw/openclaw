@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { listAgentWorkspaceDirs } from "../agents/workspace-dirs.js";
-import type { OpenClawConfig } from "../config/config.js";
-import type { SecurityAuditFinding } from "./audit.types.js";
-import { isPathInside } from "./scan-paths.js";
+import { listAgentWorkspaceDirs } from "../../agents/workspace-dirs.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import type { SecurityAuditFinding } from "../../security/audit.types.js";
+import { isPathInside } from "../../security/scan-paths.js";
 
 type WorkspaceSkillScanLimits = {
   maxFiles?: number;
