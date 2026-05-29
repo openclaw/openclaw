@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
-import type { ReplyDispatcher } from "./reply/reply-dispatcher.js";
+import type { ReplyDispatchBeforeDeliver, ReplyDispatcher } from "./reply/reply-dispatcher.js";
 import { buildTestCtx } from "./reply/test-ctx.js";
 
 type DispatchReplyFromConfigFn =
@@ -416,6 +416,60 @@ describe("withReplyDispatcher", () => {
     );
 
     expect(payload).toBeNull();
+  });
+
+  it("installs reply_payload_sending hooks on prebuilt dispatchers", async () => {
+    const runReplyPayloadSending = vi.fn(async ({ payload }: { payload: { text?: string } }) => ({
+      payload: {
+        ...payload,
+        text: `${payload.text ?? ""} + installed`,
+      },
+    }));
+    hoisted.getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: vi.fn((hookName?: string) => hookName === "reply_payload_sending"),
+      runMessageSending: vi.fn(async () => undefined),
+      runReplyPayloadSending,
+    });
+    hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({ text: "ok" });
+    const installedHooks: ReplyDispatchBeforeDeliver[] = [];
+    const dispatcher = {
+      ...createDispatcher([]),
+      appendBeforeDeliver: vi.fn((hook: ReplyDispatchBeforeDeliver) => {
+        installedHooks.push(hook);
+      }),
+    };
+
+    await dispatchInboundMessage({
+      ctx: buildTestCtx({ Surface: "discord", SessionKey: "agent:test:session" }),
+      cfg: {} as OpenClawConfig,
+      dispatcher,
+      replyOptions: { runId: "run-456" },
+      replyResolver: async () => ({ text: "ok" }),
+    });
+
+    expect(dispatcher.appendBeforeDeliver).toHaveBeenCalledTimes(1);
+    const installedHook = installedHooks[0];
+    if (!installedHook) {
+      throw new Error("expected installed beforeDeliver hook");
+    }
+    const payload = await installedHook({ text: "prebuilt reply" }, { kind: "final" });
+
+    expect(payload).toEqual({ text: "prebuilt reply + installed" });
+    expect(runReplyPayloadSending).toHaveBeenCalledWith(
+      {
+        payload: { text: "prebuilt reply" },
+        kind: "final",
+        channel: "discord",
+        sessionKey: "agent:test:session",
+        runId: "run-456",
+      },
+      {
+        accountId: "acct-1",
+        channelId: "threads",
+        conversationId: "conv-1",
+        runId: "run-456",
+      },
+    );
   });
 
   it("reconciles queuedFinal and counts after dispatcher-side cancellation", async () => {

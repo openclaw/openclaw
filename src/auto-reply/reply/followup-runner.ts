@@ -50,6 +50,7 @@ import {
   refreshQueuedFollowupSession,
   type FollowupRun,
 } from "./queue.js";
+import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
 import { runReplyPayloadSendingHook } from "./reply-payload-sending-hook.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
@@ -267,7 +268,7 @@ export function createFollowupRunner(params: {
     payloads: ReplyPayload[],
     queued: FollowupRun,
     resolvedRun: { provider: string; modelId: string },
-    options: { mirror?: boolean; runId?: string } = {},
+    options: { kind?: ReplyDispatchKind; mirror?: boolean; runId?: string } = {},
   ) => {
     // Check if we should route to originating channel.
     const { originatingChannel, originatingTo } = queued;
@@ -299,6 +300,7 @@ export function createFollowupRunner(params: {
 
     let crossChannelRouteFailureNeedsNotice = false;
     let routedAnyCrossChannelPayloadToOrigin = false;
+    const replyKind = options.kind ?? "final";
     const sendDispatcherPayload = async (payload: ReplyPayload) => {
       if (!opts?.onBlockReply) {
         return;
@@ -309,7 +311,7 @@ export function createFollowupRunner(params: {
         }) ?? "unknown";
       const hookedPayload = await runReplyPayloadSendingHook({
         payload,
-        kind: "final",
+        kind: replyKind,
         channel: dispatcherChannel,
         sessionKey: queued.run.sessionKey,
         runId: options.runId,
@@ -371,7 +373,7 @@ export function createFollowupRunner(params: {
           threadId: queued.originatingThreadId,
           cfg: runtimeConfig,
           mirror: options.mirror,
-          replyKind: "final",
+          replyKind,
           runId: options.runId,
         });
         if (!result.ok) {
@@ -914,7 +916,7 @@ export function createFollowupRunner(params: {
                         provider,
                         modelId: model,
                       },
-                      { mirror: false, runId },
+                      { kind: "tool", mirror: false, runId },
                     );
                     if (payload.isError === true) {
                       markVisibleToolErrorProgress();

@@ -52,6 +52,7 @@ type ForegroundReplyFenceSnapshot = {
 };
 
 const foregroundReplyFenceByKey = new Map<string, ForegroundReplyFenceState>();
+const replyPayloadSendingDispatchers = new WeakSet<ReplyDispatcher>();
 
 function normalizeForegroundReplyFencePart(value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -354,6 +355,31 @@ function buildReplyPayloadSendingBeforeDeliver(
   };
 }
 
+function installReplyPayloadSendingBeforeDeliver(
+  dispatcher: ReplyDispatcher,
+  ctx: MsgContext | FinalizedMsgContext,
+  opts?: { runId?: string },
+): void {
+  if (replyPayloadSendingDispatchers.has(dispatcher)) {
+    return;
+  }
+  const beforeDeliver = buildReplyPayloadSendingBeforeDeliver(ctx, opts);
+  if (!beforeDeliver || !dispatcher.appendBeforeDeliver) {
+    return;
+  }
+  dispatcher.appendBeforeDeliver(beforeDeliver);
+  replyPayloadSendingDispatchers.add(dispatcher);
+}
+
+function markReplyPayloadSendingBeforeDeliverInstalled(
+  dispatcher: ReplyDispatcher,
+  beforeDeliver: ReplyDispatchBeforeDeliver | undefined,
+): void {
+  if (beforeDeliver) {
+    replyPayloadSendingDispatchers.add(dispatcher);
+  }
+}
+
 function combineBeforeDeliverHooks(
   ...hooks: Array<ReplyDispatchBeforeDeliver | undefined>
 ): ReplyDispatchBeforeDeliver | undefined {
@@ -455,6 +481,9 @@ export async function dispatchInboundMessage(params: {
       source: "dispatchInboundMessage",
     });
   }
+  installReplyPayloadSendingBeforeDeliver(params.dispatcher, finalized, {
+    runId: params.replyOptions?.runId,
+  });
   const result = await withReplyDispatcher({
     dispatcher: params.dispatcher,
     run: () =>
@@ -537,6 +566,7 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
       beforeDeliver,
       silentReplyContext: params.dispatcherOptions.silentReplyContext ?? silentReplyContext,
     });
+  markReplyPayloadSendingBeforeDeliverInstalled(dispatcher, replyPayloadBeforeDeliver);
   try {
     return await dispatchInboundMessage({
       ctx: finalized,
@@ -591,6 +621,7 @@ export async function dispatchInboundMessageWithDispatcher(params: {
     beforeDeliver: composedBeforeDeliver,
     silentReplyContext: params.dispatcherOptions.silentReplyContext ?? silentReplyContext,
   });
+  markReplyPayloadSendingBeforeDeliverInstalled(dispatcher, replyPayloadBeforeDeliver);
   return await dispatchInboundMessage({
     ctx: params.ctx,
     cfg: params.cfg,
