@@ -18,6 +18,7 @@ const rootEntries = [
   bundledPluginFile("telegram", "src/token.ts", "!"),
   "src/hooks/bundled/*/handler.ts!",
   "src/hooks/llm-slug-generator.ts!",
+  "src/plugins/source-loader.ts!",
   "src/plugin-sdk/*.ts!",
 ] as const;
 

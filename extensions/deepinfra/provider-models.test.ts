@@ -61,37 +61,49 @@ function expectedLiveChatCatalog(liveModels: ReturnType<typeof expectedStaticCha
   return [...liveModels, ...expectedStaticChatCatalog().filter((model) => !liveIds.has(model.id))];
 }
 
+type FetchPathEnvOverrides = {
+  DEEPINFRA_API_KEY?: string;
+  NODE_ENV?: string;
+  VITEST?: string;
+};
+
 async function withFetchPathTest(
   mockFetch: ReturnType<typeof vi.fn>,
-  envOverrides: Record<string, string | undefined>,
+  envOverrides: FetchPathEnvOverrides,
   runAssertions: () => Promise<void>,
 ) {
   const env = { ...process.env };
   delete process.env.NODE_ENV;
   delete process.env.VITEST;
-  for (const [key, value] of Object.entries(envOverrides)) {
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
+  if (envOverrides.DEEPINFRA_API_KEY === undefined) {
+    delete process.env.DEEPINFRA_API_KEY;
+  } else {
+    process.env.DEEPINFRA_API_KEY = envOverrides.DEEPINFRA_API_KEY;
+  }
+  if (envOverrides.NODE_ENV !== undefined) {
+    process.env.NODE_ENV = envOverrides.NODE_ENV;
+  }
+  if (envOverrides.VITEST !== undefined) {
+    process.env.VITEST = envOverrides.VITEST;
   }
   vi.stubGlobal("fetch", mockFetch);
 
   try {
     await runAssertions();
   } finally {
-    for (const key of Object.keys(envOverrides)) {
-      if (env[key] === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = env[key];
-      }
+    if (env.DEEPINFRA_API_KEY === undefined) {
+      delete process.env.DEEPINFRA_API_KEY;
+    } else {
+      process.env.DEEPINFRA_API_KEY = env.DEEPINFRA_API_KEY;
     }
-    if (env.NODE_ENV !== undefined) {
+    if (env.NODE_ENV === undefined) {
+      delete process.env.NODE_ENV;
+    } else {
       process.env.NODE_ENV = env.NODE_ENV;
     }
-    if (env.VITEST !== undefined) {
+    if (env.VITEST === undefined) {
+      delete process.env.VITEST;
+    } else {
       process.env.VITEST = env.VITEST;
     }
     vi.unstubAllGlobals();
