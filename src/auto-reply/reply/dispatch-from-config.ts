@@ -102,7 +102,6 @@ import {
 } from "../commands-registry.js";
 import type { BlockReplyContext } from "../get-reply-options.types.js";
 import {
-  copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
   isReplyPayloadStatusNotice,
   markReplyPayloadAsTtsSupplement,
@@ -266,10 +265,7 @@ async function maybeApplyTtsToReplyPayload(
     return params.payload;
   }
   const { maybeApplyTtsToPayload } = await loadTtsRuntime();
-  const ttsPayload = await maybeApplyTtsToPayload(params);
-  return ttsPayload === params.payload
-    ? ttsPayload
-    : copyReplyPayloadMetadata(params.payload, ttsPayload);
+  return maybeApplyTtsToPayload(params);
 }
 
 const AUDIO_PLACEHOLDER_RE = /^<media:audio>(\s*\([^)]*\))?$/i;
@@ -1810,6 +1806,17 @@ export async function dispatchReplyFromConfig(
       const reply = resolveSendableOutboundReplyParts(payload);
       return !reply.hasMedia && !hasExecApprovalPayload(payload);
     };
+    const shouldSuppressTelegramMessageToolOnlyTextProgress = (payload: ReplyPayload) => {
+      if (
+        sourceReplyDeliveryMode !== "message_tool_only" ||
+        shouldEmitFullVerboseProgress() ||
+        ctx.Provider !== "telegram"
+      ) {
+        return false;
+      }
+      const reply = resolveSendableOutboundReplyParts(payload);
+      return !reply.hasMedia && !hasExecApprovalPayload(payload);
+    };
     const sendFinalPayload = async (
       payload: ReplyPayload,
       options: { abortSignal?: AbortSignal } = {},
@@ -2345,6 +2352,9 @@ export async function dispatchReplyFromConfig(
                   return;
                 }
                 if (shouldSuppressMessageToolOnlyTextErrorProgress(deliveryPayload)) {
+                  return;
+                }
+                if (shouldSuppressTelegramMessageToolOnlyTextProgress(deliveryPayload)) {
                   return;
                 }
                 if (shouldSuppressDefaultToolProgressMessages()) {
