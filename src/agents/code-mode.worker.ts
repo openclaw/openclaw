@@ -415,6 +415,16 @@ function throwWorkerFailureWithOutput(params: {
   throw params.error;
 }
 
+function disposeVmAfterRun(vm: QuickJS): void {
+  try {
+    vm.dispose();
+  } catch (error) {
+    if (!isQuickJsInterruptedError(error)) {
+      throw error;
+    }
+  }
+}
+
 function drainPendingJobs(vm: QuickJS): void {
   for (let index = 0; index < 1000; index += 1) {
     if (vm.executePendingJobs() === 0) {
@@ -500,7 +510,7 @@ async function runExec(input: Extract<CodeModeWorkerInput, { kind: "exec" }>) {
   } catch (error) {
     return throwWorkerFailureWithOutput({ error, didTimeout, output, vm });
   } finally {
-    vm.dispose();
+    disposeVmAfterRun(vm);
   }
 }
 
@@ -555,7 +565,7 @@ async function runResume(input: Extract<CodeModeWorkerInput, { kind: "resume" }>
   } catch (error) {
     return throwWorkerFailureWithOutput({ error, didTimeout, output, vm });
   } finally {
-    vm.dispose();
+    disposeVmAfterRun(vm);
   }
 }
 

@@ -1,3 +1,5 @@
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setPluginToolMeta } from "../plugins/tools.js";
 import {
@@ -169,12 +171,17 @@ describe("Code Mode", () => {
   });
 
   it("resolves the packaged worker URL from stable and hashed dist modules", () => {
-    expect(testing.resolveCodeModeWorkerUrl("file:///repo/dist/agents/code-mode.js").pathname).toBe(
-      "/repo/dist/agents/code-mode.worker.js",
-    );
-    expect(testing.resolveCodeModeWorkerUrl("file:///repo/dist/selection-abc123.js").pathname).toBe(
-      "/repo/dist/agents/code-mode.worker.js",
-    );
+    const repoRoot = path.join(process.cwd(), "repo");
+    const stableModuleUrl = pathToFileURL(
+      path.join(repoRoot, "dist", "agents", "code-mode.js"),
+    ).href;
+    const hashedModuleUrl = pathToFileURL(path.join(repoRoot, "dist", "selection-abc123.js")).href;
+    const workerPath = pathToFileURL(
+      path.join(repoRoot, "dist", "agents", "code-mode.worker.js"),
+    ).pathname;
+
+    expect(testing.resolveCodeModeWorkerUrl(stableModuleUrl).pathname).toBe(workerPath);
+    expect(testing.resolveCodeModeWorkerUrl(hashedModuleUrl).pathname).toBe(workerPath);
   });
 
   it("hides all normal tools behind exec and wait", () => {
