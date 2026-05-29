@@ -10,17 +10,52 @@ describe("ci workflow guards", () => {
   it("kills timed manual checkout fetches after the grace period", () => {
     const workflowPaths = [
       ".github/workflows/ci.yml",
+      ".github/workflows/workflow-sanity.yml",
       ".github/workflows/ci-check-testbox.yml",
       ".github/workflows/ci-build-artifacts-testbox.yml",
+      ".github/workflows/crabbox-hydrate.yml",
     ];
 
     for (const workflowPath of workflowPaths) {
       const workflow = readFileSync(workflowPath, "utf8");
-      const fetchTimeouts = workflow.match(/timeout --signal=TERM[^\n]* 30s git -C "\$workdir"/g);
+      const fetchTimeouts = workflow.match(
+        /timeout --signal=TERM[^\n]* 30s git(?: -C "(?:\$workdir|\$GITHUB_WORKSPACE|clawhub-source)")?/g,
+      );
 
       expect(fetchTimeouts?.length, workflowPath).toBeGreaterThan(0);
-      expect(fetchTimeouts, workflowPath).toEqual(
-        fetchTimeouts?.map(() => 'timeout --signal=TERM --kill-after=10s 30s git -C "$workdir"'),
+      expect(
+        fetchTimeouts?.every((line) =>
+          line.startsWith("timeout --signal=TERM --kill-after=10s 30s git"),
+        ),
+        workflowPath,
+      ).toBe(true);
+    }
+  });
+
+  it("bounds shared base commit fetches", () => {
+    const action = readFileSync(".github/actions/ensure-base-commit/action.yml", "utf8");
+
+    expect(action).toContain("fetch_base_ref()");
+    expect(action).toContain("timeout --signal=TERM --kill-after=10s 30s git");
+    expect(action).toContain("-c protocol.version=2");
+    expect(action).not.toContain("if ! git fetch --no-tags");
+  });
+
+  it("bounds early unauthenticated checkout fetches", () => {
+    const workflow = readCiWorkflow();
+
+    for (const jobName of ["preflight", "security-fast"]) {
+      const checkoutStep = workflow.jobs[jobName].steps.find((step) => step.name === "Checkout");
+
+      expect(checkoutStep.run, jobName).toContain(
+        'timeout --signal=TERM --kill-after=10s 30s git -C "$GITHUB_WORKSPACE"',
+      );
+      expect(checkoutStep.run, jobName).toContain("-c protocol.version=2");
+      expect(checkoutStep.run, jobName).toContain(
+        "fetch --no-tags --prune --no-recurse-submodules --depth=1 origin",
+      );
+      expect(checkoutStep.run, jobName).not.toContain(
+        'git -C "$GITHUB_WORKSPACE" fetch --no-tags --depth=1',
       );
     }
   });
