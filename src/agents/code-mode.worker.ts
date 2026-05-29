@@ -102,7 +102,7 @@ function isQuickJsInterruptedError(error: unknown): boolean {
   if (error instanceof CodeModeGuestError) {
     return false;
   }
-  return errorMessage(error) === "interrupted";
+  return errorMessage(error).includes("interrupted");
 }
 
 type VmRun = {
