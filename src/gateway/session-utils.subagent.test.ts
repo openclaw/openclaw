@@ -12,6 +12,8 @@ import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/a
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { withEnv } from "../test-utils/env.js";
 import {
+  buildGatewaySessionRow,
+  buildSessionListRowContext,
   listSessionsFromStore,
   loadCombinedSessionStoreForGateway,
   resolveGatewayModelSupportsImages,
@@ -205,6 +207,170 @@ describe("listSessionsFromStore subagent metadata", () => {
     const failed = result.sessions.find((session) => session.key === "agent:main:subagent:failed");
     expect(failed?.status).toBe("failed");
     expect(failed?.runtimeMs).toBe(5_000);
+  });
+
+  test("matches fallback row semantics when using an operation-scoped subagent read index", () => {
+    const now = Date.now();
+    const root = "agent:main:main";
+    const active = "agent:main:subagent:active";
+    const staleParent = "agent:main:subagent:stale-parent";
+    const staleGrandchild = "agent:main:subagent:stale-grandchild";
+    const recentEnded = "agent:main:subagent:recent-ended";
+    const storeOnly = "agent:main:subagent:store-only";
+    const moved = "agent:main:subagent:moved";
+    const movedController = "agent:main:subagent:moved-controller";
+    const store: Record<string, SessionEntry> = {
+      [root]: { updatedAt: now } as SessionEntry,
+      [active]: {
+        updatedAt: now - 1,
+        spawnedBy: root,
+        status: "running",
+        startedAt: now - 60_000,
+      } as SessionEntry,
+      [staleParent]: {
+        updatedAt: now - 2,
+        spawnedBy: root,
+        status: "running",
+        startedAt: now - 3 * 60 * 60_000,
+      } as SessionEntry,
+      [staleGrandchild]: {
+        updatedAt: now - 3,
+        spawnedBy: staleParent,
+        status: "running",
+        startedAt: now - 30_000,
+      } as SessionEntry,
+      [recentEnded]: {
+        updatedAt: now - 4,
+        spawnedBy: root,
+        status: "done",
+        startedAt: now - 180_000,
+        endedAt: now - 120_000,
+        runtimeMs: 60_000,
+      } as SessionEntry,
+      [storeOnly]: {
+        updatedAt: now - 5,
+        spawnedBy: root,
+        status: "running",
+        startedAt: now - 15_000,
+      } as SessionEntry,
+      [moved]: {
+        updatedAt: now - 6,
+        spawnedBy: root,
+        status: "running",
+        startedAt: now - 15_000,
+      } as SessionEntry,
+    };
+
+    addSubagentRunForTests({
+      runId: "run-active",
+      childSessionKey: active,
+      controllerSessionKey: root,
+      requesterSessionKey: root,
+      requesterDisplayKey: "main",
+      task: "active task",
+      cleanup: "keep",
+      createdAt: now - 10_000,
+      startedAt: now - 60_000,
+      model: "openai/gpt-5.5",
+    });
+    registerAgentRunContext("run-active", { sessionKey: active });
+    addSubagentRunForTests({
+      runId: "run-stale-parent",
+      childSessionKey: staleParent,
+      controllerSessionKey: root,
+      requesterSessionKey: root,
+      requesterDisplayKey: "main",
+      task: "stale parent task",
+      cleanup: "keep",
+      createdAt: now - 20_000,
+      startedAt: now - 3 * 60 * 60_000,
+      model: "openai/gpt-5.5",
+    });
+    addSubagentRunForTests({
+      runId: "run-stale-grandchild",
+      childSessionKey: staleGrandchild,
+      controllerSessionKey: staleParent,
+      requesterSessionKey: staleParent,
+      requesterDisplayKey: "stale parent",
+      task: "active descendant task",
+      cleanup: "keep",
+      createdAt: now - 5_000,
+      startedAt: now - 30_000,
+      model: "openai/gpt-5.5",
+    });
+    registerAgentRunContext("run-stale-grandchild", { sessionKey: staleGrandchild });
+    addSubagentRunForTests({
+      runId: "run-recent-ended",
+      childSessionKey: recentEnded,
+      controllerSessionKey: root,
+      requesterSessionKey: root,
+      requesterDisplayKey: "main",
+      task: "recent ended task",
+      cleanup: "keep",
+      createdAt: now - 30_000,
+      startedAt: now - 180_000,
+      endedAt: now - 120_000,
+      outcome: { status: "ok" },
+      model: "openai/gpt-5.5",
+    });
+    addSubagentRunForTests({
+      runId: "run-moved-old",
+      childSessionKey: moved,
+      controllerSessionKey: root,
+      requesterSessionKey: root,
+      requesterDisplayKey: "main",
+      task: "moved old task",
+      cleanup: "keep",
+      createdAt: now - 40_000,
+      startedAt: now - 15_000,
+      model: "openai/gpt-5.5",
+    });
+    addSubagentRunForTests({
+      runId: "run-moved-latest",
+      childSessionKey: moved,
+      controllerSessionKey: movedController,
+      requesterSessionKey: movedController,
+      requesterDisplayKey: "moved controller",
+      task: "moved latest task",
+      cleanup: "keep",
+      createdAt: now - 1_000,
+      startedAt: now - 1_000,
+      model: "openai/gpt-5.5",
+    });
+
+    const rowContext = buildSessionListRowContext({ store, now });
+    const buildFallbackRow = (key: string) =>
+      buildGatewaySessionRow({
+        cfg,
+        storePath: "/tmp/sessions.json",
+        store,
+        key,
+        entry: store[key],
+        now,
+      });
+    const buildIndexedRow = (key: string) =>
+      buildGatewaySessionRow({
+        cfg,
+        storePath: "/tmp/sessions.json",
+        store,
+        key,
+        entry: store[key],
+        now,
+        storeChildSessionsByKey: rowContext.storeChildSessionsByKey,
+        rowContext,
+      });
+
+    for (const key of [root, active, staleParent, staleGrandchild, recentEnded, storeOnly, moved]) {
+      expect(buildIndexedRow(key)).toEqual(buildFallbackRow(key));
+    }
+    expect(buildIndexedRow(root).childSessions).toEqual([
+      active,
+      staleParent,
+      recentEnded,
+      storeOnly,
+    ]);
+    expect(buildIndexedRow(staleParent).childSessions).toEqual([staleGrandchild]);
+    expect(buildIndexedRow(moved).spawnedBy).toBe(movedController);
   });
 
   test("does not show stale registry-only subagent runs as actively running", () => {

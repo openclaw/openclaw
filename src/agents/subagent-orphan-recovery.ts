@@ -182,6 +182,7 @@ async function resumeOrphanedSession(params: {
  */
 export async function recoverOrphanedSubagentSessions(params: {
   getActiveRuns: () => Map<string, SubagentRunRecord>;
+  markActiveRunsMutated?: () => void;
   /** Persisted across retries so already-resumed sessions are not resumed again. */
   resumedSessionKeys?: Set<string>;
 }): Promise<{
@@ -237,6 +238,7 @@ export async function recoverOrphanedSubagentSessions(params: {
 
         if (isLegacyRestartInterruptedTimeout(runRecord, entry)) {
           reclassifyLegacyRestartInterruptedRun(runRecord);
+          params.markActiveRunsMutated?.();
         }
 
         // Terminal child outcomes are immutable. Restart resume only applies to
@@ -417,6 +419,7 @@ function buildRecoveryFailureMessage(params: { attempts: number; error?: string 
  */
 export function scheduleOrphanRecovery(params: {
   getActiveRuns: () => Map<string, SubagentRunRecord>;
+  markActiveRunsMutated?: () => void;
   delayMs?: number;
   maxRetries?: number;
 }): void {

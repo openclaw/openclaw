@@ -7,6 +7,7 @@ import {
   type SubagentRunReadIndex,
 } from "./subagent-registry-queries.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { STALE_UNENDED_SUBAGENT_RUN_MS } from "./subagent-run-liveness.js";
 
 function makeRun(overrides: Partial<SubagentRunRecord>): SubagentRunRecord {
   const runId = overrides.runId ?? "run-default";
@@ -200,6 +201,34 @@ describe("subagent registry read index", () => {
     const index = buildSubagentRunReadIndexFromRuns({ runs });
 
     expect(index.getDisplaySubagentRun(normalizedChildSessionKey)).toBe(run);
+  });
+
+  it("derives liveness from the supplied now instead of caching raw snapshot answers", () => {
+    const startedAt = Date.UTC(2025, 0, 1);
+    const root = "agent:main:main";
+    const child = "agent:main:subagent:time-sensitive";
+    const runs = toRunMap([
+      makeRun({
+        runId: "run-time-sensitive",
+        childSessionKey: child,
+        controllerSessionKey: root,
+        requesterSessionKey: root,
+        createdAt: startedAt,
+        startedAt,
+      }),
+    ]);
+
+    const freshIndex = buildSubagentRunReadIndexFromRuns({
+      runs,
+      now: startedAt + 60_000,
+    });
+    const staleIndex = buildSubagentRunReadIndexFromRuns({
+      runs,
+      now: startedAt + STALE_UNENDED_SUBAGENT_RUN_MS + 60_000,
+    });
+
+    expect(freshIndex.countActiveDescendantRuns(root)).toBe(1);
+    expect(staleIndex.countActiveDescendantRuns(root)).toBe(0);
   });
 
   it("keeps the display-row preference for in-memory records over persisted snapshots", () => {

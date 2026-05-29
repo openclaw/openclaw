@@ -43,7 +43,7 @@ import {
   safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
 import { createSubagentRegistryLifecycleController } from "./subagent-registry-lifecycle.js";
-import { subagentRuns } from "./subagent-registry-memory.js";
+import { bumpSubagentRegistryMemoryVersion, subagentRuns } from "./subagent-registry-memory.js";
 import {
   countActiveDescendantRunsFromRuns,
   countActiveRunsForSessionFromRuns,
@@ -262,10 +262,12 @@ async function resolveSubagentRegistryContextEngine(
 }
 
 function persistSubagentRuns() {
+  bumpSubagentRegistryMemoryVersion();
   subagentRegistryDeps.persistSubagentRunsToDisk(subagentRuns);
 }
 
 function persistSubagentRunsOrThrow() {
+  bumpSubagentRegistryMemoryVersion();
   subagentRegistryDeps.persistSubagentRunsToDiskOrThrow(subagentRuns);
 }
 
@@ -279,6 +281,7 @@ export function scheduleSubagentOrphanRecovery(params?: { delayMs?: number; maxR
     ({ scheduleOrphanRecovery }) => {
       scheduleOrphanRecovery({
         getActiveRuns: () => subagentRuns,
+        markActiveRunsMutated: bumpSubagentRegistryMemoryVersion,
         delayMs: params?.delayMs,
         maxRetries: params?.maxRetries,
       });
@@ -574,6 +577,7 @@ const subagentLifecycleController = createSubagentRegistryLifecycleController({
   runs: subagentRuns,
   resumedRuns,
   subagentAnnounceTimeoutMs: SUBAGENT_ANNOUNCE_TIMEOUT_MS,
+  markRunsMutated: bumpSubagentRegistryMemoryVersion,
   persist: persistSubagentRuns,
   clearPendingLifecycleError,
   countPendingDescendantRuns,

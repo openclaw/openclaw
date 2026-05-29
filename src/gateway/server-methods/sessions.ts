@@ -95,6 +95,7 @@ import { reactivateCompletedSubagentSession } from "../session-subagent-reactiva
 import {
   archiveFileOnDisk,
   buildGatewaySessionRow,
+  buildSessionListRowContext,
   listSessionsFromStoreAsync,
   loadCombinedSessionStoreForGateway,
   loadGatewaySessionRow,
@@ -1404,15 +1405,20 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       respond(true, { session: null }, undefined);
       return;
     }
+    const now = Date.now();
+    const rowContext = buildSessionListRowContext({ store, now });
     const row = buildGatewaySessionRow({
       cfg,
       storePath,
       store,
       key: target.canonicalKey,
       entry,
+      now,
       includeDerivedTitles: p.includeDerivedTitles,
       includeLastMessage: p.includeLastMessage,
       transcriptUsageMaxBytes: 64 * 1024,
+      storeChildSessionsByKey: rowContext.storeChildSessionsByKey,
+      rowContext,
     });
     respond(true, { session: row }, undefined);
   },

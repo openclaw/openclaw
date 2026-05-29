@@ -136,6 +136,7 @@ export function createSubagentRegistryLifecycleController(params: {
   runs: Map<string, SubagentRunRecord>;
   resumedRuns: Set<string>;
   subagentAnnounceTimeoutMs: number;
+  markRunsMutated(): void;
   persist(): void;
   clearPendingLifecycleError(runId: string): void;
   countPendingDescendantRuns(rootSessionKey: string): number;
@@ -1102,6 +1103,14 @@ export function createSubagentRegistryLifecycleController(params: {
     }
 
     let mutated = false;
+    let markedMutableSnapshotDirty = false;
+    const markMutableSnapshotDirty = () => {
+      if (!mutated || markedMutableSnapshotDirty) {
+        return;
+      }
+      params.markRunsMutated();
+      markedMutableSnapshotDirty = true;
+    };
     if (
       completeParams.reason === SUBAGENT_ENDED_REASON_COMPLETE &&
       entry.suppressAnnounceReason === "killed" &&
@@ -1189,6 +1198,7 @@ export function createSubagentRegistryLifecycleController(params: {
       mutated = true;
     }
 
+    markMutableSnapshotDirty();
     if (await freezeRunResultAtCompletion(entry, outcome)) {
       mutated = true;
     }

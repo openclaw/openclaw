@@ -425,7 +425,7 @@ function shouldKeepStoreOnlyChildLink(entry: SessionEntry, now: number): boolean
   );
 }
 
-type SessionListRowContext = {
+export type SessionListRowContext = {
   subagentRuns: ReturnType<typeof buildSubagentRunReadIndex>;
   storeChildSessionsByKey: Map<string, string[]>;
   selectedModelByOverrideRef: Map<string, ReturnType<typeof resolveSessionModelRef>>;
@@ -620,6 +620,7 @@ function resolveStoreChildSessionKeysFromCandidates(params: {
   key: string;
   now: number;
   candidates: ReadonlyMap<string, readonly string[]>;
+  subagentRuns?: SessionListRowContext["subagentRuns"];
 }): string[] | undefined {
   const childSessionKeys: string[] = [];
   for (const childKey of params.candidates.get(params.key) ?? []) {
@@ -627,7 +628,9 @@ function resolveStoreChildSessionKeysFromCandidates(params: {
     if (!entry) {
       continue;
     }
-    const latest = getSessionDisplaySubagentRunByChildSessionKey(childKey);
+    const latest = params.subagentRuns
+      ? params.subagentRuns.getDisplaySubagentRun(childKey)
+      : getSessionDisplaySubagentRunByChildSessionKey(childKey);
     if (latest) {
       const latestControllerSessionKey =
         normalizeOptionalString(latest.controllerSessionKey) ||
@@ -637,7 +640,9 @@ function resolveStoreChildSessionKeysFromCandidates(params: {
       }
       if (
         !shouldKeepSubagentRunChildLink(latest, {
-          activeDescendants: countActiveDescendantRuns(childKey),
+          activeDescendants: params.subagentRuns
+            ? params.subagentRuns.countActiveDescendantRuns(childKey)
+            : countActiveDescendantRuns(childKey),
           now: params.now,
         })
       ) {
@@ -654,14 +659,13 @@ function resolveStoreChildSessionKeysFromCandidates(params: {
   return childSessionKeys.length > 0 ? childSessionKeys : undefined;
 }
 
-function buildSessionListRowContext(params: {
-  store: Record<string, SessionEntry>;
-  now: number;
+function createSessionListRowContext(params: {
+  subagentRuns: SessionListRowContext["subagentRuns"];
+  storeChildSessionsByKey: Map<string, string[]>;
 }): SessionListRowContext {
-  const subagentRuns = buildSubagentRunReadIndex(params.now);
   return {
-    subagentRuns,
-    storeChildSessionsByKey: buildStoreChildSessionIndex(params.store, params.now, subagentRuns),
+    subagentRuns: params.subagentRuns,
+    storeChildSessionsByKey: params.storeChildSessionsByKey,
     selectedModelByOverrideRef: new Map(),
     thinkingMetadataByModelRef: new Map(),
     displayModelIdentityByKey: new Map(),
@@ -669,22 +673,78 @@ function buildSessionListRowContext(params: {
   };
 }
 
+export function buildSessionListRowContext(params: {
+  store: Record<string, SessionEntry>;
+  now: number;
+}): SessionListRowContext {
+  const subagentRuns = buildSubagentRunReadIndex(params.now);
+  return createSessionListRowContext({
+    subagentRuns,
+    storeChildSessionsByKey: buildStoreChildSessionIndex(params.store, params.now, subagentRuns),
+  });
+}
+
+const SINGLE_ROW_SUBAGENT_INDEX_CANDIDATE_THRESHOLD = 16;
+
+type SingleSessionRowContext = {
+  storeChildSessionsByKey: Map<string, string[]>;
+  rowContext?: SessionListRowContext;
+};
+
 function buildSingleRowStoreChildSessionsByKey(params: {
   store: Record<string, SessionEntry>;
-  storePath: string;
   key: string;
   now: number;
+  candidates: ReadonlyMap<string, readonly string[]>;
+  subagentRuns?: SessionListRowContext["subagentRuns"];
 }): Map<string, string[]> {
   const storeChildSessions = resolveStoreChildSessionKeysFromCandidates({
     store: params.store,
     key: params.key,
     now: params.now,
-    candidates: getSingleRowChildSessionCandidates({
-      storePath: params.storePath,
-      store: params.store,
-    }),
+    candidates: params.candidates,
+    subagentRuns: params.subagentRuns,
   });
   return storeChildSessions ? new Map([[params.key, storeChildSessions]]) : new Map();
+}
+
+function buildSingleSessionRowContext(params: {
+  store: Record<string, SessionEntry>;
+  storePath: string;
+  key: string;
+  now: number;
+}): SingleSessionRowContext {
+  const candidates = getSingleRowChildSessionCandidates({
+    storePath: params.storePath,
+    store: params.store,
+  });
+  const candidateCount = candidates.get(params.key)?.length ?? 0;
+  if (candidateCount < SINGLE_ROW_SUBAGENT_INDEX_CANDIDATE_THRESHOLD) {
+    return {
+      storeChildSessionsByKey: buildSingleRowStoreChildSessionsByKey({
+        store: params.store,
+        key: params.key,
+        now: params.now,
+        candidates,
+      }),
+    };
+  }
+
+  const subagentRuns = buildSubagentRunReadIndex(params.now);
+  const storeChildSessionsByKey = buildSingleRowStoreChildSessionsByKey({
+    store: params.store,
+    key: params.key,
+    now: params.now,
+    candidates,
+    subagentRuns,
+  });
+  return {
+    storeChildSessionsByKey,
+    rowContext: createSessionListRowContext({
+      subagentRuns,
+      storeChildSessionsByKey,
+    }),
+  };
 }
 
 function createSessionRowModelCacheKey(provider: string | undefined, model: string | undefined) {
@@ -2216,7 +2276,7 @@ export function loadGatewaySessionRow(
   if (!entry) {
     return null;
   }
-  const storeChildSessionsByKey = buildSingleRowStoreChildSessionsByKey({
+  const singleRowContext = buildSingleSessionRowContext({
     storePath,
     store,
     key: canonicalKey,
@@ -2232,7 +2292,8 @@ export function loadGatewaySessionRow(
     includeDerivedTitles: options?.includeDerivedTitles,
     includeLastMessage: options?.includeLastMessage,
     transcriptUsageMaxBytes: options?.transcriptUsageMaxBytes,
-    storeChildSessionsByKey,
+    storeChildSessionsByKey: singleRowContext.storeChildSessionsByKey,
+    rowContext: singleRowContext.rowContext,
     ...(options?.agentId ? { agentId: options.agentId } : {}),
   });
 }
@@ -2455,6 +2516,13 @@ function selectSessionEntries(params: {
   };
 }
 
+function sessionEntrySelectionNeedsRowContext(opts: SessionsListParams): boolean {
+  return (
+    Boolean(normalizeOptionalString(opts.spawnedBy)) ||
+    Boolean(normalizeOptionalString(opts.search))
+  );
+}
+
 export function filterAndSortSessionEntries(params: {
   cfg: OpenClawConfig;
   store: Record<string, SessionEntry>;
@@ -2462,7 +2530,12 @@ export function filterAndSortSessionEntries(params: {
   now: number;
   rowContext?: SessionListRowContext;
 }): [string, SessionEntry][] {
-  return selectSessionEntries(params).entries;
+  const rowContext =
+    params.rowContext ??
+    (sessionEntrySelectionNeedsRowContext(params.opts)
+      ? buildSessionListRowContext({ store: params.store, now: params.now })
+      : undefined);
+  return selectSessionEntries({ ...params, rowContext }).entries;
 }
 
 export function listSessionsFromStore(params: {
@@ -2483,17 +2556,13 @@ export function listSessionsFromStore(params: {
   };
   const includeDerivedTitles = opts.includeDerivedTitles === true;
   const includeLastMessage = opts.includeLastMessage === true;
-  const hasSpawnedByFilter = typeof opts.spawnedBy === "string" && opts.spawnedBy.length > 0;
 
   const selection = selectSessionEntries({
     cfg,
     store,
     opts,
     now,
-    rowContext:
-      hasSpawnedByFilter || Boolean(normalizeOptionalString(opts.search))
-        ? getRowContext()
-        : undefined,
+    rowContext: sessionEntrySelectionNeedsRowContext(opts) ? getRowContext() : undefined,
     defaultLimit: SESSIONS_LIST_DEFAULT_LIMIT,
   });
   const { entries, totalCount, limitApplied, offset, nextOffset, hasMore } = selection;
@@ -2563,17 +2632,13 @@ export async function listSessionsFromStoreAsync(params: {
   };
   const includeDerivedTitles = opts.includeDerivedTitles === true;
   const includeLastMessage = opts.includeLastMessage === true;
-  const hasSpawnedByFilter = typeof opts.spawnedBy === "string" && opts.spawnedBy.length > 0;
 
   const selection = selectSessionEntries({
     cfg,
     store,
     opts,
     now,
-    rowContext:
-      hasSpawnedByFilter || Boolean(normalizeOptionalString(opts.search))
-        ? getRowContext()
-        : undefined,
+    rowContext: sessionEntrySelectionNeedsRowContext(opts) ? getRowContext() : undefined,
     defaultLimit: SESSIONS_LIST_DEFAULT_LIMIT,
   });
   const { entries, totalCount, limitApplied, offset, nextOffset, hasMore } = selection;

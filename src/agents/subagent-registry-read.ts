@@ -8,7 +8,11 @@ import {
   listRunsForControllerFromRuns,
   type SubagentRunReadIndex,
 } from "./subagent-registry-queries.js";
-import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
+import {
+  getSubagentRegistryReadSnapshot,
+  getSubagentRunsSnapshotForRead,
+} from "./subagent-registry-state.js";
+import type { ReadonlySubagentRunRecord } from "./subagent-registry.store.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 export {
@@ -17,10 +21,13 @@ export {
   resolveSubagentSessionStatus,
 } from "./subagent-session-metrics.js";
 
-export function buildSubagentRunReadIndex(now = Date.now()): SubagentRunReadIndex {
+export function buildSubagentRunReadIndex(
+  now = Date.now(),
+): SubagentRunReadIndex<ReadonlySubagentRunRecord> {
+  const snapshot = getSubagentRegistryReadSnapshot();
   return buildSubagentRunReadIndexFromRuns({
-    runs: getSubagentRunsSnapshotForRead(subagentRuns),
-    inMemoryRuns: subagentRuns.values(),
+    runs: snapshot.runsById,
+    inMemoryRuns: snapshot.inMemoryRunsById.values(),
     now,
   });
 }

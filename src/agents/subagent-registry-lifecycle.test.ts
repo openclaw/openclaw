@@ -179,6 +179,7 @@ function createLifecycleController({
     runs,
     resumedRuns: new Set(),
     subagentAnnounceTimeoutMs: 1_000,
+    markRunsMutated: vi.fn(),
     persist: vi.fn(),
     clearPendingLifecycleError: vi.fn(),
     countPendingDescendantRuns: () => 0,
@@ -264,6 +265,45 @@ describe("subagent registry lifecycle hardening", () => {
     browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd.mockClear();
     bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey.mockClear();
     bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey.mockResolvedValue(true);
+  });
+
+  it("marks in-memory snapshots dirty before awaiting terminal reply capture", async () => {
+    const entry = createRunEntry();
+    const markRunsMutated = vi.fn();
+    const persist = vi.fn();
+    let resolveCapture!: (value: string) => void;
+    const captureStarted = vi.fn();
+    const captureSubagentCompletionReply = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveCapture = resolve;
+          captureStarted();
+        }),
+    );
+    const controller = createLifecycleController({
+      entry,
+      markRunsMutated,
+      persist,
+      captureSubagentCompletionReply,
+    });
+
+    const completion = controller.completeSubagentRun({
+      runId: entry.runId,
+      endedAt: 4_000,
+      outcome: { status: "ok" },
+      reason: SUBAGENT_ENDED_REASON_COMPLETE,
+      triggerCleanup: false,
+    });
+
+    await vi.waitFor(() => expect(captureStarted).toHaveBeenCalledTimes(1));
+    expect(entry.endedAt).toBe(4_000);
+    expect(markRunsMutated).toHaveBeenCalledTimes(1);
+    expect(persist).not.toHaveBeenCalled();
+
+    resolveCapture("final completion reply");
+    await completion;
+
+    expect(persist).toHaveBeenCalledTimes(1);
   });
 
   it("does not reject completion when task finalization throws", async () => {

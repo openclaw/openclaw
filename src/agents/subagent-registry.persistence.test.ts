@@ -12,11 +12,17 @@ import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { captureEnv, withEnv } from "../test-utils/env.js";
 import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
-import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
+import { buildSubagentRunReadIndexFromRuns } from "./subagent-registry-queries.js";
+import {
+  getSubagentRegistryReadSnapshot,
+  getSubagentRunsSnapshotForRead,
+} from "./subagent-registry-state.js";
 import {
   testing,
   addSubagentRunForTests,
   clearSubagentRunSteerRestart,
+  markSubagentRunForSteerRestart,
+  releaseSubagentRun,
   getLatestSubagentRunByChildSessionKey,
   getSubagentRunByChildSessionKey,
   initSubagentRegistry,
@@ -443,6 +449,251 @@ describe("subagent registry persistence", () => {
       } else {
         process.env.OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_DISK = previousFlag;
       }
+    }
+  });
+
+
+  it("reuses immutable read snapshots while preserving mutable compatibility clones", async () => {
+    await writePersistedRegistry(
+      {
+        version: 2,
+        runs: {
+          "run-readonly": {
+            runId: "run-readonly",
+            childSessionKey: "agent:main:subagent:readonly",
+            requesterSessionKey: "agent:main:main",
+            requesterOrigin: { channel: "telegram", accountId: "readonly-account" },
+            requesterDisplayKey: "main",
+            task: "readonly persisted run",
+            cleanup: "keep",
+            createdAt: 1,
+            startedAt: 1,
+            outcome: { status: "ok" },
+            delivery: { status: "pending", attemptCount: 1 },
+          },
+        },
+      },
+      { seedChildSessions: false },
+    );
+
+    const first = withEnv({ OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_DISK: "1" }, () =>
+      getSubagentRegistryReadSnapshot(),
+    );
+    const second = withEnv({ OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_DISK: "1" }, () =>
+      getSubagentRegistryReadSnapshot(),
+    );
+    const readonlyEntry = first.runsById.get("run-readonly");
+    if (!readonlyEntry) {
+      throw new Error("expected readonly run");
+    }
+
+    expect(second).toBe(first);
+    expect(second.runsById.get("run-readonly")).toBe(readonlyEntry);
+    expect(Object.isFrozen(readonlyEntry)).toBe(true);
+    expect(Object.isFrozen(readonlyEntry.requesterOrigin)).toBe(true);
+    expect(Object.isFrozen(readonlyEntry.outcome)).toBe(true);
+    expect(Object.isFrozen(readonlyEntry.delivery)).toBe(true);
+    expect(() => {
+      (readonlyEntry as SubagentRunRecord).endedAt = 999;
+    }).toThrow(TypeError);
+    expect(() => {
+      (readonlyEntry.requesterOrigin as { accountId?: string }).accountId = "mutated";
+    }).toThrow(TypeError);
+
+    const mutable = loadSubagentRegistryFromDisk();
+    const mutableEntry = mutable.get("run-readonly");
+    if (!mutableEntry?.requesterOrigin || !mutableEntry.outcome) {
+      throw new Error("expected mutable run");
+    }
+    mutableEntry.requesterOrigin.accountId = "mutated-account";
+    mutableEntry.outcome.status = "error";
+    mutableEntry.delivery = { status: "failed", lastError: "mutated" };
+
+    const third = withEnv({ OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_DISK: "1" }, () =>
+      getSubagentRegistryReadSnapshot(),
+    );
+    expect(third).toBe(first);
+    expect(third.runsById.get("run-readonly")?.requesterOrigin?.accountId).toBe("readonly-account");
+    expect(third.runsById.get("run-readonly")?.outcome?.status).toBe("ok");
+    expect(third.runsById.get("run-readonly")?.delivery?.status).toBe("pending");
+
+    const compatibilityAgain = loadSubagentRegistryFromDisk();
+    expect(compatibilityAgain).not.toBe(mutable);
+    expect(compatibilityAgain.get("run-readonly")).not.toBe(mutableEntry);
+    expect(compatibilityAgain.get("run-readonly")?.requesterOrigin?.accountId).toBe(
+      "readonly-account",
+    );
+  });
+
+  it("invalidates immutable read snapshots when the persisted registry signature changes", async () => {
+    const registryPath = await writePersistedRegistry(
+      {
+        version: 2,
+        runs: {
+          "run-before-signature-change": {
+            runId: "run-before-signature-change",
+            childSessionKey: "agent:main:subagent:before-signature-change",
+            requesterSessionKey: "agent:main:main",
+            requesterDisplayKey: "main",
+            task: "before signature change",
+            cleanup: "keep",
+            createdAt: 1,
+            startedAt: 1,
+          },
+        },
+      },
+      { seedChildSessions: false },
+    );
+
+    const before = withEnv({ OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_DISK: "1" }, () =>
+      getSubagentRegistryReadSnapshot(),
+    );
+
+    await fs.writeFile(
+      registryPath,
+      `${JSON.stringify({
+        version: 2,
+        runs: {
+          "run-after-signature-change": {
+            runId: "run-after-signature-change",
+            childSessionKey: "agent:main:subagent:after-signature-change",
+            requesterSessionKey: "agent:main:main",
+            requesterDisplayKey: "main",
+            task: "after signature change with longer payload",
+            cleanup: "keep",
+            createdAt: 2,
+            startedAt: 2,
+          },
+        },
+      })}\n`,
+      "utf8",
+    );
+
+    const after = withEnv({ OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_DISK: "1" }, () =>
+      getSubagentRegistryReadSnapshot(),
+    );
+
+    expect(after).not.toBe(before);
+    expect(after.diskSignature).not.toBe(before.diskSignature);
+    expect(after.runsById.has("run-before-signature-change")).toBe(false);
+    expect(after.runsById.has("run-after-signature-change")).toBe(true);
+  });
+
+  it("falls back to memory-only immutable snapshots when persisted registry reads fail", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+    await fs.writeFile(path.join(tempStateDir, "subagents"), "not a directory", "utf8");
+    resetSubagentRegistryForTests({ persist: false });
+    addSubagentRunForTests({
+      runId: "run-memory-fallback",
+      childSessionKey: "agent:main:subagent:memory-fallback",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "memory fallback run",
+      cleanup: "keep",
+      createdAt: 1,
+      startedAt: 1,
+    });
+
+    const snapshot = withEnv({ OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_DISK: "1" }, () =>
+      getSubagentRegistryReadSnapshot(),
+    );
+
+    expect(snapshot.diskSignature).toBeNull();
+    expect(snapshot.runsById.get("run-memory-fallback")?.task).toBe("memory fallback run");
+  });
+
+  it("invalidates immutable read snapshots on in-memory add update and delete", () => {
+    resetSubagentRegistryForTests({ persist: false });
+    const empty = getSubagentRegistryReadSnapshot();
+
+    addSubagentRunForTests({
+      runId: "run-memory-versioned",
+      childSessionKey: "agent:main:subagent:memory-versioned",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "memory versioned run",
+      cleanup: "keep",
+      createdAt: 1,
+      startedAt: 1,
+      delivery: { status: "pending", attemptCount: 0 },
+    });
+
+    const afterAdd = getSubagentRegistryReadSnapshot();
+    expect(afterAdd).not.toBe(empty);
+    expect(afterAdd.runsById.get("run-memory-versioned")?.task).toBe("memory versioned run");
+    expect(getSubagentRegistryReadSnapshot()).toBe(afterAdd);
+
+    expect(markSubagentRunForSteerRestart("run-memory-versioned")).toBe(true);
+    const afterUpdate = getSubagentRegistryReadSnapshot();
+    expect(afterUpdate).not.toBe(afterAdd);
+    expect(afterUpdate.runsById.get("run-memory-versioned")?.suppressAnnounceReason).toBe(
+      "steer-restart",
+    );
+
+    releaseSubagentRun("run-memory-versioned");
+    const afterDelete = getSubagentRegistryReadSnapshot();
+    expect(afterDelete).not.toBe(afterUpdate);
+    expect(afterDelete.runsById.has("run-memory-versioned")).toBe(false);
+  });
+
+  it("builds row-like read indexes from immutable snapshots without repeated clone work", async () => {
+    await writePersistedRegistry(
+      {
+        version: 2,
+        runs: Object.fromEntries(
+          Array.from({ length: 12 }, (_, index) => {
+            const runId = `run-row-like-${index}`;
+            const childSessionKey = `agent:main:subagent:row-like-${index}`;
+            const requesterSessionKey =
+              index === 0 ? "agent:main:main" : `agent:main:subagent:row-like-${index - 1}`;
+            return [
+              runId,
+              {
+                runId,
+                childSessionKey,
+                controllerSessionKey: requesterSessionKey,
+                requesterSessionKey,
+                requesterDisplayKey: requesterSessionKey,
+                task: `row-like ${index}`,
+                cleanup: "keep",
+                createdAt: Date.UTC(2025, 0, 1) + index,
+                startedAt: Date.UTC(2025, 0, 1) + index,
+              },
+            ];
+          }),
+        ),
+      },
+      { seedChildSessions: false },
+    );
+
+    const originalStructuredClone = globalThis.structuredClone;
+    const cloneSpy = vi
+      .spyOn(globalThis, "structuredClone")
+      .mockImplementation((value: unknown, options?: StructuredSerializeOptions) =>
+        originalStructuredClone(value, options),
+      );
+    try {
+      const first = withEnv({ OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_DISK: "1" }, () =>
+        getSubagentRegistryReadSnapshot(),
+      );
+      cloneSpy.mockClear();
+
+      for (let index = 0; index < 20; index += 1) {
+        const snapshot = withEnv({ OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_DISK: "1" }, () =>
+          getSubagentRegistryReadSnapshot(),
+        );
+        expect(snapshot).toBe(first);
+        const readIndex = buildSubagentRunReadIndexFromRuns({
+          runs: snapshot.runsById,
+          now: Date.UTC(2025, 0, 1) + 60_000,
+        });
+        expect(readIndex.countActiveDescendantRuns("agent:main:main")).toBeGreaterThan(0);
+      }
+
+      expect(cloneSpy).not.toHaveBeenCalled();
+    } finally {
+      cloneSpy.mockRestore();
     }
   });
 
