@@ -227,6 +227,7 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       codexTurnCompletionIdleTimeoutAttempt({
         timedOut: true,
+        didSendViaMessagingTool: true,
         replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
         promptTimeoutOutcome: {
           message:

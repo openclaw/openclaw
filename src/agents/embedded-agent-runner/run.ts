@@ -2982,7 +2982,7 @@ export async function runEmbeddedAgent(
           if (
             timedOutDuringPrompt &&
             !hasSuccessfulFinalAssistantAfterPromptTimeout &&
-            !hasMessagingToolDeliveryEvidence(attempt)
+            (shouldSurfaceCodexCompletionTimeout || !hasMessagingToolDeliveryEvidence(attempt))
           ) {
             const defaultTimeoutText = idleTimedOut
               ? "The model did not produce a response before the model idle timeout. " +
