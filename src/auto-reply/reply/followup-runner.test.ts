@@ -880,6 +880,10 @@ describe("createFollowupRunner runtime config", () => {
     await runner(
       createQueuedRun({
         originatingChannel: "telegram",
+        originatingTo: "telegram:-100123:topic:42",
+        originatingThreadId: "42",
+        originatingReplyToId: "reply-42",
+        messageId: "queued-message-1",
         run: {
           config: runtimeConfig,
           sessionId: "session-cli-followup",
@@ -887,6 +891,11 @@ describe("createFollowupRunner runtime config", () => {
           model: "claude-opus-4-7",
           messageProvider: "telegram",
           cwd: "/tmp/task-repo",
+          inputProvenance: {
+            kind: "internal_system",
+            sourceChannel: "telegram",
+            sourceTool: "restart-sentinel",
+          },
         },
       }),
     );
@@ -899,6 +908,9 @@ describe("createFollowupRunner runtime config", () => {
     expect(call.config).toBe(runtimeConfig);
     expect(call.cliSessionId).toBe("cli-session-1");
     expect(call.messageChannel).toBe("telegram");
+    expect(call.currentChannelId).toBe("telegram:-100123:topic:42");
+    expect(call.currentThreadTs).toBe("42");
+    expect(call.currentMessageId).toBe("reply-42");
     expect(call).toMatchObject({
       sessionId: "session-cli-followup",
       sessionKey: "main",
