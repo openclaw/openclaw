@@ -1,7 +1,12 @@
 // Control UI controller manages config gateway state.
 import { applyMergePatch } from "../../../../src/config/merge-patch.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
-import type { ConfigSchemaResponse, ConfigSnapshot, ConfigUiHints } from "../types.ts";
+import type {
+  ConfigSchemaResponse,
+  ConfigSnapshot,
+  ConfigUiHints,
+  UpdateAvailable,
+} from "../types.ts";
 import type { JsonSchema } from "../views/config-form.shared.ts";
 import { coerceFormValues } from "./config/form-coerce.ts";
 import {
@@ -42,6 +47,7 @@ export type ConfigState = {
   updateStatusBanner: { tone: "danger" | "warn" | "info"; text: string } | null;
   lastError: string | null;
   chatError?: string | null;
+  updateAvailable?: UpdateAvailable | null;
 };
 
 const autoAllowlistedPluginIdsByState = new WeakMap<ConfigState, Set<string>>();
@@ -292,19 +298,20 @@ export async function runUpdate(state: ConfigState) {
       sessionKey: state.applySessionKey,
     });
     const status = res.result?.status ?? (res.ok === true ? "ok" : "error");
-<<<<<<< HEAD
     const handoffStarted =
       res.ok === true &&
       status === "skipped" &&
       res.result?.reason === UPDATE_HANDOFF_STARTED_REASON &&
       res.handoff?.status === "started";
     if (handoffStarted) {
-      state.pendingUpdateExpectedVersion = res.result?.after?.version ?? null;
+      state.pendingUpdateExpectedVersion =
+        res.result?.after?.version ?? state.updateAvailable?.latestVersion ?? null;
       state.pendingUpdateHandoff = true;
       return;
     }
     if (status === "ok" && res.ok === true) {
-      state.pendingUpdateExpectedVersion = res.result?.after?.version ?? null;
+      state.pendingUpdateExpectedVersion =
+        res.result?.after?.version ?? state.updateAvailable?.latestVersion ?? null;
       state.pendingUpdateHandoff = false;
       return;
     }
