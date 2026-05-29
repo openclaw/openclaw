@@ -223,4 +223,42 @@ describe("createMediaGenerationTaskLifecycle", () => {
       }),
     ).resolves.toBe(true);
   });
+
+  it("treats terminal generated-media fallback failure as handled", async () => {
+    subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValueOnce({
+      delivered: false,
+      path: "direct",
+      terminal: true,
+      error: "generated media direct delivery failed after partial upload",
+    });
+    const lifecycle = createMediaGenerationTaskLifecycle({
+      toolName: "image_generate",
+      taskKind: "image_generation",
+      label: "Image generation",
+      queuedProgressSummary: "Queued image generation",
+      generatedLabel: "image",
+      failureProgressSummary: "Image generation failed",
+      eventSource: "image_generation",
+      announceType: "image generation task",
+      completionLabel: "image",
+    });
+
+    await expect(
+      lifecycle.wakeTaskCompletion({
+        handle: {
+          taskId: "task-image-terminal",
+          runId: "tool:image_generate:terminal",
+          requesterSessionKey: "agent:main:discord:channel:123",
+          taskLabel: "proof image",
+          requesterOrigin: {
+            channel: "discord",
+            to: "channel:123",
+          },
+        },
+        status: "ok",
+        statusLabel: "completed successfully",
+        result: "generated",
+      }),
+    ).resolves.toBe(true);
+  });
 });

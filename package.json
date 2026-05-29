@@ -545,6 +545,10 @@
       "types": "./dist/plugin-sdk/secret-ref-runtime.d.ts",
       "default": "./dist/plugin-sdk/secret-ref-runtime.js"
     },
+    "./plugin-sdk/secret-provider-integration": {
+      "types": "./dist/plugin-sdk/secret-provider-integration.d.ts",
+      "default": "./dist/plugin-sdk/secret-provider-integration.js"
+    },
     "./plugin-sdk/secret-file-runtime": {
       "types": "./dist/plugin-sdk/secret-file-runtime.d.ts",
       "default": "./dist/plugin-sdk/secret-file-runtime.js"

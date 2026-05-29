@@ -23,6 +23,13 @@ vi.mock("./client.js", () => ({
   },
 }));
 
+vi.mock("./client-start-readiness.js", () => ({
+  startGatewayClientWhenEventLoopReady: async (client: { start: () => void }) => {
+    client.start();
+    return { ready: true, aborted: false, elapsedMs: 0, maxDriftMs: 0, checks: 0 };
+  },
+}));
+
 describe("gateway cli backend live helpers", () => {
   let liveHelpers: typeof import("./gateway-cli-backend.live-helpers.js");
 
