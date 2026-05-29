@@ -59,7 +59,7 @@ if ! docker_e2e_run_with_harness \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'; then
-set -euo pipefail
+set -Eeuo pipefail
 
 source scripts/lib/openclaw-e2e-instance.sh
 openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}"
@@ -178,12 +178,18 @@ else
 fi
 
 echo "Running local agent turn against mocked OpenAI..."
-openclaw agent --local \
+if openclaw agent --local \
   --agent main \
   --session-id npm-onboard-channel-agent \
   --message "Return the success marker from the test server." \
   --thinking off \
-  --json >/tmp/openclaw-agent.combined 2>&1
+  --json >/tmp/openclaw-agent.combined 2>&1; then
+  :
+else
+  status=$?
+  dump_debug_logs "$status"
+  exit "$status"
+fi
 
 node scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs assert-agent-turn "$SUCCESS_MARKER" "$MOCK_REQUEST_LOG"
 
