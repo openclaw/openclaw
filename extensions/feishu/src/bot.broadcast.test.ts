@@ -109,6 +109,7 @@ describe("broadcast dispatch", () => {
           mockWithReplyDispatcher as unknown as PluginRuntime["channel"]["reply"]["withReplyDispatcher"],
       },
       commands: {
+        isControlCommandMessage: vi.fn(() => false),
         shouldComputeCommandAuthorized: mockShouldComputeCommandAuthorized,
         resolveCommandAuthorizedFromAuthorizers: vi.fn(() => false),
       },

@@ -2,6 +2,7 @@ import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-w
 import {
   buildChannelInboundEventContext,
   toInboundMediaFacts,
+  type CommandTurnContext,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveAgentOutboundIdentity } from "openclaw/plugin-sdk/channel-outbound";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
@@ -961,6 +962,10 @@ export async function handleFeishuMessage(params: {
       audioTranscript === undefined
         ? shouldComputeCommandAuthorized
         : core.channel.commands.shouldComputeCommandAuthorized(effectiveCommandProbeBody, cfg);
+    const isTextSlashCommandTurn = core.channel.commands.isControlCommandMessage(
+      effectiveCommandProbeBody,
+      cfg,
+    );
     const commandAuthorized = shouldComputeEffectiveCommandAuthorized
       ? isDirect && audioTranscript === undefined && dmIngress
         ? dmIngress.commandAccess.authorized
@@ -993,6 +998,19 @@ export async function handleFeishuMessage(params: {
               })
             ).commandAccess.authorized
       : undefined;
+    const commandTurn: CommandTurnContext = isTextSlashCommandTurn
+      ? {
+          kind: "text-slash",
+          source: "text",
+          authorized: Boolean(commandAuthorized),
+          body: effectiveCommandProbeBody,
+        }
+      : {
+          kind: "normal",
+          source: "message",
+          authorized: false,
+          body: agentFacingContent,
+        };
 
     // Fetch quoted/replied message content if parentId exists
     let quotedMessageInfo: Awaited<ReturnType<typeof getMessageFeishu>> = null;
@@ -1277,12 +1295,14 @@ export async function handleFeishuMessage(params: {
       return buildChannelInboundEventContext({
         channel: "feishu",
         finalize: core.channel.reply.finalizeInboundContext,
+        contextVisibility: contextVisibilityMode,
         supplemental: {
           quote: quotedContent ? { id: ctx.parentId, body: quotedContent } : undefined,
           thread: {
             starterBody: threadContext.threadStarterBody,
             historyBody: threadContext.threadHistoryBody,
             label: threadContext.threadLabel,
+            senderAllowed: true,
           },
           groupSystemPrompt: isGroup
             ? normalizeOptionalString(groupConfig?.systemPrompt)
@@ -1328,6 +1348,7 @@ export async function handleFeishuMessage(params: {
             authorized: commandAuthorized,
           },
         },
+        commandTurn,
         extra: {
           RootMessageId: ctx.rootId,
           Transcript: audioTranscript,

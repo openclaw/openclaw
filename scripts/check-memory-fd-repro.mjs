@@ -5,7 +5,7 @@ import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import process from "node:process";
+import process, { kill as signalProcess } from "node:process";
 import { pathToFileURL } from "node:url";
 
 const ISSUE_FILE_COUNTS = [
@@ -321,6 +321,14 @@ function findGatewayPid(port) {
   return Number.isFinite(pid) && pid > 0 ? pid : null;
 }
 
+function signalPid(pid, signal) {
+  if (!Number.isFinite(pid) || pid <= 0) {
+    return false;
+  }
+  signalProcess(pid, signal);
+  return true;
+}
+
 function sampleFds({ label, pid, workspaceRealPath }) {
   const output = runLsofForPid(pid);
   const workspacePrefix = `${workspaceRealPath}${path.sep}`;
@@ -396,7 +404,7 @@ export async function stopGateway({ child, port }) {
     child,
     port,
     findGatewayPidFn: findGatewayPid,
-    killProcess: (pid, signal) => process.kill(pid, signal),
+    killProcess: signalPid,
   });
 }
 

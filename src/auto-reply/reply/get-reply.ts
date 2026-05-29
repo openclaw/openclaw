@@ -41,7 +41,7 @@ import {
   shouldUseReplyFastTestRuntime,
 } from "./get-reply-fast-path.js";
 import { handleInlineActions } from "./get-reply-inline-actions.js";
-import { maybeResolveNativeSlashCommandFastReply } from "./get-reply-native-slash-fast-path.js";
+import { maybeResolveSlashCommandFastReply } from "./get-reply-native-slash-fast-path.js";
 import { runPreparedReply } from "./get-reply-run.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import { hasInboundMedia } from "./inbound-media.js";
@@ -380,30 +380,28 @@ export async function getReplyFromConfig(
     return controller;
   });
 
-  const nativeSlashCommandFastReply = await traceGetReplyPhase(
-    "reply.native_slash_command_fast_path",
-    () =>
-      maybeResolveNativeSlashCommandFastReply({
-        ctx: finalized,
-        cfg,
-        agentId,
-        agentDir,
-        agentCfg,
-        commandAuthorized: finalized.CommandAuthorized,
-        defaultProvider,
-        defaultModel,
-        aliasIndex,
-        provider,
-        model,
-        workspaceDir: workspaceDirForNativeCommand,
-        typing,
-        opts: resolvedOpts,
-        skillFilter: mergedSkillFilter,
-      }),
+  const slashCommandFastReply = await traceGetReplyPhase("reply.slash_command_fast_path", () =>
+    maybeResolveSlashCommandFastReply({
+      ctx: finalized,
+      cfg,
+      agentId,
+      agentDir,
+      agentCfg,
+      commandAuthorized: finalized.CommandAuthorized,
+      defaultProvider,
+      defaultModel,
+      aliasIndex,
+      provider,
+      model,
+      workspaceDir: workspaceDirForNativeCommand,
+      typing,
+      opts: resolvedOpts,
+      skillFilter: mergedSkillFilter,
+    }),
   );
-  if (nativeSlashCommandFastReply.handled) {
-    logResolverTiming("completed", "native_slash_command_fast_path");
-    return nativeSlashCommandFastReply.reply;
+  if (slashCommandFastReply.handled) {
+    logResolverTiming("completed", "slash_command_fast_path");
+    return slashCommandFastReply.reply;
   }
 
   const workspace = await traceGetReplyPhase("reply.ensure_workspace", async () =>

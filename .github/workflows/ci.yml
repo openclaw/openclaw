@@ -1266,6 +1266,7 @@ jobs:
 
       - name: Run check shard
         env:
+          NODE_OPTIONS: --max-old-space-size=8192
           OPENCLAW_LOCAL_CHECK: "0"
           TASK: ${{ matrix.task }}
         shell: bash

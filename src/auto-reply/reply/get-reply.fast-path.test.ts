@@ -4,6 +4,11 @@ import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import {
   buildFastReplyCommandContext,
   initFastReplySessionState,
@@ -61,6 +66,7 @@ let resolveDefaultModelMock: typeof import("./directive-handling.defaults.js").r
 let resolveModelRefFromStringMock: typeof import("../../agents/model-selection.js").resolveModelRefFromString;
 let loadConfigMock: typeof import("../../config/config.js").getRuntimeConfig;
 let runPreparedReplyMock: typeof import("./get-reply-run.js").runPreparedReply;
+let resolveCommandAuthorizationMock: typeof import("../command-auth.js").resolveCommandAuthorization;
 
 async function loadGetReplyRuntimeForTest() {
   ({ getReplyFromConfig } = await loadGetReplyModuleForTest({ cacheKey: import.meta.url }));
@@ -70,6 +76,8 @@ async function loadGetReplyRuntimeForTest() {
     await import("../../agents/model-selection.js"));
   ({ getRuntimeConfig: loadConfigMock } = await import("../../config/config.js"));
   ({ runPreparedReply: runPreparedReplyMock } = await import("./get-reply-run.js"));
+  ({ resolveCommandAuthorization: resolveCommandAuthorizationMock } =
+    await import("../command-auth.js"));
 }
 
 function requirePreparedReplyParams() {
@@ -115,6 +123,12 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     mocks.ensureAgentWorkspace.mockReset();
     mocks.initSessionState.mockReset();
     mocks.loadModelCatalog.mockReset();
+    vi.mocked(resolveCommandAuthorizationMock).mockReset();
+    vi.mocked(resolveCommandAuthorizationMock).mockReturnValue({
+      ownerList: [],
+      senderIsOwner: false,
+      isAuthorizedSender: true,
+    });
     mocks.loadModelCatalog.mockResolvedValue([
       {
         provider: "openai",
@@ -480,6 +494,354 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(mocks.initSessionState).not.toHaveBeenCalled();
     expect(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
     expect(vi.mocked(runPreparedReplyMock)).not.toHaveBeenCalled();
+  });
+
+  it("handles authorized text /status before workspace bootstrap", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-text-status-fast-"));
+    const sessionKey = "agent:yuantai:main";
+    const cfg = markCompleteReplyConfig({
+      agents: {
+        defaults: {
+          workspace: path.join(home, "workspace"),
+        },
+        list: [
+          {
+            id: "yuantai",
+            model: "openai/gpt-5.5",
+          },
+        ],
+      },
+      commands: { text: true },
+      channels: { feishu: { allowFrom: ["ou_cf8baf418e22be1d45ca358d3c57463c"] } },
+      session: { store: path.join(home, "sessions.json") },
+    } as OpenClawConfig);
+    vi.mocked(resolveDefaultModelMock).mockReturnValueOnce({
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+      aliasIndex: emptyAliasIndex(),
+    });
+
+    const reply = await getReplyFromConfig(
+      buildGetReplyCtx({
+        Provider: "feishu",
+        Surface: "feishu",
+        AccountId: "feishu2",
+        Body: "/status",
+        BodyForAgent: "/status",
+        RawBody: "/status",
+        CommandBody: "/status",
+        BodyForCommands: "/status",
+        CommandSource: "text",
+        CommandAuthorized: true,
+        SessionKey: sessionKey,
+        From: "feishu:ou_cf8baf418e22be1d45ca358d3c57463c",
+        To: "user:ou_cf8baf418e22be1d45ca358d3c57463c",
+      }),
+      undefined,
+      cfg,
+    );
+
+    if (!reply || Array.isArray(reply) || typeof reply.text !== "string") {
+      throw new Error("expected status reply text");
+    }
+    expect(reply.text).toContain("OpenClaw");
+    expect(reply.text).toContain("Model: openai/gpt-5.5");
+    expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
+    expect(mocks.initSessionState).not.toHaveBeenCalled();
+    expect(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
+    expect(vi.mocked(runPreparedReplyMock)).not.toHaveBeenCalled();
+  });
+
+  it("handles structured text command turns before workspace bootstrap", async () => {
+    const home = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-text-command-turn-status-fast-"),
+    );
+    const sessionKey = "agent:yuantai:main";
+    const cfg = markCompleteReplyConfig({
+      agents: {
+        defaults: {
+          workspace: path.join(home, "workspace"),
+        },
+        list: [
+          {
+            id: "yuantai",
+            model: "openai/gpt-5.5",
+          },
+        ],
+      },
+      commands: { text: true },
+      session: { store: path.join(home, "sessions.json") },
+    } as OpenClawConfig);
+    vi.mocked(resolveDefaultModelMock).mockReturnValueOnce({
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+      aliasIndex: emptyAliasIndex(),
+    });
+
+    const reply = await getReplyFromConfig(
+      buildGetReplyCtx({
+        Provider: "feishu",
+        Surface: "feishu",
+        Body: "@bot /status",
+        BodyForAgent: "@bot /status",
+        RawBody: "@bot /status",
+        CommandBody: "@bot /status",
+        BodyForCommands: "@bot /status",
+        CommandAuthorized: true,
+        CommandTurn: {
+          kind: "text-slash",
+          source: "text",
+          authorized: true,
+          body: "/status",
+        },
+        SessionKey: sessionKey,
+      }),
+      undefined,
+      cfg,
+    );
+
+    if (!reply || Array.isArray(reply) || typeof reply.text !== "string") {
+      throw new Error("expected status reply text");
+    }
+    expect(reply.text).toContain("OpenClaw");
+    expect(reply.text).toContain("Model: openai/gpt-5.5");
+    expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
+    expect(mocks.initSessionState).not.toHaveBeenCalled();
+    expect(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
+    expect(vi.mocked(runPreparedReplyMock)).not.toHaveBeenCalled();
+  });
+
+  it("handles authorized text local directives before workspace bootstrap", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-text-directive-fast-"));
+    const sessionKey = "agent:yuantai:main";
+    const cfg = markCompleteReplyConfig({
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.5",
+          workspace: path.join(home, "workspace"),
+        },
+      },
+      commands: { text: true },
+      session: { store: path.join(home, "sessions.json") },
+    } as OpenClawConfig);
+    mocks.resolveReplyDirectives.mockResolvedValueOnce({
+      kind: "reply",
+      reply: { text: "Thinking level set to medium." },
+    });
+
+    await expect(
+      getReplyFromConfig(
+        buildGetReplyCtx({
+          Provider: "feishu",
+          Surface: "feishu",
+          Body: "/thinking medium",
+          BodyForAgent: "/thinking medium",
+          RawBody: "/thinking medium",
+          CommandBody: "/thinking medium",
+          BodyForCommands: "/thinking medium",
+          CommandSource: "text",
+          CommandAuthorized: true,
+          SessionKey: sessionKey,
+        }),
+        undefined,
+        cfg,
+      ),
+    ).resolves.toEqual({ text: "Thinking level set to medium." });
+
+    expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
+    expect(mocks.initSessionState).not.toHaveBeenCalled();
+    expect(mocks.resolveReplyDirectives).toHaveBeenCalledOnce();
+    expect(vi.mocked(runPreparedReplyMock)).not.toHaveBeenCalled();
+    const directiveParams = requireDirectiveParams();
+    expect(directiveParams.sessionKey).toBe(sessionKey);
+    expect(directiveParams.workspaceDir).toBe("/tmp/workspace");
+    const directiveCall = mocks.resolveReplyDirectives.mock.calls[0]?.[0] as
+      | { triggerBodyNormalized?: string }
+      | undefined;
+    expect(directiveCall?.triggerBodyNormalized).toBe("/think medium");
+  });
+
+  it("handles authorized text local command handlers before workspace bootstrap", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-text-whoami-fast-"));
+    const cfg = markCompleteReplyConfig({
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.5",
+          workspace: path.join(home, "workspace"),
+        },
+      },
+      commands: { text: true },
+      session: { store: path.join(home, "sessions.json") },
+    } as OpenClawConfig);
+    vi.mocked(resolveCommandAuthorizationMock).mockReturnValueOnce({
+      ownerList: [],
+      senderIsOwner: false,
+      isAuthorizedSender: true,
+      senderId: "ou_test_sender",
+    });
+
+    const reply = await getReplyFromConfig(
+      buildGetReplyCtx({
+        Provider: "feishu",
+        Surface: "feishu",
+        Body: "/id",
+        BodyForAgent: "/id",
+        RawBody: "/id",
+        CommandBody: "/id",
+        BodyForCommands: "/id",
+        CommandSource: "text",
+        CommandAuthorized: true,
+        SenderId: "ou_test_sender",
+        SessionKey: "agent:yuantai:main",
+      }),
+      undefined,
+      cfg,
+    );
+
+    if (!reply || Array.isArray(reply) || typeof reply.text !== "string") {
+      throw new Error("expected whoami reply text");
+    }
+    expect(reply.text).toContain("Identity");
+    expect(reply.text).toContain("Channel: feishu");
+    expect(reply.text).toContain("User id: ou_test_sender");
+    expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
+    expect(mocks.initSessionState).not.toHaveBeenCalled();
+    expect(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
+    expect(vi.mocked(runPreparedReplyMock)).not.toHaveBeenCalled();
+  });
+
+  it("does not fast-path text directives with trailing prompt text", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-text-directive-prompt-"));
+    const cfg = markCompleteReplyConfig({
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.5",
+          workspace: path.join(home, "workspace"),
+        },
+      },
+      commands: { text: true },
+      session: { store: path.join(home, "sessions.json") },
+    } as OpenClawConfig);
+
+    await expect(
+      getReplyFromConfig(
+        buildGetReplyCtx({
+          Body: "/thinking medium explain this",
+          BodyForAgent: "/thinking medium explain this",
+          RawBody: "/thinking medium explain this",
+          CommandBody: "/thinking medium explain this",
+          BodyForCommands: "/thinking medium explain this",
+          CommandSource: "text",
+          CommandAuthorized: true,
+        }),
+        undefined,
+        cfg,
+      ),
+    ).resolves.toEqual({ text: "ok" });
+
+    expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
+    expect(mocks.initSessionState).not.toHaveBeenCalled();
+    expect(mocks.resolveReplyDirectives).toHaveBeenCalledOnce();
+    expect(vi.mocked(runPreparedReplyMock)).not.toHaveBeenCalled();
+    const directiveParams = requireDirectiveParams();
+    expect(directiveParams.sessionKey).toBe("agent:main:telegram:123");
+    const directiveCall = mocks.resolveReplyDirectives.mock.calls[0]?.[0] as
+      | { triggerBodyNormalized?: string }
+      | undefined;
+    expect(directiveCall?.triggerBodyNormalized).toBe("/thinking medium explain this");
+  });
+
+  it("does not fast-path unauthorized text /status", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-text-status-unauthorized-"));
+    const cfg = markCompleteReplyConfig({
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.5",
+          workspace: path.join(home, "workspace"),
+        },
+      },
+      commands: { text: true },
+      session: { store: path.join(home, "sessions.json") },
+    } as OpenClawConfig);
+    vi.mocked(resolveCommandAuthorizationMock).mockReturnValueOnce({
+      ownerList: [],
+      senderIsOwner: false,
+      isAuthorizedSender: false,
+      senderId: "unauthorized",
+    });
+
+    const reply = await getReplyFromConfig(
+      buildGetReplyCtx({
+        Body: "/status",
+        BodyForAgent: "/status",
+        RawBody: "/status",
+        CommandBody: "/status",
+        BodyForCommands: "/status",
+        CommandSource: "text",
+        CommandAuthorized: false,
+      }),
+      undefined,
+      cfg,
+    );
+
+    expect(reply).toBeUndefined();
+    expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
+    expect(mocks.initSessionState).not.toHaveBeenCalled();
+    expect(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
+    expect(vi.mocked(runPreparedReplyMock)).not.toHaveBeenCalled();
+  });
+
+  it("does not fast-path text /status on native-command surfaces when text commands are disabled", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-text-status-disabled-"));
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "discord",
+          plugin: createChannelTestPluginBase({
+            id: "discord",
+            capabilities: { nativeCommands: true, chatTypes: ["direct"] },
+          }),
+          source: "test",
+        },
+      ]),
+    );
+    const cfg = markCompleteReplyConfig({
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.5",
+          workspace: path.join(home, "workspace"),
+        },
+      },
+      commands: { text: false },
+      session: { store: path.join(home, "sessions.json") },
+    } as OpenClawConfig);
+
+    try {
+      await expect(
+        getReplyFromConfig(
+          buildGetReplyCtx({
+            Provider: "discord",
+            Surface: "discord",
+            Body: "/status",
+            BodyForAgent: "/status",
+            RawBody: "/status",
+            CommandBody: "/status",
+            BodyForCommands: "/status",
+            CommandSource: "text",
+            CommandAuthorized: true,
+          }),
+          undefined,
+          cfg,
+        ),
+      ).resolves.toEqual({ text: "ok" });
+
+      expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
+      expect(mocks.initSessionState).not.toHaveBeenCalled();
+      expect(mocks.resolveReplyDirectives).toHaveBeenCalledOnce();
+      expect(vi.mocked(runPreparedReplyMock)).not.toHaveBeenCalled();
+    } finally {
+      setActivePluginRegistry(createTestRegistry([]));
+    }
   });
 
   it("handles native slash directives before workspace bootstrap", async () => {
