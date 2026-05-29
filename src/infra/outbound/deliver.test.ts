@@ -1279,6 +1279,56 @@ describe("deliverOutboundPayloads", () => {
     resolveMediaAccessSpy.mockRestore();
   });
 
+  it("scopes media access after reply payload hooks add local media", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "reply_payload_sending",
+    );
+    hookMocks.runner.runReplyPayloadSending.mockResolvedValueOnce({
+      payload: {
+        text: "hook media",
+        mediaUrl: "file:///tmp/hook-added.png",
+      },
+    });
+    const resolveMediaAccessSpy = vi.spyOn(
+      mediaCapabilityModule,
+      "resolveAgentScopedOutboundMediaAccess",
+    );
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m5", roomId: "!room:example" });
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "hello" }],
+      deps: { matrix: sendMatrix },
+      session: {
+        key: "agent:main:matrix:room:ops",
+        agentId: "main",
+        requesterSenderId: "sender-1",
+      },
+      replyPayloadSendingHook: {
+        kind: "final",
+        channel: "matrix",
+        context: { channelId: "matrix", conversationId: "!room:example" },
+      },
+    });
+
+    const [mediaAccessOptions] = requireMockCall(resolveMediaAccessSpy, "media access") as [
+      {
+        mediaSources?: unknown;
+        requesterSenderId?: unknown;
+        sessionKey?: unknown;
+      },
+    ];
+    expect(mediaAccessOptions?.mediaSources).toEqual(["file:///tmp/hook-added.png"]);
+    expect(mediaAccessOptions?.sessionKey).toBe("agent:main:matrix:room:ops");
+    expect(mediaAccessOptions?.requesterSenderId).toBe("sender-1");
+    const sendOptions = requireMatrixSendCall(sendMatrix)[2] as Record<string, unknown>;
+    expect(sendOptions.mediaUrl).toBe("file:///tmp/hook-added.png");
+    expect(typeof sendOptions.mediaReadFile).toBe("function");
+    resolveMediaAccessSpy.mockRestore();
+  });
+
   it("chunks direct adapter text and preserves delivery overrides across sends", async () => {
     const sendText = vi.fn().mockImplementation(async ({ text }: { text: string }) => ({
       channel: "matrix" as const,
