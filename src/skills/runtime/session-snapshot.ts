@@ -3,7 +3,7 @@ import { stableStringify } from "../../agents/stable-stringify.js";
 import { redactConfigObject } from "../../config/redact-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { matchesSkillFilter } from "../discovery/filter.js";
-import { buildWorkspaceSkillSnapshot } from "../discovery/service.js";
+import { buildWorkspaceSkillSnapshot } from "../loading/workspace.js";
 import type { SkillEligibilityContext, SkillSnapshot } from "../types.js";
 import { getSkillsSnapshotVersion, shouldRefreshSnapshotForVersion } from "./refresh-state.js";
 import { ensureSkillsWatcher } from "./refresh.js";

@@ -57,7 +57,7 @@ vi.mock("../../skills/runtime/remote.js", () => ({
   getRemoteSkillEligibility: getRemoteSkillEligibilityMock,
 }));
 
-vi.mock("../../skills/discovery/service.js", () => ({
+vi.mock("../../skills/loading/workspace.js", () => ({
   buildWorkspaceSkillSnapshot: buildWorkspaceSkillSnapshotMock,
 }));
 

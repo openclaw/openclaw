@@ -19,7 +19,7 @@ import {
   appendUserTurnTranscriptMessage,
   type PersistedUserTurnMessage,
 } from "../../sessions/user-turn-transcript.js";
-import { buildWorkspaceSkillSnapshot } from "../../skills/discovery/service.js";
+import { buildWorkspaceSkillSnapshot } from "../../skills/loading/workspace.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
