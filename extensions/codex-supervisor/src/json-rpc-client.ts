@@ -244,6 +244,10 @@ function resolveUnixWebSocketPath(url: string): string {
   return suffix || defaultCodexControlSocketPath();
 }
 
+function connectCodexSupervisorUnixSocket(url: string): net.Socket {
+  return net.createConnection(resolveUnixWebSocketPath(url));
+}
+
 function websocketMessageToString(data: WebSocket.RawData): string {
   if (typeof data === "string") {
     return data;
@@ -273,7 +277,7 @@ class WebSocketCodexJsonRpcConnection extends BaseCodexJsonRpcConnection {
     this.ws = endpoint.url.startsWith("unix://")
       ? new WebSocket("ws://localhost/", {
           headers,
-          createConnection: () => net.createConnection(resolveUnixWebSocketPath(endpoint.url)),
+          createConnection: () => connectCodexSupervisorUnixSocket(endpoint.url),
         })
       : new WebSocket(endpoint.url, { headers });
     this.openPromise = new Promise((resolve, reject) => {
