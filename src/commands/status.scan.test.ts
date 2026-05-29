@@ -14,6 +14,7 @@ const mocks = {
   ...createStatusScanSharedMocks("status-scan"),
   buildChannelsTable: vi.fn(),
   callGateway: vi.fn(),
+  getStatusCommandSecretTargetIds: vi.fn(() => new Set<string>()),
 };
 
 let originalForceStderr: boolean;
@@ -69,6 +70,23 @@ function configureScanStatus(
     details: [],
   });
   mocks.callGateway.mockResolvedValue(null);
+  mocks.getStatusCommandSecretTargetIds.mockReturnValue(new Set<string>());
+}
+
+function firstCallArg(mock: { mock: { calls: unknown[][] } }, label: string): unknown {
+  const arg = mock.mock.calls[0]?.[0];
+  if (arg === undefined) {
+    throw new Error(`expected ${label}`);
+  }
+  return arg;
+}
+
+function firstBuildChannelsTableCall(): unknown[] {
+  const call = mocks.buildChannelsTable.mock.calls[0];
+  if (!call) {
+    throw new Error("expected buildChannelsTable call");
+  }
+  return call;
 }
 
 describe("scanStatus", () => {
@@ -90,18 +108,19 @@ describe("scanStatus", () => {
     await scanStatus({ json: false }, {} as never);
 
     expect(mocks.buildChannelsTable).toHaveBeenCalledOnce();
-    expect(mocks.buildChannelsTable.mock.calls[0]).toStrictEqual([
+    expect(firstBuildChannelsTableCall()).toStrictEqual([
       resolvedConfig,
       {
         showSecrets: true,
-        includeSetupFallbackPlugins: true,
+        includeSetupFallbackPlugins: false,
         sourceConfig,
         liveChannelStatus: null,
+        credentialResolutionSkipped: true,
       },
     ]);
   });
 
-  it("keeps default text status off live channel status while keeping configured channel setup fallback", async () => {
+  it("keeps default text status off live channel status and channel setup fallback for fast path", async () => {
     const cfg = createStatusScanConfig();
     configureScanStatus({
       hasConfiguredChannels: true,
@@ -127,14 +146,24 @@ describe("scanStatus", () => {
         return (call as { method?: unknown } | undefined)?.method === "channels.status";
       }),
     ).toBe(false);
+    expect(mocks.getUpdateCheckResult).toHaveBeenCalledWith({
+      timeoutMs: 2500,
+      fetchGit: false,
+      includeRegistry: false,
+      updateConfigChannel: null,
+    });
+    expect(mocks.getStatusCommandSecretTargetIds).toHaveBeenCalledWith(cfg, process.env, {
+      includeChannelTargets: false,
+    });
     expect(mocks.buildChannelsTable).toHaveBeenCalledOnce();
-    expect(mocks.buildChannelsTable.mock.calls[0]).toStrictEqual([
+    expect(firstBuildChannelsTableCall()).toStrictEqual([
       cfg,
       {
         showSecrets: true,
-        includeSetupFallbackPlugins: true,
+        includeSetupFallbackPlugins: false,
         sourceConfig: cfg,
         liveChannelStatus: null,
+        credentialResolutionSkipped: true,
       },
     ]);
   });
@@ -167,7 +196,7 @@ describe("scanStatus", () => {
     await scanStatus({ json: false, deep: true, timeoutMs: 5000 }, {} as never);
 
     expect(mocks.callGateway).toHaveBeenCalledOnce();
-    expect(mocks.callGateway.mock.calls[0]?.[0]).toStrictEqual({
+    expect(firstCallArg(mocks.callGateway, "callGateway args")).toStrictEqual({
       config: cfg,
       method: "channels.status",
       params: {
@@ -177,7 +206,7 @@ describe("scanStatus", () => {
       timeoutMs: 2500,
     });
     expect(mocks.buildChannelsTable).toHaveBeenCalledOnce();
-    expect(mocks.buildChannelsTable.mock.calls[0]).toStrictEqual([
+    expect(firstBuildChannelsTableCall()).toStrictEqual([
       cfg,
       {
         showSecrets: true,
@@ -276,7 +305,7 @@ describe("scanStatus", () => {
     await scanStatus({ json: true }, {} as never);
 
     expect(mocks.getMemorySearchManager).toHaveBeenCalledOnce();
-    expect(mocks.getMemorySearchManager.mock.calls[0]?.[0]).toStrictEqual({
+    expect(firstCallArg(mocks.getMemorySearchManager, "memory search manager args")).toStrictEqual({
       cfg: createStatusMemorySearchConfig(),
       agentId: "main",
       purpose: "status",
@@ -305,7 +334,7 @@ describe("scanStatus", () => {
     // Verify plugin logs were routed to stderr during loading and restored after
     expect(loggingStateRef.forceConsoleToStderr).toBe(false);
     expect(mocks.probeGateway).toHaveBeenCalledOnce();
-    expect(mocks.probeGateway.mock.calls[0]?.[0]).toStrictEqual({
+    expect(firstCallArg(mocks.probeGateway, "probeGateway args")).toStrictEqual({
       url: "ws://127.0.0.1:18789",
       auth: {},
       preauthHandshakeTimeoutMs: undefined,

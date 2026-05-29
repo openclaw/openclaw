@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { setTimeout as scheduleNativeTimeout } from "node:timers";
+import { withMockedWindowsPlatform } from "openclaw/plugin-sdk/test-node-mocks";
 import type { Mock } from "vitest";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -28,6 +29,25 @@ const { withFileLockMock } = vi.hoisted(() => ({
 const MEMORY_EMBEDDING_PROVIDERS_KEY = Symbol.for("openclaw.memoryEmbeddingProviders");
 const MCPORTER_STATE_KEY = Symbol.for("openclaw.mcporterState");
 const QMD_EMBED_QUEUE_KEY = Symbol.for("openclaw.qmdEmbedQueueTail");
+
+type WatchOptions = {
+  ignored?: (watchPath: string) => boolean;
+};
+
+type EmbedLockCall = [
+  string,
+  {
+    retries: {
+      retries: number;
+      factor: number;
+      minTimeout: number;
+      maxTimeout: number;
+      randomize: boolean;
+    };
+    stale: number;
+  },
+  () => Promise<unknown>,
+];
 
 interface MockChild extends EventEmitter {
   stdout: EventEmitter;
@@ -81,6 +101,22 @@ function isMcporterCommand(cmd: unknown): boolean {
     return false;
   }
   return /(^|[\\/])mcporter(?:\.cmd)?$/i.test(cmd);
+}
+
+function firstWatchOptions(): WatchOptions {
+  const call = watchMock.mock.calls[0] as unknown as [string[], WatchOptions] | undefined;
+  if (!call) {
+    throw new Error("Expected watch call");
+  }
+  return call[1];
+}
+
+function firstEmbedLockCall(): EmbedLockCall {
+  const call = withFileLockMock.mock.calls[0] as EmbedLockCall | undefined;
+  if (!call) {
+    throw new Error("Expected qmd embed lock call");
+  }
+  return call;
 }
 
 vi.mock("openclaw/plugin-sdk/memory-core-host-engine-foundation", async () => {
@@ -183,11 +219,11 @@ describe("QmdMemoryManager", () => {
   }
 
   function expectMockMessageContains(mock: Mock, text: string): void {
-    expect(mockMessages(mock).some((message) => message.includes(text))).toBe(true);
+    expect(mockMessages(mock).join("\n")).toContain(text);
   }
 
   function expectMockMessageNotContains(mock: Mock, text: string): void {
-    expect(mockMessages(mock).every((message) => !message.includes(text))).toBe(true);
+    expect(mockMessages(mock).join("\n")).not.toContain(text);
   }
 
   async function expectPathMissing(targetPath: string): Promise<void> {
@@ -457,10 +493,8 @@ describe("QmdMemoryManager", () => {
     };
     const initialUpdateCalls = spawnMock.mock.calls.filter((call) => call[1]?.[0] === "update");
     expect(initialUpdateCalls).toHaveLength(0);
-    const [, watchOptions] = watchMock.mock.calls[0] as unknown as [
-      string[],
-      { ignored?: (watchPath: string) => boolean },
-    ];
+    const watchOptions = firstWatchOptions();
+    expect(watchOptions).not.toHaveProperty("awaitWriteFinish");
     expect(watchOptions.ignored?.(path.join(workspaceDir, "node_modules", "pkg", "note.md"))).toBe(
       true,
     );
@@ -470,7 +504,14 @@ describe("QmdMemoryManager", () => {
     expect(watchOptions.ignored?.(path.join(workspaceDir, "build", "note.md"))).toBe(true);
     expect(watchOptions.ignored?.(path.join(workspaceDir, "notes.md"))).toBe(false);
 
-    watcher.emit("change", path.join(workspaceDir, "notes.md"));
+    const notesPath = path.join(workspaceDir, "notes.md");
+    await fs.writeFile(notesPath, "hello");
+    const initialStats = await fs.stat(notesPath);
+    watcher.emit("change", notesPath, {
+      size: initialStats.size,
+      mtimeMs: initialStats.mtimeMs,
+      isDirectory: () => false,
+    });
     expect(manager.status().dirty).toBe(true);
 
     await vi.advanceTimersByTimeAsync(25);
@@ -478,6 +519,55 @@ describe("QmdMemoryManager", () => {
     const updateCalls = spawnMock.mock.calls.filter((call) => call[1]?.[0] === "update");
     expect(updateCalls).toHaveLength(1);
     expect(manager.status().dirty).toBe(false);
+
+    await manager.close();
+  });
+
+  it("delays qmd watch sync until changed file stats settle", async () => {
+    vi.useFakeTimers();
+    cfg = {
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          memorySearch: {
+            provider: "openai",
+            model: "mock-embed",
+            store: { path: path.join(workspaceDir, "index.sqlite"), vector: { enabled: false } },
+            sync: { watch: true, watchDebounceMs: 25, onSessionStart: false, onSearch: false },
+          },
+        },
+        list: [{ id: agentId, default: true, workspace: workspaceDir }],
+      },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 0, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    const notesPath = path.join(workspaceDir, "notes.md");
+    await fs.writeFile(notesPath, "hello");
+    const initialStats = await fs.stat(notesPath);
+    const { manager } = await createManager({ mode: "full" });
+    const watcher = watchMock.mock.results[0]?.value as {
+      emit: (event: string, ...args: unknown[]) => boolean;
+    };
+
+    watcher.emit("change", notesPath, {
+      size: initialStats.size,
+      mtimeMs: initialStats.mtimeMs,
+      isDirectory: () => false,
+    });
+    await fs.writeFile(notesPath, "hello updated");
+
+    await vi.advanceTimersByTimeAsync(25);
+    expect(spawnMock.mock.calls.filter((call) => call[1]?.[0] === "update")).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(25);
+    expect(spawnMock.mock.calls.filter((call) => call[1]?.[0] === "update")).toHaveLength(1);
 
     await manager.close();
   });
@@ -1739,6 +1829,137 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("uses valid qmd query JSON captured before a non-zero exit", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "query",
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "query") {
+        const child = createMockChild({ autoClose: false });
+        queueMicrotask(() => {
+          child.stdout.emit("data", "initializing qmd reranker\n");
+          child.stdout.emit(
+            "data",
+            JSON.stringify(
+              [
+                {
+                  file: "qmd://workspace-main/notes/welcome.md",
+                  score: 0.93,
+                  snippet: "@@ -7,1\nrouter glacier backup",
+                },
+              ],
+              null,
+              2,
+            ),
+          );
+          child.stderr.emit("data", "ggml-metal-device.m:612 assertion failed");
+          child.closeWith(134);
+        });
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager();
+
+    await expect(
+      manager.search("router glacier backup", { sessionKey: "agent:main:slack:dm:u123" }),
+    ).resolves.toEqual([
+      {
+        path: "notes/welcome.md",
+        startLine: 7,
+        endLine: 7,
+        score: 0.93,
+        snippet: "@@ -7,1\nrouter glacier backup",
+        source: "memory",
+      },
+    ]);
+    expectMockMessageContains(
+      logWarnMock,
+      "qmd query exited non-zero after producing valid JSON; using captured search results (code 134)",
+    );
+    await manager.close();
+  });
+
+  it("keeps invalid qmd query stdout failed after a non-zero exit", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "query",
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "query") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(child, "stdout", "not json", 134);
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager();
+
+    await expect(
+      manager.search("router glacier backup", { sessionKey: "agent:main:slack:dm:u123" }),
+    ).rejects.toThrow(/qmd query router glacier backup .* failed \(code 134\): not json/);
+    await manager.close();
+  });
+
+  it("does not use qmd query JSON from a non-crash search failure", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "query",
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "query") {
+        const child = createMockChild({ autoClose: false });
+        queueMicrotask(() => {
+          child.stdout.emit("data", "[]");
+          child.stderr.emit("data", "SQLITE_BUSY: database is locked");
+          child.closeWith(2);
+        });
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager();
+
+    await expect(
+      manager.search("router glacier backup", { sessionKey: "agent:main:slack:dm:u123" }),
+    ).rejects.toThrow(/SQLITE_BUSY: database is locked/);
+    expect(logWarnMock).not.toHaveBeenCalledWith(
+      expect.stringContaining("using captured search results"),
+    );
+    await manager.close();
+  });
+
   it("repairs missing managed collections and retries search once", async () => {
     cfg = {
       ...cfg,
@@ -1774,7 +1995,11 @@ describe("QmdMemoryManager", () => {
         if (collection === "memory-root-main" && !missingCollectionSeen) {
           missingCollectionSeen = true;
           const child = createMockChild({ autoClose: false });
-          emitAndClose(child, "stderr", "Collection not found: memory-root-main", 1);
+          queueMicrotask(() => {
+            child.stdout.emit("data", "[]");
+            child.stderr.emit("data", "Collection not found: memory-root-main");
+            child.closeWith(1);
+          });
           return child;
         }
         if (collection === "memory-root-main") {
@@ -1828,47 +2053,47 @@ describe("QmdMemoryManager", () => {
   });
 
   it("resolves bare qmd command to a Windows-compatible spawn invocation", async () => {
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    const previousPath = process.env.PATH;
-    try {
-      const nodeModulesDir = path.join(tmpRoot, "node_modules");
-      const shimDir = path.join(nodeModulesDir, ".bin");
-      const packageDir = path.join(nodeModulesDir, "qmd");
-      const scriptPath = path.join(packageDir, "dist", "cli.js");
-      await fs.mkdir(path.dirname(scriptPath), { recursive: true });
-      await fs.mkdir(shimDir, { recursive: true });
-      await fs.writeFile(path.join(shimDir, "qmd.cmd"), "@echo off\r\n", "utf8");
-      await fs.writeFile(
-        path.join(packageDir, "package.json"),
-        JSON.stringify({ name: "qmd", version: "0.0.0", bin: { qmd: "dist/cli.js" } }),
-        "utf8",
-      );
-      await fs.writeFile(scriptPath, "module.exports = {};\n", "utf8");
-      process.env.PATH = `${shimDir};${previousPath ?? ""}`;
-
-      const { manager } = await createManager({ mode: "status" });
-      await manager.sync({ reason: "manual" });
-
-      const qmdCalls = spawnMock.mock.calls.filter((call: unknown[]) => {
-        const args = call[1] as string[] | undefined;
-        return (
-          Array.isArray(args) &&
-          args.some((token) => token === "update" || token === "search" || token === "query")
+    await withMockedWindowsPlatform(async () => {
+      const previousPath = process.env.PATH;
+      try {
+        const nodeModulesDir = path.join(tmpRoot, "node_modules");
+        const shimDir = path.join(nodeModulesDir, ".bin");
+        const packageDir = path.join(nodeModulesDir, "qmd");
+        const scriptPath = path.join(packageDir, "dist", "cli.js");
+        await fs.mkdir(path.dirname(scriptPath), { recursive: true });
+        await fs.mkdir(shimDir, { recursive: true });
+        await fs.writeFile(path.join(shimDir, "qmd.cmd"), "@echo off\r\n", "utf8");
+        await fs.writeFile(
+          path.join(packageDir, "package.json"),
+          JSON.stringify({ name: "qmd", version: "0.0.0", bin: { qmd: "dist/cli.js" } }),
+          "utf8",
         );
-      });
-      expect(qmdCalls.length).toBeGreaterThan(0);
-      for (const call of qmdCalls) {
-        const command = String(call[0]);
-        const options = call[2] as { shell?: boolean } | undefined;
-        expect(command).not.toMatch(/(^|[\\/])qmd\.cmd$/i);
-        expect(options?.shell).not.toBe(true);
-      }
+        await fs.writeFile(scriptPath, "module.exports = {};\n", "utf8");
+        process.env.PATH = `${shimDir};${previousPath ?? ""}`;
 
-      await manager.close();
-    } finally {
-      platformSpy.mockRestore();
-      process.env.PATH = previousPath;
-    }
+        const { manager } = await createManager({ mode: "status" });
+        await manager.sync({ reason: "manual" });
+
+        const qmdCalls = spawnMock.mock.calls.filter((call: unknown[]) => {
+          const args = call[1] as string[] | undefined;
+          return (
+            Array.isArray(args) &&
+            args.some((token) => token === "update" || token === "search" || token === "query")
+          );
+        });
+        expect(qmdCalls.length).toBeGreaterThan(0);
+        for (const call of qmdCalls) {
+          const command = String(call[0]);
+          const options = call[2] as { shell?: boolean } | undefined;
+          expect(command).not.toMatch(/(^|[\\/])qmd\.cmd$/i);
+          expect(options?.shell).not.toBe(true);
+        }
+
+        await manager.close();
+      } finally {
+        process.env.PATH = previousPath;
+      }
+    });
   });
 
   it("keeps mixed Han-script BM25 queries intact before qmd search", async () => {
@@ -2608,6 +2833,80 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("keeps hyphenated tokens in lexical QMD searches while normalizing semantic searches", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "query",
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+          mcporter: { enabled: true, serverName: "qmd", startDaemon: false },
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((cmd: string, args: string[]) => {
+      const child = createMockChild({ autoClose: false });
+      if (isMcporterCommand(cmd) && args[0] === "call") {
+        expect(args[1]).toBe("qmd.query");
+        const callArgs = JSON.parse(args[args.indexOf("--args") + 1]);
+        expect(callArgs.searches).toEqual([
+          { type: "lex", query: "sqlite-vec-qmd backend health 2026-05-04 multi-agent" },
+          { type: "vec", query: "sqlite vec qmd backend health 2026 05 04 multi agent" },
+          { type: "hyde", query: "sqlite vec qmd backend health 2026 05 04 multi agent" },
+        ]);
+        emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
+        return child;
+      }
+      emitAndClose(child, "stdout", "[]");
+      return child;
+    });
+
+    const { manager } = await createManager();
+    await manager.search("sqlite-vec-qmd backend health 2026-05-04 multi-agent", {
+      sessionKey: "agent:main:slack:dm:u123",
+    });
+    await manager.close();
+  });
+
+  it("normalizes hyphenated tokens for vector-only QMD searches", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "vsearch",
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+          mcporter: { enabled: true, serverName: "qmd", startDaemon: false },
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((cmd: string, args: string[]) => {
+      const child = createMockChild({ autoClose: false });
+      if (isMcporterCommand(cmd) && args[0] === "call") {
+        expect(args[1]).toBe("qmd.query");
+        const callArgs = JSON.parse(args[args.indexOf("--args") + 1]);
+        expect(callArgs.searches).toEqual([{ type: "vec", query: "sqlite vec backend health" }]);
+        emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
+        return child;
+      }
+      emitAndClose(child, "stdout", "[]");
+      return child;
+    });
+
+    const { manager } = await createManager();
+    await manager.search("sqlite-vec backend health", {
+      sessionKey: "agent:main:slack:dm:u123",
+    });
+    await manager.close();
+  });
+
   it("falls back to QMD <1.1 tool names when query tool is not found", async () => {
     // qmdMcpToolVersion is an instance field — each createManager() starts fresh.
 
@@ -3121,125 +3420,125 @@ describe("QmdMemoryManager", () => {
   });
 
   it("resolves mcporter to a direct Windows entrypoint without enabling shell mode", async () => {
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    const previousPath = process.env.PATH;
-    try {
-      const nodeModulesDir = path.join(tmpRoot, "node_modules");
-      const shimDir = path.join(nodeModulesDir, ".bin");
-      const packageDir = path.join(nodeModulesDir, "mcporter");
-      const scriptPath = path.join(packageDir, "dist", "cli.js");
-      await fs.mkdir(path.dirname(scriptPath), { recursive: true });
-      await fs.mkdir(shimDir, { recursive: true });
-      await fs.writeFile(path.join(shimDir, "mcporter.cmd"), "@echo off\r\n", "utf8");
-      await fs.writeFile(
-        path.join(packageDir, "package.json"),
-        JSON.stringify({ name: "mcporter", version: "0.0.0", bin: { mcporter: "dist/cli.js" } }),
-        "utf8",
-      );
-      await fs.writeFile(scriptPath, "module.exports = {};\n", "utf8");
-      process.env.PATH = `${shimDir};${previousPath ?? ""}`;
+    await withMockedWindowsPlatform(async () => {
+      const previousPath = process.env.PATH;
+      try {
+        const nodeModulesDir = path.join(tmpRoot, "node_modules");
+        const shimDir = path.join(nodeModulesDir, ".bin");
+        const packageDir = path.join(nodeModulesDir, "mcporter");
+        const scriptPath = path.join(packageDir, "dist", "cli.js");
+        await fs.mkdir(path.dirname(scriptPath), { recursive: true });
+        await fs.mkdir(shimDir, { recursive: true });
+        await fs.writeFile(path.join(shimDir, "mcporter.cmd"), "@echo off\r\n", "utf8");
+        await fs.writeFile(
+          path.join(packageDir, "package.json"),
+          JSON.stringify({ name: "mcporter", version: "0.0.0", bin: { mcporter: "dist/cli.js" } }),
+          "utf8",
+        );
+        await fs.writeFile(scriptPath, "module.exports = {};\n", "utf8");
+        process.env.PATH = `${shimDir};${previousPath ?? ""}`;
 
-      cfg = {
-        ...cfg,
-        memory: {
-          backend: "qmd",
-          qmd: {
-            includeDefaultMemory: false,
-            update: { interval: "0s", debounceMs: 60_000, onBoot: false },
-            paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
-            mcporter: { enabled: true, serverName: "qmd", startDaemon: false },
+        cfg = {
+          ...cfg,
+          memory: {
+            backend: "qmd",
+            qmd: {
+              includeDefaultMemory: false,
+              update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+              paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+              mcporter: { enabled: true, serverName: "qmd", startDaemon: false },
+            },
           },
-        },
-      } as OpenClawConfig;
+        } as OpenClawConfig;
 
-      spawnMock.mockImplementation((_cmd: string, args: string[]) => {
-        const child = createMockChild({ autoClose: false });
-        if (args[0] === "call") {
-          emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
+        spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+          const child = createMockChild({ autoClose: false });
+          if (args[0] === "call") {
+            emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
+            return child;
+          }
+          emitAndClose(child, "stdout", "[]");
           return child;
-        }
-        emitAndClose(child, "stdout", "[]");
-        return child;
-      });
+        });
 
-      const { manager } = await createManager();
-      await manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" });
+        const { manager } = await createManager();
+        await manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" });
 
-      const mcporterCall = spawnMock.mock.calls.find((call: unknown[]) =>
-        (call[1] as string[] | undefined)?.includes("call"),
-      );
-      const searchCall = requireValue(mcporterCall, "mcporter search call missing");
-      const callCommand = searchCall[0];
-      expect(typeof callCommand).toBe("string");
-      const options = searchCall[2] as { shell?: boolean } | undefined;
-      expect(callCommand).not.toBe("mcporter.cmd");
-      expect(options?.shell).not.toBe(true);
+        const mcporterCall = spawnMock.mock.calls.find((call: unknown[]) =>
+          (call[1] as string[] | undefined)?.includes("call"),
+        );
+        const searchCall = requireValue(mcporterCall, "mcporter search call missing");
+        const callCommand = searchCall[0];
+        expect(typeof callCommand).toBe("string");
+        const options = searchCall[2] as { shell?: boolean } | undefined;
+        expect(callCommand).not.toBe("mcporter.cmd");
+        expect(options?.shell).not.toBe(true);
 
-      await manager.close();
-    } finally {
-      platformSpy.mockRestore();
-      process.env.PATH = previousPath;
-    }
+        await manager.close();
+      } finally {
+        process.env.PATH = previousPath;
+      }
+    });
   });
 
   it("fails closed on Windows EINVAL cmd-shim failures instead of retrying through the shell", async () => {
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    const previousPath = process.env.PATH;
-    try {
-      const shimDir = await fs.mkdtemp(path.join(tmpRoot, "mcporter-shim-"));
-      await fs.writeFile(path.join(shimDir, "mcporter.cmd"), "@echo off\n");
-      process.env.PATH = `${shimDir};${previousPath ?? ""}`;
+    await withMockedWindowsPlatform(async () => {
+      const previousPath = process.env.PATH;
+      try {
+        const shimDir = await fs.mkdtemp(path.join(tmpRoot, "mcporter-shim-"));
+        await fs.writeFile(path.join(shimDir, "mcporter.cmd"), "@echo off\n");
+        process.env.PATH = `${shimDir};${previousPath ?? ""}`;
 
-      cfg = {
-        ...cfg,
-        memory: {
-          backend: "qmd",
-          qmd: {
-            includeDefaultMemory: false,
-            update: { interval: "0s", debounceMs: 60_000, onBoot: false },
-            paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
-            mcporter: { enabled: true, serverName: "qmd", startDaemon: false },
+        cfg = {
+          ...cfg,
+          memory: {
+            backend: "qmd",
+            qmd: {
+              includeDefaultMemory: false,
+              update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+              paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+              mcporter: { enabled: true, serverName: "qmd", startDaemon: false },
+            },
           },
-        },
-      } as OpenClawConfig;
+        } as OpenClawConfig;
 
-      let firstCallCommand: string | null = null;
-      spawnMock.mockImplementation((cmd: string, args: string[]) => {
-        if (args[0] === "call" && firstCallCommand === null) {
-          firstCallCommand = cmd;
-        }
-        if (args[0] === "call" && typeof cmd === "string" && cmd.toLowerCase().endsWith(".cmd")) {
+        let firstCallCommand: string | null = null;
+        spawnMock.mockImplementation((cmd: string, args: string[]) => {
+          if (args[0] === "call" && firstCallCommand === null) {
+            firstCallCommand = cmd;
+          }
+          if (args[0] === "call" && typeof cmd === "string" && cmd.toLowerCase().endsWith(".cmd")) {
+            const child = createMockChild({ autoClose: false });
+            queueMicrotask(() => {
+              const err = Object.assign(new Error("spawn EINVAL"), { code: "EINVAL" });
+              child.emit("error", err);
+            });
+            return child;
+          }
           const child = createMockChild({ autoClose: false });
-          queueMicrotask(() => {
-            const err = Object.assign(new Error("spawn EINVAL"), { code: "EINVAL" });
-            child.emit("error", err);
-          });
+          emitAndClose(child, "stdout", "[]");
           return child;
-        }
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stdout", "[]");
-        return child;
-      });
+        });
 
-      const { manager } = await createManager();
-      await expect(
-        manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" }),
-      ).rejects.toThrow(/without shell execution|EINVAL/);
-      const attemptedCmdShim = (firstCallCommand ?? "").toLowerCase().endsWith(".cmd");
-      if (attemptedCmdShim) {
-        expect(
-          spawnMock.mock.calls.some(
-            (call: unknown[]) =>
-              call[0] === "mcporter" &&
-              (call[2] as { shell?: boolean } | undefined)?.shell === true,
-          ),
-        ).toBe(false);
+        const { manager } = await createManager();
+        await expect(
+          manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" }),
+        ).rejects.toThrow(/without shell execution|EINVAL/);
+        const attemptedCmdShim = (firstCallCommand ?? "").toLowerCase().endsWith(".cmd");
+        if (attemptedCmdShim) {
+          expect(
+            spawnMock.mock.calls.some(
+              (call: unknown[]) =>
+                call[0] === "mcporter" &&
+                (call[2] as { shell?: boolean } | undefined)?.shell === true,
+            ),
+          ).toBe(false);
+        }
+        await manager.close();
+      } finally {
+        process.env.PATH = previousPath;
       }
-      await manager.close();
-    } finally {
-      platformSpy.mockRestore();
-      process.env.PATH = previousPath;
-    }
+    });
   });
 
   it("passes manager-scoped XDG env to mcporter commands", async () => {
@@ -3719,26 +4018,7 @@ describe("QmdMemoryManager", () => {
     const firstSync = first.manager.sync({ reason: "manual", force: true });
     await vi.advanceTimersByTimeAsync(0);
     expect(embedChildren).toHaveLength(1);
-    const lockCall = withFileLockMock.mock.calls[0] as
-      | [
-          string,
-          {
-            retries: {
-              retries: number;
-              factor: number;
-              minTimeout: number;
-              maxTimeout: number;
-              randomize: boolean;
-            };
-            stale: number;
-          },
-          () => Promise<unknown>,
-        ]
-      | undefined;
-    if (!lockCall) {
-      throw new Error("Expected qmd embed lock call");
-    }
-    const [lockPath, lockOptions, lockTask] = lockCall;
+    const [lockPath, lockOptions, lockTask] = firstEmbedLockCall();
     expect(lockPath.endsWith(path.join("qmd", "embed.lock"))).toBe(true);
     expect(lockOptions).toEqual({
       retries: {
@@ -4114,6 +4394,35 @@ describe("QmdMemoryManager", () => {
       lines: 3,
       truncated: true,
       nextFrom: 13,
+    });
+    expect(readFileSpy).not.toHaveBeenCalled();
+
+    await manager.close();
+    readFileSpy.mockRestore();
+  });
+
+  it("defaults non-finite partial read line options before streaming canonical memory files", async () => {
+    const readFileSpy = vi.spyOn(fs, "readFile");
+    const relPath = path.join("memory", "non-finite-window.md");
+    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceDir, relPath),
+      ["line-1", "line-2", "line-3"].join("\n"),
+      "utf-8",
+    );
+
+    const { manager } = await createManager();
+
+    const result = await manager.readFile({
+      relPath,
+      from: Number.NaN,
+      lines: Number.POSITIVE_INFINITY,
+    });
+    expect(result).toEqual({
+      path: relPath,
+      text: "line-1\nline-2\nline-3",
+      from: 1,
+      lines: 3,
     });
     expect(readFileSpy).not.toHaveBeenCalled();
 

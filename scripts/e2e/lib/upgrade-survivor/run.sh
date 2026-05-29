@@ -21,14 +21,21 @@ export MATRIX_ACCESS_TOKEN="upgrade-survivor-matrix-token"
 export BRAVE_API_KEY="BSA_upgrade_survivor_brave_key"
 
 ARTIFACT_ROOT="$(dirname "${OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON:-/tmp/openclaw-upgrade-survivor-artifacts/summary.json}")"
+export OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT="${OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT:-/tmp/openclaw-upgrade-survivor-runtime}"
+RUNTIME_ROOT="$OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT"
+STATE_HOME_ROOT="${OPENCLAW_UPGRADE_SURVIVOR_STATE_HOME_ROOT:-$RUNTIME_ROOT/state-home}"
 mkdir -p "$ARTIFACT_ROOT"
-export TMPDIR="$ARTIFACT_ROOT/tmp"
-mkdir -p "$TMPDIR"
+mkdir -p "$RUNTIME_ROOT"
+export TMPDIR="${OPENCLAW_UPGRADE_SURVIVOR_TMPDIR:-$RUNTIME_ROOT/tmp}"
+export OPENCLAW_TEST_STATE_TMPDIR="${OPENCLAW_UPGRADE_SURVIVOR_TEST_STATE_TMPDIR:-$RUNTIME_ROOT/state-tmp}"
+mkdir -p "$TMPDIR" "$OPENCLAW_TEST_STATE_TMPDIR"
 export npm_config_prefix="$ARTIFACT_ROOT/npm-prefix"
 export NPM_CONFIG_PREFIX="$npm_config_prefix"
-export npm_config_cache="$ARTIFACT_ROOT/npm-cache"
+export npm_config_cache="${OPENCLAW_UPGRADE_SURVIVOR_NPM_CACHE:-$OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT/npm-cache}"
+export NPM_CONFIG_CACHE="$npm_config_cache"
 export npm_config_tmp="$TMPDIR"
 mkdir -p "$npm_config_prefix" "$npm_config_cache"
+chmod 700 "$npm_config_cache" || true
 export PATH="$npm_config_prefix/bin:$PATH"
 
 SUMMARY_JSON="${OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON:-$ARTIFACT_ROOT/summary.json}"
@@ -38,6 +45,8 @@ CANDIDATE_KIND="${OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_KIND:-tarball}"
 CANDIDATE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_SPEC:-${OPENCLAW_CURRENT_PACKAGE_TGZ:-}}"
 SCENARIO="${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base}"
 UPDATE_RESTART_MODE="${OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE:-manual}"
+ROOT_MANAGED_VPS="${OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS:-0}"
+COMMAND_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT:-900s}"
 CURRENT_PHASE="setup"
 FAILURE_PHASE=""
 FAILURE_MESSAGE=""
@@ -640,15 +649,15 @@ rm_rf_retry() {
 }
 
 reset_run_state() {
-  rm_rf_retry "$npm_config_prefix" "$TMPDIR" "$ARTIFACT_ROOT/state-home"
+  rm_rf_retry "$npm_config_prefix" "$TMPDIR" "$OPENCLAW_TEST_STATE_TMPDIR" "$STATE_HOME_ROOT"
   rm -f "$SYSTEMCTL_SHIM_PID_FILE" "$SYSTEMCTL_SHIM_DAEMON_LOG"
-  mkdir -p "$npm_config_prefix" "$npm_config_cache" "$TMPDIR"
+  mkdir -p "$npm_config_prefix" "$npm_config_cache" "$TMPDIR" "$OPENCLAW_TEST_STATE_TMPDIR"
 }
 
 install_baseline() {
   normalize_baseline
   echo "Installing baseline package: $baseline_spec"
-  if ! npm install -g --prefix "$npm_config_prefix" "$baseline_spec" --no-fund --no-audit >"$BASELINE_INSTALL_LOG" 2>&1; then
+  if ! openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install -g --prefix "$npm_config_prefix" "$baseline_spec" --no-fund --no-audit >"$BASELINE_INSTALL_LOG" 2>&1; then
     echo "baseline npm install failed" >&2
     cat "$BASELINE_INSTALL_LOG" >&2 || true
     return 1
@@ -667,7 +676,7 @@ install_baseline() {
   fi
   baseline_version="$installed_version"
   local version_output
-  if ! version_output="$(openclaw --version 2>&1)"; then
+  if ! version_output="$(openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw --version 2>&1)"; then
     echo "baseline openclaw --version failed" >&2
     echo "$version_output" >&2
     return 1
@@ -681,7 +690,16 @@ install_baseline() {
 
 seed_state() {
   openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_FUNCTION_B64:?missing OPENCLAW_TEST_STATE_FUNCTION_B64}"
-  openclaw_test_state_create "$ARTIFACT_ROOT/state-home" minimal
+  if [ "$ROOT_MANAGED_VPS" = "1" ]; then
+    if [ "$(id -u)" -ne 0 ]; then
+      echo "root-managed VPS survivor mode must run as uid 0" >&2
+      return 1
+    fi
+    rm -rf /root/.openclaw /root/workspace
+    openclaw_test_state_create /root minimal
+  else
+    openclaw_test_state_create "$STATE_HOME_ROOT" minimal
+  fi
   export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION="$baseline_version"
   node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed
 }
@@ -693,7 +711,7 @@ apply_baseline_config_recipe() {
 }
 
 validate_baseline_config() {
-  if ! openclaw config validate >"$BASELINE_CONFIG_VALIDATE_LOG" 2>&1; then
+  if ! openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw config validate >"$BASELINE_CONFIG_VALIDATE_LOG" 2>&1; then
     echo "generated baseline config failed baseline validation" >&2
     cat "$BASELINE_CONFIG_VALIDATE_LOG" >&2 || true
     return 1
@@ -843,7 +861,7 @@ SHIM
 }
 
 install_update_restart_service_unit() {
-  if ! env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD openclaw gateway install --force --json >"$BASELINE_SERVICE_INSTALL_JSON" 2>"$BASELINE_SERVICE_INSTALL_ERR"; then
+  if ! openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD openclaw gateway install --force --json >"$BASELINE_SERVICE_INSTALL_JSON" 2>"$BASELINE_SERVICE_INSTALL_ERR"; then
     echo "baseline gateway service install failed" >&2
     cat "$BASELINE_SERVICE_INSTALL_ERR" >&2 || true
     cat "$BASELINE_SERVICE_INSTALL_JSON" >&2 || true
@@ -1032,17 +1050,66 @@ resolve_candidate_version() {
   export OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT
 }
 
+candidate_update_spec() {
+  if [ "$CANDIDATE_KIND" != "tarball" ]; then
+    printf '%s\n' "$CANDIDATE_SPEC"
+    return 0
+  fi
+  case "$CANDIDATE_SPEC" in
+    file:*)
+      printf '%s\n' "$CANDIDATE_SPEC"
+      ;;
+    *)
+      printf 'file:%s\n' "$CANDIDATE_SPEC"
+      ;;
+  esac
+}
+
+assert_update_json_ok() {
+  local file="$1"
+  node -e '
+    const fs = require("node:fs");
+    const file = process.argv[1];
+    const raw = fs.readFileSync(file, "utf8");
+    let result;
+    try {
+      result = JSON.parse(raw);
+    } catch (err) {
+      // Published baselines may emit legacy service-control logs before the JSON payload.
+      const jsonStart = raw.indexOf("{");
+      if (jsonStart === -1) {
+        throw err;
+      }
+      result = JSON.parse(raw.slice(jsonStart));
+    }
+    if (!result || result.status !== "ok") {
+      throw new Error(`update JSON did not report ok status: ${JSON.stringify(result)}`);
+    }
+  ' "$file"
+}
+
 update_candidate() {
-  echo "Updating baseline $baseline_spec to candidate $CANDIDATE_KIND:$CANDIDATE_SPEC ($candidate_version)"
+  local update_spec
+  update_spec="$(candidate_update_spec)"
+  echo "Updating baseline $baseline_spec to candidate $CANDIDATE_KIND:$update_spec ($candidate_version)"
   local update_start=""
   local update_end=""
-  local update_args=(update --tag "$CANDIDATE_SPEC" --yes --json)
+  local update_args=(update --tag "$update_spec" --yes --json)
+  local update_env=(
+    env
+    -u OPENCLAW_GATEWAY_TOKEN
+    -u OPENCLAW_GATEWAY_PASSWORD
+    -u OPENCLAW_ALLOW_ROOT
+  )
   if [ "$UPDATE_RESTART_MODE" = "manual" ]; then
     update_args+=(--no-restart)
   else
     update_start="$(node -e "process.stdout.write(String(Date.now()))")"
   fi
-  if ! env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD OPENCLAW_ALLOW_ROOT=1 openclaw "${update_args[@]}" >"$UPDATE_JSON" 2>"$UPDATE_ERR"; then
+  if [ "$ROOT_MANAGED_VPS" != "1" ]; then
+    update_env+=(OPENCLAW_ALLOW_ROOT=1)
+  fi
+  if ! openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" "${update_env[@]}" openclaw "${update_args[@]}" >"$UPDATE_JSON" 2>"$UPDATE_ERR"; then
     echo "openclaw update failed" >&2
     cat "$UPDATE_ERR" >&2 || true
     cat "$UPDATE_JSON" >&2 || true
@@ -1051,20 +1118,27 @@ update_candidate() {
   if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
     update_end="$(node -e "process.stdout.write(String(Date.now()))")"
     update_restart_seconds=$(((update_end - update_start + 999) / 1000))
-    node -e '
-      const fs = require("node:fs");
-      const file = process.argv[1];
-      const result = JSON.parse(fs.readFileSync(file, "utf8"));
-      if (!result || result.status !== "ok") {
-        throw new Error(`update JSON did not report ok status: ${JSON.stringify(result)}`);
-      }
-    ' "$UPDATE_JSON"
+    assert_update_json_ok "$UPDATE_JSON"
   fi
   installed_version="$(read_installed_version)"
 }
 
+assert_root_managed_vps_cli_usable() {
+  if [ "$ROOT_MANAGED_VPS" != "1" ]; then
+    return 0
+  fi
+  local root_cli_env=(
+    env
+    -u OPENCLAW_GATEWAY_TOKEN
+    -u OPENCLAW_GATEWAY_PASSWORD
+    -u OPENCLAW_ALLOW_ROOT
+  )
+  openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" "${root_cli_env[@]}" openclaw config file >"$ARTIFACT_ROOT/root-vps-config-file.out" 2>"$ARTIFACT_ROOT/root-vps-config-file.err"
+  openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" "${root_cli_env[@]}" openclaw plugins >"$ARTIFACT_ROOT/root-vps-plugins.out" 2>"$ARTIFACT_ROOT/root-vps-plugins.err"
+}
+
 run_doctor() {
-  if ! openclaw doctor --fix --non-interactive >"$DOCTOR_LOG" 2>&1; then
+  if ! openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw doctor --fix --non-interactive >"$DOCTOR_LOG" 2>&1; then
     echo "openclaw doctor failed" >&2
     cat "$DOCTOR_LOG" >&2 || true
     return 1
@@ -1072,7 +1146,7 @@ run_doctor() {
 }
 
 validate_post_doctor_config() {
-  if ! openclaw config validate >>"$DOCTOR_LOG" 2>&1; then
+  if ! openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw config validate >>"$DOCTOR_LOG" 2>&1; then
     echo "post-doctor config validation failed" >&2
     cat "$DOCTOR_LOG" >&2 || true
     return 1
@@ -1151,7 +1225,7 @@ check_gateway_status() {
   local status_start
   local status_end
   status_start="$(node -e "process.stdout.write(String(Date.now()))")"
-  if ! openclaw gateway status --url "ws://127.0.0.1:$port" --token "$GATEWAY_AUTH_TOKEN_REF" --require-rpc --timeout 30000 --json >"$STATUS_JSON" 2>"$STATUS_ERR"; then
+  if ! openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw gateway status --url "ws://127.0.0.1:$port" --token "$GATEWAY_AUTH_TOKEN_REF" --require-rpc --timeout 30000 --json >"$STATUS_JSON" 2>"$STATUS_ERR"; then
     echo "gateway status failed" >&2
     cat "$STATUS_ERR" >&2 || true
     cat "$GATEWAY_LOG" >&2 || true
@@ -1183,6 +1257,7 @@ phase seed-legacy-runtime-deps-symlink seed_legacy_runtime_deps_symlink
 phase resolve-candidate resolve_candidate_version
 phase prepare-update-restart-probe prepare_update_restart_probe
 phase update-candidate update_candidate
+phase root-managed-vps-cli-usable assert_root_managed_vps_cli_usable
 phase assert-legacy-plugin-dependency-debris-before-doctor assert_legacy_plugin_dependency_debris_before_doctor
 phase configure-configured-plugin-install-fixture-registry configure_configured_plugin_install_fixture_registry
 phase doctor run_doctor

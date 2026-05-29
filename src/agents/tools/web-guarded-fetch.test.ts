@@ -25,6 +25,14 @@ vi.mock("../../infra/net/fetch-guard.js", () => {
   };
 });
 
+function firstFetchCall(): Record<string, unknown> {
+  const call = vi.mocked(fetchWithSsrFGuard).mock.calls[0]?.[0];
+  if (!call || typeof call !== "object") {
+    throw new Error("Expected guarded fetch call");
+  }
+  return call as Record<string, unknown>;
+}
+
 describe("web-guarded-fetch", () => {
   afterEach(() => {
     vi.clearAllMocks();
@@ -39,7 +47,7 @@ describe("web-guarded-fetch", () => {
 
     await withTrustedWebToolsEndpoint({ url: "https://example.com" }, async () => undefined);
 
-    const call = vi.mocked(fetchWithSsrFGuard).mock.calls[0]?.[0];
+    const call = firstFetchCall();
     expect(call?.url).toBe("https://example.com");
     expect(call?.policy).toEqual({
       allowRfc2544BenchmarkRange: true,
@@ -58,11 +66,12 @@ describe("web-guarded-fetch", () => {
 
     await withSelfHostedWebToolsEndpoint({ url: "http://127.0.0.1:8080" }, async () => undefined);
 
-    const call = vi.mocked(fetchWithSsrFGuard).mock.calls[0]?.[0];
+    const call = firstFetchCall();
     expect(call?.url).toBe("http://127.0.0.1:8080");
-    expect(call?.policy?.dangerouslyAllowPrivateNetwork).toBe(true);
-    expect(call?.policy?.allowRfc2544BenchmarkRange).toBe(true);
-    expect(call?.policy?.allowIpv6UniqueLocalRange).toBe(true);
+    const policy = call.policy as Record<string, unknown> | undefined;
+    expect(policy?.dangerouslyAllowPrivateNetwork).toBe(true);
+    expect(policy?.allowRfc2544BenchmarkRange).toBe(true);
+    expect(policy?.allowIpv6UniqueLocalRange).toBe(true);
     expect(call?.mode).toBe(GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY);
   });
 
@@ -75,9 +84,56 @@ describe("web-guarded-fetch", () => {
 
     await withStrictWebToolsEndpoint({ url: "https://example.com" }, async () => undefined);
 
-    const call = vi.mocked(fetchWithSsrFGuard).mock.calls[0]?.[0];
+    const call = firstFetchCall();
     expect(call?.url).toBe("https://example.com");
     expect(call?.policy).toBeUndefined();
     expect(call?.mode).toBe(GUARDED_FETCH_MODE.STRICT);
+  });
+
+  it("normalizes string timeouts before guarded fetch dispatch", async () => {
+    vi.mocked(fetchWithSsrFGuard).mockResolvedValue({
+      response: new Response("ok", { status: 200 }),
+      finalUrl: "https://example.com",
+      release: async () => {},
+    });
+
+    await withStrictWebToolsEndpoint(
+      { url: "https://example.com", timeoutSeconds: "7" as never },
+      async () => undefined,
+    );
+    expect(firstFetchCall().timeoutMs).toBe(7000);
+
+    vi.clearAllMocks();
+    vi.mocked(fetchWithSsrFGuard).mockResolvedValue({
+      response: new Response("ok", { status: 200 }),
+      finalUrl: "https://example.com",
+      release: async () => {},
+    });
+
+    await withStrictWebToolsEndpoint(
+      {
+        url: "https://example.com",
+        timeoutMs: "2500" as never,
+        timeoutSeconds: "7" as never,
+      },
+      async () => undefined,
+    );
+    expect(firstFetchCall().timeoutMs).toBe(2500);
+  });
+
+  it("rejects malformed timeouts before guarded fetch dispatch", async () => {
+    await expect(
+      withStrictWebToolsEndpoint(
+        { url: "https://example.com", timeoutMs: "2.5" as never },
+        async () => undefined,
+      ),
+    ).rejects.toThrow("timeoutMs must be a positive integer");
+    await expect(
+      withStrictWebToolsEndpoint(
+        { url: "https://example.com", timeoutSeconds: -1 },
+        async () => undefined,
+      ),
+    ).rejects.toThrow("timeoutSeconds must be a positive integer");
+    expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
   });
 });

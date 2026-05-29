@@ -3,7 +3,7 @@ import type { NextFunction, Request, Response } from "express";
 import {
   createMessageReceiveContext,
   type MessageReceiveContext,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
 import { danger, logVerbose, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { parseLineWebhookBody, validateLineSignature } from "./webhook-utils.js";
 
@@ -30,6 +30,10 @@ function parseWebhookBody(rawBody?: string | null): webhook.CallbackRequest | nu
     return null;
   }
   return parseLineWebhookBody(rawBody);
+}
+
+function logLineWebhookDispatchError(runtime: RuntimeEnv | undefined, err: unknown): void {
+  runtime?.error?.(danger(`line webhook dispatch failed: ${String(err)}`));
 }
 
 export function createLineWebhookMiddleware(
@@ -75,20 +79,21 @@ export function createLineWebhookMiddleware(
         id: `${Date.now()}:line:webhook`,
         channel: "line",
         message: body,
-        ackPolicy: body.events?.length ? "after_agent_dispatch" : "after_receive_record",
+        ackPolicy: "after_receive_record",
         onAck: () => {
           res.status(200).json({ status: "ok" });
         },
       });
 
-      if (body.events && body.events.length > 0) {
-        logVerbose(`line: received ${body.events.length} webhook events`);
-        await onEvents(body);
+      if (receiveContext.shouldAckAfter("receive_record")) {
+        await receiveContext.ack();
       }
 
-      const ackStage = body.events?.length ? "agent_dispatch" : "receive_record";
-      if (receiveContext.shouldAckAfter(ackStage)) {
-        await receiveContext.ack();
+      if (body.events && body.events.length > 0) {
+        logVerbose(`line: received ${body.events.length} webhook events`);
+        void Promise.resolve()
+          .then(() => onEvents(body))
+          .catch((err) => logLineWebhookDispatchError(runtime, err));
       }
     } catch (err) {
       await receiveContext?.nack(err);

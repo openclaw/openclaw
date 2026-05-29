@@ -1,4 +1,4 @@
-import { getModels } from "@earendil-works/pi-ai";
+import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import {
   registerProviderPlugin,
   registerSingleProviderPlugin,
@@ -72,8 +72,7 @@ describe("opencode-go provider plugin", () => {
     const provider = await registerSingleProviderPlugin(plugin);
     expect(provider.catalog).toBeUndefined();
 
-    const models = new Map(getModels("opencode-go").map((model) => [model.id, model]));
-    expect([...models.keys()]).toEqual([
+    const expectedModelIds = [
       "deepseek-v4-flash",
       "deepseek-v4-pro",
       "glm-5",
@@ -86,7 +85,16 @@ describe("opencode-go provider plugin", () => {
       "minimax-m2.7",
       "qwen3.5-plus",
       "qwen3.6-plus",
-    ]);
+    ];
+    const models = new Map<string, ProviderRuntimeModel>();
+    for (const modelId of expectedModelIds) {
+      const model = provider.resolveDynamicModel?.({ modelId } as never);
+      if (!model) {
+        throw new Error(`expected OpenCode Go model ${modelId}`);
+      }
+      models.set(model.id, model);
+    }
+    expect([...models.keys()]).toEqual(expectedModelIds);
     const supplemental = await provider.augmentModelCatalog?.({
       entries: [...models.values()].map((model) => ({
         provider: model.provider,
@@ -185,6 +193,42 @@ describe("opencode-go provider plugin", () => {
     ]);
   });
 
+  it("strips unsupported Kimi reasoning payloads on OpenCode Go", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const capturedPayloads: Record<string, unknown>[] = [];
+    const baseStreamFn = (_model: unknown, _context: unknown, options: unknown) => {
+      const payload = {
+        model: "kimi-k2.6",
+        reasoning_effort: "high",
+        reasoning: { effort: "high" },
+        reasoningEffort: "high",
+      };
+      (options as { onPayload?: (payload: Record<string, unknown>) => void })?.onPayload?.(payload);
+      capturedPayloads.push(payload);
+      return {} as never;
+    };
+
+    const streamFn = provider.wrapStreamFn?.({
+      streamFn: baseStreamFn as never,
+      providerId: "opencode-go",
+      modelId: "kimi-k2.6",
+      thinkingLevel: "high",
+    } as never);
+
+    expect(streamFn).toBeTypeOf("function");
+    await streamFn?.(
+      { provider: "opencode-go", id: "kimi-k2.6", api: "openai-completions" } as never,
+      {} as never,
+      {},
+    );
+
+    expect(capturedPayloads).toEqual([
+      {
+        model: "kimi-k2.6",
+      },
+    ]);
+  });
+
   it("canonicalizes stale OpenCode Go base URLs", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 
@@ -220,6 +264,29 @@ describe("opencode-go provider plugin", () => {
       "normalized model",
     );
     expect(normalizedModel.baseUrl).toBe("https://opencode.ai/zen/go/v1");
+
+    const normalizedKimi = requireRecord(
+      provider.normalizeResolvedModel?.({
+        provider: "opencode-go",
+        model: {
+          provider: "opencode-go",
+          id: "kimi-k2.6",
+          name: "Kimi K2.6",
+          api: "openai-completions",
+          baseUrl: "https://opencode.ai/zen/go/v1",
+          reasoning: true,
+          input: ["text", "image"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 262_144,
+          maxTokens: 65_536,
+        },
+      } as never),
+      "normalized Kimi model",
+    );
+    expect(normalizedKimi.reasoning).toBe(false);
+    expect(requireRecord(normalizedKimi.compat, "normalized Kimi compat")).toMatchObject({
+      supportsReasoningEffort: false,
+    });
 
     expect(
       provider.normalizeTransport?.({

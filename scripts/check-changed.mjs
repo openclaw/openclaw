@@ -1,3 +1,6 @@
+import { accessSync, chmodSync, constants, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { performance } from "node:perf_hooks";
 import {
   detectChangedLanesForPaths,
@@ -5,8 +8,10 @@ import {
   listStagedChangedPaths,
   normalizeChangedPath,
 } from "./changed-lanes.mjs";
+import { shrinkwrapPackageDirsForChangedPaths } from "./generate-npm-shrinkwrap.mjs";
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
 import { printTimingSummary } from "./lib/check-timing-summary.mjs";
+import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import {
   acquireLocalHeavyCheckLockSync,
   resolveLocalHeavyCheckEnv,
@@ -21,7 +26,11 @@ const LIVE_DOCKER_AUTH_SHELL_TARGETS = [
   "scripts/test-live-codex-harness-docker.sh",
   "scripts/test-live-gateway-models-docker.sh",
   "scripts/test-live-models-docker.sh",
+  "scripts/test-live-subagent-announce-docker.sh",
 ];
+const SHRINKWRAP_POLICY_PATH_RE =
+  /^(?:npm-shrinkwrap\.json|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|scripts\/generate-npm-shrinkwrap\.mjs|extensions\/[^/]+\/(?:package\.json|npm-shrinkwrap\.json))$/u;
+let corepackPnpmShimDir;
 
 export function createChangedCheckChildEnv(baseEnv = process.env) {
   const resolvedBaseEnv = resolveLocalHeavyCheckEnv(baseEnv);
@@ -40,11 +49,35 @@ function isTruthyEnvFlag(value) {
   return normalized !== "" && normalized !== "0" && normalized !== "false" && normalized !== "no";
 }
 
+function executableExistsOnPath(command, env = process.env) {
+  const pathValue = env.PATH ?? env.Path ?? "";
+  const pathExts =
+    process.platform === "win32" ? (env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";") : [""];
+  for (const searchPath of pathValue.split(path.delimiter)) {
+    if (!searchPath) {
+      continue;
+    }
+    for (const ext of pathExts) {
+      try {
+        accessSync(path.join(searchPath, `${command}${ext}`), constants.X_OK);
+        return true;
+      } catch {
+        continue;
+      }
+    }
+  }
+  return false;
+}
+
+export function shouldSkipAppLintForMissingSwiftlint(options = {}) {
+  const env = options.env ?? process.env;
+  const platform = options.platform ?? process.platform;
+  const swiftlintAvailable = options.swiftlintAvailable ?? executableExistsOnPath("swiftlint", env);
+  return platform !== "darwin" && !swiftlintAvailable;
+}
+
 export function shouldDelegateChangedCheckToCrabbox(argv = [], env = process.env) {
   if (!isTruthyEnvFlag(env.OPENCLAW_TESTBOX)) {
-    return false;
-  }
-  if (isTruthyEnvFlag(env.OPENCLAW_TESTBOX_REMOTE_RUN)) {
     return false;
   }
   if (isTruthyEnvFlag(env.CI) || isTruthyEnvFlag(env.GITHUB_ACTIONS)) {
@@ -76,17 +109,37 @@ export function buildChangedCheckCrabboxArgs(argv = []) {
     "240m",
     "--timing-json",
     "--",
-    "CI=1",
-    "NODE_OPTIONS=--max-old-space-size=4096",
-    "OPENCLAW_TEST_PROJECTS_PARALLEL=6",
-    "OPENCLAW_VITEST_MAX_WORKERS=1",
-    "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000",
-    "OPENCLAW_TESTBOX=1",
-    "OPENCLAW_TESTBOX_REMOTE_RUN=1",
+    "corepack",
     "pnpm",
     "check:changed",
     ...argv,
   ];
+}
+
+export function shouldRunShrinkwrapGuard(paths) {
+  return paths.some((changedPath) => SHRINKWRAP_POLICY_PATH_RE.test(changedPath));
+}
+
+export function createShrinkwrapGuardCommand(paths) {
+  if (!shouldRunShrinkwrapGuard(paths)) {
+    return null;
+  }
+  const packageDirs = shrinkwrapPackageDirsForChangedPaths(paths);
+  if (packageDirs.length === 0) {
+    return null;
+  }
+  return {
+    name:
+      packageDirs.length === 1
+        ? "npm shrinkwrap guard"
+        : `npm shrinkwrap guard (${packageDirs.length} packages)`,
+    bin: "node",
+    args: [
+      "scripts/generate-npm-shrinkwrap.mjs",
+      "--check",
+      ...packageDirs.flatMap((packageDir) => ["--package-dir", packageDir]),
+    ],
+  };
 }
 
 export async function runChangedCheckViaCrabbox(argv = [], env = process.env) {
@@ -125,6 +178,17 @@ export function createChangedCheckPlan(result, options = {}) {
   add("guarded extension wildcard re-exports", ["lint:extensions:no-guarded-wildcard-reexports"]);
   add("plugin-sdk wildcard re-exports", ["lint:extensions:no-plugin-sdk-wildcard-reexports"]);
   add("duplicate scan target coverage", ["dup:check:coverage"]);
+  add("dependency pin guard", ["deps:pins:check"]);
+  const shrinkwrapGuardCommand = createShrinkwrapGuardCommand(result.paths);
+  if (shrinkwrapGuardCommand) {
+    addCommand(
+      shrinkwrapGuardCommand.name,
+      shrinkwrapGuardCommand.bin,
+      shrinkwrapGuardCommand.args,
+      baseEnv,
+    );
+  }
+  add("package patch guard", ["deps:patches:check"]);
 
   if (result.docsOnly) {
     return {
@@ -155,6 +219,7 @@ export function createChangedCheckPlan(result, options = {}) {
   }
 
   if (runAll) {
+    add("media download helper guard", ["check:media-download-helpers"]);
     add("runtime sidecar loader guard", ["check:runtime-sidecar-loaders"]);
     addTypecheck("typecheck all", ["tsgo:all"]);
     addLint("lint", ["lint"]);
@@ -194,11 +259,22 @@ export function createChangedCheckPlan(result, options = {}) {
   if (lanes.tooling || lanes.liveDockerTooling) {
     addLint("lint scripts", ["lint:scripts"]);
   }
-  if (lanes.apps) {
+  if (lanes.apps && shouldSkipAppLintForMissingSwiftlint({ ...options, env: baseEnv })) {
+    addCommand(
+      "lint apps (swiftlint unavailable on this host)",
+      "node",
+      [
+        "-e",
+        "console.error('[check:changed] Swift app lint skipped: swiftlint is unavailable on this non-macOS host; macOS CI owns SwiftLint coverage.')",
+      ],
+      baseEnv,
+    );
+  } else if (lanes.apps) {
     addLint("lint apps", ["lint:apps"]);
   }
 
   if (lanes.core || lanes.extensions) {
+    add("media download helper guard", ["check:media-download-helpers"]);
     add("runtime sidecar loader guard", ["check:runtime-sidecar-loaders"]);
     add("runtime import cycles", ["check:import-cycles"]);
   }
@@ -229,7 +305,10 @@ export function createChangedCheckPlan(result, options = {}) {
 export async function runChangedCheck(result, options = {}) {
   const baseEnv = resolveLocalHeavyCheckEnv(options.env ?? process.env);
   const childEnv = createChangedCheckChildEnv(baseEnv);
-  const plan = createChangedCheckPlan(result, { ...options, env: childEnv });
+  const plan = createChangedCheckPlan(result, {
+    ...options,
+    env: childEnv,
+  });
   const releaseLock = options.dryRun
     ? () => {}
     : acquireLocalHeavyCheckLockSync({
@@ -277,7 +356,7 @@ function printPlan(result, plan, options) {
 }
 
 async function runPnpm(command, timings) {
-  return await runCommand({ ...command, bin: "pnpm" }, timings);
+  return await runCommand(createPnpmManagedCommand(command), timings);
 }
 
 async function runPlanCommand(command, timings) {
@@ -285,6 +364,41 @@ async function runPlanCommand(command, timings) {
     return await runCommand(command, timings);
   }
   return await runPnpm(command, timings);
+}
+
+export function createPnpmManagedCommand(command, env = process.env) {
+  const commandEnv = command.env ?? resolveLocalHeavyCheckEnv(env);
+  if (isTruthyEnvFlag(commandEnv.CI) || isTruthyEnvFlag(commandEnv.GITHUB_ACTIONS)) {
+    const shimmedEnv = prependCorepackPnpmShim(commandEnv);
+    return {
+      ...command,
+      bin: "corepack",
+      args: ["pnpm", ...command.args],
+      env: shimmedEnv,
+    };
+  }
+  return { ...command, bin: "pnpm", env: commandEnv };
+}
+
+function prependCorepackPnpmShim(env) {
+  const shimDir = ensureCorepackPnpmShimDir();
+  return {
+    ...env,
+    PATH: [shimDir, env.PATH ?? env.Path ?? ""].filter(Boolean).join(path.delimiter),
+  };
+}
+
+function ensureCorepackPnpmShimDir() {
+  if (corepackPnpmShimDir) {
+    return corepackPnpmShimDir;
+  }
+  const dir = mkdtempSync(path.join(tmpdir(), "openclaw-corepack-pnpm-"));
+  const pnpmPath = path.join(dir, "pnpm");
+  writeFileSync(pnpmPath, '#!/bin/sh\nexec corepack pnpm "$@"\n', "utf8");
+  chmodSync(pnpmPath, 0o755);
+  writeFileSync(path.join(dir, "pnpm.cmd"), "@echo off\r\ncorepack pnpm %*\r\n", "utf8");
+  corepackPnpmShimDir = dir;
+  return dir;
 }
 
 async function runCommand(command, timings) {
@@ -320,6 +434,7 @@ function parseArgs(argv) {
     staged: false,
     dryRun: false,
     timed: false,
+    help: false,
     paths: [],
   };
   return parseFlagArgs(
@@ -331,6 +446,8 @@ function parseArgs(argv) {
       booleanFlag("--staged", "staged"),
       booleanFlag("--dry-run", "dryRun"),
       booleanFlag("--timed", "timed"),
+      booleanFlag("--help", "help"),
+      booleanFlag("-h", "help"),
     ],
     {
       onUnhandledArg(arg, target) {
@@ -344,17 +461,36 @@ function parseArgs(argv) {
   );
 }
 
+function printUsage() {
+  process.stdout.write(
+    [
+      "Usage: node scripts/check-changed.mjs [options] [-- <paths...>]",
+      "",
+      "Options:",
+      "  --base <ref>     Base ref for changed paths (default: origin/main)",
+      "  --head <ref>     Head ref for changed paths (default: HEAD)",
+      "  --staged         Check staged paths instead of git diff paths",
+      "  --dry-run        Print the planned checks without running them",
+      "  --timed          Print timing summary",
+      "  -h, --help       Show this help",
+      "",
+    ].join("\n"),
+  );
+}
+
 function isDirectRun() {
-  const direct = process.argv[1];
-  return Boolean(direct && import.meta.url.endsWith(direct));
+  return isDirectRunUrl(process.argv[1], import.meta.url);
 }
 
 if (isDirectRun()) {
   const argv = process.argv.slice(2);
-  if (shouldDelegateChangedCheckToCrabbox(argv, process.env)) {
+  const args = parseArgs(argv);
+  if (args.help) {
+    printUsage();
+    process.exitCode = 0;
+  } else if (shouldDelegateChangedCheckToCrabbox(argv, process.env)) {
     process.exitCode = await runChangedCheckViaCrabbox(argv, process.env);
   } else {
-    const args = parseArgs(argv);
     const paths =
       args.paths.length > 0
         ? args.paths

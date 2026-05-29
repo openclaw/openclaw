@@ -3,19 +3,22 @@ import type {
   UnifiedModelCatalogKind,
   UnifiedModelCatalogSource,
 } from "../model-catalog/types.js";
+import { normalizeUniqueSingleOrTrimmedStringList } from "../shared/string-normalization.js";
 
-export type MediaGenerationCatalogKind = Exclude<UnifiedModelCatalogKind, "text">;
+export type MediaGenerationCatalogKind = Extract<
+  UnifiedModelCatalogKind,
+  "image_generation" | "video_generation" | "music_generation"
+>;
 
 export type MediaGenerationCatalogSource = Extract<
   UnifiedModelCatalogSource,
   "static" | "live" | "cache" | "configured"
 >;
 
-export type MediaGenerationCatalogEntry<TCapabilities = unknown> =
-  UnifiedModelCatalogEntry<TCapabilities> & {
-    kind: MediaGenerationCatalogKind;
-    source: MediaGenerationCatalogSource;
-  };
+export type MediaGenerationCatalogEntry<TCapabilities> = UnifiedModelCatalogEntry<TCapabilities> & {
+  kind: MediaGenerationCatalogKind;
+  source: MediaGenerationCatalogSource;
+};
 
 export type MediaGenerationCatalogProvider<TCapabilities = unknown> = {
   id: string;
@@ -27,17 +30,10 @@ export type MediaGenerationCatalogProvider<TCapabilities = unknown> = {
 };
 
 function uniqueModels(provider: { defaultModel?: string; models?: readonly string[] }): string[] {
-  const seen = new Set<string>();
-  const models: string[] = [];
-  for (const candidate of [provider.defaultModel, ...(provider.models ?? [])]) {
-    const model = candidate?.trim();
-    if (!model || seen.has(model)) {
-      continue;
-    }
-    seen.add(model);
-    models.push(model);
-  }
-  return models;
+  return normalizeUniqueSingleOrTrimmedStringList([
+    provider.defaultModel,
+    ...(provider.models ?? []),
+  ]);
 }
 
 export function synthesizeMediaGenerationCatalogEntries<TCapabilities>(params: {

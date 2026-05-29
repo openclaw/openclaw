@@ -2,6 +2,10 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import type { AgentRouteBinding } from "../config/types.agents.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import {
+  testing as bundleMcpRuntimeTesting,
+  getOrCreateSessionMcpRuntime,
+} from "./agent-bundle-mcp-tools.js";
+import {
   getCallGatewayMock,
   getSessionsSpawnTool,
   resetSessionsSpawnAnnounceFlowOverride,
@@ -13,10 +17,6 @@ import {
   setSessionsSpawnConfigOverride,
   waitForSessionsSpawnEvent,
 } from "./openclaw-tools.subagents.sessions-spawn.test-harness.js";
-import {
-  __testing as bundleMcpRuntimeTesting,
-  getOrCreateSessionMcpRuntime,
-} from "./pi-bundle-mcp-tools.js";
 import {
   getLatestSubagentRunByChildSessionKey,
   resetSubagentRegistryForTests,
@@ -122,7 +122,10 @@ async function executeBoundAccountSpawn(params: {
   setSessionsSpawnConfigOverride({
     session: { mainKey: "main", scope: "per-sender" },
     messages: { queue: { debounceMs: 0 } },
-    agents: { defaults: { subagents: { allowAgents: ["bot-alpha"] } } },
+    agents: {
+      defaults: { subagents: { allowAgents: ["bot-alpha"] } },
+      list: [{ id: "main" }, { id: "bot-alpha" }],
+    },
     bindings: params.bindings,
   });
   setupSessionsSpawnGatewayMock({
@@ -272,8 +275,11 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     expect(agentCalls).toHaveLength(2);
 
     // First call: subagent spawn
-    const first = agentCalls[0]?.params as { lane?: string } | undefined;
+    const first = agentCalls[0]?.params as
+      | { disableMessageTool?: boolean; lane?: string }
+      | undefined;
     expect(first?.lane).toBe("subagent");
+    expect(first?.disableMessageTool).toBe(true);
 
     // Second call: main agent trigger (not "Sub-agent announce step." anymore)
     const second = agentCalls[1]?.params as { sessionKey?: string; message?: string } | undefined;
@@ -481,11 +487,12 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     expect(deletedKey?.startsWith("agent:main:subagent:")).toBe(true);
   });
 
-  it("sessions_spawn records timeout when agent.wait returns timeout", async () => {
+  it("sessions_spawn records timeout when agent.wait returns timeout and child session is terminal", async () => {
     const ctx = setupSessionsSpawnGatewayMock({
       includeChatHistory: true,
       chatHistoryText: "still working",
       agentWaitResult: { status: "timeout", startedAt: 6000, endedAt: 7000 },
+      subagentSessionEntryPatch: { status: "timeout", endedAt: 7000 },
     });
 
     const tool = await getDiscordGroupSpawnTool();

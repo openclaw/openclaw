@@ -52,6 +52,18 @@ async function importChannelResolution(scope: string) {
   );
 }
 
+function firstMockArg(mock: { mock: { calls: readonly unknown[][] } }): Record<string, unknown> {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error("expected mock call");
+  }
+  const [arg] = call;
+  if (typeof arg !== "object" || arg === null || Array.isArray(arg)) {
+    throw new Error("expected mock call arg to be an object");
+  }
+  return arg as Record<string, unknown>;
+}
+
 describe("outbound channel resolution", () => {
   beforeEach(async () => {
     resolveDefaultAgentIdMock.mockReset();
@@ -109,6 +121,22 @@ describe("outbound channel resolution", () => {
     expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
   });
 
+  it("returns a bundled plugin without bootstrapping", async () => {
+    const plugin = { id: "alpha" };
+    getLoadedChannelPluginMock.mockReturnValue(undefined);
+    getChannelPluginMock.mockReturnValue(plugin);
+    const channelResolution = await importChannelResolution("bundled-plugin");
+
+    expect(
+      channelResolution.resolveOutboundChannelPlugin({
+        channel: "alpha",
+        cfg: {} as never,
+        allowBootstrap: true,
+      }),
+    ).toBe(plugin);
+    expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
+  });
+
   it("falls back to the active registry when getChannelPlugin misses", async () => {
     const plugin = { id: "alpha" };
     getChannelPluginMock.mockReturnValue(undefined);
@@ -142,12 +170,12 @@ describe("outbound channel resolution", () => {
     ).toBe(plugin);
     expect(applyPluginAutoEnableMock).toHaveBeenCalledWith({ config: { channels: {} } });
     expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledOnce();
-    const registryOptions = resolveRuntimePluginRegistryMock.mock.calls[0]?.[0];
-    expect(registryOptions?.config).toEqual({ autoEnabled: true });
-    expect(registryOptions?.activationSourceConfig).toEqual({ channels: {} });
-    expect(registryOptions?.autoEnabledReasons).toEqual({});
-    expect(registryOptions?.workspaceDir).toBe("/tmp/workspace");
-    expect(registryOptions?.runtimeOptions).toEqual({
+    const registryOptions = firstMockArg(resolveRuntimePluginRegistryMock);
+    expect(registryOptions.config).toEqual({ autoEnabled: true });
+    expect(registryOptions.activationSourceConfig).toEqual({ channels: {} });
+    expect(registryOptions.autoEnabledReasons).toEqual({});
+    expect(registryOptions.workspaceDir).toBe("/tmp/workspace");
+    expect(registryOptions.runtimeOptions).toEqual({
       allowGatewaySubagentBinding: true,
     });
   });

@@ -25,7 +25,7 @@ const ALPHA_INSTALL_PATH = installedPluginRoot(CLI_STATE_ROOT, "alpha");
 const ORIGINAL_OPENCLAW_NIX_MODE = process.env.OPENCLAW_NIX_MODE;
 
 function expectRuntimeLogIncludes(fragment: string) {
-  expect(runtimeLogs.some((message) => message.includes(fragment))).toBe(true);
+  expect(runtimeLogs.join("\n")).toContain(fragment);
 }
 
 function expectLatestUninstallPlanParams(expected: {
@@ -33,14 +33,16 @@ function expectLatestUninstallPlanParams(expected: {
   deleteFiles: boolean;
   channelIds?: unknown;
 }) {
-  expect(planPluginUninstall).toHaveBeenCalled();
-  const params = planPluginUninstall.mock.calls.at(-1)?.[0] as
+  const params = planPluginUninstall.mock.calls[planPluginUninstall.mock.calls.length - 1]?.[0] as
     | { pluginId?: string; deleteFiles?: boolean; channelIds?: unknown }
     | undefined;
-  expect(params?.pluginId).toBe(expected.pluginId);
-  expect(params?.deleteFiles).toBe(expected.deleteFiles);
+  if (params === undefined) {
+    throw new Error("expected latest plugin uninstall plan params");
+  }
+  expect(params.pluginId).toBe(expected.pluginId);
+  expect(params.deleteFiles).toBe(expected.deleteFiles);
   if ("channelIds" in expected) {
-    expect(params?.channelIds).toBe(expected.channelIds);
+    expect(params.channelIds).toBe(expected.channelIds);
   }
 }
 
@@ -119,9 +121,9 @@ describe("plugins cli uninstall", () => {
 
     await runPluginsCommand(["plugins", "uninstall", "alpha", "--dry-run"]);
 
-    expect(buildPluginSnapshotReport).toHaveBeenCalled();
+    expect(buildPluginSnapshotReport).toHaveBeenCalledTimes(1);
     expect(buildPluginDiagnosticsReport).not.toHaveBeenCalled();
-    expect(planPluginUninstall).toHaveBeenCalled();
+    expect(planPluginUninstall).toHaveBeenCalledTimes(1);
     expect(writeConfigFile).not.toHaveBeenCalled();
     expect(refreshPluginRegistry).not.toHaveBeenCalled();
     expectRuntimeLogIncludes("Dry run, no changes made.");
@@ -359,7 +361,9 @@ describe("plugins cli uninstall", () => {
       applyPluginUninstallDirectoryRemoval.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER;
     const refreshOrder =
       refreshPluginRegistry.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER;
-    expect(configWriteOrder).toBeGreaterThan(0);
+    expect(writeConfigFile).toHaveBeenCalledTimes(1);
+    expect(applyPluginUninstallDirectoryRemoval).toHaveBeenCalledTimes(1);
+    expect(refreshPluginRegistry).toHaveBeenCalledTimes(1);
     expect(deleteOrder).toBeGreaterThan(configWriteOrder);
     expect(refreshOrder).toBeGreaterThan(deleteOrder);
     expect(applyPluginUninstallDirectoryRemoval).toHaveBeenCalledWith({
@@ -543,6 +547,6 @@ describe("plugins cli uninstall", () => {
     );
 
     expect(runtimeErrors.at(-1)).toContain("is not managed by plugins config/install records");
-    expect(planPluginUninstall).toHaveBeenCalled();
+    expect(planPluginUninstall).toHaveBeenCalledTimes(1);
   });
 });

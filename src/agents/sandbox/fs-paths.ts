@@ -2,18 +2,24 @@ import os from "node:os";
 import path from "node:path";
 import { isPathInside } from "../../infra/path-guards.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
+import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { resolveSandboxInputPath, resolveSandboxPath } from "../sandbox-paths.js";
 import type { SandboxFsBridgeContext } from "./backend-handle.types.js";
 import { splitSandboxBindSpec } from "./bind-spec.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
 import { resolveSandboxHostPathViaExistingAncestor } from "./host-paths.js";
-import { isPathInsideContainerRoot, normalizeContainerPath } from "./path-utils.js";
+import {
+  isPathInsideContainerRoot,
+  normalizeContainerPath,
+  relativePathEscapesContainerRoot,
+} from "./path-utils.js";
+import { resolveReadOnlyWorkspaceSkillMounts } from "./workspace-mounts.js";
 
 export type SandboxFsMount = {
   hostRoot: string;
   containerRoot: string;
   writable: boolean;
-  source: "workspace" | "agent" | "bind";
+  source: "workspace" | "agent" | "bind" | "protectedSkill";
 };
 
 export type SandboxResolvedFsPath = {
@@ -46,12 +52,7 @@ export function parseSandboxBindMount(spec: string): ParsedBindMount | null {
     return null;
   }
   const optionsToken = normalizeOptionalLowercaseString(parsed.options) ?? "";
-  const optionParts = optionsToken
-    ? optionsToken
-        .split(",")
-        .map((entry) => entry.trim())
-        .filter(Boolean)
-    : [];
+  const optionParts = optionsToken ? normalizeStringEntries(optionsToken.split(",")) : [];
   const writable = !optionParts.includes("ro");
   return {
     hostRoot: path.resolve(hostToken),
@@ -82,6 +83,20 @@ export function buildSandboxFsMounts(sandbox: SandboxFsBridgeContext): SandboxFs
     });
   }
 
+  for (const mount of resolveReadOnlyWorkspaceSkillMounts({
+    workspaceDir: sandbox.workspaceDir,
+    agentWorkspaceDir: sandbox.agentWorkspaceDir,
+    workdir: sandbox.containerWorkdir,
+    workspaceAccess: sandbox.workspaceAccess,
+  })) {
+    mounts.push({
+      hostRoot: path.resolve(mount.hostPath),
+      containerRoot: normalizeContainerPath(mount.containerPath),
+      writable: false,
+      source: "protectedSkill",
+    });
+  }
+
   for (const bind of sandbox.docker.binds ?? []) {
     const parsed = parseSandboxBindMount(bind);
     if (!parsed) {
@@ -96,6 +111,56 @@ export function buildSandboxFsMounts(sandbox: SandboxFsBridgeContext): SandboxFs
   }
 
   return dedupeMounts(mounts);
+}
+
+export function resolveWritableSandboxBindHostRoots(
+  binds: readonly string[] | undefined,
+): string[] {
+  const parsedBinds = parseSandboxBindMounts(binds);
+  const readonlyRoots = parsedBinds.filter((bind) => !bind.writable).map((bind) => bind.hostRoot);
+  const roots: string[] = [];
+  const seen = new Set<string>();
+  for (const parsed of parsedBinds) {
+    if (
+      !parsed.writable ||
+      seen.has(parsed.hostRoot) ||
+      readonlyRoots.some((root) => isHostPathWithinOrEqual(parsed.hostRoot, root))
+    ) {
+      continue;
+    }
+    seen.add(parsed.hostRoot);
+    roots.push(parsed.hostRoot);
+  }
+  return roots;
+}
+
+export function hasSandboxBindContainerPathAliases(binds: readonly string[] | undefined): boolean {
+  for (const parsed of parseSandboxBindMounts(binds)) {
+    if (parsed.hostRoot !== parsed.containerRoot) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function hasSandboxBindReadonlyHostShadows(binds: readonly string[] | undefined): boolean {
+  const parsedBinds = parseSandboxBindMounts(binds);
+  const writableRoots = parsedBinds.filter((bind) => bind.writable).map((bind) => bind.hostRoot);
+  const readonlyRoots = parsedBinds.filter((bind) => !bind.writable).map((bind) => bind.hostRoot);
+  return writableRoots.some((writableRoot) =>
+    readonlyRoots.some((readonlyRoot) => isHostPathWithinOrEqual(writableRoot, readonlyRoot)),
+  );
+}
+
+function parseSandboxBindMounts(binds: readonly string[] | undefined): ParsedBindMount[] {
+  const parsed: ParsedBindMount[] = [];
+  for (const bind of binds ?? []) {
+    const mount = parseSandboxBindMount(bind);
+    if (mount) {
+      parsed.push(mount);
+    }
+  }
+  return parsed;
 }
 
 export function resolveSandboxFsPathWithMounts(params: {
@@ -192,8 +257,9 @@ function compareMountsByContainerPath(a: SandboxFsMount, b: SandboxFsMount): num
   if (byLength !== 0) {
     return byLength;
   }
-  // Keep resolver ordering aligned with docker mount precedence: custom binds can
-  // intentionally shadow default workspace mounts at the same container path.
+  // Keep resolver ordering aligned with docker mount precedence for default
+  // workspace mounts, but never let bridge policy classify protected skills
+  // as writable.
   return mountSourcePriority(b.source) - mountSourcePriority(a.source);
 }
 
@@ -206,6 +272,9 @@ function compareMountsByHostPath(a: SandboxFsMount, b: SandboxFsMount): number {
 }
 
 function mountSourcePriority(source: SandboxFsMount["source"]): number {
+  if (source === "protectedSkill") {
+    return 3;
+  }
   if (source === "bind") {
     return 2;
   }
@@ -259,6 +328,11 @@ function isPathInsideHost(root: string, target: string): boolean {
   return isPathInside(canonicalRoot, canonicalTarget);
 }
 
+function isHostPathWithinOrEqual(root: string, target: string): boolean {
+  const relative = path.relative(path.resolve(root), path.resolve(target));
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
 function toHostSegments(relativePosix: string): string[] {
   return relativePosix.split("/").filter(Boolean);
 }
@@ -271,7 +345,7 @@ function toDisplayRelative(params: {
   if (!rel) {
     return "";
   }
-  if (!rel.startsWith("..") && !path.posix.isAbsolute(rel)) {
+  if (!relativePathEscapesContainerRoot(rel)) {
     return rel;
   }
   return params.containerPath;

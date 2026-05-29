@@ -1,3 +1,4 @@
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
   removeProviderAuthProfilesWithLock,
   buildApiKeyCredential,
@@ -23,6 +24,7 @@ import {
   type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/provider-setup";
 import { WizardCancelledError, type WizardPrompter } from "openclaw/plugin-sdk/setup";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   LMSTUDIO_DEFAULT_API_KEY_ENV_VAR,
   LMSTUDIO_DEFAULT_INFERENCE_BASE_URL,
@@ -121,8 +123,7 @@ function resolvePositiveInteger(value: unknown): number | undefined {
   if (!trimmed || !/^\d+$/.test(trimmed)) {
     return undefined;
   }
-  const normalized = Number.parseInt(trimmed, 10);
-  return Number.isFinite(normalized) && normalized > 0 ? normalized : undefined;
+  return parseStrictPositiveInteger(trimmed);
 }
 
 function buildLmstudioSetupProviderConfig(params: {
@@ -281,7 +282,7 @@ function mergeDiscoveredModels(params: {
   }
 
   const merged = [...explicitModels];
-  const seen = new Set(explicitModels.map((model) => model.id.trim()).filter(Boolean));
+  const seen = new Set(normalizeStringEntries(explicitModels.map((model) => model.id)));
   for (const model of discoveredModels) {
     const id = model.id.trim();
     if (!id || seen.has(id)) {
@@ -328,17 +329,16 @@ function mergeDiscoveredLmstudioAllowlistEntries(params: {
 }) {
   return withAgentModelAliases(
     params.existing,
-    params.discoveredModels
-      .map((model) => model.id.trim())
-      .filter(Boolean)
-      .map((id) => `${PROVIDER_ID}/${id}`),
+    normalizeStringEntries(params.discoveredModels.map((model) => model.id)).map(
+      (id) => `${PROVIDER_ID}/${id}`,
+    ),
   );
 }
 
 function selectDefaultLmstudioModelId(
   discoveredModels: ModelDefinitionConfig[],
 ): string | undefined {
-  const ids = discoveredModels.map((model) => model.id.trim()).filter(Boolean);
+  const ids = normalizeStringEntries(discoveredModels.map((model) => model.id));
   if (ids.length === 0) {
     return undefined;
   }
@@ -760,18 +760,6 @@ export async function discoverLmstudioProvider(ctx: ProviderCatalogContext): Pro
   }
   const hasExplicitModels = Array.isArray(explicit?.models) && explicit.models.length > 0;
   const { apiKey, discoveryApiKey } = ctx.resolveProviderApiKey(PROVIDER_ID);
-  let configuredDiscoveryApiKey: string | undefined;
-  try {
-    configuredDiscoveryApiKey = await resolveLmstudioConfiguredApiKey({
-      config: ctx.config,
-      env: ctx.env,
-    });
-  } catch (error) {
-    if (isLmstudioDiscoveryConfigResolutionError(error)) {
-      return null;
-    }
-    throw error;
-  }
   let resolvedHeaders: Record<string, string> | undefined;
   try {
     resolvedHeaders = await resolveLmstudioProviderHeaders({
@@ -786,6 +774,19 @@ export async function discoverLmstudioProvider(ctx: ProviderCatalogContext): Pro
     throw error;
   }
   const hasAuthorizationHeader = hasLmstudioAuthorizationHeader(resolvedHeaders);
+  let configuredDiscoveryApiKey: string | undefined;
+  try {
+    configuredDiscoveryApiKey = await resolveLmstudioConfiguredApiKey({
+      config: ctx.config,
+      env: ctx.env,
+      allowUnresolved: hasAuthorizationHeader || Boolean(discoveryApiKey),
+    });
+  } catch (error) {
+    if (isLmstudioDiscoveryConfigResolutionError(error)) {
+      return null;
+    }
+    throw error;
+  }
   const resolvedDiscoveryApiKey = hasAuthorizationHeader
     ? undefined
     : (discoveryApiKey ?? configuredDiscoveryApiKey);

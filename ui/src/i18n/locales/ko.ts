@@ -347,6 +347,12 @@ export const ko: TranslationMap = {
     eventLogSubtitle: "Latest gateway events.",
     noEvents: "No events yet.",
   },
+  quickSettings: {
+    security: {
+      browserEnabled: "Browser enabled",
+      toolProfile: "Tool profile",
+    },
+  },
   execApproval: {
     expiresIn: "expires in {time}",
     expired: "expired",
@@ -355,6 +361,8 @@ export const ko: TranslationMap = {
     pending: "{count} pending",
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
+    allowAlwaysUnavailable:
+      "유효한 승인 정책이 매번 승인을 요구하므로, 항상 허용을 사용할 수 없습니다.",
     deny: "Deny",
     labels: {
       host: "Host",
@@ -386,6 +394,7 @@ export const ko: TranslationMap = {
   },
   tabs: {
     agents: "에이전트",
+    activity: "활동",
     overview: "개요",
     channels: "채널",
     instances: "인스턴스",
@@ -407,6 +416,7 @@ export const ko: TranslationMap = {
   },
   subtitles: {
     agents: "워크스페이스, 도구, 정체성.",
+    activity: "브라우저 로컬 도구 활동 요약입니다.",
     overview: "상태, 진입점, 상태 정보.",
     channels: "채널 및 설정.",
     instances: "연결된 클라이언트와 노드.",
@@ -425,6 +435,42 @@ export const ko: TranslationMap = {
     debug: "스냅샷, 이벤트, RPC.",
     logs: "실시간 Gateway 로그.",
     dreams: "수면 중 메모리 통합.",
+  },
+  activity: {
+    title: "활동",
+    subtitle: "라이브 세션 이벤트에서 파생된 임시 도구 활동입니다.",
+    visibleCount: "{visible}/{total}",
+    filtersLabel: "활동 필터",
+    search: "검색",
+    searchPlaceholder: "도구, 요약, 실행, 세션으로 필터링",
+    toolFilter: "도구",
+    allTools: "모든 도구",
+    statusFilters: "상태 필터",
+    autoFollow: "자동 따라가기",
+    expandAll: "모두 펼치기",
+    collapseAll: "모두 접기",
+    clear: "지우기",
+    empty: "아직 도구 활동이 없습니다.",
+    emptyFiltered: "이 필터와 일치하는 활동이 없습니다.",
+    entrySummary: "{argumentSummary}",
+    argumentHiddenOne: "인수 1개 숨김",
+    argumentsHidden: "인수 {count}개 숨김",
+    streamLabel: "도구 활동 항목",
+    toolCallId: "도구 호출",
+    runId: "실행",
+    session: "세션",
+    outputTruncated: "미리 보기가 마스킹되고 잘렸습니다.",
+    noOutputPreview: "출력 미리보기가 없습니다.",
+    status: {
+      running: "실행 중",
+      done: "완료",
+      error: "오류",
+    },
+    duration: {
+      ms: "{count} ms",
+      seconds: "{count} s",
+      minutes: "{minutes}m {seconds}s",
+    },
   },
   overview: {
     access: {
@@ -691,10 +737,6 @@ export const ko: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle:
-        "토큰이 어디에 사용되는지, 언제 세션이 급증하는지, 무엇이 비용을 유발하는지 확인하세요.",
-    },
     common: {
       emptyValue: "—",
       unknown: "알 수 없음",
@@ -1035,6 +1077,10 @@ export const ko: TranslationMap = {
     settings: "채팅 설정",
     thinkingToggle: "어시스턴트 생각/작업 출력 전환",
     toolCallsToggle: "도구 호출 및 도구 결과 전환",
+    autoScrollMode: "자동 스크롤 모드",
+    autoScrollAlways: "항상",
+    autoScrollNearBottom: "하단 근처",
+    autoScrollOff: "끔",
     focusToggle: "집중 모드 전환(사이드바 + 페이지 헤더 숨기기)",
     hideCronSessions: "Cron 세션 숨기기",
     showCronSessions: "Cron 세션 표시",
@@ -1072,17 +1118,27 @@ export const ko: TranslationMap = {
       send: "Send",
       sendMessage: "Send message",
     },
+    queue: {
+      retry: "다시 시도",
+      retrySend: "전송 다시 시도",
+      retryQueuedMessage: "대기 중인 메시지 다시 시도",
+    },
     composer: {
       placeholder: "Message {name} (Enter to send)",
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
       startTalk: "Start Talk",
+      stillListening: "계속 듣는 중",
+      talkTranscript: "음성 대화 기록",
       stopTalk: "Stop Talk",
     },
     selectors: {
       agentFilter: "에이전트별로 세션 필터링",
       session: "Chat session",
+      sessionSearch: "세션 검색",
+      clearSessionSearch: "세션 검색 지우기",
+      loadMoreSessions: "세션 더 불러오기",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },
@@ -1194,6 +1250,9 @@ export const ko: TranslationMap = {
       ascending: "오름차순",
       descending: "내림차순",
       reset: "재설정",
+      emptyTitle: "No scheduled jobs yet.",
+      emptyHint: "Create one from a plain-language prompt; advanced fields can wait.",
+      emptyFilteredHint: "Clear or change filters to see scheduled jobs.",
       noMatching: "일치하는 작업이 없습니다.",
       loading: "로딩 중...",
       loadMore: "작업 더 불러오기",
@@ -1229,6 +1288,7 @@ export const ko: TranslationMap = {
     form: {
       editJob: "작업 편집",
       newJob: "새 작업",
+      advancedJob: "Advanced job",
       updateSubtitle: "선택한 예약 작업을 업데이트합니다.",
       createSubtitle: "예약된 웨이크업 또는 에이전트 실행을 생성합니다.",
       required: "필수",

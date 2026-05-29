@@ -43,6 +43,14 @@ const pairingIdLabels: Record<string, string> = {
   discord: "discordUserId",
 };
 
+function requireFirstMockCall(calls: readonly unknown[][], label: string): unknown[] {
+  const call = calls.at(0);
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
 vi.mock("../pairing/pairing-store.js", () => ({
   listChannelPairingRequests: mocks.listChannelPairingRequests,
   approveChannelPairingCode: mocks.approveChannelPairingCode,
@@ -226,9 +234,10 @@ describe("pairing cli", () => {
         channel: "telegram",
         code: "ABCDEFGH",
       });
-      const replaceCall = replaceConfigFile.mock.calls[0]?.[0] as
-        | { nextConfig?: { commands?: { ownerAllowFrom?: string[] } } }
-        | undefined;
+      const replaceCall = requireFirstMockCall(
+        replaceConfigFile.mock.calls,
+        "config replace",
+      )[0] as { nextConfig?: { commands?: { ownerAllowFrom?: string[] } } } | undefined;
       expect(replaceCall?.nextConfig?.commands?.ownerAllowFrom).toEqual(["telegram:123"]);
       expect(log.mock.calls).toEqual([
         [`${theme.success("Approved")} ${theme.muted("telegram")} sender ${theme.command("123")}.`],

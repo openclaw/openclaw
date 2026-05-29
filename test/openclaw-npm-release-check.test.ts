@@ -1,6 +1,7 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { WORKSPACE_TEMPLATE_PACK_PATHS } from "../scripts/lib/workspace-bootstrap-smoke.mjs";
 import {
@@ -17,6 +18,8 @@ import {
   resolveNpmDistTagMirrorAuth,
   resolveNpmPublishPlan,
   resolveNpmCommandInvocation,
+  resolveNpmReleaseCheckCommandTimeoutMs,
+  runNpmReleaseCheckCommand,
   shouldSkipPackedTarballValidation,
   utcCalendarDayDistance,
 } from "../scripts/openclaw-npm-release-check.ts";
@@ -26,9 +29,25 @@ import {
 } from "../src/infra/package-dist-inventory.ts";
 
 const REQUIRED_PACKED_PATHS = [
+  "npm-shrinkwrap.json",
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   ...WORKSPACE_TEMPLATE_PACK_PATHS,
 ] as const;
+
+describe("workspace template package paths", () => {
+  it("keeps the runtime heartbeat template in the npm pack guard", () => {
+    expect(WORKSPACE_TEMPLATE_PACK_PATHS).toContain("src/agents/templates/HEARTBEAT.md");
+    expect(WORKSPACE_TEMPLATE_PACK_PATHS).not.toContain("docs/reference/templates/HEARTBEAT.md");
+  });
+
+  it("keeps runtime heartbeat templates allowlisted in package.json", () => {
+    const packageJson = JSON.parse(readFileSync("package.json", "utf-8")) as {
+      files?: unknown;
+    };
+
+    expect(packageJson.files).toContain("src/agents/templates/");
+  });
+});
 
 describe("parseReleaseVersion", () => {
   it("parses stable CalVer releases", () => {
@@ -283,33 +302,182 @@ describe("resolveNpmCommandInvocation", () => {
     expect(
       resolveNpmCommandInvocation({
         npmExecPath: "/usr/local/lib/node_modules/npm/bin/npm-cli.js",
+        npmArgs: ["view", "openclaw", "version"],
         nodeExecPath: "/usr/local/bin/node",
         platform: "linux",
       }),
     ).toEqual({
       command: "/usr/local/bin/node",
-      args: ["/usr/local/lib/node_modules/npm/bin/npm-cli.js"],
+      args: ["/usr/local/lib/node_modules/npm/bin/npm-cli.js", "view", "openclaw", "version"],
     });
   });
 
   it("falls back to the npm command when npm_execpath points to pnpm", () => {
     expect(
       resolveNpmCommandInvocation({
+        npmArgs: ["pack"],
         npmExecPath: "/home/test/.cache/node/corepack/v1/pnpm/10.23.0/bin/pnpm.cjs",
         nodeExecPath: "/usr/local/bin/node",
         platform: "linux",
       }),
     ).toEqual({
       command: "npm",
-      args: [],
+      args: ["pack"],
     });
   });
 
-  it("uses the platform npm command when npm_execpath is missing", () => {
-    expect(resolveNpmCommandInvocation({ platform: "win32" })).toEqual({
-      command: "npm.cmd",
-      args: [],
+  it("wraps the Windows npm command when npm_execpath is missing", () => {
+    expect(
+      resolveNpmCommandInvocation({
+        comSpec: "C:\\Windows\\System32\\cmd.exe",
+        npmArgs: ["view", "openclaw@beta", "version"],
+        npmExecPath: "",
+        platform: "win32",
+      }),
+    ).toEqual({
+      command: "C:\\Windows\\System32\\cmd.exe",
+      args: ["/d", "/s", "/c", "npm.cmd view openclaw@beta version"],
+      windowsVerbatimArguments: true,
     });
+  });
+
+  it("wraps Windows npm_execpath command shims", () => {
+    expect(
+      resolveNpmCommandInvocation({
+        comSpec: "C:\\Windows\\System32\\cmd.exe",
+        npmArgs: ["install", "-g", "C:\\tmp\\openclaw package.tgz"],
+        npmExecPath: "C:\\Program Files\\nodejs\\npm.cmd",
+        nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
+        platform: "win32",
+      }),
+    ).toEqual({
+      command: "C:\\Windows\\System32\\cmd.exe",
+      args: [
+        "/d",
+        "/s",
+        "/c",
+        '""C:\\Program Files\\nodejs\\npm.cmd" install -g "C:\\tmp\\openclaw package.tgz""',
+      ],
+      windowsVerbatimArguments: true,
+    });
+  });
+
+  it("runs Windows npm_execpath executables directly", () => {
+    expect(
+      resolveNpmCommandInvocation({
+        npmArgs: ["--version"],
+        npmExecPath: "C:\\Program Files\\nodejs\\npm.exe",
+        platform: "win32",
+      }),
+    ).toEqual({
+      command: "C:\\Program Files\\nodejs\\npm.exe",
+      args: ["--version"],
+    });
+  });
+
+  if (process.platform === "win32") {
+    it("executes fallback npm.cmd through cmd.exe on Windows", () => {
+      const dir = mkdtempSync(join(tmpdir(), "openclaw-fake-npm-cmd-"));
+      try {
+        const outputPath = join(dir, "args.json");
+        writeFileSync(
+          join(dir, "fake-npm.js"),
+          [
+            "const fs = require('node:fs');",
+            "fs.writeFileSync(process.env.OPENCLAW_FAKE_NPM_OUT, JSON.stringify(process.argv.slice(2)));",
+          ].join("\n"),
+        );
+        writeFileSync(
+          join(dir, "npm.cmd"),
+          `@echo off\r\n"${process.execPath}" "%~dp0fake-npm.js" %*\r\n`,
+        );
+
+        const invocation = resolveNpmCommandInvocation({
+          comSpec: process.env.ComSpec ?? "cmd.exe",
+          npmArgs: ["view", "openclaw@beta", "version"],
+          npmExecPath: "",
+          platform: "win32",
+        });
+        execFileSync(invocation.command, invocation.args, {
+          cwd: dir,
+          env: {
+            ...process.env,
+            OPENCLAW_FAKE_NPM_OUT: outputPath,
+            PATH: `${dir}${delimiter}${process.env.PATH ?? ""}`,
+          },
+          windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+        });
+
+        expect(JSON.parse(readFileSync(outputPath, "utf8"))).toEqual([
+          "view",
+          "openclaw@beta",
+          "version",
+        ]);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  }
+});
+
+describe("runNpmReleaseCheckCommand", () => {
+  it("returns captured command output", () => {
+    expect(
+      runNpmReleaseCheckCommand(
+        { command: process.execPath, args: ["--eval", "process.stdout.write('ok')"] },
+        { stdio: ["ignore", "pipe", "pipe"] },
+      ),
+    ).toBe("ok");
+  });
+
+  it("bounds commands that ignore termination", () => {
+    const startedAt = Date.now();
+
+    expect(() =>
+      runNpmReleaseCheckCommand(
+        {
+          command: process.execPath,
+          args: ["--eval", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);"],
+        },
+        { stdio: ["ignore", "pipe", "pipe"], timeoutMs: 100 },
+      ),
+    ).toThrow();
+    expect(Date.now() - startedAt).toBeLessThan(2500);
+  });
+
+  it("bounds captured command output", () => {
+    expect(() =>
+      runNpmReleaseCheckCommand(
+        { command: process.execPath, args: ["--eval", "process.stdout.write('x'.repeat(4096))"] },
+        { maxBuffer: 1024, stdio: ["ignore", "pipe", "pipe"] },
+      ),
+    ).toThrow();
+  });
+});
+
+describe("resolveNpmReleaseCheckCommandTimeoutMs", () => {
+  it("uses a positive environment timeout", () => {
+    expect(
+      resolveNpmReleaseCheckCommandTimeoutMs({
+        OPENCLAW_NPM_RELEASE_CHECK_COMMAND_TIMEOUT_MS: "1234",
+      }),
+    ).toBe(1234);
+  });
+
+  it("falls back when the environment timeout is invalid", () => {
+    expect(
+      resolveNpmReleaseCheckCommandTimeoutMs({
+        OPENCLAW_NPM_RELEASE_CHECK_COMMAND_TIMEOUT_MS: "nope",
+      }),
+    ).toBe(10 * 60 * 1000);
+  });
+
+  it("falls back when the environment timeout has a numeric prefix", () => {
+    expect(
+      resolveNpmReleaseCheckCommandTimeoutMs({
+        OPENCLAW_NPM_RELEASE_CHECK_COMMAND_TIMEOUT_MS: "10m",
+      }),
+    ).toBe(10 * 60 * 1000);
   });
 });
 
@@ -480,12 +648,12 @@ describe("collectPackedTestCargoErrors", () => {
       collectPackedTestCargoErrors([
         "dist/extensions/webhooks/node_modules/zod/src/v3/tests/all-errors.test.ts",
         "dist/extensions/whatsapp/node_modules/pino/test/basic.test.js",
-        "dist/extensions/whatsapp/node_modules/@jimp/plugin-crop/src/__snapshots__/crop.test.ts.snap",
+        "dist/extensions/whatsapp/node_modules/example-codec/src/__snapshots__/codec.test.ts.snap",
         "dist/index.js",
       ]),
     ).toEqual([
       'npm package must not include test cargo "dist/extensions/webhooks/node_modules/zod/src/v3/tests/all-errors.test.ts".',
-      'npm package must not include test cargo "dist/extensions/whatsapp/node_modules/@jimp/plugin-crop/src/__snapshots__/crop.test.ts.snap".',
+      'npm package must not include test cargo "dist/extensions/whatsapp/node_modules/example-codec/src/__snapshots__/codec.test.ts.snap".',
       'npm package must not include test cargo "dist/extensions/whatsapp/node_modules/pino/test/basic.test.js".',
     ]);
   });

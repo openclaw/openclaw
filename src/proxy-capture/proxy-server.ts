@@ -64,6 +64,9 @@ export function parseConnectTarget(rawTarget: string | undefined): {
   }
   const hostname = trimmed.slice(0, lastColon).trim() || "127.0.0.1";
   const portText = trimmed.slice(lastColon + 1).trim();
+  if (!/^\d+$/.test(portText)) {
+    throw new Error("Invalid CONNECT target port");
+  }
   const port = Number(portText);
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
     throw new Error("Invalid CONNECT target port");
@@ -98,7 +101,34 @@ export async function startDebugProxyServer(params: {
 
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     const flowId = randomUUID();
-    const target = normalizeTargetUrl(req);
+    let target: URL;
+    try {
+      target = normalizeTargetUrl(req);
+    } catch (error) {
+      const message = "Invalid proxy target URL";
+      store.recordEvent({
+        sessionId: params.settings.sessionId,
+        ts: Date.now(),
+        sourceScope: "openclaw",
+        sourceProcess: params.settings.sourceProcess,
+        protocol: "http",
+        direction: "local",
+        kind: "error",
+        flowId,
+        method: req.method,
+        host: req.headers.host,
+        path: req.url ?? "",
+        errorText: error instanceof Error ? error.message : String(error),
+      });
+      const responseBody = `${message}\n`;
+      res.writeHead(400, {
+        Connection: "close",
+        "Content-Type": "text/plain; charset=utf-8",
+        "Content-Length": Buffer.byteLength(responseBody),
+      });
+      res.end(responseBody);
+      return;
+    }
     try {
       assertDebugProxyDirectUpstreamAllowed();
     } catch (error) {
@@ -271,6 +301,22 @@ export async function startDebugProxyServer(params: {
       clientSocket.pipe(upstreamSocket);
       upstreamSocket.pipe(clientSocket);
     });
+    clientSocket.on("error", (error) => {
+      store.recordEvent({
+        sessionId: params.settings.sessionId,
+        ts: Date.now(),
+        sourceScope: "openclaw",
+        sourceProcess: params.settings.sourceProcess,
+        protocol: "connect",
+        direction: "local",
+        kind: "error",
+        flowId,
+        host: hostname,
+        path: req.url ?? "",
+        errorText: error.message,
+      });
+      upstreamSocket.destroy();
+    });
     upstreamSocket.on("error", (error) => {
       store.recordEvent({
         sessionId: params.settings.sessionId,
@@ -285,7 +331,7 @@ export async function startDebugProxyServer(params: {
         path: req.url ?? "",
         errorText: error.message,
       });
-      clientSocket.end();
+      clientSocket.destroy();
     });
   });
 

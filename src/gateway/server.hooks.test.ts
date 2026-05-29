@@ -18,6 +18,8 @@ import {
 
 installGatewayTestHooks({ scope: "suite" });
 
+await import("./server.js");
+
 const resolveMainKey = () => resolveMainSessionKeyFromConfig();
 const HOOK_TOKEN = "hook-secret";
 const HOOKS_MAIN_SESSION_KEY = "agent:hooks:main";
@@ -89,6 +91,25 @@ async function waitForCronIsolatedRuns(count: number, timeoutMs = 2_000): Promis
     .toBe(count);
 }
 
+type HookCronRunCall = {
+  sessionKey?: string;
+  job?: {
+    agentId?: string;
+    payload?: {
+      externalContentSource?: string;
+      model?: string;
+    };
+  };
+};
+
+function cronRunCall(index = 0): HookCronRunCall {
+  const call = cronIsolatedRun.mock.calls.at(index)?.[0];
+  if (!call || typeof call !== "object") {
+    throw new Error(`expected cron isolated run call ${index + 1}`);
+  }
+  return call as HookCronRunCall;
+}
+
 async function postAgentHookWithIdempotency(
   port: number,
   idempotencyKey: string,
@@ -133,9 +154,7 @@ async function expectHookAgentSessionRouting(params: {
   expect(resAgent.status).toBe(200);
   await waitForSystemEventTexts(HOOKS_MAIN_SESSION_KEY);
 
-  const routedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
-    | { sessionKey?: string; job?: { agentId?: string } }
-    | undefined;
+  const routedCall = cronRunCall();
   expect(routedCall?.job?.agentId).toBe("hooks");
   expect(routedCall?.sessionKey).toBe(params.expectedSessionKey);
   drainSystemEvents(HOOKS_MAIN_SESSION_KEY);
@@ -172,17 +191,15 @@ describe("gateway server hooks", () => {
       const resWake = await postHook(port, "/hooks/wake", { text: "Ping", mode: "next-heartbeat" });
       expect(resWake.status).toBe(200);
       const wakeEvents = await waitForSystemEvent();
-      expect(wakeEvents.some((event) => event.includes("Ping"))).toBe(true);
+      expect(wakeEvents.join("\n")).toContain("Ping");
       drainSystemEvents(resolveMainKey());
 
       mockIsolatedRunOkOnce();
       const resAgent = await postHook(port, "/hooks/agent", { message: "Do it", name: "Email" });
       expect(resAgent.status).toBe(200);
       const agentEvents = await waitForSystemEvent();
-      expect(agentEvents.some((event) => event.includes("Hook Email: done"))).toBe(true);
-      const firstCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
-        job?: { payload?: { externalContentSource?: string } };
-      };
+      expect(agentEvents.join("\n")).toContain("Hook Email: done");
+      const firstCall = cronRunCall();
       expect(firstCall?.job?.payload?.externalContentSource).toBe("webhook");
       drainSystemEvents(resolveMainKey());
 
@@ -194,9 +211,7 @@ describe("gateway server hooks", () => {
       });
       expect(resAgentModel.status).toBe(200);
       await waitForSystemEvent();
-      const call = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
-        job?: { payload?: { model?: string } };
-      };
+      const call = cronRunCall();
       expect(call?.job?.payload?.model).toBe("openai/gpt-4.1-mini");
       drainSystemEvents(resolveMainKey());
 
@@ -208,9 +223,7 @@ describe("gateway server hooks", () => {
       });
       expect(resAgentWithId.status).toBe(200);
       await waitForSystemEventTexts(HOOKS_MAIN_SESSION_KEY);
-      const routedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
-        job?: { agentId?: string };
-      };
+      const routedCall = cronRunCall();
       expect(routedCall?.job?.agentId).toBe("hooks");
       drainSystemEvents(HOOKS_MAIN_SESSION_KEY);
 
@@ -222,9 +235,7 @@ describe("gateway server hooks", () => {
       });
       expect(resAgentUnknown.status).toBe(200);
       await waitForSystemEvent();
-      const fallbackCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
-        job?: { agentId?: string };
-      };
+      const fallbackCall = cronRunCall();
       expect(fallbackCall?.job?.agentId).toBe("main");
       drainSystemEvents(resolveMainKey());
 
@@ -251,7 +262,7 @@ describe("gateway server hooks", () => {
       );
       expect(resHeader.status).toBe(200);
       const headerEvents = await waitForSystemEvent();
-      expect(headerEvents.some((event) => event.includes("Header auth"))).toBe(true);
+      expect(headerEvents.join("\n")).toContain("Header auth");
       drainSystemEvents(resolveMainKey());
 
       const resGet = await fetch(`http://127.0.0.1:${port}/hooks/wake`, {
@@ -297,10 +308,7 @@ describe("gateway server hooks", () => {
         .poll(() => cronIsolatedRun.mock.calls.length, { timeout: 2_000, interval: 10 })
         .toBe(1);
 
-      const call = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
-        sessionKey?: string;
-        job?: { payload?: { externalContentSource?: string } };
-      };
+      const call = cronRunCall();
       expect(call?.sessionKey).toBe("main");
       expect(call?.job?.payload?.externalContentSource).toBe("gmail");
       drainSystemEvents(resolveMainKey());
@@ -321,7 +329,7 @@ describe("gateway server hooks", () => {
       expect(resAgent.status).toBe(200);
 
       const targetEvents = await waitForSystemEventTexts(HOOKS_MAIN_SESSION_KEY);
-      expect(targetEvents.some((event) => event.includes("Hook Email: done"))).toBe(true);
+      expect(targetEvents.join("\n")).toContain("Hook Email: done");
       expect(peekSystemEventEntries(resolveMainKey())).toStrictEqual([]);
       drainSystemEvents(HOOKS_MAIN_SESSION_KEY);
     });
@@ -407,7 +415,7 @@ describe("gateway server hooks", () => {
     });
   });
 
-  test("queues direct and mapped wake payloads as untrusted system events", async () => {
+  test("queues direct and mapped wake payloads as system events", async () => {
     testState.hooksConfig = {
       enabled: true,
       token: HOOK_TOKEN,
@@ -427,7 +435,6 @@ describe("gateway server hooks", () => {
       const directEvents = peekSystemEventEntries(resolveMainKey());
       expect(directEvents).toHaveLength(1);
       expect(directEvents[0]?.text).toBe("Direct wake");
-      expect(directEvents[0]?.trusted).toBe(false);
       drainSystemEvents(resolveMainKey());
 
       const mapped = await postHook(port, "/hooks/mapped-wake", { subject: "Email" });
@@ -436,7 +443,6 @@ describe("gateway server hooks", () => {
       const mappedEvents = peekSystemEventEntries(resolveMainKey());
       expect(mappedEvents).toHaveLength(1);
       expect(mappedEvents[0]?.text).toBe("Mapped wake: Email");
-      expect(mappedEvents[0]?.trusted).toBe(false);
       drainSystemEvents(resolveMainKey());
     });
   });
@@ -490,9 +496,7 @@ describe("gateway server hooks", () => {
       });
       expect(defaultRoute.status).toBe(200);
       await waitForSystemEvent();
-      const defaultCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
-        | { sessionKey?: string }
-        | undefined;
+      const defaultCall = cronRunCall();
       expect(defaultCall?.sessionKey).toBe("hook:ingress");
       drainSystemEvents(resolveMainKey());
 
@@ -508,9 +512,7 @@ describe("gateway server hooks", () => {
       });
       expect(mappedOk.status).toBe(200);
       await waitForSystemEvent();
-      const mappedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
-        | { sessionKey?: string }
-        | undefined;
+      const mappedCall = cronRunCall();
       expect(mappedCall?.sessionKey).toBe("hook:mapped:42");
       drainSystemEvents(resolveMainKey());
 
@@ -562,9 +564,7 @@ describe("gateway server hooks", () => {
       });
       expect(staticMapped.status).toBe(200);
       await waitForSystemEvent();
-      const staticCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
-        | { sessionKey?: string }
-        | undefined;
+      const staticCall = cronRunCall();
       expect(staticCall?.sessionKey).toBe("hook:gmail:fixed");
       drainSystemEvents(resolveMainKey());
     });
@@ -792,12 +792,17 @@ describe("gateway server hooks", () => {
     });
   });
 
-  test("enforces hooks.allowedAgentIds for explicit agent routing", async () => {
+  test("enforces hooks.allowedAgentIds for effective agent routing", async () => {
     testState.hooksConfig = {
       enabled: true,
       token: HOOK_TOKEN,
       allowedAgentIds: ["hooks"],
       mappings: [
+        {
+          match: { path: "mapped-default" },
+          action: "agent",
+          messageTemplate: "Mapped default: {{payload.subject}}",
+        },
         {
           match: { path: "mapped" },
           action: "agent",
@@ -808,15 +813,21 @@ describe("gateway server hooks", () => {
     };
     setMainAndHooksAgents();
     await withGatewayServer(async ({ port }) => {
-      mockIsolatedRunOkOnce();
       const resNoAgent = await postHook(port, "/hooks/agent", { message: "No explicit agent" });
-      expect(resNoAgent.status).toBe(200);
-      await waitForSystemEvent();
-      const noAgentCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
-        job?: { agentId?: string };
-      };
-      expect(noAgentCall?.job?.agentId).toBeUndefined();
-      drainSystemEvents(resolveMainKey());
+      expect(resNoAgent.status).toBe(400);
+      const noAgentBody = (await resNoAgent.json()) as { error?: string };
+      expect(noAgentBody.error).toContain("hooks.allowedAgentIds");
+      expect(cronIsolatedRun).not.toHaveBeenCalled();
+      expect(peekSystemEvents(resolveMainKey()).length).toBe(0);
+
+      const resEmptyAgent = await postHook(port, "/hooks/agent", {
+        message: "Empty agent",
+        agentId: " ",
+      });
+      expect(resEmptyAgent.status).toBe(400);
+      const emptyAgentBody = (await resEmptyAgent.json()) as { error?: string };
+      expect(emptyAgentBody.error).toContain("hooks.allowedAgentIds");
+      expect(cronIsolatedRun).not.toHaveBeenCalled();
 
       mockIsolatedRunOkOnce();
       const resAllowed = await postHook(port, "/hooks/agent", {
@@ -825,9 +836,7 @@ describe("gateway server hooks", () => {
       });
       expect(resAllowed.status).toBe(200);
       await waitForSystemEventTexts(HOOKS_MAIN_SESSION_KEY);
-      const allowedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
-        job?: { agentId?: string };
-      };
+      const allowedCall = cronRunCall();
       expect(allowedCall?.job?.agentId).toBe("hooks");
       drainSystemEvents(HOOKS_MAIN_SESSION_KEY);
 
@@ -839,11 +848,55 @@ describe("gateway server hooks", () => {
       const deniedBody = (await resDenied.json()) as { error?: string };
       expect(deniedBody.error).toContain("hooks.allowedAgentIds");
 
+      const resMappedDefaultDenied = await postHook(port, "/hooks/mapped-default", {
+        subject: "hello",
+      });
+      expect(resMappedDefaultDenied.status).toBe(400);
+      const mappedDefaultDeniedBody = (await resMappedDefaultDenied.json()) as { error?: string };
+      expect(mappedDefaultDeniedBody.error).toContain("hooks.allowedAgentIds");
+
       const resMappedDenied = await postHook(port, "/hooks/mapped", { subject: "hello" });
       expect(resMappedDenied.status).toBe(400);
       const mappedDeniedBody = (await resMappedDenied.json()) as { error?: string };
       expect(mappedDeniedBody.error).toContain("hooks.allowedAgentIds");
       expect(peekSystemEvents(resolveMainKey()).length).toBe(0);
+    });
+  });
+
+  test("allows omitted agentId when the default target is allowlisted", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      allowRequestSessionKey: true,
+      allowedSessionKeyPrefixes: ["hook:", "agent:"],
+      allowedAgentIds: ["main"],
+    };
+    testState.sessionConfig = { scope: "global" };
+    setMainAndHooksAgents();
+    await withGatewayServer(async ({ port }) => {
+      mockIsolatedRunOkOnce();
+      const resNoAgent = await postHook(port, "/hooks/agent", {
+        message: "Default target",
+        sessionKey: "agent:hooks:slack:channel:c123",
+      });
+      expect(resNoAgent.status).toBe(200);
+      await waitForSystemEventTexts(resolveMainKey());
+      const noAgentCall = cronRunCall();
+      expect(noAgentCall?.job?.agentId).toBeUndefined();
+      expect(noAgentCall?.sessionKey).toBe("agent:main:slack:channel:c123");
+      expect(peekSystemEventEntries("agent:main:main")).toStrictEqual([]);
+      drainSystemEvents(resolveMainKey());
+
+      mockIsolatedRunOkOnce();
+      const resBlankAgent = await postHook(port, "/hooks/agent", {
+        message: "Blank target",
+        agentId: " ",
+      });
+      expect(resBlankAgent.status).toBe(200);
+      await waitForSystemEventTexts(resolveMainKey());
+      const blankAgentCall = cronRunCall();
+      expect(blankAgentCall?.job?.agentId).toBeUndefined();
+      drainSystemEvents(resolveMainKey());
     });
   });
 
@@ -857,6 +910,13 @@ describe("gateway server hooks", () => {
       list: [{ id: "main", default: true }, { id: "hooks" }],
     };
     await withGatewayServer(async ({ port }) => {
+      const resNoAgent = await postHook(port, "/hooks/agent", {
+        message: "Denied by omission",
+      });
+      expect(resNoAgent.status).toBe(400);
+      const noAgentBody = (await resNoAgent.json()) as { error?: string };
+      expect(noAgentBody.error).toContain("hooks.allowedAgentIds");
+
       const resDenied = await postHook(port, "/hooks/agent", {
         message: "Denied",
         agentId: "hooks",

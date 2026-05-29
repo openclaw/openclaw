@@ -1,3 +1,4 @@
+import { parseAccessGroupAllowFromEntry } from "openclaw/plugin-sdk/access-groups";
 import {
   createChannelIngressResolver,
   defineStableChannelIngressIdentity,
@@ -5,9 +6,7 @@ import {
 import { resolveInboundMentionDecision } from "openclaw/plugin-sdk/channel-mention-gating";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
-  buildPendingHistoryContextFromMap,
-  clearHistoryEntriesIfEnabled,
-  recordPendingHistoryEntryIfEnabled,
+  createChannelHistoryWindow,
   type HistoryEntry as SdkHistoryEntry,
 } from "openclaw/plugin-sdk/reply-history";
 import { resolveQQBotEffectivePolicies } from "../engine/access/resolve-policy.js";
@@ -34,8 +33,7 @@ export function createSdkHistoryAdapter(): HistoryPort {
       entry?: T | null;
       limit: number;
     }) {
-      return recordPendingHistoryEntryIfEnabled({
-        historyMap: asSdkMap(params.historyMap),
+      return createChannelHistoryWindow({ historyMap: asSdkMap(params.historyMap) }).record({
         historyKey: params.historyKey,
         entry: params.entry as SdkHistoryEntry | undefined,
         limit: params.limit,
@@ -43,8 +41,9 @@ export function createSdkHistoryAdapter(): HistoryPort {
     },
 
     buildPendingHistoryContext(params) {
-      return buildPendingHistoryContextFromMap({
+      return createChannelHistoryWindow({
         historyMap: asSdkMap(params.historyMap),
+      }).buildPendingContext({
         historyKey: params.historyKey,
         limit: params.limit,
         currentMessage: params.currentMessage,
@@ -54,8 +53,7 @@ export function createSdkHistoryAdapter(): HistoryPort {
     },
 
     clearPendingHistory(params) {
-      clearHistoryEntriesIfEnabled({
-        historyMap: asSdkMap(params.historyMap),
+      createChannelHistoryWindow({ historyMap: asSdkMap(params.historyMap) }).clear({
         historyKey: params.historyKey,
         limit: params.limit,
       });
@@ -136,7 +134,7 @@ async function resolveQQBotSlashCommandAuthorized(params: {
     (params.isGroup && params.groupAllowFrom && params.groupAllowFrom.length > 0
       ? params.groupAllowFrom
       : params.allowFrom);
-  const explicitAllowFrom = normalizeQQBotAllowFrom(rawAllowFrom).filter((entry) => entry !== "*");
+  const explicitAllowFrom = normalizeQQBotCommandAllowFrom(rawAllowFrom);
   if (explicitAllowFrom.length === 0) {
     return false;
   }
@@ -164,4 +162,25 @@ async function resolveQQBotSlashCommandAuthorized(params: {
     },
   });
   return resolved.commandAccess.authorized;
+}
+
+function normalizeQQBotCommandAllowFrom(
+  rawAllowFrom: Array<string | number> | null | undefined,
+): string[] {
+  const entries: string[] = [];
+  for (const rawEntry of rawAllowFrom ?? []) {
+    const entry = String(rawEntry).trim();
+    if (!entry) {
+      continue;
+    }
+    if (parseAccessGroupAllowFromEntry(entry)) {
+      entries.push(entry);
+      continue;
+    }
+    const normalized = normalizeQQBotSenderId(entry);
+    if (normalized && normalized !== "*") {
+      entries.push(normalized);
+    }
+  }
+  return entries;
 }

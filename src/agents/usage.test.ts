@@ -96,18 +96,37 @@ describe("normalizeUsage", () => {
       output_tokens: 30,
       total_tokens: 250,
       input_tokens_details: { cached_tokens: 100 },
+      output_tokens_details: { reasoning_tokens: 17 },
     });
     expect(usage).toEqual({
       input: 20,
       output: 30,
       cacheRead: 100,
       cacheWrite: undefined,
+      reasoningTokens: 17,
       total: 250,
     });
   });
 
+  it("handles OpenAI Chat Completions reasoning token details", () => {
+    const usage = normalizeUsage({
+      prompt_tokens: 120,
+      completion_tokens: 30,
+      total_tokens: 150,
+      completion_tokens_details: { reasoning_tokens: 11 },
+    });
+    expect(usage).toEqual({
+      input: 120,
+      output: 30,
+      cacheRead: undefined,
+      cacheWrite: undefined,
+      reasoningTokens: 11,
+      total: 150,
+    });
+  });
+
   it("clamps negative input to zero (pre-subtracted cached_tokens > prompt_tokens)", () => {
-    // pi-ai OpenAI-format providers subtract cached_tokens from prompt_tokens
+    // shared model runtime OpenAI-format providers subtract cached_tokens from prompt_tokens
     // upstream.  When cached_tokens exceeds prompt_tokens the result is negative.
     const usage = normalizeUsage({
       input: -4900,
@@ -181,6 +200,21 @@ describe("toOpenAiChatCompletionsUsage", () => {
     });
   });
 
+  it("preserves reasoning token details", () => {
+    const usage = normalizeUsage({
+      prompt_tokens: 10,
+      completion_tokens: 8,
+      completion_tokens_details: { reasoning_tokens: 6 },
+      total_tokens: 18,
+    });
+    expect(toOpenAiChatCompletionsUsage(usage)).toEqual({
+      prompt_tokens: 10,
+      completion_tokens: 8,
+      completion_tokens_details: { reasoning_tokens: 6 },
+      total_tokens: 18,
+    });
+  });
+
   it("returns zeros for undefined usage", () => {
     expect(toOpenAiChatCompletionsUsage(undefined)).toEqual({
       prompt_tokens: 0,
@@ -229,6 +263,39 @@ describe("toOpenAiChatCompletionsUsage", () => {
       completion_tokens: 0,
       total_tokens: 7,
     });
+  });
+
+  it("forwards cached_tokens via prompt_tokens_details when cache was hit", () => {
+    expect(
+      toOpenAiChatCompletionsUsage({
+        input: 594,
+        output: 79,
+        cacheRead: 30848,
+        cacheWrite: 0,
+        total: 31521,
+      }),
+    ).toEqual({
+      prompt_tokens: 31442,
+      completion_tokens: 79,
+      total_tokens: 31521,
+      prompt_tokens_details: { cached_tokens: 30848 },
+    });
+  });
+
+  it("omits prompt_tokens_details when no cache was read", () => {
+    const result = toOpenAiChatCompletionsUsage({
+      input: 1000,
+      output: 50,
+      cacheRead: 0,
+      cacheWrite: 0,
+      total: 1050,
+    });
+    expect(result).toEqual({
+      prompt_tokens: 1000,
+      completion_tokens: 50,
+      total_tokens: 1050,
+    });
+    expect("prompt_tokens_details" in result).toBe(false);
   });
 });
 

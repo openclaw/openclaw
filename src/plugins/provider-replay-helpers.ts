@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AgentMessage } from "../agents/runtime/index.js";
 import { isGemma4ModelId } from "../shared/google-models.js";
 import { sanitizeGoogleAssistantFirstOrdering } from "../shared/google-turn-ordering.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
@@ -30,11 +30,16 @@ export function buildOpenAICompatibleReplayPolicy(
 
   const sanitizeToolCallIds = options.sanitizeToolCallIds ?? true;
   const dropReasoningFromHistory = options.dropReasoningFromHistory ?? true;
+  const isResponsesFamily =
+    modelApi === "openai-responses" ||
+    modelApi === "openai-codex-responses" ||
+    modelApi === "azure-openai-responses";
 
   return {
     ...(sanitizeToolCallIds
       ? { sanitizeToolCallIds: true, toolCallIdMode: "strict" as const }
       : {}),
+    ...(isResponsesFamily ? { allowSyntheticToolResults: true } : {}),
     ...(modelApi === "openai-completions"
       ? {
           applyAssistantFirstOrderingFix: true,

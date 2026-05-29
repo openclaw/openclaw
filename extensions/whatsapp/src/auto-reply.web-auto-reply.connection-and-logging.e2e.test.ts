@@ -27,6 +27,25 @@ import {
   startWebAutoReplyMonitor,
 } from "./auto-reply.test-harness.js";
 
+type DrainSelectionEntry = {
+  channel: string;
+  accountId?: string | null;
+  lastError?: string;
+};
+type DrainPendingDeliveriesCall = {
+  drainKey: string;
+  logLabel: string;
+  selectEntry: (entry: DrainSelectionEntry) => { match: boolean; bypassBackoff: boolean };
+};
+
+const deliveryQueueMocks = vi.hoisted(() => ({
+  drainPendingDeliveries: vi.fn(async (_opts: unknown) => undefined),
+}));
+
+vi.mock("openclaw/plugin-sdk/delivery-queue-runtime", () => ({
+  drainPendingDeliveries: deliveryQueueMocks.drainPendingDeliveries,
+}));
+
 installWebAutoReplyTestHomeHooks();
 
 function requireOnMessage(
@@ -84,7 +103,7 @@ function expectErrorContaining(errorFn: unknown, text: string): void {
   const messages = ((errorFn as { mock?: { calls?: unknown[][] } }).mock?.calls ?? []).map((call) =>
     typeof call[0] === "string" ? call[0] : call[0] instanceof Error ? call[0].message : "",
   );
-  expect(messages.some((message) => message.includes(text))).toBe(true);
+  expect(messages.join("\n")).toContain(text);
 }
 
 function mockStringMessages(mocked: unknown): string[] {
@@ -122,7 +141,7 @@ describe("web auto-reply connection", () => {
 
   it("handles helper envelope timestamps with trimmed timezones (regression)", () => {
     const d = new Date("2025-01-01T00:00:00.000Z");
-    expect(formatEnvelopeTimestamp(d, " America/Los_Angeles ")).toBe("Tue 2024-12-31 16:00 PST");
+    expect(formatEnvelopeTimestamp(d, " America/Los_Angeles ")).toBe("Tue 2024-12-31 16:00:00 PST");
   });
 
   it("handles reconnect progress and max-attempt stop behavior", async () => {
@@ -247,6 +266,78 @@ describe("web auto-reply connection", () => {
     expect(sleep).toHaveBeenCalled();
   });
 
+  it("drains pending deliveries while connected and stops after close", async () => {
+    vi.useFakeTimers();
+    try {
+      const sleep = vi.fn(async () => {});
+      const scripted = createScriptedWebListenerFactory();
+      const { controller, run } = startWebAutoReplyMonitor({
+        monitorWebChannelFn: monitorWebChannel as never,
+        listenerFactory: scripted.listenerFactory,
+        sleep,
+        accountId: "work",
+      });
+
+      await vi.waitFor(
+        () => {
+          expect(scripted.getListenerCount()).toBe(1);
+        },
+        { timeout: 250, interval: 2 },
+      );
+      expect(deliveryQueueMocks.drainPendingDeliveries).toHaveBeenCalledWith(
+        expect.objectContaining({
+          drainKey: "whatsapp:work",
+          logLabel: "WhatsApp reconnect drain",
+        }),
+      );
+
+      deliveryQueueMocks.drainPendingDeliveries.mockClear();
+      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.waitFor(() => {
+        expect(deliveryQueueMocks.drainPendingDeliveries).toHaveBeenCalledTimes(1);
+      });
+
+      const periodicCall = deliveryQueueMocks.drainPendingDeliveries.mock.calls.at(-1)?.[0] as
+        | DrainPendingDeliveriesCall
+        | undefined;
+      expect(periodicCall).toBeDefined();
+      if (!periodicCall) {
+        throw new Error("Expected WhatsApp periodic drain call");
+      }
+      expect(periodicCall.drainKey).toBe("whatsapp:work");
+      expect(periodicCall.logLabel).toBe("WhatsApp periodic drain");
+      expect(
+        periodicCall.selectEntry({
+          channel: "whatsapp",
+          accountId: "work",
+        }),
+      ).toEqual({ match: true, bypassBackoff: false });
+      expect(
+        periodicCall.selectEntry({
+          channel: "whatsapp",
+          accountId: "default",
+        }),
+      ).toEqual({ match: false, bypassBackoff: false });
+      expect(
+        periodicCall.selectEntry({
+          channel: "telegram",
+          accountId: "work",
+        }),
+      ).toEqual({ match: false, bypassBackoff: false });
+
+      controller.abort();
+      scripted.resolveClose(0, { status: 499, isLoggedOut: false, error: "aborted" });
+      await Promise.resolve();
+      await run;
+
+      deliveryQueueMocks.drainPendingDeliveries.mockClear();
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(deliveryQueueMocks.drainPendingDeliveries).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("treats status 440 as non-retryable and stops without retrying", async () => {
     const sleep = vi.fn(async () => {});
     const scripted = createScriptedWebListenerFactory();
@@ -365,8 +456,8 @@ describe("web auto-reply connection", () => {
       expect(getActiveWebListener(accountId)).toBeNull();
       await expectPathMissing(authDir);
       expect(
-        statuses.some((entry) => entry.connected === false && entry.healthState === healthState),
-      ).toBe(true);
+        statuses.filter((entry) => entry.connected === false && entry.healthState === healthState),
+      ).not.toEqual([]);
       const finalStatus = statuses.at(-1);
       expect(finalStatus?.running).toBe(false);
       expect(finalStatus?.connected).toBe(false);
@@ -451,41 +542,35 @@ describe("web auto-reply connection", () => {
       await Promise.resolve();
       await run;
 
+      expect(mockStringMessages(runtime.log).join("\n")).toContain(
+        "WhatsApp Web watchdog is recovering a stale connection",
+      );
+      expect(mockStringMessages(runtime.error).join("\n")).not.toContain("status 499");
       expect(
-        mockStringMessages(runtime.log).some((message) =>
-          message.includes("WhatsApp Web watchdog is recovering a stale connection"),
-        ),
-      ).toBe(true);
-      expect(
-        mockStringMessages(runtime.error).some((message) => message.includes("status 499")),
-      ).toBe(false);
-      expect(
-        statuses.some(
+        statuses.filter(
           (status) =>
             status.healthState === "reconnecting" &&
             status.reconnectAttempts === 1 &&
             (status.lastDisconnect as { status?: number } | null)?.status === 499,
         ),
-      ).toBe(true);
+      ).not.toEqual([]);
       expect(
-        statuses.every(
+        statuses.filter(
           (status) =>
-            !(
-              status.lastDisconnect &&
-              typeof status.lastDisconnect === "object" &&
-              "expected" in status.lastDisconnect
-            ),
+            status.lastDisconnect &&
+            typeof status.lastDisconnect === "object" &&
+            "expected" in status.lastDisconnect,
         ),
-      ).toBe(true);
+      ).toEqual([]);
       expect(
-        statuses.some(
+        statuses.filter(
           (status) =>
             status.connected === true &&
             status.healthState === "healthy" &&
             status.reconnectAttempts === 0 &&
             status.lastDisconnect === null,
         ),
-      ).toBe(true);
+      ).not.toEqual([]);
     } finally {
       vi.useRealTimers();
     }
@@ -904,8 +989,8 @@ describe("web auto-reply connection", () => {
         });
 
         expect(resolver).toHaveBeenCalledTimes(2);
-        const firstArgs = resolver.mock.calls[0][0];
-        const secondArgs = resolver.mock.calls[1][0];
+        const firstArgs = resolver.mock.calls.at(0)?.[0];
+        const secondArgs = resolver.mock.calls.at(1)?.[0];
         const firstTimestamp = formatEnvelopeTimestamp(new Date("2025-01-01T00:00:00Z"));
         const secondTimestamp = formatEnvelopeTimestamp(new Date("2025-01-01T01:00:00Z"));
         const firstPattern = escapeRegExp(firstTimestamp);

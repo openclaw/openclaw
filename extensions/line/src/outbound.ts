@@ -2,7 +2,7 @@ import {
   defineChannelMessageAdapter,
   type ChannelMessageSendResult,
   type MessageReceiptPartKind,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
 import {
   createAttachedChannelResultAdapter,
   createEmptyChannelResult,
@@ -421,7 +421,7 @@ export const lineMessageAdapter = defineChannelMessageAdapter({
     },
   },
   receive: {
-    defaultAckPolicy: "after_agent_dispatch",
-    supportedAckPolicies: ["after_receive_record", "after_agent_dispatch"],
+    defaultAckPolicy: "after_receive_record",
+    supportedAckPolicies: ["after_receive_record"],
   },
 });

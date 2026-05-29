@@ -1,10 +1,14 @@
+import { readProviderJsonArrayFieldResponse } from "openclaw/plugin-sdk/provider-http";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asPositiveSafeInteger,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const log = createSubsystemLogger("kilocode-models");
 
@@ -70,10 +74,6 @@ interface GatewayModelEntry {
   supported_parameters?: string[];
 }
 
-interface GatewayModelsResponse {
-  data: GatewayModelEntry[];
-}
-
 function toPricePerMillion(perToken: string | undefined): number {
   if (!perToken) {
     return 0;
@@ -116,8 +116,10 @@ function toModelDefinition(entry: GatewayModelEntry): ModelDefinitionConfig {
       cacheRead: toPricePerMillion(entry.pricing.input_cache_read),
       cacheWrite: toPricePerMillion(entry.pricing.input_cache_write),
     },
-    contextWindow: entry.context_length || KILOCODE_DEFAULT_CONTEXT_WINDOW,
-    maxTokens: entry.top_provider?.max_completion_tokens ?? KILOCODE_DEFAULT_MAX_TOKENS,
+    contextWindow: asPositiveSafeInteger(entry.context_length) ?? KILOCODE_DEFAULT_CONTEXT_WINDOW,
+    maxTokens:
+      asPositiveSafeInteger(entry.top_provider?.max_completion_tokens) ??
+      KILOCODE_DEFAULT_MAX_TOKENS,
   };
 }
 
@@ -131,6 +133,30 @@ function buildStaticCatalog(): ModelDefinitionConfig[] {
     contextWindow: model.contextWindow ?? KILOCODE_DEFAULT_CONTEXT_WINDOW,
     maxTokens: model.maxTokens ?? KILOCODE_DEFAULT_MAX_TOKENS,
   }));
+}
+
+function asGatewayModelEntry(value: unknown): GatewayModelEntry {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("Kilocode model list: malformed JSON response");
+  }
+  const entry = value as Partial<GatewayModelEntry>;
+  if (
+    typeof entry.id !== "string" ||
+    typeof entry.pricing !== "object" ||
+    entry.pricing === null ||
+    Array.isArray(entry.pricing)
+  ) {
+    throw new Error("Kilocode model list: malformed JSON response");
+  }
+  return value as GatewayModelEntry;
+}
+
+function readGatewayModelId(value: unknown): string {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return "";
+  }
+  const id = (value as Partial<GatewayModelEntry>).id;
+  return typeof id === "string" ? id.trim() : "";
 }
 
 export async function discoverKilocodeModels(): Promise<ModelDefinitionConfig[]> {
@@ -154,8 +180,12 @@ export async function discoverKilocodeModels(): Promise<ModelDefinitionConfig[]>
         return buildStaticCatalog();
       }
 
-      const data = (await response.json()) as GatewayModelsResponse;
-      if (!Array.isArray(data.data) || data.data.length === 0) {
+      const data = await readProviderJsonArrayFieldResponse(
+        response,
+        "Kilocode model list",
+        "data",
+      );
+      if (data.length === 0) {
         log.warn("No models found from gateway API, using static catalog");
         return buildStaticCatalog();
       }
@@ -163,15 +193,13 @@ export async function discoverKilocodeModels(): Promise<ModelDefinitionConfig[]>
       const models: ModelDefinitionConfig[] = [];
       const discoveredIds = new Set<string>();
 
-      for (const entry of data.data) {
-        if (!entry || typeof entry !== "object") {
-          continue;
-        }
-        const id = typeof entry.id === "string" ? entry.id.trim() : "";
-        if (!id || discoveredIds.has(id)) {
-          continue;
-        }
+      for (const rawEntry of data) {
+        const id = readGatewayModelId(rawEntry);
         try {
+          const entry = asGatewayModelEntry(rawEntry);
+          if (!id || discoveredIds.has(id)) {
+            continue;
+          }
           models.push(toModelDefinition(entry));
           discoveredIds.add(id);
         } catch (e) {

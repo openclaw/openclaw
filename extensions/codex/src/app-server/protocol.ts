@@ -70,18 +70,25 @@ export type CodexDynamicToolSpec = JsonObject & {
   inputSchema: JsonValue;
 };
 
+export type CodexTurnEnvironmentParams = JsonObject & {
+  environmentId: string;
+  cwd: string;
+};
+
 export type CodexThreadStartParams = JsonObject & {
   input?: CodexUserInput[];
   cwd?: string;
   model?: string;
   modelProvider?: string | null;
+  personality?: string | null;
   approvalPolicy?: string | JsonObject;
   approvalsReviewer?: string | null;
-  sandbox?: CodexSandboxPolicy;
+  sandbox?: string;
   serviceTier?: CodexServiceTier | null;
   dynamicTools?: CodexDynamicToolSpec[] | null;
   developerInstructions?: string;
   experimentalRawEvents?: boolean;
+  environments?: CodexTurnEnvironmentParams[] | null;
   persistExtendedHistory?: boolean;
 };
 
@@ -89,6 +96,14 @@ export type CodexThreadResumeParams = JsonObject & {
   threadId: string;
   model?: string;
   modelProvider?: string | null;
+  personality?: string | null;
+  approvalPolicy?: string | JsonObject;
+  approvalsReviewer?: string | null;
+  sandbox?: string;
+  serviceTier?: CodexServiceTier | null;
+  config?: JsonObject;
+  developerInstructions?: string;
+  persistExtendedHistory?: boolean;
 };
 
 export type CodexThreadStartResponse = {
@@ -137,6 +152,8 @@ export type CodexTurnStartParams = JsonObject & {
   sandboxPolicy?: CodexSandboxPolicy;
   serviceTier?: CodexServiceTier | null;
   effort?: string | null;
+  personality?: string | null;
+  environments?: CodexTurnEnvironmentParams[] | null;
   collaborationMode?: {
     mode: string;
     settings: JsonObject & {
@@ -254,9 +271,15 @@ export type CodexDynamicToolCallParams = {
 };
 
 export type CodexDynamicToolCallResponse = {
+  asyncStarted?: boolean;
   contentItems: CodexDynamicToolCallOutputContentItem[];
+  diagnosticTerminalType?: CodexDynamicToolDiagnosticTerminalType;
+  sideEffectEvidence?: boolean;
   success: boolean;
+  terminate?: boolean;
 };
+
+export type CodexDynamicToolDiagnosticTerminalType = "blocked" | "completed" | "error";
 
 export type CodexDynamicToolCallOutputContentItem =
   | {
@@ -425,9 +448,32 @@ export type CodexSkillsListParams = {
   forceReload?: boolean;
 };
 
+export type CodexSkillScope = "user" | "repo" | "system" | "admin";
+
+export type CodexSkillMetadata = {
+  name: string;
+  description: string;
+  shortDescription?: string;
+  interface?: JsonObject;
+  dependencies?: JsonObject;
+  path: string;
+  scope: CodexSkillScope;
+  enabled: boolean;
+};
+
+export type CodexSkillErrorInfo = {
+  path: string;
+  message: string;
+};
+
+export type CodexSkillsListEntry = {
+  cwd: string;
+  skills: CodexSkillMetadata[];
+  errors: CodexSkillErrorInfo[];
+};
+
 export type CodexSkillsListResponse = {
-  data: JsonValue[];
-  nextCursor?: string | null;
+  data: CodexSkillsListEntry[];
 };
 
 export type CodexHooksListParams = {
@@ -472,6 +518,7 @@ export declare namespace v2 {
 }
 
 type CodexAppServerRequestParamsOverride = {
+  "environment/add": { environmentId: string; execServerUrl: string };
   "thread/fork": CodexThreadForkParams;
   "thread/inject_items": CodexThreadInjectItemsParams;
   "thread/start": CodexThreadStartParams;
@@ -485,6 +532,7 @@ type CodexAppServerRequestResultMap = {
   "account/read": CodexGetAccountResponse;
   "app/list": CodexAppsListResponse;
   "config/mcpServer/reload": JsonValue;
+  "environment/add": JsonValue;
   "experimentalFeature/enablement/set": JsonValue;
   "feedback/upload": JsonValue;
   "hooks/list": CodexHooksListResponse;
@@ -508,7 +556,7 @@ type CodexAppServerRequestResultMap = {
   "turn/steer": JsonValue;
 };
 
-export function isJsonObject(value: JsonValue | undefined): value is JsonObject {
+export function isJsonObject(value: unknown): value is JsonObject {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 

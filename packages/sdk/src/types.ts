@@ -28,7 +28,7 @@ export type ConnectableOpenClawTransport = OpenClawTransport & {
 
 export type RuntimeSelection =
   | "auto"
-  | { type: "embedded"; id: "pi" | "codex" | (string & {}) }
+  | { type: "embedded"; id: "openclaw" | "codex" | (string & {}) }
   | { type: "cli"; id: "claude-cli" | (string & {}) }
   | { type: "acp"; harness: "claude" | "cursor" | "gemini" | "opencode" | (string & {}) }
   | { type: "managed"; provider: "local" | "node" | "testbox" | "cloud" | (string & {}) };
@@ -101,9 +101,9 @@ export type ArtifactSummary = {
 };
 
 export type ArtifactQuery =
-  | { sessionKey: string; runId?: string; taskId?: string }
-  | { runId: string; sessionKey?: string; taskId?: string }
-  | { taskId: string; sessionKey?: string; runId?: string };
+  | { sessionKey: string; runId?: string; taskId?: string; agentId?: string }
+  | { runId: string; sessionKey?: string; taskId?: string; agentId?: string }
+  | { taskId: string; sessionKey?: string; runId?: string; agentId?: string };
 
 export type ArtifactsListResult = {
   artifacts: ArtifactSummary[];

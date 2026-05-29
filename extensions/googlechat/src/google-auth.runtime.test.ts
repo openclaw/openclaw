@@ -38,14 +38,14 @@ vi.mock("gaxios", () => ({
   Gaxios: mocks.gaxiosCtor,
 }));
 
-let __testing: typeof import("./google-auth.runtime.js").__testing;
+let testing: typeof import("./google-auth.runtime.js").testing;
 let createGoogleAuthFetch: typeof import("./google-auth.runtime.js").createGoogleAuthFetch;
 let getGoogleAuthTransport: typeof import("./google-auth.runtime.js").getGoogleAuthTransport;
 let resolveValidatedGoogleChatCredentials: typeof import("./google-auth.runtime.js").resolveValidatedGoogleChatCredentials;
 
 beforeAll(async () => {
   ({
-    __testing,
+    testing,
     createGoogleAuthFetch,
     getGoogleAuthTransport,
     resolveValidatedGoogleChatCredentials,
@@ -53,7 +53,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  __testing.resetGoogleAuthRuntimeForTests();
+  testing.resetGoogleAuthRuntimeForTests();
   mocks.buildHostnameAllowlistPolicyFromSuffixAllowlist.mockClear();
   mocks.fetchWithSsrFGuard.mockReset();
   mocks.gaxiosCtor.mockClear();
@@ -70,6 +70,14 @@ afterAll(() => {
   vi.doUnmock("gaxios");
   vi.resetModules();
 });
+
+function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0): unknown {
+  const call = mock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`Expected mock call ${callIndex}`);
+  }
+  return call[argIndex];
+}
 
 describe("googlechat google auth runtime", () => {
   it("routes Google auth fetches through the SSRF guard and preserves explicit proxy mTLS", async () => {
@@ -127,7 +135,7 @@ describe("googlechat google auth runtime", () => {
       method: "POST",
     } as RequestInit);
 
-    expect(mocks.fetchWithSsrFGuard.mock.calls[0]?.[0]).not.toHaveProperty("fetchImpl");
+    expect(mockCallArg(mocks.fetchWithSsrFGuard)).not.toHaveProperty("fetchImpl");
     expect(release).toHaveBeenCalledOnce();
   });
 
@@ -150,7 +158,7 @@ describe("googlechat google auth runtime", () => {
       (globalThis as Record<string, unknown>).fetch = originalFetch;
     }
 
-    expect(mocks.fetchWithSsrFGuard.mock.calls[0]?.[0]).not.toHaveProperty("fetchImpl");
+    expect(mockCallArg(mocks.fetchWithSsrFGuard)).not.toHaveProperty("fetchImpl");
     expect(release).toHaveBeenCalledOnce();
   });
 
@@ -234,10 +242,10 @@ describe("googlechat google auth runtime", () => {
     vi.stubEnv("HTTPS_PROXY", "http://upper-https-proxy.example:8080");
     vi.stubEnv("https_proxy", "http://lower-https-proxy.example:8080");
 
-    expect(__testing.resolveGoogleAuthEnvProxyUrl("https")).toBe(
+    expect(testing.resolveGoogleAuthEnvProxyUrl("https")).toBe(
       "http://upper-https-proxy.example:8080",
     );
-    expect(__testing.resolveGoogleAuthEnvProxyUrl("http")).toBe(
+    expect(testing.resolveGoogleAuthEnvProxyUrl("http")).toBe(
       "http://upper-http-proxy.example:8080",
     );
   });
@@ -352,10 +360,10 @@ describe("googlechat google auth runtime", () => {
       const responseInterceptorAdd = transport.interceptors.response.add as unknown as ReturnType<
         typeof vi.fn
       >;
-      const requestInterceptor = requestInterceptorAdd.mock.calls[0]?.[0] as
+      const requestInterceptor = mockCallArg(requestInterceptorAdd) as
         | { resolved?: unknown }
         | undefined;
-      const responseInterceptor = responseInterceptorAdd.mock.calls[0]?.[0] as
+      const responseInterceptor = mockCallArg(responseInterceptorAdd) as
         | { resolved?: unknown }
         | undefined;
 
@@ -391,7 +399,7 @@ describe("googlechat google auth runtime", () => {
       url: new URL("https://www.googleapis.com/oauth2/v1/certs"),
     };
 
-    const normalized = __testing.normalizeGoogleAuthPreparedRequestHeaders(config);
+    const normalized = testing.normalizeGoogleAuthPreparedRequestHeaders(config);
 
     expect(normalized.headers).toBeInstanceOf(Headers);
     expect(normalized.headers.has("x-test")).toBe(true);
@@ -406,7 +414,7 @@ describe("googlechat google auth runtime", () => {
       },
     };
 
-    const normalized = __testing.normalizeGoogleAuthResponseHeaders(response);
+    const normalized = testing.normalizeGoogleAuthResponseHeaders(response);
 
     expect(normalized.headers).toBeInstanceOf(Headers);
     expect(normalized.headers.get("cache-control")).toBe("public, max-age=3600");

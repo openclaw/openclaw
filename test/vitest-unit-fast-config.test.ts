@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
+import { spawnNodeEvalSync } from "../src/test-utils/node-process.js";
 import { createCommandsLightVitestConfig } from "./vitest/vitest.commands-light.config.ts";
 import { createPluginSdkLightVitestConfig } from "./vitest/vitest.plugin-sdk-light.config.ts";
 import {
@@ -49,14 +50,59 @@ function collectUnroutedForcedFiles(
 }
 
 describe("unit-fast vitest lane", () => {
+  let configProbeResult: ReturnType<typeof spawnNodeEvalSync>;
+  let unitFastConfig: ReturnType<typeof createUnitFastVitestConfig>;
+  let unitFastTestFiles: ReturnType<typeof getUnitFastTestFiles>;
+  let unitFastAnalysis: ReturnType<typeof collectUnitFastTestFileAnalysis>;
+  let broadCandidates: ReturnType<typeof collectBroadUnitFastTestCandidates>;
+  let broadAnalysis: ReturnType<typeof collectUnitFastTestFileAnalysis>;
+  let currentCandidates: ReturnType<typeof collectUnitFastTestCandidates>;
+
+  beforeAll(() => {
+    const script = `
+      import fs from "node:fs";
+      let readdirSyncCalls = 0;
+      const originalReaddirSync = fs.readdirSync;
+      fs.readdirSync = function patchedReaddirSync(...args) {
+        readdirSyncCalls += 1;
+        return originalReaddirSync.apply(this, args);
+      };
+      await import("./test/vitest/vitest.unit-fast.config.ts?io-probe=" + Date.now());
+      console.log(readdirSyncCalls);
+    `;
+    configProbeResult = spawnNodeEvalSync(script, {
+      env: { ...process.env, FORCE_COLOR: "0", NO_COLOR: "1" },
+      evalFlag: "-e",
+      imports: ["tsx"],
+    });
+    unitFastConfig = createUnitFastVitestConfig({});
+    unitFastTestFiles = getUnitFastTestFiles();
+    unitFastAnalysis = collectUnitFastTestFileAnalysis();
+    currentCandidates = collectUnitFastTestCandidates();
+    broadCandidates = collectBroadUnitFastTestCandidates();
+    broadAnalysis = collectUnitFastTestFileAnalysis(process.cwd(), { scope: "broad" });
+  });
+
+  it("loads the config without recursively walking repo roots", () => {
+    expect(configProbeResult.status, configProbeResult.stderr).toBe(0);
+    const numericOutputLines = configProbeResult.stdout
+      .trim()
+      .split(/\r?\n/u)
+      .map((line) => Number(line.trim()))
+      .filter(Number.isFinite);
+    expect(numericOutputLines.length, configProbeResult.stdout).toBeGreaterThan(0);
+    expect(numericOutputLines.at(-1)).toBeLessThan(20);
+  });
+
   it("runs cache-friendly tests without the reset-heavy runner or runtime setup", () => {
-    const config = createUnitFastVitestConfig({});
-    const testConfig = requireTestConfig(config);
+    const testConfig = requireTestConfig(unitFastConfig);
 
     expect(testConfig.isolate).toBe(false);
     expect(testConfig.runner).toBeUndefined();
     expect(testConfig.setupFiles).toStrictEqual([]);
-    expect(testConfig.include).toContain("src/agents/pi-tools.deferred-followup-guidance.test.ts");
+    expect(testConfig.include).toContain(
+      "src/agents/agent-tools.deferred-followup-guidance.test.ts",
+    );
     expect(testConfig.include).toContain("src/acp/control-plane/runtime-cache.test.ts");
     expect(testConfig.include).toContain("src/acp/runtime/registry.test.ts");
     expect(testConfig.include).toContain("src/commands/status-overview-values.test.ts");
@@ -127,26 +173,21 @@ describe("unit-fast vitest lane", () => {
   });
 
   it("routes audited stateful-looking tests through the fast lane", () => {
-    const analysis = collectUnitFastTestFileAnalysis();
     const forcedFileSet = new Set(forcedUnitFastTestFiles);
-    const forcedAnalysisCount = countMatching(analysis, (entry) => forcedFileSet.has(entry.file));
-    const unitFastTestFiles = getUnitFastTestFiles();
+    const forcedAnalysisCount = countMatching(unitFastAnalysis, (entry) =>
+      forcedFileSet.has(entry.file),
+    );
 
     expect(forcedAnalysisCount).toBe(forcedUnitFastTestFiles.length);
     for (const file of forcedUnitFastTestFiles) {
       expect(unitFastTestFiles).toContain(file);
       expect(isUnitFastTestFile(file)).toBe(true);
     }
-    const unroutedForcedFiles = collectUnroutedForcedFiles(analysis, forcedFileSet);
+    const unroutedForcedFiles = collectUnroutedForcedFiles(unitFastAnalysis, forcedFileSet);
     expect(unroutedForcedFiles).toStrictEqual([]);
   });
 
   it("keeps broad audit candidates separate from automatically routed unit-fast tests", () => {
-    const currentCandidates = collectUnitFastTestCandidates();
-    const broadCandidates = collectBroadUnitFastTestCandidates();
-    const broadAnalysis = collectUnitFastTestFileAnalysis(process.cwd(), { scope: "broad" });
-    const unitFastTestFiles = getUnitFastTestFiles();
-
     expect(currentCandidates.length).toBeGreaterThanOrEqual(unitFastTestFiles.length);
     expect(broadCandidates.length).toBeGreaterThan(currentCandidates.length);
     expect(countMatching(broadAnalysis, (entry) => entry.unitFast)).toBeGreaterThan(
@@ -157,7 +198,6 @@ describe("unit-fast vitest lane", () => {
   it("excludes unit-fast files from the older light lanes so full runs do not duplicate them", () => {
     const pluginSdkLight = createPluginSdkLightVitestConfig({});
     const commandsLight = createCommandsLightVitestConfig({});
-    const unitFastTestFiles = getUnitFastTestFiles();
 
     expect(unitFastTestFiles).toContain("src/plugin-sdk/provider-entry.test.ts");
     expect(requireTestConfig(pluginSdkLight).exclude).toContain(

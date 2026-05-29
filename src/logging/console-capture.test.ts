@@ -49,6 +49,14 @@ afterAll(async () => {
   await logPathTracker.cleanup();
 });
 
+function firstMockArgAsString(mock: { mock: { calls: readonly unknown[][] } }): string {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error("expected mock call");
+  }
+  return String(call[0]);
+}
+
 describe("enableConsoleCapture", () => {
   const secret = "sk-testsecret1234567890abcd";
 
@@ -82,7 +90,7 @@ describe("enableConsoleCapture", () => {
     enableConsoleCapture();
     console.warn("[EventQueue] Slow listener detected");
     expect(warn).toHaveBeenCalledTimes(1);
-    const firstArg = String(warn.mock.calls[0]?.[0] ?? "");
+    const firstArg = firstMockArgAsString(warn);
     // Timestamp uses local time with timezone offset instead of UTC "Z" suffix
     expect(firstArg).toMatch(
       /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2} \[EventQueue\]/,
@@ -109,7 +117,7 @@ describe("enableConsoleCapture", () => {
     const payload = JSON.stringify({ ok: true });
     console.log(payload);
     expect(log).toHaveBeenCalledTimes(1);
-    const firstArg = String(log.mock.calls[0]?.[0] ?? "");
+    const firstArg = firstMockArgAsString(log);
     expect(firstArg).toMatch(/^(?:\d{2}:\d{2}:\d{2}|\d{4}-\d{2}-\d{2}T)/);
     expect(firstArg.endsWith(` ${payload}`)).toBe(true);
   });
@@ -137,7 +145,7 @@ describe("enableConsoleCapture", () => {
     console.log("apiKey:", secret);
 
     expect(log).toHaveBeenCalledTimes(1);
-    const line = String(log.mock.calls[0]?.[0] ?? "");
+    const line = firstMockArgAsString(log);
     expect(line).toContain("apiKey:");
     expect(line).not.toContain(secret);
   });
@@ -151,7 +159,7 @@ describe("enableConsoleCapture", () => {
     console.error(`Authorization: Bearer ${secret}`);
 
     expect(stderrWrite).toHaveBeenCalledTimes(1);
-    const line = String(stderrWrite.mock.calls[0]?.[0] ?? "");
+    const line = firstMockArgAsString(stderrWrite);
     expect(line).toContain("Authorization: Bearer");
     expect(line).not.toContain(secret);
   });
@@ -166,7 +174,7 @@ describe("enableConsoleCapture", () => {
     console.warn(`token=${secret}`);
 
     expect(warn).toHaveBeenCalledTimes(1);
-    const line = String(warn.mock.calls[0]?.[0] ?? "");
+    const line = firstMockArgAsString(warn);
     expect(line).toMatch(/^(?:\d{2}:\d{2}:\d{2}|\d{4}-\d{2}-\d{2}T)/);
     expect(line).toContain("token=");
     expect(line).not.toContain(secret);
@@ -175,12 +183,37 @@ describe("enableConsoleCapture", () => {
   it.each([
     { name: "stdout", stream: process.stdout },
     { name: "stderr", stream: process.stderr },
-  ])("swallows async EPIPE on $name", ({ stream }) => {
-    setLoggerOverride({ level: "info", file: tempLogPath() });
-    enableConsoleCapture();
-    const epipe = new Error("write EPIPE") as NodeJS.ErrnoException;
-    epipe.code = "EPIPE";
-    expect(stream.emit("error", epipe)).toBe(true);
+  ])("exits on async EPIPE on $name", ({ stream }) => {
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {}) as typeof process.exit);
+    try {
+      setLoggerOverride({ level: "info", file: tempLogPath() });
+      loggingState.streamErrorHandlersInstalled = false;
+      enableConsoleCapture();
+      const epipe = new Error("write EPIPE") as NodeJS.ErrnoException;
+      epipe.code = "EPIPE";
+      stream.emit("error", epipe);
+      expect(exitSpy).toHaveBeenCalledWith(0);
+    } finally {
+      exitSpy.mockRestore();
+    }
+  });
+
+  it("preserves an existing nonzero exit code on async EPIPE", () => {
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {}) as typeof process.exit);
+    const originalExitCode = process.exitCode;
+    try {
+      process.exitCode = 2;
+      setLoggerOverride({ level: "info", file: tempLogPath() });
+      loggingState.streamErrorHandlersInstalled = false;
+      enableConsoleCapture();
+      const epipe = new Error("write EPIPE") as NodeJS.ErrnoException;
+      epipe.code = "EPIPE";
+      process.stderr.emit("error", epipe);
+      expect(exitSpy).toHaveBeenCalledWith(2);
+    } finally {
+      process.exitCode = originalExitCode;
+      exitSpy.mockRestore();
+    }
   });
 
   it("rethrows non-EPIPE errors on stdout", () => {

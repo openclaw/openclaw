@@ -29,6 +29,20 @@ function createSetupDeps(home: string) {
   };
 }
 
+function requireFirstWorkspaceParams(
+  ensureAgentWorkspace: ReturnType<typeof vi.fn>,
+): Record<string, unknown> {
+  const [call] = ensureAgentWorkspace.mock.calls;
+  if (!call) {
+    throw new Error("expected workspace setup call");
+  }
+  const [params] = call;
+  if (!params || typeof params !== "object" || Array.isArray(params)) {
+    throw new Error("expected workspace setup params");
+  }
+  return params as Record<string, unknown>;
+}
+
 describe("setupCommand", () => {
   it("writes gateway.mode=local on first run", async () => {
     await withTempHome(async (home) => {
@@ -143,9 +157,9 @@ describe("setupCommand", () => {
       await setupCommand(undefined, runtime, deps);
 
       expect(deps.ensureAgentWorkspace).toHaveBeenCalledOnce();
-      const [workspaceParams] = deps.ensureAgentWorkspace.mock.calls[0] ?? [];
-      expect(workspaceParams?.dir).toBe(workspace);
-      expect(workspaceParams?.skipOptionalBootstrapFiles).toEqual(["IDENTITY.md", "USER.md"]);
+      const workspaceParams = requireFirstWorkspaceParams(deps.ensureAgentWorkspace);
+      expect(workspaceParams.dir).toBe(workspace);
+      expect(workspaceParams.skipOptionalBootstrapFiles).toEqual(["IDENTITY.md", "USER.md"]);
     });
   });
 

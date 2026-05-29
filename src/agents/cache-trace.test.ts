@@ -278,16 +278,15 @@ describe("createCacheTrace", () => {
       .update('{"child":{"ref":"[Circular]"},"content":"hello","role":"user"}')
       .digest("hex");
     const event = JSON.parse(lines[0]?.trim() ?? "{}") as Record<string, unknown>;
-    expect(event).toStrictEqual(
-      expect.objectContaining({
-        messageCount: 1,
-        messageFingerprints: [fingerprint],
-        messageRoles: ["user"],
-        messagesDigest: crypto
-          .createHash("sha256")
-          .update(JSON.stringify(fingerprint))
-          .digest("hex"),
-      }),
-    );
+    expect(event).toStrictEqual({
+      ts: expect.any(String),
+      seq: 1,
+      stage: "prompt:images",
+      messageCount: 1,
+      messageRoles: ["user"],
+      messageFingerprints: [fingerprint],
+      messagesDigest: crypto.createHash("sha256").update(JSON.stringify(fingerprint)).digest("hex"),
+      messages: [{ role: "user", content: "hello", child: { ref: "[Circular]" } }],
+    });
   });
 });

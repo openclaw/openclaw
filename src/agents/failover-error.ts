@@ -5,9 +5,9 @@ import {
   isUnclassifiedNoBodyHttpSignal,
   type FailoverClassification,
   type FailoverSignal,
-} from "./pi-embedded-helpers/errors.js";
-import { isTimeoutErrorMessage } from "./pi-embedded-helpers/errors.js";
-import type { FailoverReason } from "./pi-embedded-helpers/types.js";
+} from "./embedded-agent-helpers/errors.js";
+import { isTimeoutErrorMessage } from "./embedded-agent-helpers/errors.js";
+import type { FailoverReason } from "./embedded-agent-helpers/types.js";
 import { isSessionWriteLockTimeoutError } from "./session-write-lock-error.js";
 
 const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
@@ -151,6 +151,11 @@ function readDirectErrorCode(err: unknown): string | undefined {
     const trimmed = directCode.trim();
     return trimmed ? trimmed : undefined;
   }
+  const detailCode = (err as { detail?: { code?: unknown } }).detail?.code;
+  if (typeof detailCode === "string") {
+    const trimmed = detailCode.trim();
+    return trimmed ? trimmed : undefined;
+  }
   const status = (err as { status?: unknown }).status;
   if (typeof status !== "string" || /^\d+$/.test(status)) {
     return undefined;
@@ -232,6 +237,52 @@ function hasSessionWriteLockTimeout(err: unknown, seen: Set<object> = new Set())
     hasSessionWriteLockTimeout(candidate.cause, seen) ||
     hasSessionWriteLockTimeout(candidate.reason, seen)
   );
+}
+
+function isEmbeddedAttemptSessionTakeover(err: unknown): boolean {
+  // Match by name to avoid importing embedded-agent-runner here (would create a cycle).
+  return Boolean(
+    err && typeof err === "object" && readErrorName(err) === "EmbeddedAttemptSessionTakeoverError",
+  );
+}
+
+function hasEmbeddedAttemptSessionTakeover(err: unknown, seen: Set<object> = new Set()): boolean {
+  if (isEmbeddedAttemptSessionTakeover(err)) {
+    return true;
+  }
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+  if (seen.has(err)) {
+    return false;
+  }
+  seen.add(err);
+  const candidate = err as { error?: unknown; cause?: unknown; reason?: unknown };
+  return (
+    hasEmbeddedAttemptSessionTakeover(candidate.error, seen) ||
+    hasEmbeddedAttemptSessionTakeover(candidate.cause, seen) ||
+    hasEmbeddedAttemptSessionTakeover(candidate.reason, seen)
+  );
+}
+
+/**
+ * True when the error is a local runtime coordination error (session write-lock
+ * timeout or embedded attempt session takeover) rather than a provider/model
+ * failure. The model fallback chain must abort on these instead of consuming
+ * candidate slots — retrying any model would hit the same local condition.
+ * See #83510.
+ */
+export function isNonProviderRuntimeCoordinationError(err: unknown): boolean {
+  if (!hasSessionWriteLockTimeout(err) && !hasEmbeddedAttemptSessionTakeover(err)) {
+    return false;
+  }
+  if (isFailoverError(err)) {
+    return false;
+  }
+  if (isEmbeddedAttemptSessionTakeover(err)) {
+    return true;
+  }
+  return resolveFailoverClassificationFromError(err) === null;
 }
 
 function hasTimeoutHint(err: unknown): boolean {

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ErrorCodes } from "../protocol/index.js";
+import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 
 const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(() => ({})),
@@ -76,7 +76,7 @@ describe("ttsHandlers", () => {
       context: { getRuntimeConfig: mocks.getRuntimeConfig },
     } as never);
 
-    const call = respond.mock.calls[0] as
+    const call = respond.mock.calls.at(0) as
       | [boolean, unknown, { code?: number; message?: string }]
       | undefined;
     expect(call?.[0]).toBe(false);

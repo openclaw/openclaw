@@ -76,6 +76,65 @@ describe("applyJobPatch", () => {
     expect(job.delivery).toEqual({ mode: "webhook", to: "https://example.invalid/cron" });
   });
 
+  it("clears chat delivery fields when switching delivery to webhook", () => {
+    const job = createIsolatedAgentTurnJob("job-webhook-switch", {
+      mode: "announce",
+      channel: "telegram",
+      to: "-100123",
+      threadId: 42,
+      accountId: "coordinator",
+    });
+
+    applyJobPatch(job, {
+      delivery: { mode: "webhook", to: "https://example.invalid/cron" },
+    });
+
+    expect(job.delivery).toEqual({
+      mode: "webhook",
+      to: "https://example.invalid/cron",
+      bestEffort: undefined,
+      failureDestination: undefined,
+    });
+  });
+
+  it("clears webhook delivery targets when switching delivery to announce", () => {
+    const job = createIsolatedAgentTurnJob("job-announce-switch", {
+      mode: "webhook",
+      to: "https://example.invalid/cron",
+    });
+
+    applyJobPatch(job, {
+      delivery: { mode: "announce" },
+    });
+
+    expect(job.delivery).toEqual({
+      mode: "announce",
+      channel: undefined,
+      to: undefined,
+      threadId: undefined,
+      accountId: undefined,
+      bestEffort: undefined,
+      failureDestination: undefined,
+    });
+  });
+
+  it("keeps explicit chat targets when switching webhook delivery to announce", () => {
+    const job = createIsolatedAgentTurnJob("job-announce-switch-target", {
+      mode: "webhook",
+      to: "https://example.invalid/cron",
+    });
+
+    applyJobPatch(job, {
+      delivery: { mode: "announce", channel: "telegram", to: "-100123" },
+    });
+
+    expect(job.delivery).toMatchObject({
+      mode: "announce",
+      channel: "telegram",
+      to: "-100123",
+    });
+  });
+
   it("applies explicit delivery patches", () => {
     const job = createIsolatedAgentTurnJob("job-2", {
       mode: "announce",
@@ -481,14 +540,28 @@ describe("createJob rejects sessionTarget main for non-default agents", () => {
     expect(job.sessionTarget).toBe("isolated");
   });
 
-  it("rejects custom session targets with path separators", () => {
+  it("accepts custom session targets with channel-native separators", () => {
+    const state = createMockState(now, { defaultAgentId: "main" });
+    const sessionTarget = "session:agent:main:dingtalk:group:cid3tmd4xb19xjfk/wogxwy2a==";
+    const job = createJob(state, {
+      name: "dingtalk-group-session",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget,
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "hello" },
+    });
+    expect(job.sessionTarget).toBe(sessionTarget);
+  });
+
+  it("rejects null bytes in custom session targets", () => {
     const state = createMockState(now, { defaultAgentId: "main" });
     expect(() =>
       createJob(state, {
         name: "bad-custom-session",
         enabled: true,
         schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "session:../../outside",
+        sessionTarget: "session:bad\0id",
         wakeMode: "now",
         payload: { kind: "agentTurn", message: "hello" },
       }),
@@ -548,13 +621,27 @@ describe("applyJobPatch rejects sessionTarget main for non-default agents", () =
     expect(job.agentId).toBe("main");
   });
 
-  it("rejects patching to a custom session target with path separators", () => {
+  it("accepts patching to a custom session target with channel-native separators", () => {
+    const job = createMainJob();
+    const sessionTarget = "session:agent:main:dingtalk:group:cid3tmd4xb19xjfk/wogxwy2a==";
+    applyJobPatch(
+      job,
+      {
+        sessionTarget,
+        payload: { kind: "agentTurn", message: "hello" },
+      },
+      { defaultAgentId: "main" },
+    );
+    expect(job.sessionTarget).toBe(sessionTarget);
+  });
+
+  it("rejects patching to a custom session target with null bytes", () => {
     const job = createMainJob();
     expect(() =>
       applyJobPatch(
         job,
         {
-          sessionTarget: "session:..\\outside",
+          sessionTarget: "session:bad\0id",
           payload: { kind: "agentTurn", message: "hello" },
         },
         { defaultAgentId: "main" },

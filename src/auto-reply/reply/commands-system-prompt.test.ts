@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSessionAgentIds } from "../../agents/agent-scope.js";
+import { createOpenClawCodingTools } from "../../agents/agent-tools.js";
 import { resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
-import { createOpenClawCodingTools } from "../../agents/pi-tools.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import { buildAgentSystemPrompt } from "../../agents/system-prompt.js";
 import { resolveCommandsSystemPromptBundle } from "./commands-system-prompt.js";
@@ -52,7 +52,7 @@ vi.mock("../../agents/system-prompt.js", () => ({
   buildAgentSystemPrompt: vi.fn(() => "system prompt"),
 }));
 
-vi.mock("../../agents/pi-tools.js", () => ({
+vi.mock("../../agents/agent-tools.js", () => ({
   createOpenClawCodingTools: createOpenClawCodingToolsMock,
 }));
 
@@ -117,7 +117,7 @@ function requireFirstArg(
   mockFn: { mock: { calls: unknown[][] } },
   label: string,
 ): Record<string, unknown> {
-  const arg = mockFn.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
+  const arg = mockFn.mock.calls.at(0)?.[0] as Record<string, unknown> | undefined;
   if (!arg) {
     throw new Error(`expected ${label} to be called`);
   }
@@ -178,6 +178,11 @@ describe("resolveCommandsSystemPromptBundle", () => {
     );
     expect(toolParams.agentId).toBe("target");
     expect(toolParams.sessionKey).toBe("agent:target:telegram:direct:target-session");
+    const bootstrapParams = requireFirstArg(
+      vi.mocked(resolveBootstrapContextForRun),
+      "resolveBootstrapContextForRun",
+    );
+    expect(bootstrapParams.agentId).toBe("target");
   });
 
   it("prefers the target session entry for bootstrap and tool metadata", async () => {

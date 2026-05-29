@@ -1,7 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_WINDOWS_SYSTEM_ROOT,
-  _resetWindowsInstallRootsForTests,
+  resetWindowsInstallRootsForTests,
 } from "../infra/windows-install-roots.js";
 import type { WindowsAclEntry, WindowsAclSummary } from "./windows-acl.js";
 
@@ -33,7 +33,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   vi.unstubAllEnvs();
-  _resetWindowsInstallRootsForTests();
+  resetWindowsInstallRootsForTests();
 });
 
 function aclEntry(params: {
@@ -396,6 +396,71 @@ Successfully processed 1 files`;
         ],
         expected: { untrustedWorld: 1 },
       },
+      {
+        name: "Anonymous Logon SID (S-1-5-7) is world, not group",
+        entries: [
+          aclEntry({
+            principal: "*S-1-5-7",
+            rights: ["R"],
+            rawRights: "(R)",
+            canRead: true,
+            canWrite: false,
+          }),
+        ],
+        expected: { untrustedWorld: 1 },
+      },
+      {
+        name: "BUILTIN\\\\Guests SID (S-1-5-32-546) is world, not group",
+        entries: [
+          aclEntry({
+            principal: "*S-1-5-32-546",
+            rights: ["R"],
+            rawRights: "(R)",
+            canRead: true,
+            canWrite: false,
+          }),
+        ],
+        expected: { untrustedWorld: 1 },
+      },
+      {
+        name: "Interactive SID (S-1-5-4) is world, not group",
+        entries: [
+          aclEntry({
+            principal: "*S-1-5-4",
+            rights: ["R"],
+            rawRights: "(R)",
+            canRead: true,
+            canWrite: false,
+          }),
+        ],
+        expected: { untrustedWorld: 1 },
+      },
+      {
+        name: "Local SID (S-1-2-0) is world, not group",
+        entries: [
+          aclEntry({
+            principal: "*S-1-2-0",
+            rights: ["R"],
+            rawRights: "(R)",
+            canRead: true,
+            canWrite: false,
+          }),
+        ],
+        expected: { untrustedWorld: 1 },
+      },
+      {
+        name: "Network SID (S-1-5-2) is world, not group",
+        entries: [
+          aclEntry({
+            principal: "*S-1-5-2",
+            rights: ["R"],
+            rawRights: "(R)",
+            canRead: true,
+            canWrite: false,
+          }),
+        ],
+        expected: { untrustedWorld: 1 },
+      },
     ] as const)("$name", ({ entries, env, expected }) => {
       expectSummaryCounts(entries, expected, env);
     });
@@ -445,7 +510,7 @@ Successfully processed 1 files`;
     });
 
     it("uses the discovered process SystemRoot when env options are omitted", async () => {
-      _resetWindowsInstallRootsForTests({ queryRegistryValue: () => null });
+      resetWindowsInstallRootsForTests({ queryRegistryValue: () => null });
       vi.stubEnv("SystemRoot", "D:\\Windows");
 
       const mockExec = vi.fn().mockResolvedValue({
@@ -862,13 +927,6 @@ Successfully processed 1 files`;
 
     it("classifies Spanish SYSTEM (AUTORIDAD NT\\SYSTEM) as trusted", () => {
       expectTrustedOnly([aclEntry({ principal: "AUTORIDAD NT\\SYSTEM" })]);
-    });
-
-    it("classifies principal with diacritic not in TRUSTED_BASE but matching stripped suffix (line 145)", () => {
-      // "NT Authority\\Syst\u00e9me" has \u00e9 (e-acute) which is not in TRUSTED_BASE directly.
-      // After diacritic stripping: "nt authority\\systeme" which ends with stripped("\\syst\u00e8me") = "\\systeme".
-      // This exercises the classifyPrincipal diacritic-strip fallback at line 145.
-      expectTrustedOnly([aclEntry({ principal: "NT Authority\\Syst\u00e9me" })]);
     });
 
     it("French Windows full scenario: user + Système only → no untrusted", () => {

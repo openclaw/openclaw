@@ -3,6 +3,10 @@ import {
   removeAckReactionHandleAfterReply,
   type AckReactionHandle,
 } from "openclaw/plugin-sdk/channel-feedback";
+import {
+  runChannelInboundEvent,
+  type CommandTurnContext,
+} from "openclaw/plugin-sdk/channel-inbound";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import {
   createInternalHookEvent,
@@ -13,7 +17,6 @@ import {
   toPluginMessageReceivedEvent,
   triggerInternalHook,
 } from "openclaw/plugin-sdk/hook-runtime";
-import { runInboundReplyTurn } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveBatchedReplyThreadingPolicy } from "openclaw/plugin-sdk/reply-reference";
 import { getPrimaryIdentityId, getSelfIdentity, getSenderIdentity } from "../../identity.js";
@@ -55,6 +58,7 @@ import {
   resolveChannelContextVisibilityMode,
   resolveInboundSessionEnvelopeContext,
   resolvePinnedMainDmOwnerFromAllowlist,
+  isControlCommandMessage,
   shouldComputeCommandAuthorized,
   shouldLogVerbose,
   type getChildLogger,
@@ -63,6 +67,10 @@ import {
   type LoadConfigFn,
   type resolveAgentRoute,
 } from "./runtime-api.js";
+import {
+  createWhatsAppStatusReactionController,
+  type StatusReactionController,
+} from "./status-reaction.js";
 
 const WHATSAPP_MESSAGE_RECEIVED_HOOK_LIMITS = {
   maxConcurrency: 8,
@@ -72,7 +80,7 @@ const WHATSAPP_MESSAGE_RECEIVED_HOOK_LIMITS = {
 
 type WhatsAppMessageReceivedHookConfig = {
   pluginHooks?: {
-    messageReceived?: unknown;
+    messageReceived?: boolean;
   };
   accounts?: Record<string, unknown>;
 };
@@ -82,7 +90,10 @@ function readWhatsAppMessageReceivedHookOptIn(value: unknown): boolean | undefin
     return undefined;
   }
   const pluginHooks = (value as WhatsAppMessageReceivedHookConfig).pluginHooks;
-  return pluginHooks?.messageReceived === true ? true : undefined;
+  if (pluginHooks?.messageReceived === undefined) {
+    return undefined;
+  }
+  return pluginHooks.messageReceived;
 }
 
 function shouldEmitWhatsAppMessageReceivedHooks(params: {
@@ -96,6 +107,7 @@ function shouldEmitWhatsAppMessageReceivedHooks(params: {
     params.accountId && channelConfig?.accounts
       ? channelConfig.accounts[params.accountId]
       : undefined;
+
   return (
     readWhatsAppMessageReceivedHookOptIn(accountConfig) ??
     readWhatsAppMessageReceivedHookOptIn(channelConfig) ??
@@ -104,7 +116,7 @@ function shouldEmitWhatsAppMessageReceivedHooks(params: {
 }
 
 function emitWhatsAppMessageReceivedHooks(params: {
-  ctx: ReturnType<typeof buildWhatsAppInboundContext>;
+  ctx: Awaited<ReturnType<typeof buildWhatsAppInboundContext>>;
   sessionKey: string;
 }): void {
   const canonical = deriveInboundMessageHookContext(params.ctx);
@@ -139,7 +151,7 @@ function emitWhatsAppMessageReceivedHooks(params: {
 
 function emitWhatsAppMessageReceivedHooksIfEnabled(params: {
   cfg: ReturnType<LoadConfigFn>;
-  ctx: ReturnType<typeof buildWhatsAppInboundContext>;
+  ctx: Awaited<ReturnType<typeof buildWhatsAppInboundContext>>;
   accountId?: string;
   sessionKey: string;
 }): void {
@@ -198,6 +210,7 @@ export async function processMessage(params: {
   suppressGroupHistoryClear?: boolean;
   ackAlreadySent?: boolean;
   ackReaction?: AckReactionHandle | null;
+  statusReactionController?: StatusReactionController | null;
   /** Pre-computed audio transcript from a caller-level preflight, used to avoid
    * re-transcribing the same voice note once per broadcast agent.
    * - string  → transcript obtained; use it directly, skip internal STT
@@ -326,11 +339,33 @@ export async function processMessage(params: {
     return false;
   }
 
+  // When statusReactions.enabled, a StatusReactionController takes over lifecycle
+  // signaling (queued → thinking → tool → done/error). The plain ackReaction is
+  // skipped so the same message slot isn't used for two competing systems.
+  const statusReactionController =
+    params.statusReactionController ??
+    (params.cfg.messages?.statusReactions?.enabled === true && !params.ackAlreadySent
+      ? await createWhatsAppStatusReactionController({
+          cfg: params.cfg,
+          msg: params.msg,
+          agentId: params.route.agentId,
+          sessionKey: params.route.sessionKey,
+          conversationId,
+          verbose: params.verbose,
+          accountId: account.accountId,
+        })
+      : null);
+
+  if (statusReactionController && !params.statusReactionController) {
+    void statusReactionController.setQueued();
+  }
+
   // Send ack reaction immediately upon message receipt (post-gating). Callers
   // that do preflight work before processMessage can send it first and set
   // ackAlreadySent so slow STT does not delay user-visible receipt feedback.
+  // Skip if the status reaction controller is handling lifecycle signaling.
   let ackReaction = params.ackReaction ?? null;
-  if (!ackReaction && params.ackAlreadySent !== true) {
+  if (!statusReactionController && !ackReaction && params.ackAlreadySent !== true) {
     ackReaction = await maybeSendAckReaction({
       cfg: params.cfg,
       msg: params.msg,
@@ -380,13 +415,28 @@ export async function processMessage(params: {
     senderE164: sender.e164 ?? undefined,
     normalizeE164,
   });
-  const commandAuthorized = shouldComputeCommandAuthorized(params.msg.body, params.cfg)
+  const shouldCheckCommandAuth = shouldComputeCommandAuthorized(params.msg.body, params.cfg);
+  const isTextCommand = isControlCommandMessage(params.msg.body, params.cfg);
+  const commandAuthorized = shouldCheckCommandAuth
     ? await resolveWhatsAppCommandAuthorized({
         cfg: params.cfg,
         msg: params.msg,
         policy: inboundPolicy,
       })
     : undefined;
+  const commandTurn: CommandTurnContext = isTextCommand
+    ? {
+        kind: "text-slash",
+        source: "text",
+        authorized: Boolean(commandAuthorized),
+        body: params.msg.body,
+      }
+    : {
+        kind: "normal",
+        source: "message",
+        authorized: false,
+        body: params.msg.body,
+      };
   const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
     cfg: params.cfg,
     agentId: params.route.agentId,
@@ -416,11 +466,12 @@ export async function processMessage(params: {
           peerId: dmRouteTarget ?? params.msg.from,
         });
 
-  const ctxPayload = buildWhatsAppInboundContext({
+  const ctxPayload = await buildWhatsAppInboundContext({
     bodyForAgent: msgForAgent.body,
     combinedBody,
     commandBody: params.msg.body,
     commandAuthorized,
+    commandTurn,
     conversationId,
     groupHistory: visibleGroupHistory,
     groupMemberRoster: params.groupMemberNames.get(params.groupHistoryKey),
@@ -460,7 +511,7 @@ export async function processMessage(params: {
     warn: params.replyLogger.warn.bind(params.replyLogger),
   });
 
-  const turnResult = await runInboundReplyTurn({
+  const turnResult = await runChannelInboundEvent({
     channel: "whatsapp",
     accountId: params.route.accountId,
     raw: params.msg,
@@ -517,6 +568,7 @@ export async function processMessage(params: {
             replyResolver: params.replyResolver,
             route: params.route,
             shouldClearGroupHistory,
+            statusReactionController,
           }),
       }),
     },

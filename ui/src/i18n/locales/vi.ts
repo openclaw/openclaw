@@ -348,6 +348,12 @@ export const vi: TranslationMap = {
     eventLogSubtitle: "Các sự kiện gateway mới nhất.",
     noEvents: "Chưa có sự kiện nào.",
   },
+  quickSettings: {
+    security: {
+      browserEnabled: "Browser enabled",
+      toolProfile: "Tool profile",
+    },
+  },
   execApproval: {
     expiresIn: "hết hạn sau {time}",
     expired: "đã hết hạn",
@@ -356,6 +362,8 @@ export const vi: TranslationMap = {
     pending: "{count} đang chờ",
     allowOnce: "Cho phép một lần",
     alwaysAllow: "Luôn cho phép",
+    allowAlwaysUnavailable:
+      "Chính sách phê duyệt có hiệu lực yêu cầu phê duyệt mọi lần, vì vậy Không cho phép Luôn cho phép.",
     deny: "Từ chối",
     labels: {
       host: "Máy chủ",
@@ -387,6 +395,7 @@ export const vi: TranslationMap = {
   },
   tabs: {
     agents: "Agent",
+    activity: "Hoạt động",
     overview: "Tổng quan",
     channels: "Kênh",
     instances: "Phiên bản",
@@ -408,6 +417,7 @@ export const vi: TranslationMap = {
   },
   subtitles: {
     agents: "Không gian làm việc, công cụ, danh tính.",
+    activity: "Tóm tắt hoạt động công cụ cục bộ trên trình duyệt.",
     overview: "Trạng thái, điểm vào, tình trạng.",
     channels: "Kênh và cài đặt.",
     instances: "Máy khách và nút đã kết nối.",
@@ -426,6 +436,42 @@ export const vi: TranslationMap = {
     debug: "Ảnh chụp, sự kiện, RPC.",
     logs: "Nhật ký gateway trực tiếp.",
     dreams: "Mơ bộ nhớ, hợp nhất và phản chiếu.",
+  },
+  activity: {
+    title: "Hoạt động",
+    subtitle: "Hoạt động công cụ tạm thời được lấy từ các sự kiện phiên trực tiếp.",
+    visibleCount: "{visible} trên {total}",
+    filtersLabel: "Bộ lọc hoạt động",
+    search: "Tìm kiếm",
+    searchPlaceholder: "Lọc theo công cụ, tóm tắt, lượt chạy, phiên",
+    toolFilter: "Công cụ",
+    allTools: "Tất cả công cụ",
+    statusFilters: "Bộ lọc trạng thái",
+    autoFollow: "Tự động theo dõi",
+    expandAll: "Mở rộng tất cả",
+    collapseAll: "Thu gọn tất cả",
+    clear: "Xóa",
+    empty: "Chưa có hoạt động công cụ.",
+    emptyFiltered: "Không có hoạt động nào khớp với các bộ lọc này.",
+    entrySummary: "{argumentSummary}",
+    argumentHiddenOne: "1 đối số bị ẩn",
+    argumentsHidden: "{count} đối số bị ẩn",
+    streamLabel: "Các mục hoạt động công cụ",
+    toolCallId: "Lệnh gọi công cụ",
+    runId: "Chạy",
+    session: "Phiên",
+    outputTruncated: "Bản xem trước đã được biên tập lại và cắt ngắn.",
+    noOutputPreview: "Không có bản xem trước đầu ra.",
+    status: {
+      running: "Đang chạy",
+      done: "Hoàn tất",
+      error: "Lỗi",
+    },
+    duration: {
+      ms: "{count} ms",
+      seconds: "{count} s",
+      minutes: "{minutes}m {seconds}s",
+    },
   },
   overview: {
     access: {
@@ -691,9 +737,6 @@ export const vi: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle: "Xem token đi đâu, khi nào phiên tăng đột biến và điều gì thúc đẩy chi phí.",
-    },
     common: {
       emptyValue: "—",
       unknown: "không rõ",
@@ -1033,6 +1076,10 @@ export const vi: TranslationMap = {
     settings: "Cài đặt trò chuyện",
     thinkingToggle: "Bật/tắt đầu ra suy nghĩ/đang xử lý của trợ lý",
     toolCallsToggle: "Bật/tắt lượt gọi công cụ và kết quả công cụ",
+    autoScrollMode: "Chế độ tự động cuộn",
+    autoScrollAlways: "Luôn luôn",
+    autoScrollNearBottom: "Gần cuối",
+    autoScrollOff: "Tắt",
     focusToggle: "Bật/tắt chế độ tập trung (ẩn thanh bên + tiêu đề trang)",
     hideCronSessions: "Ẩn phiên cron",
     showCronSessions: "Hiển thị phiên cron",
@@ -1070,17 +1117,27 @@ export const vi: TranslationMap = {
       send: "Send",
       sendMessage: "Send message",
     },
+    queue: {
+      retry: "Thử lại",
+      retrySend: "Thử gửi lại",
+      retryQueuedMessage: "Thử lại tin nhắn trong hàng đợi",
+    },
     composer: {
       placeholder: "Message {name} (Enter to send)",
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
       startTalk: "Start Talk",
+      stillListening: "Vẫn đang nghe",
+      talkTranscript: "Bản chép lời cuộc trò chuyện",
       stopTalk: "Stop Talk",
     },
     selectors: {
       agentFilter: "Lọc phiên theo tác nhân",
       session: "Chat session",
+      sessionSearch: "Tìm kiếm phiên",
+      clearSessionSearch: "Xóa tìm kiếm phiên",
+      loadMoreSessions: "Tải thêm phiên",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },
@@ -1193,6 +1250,9 @@ export const vi: TranslationMap = {
       ascending: "Tăng dần",
       descending: "Giảm dần",
       reset: "Đặt lại",
+      emptyTitle: "No scheduled jobs yet.",
+      emptyHint: "Create one from a plain-language prompt; advanced fields can wait.",
+      emptyFilteredHint: "Clear or change filters to see scheduled jobs.",
       noMatching: "Không có tác vụ khớp.",
       loading: "Đang tải...",
       loadMore: "Tải thêm tác vụ",
@@ -1228,6 +1288,7 @@ export const vi: TranslationMap = {
     form: {
       editJob: "Chỉnh sửa tác vụ",
       newJob: "Tác vụ mới",
+      advancedJob: "Advanced job",
       updateSubtitle: "Cập nhật tác vụ đã lên lịch được chọn.",
       createSubtitle: "Tạo một lần đánh thức hoặc chạy agent theo lịch.",
       required: "Bắt buộc",

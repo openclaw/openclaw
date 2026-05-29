@@ -89,11 +89,6 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/channel-message", () => ({
-  createChannelMessageReplyPipeline: vi.fn(() => ({})),
-  hasFinalChannelTurnDispatch: vi.fn(() => false),
-}));
-
 vi.mock("openclaw/plugin-sdk/webhook-ingress", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/webhook-ingress")>(
     "openclaw/plugin-sdk/webhook-ingress",
@@ -153,7 +148,6 @@ describe("monitorLineProvider lifecycle", () => {
     vi.doUnmock("./bot.js");
     vi.doUnmock("openclaw/plugin-sdk/reply-runtime");
     vi.doUnmock("openclaw/plugin-sdk/runtime-env");
-    vi.doUnmock("openclaw/plugin-sdk/channel-message");
     vi.doUnmock("openclaw/plugin-sdk/webhook-ingress");
     vi.doUnmock("./webhook-node.js");
     vi.doUnmock("./auto-reply-delivery.js");
@@ -355,6 +349,47 @@ describe("monitorLineProvider lifecycle", () => {
 
     firstMonitor.stop();
     secondMonitor.stop();
+  });
+
+  it("acknowledges shared-path POST requests before matched event processing completes", async () => {
+    const monitor = await monitorLineProvider({
+      channelAccessToken: "token",
+      channelSecret: "secret", // pragma: allowlist secret
+      accountId: "default",
+      config: {} as OpenClawConfig,
+      runtime: {} as RuntimeEnv,
+    });
+
+    let releaseWebhook: (() => void) | undefined;
+    const bot = createLineBotMock.mock.results[0]?.value as {
+      handleWebhook: ReturnType<typeof vi.fn>;
+    };
+    bot.handleWebhook.mockImplementation(
+      async () =>
+        await new Promise<void>((resolve) => {
+          releaseWebhook = resolve;
+        }),
+    );
+
+    const route = requireRegisteredRoute();
+    const payload = JSON.stringify({ events: [{ type: "message" }] });
+    const signature = crypto.createHmac("SHA256", "secret").update(payload).digest("base64");
+    const req = Object.assign(createMockIncomingRequest([payload]), {
+      method: "POST",
+      headers: { "x-line-signature": signature },
+    }) as unknown as IncomingMessage;
+    const res = createRouteResponse();
+
+    await route.handler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.headersSent).toBe(true);
+    expect(bot.handleWebhook).toHaveBeenCalledTimes(1);
+    if (!releaseWebhook) {
+      throw new Error("expected pending LINE webhook handler");
+    }
+    releaseWebhook();
+    monitor.stop();
   });
 
   it("rejects ambiguous shared-path webhook signatures", async () => {

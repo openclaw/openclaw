@@ -1,13 +1,18 @@
+import {
+  assertOkOrThrowProviderError,
+  readProviderJsonResponse,
+} from "openclaw/plugin-sdk/provider-http";
 import type { SearchConfigRecord } from "openclaw/plugin-sdk/provider-web-search";
 import {
   buildSearchCacheKey,
   DEFAULT_SEARCH_COUNT,
   formatCliCommand,
+  MAX_SEARCH_COUNT,
   normalizeFreshness,
   parseIsoDateRange,
   readCachedSearchPayload,
   readConfiguredSecretString,
-  readNumberParam,
+  readPositiveIntegerParam,
   readProviderEnvValue,
   readStringParam,
   resolveSearchCacheTtlMs,
@@ -224,14 +229,12 @@ async function runBraveLlmContextSearch(params: {
         ok: response.ok,
         durationMs: Date.now() - startedAt,
       });
-      if (!response.ok) {
-        const detail = await response.text();
-        throw new Error(
-          `Brave LLM Context API error (${response.status}): ${detail || response.statusText}`,
-        );
-      }
+      await assertOkOrThrowProviderError(response, "Brave LLM Context API error");
 
-      const data = (await response.json()) as BraveLlmContextResponse;
+      const data = await readProviderJsonResponse<BraveLlmContextResponse>(
+        response,
+        "Brave LLM Context API error",
+      );
       return { results: mapBraveLlmContextResults(data), sources: data.sources };
     },
   );
@@ -308,14 +311,12 @@ async function runBraveWebSearch(params: {
         ok: response.ok,
         durationMs: Date.now() - startedAt,
       });
-      if (!response.ok) {
-        const detail = await response.text();
-        throw new Error(
-          `Brave Search API error (${response.status}): ${detail || response.statusText}`,
-        );
-      }
+      await assertOkOrThrowProviderError(response, "Brave Search API error");
 
-      const data = (await response.json()) as BraveSearchResponse;
+      const data = await readProviderJsonResponse<BraveSearchResponse>(
+        response,
+        "Brave Search API error",
+      );
       const results = Array.isArray(data.web?.results) ? (data.web?.results ?? []) : [];
       return results.map((entry) => {
         const description = entry.description ?? "";
@@ -351,7 +352,12 @@ export async function executeBraveSearch(
   const braveEndpointMode = await validateBraveBaseUrl(braveBaseUrl);
   const query = readStringParam(args, "query", { required: true });
   const count =
-    readNumberParam(args, "count", { integer: true }) ?? searchConfig?.maxResults ?? undefined;
+    readPositiveIntegerParam(args, "count", {
+      max: MAX_SEARCH_COUNT,
+      message: `count must be an integer from 1 to ${MAX_SEARCH_COUNT}.`,
+    }) ??
+    searchConfig?.maxResults ??
+    undefined;
   const country = normalizeBraveCountry(readStringParam(args, "country"));
   const language = readStringParam(args, "language");
   const search_lang = readStringParam(args, "search_lang");

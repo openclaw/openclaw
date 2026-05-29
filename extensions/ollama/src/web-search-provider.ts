@@ -6,7 +6,7 @@ import {
 import { resolveEnvApiKey } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   enablePluginInConfig,
-  readNumberParam,
+  readPositiveIntegerParam,
   readResponseText,
   readStringParam,
   resolveProviderWebSearchPluginConfig,
@@ -32,7 +32,7 @@ const OLLAMA_WEB_SEARCH_SCHEMA = Type.Object(
   {
     query: Type.String({ description: "Search query string." }),
     count: Type.Optional(
-      Type.Number({
+      Type.Integer({
         description: "Number of results to return (1-10).",
         minimum: 1,
         maximum: 10,
@@ -64,6 +64,14 @@ type OllamaWebSearchAttempt = {
   path: string;
   apiKey?: string;
 };
+
+async function readOllamaWebSearchResponse(response: Response): Promise<OllamaWebSearchResponse> {
+  try {
+    return (await response.json()) as OllamaWebSearchResponse;
+  } catch (cause) {
+    throw new Error("Ollama web search returned malformed JSON", { cause });
+  }
+}
 
 function isOllamaCloudBaseUrl(baseUrl: string): boolean {
   try {
@@ -211,7 +219,7 @@ export async function runOllamaWebSearch(params: {
         }
         throw new Error(message);
       }
-      payload = (await response.json()) as OllamaWebSearchResponse;
+      payload = await readOllamaWebSearchResponse(response);
       break;
     } catch (error) {
       if (error instanceof Error) {
@@ -322,13 +330,16 @@ export function createOllamaWebSearchProvider(): WebSearchProviderPlugin {
         await runOllamaWebSearch({
           config: ctx.config,
           query: readStringParam(args, "query", { required: true }),
-          count: readNumberParam(args, "count", { integer: true }),
+          count: readPositiveIntegerParam(args, "count", {
+            max: 10,
+            message: "count must be an integer from 1 to 10.",
+          }),
         }),
     }),
   };
 }
 
-export const __testing = {
+export const testing = {
   buildOllamaWebSearchAttempts,
   normalizeOllamaWebSearchResult,
   resolveConfiguredOllamaWebSearchApiKey,
@@ -336,5 +347,7 @@ export const __testing = {
   resolveOllamaWebSearchApiKey,
   resolveOllamaWebSearchBaseUrl,
   isOllamaCloudBaseUrl,
+  readOllamaWebSearchResponse,
   warnOllamaWebSearchPrereqs,
 };
+export { testing as __testing };

@@ -7,7 +7,17 @@ import type {
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
 } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  BROWSER_REQUEST_GATEWAY_METHOD,
+  BROWSER_REQUEST_GATEWAY_SCOPE,
+} from "./src/browser-gateway-contract.js";
 import { BrowserToolSchema } from "./src/browser-tool.schema.js";
+
+const EAGER_BROWSER_CONTROL_SERVICE_ENV = "OPENCLAW_EAGER_BROWSER_CONTROL_SERVER";
+
+function isTruthyEnvValue(value: string | undefined): boolean {
+  return /^(?:1|true|yes|on)$/iu.test(value?.trim() ?? "");
+}
 
 const BROWSER_CLI_DESCRIPTOR = {
   name: "browser",
@@ -80,14 +90,19 @@ function createLazyBrowserPluginService(): OpenClawPluginService {
   return {
     id: "browser-control",
     start: async (ctx) => {
+      if (!isTruthyEnvValue(process.env[EAGER_BROWSER_CONTROL_SERVICE_ENV])) {
+        return;
+      }
       const loaded = await loadService();
       await loaded.start(ctx);
     },
     stop: async (ctx) => {
-      if (!service?.stop) {
+      if (!service) {
+        const { stopBrowserControlService } = await import("./src/control-service.js");
+        await stopBrowserControlService().catch(() => {});
         return;
       }
-      await service.stop(ctx);
+      await service.stop?.(ctx);
     },
   };
 }
@@ -107,13 +122,13 @@ export function registerBrowserPlugin(api: OpenClawPluginApi) {
     { commands: ["browser"], descriptors: [BROWSER_CLI_DESCRIPTOR] },
   );
   api.registerGatewayMethod(
-    "browser.request",
+    BROWSER_REQUEST_GATEWAY_METHOD,
     async (opts) => {
       const { handleBrowserGatewayRequest } = await import("./register.runtime.js");
       return await handleBrowserGatewayRequest(opts);
     },
     {
-      scope: "operator.admin",
+      scope: BROWSER_REQUEST_GATEWAY_SCOPE,
     },
   );
   api.registerService(createLazyBrowserPluginService());

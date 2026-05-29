@@ -37,9 +37,7 @@ describe("cli progress", () => {
     progress.setPercent(50);
     progress.done();
 
-    const output = writes.join("");
-    expect(output).toContain("Indexing memory... 0%");
-    expect(output).toContain("Indexing memory... 50%");
+    expect(writes).toEqual(["Indexing memory... 0%\n", "Indexing memory... 50%\n"]);
   });
 
   it("does not log without a tty when fallback is none", () => {
@@ -100,5 +98,36 @@ describe("cli progress", () => {
     });
 
     expect(writes).toStrictEqual([]);
+  });
+
+  it("unregisters a delayed tty progress line when done before start", () => {
+    const firstWrites: string[] = [];
+    const firstStream = {
+      isTTY: true,
+      write: vi.fn((chunk: string) => {
+        firstWrites.push(chunk);
+      }),
+    } as unknown as NodeJS.WriteStream;
+    const secondStream = {
+      isTTY: true,
+      write: vi.fn(),
+    } as unknown as NodeJS.WriteStream;
+
+    const delayed = createCliProgress({
+      label: "Delayed",
+      stream: firstStream,
+      fallback: "line",
+      delayMs: 10_000,
+    });
+    delayed.done();
+
+    const next = createCliProgress({
+      label: "Next",
+      stream: secondStream,
+      fallback: "line",
+    });
+    next.done();
+
+    expect(firstWrites).toStrictEqual([]);
   });
 });

@@ -76,7 +76,6 @@ function makeHandler(
       enabled: false,
       maxChars: 6000,
       includeIdentity: true,
-      includeSystemPrompt: true,
       includeWorkspaceFiles: true,
       files: ["SOUL.md", "IDENTITY.md", "USER.md"],
     },
@@ -87,6 +86,7 @@ function makeHandler(
     config,
     {
       processEvent: vi.fn(),
+      getCall: vi.fn(),
       getCallByProviderCallId: vi.fn(),
       ...deps?.manager,
     } as unknown as CallManager,
@@ -128,11 +128,34 @@ const startRealtimeServer = async (
   });
 };
 
+const startStreamSessionServer = async (
+  handler: RealtimeCallHandler,
+  streamUrl: string,
+): Promise<{
+  url: string;
+  close: () => Promise<void>;
+}> => {
+  return await startUpgradeWsServer({
+    urlPath: new URL(streamUrl).pathname,
+    onUpgrade: (request, socket, head) => {
+      handler.handleWebSocketUpgrade(request, socket, head);
+    },
+  });
+};
+
 async function waitForRealtimeTest(
   callback: () => void | Promise<void>,
   options: { timeout?: number; interval?: number } = {},
 ) {
   await vi.waitFor(callback, { interval: 1, ...options });
+}
+
+function requireFirstMockCall(calls: readonly unknown[][], label: string): unknown[] {
+  const call = calls.at(0);
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
 }
 
 describe("RealtimeCallHandler path routing", () => {
@@ -224,7 +247,9 @@ describe("RealtimeCallHandler path routing", () => {
           expect(createBridge).toHaveBeenCalled();
         });
         callbacks?.onReady?.();
-        const event = processEvent.mock.calls[0]?.[0] as NormalizedEvent | undefined;
+        const event = requireFirstMockCall(processEvent.mock.calls, "processed event")[0] as
+          | NormalizedEvent
+          | undefined;
         expect(event?.type).toBe("call.initiated");
         if (event?.type !== "call.initiated") {
           throw new Error("expected outbound realtime stream to emit call.initiated");
@@ -237,6 +262,130 @@ describe("RealtimeCallHandler path routing", () => {
           ws.close();
         }
       }
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("joins Telnyx realtime streams to the token-bound call", async () => {
+    const processEvent = vi.fn();
+    const getCall = vi.fn(
+      (): CallRecord => ({
+        callId: "call-1",
+        providerCallId: "v3:call-1",
+        provider: "telnyx",
+        direction: "inbound",
+        state: "answered",
+        from: "+15550001234",
+        to: "+15550009999",
+        startedAt: Date.now(),
+        transcript: [],
+        processedEventIds: [],
+        metadata: { initialMessage: "hello" },
+      }),
+    );
+    const createBridge = vi.fn(() => makeBridge());
+    const handler = makeHandler(undefined, {
+      manager: {
+        processEvent,
+        getCall,
+      },
+      provider: {
+        name: "telnyx",
+      },
+      realtimeProvider: makeRealtimeProvider(createBridge),
+    });
+    handler.setPublicUrl("https://public.example/voice/webhook");
+    const session = handler.issueStreamSession({
+      providerName: "telnyx",
+      callId: "call-1",
+      from: "+15550001234",
+      to: "+15550009999",
+      direction: "inbound",
+    });
+    const server = await startStreamSessionServer(handler, session.streamUrl);
+
+    try {
+      const ws = await connectWs(server.url);
+      try {
+        ws.send(
+          JSON.stringify({
+            event: "start",
+            stream_id: "stream-1",
+            start: { call_control_id: "v3:call-1" },
+          }),
+        );
+        await waitForRealtimeTest(() => {
+          expect(createBridge).toHaveBeenCalled();
+        });
+
+        const eventTypes = processEvent.mock.calls.map(
+          ([event]) => (event as NormalizedEvent).type,
+        );
+        expect(eventTypes).toEqual(["call.answered"]);
+        expect((processEvent.mock.calls[0]?.[0] as NormalizedEvent | undefined)?.callId).toBe(
+          "call-1",
+        );
+      } finally {
+        if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+          ws.close();
+        }
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("rejects Telnyx stream starts that do not match the token-bound call", async () => {
+    const processEvent = vi.fn();
+    const getCall = vi.fn(
+      (): CallRecord => ({
+        callId: "call-1",
+        providerCallId: "v3:call-1",
+        provider: "telnyx",
+        direction: "inbound",
+        state: "answered",
+        from: "+15550001234",
+        to: "+15550009999",
+        startedAt: Date.now(),
+        transcript: [],
+        processedEventIds: [],
+        metadata: {},
+      }),
+    );
+    const createBridge = vi.fn(() => makeBridge());
+    const handler = makeHandler(undefined, {
+      manager: {
+        processEvent,
+        getCall,
+      },
+      provider: {
+        name: "telnyx",
+      },
+      realtimeProvider: makeRealtimeProvider(createBridge),
+    });
+    handler.setPublicUrl("https://public.example/voice/webhook");
+    const session = handler.issueStreamSession({
+      providerName: "telnyx",
+      callId: "call-1",
+      direction: "inbound",
+    });
+    const server = await startStreamSessionServer(handler, session.streamUrl);
+
+    try {
+      const ws = await connectWs(server.url);
+      ws.send(
+        JSON.stringify({
+          event: "start",
+          stream_id: "stream-1",
+          start: { call_control_id: "v3:other" },
+        }),
+      );
+      const close = await waitForClose(ws);
+
+      expect(close.code).toBe(1008);
+      expect(createBridge).not.toHaveBeenCalled();
+      expect(processEvent).not.toHaveBeenCalled();
     } finally {
       await server.close();
     }
@@ -816,17 +965,17 @@ describe("RealtimeCallHandler path routing", () => {
         await waitForRealtimeTest(() => {
           expect(consult).toHaveBeenCalledTimes(1);
         });
-        const [args, callId, context] = consult.mock.calls[0] ?? [];
+        const [args, callId, context] = requireFirstMockCall(consult.mock.calls, "consult");
         expect(args).toEqual({
           question: "Create a smoke test file for me.",
-          context:
-            "The realtime provider produced a final user transcript without invoking openclaw_agent_consult, so OpenClaw is forcing the consult because consultPolicy is always.",
         });
+        expect(JSON.stringify(args)).not.toContain("consultPolicy");
+        expect(JSON.stringify(args)).not.toContain("openclaw_agent_consult");
         expect(callId).toBe("call-1");
         expect(context).toEqual({});
         await waitForRealtimeTest(() => {
           expect(sendUserMessage).toHaveBeenCalledTimes(1);
-          expect(sendUserMessage.mock.calls[0]).toEqual([
+          expect(requireFirstMockCall(sendUserMessage.mock.calls, "user message")).toEqual([
             "Internal OpenClaw consult result is ready.\nDo not call tools for this internal result.\nSpeak the following answer to the caller now, briefly and naturally:\nI created the smoke test file.",
           ]);
         });
@@ -988,7 +1137,7 @@ describe("RealtimeCallHandler path routing", () => {
           },
           { timeout: 2_000 },
         );
-        const [args, callId, context] = consult.mock.calls[0] ?? [];
+        const [args, callId, context] = requireFirstMockCall(consult.mock.calls, "consult");
         const consultArgs = args as { question?: string; context?: string } | undefined;
         expect(consultArgs?.question).toBe("Send a Discord message.");
         expect(consultArgs?.context).toBe(

@@ -16,11 +16,21 @@ export function normalizeGooglePreviewModelId(id: string): string {
   if (id === "gemini-3.1-pro") {
     return "gemini-3.1-pro-preview";
   }
-  if (id === "gemini-3.1-flash-lite") {
-    return "gemini-3.1-flash-lite-preview";
+  // Gemini 3.1 Flash Lite graduated to GA on 2026-05-07; the -preview
+  // endpoint is deprecated (shutdown 2026-05-25). Map old preview name
+  // to the stable GA id.
+  if (id === "gemini-3.1-flash-lite-preview") {
+    return "gemini-3.1-flash-lite";
   }
   if (id === "gemini-3.1-flash" || id === "gemini-3.1-flash-preview") {
     return "gemini-3-flash-preview";
+  }
+  return id;
+}
+
+export function normalizeTogetherModelId(id: string): string {
+  if (id === "moonshotai/Kimi-K2.5") {
+    return "moonshotai/Kimi-K2.6";
   }
   return id;
 }

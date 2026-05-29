@@ -5,6 +5,7 @@ import {
 } from "./batch-utils.js";
 import { hashText } from "./hash.js";
 import { withRemoteHttpResponse } from "./remote-http.js";
+import { readResponseTextSnippet } from "./response-snippet.js";
 
 export async function uploadBatchJsonlFile(params: {
   client: BatchHttpClientConfig;
@@ -31,10 +32,14 @@ export async function uploadBatchJsonlFile(params: {
     },
     onResponse: async (fileRes) => {
       if (!fileRes.ok) {
-        const text = await fileRes.text();
+        const text = await readResponseTextSnippet(fileRes);
         throw new Error(`${params.errorPrefix}: ${fileRes.status} ${text}`);
       }
-      return (await fileRes.json()) as { id?: string };
+      try {
+        return (await fileRes.json()) as { id?: string };
+      } catch (cause) {
+        throw new Error(`${params.errorPrefix}: malformed JSON response`, { cause });
+      }
     },
   });
   if (!filePayload.id) {

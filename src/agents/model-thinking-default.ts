@@ -19,11 +19,12 @@ export function resolveThinkingDefault(params: {
 }): ThinkLevel {
   const normalizedProvider = normalizeProviderId(params.provider);
   const normalizedModel = normalizeLowercaseStringOrEmpty(params.model).replace(/\./g, "-");
-  const catalogCandidate = Array.isArray(params.catalog)
-    ? params.catalog.find(
-        (entry) => entry.provider === params.provider && entry.id === params.model,
-      )
-    : undefined;
+  const catalog = Array.isArray(params.catalog)
+    ? params.catalog
+    : buildConfiguredModelCatalog({ cfg: params.cfg });
+  const catalogCandidate = catalog.find(
+    (entry) => entry.provider === params.provider && entry.id === params.model,
+  );
   const configuredModels = params.cfg.agents?.defaults?.models;
   const canonicalKey = modelKey(params.provider, params.model);
   const legacyKey = legacyModelKey(params.provider, params.model);
@@ -56,8 +57,18 @@ export function resolveThinkingDefault(params: {
   if (configured) {
     return configured;
   }
+  const isClaudeProvider =
+    normalizedProvider === "anthropic" ||
+    normalizedProvider === "anthropic-vertex" ||
+    normalizedProvider === "claude-cli";
   if (
-    normalizedProvider === "anthropic" &&
+    isClaudeProvider &&
+    (normalizedModel.startsWith("claude-opus-4-8") || normalizedModel.startsWith("claude-opus-4.8"))
+  ) {
+    return "off";
+  }
+  if (
+    isClaudeProvider &&
     (normalizedModel.startsWith("claude-opus-4-7") || normalizedModel.startsWith("claude-opus-4.7"))
   ) {
     return "off";
@@ -75,7 +86,7 @@ export function resolveThinkingDefault(params: {
   return resolveThinkingDefaultForModel({
     provider: params.provider,
     model: params.model,
-    catalog: params.catalog,
+    catalog,
   });
 }
 

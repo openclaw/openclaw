@@ -1,3 +1,7 @@
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../packages/gateway-protocol/src/client-info.js";
 import { resolveSystemRunApprovalRuntimeContext } from "../infra/system-run-approval-context.js";
 import { resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
 import { asNullableRecord } from "../shared/record-coerce.js";
@@ -11,7 +15,6 @@ import {
   evaluateSystemRunApprovalMatch,
   toSystemRunApprovalMismatchError,
 } from "./node-invoke-system-run-approval-match.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "./protocol/client-info.js";
 
 type SystemRunParamsLike = {
   command?: unknown;
@@ -158,7 +161,13 @@ function canBridgeNoDeviceChatApprovalFromBackend(params: {
       actual: params.rawParams.turnSourceChannel,
       lowercase: true,
     }) &&
-    matchesRequiredString({
+    // turnSourceTo is channel-specific: required for messaging channels with a
+    // recipient (e.g. telegram chat id), null for channels without a "to"
+    // concept (webchat, control-ui). matchesRequiredString returns false on
+    // null expected, which broke webchat node exec approval replay. Treat it
+    // as optional so null-on-both-sides matches; required fields below
+    // (turnSourceChannel, sessionKey) still gate cross-channel replays.
+    matchesOptionalString({
       expected: request.turnSourceTo,
       actual: params.rawParams.turnSourceTo,
     }) &&

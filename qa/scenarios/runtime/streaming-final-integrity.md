@@ -4,6 +4,7 @@
 id: streaming-final-integrity
 title: Streaming final integrity
 surface: runtime
+runtimeParityTier: live-only
 coverage:
   primary:
     - channels.streaming
@@ -19,7 +20,7 @@ docsRefs:
   - docs/concepts/streaming.md
   - docs/channels/qa-channel.md
 codeRefs:
-  - src/agents/pi-embedded-runner/run/incomplete-turn.ts
+  - src/agents/embedded-agent-runner/run/incomplete-turn.ts
   - extensions/qa-lab/src/bus-state.ts
   - extensions/qa-lab/src/suite-runtime-transport.ts
 execution:

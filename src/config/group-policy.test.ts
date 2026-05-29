@@ -6,6 +6,14 @@ import {
   resolveToolsBySender,
 } from "./group-policy.js";
 
+function firstWarningCall(warningSpy: ReturnType<typeof vi.spyOn>): [unknown, { code?: unknown }?] {
+  const [call] = warningSpy.mock.calls;
+  if (!call) {
+    throw new Error("expected process.emitWarning call");
+  }
+  return call as [unknown, { code?: unknown }?];
+}
+
 describe("resolveChannelGroupPolicy", () => {
   it("fails closed when groupPolicy=allowlist and groups are missing", () => {
     const cfg = {
@@ -159,6 +167,68 @@ describe("resolveChannelGroupPolicy", () => {
         groupId: "123@g.us",
         configuredGroupDefaultsToNoMention: true,
       }),
+    ).toBe(false);
+  });
+
+  it("falls back to root channel groups when account.groups is an empty object (regression: #79427)", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          groupPolicy: "allowlist",
+          groups: {
+            "-100123": { requireMention: false },
+          },
+          accounts: {
+            default: { botToken: "123:default", groups: {} },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const policy = resolveChannelGroupPolicy({
+      cfg,
+      channel: "telegram",
+      groupId: "-100123",
+      accountId: "default",
+    });
+
+    expect(policy.allowlistEnabled).toBe(true);
+    expect(policy.allowed).toBe(true);
+  });
+
+  it("uses populated account.groups instead of root when both are configured", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          groupPolicy: "allowlist",
+          groups: {
+            "-100root": { requireMention: false },
+          },
+          accounts: {
+            default: {
+              botToken: "123:default",
+              groups: { "-100account": { requireMention: false } },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveChannelGroupPolicy({
+        cfg,
+        channel: "telegram",
+        groupId: "-100account",
+        accountId: "default",
+      }).allowed,
+    ).toBe(true);
+    expect(
+      resolveChannelGroupPolicy({
+        cfg,
+        channel: "telegram",
+        groupId: "-100root",
+        accountId: "default",
+      }).allowed,
     ).toBe(false);
   });
 });
@@ -337,8 +407,8 @@ describe("resolveToolsBySender", () => {
     });
 
     expect(warningSpy).toHaveBeenCalledTimes(1);
-    expect(String(warningSpy.mock.calls[0]?.[0])).toContain(`toolsBySender key "${legacyKey}"`);
-    const warningMeta = warningSpy.mock.calls[0]?.[1] as { code?: unknown } | undefined;
+    const [warningMessage, warningMeta] = firstWarningCall(warningSpy);
+    expect(String(warningMessage)).toContain(`toolsBySender key "${legacyKey}"`);
     expect(warningMeta?.code).toBe("OPENCLAW_TOOLS_BY_SENDER_UNTYPED_KEY");
   });
 });

@@ -62,7 +62,7 @@ function createMockClient(params: {
         }
       }
     }),
-    __setMembers(next: string[]) {
+    setMembersForTest(next: string[]) {
       members = next;
     },
   } as unknown as MatrixClient & {
@@ -74,7 +74,7 @@ function createMockClient(params: {
     getJoinedRoomMembers: ReturnType<typeof vi.fn>;
     getRoomStateEvent: ReturnType<typeof vi.fn>;
     setAccountData: ReturnType<typeof vi.fn>;
-    __setMembers: (members: string[]) => void;
+    setMembersForTest: (members: string[]) => void;
   };
 }
 
@@ -95,6 +95,40 @@ describe("createDirectRoomTracker", () => {
     ).resolves.toBe(true);
 
     expect(client.getJoinedRoomMembers).toHaveBeenCalledWith("!room:example.org");
+  });
+
+  it("lets explicit room config veto stale m.direct classifications", async () => {
+    const client = createMockClient({ isDm: true });
+    const tracker = createDirectRoomTracker(client, {
+      isExplicitlyConfiguredRoom: (roomId) => roomId === "!room:example.org",
+    });
+
+    await expect(
+      tracker.isDirectMessage({
+        roomId: "!room:example.org",
+        senderId: "@alice:example.org",
+      }),
+    ).resolves.toBe(false);
+
+    expect(client.dms.update).not.toHaveBeenCalled();
+    expect(client.getJoinedRoomMembers).not.toHaveBeenCalled();
+  });
+
+  it("lets explicit room config veto strict two-member fallback before dm cache seed", async () => {
+    const client = createMockClient({ isDm: false, dmCacheAvailable: false });
+    const tracker = createDirectRoomTracker(client, {
+      isExplicitlyConfiguredRoom: (roomId) => roomId === "!room:example.org",
+    });
+
+    await expect(
+      tracker.isDirectMessage({
+        roomId: "!room:example.org",
+        senderId: "@alice:example.org",
+      }),
+    ).resolves.toBe(false);
+
+    expect(client.dms.update).not.toHaveBeenCalled();
+    expect(client.getJoinedRoomMembers).not.toHaveBeenCalled();
   });
 
   it("does not trust stale m.direct classifications for shared rooms", async () => {
@@ -466,7 +500,7 @@ describe("createDirectRoomTracker", () => {
       }),
     ).resolves.toBe(true);
 
-    client.__setMembers(["@alice:example.org", "@bot:example.org", "@mallory:example.org"]);
+    client.setMembersForTest(["@alice:example.org", "@bot:example.org", "@mallory:example.org"]);
     tracker.invalidateRoom("!room:example.org");
 
     await expect(

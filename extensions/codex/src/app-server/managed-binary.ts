@@ -90,7 +90,7 @@ function resolveManagedCodexAppServerCandidateRoots(
   platform: NodeJS.Platform,
 ): string[] {
   const pathApi = pathForPlatform(platform);
-  return [
+  const directRoots = [
     pluginRoot,
     pathApi.dirname(pluginRoot),
     pathApi.dirname(pathApi.dirname(pluginRoot)),
@@ -98,6 +98,32 @@ function resolveManagedCodexAppServerCandidateRoots(
       ? pathApi.dirname(pathApi.dirname(pathApi.dirname(pluginRoot)))
       : null,
   ].filter((root): root is string => Boolean(root));
+  return [
+    ...new Set([...directRoots, ...resolveNearestNodeModulesProjectRoots(directRoots, platform)]),
+  ];
+}
+
+function resolveNearestNodeModulesProjectRoots(
+  roots: readonly string[],
+  platform: NodeJS.Platform,
+): string[] {
+  const pathApi = pathForPlatform(platform);
+  const projectRoots: string[] = [];
+  for (const root of roots) {
+    let current = pathApi.resolve(root);
+    while (true) {
+      if (pathApi.basename(current) === "node_modules") {
+        projectRoots.push(pathApi.dirname(current));
+        break;
+      }
+      const parent = pathApi.dirname(current);
+      if (parent === current) {
+        break;
+      }
+      current = parent;
+    }
+  }
+  return projectRoots;
 }
 
 function resolveManagedCodexPackageBinCandidates(
@@ -144,7 +170,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-export const __testing = {
+export const testing = {
   resolveDefaultCodexPluginRoot,
 };
 
@@ -190,3 +216,4 @@ async function commandPathExists(filePath: string, platform: NodeJS.Platform): P
     return false;
   }
 }
+export { testing as __testing };

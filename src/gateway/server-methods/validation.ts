@@ -1,9 +1,13 @@
-import type { ErrorObject } from "ajv";
-import { ErrorCodes, errorShape, formatValidationErrors } from "../protocol/index.js";
+import {
+  ErrorCodes,
+  errorShape,
+  formatValidationErrors,
+} from "../../../packages/gateway-protocol/src/index.js";
+import type { ValidationError } from "../../../packages/gateway-protocol/src/index.js";
 import type { RespondFn } from "./types.js";
 
 export type Validator<T> = ((params: unknown) => params is T) & {
-  errors?: ErrorObject[] | null;
+  errors?: ValidationError[] | null;
 };
 
 export function assertValidParams<T>(

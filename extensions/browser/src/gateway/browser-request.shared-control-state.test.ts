@@ -100,9 +100,12 @@ async function browserRequestStatus(): Promise<unknown> {
     req: { type: "req", id: "req-1", method: "browser.request" },
     isWebchatConnect: () => false,
   });
-  const call = respond.mock.calls[0];
-  expect(call?.[0]).toBe(true);
-  return call?.[1];
+  const [call] = respond.mock.calls;
+  if (!call) {
+    throw new Error("expected browser request response");
+  }
+  expect(call[0]).toBe(true);
+  return call[1];
 }
 
 describe("browser.request local control state", () => {

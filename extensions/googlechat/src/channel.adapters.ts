@@ -3,7 +3,8 @@ import {
   createMessageReceiptFromOutboundResults,
   defineChannelMessageAdapter,
   type MessageReceiptPartKind,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
+import { sanitizeForPlainText } from "openclaw/plugin-sdk/channel-outbound";
 import {
   composeAccountWarningCollectors,
   createAllowlistProviderOpenWarningCollector,
@@ -15,7 +16,6 @@ import {
 } from "openclaw/plugin-sdk/directory-runtime";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import type { OutboundMediaLoadOptions } from "openclaw/plugin-sdk/outbound-media";
-import { sanitizeForPlainText } from "openclaw/plugin-sdk/outbound-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -23,7 +23,7 @@ import {
 import {
   type ResolvedGoogleChatAccount,
   chunkTextForOutbound,
-  fetchRemoteMedia,
+  readRemoteMediaBuffer,
   isGoogleChatUserTarget,
   loadOutboundMediaFromUrl,
   missingTargetError,
@@ -280,7 +280,7 @@ export const googlechatOutboundAdapter = {
       });
       const effectiveMaxBytes = maxBytes ?? (account.config.mediaMaxMb ?? 20) * 1024 * 1024;
       const loaded = /^https?:\/\//i.test(mediaUrl)
-        ? await fetchRemoteMedia({
+        ? await readRemoteMediaBuffer({
             url: mediaUrl,
             maxBytes: effectiveMaxBytes,
           })

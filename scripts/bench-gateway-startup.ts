@@ -1,10 +1,13 @@
-import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
+import { pathToFileURL } from "node:url";
+import { parseStrictIntegerOption } from "./lib/dev-tooling-safety.ts";
+import { delay, stopChild } from "./lib/gateway-bench-child.ts";
 
 type GatewayBenchCase = {
   config: Record<string, unknown>;
@@ -16,19 +19,32 @@ type GatewayBenchCase = {
 };
 
 type ProbeResult = {
+  firstErrorKind: string | null;
+  firstRecoveryMs: number | null;
   ms: number | null;
+  status: number | null;
+  transitions: ProbeTransition[];
+};
+
+type ProbeTransition = {
+  errorKind?: string;
+  ms: number;
   status: number | null;
 };
 
 type GatewaySample = {
   cpuCoreRatio: number | null;
   cpuMs: number | null;
+  exitedBeforeTeardown?: boolean;
   exitCode: number | null;
   firstOutputMs: number | null;
+  gatewayReadyLogLine: string | null;
+  gatewayReadyLogMs: number | null;
   healthz: ProbeResult;
+  httpListenLogLine: string | null;
+  httpListenLogMs: number | null;
   maxRssMb: number | null;
   outputTail: string;
-  readyLogMs: number | null;
   readyz: ProbeResult;
   signal: string | null;
   startupTrace: Record<string, number>;
@@ -50,12 +66,24 @@ type CaseResult = {
     firstOutputMs: SummaryStats | null;
     cpuCoreRatio: SummaryStats | null;
     cpuMs: SummaryStats | null;
+    gatewayReadyLogMs: SummaryStats | null;
     healthzMs: SummaryStats | null;
+    httpListenLogMs: SummaryStats | null;
     maxRssMb: SummaryStats | null;
-    readyLogMs: SummaryStats | null;
     readyzMs: SummaryStats | null;
     startupTrace: Record<string, SummaryStats>;
   };
+};
+
+type BenchmarkFailure = {
+  id: string;
+  reason: string;
+  sampleIndex: number;
+};
+
+type PluginFixtureResult = {
+  pluginIds: string[];
+  pluginsDir: string;
 };
 
 type CliOptions = {
@@ -135,6 +163,7 @@ const GATEWAY_CASES: readonly GatewayBenchCase[] = [
     id: "fiftyPlugins",
     name: "gateway, 50 manifest plugins",
     env: { OPENCLAW_SKIP_CHANNELS: "1" },
+    pluginActivationOnStartup: true,
     pluginCount: 50,
     config: BASE_CONFIG,
   },
@@ -174,15 +203,34 @@ function parseRepeatableFlag(flag: string): string[] {
   return values;
 }
 
-function parsePositiveInt(raw: string | undefined, fallback: number): number {
-  if (!raw) {
-    return fallback;
+function parsePositiveInt(raw: string | undefined, fallback: number, label: string): number {
+  return parseStrictIntegerOption({ fallback, label, min: 1, raw });
+}
+
+function parseNonNegativeInt(raw: string | undefined, fallback: number, label: string): number {
+  return parseStrictIntegerOption({ fallback, label, min: 0, raw });
+}
+
+function resolveEntry(raw: string | undefined): string {
+  const entry = raw?.trim() || DEFAULT_ENTRY;
+  if (entry.includes("\0")) {
+    throw new Error("--entry must not contain NUL bytes");
   }
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed) || parsed < 0) {
-    return fallback;
+  if (entry.startsWith("-")) {
+    throw new Error(`--entry must be a file path, not a Node option: ${JSON.stringify(entry)}`);
   }
-  return parsed;
+  return entry;
+}
+
+function resolveOutputPath(raw: string | undefined): string | undefined {
+  const output = raw?.trim();
+  if (!output) {
+    return undefined;
+  }
+  if (output.includes("\0")) {
+    throw new Error("--output must not contain NUL bytes");
+  }
+  return output;
 }
 
 function resolveCases(caseIds: string[]): GatewayBenchCase[] {
@@ -203,12 +251,12 @@ function parseOptions(): CliOptions {
   return {
     cases: resolveCases(parseRepeatableFlag("--case")),
     cpuProfDir: parseFlagValue("--cpu-prof-dir"),
-    entry: parseFlagValue("--entry") ?? DEFAULT_ENTRY,
+    entry: resolveEntry(parseFlagValue("--entry")),
     json: hasFlag("--json"),
-    output: parseFlagValue("--output"),
-    runs: parsePositiveInt(parseFlagValue("--runs"), DEFAULT_RUNS),
-    timeoutMs: parsePositiveInt(parseFlagValue("--timeout-ms"), DEFAULT_TIMEOUT_MS),
-    warmup: parsePositiveInt(parseFlagValue("--warmup"), DEFAULT_WARMUP),
+    output: resolveOutputPath(parseFlagValue("--output")),
+    runs: parsePositiveInt(parseFlagValue("--runs"), DEFAULT_RUNS, "--runs"),
+    timeoutMs: parsePositiveInt(parseFlagValue("--timeout-ms"), DEFAULT_TIMEOUT_MS, "--timeout-ms"),
+    warmup: parseNonNegativeInt(parseFlagValue("--warmup"), DEFAULT_WARMUP, "--warmup"),
   };
 }
 
@@ -302,19 +350,24 @@ function summarizeCase(benchCase: GatewayBenchCase, samples: GatewaySample[]): C
           .map((sample) => sample.cpuMs)
           .filter((value): value is number => typeof value === "number"),
       ),
+      gatewayReadyLogMs: summarizeNumbers(
+        samples
+          .map((sample) => sample.gatewayReadyLogMs)
+          .filter((value): value is number => typeof value === "number"),
+      ),
       healthzMs: summarizeNumbers(
         samples
           .map((sample) => sample.healthz.ms)
           .filter((value): value is number => typeof value === "number"),
       ),
+      httpListenLogMs: summarizeNumbers(
+        samples
+          .map((sample) => sample.httpListenLogMs)
+          .filter((value): value is number => typeof value === "number"),
+      ),
       maxRssMb: summarizeNumbers(
         samples
           .map((sample) => sample.maxRssMb)
-          .filter((value): value is number => typeof value === "number"),
-      ),
-      readyLogMs: summarizeNumbers(
-        samples
-          .map((sample) => sample.readyLogMs)
           .filter((value): value is number => typeof value === "number"),
       ),
       readyzMs: summarizeNumbers(
@@ -325,6 +378,69 @@ function summarizeCase(benchCase: GatewayBenchCase, samples: GatewaySample[]): C
       startupTrace,
     },
   };
+}
+
+function collectResultFailures(
+  results: CaseResult[],
+  options: { processMetricsRequired?: boolean } = {},
+): BenchmarkFailure[] {
+  const processMetricsRequired = options.processMetricsRequired ?? process.platform !== "win32";
+  const failures: BenchmarkFailure[] = [];
+  for (const result of results) {
+    result.samples.forEach((sample, index) => {
+      const missing: string[] = [];
+      if (sample.healthz.status !== 200 || sample.healthz.ms == null) {
+        missing.push("/healthz");
+      }
+      if (sample.readyz.status !== 200 || sample.readyz.ms == null) {
+        missing.push("/readyz");
+      }
+      if (processMetricsRequired) {
+        if (sample.cpuMs == null || sample.cpuCoreRatio == null) {
+          missing.push("cpu");
+        }
+        if (sample.maxRssMb == null) {
+          missing.push("rss");
+        }
+      }
+      if (missing.length > 0) {
+        failures.push({
+          id: result.id,
+          reason: `missing ${missing.join(", ")}`,
+          sampleIndex: index + 1,
+        });
+        return;
+      }
+      if (sample.exitedBeforeTeardown === true) {
+        failures.push({
+          id: result.id,
+          reason:
+            sample.signal == null
+              ? `child exited ${sample.exitCode ?? "before teardown"}`
+              : `child exited by ${sample.signal}`,
+          sampleIndex: index + 1,
+        });
+      }
+    });
+  }
+  return failures;
+}
+
+function printBenchmarkFailures(failures: BenchmarkFailure[]): void {
+  if (failures.length === 0) {
+    return;
+  }
+  console.error(
+    `[gateway-startup-bench] failed: ${failures.length} sample(s) did not produce ready probes or process metrics`,
+  );
+  for (const failure of failures.slice(0, 8)) {
+    console.error(
+      `[gateway-startup-bench] ${failure.id} run ${failure.sampleIndex}: ${failure.reason}`,
+    );
+  }
+  if (failures.length > 8) {
+    console.error(`[gateway-startup-bench] ${failures.length - 8} more sample failure(s) omitted`);
+  }
 }
 
 function formatMs(value: number | null): string {
@@ -399,19 +515,86 @@ async function waitForProbe(params: {
   port: number;
   startAt: number;
 }): Promise<ProbeResult> {
+  let firstErrorKind: string | null = null;
+  let firstRecoveryMs: number | null = null;
   let lastStatus: number | null = null;
+  let lastStateKey: string | null = null;
+  let sawUnreadyState = false;
+  const transitions: ProbeTransition[] = [];
   while (performance.now() < params.deadlineAt) {
     if (params.isDone?.()) {
       break;
     }
-    const status = await requestStatus(params.port, params.path).catch(() => null);
-    lastStatus = status;
-    if (status === 200) {
-      return { ms: performance.now() - params.startAt, status };
+    const attempt = await requestProbeStatus(params.port, params.path);
+    const now = performance.now();
+    const elapsedMs = now - params.startAt;
+    lastStatus = attempt.status;
+    const stateKey = `${attempt.status ?? "none"}:${attempt.errorKind ?? "ok"}`;
+    if (stateKey !== lastStateKey) {
+      transitions.push({
+        ms: elapsedMs,
+        status: attempt.status,
+        ...(attempt.errorKind ? { errorKind: attempt.errorKind } : {}),
+      });
+      lastStateKey = stateKey;
+    }
+    if (attempt.errorKind && firstErrorKind == null) {
+      firstErrorKind = attempt.errorKind;
+    }
+    if (attempt.status !== 200) {
+      sawUnreadyState = true;
+    }
+    if (attempt.status === 200) {
+      if (sawUnreadyState && firstRecoveryMs == null) {
+        firstRecoveryMs = elapsedMs;
+      }
+      return {
+        firstErrorKind,
+        firstRecoveryMs,
+        ms: elapsedMs,
+        status: attempt.status,
+        transitions,
+      };
     }
     await delay(25);
   }
-  return { ms: null, status: lastStatus };
+  return { firstErrorKind, firstRecoveryMs, ms: null, status: lastStatus, transitions };
+}
+
+async function requestProbeStatus(
+  port: number,
+  pathname: string,
+): Promise<{ errorKind: string | null; status: number | null }> {
+  try {
+    const status = await requestStatus(port, pathname);
+    return {
+      errorKind: status === 200 ? null : `http-${status}`,
+      status,
+    };
+  } catch (error) {
+    return {
+      errorKind: classifyProbeErrorKind(error),
+      status: null,
+    };
+  }
+}
+
+function classifyProbeErrorKind(error: unknown): string {
+  if (typeof error === "object" && error !== null) {
+    const code = (error as { code?: unknown }).code;
+    if (typeof code === "string" && code.trim()) {
+      return code.trim().toLowerCase();
+    }
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === "string" && message.toLowerCase().includes("probe timeout")) {
+      return "timeout";
+    }
+    const name = (error as { name?: unknown }).name;
+    if (typeof name === "string" && name.trim()) {
+      return name.trim().toLowerCase();
+    }
+  }
+  return "error";
 }
 
 function requestStatus(port: number, pathname: string): Promise<number> {
@@ -431,16 +614,17 @@ function requestStatus(port: number, pathname: string): Promise<number> {
   });
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function writePluginFixtures(root: string, count: number, activationOnStartup?: boolean): string[] {
-  const files: string[] = [];
+function writePluginFixtures(
+  root: string,
+  count: number,
+  activationOnStartup?: boolean,
+): PluginFixtureResult {
+  const pluginIds: string[] = [];
   const pluginsDir = path.join(root, "plugins");
   mkdirSync(pluginsDir, { recursive: true });
   for (let index = 0; index < count; index += 1) {
     const id = `bench-plugin-${String(index + 1).padStart(2, "0")}`;
+    pluginIds.push(id);
     const pluginDir = path.join(pluginsDir, id);
     mkdirSync(pluginDir, { recursive: true });
     const entry = path.join(pluginDir, "index.cjs");
@@ -459,23 +643,22 @@ function writePluginFixtures(root: string, count: number, activationOnStartup?: 
         2,
       )}\n`,
     );
-    files.push(entry);
   }
-  return files;
+  return { pluginIds, pluginsDir };
 }
 
 function writeConfig(root: string, benchCase: GatewayBenchCase): string {
-  const pluginPaths = benchCase.pluginCount
+  const pluginFixtures = benchCase.pluginCount
     ? writePluginFixtures(root, benchCase.pluginCount, benchCase.pluginActivationOnStartup)
-    : [];
+    : null;
   const config = {
     ...benchCase.config,
     plugins: {
       ...(benchCase.config.plugins as Record<string, unknown> | undefined),
-      ...(pluginPaths.length > 0
+      ...(pluginFixtures
         ? {
-            load: { paths: pluginPaths },
-            allow: pluginPaths.map((file) => path.basename(path.dirname(file))),
+            load: { paths: [pluginFixtures.pluginsDir] },
+            allow: pluginFixtures.pluginIds,
           }
         : {}),
     },
@@ -505,45 +688,12 @@ function sanitizedEnv(
     OPENCLAW_CONFIG_PATH: configPath,
     OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
     OPENCLAW_HOME: root,
-    OPENCLAW_LOCAL_CHECK: "0",
     OPENCLAW_NO_RESPAWN: "1",
     OPENCLAW_STATE_DIR: path.join(root, "state"),
     OPENCLAW_TEST_DISABLE_UPDATE_CHECK: "1",
     ...benchCase.env,
   };
   return env;
-}
-
-async function stopChild(child: ChildProcessWithoutNullStreams): Promise<{
-  exitCode: number | null;
-  signal: string | null;
-}> {
-  if (child.exitCode != null || child.signalCode != null) {
-    return { exitCode: child.exitCode, signal: child.signalCode };
-  }
-  const exited = new Promise<{ exitCode: number | null; signal: string | null }>((resolve) => {
-    child.once("exit", (exitCode, signal) => resolve({ exitCode, signal }));
-  });
-  killProcessTree(child, "SIGTERM");
-  const timeout = delay(2000).then(() => {
-    if (child.exitCode == null && child.signalCode == null) {
-      killProcessTree(child, "SIGKILL");
-    }
-    return exited;
-  });
-  return Promise.race([exited, timeout]);
-}
-
-function killProcessTree(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): void {
-  if (process.platform !== "win32" && child.pid !== undefined) {
-    try {
-      process.kill(-child.pid, signal);
-      return;
-    } catch {
-      // Fall back to the direct child below.
-    }
-  }
-  child.kill(signal);
 }
 
 function collectStartupTrace(line: string, startupTrace: Record<string, number>): void {
@@ -565,8 +715,14 @@ function collectStartupTrace(line: string, startupTrace: Record<string, number>)
   }
 }
 
-function hasGatewayReadyLog(line: string): boolean {
-  return /\[gateway\] (?:http server listening|ready \()/.test(line);
+function classifyGatewayReadyLog(line: string): "gateway-ready" | "http-listen" | null {
+  if (line.includes("[gateway] http server listening (")) {
+    return "http-listen";
+  }
+  if (/\[gateway\] ready(?:\s*\(|\s*$)/.test(line)) {
+    return "gateway-ready";
+  }
+  return null;
 }
 
 function parseStartupTraceMetrics(raw: string): Array<{ key: string; value: number }> {
@@ -688,8 +844,11 @@ async function runGatewaySample(options: {
   const startupTrace: Record<string, number> = {};
   const output: string[] = [];
   let firstOutputMs: number | null = null;
+  let gatewayReadyLogLine: string | null = null;
+  let gatewayReadyLogMs: number | null = null;
+  let httpListenLogLine: string | null = null;
+  let httpListenLogMs: number | null = null;
   let maxRssMb: number | null = null;
-  let readyLogMs: number | null = null;
   let childExited = false;
 
   const childArgs = [
@@ -749,8 +908,14 @@ async function runGatewaySample(options: {
       output.splice(0, output.length - 20);
     }
     for (const line of text.split(/\r?\n/u)) {
-      if (hasGatewayReadyLog(line) && readyLogMs == null) {
-        readyLogMs = performance.now() - startAt;
+      const readyLogKind = classifyGatewayReadyLog(line);
+      if (readyLogKind === "http-listen" && httpListenLogMs == null) {
+        httpListenLogMs = performance.now() - startAt;
+        httpListenLogLine = line;
+      }
+      if (readyLogKind === "gateway-ready" && gatewayReadyLogMs == null) {
+        gatewayReadyLogMs = performance.now() - startAt;
+        gatewayReadyLogLine = line;
       }
       collectStartupTrace(line, startupTrace);
     }
@@ -781,18 +946,23 @@ async function runGatewaySample(options: {
   const exit = await stopChild(child);
   clearInterval(rssTimer);
   sampleRss();
-  await childExitPromise.catch(() => null);
+  // stopChild is the bounded teardown wait; the raw exit promise may never settle.
+  void childExitPromise.catch(() => null);
   rmSync(root, { force: true, maxRetries: 3, recursive: true, retryDelay: 100 });
 
   return {
     cpuCoreRatio,
     cpuMs,
+    exitedBeforeTeardown: exit.exitedBeforeTeardown,
     exitCode: exit.exitCode,
     firstOutputMs,
+    gatewayReadyLogLine,
+    gatewayReadyLogMs,
     healthz,
+    httpListenLogLine,
+    httpListenLogMs,
     maxRssMb,
     outputTail: output.join("").split(/\r?\n/u).slice(-20).join("\n"),
-    readyLogMs,
     readyz,
     signal: exit.signal,
     startupTrace,
@@ -821,7 +991,7 @@ async function runCase(options: {
       samples.push(sample);
       const heapUsedMb = sample.startupTrace["memory.ready.heapUsedMb"] ?? null;
       console.log(
-        `[gateway-startup-bench] ${options.benchCase.id} run ${samples.length}/${options.runs}: healthz=${formatMs(sample.healthz.ms)} readyz=${formatMs(sample.readyz.ms)} readyLog=${formatMs(sample.readyLogMs)} cpu=${formatMs(sample.cpuMs)} cpuCore=${formatRatio(sample.cpuCoreRatio)} rss=${formatMb(sample.maxRssMb)} heap=${formatMb(heapUsedMb)}`,
+        `[gateway-startup-bench] ${options.benchCase.id} run ${samples.length}/${options.runs}: healthz=${formatMs(sample.healthz.ms)} readyz=${formatMs(sample.readyz.ms)} httpListen=${formatMs(sample.httpListenLogMs)} gatewayReady=${formatMs(sample.gatewayReadyLogMs)} cpu=${formatMs(sample.cpuMs)} cpuCore=${formatRatio(sample.cpuCoreRatio)} rss=${formatMb(sample.maxRssMb)} heap=${formatMb(heapUsedMb)}`,
       );
     } else {
       const heapUsedMb = sample.startupTrace["memory.ready.heapUsedMb"] ?? null;
@@ -839,7 +1009,8 @@ function printResult(result: CaseResult): void {
   console.log(`  CPU:          ${formatStats(result.summary.cpuMs)}`);
   console.log(`  CPU core:     ${formatRatioStats(result.summary.cpuCoreRatio)}`);
   console.log(`  /healthz:     ${formatStats(result.summary.healthzMs)}`);
-  console.log(`  ready log:    ${formatStats(result.summary.readyLogMs)}`);
+  console.log(`  http listen:  ${formatStats(result.summary.httpListenLogMs)}`);
+  console.log(`  gateway ready: ${formatStats(result.summary.gatewayReadyLogMs)}`);
   console.log(`  /readyz:      ${formatStats(result.summary.readyzMs)}`);
   console.log(`  max RSS:      ${formatMemoryStats(result.summary.maxRssMb)}`);
   console.log(
@@ -895,14 +1066,38 @@ async function main() {
   }
   if (options.json) {
     console.log(JSON.stringify(payload, null, 2));
-    return;
+  } else {
+    for (const result of results) {
+      printResult(result);
+    }
   }
-  for (const result of results) {
-    printResult(result);
+
+  const failures = collectResultFailures(results);
+  if (failures.length > 0) {
+    printBenchmarkFailures(failures);
+    process.exitCode = 1;
   }
 }
 
-main().catch((err) => {
-  console.error(err instanceof Error ? err.stack : String(err));
-  process.exitCode = 1;
-});
+export const testing = {
+  classifyGatewayReadyLog,
+  classifyProbeErrorKind,
+  collectResultFailures,
+  collectStartupTrace,
+  parseNonNegativeInt,
+  parsePositiveInt,
+  resolveEntry,
+  sanitizedEnv,
+  stopChild,
+  summarizeCase,
+  waitForProbe,
+  writeConfig,
+};
+
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  main().catch((err) => {
+    console.error(err instanceof Error ? err.stack : String(err));
+    process.exitCode = 1;
+  });
+}
+export { testing as __testing };

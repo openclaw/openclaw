@@ -2,6 +2,7 @@ import type { CodexComputerUseStatus } from "./app-server/computer-use.js";
 import type { CodexAppServerModelListResult } from "./app-server/models.js";
 import { isJsonObject, type JsonObject, type JsonValue } from "./app-server/protocol.js";
 import {
+  hasCodexRateLimitSnapshots,
   summarizeCodexAccountRateLimits,
   summarizeCodexRateLimits,
 } from "./app-server/rate-limits.js";
@@ -56,7 +57,7 @@ export function formatCodexStatus(probes: CodexStatusProbes): string {
   lines.push(
     `Skills: ${
       probes.skills.ok
-        ? summarizeArrayLike(probes.skills.value)
+        ? summarizeCodexSkills(probes.skills.value)
         : formatCodexDisplayText(probes.skills.error)
     }`,
   );
@@ -198,6 +199,48 @@ export function formatList(response: JsonValue | undefined, label: string): stri
   ].join("\n");
 }
 
+export function formatSkills(response: JsonValue | undefined): string {
+  const groups = isJsonObject(response) && Array.isArray(response.data) ? response.data : [];
+  if (groups.length === 0) {
+    return "Codex skills: none returned.";
+  }
+  const lines = ["Codex skills:"];
+  let renderedSkills = 0;
+  let loadErrors = 0;
+  for (const group of groups) {
+    const record = isJsonObject(group) ? group : {};
+    if (Array.isArray(record.errors)) {
+      loadErrors += record.errors.length;
+    }
+    const skills = Array.isArray(record.skills) ? record.skills : [];
+    if (skills.length === 0) {
+      continue;
+    }
+    for (const skill of skills) {
+      if (isJsonObject(skill) && skill.enabled === false) {
+        continue;
+      }
+      lines.push(`- ${formatCodexSkillEntry(skill)}`);
+      renderedSkills += 1;
+    }
+  }
+  if (renderedSkills === 0) {
+    if (loadErrors > 0) {
+      return `Codex skills: none returned (${loadErrors} load ${
+        loadErrors === 1 ? "error" : "errors"
+      }).`;
+    }
+    return "Codex skills: none returned.";
+  }
+  return lines.join("\n");
+}
+
+function formatCodexSkillEntry(entry: JsonValue): string {
+  const record = isJsonObject(entry) ? entry : {};
+  const name = readString(record, "name") ?? "<unknown>";
+  return `\`${formatCodexDisplayText(name)}\``;
+}
+
 const CODEX_RESUME_SAFE_THREAD_ID_PATTERN = /^[A-Za-z0-9._:-]+$/;
 
 function formatCodexResumeHint(threadId: string): string {
@@ -301,7 +344,9 @@ export function buildHelp(): string {
     "- /codex status",
     "- /codex models",
     "- /codex threads [filter]",
+    "- /codex sessions --host <node> [filter]",
     "- /codex resume <thread-id>",
+    "- /codex resume <session-id> --host <node> --bind here",
     "- /codex bind [thread-id] [--cwd <path>] [--model <model>] [--provider <provider>]",
     "- /codex binding",
     "- /codex stop",
@@ -317,6 +362,7 @@ export function buildHelp(): string {
     "- /codex account",
     "- /codex mcp",
     "- /codex skills",
+    "- /codex plugins [list|enable|disable]",
   ].join("\n");
 }
 
@@ -346,14 +392,52 @@ function summarizeArrayLike(value: JsonValue | undefined): string {
   return `${entries.length}`;
 }
 
+function summarizeCodexSkills(value: JsonValue | undefined): string {
+  const groups = isJsonObject(value) && Array.isArray(value.data) ? value.data : [];
+  if (groups.length === 0) {
+    return "none returned";
+  }
+  let enabledSkills = 0;
+  let loadErrors = 0;
+  for (const group of groups) {
+    if (!isJsonObject(group)) {
+      continue;
+    }
+    if (Array.isArray(group.errors)) {
+      loadErrors += group.errors.length;
+    }
+    if (!Array.isArray(group.skills)) {
+      continue;
+    }
+    enabledSkills += group.skills.filter(
+      (skill) => !isJsonObject(skill) || skill.enabled !== false,
+    ).length;
+  }
+  if (enabledSkills > 0) {
+    return `${enabledSkills}`;
+  }
+  if (loadErrors > 0) {
+    return `none returned (${loadErrors} load ${loadErrors === 1 ? "error" : "errors"})`;
+  }
+  return "none returned";
+}
+
 function formatCodexRateLimitSummary(value: JsonValue | undefined): string {
-  return formatCodexDisplayText(summarizeCodexRateLimits(value) ?? summarizeRateLimits(value));
+  const summary = summarizeCodexRateLimits(value);
+  if (summary) {
+    return formatCodexDisplayText(summary);
+  }
+  return formatCodexDisplayText(
+    hasCodexRateLimitSnapshots(value) ? "none returned" : summarizeRateLimits(value),
+  );
 }
 
 function formatCodexRateLimitDetails(value: JsonValue | undefined): string {
   const lines = summarizeCodexAccountRateLimits(value);
   if (!lines) {
-    return formatCodexDisplayText(summarizeRateLimits(value));
+    return formatCodexDisplayText(
+      hasCodexRateLimitSnapshots(value) ? "none returned" : summarizeRateLimits(value),
+    );
   }
   return lines.map(formatCodexDisplayText).join("\n");
 }
@@ -361,7 +445,8 @@ function formatCodexRateLimitDetails(value: JsonValue | undefined): string {
 function summarizeRateLimits(value: JsonValue | undefined): string {
   const entries = extractArray(value);
   if (entries.length > 0) {
-    return `${entries.length}`;
+    const count = entries.filter(isMeaningfulRateLimitSnapshot).length;
+    return count > 0 ? `${count}` : "none returned";
   }
   if (!isJsonObject(value)) {
     return "none returned";
@@ -377,7 +462,18 @@ function summarizeRateLimits(value: JsonValue | undefined): string {
 }
 
 function isMeaningfulRateLimitSnapshot(value: JsonValue | undefined): boolean {
-  return isJsonObject(value) && Object.values(value).some((entry) => entry != null);
+  if (!isJsonObject(value)) {
+    return false;
+  }
+  const reachedType =
+    readString(value, "rateLimitReachedType") ?? readString(value, "rate_limit_reached_type");
+  if (reachedType) {
+    return true;
+  }
+  return ["primary", "secondary"].some((key) => {
+    const window = value[key];
+    return isJsonObject(window) && Object.values(window).some((entry) => entry != null);
+  });
 }
 
 function extractArray(value: JsonValue | undefined): JsonValue[] {

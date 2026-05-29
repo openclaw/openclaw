@@ -1,14 +1,15 @@
-import { listDevicePairing } from "../../infra/device-pairing.js";
-import { listNodePairing } from "../../infra/node-pairing.js";
-import type { NodeListNode } from "../../shared/node-list-types.js";
-import { createKnownNodeCatalog, listKnownNodes } from "../node-catalog.js";
 import {
   type EnvironmentSummary,
   ErrorCodes,
   errorShape,
   validateEnvironmentsListParams,
   validateEnvironmentsStatusParams,
-} from "../protocol/index.js";
+} from "../../../packages/gateway-protocol/src/index.js";
+import { listDevicePairing } from "../../infra/device-pairing.js";
+import { listNodePairing } from "../../infra/node-pairing.js";
+import type { NodeListNode } from "../../shared/node-list-types.js";
+import { normalizeSortedUniqueTrimmedStringList } from "../../shared/string-normalization.js";
+import { createKnownNodeCatalog, listKnownNodes } from "../node-catalog.js";
 import { respondInvalidParams, respondUnavailableOnThrow } from "./nodes.helpers.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 
@@ -21,16 +22,7 @@ const GATEWAY_ENVIRONMENT: EnvironmentSummary = {
 };
 
 function uniqueSortedStrings(...items: Array<readonly string[] | undefined>): string[] {
-  const values = new Set<string>();
-  for (const item of items) {
-    for (const value of item ?? []) {
-      const trimmed = value.trim();
-      if (trimmed) {
-        values.add(trimmed);
-      }
-    }
-  }
-  return [...values].toSorted((left, right) => left.localeCompare(right));
+  return normalizeSortedUniqueTrimmedStringList(items.flatMap((item) => item ?? []));
 }
 
 function summarizeNodeEnvironment(node: NodeListNode): EnvironmentSummary {

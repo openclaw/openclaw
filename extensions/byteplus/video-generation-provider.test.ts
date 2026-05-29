@@ -41,13 +41,23 @@ function mockSuccessfulBytePlusTask(params?: { model?: string }) {
     });
 }
 
-function requireBytePlusPostBody(): Record<string, unknown> {
-  const request = postJsonRequestMock.mock.calls[0]?.[0] as
-    | { body?: Record<string, unknown> }
-    | undefined;
+function requireBytePlusPostRequest(): { body?: Record<string, unknown>; url?: string } {
+  const [call] = postJsonRequestMock.mock.calls;
+  if (!call) {
+    throw new Error("expected BytePlus video request");
+  }
+  const [request] = call;
   if (!request) {
     throw new Error("expected BytePlus video request");
   }
+  if (typeof request !== "object" || Array.isArray(request)) {
+    throw new Error("expected BytePlus video request options");
+  }
+  return request as { body?: Record<string, unknown>; url?: string };
+}
+
+function requireBytePlusPostBody(): Record<string, unknown> {
+  const request = requireBytePlusPostRequest();
   if (!request.body) {
     throw new Error("expected BytePlus video request body");
   }
@@ -71,8 +81,8 @@ describe("byteplus video generation provider", () => {
     });
 
     expect(postJsonRequestMock).toHaveBeenCalledTimes(1);
-    const request = postJsonRequestMock.mock.calls[0]?.[0] as { url?: string } | undefined;
-    expect(request?.url).toBe(
+    const request = requireBytePlusPostRequest();
+    expect(request.url).toBe(
       "https://ark.ap-southeast.bytepluses.com/api/v3/contents/generations/tasks",
     );
     expect(result.videos).toHaveLength(1);
@@ -133,5 +143,149 @@ describe("byteplus video generation provider", () => {
     expect(body.seed).toBe(42);
     expect(body.resolution).toBe("480p");
     expect(body.camera_fixed).toBe(false);
+  });
+
+  it("drops malformed seed values before creating videos", async () => {
+    mockSuccessfulBytePlusTask({ model: "seedance-1-0-pro-250528" });
+
+    const provider = buildBytePlusVideoGenerationProvider();
+    await provider.generateVideo({
+      provider: "byteplus",
+      model: "seedance-1-0-pro-250528",
+      prompt: "A cinematic lobster montage",
+      providerOptions: {
+        seed: 1.5,
+      },
+      cfg: {},
+    });
+
+    expect(requireBytePlusPostBody()).not.toHaveProperty("seed");
+  });
+
+  it("drops out-of-range duration values before creating videos", async () => {
+    mockSuccessfulBytePlusTask({ model: "seedance-1-0-pro-250528" });
+
+    const provider = buildBytePlusVideoGenerationProvider();
+    await provider.generateVideo({
+      provider: "byteplus",
+      model: "seedance-1-0-pro-250528",
+      prompt: "A cinematic lobster montage",
+      durationSeconds: 99,
+      cfg: {},
+    });
+
+    expect(requireBytePlusPostBody()).not.toHaveProperty("duration");
+  });
+
+  it("drops malformed response duration metadata", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({
+          id: "task_123",
+        }),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce({
+        json: async () => ({
+          id: "task_123",
+          status: "succeeded",
+          content: {
+            video_url: "https://example.com/byteplus.mp4",
+          },
+          duration: 1.5,
+        }),
+      })
+      .mockResolvedValueOnce({
+        headers: new Headers({ "content-type": "video/mp4" }),
+        arrayBuffer: async () => Buffer.from("mp4-bytes"),
+      });
+
+    const provider = buildBytePlusVideoGenerationProvider();
+    const result = await provider.generateVideo({
+      provider: "byteplus",
+      model: "seedance-1-0-lite-t2v-250428",
+      prompt: "A lantern floats upward into the night sky",
+      cfg: {},
+    });
+
+    expect(result.metadata).toMatchObject({ duration: undefined });
+  });
+
+  it("reports malformed create JSON with a provider-owned error", async () => {
+    const release = vi.fn(async () => {});
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => {
+          throw new SyntaxError("bad json");
+        },
+      },
+      release,
+    });
+
+    const provider = buildBytePlusVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "byteplus",
+        model: "seedance-1-0-lite-t2v-250428",
+        prompt: "bad create response",
+        cfg: {},
+      }),
+    ).rejects.toThrow("BytePlus video generation failed: malformed JSON response");
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("rejects status responses missing a task status", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({ id: "task_missing_status" }),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutMock.mockResolvedValueOnce({
+      json: async () => ({
+        id: "task_missing_status",
+        content: {
+          video_url: "https://example.com/byteplus.mp4",
+        },
+      }),
+    });
+
+    const provider = buildBytePlusVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "byteplus",
+        model: "seedance-1-0-lite-t2v-250428",
+        prompt: "missing status",
+        cfg: {},
+      }),
+    ).rejects.toThrow("BytePlus video status response missing task status");
+  });
+
+  it("rejects malformed completed content", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({ id: "task_malformed_content" }),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutMock.mockResolvedValueOnce({
+      json: async () => ({
+        id: "task_malformed_content",
+        status: "succeeded",
+        content: ["https://example.com/byteplus.mp4"],
+      }),
+    });
+
+    const provider = buildBytePlusVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "byteplus",
+        model: "seedance-1-0-lite-t2v-250428",
+        prompt: "malformed content",
+        cfg: {},
+      }),
+    ).rejects.toThrow("BytePlus video generation completed with malformed content");
   });
 });

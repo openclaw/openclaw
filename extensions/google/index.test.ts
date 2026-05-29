@@ -1,4 +1,4 @@
-import type { Context, Model } from "@earendil-works/pi-ai";
+import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import type {
   ProviderReplaySessionEntry,
   ProviderSanitizeReplayHistoryContext,
@@ -10,7 +10,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createCapturedThinkingConfigStream } from "openclaw/plugin-sdk/provider-test-contracts";
 import type { RealtimeVoiceProviderPlugin } from "openclaw/plugin-sdk/realtime-voice";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { registerGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
 import googlePlugin from "./index.js";
 import { registerGoogleProvider } from "./provider-registration.js";
@@ -21,6 +21,12 @@ const googleProviderPlugin = {
     registerGoogleGeminiCliProvider(api);
   },
 };
+
+const refreshGeminiCliOAuthTokenMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./oauth.runtime.js", () => ({
+  refreshGeminiCliOAuthToken: refreshGeminiCliOAuthTokenMock,
+}));
 
 describe("google provider plugin hooks", () => {
   it("owns replay policy and reasoning mode for the direct Gemini provider", async () => {
@@ -82,14 +88,12 @@ describe("google provider plugin hooks", () => {
       } as ProviderSanitizeReplayHistoryContext),
     );
 
-    const bootstrapMessage = sanitized?.[0];
+    const bootstrapMessage = sanitized?.[0] as
+      | { role?: string; content?: unknown; timestamp?: unknown }
+      | undefined;
     expect(bootstrapMessage?.role).toBe("user");
-    expect(
-      bootstrapMessage && "content" in bootstrapMessage ? bootstrapMessage.content : undefined,
-    ).toBe("(session bootstrap)");
-    expect(typeof (bootstrapMessage as { timestamp?: unknown } | undefined)?.timestamp).toBe(
-      "number",
-    );
+    expect(bootstrapMessage?.content).toBe("(session bootstrap)");
+    expect(typeof bootstrapMessage?.timestamp).toBe("number");
     expect(sanitized?.[1]).toEqual({
       role: "assistant",
       content: [{ type: "text", text: "hello" }],
@@ -195,6 +199,25 @@ describe("google provider plugin hooks", () => {
     runCase(cliProvider, "google-gemini-cli");
   });
 
+  it("wires Vertex transport before request-time metadata ADC detection", async () => {
+    const { providers } = await registerProviderPlugin({
+      plugin: googleProviderPlugin,
+      id: "google",
+      name: "Google Provider",
+    });
+    const provider = requireRegisteredProvider(providers, "google");
+
+    expect(
+      provider.createStreamFn?.({
+        model: {
+          api: "google-vertex",
+          provider: "google",
+          id: "gemini-2.5-pro",
+        },
+      } as never),
+    ).toEqual(expect.any(Function));
+  });
+
   it("advertises adaptive thinking for Gemini dynamic thinking", async () => {
     const { providers } = await registerProviderPlugin({
       plugin: googleProviderPlugin,
@@ -266,5 +289,41 @@ describe("google provider plugin hooks", () => {
     expect(bridge.sendAudio(Buffer.alloc(160))).toBeUndefined();
     expect(bridge.setMediaTimestamp(20)).toBeUndefined();
     expect(bridge.sendUserMessage?.("hello")).toBeUndefined();
+  });
+
+  it("refreshes Gemini CLI OAuth through the provider-owned refresh hook", async () => {
+    refreshGeminiCliOAuthTokenMock.mockResolvedValueOnce({
+      type: "oauth",
+      provider: "google-gemini-cli",
+      access: "fresh-access",
+      refresh: "fresh-refresh",
+      expires: Date.now() + 60_000,
+      email: "user@example.com",
+      projectId: "project-1",
+    });
+
+    const { providers } = await registerProviderPlugin({
+      plugin: googleProviderPlugin,
+      id: "google",
+      name: "Google Provider",
+    });
+    const provider = requireRegisteredProvider(providers, "google-gemini-cli");
+    const credential = {
+      type: "oauth" as const,
+      provider: "google-gemini-cli",
+      access: "stale-access",
+      refresh: "stale-refresh",
+      expires: Date.now() - 60_000,
+      email: "user@example.com",
+      projectId: "project-1",
+    };
+
+    await expect(provider.refreshOAuth?.(credential)).resolves.toMatchObject({
+      access: "fresh-access",
+      refresh: "fresh-refresh",
+      email: "user@example.com",
+      projectId: "project-1",
+    });
+    expect(refreshGeminiCliOAuthTokenMock).toHaveBeenCalledWith(credential);
   });
 });

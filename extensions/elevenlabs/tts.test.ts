@@ -25,16 +25,24 @@ describe("elevenlabs tts diagnostics", () => {
   }
 
   function getHeadersFromFirstFetchCall(fetchMock: ReturnType<typeof vi.fn>): Headers {
-    const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
-    return new Headers(init?.headers);
+    return new Headers(getInitFromFirstFetchCall(fetchMock).headers);
+  }
+
+  function requireFirstFetchCall(fetchMock: ReturnType<typeof vi.fn>): [string | URL, RequestInit] {
+    const [call] = fetchMock.mock.calls;
+    if (!call) {
+      throw new Error("expected ElevenLabs fetch call");
+    }
+    return call as [string | URL, RequestInit];
   }
 
   function getInitFromFirstFetchCall(fetchMock: ReturnType<typeof vi.fn>): RequestInit {
-    return (fetchMock.mock.calls[0] as unknown[])[1] as RequestInit;
+    const [, init] = requireFirstFetchCall(fetchMock);
+    return init;
   }
 
   function getUrlFromFirstFetchCall(fetchMock: ReturnType<typeof vi.fn>): URL {
-    const url = fetchMock.mock.calls[0]?.[0] as string | URL;
+    const [url] = requireFirstFetchCall(fetchMock);
     return new URL(url.toString());
   }
 
@@ -104,6 +112,25 @@ describe("elevenlabs tts diagnostics", () => {
     expect(getHeadersFromFirstFetchCall(fetchMock).get("accept")).toBe("audio/mpeg");
   });
 
+  it("rejects JSON success bodies as malformed audio", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ error: "not audio" }), {
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await expectDefaultTtsRequestToThrow("ElevenLabs API error: malformed audio response");
+  });
+
+  it("rejects empty successful audio bodies as malformed audio", async () => {
+    const fetchMock = vi.fn(async () => new Response(new Uint8Array()));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await expectDefaultTtsRequestToThrow("ElevenLabs API error: malformed audio response");
+  });
+
   it("omits the MPEG Accept header for PCM telephony output", async () => {
     const fetchMock = vi.fn(async () => new Response(Buffer.from("pcm")));
     globalThis.fetch = fetchMock as unknown as typeof fetch;
@@ -131,6 +158,20 @@ describe("elevenlabs tts diagnostics", () => {
       latency_optimization_level?: number;
     };
     expect(body.latency_optimization_level).toBeUndefined();
+  });
+
+  it("rejects fractional latency optimization instead of truncating it", async () => {
+    const fetchMock = vi.fn(async () => new Response(Buffer.from("mp3")));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await expect(
+      elevenLabsTTS({
+        ...createDefaultTtsRequest(),
+        latencyTier: 3.9,
+      }),
+    ).rejects.toThrow("latencyTier must be an integer");
+
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("omits latency optimization for eleven_v3 because the API rejects it", async () => {
@@ -167,5 +208,19 @@ describe("elevenlabs tts diagnostics", () => {
     expect(url.searchParams.get("optimize_streaming_latency")).toBe("2");
     expect(result.audioStream).toBeInstanceOf(ReadableStream);
     await result.release();
+  });
+
+  it("rejects JSON success stream responses as malformed audio", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ error: "not audio" }), {
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await expect(elevenLabsTTSStream(createDefaultTtsRequest())).rejects.toThrow(
+      "ElevenLabs API error: malformed audio response",
+    );
   });
 });

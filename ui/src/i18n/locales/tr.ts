@@ -350,6 +350,12 @@ export const tr: TranslationMap = {
     eventLogSubtitle: "Latest gateway events.",
     noEvents: "No events yet.",
   },
+  quickSettings: {
+    security: {
+      browserEnabled: "Browser enabled",
+      toolProfile: "Tool profile",
+    },
+  },
   execApproval: {
     expiresIn: "expires in {time}",
     expired: "expired",
@@ -358,6 +364,8 @@ export const tr: TranslationMap = {
     pending: "{count} pending",
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
+    allowAlwaysUnavailable:
+      "Geçerli onay ilkesi her seferinde onay gerektiriyor, bu nedenle Her Zaman İzin Ver kullanılamıyor.",
     deny: "Deny",
     labels: {
       host: "Host",
@@ -389,6 +397,7 @@ export const tr: TranslationMap = {
   },
   tabs: {
     agents: "Aracılar",
+    activity: "Etkinlik",
     overview: "Genel Bakış",
     channels: "Kanallar",
     instances: "Örnekler",
@@ -410,6 +419,7 @@ export const tr: TranslationMap = {
   },
   subtitles: {
     agents: "Çalışma alanları, araçlar, kimlikler.",
+    activity: "Tarayıcıya yerel araç etkinliği özetleri.",
     overview: "Durum, giriş noktaları, sağlık.",
     channels: "Kanallar ve ayarlar.",
     instances: "Bağlı istemciler ve düğümler.",
@@ -428,6 +438,42 @@ export const tr: TranslationMap = {
     debug: "Anlık görüntüler, olaylar, RPC.",
     logs: "Canlı Gateway günlükleri.",
     dreams: "Uyku sırasında bellek birleştirme.",
+  },
+  activity: {
+    title: "Etkinlik",
+    subtitle: "Canlı oturum olaylarından türetilen geçici araç etkinliği.",
+    visibleCount: "{visible} / {total}",
+    filtersLabel: "Etkinlik filtreleri",
+    search: "Ara",
+    searchPlaceholder: "Araca, özete, çalıştırmaya, oturuma göre filtrele",
+    toolFilter: "Araç",
+    allTools: "Tüm araçlar",
+    statusFilters: "Durum filtreleri",
+    autoFollow: "Otomatik takip",
+    expandAll: "Tümünü genişlet",
+    collapseAll: "Tümünü daralt",
+    clear: "Temizle",
+    empty: "Henüz araç etkinliği yok.",
+    emptyFiltered: "Bu filtrelerle eşleşen etkinlik yok.",
+    entrySummary: "{argumentSummary}",
+    argumentHiddenOne: "1 bağımsız değişken gizlendi",
+    argumentsHidden: "{count} bağımsız değişken gizlendi",
+    streamLabel: "Araç etkinliği girişleri",
+    toolCallId: "Araç çağrısı",
+    runId: "Çalıştır",
+    session: "Oturum",
+    outputTruncated: "Önizleme gizlendi ve kısaltıldı.",
+    noOutputPreview: "Çıkış önizlemesi yok.",
+    status: {
+      running: "Çalışıyor",
+      done: "Tamamlandı",
+      error: "Hata",
+    },
+    duration: {
+      ms: "{count} ms",
+      seconds: "{count} sn",
+      minutes: "{minutes} dk {seconds} sn",
+    },
   },
   overview: {
     access: {
@@ -697,10 +743,6 @@ export const tr: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle:
-        "Token'ların nereye gittiğini, oturumların ne zaman arttığını ve maliyeti neyin belirlediğini görün.",
-    },
     common: {
       emptyValue: "—",
       unknown: "bilinmiyor",
@@ -1048,6 +1090,10 @@ export const tr: TranslationMap = {
     settings: "Sohbet ayarları",
     thinkingToggle: "Asistanın düşünme/çalışma çıktısını aç/kapat",
     toolCallsToggle: "Araç çağrılarını ve araç sonuçlarını aç/kapat",
+    autoScrollMode: "Otomatik kaydırma modu",
+    autoScrollAlways: "Her zaman",
+    autoScrollNearBottom: "Alta yakın",
+    autoScrollOff: "Kapalı",
     focusToggle: "Odak modunu aç/kapat (kenar çubuğunu + sayfa başlığını gizle)",
     hideCronSessions: "Cron oturumlarını gizle",
     showCronSessions: "Cron oturumlarını göster",
@@ -1085,17 +1131,27 @@ export const tr: TranslationMap = {
       send: "Send",
       sendMessage: "Send message",
     },
+    queue: {
+      retry: "Yeniden dene",
+      retrySend: "Göndermeyi yeniden dene",
+      retryQueuedMessage: "Kuyruktaki mesajı yeniden dene",
+    },
     composer: {
       placeholder: "Message {name} (Enter to send)",
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
       startTalk: "Start Talk",
+      stillListening: "Hâlâ dinliyor",
+      talkTranscript: "Konuşma dökümü",
       stopTalk: "Stop Talk",
     },
     selectors: {
       agentFilter: "Oturumları ajana göre filtrele",
       session: "Chat session",
+      sessionSearch: "Oturumlarda ara",
+      clearSessionSearch: "Oturum aramasını temizle",
+      loadMoreSessions: "Daha fazla oturum yükle",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },
@@ -1207,6 +1263,9 @@ export const tr: TranslationMap = {
       ascending: "Artan",
       descending: "Azalan",
       reset: "Sıfırla",
+      emptyTitle: "No scheduled jobs yet.",
+      emptyHint: "Create one from a plain-language prompt; advanced fields can wait.",
+      emptyFilteredHint: "Clear or change filters to see scheduled jobs.",
       noMatching: "Eşleşen iş yok.",
       loading: "Yükleniyor...",
       loadMore: "Daha fazla iş yükle",
@@ -1242,6 +1301,7 @@ export const tr: TranslationMap = {
     form: {
       editJob: "İşi Düzenle",
       newJob: "Yeni İş",
+      advancedJob: "Advanced job",
       updateSubtitle: "Seçili zamanlanmış işi güncelleyin.",
       createSubtitle: "Zamanlanmış bir uyandırma veya aracı çalıştırması oluşturun.",
       required: "Gerekli",

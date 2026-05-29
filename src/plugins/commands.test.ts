@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { listRegisteredPluginAgentPromptGuidance } from "./command-registry-state.js";
 import {
-  __testing,
+  testing,
   clearPluginCommands,
   executePluginCommand,
   getPluginCommandSpecs,
@@ -15,6 +15,20 @@ import {
 import { createPluginRegistry, type PluginRecord } from "./registry.js";
 import { setActivePluginRegistry } from "./runtime.js";
 import type { PluginRuntime } from "./runtime/types.js";
+
+const completionMocks = vi.hoisted(() => ({
+  prepareSimpleCompletionModelForAgent: vi.fn(),
+  completeWithPreparedSimpleCompletionModel: vi.fn(),
+  resolveSimpleCompletionSelectionForAgent: vi.fn(),
+}));
+
+vi.mock("../agents/simple-completion-runtime.js", () => ({
+  prepareSimpleCompletionModelForAgent: completionMocks.prepareSimpleCompletionModelForAgent,
+  completeWithPreparedSimpleCompletionModel:
+    completionMocks.completeWithPreparedSimpleCompletionModel,
+  resolveSimpleCompletionSelectionForAgent:
+    completionMocks.resolveSimpleCompletionSelectionForAgent,
+}));
 
 type CommandsModule = typeof import("./commands.js");
 
@@ -47,10 +61,12 @@ function createBundledPluginRecord(id: string): PluginRecord {
     channelIds: [],
     cliBackendIds: [],
     providerIds: [],
+    embeddingProviderIds: [],
     speechProviderIds: [],
     realtimeTranscriptionProviderIds: [],
     realtimeVoiceProviderIds: [],
     mediaUnderstandingProviderIds: [],
+    transcriptSourceProviderIds: [],
     imageGenerationProviderIds: [],
     videoGenerationProviderIds: [],
     musicGenerationProviderIds: [],
@@ -59,7 +75,6 @@ function createBundledPluginRecord(id: string): PluginRecord {
     migrationProviderIds: [],
     memoryEmbeddingProviderIds: [],
     agentHarnessIds: [],
-    gatewayMethods: [],
     cliCommands: [],
     services: [],
     gatewayDiscoveryServiceIds: [],
@@ -93,9 +108,9 @@ function registerVoiceCommandForTest(
 }
 
 function resolveBindingConversationFromCommand(
-  params: Parameters<typeof __testing.resolveBindingConversationFromCommand>[0],
+  params: Parameters<typeof testing.resolveBindingConversationFromCommand>[0],
 ) {
-  return __testing.resolveBindingConversationFromCommand(params);
+  return testing.resolveBindingConversationFromCommand(params);
 }
 
 function expectCommandMatch(
@@ -161,6 +176,41 @@ function expectBindingConversationCase(
 }
 
 beforeEach(() => {
+  completionMocks.prepareSimpleCompletionModelForAgent.mockReset();
+  completionMocks.prepareSimpleCompletionModelForAgent.mockResolvedValue({
+    selection: {
+      provider: "openai",
+      modelId: "gpt-5.5",
+      agentDir: "/tmp/openclaw-agent",
+    },
+    model: {
+      provider: "openai",
+      id: "gpt-5.5",
+      name: "GPT-5.5",
+      api: "openai",
+      input: ["text"],
+      reasoning: false,
+      contextWindow: 128_000,
+      maxTokens: 4096,
+      cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0.2 },
+    },
+    auth: {
+      apiKey: "test-api-key",
+      source: "test",
+      mode: "api-key",
+    },
+  });
+  completionMocks.completeWithPreparedSimpleCompletionModel.mockReset();
+  completionMocks.completeWithPreparedSimpleCompletionModel.mockResolvedValue({
+    content: [{ type: "text", text: "done" }],
+    usage: {},
+  });
+  completionMocks.resolveSimpleCompletionSelectionForAgent.mockReset();
+  completionMocks.resolveSimpleCompletionSelectionForAgent.mockReturnValue({
+    provider: "openai",
+    modelId: "gpt-5.5",
+    agentDir: "/tmp/openclaw-agent",
+  });
   setActivePluginRegistry(
     createTestRegistry([
       {
@@ -321,7 +371,34 @@ describe("registerPluginCommand", () => {
       },
       expected: {
         ok: false,
-        error: "Agent prompt guidance must be an array of strings",
+        error: "Agent prompt guidance must be an array of strings or objects",
+      },
+    },
+    {
+      name: "rejects invalid structured agent prompt guidance",
+      command: {
+        name: "demo",
+        description: "Demo",
+        agentPromptGuidance: [{ text: "Use /demo.", surfaces: ["nope"] }] as never,
+        handler: async () => ({ text: "ok" }),
+      },
+      expected: {
+        ok: false,
+        error:
+          "Agent prompt guidance 1 surface 1 must be one of: openclaw_main, pi_main, codex_app_server, cli_backend, acp_backend, subagent",
+      },
+    },
+    {
+      name: "rejects empty structured agent prompt guidance surfaces",
+      command: {
+        name: "demo",
+        description: "Demo",
+        agentPromptGuidance: [{ text: "Use /demo.", surfaces: [] }] as never,
+        handler: async () => ({ text: "ok" }),
+      },
+      expected: {
+        ok: false,
+        error: "Agent prompt guidance 1 surfaces cannot be empty",
       },
     },
     {
@@ -337,8 +414,21 @@ describe("registerPluginCommand", () => {
         error: "Command channel 2 cannot be empty",
       },
     },
+    {
+      name: "rejects primitive native command metadata",
+      command: {
+        name: "demo",
+        description: "Demo",
+        nativeNames: "demo-native",
+        handler: async () => ({ text: "ok" }),
+      },
+      expected: {
+        ok: false,
+        error: "Command nativeNames must be an object",
+      },
+    },
   ] as const)("$name", ({ command, expected }) => {
-    expect(registerPluginCommand("demo-plugin", command)).toEqual(expected);
+    expect(registerPluginCommand("demo-plugin", command as never)).toEqual(expected);
   });
 
   it("normalizes command metadata for downstream consumers", () => {
@@ -365,6 +455,50 @@ describe("registerPluginCommand", () => {
       },
     ]);
     expect(listRegisteredPluginAgentPromptGuidance()).toEqual(["Use /demo_cmd for demo routing."]);
+  });
+
+  it("normalizes and filters structured agent prompt guidance by surface", () => {
+    const result = registerPluginCommand("demo-plugin", {
+      name: "demo_cmd",
+      description: "Demo command",
+      agentPromptGuidance: [
+        "  Use /demo_cmd everywhere.  ",
+        {
+          text: "  Use /demo_cmd for main agent routing.  ",
+          surfaces: ["openclaw_main"],
+        },
+        {
+          text: "Use /demo_cmd for subagents.",
+          surfaces: ["subagent"],
+        },
+      ],
+      handler: async () => ({ text: "ok" }),
+    });
+    expect(result).toEqual({ ok: true });
+
+    expect(listRegisteredPluginAgentPromptGuidance()).toEqual([
+      "Use /demo_cmd everywhere.",
+      "Use /demo_cmd for main agent routing.",
+      "Use /demo_cmd for subagents.",
+    ]);
+    expect(listRegisteredPluginAgentPromptGuidance({ surface: "openclaw_main" })).toEqual([
+      "Use /demo_cmd everywhere.",
+      "Use /demo_cmd for main agent routing.",
+    ]);
+    expect(listRegisteredPluginAgentPromptGuidance({ surface: "pi_main" })).toEqual([
+      "Use /demo_cmd everywhere.",
+      "Use /demo_cmd for main agent routing.",
+    ]);
+    expect(listRegisteredPluginAgentPromptGuidance({ surface: "subagent" })).toEqual([
+      "Use /demo_cmd everywhere.",
+      "Use /demo_cmd for subagents.",
+    ]);
+    expect(
+      listRegisteredPluginAgentPromptGuidance({
+        surface: "subagent",
+        includeLegacyGlobalGuidance: false,
+      }),
+    ).toEqual(["Use /demo_cmd for subagents."]);
   });
 
   it("matches underscore aliases for hyphenated command names", () => {
@@ -601,6 +735,109 @@ describe("registerPluginCommand", () => {
     });
 
     expect(observedOwnerStatus).toBeUndefined();
+  });
+
+  it("ignores owner status opt-in from direct plugin command registration", async () => {
+    let observedOwnerStatus: boolean | undefined;
+    registerPluginCommand("demo-plugin", {
+      name: "voice",
+      description: "Voice command",
+      exposeSenderIsOwner: true,
+      handler: async (ctx) => {
+        observedOwnerStatus = ctx.senderIsOwner;
+        return { text: "ok" };
+      },
+    });
+    const match = requirePluginCommandMatch("/voice");
+
+    await executePluginCommand({
+      command: match.command,
+      channel: "telegram",
+      isAuthorizedSender: true,
+      senderIsOwner: true,
+      commandBody: "/voice",
+      config: {},
+    });
+
+    expect(observedOwnerStatus).toBeUndefined();
+  });
+
+  it("ignores owner status opt-in from external plugin registry commands", async () => {
+    const pluginRegistry = createPluginRegistry({
+      logger: {
+        info() {},
+        warn() {},
+        error() {},
+        debug() {},
+      },
+      runtime: {} as PluginRuntime,
+      activateGlobalSideEffects: true,
+    });
+    let observedOwnerStatus: boolean | undefined;
+    pluginRegistry.registerCommand(
+      {
+        ...createBundledPluginRecord("external-plugin"),
+        origin: "workspace",
+        source: "/workspace/external-plugin/index.ts",
+        rootDir: "/workspace/external-plugin",
+      },
+      {
+        name: "external",
+        description: "External command",
+        exposeSenderIsOwner: true,
+        handler: async (ctx) => {
+          observedOwnerStatus = ctx.senderIsOwner;
+          return { text: "ok" };
+        },
+      },
+    );
+    const match = requirePluginCommandMatch("/external");
+
+    await executePluginCommand({
+      command: match.command,
+      channel: "telegram",
+      isAuthorizedSender: true,
+      senderIsOwner: true,
+      commandBody: "/external",
+      config: {},
+    });
+
+    expect(observedOwnerStatus).toBeUndefined();
+  });
+
+  it("exposes owner status to trusted bundled plugin commands that opt in", async () => {
+    const pluginRegistry = createPluginRegistry({
+      logger: {
+        info() {},
+        warn() {},
+        error() {},
+        debug() {},
+      },
+      runtime: {} as PluginRuntime,
+      activateGlobalSideEffects: true,
+    });
+    let observedOwnerStatus: boolean | undefined;
+    pluginRegistry.registerCommand(createBundledPluginRecord("phone-control"), {
+      name: "phone",
+      description: "Phone command",
+      exposeSenderIsOwner: true,
+      handler: async (ctx) => {
+        observedOwnerStatus = ctx.senderIsOwner;
+        return { text: "ok" };
+      },
+    });
+    const match = requirePluginCommandMatch("/phone");
+
+    await executePluginCommand({
+      command: match.command,
+      channel: "telegram",
+      isAuthorizedSender: true,
+      senderIsOwner: true,
+      commandBody: "/phone",
+      config: {},
+    });
+
+    expect(observedOwnerStatus).toBe(true);
   });
 
   it("allows command owners to run scoped plugin commands without gateway scopes", async () => {
@@ -1025,6 +1262,133 @@ describe("registerPluginCommand", () => {
     expect(result).toEqual({ text: "ok" });
     expect(receivedCtx?.sessionKey).toBe("agent:main:whatsapp:direct:123");
     expect(receivedCtx?.sessionId).toBe("session-123");
+  });
+
+  it("passes a host-bound llm runtime through to plugin command handlers", async () => {
+    let receivedCtx:
+      | {
+          runtimeContext?: {
+            llm?: {
+              complete?: unknown;
+            };
+          };
+        }
+      | undefined;
+    const handler = async (ctx: typeof receivedCtx) => {
+      receivedCtx = ctx;
+      return { text: "ok" };
+    };
+
+    const result = await executePluginCommand({
+      command: {
+        name: "runtimecheck",
+        description: "Demo command",
+        acceptsArgs: false,
+        handler,
+        pluginId: "demo-plugin",
+      },
+      channel: "telegram",
+      senderId: "U123",
+      isAuthorizedSender: true,
+      sessionKey: "agent:main:telegram:direct:runtimecheck",
+      authProfileId: "openai-codex:claude@example.com",
+      commandBody: "/runtimecheck",
+      config: {} as never,
+    });
+
+    expect(result).toEqual({ text: "ok" });
+    expect(receivedCtx?.runtimeContext?.llm?.complete).toEqual(expect.any(Function));
+  });
+
+  it("binds legacy main session plugin llm runtime to the default agent", async () => {
+    const handler = async (ctx: {
+      runtimeContext?: {
+        llm?: {
+          complete: (params: {
+            messages: Array<{ role: "user"; content: string }>;
+          }) => Promise<unknown>;
+        };
+      };
+    }) => {
+      await ctx.runtimeContext?.llm?.complete({
+        messages: [{ role: "user", content: "draft" }],
+      });
+      return { text: "ok" };
+    };
+
+    await executePluginCommand({
+      command: {
+        name: "runtimecheck",
+        description: "Demo command",
+        acceptsArgs: false,
+        handler,
+        pluginId: "demo-plugin",
+      },
+      channel: "telegram",
+      senderId: "U123",
+      isAuthorizedSender: true,
+      sessionKey: "main",
+      commandBody: "/runtimecheck",
+      config: {
+        agents: {
+          list: [{ id: "ops", default: true }],
+          defaults: {
+            model: "openai/gpt-5.5",
+          },
+        },
+        session: {
+          mainKey: "main",
+        },
+      } as never,
+    });
+
+    expect(completionMocks.prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "ops",
+      }),
+    );
+  });
+
+  it("binds plugin-owned command sessions to the host-resolved agent", async () => {
+    const handler = async (ctx: {
+      runtimeContext?: {
+        llm?: {
+          complete: (params: {
+            messages: Array<{ role: "user"; content: string }>;
+          }) => Promise<unknown>;
+        };
+      };
+    }) => {
+      await ctx.runtimeContext?.llm?.complete({
+        messages: [{ role: "user", content: "summarize" }],
+      });
+      return { text: "ok" };
+    };
+
+    await executePluginCommand({
+      command: {
+        name: "runtimecheck",
+        description: "Demo command",
+        acceptsArgs: false,
+        handler,
+        pluginId: "demo-plugin",
+      },
+      channel: "discord",
+      senderId: "U123",
+      isAuthorizedSender: true,
+      agentId: "codex",
+      sessionKey: "plugin-binding:openclaw-codex-app-server:dm",
+      authProfileId: "openai-codex:owner@example.com",
+      commandBody: "/runtimecheck",
+      config: {} as never,
+    });
+
+    expect(completionMocks.prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "codex",
+        preferredProfile: "openai-codex:owner@example.com",
+      }),
+    );
   });
 
   it("normalizes undefined plugin command handler results to an empty reply payload", async () => {

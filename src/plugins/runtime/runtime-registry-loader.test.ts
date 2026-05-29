@@ -7,6 +7,8 @@ const mocks = vi.hoisted(() => ({
     vi.fn<typeof import("../loader.js").resolveCompatibleRuntimePluginRegistry>(),
   resolveRuntimePluginRegistry: vi.fn<typeof import("../loader.js").resolveRuntimePluginRegistry>(),
   getActivePluginRegistry: vi.fn<typeof import("../runtime.js").getActivePluginRegistry>(),
+  getActivePluginRegistryWorkspaceDir:
+    vi.fn<typeof import("../runtime.js").getActivePluginRegistryWorkspaceDir>(),
   resolveConfiguredChannelPluginIds:
     vi.fn<typeof import("../channel-plugin-ids.js").resolveConfiguredChannelPluginIds>(),
   resolveDiscoverableScopedChannelPluginIds:
@@ -17,6 +19,8 @@ const mocks = vi.hoisted(() => ({
     vi.fn<typeof import("../effective-plugin-ids.js").resolveEffectivePluginIds>(),
   applyPluginAutoEnable:
     vi.fn<typeof import("../../config/plugin-auto-enable.js").applyPluginAutoEnable>(),
+  resolvePluginMetadataSnapshot:
+    vi.fn<typeof import("../plugin-metadata-snapshot.js").resolvePluginMetadataSnapshot>(),
   resolveAgentWorkspaceDir: vi.fn<
     typeof import("../../agents/agent-scope.js").resolveAgentWorkspaceDir
   >(() => "/resolved-workspace"),
@@ -26,7 +30,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 let ensurePluginRegistryLoaded: typeof import("./runtime-registry-loader.js").ensurePluginRegistryLoaded;
-let resetPluginRegistryLoadedForTests: typeof import("./runtime-registry-loader.js").__testing.resetPluginRegistryLoadedForTests;
+let resetPluginRegistryLoadedForTests: typeof import("./runtime-registry-loader.js").testing.resetPluginRegistryLoadedForTests;
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object") {
@@ -76,7 +80,9 @@ vi.mock("../runtime.js", () => ({
   getActivePluginHttpRouteRegistry: () => null,
   getActivePluginRegistry: (...args: Parameters<typeof mocks.getActivePluginRegistry>) =>
     mocks.getActivePluginRegistry(...args),
-  getActivePluginRegistryWorkspaceDir: () => undefined,
+  getActivePluginRegistryWorkspaceDir: (
+    ...args: Parameters<typeof mocks.getActivePluginRegistryWorkspaceDir>
+  ) => mocks.getActivePluginRegistryWorkspaceDir(...args),
 }));
 
 vi.mock("../channel-plugin-ids.js", () => ({
@@ -100,6 +106,12 @@ vi.mock("../../config/plugin-auto-enable.js", () => ({
     mocks.applyPluginAutoEnable(...args),
 }));
 
+vi.mock("../plugin-metadata-snapshot.js", () => ({
+  resolvePluginMetadataSnapshot: (
+    ...args: Parameters<typeof mocks.resolvePluginMetadataSnapshot>
+  ) => mocks.resolvePluginMetadataSnapshot(...args),
+}));
+
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentWorkspaceDir: (...args: Parameters<typeof mocks.resolveAgentWorkspaceDir>) =>
     mocks.resolveAgentWorkspaceDir(...args),
@@ -111,7 +123,7 @@ describe("ensurePluginRegistryLoaded", () => {
   beforeAll(async () => {
     const mod = await import("./runtime-registry-loader.js");
     ensurePluginRegistryLoaded = mod.ensurePluginRegistryLoaded;
-    resetPluginRegistryLoadedForTests = () => mod.__testing.resetPluginRegistryLoadedForTests();
+    resetPluginRegistryLoadedForTests = () => mod.testing.resetPluginRegistryLoadedForTests();
   });
 
   beforeEach(() => {
@@ -119,16 +131,19 @@ describe("ensurePluginRegistryLoaded", () => {
     mocks.resolveCompatibleRuntimePluginRegistry.mockReset();
     mocks.resolveRuntimePluginRegistry.mockReset();
     mocks.getActivePluginRegistry.mockReset();
+    mocks.getActivePluginRegistryWorkspaceDir.mockReset();
     mocks.resolveConfiguredChannelPluginIds.mockReset();
     mocks.resolveDiscoverableScopedChannelPluginIds.mockReset();
     mocks.resolveChannelPluginIds.mockReset();
     mocks.resolveEffectivePluginIds.mockReset();
     mocks.applyPluginAutoEnable.mockReset();
+    mocks.resolvePluginMetadataSnapshot.mockReset();
     mocks.resolveAgentWorkspaceDir.mockClear();
     mocks.resolveDefaultAgentId.mockClear();
     resetPluginRegistryLoadedForTests();
 
     mocks.getActivePluginRegistry.mockReturnValue(null);
+    mocks.getActivePluginRegistryWorkspaceDir.mockReturnValue(undefined);
     mocks.resolveCompatibleRuntimePluginRegistry.mockReturnValue(undefined);
     mocks.loadOpenClawPlugins.mockReturnValue(createEmptyPluginRegistry());
     mocks.resolveRuntimePluginRegistry.mockImplementation(
@@ -180,10 +195,12 @@ describe("ensurePluginRegistryLoaded", () => {
     expect(channelOptions.activationSourceConfig).toEqual({ plugins: { allow: ["demo-channel"] } });
     expect(channelOptions.env).toBe(env);
     expect(channelOptions.workspaceDir).toBe("/resolved-workspace");
-    expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith({
-      config: rawConfig,
-      env,
-    });
+    expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: rawConfig,
+        env,
+      }),
+    );
     const load = loadOptions();
     const loadConfig = requireRecord(load.config, "load config");
     expect(loadConfig.channels).toEqual(rawConfig.channels);
@@ -331,6 +348,33 @@ describe("ensurePluginRegistryLoaded", () => {
     expect(load.workspaceDir).toBe("/resolved-workspace");
   });
 
+  it("does not reuse non-empty all-scope registries without loader compatibility", () => {
+    mocks.resolveEffectivePluginIds.mockReturnValue(["demo"]);
+
+    ensurePluginRegistryLoaded({
+      scope: "all",
+      config: { plugins: { allow: ["demo"] } } as never,
+    });
+    const activeRegistry = createEmptyPluginRegistry();
+    activeRegistry.plugins.push({
+      id: "demo",
+      source: "/tmp/demo.js",
+      origin: "workspace",
+      enabled: true,
+      status: "loaded",
+    } as never);
+    mocks.getActivePluginRegistry.mockReturnValue(activeRegistry);
+    mocks.getActivePluginRegistryWorkspaceDir.mockReturnValue("/resolved-workspace");
+    mocks.loadOpenClawPlugins.mockClear();
+
+    ensurePluginRegistryLoaded({
+      scope: "all",
+      config: { plugins: { allow: ["demo"], entries: { demo: { value: "changed" } } } } as never,
+    });
+
+    expect(loadOptions().onlyPluginIds).toEqual(["demo"]);
+  });
+
   it("preserves empty all-scope loads instead of widening to all discovered plugins", () => {
     mocks.resolveEffectivePluginIds.mockReturnValue([]);
 
@@ -340,6 +384,149 @@ describe("ensurePluginRegistryLoaded", () => {
     });
 
     expect(loadOptions().onlyPluginIds).toEqual([]);
+  });
+
+  it("reuses an active empty registry for repeated empty all-scope loads", () => {
+    mocks.resolveEffectivePluginIds.mockReturnValue([]);
+
+    ensurePluginRegistryLoaded({
+      scope: "all",
+      config: { plugins: { enabled: true } } as never,
+    });
+    const emptyRegistry = createEmptyPluginRegistry();
+    mocks.getActivePluginRegistry.mockReturnValue(emptyRegistry);
+    mocks.getActivePluginRegistryWorkspaceDir.mockReturnValue("/resolved-workspace");
+    mocks.loadOpenClawPlugins.mockClear();
+
+    ensurePluginRegistryLoaded({
+      scope: "all",
+      config: { plugins: { enabled: true } } as never,
+    });
+
+    expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
+  });
+
+  it("does not reuse an empty active registry from another workspace", () => {
+    mocks.resolveEffectivePluginIds.mockReturnValue([]);
+
+    ensurePluginRegistryLoaded({
+      scope: "all",
+      config: { plugins: { enabled: true } } as never,
+    });
+    const emptyRegistry = createEmptyPluginRegistry();
+    mocks.getActivePluginRegistry.mockReturnValue(emptyRegistry);
+    mocks.getActivePluginRegistryWorkspaceDir.mockReturnValue("/other-workspace");
+    mocks.loadOpenClawPlugins.mockClear();
+
+    ensurePluginRegistryLoaded({
+      scope: "all",
+      config: { plugins: { enabled: true } } as never,
+    });
+
+    expect(loadOptions().onlyPluginIds).toEqual([]);
+  });
+
+  it("does not reuse a non-empty active registry for empty all-scope loads", () => {
+    mocks.resolveEffectivePluginIds.mockReturnValue([]);
+
+    ensurePluginRegistryLoaded({
+      scope: "all",
+      config: { plugins: { enabled: true } } as never,
+    });
+    const staleRegistry = createEmptyPluginRegistry();
+    staleRegistry.plugins.push({
+      id: "stale",
+      source: "/tmp/stale.js",
+      origin: "workspace",
+      enabled: true,
+      status: "loaded",
+    } as never);
+    mocks.getActivePluginRegistry.mockReturnValue(staleRegistry);
+    mocks.loadOpenClawPlugins.mockClear();
+
+    ensurePluginRegistryLoaded({
+      scope: "all",
+      config: { plugins: { enabled: true } } as never,
+    });
+
+    expect(loadOptions().onlyPluginIds).toEqual([]);
+  });
+
+  it("does not reuse a disabled-record registry for empty all-scope loads", () => {
+    mocks.resolveEffectivePluginIds.mockReturnValue([]);
+
+    ensurePluginRegistryLoaded({
+      scope: "all",
+      config: { plugins: { enabled: true } } as never,
+    });
+    const disabledRegistry = createEmptyPluginRegistry();
+    disabledRegistry.plugins.push({
+      id: "disabled",
+      source: "/tmp/disabled.js",
+      origin: "workspace",
+      enabled: false,
+      status: "disabled",
+    } as never);
+    mocks.getActivePluginRegistry.mockReturnValue(disabledRegistry);
+    mocks.getActivePluginRegistryWorkspaceDir.mockReturnValue("/resolved-workspace");
+    mocks.loadOpenClawPlugins.mockClear();
+
+    ensurePluginRegistryLoaded({
+      scope: "all",
+      config: { plugins: { enabled: true } } as never,
+    });
+
+    expect(loadOptions().onlyPluginIds).toEqual([]);
+  });
+
+  it("does not reuse a failed diagnostic registry for explicit plugin scopes", () => {
+    const failedRegistry = createEmptyPluginRegistry();
+    failedRegistry.plugins.push({
+      id: "failed",
+      source: "/tmp/failed.js",
+      origin: "workspace",
+      enabled: true,
+      status: "error",
+    } as never);
+    failedRegistry.diagnostics.push({
+      level: "error",
+      pluginId: "failed",
+      message: "failed to load",
+    } as never);
+    mocks.getActivePluginRegistry.mockReturnValue(failedRegistry);
+    mocks.getActivePluginRegistryWorkspaceDir.mockReturnValue("/resolved-workspace");
+
+    ensurePluginRegistryLoaded({
+      scope: "all",
+      config: { plugins: { enabled: true } } as never,
+      onlyPluginIds: ["failed"],
+    });
+
+    expect(loadOptions().onlyPluginIds).toEqual(["failed"]);
+  });
+
+  it("does not reuse a setup-only registry for explicit plugin scopes", () => {
+    const setupRegistry = createEmptyPluginRegistry();
+    setupRegistry.plugins.push({
+      id: "setup-only",
+      source: "/tmp/setup-only.js",
+      origin: "workspace",
+      enabled: false,
+      status: "disabled",
+    } as never);
+    setupRegistry.channelSetups.push({
+      pluginId: "setup-only",
+    } as never);
+    mocks.getActivePluginRegistry.mockReturnValue(setupRegistry);
+    mocks.getActivePluginRegistryWorkspaceDir.mockReturnValue("/resolved-workspace");
+
+    ensurePluginRegistryLoaded({
+      scope: "all",
+      config: { plugins: { enabled: true } } as never,
+      onlyPluginIds: ["setup-only"],
+    });
+
+    expect(loadOptions().onlyPluginIds).toEqual(["setup-only"]);
   });
 
   it("reuses a compatible active registry instead of forcing a broad reload", () => {

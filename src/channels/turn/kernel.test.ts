@@ -1,11 +1,14 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import type { HistoryEntry } from "../../auto-reply/reply/history.types.js";
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RecordInboundSession } from "../session.types.js";
+import type { ChannelTurnResult, DispatchedChannelTurnResult } from "./kernel.js";
 import {
-  createNoopChannelTurnDeliveryAdapter,
+  clearChannelBotPairLoopGuardForTests,
+  createNoopChannelEventDeliveryAdapter,
   dispatchAssembledChannelTurn,
   hasFinalChannelTurnDispatch,
   hasVisibleChannelTurnDispatch,
@@ -13,6 +16,7 @@ import {
   runPreparedChannelTurn,
   runChannelTurn,
 } from "./kernel.js";
+import type { PreparedChannelTurn } from "./types.js";
 
 const deliverOutboundPayloads = vi.hoisted(() => vi.fn());
 const resolveOutboundDurableFinalDeliverySupport = vi.hoisted(() => vi.fn());
@@ -71,6 +75,14 @@ function createDispatch(
   }) as DispatchReplyWithBufferedBlockDispatcher;
 }
 
+function requireFirstMockCall<T>(mock: { mock: { calls: T[][] } }, label: string): T[] {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
 function createDurableSendResult(messageIds: string[]) {
   return {
     status: "sent",
@@ -124,14 +136,22 @@ type TurnLogEvent = {
 };
 
 function latestDurableSendRequest(): DurableSendRequest {
-  const [request] = sendDurableMessageBatch.mock.calls.at(-1) as unknown as [DurableSendRequest];
+  const calls = sendDurableMessageBatch.mock.calls;
+  const call = calls[calls.length - 1] as unknown as [DurableSendRequest] | undefined;
+  if (!call) {
+    throw new Error("expected durable send request");
+  }
+  const [request] = call;
   return request;
 }
 
 function latestDurableSupportRequest(): DurableSupportRequest {
-  const [request] = resolveOutboundDurableFinalDeliverySupport.mock.calls.at(-1) as unknown as [
-    DurableSupportRequest,
-  ];
+  const calls = resolveOutboundDurableFinalDeliverySupport.mock.calls;
+  const call = calls[calls.length - 1] as unknown as [DurableSupportRequest] | undefined;
+  if (!call) {
+    throw new Error("expected durable support request");
+  }
+  const [request] = call;
   return request;
 }
 
@@ -157,7 +177,25 @@ function loggedEvents(log: ReturnType<typeof vi.fn>): TurnLogEvent[] {
 describe("channel turn kernel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    clearChannelBotPairLoopGuardForTests();
     resolveOutboundDurableFinalDeliverySupport.mockResolvedValue({ ok: true });
+  });
+
+  it("types optionally guarded prepared turns as drop-capable", () => {
+    type DispatchResult = { queuedFinal: true };
+    const guarded = {} as PreparedChannelTurn<DispatchResult>;
+    const unguarded = {} as Omit<PreparedChannelTurn<DispatchResult>, "botLoopProtection"> & {
+      botLoopProtection?: undefined;
+    };
+
+    if (Date.now() < 0) {
+      expectTypeOf(runPreparedChannelTurn(guarded)).toEqualTypeOf<
+        Promise<ChannelTurnResult<DispatchResult>>
+      >();
+      expectTypeOf(runPreparedChannelTurn(unguarded)).toEqualTypeOf<
+        Promise<DispatchedChannelTurnResult<DispatchResult>>
+      >();
+    }
   });
 
   it("routes assembled final replies through durable outbound delivery", async () => {
@@ -363,6 +401,78 @@ describe("channel turn kernel", () => {
     expect(deliver).not.toHaveBeenCalled();
   });
 
+  it("preserves durable partial-send visibility when generic delivery throws", async () => {
+    const error = new Error("second chunk failed");
+    sendDurableMessageBatch.mockResolvedValueOnce({
+      status: "partial_failed",
+      results: [{ channel: "telegram", messageId: "tg-1" }],
+      receipt: {
+        primaryPlatformMessageId: "tg-1",
+        platformMessageIds: ["tg-1"],
+        parts: [{ platformMessageId: "tg-1", kind: "text", index: 0 }],
+        sentAt: 1,
+      },
+      error,
+      sentBeforeError: true,
+    });
+    const deliver = vi.fn(async () => ({ messageIds: ["legacy-1"], visibleReplySent: true }));
+    const dispatchReplyWithBufferedBlockDispatcher = createDispatch();
+
+    await expect(
+      dispatchAssembledChannelTurn({
+        cfg,
+        channel: "telegram",
+        accountId: "acct",
+        agentId: "main",
+        routeSessionKey: "agent:main:telegram:peer",
+        storePath: "/tmp/sessions.json",
+        ctxPayload: createCtx({ To: "123", OriginatingTo: "123" }),
+        recordInboundSession: createRecordInboundSession(),
+        dispatchReplyWithBufferedBlockDispatcher,
+        delivery: { deliver, durable: { replyToMode: "first" } },
+      }),
+    ).rejects.toMatchObject({
+      sentBeforeError: true,
+      visibleReplySent: true,
+    });
+
+    expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it("preserves visible delivery when post-delivery observers throw", async () => {
+    const error = new Error("observer failed");
+    const deliver = vi.fn(async () => ({ messageIds: ["local-1"], visibleReplySent: true }));
+    const dispatchReplyWithBufferedBlockDispatcher = createDispatch();
+
+    await expect(
+      dispatchAssembledChannelTurn({
+        cfg,
+        channel: "telegram",
+        accountId: "acct",
+        agentId: "main",
+        routeSessionKey: "agent:main:telegram:peer",
+        storePath: "/tmp/sessions.json",
+        ctxPayload: createCtx({ To: "123", OriginatingTo: "123" }),
+        recordInboundSession: createRecordInboundSession(),
+        dispatchReplyWithBufferedBlockDispatcher,
+        delivery: {
+          deliver,
+          durable: false,
+          onDelivered: () => {
+            throw error;
+          },
+        },
+      }),
+    ).rejects.toMatchObject({
+      sentBeforeError: true,
+      visibleReplySent: true,
+    });
+    expect(error).toMatchObject({
+      sentBeforeError: true,
+      visibleReplySent: true,
+    });
+  });
+
   it("returns custom delivery result to the buffered dispatcher", async () => {
     let deliveredResult: unknown;
     const dispatchReplyWithBufferedBlockDispatcher = vi.fn(
@@ -556,6 +666,71 @@ describe("channel turn kernel", () => {
     ]);
   });
 
+  it("drops direct prepared turns with bot-loop protection before record and dispatch", async () => {
+    const events: string[] = [];
+    const log = vi.fn();
+    const historyMap = new Map<string, HistoryEntry[]>([
+      ["room", [{ sender: "User", body: "queued before suppression" }]],
+    ]);
+    const recordInboundSession = createRecordInboundSession(events);
+    const runDispatch = vi.fn(async () => {
+      events.push("dispatch");
+      return {
+        queuedFinal: true,
+        counts: { tool: 0, block: 0, final: 1 },
+      };
+    });
+    const botLoopProtection = {
+      scopeId: "prepared-loop-test",
+      conversationId: "room",
+      senderId: "bot-a",
+      receiverId: "bot-b",
+      config: { maxEventsPerWindow: 1, windowSeconds: 60, cooldownSeconds: 60 },
+      defaultEnabled: true,
+    };
+
+    const first = await runPreparedChannelTurn({
+      channel: "test",
+      routeSessionKey: "agent:main:test:peer",
+      storePath: "/tmp/sessions.json",
+      ctxPayload: createCtx(),
+      recordInboundSession,
+      runDispatch,
+      botLoopProtection: { ...botLoopProtection, nowMs: 1_000 },
+    });
+    const second = await runPreparedChannelTurn({
+      channel: "test",
+      routeSessionKey: "agent:main:test:peer",
+      storePath: "/tmp/sessions.json",
+      ctxPayload: createCtx(),
+      recordInboundSession,
+      runDispatch,
+      log,
+      messageId: "msg-loop",
+      botLoopProtection: { ...botLoopProtection, nowMs: 1_001 },
+      history: {
+        isGroup: true,
+        historyKey: "room",
+        historyMap,
+        limit: 50,
+      },
+    });
+
+    expect(first.dispatched).toBe(true);
+    expect(second).toMatchObject({
+      admission: { kind: "drop", reason: "bot-loop-protection" },
+      dispatched: false,
+      routeSessionKey: "agent:main:test:peer",
+    });
+    expect(events).toEqual(["record", "dispatch"]);
+    expect(recordInboundSession).toHaveBeenCalledTimes(1);
+    expect(runDispatch).toHaveBeenCalledTimes(1);
+    expect(historyMap.get("room")).toStrictEqual([]);
+    expect(loggedEvents(log)).toEqual([
+      { stage: "authorize", event: "drop", messageId: "msg-loop" },
+    ]);
+  });
+
   it("suppresses direct prepared dispatches for observe-only admission", async () => {
     const events: string[] = [];
     const recordInboundSession = createRecordInboundSession(events);
@@ -646,7 +821,10 @@ describe("channel turn kernel", () => {
     expect(events).toEqual(["record", "cleanup"]);
     expect(runDispatch).not.toHaveBeenCalled();
     expect(onPreDispatchFailure).toHaveBeenCalledWith(recordError);
-    expect(loggedEvents(log)).toContainEqual({ stage: "record", event: "error" });
+    expect(loggedEvents(log)).toEqual([
+      { stage: "record", event: "start" },
+      { stage: "record", event: "error" },
+    ]);
   });
 
   it("normalizes visible dispatch checks", () => {
@@ -729,6 +907,119 @@ describe("channel turn kernel", () => {
     expect(resolveTurn).not.toHaveBeenCalled();
   });
 
+  it("records preflight drop history through the turn kernel", async () => {
+    const historyMap = new Map<string, HistoryEntry[]>();
+    const resolveTurn = vi.fn();
+
+    const result = await runChannelTurn({
+      channel: "test",
+      raw: {},
+      adapter: {
+        ingest: () => ({
+          id: "msg-1",
+          timestamp: 1_700_000_000_000,
+          rawText: "<media:image>",
+        }),
+        preflight: () => ({
+          admission: { kind: "drop", reason: "missing-mention", recordHistory: true },
+          message: {
+            bodyForAgent: "<media:image>",
+            senderLabel: "Alice",
+          },
+          history: {
+            key: "room-1",
+            historyMap,
+            limit: 5,
+            mediaLimit: 2,
+          },
+          media: async () => [
+            { path: "/tmp/a.png", contentType: "image/png", kind: "image" },
+            { path: "https://example.com/b.png", contentType: "image/png", kind: "image" },
+          ],
+        }),
+        resolveTurn,
+      },
+    });
+
+    expect(result.admission).toEqual({
+      kind: "drop",
+      reason: "missing-mention",
+      recordHistory: true,
+    });
+    expect(result.dispatched).toBe(false);
+    expect(resolveTurn).not.toHaveBeenCalled();
+    expect(historyMap.get("room-1")).toEqual([
+      {
+        sender: "Alice",
+        body: "<media:image>",
+        timestamp: 1_700_000_000_000,
+        messageId: "msg-1",
+        media: [
+          { path: "/tmp/a.png", contentType: "image/png", kind: "image", messageId: "msg-1" },
+        ],
+      },
+    ]);
+  });
+
+  it("drops repeated bot-pair turns in the core turn kernel before record and dispatch", async () => {
+    const events: string[] = [];
+    const onFinalize = vi.fn();
+    let nowMs = 1_000;
+    const runOne = async (id: string) =>
+      await runChannelTurn({
+        channel: "test",
+        accountId: "acct",
+        raw: { id },
+        adapter: {
+          ingest: () => ({ id, rawText: "hello" }),
+          resolveTurn: () => ({
+            channel: "test",
+            accountId: "acct",
+            routeSessionKey: "agent:main:test:peer",
+            storePath: "/tmp/sessions.json",
+            ctxPayload: createCtx(),
+            recordInboundSession: createRecordInboundSession(events),
+            botLoopProtection: {
+              scopeId: "acct",
+              conversationId: "room",
+              senderId: "bot-a",
+              receiverId: "bot-b",
+              config: { maxEventsPerWindow: 1, windowSeconds: 60, cooldownSeconds: 60 },
+              defaultEnabled: true,
+              nowMs: nowMs++,
+            },
+            runDispatch: async () => {
+              events.push("custom-dispatch");
+              return {
+                queuedFinal: true,
+                counts: { tool: 0, block: 0, final: 1 },
+              };
+            },
+          }),
+          onFinalize,
+        },
+      });
+
+    const first = await runOne("msg-1");
+    const second = await runOne("msg-2");
+
+    expect(first.dispatched).toBe(true);
+    expect(second).toEqual({
+      admission: { kind: "drop", reason: "bot-loop-protection" },
+      dispatched: false,
+      ctxPayload: createCtx(),
+      routeSessionKey: "agent:main:test:peer",
+    });
+    expect(events).toEqual(["record", "custom-dispatch"]);
+    expect(onFinalize).toHaveBeenCalledTimes(2);
+    const [, suppressed] = onFinalize.mock.calls;
+    expect(suppressed?.[0]).toMatchObject({
+      admission: { kind: "drop", reason: "bot-loop-protection" },
+      dispatched: false,
+      routeSessionKey: "agent:main:test:peer",
+    });
+  });
+
   it("runs observe-only preflights through resolve, record, dispatch, and finalize without visible delivery", async () => {
     const events: string[] = [];
     const deliver = vi.fn();
@@ -765,7 +1056,7 @@ describe("channel turn kernel", () => {
     expect(events).toEqual(["record", "dispatch"]);
     expect(deliver).not.toHaveBeenCalled();
     expect(onFinalize).toHaveBeenCalledTimes(1);
-    const [finalized] = onFinalize.mock.calls[0] as unknown as [unknown];
+    const [finalized] = requireFirstMockCall(onFinalize, "finalize");
     const finalizedResult = finalizeResult(finalized);
     expect(finalizedResult.admission).toEqual({
       kind: "observeOnly",
@@ -844,7 +1135,7 @@ describe("channel turn kernel", () => {
     }
     expect(hasFinalChannelTurnDispatch(result.dispatchResult)).toBe(false);
     expect(onFinalize).toHaveBeenCalledTimes(1);
-    const [finalized] = onFinalize.mock.calls[0] as unknown as [unknown];
+    const [finalized] = requireFirstMockCall(onFinalize, "finalize");
     const finalizedResult = finalizeResult(finalized);
     expect(finalizedResult.admission).toEqual({
       kind: "observeOnly",
@@ -875,7 +1166,7 @@ describe("channel turn kernel", () => {
             ctxPayload: createCtx(),
             recordInboundSession: createRecordInboundSession(),
             dispatchReplyWithBufferedBlockDispatcher,
-            delivery: createNoopChannelTurnDeliveryAdapter(),
+            delivery: createNoopChannelEventDeliveryAdapter(),
             record: {
               onRecordError: vi.fn(),
             },
@@ -886,7 +1177,7 @@ describe("channel turn kernel", () => {
     ).rejects.toThrow(dispatchError);
 
     expect(onFinalize).toHaveBeenCalledTimes(1);
-    const [finalized] = onFinalize.mock.calls[0] as unknown as [unknown];
+    const [finalized] = requireFirstMockCall(onFinalize, "finalize");
     const finalizedResult = finalizeResult(finalized);
     expect(finalizedResult.admission).toEqual({ kind: "dispatch" });
     expect(finalizedResult.dispatched).toBe(false);

@@ -1,8 +1,11 @@
-import { readFileSync, readdirSync } from "node:fs";
-import { dirname, relative, resolve, sep } from "node:path";
+import { spawnSync } from "node:child_process";
+import fs, { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
+import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
+import { listGitTrackedFiles, toRepoRelativePath } from "../../test-utils/repo-files.js";
 
 const SRC_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const REPO_ROOT = resolve(SRC_ROOT, "..");
@@ -75,7 +78,8 @@ const BUNDLED_LIVE_CONFIG_PROVIDER_GUARDS = {
     "resolvePluginConfigObject(",
     "const startupPluginConfig = (api.pluginConfig ?? {})",
     "const currentPluginConfig = resolveCurrentPluginConfig(ctx.config);",
-    "const currentGuardrail = resolveCurrentPluginConfig(config)?.guardrail;",
+    "const currentPluginConfig = resolveCurrentPluginConfig(config);",
+    "const currentGuardrail = currentPluginConfig?.guardrail;",
   ],
   "extensions/amazon-bedrock-mantle/register.sync.runtime.ts": [
     "resolvePluginConfigObject(",
@@ -120,14 +124,20 @@ type FileFilter = {
 function listTsFiles(rootRelativePath: string, filter: FileFilter = {}): string[] {
   const cacheKey = `${rootRelativePath}:${filter.excludeTests ? "exclude-tests" : ""}:${filter.testOnly ? "test-only" : ""}`;
   const cached = tsFilesCache.get(cacheKey);
-  if (cached) {
+  if (cached !== undefined) {
     return cached;
   }
+  const externalFiles = listExternalTsFiles(rootRelativePath, filter);
+  if (externalFiles) {
+    tsFilesCache.set(cacheKey, externalFiles);
+    return externalFiles;
+  }
+
   const root = resolve(REPO_ROOT, rootRelativePath);
   const files: string[] = [];
 
   function walk(directory: string) {
-    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
       const fullPath = resolve(directory, entry.name);
       if (entry.isDirectory()) {
         if (entry.name === "node_modules" || entry.name === "dist" || entry.name === ".git") {
@@ -139,7 +149,7 @@ function listTsFiles(rootRelativePath: string, filter: FileFilter = {}): string[
       if (!entry.isFile() || !entry.name.endsWith(".ts")) {
         continue;
       }
-      const repoRelativePath = relative(REPO_ROOT, fullPath).split(sep).join("/");
+      const repoRelativePath = toRepoRelativePath(REPO_ROOT, fullPath);
       if (filter.excludeTests && repoRelativePath.endsWith(".test.ts")) {
         continue;
       }
@@ -154,6 +164,69 @@ function listTsFiles(rootRelativePath: string, filter: FileFilter = {}): string[
   const sorted = files.toSorted();
   tsFilesCache.set(cacheKey, sorted);
   return sorted;
+}
+
+function listExternalTsFiles(rootRelativePath: string, filter: FileFilter): string[] | null {
+  return (
+    listGitTrackedTsFiles(rootRelativePath, filter) ?? listFindTsFiles(rootRelativePath, filter)
+  );
+}
+
+function listGitTrackedTsFiles(rootRelativePath: string, filter: FileFilter): string[] | null {
+  if (!rootRelativePath || rootRelativePath.startsWith("..")) {
+    return null;
+  }
+  const files = listGitTrackedFiles({ repoRoot: REPO_ROOT, pathspecs: rootRelativePath });
+  if (!files) {
+    return null;
+  }
+  return files
+    .filter((line) => line.endsWith(".ts"))
+    .filter((line) => !(filter.excludeTests && line.endsWith(".test.ts")))
+    .filter((line) => !(filter.testOnly && !line.endsWith(".test.ts")))
+    .filter((line) => fs.existsSync(resolve(REPO_ROOT, line)))
+    .toSorted();
+}
+
+function listFindTsFiles(rootRelativePath: string, filter: FileFilter): string[] | null {
+  if (!rootRelativePath || rootRelativePath.startsWith("..")) {
+    return null;
+  }
+  const root = resolve(REPO_ROOT, rootRelativePath);
+  const result = spawnSync(
+    "find",
+    [
+      root,
+      "-type",
+      "f",
+      "-name",
+      "*.ts",
+      "-not",
+      "-path",
+      "*/node_modules/*",
+      "-not",
+      "-path",
+      "*/dist/*",
+    ],
+    {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+      maxBuffer: 16 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"],
+    },
+  );
+  if (result.status !== 0) {
+    return null;
+  }
+  return result.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((line) => toRepoRelativePath(REPO_ROOT, line))
+    .filter((line) => line.endsWith(".ts"))
+    .filter((line) => !(filter.excludeTests && line.endsWith(".test.ts")))
+    .filter((line) => !(filter.testOnly && !line.endsWith(".test.ts")))
+    .toSorted();
 }
 
 function readRepoSource(file: string): string {
@@ -198,7 +271,7 @@ function collectBundledExtensionImports(source: string): string[] {
   }
 
   visit(sourceFile);
-  return specifiers.filter((specifier) => specifier.includes("extensions/"));
+  return specifiers.filter((specifier) => /(?:^|\/)extensions\/[^/]+\//u.test(specifier));
 }
 
 function isBundledExtensionImportHelperCall(expression: ts.Expression): boolean {
@@ -221,6 +294,21 @@ function collectTypedHookNames(source: string): string[] {
 }
 
 describe("plugin contract boundary invariants", () => {
+  it("lists boundary invariant source files without walking roots in-process", () => {
+    try {
+      expectNoReaddirSyncDuring(() => {
+        tsFilesCache.clear();
+        const files = listTsFiles("src", { excludeTests: true });
+
+        expect(files.length).toBeGreaterThan(0);
+        expect(files.every((file) => file.startsWith("src/") && file.endsWith(".ts"))).toBe(true);
+        expect(files.some((file) => file.endsWith(".test.ts"))).toBe(false);
+      });
+    } finally {
+      tsFilesCache.clear();
+    }
+  });
+
   it("keeps bundled-capability-metadata confined to contract/test inventory", () => {
     const files = listTsFiles("src");
     const offenders = files.filter((file) => {
@@ -247,7 +335,11 @@ describe("plugin contract boundary invariants", () => {
   it("keeps core tests off bundled extension deep imports", () => {
     const files = listTsFiles("src", { testOnly: true });
     const offenders = files.filter((file) => {
-      return collectBundledExtensionImports(readRepoSource(file)).some(
+      const source = readRepoSource(file);
+      if (!source.includes("extensions/")) {
+        return false;
+      }
+      return collectBundledExtensionImports(source).some(
         (specifier) => !isAllowedBundledExtensionImport(specifier),
       );
     });

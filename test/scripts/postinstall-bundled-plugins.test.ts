@@ -221,7 +221,7 @@ describe("bundled plugin postinstall", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("patches the Baileys rc10 upload helper dispatcher guard", async () => {
+  it("patches the Baileys upload helper dispatcher guard", async () => {
     const packageRoot = await createTempDirAsync("openclaw-baileys-postinstall-");
     const mediaFile = await writeBaileysMediaFile(
       packageRoot,
@@ -266,7 +266,7 @@ describe("bundled plugin postinstall", () => {
     expect(patchedText).not.toContain("        dispatcher: agent,");
   });
 
-  it("recognizes already patched Baileys rc10 upload helpers", async () => {
+  it("recognizes already patched Baileys upload helpers", async () => {
     const packageRoot = await createTempDirAsync("openclaw-baileys-postinstall-");
     await writeBaileysMediaFile(
       packageRoot,
@@ -286,6 +286,40 @@ describe("bundled plugin postinstall", () => {
         "const uploadWithFetch = async ({ url, filePath, headers, timeoutMs, agent }) => {",
         "    const response = await fetch(url, {",
         "        ...(typeof agent?.dispatch === 'function' ? { dispatcher: agent } : {}),",
+        "        method: 'POST',",
+        "    });",
+        "};",
+        "",
+      ].join("\n"),
+    );
+
+    expect(applyBaileysEncryptedStreamFinishHotfix({ packageRoot })).toEqual({
+      applied: false,
+      reason: "already_patched",
+    });
+  });
+
+  it("recognizes Baileys upload helpers with a prepared dispatcher", async () => {
+    const packageRoot = await createTempDirAsync("openclaw-baileys-postinstall-");
+    await writeBaileysMediaFile(
+      packageRoot,
+      [
+        "import { once } from 'events';",
+        "const encryptedStream = async () => {",
+        "        encFileWriteStream.write(mac);",
+        "        const encFinishPromise = once(encFileWriteStream, 'finish');",
+        "        const originalFinishPromise = originalFileStream ? once(originalFileStream, 'finish') : Promise.resolve();",
+        "        encFileWriteStream.end();",
+        "        originalFileStream?.end?.();",
+        "        stream.destroy();",
+        "        await encFinishPromise;",
+        "        await originalFinishPromise;",
+        "        logger?.debug('encrypted data successfully');",
+        "};",
+        "const uploadWithFetch = async ({ url, filePath, headers, timeoutMs, agent }) => {",
+        "    const dispatcher = typeof agent?.dispatch === 'function' ? agent : undefined;",
+        "    const response = await fetch(url, {",
+        "        ...(dispatcher ? { dispatcher } : {}),",
         "        method: 'POST',",
         "    });",
         "};",
@@ -559,6 +593,34 @@ describe("bundled plugin postinstall", () => {
 
     await expectPathExists(currentFile);
     await expectPathMissing(staleFile);
+  });
+
+  it("omits unpacked plugin-sdk test helpers from the package dist inventory", async () => {
+    const packageRoot = await createTempDirAsync("openclaw-packaged-inventory-");
+    const runtimeFile = path.join(packageRoot, "dist", "plugin-sdk", "runtime.js");
+    const testHelperFile = path.join(packageRoot, "dist", "plugin-sdk", "testing.js");
+    const nestedTestHelperFile = path.join(
+      packageRoot,
+      "dist",
+      "plugin-sdk",
+      "src",
+      "plugin-sdk",
+      "test-helpers",
+      "provider-contract.d.ts",
+    );
+    await fs.mkdir(path.dirname(nestedTestHelperFile), { recursive: true });
+    await fs.mkdir(path.dirname(runtimeFile), { recursive: true });
+    await fs.writeFile(runtimeFile, "export {};\n");
+    await fs.writeFile(testHelperFile, "export {};\n");
+    await fs.writeFile(nestedTestHelperFile, "export {};\n");
+
+    const inventory = await writePackageDistInventory(packageRoot);
+
+    expect(inventory).toContain("dist/plugin-sdk/runtime.js");
+    expect(inventory).not.toContain("dist/plugin-sdk/testing.js");
+    expect(inventory).not.toContain(
+      "dist/plugin-sdk/src/plugin-sdk/test-helpers/provider-contract.d.ts",
+    );
   });
 
   it("prunes legacy plugin runtime deps state during packaged postinstall", async () => {

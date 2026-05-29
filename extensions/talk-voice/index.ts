@@ -96,6 +96,15 @@ function asTrimmedString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function parsePositiveIntegerToken(value: unknown): number | undefined {
+  const trimmed = asTrimmedString(value);
+  if (!/^\d+$/.test(trimmed)) {
+    return undefined;
+  }
+  const parsed = Number(trimmed);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
 function resolveCommandLabel(channel: string): string {
   return channel === "discord" ? "/talkvoice" : "/voice";
 }
@@ -163,7 +172,7 @@ export default definePluginEntry({
         }
 
         if (action === "list") {
-          const limit = Number.parseInt(tokens[1] ?? "12", 10);
+          const limit = parsePositiveIntegerToken(tokens[1]) ?? 12;
           try {
             const voices = await api.runtime.tts.listVoices({
               provider: providerId,
@@ -172,7 +181,7 @@ export default definePluginEntry({
               baseUrl,
             });
             return {
-              text: formatVoiceList(voices, Number.isFinite(limit) ? limit : 12, providerId),
+              text: formatVoiceList(voices, limit, providerId),
             };
           } catch (error) {
             const message = formatErrorMessage(error);
@@ -209,24 +218,26 @@ export default definePluginEntry({
             return { text: `No voice found for ${hint}. Try: ${commandLabel} list` };
           }
 
-          const nextConfig = {
-            ...cfg,
-            talk: {
-              ...cfg.talk,
-              provider: providerId,
-              providers: {
-                ...cfg.talk?.providers,
-                [providerId]: {
-                  ...cfg.talk?.providers?.[providerId],
-                  voiceId: chosen.id,
-                },
-              },
-              ...(providerId === "elevenlabs" ? { voiceId: chosen.id } : {}),
-            },
-          };
-          await api.runtime.config.replaceConfigFile({
-            nextConfig,
+          await api.runtime.config.mutateConfigFile({
             afterWrite: { mode: "auto" },
+            mutate: (draft) => {
+              const nextConfig = {
+                ...draft,
+                talk: {
+                  ...draft.talk,
+                  provider: providerId,
+                  providers: {
+                    ...draft.talk?.providers,
+                    [providerId]: {
+                      ...draft.talk?.providers?.[providerId],
+                      voiceId: chosen.id,
+                    },
+                  },
+                  ...(providerId === "elevenlabs" ? { voiceId: chosen.id } : {}),
+                },
+              };
+              Object.assign(draft, nextConfig);
+            },
           });
 
           const name = (chosen.name ?? "").trim() || "(unnamed)";

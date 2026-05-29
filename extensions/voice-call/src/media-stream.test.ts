@@ -8,7 +8,7 @@ import type {
 import { createTalkSessionController, type TalkEvent } from "openclaw/plugin-sdk/realtime-voice";
 import { describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
-import { MediaStreamHandler, sanitizeLogText } from "./media-stream.js";
+import { MediaStreamHandler, parseTwilioMediaMessage, sanitizeLogText } from "./media-stream.js";
 import {
   connectWs,
   startUpgradeWsServer,
@@ -75,6 +75,14 @@ const requireRecord = (value: unknown, label: string): Record<string, unknown> =
     throw new Error(`Expected ${label} to be a record`);
   }
   return value as Record<string, unknown>;
+};
+
+const requireFirstMockCall = <T extends unknown[]>(calls: readonly T[], label: string): T => {
+  const call = calls.at(0);
+  if (!call) {
+    throw new Error(`Expected ${label}`);
+  }
+  return call;
 };
 
 const requireTalkEvent = (events: TalkEvent[], type: TalkEvent["type"]) => {
@@ -175,6 +183,20 @@ describe("MediaStreamHandler TTS queue", () => {
 });
 
 describe("MediaStreamHandler security hardening", () => {
+  it("wraps malformed Twilio media stream JSON with an owned parser error", () => {
+    let error: unknown;
+    try {
+      parseTwilioMediaMessage(Buffer.from("{not json"));
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe("Twilio media stream message was malformed JSON");
+    expect(error).not.toBeInstanceOf(SyntaxError);
+    expect((error as Error).cause).toBeInstanceOf(SyntaxError);
+  });
+
   it("emits common Talk events for telephony STT/TTS sessions", async () => {
     let callbacks: RealtimeTranscriptionSessionCreateRequest | undefined;
     const sentAudio: Buffer[] = [];
@@ -571,10 +593,10 @@ describe("MediaStreamHandler security hardening", () => {
     }
     completeUpgrade({} as WebSocket);
     expect(fakeWss.emit).toHaveBeenCalledOnce();
-    const emitCall = fakeWss.emit.mock.calls[0];
-    if (emitCall === undefined) {
-      throw new Error("Expected websocket connection emit call");
-    }
+    const emitCall = requireFirstMockCall(
+      fakeWss.emit.mock.calls,
+      "websocket connection emit call",
+    );
     expect(emitCall[0]).toBe("connection");
     if (!emitCall[1]) {
       throw new Error("Expected websocket connection argument");
@@ -659,10 +681,11 @@ describe("MediaStreamHandler security hardening", () => {
       await vi.waitFor(() => {
         expect(shouldAcceptStream).toHaveBeenCalledOnce();
       });
-      const acceptedStream = requireRecord(
-        shouldAcceptStream.mock.calls[0]?.[0],
-        "accepted stream params",
+      const acceptedStreamCall = requireFirstMockCall(
+        shouldAcceptStream.mock.calls,
+        "accepted stream call",
       );
+      const acceptedStream = requireRecord(acceptedStreamCall[0], "accepted stream params");
       expect(acceptedStream.callId).toBe("CA123");
       expect(acceptedStream.streamSid).toBe("MZ123");
       expect(acceptedStream.token).toBe("token-123");

@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   DEFAULT_GATEWAY_PORT,
+  normalizeStateDirEnv,
   resolveDefaultConfigCandidates,
   resolveConfigPathCandidate,
   resolveConfigPath,
@@ -86,6 +87,24 @@ describe("gateway port resolution", () => {
     ).toBe(19003);
   });
 
+  it("falls back to config when env ports exceed TCP bounds", () => {
+    expect(
+      resolveGatewayPort({ gateway: { port: 19003 } }, envWith({ OPENCLAW_GATEWAY_PORT: "65536" })),
+    ).toBe(19003);
+    expect(
+      resolveGatewayPort(
+        { gateway: { port: 19004 } },
+        envWith({ OPENCLAW_GATEWAY_PORT: "127.0.0.1:65536" }),
+      ),
+    ).toBe(19004);
+    expect(
+      resolveGatewayPort(
+        { gateway: { port: 19005 } },
+        envWith({ OPENCLAW_GATEWAY_PORT: "[::1]:65536" }),
+      ),
+    ).toBe(19005);
+  });
+
   it("falls back when malformed IPv6 inputs do not provide an explicit port", () => {
     expect(
       resolveGatewayPort({ gateway: { port: 19003 } }, envWith({ OPENCLAW_GATEWAY_PORT: "::1" })),
@@ -121,6 +140,30 @@ describe("state + config path candidates", () => {
     } as NodeJS.ProcessEnv;
 
     expect(resolveStateDir(env, () => "/home/test")).toBe(path.resolve("/new/state"));
+  });
+
+  it("normalizes relative OPENCLAW_STATE_DIR overrides to absolute paths", () => {
+    const env = {
+      OPENCLAW_STATE_DIR: ".",
+      OPENCLAW_HOME: "/srv/openclaw-home",
+    } as NodeJS.ProcessEnv;
+
+    normalizeStateDirEnv(env);
+
+    expect(env.OPENCLAW_STATE_DIR).toBe(path.resolve("."));
+  });
+
+  it("pins a relative state-dir override before later resolution", () => {
+    const env = {
+      OPENCLAW_STATE_DIR: "relative-state",
+      OPENCLAW_HOME: "/srv/openclaw-home",
+    } as NodeJS.ProcessEnv;
+
+    normalizeStateDirEnv(env);
+    const normalized = env.OPENCLAW_STATE_DIR;
+
+    expect(normalized).toBe(path.resolve("relative-state"));
+    expect(resolveStateDir(env, () => "/srv/other-home")).toBe(normalized);
   });
 
   it("uses OPENCLAW_HOME for default state/config locations", () => {

@@ -19,9 +19,9 @@ export { missingTargetError } from "openclaw/plugin-sdk/channel-feedback";
 export {
   createAccountStatusSink,
   runPassiveAccountLifecycle,
-} from "openclaw/plugin-sdk/channel-lifecycle";
+} from "openclaw/plugin-sdk/channel-outbound";
 export { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
-export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-message";
+export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 export { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
 export { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 export type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -33,7 +33,10 @@ export {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/runtime-group-policy";
 export { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
-export { fetchRemoteMedia, resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/media-runtime";
+export {
+  readRemoteMediaBuffer,
+  resolveChannelMediaMaxBytes,
+} from "openclaw/plugin-sdk/media-runtime";
 export { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 export type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 export { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";

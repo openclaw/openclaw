@@ -107,6 +107,14 @@ function normalizeTalkRealtimeConfig(value: unknown): TalkRealtimeConfig | undef
     normalized.model = model;
   }
   const voice = normalizeOptionalString(source.voice);
+  const speakerVoice = normalizeOptionalString(source.speakerVoice) ?? voice;
+  const speakerVoiceId = normalizeOptionalString(source.speakerVoiceId);
+  if (speakerVoice) {
+    normalized.speakerVoice = speakerVoice;
+  }
+  if (speakerVoiceId) {
+    normalized.speakerVoiceId = speakerVoiceId;
+  }
   if (voice) {
     normalized.voice = voice;
   }
@@ -131,6 +139,12 @@ function normalizeTalkRealtimeConfig(value: unknown): TalkRealtimeConfig | undef
     source.brain === "none"
   ) {
     normalized.brain = source.brain;
+  }
+  if (
+    source.consultRouting === "provider-direct" ||
+    source.consultRouting === "force-agent-consult"
+  ) {
+    normalized.consultRouting = source.consultRouting;
   }
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }

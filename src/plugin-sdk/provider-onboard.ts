@@ -53,6 +53,10 @@ function extractAgentDefaultModelFallbacks(model: unknown): string[] | undefined
   return Array.isArray(fallbacks) ? fallbacks.map((value) => String(value)) : undefined;
 }
 
+function hasAgentDefaultModelPrimary(cfg: OpenClawConfig): boolean {
+  return resolvePrimaryStringValue(cfg.agents?.defaults?.model) !== undefined;
+}
+
 function normalizeAgentModelAliasEntry(entry: AgentModelAliasEntry): {
   modelRef: string;
   alias?: string;
@@ -101,6 +105,30 @@ function normalizeProviderModelsForConfig(
   }
 
   return mutated ? next : models;
+}
+
+function normalizeModelProvidersForConfig(
+  providers: Record<string, ModelProviderConfig> | undefined,
+): Record<string, ModelProviderConfig> | undefined {
+  if (!providers) {
+    return providers;
+  }
+
+  let mutated = false;
+  const nextProviders: Record<string, ModelProviderConfig> = {};
+  for (const [providerId, providerConfig] of Object.entries(providers)) {
+    const models = Array.isArray(providerConfig.models)
+      ? normalizeProviderModelsForConfig(providerId, providerConfig.models)
+      : providerConfig.models;
+    if (models !== providerConfig.models) {
+      mutated = true;
+      nextProviders[providerId] = { ...providerConfig, models };
+      continue;
+    }
+    nextProviders[providerId] = providerConfig;
+  }
+
+  return mutated ? nextProviders : providers;
 }
 
 function resolveProviderModelMergeState(
@@ -254,22 +282,35 @@ export function applyAgentDefaultModelPrimary(
   cfg: OpenClawConfig,
   primary: string,
 ): OpenClawConfig {
+  const defaults = cfg.agents?.defaults;
   const existingFallbacks = extractAgentDefaultModelFallbacks(cfg.agents?.defaults?.model);
   const normalizedFallbacks = existingFallbacks?.map((fallback) =>
     normalizeAgentModelRefForConfig(fallback),
   );
+  const normalizedModels =
+    defaults?.models === undefined ? undefined : normalizeAgentModelMapForConfig(defaults.models);
+  const normalizedProviders = normalizeModelProvidersForConfig(cfg.models?.providers);
   return {
     ...cfg,
     agents: {
       ...cfg.agents,
       defaults: {
-        ...cfg.agents?.defaults,
+        ...defaults,
         model: {
           ...(normalizedFallbacks ? { fallbacks: normalizedFallbacks } : undefined),
           primary: normalizeAgentModelRefForConfig(primary),
         },
+        ...(normalizedModels !== undefined ? { models: normalizedModels } : undefined),
       },
     },
+    ...(normalizedProviders !== undefined
+      ? {
+          models: {
+            ...cfg.models,
+            providers: normalizedProviders,
+          },
+        }
+      : undefined),
   };
 }
 
@@ -367,7 +408,9 @@ export function applyProviderConfigWithDefaultModelPreset(
     defaultModelId: params.defaultModelId,
   });
   return params.primaryModelRef
-    ? applyAgentDefaultModelPrimary(next, params.primaryModelRef)
+    ? hasAgentDefaultModelPrimary(cfg)
+      ? next
+      : applyAgentDefaultModelPrimary(next, params.primaryModelRef)
     : next;
 }
 
@@ -409,7 +452,9 @@ export function applyProviderConfigWithDefaultModelsPreset(
     defaultModelId: params.defaultModelId,
   });
   return params.primaryModelRef
-    ? applyAgentDefaultModelPrimary(next, params.primaryModelRef)
+    ? hasAgentDefaultModelPrimary(cfg)
+      ? next
+      : applyAgentDefaultModelPrimary(next, params.primaryModelRef)
     : next;
 }
 
@@ -481,7 +526,9 @@ export function applyProviderConfigWithModelCatalogPreset(
     catalogModels: params.catalogModels,
   });
   return params.primaryModelRef
-    ? applyAgentDefaultModelPrimary(next, params.primaryModelRef)
+    ? hasAgentDefaultModelPrimary(cfg)
+      ? next
+      : applyAgentDefaultModelPrimary(next, params.primaryModelRef)
     : next;
 }
 

@@ -129,12 +129,61 @@ function createExternalProviderConfig(params: {
   return config;
 }
 
-function firstCallParam(calls: unknown[][], label: string) {
-  const call = calls[0];
+type RealtimeConsultToolHandler = (
+  args: unknown,
+  callId: string,
+  context?: { partialUserTranscript?: string },
+) => Promise<unknown>;
+
+function firstMockCall(calls: readonly unknown[][], label: string): unknown[] {
+  const call = calls.at(0);
   if (!call) {
     throw new Error(`expected ${label} call`);
   }
+  return call;
+}
+
+function firstCallParam(calls: readonly unknown[][], label: string) {
+  const call = firstMockCall(calls, label);
   return call[0];
+}
+
+type MockSessionEntry = {
+  sessionId?: string;
+  updatedAt?: number;
+  [key: string]: unknown;
+};
+
+function createMockSessionRuntime(sessionStore: Record<string, unknown>) {
+  return {
+    resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
+    loadSessionStore: vi.fn(() => sessionStore),
+    saveSessionStore: vi.fn(async () => {}),
+    updateSessionStore: vi.fn(async (_storePath, mutator: (store: never) => unknown) =>
+      mutator(sessionStore as never),
+    ),
+    getSessionEntry: vi.fn(
+      ({ sessionKey }: { sessionKey: string }) => sessionStore[sessionKey] as MockSessionEntry,
+    ),
+    patchSessionEntry: vi.fn(
+      async ({
+        sessionKey,
+        fallbackEntry,
+        update,
+      }: {
+        sessionKey: string;
+        fallbackEntry: MockSessionEntry;
+        update: (entry: MockSessionEntry) => Promise<MockSessionEntry> | MockSessionEntry;
+      }) => {
+        const current = (sessionStore[sessionKey] as MockSessionEntry | undefined) ?? fallbackEntry;
+        const patch = await update(current);
+        const next = { ...current, ...patch };
+        sessionStore[sessionKey] = next;
+        return next;
+      },
+    ),
+    resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
+  };
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -142,6 +191,18 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
     throw new Error(`expected ${label} to be a record`);
   }
   return value as Record<string, unknown>;
+}
+
+function requireRealtimeConsultToolHandler(): RealtimeConsultToolHandler {
+  const registeredToolHandler = firstMockCall(
+    mocks.realtimeHandlerRegisterToolHandler.mock.calls,
+    "realtime tool handler registration",
+  );
+  expect(registeredToolHandler[0]).toBe("openclaw_agent_consult");
+  if (typeof registeredToolHandler[1] !== "function") {
+    throw new Error("expected realtime tool handler callback");
+  }
+  return registeredToolHandler[1] as RealtimeConsultToolHandler;
 }
 
 describe("createVoiceCallRuntime lifecycle", () => {
@@ -329,7 +390,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
       },
     ];
     const sessionStore: Record<string, unknown> = {};
-    const runEmbeddedPiAgent = vi.fn(async () => ({
+    const runEmbeddedAgent = vi.fn(async () => ({
       payloads: [{ text: "Use the shipment status." }],
       meta: {},
     }));
@@ -341,14 +402,8 @@ describe("createVoiceCallRuntime lifecycle", () => {
       resolveThinkingDefault: vi.fn(() => "high"),
       resolveAgentTimeoutMs: vi.fn(() => 30_000),
       ensureAgentWorkspace: vi.fn(async () => {}),
-      session: {
-        resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
-        loadSessionStore: vi.fn(() => sessionStore),
-        saveSessionStore: vi.fn(async () => {}),
-        updateSessionStore: vi.fn(async (_storePath, mutator) => mutator(sessionStore as never)),
-        resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
-      },
-      runEmbeddedPiAgent,
+      session: createMockSessionRuntime(sessionStore),
+      runEmbeddedAgent,
     };
     mocks.managerGetCall.mockReturnValue({
       callId: "call-1",
@@ -377,28 +432,18 @@ describe("createVoiceCallRuntime lifecycle", () => {
       "openclaw_agent_consult",
       "custom_tool",
     ]);
-    const registeredToolHandler = mocks.realtimeHandlerRegisterToolHandler.mock.calls[0];
-    expect(registeredToolHandler?.[0]).toBe("openclaw_agent_consult");
-    expect(registeredToolHandler?.[1]).toBeTypeOf("function");
-
-    const handler = mocks.realtimeHandlerRegisterToolHandler.mock.calls[0]?.[1] as
-      | ((
-          args: unknown,
-          callId: string,
-          context?: { partialUserTranscript?: string },
-        ) => Promise<unknown>)
-      | undefined;
+    const handler = requireRealtimeConsultToolHandler();
     await expect(
-      handler?.({ question: "What should I say?" }, "call-1", {
+      handler({ question: "What should I say?" }, "call-1", {
         partialUserTranscript: "Also check the ETA.",
       }),
     ).resolves.toEqual({
       text: "Use the shipment status.",
     });
-    expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
+    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
     const consultParams = requireRecord(
-      firstCallParam(runEmbeddedPiAgent.mock.calls as unknown[][], "embedded PI consult"),
-      "embedded PI consult params",
+      firstCallParam(runEmbeddedAgent.mock.calls as unknown[][], "embedded OpenClaw consult"),
+      "embedded OpenClaw consult params",
     );
     expect(consultParams.sessionKey).toBe("voice:15550009999");
     expect(consultParams.spawnedBy).toBe("agent:main:discord:channel:general");
@@ -424,7 +469,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     config.inboundPolicy = "allowlist";
     config.realtime.enabled = true;
     config.sessionScope = "per-call";
-    const runEmbeddedPiAgent = vi.fn(async () => ({
+    const runEmbeddedAgent = vi.fn(async () => ({
       payloads: [{ text: "Per-call consult answer." }],
       meta: {},
     }));
@@ -437,14 +482,8 @@ describe("createVoiceCallRuntime lifecycle", () => {
       resolveThinkingDefault: vi.fn(() => "high"),
       resolveAgentTimeoutMs: vi.fn(() => 30_000),
       ensureAgentWorkspace: vi.fn(async () => {}),
-      session: {
-        resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
-        loadSessionStore: vi.fn(() => sessionStore),
-        saveSessionStore: vi.fn(async () => {}),
-        updateSessionStore: vi.fn(async (_storePath, mutator) => mutator(sessionStore as never)),
-        resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
-      },
-      runEmbeddedPiAgent,
+      session: createMockSessionRuntime(sessionStore),
+      runEmbeddedAgent,
     };
     mocks.managerGetCall.mockReturnValue({
       callId: "call-1",
@@ -461,20 +500,17 @@ describe("createVoiceCallRuntime lifecycle", () => {
       agentRuntime: agentRuntime as never,
     });
 
-    const handler = mocks.realtimeHandlerRegisterToolHandler.mock.calls[0]?.[1] as
-      | ((
-          args: unknown,
-          callId: string,
-          context?: { partialUserTranscript?: string },
-        ) => Promise<unknown>)
-      | undefined;
-    await expect(handler?.({ question: "What should I say?" }, "call-1")).resolves.toEqual({
+    const handler = requireRealtimeConsultToolHandler();
+    await expect(handler({ question: "What should I say?" }, "call-1")).resolves.toEqual({
       text: "Per-call consult answer.",
     });
-    expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
+    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
     const consultParams = requireRecord(
-      firstCallParam(runEmbeddedPiAgent.mock.calls as unknown[][], "per-call embedded PI consult"),
-      "per-call embedded PI consult params",
+      firstCallParam(
+        runEmbeddedAgent.mock.calls as unknown[][],
+        "per-call embedded OpenClaw consult",
+      ),
+      "per-call embedded OpenClaw consult params",
     );
     expect(consultParams.sessionKey).toBe("voice:call:call-1");
   });
@@ -489,7 +525,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
       sources: ["memory"],
       fallbackToConsult: false,
     };
-    const runEmbeddedPiAgent = vi.fn(async () => ({
+    const runEmbeddedAgent = vi.fn(async () => ({
       payloads: [{ text: "slow answer" }],
       meta: {},
     }));
@@ -501,14 +537,8 @@ describe("createVoiceCallRuntime lifecycle", () => {
       resolveThinkingDefault: vi.fn(() => "high"),
       resolveAgentTimeoutMs: vi.fn(() => 30_000),
       ensureAgentWorkspace: vi.fn(async () => {}),
-      session: {
-        resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
-        loadSessionStore: vi.fn(() => sessionStore),
-        saveSessionStore: vi.fn(async () => {}),
-        updateSessionStore: vi.fn(async (_storePath, mutator) => mutator(sessionStore as never)),
-        resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
-      },
-      runEmbeddedPiAgent,
+      session: createMockSessionRuntime(sessionStore),
+      runEmbeddedAgent,
     };
     mocks.managerGetCall.mockReturnValue({
       callId: "call-1",
@@ -530,17 +560,8 @@ describe("createVoiceCallRuntime lifecycle", () => {
       agentRuntime: agentRuntime as never,
     });
 
-    const handler = mocks.realtimeHandlerRegisterToolHandler.mock.calls[0]?.[1] as
-      | ((
-          args: unknown,
-          callId: string,
-          context?: { partialUserTranscript?: string },
-        ) => Promise<unknown>)
-      | undefined;
-    const fastContextResult = await handler?.(
-      { question: "Are the basement lights on?" },
-      "call-1",
-    );
+    const handler = requireRealtimeConsultToolHandler();
+    const fastContextResult = await handler({ question: "Are the basement lights on?" }, "call-1");
     const fastContextRecord = requireRecord(fastContextResult, "fast context result");
     expect(fastContextRecord.text).toContain("The caller's basement lights are on.");
     expect(mocks.resolveRealtimeFastContextConsult).toHaveBeenCalledWith({
@@ -562,7 +583,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
       },
       sessionKey: "voice:15550001234",
     });
-    expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
   it("uses the configured realtime consult thinking level when set", async () => {
@@ -572,7 +593,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     config.realtime.consultThinkingLevel = "low";
     config.realtime.consultFastMode = true;
     const sessionStore: Record<string, unknown> = {};
-    const runEmbeddedPiAgent = vi.fn(async () => ({
+    const runEmbeddedAgent = vi.fn(async () => ({
       payloads: [{ text: "Done." }],
       meta: {},
     }));
@@ -584,14 +605,8 @@ describe("createVoiceCallRuntime lifecycle", () => {
       resolveThinkingDefault: vi.fn(() => "high"),
       resolveAgentTimeoutMs: vi.fn(() => 30_000),
       ensureAgentWorkspace: vi.fn(async () => {}),
-      session: {
-        resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
-        loadSessionStore: vi.fn(() => sessionStore),
-        saveSessionStore: vi.fn(async () => {}),
-        updateSessionStore: vi.fn(async (_storePath, mutator) => mutator(sessionStore)),
-        resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
-      },
-      runEmbeddedPiAgent,
+      session: createMockSessionRuntime(sessionStore),
+      runEmbeddedAgent,
     };
     mocks.managerGetCall.mockReturnValue({
       callId: "call-1",
@@ -607,21 +622,19 @@ describe("createVoiceCallRuntime lifecycle", () => {
       agentRuntime: agentRuntime as never,
     });
 
-    const handler = mocks.realtimeHandlerRegisterToolHandler.mock.calls[0]?.[1] as
-      | ((args: unknown, callId: string) => Promise<unknown>)
-      | undefined;
-    await expect(handler?.({ question: "Turn on the lights." }, "call-1")).resolves.toEqual({
+    const handler = requireRealtimeConsultToolHandler();
+    await expect(handler({ question: "Turn on the lights." }, "call-1")).resolves.toEqual({
       text: "Done.",
     });
 
     expect(agentRuntime.resolveThinkingDefault).not.toHaveBeenCalled();
-    expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
+    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
     const consultParams = requireRecord(
       firstCallParam(
-        runEmbeddedPiAgent.mock.calls as unknown[][],
-        "configured embedded PI consult",
+        runEmbeddedAgent.mock.calls as unknown[][],
+        "configured embedded OpenClaw consult",
       ),
-      "configured embedded PI consult params",
+      "configured embedded OpenClaw consult params",
     );
     expect(consultParams.thinkLevel).toBe("low");
     expect(consultParams.fastMode).toBe(true);

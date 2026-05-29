@@ -3,65 +3,19 @@
 import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
+import { getRenderedModalDialog, installDialogPolyfill } from "../../test-helpers/modal-dialog.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import type { AppViewState } from "../app-view-state.ts";
-import { type OpenClawModalDialog } from "../components/modal-dialog.ts";
 import type { ExecApprovalRequest } from "../controllers/exec-approval.ts";
 import { renderDreamingRestartConfirmation } from "./dreaming-restart-confirmation.ts";
 import { renderExecApprovalPrompt } from "./exec-approval.ts";
 import { renderGatewayUrlConfirmation } from "./gateway-url-confirmation.ts";
 
 let container: HTMLDivElement;
-
-const showModalDescriptor = Object.getOwnPropertyDescriptor(
-  HTMLDialogElement.prototype,
-  "showModal",
-);
-const closeDescriptor = Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, "close");
-
-function nextFrame() {
-  return new Promise<void>((resolve) => {
-    requestAnimationFrame(() => resolve());
-  });
-}
-
-function installDialogPolyfill() {
-  Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
-    configurable: true,
-    value(this: HTMLDialogElement) {
-      this.setAttribute("open", "");
-    },
-  });
-  Object.defineProperty(HTMLDialogElement.prototype, "close", {
-    configurable: true,
-    value(this: HTMLDialogElement) {
-      this.removeAttribute("open");
-    },
-  });
-}
-
-function restoreDescriptor(name: "showModal" | "close", descriptor?: PropertyDescriptor) {
-  if (descriptor) {
-    Object.defineProperty(HTMLDialogElement.prototype, name, descriptor);
-    return;
-  }
-  delete (HTMLDialogElement.prototype as Partial<HTMLDialogElement>)[name];
-}
+let restoreDialogPolyfill: () => void;
 
 async function getRenderedDialog() {
-  const modal = container.querySelector<OpenClawModalDialog>("openclaw-modal-dialog");
-  expect(modal).toBeInstanceOf(HTMLElement);
-  if (!modal) {
-    throw new Error("Expected openclaw-modal-dialog");
-  }
-  await modal.updateComplete;
-  await nextFrame();
-  const dialog = modal.shadowRoot?.querySelector("dialog");
-  expect(dialog).toBeInstanceOf(HTMLDialogElement);
-  if (!(dialog instanceof HTMLDialogElement)) {
-    throw new Error("Expected rendered dialog");
-  }
-  return { modal, dialog };
+  return await getRenderedModalDialog(container);
 }
 
 function dispatchEscape(target: EventTarget) {
@@ -110,7 +64,7 @@ function createExecState(
 
 describe("approval and confirmation modals", () => {
   beforeEach(async () => {
-    installDialogPolyfill();
+    restoreDialogPolyfill = installDialogPolyfill();
     vi.stubGlobal("localStorage", createStorageMock());
     await i18n.setLocale("en");
     container = document.createElement("div");
@@ -121,15 +75,17 @@ describe("approval and confirmation modals", () => {
     render(nothing, container);
     container.remove();
     await i18n.setLocale("en");
-    restoreDescriptor("showModal", showModalDescriptor);
-    restoreDescriptor("close", closeDescriptor);
+    restoreDialogPolyfill();
     vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
 
   it("renders exec approval as a labelled modal", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-29T00:00:00.000Z"));
     render(renderExecApprovalPrompt(createExecState()), container);
+    vi.useRealTimers();
 
     const { modal, dialog } = await getRenderedDialog();
 
@@ -140,10 +96,13 @@ describe("approval and confirmation modals", () => {
       "Exec approval needed",
     );
     expect(
-      modal.shadowRoot?.querySelector("#openclaw-modal-dialog-description")?.textContent,
-    ).toContain("expires in");
-    expect(container.querySelector("#exec-approval-title")?.textContent).toContain(
+      modal.shadowRoot?.querySelector("#openclaw-modal-dialog-description")?.textContent?.trim(),
+    ).toBe("expires in 1m");
+    expect(container.querySelector("#exec-approval-title")?.textContent?.trim()).toBe(
       "Exec approval needed",
+    );
+    expect(container.querySelector("#exec-approval-description")?.textContent?.trim()).toBe(
+      "expires in 1m",
     );
   });
 
@@ -168,14 +127,102 @@ describe("approval and confirmation modals", () => {
     expect(spans).toEqual(["ls", "python -c"]);
   });
 
+  it("does not render a visible neutral dismiss action", async () => {
+    render(renderExecApprovalPrompt(createExecState()), container);
+
+    await getRenderedDialog();
+
+    expect(
+      Array.from(container.querySelectorAll(".exec-approval-actions button")).map((button) =>
+        button.textContent?.trim(),
+      ),
+    ).toEqual(["Allow once", "Always allow", "Deny"]);
+  });
+
+  it("hides unavailable exec approval decisions", async () => {
+    const request = createExecRequest();
+    request.request.ask = "always";
+    request.request.allowedDecisions = ["allow-once", "deny"];
+
+    render(renderExecApprovalPrompt(createExecState({ execApprovalQueue: [request] })), container);
+
+    await getRenderedDialog();
+
+    expect(
+      Array.from(container.querySelectorAll(".exec-approval-actions button")).map((button) =>
+        button.textContent?.trim(),
+      ),
+    ).toEqual(["Allow once", "Deny"]);
+    expect(container.querySelector(".exec-approval-warning")?.textContent?.trim()).toBe(
+      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
+    );
+  });
+
+  it("falls back to ask when exec approval decisions are omitted", async () => {
+    const request = createExecRequest();
+    request.request.ask = "always";
+    request.request.allowedDecisions = undefined;
+
+    render(renderExecApprovalPrompt(createExecState({ execApprovalQueue: [request] })), container);
+
+    await getRenderedDialog();
+
+    expect(
+      Array.from(container.querySelectorAll(".exec-approval-actions button")).map((button) =>
+        button.textContent?.trim(),
+      ),
+    ).toEqual(["Allow once", "Deny"]);
+  });
+
+  it("keeps durable exec approval when the request allows it", async () => {
+    const request = createExecRequest();
+    request.request.allowedDecisions = ["allow-once", "allow-always", "deny"];
+
+    render(renderExecApprovalPrompt(createExecState({ execApprovalQueue: [request] })), container);
+
+    await getRenderedDialog();
+
+    expect(
+      Array.from(container.querySelectorAll(".exec-approval-actions button")).map((button) =>
+        button.textContent?.trim(),
+      ),
+    ).toEqual(["Allow once", "Always allow", "Deny"]);
+    expect(container.querySelector(".exec-approval-warning")).toBeNull();
+  });
+
+  it("does not show exec policy warning for restricted plugin approvals", async () => {
+    const request: ExecApprovalRequest = {
+      id: "plugin-approval-1",
+      kind: "plugin",
+      request: {
+        command: "Plugin approval",
+        allowedDecisions: ["allow-once", "deny"],
+      },
+      pluginTitle: "Plugin approval",
+      createdAtMs: Date.now() - 1_000,
+      expiresAtMs: Date.now() + 60_000,
+    };
+
+    render(renderExecApprovalPrompt(createExecState({ execApprovalQueue: [request] })), container);
+
+    await getRenderedDialog();
+
+    expect(
+      Array.from(container.querySelectorAll(".exec-approval-actions button")).map((button) =>
+        button.textContent?.trim(),
+      ),
+    ).toEqual(["Allow once", "Deny"]);
+    expect(container.querySelector(".exec-approval-warning")).toBeNull();
+  });
+
   it("maps Escape to exec denial when approval is idle", async () => {
     const handleExecApprovalDecision = vi.fn(async () => undefined);
     render(renderExecApprovalPrompt(createExecState({ handleExecApprovalDecision })), container);
 
     const { dialog } = await getRenderedDialog();
+
     dispatchEscape(dialog);
 
-    expect(handleExecApprovalDecision).toHaveBeenCalledTimes(1);
     expect(handleExecApprovalDecision).toHaveBeenCalledWith("deny");
   });
 
@@ -184,6 +231,23 @@ describe("approval and confirmation modals", () => {
     render(
       renderExecApprovalPrompt(
         createExecState({ execApprovalBusy: true, handleExecApprovalDecision }),
+      ),
+      container,
+    );
+
+    const { dialog } = await getRenderedDialog();
+    dispatchEscape(dialog);
+
+    expect(handleExecApprovalDecision).not.toHaveBeenCalled();
+  });
+
+  it("does not dispatch denied from Escape when denial is unavailable", async () => {
+    const request = createExecRequest();
+    request.request.allowedDecisions = ["allow-once"];
+    const handleExecApprovalDecision = vi.fn(async () => undefined);
+    render(
+      renderExecApprovalPrompt(
+        createExecState({ execApprovalQueue: [request], handleExecApprovalDecision }),
       ),
       container,
     );
@@ -226,14 +290,37 @@ describe("approval and confirmation modals", () => {
       container,
     );
 
-    expect(container.textContent).toContain("需要 Exec 审批");
-    expect(container.textContent).toContain("1m 后过期");
-    expect(container.textContent).toContain("2 个待处理");
-    expect(container.textContent).toContain("主机");
-    expect(container.textContent).toContain("代理");
-    expect(container.textContent).toContain("允许一次");
-    expect(container.textContent).toContain("始终允许");
-    expect(container.textContent).toContain("拒绝");
+    expect(container.querySelector("#exec-approval-title")?.textContent?.trim()).toBe(
+      "需要 Exec 审批",
+    );
+    expect(container.querySelector("#exec-approval-description")?.textContent?.trim()).toBe(
+      "1m 后过期",
+    );
+    expect(container.querySelector(".exec-approval-queue")?.textContent?.trim()).toBe("2 个待处理");
+    expect(container.querySelector(".exec-approval-command")?.textContent?.trim()).toBe(
+      "pnpm check:changed",
+    );
+    expect(
+      Array.from(container.querySelectorAll(".exec-approval-meta-row")).map((row) => {
+        const [label, value] = Array.from(row.querySelectorAll("span")).map((span) =>
+          span.textContent?.trim(),
+        );
+        return { label, value };
+      }),
+    ).toEqual([
+      { label: "主机", value: "gateway" },
+      { label: "代理", value: "main" },
+      { label: "会话", value: "main" },
+      { label: "CWD", value: "/tmp/project" },
+      { label: "已解析", value: "/tmp/project" },
+      { label: "安全", value: "workspace-write" },
+      { label: "询问策略", value: "on-request" },
+    ]);
+    expect(
+      Array.from(container.querySelectorAll(".exec-approval-actions button")).map((button) =>
+        button.textContent?.trim(),
+      ),
+    ).toEqual(["允许一次", "始终允许", "拒绝"]);
   });
 
   it("uses the shared modal primitive for gateway URL confirmation and cancels on Escape", async () => {

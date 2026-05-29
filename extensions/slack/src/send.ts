@@ -1,10 +1,11 @@
+import type { MessageMetadata } from "@slack/types";
 import { type Block, type KnownBlock, type WebClient } from "@slack/web-api";
 import {
   createMessageReceiptFromOutboundResults,
   type MessageReceipt,
   type MessageReceiptPartKind,
   type MessageReceiptSourceResult,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
@@ -21,6 +22,7 @@ import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
+  normalizeOptionalString as normalizeSlackApiString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SlackTokenSource } from "./accounts.js";
 import { resolveSlackAccount } from "./accounts.js";
@@ -85,6 +87,7 @@ type SlackBasePostMessagePayload = SlackPostThreadPayload & {
   channel: string;
   text: string;
   blocks?: (Block | KnownBlock)[];
+  metadata?: MessageMetadata;
   unfurl_links?: boolean;
   unfurl_media?: boolean;
 };
@@ -107,6 +110,7 @@ type SlackSendOpts = {
   replyBroadcast?: boolean;
   identity?: SlackSendIdentity;
   blocks?: (Block | KnownBlock)[];
+  metadata?: MessageMetadata;
 };
 
 type SlackWebApiErrorData = {
@@ -128,7 +132,10 @@ function hasCustomIdentity(identity?: SlackSendIdentity): boolean {
 
 function buildSlackUnfurlPayload(options?: SlackUnfurlOptions) {
   return {
-    ...(typeof options?.unfurlLinks === "boolean" ? { unfurl_links: options.unfurlLinks } : {}),
+    // Default unfurl_links to false so bot messages don't expand inline
+    // link previews (Slack message links, URLs, etc.) unless the operator
+    // explicitly opts in via `channels.slack.unfurlLinks: true`.
+    unfurl_links: options?.unfurlLinks ?? false,
     ...(typeof options?.unfurlMedia === "boolean" ? { unfurl_media: options.unfurlMedia } : {}),
   };
 }
@@ -139,6 +146,7 @@ function buildSlackPostMessagePayload(params: {
   threadTs?: string;
   replyBroadcast?: boolean;
   blocks?: (Block | KnownBlock)[];
+  metadata?: MessageMetadata;
   unfurl?: SlackUnfurlOptions;
 }): SlackBasePostMessagePayload {
   const threadPayload =
@@ -153,6 +161,7 @@ function buildSlackPostMessagePayload(params: {
       channel: params.channelId,
       text: params.text,
       blocks: params.blocks,
+      ...(params.metadata ? { metadata: params.metadata } : {}),
       ...threadPayload,
       ...unfurlPayload,
     };
@@ -160,13 +169,10 @@ function buildSlackPostMessagePayload(params: {
   return {
     channel: params.channelId,
     text: params.text,
+    ...(params.metadata ? { metadata: params.metadata } : {}),
     ...threadPayload,
     ...unfurlPayload,
   };
-}
-
-function normalizeSlackApiString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function normalizeSlackScopeList(value: unknown): string[] {
@@ -310,6 +316,7 @@ async function postSlackMessageBestEffort(params: {
   replyBroadcast?: boolean;
   identity?: SlackSendIdentity;
   blocks?: (Block | KnownBlock)[];
+  metadata?: MessageMetadata;
   unfurl?: SlackUnfurlOptions;
 }) {
   const basePayload = buildSlackPostMessagePayload(params);
@@ -481,6 +488,13 @@ function resolveDirectUserPostChannelId(params: {
     return undefined;
   }
   return params.recipient.id;
+}
+
+function resolvePostedMessageChannelId(response: { channel?: unknown }, fallback: string): string {
+  return (
+    (typeof response.channel === "string" ? normalizeOptionalString(response.channel) : null) ??
+    fallback
+  );
 }
 
 async function resolveChannelId(
@@ -716,15 +730,17 @@ async function sendMessageSlackQueuedInner(params: {
       replyBroadcast: opts.replyBroadcast,
       identity: opts.identity,
       blocks,
+      metadata: opts.metadata,
       unfurl,
     });
     const messageId = response.ts ?? "unknown";
+    const deliveredChannelId = resolvePostedMessageChannelId(response, channelId);
     return {
       messageId,
-      channelId,
+      channelId: deliveredChannelId,
       receipt: createSlackSendReceipt({
         platformMessageIds: [messageId],
-        channelId,
+        channelId: deliveredChannelId,
         kind: "card",
         threadTs: opts.threadTs,
       }),
@@ -755,6 +771,7 @@ async function sendMessageSlackQueuedInner(params: {
 
   const sentMessageIds: string[] = [];
   let lastMessageId = "";
+  let deliveredChannelId = channelId;
   if (opts.mediaUrl) {
     const [firstChunk, ...rest] = resolvedChunks;
     lastMessageId = await uploadSlackFile({
@@ -779,9 +796,11 @@ async function sendMessageSlackQueuedInner(params: {
         threadTs: opts.threadTs,
         replyBroadcast: sentMessageIds.length === 0 ? opts.replyBroadcast : undefined,
         identity: opts.identity,
+        metadata: sentMessageIds.length === 0 ? opts.metadata : undefined,
         unfurl,
       });
       lastMessageId = response.ts ?? lastMessageId;
+      deliveredChannelId = resolvePostedMessageChannelId(response, deliveredChannelId);
       if (response.ts) {
         sentMessageIds.push(response.ts);
       }
@@ -795,9 +814,11 @@ async function sendMessageSlackQueuedInner(params: {
         threadTs: opts.threadTs,
         replyBroadcast: sentMessageIds.length === 0 ? opts.replyBroadcast : undefined,
         identity: opts.identity,
+        metadata: sentMessageIds.length === 0 ? opts.metadata : undefined,
         unfurl,
       });
       lastMessageId = response.ts ?? lastMessageId;
+      deliveredChannelId = resolvePostedMessageChannelId(response, deliveredChannelId);
       if (response.ts) {
         sentMessageIds.push(response.ts);
       }
@@ -807,10 +828,10 @@ async function sendMessageSlackQueuedInner(params: {
   const messageId = lastMessageId || "unknown";
   return {
     messageId,
-    channelId,
+    channelId: deliveredChannelId,
     receipt: createSlackSendReceipt({
       platformMessageIds: sentMessageIds.length ? sentMessageIds : [messageId],
-      channelId,
+      channelId: deliveredChannelId,
       kind: opts.mediaUrl ? "media" : "text",
       threadTs: opts.threadTs,
     }),

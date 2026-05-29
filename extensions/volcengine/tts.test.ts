@@ -10,6 +10,14 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
+function requireFirstGuardedFetchCall(): unknown {
+  const [call] = fetchWithSsrFGuardMock.mock.calls;
+  if (!call) {
+    throw new Error("expected Volcengine guarded fetch call");
+  }
+  return call[0];
+}
+
 function makeProviderConfig(overrides?: Record<string, unknown>) {
   return {
     apiKey: "test-api-key",
@@ -148,7 +156,7 @@ describe("Volcengine speech provider", () => {
     expect(result.fileExtension).toBe(".opus");
     expect(result.voiceCompatible).toBe(true);
 
-    const call = fetchWithSsrFGuardMock.mock.calls[0]?.[0];
+    const call = requireFirstGuardedFetchCall();
     expect(call).toEqual({
       url: "https://voice.ap-southeast-1.bytepluses.com/api/v3/tts/unidirectional",
       init: {
@@ -179,6 +187,34 @@ describe("Volcengine speech provider", () => {
       auditContext: "volcengine.tts",
     });
     expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops malformed speed ratios before synthesis", async () => {
+    const release = vi.fn();
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        JSON.stringify({
+          code: 0,
+          data: Buffer.from("voice-audio").toString("base64"),
+        }),
+      ),
+      release,
+    });
+
+    await provider.synthesize({
+      text: "hello",
+      cfg: {},
+      providerConfig: makeProviderConfig({ speedRatio: 4 }),
+      target: "audio-file",
+      providerOverrides: { speedRatio: -1 },
+      timeoutMs: 1234,
+    });
+
+    const call = requireFirstGuardedFetchCall() as { init: { body: string } };
+    const body = JSON.parse(call.init.body) as {
+      req_params?: { speed_ratio?: number };
+    };
+    expect(body.req_params).not.toHaveProperty("speed_ratio");
   });
 });
 

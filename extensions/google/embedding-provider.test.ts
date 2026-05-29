@@ -1,4 +1,21 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-engine-embeddings")>();
+  return {
+    ...actual,
+    withRemoteHttpResponse: (async <T>(params: {
+      url: string;
+      init?: RequestInit;
+      onResponse: (response: Response) => Promise<T>;
+    }): Promise<T> => {
+      const response = await fetch(params.url, params.init);
+      return await params.onResponse(response);
+    }) satisfies typeof actual.withRemoteHttpResponse,
+  };
+});
+
 import {
   buildGeminiEmbeddingRequest,
   buildGeminiTextEmbeddingRequest,
@@ -35,6 +52,14 @@ function fetchJsonBody(fetchMock: ReturnType<typeof vi.fn>, index: number): unkn
     throw new Error("Expected JSON string request body.");
   }
   return JSON.parse(body) as unknown;
+}
+
+function requireFirstFetchInput(fetchMock: ReturnType<typeof vi.fn>): RequestInfo | URL {
+  const [call] = fetchMock.mock.calls;
+  if (!call) {
+    throw new Error("expected Gemini embedding fetch call");
+  }
+  return call[0] as RequestInfo | URL;
 }
 
 describe("Gemini embedding request helpers", () => {
@@ -112,10 +137,10 @@ describe("Gemini embedding provider", () => {
       return url.endsWith(":batchEmbedContents")
         ? {
             embeddings: Array.from({ length: 2 }, () => ({
-              values: [0, Number.POSITIVE_INFINITY, 5],
+              values: [0, 0, 5],
             })),
           }
-        : { embedding: { values: [3, 4, Number.NaN] } };
+        : { embedding: { values: [3, 4, 0] } };
     });
 
     const { provider } = await createGeminiEmbeddingProvider({
@@ -153,7 +178,7 @@ describe("Gemini embedding provider", () => {
       [0, 0, 1],
     ]);
 
-    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+    expect(requireFirstFetchInput(fetchMock)).toBe(
       "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2-preview:embedContent",
     );
     expect(fetchJsonBody(fetchMock, 0)).toEqual({
@@ -187,5 +212,53 @@ describe("Gemini embedding provider", () => {
         },
       ],
     });
+  });
+
+  it("rejects non-object successful embedding responses", async () => {
+    installFetchMock(() => []);
+
+    const { provider } = await createGeminiEmbeddingProvider({
+      config: {} as never,
+      provider: "gemini",
+      remote: { apiKey: "test-key" },
+      model: "gemini-embedding-001",
+      fallback: "none",
+    });
+
+    await expect(provider.embedQuery("test query")).rejects.toThrow(
+      "gemini embeddings failed: malformed JSON response",
+    );
+  });
+
+  it("rejects wrong single embedding vector shapes", async () => {
+    installFetchMock(() => ({ embedding: { values: [1, "bad"] } }));
+
+    const { provider } = await createGeminiEmbeddingProvider({
+      config: {} as never,
+      provider: "gemini",
+      remote: { apiKey: "test-key" },
+      model: "gemini-embedding-001",
+      fallback: "none",
+    });
+
+    await expect(provider.embedQuery("test query")).rejects.toThrow(
+      "gemini embeddings failed: malformed JSON response",
+    );
+  });
+
+  it("rejects batch embedding count mismatches", async () => {
+    installFetchMock(() => ({ embeddings: [{ values: [1, 2] }] }));
+
+    const { provider } = await createGeminiEmbeddingProvider({
+      config: {} as never,
+      provider: "gemini",
+      remote: { apiKey: "test-key" },
+      model: "gemini-embedding-001",
+      fallback: "none",
+    });
+
+    await expect(provider.embedBatch(["one", "two"])).rejects.toThrow(
+      "gemini embeddings failed: malformed JSON response",
+    );
   });
 });

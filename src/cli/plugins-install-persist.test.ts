@@ -31,7 +31,7 @@ function requireMockCallArg(
 }
 
 function expectRuntimeLogIncludes(fragment: string) {
-  expect(runtimeLogs.some((log) => log.includes(fragment))).toBe(true);
+  expect(runtimeLogs.join("\n")).toContain(fragment);
 }
 
 describe("persistPluginInstall", () => {
@@ -139,7 +139,7 @@ describe("persistPluginInstall", () => {
     });
 
     expect(next).toEqual(enabledConfig);
-    expect(refreshPluginRegistry).toHaveBeenCalled();
+    expect(refreshPluginRegistry).toHaveBeenCalledTimes(1);
     expectRuntimeLogIncludes("Plugin runtime cache invalidation failed");
   });
 
@@ -401,7 +401,7 @@ describe("persistPluginInstall", () => {
     });
 
     expect(next).toEqual(enabledConfig);
-    expect(refreshPluginRegistry).toHaveBeenCalled();
+    expect(refreshPluginRegistry).toHaveBeenCalledTimes(1);
     expect(clearPluginRegistryLoadCache).toHaveBeenCalledTimes(1);
     expectRuntimeLogIncludes("Plugin registry refresh failed");
   });

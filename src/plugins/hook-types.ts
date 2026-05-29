@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AgentMessage } from "../agents/runtime/index.js";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type {
@@ -83,6 +83,7 @@ export type PluginHookName =
   | "inbound_claim"
   | "message_received"
   | "message_sending"
+  | "reply_payload_sending"
   | "message_sent"
   | "before_tool_call"
   | "after_tool_call"
@@ -94,6 +95,8 @@ export type PluginHookName =
   | "subagent_delivery_target"
   | "subagent_spawned"
   | "subagent_ended"
+  /** @deprecated Use gateway_stop. */
+  | "deactivate"
   | "gateway_start"
   | "gateway_stop"
   | "heartbeat_prompt_contribution"
@@ -121,6 +124,7 @@ export const PLUGIN_HOOK_NAMES = [
   "inbound_claim",
   "message_received",
   "message_sending",
+  "reply_payload_sending",
   "message_sent",
   "before_tool_call",
   "after_tool_call",
@@ -132,6 +136,7 @@ export const PLUGIN_HOOK_NAMES = [
   "subagent_delivery_target",
   "subagent_spawned",
   "subagent_ended",
+  "deactivate",
   "gateway_start",
   "gateway_stop",
   "heartbeat_prompt_contribution",
@@ -196,7 +201,19 @@ export type PluginHookAgentContext = {
   messageProvider?: string;
   trigger?: string;
   channelId?: string;
+  /** Resolved effective context-token budget after model/config/agent caps. */
+  contextTokenBudget?: number;
+  /** Source that supplied the resolved context-token budget. */
+  contextWindowSource?: PluginHookContextWindowSource;
+  /** Native/configured reference window when a lower cap wins. */
+  contextWindowReferenceTokens?: number;
 };
+
+export type PluginHookContextWindowSource =
+  | "model"
+  | "modelsConfig"
+  | "agentContextTokens"
+  | "default";
 
 export type PluginHookBeforeAgentReplyEvent = {
   cleanedBody: string;
@@ -217,6 +234,7 @@ export type PluginHookLlmInputEvent = {
   prompt: string;
   historyMessages: unknown[];
   imagesCount: number;
+  tools?: unknown[];
 };
 
 export type PluginHookModelCallBaseEvent = {
@@ -228,6 +246,12 @@ export type PluginHookModelCallBaseEvent = {
   model: string;
   api?: string;
   transport?: string;
+  /** Resolved effective context-token budget after model/config/agent caps. */
+  contextTokenBudget?: number;
+  /** Source that supplied the resolved context-token budget. */
+  contextWindowSource?: PluginHookContextWindowSource;
+  /** Native/configured reference window when a lower cap wins. */
+  contextWindowReferenceTokens?: number;
 };
 
 export type PluginHookModelCallStartedEvent = PluginHookModelCallBaseEvent;
@@ -248,6 +272,12 @@ export type PluginHookLlmOutputEvent = {
   sessionId: string;
   provider: string;
   model: string;
+  /** Resolved effective context-token budget after model/config/agent caps. */
+  contextTokenBudget?: number;
+  /** Source that supplied the resolved context-token budget. */
+  contextWindowSource?: PluginHookContextWindowSource;
+  /** Native/configured reference window when a lower cap wins. */
+  contextWindowReferenceTokens?: number;
   /**
    * Fully resolved provider/model ref used for the call.
    *
@@ -400,6 +430,26 @@ export type PluginHookReplyDispatchResult = {
   counts: Record<ReplyDispatchKind, number>;
 };
 
+export type PluginHookReplyPayloadSendingEvent = {
+  payload: PluginHookReplyPayload;
+  kind: ReplyDispatchKind;
+  channel?: string;
+  sessionKey?: string;
+  runId?: string;
+};
+
+export type PluginHookReplyPayload = Omit<ReplyPayload, "trustedLocalMedia">;
+export type PluginHookReplyPayloadSendingContext = PluginHookMessageContext;
+
+export type PluginHookReplyPayloadSendingResult = {
+  payload?: PluginHookReplyPayload;
+  cancel?: boolean;
+  reason?: string;
+};
+
+export type PluginHookToolKind = "code_mode_exec";
+export type PluginHookToolInputKind = "javascript" | "typescript";
+
 export type PluginHookToolContext = {
   agentId?: string;
   sessionKey?: string;
@@ -407,6 +457,10 @@ export type PluginHookToolContext = {
   runId?: string;
   trace?: DiagnosticTraceContext;
   toolName: string;
+  /** Host-authoritative discriminator for tools that intentionally share names. */
+  toolKind?: PluginHookToolKind;
+  /** Host-authoritative input/runtime family for tools whose payloads need policy distinction. */
+  toolInputKind?: PluginHookToolInputKind;
   toolCallId?: string;
   getSessionExtension?: (namespace: string) => PluginJsonValue | undefined;
   channelId?: string;
@@ -415,6 +469,10 @@ export type PluginHookToolContext = {
 export type PluginHookBeforeToolCallEvent = {
   toolName: string;
   params: Record<string, unknown>;
+  /** Host-authoritative discriminator for tools that intentionally share names. */
+  toolKind?: PluginHookToolKind;
+  /** Host-authoritative input/runtime family for tools whose payloads need policy distinction. */
+  toolInputKind?: PluginHookToolInputKind;
   runId?: string;
   toolCallId?: string;
   /**
@@ -559,7 +617,17 @@ export type PluginHookSubagentSpawningEvent = PluginHookSubagentSpawnBase;
 export type PluginHookSubagentSpawningResult =
   | {
       status: "ok";
+      /**
+       * @deprecated Core now resolves thread-bound spawn routing from session
+       * bindings and channel route projection. Keep returning this only for
+       * compatibility with older OpenClaw runtimes.
+       */
       threadBindingReady?: boolean;
+      /**
+       * @deprecated Use channel `resolveDeliveryTarget` plus core
+       * `SessionBindingRecord` projection instead of returning an ad hoc
+       * delivery route from this hook.
+       */
       deliveryOrigin?: {
         channel?: string;
         accountId?: string;
@@ -586,6 +654,11 @@ export type PluginHookSubagentDeliveryTargetEvent = {
   expectsCompletionMessage: boolean;
 };
 
+/**
+ * @deprecated Core route projection resolves subagent delivery targets from
+ * `SessionBindingRecord` and channel `resolveDeliveryTarget`. This hook result
+ * remains for plugin compatibility during the transition.
+ */
 export type PluginHookSubagentDeliveryTargetResult = {
   origin?: {
     channel?: string;
@@ -641,6 +714,12 @@ export type PluginHookGatewayCronJobState = {
   lastRunStatus?: PluginHookGatewayCronRunStatus;
   lastError?: string;
   lastDurationMs?: number;
+  lastDelivered?: boolean;
+  lastDeliveryStatus?: PluginHookGatewayCronDeliveryStatus;
+  lastDeliveryError?: string;
+  lastFailureNotificationDelivered?: boolean;
+  lastFailureNotificationDeliveryStatus?: PluginHookGatewayCronDeliveryStatus;
+  lastFailureNotificationDeliveryError?: string;
 };
 
 export type PluginHookGatewayCronJob = {
@@ -837,7 +916,7 @@ export type PluginHookBeforeAgentRunEvent = {
   channelId?: string;
   /** Sender identity when available. */
   senderId?: string;
-  /** Whether the sender is an owner. */
+  /** Trusted sender identity bit when available. */
   senderIsOwner?: boolean;
 };
 
@@ -914,6 +993,13 @@ export type PluginHookHandlerMap = {
     event: PluginHookReplyDispatchEvent,
     ctx: PluginHookReplyDispatchContext,
   ) => Promise<PluginHookReplyDispatchResult | void> | PluginHookReplyDispatchResult | void;
+  reply_payload_sending: (
+    event: PluginHookReplyPayloadSendingEvent,
+    ctx: PluginHookReplyPayloadSendingContext,
+  ) =>
+    | Promise<PluginHookReplyPayloadSendingResult | void>
+    | PluginHookReplyPayloadSendingResult
+    | void;
   message_received: (
     event: PluginHookMessageReceivedEvent,
     ctx: PluginHookMessageContext,
@@ -968,6 +1054,19 @@ export type PluginHookHandlerMap = {
   subagent_ended: (
     event: PluginHookSubagentEndedEvent,
     ctx: PluginHookSubagentContext,
+  ) => Promise<void> | void;
+  /**
+   * Deprecated compatibility alias for gateway_stop.
+   *
+   * New plugins should register gateway_stop directly; the loader normalizes
+   * deactivate registrations onto gateway_stop so cleanup handlers still run
+   * during Gateway shutdown.
+   *
+   * @deprecated Use gateway_stop.
+   */
+  deactivate: (
+    event: PluginHookGatewayStopEvent,
+    ctx: PluginHookGatewayContext,
   ) => Promise<void> | void;
   gateway_start: (
     event: PluginHookGatewayStartEvent,

@@ -113,18 +113,32 @@ describe("Ghost reminder bug (issue #13317)", () => {
     expect(calledCtx.Body).not.toContain("heartbeat poll");
   };
 
+  const mockCallAt = (
+    mock: { mock: { calls: Array<readonly unknown[]> } },
+    index: number,
+    label: string,
+  ): readonly unknown[] => {
+    const call = mock.mock.calls[index];
+    if (!call) {
+      throw new Error(`expected ${label} call`);
+    }
+    return call;
+  };
+
   const getFirstReplyContext = (
     replySpy: ReturnType<typeof vi.fn>,
   ): {
+    Provider?: string;
     SessionKey?: string;
     MessageThreadId?: number;
     Body?: string;
   } => {
-    const ctx = replySpy.mock.calls[0]?.[0];
+    const [ctx] = mockCallAt(replySpy, 0, "heartbeat reply");
     if (!ctx || typeof ctx !== "object") {
       throw new Error("expected heartbeat reply context");
     }
     return ctx as {
+      Provider?: string;
       SessionKey?: string;
       MessageThreadId?: number;
       Body?: string;
@@ -140,7 +154,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
     },
   ) => {
     expect(sendTelegram).toHaveBeenCalledTimes(1);
-    const [to, text, options] = sendTelegram.mock.calls[0] ?? [];
+    const [to, text, options] = mockCallAt(sendTelegram, 0, "Telegram send");
     expect(to).toBe(params.to);
     expect(text).toBe(params.text);
     expect((options as { messageThreadId?: number } | undefined)?.messageThreadId).toBe(
@@ -154,7 +168,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
   ): Promise<{
     result: Awaited<ReturnType<typeof runHeartbeatOnce>>;
     sendTelegram: ReturnType<typeof vi.fn>;
-    calledCtx: { Provider?: string; Body?: string; ForceSenderIsOwnerFalse?: boolean } | null;
+    calledCtx: { Provider?: string; Body?: string } | null;
   }> => {
     return runHeartbeatCase({
       tmpPrefix,
@@ -178,7 +192,6 @@ describe("Ghost reminder bug (issue #13317)", () => {
       Provider?: string;
       Body?: string;
       SessionKey?: string;
-      ForceSenderIsOwnerFalse?: boolean;
     } | null;
     sessionKey: string;
     replyCallCount: number;
@@ -202,12 +215,8 @@ describe("Ghost reminder bug (issue #13317)", () => {
             telegram: sendTelegram,
           },
         });
-        const calledCtx = (getReplySpy.mock.calls[0]?.[0] ?? null) as {
-          Provider?: string;
-          Body?: string;
-          SessionKey?: string;
-          ForceSenderIsOwnerFalse?: boolean;
-        } | null;
+        const calledCtx =
+          getReplySpy.mock.calls.length === 0 ? null : getFirstReplyContext(getReplySpy);
         return {
           result,
           sendTelegram,
@@ -218,35 +227,6 @@ describe("Ghost reminder bug (issue #13317)", () => {
       },
       { prefix: params.tmpPrefix },
     );
-  };
-
-  const expectUntrustedEventOwnership = async (params: {
-    tmpPrefix: string;
-    reason: "hook:wake" | "interval";
-    isolatedSession?: boolean;
-    forceSenderIsOwnerFalse: boolean;
-  }): Promise<void> => {
-    const { result, sendTelegram, calledCtx } = await runHeartbeatCase({
-      tmpPrefix: params.tmpPrefix,
-      replyText: "Handled internally",
-      reason: params.reason,
-      target: "none",
-      isolatedSession: params.isolatedSession,
-      enqueue: (sessionKey) => {
-        enqueueSystemEvent("GitHub issue opened: untrusted webhook content", {
-          sessionKey,
-          trusted: false,
-        });
-      },
-    });
-
-    expect(result.status).toBe("ran");
-    expect(calledCtx?.Provider).toBe("heartbeat");
-    if (params.isolatedSession === true) {
-      expect(calledCtx?.SessionKey).toContain(":heartbeat");
-    }
-    expect(calledCtx?.ForceSenderIsOwnerFalse).toBe(params.forceSenderIsOwnerFalse);
-    expect(sendTelegram).not.toHaveBeenCalled();
   };
 
   it("does not use CRON_EVENT_PROMPT when only a HEARTBEAT_OK event is present", async () => {
@@ -352,8 +332,14 @@ describe("Ghost reminder bug (issue #13317)", () => {
       expect(second.status).toBe("ran");
       expect(getReplySpy).toHaveBeenCalledTimes(2);
 
-      const firstCtx = getReplySpy.mock.calls[0]?.[0] as { Provider?: string; Body?: string };
-      const secondCtx = getReplySpy.mock.calls[1]?.[0] as { Provider?: string; Body?: string };
+      const firstCtx = mockCallAt(getReplySpy, 0, "first heartbeat reply")[0] as {
+        Provider?: string;
+        Body?: string;
+      };
+      const secondCtx = mockCallAt(getReplySpy, 1, "second heartbeat reply")[0] as {
+        Provider?: string;
+        Body?: string;
+      };
       expect(firstCtx.Provider).toBe("cron-event");
       expect(firstCtx.Body).toContain("Cron: QMD maintenance completed");
       expect(secondCtx.Provider).toBe("heartbeat");
@@ -386,13 +372,12 @@ describe("Ghost reminder bug (issue #13317)", () => {
       reason: "exec-event",
       target: "none",
       enqueue: (sessionKey) => {
-        enqueueSystemEvent("exec finished: deploy succeeded", { sessionKey, trusted: false });
+        enqueueSystemEvent("exec finished: deploy succeeded", { sessionKey });
       },
     });
 
     expect(result.status).toBe("ran");
     expect(calledCtx?.Provider).toBe("exec-event");
-    expect(calledCtx?.ForceSenderIsOwnerFalse).toBe(true);
     expect(calledCtx?.Body).toContain("Handle the result internally");
     expect(sendTelegram).not.toHaveBeenCalled();
   });
@@ -403,13 +388,12 @@ describe("Ghost reminder bug (issue #13317)", () => {
       replyText: "Deploy succeeded",
       reason: "exec-event",
       enqueue: (sessionKey) => {
-        enqueueSystemEvent("exec finished: deploy succeeded", { sessionKey, trusted: false });
+        enqueueSystemEvent("exec finished: deploy succeeded", { sessionKey });
       },
     });
 
     expect(result.status).toBe("ran");
     expect(calledCtx?.Provider).toBe("exec-event");
-    expect(calledCtx?.ForceSenderIsOwnerFalse).toBe(true);
     expect(calledCtx?.Body).toContain("exec finished: deploy succeeded");
     expect(sendTelegram).toHaveBeenCalled();
   });
@@ -447,7 +431,6 @@ describe("Ghost reminder bug (issue #13317)", () => {
 
     expect(result.status).toBe("ran");
     expect(calledCtx?.Provider).toBe("exec-event");
-    expect(calledCtx?.ForceSenderIsOwnerFalse).toBe(true);
     expect(calledCtx?.Body).toContain("Handle the result internally");
     expect(sendTelegram).not.toHaveBeenCalled();
   });
@@ -467,42 +450,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
     expect(result.status).toBe("ran");
     expect(calledCtx?.Provider).toBe("heartbeat");
     expect(calledCtx?.SessionKey).toContain(":heartbeat");
-    expect(calledCtx?.ForceSenderIsOwnerFalse).toBe(false);
     expect(sendTelegram).not.toHaveBeenCalled();
-  });
-
-  it("forces owner downgrade for untrusted hook:wake system events", async () => {
-    await expectUntrustedEventOwnership({
-      tmpPrefix: "openclaw-hook-untrusted-",
-      reason: "hook:wake",
-      forceSenderIsOwnerFalse: true,
-    });
-  });
-
-  it("forces owner downgrade for untrusted interval events", async () => {
-    await expectUntrustedEventOwnership({
-      tmpPrefix: "openclaw-interval-untrusted-",
-      reason: "interval",
-      forceSenderIsOwnerFalse: true,
-    });
-  });
-
-  it("does not force owner downgrade for untrusted hook:wake events with isolated sessions", async () => {
-    await expectUntrustedEventOwnership({
-      tmpPrefix: "openclaw-hook-untrusted-isolated-",
-      reason: "hook:wake",
-      isolatedSession: true,
-      forceSenderIsOwnerFalse: false,
-    });
-  });
-
-  it("does not force owner downgrade for isolated interval runs with only base-session untrusted events", async () => {
-    await expectUntrustedEventOwnership({
-      tmpPrefix: "openclaw-interval-untrusted-isolated-",
-      reason: "interval",
-      isolatedSession: true,
-      forceSenderIsOwnerFalse: false,
-    });
   });
 
   it("routes wake-triggered heartbeat replies using queued system-event delivery context", async () => {
@@ -600,10 +548,10 @@ describe("Ghost reminder bug (issue #13317)", () => {
 
       expect(result.status).toBe("ran");
       expect(getFirstReplyContext(replySpy).SessionKey).toBe(`${sessionKey}:heartbeat`);
-      expect(sendTelegram).toHaveBeenCalledTimes(1);
-      expect(sendTelegram.mock.calls[0]?.[0]).toBe("-100155462274");
-      const options = sendTelegram.mock.calls[0]?.[2] as { messageThreadId?: number } | undefined;
-      expect(options?.messageThreadId).toBeUndefined();
+      expectTelegramSend(sendTelegram, {
+        to: "-100155462274",
+        text: "Restart complete",
+      });
     });
   });
   it("keeps output-bearing exec-event delivery pinned to the original Telegram topic when session route drifts", async () => {
@@ -644,7 +592,6 @@ describe("Ghost reminder bug (issue #13317)", () => {
       });
       enqueueSystemEvent("Exec completed (review-run, code 0) :: review-worker spawn finished", {
         sessionKey,
-        trusted: false,
         deliveryContext: {
           channel: "telegram",
           to: "telegram:-1003774691294:topic:47",
@@ -707,7 +654,6 @@ describe("Ghost reminder bug (issue #13317)", () => {
       });
       enqueueSystemEvent("Exec completed (review-run, code 0)", {
         sessionKey,
-        trusted: false,
         deliveryContext: {
           channel: "telegram",
           to: "telegram:-1003774691294:topic:47",

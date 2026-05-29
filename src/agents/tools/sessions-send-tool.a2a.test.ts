@@ -5,7 +5,7 @@ import { createSessionConversationTestRegistry } from "../../test-utils/session-
 import { readLatestAssistantReplySnapshot, waitForAgentRun } from "../run-wait.js";
 import { runAgentStep } from "./agent-step.js";
 import type { SessionListRow } from "./sessions-helpers.js";
-import { runSessionsSendA2AFlow, __testing } from "./sessions-send-tool.a2a.js";
+import { runSessionsSendA2AFlow, testing } from "./sessions-send-tool.a2a.js";
 
 const callGatewayMock = vi.hoisted(() => vi.fn());
 
@@ -24,6 +24,17 @@ vi.mock("../run-wait.js", () => ({
 vi.mock("./agent-step.js", () => ({
   runAgentStep: vi.fn().mockResolvedValue("Test announce reply"),
 }));
+
+function firstMockArg(
+  mock: { mock: { calls: unknown[][] } },
+  label: string,
+): Record<string, unknown> {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error(`Expected ${label} to be called`);
+  }
+  return call[0] as Record<string, unknown>;
+}
 
 describe("runSessionsSendA2AFlow announce delivery", () => {
   let gatewayCalls: CallGatewayOptions[];
@@ -49,7 +60,7 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
       text: "Test announce reply",
       fingerprint: "test-announce-reply",
     });
-    __testing.setDepsForTest({
+    testing.setDepsForTest({
       callGateway,
     });
   });
@@ -63,7 +74,7 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
   }
 
   afterEach(() => {
-    __testing.setDepsForTest();
+    testing.setDepsForTest();
     vi.restoreAllMocks();
   });
 
@@ -187,14 +198,11 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
       waitRunId: "run-delayed",
     });
 
-    const waitInput = vi.mocked(waitForAgentRun).mock.calls[0]?.[0] as
-      | { runId?: string }
-      | undefined;
-    expect(waitInput?.runId).toBe("run-delayed");
-    const snapshotInput = vi.mocked(readLatestAssistantReplySnapshot).mock.calls[0]?.[0] as
-      | { sessionKey?: string }
-      | undefined;
-    expect(snapshotInput?.sessionKey).toBe("agent:main:discord:group:dev");
+    expect(firstMockArg(vi.mocked(waitForAgentRun), "agent run wait").runId).toBe("run-delayed");
+    expect(
+      firstMockArg(vi.mocked(readLatestAssistantReplySnapshot), "assistant reply snapshot")
+        .sessionKey,
+    ).toBe("agent:main:discord:group:dev");
     expect(runAgentStep).not.toHaveBeenCalled();
     expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
   });
@@ -213,11 +221,9 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
         roundOneReply: "Worker completed successfully",
       });
 
-      const stepInput = vi.mocked(runAgentStep).mock.calls[0]?.[0] as
-        | { message?: string; transcriptMessage?: string }
-        | undefined;
-      expect(stepInput?.message).toBe("Agent-to-agent announce step.");
-      expect(stepInput?.transcriptMessage).toBe("");
+      const stepInput = firstMockArg(vi.mocked(runAgentStep), "agent step");
+      expect(stepInput.message).toBe("Agent-to-agent announce step.");
+      expect(stepInput.transcriptMessage).toBe("");
       expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
     },
   );

@@ -13,6 +13,25 @@ vi.mock("node:child_process", async () => {
 
 import { scheduleDetachedLaunchdRestartHandoff } from "./launchd-restart-handoff.js";
 
+type SpawnCall = [string, string[], { env: Record<string, string | undefined> }];
+
+function requireSpawnCall(callIndex = 0): SpawnCall {
+  const call = spawnMock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected spawn call ${callIndex}`);
+  }
+  const [command, args, options] = call;
+  if (
+    typeof command !== "string" ||
+    !Array.isArray(args) ||
+    !options ||
+    typeof options !== "object"
+  ) {
+    throw new Error(`expected spawn call ${callIndex} with command, args, and options`);
+  }
+  return [command, args as string[], options as SpawnCall[2]];
+}
+
 afterEach(() => {
   spawnMock.mockReset();
   unrefMock.mockReset();
@@ -35,7 +54,7 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
 
     expect(result).toEqual({ ok: true, pid: 4242 });
     expect(spawnMock).toHaveBeenCalledTimes(1);
-    const [, args] = spawnMock.mock.calls[0] as [string, string[]];
+    const [, args] = requireSpawnCall();
     expect(args[0]).toBe("-c");
     expect(args[2]).toBe("openclaw-launchd-restart-handoff");
     expect(args[6]).toBe("9876");
@@ -64,7 +83,7 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
       mode: "start-after-exit",
     });
 
-    const [, args] = spawnMock.mock.calls[0] as [string, string[]];
+    const [, args] = requireSpawnCall();
     expect(args[7]).toBe("ai.openclaw.gateway");
     expect(args[1]).toContain('if launchctl print "$service_target" >/dev/null 2>&1; then');
     expect(args[1]).toContain("reason=launchd-auto-reload");
@@ -73,6 +92,30 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     expect(args[1]).toContain('if launchctl bootstrap "$domain" "$plist_path"; then');
     expect(args[1]).not.toContain('if launchctl start "$label"; then');
     expect(args[1]).not.toContain('basename "$service_target"');
+  });
+
+  it("polls after bootout and falls back to kickstart on bootstrap failure for reload mode", () => {
+    spawnMock.mockReturnValue({ pid: 4242, unref: unrefMock });
+
+    scheduleDetachedLaunchdRestartHandoff({
+      env: {
+        HOME: "/Users/test",
+        OPENCLAW_PROFILE: "default",
+      },
+      mode: "reload",
+      waitForPid: 9876,
+    });
+
+    const [, args] = requireSpawnCall();
+    expect(args[1]).toContain("openclaw restart attempt source=launchd-handoff mode=reload");
+    expect(args[1]).toContain('launchctl enable "$service_target"');
+    expect(args[1]).toContain('launchctl bootout "$service_target"');
+    // polls until launchd finishes the async unload before re-bootstrapping
+    expect(args[1]).toContain("bootout_wait_count=");
+    expect(args[1]).toContain('if ! launchctl print "$service_target" >/dev/null 2>&1; then');
+    expect(args[1]).toContain('if launchctl bootstrap "$domain" "$plist_path"; then');
+    // fallback: kickstart -k on bootstrap failure so service isn't left deregistered
+    expect(args[1]).toContain('launchctl kickstart -k "$service_target"');
   });
 
   it("sanitizes restart helper environment overrides before spawning", () => {
@@ -89,11 +132,7 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
       mode: "kickstart",
     });
 
-    const [, args, options] = spawnMock.mock.calls[0] as [
-      string,
-      string[],
-      { env: Record<string, string | undefined> },
-    ];
+    const [, args, options] = requireSpawnCall();
     expect(args[1]).toContain("exec >>'/Users/test/.openclaw/logs/gateway-restart.log' 2>&1");
     expect(args[1]).not.toContain("/tmp/evil-bin");
     expect(args[1]).not.toContain("/tmp/evil.dylib");

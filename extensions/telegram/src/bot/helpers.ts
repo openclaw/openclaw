@@ -1,4 +1,4 @@
-import type { Chat, Message } from "@grammyjs/types";
+import type { Chat, Message } from "grammy/types";
 import { formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
 import {
   resolveCommandAuthorization,
@@ -6,28 +6,33 @@ import {
 } from "openclaw/plugin-sdk/command-auth-native";
 import type {
   OpenClawConfig,
-  TelegramAccountConfig,
+  DmPolicy,
   TelegramDirectConfig,
   TelegramGroupConfig,
-  TelegramDmThreadReplies,
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-contracts";
 import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { expandTelegramAllowFromWithAccessGroups } from "../access-groups.js";
-import { firstDefined, normalizeAllowFrom, type NormalizedAllowFrom } from "../bot-access.js";
+import {
+  firstDefined,
+  isSenderAllowed,
+  normalizeAllowFrom,
+  resolveTelegramEffectiveDmPolicy,
+  type NormalizedAllowFrom,
+} from "../bot-access.js";
 import { normalizeTelegramReplyToMessageId } from "../outbound-params.js";
 import { resolveTelegramPreviewStreamMode } from "../preview-streaming.js";
 import {
   buildSenderLabel,
   buildSenderName,
-  expandTextLinks,
   extractTelegramLocation,
   getTelegramTextParts,
   hasBotMention,
   isBinaryContent,
   normalizeForwardedContext,
+  renderTelegramTextEntities,
   resolveTelegramTextContent,
   resolveTelegramMediaPlaceholder,
   type TelegramForwardedContext,
@@ -39,12 +44,12 @@ export type { TelegramForwardedContext, TelegramTextEntity } from "./body-helper
 export {
   buildSenderLabel,
   buildSenderName,
-  expandTextLinks,
   extractTelegramLocation,
   getTelegramTextParts,
   hasBotMention,
   isBinaryContent,
   normalizeForwardedContext,
+  renderTelegramTextEntities,
   resolveTelegramMediaPlaceholder,
 };
 
@@ -83,34 +88,20 @@ export type TelegramThreadSpec = {
   scope: "dm" | "forum" | "none";
 };
 
-function normalizeTelegramDmThreadReplies(value: unknown): TelegramDmThreadReplies | undefined {
-  return value === "off" || value === "inbound" || value === "always" ? value : undefined;
-}
-
-export function resolveTelegramDmThreadReplies(params: {
-  accountConfig?: TelegramAccountConfig;
-  directConfig?: TelegramDirectConfig;
-}): TelegramDmThreadReplies {
-  return (
-    normalizeTelegramDmThreadReplies(params.directConfig?.threadReplies) ??
-    normalizeTelegramDmThreadReplies(params.accountConfig?.dm?.threadReplies) ??
-    "off"
-  );
-}
-
 export function shouldUseTelegramDmThreadSession(params: {
   dmThreadId?: number;
-  accountConfig?: TelegramAccountConfig;
-  directConfig?: TelegramDirectConfig;
-  topicConfig?: TelegramTopicConfig;
+  botHasTopicsEnabled?: boolean;
 }): boolean {
-  if (params.dmThreadId == null) {
-    return false;
-  }
-  if (params.directConfig?.requireTopic === true || params.topicConfig) {
-    return true;
-  }
-  return resolveTelegramDmThreadReplies(params) !== "off";
+  return params.dmThreadId != null && params.botHasTopicsEnabled === true;
+}
+
+export function resolveTelegramBotHasTopicsEnabled(me: unknown): boolean {
+  return (
+    me !== null &&
+    typeof me === "object" &&
+    "has_topics_enabled" in me &&
+    me.has_topics_enabled === true
+  );
 }
 
 export function extractTelegramForumFlag(value: unknown): boolean | undefined {
@@ -121,18 +112,35 @@ export function extractTelegramForumFlag(value: unknown): boolean | undefined {
   return typeof forum === "boolean" ? forum : undefined;
 }
 
+export function resolveTelegramMessageForumFlagHint(params: {
+  chatType?: Chat["type"];
+  isForum?: boolean;
+  isTopicMessage?: boolean;
+}): boolean | undefined {
+  if (params.chatType === "supergroup" && params.isTopicMessage === true) {
+    return true;
+  }
+  return typeof params.isForum === "boolean" ? params.isForum : undefined;
+}
+
 export async function resolveTelegramForumFlag(params: {
   chatId: string | number;
   chatType?: Chat["type"];
   isGroup: boolean;
   isForum?: boolean;
+  isTopicMessage?: boolean;
   getChat?: TelegramGetChat;
 }): Promise<boolean> {
-  if (typeof params.isForum === "boolean") {
+  const forumHint = resolveTelegramMessageForumFlagHint({
+    chatType: params.chatType,
+    isForum: params.isForum,
+    isTopicMessage: params.isTopicMessage,
+  });
+  if (typeof forumHint === "boolean") {
     if (params.isGroup && params.chatType === "supergroup") {
-      cacheTelegramForumFlag(params.chatId, params.isForum);
+      cacheTelegramForumFlag(params.chatId, forumHint);
     }
-    return params.isForum;
+    return forumHint;
   }
   if (!params.isGroup || params.chatType !== "supergroup" || !params.getChat) {
     return false;
@@ -177,11 +185,17 @@ export async function resolveTelegramGroupAllowFromContext(params: {
   cfg?: OpenClawConfig;
   chatId: string | number;
   accountId?: string;
+  dmPolicy?: DmPolicy;
+  allowFrom?: Array<string | number>;
   senderId?: string;
   isGroup?: boolean;
   isForum?: boolean;
   messageThreadId?: number | null;
   groupAllowFrom?: Array<string | number>;
+  // Set when the caller has already authorized the sender by some other config
+  // path (e.g. commands.allowFrom) and the pairing-store outcome cannot change
+  // the decision. Lets command auth survive transient store I/O failures.
+  skipPairingStoreRead?: boolean;
   readChannelAllowFromStore?: typeof readChannelAllowFromStore;
   resolveTelegramGroupConfig: (
     chatId: string | number,
@@ -210,16 +224,27 @@ export async function resolveTelegramGroupAllowFromContext(params: {
   const resolvedThreadId = threadSpec.scope === "forum" ? threadSpec.id : undefined;
   const dmThreadId = threadSpec.scope === "dm" ? threadSpec.id : undefined;
   const threadIdForConfig = resolvedThreadId ?? dmThreadId;
-  const storeAllowFrom = await (params.readChannelAllowFromStore ?? readChannelAllowFromStore)(
-    "telegram",
-    process.env,
-    accountId,
-  ).catch(() => []);
   const { groupConfig, topicConfig } = params.resolveTelegramGroupConfig(
     params.chatId,
     threadIdForConfig,
   );
   const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
+  const effectiveDmPolicy = resolveTelegramEffectiveDmPolicy({
+    isGroup: params.isGroup ?? false,
+    groupConfig,
+    dmPolicy: params.dmPolicy,
+  });
+  const storeAllowFrom = await loadTelegramPairingStoreIfNeeded({
+    cfg: params.cfg,
+    allowFrom: params.allowFrom,
+    groupAllowOverride,
+    accountId,
+    senderId: params.senderId,
+    isGroup: params.isGroup ?? false,
+    effectiveDmPolicy,
+    skipPairingStoreRead: params.skipPairingStoreRead,
+    readChannelAllowFromStore: params.readChannelAllowFromStore,
+  });
   const expandedGroupAllowFrom = await expandTelegramAllowFromWithAccessGroups({
     cfg: params.cfg,
     allowFrom: groupAllowOverride ?? params.groupAllowFrom,
@@ -240,6 +265,78 @@ export async function resolveTelegramGroupAllowFromContext(params: {
     effectiveGroupAllow,
     hasGroupAllowOverride,
   };
+}
+
+async function isTelegramDmAllowedByConfiguredAllowFrom(params: {
+  cfg?: OpenClawConfig;
+  allowFrom?: Array<string | number>;
+  groupAllowOverride?: Array<string | number>;
+  accountId: string;
+  senderId?: string;
+}): Promise<boolean> {
+  const configuredAllowFrom = params.groupAllowOverride ?? params.allowFrom;
+  if (!configuredAllowFrom || configuredAllowFrom.length === 0) {
+    return false;
+  }
+  const expandedAllowFrom = await expandTelegramAllowFromWithAccessGroups({
+    cfg: params.cfg,
+    allowFrom: configuredAllowFrom,
+    accountId: params.accountId,
+    senderId: params.senderId,
+  });
+  const normalizedAllowFrom = normalizeAllowFrom(expandedAllowFrom);
+  return (
+    normalizedAllowFrom.hasEntries &&
+    isSenderAllowed({
+      allow: normalizedAllowFrom,
+      senderId: params.senderId,
+    })
+  );
+}
+
+export class TelegramPairingStoreReadError extends Error {
+  override readonly cause: unknown;
+  constructor(cause: unknown) {
+    super(`Telegram pairing store read failed: ${String(cause)}`);
+    this.name = "TelegramPairingStoreReadError";
+    this.cause = cause;
+  }
+}
+
+// Could add bounded retries to absorb short FD-pressure spikes; deferred. See #85555.
+export async function loadTelegramPairingStoreIfNeeded(params: {
+  cfg?: OpenClawConfig;
+  allowFrom?: Array<string | number>;
+  groupAllowOverride?: Array<string | number>;
+  accountId: string;
+  senderId?: string;
+  isGroup: boolean;
+  effectiveDmPolicy: DmPolicy;
+  skipPairingStoreRead?: boolean;
+  readChannelAllowFromStore?: typeof readChannelAllowFromStore;
+}): Promise<string[]> {
+  if (params.skipPairingStoreRead || params.isGroup || params.effectiveDmPolicy !== "pairing") {
+    return [];
+  }
+  const configuredDmAllowed = await isTelegramDmAllowedByConfiguredAllowFrom({
+    cfg: params.cfg,
+    allowFrom: params.allowFrom,
+    groupAllowOverride: params.groupAllowOverride,
+    accountId: params.accountId,
+    senderId: params.senderId,
+  });
+  if (configuredDmAllowed) {
+    return [];
+  }
+  try {
+    return await (params.readChannelAllowFromStore ?? readChannelAllowFromStore)(
+      "telegram",
+      process.env,
+      params.accountId,
+    );
+  } catch (cause) {
+    throw new TelegramPairingStoreReadError(cause);
+  }
 }
 
 /**
@@ -337,6 +434,20 @@ export function buildTelegramRoutingTarget(
     return base;
   }
   return `${base}:topic:${messageThreadId}`;
+}
+
+/**
+ * Build the canonical Telegram inbound origin used by queued follow-up routing.
+ * DM thread ids remain metadata-only; real forum topics must be in-band.
+ */
+export function buildTelegramInboundOriginTarget(
+  chatId: number | string,
+  thread?: TelegramThreadSpec | null,
+): string {
+  if (thread?.scope !== "forum") {
+    return `telegram:${chatId}`;
+  }
+  return buildTelegramRoutingTarget(chatId, thread);
 }
 
 /**

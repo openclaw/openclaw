@@ -30,6 +30,14 @@ vi.mock("./tavily-client.js", () => ({
   runTavilyExtract,
 }));
 
+function requireFirstMockArg(mock: ReturnType<typeof vi.fn>, label: string): unknown {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`Expected ${label}`);
+  }
+  return call[0];
+}
+
 function fakeApi(): OpenClawPluginApi {
   return {
     config: {},
@@ -40,14 +48,14 @@ describe("tavily tools", () => {
   let createTavilyWebSearchProvider: typeof import("./tavily-search-provider.js").createTavilyWebSearchProvider;
   let createTavilySearchTool: typeof import("./tavily-search-tool.js").createTavilySearchTool;
   let createTavilyExtractTool: typeof import("./tavily-extract-tool.js").createTavilyExtractTool;
-  let tavilyClientTesting: typeof import("./tavily-client.js").__testing;
+  let tavilyClientTesting: typeof import("./tavily-client.js").testing;
   let tavilyPlugin: typeof import("../index.js").default;
 
   beforeAll(async () => {
     ({ createTavilyWebSearchProvider } = await import("./tavily-search-provider.js"));
     ({ createTavilySearchTool } = await import("./tavily-search-tool.js"));
     ({ createTavilyExtractTool } = await import("./tavily-extract-tool.js"));
-    ({ __testing: tavilyClientTesting } =
+    ({ testing: tavilyClientTesting } =
       await vi.importActual<typeof import("./tavily-client.js")>("./tavily-client.js"));
     ({ default: tavilyPlugin } = await import("../index.js"));
   });
@@ -99,6 +107,33 @@ describe("tavily tools", () => {
       query: "weather sf",
       maxResults: 7,
     });
+  });
+
+  it("normalizes generic Tavily search count before dispatch", async () => {
+    const provider = createTavilyWebSearchProvider();
+    const tool = provider.createTool({
+      config: { test: true },
+    } as never);
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    await tool.execute({
+      query: "weather sf",
+      count: "7",
+    });
+
+    expect(runTavilySearch).toHaveBeenCalledWith({
+      cfg: { test: true },
+      query: "weather sf",
+      maxResults: 7,
+    });
+    await expect(
+      tool.execute({
+        query: "weather sf",
+        count: "7.5",
+      }),
+    ).rejects.toThrow("count must be an integer from 1 to 20");
   });
 
   it("normalizes optional parameters before invoking Tavily", async () => {
@@ -217,12 +252,18 @@ describe("tavily tools", () => {
     await searchTool.execute("search-call", { query: "openclaw" });
     await extractTool.execute("extract-call", { urls: ["https://example.com"] });
 
-    const searchParams = runTavilySearch.mock.calls[0]?.[0];
-    expect(searchParams?.cfg).toBe(runtimeConfig);
-    expect(searchParams?.query).toBe("openclaw");
-    const extractParams = runTavilyExtract.mock.calls[0]?.[0] as TavilyExtractParams | undefined;
-    expect(extractParams?.cfg).toBe(runtimeConfig);
-    expect(extractParams?.urls).toEqual(["https://example.com"]);
+    const searchParams = requireFirstMockArg(runTavilySearch, "Tavily search params") as Record<
+      string,
+      unknown
+    >;
+    expect(searchParams.cfg).toBe(runtimeConfig);
+    expect(searchParams.query).toBe("openclaw");
+    const extractParams = requireFirstMockArg(
+      runTavilyExtract,
+      "Tavily extract params",
+    ) as TavilyExtractParams;
+    expect(extractParams.cfg).toBe(runtimeConfig);
+    expect(extractParams.urls).toEqual(["https://example.com"]);
   });
 
   it("drops empty domain arrays and forwards query-scoped chunking", async () => {
@@ -260,11 +301,14 @@ describe("tavily tools", () => {
       chunks_per_source: 2,
     });
 
-    const extractParams = runTavilyExtract.mock.calls[0]?.[0] as TavilyExtractParams | undefined;
-    expect(extractParams?.cfg).toEqual({});
-    expect(extractParams?.urls).toEqual(["https://example.com"]);
-    expect(extractParams?.query).toBe("pricing");
-    expect(extractParams?.chunksPerSource).toBe(2);
+    const extractParams = requireFirstMockArg(
+      runTavilyExtract,
+      "Tavily extract params",
+    ) as TavilyExtractParams;
+    expect(extractParams.cfg).toEqual({});
+    expect(extractParams.urls).toEqual(["https://example.com"]);
+    expect(extractParams.query).toBe("pricing");
+    expect(extractParams.chunksPerSource).toBe(2);
   });
 
   it("rejects chunks_per_source without query", async () => {
@@ -277,6 +321,41 @@ describe("tavily tools", () => {
       }),
     ).rejects.toThrow("tavily_extract requires query when chunks_per_source is set.");
 
+    expect(runTavilyExtract).not.toHaveBeenCalled();
+  });
+
+  it("rejects fractional and out-of-range integer options before Tavily calls", async () => {
+    const searchTool = createTavilySearchTool(fakeApi());
+    await expect(
+      searchTool.execute("search-call", {
+        query: "openclaw",
+        max_results: 5.5,
+      }),
+    ).rejects.toThrow("max_results must be an integer from 1 to 20.");
+    await expect(
+      searchTool.execute("search-call", {
+        query: "openclaw",
+        max_results: 21,
+      }),
+    ).rejects.toThrow("max_results must be an integer from 1 to 20.");
+
+    const extractTool = createTavilyExtractTool(fakeApi());
+    await expect(
+      extractTool.execute("extract-call", {
+        urls: ["https://example.com"],
+        query: "pricing",
+        chunks_per_source: 2.5,
+      }),
+    ).rejects.toThrow("chunks_per_source must be an integer from 1 to 5.");
+    await expect(
+      extractTool.execute("extract-call", {
+        urls: ["https://example.com"],
+        query: "pricing",
+        chunks_per_source: 6,
+      }),
+    ).rejects.toThrow("chunks_per_source must be an integer from 1 to 5.");
+
+    expect(runTavilySearch).not.toHaveBeenCalled();
     expect(runTavilyExtract).not.toHaveBeenCalled();
   });
 
@@ -321,6 +400,8 @@ describe("tavily tools", () => {
   it("accepts positive numeric timeout overrides and floors them", () => {
     expect(resolveTavilySearchTimeoutSeconds(19.9)).toBe(19);
     expect(resolveTavilyExtractTimeoutSeconds(42.7)).toBe(42);
+    expect(resolveTavilySearchTimeoutSeconds(0.5)).toBe(1);
+    expect(resolveTavilyExtractTimeoutSeconds(0.5)).toBe(1);
     expect(resolveTavilySearchTimeoutSeconds(0)).toBe(DEFAULT_TAVILY_SEARCH_TIMEOUT_SECONDS);
     expect(resolveTavilyExtractTimeoutSeconds(Number.NaN)).toBe(
       DEFAULT_TAVILY_EXTRACT_TIMEOUT_SECONDS,

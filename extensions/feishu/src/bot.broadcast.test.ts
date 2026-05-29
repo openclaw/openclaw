@@ -54,6 +54,11 @@ describe("broadcast dispatch", () => {
     return {
       ...ctx,
       CommandAuthorized: typeof ctx.CommandAuthorized === "boolean" ? ctx.CommandAuthorized : false,
+      CommandTurn: {
+        kind: "normal",
+        source: "message",
+        authorized: false,
+      },
     };
   };
   const mockDispatchReplyFromConfig = vi
@@ -110,8 +115,8 @@ describe("broadcast dispatch", () => {
       media: {
         saveMediaBuffer: mockSaveMediaBuffer,
       },
-      turn: {
-        run: vi.fn(async (params: Parameters<PluginRuntime["channel"]["turn"]["run"]>[0]) => {
+      inbound: {
+        run: vi.fn(async (params: Parameters<PluginRuntime["channel"]["inbound"]["run"]>[0]) => {
           const input = await params.adapter.ingest(params.raw);
           if (!input) {
             return {
@@ -144,26 +149,6 @@ describe("broadcast dispatch", () => {
             dispatchResult: await turn.runDispatch(),
           };
         }),
-        runPrepared: vi.fn(
-          async (turn: Parameters<PluginRuntime["channel"]["turn"]["runPrepared"]>[0]) => {
-            await turn.recordInboundSession({
-              storePath: turn.storePath,
-              sessionKey: turn.ctxPayload.SessionKey ?? turn.routeSessionKey,
-              ctx: turn.ctxPayload,
-              groupResolution: turn.record?.groupResolution,
-              createIfMissing: turn.record?.createIfMissing,
-              updateLastRoute: turn.record?.updateLastRoute,
-              onRecordError: turn.record?.onRecordError ?? (() => undefined),
-            });
-            return {
-              admission: { kind: "dispatch" as const },
-              dispatched: true,
-              ctxPayload: turn.ctxPayload,
-              routeSessionKey: turn.routeSessionKey,
-              dispatchResult: await turn.runDispatch(),
-            };
-          },
-        ),
       },
       pairing: {
         readAllowFromStore: vi.fn().mockResolvedValue([]),
@@ -279,6 +264,43 @@ describe("broadcast dispatch", () => {
     const sessionKeys = finalizeInboundContextCalls.map((call) => call.SessionKey);
     expect(sessionKeys).toContain("agent:susan:feishu:group:oc-broadcast-group");
     expect(sessionKeys).toContain("agent:main:feishu:group:oc-broadcast-group");
+    const recordCalls = (
+      runtimeStub.channel.session.recordInboundSession as unknown as {
+        mock: {
+          calls: Array<
+            [
+              {
+                updateLastRoute?: {
+                  sessionKey?: unknown;
+                  channel?: unknown;
+                  to?: unknown;
+                };
+              },
+            ]
+          >;
+        };
+      }
+    ).mock.calls;
+    expect(
+      recordCalls
+        .map(([call]) => ({
+          sessionKey: call.updateLastRoute?.["sessionKey"],
+          channel: call.updateLastRoute?.["channel"],
+          to: call.updateLastRoute?.["to"],
+        }))
+        .toSorted((left, right) => String(left.sessionKey).localeCompare(String(right.sessionKey))),
+    ).toEqual([
+      {
+        sessionKey: "agent:main:feishu:group:oc-broadcast-group",
+        channel: "feishu",
+        to: "chat:oc-broadcast-group",
+      },
+      {
+        sessionKey: "agent:susan:feishu:group:oc-broadcast-group",
+        channel: "feishu",
+        to: "chat:oc-broadcast-group",
+      },
+    ]);
     expect(mockGetChatInfo).toHaveBeenCalledTimes(1);
     expect(
       finalizeInboundContextCalls
@@ -301,7 +323,7 @@ describe("broadcast dispatch", () => {
       },
     ]);
     expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledTimes(1);
-    const dispatcherParams = mockCreateFeishuReplyDispatcher.mock.calls[0]?.[0] as
+    const dispatcherParams = mockCreateFeishuReplyDispatcher.mock.calls.at(0)?.[0] as
       | { agentId?: string }
       | undefined;
     expect(dispatcherParams?.agentId).toBe("main");

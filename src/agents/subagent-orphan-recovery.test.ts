@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as sessions from "../config/sessions.js";
 import * as gateway from "../gateway/call.js";
 import * as sessionUtils from "../gateway/session-utils.fs.js";
+import { resolveInternalSessionEffectsTranscriptPath } from "./internal-session-effects.js";
 import * as announceDelivery from "./subagent-announce-delivery.js";
 import {
   recoverOrphanedSubagentSessions,
@@ -91,11 +92,11 @@ async function expectSkippedRecovery(store: ReturnType<typeof sessions.loadSessi
 }
 
 function getResumeMessage() {
-  const call = vi.mocked(gateway.callGateway).mock.calls[0];
-  if (call === undefined) {
-    throw new Error("expected resume gateway call");
-  }
-  const params = call[0].params as Record<string, unknown>;
+  const call = requireRecord(
+    firstCallParam(vi.mocked(gateway.callGateway).mock.calls, "resume gateway"),
+    "resume gateway params",
+  );
+  const params = call.params as Record<string, unknown>;
   return params.message as string;
 }
 
@@ -112,6 +113,14 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
     throw new Error(`expected ${label} to be a record`);
   }
   return value as Record<string, unknown>;
+}
+
+function requireFirstUpdateSessionStoreCall() {
+  const call = vi.mocked(sessions.updateSessionStore).mock.calls[0];
+  if (call === undefined) {
+    throw new Error("expected update session store call");
+  }
+  return call;
 }
 
 describe("subagent-orphan-recovery", () => {
@@ -150,8 +159,10 @@ describe("subagent-orphan-recovery", () => {
 
     // Should have called callGateway to resume the session
     expect(gateway.callGateway).toHaveBeenCalledOnce();
-    const callArgs = vi.mocked(gateway.callGateway).mock.calls[0];
-    const opts = callArgs[0];
+    const opts = requireRecord(
+      firstCallParam(vi.mocked(gateway.callGateway).mock.calls, "gateway resume"),
+      "gateway resume params",
+    );
     expect(opts.method).toBe("agent");
     const params = opts.params as Record<string, unknown>;
     expect(params.sessionKey).toBe("agent:main:subagent:test-session-1");
@@ -168,6 +179,12 @@ describe("subagent-orphan-recovery", () => {
     expect(replaceParams.previousRunId).toBe("run-1");
     expect(replaceParams.nextRunId).toBe("test-run-id");
     expect(replaceParams.fallback).toBe(run);
+    expect(replaceParams.transcriptFile).toBe(
+      resolveInternalSessionEffectsTranscriptPath("test-run-id"),
+    );
+    expect(replaceParams.transcriptFile).not.toBe(
+      resolveInternalSessionEffectsTranscriptPath(params.idempotencyKey as string),
+    );
   });
 
   it("skips sessions that are not aborted", async () => {
@@ -369,7 +386,11 @@ describe("subagent-orphan-recovery", () => {
       getActiveRuns: () => createActiveRuns(createTestRunRecord()),
     });
 
-    const [, updater] = vi.mocked(sessions.updateSessionStore).mock.calls[0];
+    const updateCall = requireFirstUpdateSessionStoreCall();
+    const updater = updateCall[1];
+    if (typeof updater !== "function") {
+      throw new Error("expected update session store callback");
+    }
     const mockStore: ReturnType<typeof sessions.loadSessionStore> = {
       "agent:main:subagent:test-session-1": {
         sessionId: "session-abc",
@@ -414,7 +435,11 @@ describe("subagent-orphan-recovery", () => {
     expect(gateway.callGateway).not.toHaveBeenCalled();
     expect(sessions.updateSessionStore).toHaveBeenCalledOnce();
 
-    const [, updater] = vi.mocked(sessions.updateSessionStore).mock.calls[0];
+    const updateCall = requireFirstUpdateSessionStoreCall();
+    const updater = updateCall[1];
+    if (typeof updater !== "function") {
+      throw new Error("expected update session store callback");
+    }
     const mockStore: ReturnType<typeof sessions.loadSessionStore> = {
       "agent:main:subagent:test-session-1": {
         sessionId: "session-abc",
@@ -514,39 +539,22 @@ describe("subagent-orphan-recovery", () => {
     expect(message).toContain("config changes from your previous run were already applied");
   });
 
-  it("announces recovery-in-progress once when a later retry is attempting resume", async () => {
+  it("does not send parent-visible recovery-progress announcements on retry", async () => {
     mockSingleAbortedSession();
 
     const activeRuns = createActiveRuns(createTestRunRecord());
-    const notifiedRecoverySessionKeys = new Set<string>();
 
     await recoverOrphanedSubagentSessions({
       getActiveRuns: () => activeRuns,
-      attemptNumber: 2,
-      maxAttempts: 4,
-      notifiedRecoverySessionKeys,
     });
 
-    expect(announceDelivery.deliverSubagentAnnouncement).toHaveBeenCalledOnce();
-    const announcement = requireRecord(
-      firstCallParam(
-        vi.mocked(announceDelivery.deliverSubagentAnnouncement).mock.calls,
-        "recovery announcement",
-      ),
-      "recovery announcement params",
-    );
-    expect(announcement.requesterSessionKey).toBe("agent:main:quietchat:direct:+1234567890");
-    expect(announcement.triggerMessage).toContain("Automatic recovery is already in progress");
-    expect(notifiedRecoverySessionKeys).toEqual(new Set(["agent:main:subagent:test-session-1"]));
+    expect(announceDelivery.deliverSubagentAnnouncement).not.toHaveBeenCalled();
 
     await recoverOrphanedSubagentSessions({
       getActiveRuns: () => activeRuns,
-      attemptNumber: 3,
-      maxAttempts: 4,
-      notifiedRecoverySessionKeys,
     });
 
-    expect(announceDelivery.deliverSubagentAnnouncement).toHaveBeenCalledOnce();
+    expect(announceDelivery.deliverSubagentAnnouncement).not.toHaveBeenCalled();
   });
 
   it("prevents duplicate resume when updateSessionStore fails", async () => {

@@ -1,4 +1,13 @@
-import type { ValidateFunction } from "ajv";
+import {
+  ErrorCodes,
+  errorShape,
+  formatValidationErrors,
+  type ProtocolValidator,
+  validateSkillsUploadBeginParams,
+  validateSkillsUploadChunkParams,
+  validateSkillsUploadCommitParams,
+} from "../../../packages/gateway-protocol/src/index.js";
+import type { ErrorShape } from "../../../packages/gateway-protocol/src/index.js";
 import {
   installSkillArchiveFromPath,
   type SkillArchiveInstallFailureKind,
@@ -6,15 +15,6 @@ import {
 } from "../../agents/skills-archive-install.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import {
-  ErrorCodes,
-  errorShape,
-  formatValidationErrors,
-  validateSkillsUploadBeginParams,
-  validateSkillsUploadChunkParams,
-  validateSkillsUploadCommitParams,
-} from "../protocol/index.js";
-import type { ErrorShape } from "../protocol/index.js";
 import {
   defaultSkillUploadStore,
   normalizeSkillUploadSha256,
@@ -90,7 +90,7 @@ export const skillsUploadHandlers: GatewayRequestHandlers = {
 
 function makeUploadHandler<P, R>(
   name: string,
-  validator: ValidateFunction<P>,
+  validator: ProtocolValidator<P>,
   action: (params: P) => Promise<R>,
 ): GatewayRequestHandlers[string] {
   return async ({ params, respond, context }) => {

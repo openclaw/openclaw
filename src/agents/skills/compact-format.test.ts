@@ -1,5 +1,5 @@
 import os from "node:os";
-import { formatSkillsForPrompt as upstreamFormatSkillsForPrompt } from "@earendil-works/pi-coding-agent";
+import { formatSkillsForPrompt as upstreamFormatSkillsForPrompt } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createCanonicalFixtureSkill } from "../skills.test-helpers.js";
@@ -177,7 +177,8 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
     expect(prompt).toContain("skill-0");
     const [included, total] = requireIncludedCounts(prompt);
     expect(included).toBeLessThan(total);
-    expect(included).toBeGreaterThan(0);
+    expect(total).toBe(skills.length);
+    expect(prompt.match(/<skill>/g)?.length ?? 0).toBe(included);
   });
 
   it("compact preserves all skills where full format would drop some", () => {

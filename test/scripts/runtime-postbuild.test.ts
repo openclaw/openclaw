@@ -14,6 +14,7 @@ import {
   writeLegacyRootRuntimeCompatAliases,
   writeStableRootRuntimeAliases,
 } from "../../scripts/runtime-postbuild.mjs";
+import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -35,11 +36,35 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 describe("runtime postbuild static assets", () => {
   it("tracks plugin-owned static assets that release packaging must ship", () => {
     expect(listStaticExtensionAssetOutputs()).toEqual([
-      "dist/extensions/acpx/error-format.mjs",
       "dist/extensions/acpx/mcp-command-line.mjs",
       "dist/extensions/acpx/mcp-proxy.mjs",
+      "dist/extensions/diffs-language-pack/assets/viewer-runtime.js",
       "dist/extensions/diffs/assets/viewer-runtime.js",
     ]);
+  });
+
+  it("discovers repo static asset metadata without scanning extension directories", () => {
+    const payload = expectNoNodeFsScans<{
+      outputs: string[];
+      sources: string[];
+    }>(`
+      const assets = await import("./scripts/lib/static-extension-assets.mjs");
+      return {
+        outputs: assets.listStaticExtensionAssetOutputs(),
+        sources: assets.listStaticExtensionAssetSources(),
+      };
+    `);
+
+    expect(payload.outputs).toEqual([
+      "dist/extensions/acpx/mcp-command-line.mjs",
+      "dist/extensions/acpx/mcp-proxy.mjs",
+      "dist/extensions/diffs-language-pack/assets/viewer-runtime.js",
+      "dist/extensions/diffs/assets/viewer-runtime.js",
+    ]);
+    expect(payload.sources).toContain(
+      "extensions/diffs-language-pack/assets/viewer-runtime.js",
+    );
+    expect(payload.sources).toContain("extensions/diffs/assets/viewer-runtime.js");
   });
 
   it("discovers static assets from plugin package metadata", async () => {
@@ -373,6 +398,37 @@ describe("runtime postbuild static assets", () => {
     );
   });
 
+  it("ignores legacy wrappers to the stable runtime alias when choosing the implementation", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-");
+    const distDir = path.join(rootDir, "dist");
+    await fs.mkdir(distDir, { recursive: true });
+    await fs.writeFile(
+      path.join(distDir, "runtime-plugins.runtime-NewHash.js"),
+      "export const ready = true;\n",
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(distDir, "runtime-plugins.runtime-OldHash.js"),
+      'export * from "./runtime-plugins.runtime.js";\n',
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(distDir, "dispatch-OldHash.js"),
+      ['const lazy = () => import("./runtime-plugins.runtime-NewHash.js");', ""].join("\n"),
+      "utf8",
+    );
+
+    rewriteRootRuntimeImportsToStableAliases({ rootDir });
+    writeStableRootRuntimeAliases({ rootDir });
+
+    expect(await fs.readFile(path.join(distDir, "dispatch-OldHash.js"), "utf8")).toBe(
+      ['const lazy = () => import("./runtime-plugins.runtime.js");', ""].join("\n"),
+    );
+    expect(await fs.readFile(path.join(distDir, "runtime-plugins.runtime.js"), "utf8")).toBe(
+      'export * from "./runtime-plugins.runtime-NewHash.js";\n',
+    );
+  });
+
   it("rewrites root runtime imports to stable aliases", async () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-");
     const distDir = path.join(rootDir, "dist");
@@ -637,10 +693,16 @@ describe("runtime postbuild static assets", () => {
   it("writes compatibility aliases for previous gateway shutdown chunk names", async () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-");
     const distDir = path.join(rootDir, "dist");
+    await fs.mkdir(path.join(distDir, "plugins"), { recursive: true });
     await fs.mkdir(distDir, { recursive: true });
     await fs.writeFile(
       path.join(distDir, "server-close.runtime.js"),
       'export * from "./server-close.runtime-NewHash.js";\n',
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(distDir, "plugins", "hook-runner-global.js"),
+      "export const runGlobalHook = true;\n",
       "utf8",
     );
 
@@ -651,6 +713,9 @@ describe("runtime postbuild static assets", () => {
     );
     expect(await fs.readFile(path.join(distDir, "server-close-DvAvfgr8.js"), "utf8")).toBe(
       'export * from "./server-close.runtime.js";\n',
+    );
+    expect(await fs.readFile(path.join(distDir, "hook-runner-global-B8rMIo8I.js"), "utf8")).toBe(
+      'export * from "./plugins/hook-runner-global.js";\n',
     );
   });
 

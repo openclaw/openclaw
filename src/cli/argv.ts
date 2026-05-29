@@ -76,11 +76,12 @@ export function isHelpOrVersionInvocation(argv: string[]): boolean {
 }
 
 function parsePositiveInt(value: string): number | undefined {
-  const parsed = Number.parseInt(value, 10);
-  if (Number.isNaN(parsed) || parsed <= 0) {
+  const trimmed = value.trim();
+  if (!/^\d+$/.test(trimmed)) {
     return undefined;
   }
-  return parsed;
+  const parsed = Number(trimmed);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
 export function hasFlag(argv: string[], name: string): boolean {
@@ -117,7 +118,7 @@ export function hasRootVersionAlias(argv: string[]): boolean {
       continue;
     }
     if (arg.startsWith("-")) {
-      continue;
+      return false;
     }
     return false;
   }
@@ -163,6 +164,95 @@ function isRootInvocationForFlags(
 
 export function isRootHelpInvocation(argv: string[]): boolean {
   return isRootInvocationForFlags(argv, HELP_FLAGS);
+}
+
+export function normalizeGeneratedHelpCommandArgv(argv: string[]): string[] {
+  const positionals: Array<{ value: string; index: number }> = [];
+  const rootOptions: string[] = [];
+  let helpFlagIndex: number | null = null;
+
+  for (let index = 2; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (!arg || arg === FLAG_TERMINATOR) {
+      break;
+    }
+    const consumed = consumeRootOptionToken(argv, index);
+    if (consumed > 0) {
+      rootOptions.push(...argv.slice(index, index + consumed));
+      index += consumed - 1;
+      continue;
+    }
+    if (HELP_FLAGS.has(arg)) {
+      helpFlagIndex = index;
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      return argv;
+    }
+    positionals.push({ value: arg, index });
+  }
+
+  const [primary, secondary, target] = positionals;
+  if (
+    !primary ||
+    secondary?.value !== "help" ||
+    (KNOWN_ROOT_COMMANDS.has(primary.value) && !ROOT_COMMANDS_WITH_SUBCOMMANDS.has(primary.value))
+  ) {
+    return argv;
+  }
+
+  if (positionals.length === 2 && helpFlagIndex === secondary.index + 1) {
+    return argv.toSpliced(helpFlagIndex, 1);
+  }
+
+  if (
+    !target ||
+    positionals.length !== 3 ||
+    (helpFlagIndex !== null && helpFlagIndex !== target.index + 1)
+  ) {
+    return argv;
+  }
+
+  return [argv[0], argv[1], ...rootOptions, primary.value, target.value, "--help"];
+}
+
+export function normalizeRootHelpTargetArgv(argv: string[]): string[] {
+  const positionals: Array<{ value: string; index: number }> = [];
+  const rootOptions: string[] = [];
+  let helpFlagIndex: number | null = null;
+
+  for (let index = 2; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (!arg || arg === FLAG_TERMINATOR) {
+      break;
+    }
+    const consumed = consumeRootOptionToken(argv, index);
+    if (consumed > 0) {
+      rootOptions.push(...argv.slice(index, index + consumed));
+      index += consumed - 1;
+      continue;
+    }
+    if (HELP_FLAGS.has(arg)) {
+      helpFlagIndex = index;
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      return argv;
+    }
+    positionals.push({ value: arg, index });
+  }
+
+  const [help, target] = positionals;
+  if (
+    help?.value !== "help" ||
+    !target ||
+    (helpFlagIndex !== null && helpFlagIndex !== positionals.at(-1)!.index + 1)
+  ) {
+    return argv;
+  }
+
+  const targetPath = positionals.slice(1).map((positional) => positional.value);
+  return [argv[0], argv[1], ...rootOptions, ...targetPath, "--help"];
 }
 
 export function getFlagValue(argv: string[], name: string): string | null | undefined {
@@ -384,5 +474,5 @@ export function shouldMigrateStateFromPath(path: string[]): boolean {
 }
 
 export function shouldMigrateState(argv: string[]): boolean {
-  return shouldMigrateStateFromPath(getCommandPath(argv, 2));
+  return shouldMigrateStateFromPath(getCommandPathWithRootOptions(argv, 2));
 }

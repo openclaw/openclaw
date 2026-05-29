@@ -54,6 +54,10 @@ function gatewayRequest(method: string): Record<string, unknown> {
   return requireRecord(request);
 }
 
+function firstRegisteredSubagentRun(): Record<string, unknown> {
+  return requireRecord(hoisted.registerSubagentRunMock.mock.calls[0]?.[0]);
+}
+
 describe("spawnSubagentDirect seam flow", () => {
   beforeAll(async () => {
     ({ resetSubagentRegistryForTests, spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
@@ -215,7 +219,7 @@ describe("spawnSubagentDirect seam flow", () => {
     const childSessionKey = result.childSessionKey as string;
     expect(hoisted.pruneLegacyStoreKeysMock).toHaveBeenCalledTimes(3);
     expect(hoisted.updateSessionStoreMock).toHaveBeenCalledTimes(3);
-    const registerInput = requireRecord(hoisted.registerSubagentRunMock.mock.calls[0]?.[0]);
+    const registerInput = firstRegisteredSubagentRun();
     const requesterOrigin = requireRecord(registerInput.requesterOrigin);
     expect(registerInput.runId).toBe("run-1");
     expect(registerInput.childSessionKey).toBe(childSessionKey);
@@ -255,6 +259,57 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(agentParams.cleanupBundleMcpOnRunEnd).toBe(true);
   });
 
+  it("keeps controller ownership separate from completion ownership", async () => {
+    await spawnSubagentDirect(
+      {
+        task: "background work",
+      },
+      {
+        agentSessionKey: "agent:main:telegram:default:direct:456",
+        completionOwnerKey: "agent:main:main",
+        agentChannel: "telegram",
+        agentAccountId: "default",
+        agentTo: "telegram:direct:456",
+      },
+    );
+
+    const registerInput = firstRegisteredSubagentRun();
+    expect(registerInput.controllerSessionKey).toBe("agent:main:telegram:default:direct:456");
+    expect(registerInput.requesterSessionKey).toBe("agent:main:main");
+    expect(registerInput.requesterDisplayKey).toBe("agent:main:main");
+  });
+
+  it("keeps spawn cwd separate from inherited agent workspace", async () => {
+    let persistedStore: Record<string, Record<string, unknown>> | undefined;
+    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {
+      onStore: (store) => {
+        persistedStore = store;
+      },
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "work in the requested repo",
+        cwd: "/tmp/task-repo",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        workspaceDir: "/tmp/requester-workspace",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    const childSessionKey = result.childSessionKey as string;
+    const childEntry = persistedStore?.[childSessionKey];
+    expect(childEntry?.spawnedWorkspaceDir).toBe("/tmp/requester-workspace");
+    expect(childEntry?.spawnedCwd).toBe("/tmp/task-repo");
+
+    const agentRequest = gatewayRequest("agent");
+    const agentParams = requireRecord(agentRequest.params);
+    expect(agentParams).not.toHaveProperty("cwd");
+    expect(agentParams).not.toHaveProperty("workspaceDir");
+  });
+
   it("omits requesterOrigin threadId when no requester thread is provided", async () => {
     hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
       if (request.method === "agent") {
@@ -281,7 +336,7 @@ describe("spawnSubagentDirect seam flow", () => {
     );
 
     expect(result.status).toBe("accepted");
-    const registerInput = requireRecord(hoisted.registerSubagentRunMock.mock.calls[0]?.[0]);
+    const registerInput = firstRegisteredSubagentRun();
     const requesterOrigin = requireRecord(registerInput.requesterOrigin);
     expect(requesterOrigin.channel).toBe("discord");
     expect(requesterOrigin.accountId).toBe("acct-1");
@@ -328,8 +383,7 @@ describe("spawnSubagentDirect seam flow", () => {
         // Admin-only methods must be pinned to operator.admin.
         expect(call.scopes).toEqual(["operator.admin"]);
       } else {
-        // Non-admin methods (e.g. "agent") must NOT be forced to admin scope
-        // so the gateway preserves least-privilege and senderIsOwner stays false.
+        // Non-admin methods (e.g. "agent") must NOT be forced to admin scope.
         expect(call.scopes).toBeUndefined();
       }
     }
@@ -398,9 +452,10 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(result.status).toBe("accepted");
     const agentCall = calls.find((call) => call.method === "agent");
     const params = agentCall?.params as { message?: string; extraSystemPrompt?: string };
-    expect(params.message).not.toContain("UNIQUE_LONG_SUBAGENT_TASK_TOKEN");
-    expect(params.message).not.toContain("[Subagent Task]:");
-    expect(params.message).toContain("**Your Role**");
+    expect(params.message).toContain("[Subagent Task]");
+    expect(params.message).toContain("UNIQUE_LONG_SUBAGENT_TASK_TOKEN");
+    expect(params.message).toContain("  keep indentation");
+    expect(params.message).not.toContain("**Your Role**");
     expect(params.extraSystemPrompt).toBe("system-prompt");
   });
 

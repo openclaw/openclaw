@@ -16,20 +16,36 @@ export type PersistSessionEntryParams = {
   storePath: string;
   entry: SessionEntry;
   clearedFields?: string[];
+  shouldPersist?: (entry: SessionEntry | undefined) => boolean;
 };
 
-export async function persistSessionEntry(params: PersistSessionEntryParams): Promise<void> {
-  const persisted = await updateSessionStore(params.storePath, (store) => {
-    const merged = mergeSessionEntry(store[params.sessionKey], params.entry);
-    for (const field of params.clearedFields ?? []) {
-      if (!Object.hasOwn(params.entry, field)) {
-        Reflect.deleteProperty(merged, field);
+export async function persistSessionEntry(
+  params: PersistSessionEntryParams,
+): Promise<SessionEntry | undefined> {
+  const persisted = await updateSessionStore(
+    params.storePath,
+    (store) => {
+      const current = store[params.sessionKey];
+      if (params.shouldPersist && !params.shouldPersist(current)) {
+        return current;
       }
-    }
-    store[params.sessionKey] = merged;
-    return merged;
-  });
-  params.sessionStore[params.sessionKey] = persisted;
+      const merged = mergeSessionEntry(store[params.sessionKey], params.entry);
+      for (const field of params.clearedFields ?? []) {
+        if (!Object.hasOwn(params.entry, field)) {
+          Reflect.deleteProperty(merged, field);
+        }
+      }
+      store[params.sessionKey] = merged;
+      return merged;
+    },
+    { takeCacheOwnership: true },
+  );
+  if (persisted) {
+    params.sessionStore[params.sessionKey] = persisted;
+  } else {
+    delete params.sessionStore[params.sessionKey];
+  }
+  return persisted;
 }
 
 export function prependInternalEventContext(

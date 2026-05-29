@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
+import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../../../packages/gateway-protocol/src/client-info.js";
+import type { ConnectParams } from "../../../../packages/gateway-protocol/src/schema.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
-import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../protocol/client-info.js";
-import type { ConnectParams } from "../../protocol/schema/types.js";
 import {
   BROWSER_ORIGIN_RATE_LIMIT_KEY_PREFIX,
   BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP,
@@ -123,6 +126,18 @@ describe("handshake auth helpers", () => {
     ).toBe(true);
     expect(
       shouldAllowSilentLocalPairing({
+        locality: "direct_local",
+        hasBrowserOriginHeader: false,
+        isControlUi: false,
+        isWebchat: false,
+        reason: "metadata-upgrade",
+      }),
+    ).toBe(false);
+  });
+
+  it("allows Control UI or WebChat browser-origin pairing but keeps other browser-origin clients explicit", () => {
+    expect(
+      shouldAllowSilentLocalPairing({
         locality: "browser_container_local",
         hasBrowserOriginHeader: true,
         isControlUi: true,
@@ -132,14 +147,24 @@ describe("handshake auth helpers", () => {
     ).toBe(true);
     expect(
       shouldAllowSilentLocalPairing({
-        locality: "direct_local",
-        hasBrowserOriginHeader: false,
+        locality: "shared_secret_loopback_local",
+        hasBrowserOriginHeader: true,
+        isControlUi: false,
+        isWebchat: true,
+        reason: "scope-upgrade",
+      }),
+    ).toBe(true);
+    expect(
+      shouldAllowSilentLocalPairing({
+        locality: "shared_secret_loopback_local",
+        hasBrowserOriginHeader: true,
         isControlUi: false,
         isWebchat: false,
-        reason: "metadata-upgrade",
+        reason: "scope-upgrade",
       }),
     ).toBe(false);
   });
+
   it("rejects silent role-upgrade for remote clients", () => {
     expect(
       shouldAllowSilentLocalPairing({
@@ -150,6 +175,29 @@ describe("handshake auth helpers", () => {
         reason: "role-upgrade",
       }),
     ).toBe(false);
+  });
+
+  it("allows Control UI browser-origin local pairing for fresh pairing and upgrades", () => {
+    for (const locality of ["direct_local", "browser_container_local"] as const) {
+      expect(
+        shouldAllowSilentLocalPairing({
+          locality,
+          hasBrowserOriginHeader: true,
+          isControlUi: true,
+          isWebchat: true,
+          reason: "not-paired",
+        }),
+      ).toBe(true);
+      expect(
+        shouldAllowSilentLocalPairing({
+          locality,
+          hasBrowserOriginHeader: true,
+          isControlUi: true,
+          isWebchat: true,
+          reason: "role-upgrade",
+        }),
+      ).toBe(true);
+    }
   });
 
   it("classifies direct local requests ahead of any Docker CLI fallback", () => {

@@ -143,6 +143,24 @@ describe("OpenClaw SDK", () => {
     expect(result.error?.message).toBe("aborted by operator");
   });
 
+  it("maps auth-revoked wait snapshots to cancelled", async () => {
+    const transport = new FakeTransport({
+      "agent.wait": {
+        status: "timeout",
+        runId: "run_auth_revoked",
+        stopReason: "auth-revoked",
+        error: "provider auth was removed",
+      },
+    });
+    const oc = new OpenClaw({ transport });
+
+    const result = await oc.runs.wait("run_auth_revoked");
+
+    expect(result.runId).toBe("run_auth_revoked");
+    expect(result.status).toBe("cancelled");
+    expect(result.error?.message).toBe("provider auth was removed");
+  });
+
   it("keeps wait-only deadlines non-terminal", async () => {
     const transport = new FakeTransport({
       "agent.wait": { status: "timeout", runId: "run_still_active" },
@@ -154,6 +172,24 @@ describe("OpenClaw SDK", () => {
     expect(result.runId).toBe("run_still_active");
     expect(result.status).toBe("accepted");
     expect(result.error).toBeUndefined();
+  });
+
+  it("keeps pending-error wait deadlines non-terminal", async () => {
+    const transport = new FakeTransport({
+      "agent.wait": {
+        status: "timeout",
+        runId: "run_pending_error",
+        error: "429 RESOURCE_EXHAUSTED",
+        pendingError: true,
+      },
+    });
+    const oc = new OpenClaw({ transport });
+
+    const result = await oc.runs.wait("run_pending_error");
+
+    expect(result.runId).toBe("run_pending_error");
+    expect(result.status).toBe("accepted");
+    expect(result.error?.message).toBe("429 RESOURCE_EXHAUSTED");
   });
 
   it("maps terminal runtime timeout snapshots to timed_out", async () => {
@@ -588,6 +624,7 @@ describe("OpenClaw SDK", () => {
             runId: "run_chat_projection",
             sessionKey: "chat-projection",
             state: "delta",
+            deltaText: "hello",
             message: {
               role: "assistant",
               content: [{ type: "text", text: "hello" }],
@@ -665,6 +702,7 @@ describe("OpenClaw SDK", () => {
             runId: "run_chat_only",
             sessionKey: "chat-only",
             state: "delta",
+            deltaText: "hello",
             message: {
               role: "assistant",
               content: [{ type: "text", text: "hello" }],
@@ -679,6 +717,7 @@ describe("OpenClaw SDK", () => {
             runId: "run_chat_only",
             sessionKey: "chat-only",
             state: "delta",
+            deltaText: " again",
             message: {
               role: "assistant",
               content: [{ type: "text", text: "hello again" }],
@@ -693,6 +732,8 @@ describe("OpenClaw SDK", () => {
             runId: "run_chat_only",
             sessionKey: "chat-only",
             state: "delta",
+            deltaText: "reset",
+            replace: true,
             message: {
               role: "assistant",
               content: [{ type: "text", text: "reset" }],
@@ -773,6 +814,131 @@ describe("OpenClaw SDK", () => {
       expect(fourth.value.raw?.event).toBe("chat");
     } finally {
       await iterator.return?.();
+    }
+  });
+
+  it("uses chat projection deltaText when present", async () => {
+    const ts = 1_777_000_000_300;
+    const transport = new FakeTransport({
+      agent: (
+        _params: unknown,
+        _options: GatewayRequestOptions | undefined,
+        fake: FakeTransport,
+      ) => {
+        fake.emit({
+          event: "chat",
+          seq: 1,
+          payload: {
+            runId: "run_chat_delta_text",
+            sessionKey: "chat-delta-text",
+            state: "delta",
+            deltaText: "hello",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "hello" }],
+              timestamp: ts,
+            },
+          },
+        });
+        fake.emit({
+          event: "chat",
+          seq: 2,
+          payload: {
+            runId: "run_chat_delta_text",
+            sessionKey: "chat-delta-text",
+            state: "delta",
+            deltaText: " provided",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "hello again" }],
+              timestamp: ts + 1,
+            },
+          },
+        });
+        return { status: "accepted", runId: "run_chat_delta_text", sessionKey: "chat-delta-text" };
+      },
+    });
+    const oc = new OpenClaw({ transport });
+
+    const run = await oc.runs.create({
+      input: "stream with chat deltaText",
+      idempotencyKey: "chat-delta-text-events",
+      sessionKey: "chat-delta-text",
+    });
+    const iterator = run.events()[Symbol.asyncIterator]();
+
+    try {
+      const first = await iterator.next();
+      expect(first.done).toBe(false);
+      if (first.done !== false) {
+        throw new Error("expected first chat projection event");
+      }
+      expect(first.value.type).toBe("assistant.delta");
+      expect(first.value.data).toEqual({ text: "hello", delta: "hello" });
+
+      const second = await iterator.next();
+      expect(second.done).toBe(false);
+      if (second.done !== false) {
+        throw new Error("expected second chat projection event");
+      }
+      expect(second.value.type).toBe("assistant.delta");
+      expect(second.value.data).toEqual({ text: "hello again", delta: " provided" });
+    } finally {
+      await iterator.return?.();
+    }
+  });
+
+  it("uses cumulative text for the first replayed chat projection", async () => {
+    const transport = new FakeTransport({});
+    const oc = new OpenClaw({ transport });
+    const runId = "run_chat_delta_text_replay";
+    let text = "";
+    let iterator: AsyncIterator<OpenClawEvent> | undefined;
+
+    try {
+      await oc.connect();
+      const observedLast = (async () => {
+        for await (const event of oc.events(
+          (event) => event.raw?.event === "chat" && event.raw.seq === 501,
+        )) {
+          return event;
+        }
+        throw new Error("expected final replay setup event");
+      })();
+
+      for (let index = 0; index <= 500; index += 1) {
+        const deltaText = index === 0 ? "hello" : ` ${index}`;
+        text += deltaText;
+        transport.emit({
+          event: "chat",
+          seq: index + 1,
+          payload: {
+            runId,
+            sessionKey: "chat-delta-text-replay",
+            state: "delta",
+            deltaText,
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text }],
+              timestamp: 1_777_000_000_300 + index,
+            },
+          },
+        });
+      }
+
+      await observedLast;
+      const run = await oc.runs.get(runId);
+      iterator = run.events()[Symbol.asyncIterator]();
+      const first = await iterator.next();
+      expect(first.done).toBe(false);
+      if (first.done !== false) {
+        throw new Error("expected first replayed chat projection event");
+      }
+      expect(first.value.type).toBe("assistant.delta");
+      expect(first.value.data).toEqual({ text: "hello 1", delta: "hello 1" });
+    } finally {
+      await iterator?.return?.();
+      await oc.close();
     }
   });
 
@@ -859,9 +1025,27 @@ describe("OpenClaw SDK", () => {
     expect(cancelled.runId).toBe("run_1");
     expect(cancelled.data).toEqual({ phase: "end", aborted: true, stopReason: "rpc" });
 
-    const timedOut = normalizeGatewayEvent({
+    const authRevoked = normalizeGatewayEvent({
       event: "agent",
       seq: 6,
+      payload: {
+        runId: "run_1",
+        stream: "lifecycle",
+        ts,
+        data: { phase: "end", aborted: true, stopReason: "auth-revoked" },
+      },
+    });
+    expect(authRevoked.type).toBe("run.cancelled");
+    expect(authRevoked.runId).toBe("run_1");
+    expect(authRevoked.data).toEqual({
+      phase: "end",
+      aborted: true,
+      stopReason: "auth-revoked",
+    });
+
+    const timedOut = normalizeGatewayEvent({
+      event: "agent",
+      seq: 7,
       payload: {
         runId: "run_1",
         stream: "lifecycle",

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  getMemorySearchManagerMockCalls,
   getMemorySearchManagerMockConfigs,
   getMemorySearchManagerMockParams,
   resetMemoryToolMockState,
@@ -7,6 +8,7 @@ import {
   setMemorySearchImpl,
 } from "./memory-tool-manager-mock.js";
 import { createMemorySearchTool } from "./tools.js";
+import { MemoryGetSchema, MemorySearchSchema } from "./tools.shared.js";
 import {
   asOpenClawConfig,
   createMemorySearchToolOrThrow,
@@ -33,9 +35,69 @@ vi.mock("openclaw/plugin-sdk/session-transcript-hit", async (importOriginal) => 
   };
 });
 
+describe("memory tool schemas", () => {
+  it("uses flat corpus enums for provider tool compatibility", () => {
+    const searchCorpus = MemorySearchSchema.properties.corpus as {
+      anyOf?: unknown;
+      enum?: unknown;
+    };
+    const getCorpus = MemoryGetSchema.properties.corpus as {
+      anyOf?: unknown;
+      enum?: unknown;
+    };
+
+    expect(searchCorpus.anyOf).toBeUndefined();
+    expect(searchCorpus.enum).toEqual(["memory", "wiki", "all", "sessions"]);
+    expect(getCorpus.anyOf).toBeUndefined();
+    expect(getCorpus.enum).toEqual(["memory", "wiki", "all"]);
+  });
+});
+
 describe("memory_search unavailable payloads", () => {
   beforeEach(() => {
     resetMemoryToolMockState({ searchImpl: async () => [] });
+  });
+
+  it("rejects fractional maxResults before searching", async () => {
+    const tool = createMemorySearchToolOrThrow();
+
+    await expect(
+      tool.execute("fractional-max-results", {
+        query: "hello",
+        maxResults: 1.5,
+      }),
+    ).rejects.toThrow("maxResults must be a positive integer");
+
+    expect(getMemorySearchManagerMockCalls()).toBe(0);
+  });
+
+  it("rejects malformed minScore before searching", async () => {
+    const tool = createMemorySearchToolOrThrow();
+
+    await expect(
+      tool.execute("malformed-min-score", {
+        query: "hello",
+        minScore: "0.8junk",
+      }),
+    ).rejects.toThrow("minScore must be a finite number");
+
+    expect(getMemorySearchManagerMockCalls()).toBe(0);
+  });
+
+  it("passes string minScore through to memory search", async () => {
+    let seenMinScore: number | undefined;
+    setMemorySearchImpl(async (opts) => {
+      seenMinScore = opts?.minScore;
+      return [];
+    });
+    const tool = createMemorySearchToolOrThrow();
+
+    await tool.execute("string-min-score", {
+      query: "hello",
+      minScore: "0.8",
+    });
+
+    expect(seenMinScore).toBe(0.8);
   });
 
   it("returns explicit unavailable metadata for quota failures", async () => {
@@ -64,6 +126,81 @@ describe("memory_search unavailable payloads", () => {
       warning: "Memory search is unavailable due to an embedding/provider error.",
       action: "Check embedding provider configuration and retry memory_search.",
     });
+  });
+
+  it("re-resolves the manager once when a cached sqlite handle was closed", async () => {
+    let searchCalls = 0;
+    setMemorySearchImpl(async () => {
+      searchCalls += 1;
+      if (searchCalls === 1) {
+        throw new Error("database is not open");
+      }
+      return [
+        {
+          path: "MEMORY.md",
+          startLine: 1,
+          endLine: 1,
+          score: 0.9,
+          snippet: "Thread-hidden codename: ORBIT-22.",
+          source: "memory" as const,
+        },
+      ];
+    });
+
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: { list: [{ id: "main", default: true }] },
+        memory: { citations: "off" },
+      },
+    });
+    const result = await tool.execute("closed-db", { query: "hidden thread codename" });
+
+    expect((result.details as { results?: Array<{ path: string }> }).results).toEqual([
+      {
+        corpus: "memory",
+        path: "MEMORY.md",
+        startLine: 1,
+        endLine: 1,
+        score: 0.9,
+        snippet: "Thread-hidden codename: ORBIT-22.",
+        source: "memory",
+      },
+    ]);
+    expect(searchCalls).toBe(2);
+    expect(getMemorySearchManagerMockCalls()).toBe(2);
+  });
+
+  it("forces a sync and retries once when the first search has zero hits", async () => {
+    let searchCalls = 0;
+    setMemorySearchImpl(async () => {
+      searchCalls += 1;
+      if (searchCalls === 1) {
+        return [];
+      }
+      return [
+        {
+          path: "MEMORY.md",
+          startLine: 1,
+          endLine: 1,
+          score: 0.9,
+          snippet: "Thread-hidden codename: ORBIT-22.",
+          source: "memory" as const,
+        },
+      ];
+    });
+
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: { list: [{ id: "main", default: true }] },
+        memory: { citations: "off" },
+      },
+    });
+    const result = await tool.execute("zero-hit-retry", { query: "hidden thread codename" });
+
+    expect((result.details as { results?: Array<{ path: string }> }).results?.[0]?.path).toBe(
+      "MEMORY.md",
+    );
+    expect(searchCalls).toBe(2);
   });
 
   it("returns structured search debug metadata for qmd results", async () => {

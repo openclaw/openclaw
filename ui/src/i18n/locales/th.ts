@@ -346,6 +346,12 @@ export const th: TranslationMap = {
     eventLogSubtitle: "Latest gateway events.",
     noEvents: "No events yet.",
   },
+  quickSettings: {
+    security: {
+      browserEnabled: "Browser enabled",
+      toolProfile: "Tool profile",
+    },
+  },
   execApproval: {
     expiresIn: "expires in {time}",
     expired: "expired",
@@ -354,6 +360,8 @@ export const th: TranslationMap = {
     pending: "{count} pending",
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
+    allowAlwaysUnavailable:
+      "นโยบายการอนุมัติที่มีผลบังคับใช้กำหนดให้ต้องอนุมัติทุกครั้ง ดังนั้น Allow Always จึงไม่พร้อมใช้งาน",
     deny: "Deny",
     labels: {
       host: "Host",
@@ -385,6 +393,7 @@ export const th: TranslationMap = {
   },
   tabs: {
     agents: "เอเจนต์",
+    activity: "กิจกรรม",
     overview: "ภาพรวม",
     channels: "ช่องทาง",
     instances: "อินสแตนซ์",
@@ -406,6 +415,7 @@ export const th: TranslationMap = {
   },
   subtitles: {
     agents: "เวิร์กสเปซ เครื่องมือ และข้อมูลประจำตัว",
+    activity: "สรุปกิจกรรมของเครื่องมือภายในเบราว์เซอร์",
     overview: "สถานะ จุดเข้าใช้งาน และความพร้อมใช้งาน",
     channels: "ช่องทางและการตั้งค่า",
     instances: "ไคลเอนต์และโหนดที่เชื่อมต่อ",
@@ -424,6 +434,42 @@ export const th: TranslationMap = {
     debug: "สแนปช็อต เหตุการณ์ และ RPC",
     logs: "บันทึกเกตเวย์แบบสด",
     dreams: "การฝันของหน่วยความจำ การรวมข้อมูล และการสะท้อนคิด",
+  },
+  activity: {
+    title: "กิจกรรม",
+    subtitle: "กิจกรรมของเครื่องมือแบบชั่วคราวที่ได้จากเหตุการณ์เซสชันสด",
+    visibleCount: "{visible} จาก {total}",
+    filtersLabel: "ตัวกรองกิจกรรม",
+    search: "ค้นหา",
+    searchPlaceholder: "กรองตามเครื่องมือ สรุป การรัน เซสชัน",
+    toolFilter: "Tool",
+    allTools: "เครื่องมือทั้งหมด",
+    statusFilters: "ตัวกรองสถานะ",
+    autoFollow: "ติดตามอัตโนมัติ",
+    expandAll: "ขยายทั้งหมด",
+    collapseAll: "ยุบทั้งหมด",
+    clear: "ล้าง",
+    empty: "ยังไม่มีกิจกรรมของเครื่องมือ",
+    emptyFiltered: "ไม่มีกิจกรรมที่ตรงกับตัวกรองเหล่านี้",
+    entrySummary: "{argumentSummary}",
+    argumentHiddenOne: "ซ่อนอาร์กิวเมนต์ 1 รายการ",
+    argumentsHidden: "ซ่อนอาร์กิวเมนต์ {count} รายการ",
+    streamLabel: "รายการกิจกรรมของเครื่องมือ",
+    toolCallId: "การเรียกใช้เครื่องมือ",
+    runId: "รัน",
+    session: "เซสชัน",
+    outputTruncated: "ตัวอย่างถูกปกปิดและตัดให้สั้นลง",
+    noOutputPreview: "ไม่มีตัวอย่างเอาต์พุต",
+    status: {
+      running: "กำลังทำงาน",
+      done: "เสร็จสิ้น",
+      error: "ข้อผิดพลาด",
+    },
+    duration: {
+      ms: "{count} ms",
+      seconds: "{count} s",
+      minutes: "{minutes}m {seconds}s",
+    },
   },
   overview: {
     access: {
@@ -683,9 +729,6 @@ export const th: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle: "ดูว่าโทเค็นถูกใช้ไปที่ไหน เซสชันพุ่งขึ้นเมื่อใด และอะไรเป็นตัวขับเคลื่อนค่าใช้จ่าย",
-    },
     common: {
       emptyValue: "—",
       unknown: "ไม่ทราบ",
@@ -1011,6 +1054,10 @@ export const th: TranslationMap = {
     settings: "การตั้งค่าแชท",
     thinkingToggle: "สลับการแสดงผลการคิด/การทำงานของผู้ช่วย",
     toolCallsToggle: "สลับการแสดงการเรียกใช้ tool และผลลัพธ์ของ tool",
+    autoScrollMode: "โหมดเลื่อนอัตโนมัติ",
+    autoScrollAlways: "เสมอ",
+    autoScrollNearBottom: "ใกล้ด้านล่าง",
+    autoScrollOff: "ปิด",
     focusToggle: "สลับโหมดโฟกัส (ซ่อนแถบด้านข้าง + ส่วนหัวหน้า)",
     hideCronSessions: "ซ่อนเซสชัน cron",
     showCronSessions: "แสดงเซสชัน cron",
@@ -1048,17 +1095,27 @@ export const th: TranslationMap = {
       send: "Send",
       sendMessage: "Send message",
     },
+    queue: {
+      retry: "ลองอีกครั้ง",
+      retrySend: "ลองส่งอีกครั้ง",
+      retryQueuedMessage: "ลองส่งข้อความในคิวอีกครั้ง",
+    },
     composer: {
       placeholder: "Message {name} (Enter to send)",
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
       startTalk: "Start Talk",
+      stillListening: "ยังฟังอยู่",
+      talkTranscript: "ข้อความถอดเสียงจากการพูด",
       stopTalk: "Stop Talk",
     },
     selectors: {
       agentFilter: "กรองเซสชันตามเอเจนต์",
       session: "Chat session",
+      sessionSearch: "ค้นหาเซสชัน",
+      clearSessionSearch: "ล้างการค้นหาเซสชัน",
+      loadMoreSessions: "โหลดเซสชันเพิ่มเติม",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },
@@ -1170,6 +1227,9 @@ export const th: TranslationMap = {
       ascending: "น้อยไปมาก",
       descending: "มากไปน้อย",
       reset: "รีเซ็ต",
+      emptyTitle: "No scheduled jobs yet.",
+      emptyHint: "Create one from a plain-language prompt; advanced fields can wait.",
+      emptyFilteredHint: "Clear or change filters to see scheduled jobs.",
       noMatching: "ไม่พบงานที่ตรงกัน",
       loading: "กำลังโหลด...",
       loadMore: "โหลดงานเพิ่มเติม",
@@ -1205,6 +1265,7 @@ export const th: TranslationMap = {
     form: {
       editJob: "แก้ไขงาน",
       newJob: "งานใหม่",
+      advancedJob: "Advanced job",
       updateSubtitle: "อัปเดตงานตามกำหนดเวลาที่เลือก",
       createSubtitle: "สร้างการปลุกหรืองานรันของเอเจนต์ตามกำหนดเวลา",
       required: "จำเป็น",

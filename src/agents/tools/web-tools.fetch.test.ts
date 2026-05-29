@@ -82,6 +82,12 @@ function installMockFetch(
   return mockFetch;
 }
 
+function firstFetchRequestInit(
+  mockFetch: ReturnType<typeof installMockFetch>,
+): (RequestInit & { dispatcher?: unknown }) | undefined {
+  return mockFetch.mock.calls[0]?.[1] as (RequestInit & { dispatcher?: unknown }) | undefined;
+}
+
 function createFetchTool(fetchOverrides: Record<string, unknown> = {}) {
   return createWebFetchTool({
     config: {
@@ -344,9 +350,7 @@ describe("web_fetch extraction fallbacks", () => {
 
     await tool?.execute?.("call", { url: "https://example.com/proxy" });
 
-    const requestInit = mockFetch.mock.calls[0]?.[1] as
-      | (RequestInit & { dispatcher?: unknown })
-      | undefined;
+    const requestInit = firstFetchRequestInit(mockFetch);
     const dispatcher = requestInit?.dispatcher;
     if (!dispatcher) {
       throw new Error("expected SSRF dispatcher");
@@ -372,9 +376,7 @@ describe("web_fetch extraction fallbacks", () => {
 
     await tool?.execute?.("call", { url: "https://example.com/proxy" });
 
-    const requestInit = mockFetch.mock.calls[0]?.[1] as
-      | (RequestInit & { dispatcher?: unknown })
-      | undefined;
+    const requestInit = firstFetchRequestInit(mockFetch);
     const dispatcher = requestInit?.dispatcher;
     if (!dispatcher) {
       throw new Error("expected trusted proxy dispatcher");
@@ -530,6 +532,23 @@ describe("web_fetch extraction fallbacks", () => {
     expect(details.text).toContain("Source: Web Fetch");
     expect(details.length).toBeLessThanOrEqual(10_000);
     expect(details.truncated).toBe(true);
+  });
+
+  it("rejects fractional maxChars before fetching", async () => {
+    const fetchMock = installMockFetch(
+      (input: RequestInfo | URL) =>
+        Promise.resolve(textResponse("unused", resolveRequestUrl(input))) as Promise<Response>,
+    );
+
+    const tool = createFetchTool({ firecrawl: { enabled: false } });
+
+    await expect(
+      tool?.execute?.("call", {
+        url: "https://example.com/fractional",
+        maxChars: 100.5,
+      }),
+    ).rejects.toThrow("maxChars must be a positive integer");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("strips and truncates HTML from error responses", async () => {

@@ -348,6 +348,12 @@ export const id: TranslationMap = {
     eventLogSubtitle: "Latest gateway events.",
     noEvents: "No events yet.",
   },
+  quickSettings: {
+    security: {
+      browserEnabled: "Browser enabled",
+      toolProfile: "Tool profile",
+    },
+  },
   execApproval: {
     expiresIn: "expires in {time}",
     expired: "expired",
@@ -356,6 +362,8 @@ export const id: TranslationMap = {
     pending: "{count} pending",
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
+    allowAlwaysUnavailable:
+      "Kebijakan persetujuan yang berlaku mengharuskan persetujuan setiap kali, sehingga Izinkan Selalu tidak tersedia.",
     deny: "Deny",
     labels: {
       host: "Host",
@@ -387,6 +395,7 @@ export const id: TranslationMap = {
   },
   tabs: {
     agents: "Agen",
+    activity: "Aktivitas",
     overview: "Ikhtisar",
     channels: "Saluran",
     instances: "Instans",
@@ -408,6 +417,7 @@ export const id: TranslationMap = {
   },
   subtitles: {
     agents: "Ruang kerja, alat, identitas.",
+    activity: "Ringkasan aktivitas alat lokal browser.",
     overview: "Status, titik masuk, kesehatan.",
     channels: "Saluran dan pengaturan.",
     instances: "Klien dan node yang terhubung.",
@@ -426,6 +436,42 @@ export const id: TranslationMap = {
     debug: "Snapshot, peristiwa, RPC.",
     logs: "Log Gateway langsung.",
     dreams: "Konsolidasi memori saat tidur.",
+  },
+  activity: {
+    title: "Aktivitas",
+    subtitle: "Aktivitas alat sementara yang berasal dari peristiwa sesi langsung.",
+    visibleCount: "{visible} dari {total}",
+    filtersLabel: "Filter aktivitas",
+    search: "Cari",
+    searchPlaceholder: "Filter berdasarkan alat, ringkasan, run, sesi",
+    toolFilter: "Alat",
+    allTools: "Semua alat",
+    statusFilters: "Filter status",
+    autoFollow: "Ikuti otomatis",
+    expandAll: "Perluas semua",
+    collapseAll: "Ciutkan semua",
+    clear: "Bersihkan",
+    empty: "Belum ada aktivitas alat.",
+    emptyFiltered: "Tidak ada aktivitas yang cocok dengan filter ini.",
+    entrySummary: "{argumentSummary}",
+    argumentHiddenOne: "1 argumen disembunyikan",
+    argumentsHidden: "{count} argumen disembunyikan",
+    streamLabel: "Entri aktivitas alat",
+    toolCallId: "Panggilan alat",
+    runId: "Jalankan",
+    session: "Sesi",
+    outputTruncated: "Pratinjau disunting dan dipotong.",
+    noOutputPreview: "Tidak ada pratinjau output.",
+    status: {
+      running: "Berjalan",
+      done: "Selesai",
+      error: "Kesalahan",
+    },
+    duration: {
+      ms: "{count} ms",
+      seconds: "{count} dtk",
+      minutes: "{minutes}m {seconds}dtk",
+    },
   },
   overview: {
     access: {
@@ -693,9 +739,6 @@ export const id: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle: "Lihat ke mana token digunakan, kapan sesi melonjak, dan apa yang mendorong biaya.",
-    },
     common: {
       emptyValue: "—",
       unknown: "tidak diketahui",
@@ -1041,6 +1084,10 @@ export const id: TranslationMap = {
     settings: "Pengaturan chat",
     thinkingToggle: "Alihkan output berpikir/bekerja asisten",
     toolCallsToggle: "Alihkan panggilan alat dan hasil alat",
+    autoScrollMode: "Mode gulir otomatis",
+    autoScrollAlways: "Selalu",
+    autoScrollNearBottom: "Dekat bagian bawah",
+    autoScrollOff: "Nonaktif",
     focusToggle: "Alihkan mode fokus (sembunyikan bilah samping + header halaman)",
     hideCronSessions: "Sembunyikan sesi cron",
     showCronSessions: "Tampilkan sesi cron",
@@ -1078,17 +1125,27 @@ export const id: TranslationMap = {
       send: "Send",
       sendMessage: "Send message",
     },
+    queue: {
+      retry: "Coba lagi",
+      retrySend: "Coba kirim lagi",
+      retryQueuedMessage: "Coba lagi pesan dalam antrean",
+    },
     composer: {
       placeholder: "Message {name} (Enter to send)",
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
       startTalk: "Start Talk",
+      stillListening: "Masih mendengarkan",
+      talkTranscript: "Transkrip bicara",
       stopTalk: "Stop Talk",
     },
     selectors: {
       agentFilter: "Filter sesi berdasarkan agen",
       session: "Chat session",
+      sessionSearch: "Cari sesi",
+      clearSessionSearch: "Hapus pencarian sesi",
+      loadMoreSessions: "Muat sesi lainnya",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },
@@ -1200,6 +1257,9 @@ export const id: TranslationMap = {
       ascending: "Naik",
       descending: "Turun",
       reset: "Atur Ulang",
+      emptyTitle: "No scheduled jobs yet.",
+      emptyHint: "Create one from a plain-language prompt; advanced fields can wait.",
+      emptyFilteredHint: "Clear or change filters to see scheduled jobs.",
       noMatching: "Tidak ada tugas yang cocok.",
       loading: "Memuat...",
       loadMore: "Muat lebih banyak tugas",
@@ -1235,6 +1295,7 @@ export const id: TranslationMap = {
     form: {
       editJob: "Edit Tugas",
       newJob: "Tugas Baru",
+      advancedJob: "Advanced job",
       updateSubtitle: "Perbarui tugas terjadwal yang dipilih.",
       createSubtitle: "Buat bangun terjadwal atau proses agen.",
       required: "Wajib",

@@ -9,8 +9,10 @@ import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
+import { isChildlessCodexNativeSubagentTask } from "./codex-native-subagent-task.js";
 import {
   formatTaskBlockedFollowupMessage,
   formatTaskStateChangeMessage,
@@ -19,6 +21,7 @@ import {
   shouldAutoDeliverTaskStateChange,
   shouldAutoDeliverTaskTerminalUpdate,
   shouldSuppressDuplicateTerminalDelivery,
+  shouldUseParentReviewTaskTerminalMessage,
 } from "./task-executor-policy.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import {
@@ -27,6 +30,7 @@ import {
   updateFlowRecordByIdExpectedRevision,
 } from "./task-flow-runtime-internal.js";
 import type { TaskRegistryControlRuntime } from "./task-registry-control.types.js";
+import { getTaskRegistryProcessState } from "./task-registry.process-state.js";
 import {
   getTaskRegistryObservers,
   getTaskRegistryStore,
@@ -48,17 +52,18 @@ import type {
   TaskStatus,
   TaskTerminalOutcome,
 } from "./task-registry.types.js";
+import { resolveTaskCleanupAfter } from "./task-retention.js";
 
 const log = createSubsystemLogger("tasks/registry");
-const DEFAULT_TASK_RETENTION_MS = 7 * 24 * 60 * 60_000;
 
-const tasks = new Map<string, TaskRecord>();
-const taskDeliveryStates = new Map<string, TaskDeliveryState>();
-const taskIdsByRunId = new Map<string, Set<string>>();
-const taskIdsByOwnerKey = new Map<string, Set<string>>();
-const taskIdsByParentFlowId = new Map<string, Set<string>>();
-const taskIdsByRelatedSessionKey = new Map<string, Set<string>>();
-const tasksWithPendingDelivery = new Set<string>();
+const taskRegistryProcessState = getTaskRegistryProcessState();
+const tasks = taskRegistryProcessState.tasks;
+const taskDeliveryStates = taskRegistryProcessState.taskDeliveryStates;
+const taskIdsByRunId = taskRegistryProcessState.taskIdsByRunId;
+const taskIdsByOwnerKey = taskRegistryProcessState.taskIdsByOwnerKey;
+const taskIdsByParentFlowId = taskRegistryProcessState.taskIdsByParentFlowId;
+const taskIdsByRelatedSessionKey = taskRegistryProcessState.taskIdsByRelatedSessionKey;
+const tasksWithPendingDelivery = taskRegistryProcessState.tasksWithPendingDelivery;
 let listenerStarted = false;
 let listenerStop: (() => void) | null = null;
 let restoreAttempted = false;
@@ -517,14 +522,11 @@ function deleteIndexedKey(index: Map<string, Set<string>>, key: string, taskId: 
 }
 
 function getTaskRelatedSessionIndexKeys(task: Pick<TaskRecord, "ownerKey" | "childSessionKey">) {
-  return [
-    ...new Set(
-      [
-        normalizeOptionalString(task.ownerKey),
-        normalizeOptionalString(task.childSessionKey),
-      ].filter(Boolean) as string[],
-    ),
-  ];
+  return uniqueStrings(
+    [normalizeOptionalString(task.ownerKey), normalizeOptionalString(task.childSessionKey)].filter(
+      Boolean,
+    ) as string[],
+  );
 }
 
 function addOwnerKeyIndex(taskId: string, task: Pick<TaskRecord, "ownerKey">) {
@@ -982,8 +984,10 @@ function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskRecord | nu
   }
   const next = normalizeTaskTimestamps({ ...current, ...patch });
   if (isTerminalTaskStatus(next.status) && typeof next.cleanupAfter !== "number") {
-    const terminalAt = next.endedAt ?? next.lastEventAt ?? Date.now();
-    next.cleanupAfter = terminalAt + DEFAULT_TASK_RETENTION_MS;
+    next.cleanupAfter = resolveTaskCleanupAfter({
+      ...next,
+      createdAt: next.createdAt ?? Date.now(),
+    });
   }
   const sessionIndexChanged =
     normalizeOptionalString(current.ownerKey) !== normalizeOptionalString(next.ownerKey) ||
@@ -1080,7 +1084,6 @@ function queueTaskSystemEvent(task: TaskRecord, text: string) {
     sessionKey: ownerKey,
     contextKey: `task:${task.taskId}`,
     deliveryContext: owner.requesterOrigin,
-    trusted: false,
   });
   requestHeartbeat({
     source: "background-task",
@@ -1105,7 +1108,6 @@ function queueBlockedTaskFollowup(task: TaskRecord) {
     sessionKey: ownerKey,
     contextKey: `task:${task.taskId}:blocked-followup`,
     deliveryContext: owner.requesterOrigin,
-    trusted: false,
   });
   requestHeartbeat({
     source: "background-task-blocked",
@@ -1150,15 +1152,22 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
         lastEventAt: Date.now(),
       });
     }
-    const eventText = formatTaskTerminalMessage(latest);
-    if (!canDeliverTaskToRequesterOrigin(latest)) {
+    const shouldRouteParentReview = shouldUseParentReviewTaskTerminalMessage(latest);
+    const canDeliverDirect = canDeliverTaskToRequesterOrigin(latest);
+    const directEventText = formatTaskTerminalMessage(latest);
+    const sessionEventText = formatTaskTerminalMessage(
+      latest,
+      shouldRouteParentReview ? { surface: "parent_session" } : undefined,
+    );
+    if (shouldRouteParentReview || !canDeliverDirect) {
       try {
-        queueTaskSystemEvent(latest, eventText);
+        queueTaskSystemEvent(latest, sessionEventText);
         if (latest.terminalOutcome === "blocked") {
           queueBlockedTaskFollowup(latest);
         }
         return updateTask(taskId, {
-          deliveryStatus: "session_queued",
+          deliveryStatus:
+            shouldRouteParentReview && canDeliverDirect ? "pending" : "session_queued",
           lastEventAt: Date.now(),
         });
       } catch (error) {
@@ -1182,7 +1191,7 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
         to: owner.requesterOrigin?.to ?? "",
         accountId: owner.requesterOrigin?.accountId,
         threadId: owner.requesterOrigin?.threadId,
-        content: eventText,
+        content: directEventText,
         agentId: requesterAgentId,
         idempotencyKey,
         mirror: {
@@ -1206,7 +1215,7 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
         error,
       });
       try {
-        queueTaskSystemEvent(latest, eventText);
+        queueTaskSystemEvent(latest, sessionEventText);
         if (latest.terminalOutcome === "blocked") {
           queueBlockedTaskFollowup(latest);
         }
@@ -1589,8 +1598,7 @@ export function createTaskRecord(params: {
     }),
   });
   if (isTerminalTaskStatus(record.status) && typeof record.cleanupAfter !== "number") {
-    record.cleanupAfter =
-      (record.endedAt ?? record.lastEventAt ?? record.createdAt) + DEFAULT_TASK_RETENTION_MS;
+    record.cleanupAfter = resolveTaskCleanupAfter(record);
   }
   tasks.set(taskId, record);
   upsertTaskDeliveryState({
@@ -1888,14 +1896,20 @@ export async function cancelTaskById(params: {
   try {
     if (task.runtime !== "cli") {
       if (!childSessionKey) {
-        return {
-          found: true,
-          cancelled: false,
-          reason: "Task has no cancellable child session.",
-          task: cloneTaskRecord(task),
-        };
+        if (!isChildlessCodexNativeSubagentTask(task)) {
+          return {
+            found: true,
+            cancelled: false,
+            reason: "Task has no cancellable child session.",
+            task: cloneTaskRecord(task),
+          };
+        }
       }
-      if (task.runtime === "acp") {
+      if (!childSessionKey) {
+        // Codex native subagents are mirrored from the Codex app server and do
+        // not have OpenClaw child sessions to terminate. Cancellation clears
+        // the stale task-registry record only.
+      } else if (task.runtime === "acp") {
         const { getAcpSessionManager } = await loadTaskRegistryControlRuntime();
         await getAcpSessionManager().cancelSession({
           cfg: params.cfg,
@@ -2072,6 +2086,34 @@ export function listTasksForOwnerKey(ownerKey: string): TaskRecord[] {
   if (!key) {
     return [];
   }
+  return listTasksFromIndex(taskIdsByOwnerKey, key);
+}
+
+export function listFreshTasksForOwnerKey(ownerKey: string): TaskRecord[] {
+  ensureTaskRegistryReady();
+  const key = normalizeOptionalString(ownerKey);
+  if (!key) {
+    return [];
+  }
+  const store = getTaskRegistryStore();
+  if (store.listTasksForOwnerKey) {
+    try {
+      const merged = new Map<string, TaskRecord>();
+      for (const task of store.listTasksForOwnerKey(key)) {
+        merged.set(task.taskId, cloneTaskRecord(normalizeTaskTimestamps(task)));
+      }
+      return [...merged.values()]
+        .map((task, insertionIndex) => Object.assign({}, task, { insertionIndex }))
+        .toSorted(compareTasksNewestFirst)
+        .map(({ insertionIndex: _, ...task }) => task);
+    } catch (error) {
+      log.warn("Failed to read fresh owner task registry records", {
+        ownerKey: key,
+        error,
+      });
+    }
+  }
+
   return listTasksFromIndex(taskIdsByOwnerKey, key);
 }
 

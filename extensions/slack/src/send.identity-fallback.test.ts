@@ -41,6 +41,21 @@ function buildMissingScopeError(overrides?: {
   return err;
 }
 
+function readPostMessagePayload(
+  client: ReturnType<typeof createSlackSendTestClient>,
+  index: number,
+): Record<string, unknown> {
+  const call = vi.mocked(client.chat.postMessage).mock.calls[index];
+  if (!call) {
+    throw new Error(`expected Slack postMessage call #${index + 1}`);
+  }
+  const [payload] = call;
+  if (!payload || typeof payload !== "object") {
+    throw new Error(`expected Slack postMessage payload #${index + 1}`);
+  }
+  return payload as Record<string, unknown>;
+}
+
 describe("sendMessageSlack customize-scope fallback", () => {
   beforeEach(() => {
     vi.mocked(logVerbose).mockClear();
@@ -60,17 +75,19 @@ describe("sendMessageSlack customize-scope fallback", () => {
     });
 
     expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
-    const [firstCall] = vi.mocked(client.chat.postMessage).mock.calls[0];
-    const [secondCall] = vi.mocked(client.chat.postMessage).mock.calls[1];
+    const firstCall = readPostMessagePayload(client, 0);
+    const secondCall = readPostMessagePayload(client, 1);
     expect(firstCall).toEqual({
       channel: "C123",
       text: "hello",
       username: "Bot",
       icon_url: "https://example.com/bot.png",
+      unfurl_links: false,
     });
     expect(secondCall).toEqual({
       channel: "C123",
       text: "hello",
+      unfurl_links: false,
     });
     expect(vi.mocked(logVerbose)).toHaveBeenCalledWith(
       "slack send: missing chat:write.customize, retrying without custom identity",
@@ -94,7 +111,7 @@ describe("sendMessageSlack customize-scope fallback", () => {
     });
 
     expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
-    const [secondCall] = vi.mocked(client.chat.postMessage).mock.calls[1];
+    const secondCall = readPostMessagePayload(client, 1);
     expect(secondCall).not.toHaveProperty("icon_emoji");
     expect(vi.mocked(logVerbose)).toHaveBeenCalledWith(
       "slack send: missing chat:write.customize, retrying without custom identity",

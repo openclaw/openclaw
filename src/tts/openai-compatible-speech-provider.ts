@@ -1,6 +1,7 @@
 import {
   assertOkOrThrowHttpError,
   postJsonRequest,
+  readProviderBinaryResponse,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
@@ -279,6 +280,7 @@ export function createOpenAiCompatibleSpeechProvider<
     id: options.id,
     label: options.label,
     autoSelectOrder: options.autoSelectOrder,
+    defaultModel: options.defaultModel,
     models: [...options.models],
     voices: [...options.voices],
     resolveConfig: ({ rawConfig }) => normalizeConfig(rawConfig),
@@ -382,7 +384,13 @@ export function createOpenAiCompatibleSpeechProvider<
           options.apiErrorLabel ?? `${options.label} TTS API error`,
         );
         return {
-          audioBuffer: Buffer.from(await response.arrayBuffer()),
+          audioBuffer: Buffer.from(
+            await readProviderBinaryResponse(
+              response,
+              options.apiErrorLabel ?? `${options.label} TTS API error`,
+              "audio",
+            ),
+          ),
           outputFormat: responseFormat,
           fileExtension: responseFormatToFileExtension(responseFormat),
           voiceCompatible: options.voiceCompatibleResponseFormats.includes(responseFormat),

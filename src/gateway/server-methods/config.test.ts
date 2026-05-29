@@ -1,8 +1,20 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { configHandlers, resolveConfigOpenCommand } from "./config.js";
+import {
+  clearConfigSchemaResponseCacheForTests,
+  configHandlers,
+  loadConfigSchemaResponseForTests,
+  resolveConfigOpenCommand,
+} from "./config.js";
 import { createConfigHandlerHarness } from "./config.test-helpers.js";
 
-const execFileMock = vi.hoisted(() => vi.fn());
+const { execFileMock, loadGatewayRuntimeConfigSchemaMock } = vi.hoisted(() => ({
+  execFileMock: vi.fn(),
+  loadGatewayRuntimeConfigSchemaMock: vi.fn(() => ({
+    schema: { type: "object" },
+    uiHints: undefined,
+    version: "test-schema",
+  })),
+}));
 
 vi.mock("node:child_process", async () => {
   const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
@@ -16,6 +28,10 @@ vi.mock("node:child_process", async () => {
   );
 });
 
+vi.mock("../../config/runtime-schema.js", () => ({
+  loadGatewayRuntimeConfigSchema: loadGatewayRuntimeConfigSchemaMock,
+}));
+
 function invokeExecFileCallback(args: unknown[], error: Error | null) {
   const callback = args.at(-1);
   if (typeof callback !== "function") {
@@ -23,6 +39,11 @@ function invokeExecFileCallback(args: unknown[], error: Error | null) {
   }
   callback(error);
 }
+
+afterEach(() => {
+  clearConfigSchemaResponseCacheForTests();
+  vi.clearAllMocks();
+});
 
 describe("resolveConfigOpenCommand", () => {
   it("uses open on macOS", () => {
@@ -55,7 +76,6 @@ describe("resolveConfigOpenCommand", () => {
 describe("config.openFile", () => {
   afterEach(() => {
     delete process.env.OPENCLAW_CONFIG_PATH;
-    vi.clearAllMocks();
   });
 
   it("opens the configured file without shell interpolation", async () => {
@@ -80,7 +100,7 @@ describe("config.openFile", () => {
     );
   });
 
-  it("returns a generic error and logs details when the opener fails", async () => {
+  it("returns a detailed error and logs details when the opener fails", async () => {
     process.env.OPENCLAW_CONFIG_PATH = "/tmp/config.json";
     execFileMock.mockImplementation((...args: unknown[]) => {
       invokeExecFileCallback(
@@ -100,12 +120,59 @@ describe("config.openFile", () => {
       {
         ok: false,
         path: "/tmp/config.json",
-        error: "failed to open config file",
+        error: "Failed to open config file: spawn xdg-open ENOENT",
       },
       undefined,
     );
     expect(logGateway.warn).toHaveBeenCalledWith(
       "config.openFile failed path=/tmp/config.json: spawn xdg-open ENOENT",
     );
+  });
+
+  it("returns actionable headless environment error when xdg-open reports no method available", async () => {
+    process.env.OPENCLAW_CONFIG_PATH = "/tmp/config.json";
+    execFileMock.mockImplementation((...args: unknown[]) => {
+      invokeExecFileCallback(
+        args,
+        new Error("xdg-open: no method available for opening '/tmp/config.json'"),
+      );
+      return {} as never;
+    });
+
+    const { options, respond, logGateway } = createConfigHandlerHarness({
+      method: "config.openFile",
+    });
+    await configHandlers["config.openFile"](options);
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        ok: false,
+        path: "/tmp/config.json",
+        error:
+          "Cannot open file in headless environment. File path: /tmp/config.json. This environment appears to lack a graphical or terminal browser handler.",
+      },
+      undefined,
+    );
+    expect(logGateway.warn).toHaveBeenCalledWith(
+      "config.openFile failed path=/tmp/config.json: xdg-open: no method available for opening '/tmp/config.json'",
+    );
+  });
+});
+
+describe("config schema response cache", () => {
+  it("reuses a recent schema build across burst config requests", () => {
+    loadConfigSchemaResponseForTests();
+    loadConfigSchemaResponseForTests();
+
+    expect(loadGatewayRuntimeConfigSchemaMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("can be cleared when config writes change schema inputs", () => {
+    loadConfigSchemaResponseForTests();
+    clearConfigSchemaResponseCacheForTests();
+    loadConfigSchemaResponseForTests();
+
+    expect(loadGatewayRuntimeConfigSchemaMock).toHaveBeenCalledTimes(2);
   });
 });
