@@ -1001,8 +1001,12 @@ export function buildStatusMessage(args: StatusArgs): string {
     }
     return undefined;
   })();
-  const configuredFallbacksLine = configuredFallbacks?.length
-    ? `🔄 Fallbacks: ${configuredFallbacks.join(", ")}`
+  const filteredFallbacks = configuredFallbacks?.filter(
+    (fb) =>
+      normalizeLowercaseStringOrEmpty(fb) !== normalizeLowercaseStringOrEmpty(selectedModelLabel),
+  );
+  const configuredFallbacksLine = filteredFallbacks?.length
+    ? `🔄 Fallbacks: ${filteredFallbacks.join(", ")}`
     : null;
 
   const showFallbackAuth = activeAuthLabelValue && activeAuthLabelValue !== selectedAuthLabelValue;
