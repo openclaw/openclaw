@@ -82,7 +82,6 @@ describe("buildStatusMessage", () => {
         models: {
           providers: {
             anthropic: {
-              apiKey: "test-key",
               models: [
                 {
                   id: "test:opus",
@@ -991,6 +990,52 @@ describe("buildStatusMessage", () => {
 
     const normalized = normalizeTestText(text);
     expect(normalized).toContain("Fallback: minimax-portal/MiniMax-M2.7");
+    expect(normalized).toContain("Context: 49k/200k");
+    expect(normalized).not.toContain("Context: 49k/1.0m");
+  });
+
+  it("uses fallback notice as the active runtime when session routing model stays selected", () => {
+    const text = buildStatusMessage({
+      config: {
+        models: {
+          providers: {
+            "minimax-portal": {
+              apiKey: "test-key",
+              models: [{ id: "MiniMax-M2.7", contextWindow: 200_000 }],
+            },
+            xiaomi: {
+              models: [{ id: "mimo-v2-flash", contextWindow: 1_048_576 }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "xiaomi/mimo-v2-flash",
+      },
+      sessionEntry: {
+        sessionId: "fallback-selected-routing-context-window",
+        updatedAt: 0,
+        modelProvider: "xiaomi",
+        model: "mimo-v2-flash",
+        fallbackNoticeSelectedModel: "xiaomi/mimo-v2-flash",
+        fallbackNoticeActiveModel: "minimax-portal/MiniMax-M2.7",
+        fallbackNoticeReason: "model not allowed",
+        totalTokens: 49_000,
+        contextTokens: 1_048_576,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      runtimeContextTokens: 1_048_576,
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "oauth",
+      activeModelAuth: "oauth",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Model: xiaomi/mimo-v2-flash");
+    expect(normalized).toContain("Fallback: minimax-portal/MiniMax-M2.7");
+    expect(normalized).toContain("api-key");
+    expect(normalized).not.toContain("Fallback: minimax-portal/MiniMax-M2.7 · ? oauth");
     expect(normalized).toContain("Context: 49k/200k");
     expect(normalized).not.toContain("Context: 49k/1.0m");
   });

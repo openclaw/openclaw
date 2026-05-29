@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import {
@@ -1389,7 +1389,7 @@ describe("runAgentTurnWithFallback", () => {
     });
   });
 
-  it("keeps fallback auth available for later same-provider fallback models", async () => {
+  it("keeps fallback auth available without clobbering an existing fallback pin", async () => {
     const probe = {
       provider: "anthropic",
       model: "claude-sonnet-4-6",
@@ -1447,7 +1447,7 @@ describe("runAgentTurnWithFallback", () => {
     });
     expectRecordFields(sessionEntry as unknown as Record<string, unknown>, {
       providerOverride: "openai",
-      modelOverride: "gpt-5.5",
+      modelOverride: "gpt-5.4",
       modelOverrideSource: "auto",
       modelOverrideFallbackOriginProvider: "anthropic",
       modelOverrideFallbackOriginModel: "claude-sonnet-4-6",
@@ -1456,7 +1456,7 @@ describe("runAgentTurnWithFallback", () => {
     });
   });
 
-  it("keeps the primary origin when an auto pin is cleared before fallback persists", async () => {
+  it("does not re-persist an auto pin cleared before fallback cleanup", async () => {
     const probe = {
       provider: "anthropic",
       model: "claude-sonnet-4-6",
@@ -1507,18 +1507,16 @@ describe("runAgentTurnWithFallback", () => {
       getActiveSessionEntry: () => activeSessionStore[sessionKey],
     });
 
-    expectRecordFields(activeSessionStore[sessionKey] as unknown as Record<string, unknown>, {
-      providerOverride: "openai",
-      modelOverride: "gpt-5.5",
-      modelOverrideSource: "auto",
-      modelOverrideFallbackOriginProvider: "anthropic",
-      modelOverrideFallbackOriginModel: "claude-sonnet-4-6",
-      authProfileOverride: "openai:fallback",
-      authProfileOverrideSource: "auto",
-    });
+    expect(activeSessionStore[sessionKey].providerOverride).toBeUndefined();
+    expect(activeSessionStore[sessionKey].modelOverride).toBeUndefined();
+    expect(activeSessionStore[sessionKey].modelOverrideSource).toBeUndefined();
+    expect(activeSessionStore[sessionKey].modelOverrideFallbackOriginProvider).toBeUndefined();
+    expect(activeSessionStore[sessionKey].modelOverrideFallbackOriginModel).toBeUndefined();
+    expect(activeSessionStore[sessionKey].authProfileOverride).toBeUndefined();
+    expect(activeSessionStore[sessionKey].authProfileOverrideSource).toBeUndefined();
   });
 
-  it("re-persists cross-provider same-model fallback pins after an in-flight clear", async () => {
+  it("does not re-persist cross-provider same-model fallback pins after an in-flight clear", async () => {
     const probe = {
       provider: "openai",
       model: "gpt-5.5",
@@ -1569,15 +1567,13 @@ describe("runAgentTurnWithFallback", () => {
       getActiveSessionEntry: () => activeSessionStore[sessionKey],
     });
 
-    expectRecordFields(activeSessionStore[sessionKey] as unknown as Record<string, unknown>, {
-      providerOverride: "azure",
-      modelOverride: "gpt-5.5",
-      modelOverrideSource: "auto",
-      modelOverrideFallbackOriginProvider: "openai",
-      modelOverrideFallbackOriginModel: "gpt-5.5",
-      authProfileOverride: "azure:fallback",
-      authProfileOverrideSource: "auto",
-    });
+    expect(activeSessionStore[sessionKey].providerOverride).toBeUndefined();
+    expect(activeSessionStore[sessionKey].modelOverride).toBeUndefined();
+    expect(activeSessionStore[sessionKey].modelOverrideSource).toBeUndefined();
+    expect(activeSessionStore[sessionKey].modelOverrideFallbackOriginProvider).toBeUndefined();
+    expect(activeSessionStore[sessionKey].modelOverrideFallbackOriginModel).toBeUndefined();
+    expect(activeSessionStore[sessionKey].authProfileOverride).toBeUndefined();
+    expect(activeSessionStore[sessionKey].authProfileOverrideSource).toBeUndefined();
   });
 
   it("keeps primary auth on same-provider primary probes", async () => {
@@ -2995,7 +2991,9 @@ describe("runAgentTurnWithFallback", () => {
       compactionCount: 0,
     };
     const activeSessionStore = { main: sessionEntry };
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
+    state.runEmbeddedAgentMock
+      .mockResolvedValueOnce({ payloads: [], meta: {} })
+      .mockResolvedValueOnce({ payloads: [{ text: "fallback ok" }], meta: {} });
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
       const failedResult = await params.run("openai-codex", "gpt-5.4");
       expect(sessionEntry.providerOverride).toBe("openai-codex");
@@ -3012,8 +3010,9 @@ describe("runAgentTurnWithFallback", () => {
       });
       expect(sessionEntry.providerOverride).toBeUndefined();
       expect(sessionEntry.modelOverride).toBeUndefined();
+      const successfulResult = await params.run("anthropic", "claude");
       return {
-        result: { payloads: [{ text: "fallback ok" }], meta: {} },
+        result: successfulResult,
         provider: "anthropic",
         model: "claude",
         attempts: [],
@@ -3027,7 +3026,7 @@ describe("runAgentTurnWithFallback", () => {
       getActiveSessionEntry: () => sessionEntry,
     });
 
-    expect(result.kind).toBe("success");
+    expect(result.kind).toBe("final");
     expect(sessionEntry.providerOverride).toBeUndefined();
     expect(sessionEntry.modelOverride).toBeUndefined();
   });
@@ -5970,12 +5969,360 @@ describe("runAgentTurnWithFallback", () => {
       authProfileId: undefined,
       authProfileIdSource: undefined,
     });
-    expect(sessionEntry.providerOverride).toBe("openai-codex");
-    expect(sessionEntry.modelOverride).toBe("gpt-5.4");
-    expect(sessionEntry.modelOverrideSource).toBe("auto");
+    expect(sessionEntry.providerOverride).toBeUndefined();
+    expect(sessionEntry.modelOverride).toBeUndefined();
+    expect(sessionEntry.modelOverrideSource).toBeUndefined();
     expect(sessionEntry.authProfileOverride).toBeUndefined();
     expect(sessionEntry.authProfileOverrideSource).toBeUndefined();
+    expect(sessionStore.main.providerOverride).toBeUndefined();
+    expect(sessionStore.main.modelOverride).toBeUndefined();
     expect(sessionStore.main.authProfileOverride).toBeUndefined();
+  });
+
+  it("retries persisted fallback cleanup when success rollback write fails", async () => {
+    state.runWithModelFallbackMock.mockImplementation(
+      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+        result: await params.run("openai-codex", "gpt-5.4"),
+        provider: "openai-codex",
+        model: "gpt-5.4",
+        attempts: [],
+      }),
+    );
+    state.runEmbeddedAgentMock.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "anthropic";
+    followupRun.run.model = "claude-opus-4-6";
+
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 1,
+      compactionCount: 0,
+    };
+    const sessionStore = { main: sessionEntry };
+    const persistedStore: Record<string, SessionEntry> = { main: { ...sessionEntry } };
+    const updateSessionStoreMock = vi.mocked(updateSessionStore);
+    let storeWriteAttempt = 0;
+    updateSessionStoreMock.mockImplementation(
+      async (_storePath: string, update: (store: Record<string, SessionEntry>) => void) => {
+        storeWriteAttempt += 1;
+        if (storeWriteAttempt === 2) {
+          throw new Error("sessions store temporarily locked");
+        }
+        update(persistedStore);
+      },
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun,
+      sessionCtx: {
+        Provider: "telegram",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => sessionEntry,
+      activeSessionStore: sessionStore,
+      storePath: "/tmp/sessions.json",
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("success");
+    expect(storeWriteAttempt).toBe(3);
+    expect(sessionEntry.providerOverride).toBeUndefined();
+    expect(sessionEntry.modelOverride).toBeUndefined();
+    expect(sessionEntry.modelOverrideSource).toBeUndefined();
+    expect(persistedStore.main.providerOverride).toBeUndefined();
+    expect(persistedStore.main.modelOverride).toBeUndefined();
+    expect(persistedStore.main.modelOverrideSource).toBeUndefined();
+  });
+
+  it("keeps auto fallback selection visible when success rollback writes keep failing", async () => {
+    state.runWithModelFallbackMock.mockImplementation(
+      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+        result: await params.run("openai-codex", "gpt-5.4"),
+        provider: "openai-codex",
+        model: "gpt-5.4",
+        attempts: [],
+      }),
+    );
+    state.runEmbeddedAgentMock.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "anthropic";
+    followupRun.run.model = "claude-opus-4-6";
+
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 1,
+      compactionCount: 0,
+    };
+    const sessionStore = { main: sessionEntry };
+    const persistedStore: Record<string, SessionEntry> = { main: { ...sessionEntry } };
+    const updateSessionStoreMock = vi.mocked(updateSessionStore);
+    let storeWriteAttempt = 0;
+    updateSessionStoreMock.mockImplementation(
+      async (_storePath: string, update: (store: Record<string, SessionEntry>) => void) => {
+        storeWriteAttempt += 1;
+        if (storeWriteAttempt >= 2) {
+          throw new Error("sessions store still locked");
+        }
+        update(persistedStore);
+      },
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun,
+      sessionCtx: {
+        Provider: "telegram",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => sessionEntry,
+      activeSessionStore: sessionStore,
+      storePath: "/tmp/sessions.json",
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("success");
+    expect(storeWriteAttempt).toBe(3);
+    expectRecordFields(sessionEntry as unknown as Record<string, unknown>, {
+      providerOverride: "openai-codex",
+      modelOverride: "gpt-5.4",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "anthropic",
+      modelOverrideFallbackOriginModel: "claude-opus-4-6",
+    });
+    expectRecordFields(persistedStore.main as unknown as Record<string, unknown>, {
+      providerOverride: "openai-codex",
+      modelOverride: "gpt-5.4",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "anthropic",
+      modelOverrideFallbackOriginModel: "claude-opus-4-6",
+    });
+  });
+
+  it("does not roll back a matching user model switch after fallback success", async () => {
+    state.runWithModelFallbackMock.mockImplementation(
+      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+        result: await params.run("openai-codex", "gpt-5.4"),
+        provider: "openai-codex",
+        model: "gpt-5.4",
+        attempts: [],
+      }),
+    );
+
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "anthropic";
+    followupRun.run.model = "claude-opus-4-6";
+
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 1,
+      compactionCount: 0,
+    };
+    const sessionStore = { main: sessionEntry };
+    const persistedStore: Record<string, SessionEntry> = { main: { ...sessionEntry } };
+    const updateSessionStoreMock = vi.mocked(updateSessionStore);
+    let storeWriteAttempt = 0;
+    updateSessionStoreMock.mockImplementation(
+      async (_storePath: string, update: (store: Record<string, SessionEntry>) => void) => {
+        storeWriteAttempt += 1;
+        if (storeWriteAttempt === 2) {
+          persistedStore.main = {
+            ...persistedStore.main,
+            providerOverride: "openai-codex",
+            modelOverride: "gpt-5.4",
+            modelOverrideSource: "user",
+            modelOverrideFallbackOriginProvider: undefined,
+            modelOverrideFallbackOriginModel: undefined,
+          };
+        }
+        update(persistedStore);
+      },
+    );
+    state.runEmbeddedAgentMock.mockImplementation(async () => {
+      sessionEntry.providerOverride = "openai-codex";
+      sessionEntry.modelOverride = "gpt-5.4";
+      sessionEntry.modelOverrideSource = "user";
+      delete sessionEntry.modelOverrideFallbackOriginProvider;
+      delete sessionEntry.modelOverrideFallbackOriginModel;
+      return {
+        payloads: [{ text: "ok" }],
+        meta: {},
+      };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun,
+      sessionCtx: {
+        Provider: "telegram",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => sessionEntry,
+      activeSessionStore: sessionStore,
+      storePath: "/tmp/sessions.json",
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("success");
+    expect(storeWriteAttempt).toBe(2);
+    expectRecordFields(sessionEntry as unknown as Record<string, unknown>, {
+      providerOverride: "openai-codex",
+      modelOverride: "gpt-5.4",
+      modelOverrideSource: "user",
+      modelOverrideFallbackOriginProvider: undefined,
+      modelOverrideFallbackOriginModel: undefined,
+    });
+    expectRecordFields(persistedStore.main as unknown as Record<string, unknown>, {
+      providerOverride: "openai-codex",
+      modelOverride: "gpt-5.4",
+      modelOverrideSource: "user",
+      modelOverrideFallbackOriginProvider: undefined,
+      modelOverrideFallbackOriginModel: undefined,
+    });
+  });
+
+  it("rolls back fallback model selection while preserving concurrent auth switches", async () => {
+    state.runWithModelFallbackMock.mockImplementation(
+      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+        result: await params.run("openai-codex", "gpt-5.4"),
+        provider: "openai-codex",
+        model: "gpt-5.4",
+        attempts: [],
+      }),
+    );
+
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "anthropic";
+    followupRun.run.model = "claude-opus-4-6";
+
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 1,
+      compactionCount: 0,
+    };
+    const sessionStore = { main: sessionEntry };
+    const persistedStore: Record<string, SessionEntry> = { main: { ...sessionEntry } };
+    const updateSessionStoreMock = vi.mocked(updateSessionStore);
+    let storeWriteAttempt = 0;
+    updateSessionStoreMock.mockImplementation(
+      async (_storePath: string, update: (store: Record<string, SessionEntry>) => void) => {
+        storeWriteAttempt += 1;
+        if (storeWriteAttempt === 2) {
+          persistedStore.main = {
+            ...persistedStore.main,
+            authProfileOverride: "anthropic:work",
+            authProfileOverrideSource: "user",
+          };
+        }
+        update(persistedStore);
+      },
+    );
+    state.runEmbeddedAgentMock.mockImplementation(async () => {
+      sessionEntry.authProfileOverride = "anthropic:work";
+      sessionEntry.authProfileOverrideSource = "user";
+      return {
+        payloads: [{ text: "ok" }],
+        meta: {},
+      };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun,
+      sessionCtx: {
+        Provider: "telegram",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => sessionEntry,
+      activeSessionStore: sessionStore,
+      storePath: "/tmp/sessions.json",
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("success");
+    expect(storeWriteAttempt).toBe(2);
+    expectRecordFields(sessionEntry as unknown as Record<string, unknown>, {
+      providerOverride: undefined,
+      modelOverride: undefined,
+      modelOverrideSource: undefined,
+      modelOverrideFallbackOriginProvider: undefined,
+      modelOverrideFallbackOriginModel: undefined,
+      authProfileOverride: "anthropic:work",
+      authProfileOverrideSource: "user",
+    });
+    expectRecordFields(persistedStore.main as unknown as Record<string, unknown>, {
+      providerOverride: undefined,
+      modelOverride: undefined,
+      modelOverrideSource: undefined,
+      modelOverrideFallbackOriginProvider: undefined,
+      modelOverrideFallbackOriginModel: undefined,
+      authProfileOverride: "anthropic:work",
+      authProfileOverrideSource: "user",
+    });
   });
 
   it("does not persist fallback selection for legacy user overrides without modelOverrideSource", async () => {
@@ -6045,7 +6392,7 @@ describe("runAgentTurnWithFallback", () => {
     expect(sessionEntry.modelOverrideSource).toBeUndefined();
   });
 
-  it("persists fallback selection for recovered auto overrides without modelOverrideSource", async () => {
+  it("keeps recovered auto overrides without modelOverrideSource temporary", async () => {
     state.runWithModelFallbackMock.mockImplementation(
       async (params: { run: (provider: string, model: string) => Promise<unknown> }) => ({
         result: await params.run("openai-codex", "gpt-5.4"),
@@ -6102,9 +6449,9 @@ describe("runAgentTurnWithFallback", () => {
     });
 
     expect(result.kind).toBe("success");
-    expect(sessionEntry.providerOverride).toBe("openai-codex");
-    expect(sessionEntry.modelOverride).toBe("gpt-5.4");
-    expect(sessionEntry.modelOverrideSource).toBe("auto");
+    expect(sessionEntry.providerOverride).toBe("bailian");
+    expect(sessionEntry.modelOverride).toBe("qwen3.6-plus");
+    expect(sessionEntry.modelOverrideSource).toBeUndefined();
     expect(sessionEntry.modelOverrideFallbackOriginProvider).toBe("minimax");
     expect(sessionEntry.modelOverrideFallbackOriginModel).toBe("MiniMax-M2.7");
   });

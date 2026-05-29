@@ -21,6 +21,7 @@ import {
   loadSessionStore,
   resolveSessionPluginStatusLines,
   resolveSessionPluginTraceLines,
+  updateSessionStoreEntry,
   type SessionEntry,
 } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
@@ -98,7 +99,11 @@ import { createReplyMediaContext } from "./reply-media-paths.js";
 import { replyRunRegistry, type ReplyOperation } from "./reply-run-registry.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { admitReplyTurn, resolveReplyTurnKind } from "./reply-turn-admission.js";
-import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
+import {
+  incrementRunCompactionCount,
+  persistRunSessionUsage,
+  resolveRunSessionModelPersistence,
+} from "./session-run-accounting.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
@@ -202,6 +207,133 @@ function resolveConfiguredFallbackModel(params: {
     model: params.run.model,
     persistedAutoFallback: false,
   };
+}
+
+type AutoFallbackSelectionSnapshot = Pick<
+  SessionEntry,
+  | "providerOverride"
+  | "modelOverride"
+  | "modelOverrideSource"
+  | "modelOverrideFallbackOriginProvider"
+  | "modelOverrideFallbackOriginModel"
+>;
+
+function snapshotAutoFallbackSelection(
+  entry: SessionEntry,
+): AutoFallbackSelectionSnapshot | undefined {
+  if (entry.modelOverrideSource !== "auto") {
+    return undefined;
+  }
+  return {
+    providerOverride: entry.providerOverride,
+    modelOverride: entry.modelOverride,
+    modelOverrideSource: entry.modelOverrideSource,
+    modelOverrideFallbackOriginProvider: entry.modelOverrideFallbackOriginProvider,
+    modelOverrideFallbackOriginModel: entry.modelOverrideFallbackOriginModel,
+  };
+}
+
+function matchesAutoFallbackSelectionSnapshot(
+  entry: SessionEntry,
+  snapshot: AutoFallbackSelectionSnapshot,
+): boolean {
+  return (
+    entry.providerOverride === snapshot.providerOverride &&
+    entry.modelOverride === snapshot.modelOverride &&
+    entry.modelOverrideSource === snapshot.modelOverrideSource &&
+    entry.modelOverrideFallbackOriginProvider === snapshot.modelOverrideFallbackOriginProvider &&
+    entry.modelOverrideFallbackOriginModel === snapshot.modelOverrideFallbackOriginModel
+  );
+}
+
+function hasUserAuthProfileOverride(entry: SessionEntry): boolean {
+  if (!entry.authProfileOverride?.trim()) {
+    return false;
+  }
+  return (
+    entry.authProfileOverrideSource === "user" ||
+    (entry.authProfileOverrideSource === undefined &&
+      typeof entry.authProfileOverrideCompactionCount !== "number")
+  );
+}
+
+function clearAutoFallbackSelectionAfterAccounting(
+  entry: SessionEntry,
+  expected: AutoFallbackSelectionSnapshot,
+): boolean {
+  if (!matchesAutoFallbackSelectionSnapshot(entry, expected)) {
+    return false;
+  }
+  let updated = false;
+  const clear = (key: keyof SessionEntry) => {
+    if (Object.hasOwn(entry, key)) {
+      delete entry[key];
+      updated = true;
+    }
+  };
+  clear("providerOverride");
+  clear("modelOverride");
+  clear("modelOverrideSource");
+  clear("modelOverrideFallbackOriginProvider");
+  clear("modelOverrideFallbackOriginModel");
+  if (!hasUserAuthProfileOverride(entry)) {
+    clear("authProfileOverride");
+    clear("authProfileOverrideSource");
+    clear("authProfileOverrideCompactionCount");
+  }
+  if (updated) {
+    entry.updatedAt = Date.now();
+  }
+  return updated;
+}
+
+async function clearPersistedAutoFallbackSelectionAfterAccounting(params: {
+  storePath: string;
+  sessionKey: string;
+  expected: AutoFallbackSelectionSnapshot;
+}): Promise<boolean> {
+  const persist = async (): Promise<boolean> => {
+    let didMatch = false;
+    await updateSessionStoreEntry({
+      storePath: params.storePath,
+      sessionKey: params.sessionKey,
+      update: async (entry) => {
+        if (!matchesAutoFallbackSelectionSnapshot(entry, params.expected)) {
+          return null;
+        }
+        didMatch = true;
+        const preserveUserAuthProfile = hasUserAuthProfileOverride(entry);
+        return {
+          providerOverride: undefined,
+          modelOverride: undefined,
+          modelOverrideSource: undefined,
+          modelOverrideFallbackOriginProvider: undefined,
+          modelOverrideFallbackOriginModel: undefined,
+          authProfileOverride: preserveUserAuthProfile ? entry.authProfileOverride : undefined,
+          authProfileOverrideSource: preserveUserAuthProfile
+            ? entry.authProfileOverrideSource
+            : undefined,
+          authProfileOverrideCompactionCount: preserveUserAuthProfile
+            ? entry.authProfileOverrideCompactionCount
+            : undefined,
+        };
+      },
+    });
+    return didMatch;
+  };
+
+  try {
+    return await persist();
+  } catch (err) {
+    logVerbose(`failed to persist fallback selection cleanup (non-fatal): ${String(err)}`);
+  }
+
+  try {
+    return await persist();
+  } catch (err) {
+    logVerbose(`retry failed to persist fallback selection cleanup (non-fatal): ${String(err)}`);
+  }
+  return false;
 }
 
 function buildInlinePluginStatusPayload(params: {
@@ -1573,6 +1705,16 @@ export async function runReplyAgent(params: {
       state: fallbackStateEntry,
       cfg,
     });
+    const sessionModelPersistence = resolveRunSessionModelPersistence({
+      selectedProvider,
+      selectedModel,
+      providerUsed,
+      modelUsed,
+    });
+    const autoFallbackSelectionToClear =
+      !preserveUserFacingSessionState && fallbackStateEntry
+        ? snapshotAutoFallbackSelection(fallbackStateEntry)
+        : undefined;
     if (fallbackTransition.stateChanged && !preserveUserFacingSessionState) {
       if (fallbackStateEntry) {
         fallbackStateEntry.fallbackNoticeSelectedModel = fallbackTransition.nextState.selectedModel;
@@ -1621,7 +1763,7 @@ export async function runReplyAgent(params: {
       }) ??
       DEFAULT_CONTEXT_TOKENS;
 
-    await persistRunSessionUsage({
+    const didPersistRunSessionUsage = await persistRunSessionUsage({
       storePath,
       sessionKey,
       cfg,
@@ -1634,12 +1776,39 @@ export async function runReplyAgent(params: {
       preserveUserFacingSessionModelState: preserveUserFacingSessionState,
       modelUsed,
       providerUsed,
+      ...sessionModelPersistence,
       contextTokensUsed,
       systemPromptReport: runResult.meta?.systemPromptReport,
       cliSessionId,
       cliSessionBinding,
       preserveFreshTotalTokensOnStaleUsage: preflightCompactionApplied,
     });
+
+    if (autoFallbackSelectionToClear && didPersistRunSessionUsage) {
+      const didPersistAutoFallbackCleanup =
+        sessionKey && storePath
+          ? await clearPersistedAutoFallbackSelectionAfterAccounting({
+              storePath,
+              sessionKey,
+              expected: autoFallbackSelectionToClear,
+            })
+          : true;
+      const currentFallbackStateEntry =
+        (sessionKey ? activeSessionStore?.[sessionKey] : undefined) ?? fallbackStateEntry;
+      if (
+        didPersistAutoFallbackCleanup &&
+        currentFallbackStateEntry &&
+        clearAutoFallbackSelectionAfterAccounting(
+          currentFallbackStateEntry,
+          autoFallbackSelectionToClear,
+        )
+      ) {
+        activeSessionEntry = currentFallbackStateEntry;
+        if (sessionKey && activeSessionStore) {
+          activeSessionStore[sessionKey] = currentFallbackStateEntry;
+        }
+      }
+    }
 
     const successfulSideEffectDelivery = hasSuccessfulSideEffectDelivery({
       blockReplyPipeline,
@@ -1650,6 +1819,7 @@ export async function runReplyAgent(params: {
       successfulCronAdds: runResult.successfulCronAdds,
       didSendDeterministicApprovalPrompt: runResult.didSendDeterministicApprovalPrompt,
     });
+
     const returnSilentFallbackFailureIfNeeded = async (): Promise<ReplyPayload | undefined> => {
       const silentFallbackFailurePayload = buildSilentFallbackFailurePayload({
         fallbackTransition,

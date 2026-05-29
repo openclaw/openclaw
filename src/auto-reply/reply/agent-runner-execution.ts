@@ -312,6 +312,20 @@ const FALLBACK_SELECTION_STATE_KEYS = [
   "authProfileOverrideCompactionCount",
 ] as const satisfies ReadonlyArray<keyof FallbackSelectionState>;
 
+const FALLBACK_SELECTION_MODEL_STATE_KEYS = [
+  "providerOverride",
+  "modelOverride",
+  "modelOverrideSource",
+  "modelOverrideFallbackOriginProvider",
+  "modelOverrideFallbackOriginModel",
+] as const satisfies ReadonlyArray<keyof FallbackSelectionState>;
+
+const FALLBACK_SELECTION_AUTH_STATE_KEYS = [
+  "authProfileOverride",
+  "authProfileOverrideSource",
+  "authProfileOverrideCompactionCount",
+] as const satisfies ReadonlyArray<keyof FallbackSelectionState>;
+
 function setFallbackSelectionStateField(
   entry: SessionEntry,
   key: keyof FallbackSelectionState,
@@ -492,11 +506,13 @@ function rollbackFallbackSelectionStateIfUnchanged(
   previousState: FallbackSelectionState,
   now = Date.now(),
 ): boolean {
+  const currentState = snapshotFallbackSelectionState(entry);
+  if (FALLBACK_SELECTION_MODEL_STATE_KEYS.some((key) => currentState[key] !== expectedState[key])) {
+    return false;
+  }
+
   let updated = false;
-  for (const key of FALLBACK_SELECTION_STATE_KEYS) {
-    if (entry[key] !== expectedState[key]) {
-      continue;
-    }
+  for (const key of FALLBACK_SELECTION_MODEL_STATE_KEYS) {
     const previousValue = previousState[key];
     if (previousValue === undefined) {
       if (Object.hasOwn(entry, key)) {
@@ -507,6 +523,24 @@ function rollbackFallbackSelectionStateIfUnchanged(
     }
     if (entry[key] !== previousValue) {
       updated = setFallbackSelectionStateField(entry, key, previousValue) || updated;
+    }
+  }
+  const authStateUnchanged = FALLBACK_SELECTION_AUTH_STATE_KEYS.every(
+    (key) => currentState[key] === expectedState[key],
+  );
+  if (authStateUnchanged) {
+    for (const key of FALLBACK_SELECTION_AUTH_STATE_KEYS) {
+      const previousValue = previousState[key];
+      if (previousValue === undefined) {
+        if (Object.hasOwn(entry, key)) {
+          delete entry[key];
+          updated = true;
+        }
+        continue;
+      }
+      if (entry[key] !== previousValue) {
+        updated = setFallbackSelectionStateField(entry, key, previousValue) || updated;
+      }
     }
   }
   if (updated) {
@@ -1608,19 +1642,37 @@ export async function runAgentTurnWithFallback(params: {
       pendingFallbackCandidateRollback = undefined;
     }
   };
+  const rollbackFallbackCandidateSelectionWithRetry = async (
+    rollback: () => Promise<void>,
+    message: string,
+  ) => {
+    const attemptRollback = async (retry: boolean): Promise<boolean> => {
+      try {
+        await rollback();
+        clearPendingFallbackRollback(rollback);
+        return true;
+      } catch (rollbackError) {
+        logVerbose(`${retry ? "retry " : ""}${message} (non-fatal): ${String(rollbackError)}`);
+        return false;
+      }
+    };
+
+    if (await attemptRollback(false)) {
+      return;
+    }
+
+    await attemptRollback(true);
+  };
   const rollbackClassifiedFallbackCandidateSelection = async (provider: string, model: string) => {
     const pending = pendingFallbackCandidateRollback;
     if (!pending || pending.provider !== provider || pending.model !== model) {
       return;
     }
     pendingFallbackCandidateRollback = undefined;
-    try {
-      await pending.rollback();
-    } catch (rollbackError) {
-      logVerbose(
-        `failed to roll back classified fallback candidate selection (non-fatal): ${String(rollbackError)}`,
-      );
-    }
+    await rollbackFallbackCandidateSelectionWithRetry(
+      pending.rollback,
+      "failed to roll back classified fallback candidate selection",
+    );
   };
   const persistFallbackCandidateSelection = async (
     provider: string,
@@ -1711,15 +1763,15 @@ export async function runAgentTurnWithFallback(params: {
     }
 
     return async () => {
-      const rolledBackInMemory = rollbackFallbackSelectionStateIfUnchanged(
-        activeSessionEntry,
-        nextState,
-        previousState,
-      );
-      if (rolledBackInMemory) {
-        params.activeSessionStore![params.sessionKey!] = activeSessionEntry;
-      }
       if (!params.storePath) {
+        const rolledBackInMemory = rollbackFallbackSelectionStateIfUnchanged(
+          activeSessionEntry,
+          nextState,
+          previousState,
+        );
+        if (rolledBackInMemory) {
+          params.activeSessionStore![params.sessionKey!] = activeSessionEntry;
+        }
         return;
       }
       await updateSessionStore(params.storePath, (store) => {
@@ -1731,6 +1783,14 @@ export async function runAgentTurnWithFallback(params: {
           store[params.sessionKey!] = persistedEntry;
         }
       });
+      const rolledBackInMemory = rollbackFallbackSelectionStateIfUnchanged(
+        activeSessionEntry,
+        nextState,
+        previousState,
+      );
+      if (rolledBackInMemory) {
+        params.activeSessionStore![params.sessionKey!] = activeSessionEntry;
+      }
     };
   };
   const clearRecoveredAutoFallbackPrimaryProbe = async (paramsForClear: {
@@ -2041,14 +2101,10 @@ export async function runAgentTurnWithFallback(params: {
                     if (!rollbackFallbackCandidateSelection) {
                       return;
                     }
-                    try {
-                      await rollbackFallbackCandidateSelection();
-                      clearPendingFallbackRollback(rollbackFallbackCandidateSelection);
-                    } catch (rollbackError) {
-                      logVerbose(
-                        `failed to roll back fallback candidate selection (non-fatal): ${String(rollbackError)}`,
-                      );
-                    }
+                    await rollbackFallbackCandidateSelectionWithRetry(
+                      rollbackFallbackCandidateSelection,
+                      "failed to roll back fallback candidate selection",
+                    );
                   },
                   runParams: {
                     sessionId: params.followupRun.run.sessionId,
@@ -2119,6 +2175,12 @@ export async function runAgentTurnWithFallback(params: {
               bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
                 result.meta?.systemPromptReport,
               );
+              if (rollbackFallbackCandidateSelection) {
+                await rollbackFallbackCandidateSelectionWithRetry(
+                  rollbackFallbackCandidateSelection,
+                  "failed to roll back fallback candidate selection after success",
+                );
+              }
               return result;
             }
             const { embeddedContext, senderContext, runBaseParams } =
@@ -2536,17 +2598,19 @@ export async function runAgentTurnWithFallback(params: {
                   result.meta?.agentMeta?.compactionCount ?? 0,
                 );
                 attemptCompactionCount = Math.max(attemptCompactionCount, resultCompactionCount);
+                if (rollbackFallbackCandidateSelection) {
+                  await rollbackFallbackCandidateSelectionWithRetry(
+                    rollbackFallbackCandidateSelection,
+                    "failed to roll back fallback candidate selection after success",
+                  );
+                }
                 return result;
               } catch (err) {
                 if (rollbackFallbackCandidateSelection) {
-                  try {
-                    await rollbackFallbackCandidateSelection();
-                    clearPendingFallbackRollback(rollbackFallbackCandidateSelection);
-                  } catch (rollbackError) {
-                    logVerbose(
-                      `failed to roll back fallback candidate selection (non-fatal): ${String(rollbackError)}`,
-                    );
-                  }
+                  await rollbackFallbackCandidateSelectionWithRetry(
+                    rollbackFallbackCandidateSelection,
+                    "failed to roll back fallback candidate selection",
+                  );
                 }
                 lifecycleBackstop.emit("error", err);
                 throw err;

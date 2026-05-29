@@ -551,6 +551,127 @@ describe("buildStatusReply subagent summary", () => {
     });
   });
 
+  it("loads usage for the fallback-notice runtime provider in /status output", async () => {
+    providerUsageMock.loadProviderUsageSummary.mockResolvedValue({
+      updatedAt: Date.now(),
+      providers: [
+        {
+          provider: "minimax",
+          displayName: "MiniMax",
+          windows: [{ label: "day", usedPercent: 25 }],
+        },
+      ],
+    });
+
+    const text = await buildStatusText({
+      cfg: baseCfg,
+      sessionEntry: {
+        sessionId: "sess-status-fallback-usage",
+        updatedAt: 0,
+        modelProvider: "xiaomi",
+        model: "mimo-v2-flash",
+        fallbackNoticeSelectedModel: "xiaomi/mimo-v2-flash",
+        fallbackNoticeActiveModel: "minimax-portal/MiniMax-M2.7",
+        fallbackNoticeReason: "rate limit",
+        totalTokens: 1000,
+        contextTokens: 32_000,
+      },
+      sessionKey: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      statusChannel: "mobilechat",
+      provider: "xiaomi",
+      model: "mimo-v2-flash",
+      contextTokens: 32_000,
+      resolvedFastMode: false,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+      modelAuthOverride: "api-key",
+      activeModelAuthOverride: "api-key",
+    });
+
+    expect(providerUsageMock.loadProviderUsageSummary).toHaveBeenCalledWith(
+      expect.objectContaining({ providers: ["minimax"] }),
+    );
+    expect(normalizeTestText(text)).toContain("Usage: day 75% left");
+  });
+
+  it("keeps the resolved auth label for fallback-notice runtime providers", async () => {
+    const text = await buildStatusText({
+      cfg: baseCfg,
+      sessionEntry: {
+        sessionId: "sess-status-fallback-auth",
+        updatedAt: 0,
+        modelProvider: "xiaomi",
+        model: "mimo-v2-flash",
+        fallbackNoticeSelectedModel: "xiaomi/mimo-v2-flash",
+        fallbackNoticeActiveModel: "minimax-portal/MiniMax-M2.7",
+        fallbackNoticeReason: "rate limit",
+        totalTokens: 1000,
+        contextTokens: 32_000,
+      },
+      sessionKey: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      statusChannel: "mobilechat",
+      provider: "xiaomi",
+      model: "mimo-v2-flash",
+      contextTokens: 32_000,
+      resolvedFastMode: false,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+      modelAuthOverride: "api-key",
+      activeModelAuthOverride: "oauth (minimax workspace)",
+    });
+
+    expect(normalizeTestText(text)).toContain("oauth (minimax workspace)");
+  });
+
+  it("does not copy fallback runtime auth onto the selected model label", async () => {
+    const text = await buildStatusText({
+      cfg: baseCfg,
+      sessionEntry: {
+        sessionId: "sess-status-fallback-selected-auth",
+        updatedAt: 0,
+        modelProvider: "xiaomi",
+        model: "mimo-v2-flash",
+        fallbackNoticeSelectedModel: "xiaomi/mimo-v2-flash",
+        fallbackNoticeActiveModel: "minimax-portal/MiniMax-M2.7",
+        fallbackNoticeReason: "rate limit",
+        totalTokens: 1000,
+        contextTokens: 32_000,
+      },
+      sessionKey: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      statusChannel: "mobilechat",
+      provider: "xiaomi",
+      model: "mimo-v2-flash",
+      contextTokens: 32_000,
+      resolvedFastMode: false,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+      modelAuthOverride: "unknown",
+      activeModelAuthOverride: "oauth (minimax workspace)",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Model: xiaomi/mimo-v2-flash");
+    expect(normalized).not.toContain("Model: xiaomi/mimo-v2-flash · 🔑 oauth");
+    expect(normalized).toContain(
+      "Fallback: minimax-portal/MiniMax-M2.7 · ? oauth (minimax workspace)",
+    );
+  });
+
   it("shows gateway and system uptime in /status output", async () => {
     vi.spyOn(process, "uptime").mockReturnValue(2 * 60 * 60 + 5 * 60);
     vi.spyOn(os, "uptime").mockReturnValue(4 * 24 * 60 * 60 + 3 * 60 * 60);

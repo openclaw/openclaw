@@ -26,6 +26,7 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
+import { resolveRunSessionModelPersistence } from "./session-run-accounting.js";
 import { drainFormattedSystemEvents } from "./session-updates.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
 import { initSessionState } from "./session.js";
@@ -3176,6 +3177,105 @@ describe("persistSessionUsageUpdate", () => {
     const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].totalTokens).toBe(42_000);
     expect(stored[sessionKey].totalTokensFresh).toBe(false);
+  });
+
+  it("can persist selected session routing separately from actual fallback usage", async () => {
+    const storePath = await createStorePath("openclaw-usage-fallback-routing-");
+    const sessionKey = "main";
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "s1",
+        updatedAt: Date.now(),
+        modelProvider: "codex-lb",
+        model: "gpt-5.5",
+      },
+    });
+
+    await persistSessionUsageUpdate({
+      storePath,
+      sessionKey,
+      usage: { input: 1_000, output: 100 },
+      providerUsed: "ollama",
+      modelUsed: "qwen3-4b-instruct-2507-q8-notools:latest",
+      sessionModelProvider: "codex-lb",
+      sessionModel: "gpt-5.5",
+      contextTokensUsed: 200_000,
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].modelProvider).toBe("codex-lb");
+    expect(stored[sessionKey].model).toBe("gpt-5.5");
+    expect(stored[sessionKey].inputTokens).toBe(1_000);
+    expect(stored[sessionKey].outputTokens).toBe(100);
+  });
+
+  it("returns false when usage accounting cannot find the session entry", async () => {
+    const storePath = await createStorePath("openclaw-usage-missing-entry-");
+    await seedSessionStore({
+      storePath,
+      sessionKey: "other",
+      entry: { sessionId: "s1", updatedAt: Date.now() },
+    });
+
+    await expect(
+      persistSessionUsageUpdate({
+        storePath,
+        sessionKey: "main",
+        usage: { input: 1_000, output: 100 },
+        providerUsed: "ollama",
+        modelUsed: "qwen3",
+        contextTokensUsed: 200_000,
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it("returns false when model-only accounting cannot find the session entry", async () => {
+    const storePath = await createStorePath("openclaw-usage-missing-model-entry-");
+    await seedSessionStore({
+      storePath,
+      sessionKey: "other",
+      entry: { sessionId: "s1", updatedAt: Date.now() },
+    });
+
+    await expect(
+      persistSessionUsageUpdate({
+        storePath,
+        sessionKey: "main",
+        providerUsed: "ollama",
+        modelUsed: "qwen3",
+        contextTokensUsed: 200_000,
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it("keeps runtime alias usage as the session model instead of treating it as fallback", () => {
+    expect(
+      resolveRunSessionModelPersistence({
+        selectedProvider: "anthropic",
+        selectedModel: "claude-opus-4-7",
+        providerUsed: "claude-cli",
+        modelUsed: "claude-opus-4-7",
+      }),
+    ).toEqual({
+      sessionModelProvider: "anthropic",
+      sessionModel: "claude-opus-4-7",
+    });
+  });
+
+  it("keeps selected routing when actual usage is a real fallback model", () => {
+    expect(
+      resolveRunSessionModelPersistence({
+        selectedProvider: "anthropic",
+        selectedModel: "claude-opus-4-7",
+        providerUsed: "deepinfra",
+        modelUsed: "moonshotai/Kimi-K2.5",
+      }),
+    ).toEqual({
+      sessionModelProvider: "anthropic",
+      sessionModel: "claude-opus-4-7",
+    });
   });
 
   it("uses promptTokens when available without lastCallUsage", async () => {

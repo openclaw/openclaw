@@ -87,6 +87,8 @@ export async function persistSessionUsageUpdate(params: {
   lastCallUsage?: NormalizedUsage;
   modelUsed?: string;
   providerUsed?: string;
+  sessionModel?: string;
+  sessionModelProvider?: string;
   contextTokensUsed?: number;
   promptTokens?: number;
   usageIsContextSnapshot?: boolean;
@@ -97,11 +99,12 @@ export async function persistSessionUsageUpdate(params: {
   compactionTokensAfter?: number;
   preserveFreshTotalTokensOnStaleUsage?: boolean;
   preserveUserFacingSessionModelState?: boolean;
+  sessionPatch?: Partial<SessionEntry>;
   logLabel?: string;
-}): Promise<void> {
+}): Promise<boolean> {
   const { storePath, sessionKey } = params;
   if (!storePath || !sessionKey) {
-    return;
+    return false;
   }
 
   const label = params.logLabel ? `${params.logLabel} ` : "";
@@ -118,7 +121,7 @@ export async function persistSessionUsageUpdate(params: {
 
   if (hasUsage || hasFreshContextSnapshot || hasCompactionSnapshot) {
     try {
-      await updateSessionStoreEntry({
+      const updatedEntry = await updateSessionStoreEntry({
         storePath,
         sessionKey,
         skipMaintenance: true,
@@ -162,11 +165,13 @@ export async function persistSessionUsageUpdate(params: {
                 providerUsed: params.providerUsed ?? entry.modelProvider,
                 modelUsed: params.modelUsed ?? entry.model,
               });
+          const sessionModelProvider = params.sessionModelProvider ?? params.providerUsed;
+          const sessionModel = params.sessionModel ?? params.modelUsed;
           const patch: Partial<SessionEntry> = {
             modelProvider: preserveSessionModelState
               ? entry.modelProvider
-              : (params.providerUsed ?? entry.modelProvider),
-            model: preserveSessionModelState ? entry.model : (params.modelUsed ?? entry.model),
+              : (sessionModelProvider ?? entry.modelProvider),
+            model: preserveSessionModelState ? entry.model : (sessionModel ?? entry.model),
             ...(resolvedContextTokens !== undefined
               ? { contextTokens: resolvedContextTokens }
               : {}),
@@ -174,6 +179,7 @@ export async function persistSessionUsageUpdate(params: {
               ? entry.systemPromptReport
               : (params.systemPromptReport ?? entry.systemPromptReport),
             updatedAt: Date.now(),
+            ...params.sessionPatch,
           };
           if (hasUsage && !preserveUserFacingRunState) {
             patch.inputTokens = params.usage?.input ?? 0;
@@ -212,15 +218,21 @@ export async function persistSessionUsageUpdate(params: {
             : applyCliSessionIdToSessionPatch(params, entry, patch);
         },
       });
+      return updatedEntry !== null;
     } catch (err) {
       logVerbose(`failed to persist ${label}usage update: ${String(err)}`);
+      return false;
     }
-    return;
   }
 
-  if (params.modelUsed || params.contextTokensUsed) {
+  if (
+    params.modelUsed ||
+    params.contextTokensUsed ||
+    params.sessionModel ||
+    params.sessionModelProvider
+  ) {
     try {
-      await updateSessionStoreEntry({
+      const updatedEntry = await updateSessionStoreEntry({
         storePath,
         sessionKey,
         skipMaintenance: true,
@@ -232,24 +244,30 @@ export async function persistSessionUsageUpdate(params: {
           const contextTokens = preserveUserFacingRunState
             ? entry.contextTokens
             : (params.contextTokensUsed ?? entry.contextTokens);
+          const sessionModelProvider = params.sessionModelProvider ?? params.providerUsed;
+          const sessionModel = params.sessionModel ?? params.modelUsed;
           const patch: Partial<SessionEntry> = {
             modelProvider: preserveSessionModelState
               ? entry.modelProvider
-              : (params.providerUsed ?? entry.modelProvider),
-            model: preserveSessionModelState ? entry.model : (params.modelUsed ?? entry.model),
+              : (sessionModelProvider ?? entry.modelProvider),
+            model: preserveSessionModelState ? entry.model : (sessionModel ?? entry.model),
             ...(contextTokens !== undefined ? { contextTokens } : {}),
             systemPromptReport: preserveUserFacingRunState
               ? entry.systemPromptReport
               : (params.systemPromptReport ?? entry.systemPromptReport),
             updatedAt: Date.now(),
+            ...params.sessionPatch,
           };
           return preserveUserFacingRunState
             ? patch
             : applyCliSessionIdToSessionPatch(params, entry, patch);
         },
       });
+      return updatedEntry !== null;
     } catch (err) {
       logVerbose(`failed to persist ${label}model/context update: ${String(err)}`);
+      return false;
     }
   }
+  return false;
 }
