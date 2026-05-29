@@ -7,11 +7,15 @@ export type ChatAttachment = {
   sizeBytes?: number;
 };
 
+export type ChatQueueBusyOutcome =
+  import("../../../../packages/gateway-protocol/src/index.js").LastBusyMessageOutcome;
+
 export type ChatQueueItem = {
   id: string;
   text: string;
   createdAt: number;
   kind?: "queued" | "steered";
+  busyOutcome?: ChatQueueBusyOutcome;
   attachments?: ChatAttachment[];
   refreshSessions?: boolean;
   localCommandArgs?: string;

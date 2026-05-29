@@ -49,6 +49,7 @@ let refreshChat: typeof import("./app-chat.ts").refreshChat;
 let refreshChatAvatar: typeof import("./app-chat.ts").refreshChatAvatar;
 let clearPendingQueueItemsForRun: typeof import("./app-chat.ts").clearPendingQueueItemsForRun;
 let removeQueuedMessage: typeof import("./app-chat.ts").removeQueuedMessage;
+let applySessionBusyOutcomesToChatQueue: typeof import("./app-chat.ts").applySessionBusyOutcomesToChatQueue;
 let markQueuedChatSendsWaitingForReconnect: typeof import("./app-chat.ts").markQueuedChatSendsWaitingForReconnect;
 
 async function loadChatHelpers(): Promise<void> {
@@ -62,6 +63,7 @@ async function loadChatHelpers(): Promise<void> {
     refreshChatAvatar,
     clearPendingQueueItemsForRun,
     removeQueuedMessage,
+    applySessionBusyOutcomesToChatQueue,
     markQueuedChatSendsWaitingForReconnect,
   } = await import("./app-chat.ts"));
 }
@@ -1548,6 +1550,34 @@ describe("handleSendChat", () => {
     expect(host.chatQueue[0]?.text).toBe("tighten the plan");
     expect(host.chatQueue[0]?.kind).toBe("steered");
     expect(host.chatQueue[0]?.pendingRunId).toBe("run-1");
+  });
+
+  it("prefers backend steer fallback over optimistic steered queue state", () => {
+    const host = makeHost({
+      sessionKey: "agent:main:main",
+      chatQueue: [
+        {
+          id: "queued-1",
+          text: "tighten the plan",
+          createdAt: 90,
+          kind: "steered",
+        },
+      ],
+      sessionsResult: createSessionsResult([
+        row("agent:main:main", {
+          lastBusyMessageOutcome: {
+            kind: "active_run_steer_rejected",
+            label: "Active run rejected steering",
+            reason: "not_streaming",
+            recordedAtMs: 100,
+          },
+        }),
+      ]),
+    });
+
+    expect(applySessionBusyOutcomesToChatQueue(host)).toBe(true);
+    expect(host.chatQueue[0]?.kind).toBeUndefined();
+    expect(host.chatQueue[0]?.busyOutcome?.kind).toBe("active_run_steer_rejected");
   });
 
   it("removes pending steer indicators when the run finishes", () => {

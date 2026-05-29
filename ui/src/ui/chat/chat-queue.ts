@@ -2,6 +2,12 @@ import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
 import { icons } from "../icons.ts";
 import type { ChatQueueItem } from "../ui-types.ts";
+import {
+  applySessionBusyOutcomesToChatQueue,
+  isChatQueueItemSteered,
+  resolveChatQueueItemOutcomeBadge,
+  type ChatQueueOutcomeBadge,
+} from "./busy-message-outcome.ts";
 
 export type ChatQueueProps = {
   queue: ChatQueueItem[];
@@ -24,6 +30,32 @@ function sendStateLabel(item: ChatQueueItem): string | null {
   }
 }
 
+function outcomeBadgeClass(variant: ChatQueueOutcomeBadge["variant"]) {
+  switch (variant) {
+    case "fallback":
+      return "chat-queue__badge chat-queue__badge--fallback";
+    case "followup":
+      return "chat-queue__badge chat-queue__badge--followup";
+    case "steered":
+      return "chat-queue__badge chat-queue__badge--steered";
+    default:
+      return "chat-queue__badge";
+  }
+}
+
+function itemClass(item: ChatQueueItem): string {
+  const outcomeBadge = resolveChatQueueItemOutcomeBadge(item);
+  const steered = isChatQueueItemSteered(item);
+  const classes = ["chat-queue__item"];
+  if (steered || outcomeBadge?.variant === "steered") {
+    classes.push("chat-queue__item--steered");
+  }
+  if (outcomeBadge?.variant === "fallback") {
+    classes.push("chat-queue__item--fallback");
+  }
+  return classes.join(" ");
+}
+
 export function renderChatQueue(props: ChatQueueProps) {
   if (!props.queue.length) {
     return nothing;
@@ -34,13 +66,16 @@ export function renderChatQueue(props: ChatQueueProps) {
       <div class="chat-queue__list">
         ${props.queue.map((item) => {
           const stateLabel = sendStateLabel(item);
+          const outcomeBadge = resolveChatQueueItemOutcomeBadge(item);
           return html`
-            <div
-              class="chat-queue__item ${item.kind === "steered" ? "chat-queue__item--steered" : ""}"
-            >
+            <div class=${itemClass(item)}>
               <div class="chat-queue__main">
-                ${item.kind === "steered"
-                  ? html`<span class="chat-queue__badge">Steered</span>`
+                ${outcomeBadge
+                  ? html`<span
+                      class=${outcomeBadgeClass(outcomeBadge.variant)}
+                      title=${outcomeBadge.title}
+                      >${outcomeBadge.text}</span
+                    >`
                   : nothing}
                 ${stateLabel ? html`<span class="chat-queue__badge">${stateLabel}</span>` : nothing}
                 <div class="chat-queue__text">
@@ -68,7 +103,7 @@ export function renderChatQueue(props: ChatQueueProps) {
                   : nothing}
                 ${props.canAbort &&
                 props.onQueueSteer &&
-                item.kind !== "steered" &&
+                !isChatQueueItemSteered(item) &&
                 !item.sendState &&
                 !item.localCommandName
                   ? html`

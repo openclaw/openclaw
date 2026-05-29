@@ -1,4 +1,5 @@
 export type UpdateAvailable = import("../../../src/infra/update-startup.js").UpdateAvailable;
+import type { LastBusyMessageOutcome } from "../../../packages/gateway-protocol/src/index.js";
 import type { CronJobBase } from "../../../src/cron/types-shared.js";
 import type { ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
 import type {
@@ -460,6 +461,7 @@ export type GatewaySessionRow = {
   contextTokens?: number;
   compactionCheckpointCount?: number;
   latestCompactionCheckpoint?: SessionCompactionCheckpointPreview;
+  lastBusyMessageOutcome?: LastBusyMessageOutcome;
 };
 
 export type SessionsListResult = SessionsListResultBase<GatewaySessionsDefaults, GatewaySessionRow>;

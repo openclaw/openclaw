@@ -230,6 +230,10 @@ import {
   SecretsResolveResultSchema,
 } from "./secrets.js";
 import {
+  BusyMessageOutcomeKindSchema,
+  BusyMessageOutcomeSourceSchema,
+  BusyMessageQueueFailureReasonSchema,
+  LastBusyMessageOutcomeSchema,
   SessionsAbortParamsSchema,
   SessionsCompactParamsSchema,
   SessionsCompactionBranchParamsSchema,
@@ -332,6 +336,10 @@ export const ProtocolSchemas = {
   SecretsResolveParams: SecretsResolveParamsSchema,
   SecretsResolveAssignment: SecretsResolveAssignmentSchema,
   SecretsResolveResult: SecretsResolveResultSchema,
+  BusyMessageOutcomeKind: BusyMessageOutcomeKindSchema,
+  BusyMessageOutcomeSource: BusyMessageOutcomeSourceSchema,
+  BusyMessageQueueFailureReason: BusyMessageQueueFailureReasonSchema,
+  LastBusyMessageOutcome: LastBusyMessageOutcomeSchema,
   SessionsListParams: SessionsListParamsSchema,
   SessionsCleanupParams: SessionsCleanupParamsSchema,
   SessionsPreviewParams: SessionsPreviewParamsSchema,

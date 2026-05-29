@@ -303,6 +303,14 @@ import {
   SecretsResolveResultSchema,
   type SessionsAbortParams,
   SessionsAbortParamsSchema,
+  type BusyMessageOutcomeKind,
+  BusyMessageOutcomeKindSchema,
+  type BusyMessageOutcomeSource,
+  BusyMessageOutcomeSourceSchema,
+  type BusyMessageQueueFailureReason,
+  BusyMessageQueueFailureReasonSchema,
+  type LastBusyMessageOutcome,
+  LastBusyMessageOutcomeSchema,
   type SessionsCompactParams,
   SessionsCompactParamsSchema,
   type SessionsCleanupParams,
@@ -624,6 +632,9 @@ export const validateSessionsCompactionRestoreParams = lazyCompile<SessionsCompa
 );
 export const validateSessionsUsageParams =
   lazyCompile<SessionsUsageParams>(SessionsUsageParamsSchema);
+export const validateLastBusyMessageOutcome = lazyCompile<LastBusyMessageOutcome>(
+  LastBusyMessageOutcomeSchema,
+);
 export const validateTasksListParams = lazyCompile<TasksListParams>(TasksListParamsSchema);
 export const validateTasksGetParams = lazyCompile<TasksGetParams>(TasksGetParamsSchema);
 export const validateTasksCancelParams = lazyCompile<TasksCancelParams>(TasksCancelParamsSchema);
@@ -946,6 +957,10 @@ export {
   SessionsDeleteParamsSchema,
   SessionsCompactParamsSchema,
   SessionsUsageParamsSchema,
+  BusyMessageOutcomeKindSchema,
+  BusyMessageOutcomeSourceSchema,
+  BusyMessageQueueFailureReasonSchema,
+  LastBusyMessageOutcomeSchema,
   ArtifactSummarySchema,
   ArtifactsListParamsSchema,
   ArtifactsGetParamsSchema,
@@ -1230,6 +1245,10 @@ export type {
   SessionsDeleteParams,
   SessionsCompactParams,
   SessionsUsageParams,
+  BusyMessageOutcomeKind,
+  BusyMessageOutcomeSource,
+  BusyMessageQueueFailureReason,
+  LastBusyMessageOutcome,
   TaskSummary,
   TasksListParams,
   TasksListResult,
