@@ -226,6 +226,7 @@ export class TokenManager {
       const guarded = await fetchWithSsrFGuard({
         url: TOKEN_URL,
         auditContext: "qqbot-token",
+        capture: false,
         init: {
           method: "POST",
           headers: {

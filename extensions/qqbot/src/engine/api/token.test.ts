@@ -41,6 +41,7 @@ describe("QQBot token manager", () => {
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith({
       url: "https://bots.qq.com/app/getAppAccessToken",
       auditContext: "qqbot-token",
+      capture: false,
       init: {
         method: "POST",
         headers: {
