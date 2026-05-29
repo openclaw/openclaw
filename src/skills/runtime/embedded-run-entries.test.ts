@@ -4,9 +4,9 @@ import {
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "../../config/config.js";
-import * as skillsWorkspaceModule from "../../skills/loading/workspace.js";
-import type { SkillSnapshot } from "../../skills/types.js";
-import { resolveEmbeddedRunSkillEntries } from "./skills-runtime.js";
+import * as skillsWorkspaceModule from "../loading/workspace.js";
+import type { SkillSnapshot } from "../types.js";
+import { resolveEmbeddedRunSkillEntries } from "./embedded-run-entries.js";
 
 describe("resolveEmbeddedRunSkillEntries", () => {
   const loadWorkspaceSkillEntriesSpy = vi.spyOn(skillsWorkspaceModule, "loadWorkspaceSkillEntries");

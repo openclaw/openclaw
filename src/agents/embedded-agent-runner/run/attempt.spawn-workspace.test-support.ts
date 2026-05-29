@@ -388,7 +388,7 @@ vi.mock("../../../skills/loading/workspace.js", () => ({
   resolveSkillsPromptForRun: (...args: unknown[]) => hoisted.resolveSkillsPromptForRunMock(...args),
 }));
 
-vi.mock("../skills-runtime.js", () => ({
+vi.mock("../../../skills/runtime/embedded-run-entries.js", () => ({
   resolveEmbeddedRunSkillEntries: (...args: unknown[]) =>
     hoisted.resolveEmbeddedRunSkillEntriesMock(...args),
 }));

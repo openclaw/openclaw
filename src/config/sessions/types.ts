@@ -628,7 +628,7 @@ export type SessionSkillSnapshot = {
    * each SKILL.md body) so the embedded runner can skip a workspace skill
    * scan within a turn. Stripped from sessions.json on every read and write
    * via normalizeSessionStore — see store-load.ts. On a cold session resume
-   * this is undefined and src/agents/embedded-agent-runner/skills-runtime.ts
+   * this is undefined and src/skills/runtime/embedded-run-entries.ts
    * rebuilds it by reloading skill entries from disk.
    */
   resolvedSkills?: Skill[];

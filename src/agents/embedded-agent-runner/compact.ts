@@ -26,6 +26,7 @@ import {
 } from "../../plugins/provider-runtime.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-key.js";
 import { resolveSkillsPromptForRun } from "../../skills/loading/workspace.js";
+import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
 import {
   applySkillEnvOverrides,
   applySkillEnvOverridesFromSnapshot,
@@ -150,7 +151,6 @@ import { createEmbeddedAgentResourceLoader } from "./resource-loader.js";
 import { resolveAttemptSpawnWorkspaceDir } from "./run/attempt.thread-helpers.js";
 import { buildEmbeddedSandboxInfo, resolveEmbeddedSandboxInfoExecPolicy } from "./sandbox-info.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "./session-manager-cache.js";
-import { resolveEmbeddedRunSkillEntries } from "./skills-runtime.js";
 import {
   resolveEmbeddedAgentBaseStreamFn,
   resolveEmbeddedAgentStreamFn,

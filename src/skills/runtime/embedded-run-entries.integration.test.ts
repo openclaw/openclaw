@@ -3,8 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { writePluginWithSkill } from "../../skills/test-support/skill-plugin-fixtures.test-support.js";
-import { resolveEmbeddedRunSkillEntries } from "./skills-runtime.js";
+import { writePluginWithSkill } from "../test-support/skill-plugin-fixtures.test-support.js";
+import { resolveEmbeddedRunSkillEntries } from "./embedded-run-entries.js";
 
 const tempDirs: string[] = [];
 const originalBundledDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
