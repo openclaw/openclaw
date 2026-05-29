@@ -1,4 +1,7 @@
-import { normalizeGooglePreviewModelId } from "../plugin-sdk/provider-model-id-normalize.js";
+import {
+  normalizeGooglePreviewModelId,
+  normalizeTogetherModelId,
+} from "../plugin-sdk/provider-model-id-normalize.js";
 import { normalizeProviderModelIdWithManifest } from "../plugins/manifest-model-id-normalization.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
@@ -54,6 +57,24 @@ export function normalizeStaticProviderModelId(
 function normalizeBuiltInProviderModelId(provider: string, model: string): string {
   if (provider === "google" || provider === "google-gemini-cli" || provider === "google-vertex") {
     return normalizeGooglePreviewModelId(model);
+  }
+  if (provider === "openrouter") {
+    const trimmed = model.trim();
+    return trimmed && !trimmed.includes("/") ? `openrouter/${trimmed}` : model;
+  }
+  if (provider === "xai") {
+    const xaiAliases: Record<string, string> = {
+      "grok-4-fast-reasoning": "grok-4-fast",
+      "grok-4-1-fast-reasoning": "grok-4-1-fast",
+      "grok-4.20-experimental-beta-0304-reasoning": "grok-4.20-beta-latest-reasoning",
+      "grok-4.20-experimental-beta-0304-non-reasoning": "grok-4.20-beta-latest-non-reasoning",
+      "grok-4.20-reasoning": "grok-4.20-beta-latest-reasoning",
+      "grok-4.20-non-reasoning": "grok-4.20-beta-latest-non-reasoning",
+    };
+    return xaiAliases[normalizeLowercaseStringOrEmpty(model)] ?? model;
+  }
+  if (provider === "together") {
+    return normalizeTogetherModelId(model);
   }
   return model;
 }

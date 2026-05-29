@@ -20,6 +20,12 @@ import {
   INTERNAL_MESSAGE_CHANNEL,
 } from "../../utils/message-channel.js";
 import { listAgentIds } from "../agent-scope.js";
+import {
+  type EmbeddedAgentQueueMessageOptions,
+  formatEmbeddedAgentQueueFailureSummary,
+  queueEmbeddedAgentMessageWithOutcomeAsync,
+  resolveActiveEmbeddedRunSessionId,
+} from "../embedded-agent-runner/runs.js";
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import {
   type AgentWaitResult,
@@ -32,7 +38,7 @@ import {
   SESSIONS_SEND_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult, readStringParam } from "./common.js";
+import { jsonResult, readNonNegativeIntegerParam, readStringParam } from "./common.js";
 import {
   createSessionVisibilityGuard,
   createAgentToAgentPolicy,
@@ -49,11 +55,16 @@ const SessionsSendToolSchema = Type.Object({
   label: Type.Optional(Type.String({ minLength: 1, maxLength: SESSION_LABEL_MAX_LENGTH })),
   agentId: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
   message: Type.String(),
-  timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
+  timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
 });
 
 type GatewayCaller = typeof callGateway;
 const SESSIONS_SEND_REPLY_HISTORY_LIMIT = 50;
+
+function resolveRunScopedFallbackSessionKey(sessionKey: string): string | undefined {
+  const match = /^(agent:[^:]+:.+):run:[^:]+$/.exec(sessionKey.trim());
+  return match?.[1];
+}
 
 function resolveConfiguredAgentMainSessionKey(params: {
   cfg: OpenClawConfig;
@@ -150,13 +161,87 @@ function isTerminalAgentWaitTimeout(result: AgentWaitResult): boolean {
   return result.endedAt !== undefined || Boolean(result.stopReason || result.livenessState);
 }
 
+function isPendingErrorAgentWaitTimeout(result: AgentWaitResult): boolean {
+  return (
+    result.pendingError === true && typeof result.error === "string" && result.error.trim() !== ""
+  );
+}
+
 async function startAgentRun(params: {
   callGateway: GatewayCaller;
   runId: string;
   sendParams: Record<string, unknown>;
   sessionKey: string;
-}): Promise<{ ok: true; runId: string } | { ok: false; result: ReturnType<typeof jsonResult> }> {
+  deliveryTimeoutMs?: number;
+  allowActiveRunQueueFallback?: boolean;
+}): Promise<
+  | {
+      ok: true;
+      runId: string;
+      activeRunQueue?: boolean;
+      a2aSessionKey?: string;
+      a2aDisplayKey?: string;
+    }
+  | { ok: false; result: ReturnType<typeof jsonResult> }
+> {
   try {
+    const activeRunSessionId = params.allowActiveRunQueueFallback
+      ? resolveActiveEmbeddedRunSessionId(params.sessionKey)
+      : undefined;
+    const fallbackSessionKey = activeRunSessionId
+      ? resolveRunScopedFallbackSessionKey(params.sessionKey)
+      : undefined;
+    const messageText =
+      typeof params.sendParams.message === "string" ? params.sendParams.message : undefined;
+    if (activeRunSessionId && fallbackSessionKey && messageText) {
+      const queueOptions: EmbeddedAgentQueueMessageOptions = {
+        steeringMode: "all",
+        debounceMs: 0,
+        deliveryTimeoutMs: params.deliveryTimeoutMs,
+        waitForTranscriptCommit: true,
+      };
+      let queueOutcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
+        activeRunSessionId,
+        messageText,
+        queueOptions,
+      );
+      if (!queueOutcome.queued && queueOutcome.reason === "transcript_commit_wait_unsupported") {
+        const bestEffortQueueOptions = { ...queueOptions };
+        delete bestEffortQueueOptions.waitForTranscriptCommit;
+        queueOutcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
+          activeRunSessionId,
+          messageText,
+          bestEffortQueueOptions,
+        );
+      }
+      if (queueOutcome.queued) {
+        return { ok: true, runId: params.runId, activeRunQueue: true };
+      }
+      try {
+        const response = await params.callGateway<{ runId: string }>({
+          method: "agent",
+          params: {
+            ...params.sendParams,
+            sessionKey: fallbackSessionKey,
+            idempotencyKey: crypto.randomUUID(),
+          },
+          timeoutMs: 10_000,
+        });
+        return {
+          ok: true,
+          runId:
+            typeof response?.runId === "string" && response.runId ? response.runId : params.runId,
+          a2aSessionKey: fallbackSessionKey,
+          a2aDisplayKey: fallbackSessionKey,
+        };
+      } catch (err) {
+        const queueSummary =
+          formatEmbeddedAgentQueueFailureSummary(queueOutcome) ?? "active run queue rejected";
+        throw new Error(`${queueSummary}; fallback_failed error=${formatErrorMessage(err)}`, {
+          cause: err,
+        });
+      }
+    }
     const response = await params.callGateway<{ runId: string }>({
       method: "agent",
       params: params.sendParams,
@@ -198,6 +283,7 @@ export function createSessionsSendTool(opts?: {
       const params = args as Record<string, unknown>;
       const gatewayCall = opts?.callGateway ?? callGateway;
       const message = readStringParam(params, "message", { required: true });
+      const timeoutSeconds = readNonNegativeIntegerParam(params, "timeoutSeconds") ?? 30;
       const { cfg, mainKey, alias, effectiveRequesterKey, restrictToSpawned } =
         resolveSessionToolContext(opts);
 
@@ -350,10 +436,6 @@ export function createSessionsSendTool(opts?: {
       // Normalize sessionKey/sessionId input into a canonical session key.
       const resolvedKey = visibleSession.key;
       const displayKey = visibleSession.displayKey;
-      const timeoutSeconds =
-        typeof params.timeoutSeconds === "number" && Number.isFinite(params.timeoutSeconds)
-          ? Math.max(0, Math.floor(params.timeoutSeconds))
-          : 30;
       const timeoutMs = timeoutSeconds * 1000;
       const announceTimeoutMs = timeoutSeconds === 0 ? 30_000 : timeoutMs;
       const idempotencyKey = crypto.randomUUID();
@@ -473,13 +555,18 @@ export function createSessionsSendTool(opts?: {
         ? ({ status: "skipped", mode: "announce" } as const)
         : ({ status: "pending", mode: "announce" } as const);
 
-      const startA2AFlow = (roundOneReply?: string, waitRunId?: string) => {
+      const startA2AFlow = (
+        roundOneReply?: string,
+        waitRunId?: string,
+        flowTargetSessionKey = resolvedKey,
+        flowDisplayKey = displayKey,
+      ) => {
         if (skipA2AFlow) {
           return;
         }
         void runSessionsSendA2AFlow({
-          targetSessionKey: resolvedKey,
-          displayKey,
+          targetSessionKey: flowTargetSessionKey,
+          displayKey: flowDisplayKey,
           message,
           announceTimeoutMs,
           maxPingPongTurns,
@@ -497,12 +584,16 @@ export function createSessionsSendTool(opts?: {
           runId,
           sendParams,
           sessionKey: displayKey,
+          deliveryTimeoutMs: announceTimeoutMs,
+          allowActiveRunQueueFallback: true,
         });
         if (!start.ok) {
           return start.result;
         }
         runId = start.runId;
-        startA2AFlow(undefined, runId);
+        if (!start.activeRunQueue) {
+          startA2AFlow(undefined, runId, start.a2aSessionKey, start.a2aDisplayKey);
+        }
         return jsonResult({
           runId,
           status: "accepted",
@@ -516,6 +607,7 @@ export function createSessionsSendTool(opts?: {
         runId,
         sendParams,
         sessionKey: displayKey,
+        deliveryTimeoutMs: announceTimeoutMs,
       });
       if (!start.ok) {
         return start.result;
@@ -531,6 +623,16 @@ export function createSessionsSendTool(opts?: {
       });
 
       if (result.status === "timeout") {
+        if (isPendingErrorAgentWaitTimeout(result)) {
+          startA2AFlow(undefined, runId);
+          return jsonResult({
+            runId,
+            status: "timeout",
+            error: result.error,
+            sessionKey: displayKey,
+            delivery,
+          });
+        }
         if (!isTerminalAgentWaitTimeout(result)) {
           startA2AFlow(undefined, runId);
           return jsonResult({

@@ -11,6 +11,7 @@ const rootSdk = require(rootAliasPath) as Record<string, unknown>;
 const rootAliasSource = fs.readFileSync(rootAliasPath, "utf-8");
 const compatPath = fileURLToPath(new URL("../../plugin-sdk/compat.ts", import.meta.url));
 const packageJsonPath = fileURLToPath(new URL("../../../package.json", import.meta.url));
+const diagnosticEventsStateKey = Symbol.for("openclaw.diagnosticEvents.state.v1");
 const legacyRootExportNames = [
   "registerContextEngine",
   "buildMemorySystemPromptAddition",
@@ -34,6 +35,10 @@ type EmptySchema = {
         success: false;
         error: { issues: Array<{ path: Array<string | number>; message: string }> };
       };
+};
+
+type DiagnosticEventsStateFixture = {
+  listeners: Set<(event: { type: string }, metadata: { trusted: boolean }) => void>;
 };
 
 function requirePropertyDescriptor(
@@ -62,10 +67,13 @@ function loadRootAliasWithStubs(options?: {
   env?: Record<string, string | undefined>;
   monolithicExports?: Record<string | symbol, unknown>;
   aliasPath?: string;
+  cwd?: string;
+  defaultTmpDir?: string;
   packageExports?: Record<string, unknown>;
   platform?: string;
   existingPaths?: string[];
   privateLocalOnlySubpaths?: unknown;
+  packageVersion?: string;
 }) {
   let createJitiCalls = 0;
   let jitiLoadCalls = 0;
@@ -78,6 +86,7 @@ function loadRootAliasWithStubs(options?: {
     process: {
       env: options?.env ?? {},
       platform: options?.platform ?? "darwin",
+      cwd: () => options?.cwd ?? "/workdir",
     },
   };
   const wrapper = vm.runInNewContext(
@@ -108,12 +117,14 @@ function loadRootAliasWithStubs(options?: {
             return JSON.stringify(options?.privateLocalOnlySubpaths ?? []);
           }
           return JSON.stringify({
+            version: options?.packageVersion ?? "0.0.0-test",
             exports: {
               "./plugin-sdk/group-access": { default: "./dist/plugin-sdk/group-access.js" },
               ...options?.packageExports,
             },
           });
         },
+        statSync: () => ({ mtimeMs: 12_345, size: 678 }),
         existsSync: (targetPath: string) => {
           if (targetPath.endsWith(path.join("dist", "infra", "diagnostic-events.js"))) {
             return options?.distExists ?? false;
@@ -129,6 +140,12 @@ function loadRootAliasWithStubs(options?: {
             isFile: () => true,
             isDirectory: () => false,
           })),
+      };
+    }
+    if (id === "node:os") {
+      return {
+        tmpdir: () =>
+          context.process.env.TMPDIR ?? options?.defaultTmpDir ?? "/tmp/openclaw-root-alias-test",
       };
     }
     if (id === "jiti") {
@@ -181,6 +198,56 @@ function loadDiagnosticEventsAlias(distEntries: string[]) {
       slowHelper: (): string => "loaded",
     },
   });
+}
+
+function ensureDiagnosticEventsStateFixture(
+  context: Record<PropertyKey, unknown>,
+): DiagnosticEventsStateFixture {
+  const existing = context[diagnosticEventsStateKey] as DiagnosticEventsStateFixture | undefined;
+  if (existing) {
+    return existing;
+  }
+  const state = vm.runInNewContext(
+    `({
+      marker: Symbol.for("openclaw.diagnosticEvents.state.v1"),
+      enabled: true,
+      seq: 0,
+      listeners: new Set(),
+      dispatchDepth: 0,
+      asyncQueue: [],
+      asyncDrainScheduled: false,
+      asyncDroppedEvents: 0,
+      asyncDroppedTrustedEvents: 0,
+      asyncDroppedUntrustedEvents: 0,
+      asyncDroppedPriorityEvents: 0,
+    })`,
+    context,
+  ) as DiagnosticEventsStateFixture;
+  Object.defineProperty(context, diagnosticEventsStateKey, {
+    configurable: true,
+    enumerable: false,
+    value: state,
+    writable: false,
+  });
+  return state;
+}
+
+function requireDiagnosticEventsStateFixture(
+  lazyModule: ReturnType<typeof loadRootAliasWithStubs>,
+): DiagnosticEventsStateFixture {
+  const state = lazyModule.globalContext[diagnosticEventsStateKey] as
+    | DiagnosticEventsStateFixture
+    | undefined;
+  if (!state) {
+    throw new Error("expected diagnostic events state fixture");
+  }
+  return state;
+}
+
+function emitFixtureDiagnosticEvent(state: DiagnosticEventsStateFixture): void {
+  for (const registered of state.listeners) {
+    registered({ type: "model.usage" }, { trusted: false });
+  }
 }
 
 function expectDiagnosticEventAccessor(lazyModule: ReturnType<typeof loadRootAliasWithStubs>) {
@@ -281,6 +348,7 @@ describe("plugin-sdk root alias", () => {
       monolithicExports: {
         slowHelper: (): string => "loaded",
       },
+      packageVersion: "3.4.5",
     });
     const lazyRootSdk = lazyModule.moduleExports;
 
@@ -289,9 +357,36 @@ describe("plugin-sdk root alias", () => {
     expect(lazyModule.createJitiCalls).toBe(1);
     expect(lazyModule.jitiLoadCalls).toBe(1);
     expect(lazyModule.createJitiOptions.at(-1)?.tryNative).toBe(false);
+    expect(lazyModule.createJitiOptions.at(-1)?.fsCache).toBe(
+      path.join("/tmp/openclaw-root-alias-test", "jiti", "openclaw", "3.4.5", "12345-678"),
+    );
     expect((lazyRootSdk.slowHelper as () => string)()).toBe("loaded");
     expect(Object.keys(lazyRootSdk)).toContain("slowHelper");
     expectEnumerableConfigurableDescriptor(lazyRootSdk, "slowHelper");
+  });
+
+  it("preserves jiti's tmpdir guard when root-alias TMPDIR resolves to cwd", () => {
+    const lazyModule = loadRootAliasWithStubs({
+      cwd: "/tmp/openclaw-root-alias-cwd",
+      defaultTmpDir: "/tmp/openclaw-root-alias-fallback",
+      env: { TMPDIR: "/tmp/openclaw-root-alias-cwd" },
+      packageVersion: "3.4.5",
+    });
+
+    expect("slowHelper" in lazyModule.moduleExports).toBe(true);
+    expect(lazyModule.createJitiOptions.at(-1)?.fsCache).toBe(
+      path.join("/tmp/openclaw-root-alias-fallback", "jiti", "openclaw", "3.4.5", "12345-678"),
+    );
+  });
+
+  it("preserves jiti's fs cache environment opt-out for root alias", () => {
+    const lazyModule = loadRootAliasWithStubs({
+      env: { JITI_FS_CACHE: "false" },
+      packageVersion: "3.4.5",
+    });
+
+    expect("slowHelper" in lazyModule.moduleExports).toBe(true);
+    expect(lazyModule.createJitiOptions.at(-1)?.fsCache).toBe(false);
   });
 
   it.each([
@@ -523,6 +618,140 @@ describe("plugin-sdk root alias", () => {
     expect(lazyModule.loadedSpecifiers).not.toContain(
       path.join(packageRoot, "dist", "diagnostic-events-zeta.js"),
     );
+  });
+
+  it("does not depend on single-letter bundled export aliases", () => {
+    expect(rootAliasSource).not.toMatch(/\bmod\.[A-Za-z_$]\b/u);
+  });
+
+  it("resolves the diagnostic event export by function name when dist aliases shift", () => {
+    let subscribeCount = 0;
+    let unsubscribeCount = 0;
+    const lazyModule = loadRootAliasWithStubs({
+      aliasPath: createDistAliasPath(),
+      distEntries: ["diagnostic-events-W3Hz61fI.js"],
+      monolithicExports: {
+        r: function emitFailoverEvent(): void {
+          throw new Error("wrong diagnostic event alias selected");
+        },
+        u: function onDiagnosticEvent(_listener: () => void): () => void {
+          subscribeCount += 1;
+          return () => {
+            unsubscribeCount += 1;
+          };
+        },
+      },
+    });
+
+    const unsubscribe = (
+      lazyModule.moduleExports.onDiagnosticEvent as (
+        listener: (event: { type: string }) => void,
+      ) => () => void
+    )(() => undefined);
+    unsubscribe();
+
+    expect(subscribeCount).toBe(1);
+    expect(unsubscribeCount).toBe(1);
+  });
+
+  it("falls back and removes stale diagnostic listeners when the dist subscription is invalid", () => {
+    const seen: string[] = [];
+    let lazyModule!: ReturnType<typeof loadRootAliasWithStubs>;
+    const preexistingListener = (): void => undefined;
+    lazyModule = loadRootAliasWithStubs({
+      aliasPath: createDistAliasPath(),
+      distEntries: ["diagnostic-events-W3Hz61fI.js"],
+      monolithicExports: {
+        onDiagnosticEvent(listener: (event: { type: string }) => void): undefined {
+          const state = ensureDiagnosticEventsStateFixture(lazyModule.globalContext);
+          state.listeners.add((event, metadata) => {
+            if (!metadata.trusted) {
+              listener(event);
+            }
+          });
+          return undefined;
+        },
+      },
+    });
+    const state = ensureDiagnosticEventsStateFixture(lazyModule.globalContext);
+    state.listeners.add(preexistingListener);
+
+    const unsubscribe = (
+      lazyModule.moduleExports.onDiagnosticEvent as (
+        listener: (event: { type: string }) => void,
+      ) => () => void
+    )((event) => {
+      seen.push(event.type);
+    });
+
+    expect(state.listeners.size).toBe(2);
+    expect(state.listeners.has(preexistingListener)).toBe(true);
+    emitFixtureDiagnosticEvent(state);
+    unsubscribe();
+
+    expect(seen).toEqual(["model.usage"]);
+    expect(state.listeners.size).toBe(1);
+    expect(state.listeners.has(preexistingListener)).toBe(true);
+  });
+
+  it("falls back to shared diagnostic state when the dist subscription throws", () => {
+    const seen: string[] = [];
+    let subscribeCount = 0;
+    const lazyModule = loadRootAliasWithStubs({
+      aliasPath: createDistAliasPath(),
+      distEntries: ["diagnostic-events-W3Hz61fI.js"],
+      monolithicExports: {
+        onDiagnosticEvent(): never {
+          subscribeCount += 1;
+          throw new Error("stale diagnostic subscription");
+        },
+      },
+    });
+
+    const unsubscribe = (
+      lazyModule.moduleExports.onDiagnosticEvent as (
+        listener: (event: { type: string }) => void,
+      ) => () => void
+    )((event) => {
+      seen.push(event.type);
+    });
+    const state = requireDiagnosticEventsStateFixture(lazyModule);
+
+    expect(subscribeCount).toBe(1);
+    expect(state.listeners.size).toBe(1);
+    emitFixtureDiagnosticEvent(state);
+    unsubscribe();
+
+    expect(seen).toEqual(["model.usage"]);
+    expect(state.listeners.size).toBe(0);
+  });
+
+  it("removes the shared-state fallback listener when diagnostic cleanup throws", () => {
+    let diagnosticUnsubscribeCount = 0;
+    const lazyModule = loadRootAliasWithStubs({
+      aliasPath: createDistAliasPath(),
+      distEntries: ["diagnostic-events-W3Hz61fI.js"],
+      monolithicExports: {
+        onDiagnosticEvent(): () => void {
+          return () => {
+            diagnosticUnsubscribeCount += 1;
+            throw new Error("diagnostic cleanup failed");
+          };
+        },
+      },
+    });
+
+    const unsubscribe = (
+      lazyModule.moduleExports.onDiagnosticEvent as (
+        listener: (event: { type: string }) => void,
+      ) => () => void
+    )(() => undefined);
+    const state = requireDiagnosticEventsStateFixture(lazyModule);
+
+    expect(state.listeners.size).toBe(1);
+    expect(() => unsubscribe()).toThrow("diagnostic cleanup failed");
+    expect(diagnosticUnsubscribeCount).toBe(1);
+    expect(state.listeners.size).toBe(0);
   });
 
   it("bridges diagnostic listeners through shared process state when the lazy module is isolated", () => {

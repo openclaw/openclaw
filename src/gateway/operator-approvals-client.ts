@@ -1,10 +1,13 @@
+import { isLoopbackIpAddress } from "@openclaw/net-policy/ip";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../packages/gateway-protocol/src/client-info.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isLoopbackIpAddress } from "../shared/net/ip.js";
 import { resolveGatewayClientBootstrap } from "./client-bootstrap.js";
 import { startGatewayClientWhenEventLoopReady } from "./client-start-readiness.js";
 import { GatewayClient, type GatewayClientOptions } from "./client.js";
 import { getOperatorApprovalRuntimeToken } from "./operator-approval-runtime-token.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "./protocol/client-info.js";
 
 function isLoopbackGatewayUrl(rawUrl: string): boolean {
   try {
@@ -23,6 +26,25 @@ function shouldOmitOperatorApprovalDeviceIdentity(params: {
   password?: string;
 }): boolean {
   return Boolean((params.token || params.password) && isLoopbackGatewayUrl(params.url));
+}
+
+function shouldSendApprovalRuntimeToken(urlSource: string): boolean {
+  // This token is process-local authority; loopback alone may be a tunnel or another gateway.
+  return (
+    urlSource === "local loopback" || urlSource === "missing gateway.remote.url (fallback local)"
+  );
+}
+
+function shouldOmitApprovalRuntimeDeviceIdentity(params: {
+  url: string;
+  token?: string;
+  password?: string;
+  sendsApprovalRuntimeToken: boolean;
+}): boolean {
+  if (params.sendsApprovalRuntimeToken) {
+    return true;
+  }
+  return shouldOmitOperatorApprovalDeviceIdentity(params);
 }
 
 export async function createOperatorApprovalsGatewayClient(
@@ -44,21 +66,25 @@ export async function createOperatorApprovalsGatewayClient(
     gatewayUrl: params.gatewayUrl,
     env: process.env,
   });
+  const sendsApprovalRuntimeToken = shouldSendApprovalRuntimeToken(bootstrap.urlSource);
 
   return new GatewayClient({
     url: bootstrap.url,
     token: bootstrap.auth.token,
     password: bootstrap.auth.password,
-    ...(params.gatewayUrl ? {} : { approvalRuntimeToken: getOperatorApprovalRuntimeToken() }),
+    ...(sendsApprovalRuntimeToken
+      ? { approvalRuntimeToken: getOperatorApprovalRuntimeToken() }
+      : {}),
     preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs,
     clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
     clientDisplayName: params.clientDisplayName,
     mode: GATEWAY_CLIENT_MODES.BACKEND,
     scopes: ["operator.approvals"],
-    deviceIdentity: shouldOmitOperatorApprovalDeviceIdentity({
+    deviceIdentity: shouldOmitApprovalRuntimeDeviceIdentity({
       url: bootstrap.url,
       token: bootstrap.auth.token,
       password: bootstrap.auth.password,
+      sendsApprovalRuntimeToken,
     })
       ? null
       : undefined,

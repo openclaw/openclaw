@@ -10,6 +10,7 @@ const scriptPath = path.join(repoRoot, "scripts/e2e/lib/run-with-pty.mjs");
 
 function runPtyProbe(
   logPath: string,
+  env: Record<string, string> = {},
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const child = spawn(
@@ -21,7 +22,7 @@ function runPtyProbe(
         "-lc",
         'printf "prompt\\n"; IFS= read -r value; printf "got:%s\\n" "$value"',
       ],
-      { stdio: ["pipe", "pipe", "pipe"] },
+      { env: { ...process.env, ...env }, stdio: ["pipe", "pipe", "pipe"] },
     );
     let stdout = "";
     let stderr = "";
@@ -51,6 +52,19 @@ function runPtyProbe(
 }
 
 describe("run-with-pty", () => {
+  it("rejects loose terminal dimension env values", async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "openclaw-run-with-pty-"));
+    const logPath = path.join(tempRoot, "pty.log");
+    try {
+      const result = await runPtyProbe(logPath, { COLUMNS: "120cols" });
+
+      expect(result.code).not.toBe(0);
+      expect(result.stderr).toContain("invalid COLUMNS: 120cols");
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it("forwards stdin through a PTY and writes the transcript log", async () => {
     const tempRoot = await mkdtemp(path.join(os.tmpdir(), "openclaw-run-with-pty-"));
     const logPath = path.join(tempRoot, "pty.log");

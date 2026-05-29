@@ -31,9 +31,7 @@ import {
   type StringSelectMenuInteraction,
 } from "../internal/discord.js";
 import {
-  resolveDiscordChannelConfigWithFallback,
   resolveDiscordChannelPolicyCommandAuthorizer,
-  resolveDiscordGuildEntry,
   resolveDiscordOwnerAccess,
 } from "./allow-list.js";
 import { resolveDiscordChannelTopicSafe } from "./channel-access.js";
@@ -44,7 +42,7 @@ import {
   resolveDiscordCommandOwnerAllowFrom,
   resolveDiscordGuildNativeCommandAuthorized,
   resolveDiscordNativeAutocompleteAuthorized,
-  resolveDiscordNativeCommandAllowlistAccess,
+  resolveDiscordNativeCommandChannelAccessContext,
   resolveDiscordNativeGroupDmAccess,
 } from "./native-command-auth.js";
 import {
@@ -297,41 +295,22 @@ async function dispatchDiscordCommandInteraction(params: {
   const senderIsCommandOwner = commandOwnerOk || commandOwnerAllowAll;
   const ownerAllowListConfigured = discordOwnerAllowList != null;
   const ownerOk = discordOwnerOk;
-  const commandsAllowFromAccess = resolveDiscordNativeCommandAllowlistAccess({
-    cfg,
-    accountId,
-    sender: {
-      id: sender.id,
-      name: sender.name,
-      tag: sender.tag,
-    },
-    chatType: isDirectMessage
-      ? "direct"
-      : isThreadChannel
-        ? "thread"
-        : interaction.guild
-          ? "channel"
-          : "group",
-    conversationId: rawChannelId || undefined,
-    guildId: interaction.guild?.id,
-  });
-  const guildInfo = resolveDiscordGuildEntry({
-    guild: interaction.guild ?? undefined,
-    guildId: interaction.guild?.id ?? undefined,
-    guildEntries: discordConfig?.guilds,
-  });
-  const channelConfig = interaction.guild
-    ? resolveDiscordChannelConfigWithFallback({
-        guildInfo,
-        channelId: rawChannelId,
-        channelName,
-        channelSlug,
-        parentId: threadParentId,
-        parentName: threadParentName,
-        parentSlug: threadParentSlug,
-        scope: isThreadChannel ? "thread" : "channel",
-      })
-    : null;
+  const { commandsAllowFromAccess, guildInfo, channelConfig } =
+    resolveDiscordNativeCommandChannelAccessContext({
+      cfg,
+      discordConfig,
+      accountId,
+      sender,
+      isDirectMessage,
+      isThreadChannel,
+      guild: interaction.guild ?? null,
+      rawChannelId,
+      channelName,
+      channelSlug,
+      threadParentId,
+      threadParentName,
+      threadParentSlug,
+    });
   let nativeRouteStatePromise:
     | ReturnType<typeof nativeCommandRuntime.resolveDiscordNativeInteractionRouteState>
     | undefined;
@@ -549,7 +528,16 @@ async function dispatchDiscordCommandInteraction(params: {
     }
     const messageThreadId = !isDirectMessage && isThreadChannel ? channelId : undefined;
     const pluginThreadParentId = !isDirectMessage && isThreadChannel ? threadParentId : undefined;
-    const { effectiveRoute } = await getNativeRouteState();
+    const routeState = await getNativeRouteState();
+    const { effectiveRoute } = routeState;
+    const pluginCommandAgentId =
+      (isThreadChannel ? threadBindings.getByThreadId(rawChannelId)?.agentId : undefined) ||
+      routeState.configuredBinding?.statefulTarget.agentId ||
+      effectiveRoute.agentId;
+    const targetSessionEntry = nativeCommandRuntime.getSessionEntry({
+      agentId: pluginCommandAgentId,
+      sessionKey: effectiveRoute.sessionKey,
+    });
     const pluginReply = await nativeCommandRuntime.executePluginCommand({
       command: pluginMatch.command,
       args: pluginMatch.args,
@@ -558,7 +546,9 @@ async function dispatchDiscordCommandInteraction(params: {
       channelId,
       isAuthorizedSender: commandAuthorized,
       senderIsOwner: senderIsCommandOwner,
+      agentId: pluginCommandAgentId,
       sessionKey: effectiveRoute.sessionKey,
+      authProfileId: targetSessionEntry?.authProfileOverride,
       commandBody: prompt,
       config: cfg,
       from: isDirectMessage

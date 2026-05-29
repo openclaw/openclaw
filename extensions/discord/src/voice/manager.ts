@@ -80,6 +80,14 @@ const DISCORD_VOICE_FATAL_AUTOJOIN_ERROR_PATTERNS = [
   "forbidden",
 ];
 
+function logFollowUserReconcileVerbose(reason: string, message: string): void {
+  if (reason === "interval") {
+    logger.trace(`discord voice: ${message}`);
+    return;
+  }
+  logVoiceVerbose(message);
+}
+
 type DiscordVoiceSdk = ReturnType<typeof loadDiscordVoiceSdk>;
 type DiscordVoiceConnection = ReturnType<DiscordVoiceSdk["joinVoiceChannel"]>;
 type VoiceChannelResidency = {
@@ -1161,7 +1169,8 @@ export class DiscordVoiceManager {
       );
       return;
     }
-    logVoiceVerbose(
+    logFollowUserReconcileVerbose(
+      reason,
       `follow user reconcile reason=${reason}: ${this.followUserIds.size} users across ${guildIds.length} guilds`,
     );
     const plans = this.selectFollowUserReconcilePlans(guildIds, reason);
@@ -1178,7 +1187,8 @@ export class DiscordVoiceManager {
             );
             return "transient-error" as const;
           }
-          logVoiceVerbose(
+          logFollowUserReconcileVerbose(
+            reason,
             `follow user reconcile reason=${reason}: no voice state guild ${plan.guildId} user ${userId}: ${formatErrorMessage(err)}`,
           );
           return undefined;
@@ -1416,7 +1426,8 @@ export class DiscordVoiceManager {
         );
         return "transient-error" as const;
       }
-      logVoiceVerbose(
+      logFollowUserReconcileVerbose(
+        reason,
         `follow user reconcile reason=${reason}: no bot voice state guild ${guildId}: ${formatErrorMessage(err)}`,
       );
       return undefined;

@@ -22,6 +22,7 @@ import {
   handleSendChat as handleSendChatInternal,
   removeQueuedMessage as removeQueuedMessageInternal,
   resetChatInputHistoryNavigation as resetChatInputHistoryNavigationInternal,
+  retryQueuedChatMessage as retryQueuedChatMessageInternal,
   steerQueuedChatMessage as steerQueuedChatMessageInternal,
   type ChatInputHistoryKeyInput,
   type ChatInputHistoryKeyResult,
@@ -94,10 +95,16 @@ import type {
   WikiImportInsights,
   WikiMemoryPalace,
 } from "./controllers/dreaming.ts";
-import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
+import {
+  dismissExecApprovalPrompt,
+  isStaleApprovalResolutionError,
+  refreshPendingApprovalQueue,
+  type ExecApprovalRequest,
+} from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
 import type {
   ClawHubSearchResult,
+  ClawHubSkillSecurityVerdict,
   ClawHubSkillDetail,
   SkillMessage,
 } from "./controllers/skills.ts";
@@ -465,6 +472,7 @@ export class OpenClawApp extends LitElement {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   })();
   @state() usageScope: "instance" | "family" = "family";
+  @state() usageAgentId: string | null = null;
   @state() usageSelectedSessions: string[] = [];
   @state() usageSelectedDays: string[] = [];
   @state() usageSelectedHours: number[] = [];
@@ -515,6 +523,8 @@ export class OpenClawApp extends LitElement {
     | import("./views/cron-quick-create.ts").CronQuickCreateDraft
     | null = null;
   @state() cronJobsLoadingMore = false;
+  cronJobsReloadPending = false;
+  cronJobsReloadPendingTableFilters = false;
   @state() cronJobs: CronJob[] = [];
   @state() cronJobsTotal = 0;
   @state() cronJobsHasMore = false;
@@ -571,6 +581,7 @@ export class OpenClawApp extends LitElement {
   @state() skillsBusyKey: string | null = null;
   @state() skillMessages: Record<string, SkillMessage> = {};
   @state() skillsDetailKey: string | null = null;
+  @state() skillsDetailTab: "overview" | "card" = "overview";
   @state() clawhubSearchQuery = "";
   @state() clawhubSearchResults: ClawHubSearchResult[] | null = null;
   @state() clawhubSearchLoading = false;
@@ -581,6 +592,13 @@ export class OpenClawApp extends LitElement {
   @state() clawhubDetailError: string | null = null;
   @state() clawhubInstallSlug: string | null = null;
   @state() clawhubInstallMessage: { kind: "success" | "error"; text: string } | null = null;
+  @state() clawhubVerdicts: Record<string, ClawHubSkillSecurityVerdict> = {};
+  @state() clawhubVerdictsLoading = false;
+  @state() clawhubVerdictsError: string | null = null;
+  @state() skillCardContents: Record<string, string> = {};
+  @state() skillCardContentKeys: Record<string, string> = {};
+  @state() skillCardLoadingKey: string | null = null;
+  @state() skillCardErrors: Record<string, string> = {};
 
   @state() healthLoading = false;
   @state() healthResult: HealthSummary | null = null;
@@ -1047,6 +1065,13 @@ export class OpenClawApp extends LitElement {
     );
   }
 
+  async retryQueuedChatMessage(id: string) {
+    await retryQueuedChatMessageInternal(
+      this as unknown as Parameters<typeof retryQueuedChatMessageInternal>[0],
+      id,
+    );
+  }
+
   async handleSendChat(
     messageOverride?: string,
     opts?: Parameters<typeof handleSendChatInternal>[2],
@@ -1226,8 +1251,16 @@ export class OpenClawApp extends LitElement {
         id: active.id,
         decision,
       });
-      this.execApprovalQueue = this.execApprovalQueue.filter((entry) => entry.id !== active.id);
+      dismissExecApprovalPrompt(this, active.id);
     } catch (err) {
+      if (isStaleApprovalResolutionError(err)) {
+        dismissExecApprovalPrompt(this, active.id);
+        await refreshPendingApprovalQueue(this);
+        return;
+      }
+      if (!this.execApprovalQueue.some((entry) => entry.id === active.id)) {
+        return;
+      }
       this.execApprovalError = `Approval failed: ${String(err)}`;
     } finally {
       this.execApprovalBusy = false;

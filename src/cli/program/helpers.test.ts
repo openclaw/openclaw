@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   collectOption,
   parsePositiveIntOrUndefined,
+  parseStrictPositiveIntOption,
   parseStrictPositiveIntOrUndefined,
   resolveActionArgs,
   resolveCommandOptionArgs,
@@ -19,12 +20,13 @@ describe("program helpers", () => {
     { value: null, expected: undefined },
     { value: "", expected: undefined },
     { value: 5, expected: 5 },
-    { value: 5.9, expected: 5 },
+    { value: 5.9, expected: undefined },
     { value: 0, expected: undefined },
     { value: -1, expected: undefined },
     { value: Number.NaN, expected: undefined },
     { value: "10", expected: 10 },
-    { value: "10ms", expected: 10 },
+    { value: "10ms", expected: undefined },
+    { value: "1.5", expected: undefined },
     { value: "0", expected: undefined },
     { value: "nope", expected: undefined },
     { value: true, expected: undefined },
@@ -51,6 +53,13 @@ describe("program helpers", () => {
     { value: true, expected: undefined },
   ])("parseStrictPositiveIntOrUndefined(%j)", ({ value, expected }) => {
     expect(parseStrictPositiveIntOrUndefined(value)).toBe(expected);
+  });
+
+  it("parseStrictPositiveIntOption rejects partial numeric strings", () => {
+    expect(parseStrictPositiveIntOption("10", "--limit")).toBe(10);
+    expect(() => parseStrictPositiveIntOption("10ms", "--limit")).toThrow(
+      "--limit must be a positive integer.",
+    );
   });
 
   it("resolveActionArgs returns args when command has arg array", () => {

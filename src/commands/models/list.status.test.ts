@@ -92,6 +92,19 @@ const mocks = vi.hoisted(() => {
       fal: ["FAL_KEY"],
     }),
     resolveProviderEnvAuthEvidence: vi.fn().mockReturnValue({}),
+    resolveProviderEnvAuthLookupMaps: vi.fn().mockReturnValue({
+      aliasMap: { "codex-cli": "openai-codex" },
+      envCandidateMap: {
+        anthropic: ["ANTHROPIC_API_KEY"],
+        google: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+        minimax: ["MINIMAX_API_KEY"],
+        "minimax-portal": ["MINIMAX_OAUTH_TOKEN", "MINIMAX_API_KEY"],
+        openai: ["OPENAI_API_KEY"],
+        "openai-codex": ["OPENAI_OAUTH_TOKEN"],
+        fal: ["FAL_KEY"],
+      },
+      authEvidenceMap: {},
+    }),
     listProviderEnvAuthLookupKeys: vi
       .fn()
       .mockImplementation(() => [
@@ -206,6 +219,7 @@ vi.mock("../../agents/model-auth-env-vars.js", () => ({
   listProviderEnvAuthLookupKeys: mocks.listProviderEnvAuthLookupKeys,
   resolveProviderEnvApiKeyCandidates: mocks.resolveProviderEnvApiKeyCandidates,
   resolveProviderEnvAuthEvidence: mocks.resolveProviderEnvAuthEvidence,
+  resolveProviderEnvAuthLookupMaps: mocks.resolveProviderEnvAuthLookupMaps,
   listKnownProviderEnvApiKeyNames: mocks.listKnownProviderEnvApiKeyNames,
 }));
 vi.mock("../../agents/provider-auth-aliases.js", () => ({
@@ -361,6 +375,16 @@ async function withAgentScopeOverrides<T>(
 }
 
 describe("modelsStatusCommand auth overview", () => {
+  it.each([
+    [{ probeTimeout: "5000ms" }, "--probe-timeout"],
+    [{ probeConcurrency: "2.5" }, "--probe-concurrency"],
+    [{ probeMaxTokens: "64x" }, "--probe-max-tokens"],
+  ])("rejects partial probe numeric option %s", async (opts, label) => {
+    await expect(
+      modelsStatusCommand({ json: true, ...opts }, createRuntime() as never),
+    ).rejects.toThrow(label);
+  });
+
   it("includes masked auth sources in JSON output", async () => {
     await modelsStatusCommand({ json: true }, runtime as never);
     const payload = parseFirstJsonLog(runtime);
@@ -433,6 +457,34 @@ describe("modelsStatusCommand auth overview", () => {
     const payload = parseFirstJsonLog(localRuntime);
     expect(payload.agentDir).toBe("/tmp/openclaw-isolated-agent");
     expect(payload.auth.storePath).toBe("/tmp/openclaw-isolated-agent/auth-profiles.json");
+  });
+
+  it("honors deprecated PI_CODING_AGENT_DIR when OPENCLAW_AGENT_DIR is unset", async () => {
+    const localRuntime = createRuntime();
+    const previousOpenClaw = process.env.OPENCLAW_AGENT_DIR;
+    const previousPi = process.env.PI_CODING_AGENT_DIR;
+    delete process.env.OPENCLAW_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = "/tmp/openclaw-legacy-agent";
+    mocks.resolveAgentDir.mockClear();
+    try {
+      await modelsStatusCommand({ json: true }, localRuntime as never);
+    } finally {
+      if (previousOpenClaw === undefined) {
+        delete process.env.OPENCLAW_AGENT_DIR;
+      } else {
+        process.env.OPENCLAW_AGENT_DIR = previousOpenClaw;
+      }
+      if (previousPi === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = previousPi;
+      }
+    }
+
+    expect(mocks.resolveAgentDir).not.toHaveBeenCalled();
+    expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith("/tmp/openclaw-legacy-agent");
+    const payload = parseFirstJsonLog(localRuntime);
+    expect(payload.agentDir).toBe("/tmp/openclaw-legacy-agent");
   });
 
   it("uses agent overrides and reports sources", async () => {
@@ -1261,7 +1313,7 @@ describe("modelsStatusCommand auth overview", () => {
     }
   });
 
-  it("handles cli backend and aliased provider auth summaries", async () => {
+  it("handles cli backend and exact provider auth summaries", async () => {
     const localRuntime = createRuntime();
     const originalLoadConfig = mocks.loadConfig.getMockImplementation();
     const originalEnvImpl = mocks.resolveEnvApiKey.getMockImplementation();
@@ -1308,9 +1360,9 @@ describe("modelsStatusCommand auth overview", () => {
       const aliasPayload = parseFirstJsonLog(aliasRuntime);
       const providers = aliasPayload.auth.providers as Array<{ provider: string }>;
       expect(
-        providers.reduce((count, provider) => count + (provider.provider === "zai" ? 1 : 0), 0),
+        providers.reduce((count, provider) => count + (provider.provider === "z.ai" ? 1 : 0), 0),
       ).toBe(1);
-      expect(providers.map((provider) => provider.provider)).not.toContain("z.ai");
+      expect(providers.map((provider) => provider.provider)).not.toContain("zai");
     } finally {
       if (originalLoadConfig) {
         mocks.loadConfig.mockImplementation(originalLoadConfig);

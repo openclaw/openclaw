@@ -4,7 +4,7 @@ title: "Codex harness runtime"
 read_when:
   - You need the Codex harness runtime support contract
   - You are debugging native Codex tools, hooks, compaction, or feedback upload
-  - You are changing plugin behavior across PI and Codex harness turns
+  - You are changing plugin behavior across OpenClaw and Codex harness turns
 ---
 
 This page documents the runtime contract for Codex harness turns. For setup and
@@ -13,7 +13,7 @@ see [Codex harness reference](/plugins/codex-harness-reference).
 
 ## Overview
 
-Codex mode is not PI with a different model call underneath. Codex owns more of
+Codex mode is not OpenClaw with a different model call underneath. Codex owns more of
 the native model loop, and OpenClaw adapts its plugin, tool, session, and
 diagnostic surfaces around that boundary.
 
@@ -24,7 +24,7 @@ continuation, and native compaction.
 
 Prompt routing follows the selected runtime, not just the provider string. A
 native Codex turn receives Codex app-server developer instructions, while an
-explicit PI compatibility route keeps the normal OpenClaw/PI system prompt even
+explicit OpenClaw compatibility route keeps the normal OpenClaw system prompt even
 when it uses Codex-flavored OpenAI auth or transport.
 
 Native Codex keeps Codex-owned base/model instructions and project-doc behavior
@@ -49,11 +49,12 @@ newly selected model.
 ## Visible replies and heartbeats
 
 When a direct/source chat turn runs through the Codex harness, visible replies
-default to the message tool: final assistant text stays private unless the
-agent calls `message(action="send")`. This matches GPT models well because they
-can decide whether source-channel output is useful. Set
-`messages.visibleReplies: "automatic"` to restore the old mode where final
-assistant text posts automatically.
+default to automatic final assistant delivery for internal WebChat surfaces.
+This keeps Codex aligned with the Pi harness prompt contract: agents reply
+normally, and OpenClaw posts the final text to the source conversation. Set
+`messages.visibleReplies: "message_tool"` when a direct/source chat should
+intentionally keep final assistant text private unless the agent calls
+`message(action="send")`.
 
 Codex heartbeat turns also get `heartbeat_respond` in the searchable OpenClaw
 tool catalog by default, so the agent can record whether the wake should stay
@@ -72,7 +73,7 @@ The Codex harness has three hook layers:
 
 | Layer                                 | Owner                    | Purpose                                                             |
 | ------------------------------------- | ------------------------ | ------------------------------------------------------------------- |
-| OpenClaw plugin hooks                 | OpenClaw                 | Product/plugin compatibility across PI and Codex harnesses.         |
+| OpenClaw plugin hooks                 | OpenClaw                 | Product/plugin compatibility across OpenClaw and Codex harnesses.   |
 | Codex app-server extension middleware | OpenClaw bundled plugins | Per-turn adapter behavior around OpenClaw dynamic tools.            |
 | Codex native hooks                    | Codex                    | Low-level Codex lifecycle and native tool policy from Codex config. |
 
@@ -97,6 +98,16 @@ harness adapter. For Codex-native tools, Codex owns the canonical tool record.
 OpenClaw can mirror selected events, but it cannot rewrite the native Codex
 thread unless Codex exposes that operation through app-server or native hook
 callbacks.
+
+Codex app-server report-mode `PreToolUse` events defer plugin approval requests
+to the matching app-server approval. If an OpenClaw `before_tool_call` hook
+returns `requireApproval` while the native payload sets report approval mode
+(`openclaw_approval_mode` is `"report"`), the native hook relay records the
+plugin approval requirement and returns no native decision. When Codex sends the
+app-server approval request for the same tool use, OpenClaw opens the plugin
+approval prompt and maps the decision back to Codex. Codex `PermissionRequest`
+events are a separate approval path and can still route through OpenClaw
+approvals when the runtime is configured for that bridge.
 
 Codex app-server item notifications also provide async `after_tool_call`
 observations for native tool completions that are not already covered by the
@@ -240,7 +251,7 @@ settings such as `agents.defaults.imageGenerationModel`, `videoGenerationModel`,
 `pdfModel`, and `messages.tts`.
 
 Text, images, video, music, TTS, approvals, and messaging-tool output continue
-through the normal OpenClaw delivery path. Media generation does not require PI.
+through the normal OpenClaw delivery path. Media generation does not require the legacy runtime.
 When Codex emits a native image-generation item with a `savedPath`, OpenClaw
 forwards that exact file through the normal reply-media path even if the Codex
 turn has no assistant text.

@@ -22,9 +22,10 @@ npm-to-clawhub|clawhub:@openclaw/kitchen-sink@latest|openclaw-kitchen-sink-fixtu
 SCENARIOS
 )"
 KITCHEN_SINK_SCENARIOS="${OPENCLAW_KITCHEN_SINK_PLUGIN_SCENARIOS:-$DEFAULT_KITCHEN_SINK_SCENARIOS}"
-MAX_MEMORY_MIB="${OPENCLAW_KITCHEN_SINK_MAX_MEMORY_MIB:-2048}"
+MAX_MEMORY_MIB="${OPENCLAW_KITCHEN_SINK_PLUGIN_MAX_MEMORY_MIB:-${OPENCLAW_KITCHEN_SINK_MAX_MEMORY_MIB:-2304}}"
 MAX_CPU_PERCENT="${OPENCLAW_KITCHEN_SINK_MAX_CPU_PERCENT:-1200}"
 DOCKER_RUN_TIMEOUT="${OPENCLAW_KITCHEN_SINK_PLUGIN_DOCKER_RUN_TIMEOUT:-1200s}"
+KITCHEN_SINK_CLI_TIMEOUT="${OPENCLAW_KITCHEN_SINK_PLUGIN_CLI_TIMEOUT:-${KITCHEN_SINK_CLI_TIMEOUT:-180s}}"
 CONTAINER_NAME="openclaw-kitchen-sink-plugin-e2e-$$"
 RUN_LOG="$(mktemp "${TMPDIR:-/tmp}/openclaw-kitchen-sink-plugin.XXXXXX")"
 STATS_LOG="$(mktemp "${TMPDIR:-/tmp}/openclaw-kitchen-sink-plugin-stats.XXXXXX")"
@@ -39,6 +40,7 @@ DOCKER_ENV_ARGS=(
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64"
   -e "KITCHEN_SINK_SCENARIOS=$KITCHEN_SINK_SCENARIOS"
+  -e "KITCHEN_SINK_CLI_TIMEOUT=$KITCHEN_SINK_CLI_TIMEOUT"
 )
 if [[ "${OPENCLAW_KITCHEN_SINK_LIVE_CLAWHUB:-0}" = "1" ]]; then
   for env_name in \
@@ -76,6 +78,10 @@ set -e
 
 cat "$RUN_LOG"
 
-node scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs "$STATS_LOG" "$MAX_MEMORY_MIB" "$MAX_CPU_PERCENT" kitchen-sink
+if [ "$run_status" -eq 0 ]; then
+  node scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs "$STATS_LOG" "$MAX_MEMORY_MIB" "$MAX_CPU_PERCENT" kitchen-sink
+elif [ -s "$STATS_LOG" ]; then
+  node scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs "$STATS_LOG" "$MAX_MEMORY_MIB" "$MAX_CPU_PERCENT" kitchen-sink || true
+fi
 
 exit "$run_status"

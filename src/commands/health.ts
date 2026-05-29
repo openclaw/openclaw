@@ -13,6 +13,7 @@ import { withProgress } from "../cli/progress.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { listContextEngineQuarantines } from "../context-engine/registry.js";
 import {
   buildGatewayConnectionDetails,
   callGateway,
@@ -43,6 +44,7 @@ import type {
   AgentHealthSummary,
   ChannelAccountHealthSummary,
   ChannelHealthSummary,
+  ContextEngineHealthSummary,
   HealthSummary,
   PluginHealthErrorSummary,
   PluginHealthSummary,
@@ -166,6 +168,32 @@ export function formatModelPricingHealthLine(summary: HealthSummary): string | n
   return `Model pricing: warning (optional pricing refresh degraded)${detail}`;
 }
 
+function buildContextEngineHealthSummary(): ContextEngineHealthSummary | undefined {
+  const quarantined: ContextEngineHealthSummary["quarantined"] = [];
+  for (const entry of listContextEngineQuarantines()) {
+    const summary: ContextEngineHealthSummary["quarantined"][number] = {
+      engineId: entry.engineId,
+      operation: entry.operation,
+      reason: entry.reason,
+      failedAt: entry.failedAt.getTime(),
+    };
+    if (entry.owner) {
+      summary.owner = entry.owner;
+    }
+    quarantined.push(summary);
+  }
+  return quarantined.length > 0 ? { quarantined } : undefined;
+}
+
+export function formatContextEngineHealthLine(summary: HealthSummary): string | null {
+  const quarantined = summary.contextEngines?.quarantined ?? [];
+  if (quarantined.length === 0) {
+    return null;
+  }
+  const engines = quarantined.map((entry) => entry.engineId).join(", ");
+  return `Context engine: warning (${quarantined.length} quarantined; downgraded to legacy: ${engines})`;
+}
+
 const resolveHeartbeatSummary = (cfg: OpenClawConfig, agentId: string) =>
   resolveHeartbeatSummaryForAgent(cfg, agentId);
 
@@ -203,7 +231,7 @@ const resolveAgentOrder = (cfg: OpenClawConfig) => {
 
 const buildSessionSummary = async (storePath: string) => {
   const { loadSessionStore } = await import("../config/sessions/store.js");
-  const store = loadSessionStore(storePath);
+  const store = loadSessionStore(storePath, { clone: false });
   const sessions = Object.entries(store)
     .filter(([key]) => key !== "global" && key !== "unknown")
     .map(([key, entry]) => ({ key, updatedAt: entry?.updatedAt ?? 0 }))
@@ -571,12 +599,14 @@ export async function getHealthSnapshot(params?: {
   }
 
   const pluginHealth = buildPluginHealthSummary();
+  const contextEngineHealth = buildContextEngineHealthSummary();
   const summary: HealthSummary = {
     ok: true,
     ts: Date.now(),
     durationMs: Date.now() - start,
     ...(params?.eventLoop ? { eventLoop: params.eventLoop } : {}),
     ...(pluginHealth ? { plugins: pluginHealth } : {}),
+    ...(contextEngineHealth ? { contextEngines: contextEngineHealth } : {}),
     modelPricing: getGatewayModelPricingHealth({ enabled: isGatewayModelPricingEnabled(cfg) }),
     channels,
     channelOrder,
@@ -781,6 +811,10 @@ export async function healthCommand(
     const modelPricingLine = formatModelPricingHealthLine(summary);
     if (modelPricingLine) {
       runtime.log(styleHealthChannelLine(modelPricingLine, rich));
+    }
+    const contextEngineLine = formatContextEngineHealthLine(summary);
+    if (contextEngineLine) {
+      runtime.log(styleHealthChannelLine(contextEngineLine, rich));
     }
     for (const plugin of displayPlugins) {
       const channelSummary = summary.channels?.[plugin.id];

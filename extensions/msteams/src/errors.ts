@@ -33,28 +33,31 @@ function extractStatusCode(err: unknown): number | null {
   if (!isRecord(err)) {
     return null;
   }
-  const direct = err.statusCode ?? err.status;
-  if (typeof direct === "number" && Number.isFinite(direct)) {
-    return direct;
-  }
-  if (typeof direct === "string") {
-    const parsed = Number.parseInt(direct, 10);
-    if (Number.isFinite(parsed)) {
-      return parsed;
+  const parseStatusCode = (value: unknown): number | null => {
+    if (typeof value === "number") {
+      return Number.isInteger(value) && value >= 100 && value <= 599 ? value : null;
     }
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (!/^\d{3}$/.test(trimmed)) {
+        return null;
+      }
+      const parsed = Number(trimmed);
+      return parsed >= 100 && parsed <= 599 ? parsed : null;
+    }
+    return null;
+  };
+  const direct = err.statusCode ?? err.status;
+  const directStatus = parseStatusCode(direct);
+  if (directStatus !== null) {
+    return directStatus;
   }
 
   const response = err.response;
   if (isRecord(response)) {
-    const status = response.status;
-    if (typeof status === "number" && Number.isFinite(status)) {
-      return status;
-    }
-    if (typeof status === "string") {
-      const parsed = Number.parseInt(status, 10);
-      if (Number.isFinite(parsed)) {
-        return parsed;
-      }
+    const responseStatus = parseStatusCode(response.status);
+    if (responseStatus !== null) {
+      return responseStatus;
     }
   }
 
@@ -102,7 +105,7 @@ function extractRetryAfterMs(err: unknown): number | null {
     return retryAfter >= 0 ? retryAfter * 1000 : null;
   }
   if (typeof retryAfter === "string") {
-    const parsed = Number.parseFloat(retryAfter);
+    const parsed = parseNonNegativeRetryAfterSeconds(retryAfter);
     if (Number.isFinite(parsed) && parsed >= 0) {
       return parsed * 1000;
     }
@@ -121,7 +124,7 @@ function extractRetryAfterMs(err: unknown): number | null {
   if (isRecord(headers)) {
     const raw = headers["retry-after"] ?? headers["Retry-After"];
     if (typeof raw === "string") {
-      const parsed = Number.parseFloat(raw);
+      const parsed = parseNonNegativeRetryAfterSeconds(raw);
       if (Number.isFinite(parsed) && parsed >= 0) {
         return parsed * 1000;
       }
@@ -137,7 +140,7 @@ function extractRetryAfterMs(err: unknown): number | null {
   ) {
     const raw = (headers as { get: (name: string) => string | null }).get("retry-after");
     if (raw) {
-      const parsed = Number.parseFloat(raw);
+      const parsed = parseNonNegativeRetryAfterSeconds(raw);
       if (Number.isFinite(parsed) && parsed >= 0) {
         return parsed * 1000;
       }
@@ -145,6 +148,14 @@ function extractRetryAfterMs(err: unknown): number | null {
   }
 
   return null;
+}
+
+function parseNonNegativeRetryAfterSeconds(raw: string): number {
+  const trimmed = raw.trim();
+  if (!/^\d+(?:\.\d+)?$/.test(trimmed)) {
+    return Number.NaN;
+  }
+  return Number(trimmed);
 }
 
 type MSTeamsSendErrorKind =

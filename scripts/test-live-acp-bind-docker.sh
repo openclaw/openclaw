@@ -111,7 +111,21 @@ mkdir -p "$NPM_CONFIG_PREFIX" "$HOME/.local/bin" "$XDG_CACHE_HOME" "$COREPACK_HO
 chmod 700 "$XDG_CACHE_HOME" "$COREPACK_HOME" "$NPM_CONFIG_CACHE" || true
 export PATH="$HOME/.local/bin:$NPM_CONFIG_PREFIX/bin:$PATH"
 run_setup_command() {
-  timeout --kill-after=30s "${OPENCLAW_LIVE_ACP_BIND_SETUP_TIMEOUT_SECONDS:-180}s" "$@"
+  local timeout_value="${OPENCLAW_LIVE_ACP_BIND_SETUP_TIMEOUT_SECONDS:-180}s"
+  local timeout_bin=""
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_bin="timeout"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    timeout_bin="gtimeout"
+  else
+    echo "timeout command not found; cannot bound live ACP bind setup after ${timeout_value}" >&2
+    return 127
+  fi
+  if "$timeout_bin" --kill-after=1s 1s true >/dev/null 2>&1; then
+    "$timeout_bin" --kill-after=30s "$timeout_value" "$@"
+  else
+    "$timeout_bin" "$timeout_value" "$@"
+  fi
 }
 if [ "${OPENCLAW_DOCKER_AUTH_PRESTAGED:-0}" != "1" ]; then
   IFS=',' read -r -a auth_dirs <<<"${OPENCLAW_DOCKER_AUTH_DIRS_RESOLVED:-}"
@@ -356,7 +370,7 @@ for ACP_AGENT in "${ACP_AGENTS[@]}"; do
     -e OPENCODE_CONFIG_CONTENT \
     -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
     -e HOME=/home/node \
-    -e NODE_OPTIONS=--disable-warning=ExperimentalWarning \
+    -e NODE_OPTIONS="$(openclaw_live_container_node_options)" \
     -e OPENCLAW_SKIP_CHANNELS=1 \
     -e OPENCLAW_VITEST_FS_MODULE_CACHE=0 \
     -e OPENCLAW_DOCKER_AUTH_PRESTAGED="$DOCKER_AUTH_PRESTAGED" \

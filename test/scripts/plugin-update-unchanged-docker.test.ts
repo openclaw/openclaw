@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 
 const PLUGIN_UPDATE_DOCKER_SCRIPT = "scripts/e2e/plugin-update-unchanged-docker.sh";
 const PLUGIN_UPDATE_SCENARIO_SCRIPT = "scripts/e2e/lib/plugin-update/unchanged-scenario.sh";
+const CORRUPT_UPDATE_SCENARIO_SCRIPT = "scripts/e2e/lib/plugin-update/corrupt-update-scenario.sh";
 const PLUGIN_UPDATE_PROBE_SCRIPT = "scripts/e2e/lib/plugin-update/probe.mjs";
 const CORRUPT_PLUGIN_ID = "demo-corrupt-plugin";
 
@@ -66,10 +67,33 @@ describe("plugin update unchanged Docker E2E", () => {
 
     expect(script).toContain("OPENCLAW_PLUGIN_UPDATE_TIMEOUT_SECONDS");
     expect(script).toContain(
-      'timeout "${plugin_update_timeout_seconds}s" node "$entry" plugins update',
+      'openclaw_e2e_maybe_timeout "${plugin_update_timeout_seconds}s" node "$entry" plugins update',
+    );
+    expect(script).not.toMatch(
+      /^\s*timeout "\$\{plugin_update_timeout_seconds\}s" node "\$entry"/mu,
     );
     expect(script).toContain('"--- plugin update output ---"');
     expect(script).toContain('"--- local registry output ---"');
+  });
+
+  it("bounds corrupt plugin update commands and prints diagnostics on hangs", () => {
+    const script = readFileSync(CORRUPT_UPDATE_SCENARIO_SCRIPT, "utf8");
+
+    expect(script).toContain("OPENCLAW_UPDATE_CORRUPT_PLUGIN_TIMEOUT_SECONDS");
+    expect(
+      script.match(/openclaw_e2e_maybe_timeout "\$\{update_timeout_seconds\}s" \\/gu)?.length,
+    ).toBe(2);
+    expect(script).toContain("--channel beta");
+    expect(script).toContain("OPENCLAW_UPDATE_POST_CORE=1");
+    expect(script).not.toContain(
+      'node "$entry" update --channel beta --tag "${OPENCLAW_CURRENT_PACKAGE_TGZ',
+    );
+    expect(script).toContain(
+      "openclaw update failed or timed out after ${update_timeout_seconds}s",
+    );
+    expect(script).toContain(
+      "updated OpenClaw entry failed or timed out after ${update_timeout_seconds}s",
+    );
   });
 
   it("requires disabled-after-failure corrupt plugin updates to stay warnings", () => {

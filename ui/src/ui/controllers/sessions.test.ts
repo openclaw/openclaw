@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { isSessionRunActive } from "../session-run-state.ts";
 import {
   applySessionsChangedEvent,
   createSessionAndRefresh,
   deleteSessionsAndRefresh,
   loadSessions,
+  parseSessionsFilterInteger,
   subscribeSessions,
   syncSelectedSessionMessageSubscription,
   type SessionsState,
@@ -66,6 +68,17 @@ describe("subscribeSessions", () => {
 
     expect(request).toHaveBeenCalledWith("sessions.subscribe", {});
     expect(state.sessionsError).toBeNull();
+  });
+});
+
+describe("parseSessionsFilterInteger", () => {
+  it("accepts safe decimal integer filters only", () => {
+    expect(parseSessionsFilterInteger("120")).toBe(120);
+    expect(parseSessionsFilterInteger(" 50 ")).toBe(50);
+    expect(parseSessionsFilterInteger("1e3")).toBe(0);
+    expect(parseSessionsFilterInteger("0x1000")).toBe(0);
+    expect(parseSessionsFilterInteger("1.5")).toBe(0);
+    expect(parseSessionsFilterInteger("9007199254740993")).toBe(0);
   });
 });
 
@@ -528,6 +541,57 @@ describe("loadSessions", () => {
     }
   });
 
+  it("keeps stale running session list rows idle when no live run remains", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`unexpected method: ${method}`);
+      }
+      return {
+        ts: 2,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          {
+            key: "main",
+            kind: "direct",
+            updatedAt: 2,
+            hasActiveRun: false,
+            status: "running",
+          },
+        ],
+      };
+    });
+    const state = createState(request, {
+      sessionKey: "main",
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          {
+            key: "main",
+            kind: "direct",
+            updatedAt: 1,
+            hasActiveRun: false,
+            status: "done",
+          },
+        ],
+      },
+    } as Partial<SessionsState & { sessionKey: string }>);
+
+    await loadSessions(state);
+
+    const current = state.sessionsResult?.sessions[0];
+    expect(current).toMatchObject({
+      key: "main",
+      hasActiveRun: false,
+      status: "running",
+    });
+    expect(isSessionRunActive(current!)).toBe(false);
+  });
+
   it("omits the active-window cutoff when archived sessions are shown", async () => {
     const request = vi.fn(async (method: string) => {
       if (method !== "sessions.list") {
@@ -581,6 +645,63 @@ describe("loadSessions", () => {
     expect(request).toHaveBeenCalledWith("sessions.list", {
       activeMinutes: 120,
       limit: 50,
+      includeGlobal: true,
+      includeUnknown: true,
+      configuredAgentsOnly: true,
+    });
+  });
+
+  it("ignores non-decimal and unsafe sessions filter numbers", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`unexpected method: ${method}`);
+      }
+      return {
+        ts: 1,
+        path: "(multiple)",
+        count: 0,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [],
+      };
+    });
+    const state = createState(request, {
+      sessionsFilterActive: "1e3",
+      sessionsFilterLimit: "9007199254740993",
+      sessionsShowArchived: false,
+    });
+
+    await loadSessions(state);
+
+    expect(request).toHaveBeenCalledWith("sessions.list", {
+      includeGlobal: true,
+      includeUnknown: true,
+      configuredAgentsOnly: true,
+    });
+  });
+
+  it("ignores unsafe numeric session filter overrides", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`unexpected method: ${method}`);
+      }
+      return {
+        ts: 1,
+        path: "(multiple)",
+        count: 0,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [],
+      };
+    });
+    const state = createState(request);
+
+    await loadSessions(state, {
+      activeMinutes: Number.MAX_SAFE_INTEGER + 1,
+      limit: Number.MAX_SAFE_INTEGER + 1,
+      includeGlobal: true,
+      includeUnknown: true,
+    });
+
+    expect(request).toHaveBeenCalledWith("sessions.list", {
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
@@ -1327,6 +1448,83 @@ describe("applySessionsChangedEvent", () => {
     expect(state.chatStream).toBe("");
     expect(state.chatStreamStartedAt).toBe(3);
     expect(requestUpdate).not.toHaveBeenCalled();
+  });
+
+  it("keeps stale running session events idle after a local terminal reconcile", () => {
+    const state = createState(async () => undefined, {
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          {
+            key: "agent:super:main",
+            kind: "direct",
+            updatedAt: 1,
+            hasActiveRun: false,
+            status: "done",
+          },
+        ],
+      },
+    });
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:super:main",
+      sessionId: "sess-main",
+      phase: "message",
+      status: "running",
+      updatedAt: 2,
+      ts: 2,
+    });
+
+    expect(applied).toEqual({ applied: true, change: "updated" });
+    const current = state.sessionsResult?.sessions[0];
+    expect(current).toMatchObject({
+      key: "agent:super:main",
+      hasActiveRun: false,
+      status: "running",
+    });
+    expect(isSessionRunActive(current!)).toBe(false);
+  });
+
+  it("revives active state when a new lifecycle start follows stale idle state", () => {
+    const state = createState(async () => undefined, {
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          {
+            key: "agent:super:main",
+            kind: "direct",
+            updatedAt: 1,
+            hasActiveRun: false,
+            status: "done",
+          },
+        ],
+      },
+    });
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:super:main",
+      sessionId: "sess-main",
+      phase: "start",
+      status: "running",
+      startedAt: 2,
+      updatedAt: 2,
+      ts: 2,
+    });
+
+    expect(applied).toEqual({ applied: true, change: "updated" });
+    const current = state.sessionsResult?.sessions[0];
+    expect(current).toMatchObject({
+      key: "agent:super:main",
+      hasActiveRun: true,
+      status: "running",
+    });
+    expect(isSessionRunActive(current!)).toBe(true);
   });
 
   it("updates fresh context usage from websocket event payloads", () => {

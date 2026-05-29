@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -36,6 +36,17 @@ function runHelper(script: string) {
   });
 }
 
+function getPackageManagerHelperBlock(): string {
+  const script = readFileSync(scriptPath, "utf8");
+  const start = script.indexOf("PNPM_CMD=()");
+  const end = script.indexOf("merge_framework_machos()");
+
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+
+  return script.slice(start, end);
+}
+
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
@@ -43,14 +54,107 @@ afterEach(() => {
 });
 
 describe("package-mac-app plist stamping", () => {
-  it("fails closed when required bundled resources are missing", () => {
+  it("keeps dependency installation lockfile-safe", () => {
     const script = readFileSync(scriptPath, "utf8");
-    const modelCatalogBlock = script.slice(
-      script.indexOf(
-        'MODEL_CATALOG_SRC="$ROOT_DIR/node_modules/@earendil-works/pi-ai/dist/models.generated.js"',
-      ),
-      script.indexOf('echo "📦 Copying Control UI assets"'),
+    const installBlock = script.slice(
+      script.indexOf('if [[ "${SKIP_PNPM_INSTALL:-0}" != "1" ]]'),
+      script.indexOf('if [[ -z "${APP_BUILD:-}" ]]'),
     );
+
+    expect(installBlock).toContain("run_pnpm install --frozen-lockfile");
+    expect(installBlock).toContain("--config.node-linker=hoisted");
+    expect(installBlock).not.toContain("--no-frozen-lockfile");
+  });
+
+  it("falls back to corepack pnpm when the pnpm shim is absent", () => {
+    const helperBlock = getPackageManagerHelperBlock();
+    const tempRoot = mkdtempSync(path.join(tmpdir(), "openclaw-package-pnpm-root-"));
+    const toolsDir = mkdtempSync(path.join(tmpdir(), "openclaw-package-pnpm-tools-"));
+    const logPath = path.join(tempRoot, "corepack.log");
+    tempDirs.push(tempRoot, toolsDir);
+
+    const corepackPath = path.join(toolsDir, "corepack");
+    writeFileSync(
+      corepackPath,
+      [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        'printf \'%s|%s\\n\' "$PWD" "$*" >> "$OPENCLAW_TEST_LOG"',
+        'if [[ "${1:-}" == "pnpm" && "${2:-}" == "--version" ]]; then',
+        "  echo '11.2.2'",
+        "fi",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    chmodSync(corepackPath, 0o755);
+
+    const result = runHelper(`
+      set -euo pipefail
+      ROOT_DIR=${JSON.stringify(tempRoot)}
+      OPENCLAW_TEST_LOG=${JSON.stringify(logPath)}
+      export OPENCLAW_TEST_LOG
+      PATH=${JSON.stringify(`${toolsDir}:/usr/bin:/bin`)}
+      ${helperBlock}
+      run_pnpm install --frozen-lockfile --config.node-linker=hoisted
+      run_pnpm build
+    `);
+
+    expect(result.status).toBe(0);
+    expect(readFileSync(logPath, "utf8").trim().split("\n")).toEqual([
+      `${tempRoot}|pnpm --version`,
+      `${tempRoot}|pnpm install --frozen-lockfile --config.node-linker=hoisted`,
+      `${tempRoot}|pnpm build`,
+    ]);
+  });
+
+  it("fails with an actionable error when neither pnpm nor corepack pnpm is available", () => {
+    const helperBlock = getPackageManagerHelperBlock();
+    const tempRoot = mkdtempSync(path.join(tmpdir(), "openclaw-package-pnpm-root-"));
+    const toolsDir = mkdtempSync(path.join(tmpdir(), "openclaw-package-pnpm-tools-"));
+    tempDirs.push(tempRoot, toolsDir);
+
+    const result = runHelper(`
+      set -euo pipefail
+      ROOT_DIR=${JSON.stringify(tempRoot)}
+      PATH=${JSON.stringify(`${toolsDir}:/usr/bin:/bin`)}
+      ${helperBlock}
+      run_pnpm build
+    `);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("pnpm is not on PATH and corepack pnpm is unavailable");
+  });
+
+  it("does not kill unrelated OpenClaw processes during packaging", () => {
+    const script = readFileSync(scriptPath, "utf8");
+    const stopBlock = script.slice(
+      script.indexOf("running_packaged_app_pids()"),
+      script.indexOf('echo "🔏 Signing bundle'),
+    );
+
+    expect(script).not.toContain("killall -q OpenClaw");
+    expect(stopBlock).toContain('local app_binary="$APP_ROOT/Contents/MacOS/OpenClaw"');
+    expect(stopBlock).toContain('pgrep -x "$PRODUCT"');
+    expect(stopBlock).toContain('grep -Fx "$app_binary"');
+    expect(stopBlock).toContain(
+      '[[ "$command_line" == "$app_binary" || "$command_line" == "$app_binary "* ]]',
+    );
+  });
+
+  it("keeps mac packaging script checks in the macOS CI lane", () => {
+    const pkg = JSON.parse(readFileSync("package.json", "utf8")) as {
+      scripts?: Record<string, string>;
+    };
+    const macosCi = pkg.scripts?.["test:macos:ci"] ?? "";
+
+    expect(macosCi).toContain("test/scripts/package-mac-app.test.ts");
+    expect(macosCi).toContain("test/scripts/package-mac-dist.test.ts");
+    expect(macosCi).toContain("test/scripts/create-dmg.test.ts");
+  });
+
+  it("fails closed when required Swift resources are missing", () => {
+    const script = readFileSync(scriptPath, "utf8");
     const openClawKitBlock = script.slice(
       script.indexOf(
         'OPENCLAWKIT_BUNDLE="$(build_path_for_arch "$PRIMARY_ARCH")/$BUILD_CONFIG/OpenClawKit_OpenClawKit.bundle"',
@@ -58,10 +162,6 @@ describe("package-mac-app plist stamping", () => {
       script.indexOf('echo "📦 Copying Textual resources"'),
     );
 
-    expect(modelCatalogBlock).toContain("ERROR: model catalog missing");
-    expect(modelCatalogBlock).toContain("exit 1");
-    expect(modelCatalogBlock).not.toContain("WARN:");
-    expect(modelCatalogBlock).not.toContain("continuing");
     expect(openClawKitBlock).toContain("ERROR: OpenClawKit resource bundle not found");
     expect(openClawKitBlock).toContain("exit 1");
     expect(openClawKitBlock).not.toContain("WARN:");

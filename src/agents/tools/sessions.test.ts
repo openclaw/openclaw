@@ -112,6 +112,30 @@ const installRegistry = async () => {
         },
       },
       {
+        pluginId: "feishu",
+        source: "test",
+        plugin: {
+          id: "feishu",
+          meta: {
+            id: "feishu",
+            label: "Feishu",
+            selectionLabel: "Feishu",
+            docsPath: "/channels/feishu",
+            blurb: "Feishu test stub.",
+            preferSessionLookupForAnnounceTarget: true,
+          },
+          capabilities: { chatTypes: ["direct", "group"] },
+          messaging: {
+            resolveSessionConversation: resolveSessionConversationStub,
+            resolveSessionTarget: resolveSessionTargetStub,
+          },
+          config: {
+            listAccountIds: () => ["default"],
+            resolveAccount: () => ({}),
+          },
+        },
+      },
+      {
         pluginId: "whatsapp",
         source: "test",
         plugin: {
@@ -408,6 +432,43 @@ describe("resolveAnnounceTarget", () => {
     });
   });
 
+  it("hydrates announce delivery from explicit external context over stale webchat session fields", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      sessions: [
+        {
+          key: "agent:main:feishu:direct:ou_user",
+          channel: "webchat",
+          lastChannel: "webchat",
+          lastTo: "session:dashboard",
+          route: {
+            channel: "webchat",
+            target: { to: "session:dashboard" },
+          },
+          deliveryContext: {
+            channel: "feishu",
+            to: "user:ou_user",
+          },
+          origin: {
+            provider: "feishu",
+            accountId: "work",
+            threadId: "thread-77",
+          },
+        },
+      ],
+    });
+
+    const target = await resolveAnnounceTarget({
+      sessionKey: "agent:main:feishu:direct:ou_user",
+      displayKey: "agent:main:feishu:direct:ou_user",
+    });
+    expect(target).toEqual({
+      channel: "feishu",
+      to: "user:ou_user",
+      accountId: "work",
+      threadId: "thread-77",
+    });
+  });
+
   it("preserves threaded Slack session keys when sessions.list lacks stored thread metadata", async () => {
     callGatewayMock.mockResolvedValueOnce({
       sessions: [
@@ -514,10 +575,32 @@ describe("sessions_list gating", () => {
 
     const details = requireDetails(result);
     expect(details.count).toBe(1);
+    expect(details.visibility).toBeUndefined();
     const session = requireSessions(details)[0];
     expect(session?.key).toBe("agent:codex:acp:child-1");
     expect(session?.parentSessionKey).toBe(MAIN_AGENT_SESSION_KEY);
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("includes visibility metadata when session visibility is restricted", async () => {
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      tools: {
+        agentToAgent: { enabled: true },
+        sessions: { visibility: "tree" },
+      },
+    });
+
+    const result = await createMainSessionsListTool().execute("call1", {});
+
+    const details = requireDetails(result);
+    expect(details.count).toBe(1);
+    expect(details.visibility).toMatchObject({
+      mode: "tree",
+      restricted: true,
+      warning:
+        "Session visibility is restricted (effective tools.sessions.visibility=tree). Results may omit sessions outside the current scope. The count field reflects only sessions within the current scope.",
+    });
   });
 
   it("keeps literal current keys for message previews", async () => {
@@ -699,6 +782,19 @@ describe("sessions_send gating", () => {
     const details = requireDetails(result);
     expect(details.status).toBe("error");
     expect(details.error).toBe("Either sessionKey or label is required");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it.each([1.5, -1, "1sec"])("rejects invalid timeoutSeconds value %s", async (timeoutSeconds) => {
+    const tool = createMainSessionsSendTool();
+
+    await expect(
+      tool.execute("call-invalid-timeout", {
+        sessionKey: MAIN_AGENT_SESSION_KEY,
+        message: "hi",
+        timeoutSeconds,
+      }),
+    ).rejects.toThrow("timeoutSeconds must be a non-negative integer");
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 

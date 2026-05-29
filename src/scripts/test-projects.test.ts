@@ -113,9 +113,7 @@ const resolveExpectedVitestCliEntry = () => {
   return path.join(path.dirname(vitestPackageJson), "vitest.mjs");
 };
 const resolveExpectedVitestNodeArgs = (env: NodeJS.ProcessEnv) =>
-  ["1", "true", "yes", "on"].includes(
-    env.OPENCLAW_VITEST_ENABLE_MAGLEV?.trim().toLowerCase() ?? "",
-  )
+  ["1", "true", "yes", "on"].includes(env.OPENCLAW_VITEST_ENABLE_MAGLEV?.trim().toLowerCase() ?? "")
     ? []
     : ["--no-maglev"];
 const VITEST_NODE_PREFIX = [
@@ -1078,7 +1076,7 @@ describe("test-projects args", () => {
     expect(
       findUnmatchedExplicitTestTargets([
         "test/vitest/vitest.agents-core.config.ts",
-        "test/vitest/vitest.agents-pi-embedded.config.ts",
+        "test/vitest/vitest.agents-embedded-agent.config.ts",
         "test/vitest/vitest.agents-support.config.ts",
         "test/vitest/vitest.agents-tools.config.ts",
       ]),

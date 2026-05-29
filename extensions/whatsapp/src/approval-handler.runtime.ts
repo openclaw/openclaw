@@ -1,29 +1,21 @@
 import {
+  buildChannelApprovalExpiredText,
+  buildChannelApprovalResolvedText,
   createChannelApprovalNativeRuntimeAdapter,
-  type ExpiredApprovalView,
   type PendingApprovalView,
-  type ResolvedApprovalView,
+  resolvePreparedApprovalAccountId,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
 import {
-  buildExecApprovalPendingReplyPayload,
-  type ExecApprovalReplyDecision,
-  type ExecApprovalPendingReplyParams,
-} from "openclaw/plugin-sdk/approval-reply-runtime";
+  buildApprovalReactionPendingContent,
+  type ApprovalReactionPendingContent,
+} from "openclaw/plugin-sdk/approval-reaction-runtime";
 import {
-  buildApprovalResolvedReplyPayload,
-  buildPluginApprovalExpiredMessage,
-  buildPluginApprovalPendingReplyPayload,
-  buildPluginApprovalResolvedMessage,
   type ExecApprovalRequest,
-  type ExecApprovalResolved,
   type PluginApprovalRequest,
-  type PluginApprovalResolved,
 } from "openclaw/plugin-sdk/approval-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  buildWhatsAppApprovalReactionHint,
   registerWhatsAppApprovalReactionTarget,
   unregisterWhatsAppApprovalReactionTarget,
 } from "./approval-reactions.js";
@@ -34,11 +26,7 @@ import { sendMessageWhatsApp, sendTypingWhatsApp } from "./send.js";
 const log = createSubsystemLogger("whatsapp/approvals");
 
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
-type ApprovalResolved = ExecApprovalResolved | PluginApprovalResolved;
-type WhatsAppPendingDelivery = {
-  text: string;
-  allowedDecisions: readonly ExecApprovalReplyDecision[];
-};
+type WhatsAppPendingDelivery = ApprovalReactionPendingContent;
 type PreparedWhatsAppApprovalTarget = {
   to: string;
   accountId?: string;
@@ -53,93 +41,12 @@ type WhatsAppFinalPayload = {
   text: string;
 };
 
-function appendReactionHint(params: {
-  text: string;
-  allowedDecisions: WhatsAppPendingDelivery["allowedDecisions"];
-}): string {
-  const hint = buildWhatsAppApprovalReactionHint(params.allowedDecisions);
-  return hint ? `${params.text}\n\n${hint}` : params.text;
-}
-
-function replaceApprovalIdPlaceholder(text: string | undefined, approvalId: string): string {
-  return (text ?? "").replace(/\/approve\s+<id>/g, `/approve ${approvalId}`);
-}
-
 function buildPendingPayload(params: {
   request: ApprovalRequest;
-  approvalKind: "exec" | "plugin";
-  nowMs: number;
   view: PendingApprovalView;
+  nowMs: number;
 }): WhatsAppPendingDelivery {
-  const allowedDecisions = params.view.actions.map((action) => action.decision);
-  const payload =
-    params.approvalKind === "plugin"
-      ? buildPluginApprovalPendingReplyPayload({
-          request: params.request as PluginApprovalRequest,
-          nowMs: params.nowMs,
-          allowedDecisions,
-        })
-      : buildExecApprovalPendingReplyPayload({
-          approvalId: params.request.id,
-          approvalSlug: params.request.id.slice(0, 8),
-          approvalCommandId: params.request.id,
-          warningText:
-            params.view.approvalKind === "exec"
-              ? (params.view.warningText ?? undefined)
-              : undefined,
-          command: params.view.approvalKind === "exec" ? params.view.commandText : "",
-          cwd: params.view.approvalKind === "exec" ? (params.view.cwd ?? undefined) : undefined,
-          host:
-            params.view.approvalKind === "exec" && params.view.host === "node" ? "node" : "gateway",
-          nodeId:
-            params.view.approvalKind === "exec" ? (params.view.nodeId ?? undefined) : undefined,
-          allowedDecisions,
-          expiresAtMs: params.request.expiresAtMs,
-          nowMs: params.nowMs,
-        } satisfies ExecApprovalPendingReplyParams);
-  return {
-    text: appendReactionHint({
-      text: replaceApprovalIdPlaceholder(payload.text, params.request.id),
-      allowedDecisions,
-    }),
-    allowedDecisions,
-  };
-}
-
-function buildResolvedText(params: {
-  request: ApprovalRequest;
-  resolved: ApprovalResolved;
-  view: ResolvedApprovalView;
-}): string {
-  if (params.view.approvalKind === "plugin") {
-    return buildPluginApprovalResolvedMessage(params.resolved as PluginApprovalResolved);
-  }
-  const resolvedByText = params.resolved.resolvedBy
-    ? ` Resolved by ${params.resolved.resolvedBy}.`
-    : "";
-  const payload = buildApprovalResolvedReplyPayload({
-    approvalId: params.request.id,
-    approvalSlug: params.request.id.slice(0, 8),
-    text: `✅ Exec approval ${params.resolved.decision}.${resolvedByText} ID: ${params.request.id}`,
-  });
-  return payload.text ?? "";
-}
-
-function buildExpiredText(params: { request: ApprovalRequest; view: ExpiredApprovalView }): string {
-  if (params.view.approvalKind === "plugin") {
-    return buildPluginApprovalExpiredMessage(params.request as PluginApprovalRequest);
-  }
-  return `⏱️ Exec approval expired. ID: ${params.request.id}`;
-}
-
-function resolvePreparedAccountId(params: {
-  plannedAccountId?: string | null;
-  contextAccountId?: string | null;
-}): string | undefined {
-  return (
-    normalizeOptionalString(params.plannedAccountId) ??
-    normalizeOptionalString(params.contextAccountId)
-  );
+  return buildApprovalReactionPendingContent(params);
 }
 
 export const whatsappApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapter<
@@ -155,15 +62,15 @@ export const whatsappApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
     shouldHandle: ({ context }) => Boolean(context),
   },
   presentation: {
-    buildPendingPayload: ({ request, approvalKind, nowMs, view }) =>
-      buildPendingPayload({ request, approvalKind, nowMs, view }),
+    buildPendingPayload: ({ request, nowMs, view }) =>
+      buildPendingPayload({ request, view, nowMs }),
     buildResolvedResult: ({ request, resolved, view }) => ({
       kind: "update",
-      payload: { text: buildResolvedText({ request, resolved, view }) },
+      payload: { text: buildChannelApprovalResolvedText({ request, resolved, view }) },
     }),
     buildExpiredResult: ({ request, view }) => ({
       kind: "update",
-      payload: { text: buildExpiredText({ request, view }) },
+      payload: { text: buildChannelApprovalExpiredText({ request, view }) },
     }),
   },
   transport: {
@@ -174,7 +81,7 @@ export const whatsappApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
       }
       const prepared: PreparedWhatsAppApprovalTarget = {
         to,
-        accountId: resolvePreparedAccountId({
+        accountId: resolvePreparedApprovalAccountId({
           plannedAccountId: (plannedTarget.target as { accountId?: string | null }).accountId,
           contextAccountId: accountId,
         }),
@@ -192,12 +99,16 @@ export const whatsappApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
         cfg,
         ...(preparedTarget.accountId ? { accountId: preparedTarget.accountId } : {}),
       }).catch(() => {});
-      const result = await sendMessageWhatsApp(preparedTarget.to, pendingPayload.text, {
-        cfg,
-        verbose,
-        preserveLeadingWhitespace: true,
-        ...(preparedTarget.accountId ? { accountId: preparedTarget.accountId } : {}),
-      });
+      const result = await sendMessageWhatsApp(
+        preparedTarget.to,
+        pendingPayload.reactionPayload.text ?? "",
+        {
+          cfg,
+          verbose,
+          preserveLeadingWhitespace: true,
+          ...(preparedTarget.accountId ? { accountId: preparedTarget.accountId } : {}),
+        },
+      );
       if (!result.messageId) {
         return null;
       }
@@ -230,7 +141,7 @@ export const whatsappApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
         remoteJid: entry.remoteJid,
         messageId: entry.messageId,
         approvalId: request.id,
-        allowedDecisions: pendingPayload.allowedDecisions,
+        allowedDecisions: pendingPayload.reactionPayload.allowedDecisions,
         ttlMs: Math.max(1, view.expiresAtMs - Date.now()),
       })
         ? true

@@ -13,7 +13,7 @@ export function resolvePlaywrightInstallRunner(options = {}) {
   const env = options.env ?? process.env;
   return resolvePnpmRunner({
     comSpec: options.comSpec ?? env.ComSpec ?? env.COMSPEC,
-    npmExecPath: env.npm_execpath,
+    npmExecPath: env === process.env ? env.npm_execpath : (env.npm_execpath ?? ""),
     platform: options.platform,
     pnpmArgs: playwrightInstallArgs,
   });

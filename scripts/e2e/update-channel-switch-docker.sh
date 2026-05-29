@@ -89,6 +89,8 @@ OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT="$(
   node scripts/e2e/lib/package-compat.mjs "$package_version"
 )"
 export OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT
+command -v openclaw >/dev/null
+openclaw_e2e_enable_openclaw_cli_timeout
 
 openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}"
 

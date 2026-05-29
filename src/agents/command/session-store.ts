@@ -18,7 +18,7 @@ import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { isCliProvider } from "../model-selection.js";
 import { deriveSessionTotalTokens, hasNonzeroUsage } from "../usage.js";
 
-type RunResult = Awaited<ReturnType<(typeof import("../pi-embedded.js"))["runEmbeddedPiAgent"]>>;
+type RunResult = Awaited<ReturnType<(typeof import("../embedded-agent.js"))["runEmbeddedAgent"]>>;
 
 const usageFormatModuleLoader = createLazyImportLoader(() => import("../../utils/usage-format.js"));
 const contextModuleLoader = createLazyImportLoader(() => import("../context.js"));
@@ -214,18 +214,28 @@ export async function updateSessionStoreAfterAgentRun(params: {
     );
     next.inputTokens = input;
     next.outputTokens = output;
-    if (typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0) {
-      next.totalTokens = totalTokens;
-      next.totalTokensFresh = true;
-    } else if (compactionTokensAfter !== undefined) {
+    const hasUsageTotalTokens =
+      typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0;
+    const useCompactionSnapshot = compactionTokensAfter !== undefined && !hasUsageTotalTokens;
+    if (useCompactionSnapshot) {
       next.totalTokens = compactionTokensAfter;
+      next.totalTokensFresh = true;
+      next.inputTokens = undefined;
+      next.outputTokens = undefined;
+      next.cacheRead = undefined;
+      next.cacheWrite = undefined;
+      next.contextBudgetStatus = undefined;
+    } else if (hasUsageTotalTokens) {
+      next.totalTokens = totalTokens;
       next.totalTokensFresh = true;
     } else {
       next.totalTokens = undefined;
       next.totalTokensFresh = false;
     }
-    next.cacheRead = usage.cacheRead ?? 0;
-    next.cacheWrite = usage.cacheWrite ?? 0;
+    if (!useCompactionSnapshot) {
+      next.cacheRead = usage.cacheRead ?? 0;
+      next.cacheWrite = usage.cacheWrite ?? 0;
+    }
     // Snapshot cost like tokens (runEstimatedCostUsd is already computed from
     // cumulative run usage, so assign directly instead of accumulating).
     // Fixes #69347: cost was inflated 1x-72x by accumulating on every persist.
@@ -235,6 +245,11 @@ export async function updateSessionStoreAfterAgentRun(params: {
   } else if (compactionTokensAfter !== undefined && !preserveUserFacingRunState) {
     next.totalTokens = compactionTokensAfter;
     next.totalTokensFresh = true;
+    next.inputTokens = undefined;
+    next.outputTokens = undefined;
+    next.cacheRead = undefined;
+    next.cacheWrite = undefined;
+    next.contextBudgetStatus = undefined;
   } else if (
     !preserveUserFacingRunState &&
     typeof entry.totalTokens === "number" &&
@@ -253,14 +268,18 @@ export async function updateSessionStoreAfterAgentRun(params: {
         ...(touchInteraction ? { lastInteractionAt: next.lastInteractionAt } : {}),
       }
     : removeLifecycleStateFromMetadataPatch(next);
-  const persisted = await updateSessionStore(storePath, (store) => {
-    if (preserveUserFacingRunState && !store[sessionKey]) {
-      return undefined;
-    }
-    const merged = mergeSessionEntry(store[sessionKey], metadataPatch);
-    store[sessionKey] = merged;
-    return merged;
-  });
+  const persisted = await updateSessionStore(
+    storePath,
+    (store) => {
+      if (preserveUserFacingRunState && !store[sessionKey]) {
+        return undefined;
+      }
+      const merged = mergeSessionEntry(store[sessionKey], metadataPatch);
+      store[sessionKey] = merged;
+      return merged;
+    },
+    { takeCacheOwnership: true },
+  );
   if (persisted) {
     sessionStore[sessionKey] = persisted;
   }

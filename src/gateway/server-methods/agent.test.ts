@@ -182,6 +182,7 @@ const makeContext = (): GatewayRequestContext =>
     agentDeltaSentAt: new Map(),
     bufferedAgentEvents: new Map(),
     chatAbortedRuns: new Map(),
+    clearChatRunState: vi.fn(),
     agentRunSeq: new Map(),
     broadcast: vi.fn(),
     nodeSendToSession: vi.fn(),
@@ -2162,6 +2163,38 @@ describe("gateway agent handler", () => {
     expect(spawnedCall.workspaceDir).toBe("/tmp/inherited");
   });
 
+  it("forwards spawnedCwd as runtime cwd for spawned sessions", async () => {
+    primeMainAgentRun();
+    mockMainSessionEntry({
+      spawnedBy: "agent:main:subagent:parent",
+      spawnedWorkspaceDir: "/tmp/inherited",
+      spawnedCwd: "/tmp/task-repo",
+    });
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {
+        "agent:main:main": buildExistingMainStoreEntry({
+          spawnedBy: "agent:main:subagent:parent",
+          spawnedWorkspaceDir: "/tmp/inherited",
+          spawnedCwd: "/tmp/task-repo",
+        }),
+      };
+      return await updater(store);
+    });
+    mocks.agentCommand.mockClear();
+
+    await invokeAgent(
+      {
+        message: "spawned run",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "cwd-forwarded",
+      },
+      { reqId: "cwd-forwarded-1" },
+    );
+    const spawnedCall = await waitForAgentCommandCall<{ cwd?: string; workspaceDir?: string }>();
+    expect(spawnedCall.workspaceDir).toBe("/tmp/inherited");
+    expect(spawnedCall.cwd).toBe("/tmp/task-repo");
+  });
+
   it("keeps origin messageChannel as webchat while delivery channel uses last session channel", async () => {
     mockMainSessionEntry({
       sessionId: "existing-session-id",
@@ -2691,16 +2724,20 @@ describe("gateway agent handler", () => {
       primeMainAgentRun();
       const abortError = new Error("This operation was aborted");
       abortError.name = "AbortError";
-      mocks.agentCommand.mockRejectedValueOnce(abortError);
       const context = makeContext();
+      const runId = "task-registry-agent-run-abort-error";
+      mocks.agentCommand.mockImplementationOnce(() => {
+        context.chatAbortControllers.get(runId)?.controller.abort();
+        return Promise.reject(abortError);
+      });
 
       await invokeAgent(
         {
           message: "background cli task",
           sessionKey: "agent:main:main",
-          idempotencyKey: "task-registry-agent-run-abort-error",
+          idempotencyKey: runId,
         },
-        { context, reqId: "task-registry-agent-run-abort-error" },
+        { context, reqId: runId },
       );
 
       await waitForAssertion(() => {
@@ -2716,7 +2753,143 @@ describe("gateway agent handler", () => {
             runId: "task-registry-agent-run-abort-error",
             status: "timeout",
             summary: "aborted",
+            stopReason: "rpc",
           },
+        );
+      });
+    });
+  });
+
+  it("classifies timeout async gateway agent rejections as timed out", async () => {
+    await withTempDir({ prefix: "openclaw-gateway-agent-task-timeout-error-" }, async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      primeMainAgentRun();
+      const timeoutError = new Error("chat run timed out");
+      timeoutError.name = "TimeoutError";
+      const context = makeContext();
+      const runId = "task-registry-agent-run-timeout-error";
+      mocks.agentCommand.mockImplementationOnce(() => {
+        context.chatAbortControllers.get(runId)?.controller.abort(timeoutError);
+        return Promise.reject(timeoutError);
+      });
+
+      await invokeAgent(
+        {
+          message: "background cli task",
+          sessionKey: "agent:main:main",
+          idempotencyKey: runId,
+        },
+        { context, reqId: runId },
+      );
+
+      await waitForAssertion(() => {
+        expectRecordFields(findTaskByRunId("task-registry-agent-run-timeout-error"), {
+          runtime: "cli",
+          childSessionKey: "agent:main:main",
+          status: "timed_out",
+          error: "TimeoutError: chat run timed out",
+        });
+        expectRecordFields(
+          context.dedupe.get("agent:task-registry-agent-run-timeout-error")?.payload,
+          {
+            runId: "task-registry-agent-run-timeout-error",
+            status: "timeout",
+            summary: "aborted",
+            stopReason: "timeout",
+          },
+        );
+      });
+    });
+  });
+
+  it("classifies wrapped rejections after gateway timeout as timed out", async () => {
+    await withTempDir(
+      { prefix: "openclaw-gateway-agent-task-wrapped-timeout-error-" },
+      async (root) => {
+        process.env.OPENCLAW_STATE_DIR = root;
+        resetTaskRegistryForTests();
+        primeMainAgentRun();
+        const timeoutReason = new Error("chat run timed out");
+        timeoutReason.name = "TimeoutError";
+        const wrappedError = new Error("fallback result classified terminal abort");
+        wrappedError.name = "FailoverError";
+        const context = makeContext();
+        const runId = "task-registry-agent-run-wrapped-timeout-error";
+        mocks.agentCommand.mockImplementationOnce(() => {
+          context.chatAbortControllers.get(runId)?.controller.abort(timeoutReason);
+          return Promise.reject(wrappedError);
+        });
+
+        await invokeAgent(
+          {
+            message: "background cli task",
+            sessionKey: "agent:main:main",
+            idempotencyKey: runId,
+          },
+          { context, reqId: runId },
+        );
+
+        await waitForAssertion(() => {
+          expectRecordFields(findTaskByRunId("task-registry-agent-run-wrapped-timeout-error"), {
+            runtime: "cli",
+            childSessionKey: "agent:main:main",
+            status: "timed_out",
+            error: "FailoverError: fallback result classified terminal abort",
+          });
+          expectRecordFields(
+            context.dedupe.get("agent:task-registry-agent-run-wrapped-timeout-error")?.payload,
+            {
+              runId: "task-registry-agent-run-wrapped-timeout-error",
+              status: "timeout",
+              summary: "aborted",
+              stopReason: "timeout",
+            },
+          );
+          expect(
+            context.dedupe.get("agent:task-registry-agent-run-wrapped-timeout-error")?.ok,
+          ).toBe(true);
+        });
+      },
+    );
+  });
+
+  it("does not hide provider timeout async gateway agent rejections", async () => {
+    await withTempDir({ prefix: "openclaw-gateway-agent-task-provider-timeout-" }, async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      primeMainAgentRun();
+      const providerError = new Error("provider request timed out");
+      providerError.name = "TimeoutError";
+      mocks.agentCommand.mockRejectedValueOnce(providerError);
+      const context = makeContext();
+
+      await invokeAgent(
+        {
+          message: "background cli task",
+          sessionKey: "agent:main:main",
+          idempotencyKey: "task-registry-agent-run-provider-timeout",
+        },
+        { context, reqId: "task-registry-agent-run-provider-timeout" },
+      );
+
+      await waitForAssertion(() => {
+        expectRecordFields(findTaskByRunId("task-registry-agent-run-provider-timeout"), {
+          runtime: "cli",
+          childSessionKey: "agent:main:main",
+          status: "timed_out",
+          error: "TimeoutError: provider request timed out",
+        });
+        expectRecordFields(
+          context.dedupe.get("agent:task-registry-agent-run-provider-timeout")?.payload,
+          {
+            runId: "task-registry-agent-run-provider-timeout",
+            status: "error",
+            summary: "TimeoutError: provider request timed out",
+          },
+        );
+        expect(context.dedupe.get("agent:task-registry-agent-run-provider-timeout")?.ok).toBe(
+          false,
         );
       });
     });

@@ -83,6 +83,12 @@ describe("package-mac-dist plist validation", () => {
     const script = readFileSync(scriptPath, "utf8");
     const dsymBlock = script.slice(script.indexOf('if [[ "$SKIP_DSYM" != "1" ]]'));
 
+    expect(dsymBlock).toContain('for arch in "${DSYM_ARCHS[@]}"');
+    expect(dsymBlock).toContain('if [[ ! -d "$BUILD_ROOT/$arch" ]]; then');
+    expect(dsymBlock).toContain('MISSING_DSYM_ARCHS+=("$arch")');
+    expect(dsymBlock).toContain("Error: dSYM not found for architecture(s):");
+    expect(dsymBlock).not.toContain('find "$BUILD_ROOT/arm64"');
+    expect(dsymBlock).not.toContain('find "$BUILD_ROOT/x86_64"');
     expect(dsymBlock).toContain("Error: missing DWARF binaries for dSYM merge");
     expect(dsymBlock).toContain("Error: dSYM not found");
     expect(dsymBlock).toContain("exit 1");
