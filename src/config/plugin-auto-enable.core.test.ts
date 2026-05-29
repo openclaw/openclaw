@@ -962,6 +962,101 @@ describe("applyPluginAutoEnable core", () => {
     expect(result.changes).toContain("discord plugin config present, added to plugin allowlist.");
   });
 
+  it("preserves empty compat allowlists while enabling configured provider plugins", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        auth: {
+          profiles: {
+            "minimax:default": {
+              provider: "minimax",
+              mode: "api_key",
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            model: "opencode-go/deepseek-v4-pro",
+          },
+        },
+        tools: {
+          web: {
+            search: {
+              provider: "tavily",
+            },
+          },
+        },
+        plugins: {
+          allow: [],
+          bundledDiscovery: "compat",
+          entries: {
+            ollama: {
+              config: {
+                endpoint: "http://127.0.0.1:11434",
+              },
+            },
+          },
+        },
+      },
+      env,
+      manifestRegistry: makeRegistry([
+        {
+          id: "minimax",
+          channels: [],
+          providers: ["minimax"],
+          autoEnableWhenConfiguredProviders: ["minimax"],
+        },
+        { id: "opencode-go", channels: [], providers: ["opencode-go"] },
+        {
+          id: "tavily",
+          channels: [],
+          contracts: {
+            webSearchProviders: ["tavily"],
+          },
+        },
+        { id: "ollama", channels: [] },
+      ]),
+    });
+
+    expect(result.config.plugins?.allow).toEqual([]);
+    expect(result.config.plugins?.entries?.minimax?.enabled).toBe(true);
+    expect(result.config.plugins?.entries?.["opencode-go"]?.enabled).toBe(true);
+    expect(result.config.plugins?.entries?.tavily?.enabled).toBe(true);
+    expect(result.config.plugins?.entries?.ollama?.config).toEqual({
+      endpoint: "http://127.0.0.1:11434",
+    });
+    expect(result.config.plugins?.entries?.ollama?.enabled).toBeUndefined();
+    expect(result.changes).toEqual([
+      "minimax auth configured, enabled automatically.",
+      "opencode-go/deepseek-v4-pro model configured, enabled automatically.",
+      "tavily web search provider selected, enabled automatically.",
+    ]);
+
+    const rerun = applyPluginAutoEnable({
+      config: result.config,
+      env,
+      manifestRegistry: makeRegistry([
+        {
+          id: "minimax",
+          channels: [],
+          providers: ["minimax"],
+          autoEnableWhenConfiguredProviders: ["minimax"],
+        },
+        { id: "opencode-go", channels: [], providers: ["opencode-go"] },
+        {
+          id: "tavily",
+          channels: [],
+          contracts: {
+            webSearchProviders: ["tavily"],
+          },
+        },
+        { id: "ollama", channels: [] },
+      ]),
+    });
+
+    expect(rerun.config.plugins?.allow).toEqual([]);
+    expect(rerun.changes).toEqual([]);
+  });
+
   it("does not preserve stale configured plugin entries in restrictive plugins.allow", () => {
     const result = materializePluginAutoEnableCandidates({
       config: {

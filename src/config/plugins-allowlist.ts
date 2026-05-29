@@ -9,7 +9,7 @@ export function ensurePluginAllowlisted<T extends PluginAllowlistConfigCarrier>(
   pluginId: string,
 ): T {
   const allow = cfg.plugins?.allow;
-  if (!Array.isArray(allow) || allow.includes(pluginId)) {
+  if (!Array.isArray(allow) || allow.length === 0 || allow.includes(pluginId)) {
     return cfg;
   }
   return {

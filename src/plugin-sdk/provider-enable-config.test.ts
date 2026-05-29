@@ -31,6 +31,28 @@ describe("provider contract enablePluginInConfig", () => {
     });
   });
 
+  it("preserves empty plugin allowlists as open while enabling provider plugins", () => {
+    const config = {
+      plugins: {
+        allow: [],
+      },
+    };
+
+    const result = enableSearchPluginInConfig(config, "brave");
+
+    expect(result).toEqual({
+      enabled: true,
+      config: {
+        plugins: {
+          allow: [],
+          entries: {
+            brave: { enabled: true },
+          },
+        },
+      },
+    });
+  });
+
   it("shares denylist behavior across provider contract subpaths", () => {
     const config = {
       plugins: {
