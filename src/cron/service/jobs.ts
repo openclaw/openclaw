@@ -139,6 +139,104 @@ function computeStaggeredCronPreviousRunAtMs(job: CronJob, nowMs: number) {
   return undefined;
 }
 
+function isStaggeredCronRunAtMs(job: CronJob, runAtMs: number): boolean {
+  if (job.schedule.kind !== "cron" || !isFiniteTimestamp(runAtMs)) {
+    return false;
+  }
+  const previous = computeStaggeredCronPreviousRunAtMs(job, runAtMs + 1);
+  return previous === runAtMs;
+}
+
+function isPendingErrorBackoffSlot(params: {
+  state: CronServiceState;
+  job: CronJob;
+  nextRunAtMs: number;
+  nowMs: number;
+}): boolean {
+  const { state, job, nextRunAtMs, nowMs } = params;
+  if (job.state.lastStatus !== "error" || !isFiniteTimestamp(job.state.lastRunAtMs)) {
+    return false;
+  }
+  const consecutiveErrorsRaw = job.state.consecutiveErrors;
+  const consecutiveErrors =
+    typeof consecutiveErrorsRaw === "number" && Number.isFinite(consecutiveErrorsRaw)
+      ? Math.max(1, Math.floor(consecutiveErrorsRaw))
+      : 1;
+  const lastDurationMs =
+    typeof job.state.lastDurationMs === "number" && Number.isFinite(job.state.lastDurationMs)
+      ? Math.max(0, Math.floor(job.state.lastDurationMs))
+      : 0;
+  const lastEndedAtMs = job.state.lastRunAtMs + lastDurationMs;
+  const backoffFloor =
+    lastEndedAtMs +
+    errorBackoffMs(
+      consecutiveErrors,
+      state.deps.cronConfig?.retry?.backoffMs ?? DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
+    );
+  return nowMs < backoffFloor && nextRunAtMs <= backoffFloor;
+}
+
+function shouldRepairFutureCronNextRunAtMs(params: {
+  state: CronServiceState;
+  job: CronJob;
+  nowMs: number;
+}): boolean {
+  const { state, job, nowMs } = params;
+  const nextRun = job.state.nextRunAtMs;
+  if (
+    job.schedule.kind !== "cron" ||
+    !hasScheduledNextRunAtMs(nextRun) ||
+    nowMs >= nextRun ||
+    typeof job.state.runningAtMs === "number"
+  ) {
+    return false;
+  }
+
+  // Error retries may intentionally use a non-cron future timestamp while
+  // backoff is pending. Once the retry window has elapsed, stale future cron
+  // slots should be eligible for the same repair as ordinary schedule state.
+  if (isPendingErrorBackoffSlot({ state, job, nextRunAtMs: nextRun, nowMs })) {
+    return false;
+  }
+
+  let naturalNext: number | undefined;
+  try {
+    naturalNext = computeStaggeredCronNextRunAtMs(job, nowMs);
+  } catch {
+    return false;
+  }
+  if (!isFiniteTimestamp(naturalNext)) {
+    return false;
+  }
+  let isScheduledSlot = false;
+  try {
+    isScheduledSlot = isStaggeredCronRunAtMs(job, nextRun);
+  } catch {
+    return false;
+  }
+  if (isScheduledSlot) {
+    return false;
+  }
+  if (nextRun < naturalNext) {
+    return job.payload.kind !== "agentTurn";
+  }
+  if (nextRun === naturalNext) {
+    return false;
+  }
+
+  let followingNaturalNext: number | undefined;
+  try {
+    followingNaturalNext = computeStaggeredCronNextRunAtMs(job, naturalNext);
+  } catch {
+    return false;
+  }
+  if (!isFiniteTimestamp(followingNaturalNext)) {
+    return false;
+  }
+  const naturalIntervalMs = followingNaturalNext - naturalNext;
+  return naturalIntervalMs > 0 && nextRun >= followingNaturalNext + naturalIntervalMs;
+}
+
 function resolveEveryAnchorMs(params: {
   schedule: { everyMs: number; anchorMs?: number };
   fallbackAnchorMs: number;
@@ -343,7 +441,9 @@ export function recordScheduleComputeError(params: {
       sessionKey: job.sessionKey,
       contextKey: `cron:${job.id}:auto-disabled`,
     });
-    state.deps.requestHeartbeatNow({
+    state.deps.requestHeartbeat({
+      source: "cron",
+      intent: "event",
       reason: `cron:${job.id}:auto-disabled`,
       agentId: job.agentId,
       sessionKey: job.sessionKey,
@@ -409,6 +509,11 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
     );
     job.state.runningAtMs = undefined;
     changed = true;
+    const nextRun = job.state.nextRunAtMs;
+    const lastRun = job.state.lastRunAtMs;
+    const alreadyExecutedSlot =
+      hasScheduledNextRunAtMs(nextRun) && isFiniteTimestamp(lastRun) && lastRun >= nextRun;
+    return { changed, skip: !alreadyExecutedSlot };
   }
 
   return { changed, skip: false };
@@ -487,7 +592,7 @@ export function recomputeNextRuns(state: CronServiceState): boolean {
     // a job that hasn't fired yet (e.g. during restart recovery).
     const nextRun = job.state.nextRunAtMs;
     const isDueOrMissing = !hasScheduledNextRunAtMs(nextRun) || now >= nextRun;
-    if (isDueOrMissing) {
+    if (isDueOrMissing || shouldRepairFutureCronNextRunAtMs({ state, job, nowMs: now })) {
       if (recomputeJobNextRunAtMs({ state, job, nowMs: now })) {
         changed = true;
       }
@@ -505,14 +610,22 @@ export function recomputeNextRuns(state: CronServiceState): boolean {
  */
 export function recomputeNextRunsForMaintenance(
   state: CronServiceState,
-  opts?: { recomputeExpired?: boolean; nowMs?: number },
+  opts?: { recomputeExpired?: boolean; nowMs?: number; repairFutureCronNextRunAtMs?: boolean },
 ): boolean {
   const recomputeExpired = opts?.recomputeExpired ?? false;
+  const repairFutureCronNextRunAtMs = opts?.repairFutureCronNextRunAtMs ?? true;
   return walkSchedulableJobs(
     state,
     ({ job, nowMs: now }) => {
       let changed = false;
       if (!hasScheduledNextRunAtMs(job.state.nextRunAtMs)) {
+        if (recomputeJobNextRunAtMs({ state, job, nowMs: now })) {
+          changed = true;
+        }
+      } else if (
+        repairFutureCronNextRunAtMs &&
+        shouldRepairFutureCronNextRunAtMs({ state, job, nowMs: now })
+      ) {
         if (recomputeJobNextRunAtMs({ state, job, nowMs: now })) {
           changed = true;
         }
@@ -776,7 +889,16 @@ function mergeCronDelivery(
   };
 
   if (typeof patch.mode === "string") {
+    const previousMode = next.mode;
     next.mode = (patch.mode as string) === "deliver" ? "announce" : patch.mode;
+    if (previousMode !== next.mode && (previousMode === "webhook" || next.mode === "webhook")) {
+      next.to = undefined;
+    }
+    if (next.mode === "webhook") {
+      next.channel = undefined;
+      next.threadId = undefined;
+      next.accountId = undefined;
+    }
   }
   if ("channel" in patch) {
     next.channel = normalizeOptionalString(patch.channel);

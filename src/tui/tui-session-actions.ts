@@ -1,6 +1,6 @@
-import type { TUI } from "@mariozechner/pi-tui";
+import type { TUI } from "@earendil-works/pi-tui";
+import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import { resolveSessionInfoModelSelection } from "../agents/model-selection-display.js";
-import type { SessionsPatchResult } from "../gateway/protocol/index.js";
 import {
   normalizeAgentId,
   normalizeMainKey,
@@ -10,6 +10,7 @@ import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { ChatLog } from "./components/chat-log.js";
 import type { TuiAgentsList, TuiBackend } from "./tui-backend.js";
 import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
+import { TUI_SESSION_LOOKUP_LIMIT } from "./tui-session-list-policy.js";
 import type { SessionInfo, TuiOptions, TuiStateAccess } from "./tui-types.js";
 
 type SessionActionBtwPresenter = {
@@ -234,6 +235,8 @@ export function createSessionActions(context: SessionActionContext) {
       };
       const listAgentId = resolveListAgentId();
       const result = await client.listSessions({
+        limit: TUI_SESSION_LOOKUP_LIMIT,
+        search: state.currentSessionKey,
         includeGlobal: false,
         includeUnknown: false,
         agentId: listAgentId,
@@ -377,6 +380,7 @@ export function createSessionActions(context: SessionActionContext) {
     updateAgentFromSessionKey(nextKey);
     state.currentSessionKey = nextKey;
     state.activeChatRunId = null;
+    state.pendingChatRunId = null;
     setActivityStatus("idle");
     state.currentSessionId = null;
     // Session keys can move backwards in updatedAt ordering; drop previous session freshness
@@ -390,17 +394,44 @@ export function createSessionActions(context: SessionActionContext) {
     await loadHistory();
   };
 
-  const abortActive = async () => {
-    if (!state.activeChatRunId) {
-      chatLog.addSystem("no active run");
+  const abortActive = async (params?: { preferActive?: boolean }) => {
+    if (
+      opts.local === true &&
+      state.activityStatus === "finishing context" &&
+      !params?.preferActive &&
+      !state.pendingChatRunId
+    ) {
+      chatLog.addSystem("agent is finishing context; wait for it to finish before aborting");
       tui.requestRender();
       return;
     }
+    const runIds =
+      params?.preferActive && state.activeChatRunId && state.pendingChatRunId
+        ? [state.pendingChatRunId, state.activeChatRunId]
+        : [
+            !params?.preferActive && state.activeChatRunId && state.pendingChatRunId
+              ? state.pendingChatRunId
+              : (state.activeChatRunId ?? state.pendingChatRunId ?? null),
+          ].filter((runId) => runId !== null);
+    if (runIds.length === 0) {
+      chatLog.addSystem("no active run", { coalesceConsecutive: true });
+      tui.requestRender();
+      return;
+    }
+    const abortsPendingRun = Boolean(
+      state.pendingChatRunId && runIds.includes(state.pendingChatRunId),
+    );
     try {
-      await client.abortChat({
-        sessionKey: state.currentSessionKey,
-        runId: state.activeChatRunId,
-      });
+      for (const runId of runIds) {
+        await client.abortChat({
+          sessionKey: state.currentSessionKey,
+          runId,
+        });
+      }
+      state.pendingChatRunId = null;
+      if (abortsPendingRun) {
+        state.pendingOptimisticUserMessage = false;
+      }
       setActivityStatus("aborted");
     } catch (err) {
       chatLog.addSystem(`abort failed: ${String(err)}`);

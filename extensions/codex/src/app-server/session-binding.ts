@@ -1,7 +1,32 @@
 import fs from "node:fs/promises";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
-import type { CodexAppServerApprovalPolicy, CodexAppServerSandboxMode } from "./config.js";
+import {
+  ensureAuthProfileStore,
+  resolveDefaultAgentDir,
+  resolveProviderIdForAuth,
+  type AuthProfileStore,
+} from "openclaw/plugin-sdk/agent-runtime";
+import {
+  CODEX_PLUGINS_MARKETPLACE_NAME,
+  normalizeCodexServiceTier,
+  type CodexAppServerApprovalPolicy,
+  type CodexAppServerSandboxMode,
+} from "./config.js";
+import type { PluginAppPolicyContext } from "./plugin-thread-config.js";
 import type { CodexServiceTier } from "./protocol.js";
+
+const CODEX_APP_SERVER_NATIVE_AUTH_PROVIDER = "openai-codex";
+const PUBLIC_OPENAI_MODEL_PROVIDER = "openai";
+
+type ProviderAuthAliasLookupParams = Parameters<typeof resolveProviderIdForAuth>[1];
+type ProviderAuthAliasConfig = NonNullable<ProviderAuthAliasLookupParams>["config"];
+
+export type CodexAppServerAuthProfileLookup = {
+  authProfileId?: string;
+  authProfileStore?: AuthProfileStore;
+  agentDir?: string;
+  config?: ProviderAuthAliasConfig;
+};
 
 export type CodexAppServerThreadBinding = {
   schemaVersion: 1;
@@ -15,8 +40,30 @@ export type CodexAppServerThreadBinding = {
   sandbox?: CodexAppServerSandboxMode;
   serviceTier?: CodexServiceTier;
   dynamicToolsFingerprint?: string;
+  userMcpServersFingerprint?: string;
+  mcpServersFingerprint?: string;
+  nativeHookRelayGeneration?: string;
+  pluginAppsFingerprint?: string;
+  pluginAppsInputFingerprint?: string;
+  pluginAppPolicyContext?: PluginAppPolicyContext;
+  contextEngine?: CodexAppServerContextEngineBinding;
+  environmentSelectionFingerprint?: string;
   createdAt: string;
   updatedAt: string;
+};
+
+export type CodexAppServerContextEngineBinding = {
+  schemaVersion: 1;
+  engineId: string;
+  policyFingerprint: string;
+  projection?: CodexAppServerContextEngineProjectionBinding;
+};
+
+export type CodexAppServerContextEngineProjectionBinding = {
+  schemaVersion: 1;
+  mode: "thread_bootstrap";
+  epoch: string;
+  fingerprint?: string;
 };
 
 export function resolveCodexAppServerBindingPath(sessionFile: string): string {
@@ -25,6 +72,7 @@ export function resolveCodexAppServerBindingPath(sessionFile: string): string {
 
 export async function readCodexAppServerBinding(
   sessionFile: string,
+  lookup: Omit<CodexAppServerAuthProfileLookup, "authProfileId"> = {},
 ): Promise<CodexAppServerThreadBinding | undefined> {
   const path = resolveCodexAppServerBindingPath(sessionFile);
   let raw: string;
@@ -42,20 +90,49 @@ export async function readCodexAppServerBinding(
     if (parsed.schemaVersion !== 1 || typeof parsed.threadId !== "string") {
       return undefined;
     }
+    const authProfileId =
+      typeof parsed.authProfileId === "string" ? parsed.authProfileId : undefined;
     return {
       schemaVersion: 1,
       threadId: parsed.threadId,
       sessionFile,
       cwd: typeof parsed.cwd === "string" ? parsed.cwd : "",
-      authProfileId: typeof parsed.authProfileId === "string" ? parsed.authProfileId : undefined,
+      authProfileId,
       model: typeof parsed.model === "string" ? parsed.model : undefined,
-      modelProvider: typeof parsed.modelProvider === "string" ? parsed.modelProvider : undefined,
+      modelProvider: normalizeCodexAppServerBindingModelProvider({
+        ...lookup,
+        authProfileId,
+        modelProvider: typeof parsed.modelProvider === "string" ? parsed.modelProvider : undefined,
+      }),
       approvalPolicy: readApprovalPolicy(parsed.approvalPolicy),
       sandbox: readSandboxMode(parsed.sandbox),
       serviceTier: readServiceTier(parsed.serviceTier),
       dynamicToolsFingerprint:
         typeof parsed.dynamicToolsFingerprint === "string"
           ? parsed.dynamicToolsFingerprint
+          : undefined,
+      userMcpServersFingerprint:
+        typeof parsed.userMcpServersFingerprint === "string"
+          ? parsed.userMcpServersFingerprint
+          : undefined,
+      mcpServersFingerprint:
+        typeof parsed.mcpServersFingerprint === "string" ? parsed.mcpServersFingerprint : undefined,
+      nativeHookRelayGeneration:
+        typeof parsed.nativeHookRelayGeneration === "string" &&
+        parsed.nativeHookRelayGeneration.trim()
+          ? parsed.nativeHookRelayGeneration
+          : undefined,
+      pluginAppsFingerprint:
+        typeof parsed.pluginAppsFingerprint === "string" ? parsed.pluginAppsFingerprint : undefined,
+      pluginAppsInputFingerprint:
+        typeof parsed.pluginAppsInputFingerprint === "string"
+          ? parsed.pluginAppsInputFingerprint
+          : undefined,
+      pluginAppPolicyContext: readPluginAppPolicyContext(parsed.pluginAppPolicyContext),
+      contextEngine: readContextEngineBinding(parsed.contextEngine),
+      environmentSelectionFingerprint:
+        typeof parsed.environmentSelectionFingerprint === "string"
+          ? parsed.environmentSelectionFingerprint
           : undefined,
       createdAt: typeof parsed.createdAt === "string" ? parsed.createdAt : new Date().toISOString(),
       updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : new Date().toISOString(),
@@ -74,6 +151,7 @@ export async function writeCodexAppServerBinding(
   > & {
     createdAt?: string;
   },
+  lookup: Omit<CodexAppServerAuthProfileLookup, "authProfileId"> = {},
 ): Promise<void> {
   const now = new Date().toISOString();
   const payload: CodexAppServerThreadBinding = {
@@ -83,11 +161,23 @@ export async function writeCodexAppServerBinding(
     cwd: binding.cwd,
     authProfileId: binding.authProfileId,
     model: binding.model,
-    modelProvider: binding.modelProvider,
+    modelProvider: normalizeCodexAppServerBindingModelProvider({
+      ...lookup,
+      authProfileId: binding.authProfileId,
+      modelProvider: binding.modelProvider,
+    }),
     approvalPolicy: binding.approvalPolicy,
     sandbox: binding.sandbox,
     serviceTier: binding.serviceTier,
     dynamicToolsFingerprint: binding.dynamicToolsFingerprint,
+    userMcpServersFingerprint: binding.userMcpServersFingerprint,
+    mcpServersFingerprint: binding.mcpServersFingerprint,
+    nativeHookRelayGeneration: binding.nativeHookRelayGeneration,
+    pluginAppsFingerprint: binding.pluginAppsFingerprint,
+    pluginAppsInputFingerprint: binding.pluginAppsInputFingerprint,
+    pluginAppPolicyContext: binding.pluginAppPolicyContext,
+    contextEngine: binding.contextEngine,
+    environmentSelectionFingerprint: binding.environmentSelectionFingerprint,
     createdAt: binding.createdAt ?? now,
     updatedAt: now,
   };
@@ -97,7 +187,110 @@ export async function writeCodexAppServerBinding(
   );
 }
 
-export async function clearCodexAppServerBinding(sessionFile: string): Promise<void> {
+function readContextEngineBinding(value: unknown): CodexAppServerContextEngineBinding | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  if (
+    record.schemaVersion !== 1 ||
+    typeof record.engineId !== "string" ||
+    typeof record.policyFingerprint !== "string"
+  ) {
+    return undefined;
+  }
+  return {
+    schemaVersion: 1,
+    engineId: record.engineId,
+    policyFingerprint: record.policyFingerprint,
+    projection: readContextEngineProjectionBinding(record.projection),
+  };
+}
+
+function readContextEngineProjectionBinding(
+  value: unknown,
+): CodexAppServerContextEngineProjectionBinding | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  if (
+    record.schemaVersion !== 1 ||
+    record.mode !== "thread_bootstrap" ||
+    typeof record.epoch !== "string" ||
+    !record.epoch.trim()
+  ) {
+    return undefined;
+  }
+  return {
+    schemaVersion: 1,
+    mode: "thread_bootstrap",
+    epoch: record.epoch,
+    fingerprint: typeof record.fingerprint === "string" ? record.fingerprint : undefined,
+  };
+}
+
+function readPluginAppPolicyContext(value: unknown): PluginAppPolicyContext | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  if (typeof record.fingerprint !== "string") {
+    return undefined;
+  }
+  const apps = record.apps;
+  if (!apps || typeof apps !== "object" || Array.isArray(apps)) {
+    return undefined;
+  }
+  const parsedApps: PluginAppPolicyContext["apps"] = {};
+  for (const [appId, rawEntry] of Object.entries(apps)) {
+    if (!rawEntry || typeof rawEntry !== "object" || Array.isArray(rawEntry)) {
+      return undefined;
+    }
+    const entry = rawEntry as Record<string, unknown>;
+    if (
+      "appId" in entry ||
+      typeof entry.configKey !== "string" ||
+      entry.marketplaceName !== CODEX_PLUGINS_MARKETPLACE_NAME ||
+      typeof entry.pluginName !== "string" ||
+      typeof entry.allowDestructiveActions !== "boolean" ||
+      !Array.isArray(entry.mcpServerNames) ||
+      entry.mcpServerNames.some((serverName) => typeof serverName !== "string")
+    ) {
+      return undefined;
+    }
+    parsedApps[appId] = {
+      configKey: entry.configKey,
+      marketplaceName: entry.marketplaceName,
+      pluginName: entry.pluginName,
+      allowDestructiveActions: entry.allowDestructiveActions,
+      mcpServerNames: entry.mcpServerNames,
+    };
+  }
+  const parsedPluginAppIds: PluginAppPolicyContext["pluginAppIds"] = {};
+  const rawPluginAppIds = record.pluginAppIds;
+  if (rawPluginAppIds && (typeof rawPluginAppIds !== "object" || Array.isArray(rawPluginAppIds))) {
+    return undefined;
+  }
+  if (rawPluginAppIds && typeof rawPluginAppIds === "object") {
+    for (const [configKey, appIds] of Object.entries(rawPluginAppIds)) {
+      if (!Array.isArray(appIds) || appIds.some((appId) => typeof appId !== "string")) {
+        return undefined;
+      }
+      parsedPluginAppIds[configKey] = appIds;
+    }
+  }
+  return {
+    fingerprint: record.fingerprint,
+    apps: parsedApps,
+    pluginAppIds: parsedPluginAppIds,
+  };
+}
+
+export async function clearCodexAppServerBinding(
+  sessionFile: string,
+  _lookup: Omit<CodexAppServerAuthProfileLookup, "authProfileId"> = {},
+): Promise<void> {
   try {
     await fs.unlink(resolveCodexAppServerBindingPath(sessionFile));
   } catch (error) {
@@ -109,6 +302,96 @@ export async function clearCodexAppServerBinding(sessionFile: string): Promise<v
 
 function isNotFound(error: unknown): boolean {
   return Boolean(error && typeof error === "object" && "code" in error && error.code === "ENOENT");
+}
+
+export function isCodexAppServerNativeAuthProfile(
+  lookup: CodexAppServerAuthProfileLookup,
+): boolean {
+  const authProfileId = lookup.authProfileId?.trim();
+  if (!authProfileId) {
+    return false;
+  }
+  try {
+    const credential = resolveCodexAppServerAuthProfileCredential({
+      ...lookup,
+      authProfileId,
+    });
+    return isCodexAppServerNativeAuthProvider({
+      provider: credential?.provider,
+      config: lookup.config,
+    });
+  } catch (error) {
+    embeddedAgentLog.debug("failed to resolve codex app-server auth profile provider", {
+      authProfileId,
+      error,
+    });
+    return false;
+  }
+}
+
+export function normalizeCodexAppServerBindingModelProvider(params: {
+  authProfileId?: string;
+  modelProvider?: string;
+  authProfileStore?: AuthProfileStore;
+  agentDir?: string;
+  config?: ProviderAuthAliasConfig;
+}): string | undefined {
+  const modelProvider = params.modelProvider?.trim();
+  if (!modelProvider) {
+    return undefined;
+  }
+  if (
+    isCodexAppServerNativeAuthProfile(params) &&
+    modelProvider.toLowerCase() === PUBLIC_OPENAI_MODEL_PROVIDER
+  ) {
+    return undefined;
+  }
+  return modelProvider;
+}
+
+function resolveCodexAppServerAuthProfileCredential(
+  lookup: CodexAppServerAuthProfileLookup,
+): AuthProfileStore["profiles"][string] | undefined {
+  const authProfileId = lookup.authProfileId?.trim();
+  if (!authProfileId) {
+    return undefined;
+  }
+  const store =
+    lookup.authProfileStore ??
+    loadCodexAppServerAuthProfileStore({
+      agentDir: lookup.agentDir,
+      authProfileId,
+      config: lookup.config,
+    });
+  return store.profiles[authProfileId];
+}
+
+function loadCodexAppServerAuthProfileStore(params: {
+  agentDir: string | undefined;
+  authProfileId: string;
+  config?: ProviderAuthAliasConfig;
+}): AuthProfileStore {
+  return ensureAuthProfileStore(
+    params.agentDir?.trim() || resolveDefaultAgentDir(params.config ?? {}),
+    {
+      allowKeychainPrompt: false,
+      config: params.config,
+      externalCliProviderIds: [CODEX_APP_SERVER_NATIVE_AUTH_PROVIDER],
+      externalCliProfileIds: [params.authProfileId],
+    },
+  );
+}
+
+function isCodexAppServerNativeAuthProvider(params: {
+  provider?: string;
+  config?: ProviderAuthAliasConfig;
+}): boolean {
+  const provider = params.provider?.trim();
+  return Boolean(
+    provider &&
+    resolveProviderIdForAuth(provider, { config: params.config }) ===
+      CODEX_APP_SERVER_NATIVE_AUTH_PROVIDER,
+  );
 }
 
 function readApprovalPolicy(value: unknown): CodexAppServerApprovalPolicy | undefined {
@@ -127,5 +410,5 @@ function readSandboxMode(value: unknown): CodexAppServerSandboxMode | undefined 
 }
 
 function readServiceTier(value: unknown): CodexServiceTier | undefined {
-  return value === "fast" || value === "flex" ? value : undefined;
+  return normalizeCodexServiceTier(value);
 }

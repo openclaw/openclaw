@@ -6,11 +6,13 @@ import {
   DEFAULT_LIVE_RETRIES,
   allReleasePathLanes,
   mainLanes,
+  normalizeReleaseProfile,
   releasePathChunkLanes,
   tailLanes,
 } from "./docker-e2e-scenarios.mjs";
 
 export { DEFAULT_LIVE_RETRIES };
+export { normalizeReleaseProfile };
 
 export const DEFAULT_E2E_BARE_IMAGE = "openclaw-docker-e2e-bare:local";
 export const DEFAULT_E2E_FUNCTIONAL_IMAGE = "openclaw-docker-e2e-functional:local";
@@ -25,6 +27,7 @@ export const DEFAULT_RESOURCE_LIMITS = {
   "live:droid": 4,
   "live:gemini": 4,
   "live:opencode": 4,
+  "live:openai": 1,
   npm: 10,
   service: 7,
 };
@@ -73,7 +76,10 @@ const UPGRADE_SURVIVOR_SCENARIOS = [
   "base",
   "feishu-channel",
   "bootstrap-persona",
+  "channel-post-core-restore",
   "plugin-deps-cleanup",
+  "configured-plugin-installs",
+  "stale-source-plugin-shadow",
   "tilde-log-path",
   "versioned-runtime-deps",
 ];
@@ -90,12 +96,14 @@ export function normalizeUpgradeSurvivorBaselineSpec(raw) {
   }
   const spec = value.startsWith("openclaw@") ? value : `openclaw@${value}`;
   if (
-    !/^openclaw@(?:beta|latest|[0-9]{4}\.[0-9]+\.[0-9]+(?:-(?:[0-9]+|beta\.[0-9]+))?)$/u.test(spec)
+    !/^openclaw@(?:alpha|beta|latest|[0-9]{4}\.[0-9]+\.[0-9]+(?:-(?:[0-9]+|alpha\.[0-9]+|beta\.[0-9]+))?)$/u.test(
+      spec,
+    )
   ) {
     throw new Error(
       `invalid published upgrade survivor baseline: ${JSON.stringify(
         value,
-      )}. Expected openclaw@latest, openclaw@beta, or openclaw@YYYY.M.D.`,
+      )}. Expected openclaw@latest, openclaw@beta, openclaw@alpha, or openclaw@YYYY.M.D.`,
     );
   }
   return spec;
@@ -147,6 +155,33 @@ function parseUpgradeSurvivorScenarios(raw) {
   ];
 }
 
+function parsePublishedReleaseVersion(spec) {
+  const match = /^openclaw@([0-9]{4})\.([0-9]+)\.([0-9]+)/u.exec(String(spec ?? ""));
+  if (!match) {
+    return null;
+  }
+  return {
+    year: Number(match[1]),
+    month: Number(match[2]),
+    day: Number(match[3]),
+  };
+}
+
+function comparePublishedReleaseVersion(a, b) {
+  return a.year - b.year || a.month - b.month || a.day - b.day;
+}
+
+function supportsUpgradeSurvivorPluginDependencyCleanup(baselineSpec) {
+  if (!baselineSpec) {
+    return true;
+  }
+  const version = parsePublishedReleaseVersion(baselineSpec);
+  if (!version) {
+    return true;
+  }
+  return comparePublishedReleaseVersion(version, { year: 2026, month: 4, day: 23 }) >= 0;
+}
+
 function expandUpgradeSurvivorBaselineLanes(poolLanes, rawBaselineSpecs, rawScenarios = "") {
   const baselineSpecs = parseUpgradeSurvivorBaselineSpecs(rawBaselineSpecs);
   const scenarios = parseUpgradeSurvivorScenarios(rawScenarios);
@@ -160,30 +195,38 @@ function expandUpgradeSurvivorBaselineLanes(poolLanes, rawBaselineSpecs, rawScen
     const matrixBaselines = baselineSpecs.length > 0 ? baselineSpecs : [undefined];
     const matrixScenarios = scenarios.length > 0 ? scenarios : [undefined];
     return matrixBaselines.flatMap((baselineSpec) =>
-      matrixScenarios.map((scenario) => {
-        const suffixParts = [
-          baselineSpec ? sanitizeLaneNameSuffix(baselineSpec) : "",
-          scenario && scenario !== "base" ? sanitizeLaneNameSuffix(scenario) : "",
-        ].filter(Boolean);
-        const suffix = suffixParts.join("-");
-        const name = suffix ? `${poolLane.name}-${suffix}` : poolLane.name;
-        const commandPrefix = [
-          `OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR="$PWD/.artifacts/upgrade-survivor/${name}"`,
-          baselineSpec ? `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=${shellQuote(baselineSpec)}` : "",
-          scenario ? `OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=${shellQuote(scenario)}` : "",
-        ]
-          .filter(Boolean)
-          .join(" ");
-        return Object.assign({}, poolLane, {
-          cacheKey: poolLane.cacheKey
-            ? suffix
-              ? `${poolLane.cacheKey}-${suffix}`
-              : poolLane.cacheKey
-            : name,
-          command: commandPrefix ? `${commandPrefix} ${poolLane.command}` : poolLane.command,
-          name,
-        });
-      }),
+      matrixScenarios
+        .filter(
+          (scenario) =>
+            scenario !== "plugin-deps-cleanup" ||
+            supportsUpgradeSurvivorPluginDependencyCleanup(baselineSpec),
+        )
+        .map((scenario) => {
+          const suffixParts = [
+            baselineSpec ? sanitizeLaneNameSuffix(baselineSpec) : "",
+            scenario && scenario !== "base" ? sanitizeLaneNameSuffix(scenario) : "",
+          ].filter(Boolean);
+          const suffix = suffixParts.join("-");
+          const name = suffix ? `${poolLane.name}-${suffix}` : poolLane.name;
+          const commandPrefix = [
+            `OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR="$PWD/.artifacts/upgrade-survivor/${name}"`,
+            baselineSpec
+              ? `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=${shellQuote(baselineSpec)}`
+              : "",
+            scenario ? `OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=${shellQuote(scenario)}` : "",
+          ]
+            .filter(Boolean)
+            .join(" ");
+          return Object.assign({}, poolLane, {
+            cacheKey: poolLane.cacheKey
+              ? suffix
+                ? `${poolLane.cacheKey}-${suffix}`
+                : poolLane.cacheKey
+              : name,
+            command: commandPrefix ? `${commandPrefix} ${poolLane.command}` : poolLane.command,
+            name,
+          });
+        }),
     );
   });
 }
@@ -247,7 +290,7 @@ export function laneWeight(poolLane) {
 }
 
 export function laneResources(poolLane) {
-  return ["docker", ...(poolLane.resources ?? [])];
+  return [...new Set(["docker", ...(poolLane.resources ?? [])])];
 }
 
 export function laneSummary(poolLane) {
@@ -282,6 +325,7 @@ export function findLaneByName(name) {
 }
 
 function laneCredentialRequirements(poolLane) {
+  const resources = laneResources(poolLane);
   const credentials = [];
   if (poolLane.name === "install-e2e-openai") {
     credentials.push("openai");
@@ -289,8 +333,23 @@ function laneCredentialRequirements(poolLane) {
   if (poolLane.name === "install-e2e-anthropic") {
     credentials.push("anthropic");
   }
-  if (poolLane.name === "openwebui" || poolLane.name === "openai-web-search-minimal") {
+  if (resources.includes("live:openai")) {
     credentials.push("openai");
+  }
+  if (resources.includes("live:codex")) {
+    credentials.push("codex");
+  }
+  if (resources.includes("live:claude")) {
+    credentials.push("anthropic");
+  }
+  if (resources.includes("live:droid")) {
+    credentials.push("factory");
+  }
+  if (resources.includes("live:gemini")) {
+    credentials.push("gemini");
+  }
+  if (resources.includes("live:opencode")) {
+    credentials.push("opencode");
   }
   return credentials;
 }
@@ -327,10 +386,11 @@ function buildPlanJson(params) {
       bareImage: imageKinds.includes("bare"),
       e2eImage: imageKinds.length > 0,
       functionalImage: imageKinds.includes("functional"),
-      liveImage: scheduledLanes.some((poolLane) => poolLane.live),
+      liveImage: scheduledLanes.some((poolLane) => poolLane.needsLiveImage),
       package: lanesNeedOpenClawPackage(scheduledLanes),
     },
     profile: params.profile,
+    releaseProfile: params.releaseProfile,
     selectedLanes: params.selectedLaneNames,
     tailLanes: params.orderedTailLanes.map((poolLane) => poolLane.name),
     version: 1,
@@ -338,12 +398,16 @@ function buildPlanJson(params) {
 }
 
 export function resolveDockerE2ePlan(options) {
+  const releaseProfile = normalizeReleaseProfile(options.releaseProfile);
   const retriedMainLanes = applyLiveRetries(mainLanes, options.liveRetries);
   const retriedTailLanes = applyLiveRetries(tailLanes, options.liveRetries);
   const upgradeSurvivorBaselines = options.upgradeSurvivorBaselines ?? "";
   const upgradeSurvivorScenarios = options.upgradeSurvivorScenarios ?? "";
   const unexpandedSelectableLanes = dedupeLanes([
-    ...allReleasePathLanes({ includeOpenWebUI: options.includeOpenWebUI }),
+    ...allReleasePathLanes({
+      includeOpenWebUI: options.includeOpenWebUI,
+      releaseProfile: "full",
+    }),
     ...retriedMainLanes,
     ...retriedTailLanes,
   ]);
@@ -358,13 +422,14 @@ export function resolveDockerE2ePlan(options) {
     options.selectedLaneNames.length === 0 && options.profile === RELEASE_PATH_PROFILE
       ? options.planReleaseAll
         ? expandUpgradeSurvivorBaselineLanes(
-            allReleasePathLanes({ includeOpenWebUI: options.includeOpenWebUI }),
+            allReleasePathLanes({ includeOpenWebUI: options.includeOpenWebUI, releaseProfile }),
             upgradeSurvivorBaselines,
             upgradeSurvivorScenarios,
           )
         : expandUpgradeSurvivorBaselineLanes(
             releasePathChunkLanes(options.releaseChunk, {
               includeOpenWebUI: options.includeOpenWebUI,
+              releaseProfile,
             }),
             upgradeSurvivorBaselines,
             upgradeSurvivorScenarios,
@@ -415,6 +480,7 @@ export function resolveDockerE2ePlan(options) {
       orderedTailLanes,
       profile: options.profile,
       releaseChunk: options.releaseChunk,
+      releaseProfile,
       selectedLaneNames: options.selectedLaneNames,
     }),
     scheduledLanes: [...orderedLanes, ...orderedTailLanes],

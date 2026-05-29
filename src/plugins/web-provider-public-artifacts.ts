@@ -1,4 +1,6 @@
 import path from "node:path";
+import { normalizeUniqueStringEntries } from "../shared/string-normalization.js";
+import { normalizePluginId } from "./config-state.js";
 import type { PluginLoadOptions } from "./loader.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
@@ -17,7 +19,6 @@ type BundledWebProviderPublicArtifactParams = {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
-  bundledAllowlistCompat?: boolean;
   onlyPluginIds?: readonly string[];
 };
 
@@ -26,20 +27,38 @@ type BundledCandidateResolution = {
   manifestRecords?: readonly PluginManifestRecord[];
 };
 
+function filterAllowlistedBundledPluginIds(
+  config: PluginLoadOptions["config"] | undefined,
+  pluginIds: readonly string[],
+) {
+  // Deprecated shipped compat marker: old allowlist configs used this to keep
+  // bundled web provider discovery available while plugin IDs were tightened.
+  if (config?.plugins?.bundledDiscovery === "compat") {
+    return [...pluginIds];
+  }
+  const allow = config?.plugins?.allow;
+  if (!Array.isArray(allow) || allow.length === 0) {
+    return [...pluginIds];
+  }
+  const allowedPluginIds = new Set(
+    normalizeUniqueStringEntries(allow.map((pluginId) => normalizePluginId(pluginId))),
+  );
+  return pluginIds.filter((pluginId) => allowedPluginIds.has(pluginId));
+}
+
 function resolveBundledCandidatePluginIds(params: {
   contract: "webSearchProviders" | "webFetchProviders";
   configKey: "webSearch" | "webFetch";
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
-  bundledAllowlistCompat?: boolean;
   onlyPluginIds?: readonly string[];
 }): BundledCandidateResolution {
-  if (params.onlyPluginIds && params.onlyPluginIds.length > 0) {
+  if (params.onlyPluginIds !== undefined) {
     return {
-      pluginIds: [...new Set(params.onlyPluginIds)].toSorted((left, right) =>
-        left.localeCompare(right),
-      ),
+      pluginIds: filterAllowlistedBundledPluginIds(params.config, [
+        ...new Set(params.onlyPluginIds),
+      ]).toSorted((left, right) => left.localeCompare(right)),
     };
   }
   const resolvedConfig =
@@ -56,7 +75,7 @@ function resolveBundledCandidatePluginIds(params: {
     origin: "bundled",
   });
   return {
-    pluginIds: candidates.pluginIds ?? [],
+    pluginIds: filterAllowlistedBundledPluginIds(resolvedConfig, candidates.pluginIds ?? []),
     ...(candidates.manifestRecords ? { manifestRecords: candidates.manifestRecords } : {}),
   };
 }
@@ -92,7 +111,6 @@ export function resolveBundledWebSearchProvidersFromPublicArtifacts(
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
-    bundledAllowlistCompat: params.bundledAllowlistCompat,
     onlyPluginIds: params.onlyPluginIds,
   });
   if (pluginIds.pluginIds.length === 0) {
@@ -138,7 +156,6 @@ export function resolveBundledWebFetchProvidersFromPublicArtifacts(
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
-    bundledAllowlistCompat: params.bundledAllowlistCompat,
     onlyPluginIds: params.onlyPluginIds,
   });
   if (pluginIds.pluginIds.length === 0) {

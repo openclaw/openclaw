@@ -9,7 +9,7 @@ import {
   storeDeviceAuthTokenInStore,
 } from "../shared/device-auth-store.js";
 import type { DeviceAuthStore } from "../shared/device-auth.js";
-import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
+import { privateFileStoreSync } from "./private-file-store.js";
 
 const DEVICE_AUTH_FILE = "device-auth.json";
 const DeviceAuthStoreSchema = z.object({
@@ -18,29 +18,58 @@ const DeviceAuthStoreSchema = z.object({
   tokens: z.record(z.string(), z.unknown()),
 }) as z.ZodType<DeviceAuthStore>;
 
+type StoreCacheEntry = { store: DeviceAuthStore | null; mtimeMs: number; size: number };
+const storeReadCache = new Map<string, StoreCacheEntry>();
+
+function storeCacheHit(
+  cached: StoreCacheEntry | undefined,
+  stat: { mtimeMs: number; size: number },
+): boolean {
+  return cached !== undefined && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size;
+}
+
 function resolveDeviceAuthPath(env: NodeJS.ProcessEnv = process.env): string {
   return path.join(resolveStateDir(env), "identity", DEVICE_AUTH_FILE);
 }
 
 function readStore(filePath: string): DeviceAuthStore | null {
   try {
-    if (!fs.existsSync(filePath)) {
+    let stat: fs.Stats | null = null;
+    try {
+      stat = fs.statSync(filePath);
+    } catch {
+      const cached = storeReadCache.get(filePath);
+      if (cached?.mtimeMs === -1 && cached.size === -1) {
+        return cached.store;
+      }
+      storeReadCache.set(filePath, { store: null, mtimeMs: -1, size: -1 });
       return null;
     }
-    const raw = fs.readFileSync(filePath, "utf8");
-    return safeParseJsonWithSchema(DeviceAuthStoreSchema, raw);
+    const cached = storeReadCache.get(filePath);
+    if (cached !== undefined && storeCacheHit(cached, stat)) {
+      return cached.store;
+    }
+    const parsed = privateFileStoreSync(path.dirname(filePath)).readJsonIfExists(
+      path.basename(filePath),
+    );
+    const result = DeviceAuthStoreSchema.safeParse(parsed);
+    const store = result.success ? result.data : null;
+    storeReadCache.set(filePath, { store, mtimeMs: stat.mtimeMs, size: stat.size });
+    return store;
   } catch {
     return null;
   }
 }
 
 function writeStore(filePath: string, store: DeviceAuthStore): void {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, `${JSON.stringify(store, null, 2)}\n`, { mode: 0o600 });
+  privateFileStoreSync(path.dirname(filePath)).writeJson(path.basename(filePath), store, {
+    trailingNewline: true,
+  });
   try {
-    fs.chmodSync(filePath, 0o600);
+    const stat = fs.statSync(filePath);
+    storeReadCache.set(filePath, { store, mtimeMs: stat.mtimeMs, size: stat.size });
   } catch {
-    // best-effort
+    storeReadCache.delete(filePath);
   }
 }
 

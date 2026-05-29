@@ -9,7 +9,7 @@ import {
 import type { WizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import ts from "typescript";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime, ResolvedLineAccount } from "../api.js";
 import { linePlugin } from "./channel.js";
 import { lineGatewayAdapter } from "./gateway.js";
@@ -29,6 +29,11 @@ const { getBotInfoMock, MessagingApiClientMock } = vi.hoisted(() => {
 vi.mock("@line/bot-sdk", () => ({
   messagingApi: { MessagingApiClient: MessagingApiClientMock },
 }));
+
+afterAll(() => {
+  vi.doUnmock("@line/bot-sdk");
+  vi.resetModules();
+});
 
 const lineConfigure = createPluginSetupWizardConfigure(linePlugin);
 const LINE_SRC_PREFIX = `../../${bundledPluginRoot("line")}/src/`;
@@ -178,7 +183,7 @@ describe("line setup wizard", () => {
     expect(result.cfg.channels?.line?.channelSecret).toBe("line-secret");
   });
 
-  it("reads the named-account DM policy instead of the channel root", async () => {
+  it("reads the named-account DM policy instead of the channel root", () => {
     expect(
       lineSetupWizard.dmPolicy?.getCurrent(
         {
@@ -200,14 +205,14 @@ describe("line setup wizard", () => {
     ).toBe("allowlist");
   });
 
-  it("reports account-scoped config keys for named accounts", async () => {
+  it("reports account-scoped config keys for named accounts", () => {
     expect(lineSetupWizard.dmPolicy?.resolveConfigKeys?.({} as OpenClawConfig, "work")).toEqual({
       policyKey: "channels.line.accounts.work.dmPolicy",
       allowFromKey: "channels.line.accounts.work.allowFrom",
     });
   });
 
-  it("uses configured defaultAccount for omitted DM policy account context", async () => {
+  it("uses configured defaultAccount for omitted DM policy account context", () => {
     const cfg = {
       channels: {
         line: {
@@ -241,7 +246,7 @@ describe("line setup wizard", () => {
     expect(workAccount?.dmPolicy).toBe("open");
   });
 
-  it('writes open policy state to the named account and preserves inherited allowFrom with "*"', async () => {
+  it('writes open policy state to the named account and preserves inherited allowFrom with "*"', () => {
     const next = lineSetupWizard.dmPolicy?.setPolicy(
       {
         channels: {
@@ -377,17 +382,19 @@ describe("linePlugin status.probeAccount", () => {
 describe("line runtime api", () => {
   it("keeps the LINE runtime barrel self-contained", () => {
     const runtimeApiPath = path.join(process.cwd(), "extensions", "line", "runtime-api.ts");
-    expect(collectRuntimeApiPreExports(runtimeApiPath)).toEqual([]);
-    expect(collectRuntimeApiPreExports(runtimeApiPath)).toEqual([]);
+    expect(collectRuntimeApiPreExports(runtimeApiPath)).toStrictEqual([]);
+    expect(collectRuntimeApiPreExports(runtimeApiPath)).toStrictEqual([]);
   });
 });
 
 function createRuntime() {
-  const monitorLineProvider = vi.fn(async () => ({
-    account: { accountId: "default" },
-    handleWebhook: async () => {},
-    stop: () => {},
-  }));
+  const monitorLineProvider = vi.fn(
+    async (_opts: { accountId?: string; channelAccessToken: string; channelSecret: string }) => ({
+      account: { accountId: "default" },
+      handleWebhook: async () => {},
+      stop: () => {},
+    }),
+  );
 
   const runtime = {
     channel: {
@@ -459,14 +466,14 @@ describe("linePlugin gateway.startAccount", () => {
     });
 
     await vi.waitFor(() => {
-      expect(monitorLineProvider).toHaveBeenCalledWith(
-        expect.objectContaining({
-          channelAccessToken: "token",
-          channelSecret: "secret",
-          accountId: "default",
-        }),
-      );
+      expect(monitorLineProvider).toHaveBeenCalledTimes(1);
     });
+    const startupParams = (monitorLineProvider.mock.calls as unknown[][])[0]?.[0] as
+      | { accountId?: string; channelAccessToken?: string; channelSecret?: string }
+      | undefined;
+    expect(startupParams?.channelAccessToken).toBe("token");
+    expect(startupParams?.channelSecret).toBe("secret");
+    expect(startupParams?.accountId).toBe("default");
 
     abort.abort();
     await task;

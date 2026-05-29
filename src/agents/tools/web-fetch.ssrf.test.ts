@@ -34,8 +34,15 @@ function setMockFetch(
   return fetchSpy;
 }
 
+function expectRawFetchSuccessDetails(details: unknown) {
+  const typedDetails = details as { status?: number; extractor?: string };
+  expect(typedDetails.status).toBe(200);
+  expect(typedDetails.extractor).toBe("raw");
+}
+
 function createWebFetchToolForTest(params?: {
   firecrawlApiKey?: string;
+  useTrustedEnvProxy?: boolean;
   ssrfPolicy?: { allowRfc2544BenchmarkRange?: boolean; allowIpv6UniqueLocalRange?: boolean };
   cacheTtlMinutes?: number;
 }) {
@@ -58,6 +65,7 @@ function createWebFetchToolForTest(params?: {
         web: {
           fetch: {
             cacheTtlMinutes: params?.cacheTtlMinutes ?? 0,
+            useTrustedEnvProxy: params?.useTrustedEnvProxy,
             ssrfPolicy: params?.ssrfPolicy,
             ...(params?.firecrawlApiKey ? { provider: "firecrawl" } : {}),
           },
@@ -89,6 +97,7 @@ describe("web_fetch SSRF protection", () => {
     global.fetch = priorFetch;
     lookupMock.mockClear();
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it("blocks localhost hostnames before fetch/firecrawl", async () => {
@@ -150,10 +159,7 @@ describe("web_fetch SSRF protection", () => {
     const tool = createWebFetchToolForTest();
 
     const result = await tool?.execute?.("call", { url: "https://example.com" });
-    expect(result?.details).toMatchObject({
-      status: 200,
-      extractor: "raw",
-    });
+    expectRawFetchSuccessDetails(result?.details);
   });
 
   it("allows RFC2544 benchmark-range URLs only when web_fetch ssrfPolicy opts in", async () => {
@@ -170,10 +176,7 @@ describe("web_fetch SSRF protection", () => {
     });
 
     const allowed = await allowedTool?.execute?.("call", { url });
-    expect(allowed?.details).toMatchObject({
-      status: 200,
-      extractor: "raw",
-    });
+    expectRawFetchSuccessDetails(allowed?.details);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     const stricterTool = createWebFetchToolForTest({ cacheTtlMinutes: 1 });
     await expectBlockedUrl(stricterTool, url, /private|internal|blocked/i);
@@ -193,13 +196,24 @@ describe("web_fetch SSRF protection", () => {
     });
 
     const allowed = await allowedTool?.execute?.("call", { url });
-    expect(allowed?.details).toMatchObject({
-      status: 200,
-      extractor: "raw",
-    });
+    expectRawFetchSuccessDetails(allowed?.details);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
 
     const stricterTool = createWebFetchToolForTest({ cacheTtlMinutes: 1 });
     await expectBlockedUrl(stricterTool, url, /private|internal|blocked/i);
+  });
+
+  it("still blocks dangerous hostnames when trusted env proxy is explicitly enabled", async () => {
+    vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
+    vi.stubEnv("http_proxy", "http://127.0.0.1:7890");
+    const fetchSpy = setMockFetch();
+    const tool = createWebFetchToolForTest({
+      useTrustedEnvProxy: true,
+      cacheTtlMinutes: 1,
+    });
+
+    await expectBlockedUrl(tool, "http://localhost/test", /Blocked hostname/i);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(lookupMock).not.toHaveBeenCalled();
   });
 });

@@ -1,6 +1,6 @@
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { DiscordApiError, fetchDiscord } from "./api.js";
+import { DiscordApiError, fetchDiscord, requestDiscord } from "./api.js";
 import { jsonResponse } from "./test-http-helpers.js";
 
 describe("fetchDiscord", () => {
@@ -100,6 +100,32 @@ describe("fetchDiscord", () => {
     expect(message).not.toContain("<html");
   });
 
+  it.each([
+    ["hex", "0x10"],
+    ["fractional", "1.5"],
+    ["overflow", `1${"0".repeat(309)}`],
+  ])("rejects invalid Retry-After header values: %s", async (_label, header) => {
+    const fetcher = withFetchPreconnect(
+      async () =>
+        new Response("<html><title>Error 1015</title><body>rate limited</body></html>", {
+          status: 429,
+          headers: { "content-type": "text/html", "retry-after": header },
+        }),
+    );
+
+    let error: unknown;
+    try {
+      await fetchDiscord("/oauth2/applications/@me", "test", fetcher, {
+        retry: { attempts: 1 },
+      });
+    } catch (err) {
+      error = err;
+    }
+
+    expect(error).toBeInstanceOf(DiscordApiError);
+    expect((error as DiscordApiError).retryAfter).toBe(60);
+  });
+
   it("retries rate limits before succeeding", async () => {
     let calls = 0;
     const fetcher = withFetchPreconnect(async () => {
@@ -126,5 +152,27 @@ describe("fetchDiscord", () => {
 
     expect(result).toHaveLength(1);
     expect(calls).toBe(2);
+  });
+
+  it("sends JSON request bodies through the shared retry helper", async () => {
+    let request: RequestInit | undefined;
+    const fetcher = withFetchPreconnect(async (_url, init) => {
+      request = init;
+      return jsonResponse({ id: "42" }, 200);
+    });
+
+    const result = await requestDiscord<{ id: string }>("/channels/c/messages", "test", {
+      body: { content: "hello" },
+      fetcher,
+      retry: { attempts: 1 },
+    });
+
+    expect(result).toEqual({ id: "42" });
+    if (!request) {
+      throw new Error("expected Discord request init");
+    }
+    expect(request.method).toBe("POST");
+    expect(request.body).toBe(JSON.stringify({ content: "hello" }));
+    expect(new Headers(request.headers).get("content-type")).toBe("application/json");
   });
 });

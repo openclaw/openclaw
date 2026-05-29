@@ -15,7 +15,17 @@ import {
 import { describeGatewayServiceRestart, resolveGatewayService } from "../daemon/service.js";
 import { renderSystemdUnavailableHints } from "../daemon/systemd-hints.js";
 import { isSystemdUserServiceAvailable } from "../daemon/systemd.js";
-import { formatPortDiagnostics, inspectPortUsage } from "../infra/ports.js";
+import {
+  formatPortDiagnostics,
+  inspectPortConnections,
+  inspectPortUsage,
+  isExpectedGatewayListeners,
+  type PortConnection,
+} from "../infra/ports.js";
+import {
+  formatGatewayRestartHandoffDiagnostic,
+  readGatewayRestartHandoffSync,
+} from "../infra/restart-handoff.js";
 import { isWSL } from "../infra/wsl.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
@@ -103,6 +113,40 @@ function renderBlockingSystemGatewayServices(services: ExtraGatewayService[]): s
   ].join("\n");
 }
 
+function renderEstablishedGatewayConnections(connections: PortConnection[]): string {
+  return [
+    "Established Gateway TCP clients detected:",
+    ...connections.slice(0, 8).map((connection) => {
+      const pid = connection.pid ? `pid=${connection.pid}` : "pid=?";
+      const direction = connection.direction;
+      const command = connection.command ? ` ${connection.command}` : "";
+      const address = connection.address ? ` ${connection.address}` : "";
+      const commandLine = connection.commandLine ? ` cmd=${connection.commandLine}` : "";
+      return `- ${pid} ${direction}${command}${address}${commandLine}`;
+    }),
+    ...(connections.length > 8 ? [`- ... ${connections.length - 8} more connection(s)`] : []),
+    "If logs show protocol mismatch after rollback, stop stale OpenClaw client processes listed here and rerun doctor.",
+  ].join("\n");
+}
+
+async function maybeReportEstablishedGatewayClients(params: {
+  cfg: OpenClawConfig;
+  deep: boolean;
+  port?: number;
+}): Promise<void> {
+  if (!params.deep || params.cfg.gateway?.mode === "remote") {
+    return;
+  }
+  const port = params.port ?? resolveGatewayPort(params.cfg, process.env);
+  const connections = await inspectPortConnections(port).catch(() => null);
+  const establishedClients = connections?.connections.filter(
+    (connection) => connection.direction !== "server",
+  );
+  if (establishedClients && establishedClients.length > 0) {
+    note(renderEstablishedGatewayConnections(establishedClients), "Gateway clients");
+  }
+}
+
 export async function maybeRepairGatewayDaemon(params: {
   cfg: OpenClawConfig;
   runtime: RuntimeEnv;
@@ -110,8 +154,16 @@ export async function maybeRepairGatewayDaemon(params: {
   options: DoctorOptions;
   gatewayDetailsMessage: string;
   healthOk: boolean;
+  healthSkipped?: boolean;
 }) {
   if (params.healthOk) {
+    await maybeReportEstablishedGatewayClients({
+      cfg: params.cfg,
+      deep: params.options.deep ?? false,
+    });
+    return;
+  }
+  if (params.healthSkipped && params.cfg.gateway?.mode === "remote") {
     return;
   }
 
@@ -126,8 +178,23 @@ export async function maybeRepairGatewayDaemon(params: {
     loaded = false;
   }
   let serviceRuntime: Awaited<ReturnType<typeof service.readRuntime>> | undefined;
+  const command = params.options.deep
+    ? await Promise.resolve(service.readCommand(process.env)).catch(() => null)
+    : null;
+  const serviceEnv = command?.environment
+    ? ({
+        ...process.env,
+        ...command.environment,
+      } satisfies NodeJS.ProcessEnv)
+    : process.env;
   if (loaded) {
-    serviceRuntime = await service.readRuntime(process.env).catch(() => undefined);
+    serviceRuntime = await service.readRuntime(serviceEnv).catch(() => undefined);
+  }
+  if (params.options.deep) {
+    const handoff = readGatewayRestartHandoffSync(serviceEnv);
+    if (handoff) {
+      note(formatGatewayRestartHandoffDiagnostic(handoff), "Gateway");
+    }
   }
 
   if (process.platform === "darwin" && params.cfg.gateway?.mode !== "remote") {
@@ -159,7 +226,15 @@ export async function maybeRepairGatewayDaemon(params: {
   if (params.cfg.gateway?.mode !== "remote") {
     const port = resolveGatewayPort(params.cfg, process.env);
     const diagnostics = await inspectPortUsage(port);
-    if (diagnostics.status === "busy") {
+    await maybeReportEstablishedGatewayClients({
+      cfg: params.cfg,
+      deep: params.options.deep ?? false,
+      port,
+    });
+    if (
+      diagnostics.status === "busy" &&
+      !isExpectedGatewayListeners(diagnostics.listeners, diagnostics.port)
+    ) {
       note(formatPortDiagnostics(diagnostics).join("\n"), "Gateway port");
     } else if (loaded && serviceRuntime?.status === "running") {
       const lastError = await readLastGatewayErrorLine(process.env);
@@ -237,13 +312,14 @@ export async function maybeRepairGatewayDaemon(params: {
           return;
         }
         const port = resolveGatewayPort(params.cfg, process.env);
-        const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
-          env: process.env,
-          port,
-          runtime: daemonRuntime,
-          warn: (message, title) => note(message, title),
-          config: params.cfg,
-        });
+        const { programArguments, workingDirectory, environment, environmentValueSources } =
+          await buildGatewayInstallPlan({
+            env: process.env,
+            port,
+            runtime: daemonRuntime,
+            warn: (message, title) => note(message, title),
+            config: params.cfg,
+          });
         try {
           await service.install({
             env: process.env,
@@ -251,6 +327,7 @@ export async function maybeRepairGatewayDaemon(params: {
             programArguments,
             workingDirectory,
             environment,
+            environmentValueSources,
           });
         } catch (err) {
           note(`Gateway service install failed: ${String(err)}`, "Gateway");
@@ -276,6 +353,9 @@ export async function maybeRepairGatewayDaemon(params: {
   }
 
   if (serviceRuntime?.status !== "running") {
+    if (params.healthSkipped && serviceRuntime?.status !== "stopped") {
+      return;
+    }
     if (serviceRepairExternal) {
       note(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway");
       return;
@@ -311,15 +391,33 @@ export async function maybeRepairGatewayDaemon(params: {
   }
 
   if (serviceRuntime?.status === "running") {
+    if (params.healthSkipped) {
+      return;
+    }
     if (serviceRepairExternal) {
       note(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway");
       return;
     }
+
+    // Check if the gateway was recently restarted (e.g., via SIGUSR1 after an update).
+    // If a restart handoff exists and the gateway reports healthy, skip the restart prompt
+    // to avoid racing with the system supervisor and causing a restart loop.
+    const recentRestart = readGatewayRestartHandoffSync(serviceEnv);
+    if (recentRestart) {
+      try {
+        await healthCommand({ json: false, timeoutMs: 10_000 }, params.runtime);
+        note("Gateway is healthy after recent restart; skipping restart prompt.", "Gateway");
+        return;
+      } catch {
+        // Health probe failed — fall through to the restart prompt below.
+      }
+    }
+
     const restart = await confirmDoctorServiceRepair(
       params.prompter,
       {
         message: "Restart gateway service now?",
-        initialValue: true,
+        initialValue: false,
       },
       serviceRepairPolicy,
     );

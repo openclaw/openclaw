@@ -1,15 +1,19 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   collectTelegramInvalidAllowFromWarnings,
   collectTelegramApiRootWarnings,
   collectTelegramEmptyAllowlistExtraWarnings,
   collectTelegramGroupPolicyWarnings,
+  collectTelegramMalformedGroupsWarnings,
   collectTelegramMissingEnvTokenWarnings,
+  collectTelegramSelectedQuoteToolProgressWarnings,
   maybeRepairTelegramApiRoots,
   maybeRepairTelegramAllowFromUsernames,
   scanTelegramBotEndpointApiRoots,
   scanTelegramInvalidAllowFromEntries,
+  scanTelegramMalformedGroupsConfig,
+  scanTelegramSelectedQuoteToolProgressWarnings,
   telegramDoctor,
 } from "./doctor.js";
 
@@ -18,7 +22,7 @@ const listTelegramAccountIdsMock = vi.hoisted(() => vi.fn());
 const inspectTelegramAccountMock = vi.hoisted(() => vi.fn());
 const lookupTelegramChatIdMock = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/runtime-secret-resolution", () => {
+vi.mock("openclaw/plugin-sdk/runtime", () => {
   return {
     getChannelsCommandSecretTargetIds: () => ["channels"],
     resolveCommandSecretRefsViaGateway: resolveCommandSecretRefsViaGatewayMock,
@@ -70,9 +74,8 @@ describe("telegram doctor", () => {
 
   it("normalizes legacy telegram streaming aliases into the nested streaming shape", () => {
     const normalize = telegramDoctor.normalizeCompatibilityConfig;
-    expect(normalize).toBeDefined();
     if (!normalize) {
-      return;
+      throw new Error("expected telegram compatibility normalizer");
     }
 
     const result = normalize({
@@ -118,23 +121,22 @@ describe("telegram doctor", () => {
         },
       },
     });
-    expect(result.changes).toEqual(
-      expect.arrayContaining([
-        "Moved channels.telegram.streamMode → channels.telegram.streaming.mode (block).",
-        "Moved channels.telegram.chunkMode → channels.telegram.streaming.chunkMode.",
-        "Moved channels.telegram.blockStreaming → channels.telegram.streaming.block.enabled.",
-        "Moved channels.telegram.draftChunk → channels.telegram.streaming.preview.chunk.",
-        "Moved channels.telegram.accounts.work.streaming (boolean) → channels.telegram.accounts.work.streaming.mode (off).",
-        "Moved channels.telegram.accounts.work.blockStreamingCoalesce → channels.telegram.accounts.work.streaming.block.coalesce.",
-      ]),
-    );
+    for (const change of [
+      "Moved channels.telegram.streamMode → channels.telegram.streaming.mode (block).",
+      "Moved channels.telegram.chunkMode → channels.telegram.streaming.chunkMode.",
+      "Moved channels.telegram.blockStreaming → channels.telegram.streaming.block.enabled.",
+      "Moved channels.telegram.draftChunk → channels.telegram.streaming.preview.chunk.",
+      "Moved channels.telegram.accounts.work.streaming (boolean) → channels.telegram.accounts.work.streaming.mode (off).",
+      "Moved channels.telegram.accounts.work.blockStreamingCoalesce → channels.telegram.accounts.work.streaming.block.coalesce.",
+    ]) {
+      expect(result.changes).toContain(change);
+    }
   });
 
   it("does not duplicate streaming.mode change messages when streamMode wins over boolean streaming", () => {
     const normalize = telegramDoctor.normalizeCompatibilityConfig;
-    expect(normalize).toBeDefined();
     if (!normalize) {
-      return;
+      throw new Error("expected telegram compatibility normalizer");
     }
 
     const result = normalize({
@@ -154,6 +156,76 @@ describe("telegram doctor", () => {
     expect(
       result.changes.filter((change) => change.includes("channels.telegram.streaming.mode")),
     ).toEqual(["Moved channels.telegram.streamMode → channels.telegram.streaming.mode (block)."]);
+  });
+
+  it("removes retired DM thread reply policy keys", () => {
+    const normalize = telegramDoctor.normalizeCompatibilityConfig;
+    if (!normalize) {
+      throw new Error("expected telegram compatibility normalizer");
+    }
+
+    const result = normalize({
+      cfg: {
+        channels: {
+          telegram: {
+            dm: { threadReplies: "inbound" },
+            direct: {
+              "123": { threadReplies: "always", requireTopic: true },
+            },
+            accounts: {
+              work: {
+                dm: { threadReplies: "off" },
+                direct: {
+                  "456": { threadReplies: "inbound", systemPrompt: "Support" },
+                },
+              },
+            },
+          },
+        },
+      } as never,
+    });
+
+    const telegram = result.config.channels?.telegram;
+    expect(telegram?.dm).toBeUndefined();
+    expect(telegram?.direct?.["123"]).toEqual({ requireTopic: true });
+    expect(telegram?.accounts?.work?.dm).toBeUndefined();
+    expect(telegram?.accounts?.work?.direct?.["456"]).toEqual({ systemPrompt: "Support" });
+    expect(result.changes).toEqual([
+      "Removed channels.telegram.dm.threadReplies; DM topic sessions now follow Telegram getMe.has_topics_enabled.",
+      "Removed channels.telegram.direct.123.threadReplies; DM topic sessions now follow Telegram getMe.has_topics_enabled.",
+      "Removed channels.telegram.accounts.work.dm.threadReplies; DM topic sessions now follow Telegram getMe.has_topics_enabled.",
+      "Removed channels.telegram.accounts.work.direct.456.threadReplies; DM topic sessions now follow Telegram getMe.has_topics_enabled.",
+    ]);
+  });
+
+  it("removes empty retired DM policy stanzas", () => {
+    const normalize = telegramDoctor.normalizeCompatibilityConfig;
+    if (!normalize) {
+      throw new Error("expected telegram compatibility normalizer");
+    }
+
+    const result = normalize({
+      cfg: {
+        channels: {
+          telegram: {
+            dm: {},
+            accounts: {
+              work: {
+                dm: {},
+              },
+            },
+          },
+        },
+      } as never,
+    });
+
+    const telegram = result.config.channels?.telegram;
+    expect(telegram?.dm).toBeUndefined();
+    expect(telegram?.accounts?.work?.dm).toBeUndefined();
+    expect(result.changes).toEqual([
+      "Removed channels.telegram.dm.",
+      "Removed channels.telegram.accounts.work.dm.",
+    ]);
   });
 
   it("finds invalid allowFrom entries across scopes", () => {
@@ -204,6 +276,42 @@ describe("telegram doctor", () => {
         prefix: "channels.telegram",
       }),
     ).toHaveLength(1);
+  });
+
+  it("warns when Telegram groups use a non-object shape", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          groups: ["-1001234567890"],
+          accounts: {
+            work: {
+              groups: null,
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const hits = scanTelegramMalformedGroupsConfig(cfg);
+    expect(hits).toEqual([
+      { path: "channels.telegram.groups", actualType: "array" },
+      { path: "channels.telegram.accounts.work.groups", actualType: "null" },
+    ]);
+
+    const warnings = collectTelegramMalformedGroupsWarnings({
+      hits,
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+    expect(warnings[0]).toContain("object map keyed by Telegram group/chat id");
+    expect(warnings[1]).toContain('channels.telegram.groups."-1001234567890".topics."99"');
+    expect(warnings[1]).toContain("openclaw doctor --fix");
+
+    expect(
+      await telegramDoctor.collectPreviewWarnings?.({
+        cfg,
+        doctorFixCommand: "openclaw doctor --fix",
+      }),
+    ).toEqual(expect.arrayContaining(warnings));
   });
 
   it("repairs @username entries to numeric ids", async () => {
@@ -329,6 +437,113 @@ describe("telegram doctor", () => {
     ]);
   });
 
+  it("warns when selected quote replies can suppress Telegram tool-progress preview", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          replyToMode: "first",
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const hits = scanTelegramSelectedQuoteToolProgressWarnings(cfg);
+    expect(hits).toEqual([{ path: "channels.telegram", replyToMode: "first" }]);
+
+    const warnings = collectTelegramSelectedQuoteToolProgressWarnings({ hits });
+    expect(warnings[0]).toContain("selected quote replies");
+    expect(warnings[0]).toContain('"Working" tool-progress preview');
+    expect(warnings[0]).toContain("Current-message replies without selected quote text");
+    expect(warnings[1]).toContain("streaming.preview.toolProgress: false");
+    const collectedWarnings = await telegramDoctor.collectPreviewWarnings?.({
+      cfg,
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+    expect(collectedWarnings?.some((warning) => warning.includes("selected quote replies"))).toBe(
+      true,
+    );
+  });
+
+  it("warns for the implicit default Telegram account when accounts is empty", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          replyToMode: "all",
+          accounts: {},
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(scanTelegramSelectedQuoteToolProgressWarnings(cfg)).toEqual([
+      { path: "channels.telegram", replyToMode: "all" },
+    ]);
+  });
+
+  it("uses merged Telegram account config for selected quote tool-progress warnings", () => {
+    listTelegramAccountIdsMock.mockReturnValue(["work", "quiet"]);
+    const cfg = {
+      channels: {
+        telegram: {
+          replyToMode: "batched",
+          accounts: {
+            work: {},
+            quiet: {
+              replyToMode: "off",
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(scanTelegramSelectedQuoteToolProgressWarnings(cfg)).toEqual([
+      { path: "channels.telegram.accounts.work", replyToMode: "batched" },
+    ]);
+  });
+
+  it("skips selected quote tool-progress warning when preview progress is disabled", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          replyToMode: "first",
+          streaming: {
+            preview: {
+              toolProgress: false,
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(scanTelegramSelectedQuoteToolProgressWarnings(cfg)).toStrictEqual([]);
+  });
+
+  it("skips selected quote tool-progress warning when preview streaming is off or block streaming owns delivery", () => {
+    expect(
+      scanTelegramSelectedQuoteToolProgressWarnings({
+        channels: {
+          telegram: {
+            replyToMode: "first",
+            streaming: false,
+          },
+        },
+      } as unknown as OpenClawConfig),
+    ).toStrictEqual([]);
+
+    expect(
+      scanTelegramSelectedQuoteToolProgressWarnings({
+        channels: {
+          telegram: {
+            replyToMode: "first",
+          },
+        },
+        agents: {
+          defaults: {
+            blockStreamingDefault: "on",
+          },
+        },
+      } as unknown as OpenClawConfig),
+    ).toStrictEqual([]);
+  });
+
   it("wires apiRoot preview warnings and repair through the doctor adapter", async () => {
     const cfg = {
       channels: {
@@ -374,9 +589,9 @@ describe("telegram doctor", () => {
       configured: false,
       config: {},
     });
-    expect(collectTelegramMissingEnvTokenWarnings({ cfg, env: {} })).toEqual([
-      expect.stringContaining("TELEGRAM_BOT_TOKEN is absent"),
-    ]);
+    const missingEnvWarning =
+      "- channels.telegram: default account has no available bot token, and TELEGRAM_BOT_TOKEN is absent in this doctor environment. After migration, verify TELEGRAM_BOT_TOKEN is present in the state-dir .env or configure channels.telegram.botToken / channels.telegram.accounts.default.botToken as a SecretRef.";
+    expect(collectTelegramMissingEnvTokenWarnings({ cfg, env: {} })).toEqual([missingEnvWarning]);
 
     inspectTelegramAccountMock.mockReturnValueOnce({
       enabled: true,
@@ -388,7 +603,7 @@ describe("telegram doctor", () => {
     });
     expect(
       collectTelegramMissingEnvTokenWarnings({ cfg, env: { TELEGRAM_BOT_TOKEN: "123:tok" } }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
 
     inspectTelegramAccountMock.mockReturnValueOnce({
       enabled: true,
@@ -404,7 +619,7 @@ describe("telegram doctor", () => {
         doctorFixCommand: "openclaw doctor --fix",
         env: {},
       }),
-    ).toContainEqual(expect.stringContaining("TELEGRAM_BOT_TOKEN is absent"));
+    ).toContain(missingEnvWarning);
   });
 
   it("does not warn about TELEGRAM_BOT_TOKEN when a non-default account is selected", () => {
@@ -420,6 +635,6 @@ describe("telegram doctor", () => {
       },
     } as unknown as OpenClawConfig;
 
-    expect(collectTelegramMissingEnvTokenWarnings({ cfg, env: {} })).toEqual([]);
+    expect(collectTelegramMissingEnvTokenWarnings({ cfg, env: {} })).toStrictEqual([]);
   });
 });

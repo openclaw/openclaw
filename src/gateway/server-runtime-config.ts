@@ -5,6 +5,10 @@ import type {
 } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  formatUnsafeGatewayTailscaleNoAuthMessage,
+  isUnsafeGatewayTailscaleNoAuth,
+} from "../shared/gateway-tailscale-auth-policy.js";
+import {
   assertGatewayAuthConfigured,
   type ResolvedGatewayAuth,
   resolveGatewayAuth,
@@ -35,7 +39,6 @@ type GatewayRuntimeConfig = {
   tailscaleConfig: GatewayTailscaleConfig;
   tailscaleMode: "off" | "serve" | "funnel";
   hooksConfig: ReturnType<typeof resolveHooksConfig>;
-  canvasHostEnabled: boolean;
 };
 
 export async function resolveGatewayRuntimeConfig(params: {
@@ -122,9 +125,6 @@ export async function resolveGatewayRuntimeConfig(params: {
   const hasSharedSecret =
     (authMode === "token" && hasToken) || (authMode === "password" && hasPassword);
   const hooksConfig = resolveHooksConfig(params.cfg);
-  const canvasHostEnabled =
-    process.env.OPENCLAW_SKIP_CANVAS_HOST !== "1" && params.cfg.canvasHost?.enabled !== false;
-
   const trustedProxies = params.cfg.gateway?.trustedProxies ?? [];
   const controlUiAllowedOrigins = (params.cfg.gateway?.controlUi?.allowedOrigins ?? [])
     .map((value) => value.trim())
@@ -137,6 +137,9 @@ export async function resolveGatewayRuntimeConfig(params: {
     throw new Error(
       "tailscale funnel requires gateway auth mode=password (set gateway.auth.password or OPENCLAW_GATEWAY_PASSWORD)",
     );
+  }
+  if (isUnsafeGatewayTailscaleNoAuth({ authMode, tailscaleMode })) {
+    throw new Error(formatUnsafeGatewayTailscaleNoAuthMessage(tailscaleMode));
   }
   if (tailscaleMode !== "off" && !isLoopbackHost(bindHost)) {
     throw new Error("tailscale serve/funnel requires gateway bind=loopback (127.0.0.1)");
@@ -184,6 +187,5 @@ export async function resolveGatewayRuntimeConfig(params: {
     tailscaleConfig,
     tailscaleMode,
     hooksConfig,
-    canvasHostEnabled,
   };
 }

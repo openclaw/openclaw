@@ -16,11 +16,24 @@ until a message is processed. Use `openclaw channels status --probe`,
 `openclaw status --deep`, or `openclaw health --verbose` when you need live
 channel connectivity.
 
+`openclaw sessions` and Gateway `sessions.list` responses are bounded by
+default so large long-lived stores cannot monopolize the CLI process or Gateway
+event loop. The CLI returns the newest 100 sessions by default; pass
+`--limit <n>` for a smaller/larger window or `--limit all` when you intentionally
+need the full store. JSON responses include `totalCount`, `limitApplied`, and
+`hasMore` when callers need to show that more rows exist.
+
+RPC clients can pass `configuredAgentsOnly: true` to keep the broad combined
+discovery source but return only rows for agents currently present in config.
+Control UI uses that mode by default so deleted or disk-only agent stores do
+not reappear in the Sessions view.
+
 ```bash
 openclaw sessions
 openclaw sessions --agent work
 openclaw sessions --all-agents
 openclaw sessions --active 120
+openclaw sessions --limit 25
 openclaw sessions --verbose
 openclaw sessions --json
 ```
@@ -32,6 +45,7 @@ Scope selection:
 - `--agent <id>`: one configured agent store
 - `--all-agents`: aggregate all configured agent stores
 - `--store <path>`: explicit store path (cannot be combined with `--agent` or `--all-agents`)
+- `--limit <n|all>`: max rows to output (default `100`; `all` restores full output)
 
 Export a trajectory bundle for a stored session:
 
@@ -63,6 +77,9 @@ JSON examples:
   ],
   "allAgents": true,
   "count": 2,
+  "totalCount": 2,
+  "limitApplied": 100,
+  "hasMore": false,
   "activeMinutes": null,
   "sessions": [
     { "agentId": "main", "key": "agent:main:main", "model": "gpt-5" },
@@ -81,17 +98,20 @@ openclaw sessions cleanup --agent work --dry-run
 openclaw sessions cleanup --all-agents --dry-run
 openclaw sessions cleanup --enforce
 openclaw sessions cleanup --enforce --active-key "agent:main:telegram:direct:123"
+openclaw sessions cleanup --dry-run --fix-dm-scope
 openclaw sessions cleanup --json
 ```
 
 `openclaw sessions cleanup` uses `session.maintenance` settings from config:
 
 - Scope note: `openclaw sessions cleanup` maintains session stores, transcripts, and trajectory sidecars. It does not prune cron run logs (`cron/runs/<jobId>.jsonl`), which are managed by `cron.runLog.maxBytes` and `cron.runLog.keepLines` in [Cron configuration](/automation/cron-jobs#configuration) and explained in [Cron maintenance](/automation/cron-jobs#maintenance).
+- Cleanup also prunes unreferenced primary transcripts, compaction checkpoints, and trajectory sidecars older than `session.maintenance.pruneAfter`; files still referenced by `sessions.json` are preserved.
 
 - `--dry-run`: preview how many entries would be pruned/capped without writing.
   - In text mode, dry-run prints a per-session action table (`Action`, `Key`, `Age`, `Model`, `Flags`) so you can see what would be kept vs removed.
 - `--enforce`: apply maintenance even when `session.maintenance.mode` is `warn`.
-- `--fix-missing`: remove entries whose transcript files are missing, even if they would not normally age/count out yet.
+- `--fix-missing`: remove entries whose transcript files are missing or header-only/empty, even if they would not normally age/count out yet.
+- `--fix-dm-scope`: when `session.dmScope` is `main`, retire stale peer-keyed direct-DM rows left behind by earlier `per-peer`, `per-channel-peer`, or `per-account-channel-peer` routing. Use `--dry-run` first; applying the cleanup removes those rows from `sessions.json` and preserves their transcripts as deleted archives.
 - `--active-key <key>`: protect a specific active key from disk-budget eviction. Durable external conversation pointers, such as group sessions and thread-scoped chat sessions, are also kept by age/count/disk-budget maintenance.
 - `--agent <id>`: run cleanup for one configured agent store.
 - `--all-agents`: run cleanup for all configured agent stores.
@@ -115,6 +135,8 @@ traffic. Use `--store <path>` for explicit offline repair of a store file.
       "storePath": "/home/user/.openclaw/agents/main/sessions/sessions.json",
       "beforeCount": 120,
       "afterCount": 80,
+      "missing": 0,
+      "dmScopeRetired": 0,
       "pruned": 40,
       "capped": 0
     },
@@ -123,6 +145,8 @@ traffic. Use `--store <path>` for explicit offline repair of a store file.
       "storePath": "/home/user/.openclaw/agents/work/sessions/sessions.json",
       "beforeCount": 18,
       "afterCount": 18,
+      "missing": 0,
+      "dmScopeRetired": 0,
       "pruned": 0,
       "capped": 0
     }

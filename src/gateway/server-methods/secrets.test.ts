@@ -26,12 +26,18 @@ async function invokeSecretsResolve(params: {
   respond: ReturnType<typeof vi.fn>;
   commandName: unknown;
   targetIds: unknown;
+  allowedPaths?: unknown;
+  forcedActivePaths?: unknown;
 }) {
   await params.handlers["secrets.resolve"]({
     req: { type: "req", id: "1", method: "secrets.resolve" },
     params: {
       commandName: params.commandName,
       targetIds: params.targetIds,
+      ...(params.allowedPaths !== undefined ? { allowedPaths: params.allowedPaths } : {}),
+      ...(params.forcedActivePaths !== undefined
+        ? { forcedActivePaths: params.forcedActivePaths }
+        : {}),
     },
     client: null,
     isWebchatConnect: () => false,
@@ -42,10 +48,40 @@ async function invokeSecretsResolve(params: {
   });
 }
 
+function requireRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Expected a non-array record");
+  }
+  return value as Record<string, unknown>;
+}
+
+function expectRespondError(
+  respond: ReturnType<typeof vi.fn>,
+  expected: { code: string; message?: string },
+): void {
+  const call = respond.mock.calls.at(0);
+  expect(call?.[0]).toBe(false);
+  expect(call?.[1]).toBeUndefined();
+  const error = requireRecord(call?.[2]);
+  expect(error.code).toBe(expected.code);
+  if (expected.message !== undefined) {
+    expect(error.message).toBe(expected.message);
+  }
+}
+
+function expectWarnMessageWith(warn: ReturnType<typeof vi.fn>, text: string): void {
+  expect(warn.mock.calls.map(([message]) => String(message)).join("\n")).toContain(text);
+}
+
 describe("secrets handlers", () => {
   function createHandlers(overrides?: {
     reloadSecrets?: () => Promise<{ warningCount: number }>;
-    resolveSecrets?: (params: { commandName: string; targetIds: string[] }) => Promise<{
+    resolveSecrets?: (params: {
+      commandName: string;
+      targetIds: string[];
+      allowedPaths?: string[];
+      forcedActivePaths?: string[];
+    }) => Promise<{
       assignments: Array<{ path: string; pathSegments: string[]; value: unknown }>;
       diagnostics: string[];
       inactiveRefPaths: string[];
@@ -84,15 +120,11 @@ describe("secrets handlers", () => {
     });
     const respond = vi.fn();
     await invokeSecretsReload({ handlers, respond });
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "UNAVAILABLE",
-        message: "secrets.reload failed",
-      }),
-    );
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("disk full"));
+    expectRespondError(respond, {
+      code: "UNAVAILABLE",
+      message: "secrets.reload failed",
+    });
+    expectWarnMessageWith(warn, "disk full");
   });
 
   it("resolves requested command secret assignments from the active snapshot", async () => {
@@ -114,10 +146,14 @@ describe("secrets handlers", () => {
       respond,
       commandName: "memory status",
       targetIds: ["talk.providers.*.apiKey"],
+      allowedPaths: [TALK_TEST_PROVIDER_API_KEY_PATH],
+      forcedActivePaths: [TALK_TEST_PROVIDER_API_KEY_PATH],
     });
     expect(resolveSecrets).toHaveBeenCalledWith({
       commandName: "memory status",
       targetIds: ["talk.providers.*.apiKey"],
+      allowedPaths: [TALK_TEST_PROVIDER_API_KEY_PATH],
+      forcedActivePaths: [TALK_TEST_PROVIDER_API_KEY_PATH],
     });
     expect(respond).toHaveBeenCalledWith(true, {
       ok: true,
@@ -142,13 +178,7 @@ describe("secrets handlers", () => {
       commandName: "",
       targetIds: "bad",
     });
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "INVALID_REQUEST",
-      }),
-    );
+    expectRespondError(respond, { code: "INVALID_REQUEST" });
   });
 
   it("rejects secrets.resolve params when targetIds entries are not strings", async () => {
@@ -162,14 +192,10 @@ describe("secrets handlers", () => {
       targetIds: ["talk.providers.*.apiKey", 12],
     });
     expect(resolveSecrets).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "INVALID_REQUEST",
-        message: "invalid secrets.resolve params: targetIds",
-      }),
-    );
+    expectRespondError(respond, {
+      code: "INVALID_REQUEST",
+      message: "invalid secrets.resolve params: targetIds",
+    });
   });
 
   it("rejects unknown secrets.resolve target ids", async () => {
@@ -183,14 +209,10 @@ describe("secrets handlers", () => {
       targetIds: ["unknown.target"],
     });
     expect(resolveSecrets).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "INVALID_REQUEST",
-        message: 'invalid secrets.resolve params: unknown target id "unknown.target"',
-      }),
-    );
+    expectRespondError(respond, {
+      code: "INVALID_REQUEST",
+      message: 'invalid secrets.resolve params: unknown target id "unknown.target"',
+    });
   });
 
   it("returns unavailable when secrets.resolve handler returns an invalid payload shape", async () => {
@@ -208,17 +230,11 @@ describe("secrets handlers", () => {
       commandName: "memory status",
       targetIds: ["talk.providers.*.apiKey"],
     });
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "UNAVAILABLE",
-        message: "secrets.resolve failed",
-      }),
-    );
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("secrets.resolve returned invalid payload."),
-    );
+    expectRespondError(respond, {
+      code: "UNAVAILABLE",
+      message: "secrets.resolve failed",
+    });
+    expectWarnMessageWith(warn, "secrets.resolve returned invalid payload.");
   });
 
   it("logs error details when secrets.resolve throws", async () => {
@@ -234,14 +250,10 @@ describe("secrets handlers", () => {
       commandName: "memory status",
       targetIds: ["talk.providers.*.apiKey"],
     });
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "UNAVAILABLE",
-        message: "secrets.resolve failed",
-      }),
-    );
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("EACCES: permission denied"));
+    expectRespondError(respond, {
+      code: "UNAVAILABLE",
+      message: "secrets.resolve failed",
+    });
+    expectWarnMessageWith(warn, "EACCES: permission denied");
   });
 });

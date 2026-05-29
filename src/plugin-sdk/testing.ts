@@ -35,6 +35,7 @@ export type { ChannelGatewayContext } from "../channels/plugins/types.adapters.j
 export type { OpenClawConfig } from "../config/config.js";
 export { isAtLeast, parseSemver } from "../infra/runtime-guard.js";
 export { callGateway } from "../gateway/call.js";
+/** @deprecated Direct outbound delivery is runtime substrate; use channel message runtime helpers. */
 export { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
 export {
   createEmptyPluginRegistry,
@@ -120,10 +121,10 @@ export {
   isOverloadedErrorMessage,
   isServerErrorMessage,
   isTimeoutErrorMessage,
-} from "../agents/pi-embedded-helpers/failover-matches.js";
+} from "../agents/embedded-agent-helpers/failover-matches.js";
 export { maybeLoadShellEnvForGenerationProviders } from "../test-utils/generation-live-test-helpers.js";
-export { __testing } from "../acp/control-plane/manager.js";
-export { __testing as acpManagerTesting } from "../acp/control-plane/manager.js";
+export { testing, testing as __testing } from "../acp/control-plane/manager.js";
+export { testing as acpManagerTesting } from "../acp/control-plane/manager.js";
 export { runAcpRuntimeAdapterContract } from "../acp/runtime/adapter-contract.testkit.js";
 export { handleAcpCommand } from "../auto-reply/reply/commands-acp.js";
 export { buildCommandTestParams } from "../auto-reply/reply/commands-spawn.test-harness.js";

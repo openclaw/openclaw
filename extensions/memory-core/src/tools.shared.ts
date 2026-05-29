@@ -1,12 +1,13 @@
+import { optionalFiniteNumberSchema, stringEnum } from "openclaw/plugin-sdk/channel-actions";
 import {
   listMemoryCorpusSupplements,
   resolveMemorySearchConfig,
-  resolveSessionAgentId,
+  resolveSessionAgentIds,
   type MemoryCorpusSearchResult,
   type AnyAgentTool,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type } from "typebox";
 
 type MemoryToolRuntime = typeof import("./tools.runtime.js");
@@ -16,6 +17,7 @@ type MemorySearchManagerResult = Awaited<
 type MemoryToolOptions = {
   config?: OpenClawConfig;
   getConfig?: () => OpenClawConfig | undefined;
+  agentId?: string;
   agentSessionKey?: string;
 };
 
@@ -28,25 +30,16 @@ export async function loadMemoryToolRuntime(): Promise<MemoryToolRuntime> {
 
 export const MemorySearchSchema = Type.Object({
   query: Type.String(),
-  maxResults: Type.Optional(Type.Number()),
-  minScore: Type.Optional(Type.Number()),
-  corpus: Type.Optional(
-    Type.Union([
-      Type.Literal("memory"),
-      Type.Literal("wiki"),
-      Type.Literal("all"),
-      Type.Literal("sessions"),
-    ]),
-  ),
+  maxResults: Type.Optional(Type.Integer({ minimum: 1 })),
+  minScore: optionalFiniteNumberSchema(),
+  corpus: Type.Optional(stringEnum(["memory", "wiki", "all", "sessions"])),
 });
 
 export const MemoryGetSchema = Type.Object({
   path: Type.String(),
-  from: Type.Optional(Type.Number()),
-  lines: Type.Optional(Type.Number()),
-  corpus: Type.Optional(
-    Type.Union([Type.Literal("memory"), Type.Literal("wiki"), Type.Literal("all")]),
-  ),
+  from: Type.Optional(Type.Integer()),
+  lines: Type.Optional(Type.Integer()),
+  corpus: Type.Optional(stringEnum(["memory", "wiki", "all"])),
 });
 
 function resolveMemoryToolContext(options: MemoryToolOptions) {
@@ -54,9 +47,10 @@ function resolveMemoryToolContext(options: MemoryToolOptions) {
   if (!cfg) {
     return null;
   }
-  const agentId = resolveSessionAgentId({
+  const { sessionAgentId: agentId } = resolveSessionAgentIds({
     sessionKey: options.agentSessionKey,
     config: cfg,
+    agentId: options.agentId,
   });
   if (!resolveMemorySearchConfig(cfg, agentId)) {
     return null;

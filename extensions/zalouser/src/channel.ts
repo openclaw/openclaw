@@ -1,5 +1,5 @@
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
-import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
+import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-outbound";
 import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
@@ -16,6 +16,7 @@ import { DEFAULT_ACCOUNT_ID } from "./channel-api.js";
 import {
   zalouserAuthAdapter,
   zalouserGroupsAdapter,
+  zalouserMessageAdapter,
   zalouserMessageActions,
   zalouserMessagingAdapter,
   zalouserOutboundAdapter,
@@ -131,6 +132,7 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount, ZalouserProb
       },
       resolver: zalouserResolverAdapter,
       auth: zalouserAuthAdapter,
+      message: zalouserMessageAdapter,
       status: createAsyncComputedAccountStatusAdapter<ResolvedZalouserAccount, ZalouserProbeResult>(
         {
           defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),

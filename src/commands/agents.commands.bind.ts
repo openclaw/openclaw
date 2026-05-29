@@ -1,4 +1,5 @@
 import { listAgentEntries, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import { isRouteBinding, listRouteBindings } from "../config/bindings.js";
 import { replaceConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
@@ -7,6 +8,7 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { describeBinding } from "./agents.binding-format.js";
 import { requireValidConfig, requireValidConfigFileSnapshot } from "./agents.command-shared.js";
 
@@ -80,12 +82,16 @@ function resolveTargetAgentIdOrExit(params: {
     fallbackToDefault: true,
   });
   if (!agentId) {
-    params.runtime.error("Unable to resolve agent id.");
+    params.runtime.error(
+      `Unable to resolve agent id. Run ${formatCliCommand("openclaw agents list")} to choose one.`,
+    );
     params.runtime.exit(1);
     return null;
   }
   if (!hasAgent(params.cfg, agentId)) {
-    params.runtime.error(`Agent "${agentId}" not found.`);
+    params.runtime.error(
+      `Agent "${agentId}" not found. Run ${formatCliCommand("openclaw agents list")} to see configured agents.`,
+    );
     params.runtime.exit(1);
     return null;
   }
@@ -110,7 +116,7 @@ async function resolveParsedBindingsOrExit(params: {
   bindings: AgentRouteBinding[];
   errors: string[];
 } | null> {
-  const specs = (params.bindValues ?? []).map((value) => value.trim()).filter(Boolean);
+  const specs = normalizeStringEntries(params.bindValues);
   if (specs.length === 0) {
     params.runtime.error(params.emptyMessage);
     params.runtime.exit(1);
@@ -178,12 +184,16 @@ export async function agentsBindingsCommand(
 
   const filterAgentId = resolveAgentId(cfg, opts.agent?.trim());
   if (opts.agent && !filterAgentId) {
-    runtime.error("Agent id is required.");
+    runtime.error(
+      `Agent id is required. Run ${formatCliCommand("openclaw agents list")} to choose one.`,
+    );
     runtime.exit(1);
     return;
   }
   if (filterAgentId && !hasAgent(cfg, filterAgentId)) {
-    runtime.error(`Agent "${filterAgentId}" not found.`);
+    runtime.error(
+      `Agent "${filterAgentId}" not found. Run ${formatCliCommand("openclaw agents list")} to see configured agents.`,
+    );
     runtime.exit(1);
     return;
   }

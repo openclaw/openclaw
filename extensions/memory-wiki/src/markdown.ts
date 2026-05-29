@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import {
+  asFiniteNumber,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   normalizeSingleOrTrimmedStringList,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import YAML from "yaml";
 
 const WIKI_PAGE_KINDS = ["entity", "concept", "source", "synthesis", "report"] as const;
@@ -109,6 +110,11 @@ const RELATED_BLOCK_PATTERN = new RegExp(
 );
 const MAX_WIKI_SEGMENT_BYTES = 240;
 const MAX_WIKI_FILENAME_COMPONENT_BYTES = 255;
+const FS_SAFE_PINNED_WRITE_TEMP_SUFFIX = ".00000000-0000-4000-8000-000000000000.fallback.tmp";
+const MAX_WIKI_SAFE_WRITE_FILENAME_COMPONENT_BYTES =
+  MAX_WIKI_FILENAME_COMPONENT_BYTES -
+  Buffer.byteLength(FS_SAFE_PINNED_WRITE_TEMP_SUFFIX) -
+  Buffer.byteLength(".");
 const WIKI_SEGMENT_HASH_BYTES = 12;
 
 function truncateUtf8CodePointSafe(value: string, maxBytes: number): string {
@@ -152,7 +158,7 @@ export function createWikiPageFilename(stem: string, extension = ".md"): string 
   const normalizedExtension = extension.startsWith(".") ? extension : `.${extension}`;
   const maxStemBytes = Math.max(
     1,
-    MAX_WIKI_FILENAME_COMPONENT_BYTES - Buffer.byteLength(normalizedExtension),
+    MAX_WIKI_SAFE_WRITE_FILENAME_COMPONENT_BYTES - Buffer.byteLength(normalizedExtension),
   );
   return `${capWikiValueWithHash(stem, maxStemBytes, "page")}${normalizedExtension}`;
 }
@@ -271,7 +277,7 @@ export function normalizeWikiClaims(value: unknown): WikiClaim[] {
 }
 
 function normalizeOptionalNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return asFiniteNumber(value);
 }
 
 function normalizeWikiPersonCard(value: unknown): WikiPersonCard | undefined {

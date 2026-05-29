@@ -14,20 +14,27 @@ media capabilities are tool-driven: the agent decides when to use them based
 on the conversation, and each tool only appears when at least one backing
 provider is configured.
 
+Live speech uses the Talk session contract instead of the one-shot media tool
+path. Talk has three modes: provider-native `realtime`, local or streaming
+`stt-tts`, and `transcription` for observe-only speech capture. Those modes
+share provider catalogs, event envelopes, and cancellation semantics with
+telephony, meetings, browser realtime, and native push-to-talk clients.
+
 ## Capabilities
 
 <CardGroup cols={2}>
   <Card title="Image generation" href="/tools/image-generation" icon="image">
     Create and edit images from text prompts or reference images via
-    `image_generate`. Synchronous — completes inline with the reply.
+    `image_generate`. Async in chat sessions — runs in the background and
+    posts the result when ready.
   </Card>
   <Card title="Video generation" href="/tools/video-generation" icon="video">
     Text-to-video, image-to-video, and video-to-video via `video_generate`.
     Async — runs in the background and posts the result when ready.
   </Card>
   <Card title="Music generation" href="/tools/music-generation" icon="music">
-    Generate music or audio tracks via `music_generate`. Async on shared
-    providers; ComfyUI workflow path runs synchronously.
+    Generate music or audio tracks via `music_generate`. Async in chat
+    sessions on the shared media-generation task lifecycle.
   </Card>
   <Card title="Text-to-speech" href="/tools/tts" icon="microphone">
     Convert outbound replies to spoken audio via the `tts` tool plus
@@ -53,7 +60,7 @@ provider is configured.
 | DeepInfra   |   ✓   |   ✓   |       |  ✓  |  ✓  |                |          ✓          |
 | Deepgram    |       |       |       |     |  ✓  |       ✓        |                     |
 | ElevenLabs  |       |       |       |  ✓  |  ✓  |                |                     |
-| fal         |   ✓   |   ✓   |       |     |     |                |                     |
+| fal         |   ✓   |   ✓   |   ✓   |     |     |                |                     |
 | Google      |   ✓   |   ✓   |   ✓   |  ✓  |     |       ✓        |          ✓          |
 | Gradium     |       |       |       |  ✓  |     |                |                     |
 | Local CLI   |       |       |       |  ✓  |     |                |                     |
@@ -61,7 +68,7 @@ provider is configured.
 | MiniMax     |   ✓   |   ✓   |   ✓   |  ✓  |     |                |                     |
 | Mistral     |       |       |       |     |  ✓  |                |                     |
 | OpenAI      |   ✓   |   ✓   |       |  ✓  |  ✓  |       ✓        |          ✓          |
-| OpenRouter  |   ✓   |   ✓   |       |  ✓  |     |                |          ✓          |
+| OpenRouter  |   ✓   |   ✓   |   ✓   |  ✓  |  ✓  |                |          ✓          |
 | Qwen        |       |   ✓   |       |     |     |                |                     |
 | Runway      |       |   ✓   |       |     |     |                |                     |
 | SenseAudio  |       |       |       |     |  ✓  |                |                     |
@@ -80,23 +87,26 @@ reply model.
 
 ## Async vs synchronous
 
-| Capability      | Mode         | Why                                                                |
-| --------------- | ------------ | ------------------------------------------------------------------ |
-| Image           | Synchronous  | Provider responses return in seconds; completes inline with reply. |
-| Text-to-speech  | Synchronous  | Provider responses return in seconds; attached to the reply audio. |
-| Video           | Asynchronous | Provider processing takes 30 s to several minutes.                 |
-| Music (shared)  | Asynchronous | Same provider-processing characteristic as video.                  |
-| Music (ComfyUI) | Synchronous  | Local workflow runs inline against the configured ComfyUI server.  |
+| Capability     | Mode         | Why                                                                                                  |
+| -------------- | ------------ | ---------------------------------------------------------------------------------------------------- |
+| Image          | Asynchronous | Provider processing can outlive a chat turn; generated attachments use the shared completion path.   |
+| Text-to-speech | Synchronous  | Provider responses return in seconds; attached to the reply audio.                                   |
+| Video          | Asynchronous | Provider processing takes 30 s to several minutes; slow queues can run up to the configured timeout. |
+| Music          | Asynchronous | Same provider-processing characteristic as video.                                                    |
 
 For async tools, OpenClaw submits the request to the provider, returns a task
 id immediately, and tracks the job in the task ledger. The agent continues
 responding to other messages while the job runs. When the provider finishes,
-OpenClaw wakes the agent so it can post the finished media back into the
-original channel.
+OpenClaw wakes the agent with the generated media paths so it can tell the
+user and relay the result through the message tool. If the requester session
+is inactive or its active wake fails, and some generated media is still
+missing from message-tool delivery, OpenClaw sends an idempotent direct
+fallback with only the missing media. Media already delivered through the
+message tool is not posted again.
 
 ## Speech-to-text and Voice Call
 
-Deepgram, DeepInfra, ElevenLabs, Mistral, OpenAI, SenseAudio, and xAI can all transcribe
+Deepgram, DeepInfra, ElevenLabs, Mistral, OpenAI, OpenRouter, SenseAudio, and xAI can all transcribe
 inbound audio through the batch `tools.media.audio` path when configured.
 Channel plugins that preflight a voice note for mention gating or command
 parsing mark the transcribed attachment on the inbound context, so the shared
@@ -106,6 +116,11 @@ STT call for the same audio.
 Deepgram, ElevenLabs, Mistral, OpenAI, and xAI also register Voice Call
 streaming STT providers, so live phone audio can be forwarded to the selected
 vendor without waiting for a completed recording.
+
+For live user conversations, prefer [Talk mode](/nodes/talk). Batch audio
+attachments stay on the media path; browser realtime, native push-to-talk,
+telephony, and meeting audio should use Talk events and the session-scoped
+catalogs returned by the Gateway.
 
 ## Provider mappings (how vendors split across surfaces)
 
@@ -141,3 +156,4 @@ vendor without waiting for a completed recording.
 - [Text-to-speech](/tools/tts)
 - [Media understanding](/nodes/media-understanding)
 - [Audio nodes](/nodes/audio)
+- [Talk mode](/nodes/talk)

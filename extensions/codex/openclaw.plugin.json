@@ -1,7 +1,7 @@
 {
   "id": "codex",
   "name": "Codex",
-  "description": "Codex app-server harness and Codex-managed GPT model catalog.",
+  "description": "OpenClaw Codex app-server harness and model provider plugin with a Codex-managed GPT catalog.",
   "providers": ["codex"],
   "contracts": {
     "mediaUnderstandingProviders": ["codex"],
@@ -15,7 +15,7 @@
       }
     }
   },
-  "providerDiscoveryEntry": "./provider-discovery.ts",
+  "providerCatalogEntry": "./provider-discovery.ts",
   "syntheticAuthRefs": ["codex"],
   "nonSecretAuthMarkers": ["codex-app-server"],
   "activation": {
@@ -33,10 +33,10 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
-      "codexDynamicToolsProfile": {
+      "codexDynamicToolsLoading": {
         "type": "string",
-        "enum": ["native-first", "openclaw-compat"],
-        "default": "native-first"
+        "enum": ["searchable", "direct"],
+        "default": "searchable"
       },
       "codexDynamicToolsExclude": {
         "type": "array",
@@ -91,6 +91,42 @@
           }
         }
       },
+      "codexPlugins": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": false
+          },
+          "allow_destructive_actions": {
+            "type": "boolean",
+            "default": true
+          },
+          "plugins": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                },
+                "marketplaceName": {
+                  "type": "string",
+                  "enum": ["openai-curated"]
+                },
+                "pluginName": {
+                  "type": "string"
+                },
+                "allow_destructive_actions": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        }
+      },
       "appServer": {
         "type": "object",
         "additionalProperties": false,
@@ -125,10 +161,23 @@
             "type": "array",
             "items": { "type": "string" }
           },
+          "codeModeOnly": {
+            "type": "boolean",
+            "default": false
+          },
           "requestTimeoutMs": {
             "type": "number",
             "minimum": 1,
             "default": 60000
+          },
+          "turnCompletionIdleTimeoutMs": {
+            "type": "number",
+            "minimum": 1,
+            "default": 60000
+          },
+          "postToolRawAssistantCompletionIdleTimeoutMs": {
+            "type": "number",
+            "minimum": 1
           },
           "approvalPolicy": {
             "type": "string",
@@ -142,18 +191,28 @@
             "type": "string",
             "enum": ["user", "auto_review", "guardian_subagent"]
           },
-          "serviceTier": { "type": ["string", "null"], "enum": ["fast", "flex", null] },
+          "serviceTier": { "type": ["string", "null"] },
           "defaultWorkspaceDir": {
             "type": "string"
+          },
+          "experimental": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "sandboxExecServer": {
+                "type": "boolean",
+                "default": false
+              }
+            }
           }
         }
       }
     }
   },
   "uiHints": {
-    "codexDynamicToolsProfile": {
-      "label": "Dynamic Tools Profile",
-      "help": "Select which OpenClaw dynamic tools are exposed to Codex app-server. native-first omits tools Codex already owns.",
+    "codexDynamicToolsLoading": {
+      "label": "Dynamic Tools Loading",
+      "help": "Use searchable to defer OpenClaw dynamic tools behind Codex tool search, or direct to expose them in the initial context.",
       "advanced": true
     },
     "codexDynamicToolsExclude": {
@@ -219,6 +278,26 @@
       "help": "MCP server name exposed by the Computer Use plugin.",
       "advanced": true
     },
+    "codexPlugins": {
+      "label": "Native Codex Plugins",
+      "help": "Controls native Codex plugin availability for Codex harness turns.",
+      "advanced": true
+    },
+    "codexPlugins.enabled": {
+      "label": "Enable Native Plugins",
+      "help": "Expose explicit migrated Codex plugin entries to Codex harness turns.",
+      "advanced": true
+    },
+    "codexPlugins.allow_destructive_actions": {
+      "label": "Allow Destructive Plugin Actions",
+      "help": "Default policy for plugin app write or destructive action elicitations. Defaults to true.",
+      "advanced": true
+    },
+    "codexPlugins.plugins": {
+      "label": "Migrated Plugin Entries",
+      "help": "Explicit migration-authored plugin entries. The wildcard key * is not supported.",
+      "advanced": true
+    },
     "appServer": {
       "label": "App Server",
       "help": "Runtime controls for connecting to Codex app-server.",
@@ -265,9 +344,24 @@
       "help": "Environment variable names removed from the spawned stdio app-server process after overrides are applied.",
       "advanced": true
     },
+    "appServer.codeModeOnly": {
+      "label": "Code Mode Only",
+      "help": "Expose Codex's code-mode-only tool surface. OpenClaw dynamic tools remain available through Codex nested tool calls.",
+      "advanced": true
+    },
     "appServer.requestTimeoutMs": {
       "label": "Request Timeout",
       "help": "Maximum time to wait for Codex app-server control-plane requests.",
+      "advanced": true
+    },
+    "appServer.turnCompletionIdleTimeoutMs": {
+      "label": "Turn Completion Idle Timeout",
+      "help": "Maximum quiet time after Codex accepts a turn or after a turn-scoped app-server request before OpenClaw interrupts the turn while waiting for turn/completed.",
+      "advanced": true
+    },
+    "appServer.postToolRawAssistantCompletionIdleTimeoutMs": {
+      "label": "Post-Tool Raw Assistant Completion Idle Timeout",
+      "help": "Completion-idle guard after a tool handoff when Codex emits raw assistant completion or progress without turn/completed. Defaults to the assistant completion idle timeout when unset.",
       "advanced": true
     },
     "appServer.approvalPolicy": {
@@ -287,12 +381,22 @@
     },
     "appServer.serviceTier": {
       "label": "Service Tier",
-      "help": "Optional Codex app-server service tier. Use fast, flex, or null.",
+      "help": "Optional Codex app-server service tier. Use priority, flex, or null. Legacy fast is accepted as priority.",
       "advanced": true
     },
     "appServer.defaultWorkspaceDir": {
       "label": "Default Workspace",
       "help": "Workspace used by /codex bind when --cwd is omitted.",
+      "advanced": true
+    },
+    "appServer.experimental": {
+      "label": "Experimental",
+      "help": "Experimental Codex app-server integrations.",
+      "advanced": true
+    },
+    "appServer.experimental.sandboxExecServer": {
+      "label": "Sandbox Exec Server",
+      "help": "Route native Codex execution through an OpenClaw sandbox-backed exec-server when OpenClaw sandboxing is active.",
       "advanced": true
     }
   }

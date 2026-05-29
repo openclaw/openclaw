@@ -6,6 +6,7 @@ import {
   normalizeOptionalLowercaseString,
 } from "../../shared/string-coerce.js";
 import { resolveEffectiveAgentSkillFilter } from "./agent-filter.js";
+import { resolveSkillTelemetrySource } from "./source.js";
 import type { SkillEligibilityContext, SkillCommandSpec, SkillEntry } from "./types.js";
 import {
   filterWorkspaceSkillEntriesWithOptions,
@@ -28,6 +29,18 @@ function debugSkillCommandOnce(
   }
   skillCommandDebugOnce.add(messageKey);
   skillsLogger.debug(message, meta);
+}
+
+function traceSkillCommandOnce(
+  messageKey: string,
+  message: string,
+  meta?: Record<string, unknown>,
+) {
+  if (skillCommandDebugOnce.has(messageKey)) {
+    return;
+  }
+  skillCommandDebugOnce.add(messageKey);
+  skillsLogger.trace(message, meta);
 }
 
 function sanitizeSkillCommandName(raw: string): string {
@@ -96,7 +109,7 @@ export function buildWorkspaceSkillCommandSpecs(
     const rawName = entry.skill.name;
     const base = sanitizeSkillCommandName(rawName);
     if (base !== rawName) {
-      debugSkillCommandOnce(
+      traceSkillCommandOnce(
         `sanitize:${rawName}:${base}`,
         `Sanitized skill command name "${rawName}" to "/${base}".`,
         { rawName, sanitized: `/${base}` },
@@ -104,7 +117,7 @@ export function buildWorkspaceSkillCommandSpecs(
     }
     const unique = resolveUniqueSkillCommandName(base, used);
     if (unique !== base) {
-      debugSkillCommandOnce(
+      traceSkillCommandOnce(
         `dedupe:${rawName}:${unique}`,
         `De-duplicated skill command name for "${rawName}" to "/${unique}".`,
         { rawName, deduped: `/${unique}` },
@@ -157,6 +170,7 @@ export function buildWorkspaceSkillCommandSpecs(
       name: unique,
       skillName: rawName,
       description,
+      skillSource: resolveSkillTelemetrySource(entry.skill),
       ...(dispatch ? { dispatch } : {}),
     });
   }

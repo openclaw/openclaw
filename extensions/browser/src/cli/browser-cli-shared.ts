@@ -1,4 +1,9 @@
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  BROWSER_REQUEST_GATEWAY_METHOD,
+  BROWSER_REQUEST_GATEWAY_SCOPES,
+} from "../browser-gateway-contract.js";
+import { normalizeBrowserTimerDelayMs } from "../browser/timer-delay.js";
 import { callGatewayFromCli, type GatewayRpcOpts } from "./core-api.js";
 
 export type BrowserParentOpts = GatewayRpcOpts & {
@@ -27,6 +32,18 @@ function normalizeQuery(query: BrowserRequestParams["query"]): Record<string, st
   return Object.keys(out).length ? out : undefined;
 }
 
+function parsePositiveInteger(raw: string, flag: string): number {
+  const value = raw.trim();
+  if (!/^\+?\d+$/.test(value)) {
+    throw new Error(`${flag} must be a positive integer.`);
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`${flag} must be a positive integer.`);
+  }
+  return parsed;
+}
+
 export async function callBrowserRequest<T>(
   opts: BrowserParentOpts,
   params: BrowserRequestParams,
@@ -34,9 +51,9 @@ export async function callBrowserRequest<T>(
 ): Promise<T> {
   const resolvedTimeoutMs =
     typeof extra?.timeoutMs === "number" && Number.isFinite(extra.timeoutMs)
-      ? Math.max(1, Math.floor(extra.timeoutMs))
+      ? normalizeBrowserTimerDelayMs(extra.timeoutMs)
       : typeof opts.timeout === "string"
-        ? Number.parseInt(opts.timeout, 10)
+        ? normalizeBrowserTimerDelayMs(parsePositiveInteger(opts.timeout, "--timeout"))
         : undefined;
   const resolvedTimeout =
     typeof resolvedTimeoutMs === "number" && Number.isFinite(resolvedTimeoutMs)
@@ -44,7 +61,7 @@ export async function callBrowserRequest<T>(
       : undefined;
   const timeout = typeof resolvedTimeout === "number" ? String(resolvedTimeout) : opts.timeout;
   const payload = await callGatewayFromCli(
-    "browser.request",
+    BROWSER_REQUEST_GATEWAY_METHOD,
     { ...opts, timeout },
     {
       method: params.method,
@@ -53,7 +70,7 @@ export async function callBrowserRequest<T>(
       body: params.body,
       timeoutMs: resolvedTimeout,
     },
-    { progress: extra?.progress },
+    { progress: extra?.progress, scopes: [...BROWSER_REQUEST_GATEWAY_SCOPES] },
   );
   if (payload === undefined) {
     throw new Error("Unexpected browser.request response");

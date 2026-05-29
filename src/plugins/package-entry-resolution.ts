@@ -1,15 +1,18 @@
 import fs from "node:fs";
 import path from "node:path";
 import {
-  matchBoundaryFileOpenFailure,
-  openBoundaryFile,
-  openBoundaryFileSync,
+  matchRootFileOpenFailure,
+  openRootFile,
+  openRootFileSync,
 } from "../infra/boundary-file-read.js";
-import { resolveBoundaryPath, resolveBoundaryPathSync } from "../infra/boundary-path.js";
+import { resolveRootPath, resolveRootPathSync } from "../infra/boundary-path.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import { getPackageManifestMetadata, type PackageManifest } from "./manifest.js";
-import { listBuiltRuntimeEntryCandidates } from "./package-entrypoints.js";
+import {
+  isTypeScriptPackageEntry,
+  listBuiltRuntimeEntryCandidates,
+} from "./package-entrypoints.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 
 type ExtensionEntryValidation = { ok: true; exists: boolean } | { ok: false; error: string };
@@ -17,6 +20,8 @@ type ExtensionEntryValidation = { ok: true; exists: boolean } | { ok: false; err
 type RuntimeExtensionsResolution =
   | { ok: true; runtimeExtensions: string[] }
   | { ok: false; error: string };
+
+type PackageManifestStringList = { ok: true; entries: string[] } | { ok: false; error: string };
 
 function runtimeExtensionsLengthMismatchMessage(params: {
   runtimeExtensionsLength: number;
@@ -28,11 +33,25 @@ function runtimeExtensionsLengthMismatchMessage(params: {
   );
 }
 
-function normalizePackageManifestStringList(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
+function readPackageManifestStringList(params: {
+  fieldName: string;
+  value: unknown;
+}): PackageManifestStringList {
+  if (!Array.isArray(params.value)) {
+    return { ok: true, entries: [] };
   }
-  return value.map((entry) => normalizeOptionalString(entry) ?? "").filter(Boolean);
+  const entries: string[] = [];
+  for (const [index, entry] of params.value.entries()) {
+    const normalized = normalizeOptionalString(entry);
+    if (!normalized) {
+      return {
+        ok: false,
+        error: `package.json ${params.fieldName}[${index}] must be a non-empty string`,
+      };
+    }
+    entries.push(normalized);
+  }
+  return { ok: true, entries };
 }
 
 function resolvePackageRuntimeExtensionEntries(params: {
@@ -40,7 +59,14 @@ function resolvePackageRuntimeExtensionEntries(params: {
   extensions: readonly string[];
 }): RuntimeExtensionsResolution {
   const packageManifest = getPackageManifestMetadata(params.manifest ?? undefined);
-  const runtimeExtensions = normalizePackageManifestStringList(packageManifest?.runtimeExtensions);
+  const runtimeExtensionsResult = readPackageManifestStringList({
+    fieldName: "openclaw.runtimeExtensions",
+    value: packageManifest?.runtimeExtensions,
+  });
+  if (!runtimeExtensionsResult.ok) {
+    return runtimeExtensionsResult;
+  }
+  const runtimeExtensions = runtimeExtensionsResult.entries;
   if (runtimeExtensions.length === 0) {
     return { ok: true, runtimeExtensions: [] };
   }
@@ -56,6 +82,14 @@ function resolvePackageRuntimeExtensionEntries(params: {
   return { ok: true, runtimeExtensions };
 }
 
+function missingCompiledRuntimeEntryMessage(params: {
+  label: string;
+  entry: string;
+  candidates: readonly string[];
+}): string {
+  return `${params.label} requires compiled runtime output for TypeScript entry ${params.entry}: expected ${params.candidates.join(", ")}. This is a plugin packaging issue, not a local config problem; update or reinstall the plugin after the publisher ships compiled JavaScript, or disable/uninstall the plugin until then. TypeScript source fallback is only supported for source checkouts and local development paths.`;
+}
+
 async function validatePackageExtensionEntry(params: {
   packageDir: string;
   entry: string;
@@ -64,7 +98,7 @@ async function validatePackageExtensionEntry(params: {
 }): Promise<ExtensionEntryValidation> {
   const absolutePath = path.resolve(params.packageDir, params.entry);
   try {
-    const resolved = await resolveBoundaryPath({
+    const resolved = await resolveRootPath({
       absolutePath,
       rootPath: params.packageDir,
       boundaryLabel: "plugin package directory",
@@ -81,13 +115,13 @@ async function validatePackageExtensionEntry(params: {
     };
   }
 
-  const opened = await openBoundaryFile({
+  const opened = await openRootFile({
     absolutePath,
     rootPath: params.packageDir,
     boundaryLabel: "plugin package directory",
   });
   if (!opened.ok) {
-    return matchBoundaryFileOpenFailure(opened, {
+    return matchRootFileOpenFailure(opened, {
       path: () => ({ ok: false, error: `${params.label} not found: ${params.entry}` }),
       io: () => ({ ok: false, error: `${params.label} unreadable: ${params.entry}` }),
       validation: () => ({
@@ -108,6 +142,7 @@ export async function validatePackageExtensionEntriesForInstall(params: {
   packageDir: string;
   extensions: string[];
   manifest: PackageManifest;
+  allowSourceTypeScriptEntries?: boolean;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   const runtimeResolution = resolvePackageRuntimeExtensionEntries({
     manifest: params.manifest,
@@ -142,12 +177,9 @@ export async function validatePackageExtensionEntriesForInstall(params: {
       continue;
     }
 
-    if (sourceEntry.exists) {
-      continue;
-    }
-
     let foundBuiltEntry = false;
-    for (const builtEntry of listBuiltRuntimeEntryCandidates(entry)) {
+    const builtEntryCandidates = listBuiltRuntimeEntryCandidates(entry);
+    for (const builtEntry of builtEntryCandidates) {
       const builtResult = await validatePackageExtensionEntry({
         packageDir: params.packageDir,
         entry: builtEntry,
@@ -163,9 +195,45 @@ export async function validatePackageExtensionEntriesForInstall(params: {
       }
     }
 
-    if (!foundBuiltEntry) {
-      return { ok: false, error: `extension entry not found: ${entry}` };
+    if (foundBuiltEntry) {
+      continue;
     }
+
+    if (
+      sourceEntry.exists &&
+      isTypeScriptPackageEntry(entry) &&
+      params.allowSourceTypeScriptEntries
+    ) {
+      continue;
+    }
+
+    if (sourceEntry.exists && isTypeScriptPackageEntry(entry)) {
+      return {
+        ok: false,
+        error: missingCompiledRuntimeEntryMessage({
+          label: "package install",
+          entry,
+          candidates: builtEntryCandidates,
+        }),
+      };
+    }
+
+    if (sourceEntry.exists) {
+      continue;
+    }
+
+    if (builtEntryCandidates.length > 0) {
+      return {
+        ok: false,
+        error: missingCompiledRuntimeEntryMessage({
+          label: "package install",
+          entry,
+          candidates: builtEntryCandidates,
+        }),
+      };
+    }
+
+    return { ok: false, error: `extension entry not found: ${entry}` };
   }
 
   const packageManifest = getPackageManifestMetadata(params.manifest);
@@ -201,12 +269,9 @@ export async function validatePackageExtensionEntriesForInstall(params: {
       return { ok: true };
     }
 
-    if (sourceEntry.exists) {
-      return { ok: true };
-    }
-
     let foundBuiltSetupEntry = false;
-    for (const builtEntry of listBuiltRuntimeEntryCandidates(setupEntry)) {
+    const builtSetupCandidates = listBuiltRuntimeEntryCandidates(setupEntry);
+    for (const builtEntry of builtSetupCandidates) {
       const builtResult = await validatePackageExtensionEntry({
         packageDir: params.packageDir,
         entry: builtEntry,
@@ -221,9 +286,46 @@ export async function validatePackageExtensionEntriesForInstall(params: {
         break;
       }
     }
-    if (!foundBuiltSetupEntry) {
-      return { ok: false, error: `setup entry not found: ${setupEntry}` };
+
+    if (foundBuiltSetupEntry) {
+      return { ok: true };
     }
+
+    if (
+      sourceEntry.exists &&
+      isTypeScriptPackageEntry(setupEntry) &&
+      params.allowSourceTypeScriptEntries
+    ) {
+      return { ok: true };
+    }
+
+    if (sourceEntry.exists && isTypeScriptPackageEntry(setupEntry)) {
+      return {
+        ok: false,
+        error: missingCompiledRuntimeEntryMessage({
+          label: "package install",
+          entry: setupEntry,
+          candidates: builtSetupCandidates,
+        }),
+      };
+    }
+
+    if (sourceEntry.exists) {
+      return { ok: true };
+    }
+
+    if (builtSetupCandidates.length > 0) {
+      return {
+        ok: false,
+        error: missingCompiledRuntimeEntryMessage({
+          label: "package install",
+          entry: setupEntry,
+          candidates: builtSetupCandidates,
+        }),
+      };
+    }
+
+    return { ok: false, error: `setup entry not found: ${setupEntry}` };
   }
 
   return { ok: true };
@@ -233,6 +335,7 @@ function resolvePackageEntrySource(params: {
   packageDir: string;
   packageRootRealPath?: string;
   entryPath: string;
+  pluginIdHint?: string;
   sourceLabel: string;
   diagnostics: PluginDiagnostic[];
   rejectHardlinks?: boolean;
@@ -241,7 +344,7 @@ function resolvePackageEntrySource(params: {
   const rejectHardlinks = params.rejectHardlinks ?? true;
   const candidates = [source];
   const openCandidate = (absolutePath: string): string | null => {
-    const opened = openBoundaryFileSync({
+    const opened = openRootFileSync({
       absolutePath,
       rootPath: params.packageDir,
       ...(params.packageRootRealPath !== undefined
@@ -251,11 +354,12 @@ function resolvePackageEntrySource(params: {
       rejectHardlinks,
     });
     if (!opened.ok) {
-      return matchBoundaryFileOpenFailure(opened, {
+      return matchRootFileOpenFailure(opened, {
         path: () => null,
         io: () => {
           params.diagnostics.push({
             level: "warn",
+            ...(params.pluginIdHint ? { pluginId: params.pluginIdHint } : {}),
             message: `extension entry unreadable (I/O error): ${params.entryPath}`,
             source: params.sourceLabel,
           });
@@ -264,6 +368,7 @@ function resolvePackageEntrySource(params: {
         fallback: () => {
           params.diagnostics.push({
             level: "error",
+            ...(params.pluginIdHint ? { pluginId: params.pluginIdHint } : {}),
             message: `extension entry escapes package directory: ${params.entryPath}`,
             source: params.sourceLabel,
           });
@@ -296,10 +401,15 @@ function shouldInferBuiltRuntimeEntry(origin: PluginOrigin): boolean {
   return origin === "config" || origin === "global";
 }
 
+function shouldRequireBuiltRuntimeEntry(origin: PluginOrigin): boolean {
+  return origin === "global";
+}
+
 function resolveSafePackageEntry(params: {
   packageDir: string;
   packageRootRealPath?: string;
   entryPath: string;
+  pluginIdHint?: string;
   sourceLabel: string;
   diagnostics: PluginDiagnostic[];
   rejectHardlinks?: boolean;
@@ -312,6 +422,7 @@ function resolveSafePackageEntry(params: {
         ? { packageRootRealPath: params.packageRootRealPath }
         : {}),
       entryPath: params.entryPath,
+      pluginIdHint: params.pluginIdHint,
       sourceLabel: params.sourceLabel,
       diagnostics: params.diagnostics,
       rejectHardlinks: params.rejectHardlinks,
@@ -326,7 +437,7 @@ function resolveSafePackageEntry(params: {
   }
 
   try {
-    resolveBoundaryPathSync({
+    resolveRootPathSync({
       absolutePath,
       rootPath: params.packageDir,
       ...(params.packageRootRealPath !== undefined
@@ -337,6 +448,7 @@ function resolveSafePackageEntry(params: {
   } catch {
     params.diagnostics.push({
       level: "error",
+      ...(params.pluginIdHint ? { pluginId: params.pluginIdHint } : {}),
       message: `extension entry escapes package directory: ${params.entryPath}`,
       source: params.sourceLabel,
     });
@@ -345,28 +457,34 @@ function resolveSafePackageEntry(params: {
   return { relativePath: path.relative(params.packageDir, absolutePath).replace(/\\/g, "/") };
 }
 
-function resolveExistingPackageEntrySource(params: {
+function resolveOptionalExistingPackageEntrySource(params: {
   packageDir: string;
   packageRootRealPath?: string;
   entryPath: string;
+  pluginIdHint?: string;
   sourceLabel: string;
   diagnostics: PluginDiagnostic[];
   rejectHardlinks?: boolean;
-}): string | null {
+}): { status: "missing" } | { status: "invalid" } | { status: "resolved"; source: string } {
   const source = path.resolve(params.packageDir, params.entryPath);
   if (!fs.existsSync(source)) {
-    return null;
+    return { status: "missing" };
   }
-  return resolvePackageEntrySource(params);
+  const resolved = resolvePackageEntrySource(params);
+  return resolved ? { status: "resolved", source: resolved } : { status: "invalid" };
 }
 
 function resolvePackageRuntimeEntrySource(params: {
   packageDir: string;
   packageRootRealPath?: string;
   entryPath: string;
+  sourceEntryLabel?: string;
   runtimeEntryPath?: string;
   runtimeEntryLabel?: string;
+  pluginIdHint?: string;
   origin: PluginOrigin;
+  // undefined preserves the origin default; false explicitly allows source fallback.
+  requireBuiltRuntimeEntry?: boolean;
   sourceLabel: string;
   diagnostics: PluginDiagnostic[];
   rejectHardlinks?: boolean;
@@ -377,6 +495,7 @@ function resolvePackageRuntimeEntrySource(params: {
       ? { packageRootRealPath: params.packageRootRealPath }
       : {}),
     entryPath: params.entryPath,
+    pluginIdHint: params.pluginIdHint,
     sourceLabel: params.sourceLabel,
     diagnostics: params.diagnostics,
     rejectHardlinks: params.rejectHardlinks,
@@ -392,6 +511,7 @@ function resolvePackageRuntimeEntrySource(params: {
         ? { packageRootRealPath: params.packageRootRealPath }
         : {}),
       entryPath: params.runtimeEntryPath,
+      pluginIdHint: params.pluginIdHint,
       sourceLabel: params.sourceLabel,
       diagnostics: params.diagnostics,
       rejectHardlinks: params.rejectHardlinks,
@@ -401,6 +521,7 @@ function resolvePackageRuntimeEntrySource(params: {
     }
     params.diagnostics.push({
       level: "error",
+      ...(params.pluginIdHint ? { pluginId: params.pluginIdHint } : {}),
       message: `${params.runtimeEntryLabel ?? "runtime entry"} not found: ${params.runtimeEntryPath}`,
       source: params.sourceLabel,
     });
@@ -408,20 +529,41 @@ function resolvePackageRuntimeEntrySource(params: {
   }
 
   if (shouldInferBuiltRuntimeEntry(params.origin)) {
-    for (const candidate of listBuiltRuntimeEntryCandidates(safeEntry.relativePath)) {
-      const runtimeSource = resolveExistingPackageEntrySource({
+    const builtEntryCandidates = listBuiltRuntimeEntryCandidates(safeEntry.relativePath);
+    for (const candidate of builtEntryCandidates) {
+      const runtimeSource = resolveOptionalExistingPackageEntrySource({
         packageDir: params.packageDir,
         ...(params.packageRootRealPath !== undefined
           ? { packageRootRealPath: params.packageRootRealPath }
           : {}),
         entryPath: candidate,
+        pluginIdHint: params.pluginIdHint,
         sourceLabel: params.sourceLabel,
         diagnostics: params.diagnostics,
         rejectHardlinks: params.rejectHardlinks,
       });
-      if (runtimeSource) {
-        return runtimeSource;
+      if (runtimeSource.status === "resolved") {
+        return runtimeSource.source;
       }
+      if (runtimeSource.status === "invalid") {
+        return null;
+      }
+    }
+    if (
+      (params.requireBuiltRuntimeEntry ?? shouldRequireBuiltRuntimeEntry(params.origin)) &&
+      isTypeScriptPackageEntry(safeEntry.relativePath)
+    ) {
+      params.diagnostics.push({
+        level: "warn",
+        ...(params.pluginIdHint ? { pluginId: params.pluginIdHint } : {}),
+        message: missingCompiledRuntimeEntryMessage({
+          label: "installed plugin package",
+          entry: safeEntry.relativePath,
+          candidates: builtEntryCandidates,
+        }),
+        source: params.sourceLabel,
+      });
+      return null;
     }
   }
 
@@ -429,16 +571,30 @@ function resolvePackageRuntimeEntrySource(params: {
     return safeEntry.existingSource;
   }
 
-  return resolvePackageEntrySource({
-    packageDir: params.packageDir,
-    ...(params.packageRootRealPath !== undefined
-      ? { packageRootRealPath: params.packageRootRealPath }
-      : {}),
-    entryPath: params.entryPath,
-    sourceLabel: params.sourceLabel,
-    diagnostics: params.diagnostics,
-    rejectHardlinks: params.rejectHardlinks,
+  if (params.rejectHardlinks === false) {
+    const trustedFallbackSource = resolvePackageEntrySource({
+      packageDir: params.packageDir,
+      ...(params.packageRootRealPath !== undefined
+        ? { packageRootRealPath: params.packageRootRealPath }
+        : {}),
+      entryPath: params.entryPath,
+      pluginIdHint: params.pluginIdHint,
+      sourceLabel: params.sourceLabel,
+      diagnostics: params.diagnostics,
+      rejectHardlinks: params.rejectHardlinks,
+    });
+    if (trustedFallbackSource) {
+      return trustedFallbackSource;
+    }
+  }
+
+  params.diagnostics.push({
+    level: "error",
+    ...(params.pluginIdHint ? { pluginId: params.pluginIdHint } : {}),
+    message: `${params.sourceEntryLabel ?? "extension entry"} not found: ${safeEntry.relativePath}`,
+    source: params.sourceLabel,
   });
+  return null;
 }
 
 export function resolvePackageSetupSource(params: {
@@ -446,6 +602,7 @@ export function resolvePackageSetupSource(params: {
   packageRootRealPath?: string;
   manifest: PackageManifest | null;
   origin: PluginOrigin;
+  requireBuiltRuntimeEntry?: boolean;
   sourceLabel: string;
   diagnostics: PluginDiagnostic[];
   rejectHardlinks?: boolean;
@@ -461,9 +618,14 @@ export function resolvePackageSetupSource(params: {
       ? { packageRootRealPath: params.packageRootRealPath }
       : {}),
     entryPath: setupEntryPath,
+    sourceEntryLabel: "setup entry",
     runtimeEntryPath: normalizeOptionalString(packageManifest?.runtimeSetupEntry),
     runtimeEntryLabel: "runtime setup entry",
+    pluginIdHint: packageManifest?.plugin?.id ?? packageManifest?.channel?.id,
     origin: params.origin,
+    ...(params.requireBuiltRuntimeEntry !== undefined
+      ? { requireBuiltRuntimeEntry: params.requireBuiltRuntimeEntry }
+      : {}),
     sourceLabel: params.sourceLabel,
     diagnostics: params.diagnostics,
     rejectHardlinks: params.rejectHardlinks,
@@ -476,6 +638,8 @@ export function resolvePackageRuntimeExtensionSources(params: {
   manifest: PackageManifest | null;
   extensions: readonly string[];
   origin: PluginOrigin;
+  pluginIdHint?: string;
+  requireBuiltRuntimeEntry?: boolean;
   sourceLabel: string;
   diagnostics: PluginDiagnostic[];
   rejectHardlinks?: boolean;
@@ -487,6 +651,7 @@ export function resolvePackageRuntimeExtensionSources(params: {
   if (!runtimeResolution.ok) {
     params.diagnostics.push({
       level: "error",
+      ...(params.pluginIdHint ? { pluginId: params.pluginIdHint } : {}),
       message: runtimeResolution.error,
       source: params.sourceLabel,
     });
@@ -500,9 +665,14 @@ export function resolvePackageRuntimeExtensionSources(params: {
         ? { packageRootRealPath: params.packageRootRealPath }
         : {}),
       entryPath,
+      sourceEntryLabel: "extension entry",
       runtimeEntryPath: runtimeResolution.runtimeExtensions[index],
       runtimeEntryLabel: "runtime extension entry",
+      pluginIdHint: params.pluginIdHint,
       origin: params.origin,
+      ...(params.requireBuiltRuntimeEntry !== undefined
+        ? { requireBuiltRuntimeEntry: params.requireBuiltRuntimeEntry }
+        : {}),
       sourceLabel: params.sourceLabel,
       diagnostics: params.diagnostics,
       rejectHardlinks: params.rejectHardlinks,

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
-const runEmbeddedPiAgentMock = vi.fn();
+const runEmbeddedAgentMock = vi.fn();
 
 vi.mock("../agents/agent-scope.js", () => ({
   resolveDefaultAgentId: vi.fn(() => "main"),
@@ -16,16 +16,28 @@ vi.mock("../agents/agent-scope.js", () => ({
   }),
 }));
 
-vi.mock("../agents/pi-embedded.js", () => ({
-  runEmbeddedPiAgent: (...args: unknown[]) => runEmbeddedPiAgentMock(...args),
+vi.mock("../agents/embedded-agent.js", () => ({
+  runEmbeddedAgent: (...args: unknown[]) => runEmbeddedAgentMock(...args),
 }));
 
 import { generateSlugViaLLM } from "./llm-slug-generator.js";
 
+function requireFirstRunOptions(): Record<string, unknown> {
+  const [call] = runEmbeddedAgentMock.mock.calls;
+  if (!call) {
+    throw new Error("expected embedded OpenClaw agent run");
+  }
+  const [options] = call;
+  if (!options || typeof options !== "object") {
+    throw new Error("expected embedded OpenClaw agent run options");
+  }
+  return options as Record<string, unknown>;
+}
+
 describe("generateSlugViaLLM", () => {
   beforeEach(() => {
-    runEmbeddedPiAgentMock.mockReset();
-    runEmbeddedPiAgentMock.mockResolvedValue({
+    runEmbeddedAgentMock.mockReset();
+    runEmbeddedAgentMock.mockResolvedValue({
       payloads: [{ text: "test-slug" }],
     });
   });
@@ -36,13 +48,10 @@ describe("generateSlugViaLLM", () => {
       cfg: {} as OpenClawConfig,
     });
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
-    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toEqual(
-      expect.objectContaining({
-        timeoutMs: 15_000,
-        cleanupBundleMcpOnRunEnd: true,
-      }),
-    );
+    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    const options = requireFirstRunOptions();
+    expect(options.timeoutMs).toBe(15_000);
+    expect(options.cleanupBundleMcpOnRunEnd).toBe(true);
   });
 
   it("honors configured agent timeoutSeconds for slow local providers", async () => {
@@ -57,12 +66,8 @@ describe("generateSlugViaLLM", () => {
       } as OpenClawConfig,
     });
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
-    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toEqual(
-      expect.objectContaining({
-        timeoutMs: 500_000,
-      }),
-    );
+    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    expect(requireFirstRunOptions().timeoutMs).toBe(500_000);
   });
 
   it("infers provider metadata for bare configured agent models", async () => {
@@ -95,12 +100,9 @@ describe("generateSlugViaLLM", () => {
       } as OpenClawConfig,
     });
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
-    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toEqual(
-      expect.objectContaining({
-        provider: "openai-codex",
-        model: "gpt-5.5",
-      }),
-    );
+    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    const options = requireFirstRunOptions();
+    expect(options.provider).toBe("openai-codex");
+    expect(options.model).toBe("gpt-5.5");
   });
 });

@@ -10,6 +10,7 @@ import type {
   VideoGenerationAssetRole as CoreVideoGenerationAssetRole,
   VideoGenerationMode as CoreVideoGenerationMode,
   VideoGenerationModeCapabilities as CoreVideoGenerationModeCapabilities,
+  VideoGenerationModelCapabilitiesContext as CoreVideoGenerationModelCapabilitiesContext,
   VideoGenerationProvider as CoreVideoGenerationProvider,
   VideoGenerationProviderCapabilities as CoreVideoGenerationProviderCapabilities,
   VideoGenerationProviderConfiguredContext as CoreVideoGenerationProviderConfiguredContext,
@@ -33,7 +34,14 @@ export type GeneratedVideoAsset = {
   metadata?: Record<string, unknown>;
 };
 
-export type VideoGenerationResolution = "480P" | "720P" | "768P" | "1080P";
+export type VideoGenerationResolution =
+  | "360P"
+  | "480P"
+  | "540P"
+  | "720P"
+  | "768P"
+  | "1080P"
+  | (string & {});
 
 /**
  * Canonical semantic role hints for reference assets (first/last frame,
@@ -64,6 +72,15 @@ export type VideoGenerationSourceAsset = {
 export type VideoGenerationProviderConfiguredContext = {
   cfg?: OpenClawConfig;
   agentDir?: string;
+};
+
+export type VideoGenerationModelCapabilitiesContext = {
+  provider: string;
+  model: string;
+  cfg: OpenClawConfig;
+  agentDir?: string;
+  authStore?: AuthProfileStore;
+  timeoutMs?: number;
 };
 
 export type VideoGenerationRequest = {
@@ -148,15 +165,22 @@ export type VideoGenerationProvider = {
   aliases?: string[];
   label?: string;
   defaultModel?: string;
+  /** Default provider operation timeout in milliseconds when caller/config omit timeoutMs. */
+  defaultTimeoutMs?: number;
   models?: string[];
   capabilities: VideoGenerationProviderCapabilities;
   isConfigured?: (ctx: VideoGenerationProviderConfiguredContext) => boolean;
+  resolveModelCapabilities?: (
+    ctx: VideoGenerationModelCapabilitiesContext,
+  ) =>
+    | VideoGenerationProviderCapabilities
+    | undefined
+    | Promise<VideoGenerationProviderCapabilities | undefined>;
   generateVideo: (req: VideoGenerationRequest) => Promise<VideoGenerationResult>;
 };
 
 type AssertAssignable<_Left extends _Right, _Right> = true;
-
-type _VideoGenerationSdkCompat = [
+const videoGenerationSdkCompat: [
   AssertAssignable<GeneratedVideoAsset, CoreGeneratedVideoAsset>,
   AssertAssignable<CoreGeneratedVideoAsset, GeneratedVideoAsset>,
   AssertAssignable<VideoGenerationAssetRole, CoreVideoGenerationAssetRole>,
@@ -179,6 +203,14 @@ type _VideoGenerationSdkCompat = [
     CoreVideoGenerationProviderConfiguredContext,
     VideoGenerationProviderConfiguredContext
   >,
+  AssertAssignable<
+    VideoGenerationModelCapabilitiesContext,
+    CoreVideoGenerationModelCapabilitiesContext
+  >,
+  AssertAssignable<
+    CoreVideoGenerationModelCapabilitiesContext,
+    VideoGenerationModelCapabilitiesContext
+  >,
   AssertAssignable<VideoGenerationRequest, CoreVideoGenerationRequest>,
   AssertAssignable<CoreVideoGenerationRequest, VideoGenerationRequest>,
   AssertAssignable<VideoGenerationResolution, CoreVideoGenerationResolution>,
@@ -189,7 +221,8 @@ type _VideoGenerationSdkCompat = [
   AssertAssignable<CoreVideoGenerationSourceAsset, VideoGenerationSourceAsset>,
   AssertAssignable<VideoGenerationTransformCapabilities, CoreVideoGenerationTransformCapabilities>,
   AssertAssignable<CoreVideoGenerationTransformCapabilities, VideoGenerationTransformCapabilities>,
-];
+] = [] as never;
+void videoGenerationSdkCompat;
 
 export {
   DASHSCOPE_WAN_VIDEO_CAPABILITIES,

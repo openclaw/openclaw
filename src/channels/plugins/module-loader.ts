@@ -1,16 +1,25 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { openBoundaryFileSync } from "../../infra/boundary-file-read.js";
+import { openRootFileSync } from "../../infra/boundary-file-read.js";
 import { isJavaScriptModulePath } from "../../plugins/native-module-require.js";
 import {
   getCachedPluginModuleLoader,
   type PluginModuleLoaderCache,
+  type PluginModuleLoaderFactory,
 } from "../../plugins/plugin-module-loader-cache.js";
 
 const nodeRequire = createRequire(import.meta.url);
 const SOURCE_MODULE_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts"]);
 const jitiLoaders: PluginModuleLoaderCache = new Map();
+let channelPluginModuleLoaderFactoryForTest: PluginModuleLoaderFactory | undefined;
+
+export function setChannelPluginModuleLoaderFactoryForTest(
+  factory?: PluginModuleLoaderFactory,
+): void {
+  channelPluginModuleLoaderFactoryForTest = factory;
+  jitiLoaders.clear();
+}
 
 function hasNativeSourceRequireHook(modulePath: string): boolean {
   const extension = path.extname(modulePath).toLowerCase();
@@ -32,6 +41,9 @@ function loadModuleWithJiti(modulePath: string): unknown {
     loaderFilename: import.meta.url,
     tryNative: false,
     cacheScopeKey: "channel-plugin-module-loader",
+    ...(channelPluginModuleLoaderFactoryForTest
+      ? { createLoader: channelPluginModuleLoaderFactoryForTest }
+      : {}),
   });
   return loadWithJiti(modulePath);
 }
@@ -88,7 +100,7 @@ export function loadChannelPluginModule(params: {
   boundaryRootDir?: string;
   boundaryLabel?: string;
 }): unknown {
-  const opened = openBoundaryFileSync({
+  const opened = openRootFileSync({
     absolutePath: params.modulePath,
     rootPath: params.boundaryRootDir ?? params.rootDir,
     boundaryLabel: params.boundaryLabel ?? "plugin root",

@@ -35,16 +35,19 @@ function createRemoteProviderConfig(overrides?: Partial<ModelProviderConfig>): M
 describe("lmstudio plugin", () => {
   it("canonicalizes base URLs during provider normalization", () => {
     const provider = registerProvider();
+    const providerConfig = createRemoteProviderConfig({
+      baseUrl: "http://localhost:1234/api/v1/",
+    });
 
     expect(
       provider?.normalizeConfig?.({
         provider: "lmstudio",
-        providerConfig: createRemoteProviderConfig({
-          baseUrl: "http://localhost:1234/api/v1/",
-        }),
+        providerConfig,
       }),
-    ).toMatchObject({
+    ).toEqual({
+      ...providerConfig,
       baseUrl: "http://localhost:1234/v1",
+      request: { allowPrivateNetwork: true },
     });
   });
 
@@ -181,8 +184,8 @@ describe("lmstudio plugin", () => {
         compat: {
           supportsUsageInStreaming: true,
           supportsReasoningEffort: true,
-          supportedReasoningEfforts: ["off", "on"],
-          reasoningEffortMap: { off: "off", high: "on" },
+          supportedReasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
+          reasoningEffortMap: { off: "none", none: "none", adaptive: "xhigh", max: "xhigh" },
         },
         contextWindow: 32768,
         contextTokens: 8192,

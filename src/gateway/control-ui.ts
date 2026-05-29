@@ -1,19 +1,19 @@
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { resolveAgentAvatar, resolvePublicAgentAvatarSource } from "../agents/identity-avatar.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { matchRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
 import {
   isPackageProvenControlUiRootSync,
   resolveControlUiRootSync,
 } from "../infra/control-ui-assets.js";
 import { listDevicePairing, verifyDeviceToken } from "../infra/device-pairing.js";
-import { openLocalFileSafely, SafeOpenError } from "../infra/fs-safe.js";
+import { openLocalFileSafely, FsSafeError, readSecureFile } from "../infra/fs-safe.js";
 import { safeFileURLToPath } from "../infra/local-file-access.js";
 import { verifyPairingToken } from "../infra/pairing-token.js";
 import { isWithinDir } from "../infra/path-safety.js";
-import { openVerifiedFileSync } from "../infra/safe-open-sync.js";
 import { assertLocalMediaAllowed, getDefaultLocalRoots } from "../media/local-media-access.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 import { resolveMediaReferenceLocalPath } from "../media/media-reference.js";
@@ -45,7 +45,7 @@ import {
   normalizeControlUiBasePath,
   resolveAssistantAvatarUrl,
 } from "./control-ui-shared.js";
-import { sendGatewayAuthFailure } from "./http-common.js";
+import { buildMissingScopeForbiddenBody, sendGatewayAuthFailure } from "./http-common.js";
 import {
   getBearerToken,
   resolveHttpBrowserOriginPolicy,
@@ -53,13 +53,17 @@ import {
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { resolveRequestClientIp } from "./net.js";
+import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 
 const ROOT_PREFIX = "/";
 const CONTROL_UI_ASSISTANT_MEDIA_PREFIX = "/__openclaw__/assistant-media";
+const CONTROL_UI_ASSISTANT_MEDIA_TICKET_SCOPE = "assistant-media";
+const CONTROL_UI_ASSISTANT_MEDIA_TICKET_TTL_MS = 5 * 60 * 1000;
 const CONTROL_UI_ASSETS_MISSING_MESSAGE =
   "Control UI assets not found. Build them with `pnpm ui:build` (auto-installs UI deps), or run `pnpm ui:dev` during development.";
 const CONTROL_UI_OPERATOR_READ_SCOPE = "operator.read";
 const CONTROL_UI_OPERATOR_ROLE = "operator";
+const controlUiAssistantMediaTicketSecret = randomBytes(32);
 
 export type ControlUiRequestOptions = {
   basePath?: string;
@@ -132,6 +136,16 @@ const STATIC_ASSET_EXTENSIONS = new Set([
   ".ico",
   ".txt",
   ".webmanifest",
+]);
+
+const CONTROL_UI_NAMESPACE_PREFIX = "/__openclaw__/";
+const CONTROL_UI_ROOT_PUBLIC_ASSETS = new Set([
+  "apple-touch-icon.png",
+  "favicon-32.png",
+  "favicon.ico",
+  "favicon.svg",
+  "manifest.webmanifest",
+  "sw.js",
 ]);
 
 export type ControlUiAvatarResolution =
@@ -310,7 +324,12 @@ async function authorizeControlUiReadRequest(
         retryAfterMs: deviceRateCheck.retryAfterMs,
       };
     } else {
-      const deviceTokenOk = await authorizeControlUiDeviceReadToken(token);
+      const deviceTokenOk = await authorizeControlUiDeviceReadToken(token, {
+        requiredSharedGatewaySessionGeneration: resolveSharedGatewaySessionGeneration(
+          opts.auth,
+          opts.trustedProxies,
+        ),
+      });
       if (deviceTokenOk) {
         opts.rateLimiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
         opts.rateLimiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
@@ -338,20 +357,17 @@ async function authorizeControlUiReadRequest(
     requestedScopes,
   );
   if (!scopeAuth.allowed) {
-    sendJson(res, 403, {
-      ok: false,
-      error: {
-        type: "forbidden",
-        message: `missing scope: ${scopeAuth.missingScope}`,
-      },
-    });
+    sendJson(res, 403, buildMissingScopeForbiddenBody(scopeAuth.missingScope));
     return false;
   }
 
   return true;
 }
 
-async function authorizeControlUiDeviceReadToken(token: string): Promise<boolean> {
+async function authorizeControlUiDeviceReadToken(
+  token: string,
+  opts: { requiredSharedGatewaySessionGeneration?: string },
+): Promise<boolean> {
   const pairing = await listDevicePairing();
   for (const device of pairing.paired) {
     const operatorToken = device.tokens?.[CONTROL_UI_OPERATOR_ROLE];
@@ -366,6 +382,7 @@ async function authorizeControlUiDeviceReadToken(token: string): Promise<boolean
       token,
       role: CONTROL_UI_OPERATOR_ROLE,
       scopes: [CONTROL_UI_OPERATOR_READ_SCOPE],
+      requiredSharedGatewaySessionGeneration: opts.requiredSharedGatewaySessionGeneration,
     });
     if (verified.ok) {
       return true;
@@ -378,8 +395,66 @@ type AssistantMediaAvailability =
   | { available: true }
   | { available: false; reason: string; code: string };
 
+type AssistantMediaTicketPayload = {
+  scope: typeof CONTROL_UI_ASSISTANT_MEDIA_TICKET_SCOPE;
+  source: string;
+  exp: number;
+};
+
+function signAssistantMediaTicketPayload(encodedPayload: string): string {
+  return createHmac("sha256", controlUiAssistantMediaTicketSecret)
+    .update(encodedPayload)
+    .digest("base64url");
+}
+
+function createAssistantMediaTicket(source: string, nowMs = Date.now()) {
+  const exp = nowMs + CONTROL_UI_ASSISTANT_MEDIA_TICKET_TTL_MS;
+  const payload: AssistantMediaTicketPayload = {
+    scope: CONTROL_UI_ASSISTANT_MEDIA_TICKET_SCOPE,
+    source,
+    exp,
+  };
+  const encodedPayload = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+  const sig = signAssistantMediaTicketPayload(encodedPayload);
+  return {
+    mediaTicket: `v1.${encodedPayload}.${sig}`,
+    mediaTicketExpiresAt: new Date(exp).toISOString(),
+  };
+}
+
+function verifyAssistantMediaTicket(ticket: string | null, source: string, nowMs = Date.now()) {
+  const parts = ticket?.split(".");
+  if (!parts || parts.length !== 3 || parts[0] !== "v1") {
+    return false;
+  }
+  const [, encodedPayload, sig] = parts;
+  if (!encodedPayload || !sig) {
+    return false;
+  }
+  const expectedSig = signAssistantMediaTicketPayload(encodedPayload);
+  const sigBuffer = Buffer.from(sig, "base64url");
+  const expectedBuffer = Buffer.from(expectedSig, "base64url");
+  if (sigBuffer.length !== expectedBuffer.length || !timingSafeEqual(sigBuffer, expectedBuffer)) {
+    return false;
+  }
+  try {
+    const payload = JSON.parse(
+      Buffer.from(encodedPayload, "base64url").toString("utf8"),
+    ) as Partial<AssistantMediaTicketPayload>;
+    return (
+      payload.scope === CONTROL_UI_ASSISTANT_MEDIA_TICKET_SCOPE &&
+      payload.source === source &&
+      typeof payload.exp === "number" &&
+      Number.isFinite(payload.exp) &&
+      payload.exp >= nowMs
+    );
+  } catch {
+    return false;
+  }
+}
+
 function classifyAssistantMediaError(err: unknown): AssistantMediaAvailability {
-  if (err instanceof SafeOpenError) {
+  if (err instanceof FsSafeError) {
     switch (err.code) {
       case "not-found":
         return { available: false, code: "file-not-found", reason: "File not found" };
@@ -461,7 +536,16 @@ export async function handleControlUiAssistantMediaRequest(
   }
 
   applyControlUiSecurityHeaders(res);
+  const source = normalizeAssistantMediaSource(url.searchParams.get("source") ?? "");
+  if (!source) {
+    respondControlUiNotFound(res);
+    return true;
+  }
+  const isMetaRequest = url.searchParams.get("meta") === "1";
+  const hasValidMediaTicket =
+    !isMetaRequest && verifyAssistantMediaTicket(url.searchParams.get("mediaTicket"), source);
   if (
+    !hasValidMediaTicket &&
     !(await authorizeControlUiReadRequest(req, res, {
       auth: opts?.auth,
       trustedProxies: opts?.trustedProxies,
@@ -472,18 +556,19 @@ export async function handleControlUiAssistantMediaRequest(
   ) {
     return true;
   }
-  const source = normalizeAssistantMediaSource(url.searchParams.get("source") ?? "");
-  if (!source) {
-    respondControlUiNotFound(res);
-    return true;
-  }
   const localRoots = opts?.config
     ? getAgentScopedMediaLocalRoots(opts.config, opts.agentId)
     : getDefaultLocalRoots();
 
-  if (url.searchParams.get("meta") === "1") {
+  if (isMetaRequest) {
     const availability = await resolveAssistantMediaAvailability(source, localRoots);
-    sendJson(res, 200, availability);
+    sendJson(
+      res,
+      200,
+      availability.available
+        ? { ...availability, ...createAssistantMediaTicket(source) }
+        : availability,
+    );
     return true;
   }
 
@@ -615,21 +700,17 @@ export async function handleControlUiAvatarRequest(
     return true;
   }
 
-  const safeAvatar = resolveSafeAvatarFile(resolved.filePath);
+  const safeAvatar = await resolveSafeAvatarFile(resolved.filePath);
   if (!safeAvatar) {
     respondControlUiNotFound(res);
     return true;
   }
-  try {
-    if (respondHeadForFile(req, res, safeAvatar.path)) {
-      return true;
-    }
-
-    serveResolvedFile(res, safeAvatar.path, fs.readFileSync(safeAvatar.fd));
+  if (respondHeadForFile(req, res, safeAvatar.path)) {
     return true;
-  } finally {
-    fs.closeSync(safeAvatar.fd);
   }
+
+  serveResolvedFile(res, safeAvatar.path, safeAvatar.buffer);
+  return true;
 }
 
 function setStaticFileHeaders(res: ServerResponse, filePath: string) {
@@ -664,16 +745,20 @@ function isExpectedSafePathError(error: unknown): boolean {
   return code === "ENOENT" || code === "ENOTDIR" || code === "ELOOP";
 }
 
-function resolveSafeAvatarFile(filePath: string): { path: string; fd: number } | null {
-  const opened = openVerifiedFileSync({
-    filePath,
-    rejectPathSymlink: true,
-    maxBytes: AVATAR_MAX_BYTES,
-  });
-  if (!opened.ok) {
+async function resolveSafeAvatarFile(
+  filePath: string,
+): Promise<{ path: string; buffer: Buffer } | null> {
+  try {
+    const read = await readSecureFile({
+      filePath,
+      label: "Control UI avatar",
+      permissions: { allowInsecure: true, allowReadableByOthers: true },
+      io: { maxBytes: AVATAR_MAX_BYTES },
+    });
+    return { path: read.realPath, buffer: read.buffer };
+  } catch {
     return null;
   }
-  return { path: opened.path, fd: opened.fd };
 }
 
 function resolveSafeControlUiFile(
@@ -681,7 +766,7 @@ function resolveSafeControlUiFile(
   filePath: string,
   rejectHardlinks: boolean,
 ): { path: string; fd: number } | null {
-  const opened = openBoundaryFileSync({
+  const opened = openRootFileSync({
     absolutePath: filePath,
     rootPath: rootReal,
     rootRealPath: rootReal,
@@ -690,7 +775,7 @@ function resolveSafeControlUiFile(
     rejectHardlinks,
   });
   if (!opened.ok) {
-    return matchBoundaryFileOpenFailure(opened, {
+    return matchRootFileOpenFailure(opened, {
       io: (failure) => {
         throw failure.error;
       },
@@ -805,6 +890,7 @@ export async function handleControlUiHttpRequest(
             ? "strict"
             : "scripts",
       allowExternalEmbedUrls: config?.gateway?.controlUi?.allowExternalEmbedUrls === true,
+      chatMessageMaxWidth: config?.gateway?.controlUi?.chatMessageMaxWidth,
     } satisfies ControlUiBootstrapConfig);
     return true;
   }
@@ -852,6 +938,12 @@ export async function handleControlUiHttpRequest(
   const rel = (() => {
     if (uiPath === ROOT_PREFIX) {
       return "";
+    }
+    if (uiPath.startsWith(CONTROL_UI_NAMESPACE_PREFIX)) {
+      const namespacedRel = uiPath.slice(CONTROL_UI_NAMESPACE_PREFIX.length);
+      if (CONTROL_UI_ROOT_PUBLIC_ASSETS.has(namespacedRel)) {
+        return namespacedRel;
+      }
     }
     const assetsIndex = uiPath.indexOf("/assets/");
     if (assetsIndex >= 0) {

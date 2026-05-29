@@ -19,9 +19,10 @@ describe("deleteTelegramUpdateOffset", () => {
     });
   });
 
-  it("does not throw when the offset file does not exist", async () => {
+  it("keeps a missing offset file absent after delete", async () => {
     await withStateDirEnv("openclaw-tg-offset-", async () => {
-      await expect(deleteTelegramUpdateOffset({ accountId: "nonexistent" })).resolves.not.toThrow();
+      await deleteTelegramUpdateOffset({ accountId: "nonexistent" });
+      expect(await readTelegramUpdateOffset({ accountId: "nonexistent" })).toBeNull();
     });
   });
 
@@ -57,6 +58,159 @@ describe("deleteTelegramUpdateOffset", () => {
           botToken: "111111:token-a",
         }),
       ).toBe(321);
+    });
+  });
+
+  it("invokes onRotationDetected when the stored bot id no longer matches", async () => {
+    await withStateDirEnv("openclaw-tg-offset-", async () => {
+      await writeTelegramUpdateOffset({
+        accountId: "default",
+        updateId: 1500,
+        botToken: "111111:token-a",
+      });
+
+      const rotations: Array<Record<string, unknown>> = [];
+      const offset = await readTelegramUpdateOffset({
+        accountId: "default",
+        botToken: "222222:token-b",
+        onRotationDetected: (info) => {
+          rotations.push({ ...info });
+        },
+      });
+
+      expect(offset).toBeNull();
+      expect(rotations).toEqual([
+        {
+          reason: "bot-id-changed",
+          previousBotId: "111111",
+          currentBotId: "222222",
+          staleLastUpdateId: 1500,
+        },
+      ]);
+    });
+  });
+
+  it("invokes onRotationDetected for legacy offsets without bot identity", async () => {
+    await withStateDirEnv("openclaw-tg-offset-", async ({ stateDir }) => {
+      const legacyPath = path.join(stateDir, "telegram", "update-offset-default.json");
+      await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+      await fs.writeFile(
+        legacyPath,
+        `${JSON.stringify({ version: 1, lastUpdateId: 777 }, null, 2)}\n`,
+        "utf-8",
+      );
+
+      const rotations: Array<Record<string, unknown>> = [];
+      const offset = await readTelegramUpdateOffset({
+        accountId: "default",
+        botToken: "333333:token-c",
+        onRotationDetected: (info) => {
+          rotations.push({ ...info });
+        },
+      });
+
+      expect(offset).toBeNull();
+      expect(rotations).toEqual([
+        {
+          reason: "legacy-state",
+          previousBotId: null,
+          currentBotId: "333333",
+          staleLastUpdateId: 777,
+        },
+      ]);
+    });
+  });
+
+  it("detects same-bot token rotation via the persisted fingerprint", async () => {
+    await withStateDirEnv("openclaw-tg-offset-", async () => {
+      const original = "111111:original-secret";
+      const rotated = "111111:rotated-secret";
+
+      await writeTelegramUpdateOffset({
+        accountId: "default",
+        updateId: 42,
+        botToken: original,
+      });
+
+      expect(
+        await readTelegramUpdateOffset({
+          accountId: "default",
+          botToken: original,
+        }),
+      ).toBe(42);
+
+      const rotations: Array<Record<string, unknown>> = [];
+      const offset = await readTelegramUpdateOffset({
+        accountId: "default",
+        botToken: rotated,
+        onRotationDetected: (info) => {
+          rotations.push({ ...info });
+        },
+      });
+
+      expect(offset).toBeNull();
+      expect(rotations).toEqual([
+        {
+          reason: "token-rotated",
+          previousBotId: "111111",
+          currentBotId: "111111",
+          staleLastUpdateId: 42,
+        },
+      ]);
+    });
+  });
+
+  it("treats v2 bot-id-only offsets as stale when token identity cannot be verified", async () => {
+    await withStateDirEnv("openclaw-tg-offset-", async ({ stateDir }) => {
+      const legacyPath = path.join(stateDir, "telegram", "update-offset-default.json");
+      await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+      await fs.writeFile(
+        legacyPath,
+        `${JSON.stringify({ version: 2, lastUpdateId: 999, botId: "111111" }, null, 2)}\n`,
+        "utf-8",
+      );
+
+      const rotations: Array<Record<string, unknown>> = [];
+      const offset = await readTelegramUpdateOffset({
+        accountId: "default",
+        botToken: "111111:any-secret",
+        onRotationDetected: (info) => {
+          rotations.push({ ...info });
+        },
+      });
+
+      expect(offset).toBeNull();
+      expect(rotations).toEqual([
+        {
+          reason: "legacy-state",
+          previousBotId: "111111",
+          currentBotId: "111111",
+          staleLastUpdateId: 999,
+        },
+      ]);
+    });
+  });
+
+  it("awaits rotation cleanup before returning", async () => {
+    await withStateDirEnv("openclaw-tg-offset-", async () => {
+      await writeTelegramUpdateOffset({
+        accountId: "default",
+        updateId: 42,
+        botToken: "111111:original",
+      });
+
+      let cleaned = false;
+      const offset = await readTelegramUpdateOffset({
+        accountId: "default",
+        botToken: "111111:rotated",
+        onRotationDetected: async () => {
+          await new Promise<void>((resolve) => setImmediate(resolve));
+          cleaned = true;
+        },
+      });
+
+      expect(offset).toBeNull();
+      expect(cleaned).toBe(true);
     });
   });
 

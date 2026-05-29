@@ -50,6 +50,40 @@ beforeAll(async () => {
   ({ listSandboxBrowsers, removeSandboxBrowserContainer } = await import("./manage.js"));
 });
 
+function firstDescribeRuntimeInput(): { agentId?: string; entry?: { configLabelKind?: string } } {
+  const input = backendMocks.describeRuntime.mock.calls[0]?.[0] as
+    | { agentId?: string; entry?: { configLabelKind?: string } }
+    | undefined;
+  if (!input) {
+    throw new Error("expected describe runtime input");
+  }
+  return input;
+}
+
+function firstRemoveRuntimeInput(): {
+  entry?: {
+    containerName?: string;
+    configLabelKind?: string;
+    runtimeLabel?: string;
+    backendId?: string;
+  };
+} {
+  const input = backendMocks.removeRuntime.mock.calls[0]?.[0] as
+    | {
+        entry?: {
+          containerName?: string;
+          configLabelKind?: string;
+          runtimeLabel?: string;
+          backendId?: string;
+        };
+      }
+    | undefined;
+  if (!input) {
+    throw new Error("expected remove runtime input");
+  }
+  return input;
+}
+
 describe("listSandboxBrowsers", () => {
   beforeEach(async () => {
     configMocks.getRuntimeConfig.mockReset();
@@ -101,35 +135,23 @@ describe("listSandboxBrowsers", () => {
   it("compares browser runtimes against sandbox.browser.image", async () => {
     const results = await listSandboxBrowsers();
 
-    expect(backendMocks.describeRuntime).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "coder",
-        entry: expect.objectContaining({
-          configLabelKind: "BrowserImage",
-        }),
-      }),
-    );
+    const describeInput = firstDescribeRuntimeInput();
+    expect(describeInput?.agentId).toBe("coder");
+    expect(describeInput?.entry?.configLabelKind).toBe("BrowserImage");
     expect(results).toHaveLength(1);
-    expect(results[0]).toMatchObject({
-      image: "openclaw-sandbox-browser:bookworm-slim",
-      running: true,
-      imageMatch: true,
-    });
+    expect(results[0]?.image).toBe("openclaw-sandbox-browser:bookworm-slim");
+    expect(results[0]?.running).toBe(true);
+    expect(results[0]?.imageMatch).toBe(true);
   });
 
   it("removes browser runtimes with BrowserImage config label kind", async () => {
     await removeSandboxBrowserContainer("browser-1");
 
-    expect(backendMocks.removeRuntime).toHaveBeenCalledWith(
-      expect.objectContaining({
-        entry: expect.objectContaining({
-          containerName: "browser-1",
-          configLabelKind: "BrowserImage",
-          runtimeLabel: "browser-1",
-          backendId: "docker",
-        }),
-      }),
-    );
+    const removeInput = firstRemoveRuntimeInput();
+    expect(removeInput?.entry?.containerName).toBe("browser-1");
+    expect(removeInput?.entry?.configLabelKind).toBe("BrowserImage");
+    expect(removeInput?.entry?.runtimeLabel).toBe("browser-1");
+    expect(removeInput?.entry?.backendId).toBe("docker");
     expect(registryMocks.removeBrowserRegistryEntry).toHaveBeenCalledWith("browser-1");
   });
 });

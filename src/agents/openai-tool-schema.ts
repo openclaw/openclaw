@@ -1,13 +1,46 @@
-import { normalizeToolParameterSchema } from "./pi-tools-parameter-schema.js";
-export { resolveOpenAIStrictToolSetting } from "./openai-strict-tool-setting.js";
+import type { ModelCompatConfig } from "../config/types.models.js";
+import { normalizeToolParameterSchema } from "./agent-tools-parameter-schema.js";
+
+type ToolSchemaCompatInput = {
+  unsupportedToolSchemaKeywords?: unknown;
+  omitEmptyArrayItems?: unknown;
+};
 
 type ToolWithParameters = {
   name?: unknown;
   parameters: unknown;
 };
 
-export function normalizeStrictOpenAIJsonSchema(schema: unknown): unknown {
-  return normalizeStrictOpenAIJsonSchemaRecursive(normalizeToolParameterSchema(schema ?? {}), 0);
+function resolveToolSchemaModelCompat(
+  compat: ToolSchemaCompatInput | null | undefined,
+): ModelCompatConfig | undefined {
+  if (!compat) {
+    return undefined;
+  }
+  const unsupportedToolSchemaKeywords = Array.isArray(compat.unsupportedToolSchemaKeywords)
+    ? compat.unsupportedToolSchemaKeywords.filter(
+        (keyword): keyword is string => typeof keyword === "string",
+      )
+    : [];
+  if (unsupportedToolSchemaKeywords.length === 0 && compat.omitEmptyArrayItems !== true) {
+    return undefined;
+  }
+  return {
+    ...(unsupportedToolSchemaKeywords.length > 0 ? { unsupportedToolSchemaKeywords } : {}),
+    ...(compat.omitEmptyArrayItems === true ? { omitEmptyArrayItems: true } : {}),
+  };
+}
+
+export function normalizeStrictOpenAIJsonSchema(
+  schema: unknown,
+  modelCompat?: ToolSchemaCompatInput | null,
+): unknown {
+  return normalizeStrictOpenAIJsonSchemaRecursive(
+    normalizeToolParameterSchema(schema ?? {}, {
+      modelCompat: resolveToolSchemaModelCompat(modelCompat),
+    }),
+    0,
+  );
 }
 
 function normalizeStrictOpenAIJsonSchemaRecursive(schema: unknown, depth: number): unknown {
@@ -56,11 +89,16 @@ function normalizeStrictOpenAIJsonSchemaRecursive(schema: unknown, depth: number
   return changed ? normalized : schema;
 }
 
-export function normalizeOpenAIStrictToolParameters<T>(schema: T, strict: boolean): T {
+export function normalizeOpenAIStrictToolParameters<T>(
+  schema: T,
+  strict: boolean,
+  modelCompat?: ToolSchemaCompatInput | null,
+): T {
+  const toolSchemaCompat = resolveToolSchemaModelCompat(modelCompat);
   if (!strict) {
-    return normalizeToolParameterSchema(schema ?? {}) as T;
+    return normalizeToolParameterSchema(schema ?? {}, { modelCompat: toolSchemaCompat }) as T;
   }
-  return normalizeStrictOpenAIJsonSchema(schema) as T;
+  return normalizeStrictOpenAIJsonSchema(schema, toolSchemaCompat) as T;
 }
 
 export function isStrictOpenAIJsonSchemaCompatible(schema: unknown): boolean {

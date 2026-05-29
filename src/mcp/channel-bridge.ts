@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayClient } from "../gateway/client.js";
-import type { EventFrame } from "../gateway/protocol/index.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -18,6 +18,7 @@ import type {
   ConversationDescriptor,
   PendingApproval,
   QueueEvent,
+  SessionDescribeResult,
   SessionListResult,
   SessionMessagePayload,
   WaitFilter,
@@ -96,7 +97,7 @@ export class OpenClawChannelBridge {
       import("../gateway/client.js"),
       import("../gateway/client-start-readiness.js"),
       import("../gateway/method-scopes.js"),
-      import("../gateway/protocol/client-info.js"),
+      import("../../packages/gateway-protocol/src/client-info.js"),
     ]);
     const bootstrap = await resolveGatewayClientBootstrap({
       config: this.cfg,
@@ -206,10 +207,13 @@ export class OpenClawChannelBridge {
     if (!normalizedSessionKey) {
       return null;
     }
-    const conversations = await this.listConversations({ limit: 500, includeLastMessage: true });
-    return (
-      conversations.find((conversation) => conversation.sessionKey === normalizedSessionKey) ?? null
-    );
+    await this.waitUntilReady();
+    const response: SessionDescribeResult = await this.requestGateway("sessions.describe", {
+      key: normalizedSessionKey,
+      includeDerivedTitles: true,
+      includeLastMessage: true,
+    });
+    return response.session ? toConversation(response.session) : null;
   }
 
   async readMessages(

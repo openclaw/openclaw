@@ -9,8 +9,17 @@ vi.mock("./models/shared.js", async () => {
   const actual = await vi.importActual<typeof import("./models/shared.js")>("./models/shared.js");
   return {
     ...actual,
-    updateConfig: async (mutator: (cfg: Record<string, unknown>) => Record<string, unknown>) => {
-      const next = mutator(structuredClone(mocks.currentConfig));
+    updateConfig: async (
+      mutator: (
+        cfg: Record<string, unknown>,
+        context: {
+          runtimeConfig: Record<string, unknown>;
+        },
+      ) => Record<string, unknown>,
+    ) => {
+      const sourceConfig = structuredClone(mocks.currentConfig);
+      const runtimeConfig = structuredClone(mocks.currentConfig);
+      const next = mutator(sourceConfig, { runtimeConfig });
       mocks.writtenConfig = next;
       return next;
     },
@@ -30,11 +39,13 @@ function makeRuntime() {
 }
 
 function getWrittenConfig() {
-  return mocks.writtenConfig as Record<string, unknown>;
+  if (!mocks.writtenConfig) {
+    throw new Error("expected config write");
+  }
+  return mocks.writtenConfig;
 }
 
 function expectWrittenPrimaryModel(model: string) {
-  expect(mocks.writtenConfig).toBeDefined();
   const written = getWrittenConfig();
   expect(written.agents).toEqual({
     defaults: {
@@ -65,7 +76,6 @@ describe("models set + fallbacks", () => {
 
     await modelsFallbacksAddCommand("z-ai/glm-4.7", runtime);
 
-    expect(mocks.writtenConfig).toBeDefined();
     const written = getWrittenConfig();
     expect(written.agents).toEqual({
       defaults: {
@@ -81,7 +91,6 @@ describe("models set + fallbacks", () => {
 
     await modelsFallbacksAddCommand("anthropic/claude-opus-4-6", runtime);
 
-    expect(mocks.writtenConfig).toBeDefined();
     const written = getWrittenConfig();
     expect(written.agents).toEqual({
       defaults: {
@@ -112,6 +121,15 @@ describe("models set + fallbacks", () => {
     expectWrittenPrimaryModel("openrouter/hunter-alpha");
   });
 
+  it("normalizes retired Google Gemini preview ids in models set", async () => {
+    mockConfigSnapshot({});
+    const runtime = makeRuntime();
+
+    await modelsSetCommand("google/gemini-3-pro-preview", runtime);
+
+    expectWrittenPrimaryModel("google/gemini-3.1-pro-preview");
+  });
+
   it("migrates legacy duplicated OpenRouter keys on write", async () => {
     mockConfigSnapshot({
       agents: {
@@ -128,7 +146,6 @@ describe("models set + fallbacks", () => {
 
     await modelsSetCommand("openrouter/hunter-alpha", runtime);
 
-    expect(mocks.writtenConfig).toBeDefined();
     const written = getWrittenConfig();
     expect(written.agents).toEqual({
       defaults: {
@@ -148,7 +165,6 @@ describe("models set + fallbacks", () => {
 
     await modelsSetCommand("anthropic/claude-opus-4-6", runtime);
 
-    expect(mocks.writtenConfig).toBeDefined();
     const written = getWrittenConfig();
     expect(written.agents).toEqual({
       defaults: {

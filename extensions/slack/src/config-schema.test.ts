@@ -10,7 +10,7 @@ function expectSlackConfigIssue(config: unknown, path: string) {
   const res = SlackConfigSchema.safeParse(config);
   expect(res.success).toBe(false);
   if (!res.success) {
-    expect(res.error.issues.some((issue) => issue.path.join(".").includes(path))).toBe(true);
+    expect(res.error.issues.map((issue) => issue.path.join("."))).toContain(path);
   }
 }
 
@@ -35,6 +35,35 @@ describe("slack config schema", () => {
       expect(res.data.historyLimit).toBe(7);
       expect(res.data.accounts?.ops?.historyLimit).toBe(2);
     }
+  });
+
+  it("accepts unfurl controls at root and account level", () => {
+    const res = SlackConfigSchema.safeParse({
+      unfurlLinks: false,
+      unfurlMedia: false,
+      accounts: {
+        ops: {
+          unfurlLinks: true,
+          unfurlMedia: false,
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.unfurlLinks).toBe(false);
+      expect(res.data.unfurlMedia).toBe(false);
+      expect(res.data.accounts?.ops?.unfurlLinks).toBe(true);
+      expect(res.data.accounts?.ops?.unfurlMedia).toBe(false);
+    }
+  });
+
+  it("rejects invalid unfurl control types", () => {
+    expectSlackConfigIssue({ unfurlLinks: "false" }, "unfurlLinks");
+    expectSlackConfigIssue(
+      { accounts: { ops: { unfurlMedia: "false" } } },
+      "accounts.ops.unfurlMedia",
+    );
   });
 
   it('rejects dmPolicy="open" without allowFrom "*"', () => {

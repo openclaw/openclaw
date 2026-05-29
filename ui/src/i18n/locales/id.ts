@@ -160,8 +160,18 @@ export const id: TranslationMap = {
     store: "Penyimpanan: {path}",
     active: "Aktif",
     limit: "Batas",
+    filters: "Filter",
+    showFilters: "Tampilkan filter",
+    hideFilters: "Sembunyikan filter",
+    sourceFilters: "Filter sumber sesi",
     global: "Global",
     unknown: "Tidak diketahui",
+    showArchived: "Tampilkan yang diarsipkan",
+    activeTooltip: "Diperbarui dalam {count} menit terakhir.",
+    limitTooltip: "Jumlah sesi maksimum untuk dimuat.",
+    globalTooltip: "Sertakan sesi global.",
+    unknownTooltip: "Sertakan sesi tidak dikenal.",
+    showArchivedTooltip: "Sertakan sesi yang diarsipkan.",
     minutesPlaceholder: "mnt",
     searchPlaceholder: "Filter menurut kunci, agen, label, jenis…",
     selected: "{count} dipilih",
@@ -180,6 +190,8 @@ export const id: TranslationMap = {
     verbose: "Verbose",
     reasoning: "Penalaran",
     noSessions: "Tidak ada sesi yang ditemukan.",
+    noSessionsMatchFilters: "Tidak ada sesi yang cocok dengan filter Anda.",
+    showAll: "Tampilkan semua",
     inherit: "warisi",
     defaultOption: "Default ({value})",
     offExplicit: "nonaktif (eksplisit)",
@@ -192,13 +204,34 @@ export const id: TranslationMap = {
     autoThreshold: "ambang otomatis",
     overflowRetry: "percobaan ulang overflow",
     timeoutRetry: "percobaan ulang timeout",
-    tokenRange: "{before} → {after} token",
+    tokenRange: "{before} to {after} token",
     tokensBefore: "{count} token sebelumnya",
     tokenDeltaUnavailable: "delta token tidak tersedia",
     checkpoints: "{count} checkpoint",
     checkpoint: "{count} checkpoint",
-    showCheckpoints: "Tampilkan checkpoint",
-    hideCheckpoints: "Sembunyikan checkpoint",
+    showSessionDetails: "Tampilkan detail sesi untuk {count}",
+    hideSessionDetails: "Sembunyikan detail sesi untuk {count}",
+    sessionDetails: "Detail sesi",
+    compactionHistory: "Riwayat pemadatan",
+    status: "Status",
+    statusLive: "Langsung",
+    statusIdle: "Menganggur",
+    statusUnknown: "Tidak diketahui",
+    statusRunning: "Berjalan",
+    statusDone: "Selesai",
+    statusFailed: "Gagal",
+    statusKilled: "Dihentikan paksa",
+    statusTimeout: "Waktu habis",
+    model: "Model",
+    provider: "Penyedia",
+    runtime: "Runtime",
+    surface: "Permukaan",
+    subject: "Subjek",
+    room: "Ruang",
+    space: "Ruang",
+    sessionId: "ID sesi",
+    activeRun: "Jalankan aktif",
+    archived: "Diarsipkan",
     loadingCheckpoints: "Memuat checkpoint…",
     noCheckpoints: "Tidak ada checkpoint pemadatan yang tercatat untuk sesi ini.",
     noSummary: "Tidak ada ringkasan yang direkam.",
@@ -315,6 +348,12 @@ export const id: TranslationMap = {
     eventLogSubtitle: "Latest gateway events.",
     noEvents: "No events yet.",
   },
+  quickSettings: {
+    security: {
+      browserEnabled: "Browser enabled",
+      toolProfile: "Tool profile",
+    },
+  },
   execApproval: {
     expiresIn: "expires in {time}",
     expired: "expired",
@@ -323,6 +362,8 @@ export const id: TranslationMap = {
     pending: "{count} pending",
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
+    allowAlwaysUnavailable:
+      "Kebijakan persetujuan yang berlaku mengharuskan persetujuan setiap kali, sehingga Izinkan Selalu tidak tersedia.",
     deny: "Deny",
     labels: {
       host: "Host",
@@ -354,6 +395,7 @@ export const id: TranslationMap = {
   },
   tabs: {
     agents: "Agen",
+    activity: "Aktivitas",
     overview: "Ikhtisar",
     channels: "Saluran",
     instances: "Instans",
@@ -375,6 +417,7 @@ export const id: TranslationMap = {
   },
   subtitles: {
     agents: "Ruang kerja, alat, identitas.",
+    activity: "Ringkasan aktivitas alat lokal browser.",
     overview: "Status, titik masuk, kesehatan.",
     channels: "Saluran dan pengaturan.",
     instances: "Klien dan node yang terhubung.",
@@ -393,6 +436,42 @@ export const id: TranslationMap = {
     debug: "Snapshot, peristiwa, RPC.",
     logs: "Log Gateway langsung.",
     dreams: "Konsolidasi memori saat tidur.",
+  },
+  activity: {
+    title: "Aktivitas",
+    subtitle: "Aktivitas alat sementara yang berasal dari peristiwa sesi langsung.",
+    visibleCount: "{visible} dari {total}",
+    filtersLabel: "Filter aktivitas",
+    search: "Cari",
+    searchPlaceholder: "Filter berdasarkan alat, ringkasan, run, sesi",
+    toolFilter: "Alat",
+    allTools: "Semua alat",
+    statusFilters: "Filter status",
+    autoFollow: "Ikuti otomatis",
+    expandAll: "Perluas semua",
+    collapseAll: "Ciutkan semua",
+    clear: "Bersihkan",
+    empty: "Belum ada aktivitas alat.",
+    emptyFiltered: "Tidak ada aktivitas yang cocok dengan filter ini.",
+    entrySummary: "{argumentSummary}",
+    argumentHiddenOne: "1 argumen disembunyikan",
+    argumentsHidden: "{count} argumen disembunyikan",
+    streamLabel: "Entri aktivitas alat",
+    toolCallId: "Panggilan alat",
+    runId: "Jalankan",
+    session: "Sesi",
+    outputTruncated: "Pratinjau disunting dan dipotong.",
+    noOutputPreview: "Tidak ada pratinjau output.",
+    status: {
+      running: "Berjalan",
+      done: "Selesai",
+      error: "Kesalahan",
+    },
+    duration: {
+      ms: "{count} ms",
+      seconds: "{count} dtk",
+      minutes: "{minutes}m {seconds}dtk",
+    },
   },
   overview: {
     access: {
@@ -660,9 +739,6 @@ export const id: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle: "Lihat ke mana token digunakan, kapan sesi melonjak, dan apa yang mendorong biaya.",
-    },
     common: {
       emptyValue: "—",
       unknown: "tidak diketahui",
@@ -681,6 +757,16 @@ export const id: TranslationMap = {
       today: "Hari ini",
       last7d: "7h",
       last30d: "30h",
+      last90d: "90h",
+      last1y: "1th",
+      all: "Semua",
+    },
+    scope: {
+      instance: "Instans saat ini",
+      instanceHint: "Tampilkan hanya id sesi aktif untuk setiap sesi logis.",
+      family: "Garis keturunan historis",
+      familyHint: "Gabungkan id sesi berbasis transkrip yang diketahui telah dirotasi.",
+      familyIncluded: "Garis keturunan historis mencakup {count} instans sesi.",
     },
     filters: {
       title: "Filter",
@@ -722,6 +808,16 @@ export const id: TranslationMap = {
       sessionsCsv: "CSV Sesi",
       dailyCsv: "CSV Harian",
       json: "JSON",
+    },
+    cacheStatus: {
+      warning:
+        "Cache penggunaan sedang dibangun ulang di latar belakang. Total yang ditampilkan mungkin sudah kedaluwarsa.",
+      title: "{status}: {pending} tertunda, {stale} kedaluwarsa, {cached} tersimpan dalam cache",
+      status: {
+        refreshing: "menyegarkan",
+        stale: "kedaluwarsa",
+        partial: "sebagian",
+      },
     },
     empty: {
       title: "Mulai dengan rentang tanggal",
@@ -892,6 +988,95 @@ export const id: TranslationMap = {
     showPassword: "Tampilkan kata sandi",
     hidePassword: "Sembunyikan kata sandi",
     togglePasswordVisibility: "Alihkan visibilitas kata sandi",
+    failure: {
+      rawError: "Error mentah",
+      docsAuth: "Dokumentasi auth Control UI",
+      docsPairing: "Dokumentasi pemasangan perangkat",
+      docsInsecure: "Dokumentasi HTTP tidak aman",
+      authRequired: {
+        title: "Auth diperlukan",
+        summary:
+          "Gateway dapat dijangkau, tetapi memerlukan token atau kata sandi yang cocok sebelum browser ini dapat terhubung.",
+        stepPaste:
+          "Tempel token dari openclaw dashboard --no-open atau masukkan kata sandi yang dikonfigurasi.",
+        stepGenerate:
+          "Jika belum ada token yang dikonfigurasi, jalankan openclaw doctor --generate-gateway-token di host Gateway.",
+        stepConnect: "Klik Connect lagi setelah memperbarui kredensial.",
+      },
+      authFailed: {
+        title: "Auth tidak cocok",
+        summary:
+          "Kredensial yang diberikan ditolak. Penyebab paling umum adalah token kedaluwarsa atau token yang disalin dari URL Gateway lain.",
+        stepDashboard:
+          "Jalankan openclaw dashboard --no-open lalu buka URL baru atau tempel tokennya.",
+        stepReplace:
+          "Ganti nilai token/kata sandi yang lama; jangan gunakan ulang token dari URL Gateway lain.",
+        stepMode:
+          "Gunakan satu mode auth yang cocok pada satu waktu: token gateway untuk mode token, kata sandi untuk mode kata sandi.",
+      },
+      rateLimited: {
+        title: "Terlalu banyak percobaan gagal",
+        summary: "Gateway sementara membatasi percobaan autentikasi untuk klien ini.",
+        stepStop: "Berhenti mencoba ulang dari tab ini sebentar.",
+        stepWait:
+          "Tunggu pembatas auth mereda, lalu hubungkan ulang dengan kredensial yang sudah diperbaiki.",
+        stepCheckClients:
+          "Jika ini host bersama, periksa klien lain yang terus mencoba dengan kredensial salah.",
+      },
+      pairing: {
+        title: "Pemasangan perangkat diperlukan",
+        scopeTitle: "Peningkatan scope tertunda",
+        roleTitle: "Peningkatan peran tertunda",
+        metadataTitle: "Penyegaran perangkat tertunda",
+        summary:
+          "Browser ini memerlukan persetujuan satu kali dari host Gateway sebelum dapat menggunakan Control UI.",
+        upgradeSummary:
+          "Browser ini sudah dikenal, tetapi akses yang diminta berubah dan memerlukan persetujuan baru.",
+        stepList: "Jalankan openclaw devices list di host Gateway.",
+        stepApproveId: "Setujui permintaan ini: openclaw devices approve {requestId}.",
+        stepApprove: "Setujui permintaan browser/perangkat yang tertunda dari daftar tersebut.",
+        stepReconnect: "Hubungkan ulang setelah persetujuan selesai.",
+      },
+      insecure: {
+        title: "Konteks browser aman diperlukan",
+        summary:
+          "Halaman ini berjalan melalui HTTP biasa, sehingga browser tidak dapat membuat identitas perangkat yang diharapkan Gateway.",
+        stepHttps:
+          "Gunakan HTTPS/Tailscale Serve, atau buka http://127.0.0.1:18789 di host Gateway.",
+        stepLocalCompat:
+          "Untuk kompatibilitas lokal hanya-token, setel gateway.controlUi.allowInsecureAuth: true.",
+        stepAvoidDisable: "Hindari menonaktifkan auth perangkat untuk akses HTTP jarak jauh.",
+      },
+      origin: {
+        title: "Origin browser tidak diizinkan",
+        summary: "Gateway menolak origin halaman ini sebelum menerima koneksi Control UI.",
+        stepAllowedOrigins: "Tambahkan origin browser ini ke gateway.controlUi.allowedOrigins.",
+        stepFullOrigin:
+          "Gunakan origin lengkap seperti http://localhost:5173, bukan pola wildcard.",
+        stepRestart: "Mulai ulang atau muat ulang Gateway setelah mengubah origin yang diizinkan.",
+      },
+      protocol: {
+        title: "Protokol tidak cocok",
+        summary:
+          "Control UI yang disajikan dan Gateway yang berjalan tidak sepakat tentang protokol koneksi yang didukung.",
+        stepDashboard:
+          "Buka kembali dashboard yang disajikan dengan openclaw dashboard agar UI dan Gateway berasal dari instalasi yang sama.",
+        stepDevUi:
+          "Jika menggunakan pnpm ui:dev, bangun ulang atau mulai ulang UI dev terhadap checkout saat ini.",
+        stepRestart:
+          "Mulai ulang Gateway setelah memperbarui OpenClaw agar menyajikan protokol saat ini.",
+      },
+      network: {
+        title: "Tidak dapat terhubung",
+        summary:
+          "Browser tidak dapat menyelesaikan koneksi Gateway. Periksa target dan transport sebelum mencoba ulang kredensial.",
+        stepGateway: "Pastikan Gateway berjalan dengan openclaw status atau openclaw gateway run.",
+        stepUrl:
+          "Periksa URL WebSocket dan gunakan wss:// saat Gateway berada di belakang HTTPS/Tailscale Serve.",
+        stepDashboard:
+          "Buka kembali dashboard dengan openclaw dashboard --no-open untuk menyalin ulang URL dan detail auth saat ini.",
+      },
+    },
   },
   chat: {
     disconnected: "Terputus dari gateway.",
@@ -899,6 +1084,10 @@ export const id: TranslationMap = {
     settings: "Pengaturan chat",
     thinkingToggle: "Alihkan output berpikir/bekerja asisten",
     toolCallsToggle: "Alihkan panggilan alat dan hasil alat",
+    autoScrollMode: "Mode gulir otomatis",
+    autoScrollAlways: "Selalu",
+    autoScrollNearBottom: "Dekat bagian bawah",
+    autoScrollOff: "Nonaktif",
     focusToggle: "Alihkan mode fokus (sembunyikan bilah samping + header halaman)",
     hideCronSessions: "Sembunyikan sesi cron",
     showCronSessions: "Tampilkan sesi cron",
@@ -913,6 +1102,53 @@ export const id: TranslationMap = {
     updating: "Memperbarui…",
     updateNow: "Perbarui sekarang",
     dismissUpdateBanner: "Tutup banner pembaruan",
+    switchedSession: "Beralih ke {session}",
+    welcome: {
+      ready: "Ready to chat",
+      hintBeforeShortcut: "Type a message below ·",
+      hintAfterShortcut: "for commands",
+      suggestions: {
+        whatCanYouDo: "What can you do?",
+        summarizeRecentSessions: "Summarize my recent sessions",
+        configureChannel: "Help me configure a channel",
+        checkSystemHealth: "Check system health",
+      },
+    },
+    runControls: {
+      newSession: "New session",
+      export: "Ekspor",
+      exportChat: "Export chat",
+      queue: "Queue",
+      queueMessage: "Queue message",
+      stop: "Stop",
+      stopGenerating: "Stop generating",
+      send: "Send",
+      sendMessage: "Send message",
+    },
+    queue: {
+      retry: "Coba lagi",
+      retrySend: "Coba kirim lagi",
+      retryQueuedMessage: "Coba lagi pesan dalam antrean",
+    },
+    composer: {
+      placeholder: "Message {name} (Enter to send)",
+      placeholderWithAttachments: "Add a message or paste more images...",
+      placeholderDisconnected: "Connect to the gateway to start chatting...",
+      attachFile: "Attach file",
+      startTalk: "Start Talk",
+      stillListening: "Masih mendengarkan",
+      talkTranscript: "Transkrip bicara",
+      stopTalk: "Stop Talk",
+    },
+    selectors: {
+      agentFilter: "Filter sesi berdasarkan agen",
+      session: "Chat session",
+      sessionSearch: "Cari sesi",
+      clearSessionSearch: "Hapus pencarian sesi",
+      loadMoreSessions: "Muat sesi lainnya",
+      model: "Chat model",
+      thinkingLevel: "Chat thinking level",
+    },
   },
   languages: {
     en: "Inggris",
@@ -1021,6 +1257,9 @@ export const id: TranslationMap = {
       ascending: "Naik",
       descending: "Turun",
       reset: "Atur Ulang",
+      emptyTitle: "No scheduled jobs yet.",
+      emptyHint: "Create one from a plain-language prompt; advanced fields can wait.",
+      emptyFilteredHint: "Clear or change filters to see scheduled jobs.",
       noMatching: "Tidak ada tugas yang cocok.",
       loading: "Memuat...",
       loadMore: "Muat lebih banyak tugas",
@@ -1056,6 +1295,7 @@ export const id: TranslationMap = {
     form: {
       editJob: "Edit Tugas",
       newJob: "Tugas Baru",
+      advancedJob: "Advanced job",
       updateSubtitle: "Perbarui tugas terjadwal yang dipilih.",
       createSubtitle: "Buat bangun terjadwal atau proses agen.",
       required: "Wajib",

@@ -1,7 +1,7 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  __testing,
+  testing,
   buildMistralRealtimeTranscriptionProvider,
 } from "./realtime-transcription-provider.js";
 
@@ -27,8 +27,9 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
       },
     });
 
-    expect(resolved).toMatchObject({
+    expect(resolved).toEqual({
       apiKey: "mistral-key",
+      baseUrl: undefined,
       model: "voxtral-mini-transcribe-realtime-2602",
       encoding: "pcm_mulaw",
       sampleRate: 8000,
@@ -37,7 +38,7 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
   });
 
   it("builds a Mistral realtime websocket URL", () => {
-    const url = __testing.toMistralRealtimeWsUrl({
+    const url = testing.toMistralRealtimeWsUrl({
       apiKey: "mistral-key",
       baseUrl: "https://api.mistral.ai/v1",
       model: "voxtral-mini-transcribe-realtime-2602",

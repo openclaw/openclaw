@@ -26,6 +26,7 @@ type SessionBindingContractEntry = {
   bindAndResolve: () => Promise<SessionBindingRecord>;
   unbindAndVerify: (binding: SessionBindingRecord) => Promise<void>;
   cleanup: () => Promise<void> | void;
+  preload?: () => Promise<void> | void;
   beforeEach?: () => Promise<void> | void;
 };
 const contractApiPromises = new Map<string, Promise<Record<string, unknown>>>();
@@ -125,13 +126,6 @@ type ChannelConversationBindingManagerFactory = NonNullable<
   NonNullable<ChannelPlugin["conversationBindings"]>["createManager"]
 >;
 
-type BlueBubblesContractApi = {
-  blueBubblesConversationBindingTesting: {
-    resetBlueBubblesConversationBindingsForTests: () => void;
-  };
-  createBlueBubblesConversationBindingManager: ChannelConversationBindingManagerFactory;
-};
-
 type DiscordContractApi = {
   createThreadBindingManager: (params: {
     accountId: string;
@@ -216,15 +210,6 @@ function setRegistryBackedConversationBindingPlugin(params: {
   );
 }
 
-async function prepareBlueBubblesSessionBindingContract() {
-  const api = await getContractApi<BlueBubblesContractApi>("bluebubbles");
-  api.blueBubblesConversationBindingTesting.resetBlueBubblesConversationBindingsForTests();
-  setRegistryBackedConversationBindingPlugin({
-    id: "bluebubbles",
-    createManager: api.createBlueBubblesConversationBindingManager,
-  });
-}
-
 async function prepareDiscordSessionBindingContract() {
   const api = await getContractApi<DiscordContractApi>("discord");
   api.discordThreadBindingTesting.resetThreadBindingsForTests();
@@ -258,70 +243,10 @@ const sessionBindingContractEntries: Record<
   SessionBindingContractChannelId,
   Omit<SessionBindingContractEntry, "id">
 > = {
-  bluebubbles: {
-    beforeEach: prepareBlueBubblesSessionBindingContract,
-    expectedCapabilities: {
-      adapterAvailable: true,
-      bindSupported: true,
-      unbindSupported: true,
-      placements: ["current"],
-    },
-    getCapabilities: () => {
-      void createChannelConversationBindingManager({
-        channelId: "bluebubbles",
-        cfg: baseSessionBindingCfg,
-        accountId: "default",
-      });
-      return getSessionBindingService().getCapabilities({
-        channel: "bluebubbles",
-        accountId: "default",
-      });
-    },
-    bindAndResolve: async () => {
-      await createChannelConversationBindingManager({
-        channelId: "bluebubbles",
-        cfg: baseSessionBindingCfg,
-        accountId: "default",
-      });
-      const service = getSessionBindingService();
-      const binding = await service.bind({
-        targetSessionKey: "agent:codex:acp:binding:bluebubbles:default:abc123",
-        targetKind: "session",
-        conversation: {
-          channel: "bluebubbles",
-          accountId: "default",
-          conversationId: "+15555550123",
-        },
-        placement: "current",
-        metadata: {
-          agentId: "codex",
-          label: "codex-main",
-        },
-      });
-      expectResolvedSessionBinding({
-        channel: "bluebubbles",
-        accountId: "default",
-        conversationId: "+15555550123",
-        targetSessionKey: "agent:codex:acp:binding:bluebubbles:default:abc123",
-      });
-      return binding;
-    },
-    unbindAndVerify: unbindAndExpectClearedSessionBinding,
-    cleanup: async () => {
-      const manager = await createChannelConversationBindingManager({
-        channelId: "bluebubbles",
-        cfg: baseSessionBindingCfg,
-        accountId: "default",
-      });
-      await manager?.stop();
-      expectClearedSessionBinding({
-        channel: "bluebubbles",
-        accountId: "default",
-        conversationId: "+15555550123",
-      });
-    },
-  },
   discord: {
+    preload: async () => {
+      await getContractApi<DiscordContractApi>("discord");
+    },
     beforeEach: prepareDiscordSessionBindingContract,
     expectedCapabilities: {
       adapterAvailable: true,
@@ -383,6 +308,9 @@ const sessionBindingContractEntries: Record<
     },
   },
   feishu: {
+    preload: async () => {
+      await getContractApi<FeishuContractApi>("feishu");
+    },
     beforeEach: prepareFeishuSessionBindingContract,
     expectedCapabilities: {
       adapterAvailable: true,
@@ -444,6 +372,9 @@ const sessionBindingContractEntries: Record<
     },
   },
   imessage: {
+    preload: async () => {
+      await getContractApi<IMessageContractApi>("imessage");
+    },
     beforeEach: prepareIMessageSessionBindingContract,
     expectedCapabilities: {
       adapterAvailable: true,
@@ -507,6 +438,9 @@ const sessionBindingContractEntries: Record<
     },
   },
   matrix: {
+    preload: async () => {
+      await getContractApi<MatrixContractApi>("matrix");
+    },
     beforeEach: prepareMatrixSessionBindingContract,
     expectedCapabilities: {
       adapterAvailable: true,
@@ -558,6 +492,9 @@ const sessionBindingContractEntries: Record<
     },
   },
   telegram: {
+    preload: async () => {
+      await getContractApi<TelegramContractApi>("telegram");
+    },
     beforeEach: prepareTelegramSessionBindingContract,
     expectedCapabilities: {
       adapterAvailable: true,

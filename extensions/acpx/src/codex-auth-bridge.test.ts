@@ -6,13 +6,13 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { prepareAcpxCodexAuthConfig } from "./codex-auth-bridge.js";
 import { resolveAcpxPluginConfig } from "./config.js";
+import { OPENCLAW_ACPX_LEASE_ID_ARG, OPENCLAW_GATEWAY_INSTANCE_ID_ARG } from "./process-lease.js";
 
 const execFileAsync = promisify(execFile);
 const tempDirs: string[] = [];
 const previousEnv = {
   CODEX_HOME: process.env.CODEX_HOME,
   OPENCLAW_AGENT_DIR: process.env.OPENCLAW_AGENT_DIR,
-  PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR,
 };
 
 async function makeTempDir(): Promise<string> {
@@ -56,20 +56,41 @@ function generatedClaudePaths(stateDir: string): {
 }
 
 function expectCodexWrapperCommand(command: string | undefined, wrapperPath: string): void {
-  expect(command).toContain(process.execPath);
-  expect(command).toContain(wrapperPath);
+  expect(command).toContain(quoteArg(process.execPath));
+  expect(command).toContain(quoteArg(wrapperPath));
 }
 
 function expectClaudeWrapperCommand(command: string | undefined, wrapperPath: string): void {
-  expect(command).toContain(process.execPath);
-  expect(command).toContain(wrapperPath);
+  expect(command).toContain(quoteArg(process.execPath));
+  expect(command).toContain(quoteArg(wrapperPath));
+}
+
+function expectWrapperToContainPathSuffix(wrapper: string, pathSuffix: string[]): void {
+  const nativeSuffix = pathSuffix.join(path.sep);
+  const escapedNativeSuffix = JSON.stringify(nativeSuffix).slice(1, -1);
+  const posixSuffix = pathSuffix.join("/");
+  if (wrapper.includes(escapedNativeSuffix)) {
+    expect(wrapper).toContain(escapedNativeSuffix);
+  } else {
+    expect(wrapper).toContain(posixSuffix);
+  }
+}
+
+async function expectPathMissing(targetPath: string): Promise<void> {
+  let error: unknown;
+  try {
+    await fs.access(targetPath);
+  } catch (caught) {
+    error = caught;
+  }
+  expect(error).toBeInstanceOf(Error);
+  expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
 }
 
 afterEach(async () => {
   vi.restoreAllMocks();
   restoreEnv("CODEX_HOME");
   restoreEnv("OPENCLAW_AGENT_DIR");
-  restoreEnv("PI_CODING_AGENT_DIR");
   for (const dir of tempDirs.splice(0)) {
     await fs.rm(dir, { recursive: true, force: true });
   }
@@ -91,7 +112,6 @@ describe("prepareAcpxCodexAuthConfig", () => {
       "codex-acp.js",
     );
     process.env.OPENCLAW_AGENT_DIR = agentDir;
-    delete process.env.PI_CODING_AGENT_DIR;
 
     const pluginConfig = resolveAcpxPluginConfig({
       rawConfig: {},
@@ -110,9 +130,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
     const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
     expect(wrapper).toContain(JSON.stringify(installedBinPath));
     expect(wrapper).toContain("defaultArgs = [installedBinPath]");
-    await expect(
-      fs.access(path.join(agentDir, "acp-auth", "codex", "auth.json")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expectPathMissing(path.join(agentDir, "acp-auth", "codex", "auth.json"));
   });
 
   it("keeps generated wrappers usable when chmod is rejected by the state filesystem", async () => {
@@ -156,7 +174,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
     });
 
     const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
-    expect(wrapper).toContain('"@zed-industries/codex-acp@^0.12.0"');
+    expect(wrapper).toContain('"@zed-industries/codex-acp@0.15.0"');
     expect(wrapper).toContain('"--", "codex-acp"');
     expect(wrapper).not.toContain("@zed-industries/codex-acp@^0.11.1");
   });
@@ -177,7 +195,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
     });
 
     const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
-    expect(wrapper).toContain('"@agentclientprotocol/claude-agent-acp@0.31.4"');
+    expect(wrapper).toContain('"@agentclientprotocol/claude-agent-acp@0.37.0"');
     expect(wrapper).toContain('"--", "claude-agent-acp"');
     expect(wrapper).not.toContain("@agentclientprotocol/claude-agent-acp@^0.31.0");
     expect(wrapper).not.toContain("@agentclientprotocol/claude-agent-acp@0.31.0");
@@ -199,8 +217,39 @@ describe("prepareAcpxCodexAuthConfig", () => {
 
     const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
     expect(wrapper).toContain("@zed-industries/codex-acp");
-    expect(wrapper).toContain("bin/codex-acp.js");
+    expectWrapperToContainPathSuffix(wrapper, ["bin", "codex-acp.js"]);
     expect(wrapper).toContain("defaultArgs = [installedBinPath]");
+  });
+
+  it("keeps the orphaned wrapper alive long enough to force-kill the child process group", async () => {
+    const root = await makeTempDir();
+    const stateDir = path.join(root, "state");
+    const generated = generatedCodexPaths(stateDir);
+    const pluginConfig = resolveAcpxPluginConfig({
+      rawConfig: {},
+      workspaceDir: root,
+    });
+
+    await prepareAcpxCodexAuthConfig({
+      pluginConfig,
+      stateDir,
+    });
+
+    const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
+    expect(wrapper).toContain('killChildTree("SIGTERM")');
+    expect(wrapper).toContain('killChildTree("SIGKILL", { force: true })');
+    expect(wrapper).toMatch(
+      /forceKillTimer = setTimeout\(\(\) => \{\s*killChildTree\("SIGKILL", \{ force: true \}\);\s*childExitCode = 1;/s,
+    );
+    expect(wrapper).toMatch(
+      /child\.on\("exit", \(code, signal\) => \{\s*if \(parentWatcher\) \{\s*clearInterval\(parentWatcher\);\s*\}\s*if \(orphanCleanupStarted\) \{\s*return;\s*\}/s,
+    );
+    expect(wrapper).toMatch(
+      /child\.on\("close", \(\) => \{\s*finishStderrLog\(\);\s*process\.exit\(childExitCode\);/s,
+    );
+    expect(wrapper).not.toMatch(
+      /forceKillTimer = setTimeout\(\(\) => killChildTree\("SIGKILL"\), 1_500\);\s*forceKillTimer\.unref\?\.\(\);\s*process\.exit\(1\);/s,
+    );
   });
 
   it("uses the bundled Claude ACP dependency by default when it is installed", async () => {
@@ -219,7 +268,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
 
     const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
     expect(wrapper).toContain("@agentclientprotocol/claude-agent-acp");
-    expect(wrapper).toContain("dist/index.js");
+    expectWrapperToContainPathSuffix(wrapper, ["dist", "index.js"]);
     expect(wrapper).toContain("defaultArgs = [installedBinPath]");
   });
 
@@ -244,11 +293,21 @@ describe("prepareAcpxCodexAuthConfig", () => {
       resolveInstalledCodexAcpBinPath: async () => installedBinPath,
     });
 
-    const { stdout } = await execFileAsync(process.execPath, [generated.wrapperPath], {
-      cwd: root,
-    });
+    const { stdout } = await execFileAsync(
+      process.execPath,
+      [
+        generated.wrapperPath,
+        "--openclaw-acpx-lease-id",
+        "lease-1",
+        "--openclaw-gateway-instance-id",
+        "gateway-1",
+      ],
+      {
+        cwd: root,
+      },
+    );
     const launched = JSON.parse(stdout.trim()) as { argv?: unknown; codexHome?: unknown };
-    expect(launched.argv).toEqual([]);
+    expect(launched.argv).toStrictEqual([]);
     const expectedCodexHome = await fs.realpath(path.join(stateDir, "acpx", "codex-home"));
     expect(path.resolve(String(launched.codexHome))).toBe(expectedCodexHome);
   });
@@ -299,11 +358,36 @@ describe("prepareAcpxCodexAuthConfig", () => {
     );
     await fs.writeFile(
       path.join(sourceCodexHome, "config.toml"),
-      'notify = ["SkyComputerUseClient", "turn-ended"]\n',
+      [
+        'model = "gpt-5.5-1"',
+        'model_provider = "azure_foundry"',
+        'model_reasoning_effort = "high"',
+        'sandbox_mode = "workspace-write"',
+        'notify = ["SkyComputerUseClient", "turn-ended"]',
+        "",
+        "[model_providers.azure_foundry]",
+        'name = "Azure Foundry"',
+        'base_url = "https://example.azure.com/openai/v1"',
+        'wire_api = "responses"',
+        'env_key = "AZURE_OPENAI_API_KEY"',
+        'http_headers = { "api-key" = "inline-secret-key" }',
+        'query_params = { "api-version" = "2026-01-01", "secret" = "inline-secret-param" }',
+        'experimental_bearer_token = "inline-secret-bearer"',
+        "",
+        "[model_providers.azure_foundry.auth]",
+        'command = "bash"',
+        'args = ["-lc", "printf %s test-key"]',
+        "",
+        "[model_providers.secret_only]",
+        'experimental_bearer_token = "secret-only-token"',
+        "",
+        `[projects.${JSON.stringify(path.join(root, "project-with-model-key"))}]`,
+        'model = "nested-project-model"',
+        "",
+      ].join("\n"),
     );
     process.env.CODEX_HOME = sourceCodexHome;
     process.env.OPENCLAW_AGENT_DIR = agentDir;
-    delete process.env.PI_CODING_AGENT_DIR;
 
     const pluginConfig = resolveAcpxPluginConfig({
       rawConfig: {},
@@ -317,17 +401,74 @@ describe("prepareAcpxCodexAuthConfig", () => {
 
     expectCodexWrapperCommand(resolved.agents.codex, generated.wrapperPath);
     const isolatedConfig = await fs.readFile(generated.configPath, "utf8");
+    expect(isolatedConfig).toContain('model = "gpt-5.5-1"');
+    expect(isolatedConfig).toContain('model_provider = "azure_foundry"');
+    expect(isolatedConfig).toContain('model_reasoning_effort = "high"');
+    expect(isolatedConfig).toContain('sandbox_mode = "workspace-write"');
+    expect(isolatedConfig).toContain("[model_providers.azure_foundry]");
+    expect(isolatedConfig).toContain('base_url = "https://example.azure.com/openai/v1"');
+    expect(isolatedConfig).toContain('env_key = "AZURE_OPENAI_API_KEY"');
+    expect(isolatedConfig).not.toContain("http_headers");
+    expect(isolatedConfig).not.toContain("query_params");
+    expect(isolatedConfig).not.toContain("experimental_bearer_token");
+    expect(isolatedConfig).not.toContain("[model_providers.azure_foundry.auth]");
+    expect(isolatedConfig).not.toContain("[model_providers.secret_only]");
+    expect(isolatedConfig).not.toContain("nested-project-model");
+    expect(isolatedConfig).not.toContain("inline-secret");
+    expect(isolatedConfig).not.toContain('args = ["-lc", "printf %s test-key"]');
     expect(isolatedConfig).not.toContain("notify");
     expect(isolatedConfig).not.toContain("SkyComputerUseClient");
+    expect(isolatedConfig).toContain(`[projects.${JSON.stringify(path.resolve(root))}]`);
+    expect(isolatedConfig).toContain('trust_level = "trusted"');
     const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
     expect(wrapper).toContain("CODEX_HOME: codexHome");
     expect(wrapper).not.toContain(sourceCodexHome);
-    await expect(
-      fs.access(path.join(agentDir, "acp-auth", "codex-source", "auth.json")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(
-      fs.access(path.join(agentDir, "acp-auth", "codex", "auth.json")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expectPathMissing(path.join(agentDir, "acp-auth", "codex-source", "auth.json"));
+    await expectPathMissing(path.join(agentDir, "acp-auth", "codex", "auth.json"));
+  });
+
+  it("copies only trusted Codex project declarations into the isolated Codex home", async () => {
+    const root = await makeTempDir();
+    const sourceCodexHome = path.join(root, "source-codex");
+    const stateDir = path.join(root, "state");
+    const explicitProject = path.join(root, "explicit project");
+    const inlineProject = path.join(root, "inline-project");
+    const mapProject = path.join(root, "map-project");
+    const untrustedProject = path.join(root, "untrusted-project");
+    const generated = generatedCodexPaths(stateDir);
+    await fs.mkdir(sourceCodexHome, { recursive: true });
+    await fs.writeFile(
+      path.join(sourceCodexHome, "config.toml"),
+      [
+        'notify = ["SkyComputerUseClient", "turn-ended"]',
+        `projects = { ${JSON.stringify(mapProject)} = { trust_level = "trusted" }, ${JSON.stringify(untrustedProject)} = { trust_level = "untrusted" } }`,
+        "[projects]",
+        `${JSON.stringify(inlineProject)} = { trust_level = "trusted" }`,
+        `[projects.${JSON.stringify(explicitProject)}]`,
+        'trust_level = "trusted"',
+        "",
+      ].join("\n"),
+    );
+    process.env.CODEX_HOME = sourceCodexHome;
+    const pluginConfig = resolveAcpxPluginConfig({
+      rawConfig: {},
+      workspaceDir: root,
+    });
+
+    await prepareAcpxCodexAuthConfig({
+      pluginConfig,
+      stateDir,
+      resolveInstalledCodexAcpBinPath: async () => undefined,
+    });
+
+    const isolatedConfig = await fs.readFile(generated.configPath, "utf8");
+    expect(isolatedConfig).toContain(`[projects.${JSON.stringify(path.resolve(root))}]`);
+    expect(isolatedConfig).toContain(`[projects.${JSON.stringify(path.resolve(explicitProject))}]`);
+    expect(isolatedConfig).toContain(`[projects.${JSON.stringify(path.resolve(inlineProject))}]`);
+    expect(isolatedConfig).toContain(`[projects.${JSON.stringify(path.resolve(mapProject))}]`);
+    expect(isolatedConfig).not.toContain(untrustedProject);
+    expect(isolatedConfig).not.toContain("notify");
+    expect(isolatedConfig).not.toContain("SkyComputerUseClient");
   });
 
   it("normalizes an explicitly configured Codex ACP command to the local wrapper", async () => {
@@ -396,6 +537,101 @@ describe("prepareAcpxCodexAuthConfig", () => {
     expect(resolved.agents.claude).not.toContain("npx -y @agentclientprotocol/claude-agent-acp");
     expect(resolved.agents.claude).toContain("--permission-mode");
     expect(resolved.agents.claude).toContain("bypass");
+  });
+
+  it("captures Codex wrapper stderr in a stream-aware redacted per-lease log", async () => {
+    const root = await makeTempDir();
+    const stateDir = path.join(root, "state");
+    const generated = generatedCodexPaths(stateDir);
+    const stderrScript = path.join(root, "emit-stderr.mjs");
+    await fs.writeFile(
+      stderrScript,
+      `const chunks = [
+        "token=sk-test",
+        "secret1234567890\\n",
+        "Authorization: Bearer bearer-secret",
+        "-token-1234567890\\n",
+        '{"client_secret":"json-secret-1234567890","api_key":"json-api-key-1234567890"}\\n',
+        "client-secret: kebab-secret-1234567890\\n",
+        "standalone sk-live-secret",
+        "1234567890\\n",
+        "url=https://example.test/callback?token=query-secret",
+        "-1234567890\\n",
+        "github_pat_1234567890",
+        "abcdefghijklmnopqrstuvwxyz\\n",
+        "-----BEGIN PRIVATE KEY-----\\nprivate-secret-body\\n",
+        "-----END PRIVATE KEY-----\\n",
+        "tail-token=tail-secret-1234567890",
+        "\\n-----BEGIN PRIVATE KEY-----\\ntruncated-private-secret",
+      ];
+      let index = 0;
+      function writeNext() {
+        if (index >= chunks.length) {
+          process.exit(1);
+          return;
+        }
+        process.stderr.write(chunks[index]);
+        index += 1;
+        setTimeout(writeNext, 5);
+      }
+      writeNext();`,
+      "utf8",
+    );
+    const pluginConfig = resolveAcpxPluginConfig({
+      rawConfig: {
+        agents: {
+          codex: {
+            command: `${process.execPath} ${stderrScript}`,
+          },
+        },
+      },
+      workspaceDir: root,
+    });
+
+    await prepareAcpxCodexAuthConfig({
+      pluginConfig,
+      stateDir,
+      resolveInstalledCodexAcpBinPath: async () => path.join(root, "codex-acp.js"),
+    });
+
+    await expect(
+      execFileAsync(process.execPath, [
+        generated.wrapperPath,
+        "--openclaw-run-configured",
+        process.execPath,
+        stderrScript,
+        OPENCLAW_ACPX_LEASE_ID_ARG,
+        "lease-secret",
+        OPENCLAW_GATEWAY_INSTANCE_ID_ARG,
+        "gateway-test",
+      ]),
+    ).rejects.toMatchObject({ code: 1 });
+
+    const log = await fs.readFile(
+      path.join(stateDir, "acpx", "codex-acp-wrapper.stderr.lease-secret.log"),
+      "utf8",
+    );
+    expect(log).toContain("token=[REDACTED]");
+    expect(log).toContain("Authorization: Bearer [REDACTED]");
+    expect(log).toContain('"client_secret":"[REDACTED]"');
+    expect(log).toContain('"api_key":"[REDACTED]"');
+    expect(log).toContain("client-secret: [REDACTED]");
+    expect(log).toContain("standalone [REDACTED_OPENAI_KEY]");
+    expect(log).toContain("?token=[REDACTED]");
+    expect(log).toContain("[REDACTED_GITHUB_TOKEN]");
+    expect(log).toContain("[REDACTED_PRIVATE_KEY]");
+    expect(log).toContain("tail-token=[REDACTED]");
+    expect(log).not.toContain("sk-testsecret1234567890");
+    expect(log).not.toContain("bearer-secret-token-1234567890");
+    expect(log).not.toContain("json-secret-1234567890");
+    expect(log).not.toContain("json-api-key-1234567890");
+    expect(log).not.toContain("kebab-secret-1234567890");
+    expect(log).not.toContain("query-secret-1234567890");
+    expect(log).not.toContain("github_pat_1234567890abcdefghijklmnopqrstuvwxyz");
+    expect(log).not.toContain("private-secret-body");
+    expect(log).not.toContain("truncated-private-secret");
+    expect(log).not.toContain("tail-secret-1234567890");
+    await expectPathMissing(path.join(stateDir, "acpx", "codex-acp-wrapper.stderr.log"));
   });
 
   it("leaves a custom Claude agent command alone", async () => {

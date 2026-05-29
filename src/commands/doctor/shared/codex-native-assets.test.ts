@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { collectCodexNativeAssetWarnings, scanCodexNativeAssets } from "./codex-native-assets.js";
+import { collectCodexNativeAssetInfoNotes, scanCodexNativeAssets } from "./codex-native-assets.js";
 
 const tempRoots = new Set<string>();
 
@@ -33,6 +33,10 @@ function codexConfig(): OpenClawConfig {
       },
     },
   } as OpenClawConfig;
+}
+
+function hasAsset(hits: Array<{ kind: string; path: string }>, kind: string, assetPath: string) {
+  return hits.some((hit) => hit.kind === kind && hit.path === assetPath);
 }
 
 afterEach(async () => {
@@ -70,29 +74,21 @@ describe("scanCodexNativeAssets", () => {
       env: { CODEX_HOME: codexHome, HOME: root },
     });
 
-    expect(hits).toEqual(
-      expect.arrayContaining([
-        { kind: "skill", path: path.join(codexHome, "skills", "tweet-helper") },
-        { kind: "skill", path: path.join(root, ".agents", "skills", "agent-helper") },
-        {
-          kind: "plugin",
-          path: path.join(
-            codexHome,
-            "plugins",
-            "cache",
-            "openai-primary-runtime",
-            "documents",
-            "1.0.0",
-          ),
-        },
-        { kind: "config", path: path.join(codexHome, "config.toml") },
-        { kind: "hooks", path: path.join(codexHome, "hooks", "hooks.json") },
-      ]),
+    expect(hasAsset(hits, "skill", path.join(codexHome, "skills", "tweet-helper"))).toBe(true);
+    expect(hasAsset(hits, "skill", path.join(root, ".agents", "skills", "agent-helper"))).toBe(
+      true,
     );
-    expect(hits).not.toEqual(
-      expect.arrayContaining([
-        { kind: "skill", path: path.join(codexHome, "skills", ".system", "system-skill") },
-      ]),
+    expect(
+      hasAsset(
+        hits,
+        "plugin",
+        path.join(codexHome, "plugins", "cache", "openai-primary-runtime", "documents", "1.0.0"),
+      ),
+    ).toBe(true);
+    expect(hasAsset(hits, "config", path.join(codexHome, "config.toml"))).toBe(true);
+    expect(hasAsset(hits, "hooks", path.join(codexHome, "hooks", "hooks.json"))).toBe(true);
+    expect(hasAsset(hits, "skill", path.join(codexHome, "skills", ".system", "system-skill"))).toBe(
+      false,
     );
   });
 
@@ -107,26 +103,40 @@ describe("scanCodexNativeAssets", () => {
         cfg: {} as OpenClawConfig,
         env: { CODEX_HOME: codexHome, HOME: root },
       }),
-    ).resolves.toEqual([]);
+    ).resolves.toStrictEqual([]);
   });
 });
 
-describe("collectCodexNativeAssetWarnings", () => {
-  it("points users at explicit Codex migration instead of auto-copying native assets", async () => {
+describe("collectCodexNativeAssetInfoNotes", () => {
+  it("points users at explicit Codex migration planning", async () => {
     const root = await makeTempRoot();
     const codexHome = path.join(root, ".codex");
     await writeFile(path.join(root, ".agents", "skills", "agent-helper", "SKILL.md"));
 
-    const warnings = await collectCodexNativeAssetWarnings({
+    const notes = await collectCodexNativeAssetInfoNotes({
       cfg: codexConfig(),
       env: { CODEX_HOME: codexHome, HOME: root },
     });
 
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain("isolated per-agent Codex homes");
-    expect(warnings[0]).toContain(codexHome);
-    expect(warnings[0]).toContain(path.join(root, ".agents", "skills"));
-    expect(warnings[0]).toContain("openclaw migrate codex --dry-run");
-    expect(warnings[0]).toContain("manual-review only");
+    expect(notes).toStrictEqual([
+      [
+        "- Personal Codex CLI assets were found, but native Codex-mode OpenClaw agents use isolated per-agent Codex homes.",
+        `- Sources: ${codexHome} and ${path.join(root, ".agents", "skills")} (1 skill, 0 plugins, 0 config files, 0 hook files).`,
+        "- These assets will not be loaded by the Codex app-server child unless you intentionally promote them.",
+        "- If the Codex plugin is not installed, run `openclaw plugins install npm:@openclaw/codex` first. Then run `openclaw migrate plan codex` to inventory them. Applying that migration copies skills into the current OpenClaw agent workspace; Codex plugins, hooks, and config stay manual-review only.",
+      ].join("\n"),
+    ]);
+  });
+
+  it("returns empty when no Codex assets are found", async () => {
+    const root = await makeTempRoot();
+    const codexHome = path.join(root, ".codex");
+
+    const notes = await collectCodexNativeAssetInfoNotes({
+      cfg: codexConfig(),
+      env: { CODEX_HOME: codexHome, HOME: root },
+    });
+
+    expect(notes).toStrictEqual([]);
   });
 });

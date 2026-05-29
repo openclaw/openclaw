@@ -1,5 +1,4 @@
 import { mergeMissing } from "../../../config/legacy.shared.js";
-import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
 import {
   cloneRecord,
   ensureRecord,
@@ -8,7 +7,22 @@ import {
   type JsonRecord,
 } from "./legacy-config-record-shared.js";
 
-const MODERN_SCOPED_WEB_SEARCH_KEYS = new Set(["openaiCodex"]);
+const DANGEROUS_RECORD_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+
+const BUNDLED_LEGACY_WEB_SEARCH_OWNERS = new Map<string, string>([
+  ["brave", "brave"],
+  ["duckduckgo", "duckduckgo"],
+  ["exa", "exa"],
+  ["firecrawl", "firecrawl"],
+  ["gemini", "google"],
+  ["grok", "xai"],
+  ["kimi", "moonshot"],
+  ["minimax", "minimax"],
+  ["ollama", "ollama"],
+  ["perplexity", "perplexity"],
+  ["searxng", "searxng"],
+  ["tavily", "tavily"],
+]);
 
 // Tavily only ever used the plugin-owned config path, so there is no legacy
 // `tools.web.search.tavily.*` shape to migrate.
@@ -16,18 +30,7 @@ const NON_MIGRATED_LEGACY_WEB_SEARCH_PROVIDER_IDS = new Set(["tavily"]);
 const LEGACY_GLOBAL_WEB_SEARCH_PROVIDER_ID = "brave";
 
 function getBundledLegacyWebSearchOwners(): ReadonlyMap<string, string> {
-  const owners = new Map<string, string>();
-  for (const plugin of loadManifestMetadataSnapshot({ config: {}, env: process.env }).plugins) {
-    if (plugin.origin !== "bundled") {
-      continue;
-    }
-    for (const providerId of plugin.contracts?.webSearchProviders ?? []) {
-      if (!owners.has(providerId)) {
-        owners.set(providerId, plugin.id);
-      }
-    }
-  }
-  return owners;
+  return BUNDLED_LEGACY_WEB_SEARCH_OWNERS;
 }
 
 function getLegacyWebSearchProviderIds(
@@ -177,7 +180,7 @@ export function migrateLegacyWebSearchConfig<T>(raw: T): { config: T; changes: s
     return { config: raw, changes: [] };
   }
 
-  return normalizeLegacyWebSearchConfigRecord(raw, owners);
+  return normalizeLegacyWebSearchConfigRecord(structuredClone(raw) as T & JsonRecord, owners);
 }
 
 function normalizeLegacyWebSearchConfigRecord<T extends JsonRecord>(
@@ -204,9 +207,10 @@ function normalizeLegacyWebSearchConfigRecord<T extends JsonRecord>(
     if (getLegacyWebSearchProviderIdSet(owners).has(key) && isRecord(value)) {
       continue;
     }
-    if (MODERN_SCOPED_WEB_SEARCH_KEYS.has(key) || !isRecord(value)) {
-      nextSearch[key] = value;
+    if (DANGEROUS_RECORD_KEYS.has(key)) {
+      continue;
     }
+    nextSearch[key] = value;
   }
   web.search = nextSearch;
 

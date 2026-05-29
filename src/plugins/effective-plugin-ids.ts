@@ -5,6 +5,7 @@ import {
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { sortUniqueStrings } from "../shared/string-normalization.js";
 import {
   listExplicitConfiguredChannelIdsForConfig,
   loadGatewayStartupPluginPlan,
@@ -13,6 +14,7 @@ import {
 import { normalizePluginsConfig } from "./config-state.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import { passesManifestOwnerBasePolicy } from "./manifest-owner-policy.js";
+import { defaultSlotIdForKey } from "./slots.js";
 
 function collectConfiguredChannelIds(
   config: OpenClawConfig,
@@ -91,7 +93,7 @@ function collectBundledChannelOwnerPluginIds(params: {
       }
     }
   }
-  return [...pluginIds].toSorted((left, right) => left.localeCompare(right));
+  return sortUniqueStrings(pluginIds);
 }
 
 function collectExplicitEffectivePluginIds(config: OpenClawConfig): string[] {
@@ -117,7 +119,25 @@ function collectExplicitEffectivePluginIds(config: OpenClawConfig): string[] {
       ids.delete(pluginId);
     }
   }
-  return [...ids].toSorted((left, right) => left.localeCompare(right));
+  return sortUniqueStrings(ids);
+}
+
+function collectSelectedContextEnginePluginIds(config: OpenClawConfig): string[] {
+  const plugins = normalizePluginsConfig(config.plugins);
+  if (!plugins.enabled) {
+    return [];
+  }
+  const pluginId = plugins.slots.contextEngine;
+  if (!pluginId || pluginId === defaultSlotIdForKey("contextEngine")) {
+    return [];
+  }
+  if (plugins.deny.includes(pluginId)) {
+    return [];
+  }
+  if (plugins.entries[pluginId]?.enabled === false) {
+    return [];
+  }
+  return [pluginId];
 }
 
 export function resolveEffectivePluginIds(params: {
@@ -132,6 +152,9 @@ export function resolveEffectivePluginIds(params: {
   });
   const effectiveConfig = autoEnabled.config;
   const ids = new Set(collectExplicitEffectivePluginIds(effectiveConfig));
+  for (const pluginId of collectSelectedContextEnginePluginIds(effectiveConfig)) {
+    ids.add(pluginId);
+  }
   const configuredChannelIds = collectConfiguredChannelIds(
     effectiveConfig,
     params.config,
@@ -162,5 +185,5 @@ export function resolveEffectivePluginIds(params: {
   }).pluginIds) {
     ids.add(pluginId);
   }
-  return [...ids].toSorted((left, right) => left.localeCompare(right));
+  return sortUniqueStrings(ids);
 }

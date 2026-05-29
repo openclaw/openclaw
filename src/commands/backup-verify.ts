@@ -5,6 +5,7 @@ import { readStringValue } from "../shared/string-coerce.js";
 import { isRecord, resolveUserPath } from "../utils.js";
 
 const WINDOWS_ABSOLUTE_ARCHIVE_PATH_RE = /^[A-Za-z]:[\\/]/;
+const MAX_MANIFEST_BYTES = 1024 * 1024;
 
 type BackupManifestAsset = {
   kind: string;
@@ -52,6 +53,12 @@ export type BackupVerifyResult = {
   entryCount: number;
 };
 
+type ArchiveEntry = {
+  path: string;
+  linkpath?: string;
+  type?: string;
+};
+
 function stripTrailingSlashes(value: string): string {
   return value.replace(/\/+$/u, "");
 }
@@ -96,7 +103,7 @@ function parseManifest(raw: string): BackupManifest {
   try {
     parsed = JSON.parse(raw);
   } catch (err) {
-    throw new Error(`Backup manifest is not valid JSON: ${String(err)}`, { cause: err });
+    throw new Error("Backup manifest is not valid JSON.", { cause: err });
   }
 
   if (!isRecord(parsed)) {
@@ -166,13 +173,18 @@ function parseManifest(raw: string): BackupManifest {
   };
 }
 
-async function listArchiveEntries(archivePath: string): Promise<string[]> {
-  const entries: string[] = [];
+async function listArchiveEntries(archivePath: string): Promise<ArchiveEntry[]> {
+  const entries: ArchiveEntry[] = [];
   await tar.t({
     file: archivePath,
     gzip: true,
     onentry: (entry) => {
-      entries.push(entry.path);
+      entries.push({
+        path: entry.path,
+        ...(entry.linkpath ? { linkpath: entry.linkpath } : {}),
+        ...(entry.type ? { type: entry.type } : {}),
+      });
+      entry.resume();
     },
   });
   return entries;
@@ -182,7 +194,7 @@ async function extractManifest(params: {
   archivePath: string;
   manifestEntryPath: string;
 }): Promise<string> {
-  let manifestContentPromise: Promise<string> | undefined;
+  let manifestContentPromise: Promise<{ content?: string; error?: Error }> | undefined;
   await tar.t({
     file: params.archivePath,
     gzip: true,
@@ -192,14 +204,44 @@ async function extractManifest(params: {
         return;
       }
 
-      manifestContentPromise = new Promise<string>((resolve, reject) => {
+      manifestContentPromise = new Promise<{ content?: string; error?: Error }>((resolve) => {
         const chunks: Buffer[] = [];
+        let totalBytes = 0;
+        let exceededLimit = false;
+        let settled = false;
+        const settle = (result: { content?: string; error?: Error }) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          resolve(result);
+        };
         entry.on("data", (chunk: Buffer | string) => {
-          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+          if (exceededLimit) {
+            return;
+          }
+          const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          totalBytes += buffer.byteLength;
+          if (totalBytes > MAX_MANIFEST_BYTES) {
+            exceededLimit = true;
+            chunks.length = 0;
+            return;
+          }
+          chunks.push(buffer);
         });
-        entry.on("error", reject);
+        entry.on("error", (error) => {
+          settle({
+            error: error instanceof Error ? error : new Error(String(error)),
+          });
+        });
         entry.on("end", () => {
-          resolve(Buffer.concat(chunks).toString("utf8"));
+          if (exceededLimit) {
+            settle({
+              error: new Error(`Backup manifest exceeds ${MAX_MANIFEST_BYTES} byte limit.`),
+            });
+            return;
+          }
+          settle({ content: Buffer.concat(chunks, totalBytes).toString("utf8") });
         });
       });
     },
@@ -208,7 +250,11 @@ async function extractManifest(params: {
   if (!manifestContentPromise) {
     throw new Error(`Archive is missing manifest entry: ${params.manifestEntryPath}`);
   }
-  return await manifestContentPromise;
+  const result = await manifestContentPromise;
+  if (result.error) {
+    throw result.error;
+  }
+  return result.content ?? "";
 }
 
 function isRootManifestEntry(entryPath: string): boolean {
@@ -248,6 +294,26 @@ function verifyManifestAgainstEntries(manifest: BackupManifest, entries: Set<str
   }
 }
 
+function verifyHardlinkTargetsAgainstArchiveRoot(
+  hardlinkTargets: Array<{ entryPath: string; normalized: string }>,
+  archiveRoot: string,
+  entries: Set<string>,
+): void {
+  const normalizedRoot = normalizeArchiveRoot(archiveRoot);
+  for (const target of hardlinkTargets) {
+    if (!isArchivePathWithin(target.normalized, normalizedRoot)) {
+      throw new Error(
+        `Archive hardlink target is outside the declared archive root: ${target.entryPath} -> ${target.normalized}`,
+      );
+    }
+    if (!entries.has(target.normalized)) {
+      throw new Error(
+        `Archive hardlink target is missing from archive entries: ${target.entryPath} -> ${target.normalized}`,
+      );
+    }
+  }
+}
+
 function formatResult(result: BackupVerifyResult): string {
   return [
     `Backup archive OK: ${result.archivePath}`,
@@ -283,9 +349,18 @@ export async function backupVerifyCommand(
   }
 
   const entries = rawEntries.map((entry) => ({
-    raw: entry,
-    normalized: normalizeArchivePath(entry, "Archive entry"),
+    raw: entry.path,
+    normalized: normalizeArchivePath(entry.path, "Archive entry"),
   }));
+  const hardlinkTargets = rawEntries
+    .filter((entry) => entry.type === "Link" && entry.linkpath)
+    .map((entry) => ({
+      entryPath: entry.path,
+      normalized: normalizeArchivePath(
+        entry.linkpath ?? "",
+        `Archive hardlink target for ${entry.path}`,
+      ),
+    }));
   const normalizedEntrySet = new Set(entries.map((entry) => entry.normalized));
 
   const manifestMatches = entries.filter((entry) => isRootManifestEntry(entry.normalized));
@@ -304,6 +379,11 @@ export async function backupVerifyCommand(
   const manifestRaw = await extractManifest({ archivePath, manifestEntryPath });
   const manifest = parseManifest(manifestRaw);
   verifyManifestAgainstEntries(manifest, normalizedEntrySet);
+  verifyHardlinkTargetsAgainstArchiveRoot(
+    hardlinkTargets,
+    manifest.archiveRoot,
+    normalizedEntrySet,
+  );
 
   const result: BackupVerifyResult = {
     ok: true,

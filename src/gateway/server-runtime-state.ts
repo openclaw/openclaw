@@ -1,7 +1,6 @@
 import type { IncomingMessage, Server as HttpServer, ServerResponse } from "node:http";
+import type { Duplex } from "node:stream";
 import { WebSocketServer } from "ws";
-import { CANVAS_HOST_PATH } from "../canvas-host/a2ui.js";
-import { type CanvasHostHandler, createCanvasHostHandler } from "../canvas-host/server.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginRegistry } from "../plugins/registry.js";
@@ -10,9 +9,7 @@ import {
   pinActivePluginHttpRouteRegistry,
   releasePinnedPluginChannelRegistry,
   releasePinnedPluginHttpRouteRegistry,
-  resolveActivePluginHttpRouteRegistry,
 } from "../plugins/runtime.js";
-import type { RuntimeEnv } from "../runtime.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
@@ -29,11 +26,13 @@ import {
 } from "./server-chat-state.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
 import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
 import type { DedupeEntry } from "./server-shared.js";
 import type { HookClientIpConfig, HooksRequestHandler } from "./server/hooks-request-handler.js";
 import { listenGatewayHttpServer } from "./server/http-listen.js";
 import type { PluginRoutePathContext } from "./server/plugins-http/path-context.js";
 import { shouldEnforceGatewayAuthForPluginPath } from "./server/plugins-http/route-auth.js";
+import { findMatchingPluginNodeCapabilityRoute } from "./server/plugins-http/route-capability.js";
 import {
   createPreauthConnectionBudget,
   type PreauthConnectionBudget,
@@ -45,6 +44,18 @@ import type { GatewayWsClient } from "./server/ws-types.js";
 type GatewayPluginRequestHandler = (
   req: IncomingMessage,
   res: ServerResponse,
+  pathContext?: PluginRoutePathContext,
+  dispatchContext?: {
+    gatewayAuthSatisfied?: boolean;
+    gatewayRequestAuth?: AuthorizedGatewayHttpRequest;
+    gatewayRequestOperatorScopes?: readonly string[];
+  },
+) => Promise<boolean>;
+
+type GatewayPluginUpgradeHandler = (
+  req: IncomingMessage,
+  socket: Duplex,
+  head: Buffer,
   pathContext?: PluginRoutePathContext,
   dispatchContext?: {
     gatewayAuthSatisfied?: boolean;
@@ -73,18 +84,15 @@ export async function createGatewayRuntimeState(params: {
   hooksConfig: () => HooksConfigResolved | null;
   getHookClientIpConfig: () => HookClientIpConfig;
   pluginRegistry: PluginRegistry;
+  getPluginRouteRegistry?: () => PluginRegistry;
+  getGatewayRequestContext?: () => GatewayRequestContext | undefined;
   pinChannelRegistry?: boolean;
   deps: CliDeps;
-  canvasRuntime: RuntimeEnv;
-  canvasHostEnabled: boolean;
-  allowCanvasHostInTests?: boolean;
-  logCanvas: { info: (msg: string) => void; warn: (msg: string) => void };
   log: { info: (msg: string) => void; warn: (msg: string) => void };
   logHooks: ReturnType<typeof createSubsystemLogger>;
   logPlugins: ReturnType<typeof createSubsystemLogger>;
   getReadiness?: ReadinessChecker;
 }): Promise<{
-  canvasHost: CanvasHostHandler | null;
   releasePluginRouteRegistry: () => void;
   httpServer: HttpServer;
   httpServers: HttpServer[];
@@ -117,27 +125,8 @@ export async function createGatewayRuntimeState(params: {
     releasePinnedPluginChannelRegistry();
   }
   try {
-    let canvasHost: CanvasHostHandler | null = null;
-    if (params.canvasHostEnabled) {
-      try {
-        const handler = await createCanvasHostHandler({
-          runtime: params.canvasRuntime,
-          rootDir: params.cfg.canvasHost?.root,
-          basePath: CANVAS_HOST_PATH,
-          allowInTests: params.allowCanvasHostInTests,
-          liveReload: params.cfg.canvasHost?.liveReload,
-        });
-        if (handler.rootDir) {
-          canvasHost = handler;
-          params.logCanvas.info(
-            `canvas host mounted at http://${params.bindHost}:${params.port}${CANVAS_HOST_PATH}/ (root ${handler.rootDir})`,
-          );
-        }
-      } catch (err) {
-        params.logCanvas.warn(`canvas host failed to start: ${String(err)}`);
-      }
-    }
-
+    const resolvePluginRouteRegistry = () =>
+      params.getPluginRouteRegistry?.() ?? params.pluginRegistry;
     const clients = new Set<GatewayWsClient>();
     const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({ clients });
 
@@ -167,13 +156,14 @@ export async function createGatewayRuntimeState(params: {
     };
 
     let loadedPluginRequestHandler: GatewayPluginRequestHandler | null = null;
+    let loadedPluginUpgradeHandler: GatewayPluginUpgradeHandler | null = null;
     const handlePluginRequest: GatewayPluginRequestHandler = async (
       req,
       res,
       pathContext,
       dispatchContext,
     ) => {
-      const registry = resolveActivePluginHttpRouteRegistry(params.pluginRegistry);
+      const registry = resolvePluginRouteRegistry();
       if ((registry.httpRoutes ?? []).length === 0) {
         return false;
       }
@@ -181,17 +171,41 @@ export async function createGatewayRuntimeState(params: {
         const { createGatewayPluginRequestHandler } = await import("./server/plugins-http.js");
         loadedPluginRequestHandler = createGatewayPluginRequestHandler({
           registry: params.pluginRegistry,
+          getRouteRegistry: resolvePluginRouteRegistry,
           log: params.logPlugins,
+          getGatewayRequestContext: params.getGatewayRequestContext,
         });
       }
       return await loadedPluginRequestHandler(req, res, pathContext, dispatchContext);
     };
-    const shouldEnforcePluginGatewayAuth = (pathContext: PluginRoutePathContext): boolean => {
-      return shouldEnforceGatewayAuthForPluginPath(
-        resolveActivePluginHttpRouteRegistry(params.pluginRegistry),
-        pathContext,
-      );
+    const handlePluginUpgrade: GatewayPluginUpgradeHandler = async (
+      req,
+      socket,
+      head,
+      pathContext,
+      dispatchContext,
+    ) => {
+      const registry = resolvePluginRouteRegistry();
+      if ((registry.httpRoutes ?? []).length === 0) {
+        return false;
+      }
+      if (!loadedPluginUpgradeHandler) {
+        const { createGatewayPluginUpgradeHandler } = await import("./server/plugins-http.js");
+        loadedPluginUpgradeHandler = createGatewayPluginUpgradeHandler({
+          registry: params.pluginRegistry,
+          getRouteRegistry: resolvePluginRouteRegistry,
+          log: params.logPlugins,
+          getGatewayRequestContext: params.getGatewayRequestContext,
+        });
+      }
+      return await loadedPluginUpgradeHandler(req, socket, head, pathContext, dispatchContext);
     };
+    const shouldEnforcePluginGatewayAuth = (pathContext: PluginRoutePathContext): boolean => {
+      return shouldEnforceGatewayAuthForPluginPath(resolvePluginRouteRegistry(), pathContext);
+    };
+    const resolvePluginNodeCapabilityRoute = (pathContext: PluginRoutePathContext) =>
+      findMatchingPluginNodeCapabilityRoute(resolvePluginRouteRegistry(), pathContext)
+        ?.nodeCapability;
 
     const bindHosts = await resolveGatewayListenHosts(params.bindHost);
     if (!isLoopbackHost(params.bindHost)) {
@@ -217,9 +231,8 @@ export async function createGatewayRuntimeState(params: {
 
     const httpServers: HttpServer[] = [];
     const httpBindHosts: string[] = [];
-    for (const _host of bindHosts) {
+    for (const _ of bindHosts) {
       const httpServer = createGatewayHttpServer({
-        canvasHost,
         clients,
         controlUiEnabled: params.controlUiEnabled,
         controlUiBasePath: params.controlUiBasePath,
@@ -232,6 +245,7 @@ export async function createGatewayRuntimeState(params: {
         handleHooksRequest,
         handlePluginRequest,
         shouldEnforcePluginGatewayAuth,
+        resolvePluginNodeCapabilityRoute,
         resolvedAuth: params.resolvedAuth,
         getResolvedAuth: params.getResolvedAuth,
         rateLimiter: params.rateLimiter,
@@ -242,7 +256,9 @@ export async function createGatewayRuntimeState(params: {
       attachGatewayUpgradeHandler({
         httpServer,
         wss,
-        canvasHost,
+        handlePluginUpgrade,
+        shouldEnforcePluginGatewayAuth,
+        resolvePluginNodeCapabilityRoute,
         clients,
         preauthConnectionBudget,
         resolvedAuth: params.resolvedAuth,
@@ -308,7 +324,6 @@ export async function createGatewayRuntimeState(params: {
     const toolEventRecipients = createToolEventRecipientRegistry();
 
     return {
-      canvasHost,
       releasePluginRouteRegistry: () => {
         // Releases both pinned HTTP-route and channel registries set at startup.
         // Release unconditionally: plugin startup/reload can re-pin these

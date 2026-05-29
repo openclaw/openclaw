@@ -1,4 +1,6 @@
-import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-types";
+import type { InboundEventKind } from "openclaw/plugin-sdk/channel-inbound";
+import type { ChannelBotLoopProtectionFacts } from "openclaw/plugin-sdk/channel-inbound";
+import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import type { SessionBindingRecord } from "openclaw/plugin-sdk/conversation-runtime";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import type { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
@@ -19,7 +21,7 @@ export type DiscordMessageEvent = import("./listeners.js").DiscordMessageEvent;
 type DiscordMessagePreflightSharedFields = {
   cfg: LoadedConfig;
   discordConfig: NonNullable<
-    import("openclaw/plugin-sdk/config-types").OpenClawConfig["channels"]
+    import("openclaw/plugin-sdk/config-contracts").OpenClawConfig["channels"]
   >["discord"];
   accountId: string;
   token: string;
@@ -84,14 +86,17 @@ export type DiscordMessagePreflightContext = DiscordMessagePreflightSharedFields
 
   shouldRequireMention: boolean;
   hasAnyMention: boolean;
+  hasControlCommand: boolean;
   allowTextCommands: boolean;
   shouldBypassMention: boolean;
   effectiveWasMentioned: boolean;
+  inboundEventKind: InboundEventKind;
   canDetectMention: boolean;
 
   historyEntry?: HistoryEntry;
   threadBindings: DiscordThreadBindingLookup;
   discordRestFetch?: typeof fetch;
+  botLoopProtection?: ChannelBotLoopProtectionFacts;
 };
 
 export type DiscordMessagePreflightParams = DiscordMessagePreflightSharedFields & {

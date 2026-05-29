@@ -1,9 +1,20 @@
 // Barnacle owns deterministic GitHub triage and auto-response behavior.
 
-const activePrLimit = 10;
+import {
+  MOCK_ONLY_PROOF_LABEL,
+  NEEDS_REAL_BEHAVIOR_PROOF_LABEL,
+  PROOF_OVERRIDE_LABEL,
+  PROOF_SUFFICIENT_LABEL,
+  PROOF_SUPPLIED_LABEL,
+  evaluateRealBehaviorProof,
+  hasClawSweeperExactHeadProof,
+  labelsForRealBehaviorProof,
+} from "./real-behavior-proof-policy.mjs";
+
+const activePrLimit = 20;
 
 const thirdPartyExtensionMessage =
-  "Please publish this as a third-party plugin on [ClawHub](https://clawhub.ai) instead of adding it to the core repo. Docs: https://docs.openclaw.ai/plugin and https://docs.openclaw.ai/tools/clawhub";
+  "Please publish this as a third-party plugin on [ClawHub](https://clawhub.ai) instead of adding it to the core repo. Docs: https://docs.openclaw.ai/plugin and https://docs.openclaw.ai/clawhub";
 
 const rules = [
   {
@@ -51,6 +62,13 @@ const rules = [
     message: thirdPartyExtensionMessage,
   },
   {
+    label: "r: bluebubbles",
+    close: true,
+    commentTriggers: ["bluebubbles", "blue bubbles"],
+    message:
+      "BlueBubbles is deprecated and no longer ships as a bundled OpenClaw channel. Use iMessage via `imsg` instead: https://docs.openclaw.ai/channels/imessage. If this needs to stay BlueBubbles-backed, publish it as a third-party plugin on ClawHub instead of adding it back to core.",
+  },
+  {
     label: "r: moltbook",
     close: true,
     lock: true,
@@ -80,7 +98,7 @@ export const managedLabelSpecs = {
   },
   "r: too-many-prs": {
     color: "D93F0B",
-    description: "Auto-close: author has more than ten active PRs.",
+    description: "Auto-close: author has more than twenty active PRs.",
   },
   "r: too-many-prs-override": {
     color: "C2E0C6",
@@ -93,6 +111,10 @@ export const managedLabelSpecs = {
   "r: third-party-extension": {
     color: "5319E7",
     description: "Auto-close: third-party plugins/capabilities belong on ClawHub.",
+  },
+  "r: bluebubbles": {
+    color: "D93F0B",
+    description: "Auto-close: BlueBubbles is deprecated; use iMessage via imsg or ClawHub.",
   },
   "r: moltbook": {
     color: "B60205",
@@ -134,6 +156,26 @@ export const managedLabelSpecs = {
     color: "C5DEF5",
     description: "Candidate: PR template appears mostly untouched.",
   },
+  [NEEDS_REAL_BEHAVIOR_PROOF_LABEL]: {
+    color: "C5DEF5",
+    description: "Candidate: external PR needs after-fix proof from a real setup.",
+  },
+  [MOCK_ONLY_PROOF_LABEL]: {
+    color: "C5DEF5",
+    description: "Candidate: PR proof only shows tests, mocks, snapshots, lint, typecheck, or CI.",
+  },
+  [PROOF_SUPPLIED_LABEL]: {
+    color: "C2E0C6",
+    description: "External PR includes structured after-fix real behavior proof.",
+  },
+  [PROOF_SUFFICIENT_LABEL]: {
+    color: "0E8A16",
+    description: "ClawSweeper judged the real behavior proof convincing.",
+  },
+  [PROOF_OVERRIDE_LABEL]: {
+    color: "C2E0C6",
+    description: "Maintainer override for the external PR real behavior proof gate.",
+  },
   "triage: dirty-candidate": {
     color: "C5DEF5",
     description: "Candidate: broad unrelated surfaces; may need splitting or cleanup.",
@@ -154,6 +196,8 @@ export const candidateLabels = {
   docsDiscoverability: "triage: docs-discoverability",
   testOnlyNoBug: "triage: test-only-no-bug",
   refactorOnly: "triage: refactor-only",
+  needsRealBehaviorProof: NEEDS_REAL_BEHAVIOR_PROOF_LABEL,
+  mockOnlyProof: MOCK_ONLY_PROOF_LABEL,
   dirtyCandidate: "triage: dirty-candidate",
   riskyInfra: "triage: risky-infra",
   externalPluginCandidate: "triage: external-plugin-candidate",
@@ -196,10 +240,27 @@ const maintainerAuthorLabel = "maintainer";
 const privilegedAuthorAssociations = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 const privilegedRepositoryRoles = new Set(["admin", "maintain", "write"]);
 const candidateLabelValues = Object.values(candidateLabels);
+const structuralProofLabelValues = [
+  NEEDS_REAL_BEHAVIOR_PROOF_LABEL,
+  MOCK_ONLY_PROOF_LABEL,
+  PROOF_SUPPLIED_LABEL,
+];
 const noisyPrMessage =
   "Closing this PR because it looks dirty (too many unrelated or unexpected changes). This usually happens when a branch picks up unrelated commits or a merge went sideways. Please recreate the PR from a clean branch.";
 
 const candidateActionRules = [
+  {
+    label: candidateLabels.needsRealBehaviorProof,
+    close: true,
+    message:
+      "Closing this PR because it does not include real behavior proof. Please reopen or resubmit with after-fix evidence from a real OpenClaw setup; terminal screenshots, console output, redacted logs, recordings, linked artifacts, and copied live output count. Unit tests, mocks, snapshots, lint, typechecks, and CI are supplemental only.",
+  },
+  {
+    label: candidateLabels.mockOnlyProof,
+    close: true,
+    message:
+      "Closing this PR because the proof only shows tests, mocks, snapshots, lint, typechecks, or CI. Please reopen or resubmit with after-fix evidence from a real OpenClaw setup; terminal screenshots, console output, redacted logs, recordings, linked artifacts, and copied live output count.",
+  },
   {
     label: candidateLabels.dirtyCandidate,
     close: true,
@@ -437,6 +498,14 @@ export function classifyPullRequestCandidateLabels(pullRequest, files) {
   if (blankTemplate) {
     labelsToAdd.push(candidateLabels.blankTemplate);
   }
+
+  labelsToAdd.push(
+    ...labelsForRealBehaviorProof(
+      evaluateRealBehaviorProof({
+        pullRequest,
+      }),
+    ),
+  );
 
   const docsOnly = filenames.every(isMarkdownOrDocsFile);
   const docsSignal =
@@ -699,6 +768,15 @@ async function listPullRequestFiles(github, context, pullRequest) {
   });
 }
 
+async function listIssueComments(github, context, issueNumber) {
+  return github.paginate(github.rest.issues.listComments, {
+    owner: context.repo.owner,
+    repo: context.repo.repo,
+    issue_number: issueNumber,
+    per_page: 100,
+  });
+}
+
 async function addMissingLabels(github, context, core, issueNumber, labels, labelSet) {
   const missingLabels = labels.filter((label) => !labelSet.has(label));
   if (missingLabels.length === 0) {
@@ -716,14 +794,100 @@ async function addMissingLabels(github, context, core, issueNumber, labels, labe
   core.info(`Added candidate labels to #${issueNumber}: ${missingLabels.join(", ")}`);
 }
 
+function isClawSweeperOwnedLabel(label) {
+  return label === "clawsweeper" || label.startsWith("clawsweeper:");
+}
+
+function isActiveClawSweeperWork(pullRequest, labelSet) {
+  const authorLogin = pullRequest.user?.login ?? "";
+  const headRef = pullRequest.head?.ref ?? "";
+  return (
+    /clawsweeper/i.test(authorLogin) ||
+    headRef.startsWith("clawsweeper/") ||
+    [...labelSet].some(isClawSweeperOwnedLabel)
+  );
+}
+
+function shouldRemoveProofSufficientLabel(
+  context,
+  pullRequest,
+  labelSet,
+  proofEvaluation,
+  hasExactHeadClawSweeperProof,
+) {
+  if (hasExactHeadClawSweeperProof) {
+    return false;
+  }
+  if (proofEvaluation.status === "override") {
+    return false;
+  }
+  if (isActiveClawSweeperWork(pullRequest, labelSet)) {
+    return false;
+  }
+  if (!["edited", "synchronize"].includes(context.payload.action)) {
+    return false;
+  }
+  if (proofEvaluation.status !== "passed") {
+    return true;
+  }
+  return true;
+}
+
+const negativeProofLabels = new Set([NEEDS_REAL_BEHAVIOR_PROOF_LABEL, MOCK_ONLY_PROOF_LABEL]);
+
+function shouldPreserveClawSweeperProofJudgment(context, labelSet) {
+  return (
+    labelSet.has(PROOF_SUFFICIENT_LABEL) &&
+    !["edited", "synchronize"].includes(context.payload.action)
+  );
+}
+
 async function applyPullRequestCandidateLabels(github, context, core, pullRequest, labelSet) {
   const files = await listPullRequestFiles(github, context, pullRequest);
+  const hasExactHeadClawSweeperProof =
+    labelSet.has(PROOF_SUFFICIENT_LABEL) &&
+    hasClawSweeperExactHeadProof({
+      pullRequest,
+      comments: await listIssueComments(github, context, pullRequest.number),
+    });
+  const proofEvaluation = evaluateRealBehaviorProof({
+    pullRequest: {
+      ...pullRequest,
+      labels: [...labelSet].map((name) => ({ name })),
+    },
+  });
+  const classifiedLabels = classifyPullRequestCandidateLabels(
+    {
+      ...pullRequest,
+      labels: [...labelSet].map((name) => ({ name })),
+    },
+    files,
+  );
+  const candidateLabelsToApply = shouldPreserveClawSweeperProofJudgment(context, labelSet)
+    ? classifiedLabels.filter((label) => !negativeProofLabels.has(label))
+    : classifiedLabels;
+  const staleProofLabels = structuralProofLabelValues.filter(
+    (label) => labelSet.has(label) && !candidateLabelsToApply.includes(label),
+  );
+  if (
+    labelSet.has(PROOF_SUFFICIENT_LABEL) &&
+    shouldRemoveProofSufficientLabel(
+      context,
+      pullRequest,
+      labelSet,
+      proofEvaluation,
+      hasExactHeadClawSweeperProof,
+    )
+  ) {
+    staleProofLabels.push(PROOF_SUFFICIENT_LABEL);
+  }
+  await removeLabels(github, context, pullRequest.number, staleProofLabels, labelSet);
   await addMissingLabels(
     github,
     context,
     core,
     pullRequest.number,
-    classifyPullRequestCandidateLabels(pullRequest, files),
+    candidateLabelsToApply,
     labelSet,
   );
 }
@@ -735,6 +899,16 @@ function isAutomationUser(user, fallbackLogin = "") {
 
 function isAutomationActor(context) {
   return isAutomationUser(context.payload.sender, context.actor ?? "");
+}
+
+function isClawSweeperProofSufficientLabelEvent(context) {
+  const senderLogin = context.payload.sender?.login ?? context.actor ?? "";
+  return (
+    context.payload.action === "labeled" &&
+    context.payload.label?.name === PROOF_SUFFICIENT_LABEL &&
+    isAutomationUser(context.payload.sender, senderLogin) &&
+    /clawsweeper/i.test(senderLogin)
+  );
 }
 
 function isGitHubAppPullRequestAuthor(pullRequest) {
@@ -799,6 +973,9 @@ async function applyPullRequestCandidateAction({
 async function removeLabels(github, context, issueNumber, labels, labelSet) {
   for (const label of labels) {
     if (!labelSet.has(label)) {
+      continue;
+    }
+    if (isClawSweeperOwnedLabel(label)) {
       continue;
     }
     try {
@@ -931,7 +1108,9 @@ export async function runBarnacleAutoResponse({ github, context, core = console 
   const isLabelEvent = context.payload.action === "labeled";
   const isPrCandidateEvent =
     pullRequest &&
-    ["opened", "edited", "synchronize", "reopened", "labeled"].includes(context.payload.action);
+    ["opened", "edited", "synchronize", "reopened", "labeled", "unlabeled"].includes(
+      context.payload.action,
+    );
   if (!hasTriggerLabel && !isLabelEvent && !isPrCandidateEvent) {
     return;
   }
@@ -978,6 +1157,13 @@ export async function runBarnacleAutoResponse({ github, context, core = console 
     if (labelSet.has(badBarnacleLabel)) {
       core.info(
         `Skipping PR auto-response checks for #${pullRequest.number} because ${badBarnacleLabel} is present.`,
+      );
+      return;
+    }
+
+    if (isClawSweeperProofSufficientLabelEvent(context)) {
+      core.info(
+        `Skipping PR auto-response checks for #${pullRequest.number} because ClawSweeper owns ${PROOF_SUFFICIENT_LABEL}.`,
       );
       return;
     }

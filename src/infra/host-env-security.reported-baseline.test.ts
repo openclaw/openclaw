@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { sortUniqueStrings } from "../shared/string-normalization.js";
 import {
   isDangerousHostEnvOverrideVarName,
   isDangerousHostEnvVarName,
@@ -47,6 +48,15 @@ const INHERITED_ALLOWLIST_RATIONALE: Record<string, string> = {
   SSH_AUTH_SOCK: "Trusted inherited SSH agent socket from operator runtime.",
   SSL_CERT_DIR: "Trusted inherited OpenSSL certificate directory path.",
   SSL_CERT_FILE: "Trusted inherited OpenSSL certificate file path.",
+  SYSTEMROOT: "Trusted inherited Windows system root selected by the host OS.",
+  WINDIR: "Trusted inherited Windows directory selected by the host OS.",
+  XDG_CACHE_HOME: "Trusted inherited XDG cache root selected by operator runtime.",
+  XDG_CONFIG_DIRS: "Trusted inherited XDG configuration search path.",
+  XDG_CONFIG_HOME: "Trusted inherited XDG configuration root selected by operator runtime.",
+  XDG_DATA_DIRS: "Trusted inherited XDG data search path.",
+  XDG_DATA_HOME: "Trusted inherited XDG data root selected by operator runtime.",
+  XDG_RUNTIME_DIR: "Trusted inherited XDG runtime root selected by operator runtime.",
+  XDG_STATE_HOME: "Trusted inherited XDG state root selected by operator runtime.",
   ZDOTDIR: "Trusted inherited shell startup directory boundary.",
 };
 
@@ -70,9 +80,7 @@ function readBaselineAndPolicy(): {
 }
 
 function sortUniqueUpper(values: string[]): string[] {
-  return Array.from(new Set(values.map((value) => value.toUpperCase()))).toSorted((a, b) =>
-    a.localeCompare(b),
-  );
+  return sortUniqueStrings(values.map((value) => value.toUpperCase()));
 }
 
 describe("host env reported baseline coverage", () => {
@@ -83,7 +91,7 @@ describe("host env reported baseline coverage", () => {
       baseline.reportedDangerousEverywhereKeys.length +
         baseline.reportedDangerousOverrideOnlyKeys.length,
     ).toBe(baseline.expectedTotalReportedEntries);
-    expect(baseline.expectedTotalReportedEntries).toBe(232);
+    expect(baseline.expectedTotalReportedEntries).toBe(243);
     expect(sortUniqueUpper(baseline.reportedDangerousEverywhereKeys)).toEqual(
       baseline.reportedDangerousEverywhereKeys,
     );
@@ -137,7 +145,7 @@ describe("host env reported baseline coverage", () => {
       ...baseline.reportedDangerousOverrideOnlyKeys,
     ]);
     expect(overrideResult.rejectedOverrideBlockedKeys).toEqual(expectedRejectedOverrideKeys);
-    expect(overrideResult.rejectedOverrideInvalidKeys).toEqual([]);
+    expect(overrideResult.rejectedOverrideInvalidKeys).toStrictEqual([]);
 
     for (const key of expectedRejectedOverrideKeys) {
       expect(overrideResult.env[key]).toBeUndefined();
@@ -156,7 +164,9 @@ describe("host env reported baseline coverage", () => {
     for (const key of expectedAllowlistKeys) {
       expect(INHERITED_ALLOWLIST_RATIONALE[key].trim().length).toBeGreaterThan(0);
       expect(isDangerousHostInheritedEnvVarName(key)).toBe(false);
-      expect(isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key)).toBe(true);
+      expect([isDangerousHostEnvVarName(key), isDangerousHostEnvOverrideVarName(key)]).toContain(
+        true,
+      );
 
       const inheritedSanitized = sanitizeHostExecEnv({
         baseEnv: {
@@ -173,7 +183,7 @@ describe("host env reported baseline coverage", () => {
         },
       });
       expect(overrideResult.rejectedOverrideBlockedKeys).toEqual([key]);
-      expect(overrideResult.rejectedOverrideInvalidKeys).toEqual([]);
+      expect(overrideResult.rejectedOverrideInvalidKeys).toStrictEqual([]);
       expect(overrideResult.env[key]).toBeUndefined();
     }
   });

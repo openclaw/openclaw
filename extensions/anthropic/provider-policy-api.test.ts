@@ -1,6 +1,10 @@
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-types";
 import { describe, expect, it } from "vitest";
-import { applyConfigDefaults, normalizeConfig } from "./provider-policy-api.js";
+import {
+  applyConfigDefaults,
+  normalizeConfig,
+  resolveThinkingProfile,
+} from "./provider-policy-api.js";
 
 function createModel(id: string, name: string): ModelDefinitionConfig {
   return {
@@ -19,34 +23,42 @@ function createModel(id: string, name: string): ModelDefinitionConfig {
   };
 }
 
+function collectLegacyExtendedLevelIds(levels: readonly { id: string }[] | undefined): string[] {
+  const ids: string[] = [];
+  for (const level of levels ?? []) {
+    if (level.id === "xhigh" || level.id === "max") {
+      ids.push(level.id);
+    }
+  }
+  return ids;
+}
+
+function levelIds(levels: readonly { id: string }[] | undefined): string[] {
+  return (levels ?? []).map((level) => level.id);
+}
+
 describe("anthropic provider policy public artifact", () => {
   it("normalizes Anthropic provider config", () => {
-    expect(
-      normalizeConfig({
-        provider: "anthropic",
-        providerConfig: {
-          baseUrl: "https://api.anthropic.com",
-          models: [createModel("claude-sonnet-4-6", "Claude Sonnet 4.6")],
-        },
-      }),
-    ).toMatchObject({
-      api: "anthropic-messages",
-      baseUrl: "https://api.anthropic.com",
+    const normalized = normalizeConfig({
+      provider: "anthropic",
+      providerConfig: {
+        baseUrl: "https://api.anthropic.com",
+        models: [createModel("claude-sonnet-4-6", "Claude Sonnet 4.6")],
+      },
     });
+    expect(normalized.api).toBe("anthropic-messages");
+    expect(normalized.baseUrl).toBe("https://api.anthropic.com");
   });
 
   it("normalizes Claude CLI provider config", () => {
-    expect(
-      normalizeConfig({
-        provider: "claude-cli",
-        providerConfig: {
-          baseUrl: "https://api.anthropic.com",
-          models: [createModel("claude-sonnet-4-6", "Claude Sonnet 4.6")],
-        },
-      }),
-    ).toMatchObject({
-      api: "anthropic-messages",
+    const normalized = normalizeConfig({
+      provider: "claude-cli",
+      providerConfig: {
+        baseUrl: "https://api.anthropic.com",
+        models: [createModel("claude-sonnet-4-6", "Claude Sonnet 4.6")],
+      },
     });
+    expect(normalized.api).toBe("anthropic-messages");
   });
 
   it("does not normalize non-Anthropic provider config", () => {
@@ -82,9 +94,67 @@ describe("anthropic provider policy public artifact", () => {
       env: {},
     });
 
-    expect(nextConfig.agents?.defaults?.contextPruning).toMatchObject({
-      mode: "cache-ttl",
-      ttl: "1h",
+    expect(nextConfig.agents?.defaults?.contextPruning?.mode).toBe("cache-ttl");
+    expect(nextConfig.agents?.defaults?.contextPruning?.ttl).toBe("1h");
+  });
+
+  it("adds cacheRetention defaults for dated Anthropic primary model refs", () => {
+    const nextConfig = applyConfigDefaults({
+      config: {
+        auth: {
+          profiles: {
+            "anthropic:default": {
+              provider: "anthropic",
+              mode: "api_key",
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-sonnet-4-20250514" },
+          },
+        },
+      },
+      env: {},
     });
+
+    expect(
+      nextConfig.agents?.defaults?.models?.["anthropic/claude-sonnet-4-6"]?.params?.cacheRetention,
+    ).toBe("short");
+  });
+
+  it("exposes Claude Opus 4.8 thinking levels without loading the full provider plugin", () => {
+    const profile = resolveThinkingProfile({
+      provider: "anthropic",
+      modelId: "claude-opus-4-8",
+    });
+    const ids = levelIds(profile?.levels);
+    expect(ids).toContain("xhigh");
+    expect(ids).toContain("adaptive");
+    expect(ids).toContain("max");
+    expect(profile?.defaultLevel).toBe("off");
+  });
+
+  it("keeps adaptive-only Claude profiles aligned with the runtime provider", () => {
+    const profile = resolveThinkingProfile({
+      provider: "anthropic",
+      modelId: "claude-opus-4-6",
+    });
+
+    if (!profile) {
+      throw new Error("Expected Anthropic policy profile");
+    }
+    expect(levelIds(profile.levels)).toContain("adaptive");
+    expect(profile.defaultLevel).toBe("adaptive");
+    expect(collectLegacyExtendedLevelIds(profile.levels)).toStrictEqual([]);
+  });
+
+  it("does not expose Anthropic thinking profiles for unrelated providers", () => {
+    expect(
+      resolveThinkingProfile({
+        provider: "openai",
+        modelId: "claude-opus-4-7",
+      }),
+    ).toBeNull();
   });
 });

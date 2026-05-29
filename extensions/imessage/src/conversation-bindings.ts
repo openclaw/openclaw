@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createAccountScopedConversationBindingManager,
   resetAccountScopedConversationBindingsForTests,
@@ -37,10 +37,11 @@ export function createIMessageConversationBindingManager(params: {
   });
 }
 
-export const __testing = {
+export const testing = {
   resetIMessageConversationBindingsForTests() {
     resetAccountScopedConversationBindingsForTests({
       stateKey: IMESSAGE_CONVERSATION_BINDINGS_STATE_KEY,
     });
   },
 };
+export { testing as __testing };

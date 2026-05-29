@@ -1,16 +1,20 @@
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { ActiveMediaModel } from "./active-model.types.js";
 import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
   MediaUnderstandingProvider,
+  StructuredExtractionInput,
 } from "./types.js";
 
 export type RunMediaUnderstandingFileParams = {
   capability: "image" | "audio" | "video";
   filePath: string;
+  mediaUrl?: string;
   cfg: OpenClawConfig;
   agentDir?: string;
+  workspaceDir?: string;
   mime?: string;
   activeModel?: ActiveMediaModel;
   prompt?: string;
@@ -27,8 +31,10 @@ export type RunMediaUnderstandingFileResult = {
 
 export type DescribeImageFileParams = {
   filePath: string;
+  mediaUrl?: string;
   cfg: OpenClawConfig;
   agentDir?: string;
+  workspaceDir?: string;
   mime?: string;
   activeModel?: ActiveMediaModel;
   prompt?: string;
@@ -37,8 +43,10 @@ export type DescribeImageFileParams = {
 
 export type DescribeImageFileWithModelParams = {
   filePath: string;
+  mediaUrl?: string;
   cfg: OpenClawConfig;
   agentDir?: string;
+  workspaceDir?: string;
   mime?: string;
   provider: string;
   model: string;
@@ -51,10 +59,32 @@ type DescribeImageFileWithModelResult = Awaited<
   ReturnType<NonNullable<MediaUnderstandingProvider["describeImage"]>>
 >;
 
+export type ExtractStructuredWithModelParams = {
+  /** At least one image input is required; text inputs provide supplemental context. */
+  input: StructuredExtractionInput[];
+  instructions: string;
+  schemaName?: string;
+  jsonSchema?: unknown;
+  jsonMode?: boolean;
+  cfg: OpenClawConfig;
+  agentDir?: string;
+  provider: string;
+  model: string;
+  profile?: string;
+  preferredProfile?: string;
+  authStore?: AuthProfileStore;
+  timeoutMs?: number;
+};
+
+type ExtractStructuredWithModelResult = Awaited<
+  ReturnType<NonNullable<MediaUnderstandingProvider["extractStructured"]>>
+>;
+
 export type DescribeVideoFileParams = {
   filePath: string;
   cfg: OpenClawConfig;
   agentDir?: string;
+  workspaceDir?: string;
   mime?: string;
   activeModel?: ActiveMediaModel;
 };
@@ -63,6 +93,7 @@ export type TranscribeAudioFileParams = {
   filePath: string;
   cfg: OpenClawConfig;
   agentDir?: string;
+  workspaceDir?: string;
   mime?: string;
   activeModel?: ActiveMediaModel;
   language?: string;
@@ -77,6 +108,9 @@ export type MediaUnderstandingRuntime = {
   describeImageFileWithModel: (
     params: DescribeImageFileWithModelParams,
   ) => Promise<DescribeImageFileWithModelResult>;
+  extractStructuredWithModel: (
+    params: ExtractStructuredWithModelParams,
+  ) => Promise<ExtractStructuredWithModelResult>;
   describeVideoFile: (params: DescribeVideoFileParams) => Promise<RunMediaUnderstandingFileResult>;
   transcribeAudioFile: (
     params: TranscribeAudioFileParams,

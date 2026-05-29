@@ -13,30 +13,27 @@ export { buildAgentMediaPayload } from "openclaw/plugin-sdk/agent-media-payload"
 export { resolveAllowlistMatchSimple } from "openclaw/plugin-sdk/allow-from";
 export { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
 export { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
-export {
-  DM_GROUP_ACCESS_REASON,
-  readStoreAllowFromForDmPolicy,
-  resolveDmGroupAccessWithLists,
-  resolveEffectiveAllowFromLists,
-} from "openclaw/plugin-sdk/channel-policy";
-export { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 export { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 export {
-  buildModelsProviderData,
   listSkillCommandsForAgents,
   resolveControlCommandGate,
-} from "openclaw/plugin-sdk/command-auth";
+} from "openclaw/plugin-sdk/command-auth-native";
+export { buildModelsProviderData } from "openclaw/plugin-sdk/models-provider-runtime";
 export { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 export {
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/runtime-group-policy";
-export { evaluateSenderGroupAccessForPolicy } from "openclaw/plugin-sdk/group-access";
 export { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/media-runtime";
 export { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
+// Legacy map-helper exports stay for older plugin consumers. New message-turn
+// code should use createChannelHistoryWindow.
 export {
   DEFAULT_GROUP_HISTORY_LIMIT,
+  createChannelHistoryWindow,
+  buildInboundHistoryFromMap,
   buildPendingHistoryContextFromMap,
   recordPendingHistoryEntryIfEnabled,
 } from "openclaw/plugin-sdk/reply-history";
@@ -50,3 +47,4 @@ export {
   parseStrictPositiveInteger,
   resolveClientIp,
 } from "openclaw/plugin-sdk/core";
+export { parseTcpPort } from "openclaw/plugin-sdk/number-runtime";

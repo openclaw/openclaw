@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { ErrorCodes } from "../protocol/index.js";
 import { modelsHandlers } from "./models.js";
 
 type Deferred<T> = {
@@ -10,12 +10,15 @@ type Deferred<T> = {
 };
 
 function createDeferred<T>(): Deferred<T> {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
+  let resolve: ((value: T) => void) | undefined;
+  let reject: ((error: unknown) => void) | undefined;
   const promise = new Promise<T>((resolvePromise, rejectPromise) => {
     resolve = resolvePromise;
     reject = rejectPromise;
   });
+  if (!resolve || !reject) {
+    throw new Error("Expected deferred callbacks to be initialized");
+  }
   return { promise, resolve, reject };
 }
 
@@ -23,6 +26,7 @@ describe("models.list", () => {
   it("does not block the configured view on slow model catalog discovery", async () => {
     const catalog = createDeferred<never>();
     const respond = vi.fn();
+    const loadGatewayModelCatalog = vi.fn(() => catalog.promise);
 
     vi.useFakeTimers();
     try {
@@ -51,7 +55,7 @@ describe("models.list", () => {
             };
             return config as unknown as OpenClawConfig;
           },
-          loadGatewayModelCatalog: vi.fn(() => catalog.promise),
+          loadGatewayModelCatalog,
           logGateway: {
             debug: vi.fn(),
           },
@@ -74,6 +78,7 @@ describe("models.list", () => {
         },
         undefined,
       );
+      expect(loadGatewayModelCatalog).toHaveBeenCalledWith({ readOnly: true });
     } finally {
       vi.useRealTimers();
     }
@@ -82,6 +87,7 @@ describe("models.list", () => {
   it("keeps the all view exact instead of timing out to a partial catalog", async () => {
     const catalog = createDeferred<[{ id: string; name: string; provider: string }]>();
     const respond = vi.fn();
+    const loadGatewayModelCatalog = vi.fn(() => catalog.promise);
 
     vi.useFakeTimers();
     try {
@@ -98,7 +104,7 @@ describe("models.list", () => {
         isWebchatConnect: () => false,
         context: {
           getRuntimeConfig: () => ({}) as OpenClawConfig,
-          loadGatewayModelCatalog: vi.fn(() => catalog.promise),
+          loadGatewayModelCatalog,
           logGateway: {
             debug: vi.fn(),
           },
@@ -116,9 +122,133 @@ describe("models.list", () => {
         { models: [{ id: "gpt-test", name: "GPT Test", provider: "openai" }] },
         undefined,
       );
+      expect(loadGatewayModelCatalog).toHaveBeenCalledWith({ readOnly: false });
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("does not expose runtime params from catalog rows", async () => {
+    const respond = vi.fn();
+    await modelsHandlers["models.list"]({
+      req: {
+        type: "req",
+        id: "req-models-list-redact-params",
+        method: "models.list",
+        params: { view: "all" },
+      },
+      params: { view: "all" },
+      respond,
+      client: null,
+      isWebchatConnect: () => false,
+      context: {
+        getRuntimeConfig: () => ({}) as OpenClawConfig,
+        loadGatewayModelCatalog: vi.fn(() =>
+          Promise.resolve([
+            {
+              id: "qwen-local",
+              name: "Qwen Local",
+              provider: "vllm",
+              params: { qwenThinkingFormat: "chat-template" },
+            },
+          ]),
+        ),
+        logGateway: {
+          debug: vi.fn(),
+        },
+      } as never,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      { models: [{ id: "qwen-local", name: "Qwen Local", provider: "vllm" }] },
+      undefined,
+    );
+  });
+
+  it("loads the full catalog for provider-scoped configured view and filters only providers", async () => {
+    const catalog = [
+      { id: "claude-test", name: "Claude Test", provider: "anthropic" },
+      { id: "gpt-5.4-codex", name: "GPT-5.4 Codex", provider: "openai-codex" },
+      { id: "gpt-codex-test", name: "GPT Codex Test", provider: "openai-codex" },
+      { id: "llama-local", name: "Llama Local", provider: "vllm" },
+      { id: "qwen-local", name: "Qwen Local", provider: "vllm" },
+    ];
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openai-codex/*": {},
+            "vllm/*": {},
+          },
+        },
+      },
+      models: {
+        providers: {
+          "openai-codex": { apiKey: "test-key" },
+          vllm: { apiKey: "test-key" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const configuredRespond = vi.fn();
+    const loadConfiguredCatalog = vi.fn(() => Promise.resolve(catalog));
+    await modelsHandlers["models.list"]({
+      req: {
+        type: "req",
+        id: "req-models-list-provider-allowlist",
+        method: "models.list",
+        params: { view: "configured" },
+      },
+      params: { view: "configured" },
+      respond: configuredRespond,
+      client: null,
+      isWebchatConnect: () => false,
+      context: {
+        getRuntimeConfig: () => cfg,
+        loadGatewayModelCatalog: loadConfiguredCatalog,
+        logGateway: {
+          debug: vi.fn(),
+        },
+      } as never,
+    });
+
+    expect(configuredRespond).toHaveBeenCalledWith(
+      true,
+      {
+        models: [
+          { id: "gpt-5.4-codex", name: "GPT-5.4 Codex", provider: "openai-codex" },
+          { id: "gpt-codex-test", name: "GPT Codex Test", provider: "openai-codex" },
+          { id: "llama-local", name: "Llama Local", provider: "vllm" },
+          { id: "qwen-local", name: "Qwen Local", provider: "vllm" },
+        ],
+      },
+      undefined,
+    );
+    expect(loadConfiguredCatalog).toHaveBeenCalledWith({ readOnly: false });
+
+    const allRespond = vi.fn();
+    await modelsHandlers["models.list"]({
+      req: {
+        type: "req",
+        id: "req-models-list-provider-allowlist-all",
+        method: "models.list",
+        params: { view: "all" },
+      },
+      params: { view: "all" },
+      respond: allRespond,
+      client: null,
+      isWebchatConnect: () => false,
+      context: {
+        getRuntimeConfig: () => cfg,
+        loadGatewayModelCatalog: vi.fn(() => Promise.resolve(catalog)),
+        logGateway: {
+          debug: vi.fn(),
+        },
+      } as never,
+    });
+
+    expect(allRespond).toHaveBeenCalledWith(true, { models: catalog }, undefined);
   });
 
   it("preserves catalog load errors before the timeout fallback wins", async () => {
@@ -144,13 +274,12 @@ describe("models.list", () => {
       } as never,
     });
 
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: ErrorCodes.UNAVAILABLE,
-        message: "Error: catalog failed",
-      }),
-    );
+    const call = respond.mock.calls.at(0) as
+      | [boolean, unknown, { code?: number; message?: string }]
+      | undefined;
+    expect(call?.[0]).toBe(false);
+    expect(call?.[1]).toBeUndefined();
+    expect(call?.[2]?.code).toBe(ErrorCodes.UNAVAILABLE);
+    expect(call?.[2]?.message).toBe("Error: catalog failed");
   });
 });

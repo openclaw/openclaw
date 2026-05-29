@@ -1,4 +1,5 @@
 import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { DiscordComponentEntry, DiscordModalEntry } from "./components.js";
 import { getOptionalDiscordRuntime } from "./runtime.js";
 
@@ -48,9 +49,57 @@ function reportPersistentComponentRegistryError(error: unknown): void {
   try {
     getOptionalDiscordRuntime()
       ?.logging.getChildLogger({ plugin: "discord", feature: "component-registry-state" })
-      .warn("Discord persistent component registry state failed", { error: String(error) });
+      .warn("Discord persistent component registry state failed", formatRegistryError(error));
   } catch {
     // Best effort only: persistent state must never break Discord interactions.
+  }
+}
+
+function formatRegistryError(error: unknown): Record<string, unknown> {
+  if (!(error instanceof Error)) {
+    return { error: formatRegistryErrorValue(error) };
+  }
+  const details: Record<string, unknown> = {
+    error: String(error),
+    errorName: error.name,
+    errorMessage: error.message,
+  };
+  if (error.stack) {
+    details.errorStack = error.stack;
+  }
+  const cause = (error as { cause?: unknown }).cause;
+  if (cause instanceof Error) {
+    details.errorCause = String(cause);
+    details.errorCauseName = cause.name;
+    details.errorCauseMessage = cause.message;
+    if (cause.stack) {
+      details.errorCauseStack = cause.stack;
+    }
+  } else if (cause !== undefined) {
+    details.errorCause = formatRegistryErrorValue(cause);
+  }
+  return details;
+}
+
+function formatRegistryErrorValue(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint" ||
+    typeof value === "symbol"
+  ) {
+    return String(value);
+  }
+  if (value === null) {
+    return "null";
+  }
+  try {
+    return JSON.stringify(value) ?? Object.prototype.toString.call(value);
+  } catch {
+    return Object.prototype.toString.call(value);
   }
 }
 
@@ -227,7 +276,7 @@ function resolveComponentConsumptionIds(entry: DiscordComponentEntry): string[] 
     return [entry.id];
   }
   const ids = entry.consumptionGroupEntryIds?.filter((id) => typeof id === "string" && id) ?? [];
-  return ids.length > 0 ? Array.from(new Set(ids)) : [entry.id];
+  return ids.length > 0 ? uniqueStrings(ids) : [entry.id];
 }
 
 function deleteComponentConsumptionGroup(entry: DiscordComponentEntry): void {

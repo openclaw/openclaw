@@ -162,8 +162,18 @@ export const tr: TranslationMap = {
     store: "Depo: {path}",
     active: "Etkin",
     limit: "Sınır",
+    filters: "Filtreler",
+    showFilters: "Filtreleri göster",
+    hideFilters: "Filtreleri gizle",
+    sourceFilters: "Oturum kaynağı filtreleri",
     global: "Genel",
     unknown: "Bilinmiyor",
+    showArchived: "Arşivlenmişleri göster",
+    activeTooltip: "Son {count} dakika içinde güncellendi.",
+    limitTooltip: "Yüklenecek maksimum oturum sayısı.",
+    globalTooltip: "Genel oturumları dahil et.",
+    unknownTooltip: "Bilinmeyen oturumları dahil et.",
+    showArchivedTooltip: "Arşivlenmiş oturumları dahil et.",
     minutesPlaceholder: "dk",
     searchPlaceholder: "Anahtara, ajana, etikete, türe göre filtrele…",
     selected: "{count} seçildi",
@@ -182,6 +192,8 @@ export const tr: TranslationMap = {
     verbose: "Ayrıntılı",
     reasoning: "Akıl yürütme",
     noSessions: "Oturum bulunamadı.",
+    noSessionsMatchFilters: "Filtrelerinizle eşleşen oturum yok.",
+    showAll: "Tümünü göster",
     inherit: "devral",
     defaultOption: "Varsayılan ({value})",
     offExplicit: "kapalı (açıkça)",
@@ -194,13 +206,34 @@ export const tr: TranslationMap = {
     autoThreshold: "otomatik eşik",
     overflowRetry: "taşma yeniden denemesi",
     timeoutRetry: "zaman aşımı yeniden denemesi",
-    tokenRange: "{before} → {after} token",
+    tokenRange: "{before} to {after} token",
     tokensBefore: "önce {count} token",
     tokenDeltaUnavailable: "token değişimi kullanılamıyor",
     checkpoints: "{count} kontrol noktası",
     checkpoint: "{count} kontrol noktası",
-    showCheckpoints: "Kontrol noktalarını göster",
-    hideCheckpoints: "Kontrol noktalarını gizle",
+    showSessionDetails: "{count} için oturum ayrıntılarını göster",
+    hideSessionDetails: "{count} için oturum ayrıntılarını gizle",
+    sessionDetails: "Oturum ayrıntıları",
+    compactionHistory: "Sıkıştırma geçmişi",
+    status: "Durum",
+    statusLive: "Canlı",
+    statusIdle: "Boşta",
+    statusUnknown: "Bilinmiyor",
+    statusRunning: "Çalışıyor",
+    statusDone: "Tamamlandı",
+    statusFailed: "Başarısız",
+    statusKilled: "Sonlandırıldı",
+    statusTimeout: "Zaman aşımına uğradı",
+    model: "Model",
+    provider: "Sağlayıcı",
+    runtime: "Çalışma zamanı",
+    surface: "Yüzey",
+    subject: "Konu",
+    room: "Oda",
+    space: "Alan",
+    sessionId: "Oturum kimliği",
+    activeRun: "Etkin çalıştırma",
+    archived: "Arşivlendi",
     loadingCheckpoints: "Kontrol noktaları yükleniyor…",
     noCheckpoints: "Bu oturum için kaydedilmiş sıkıştırma kontrol noktası yok.",
     noSummary: "Özet yakalanmadı.",
@@ -317,6 +350,12 @@ export const tr: TranslationMap = {
     eventLogSubtitle: "Latest gateway events.",
     noEvents: "No events yet.",
   },
+  quickSettings: {
+    security: {
+      browserEnabled: "Browser enabled",
+      toolProfile: "Tool profile",
+    },
+  },
   execApproval: {
     expiresIn: "expires in {time}",
     expired: "expired",
@@ -325,6 +364,8 @@ export const tr: TranslationMap = {
     pending: "{count} pending",
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
+    allowAlwaysUnavailable:
+      "Geçerli onay ilkesi her seferinde onay gerektiriyor, bu nedenle Her Zaman İzin Ver kullanılamıyor.",
     deny: "Deny",
     labels: {
       host: "Host",
@@ -356,6 +397,7 @@ export const tr: TranslationMap = {
   },
   tabs: {
     agents: "Aracılar",
+    activity: "Etkinlik",
     overview: "Genel Bakış",
     channels: "Kanallar",
     instances: "Örnekler",
@@ -377,6 +419,7 @@ export const tr: TranslationMap = {
   },
   subtitles: {
     agents: "Çalışma alanları, araçlar, kimlikler.",
+    activity: "Tarayıcıya yerel araç etkinliği özetleri.",
     overview: "Durum, giriş noktaları, sağlık.",
     channels: "Kanallar ve ayarlar.",
     instances: "Bağlı istemciler ve düğümler.",
@@ -395,6 +438,42 @@ export const tr: TranslationMap = {
     debug: "Anlık görüntüler, olaylar, RPC.",
     logs: "Canlı Gateway günlükleri.",
     dreams: "Uyku sırasında bellek birleştirme.",
+  },
+  activity: {
+    title: "Etkinlik",
+    subtitle: "Canlı oturum olaylarından türetilen geçici araç etkinliği.",
+    visibleCount: "{visible} / {total}",
+    filtersLabel: "Etkinlik filtreleri",
+    search: "Ara",
+    searchPlaceholder: "Araca, özete, çalıştırmaya, oturuma göre filtrele",
+    toolFilter: "Araç",
+    allTools: "Tüm araçlar",
+    statusFilters: "Durum filtreleri",
+    autoFollow: "Otomatik takip",
+    expandAll: "Tümünü genişlet",
+    collapseAll: "Tümünü daralt",
+    clear: "Temizle",
+    empty: "Henüz araç etkinliği yok.",
+    emptyFiltered: "Bu filtrelerle eşleşen etkinlik yok.",
+    entrySummary: "{argumentSummary}",
+    argumentHiddenOne: "1 bağımsız değişken gizlendi",
+    argumentsHidden: "{count} bağımsız değişken gizlendi",
+    streamLabel: "Araç etkinliği girişleri",
+    toolCallId: "Araç çağrısı",
+    runId: "Çalıştır",
+    session: "Oturum",
+    outputTruncated: "Önizleme gizlendi ve kısaltıldı.",
+    noOutputPreview: "Çıkış önizlemesi yok.",
+    status: {
+      running: "Çalışıyor",
+      done: "Tamamlandı",
+      error: "Hata",
+    },
+    duration: {
+      ms: "{count} ms",
+      seconds: "{count} sn",
+      minutes: "{minutes} dk {seconds} sn",
+    },
   },
   overview: {
     access: {
@@ -664,10 +743,6 @@ export const tr: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle:
-        "Token'ların nereye gittiğini, oturumların ne zaman arttığını ve maliyeti neyin belirlediğini görün.",
-    },
     common: {
       emptyValue: "—",
       unknown: "bilinmiyor",
@@ -686,6 +761,16 @@ export const tr: TranslationMap = {
       today: "Bugün",
       last7d: "7g",
       last30d: "30g",
+      last90d: "90g",
+      last1y: "1y",
+      all: "Tümü",
+    },
+    scope: {
+      instance: "Geçerli örnek",
+      instanceHint: "Her mantıksal oturum için yalnızca etkin oturum kimliğini göster.",
+      family: "Geçmiş soy hattı",
+      familyHint: "Bilinen döndürülmüş transkript destekli oturum kimliklerini birleştir.",
+      familyIncluded: "Geçmiş soy hattı {count} oturum örneği içerir.",
     },
     filters: {
       title: "Filtreler",
@@ -728,6 +813,16 @@ export const tr: TranslationMap = {
       sessionsCsv: "Oturumlar CSV",
       dailyCsv: "Günlük CSV",
       json: "JSON",
+    },
+    cacheStatus: {
+      warning:
+        "Kullanım önbelleği arka planda yeniden oluşturuluyor. Görüntülenen toplamlar güncel olmayabilir.",
+      title: "{status}: {pending} beklemede, {stale} güncel değil, {cached} önbellekte",
+      status: {
+        refreshing: "yenileniyor",
+        stale: "güncel değil",
+        partial: "kısmi",
+      },
     },
     empty: {
       title: "Bir tarih aralığıyla başlayın",
@@ -897,6 +992,97 @@ export const tr: TranslationMap = {
     showPassword: "Parolayı göster",
     hidePassword: "Parolayı gizle",
     togglePasswordVisibility: "Parola görünürlüğünü değiştir",
+    failure: {
+      rawError: "Ham hata",
+      docsAuth: "Control UI kimlik doğrulama belgeleri",
+      docsPairing: "Cihaz eşleştirme belgeleri",
+      docsInsecure: "Güvensiz HTTP belgeleri",
+      authRequired: {
+        title: "Kimlik doğrulama gerekli",
+        summary:
+          "Gateway erişilebilir, ancak bu tarayıcı bağlanmadan önce eşleşen bir token veya parola gerekir.",
+        stepPaste:
+          "openclaw dashboard --no-open çıktısındaki tokenı yapıştırın veya yapılandırılmış parolayı girin.",
+        stepGenerate:
+          "Token yapılandırılmamışsa Gateway ana makinesinde openclaw doctor --generate-gateway-token çalıştırın.",
+        stepConnect: "Kimlik bilgisini güncelledikten sonra Connect düğmesine tekrar tıklayın.",
+      },
+      authFailed: {
+        title: "Kimlik doğrulama eşleşmedi",
+        summary:
+          "Sağlanan kimlik bilgisi reddedildi. En yaygın neden eski bir token veya başka bir Gateway URL’sinden kopyalanmış tokendır.",
+        stepDashboard:
+          "openclaw dashboard --no-open çalıştırın ve yeni URL’yi açın veya tokenını yapıştırın.",
+        stepReplace:
+          "Eski token/parola değerlerini değiştirin; başka bir Gateway URL’sinden tokenı yeniden kullanmayın.",
+        stepMode:
+          "Aynı anda tek bir eşleşen auth modu kullanın: token modu için gateway token, parola modu için parola.",
+      },
+      rateLimited: {
+        title: "Çok fazla başarısız deneme",
+        summary: "Gateway bu istemci için kimlik doğrulama denemelerini geçici olarak sınırlıyor.",
+        stepStop: "Bu sekmeden bir süre yeniden denemeyi bırakın.",
+        stepWait:
+          "Auth sınırlayıcının soğumasını bekleyin, ardından düzeltilmiş kimlik bilgisiyle yeniden bağlanın.",
+        stepCheckClients:
+          "Bu paylaşılan bir host ise diğer istemcilerde yinelenen hatalı denemeleri kontrol edin.",
+      },
+      pairing: {
+        title: "Cihaz eşleştirmesi gerekli",
+        scopeTitle: "Scope yükseltmesi bekliyor",
+        roleTitle: "Rol yükseltmesi bekliyor",
+        metadataTitle: "Cihaz yenilemesi bekliyor",
+        summary:
+          "Bu tarayıcının Control UI kullanabilmesi için Gateway hostundan tek seferlik onay gerekir.",
+        upgradeSummary:
+          "Bu tarayıcı zaten biliniyor, ancak istenen erişim değişti ve yeni onay gerekiyor.",
+        stepList: "Gateway hostunda openclaw devices list çalıştırın.",
+        stepApproveId: "Bu isteği onaylayın: openclaw devices approve {requestId}.",
+        stepApprove: "Bu listedeki bekleyen tarayıcı/cihaz isteğini onaylayın.",
+        stepReconnect: "Onay tamamlandıktan sonra yeniden bağlanın.",
+      },
+      insecure: {
+        title: "Güvenli tarayıcı bağlamı gerekli",
+        summary:
+          "Bu sayfa düz HTTP üzerinden çalışıyor, bu yüzden tarayıcı Gateway’in beklediği cihaz kimliğini oluşturamıyor.",
+        stepHttps:
+          "HTTPS/Tailscale Serve kullanın veya Gateway hostunda http://127.0.0.1:18789 adresini açın.",
+        stepLocalCompat:
+          "Yerel yalnızca-token uyumluluğu için gateway.controlUi.allowInsecureAuth: true ayarlayın.",
+        stepAvoidDisable: "Uzak HTTP erişimi için cihaz authunu devre dışı bırakmaktan kaçının.",
+      },
+      origin: {
+        title: "Tarayıcı originine izin verilmiyor",
+        summary: "Gateway, Control UI bağlantısını kabul etmeden önce bu sayfa originini reddetti.",
+        stepAllowedOrigins: "Bu tarayıcı originini gateway.controlUi.allowedOrigins içine ekleyin.",
+        stepFullOrigin:
+          "http://localhost:5173 gibi tam originler kullanın, wildcard kalıpları kullanmayın.",
+        stepRestart:
+          "İzin verilen originleri değiştirdikten sonra Gateway’i yeniden başlatın veya yeniden yükleyin.",
+      },
+      protocol: {
+        title: "Protokol uyuşmazlığı",
+        summary:
+          "Sunulan Control UI ile çalışan Gateway desteklenen bağlantı protokolü konusunda uyuşmuyor.",
+        stepDashboard:
+          "UI ve Gateway aynı kurulumdan gelsin diye sunulan dashboardı openclaw dashboard ile yeniden açın.",
+        stepDevUi:
+          "pnpm ui:dev kullanıyorsanız geliştirme UI’sini mevcut checkouta göre yeniden derleyin veya yeniden başlatın.",
+        stepRestart:
+          "OpenClaw güncellemesinden sonra Gateway’i yeniden başlatın, böylece güncel protokolü sunsun.",
+      },
+      network: {
+        title: "Bağlanılamadı",
+        summary:
+          "Tarayıcı Gateway bağlantısını tamamlayamadı. Kimlik bilgilerini yeniden denemeden önce hedefi ve taşıma yolunu kontrol edin.",
+        stepGateway:
+          "openclaw status veya openclaw gateway run ile Gateway’in çalıştığını doğrulayın.",
+        stepUrl:
+          "WebSocket URL’sini kontrol edin ve Gateway HTTPS/Tailscale Serve arkasındaysa wss:// kullanın.",
+        stepDashboard:
+          "Geçerli URL ve auth ayrıntılarını yeniden kopyalamak için dashboardı openclaw dashboard --no-open ile yeniden açın.",
+      },
+    },
   },
   chat: {
     disconnected: "Gateway bağlantısı kesildi.",
@@ -904,6 +1090,10 @@ export const tr: TranslationMap = {
     settings: "Sohbet ayarları",
     thinkingToggle: "Asistanın düşünme/çalışma çıktısını aç/kapat",
     toolCallsToggle: "Araç çağrılarını ve araç sonuçlarını aç/kapat",
+    autoScrollMode: "Otomatik kaydırma modu",
+    autoScrollAlways: "Her zaman",
+    autoScrollNearBottom: "Alta yakın",
+    autoScrollOff: "Kapalı",
     focusToggle: "Odak modunu aç/kapat (kenar çubuğunu + sayfa başlığını gizle)",
     hideCronSessions: "Cron oturumlarını gizle",
     showCronSessions: "Cron oturumlarını göster",
@@ -918,6 +1108,53 @@ export const tr: TranslationMap = {
     updating: "Güncelleniyor…",
     updateNow: "Şimdi güncelle",
     dismissUpdateBanner: "Güncelleme başlığını kapat",
+    switchedSession: "{session} oturumuna geçildi",
+    welcome: {
+      ready: "Ready to chat",
+      hintBeforeShortcut: "Type a message below ·",
+      hintAfterShortcut: "for commands",
+      suggestions: {
+        whatCanYouDo: "What can you do?",
+        summarizeRecentSessions: "Summarize my recent sessions",
+        configureChannel: "Help me configure a channel",
+        checkSystemHealth: "Check system health",
+      },
+    },
+    runControls: {
+      newSession: "New session",
+      export: "Dışa aktar",
+      exportChat: "Export chat",
+      queue: "Queue",
+      queueMessage: "Queue message",
+      stop: "Stop",
+      stopGenerating: "Stop generating",
+      send: "Send",
+      sendMessage: "Send message",
+    },
+    queue: {
+      retry: "Yeniden dene",
+      retrySend: "Göndermeyi yeniden dene",
+      retryQueuedMessage: "Kuyruktaki mesajı yeniden dene",
+    },
+    composer: {
+      placeholder: "Message {name} (Enter to send)",
+      placeholderWithAttachments: "Add a message or paste more images...",
+      placeholderDisconnected: "Connect to the gateway to start chatting...",
+      attachFile: "Attach file",
+      startTalk: "Start Talk",
+      stillListening: "Hâlâ dinliyor",
+      talkTranscript: "Konuşma dökümü",
+      stopTalk: "Stop Talk",
+    },
+    selectors: {
+      agentFilter: "Oturumları ajana göre filtrele",
+      session: "Chat session",
+      sessionSearch: "Oturumlarda ara",
+      clearSessionSearch: "Oturum aramasını temizle",
+      loadMoreSessions: "Daha fazla oturum yükle",
+      model: "Chat model",
+      thinkingLevel: "Chat thinking level",
+    },
   },
   languages: {
     en: "İngilizce",
@@ -1026,6 +1263,9 @@ export const tr: TranslationMap = {
       ascending: "Artan",
       descending: "Azalan",
       reset: "Sıfırla",
+      emptyTitle: "No scheduled jobs yet.",
+      emptyHint: "Create one from a plain-language prompt; advanced fields can wait.",
+      emptyFilteredHint: "Clear or change filters to see scheduled jobs.",
       noMatching: "Eşleşen iş yok.",
       loading: "Yükleniyor...",
       loadMore: "Daha fazla iş yükle",
@@ -1061,6 +1301,7 @@ export const tr: TranslationMap = {
     form: {
       editJob: "İşi Düzenle",
       newJob: "Yeni İş",
+      advancedJob: "Advanced job",
       updateSubtitle: "Seçili zamanlanmış işi güncelleyin.",
       createSubtitle: "Zamanlanmış bir uyandırma veya aracı çalıştırması oluşturun.",
       required: "Gerekli",

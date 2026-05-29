@@ -1,8 +1,7 @@
+import { runBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js";
+import { resolveToolLoopDetectionConfig } from "../agents/agent-tools.js";
 import { getChannelAgentToolMeta } from "../agents/channel-tools.js";
-import { runBeforeToolCallHook } from "../agents/pi-tools.before-tool-call.js";
-import { resolveToolLoopDetectionConfig } from "../agents/pi-tools.js";
 import { isKnownCoreToolId } from "../agents/tool-catalog.js";
-import { applyOwnerOnlyToolPolicy } from "../agents/tool-policy.js";
 import { ToolInputError, type AnyAgentTool } from "../agents/tools/common.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -147,11 +146,11 @@ function resolveToolSource(tool: AnyAgentTool): "core" | "plugin" | "channel" {
 export async function invokeGatewayTool(params: {
   cfg: OpenClawConfig;
   input: ToolsInvokeInput;
-  senderIsOwner: boolean;
   messageChannel?: string;
   accountId?: string;
   agentTo?: string;
   agentThreadId?: string;
+  senderIsOwner?: boolean;
   toolCallIdPrefix: string;
   approvalMode?: "request" | "report";
 }): Promise<ToolsInvokeOutcome> {
@@ -183,6 +182,9 @@ export async function invokeGatewayTool(params: {
     }
   }
 
+  const knownCoreTool = isKnownCoreToolId(toolName);
+  const gatewayRequestedTools = knownCoreTool ? [] : [toolName];
+
   const action = normalizeOptionalString(params.input.action);
   const argsRaw = params.input.args;
   const args =
@@ -198,14 +200,14 @@ export async function invokeGatewayTool(params: {
       accountId: params.accountId,
       agentTo: params.agentTo,
       agentThreadId: params.agentThreadId,
+      senderIsOwner: params.senderIsOwner,
       allowGatewaySubagentBinding: true,
       allowMediaInvokeCommands: true,
       surface: "http",
       disablePluginTools,
-      senderIsOwner: params.senderIsOwner,
+      gatewayRequestedTools,
     });
 
-  const knownCoreTool = isKnownCoreToolId(toolName);
   let { agentId, tools } = resolveTools(knownCoreTool);
   if (knownCoreTool && !tools.some((candidate) => candidate.name === toolName)) {
     ({ agentId, tools } = resolveTools(false));
@@ -222,9 +224,7 @@ export async function invokeGatewayTool(params: {
       },
     };
   }
-  const tool = applyOwnerOnlyToolPolicy(tools, params.senderIsOwner).find(
-    (candidate) => candidate.name === toolName,
-  );
+  const tool = tools.find((candidate) => candidate.name === toolName);
   if (!tool) {
     return {
       ok: false,
@@ -251,6 +251,7 @@ export async function invokeGatewayTool(params: {
       toolCallId,
       ctx: {
         agentId,
+        config: params.cfg,
         sessionKey,
         loopDetection: resolveToolLoopDetectionConfig({ cfg: params.cfg, agentId }),
       },

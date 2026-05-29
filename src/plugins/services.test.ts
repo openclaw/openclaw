@@ -16,12 +16,19 @@ vi.mock("../logging/subsystem.js", () => ({
 }));
 
 import { STATE_DIR } from "../config/paths.js";
+import { registerPluginHttpRoute } from "./http-registry.js";
+import {
+  pinActivePluginHttpRouteRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "./runtime.js";
 import { startPluginServices } from "./services.js";
 
 function createRegistry(
   services: OpenClawPluginService[],
   pluginId = "plugin:test",
   origin: PluginOrigin = "workspace",
+  trustedOfficialInstall = false,
 ) {
   const registry = createEmptyPluginRegistry();
   registry.services = services.map((service) => ({
@@ -29,6 +36,7 @@ function createRegistry(
     service,
     source: "test",
     origin,
+    ...(trustedOfficialInstall ? { trustedOfficialInstall } : {}),
     rootDir: "/plugins/test-plugin",
   })) as typeof registry.services;
   return registry;
@@ -49,7 +57,6 @@ function expectServiceContext(
 }
 
 function expectServiceLogger(ctx: OpenClawPluginServiceContext) {
-  expect(ctx.logger).toBeDefined();
   expect(typeof ctx.logger.info).toBe("function");
   expect(typeof ctx.logger.warn).toBe("function");
   expect(typeof ctx.logger.error).toBe("function");
@@ -77,15 +84,25 @@ function expectServiceLifecycleState(params: {
   expectServiceContexts(params.contexts, params.config);
 }
 
+function requireLoggerErrorMessage(index = 0): string {
+  const call = mockedLogger.error.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected logger error call ${index}`);
+  }
+  return call[0];
+}
+
 async function startTrackingServices(params: {
   services: OpenClawPluginService[];
   config?: Parameters<typeof startPluginServices>[0]["config"];
   workspaceDir?: string;
+  startupTrace?: Parameters<typeof startPluginServices>[0]["startupTrace"];
 }) {
   return startPluginServices({
     registry: createRegistry(params.services),
     config: params.config ?? createServiceConfig(),
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    ...(params.startupTrace ? { startupTrace: params.startupTrace } : {}),
   });
 }
 
@@ -127,6 +144,7 @@ function createTrackingService(
 describe("startPluginServices", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetPluginRuntimeStateForTest();
   });
 
   it("starts services and stops them in reverse order", async () => {
@@ -149,6 +167,35 @@ describe("startPluginServices", () => {
     expectServiceLifecycleState({ starts, stops, contexts, config });
   });
 
+  it("registers dynamic HTTP routes into the service registry scope", async () => {
+    const serviceRegistry = createRegistry([
+      {
+        id: "route-service",
+        start: () => {
+          registerPluginHttpRoute({
+            path: "/service-route",
+            auth: "plugin",
+            handler: vi.fn(),
+          });
+        },
+      },
+    ]);
+    const pinnedRegistry = createEmptyPluginRegistry();
+
+    setActivePluginRegistry(pinnedRegistry);
+    pinActivePluginHttpRouteRegistry(pinnedRegistry);
+
+    const handle = await startPluginServices({
+      registry: serviceRegistry,
+      config: createServiceConfig(),
+    });
+
+    expect(serviceRegistry.httpRoutes.map((route) => route.path)).toEqual(["/service-route"]);
+    expect(pinnedRegistry.httpRoutes).toHaveLength(0);
+
+    await handle.stop();
+  });
+
   it("logs start/stop failures and continues", async () => {
     const stopOk = vi.fn();
     const stopThrows = vi.fn(() => {
@@ -168,20 +215,137 @@ describe("startPluginServices", () => {
 
     await handle.stop();
 
-    expect(mockedLogger.error).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "plugin service failed (service-start-fail, plugin=plugin:test, root=/plugins/test-plugin):",
-      ),
-    );
-    expect(mockedLogger.error.mock.calls[0]?.[0]).not.toContain("\n");
-    expect(mockedLogger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("plugin service stop failed (service-stop-fail):"),
-    );
+    expect(mockedLogger.error.mock.calls).toEqual([
+      [
+        "plugin service failed (service-start-fail, plugin=plugin:test, root=/plugins/test-plugin): start failed",
+      ],
+    ]);
+    expect(requireLoggerErrorMessage()).not.toContain("\n");
+    expect(mockedLogger.warn.mock.calls).toEqual([
+      ["plugin service stop failed (service-stop-fail): Error: stop failed"],
+    ]);
     expect(stopOk).toHaveBeenCalledOnce();
     expect(stopThrows).toHaveBeenCalledOnce();
   });
 
-  it("grants internal diagnostics only to bundled diagnostics exporter services", async () => {
+  it("emits per-service startup trace spans and summary", async () => {
+    const measured: string[] = [];
+    const details: Array<{
+      name: string;
+      metrics: ReadonlyArray<readonly [string, number | string]>;
+    }> = [];
+    const startupTrace: NonNullable<Parameters<typeof startPluginServices>[0]["startupTrace"]> = {
+      measure: async (name, run) => {
+        measured.push(name);
+        return await run();
+      },
+      detail: (name, metrics) => {
+        details.push({ name, metrics });
+      },
+    };
+
+    await startTrackingServices({
+      services: [
+        createTrackingService("service-a"),
+        createTrackingService("service-fail", { failOnStart: true }),
+      ],
+      startupTrace,
+    });
+
+    expect(measured).toEqual([
+      "sidecars.plugin-services.plugin~003Atest.service-a",
+      "sidecars.plugin-services.plugin~003Atest.service-fail",
+    ]);
+    expect(details).toEqual([
+      {
+        name: "sidecars.plugin-services.summary",
+        metrics: [
+          ["serviceCount", 2],
+          ["startedCount", 1],
+          ["failedCount", 1],
+        ],
+      },
+    ]);
+  });
+
+  it("passes a scoped startup trace through service context for owned subspans", async () => {
+    const contexts: OpenClawPluginServiceContext[] = [];
+    const measured: string[] = [];
+    const details: Array<{
+      name: string;
+      metrics: ReadonlyArray<readonly [string, number | string]>;
+    }> = [];
+    const startupTrace: NonNullable<Parameters<typeof startPluginServices>[0]["startupTrace"]> = {
+      measure: async (name, run) => {
+        measured.push(name);
+        return await run();
+      },
+      detail: (name, metrics) => {
+        details.push({ name, metrics });
+      },
+    };
+
+    await startTrackingServices({
+      services: [
+        {
+          id: "service-a",
+          start: async (ctx) => {
+            contexts.push(ctx);
+            ctx.startupTrace?.detail?.("probe.result", [["healthyCount", 1]]);
+            await ctx.startupTrace?.measure("config:resolve", async () => {});
+          },
+        },
+      ],
+      startupTrace,
+    });
+
+    expect(contexts[0]?.startupTrace).not.toBe(startupTrace);
+    expect(measured).toEqual([
+      "sidecars.plugin-services.plugin~003Atest.service-a",
+      "sidecars.plugin-services.plugin~003Atest.service-a.config~003Aresolve",
+    ]);
+    expect(details).toEqual([
+      {
+        name: "sidecars.plugin-services.plugin~003Atest.service-a.probe.result",
+        metrics: [["healthyCount", 1]],
+      },
+      {
+        name: "sidecars.plugin-services.summary",
+        metrics: [
+          ["serviceCount", 1],
+          ["startedCount", 1],
+          ["failedCount", 0],
+        ],
+      },
+    ]);
+  });
+
+  it("keeps distinct service trace ownership keys non-colliding", async () => {
+    const measured: string[] = [];
+    const startupTrace: NonNullable<Parameters<typeof startPluginServices>[0]["startupTrace"]> = {
+      measure: async (name, run) => {
+        measured.push(name);
+        return await run();
+      },
+    };
+
+    await startPluginServices({
+      registry: createRegistry(
+        [createTrackingService("service:a"), createTrackingService("service_a")],
+        "plugin:test",
+      ),
+      config: createServiceConfig(),
+      startupTrace,
+    });
+
+    expect(measured).toEqual([
+      "sidecars.plugin-services.plugin~003Atest.service~003Aa",
+      "sidecars.plugin-services.plugin~003Atest.service_a",
+    ]);
+    expect(new Set(measured).size).toBe(measured.length);
+  });
+
+  it("grants internal diagnostics only to trusted diagnostics exporter services", async () => {
     const contexts: OpenClawPluginServiceContext[] = [];
     const diagnosticsService = createTrackingService("diagnostics-otel", { contexts });
     await startPluginServices({
@@ -204,6 +368,18 @@ describe("startPluginServices", () => {
     expect(prometheusContexts[0]?.internalDiagnostics?.onEvent).toBeTypeOf("function");
     expect(prometheusContexts[0]?.internalDiagnostics?.emit).toBeTypeOf("function");
 
+    const officialInstallContexts: OpenClawPluginServiceContext[] = [];
+    const officialInstallService = createTrackingService("diagnostics-prometheus", {
+      contexts: officialInstallContexts,
+    });
+    await startPluginServices({
+      registry: createRegistry([officialInstallService], "diagnostics-prometheus", "global", true),
+      config: createServiceConfig(),
+    });
+
+    expect(officialInstallContexts[0]?.internalDiagnostics?.onEvent).toBeTypeOf("function");
+    expect(officialInstallContexts[0]?.internalDiagnostics?.emit).toBeTypeOf("function");
+
     const untrustedContexts: OpenClawPluginServiceContext[] = [];
     const untrustedService = createTrackingService("diagnostics-otel", {
       contexts: untrustedContexts,
@@ -214,5 +390,16 @@ describe("startPluginServices", () => {
     });
 
     expect(untrustedContexts[0]?.internalDiagnostics).toBeUndefined();
+
+    const spoofedContexts: OpenClawPluginServiceContext[] = [];
+    const spoofedService = createTrackingService("diagnostics-prometheus", {
+      contexts: spoofedContexts,
+    });
+    await startPluginServices({
+      registry: createRegistry([spoofedService], "not-diagnostics-prometheus", "global", true),
+      config: createServiceConfig(),
+    });
+
+    expect(spoofedContexts[0]?.internalDiagnostics).toBeUndefined();
   });
 });

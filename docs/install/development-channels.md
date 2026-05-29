@@ -8,8 +8,6 @@ title: "Release channels"
 sidebarTitle: "Release Channels"
 ---
 
-# Development channels
-
 OpenClaw ships three update channels:
 
 - **stable**: npm dist-tag `latest`. Recommended for most users.
@@ -39,10 +37,14 @@ install method:
 - **`stable`** (package installs): updates via npm dist-tag `latest`.
 - **`beta`** (package installs): prefers npm dist-tag `beta`, but falls back to
   `latest` when `beta` is missing or older than the current stable tag.
-- **`stable`** (git installs): checks out the latest stable git tag.
+- **`stable`** (git installs): checks out the latest stable git tag, excluding
+  semver prerelease tags such as `-alpha.N`, `-beta.N`, `-rc.N`, `-dev.N`,
+  `-next.N`, `-preview.N`, `-canary.N`, `-nightly.N`, and other prerelease
+  suffixes.
 - **`beta`** (git installs): prefers the latest beta git tag, but falls back to
   the latest stable git tag when beta is missing or older.
-- **`dev`**: ensures a git checkout (default `~/openclaw`, override with
+- **`dev`**: ensures a git checkout (default `~/openclaw`, or
+  `$OPENCLAW_HOME/openclaw` when `OPENCLAW_HOME` is set; override with
   `OPENCLAW_GIT_DIR`), switches to `main`, rebases on upstream, builds, and
   installs the global CLI from that checkout.
 
@@ -62,11 +64,14 @@ openclaw update --tag 2026.4.1-beta.1
 # Install from the beta dist-tag (one-off, does not persist)
 openclaw update --tag beta
 
-# Install from GitHub main branch (npm tarball)
-openclaw update --tag main
+# Switch to the moving GitHub main checkout
+openclaw update --channel dev
 
 # Install a specific npm package spec
 openclaw update --tag openclaw@2026.4.1-beta.1
+
+# Install from GitHub main once without persisting the channel
+openclaw update --tag main
 ```
 
 Notes:
@@ -74,6 +79,10 @@ Notes:
 - `--tag` applies to **package (npm) installs only**. Git installs ignore it.
 - The tag is not persisted. Your next `openclaw update` uses your configured
   channel as usual.
+- For package installs, OpenClaw pre-packs GitHub/git source specs into a
+  temporary tarball before the staged npm install. Use `--channel dev` or
+  `--install-method git --version main` when you want the moving `main`
+  checkout as your persistent install.
 - Downgrade protection: if the target version is older than your current version,
   OpenClaw prompts for confirmation (skip with `--yes`).
 - `--channel beta` is different from `--tag beta`: the channel flow can fall back
@@ -115,9 +124,11 @@ source (config, git tag, git branch, or default).
 ## Tagging best practices
 
 - Tag releases you want git checkouts to land on (`vYYYY.M.D` for stable,
-  `vYYYY.M.D-beta.N` for beta).
+  `vYYYY.M.D-beta.N` for beta; named semver prerelease suffixes such as
+  `-alpha.N`, `-rc.N`, and `-next.N` are not stable targets).
+- Legacy numeric stable tags such as `vYYYY.M.D-1` and `v1.0.1-1` are still
+  recognized as stable git tags for compatibility.
 - `vYYYY.M.D.beta.N` is also recognized for compatibility, but prefer `-beta.N`.
-- Legacy `vYYYY.M.D-<patch>` tags are still recognized as stable (non-beta).
 - Keep tags immutable: never move or reuse a tag.
 - npm dist-tags remain the source of truth for npm installs:
   - `latest` -> stable

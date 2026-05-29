@@ -4,7 +4,7 @@ import type {
   BrowserActionTabResult,
 } from "./client-actions-types.js";
 import { buildProfileQuery, withBaseUrl } from "./client-actions-url.js";
-import type { BrowserActRequest, BrowserFormField } from "./client-actions.types.js";
+import type { BrowserActRequest } from "./client-actions.types.js";
 import { fetchBrowserJson } from "./client-fetch.js";
 import {
   DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
@@ -19,6 +19,8 @@ type BrowserActResponse = {
   url?: string;
   result?: unknown;
   results?: Array<{ ok: boolean; error?: string }>;
+  blockedByDialog?: boolean;
+  browserState?: unknown;
 };
 
 const BROWSER_ACT_REQUEST_TIMEOUT_SLACK_MS = 5_000;
@@ -66,6 +68,7 @@ export async function browserArmDialog(
   opts: {
     accept: boolean;
     promptText?: string;
+    dialogId?: string;
     targetId?: string;
     timeoutMs?: number;
     profile?: string;
@@ -78,6 +81,7 @@ export async function browserArmDialog(
     body: JSON.stringify({
       accept: opts.accept,
       promptText: opts.promptText,
+      dialogId: opts.dialogId,
       targetId: opts.targetId,
       timeoutMs: opts.timeoutMs,
     }),

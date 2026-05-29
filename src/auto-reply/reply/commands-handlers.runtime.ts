@@ -14,6 +14,7 @@ import {
   handleExportTrajectoryCommand,
   handleExportSessionCommand,
   handleHelpCommand,
+  handleSkillCommandUsage,
   handleStatusCommand,
   handleToolsCommand,
 } from "./commands-info.js";
@@ -31,6 +32,7 @@ import {
   handleStopCommand,
   handleUsageCommand,
 } from "./commands-session.js";
+import { handleSteerCommand } from "./commands-steer.js";
 import { handleSubagentsCommand } from "./commands-subagents.js";
 import { handleTasksCommand } from "./commands-tasks.js";
 import { handleTtsCommands } from "./commands-tts.js";
@@ -52,10 +54,14 @@ export function loadCommandHandlers(): CommandHandler[] {
     handleTtsCommands,
     handleHelpCommand,
     handleCommandsListCommand,
+    // Keep deterministic /skill usage on the native command path before the
+    // broader tool/status handlers can fall through to an agent run.
+    handleSkillCommandUsage,
     handleToolsCommand,
     handleStatusCommand,
     handleDiagnosticsCommand,
     handleTasksCommand,
+    handleSteerCommand,
     handleAllowlistCommand,
     handleApproveCommand,
     handleContextCommand,

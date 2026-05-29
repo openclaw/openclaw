@@ -10,7 +10,7 @@ CONTAINER_NAME="openclaw-crestodian-planner-e2e-$$"
 RUN_LOG="$(mktemp -t openclaw-crestodian-planner-log.XXXXXX)"
 
 cleanup() {
-  docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+  docker_e2e_docker_cmd rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
   rm -f "$RUN_LOG"
 }
 trap cleanup EXIT
@@ -28,7 +28,7 @@ docker_e2e_run_with_harness \
   bash -lc "set -euo pipefail
     source scripts/lib/openclaw-e2e-instance.sh
     openclaw_e2e_eval_test_state_from_b64 \"\${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}\"
-    tsx scripts/e2e/crestodian-planner-docker-client.ts
+    node scripts/e2e/crestodian-planner-docker-client.mjs
   " >"$RUN_LOG" 2>&1
 status=${PIPESTATUS[0]}
 set -e

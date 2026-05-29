@@ -1,9 +1,11 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import {
   replaceManagedMarkdownBlock,
   withTrailingNewline,
 } from "openclaw/plugin-sdk/memory-host-markdown";
+import { readFiniteNumberParam } from "openclaw/plugin-sdk/param-readers";
+import { root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { compileMemoryWikiVault, type CompileMemoryWikiResult } from "./compile.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import {
@@ -61,6 +63,27 @@ type ApplyMemoryWikiMutationResult = {
   compile: CompileMemoryWikiResult;
 };
 
+function normalizeMutationConfidence(
+  params: Record<string, unknown>,
+  options: { allowNull: false },
+): number | undefined;
+function normalizeMutationConfidence(
+  params: Record<string, unknown>,
+  options: { allowNull: true },
+): number | null | undefined;
+function normalizeMutationConfidence(
+  params: Record<string, unknown>,
+  options: { allowNull: boolean },
+): number | null | undefined {
+  if (options.allowNull && params.confidence === null) {
+    return null;
+  }
+  return readFiniteNumberParam(params, "confidence", {
+    min: 0,
+    max: 1,
+  });
+}
+
 export function normalizeMemoryWikiMutationInput(rawParams: unknown): ApplyMemoryWikiMutation {
   const params = rawParams as {
     op: ApplyMemoryWikiMutation["op"];
@@ -84,6 +107,9 @@ export function normalizeMemoryWikiMutationInput(rawParams: unknown): ApplyMemor
     if (!params.sourceIds || params.sourceIds.length === 0) {
       throw new Error("wiki mutation requires at least one sourceId for create_synthesis.");
     }
+    const confidence = normalizeMutationConfidence(params as Record<string, unknown>, {
+      allowNull: false,
+    });
     return {
       op: "create_synthesis",
       title: params.title,
@@ -92,13 +118,16 @@ export function normalizeMemoryWikiMutationInput(rawParams: unknown): ApplyMemor
       ...(Array.isArray(params.claims) ? { claims: normalizeWikiClaims(params.claims) } : {}),
       ...(params.contradictions ? { contradictions: params.contradictions } : {}),
       ...(params.questions ? { questions: params.questions } : {}),
-      ...(typeof params.confidence === "number" ? { confidence: params.confidence } : {}),
+      ...(typeof confidence === "number" ? { confidence } : {}),
       ...(params.status ? { status: params.status } : {}),
     };
   }
   if (!params.lookup?.trim()) {
     throw new Error("wiki mutation requires lookup for update_metadata.");
   }
+  const confidence = normalizeMutationConfidence(params as Record<string, unknown>, {
+    allowNull: true,
+  });
   return {
     op: "update_metadata",
     lookup: params.lookup,
@@ -106,7 +135,7 @@ export function normalizeMemoryWikiMutationInput(rawParams: unknown): ApplyMemor
     ...(Array.isArray(params.claims) ? { claims: normalizeWikiClaims(params.claims) } : {}),
     ...(params.contradictions ? { contradictions: params.contradictions } : {}),
     ...(params.questions ? { questions: params.questions } : {}),
-    ...(params.confidence !== undefined ? { confidence: params.confidence } : {}),
+    ...(confidence !== undefined ? { confidence } : {}),
     ...(params.status ? { status: params.status } : {}),
   };
 }
@@ -115,11 +144,7 @@ function normalizeUniqueStrings(values: string[] | undefined): string[] | undefi
   if (!values) {
     return undefined;
   }
-  const normalized = values
-    .map((value) => value.trim())
-    .filter(Boolean)
-    .filter((value, index, all) => all.indexOf(value) === index);
-  return normalized;
+  return uniqueStrings(normalizeStringEntries(values));
 }
 
 function ensureHumanNotesBlock(body: string): string {
@@ -150,22 +175,23 @@ function buildSynthesisBody(params: {
 }
 
 async function writeWikiPage(params: {
-  absolutePath: string;
+  rootDir: string;
+  relativePath: string;
   frontmatter: Record<string, unknown>;
   body: string;
 }): Promise<boolean> {
+  const root = await fsRoot(params.rootDir);
   const rendered = withTrailingNewline(
     renderWikiMarkdown({
       frontmatter: params.frontmatter,
       body: params.body,
     }),
   );
-  const existing = await fs.readFile(params.absolutePath, "utf8").catch(() => "");
+  const existing = await root.readText(params.relativePath).catch(() => "");
   if (existing === rendered) {
     return false;
   }
-  await fs.mkdir(path.dirname(params.absolutePath), { recursive: true });
-  await fs.writeFile(params.absolutePath, rendered, "utf8");
+  await root.write(params.relativePath, rendered);
   return true;
 }
 
@@ -183,14 +209,15 @@ async function applyCreateSynthesisMutation(params: {
 }): Promise<{ changed: boolean; pagePath: string; pageId: string }> {
   const slug = slugifyWikiSegment(params.mutation.title);
   const pagePath = path.join("syntheses", `${slug}.md`).replace(/\\/g, "/");
-  const absolutePath = path.join(params.config.vault.path, pagePath);
-  const existing = await fs.readFile(absolutePath, "utf8").catch(() => "");
+  const root = await fsRoot(params.config.vault.path);
+  const existing = await root.readText(pagePath).catch(() => "");
   const parsed = parseWikiMarkdown(existing);
   const pageId =
     (typeof parsed.frontmatter.id === "string" && parsed.frontmatter.id.trim()) ||
     `synthesis.${slug}`;
   const changed = await writeWikiPage({
-    absolutePath,
+    rootDir: params.config.vault.path,
+    relativePath: pagePath,
     frontmatter: {
       ...parsed.frontmatter,
       pageType: "synthesis",
@@ -278,7 +305,8 @@ async function applyUpdateMetadataMutation(params: {
   }
   const parsed = parseWikiMarkdown(page.raw);
   const changed = await writeWikiPage({
-    absolutePath: page.absolutePath,
+    rootDir: params.config.vault.path,
+    relativePath: page.relativePath,
     frontmatter: buildUpdatedFrontmatter({
       original: parsed.frontmatter,
       mutation: params.mutation,

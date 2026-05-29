@@ -1,11 +1,15 @@
 import { isIP } from "node:net";
+import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import { resolveGatewayAuth } from "../gateway/auth-resolve.js";
+import { resolveGatewayAuthTokenSourceConflict } from "../gateway/auth-token-source-conflict.js";
+import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
 import { collectCoreInsecureOrDangerousFlags } from "./core-dangerous-config-flags.js";
 import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "./dangerous-tools.js";
@@ -14,6 +18,7 @@ type CollectDangerousConfigFlags = (cfg: OpenClawConfig) => string[];
 
 export type CollectGatewayConfigFindingsOptions = {
   collectDangerousConfigFlags?: CollectDangerousConfigFlags;
+  gatewayAuthOverride?: Pick<GatewayAuthConfig, "mode" | "token" | "password">;
 };
 
 function hasNonEmptyString(value: unknown): value is string {
@@ -30,11 +35,16 @@ export function collectGatewayConfigFindings(
 
   const bind = typeof cfg.gateway?.bind === "string" ? cfg.gateway.bind : "loopback";
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
-  const auth = resolveGatewayAuth({ authConfig: cfg.gateway?.auth, tailscaleMode, env });
+  const auth = resolveGatewayAuth({
+    authConfig: cfg.gateway?.auth,
+    authOverride: options.gatewayAuthOverride,
+    tailscaleMode,
+    env,
+  });
   const controlUiEnabled = cfg.gateway?.controlUi?.enabled !== false;
-  const controlUiAllowedOrigins = (cfg.gateway?.controlUi?.allowedOrigins ?? [])
-    .map((value) => value.trim())
-    .filter(Boolean);
+  const controlUiAllowedOrigins = normalizeStringEntries(
+    cfg.gateway?.controlUi?.allowedOrigins ?? [],
+  );
   const dangerouslyAllowHostHeaderOriginFallback =
     cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
   const trustedProxies = Array.isArray(cfg.gateway?.trustedProxies)
@@ -56,7 +66,7 @@ export function collectGatewayConfigFindings(
     sourceConfig.gateway?.remote?.token,
     sourceConfig.secrets?.defaults,
   );
-  const explicitAuthMode = sourceConfig.gateway?.auth?.mode;
+  const explicitAuthMode = options.gatewayAuthOverride?.mode ?? sourceConfig.gateway?.auth?.mode;
   const tokenCanWin =
     hasToken || envTokenConfigured || tokenConfiguredFromConfig || remoteTokenConfigured;
   const passwordCanWin =
@@ -113,6 +123,17 @@ export function collectGatewayConfigFindings(
       title: "Gateway binds beyond loopback without auth",
       detail: `gateway.bind="${bind}" but no gateway.auth token/password is configured.`,
       remediation: `Set gateway.auth (token recommended) or bind to loopback.`,
+    });
+  }
+
+  const tokenConflict = resolveGatewayAuthTokenSourceConflict({ cfg: sourceConfig, env });
+  if (tokenConflict) {
+    findings.push({
+      checkId: tokenConflict.checkId,
+      severity: "warn",
+      title: tokenConflict.title,
+      detail: tokenConflict.detail,
+      remediation: tokenConflict.remediation,
     });
   }
 
@@ -260,14 +281,14 @@ export function collectGatewayConfigFindings(
   const enabledDangerousFlags = (
     options.collectDangerousConfigFlags ?? collectCoreInsecureOrDangerousFlags
   )(cfg);
-  if (enabledDangerousFlags.length > 0) {
+  for (const enabledFlag of enabledDangerousFlags) {
     findings.push({
       checkId: "config.insecure_or_dangerous_flags",
       severity: "warn",
-      title: "Insecure or dangerous config flags enabled",
-      detail: `Detected ${enabledDangerousFlags.length} enabled flag(s): ${enabledDangerousFlags.join(", ")}.`,
+      title: "Insecure or dangerous config flag enabled",
+      detail: `Detected enabled flag: ${enabledFlag}.`,
       remediation:
-        "Disable these flags when not actively debugging, or keep deployment scoped to trusted/local-only networks.",
+        "Disable this flag when not actively debugging, or keep deployment scoped to trusted/local-only networks.",
     });
   }
 
@@ -387,8 +408,8 @@ function isStrictLoopbackTrustedProxyEntry(entry: string): boolean {
     return false;
   }
   const ipVersion = isIP(rawIp.trim());
-  const prefix = Number.parseInt(rawPrefix.trim(), 10);
-  if (!Number.isInteger(prefix)) {
+  const prefix = parseStrictNonNegativeInteger(rawPrefix);
+  if (prefix === undefined) {
     return false;
   }
   if (ipVersion === 4) {

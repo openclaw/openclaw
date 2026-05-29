@@ -30,6 +30,7 @@ vi.mock("../infra/env.js", () => ({
 
 vi.mock("../infra/outbound/deliver.js", () => ({
   deliverOutboundPayloads: hoisted.deliverOutboundPayloads,
+  deliverOutboundPayloadsInternal: hoisted.deliverOutboundPayloads,
 }));
 
 vi.mock("../infra/outbound/delivery-queue.js", () => ({
@@ -52,8 +53,12 @@ vi.mock("./model-pricing-cache.js", () => ({
   startGatewayModelPricingRefresh: hoisted.startGatewayModelPricingRefresh,
 }));
 
-const { activateGatewayScheduledServices, startGatewayRuntimeServices } =
-  await import("./server-runtime-services.js");
+const {
+  activateGatewayScheduledServices,
+  runGatewayPostReadyMaintenance,
+  scheduleGatewayPostReadyMaintenance,
+  startGatewayRuntimeServices,
+} = await import("./server-runtime-services.js");
 
 describe("server-runtime-services", () => {
   beforeEach(() => {
@@ -180,18 +185,139 @@ describe("server-runtime-services", () => {
     expect(services.heartbeatRunner).toBe(hoisted.heartbeatRunner);
     await vi.advanceTimersByTimeAsync(1_250);
     await vi.dynamicImportSettled();
-    expect(hoisted.recoverPendingDeliveries).toHaveBeenCalledWith(
-      expect.objectContaining({
-        deliver: hoisted.deliverOutboundPayloads,
-        cfg: {},
+    expect(log.child).toHaveBeenNthCalledWith(1, "delivery-recovery");
+    expect(log.child).toHaveBeenNthCalledWith(2, "session-delivery-recovery");
+    const deliveryLog = log.child.mock.results[0]?.value;
+    const sessionDeliveryLog = log.child.mock.results[1]?.value;
+    if (!deliveryLog || !sessionDeliveryLog) {
+      throw new Error("Expected delivery recovery log children");
+    }
+    expect(hoisted.recoverPendingDeliveries).toHaveBeenCalledWith({
+      deliver: hoisted.deliverOutboundPayloads,
+      cfg: {},
+      log: deliveryLog,
+    });
+    expect(hoisted.recoverPendingRestartContinuationDeliveries).toHaveBeenCalledWith({
+      deps: {},
+      maxEnqueuedAt: 123,
+      log: sessionDeliveryLog,
+    });
+  });
+
+  it("can defer cron startup while activating other scheduled services", async () => {
+    vi.useFakeTimers();
+    const cron = { start: vi.fn(async () => undefined) };
+    const log = createLog();
+
+    activateGatewayScheduledServices({
+      minimalTestGateway: false,
+      cfgAtStart: {} as never,
+      deps: {} as never,
+      sessionDeliveryRecoveryMaxEnqueuedAt: 123,
+      cron,
+      startCron: false,
+      logCron: { error: vi.fn() },
+      log,
+    });
+
+    expect(hoisted.startHeartbeatRunner).toHaveBeenCalledTimes(1);
+    expect(cron.start).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1_250);
+    await vi.dynamicImportSettled();
+    expect(hoisted.recoverPendingDeliveries).toHaveBeenCalledTimes(1);
+  });
+
+  it("starts cron and records memory when post-ready maintenance fails", async () => {
+    const cron = { start: vi.fn(async () => undefined) };
+    const log = createLog();
+    const recordPostReadyMemory = vi.fn();
+
+    await runGatewayPostReadyMaintenance({
+      startMaintenance: vi.fn(async () => {
+        throw new Error("timers unavailable");
+      }),
+      applyMaintenance: vi.fn(),
+      shouldStartCron: () => true,
+      markCronStartHandled: vi.fn(),
+      cron,
+      logCron: { error: vi.fn() },
+      log,
+      recordPostReadyMemory,
+    });
+
+    expect(log.warn).toHaveBeenCalledWith(
+      "gateway post-ready maintenance startup failed: Error: timers unavailable",
+    );
+    expect(cron.start).toHaveBeenCalledTimes(1);
+    expect(recordPostReadyMemory).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns a cancellable post-ready maintenance timer", async () => {
+    vi.useFakeTimers();
+    const startMaintenance = vi.fn(async () => null);
+    const onStarted = vi.fn();
+    const handle = scheduleGatewayPostReadyMaintenance(
+      createPostReadyMaintenanceScheduleParams({
+        delayMs: 25,
+        onStarted,
+        startMaintenance,
       }),
     );
-    expect(hoisted.recoverPendingRestartContinuationDeliveries).toHaveBeenCalledWith(
-      expect.objectContaining({
-        deps: {},
-        maxEnqueuedAt: 123,
+
+    clearTimeout(handle);
+    await vi.advanceTimersByTimeAsync(25);
+
+    expect(onStarted).not.toHaveBeenCalled();
+    expect(startMaintenance).not.toHaveBeenCalled();
+  });
+
+  it("clears delayed maintenance handles when close starts during maintenance startup", async () => {
+    vi.useFakeTimers();
+    let closing = false;
+    let resolveMaintenance:
+      | ((maintenance: ReturnType<typeof createMaintenanceHandles>) => void)
+      | undefined;
+    const startMaintenance = vi.fn(
+      () =>
+        new Promise<ReturnType<typeof createMaintenanceHandles>>((resolve) => {
+          resolveMaintenance = resolve;
+        }),
+    );
+    const applyMaintenance = vi.fn();
+    const cron = { start: vi.fn(async () => undefined) };
+    const recordPostReadyMemory = vi.fn();
+    const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval");
+
+    scheduleGatewayPostReadyMaintenance(
+      createPostReadyMaintenanceScheduleParams({
+        delayMs: 25,
+        isClosing: () => closing,
+        startMaintenance,
+        applyMaintenance,
+        cron,
+        recordPostReadyMemory,
       }),
     );
+
+    await vi.advanceTimersByTimeAsync(25);
+    expect(startMaintenance).toHaveBeenCalledTimes(1);
+
+    closing = true;
+    if (!resolveMaintenance) {
+      throw new Error("Expected gateway maintenance resolver to be initialized");
+    }
+    const maintenance = createMaintenanceHandles();
+    resolveMaintenance(maintenance);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(applyMaintenance).not.toHaveBeenCalled();
+    expect(cron.start).not.toHaveBeenCalled();
+    expect(recordPostReadyMemory).not.toHaveBeenCalled();
+    expect(clearIntervalSpy).toHaveBeenCalledWith(maintenance.tickInterval);
+    expect(clearIntervalSpy).toHaveBeenCalledWith(maintenance.healthInterval);
+    expect(clearIntervalSpy).toHaveBeenCalledWith(maintenance.dedupeCleanup);
+    expect(clearIntervalSpy).toHaveBeenCalledWith(maintenance.mediaCleanup);
   });
 
   it("keeps scheduled services disabled for minimal test gateways", () => {
@@ -224,6 +350,34 @@ function createLog() {
       warn: vi.fn(),
       error: vi.fn(),
     })),
+    warn: vi.fn(),
     error: vi.fn(),
+  };
+}
+
+function createPostReadyMaintenanceScheduleParams(
+  overrides: Partial<Parameters<typeof scheduleGatewayPostReadyMaintenance>[0]> = {},
+): Parameters<typeof scheduleGatewayPostReadyMaintenance>[0] {
+  return {
+    delayMs: 1,
+    isClosing: () => false,
+    startMaintenance: vi.fn(async () => null),
+    applyMaintenance: vi.fn(),
+    shouldStartCron: () => true,
+    markCronStartHandled: vi.fn(),
+    cron: { start: vi.fn(async () => undefined) },
+    logCron: { error: vi.fn() },
+    log: createLog(),
+    recordPostReadyMemory: vi.fn(),
+    ...overrides,
+  };
+}
+
+function createMaintenanceHandles() {
+  return {
+    tickInterval: setInterval(() => undefined, 60_000),
+    healthInterval: setInterval(() => undefined, 60_000),
+    dedupeCleanup: setInterval(() => undefined, 60_000),
+    mediaCleanup: setInterval(() => undefined, 60_000),
   };
 }

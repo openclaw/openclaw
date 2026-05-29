@@ -1,27 +1,58 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
-import {
-  collectExecPolicyScopeSnapshots,
-  resolveExecPolicyScopeSummary,
-} from "./exec-approvals-effective.js";
 import {
   makeMockCommandResolution,
   makeMockExecutableResolution,
 } from "./exec-approvals-test-helpers.js";
-import {
-  evaluateExecAllowlist,
-  hasDurableExecApproval,
-  maxAsk,
-  minSecurity,
-  requireValidExecTarget,
-  type ExecApprovalsFile,
-  normalizeExecAsk,
-  normalizeExecHost,
-  normalizeExecTarget,
-  normalizeExecSecurity,
-  requiresExecApproval,
-} from "./exec-approvals.js";
+import type { ExecApprovalsFile } from "./exec-approvals.js";
+
+vi.unmock("./exec-approvals.js");
+vi.unmock("./exec-approvals-effective.js");
+
+let collectExecPolicyScopeSnapshots: typeof import("./exec-approvals-effective.js").collectExecPolicyScopeSnapshots;
+let resolveExecPolicyScopeSummary: typeof import("./exec-approvals-effective.js").resolveExecPolicyScopeSummary;
+let evaluateExecAllowlist: typeof import("./exec-approvals.js").evaluateExecAllowlist;
+let hasDurableExecApproval: typeof import("./exec-approvals.js").hasDurableExecApproval;
+let maxAsk: typeof import("./exec-approvals.js").maxAsk;
+let minSecurity: typeof import("./exec-approvals.js").minSecurity;
+let requireValidExecTarget: typeof import("./exec-approvals.js").requireValidExecTarget;
+let normalizeExecAsk: typeof import("./exec-approvals.js").normalizeExecAsk;
+let normalizeExecHost: typeof import("./exec-approvals.js").normalizeExecHost;
+let normalizeExecTarget: typeof import("./exec-approvals.js").normalizeExecTarget;
+let normalizeExecSecurity: typeof import("./exec-approvals.js").normalizeExecSecurity;
+let requiresExecApproval: typeof import("./exec-approvals.js").requiresExecApproval;
+
+async function loadActualExecApprovalModules(): Promise<void> {
+  vi.resetModules();
+  const execApprovals =
+    await vi.importActual<typeof import("./exec-approvals.js")>("./exec-approvals.js");
+  const effective = await vi.importActual<typeof import("./exec-approvals-effective.js")>(
+    "./exec-approvals-effective.js",
+  );
+  collectExecPolicyScopeSnapshots = effective.collectExecPolicyScopeSnapshots;
+  resolveExecPolicyScopeSummary = effective.resolveExecPolicyScopeSummary;
+  evaluateExecAllowlist = execApprovals.evaluateExecAllowlist;
+  hasDurableExecApproval = execApprovals.hasDurableExecApproval;
+  maxAsk = execApprovals.maxAsk;
+  minSecurity = execApprovals.minSecurity;
+  requireValidExecTarget = execApprovals.requireValidExecTarget;
+  normalizeExecAsk = execApprovals.normalizeExecAsk;
+  normalizeExecHost = execApprovals.normalizeExecHost;
+  normalizeExecTarget = execApprovals.normalizeExecTarget;
+  normalizeExecSecurity = execApprovals.normalizeExecSecurity;
+  requiresExecApproval = execApprovals.requiresExecApproval;
+}
+
+function expectFields(value: unknown, expected: Record<string, unknown>): void {
+  if (!value || typeof value !== "object") {
+    throw new Error("expected fields object");
+  }
+  const record = value as Record<string, unknown>;
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key], key).toEqual(expectedValue);
+  }
+}
 
 function expectMalformedAgentAskUsesDefaults(agentAsk: unknown): void {
   const approvals = {
@@ -45,7 +76,7 @@ function expectMalformedAgentAskUsesDefaults(agentAsk: unknown): void {
     agentId: "runner",
   });
 
-  expect(summary.ask).toMatchObject({
+  expectFields(summary.ask, {
     requested: "off",
     host: "always",
     hostSource: "~/.openclaw/exec-approvals.json defaults.ask",
@@ -55,6 +86,10 @@ function expectMalformedAgentAskUsesDefaults(agentAsk: unknown): void {
 }
 
 describe("exec approvals policy helpers", () => {
+  beforeEach(async () => {
+    await loadActualExecApprovalModules();
+  });
+
   it.each([
     { raw: " gateway ", expected: "gateway" },
     { raw: "NODE", expected: "node" },
@@ -207,6 +242,7 @@ describe("exec approvals policy helpers", () => {
     const executable = makeMockExecutableResolution({
       rawExecutable: "/usr/bin/echo",
       resolvedPath: "/usr/bin/echo",
+      resolvedRealPath: "/usr/bin/echo",
       executableName: "echo",
     });
     const result = evaluateExecAllowlist({
@@ -241,10 +277,9 @@ describe("exec approvals policy helpers", () => {
     });
 
     expect(result.allowlistSatisfied).toBe(false);
-    expect(result.segmentAllowlistEntries).toEqual([
-      expect.objectContaining({ pattern: "/usr/bin/echo" }),
-      null,
-    ]);
+    expect(result.segmentAllowlistEntries).toHaveLength(2);
+    expectFields(result.segmentAllowlistEntries[0], { pattern: "/usr/bin/echo" });
+    expect(result.segmentAllowlistEntries[1]).toBeNull();
     expect(
       hasDurableExecApproval({
         analysisOk: true,
@@ -272,14 +307,14 @@ describe("exec approvals policy helpers", () => {
       scopeLabel: "tools.exec",
     });
 
-    expect(summary.security).toMatchObject({
+    expectFields(summary.security, {
       requested: "full",
       host: "allowlist",
       effective: "allowlist",
       hostSource: "~/.openclaw/exec-approvals.json defaults.security",
       note: "stricter host security wins",
     });
-    expect(summary.ask).toMatchObject({
+    expectFields(summary.ask, {
       requested: "off",
       host: "always",
       effective: "always",
@@ -334,7 +369,7 @@ describe("exec approvals policy helpers", () => {
       scopeLabel: "tools.exec",
     });
 
-    expect(summary.ask).toMatchObject({
+    expectFields(summary.ask, {
       requested: "always",
       host: "off",
       effective: "always",
@@ -404,11 +439,11 @@ describe("exec approvals policy helpers", () => {
       agentId: "runner",
     });
 
-    expect(summary.security).toMatchObject({
+    expectFields(summary.security, {
       host: "allowlist",
       hostSource: "~/.openclaw/exec-approvals.json agents.*.security",
     });
-    expect(summary.ask).toMatchObject({
+    expectFields(summary.ask, {
       host: "always",
       hostSource: "~/.openclaw/exec-approvals.json agents.*.ask",
     });
@@ -438,13 +473,13 @@ describe("exec approvals policy helpers", () => {
       agentId: "runner",
     });
 
-    expect(summary.security).toMatchObject({
+    expectFields(summary.security, {
       requested: "full",
       requestedSource: "tools.exec.security",
       host: "allowlist",
       effective: "allowlist",
     });
-    expect(summary.ask).toMatchObject({
+    expectFields(summary.ask, {
       requested: "off",
       requestedSource: "tools.exec.ask",
       host: "always",
@@ -499,13 +534,13 @@ describe("exec approvals policy helpers", () => {
       "agent:batch",
       "agent:runner",
     ]);
-    expect(snapshots[1]?.ask).toMatchObject({
+    expectFields(snapshots[1]?.ask, {
       requested: "off",
       requestedSource: "tools.exec.ask",
       host: "always",
       effective: "always",
     });
-    expect(snapshots[2]?.security).toMatchObject({
+    expectFields(snapshots[2]?.security, {
       requested: "full",
       requestedSource: "tools.exec.security",
       host: "allowlist",
@@ -535,11 +570,11 @@ describe("exec approvals policy helpers", () => {
     });
 
     expect(snapshots.map((snapshot) => snapshot.scopeLabel)).toEqual(["tools.exec"]);
-    expect(snapshots[0]?.security).toMatchObject({
+    expectFields(snapshots[0]?.security, {
       host: "allowlist",
       hostSource: "~/.openclaw/exec-approvals.json agents.main.security",
     });
-    expect(snapshots[0]?.ask).toMatchObject({
+    expectFields(snapshots[0]?.ask, {
       host: "always",
       hostSource: "~/.openclaw/exec-approvals.json agents.main.ask",
     });
@@ -573,7 +608,7 @@ describe("exec approvals policy helpers", () => {
     });
 
     expect(snapshots.map((snapshot) => snapshot.scopeLabel)).toEqual(["tools.exec", "agent:main"]);
-    expect(snapshots[1]?.ask).toMatchObject({
+    expectFields(snapshots[1]?.ask, {
       requested: "always",
       requestedSource: "agents.list.main.tools.exec.ask",
     });

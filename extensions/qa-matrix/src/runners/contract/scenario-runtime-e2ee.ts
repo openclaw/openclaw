@@ -59,6 +59,10 @@ const MATRIX_QA_ROOM_KEY_BACKUP_VERSION_ENDPOINT = "/_matrix/client/v3/room_keys
 const MATRIX_QA_ROOM_KEY_BACKUP_FAULT_RULE_ID = "room-key-backup-version-unavailable";
 const MATRIX_QA_OWNER_SIGNATURE_UPLOAD_BLOCKED_RULE_ID = "owner-signature-upload-blocked";
 const MATRIX_QA_KEYS_SIGNATURES_UPLOAD_ENDPOINT = "/_matrix/client/v3/keys/signatures/upload";
+const MATRIX_QA_SYNC_ENDPOINT = "/_matrix/client/v3/sync";
+const MATRIX_QA_SYNC_STATE_AFTER_FAULT_RULE_ID = "sync-state-after-missing-encryption";
+const MATRIX_QA_SYNC_STATE_AFTER_KEY = "org.matrix.msc4222.state_after";
+const MATRIX_QA_SYNC_STATE_AFTER_PARAM = "org.matrix.msc4222.use_state_after";
 
 type MatrixQaE2eeBootstrapResult = Awaited<ReturnType<typeof runMatrixQaE2eeBootstrap>>;
 type MatrixQaCliVerificationStatus = {
@@ -70,6 +74,10 @@ type MatrixQaCliVerificationStatus = {
   };
   backupVersion?: string | null;
   crossSigningVerified?: boolean;
+  encryptionEnabled?: boolean;
+  pendingVerifications?: number;
+  recoveryKeyStored?: boolean;
+  serverDeviceKnown?: boolean;
   verified?: boolean;
   signedByOwner?: boolean;
   deviceId?: string | null;
@@ -210,9 +218,15 @@ async function assertMatrixQaPeerDeviceTrusted(params: {
   client: MatrixQaE2eeScenarioClient;
   deviceId: string;
   label: string;
+  timeoutMs: number;
   userId: string;
 }) {
-  const status = await params.client.getDeviceVerificationStatus(params.userId, params.deviceId);
+  const startedAt = Date.now();
+  let status = await params.client.getDeviceVerificationStatus(params.userId, params.deviceId);
+  while (!status.verified && Date.now() - startedAt < params.timeoutMs) {
+    await sleep(Math.min(250, Math.max(25, params.timeoutMs - (Date.now() - startedAt))));
+    status = await params.client.getDeviceVerificationStatus(params.userId, params.deviceId);
+  }
   if (!status.verified) {
     throw new Error(
       `${params.label} did not trust ${params.userId}/${params.deviceId} after verification`,
@@ -945,6 +959,58 @@ function buildOwnerSignatureUploadBlockedFaultRule(accessToken: string): MatrixQ
   };
 }
 
+function removeMatrixQaSyncStateAfterEncryptionEvents(payload: unknown) {
+  if (!isMatrixQaPlainRecord(payload)) {
+    return 0;
+  }
+  const rooms = isMatrixQaPlainRecord(payload.rooms) ? payload.rooms : {};
+  const join = isMatrixQaPlainRecord(rooms.join) ? rooms.join : {};
+  let removed = 0;
+  for (const room of Object.values(join)) {
+    if (!isMatrixQaPlainRecord(room)) {
+      continue;
+    }
+    const stateAfter = room[MATRIX_QA_SYNC_STATE_AFTER_KEY];
+    if (!isMatrixQaPlainRecord(stateAfter) || !Array.isArray(stateAfter.events)) {
+      continue;
+    }
+    const filtered = stateAfter.events.filter((event) => {
+      if (isMatrixQaPlainRecord(event) && event.type === "m.room.encryption") {
+        removed += 1;
+        return false;
+      }
+      return true;
+    });
+    stateAfter.events = filtered;
+  }
+  return removed;
+}
+
+function buildSyncStateAfterMissingEncryptionFaultRule(
+  accessToken: string,
+): MatrixQaFaultProxyRule {
+  return {
+    id: MATRIX_QA_SYNC_STATE_AFTER_FAULT_RULE_ID,
+    match: (request) =>
+      request.method === "GET" &&
+      request.path === MATRIX_QA_SYNC_ENDPOINT &&
+      request.bearerToken === accessToken &&
+      new URLSearchParams(request.search).get(MATRIX_QA_SYNC_STATE_AFTER_PARAM) === "true",
+    mutateResponse: ({ response }) => {
+      const contentType = response.headers.get("content-type") ?? "";
+      if (!contentType.includes("json")) {
+        return response;
+      }
+      const payload = JSON.parse(response.body.toString("utf8")) as unknown;
+      removeMatrixQaSyncStateAfterEncryptionEvents(payload);
+      return {
+        ...response,
+        body: Buffer.from(JSON.stringify(payload)),
+      };
+    },
+  };
+}
+
 async function runMatrixQaFaultedE2eeBootstrap(context: MatrixQaScenarioContext): Promise<{
   faultHits: MatrixQaFaultProxyHit[];
   result: MatrixQaE2eeBootstrapResult;
@@ -1306,6 +1372,97 @@ export async function runMatrixQaE2eeBasicReplyScenario(
   };
 }
 
+export async function runMatrixQaE2eeStateAfterMissingEncryptionScenario(
+  context: MatrixQaScenarioContext,
+): Promise<MatrixQaScenarioExecution> {
+  if (!context.restartGatewayAfterStateMutation) {
+    throw new Error("Matrix E2EE state_after QA scenario requires hard gateway restart support");
+  }
+  const accountId = context.sutAccountId ?? "sut";
+  const configPath = requireMatrixQaGatewayConfigPath(context);
+  const originalAccountConfig = await readMatrixQaGatewayMatrixAccount({
+    accountId,
+    configPath,
+  });
+  const proxy = await startMatrixQaFaultProxy({
+    targetBaseUrl: context.baseUrl,
+    rules: [buildSyncStateAfterMissingEncryptionFaultRule(context.sutAccessToken)],
+  });
+  let gatewayPatched = false;
+  try {
+    await context.restartGatewayAfterStateMutation(
+      async () => {
+        await patchMatrixQaGatewayMatrixAccount({
+          accountId,
+          accountPatch: {
+            homeserver: proxy.baseUrl,
+            network: {
+              dangerouslyAllowPrivateNetwork: true,
+            },
+          },
+          configPath,
+        });
+        gatewayPatched = true;
+      },
+      {
+        timeoutMs: context.timeoutMs,
+        waitAccountId: accountId,
+      },
+    );
+    const result = await runMatrixQaE2eeTopLevelScenario(context, {
+      scenarioId: "matrix-e2ee-state-after-missing-encryption",
+      tokenPrefix: "MATRIX_QA_E2EE_STATE_AFTER",
+    });
+    const stateAfterHits = proxy
+      .hits()
+      .filter((hit) => hit.ruleId === MATRIX_QA_SYNC_STATE_AFTER_FAULT_RULE_ID);
+    if (stateAfterHits.length > 0) {
+      throw new Error(
+        `Matrix E2EE gateway still sent ${MATRIX_QA_SYNC_STATE_AFTER_PARAM}=true on /sync`,
+      );
+    }
+    return {
+      artifacts: {
+        driverEventId: result.driverEventId,
+        faultProxyBaseUrl: proxy.baseUrl,
+        reply: result.reply,
+        roomKey: result.roomKey,
+        roomId: result.roomId,
+        stateAfterFaultHitCount: stateAfterHits.length,
+        stateAfterFaultRuleId: MATRIX_QA_SYNC_STATE_AFTER_FAULT_RULE_ID,
+        strippedSyncStateAfterParam: true,
+      },
+      details: [
+        `encrypted room key: ${result.roomKey}`,
+        `encrypted room id: ${result.roomId}`,
+        `driver event: ${result.driverEventId}`,
+        `fault proxy: ${proxy.baseUrl}`,
+        `state_after sync opt-in hits: ${stateAfterHits.length}`,
+        ...buildMatrixReplyDetails("E2EE state_after reply", result.reply),
+      ].join("\n"),
+    };
+  } finally {
+    if (gatewayPatched) {
+      await context
+        .restartGatewayAfterStateMutation(
+          async () => {
+            await replaceMatrixQaGatewayMatrixAccount({
+              accountConfig: originalAccountConfig,
+              accountId,
+              configPath,
+            });
+          },
+          {
+            timeoutMs: context.timeoutMs,
+            waitAccountId: accountId,
+          },
+        )
+        .catch(() => undefined);
+    }
+    await proxy.stop().catch(() => undefined);
+  }
+}
+
 export async function runMatrixQaE2eeThreadFollowUpScenario(
   context: MatrixQaScenarioContext,
 ): Promise<MatrixQaScenarioExecution> {
@@ -1632,6 +1789,39 @@ function assertMatrixQaCliE2eeStatus(
   }
 }
 
+function assertMatrixQaCliAccountAddBootstrapStatus(params: {
+  expectedBackupVersion?: string | null;
+  expectedUserId: string;
+  status: MatrixQaCliVerificationStatus;
+}) {
+  const { expectedBackupVersion, expectedUserId, status } = params;
+  if (status.encryptionEnabled !== true || status.recoveryKeyStored !== true) {
+    throw new Error(
+      "Matrix CLI account add --enable-e2ee degraded status did not keep encryption and recovery key state",
+    );
+  }
+  if (status.userId !== expectedUserId) {
+    throw new Error(
+      `Matrix CLI account add --enable-e2ee status user mismatch: expected ${expectedUserId}, got ${status.userId ?? "<none>"}`,
+    );
+  }
+  if (!status.deviceId || status.serverDeviceKnown !== true) {
+    throw new Error(
+      "Matrix CLI account add --enable-e2ee degraded status did not resolve the current server-known device",
+    );
+  }
+  if (expectedBackupVersion && status.backupVersion !== expectedBackupVersion) {
+    throw new Error(
+      `Matrix CLI account add --enable-e2ee backup version mismatch: expected ${expectedBackupVersion}, got ${status.backupVersion ?? "<none>"}`,
+    );
+  }
+  if (status.backup?.keyLoadError) {
+    throw new Error(
+      `Matrix CLI account add --enable-e2ee degraded status reported backup key error: ${status.backup.keyLoadError}`,
+    );
+  }
+}
+
 async function runMatrixQaCliExpectedFailure(params: {
   args: string[];
   start: (args: string[], timeoutMs?: number) => MatrixQaCliSession;
@@ -1778,6 +1968,7 @@ export async function runMatrixQaE2eeCliAccountAddEnableE2eeScenario(
       "status",
       "--account",
       accountId,
+      "--allow-degraded-local-state",
       "--json",
     ]);
     const statusArtifacts = await writeMatrixQaCliOutputArtifacts({
@@ -1786,7 +1977,11 @@ export async function runMatrixQaE2eeCliAccountAddEnableE2eeScenario(
       rootDir: cli.rootDir,
     });
     const status = parseMatrixQaCliJson(statusResult) as MatrixQaCliVerificationStatus;
-    assertMatrixQaCliE2eeStatus("Matrix CLI account add --enable-e2ee", status);
+    assertMatrixQaCliAccountAddBootstrapStatus({
+      expectedBackupVersion: added.verificationBootstrap.backupVersion,
+      expectedUserId: account.userId,
+      status,
+    });
     const cliDeviceId = status.deviceId ?? null;
 
     return {
@@ -1799,7 +1994,7 @@ export async function runMatrixQaE2eeCliAccountAddEnableE2eeScenario(
         verificationBootstrapSuccess: added.verificationBootstrap.success,
       },
       details: [
-        "Matrix CLI account add --enable-e2ee created an encrypted, verified account",
+        "Matrix CLI account add --enable-e2ee created an encrypted account and bootstrapped recovery state",
         `account add stdout: ${addArtifacts.stdoutPath}`,
         `account add stderr: ${addArtifacts.stderrPath}`,
         `verify status stdout: ${statusArtifacts.stdoutPath}`,
@@ -2969,12 +3164,14 @@ export async function runMatrixQaE2eeDeviceSasVerificationScenario(
         client: driver,
         deviceId: observerDeviceId,
         label: "driver",
+        timeoutMs: context.timeoutMs,
         userId: context.observerUserId,
       });
       const observerTrust = await assertMatrixQaPeerDeviceTrusted({
         client: observer,
         deviceId: driverDeviceId,
         label: "observer",
+        timeoutMs: context.timeoutMs,
         userId: context.driverUserId,
       });
       return {
@@ -3072,14 +3269,20 @@ export async function runMatrixQaE2eeQrVerificationScenario(
           sameMatrixQaVerificationTransaction(summary, completedDriver) && summary.completed,
         timeoutMs: context.timeoutMs,
       });
-      const driverTrust = await driver.getDeviceVerificationStatus(
-        context.observerUserId,
-        observerDeviceId,
-      );
-      const observerTrust = await observer.getDeviceVerificationStatus(
-        context.driverUserId,
-        driverDeviceId,
-      );
+      const driverTrust = await assertMatrixQaPeerDeviceTrusted({
+        client: driver,
+        deviceId: observerDeviceId,
+        label: "driver",
+        timeoutMs: context.timeoutMs,
+        userId: context.observerUserId,
+      });
+      const observerTrust = await assertMatrixQaPeerDeviceTrusted({
+        client: observer,
+        deviceId: driverDeviceId,
+        label: "observer",
+        timeoutMs: context.timeoutMs,
+        userId: context.driverUserId,
+      });
       return {
         artifacts: {
           completedVerificationIds: [completedDriver.id, completedObserver.id],

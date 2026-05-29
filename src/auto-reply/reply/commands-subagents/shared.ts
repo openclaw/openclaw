@@ -17,6 +17,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../../../shared/string-coerce.js";
+import { isNativeCommandTurn, resolveCommandTurnContext } from "../../command-turn-context.js";
 import { resolveCommandSurfaceChannel, resolveChannelAccountId } from "../channel-context.js";
 import { extractMessageText, type ChatMessage } from "../commands-subagents-text.js";
 import type { CommandHandler, CommandHandlerResult } from "../commands-types.js";
@@ -31,40 +32,14 @@ export { resolveCommandSurfaceChannel, resolveChannelAccountId };
 export type { ChatMessage } from "../commands-subagents-text.js";
 
 export const COMMAND = "/subagents";
-export const COMMAND_KILL = "/kill";
-export const COMMAND_STEER = "/steer";
-const COMMAND_TELL = "/tell";
 const COMMAND_FOCUS = "/focus";
 const COMMAND_UNFOCUS = "/unfocus";
 const COMMAND_AGENTS = "/agents";
-const ACTIONS = new Set([
-  "list",
-  "kill",
-  "log",
-  "send",
-  "steer",
-  "info",
-  "spawn",
-  "focus",
-  "unfocus",
-  "agents",
-  "help",
-]);
+const ACTIONS = new Set(["list", "log", "info", "help"]);
 
 export const RECENT_WINDOW_MINUTES = 30;
 
-type SubagentsAction =
-  | "list"
-  | "kill"
-  | "log"
-  | "send"
-  | "steer"
-  | "info"
-  | "spawn"
-  | "focus"
-  | "unfocus"
-  | "agents"
-  | "help";
+type SubagentsAction = "list" | "log" | "info" | "focus" | "unfocus" | "agents" | "help";
 
 type SubagentsCommandParams = Parameters<CommandHandler>[0];
 
@@ -93,6 +68,7 @@ function resolveSubagentTarget(
     token,
     recentWindowMinutes: RECENT_WINDOW_MINUTES,
     label: (entry) => formatRunLabel(entry),
+    aliases: (entry) => (entry.taskName ? [entry.taskName] : []),
     isActive: (entry) =>
       !entry.endedAt ||
       Math.max(
@@ -132,7 +108,7 @@ export function resolveRequesterSessionKey(
   const commandTarget = normalizeOptionalString(params.ctx.CommandTargetSessionKey);
   const commandSession = normalizeOptionalString(params.sessionKey);
   const shouldPreferCommandTarget =
-    opts?.preferCommandTarget ?? params.ctx.CommandSource === "native";
+    opts?.preferCommandTarget ?? isNativeCommandTurn(resolveCommandTurnContext(params.ctx));
   const raw = shouldPreferCommandTarget
     ? commandTarget || commandSession
     : commandSession || commandTarget;
@@ -169,19 +145,13 @@ export function resolveCommandSubagentController(
 export function resolveHandledPrefix(normalized: string): string | null {
   return normalized.startsWith(COMMAND)
     ? COMMAND
-    : normalized.startsWith(COMMAND_KILL)
-      ? COMMAND_KILL
-      : normalized.startsWith(COMMAND_STEER)
-        ? COMMAND_STEER
-        : normalized.startsWith(COMMAND_TELL)
-          ? COMMAND_TELL
-          : normalized.startsWith(COMMAND_FOCUS)
-            ? COMMAND_FOCUS
-            : normalized.startsWith(COMMAND_UNFOCUS)
-              ? COMMAND_UNFOCUS
-              : normalized.startsWith(COMMAND_AGENTS)
-                ? COMMAND_AGENTS
-                : null;
+    : normalized.startsWith(COMMAND_FOCUS)
+      ? COMMAND_FOCUS
+      : normalized.startsWith(COMMAND_UNFOCUS)
+        ? COMMAND_UNFOCUS
+        : normalized.startsWith(COMMAND_AGENTS)
+          ? COMMAND_AGENTS
+          : null;
 }
 
 export function resolveSubagentsAction(params: {
@@ -197,9 +167,6 @@ export function resolveSubagentsAction(params: {
     params.restTokens.splice(0, 1);
     return action;
   }
-  if (params.handledPrefix === COMMAND_KILL) {
-    return "kill";
-  }
   if (params.handledPrefix === COMMAND_FOCUS) {
     return "focus";
   }
@@ -209,7 +176,7 @@ export function resolveSubagentsAction(params: {
   if (params.handledPrefix === COMMAND_AGENTS) {
     return "agents";
   }
-  return "steer";
+  return null;
 }
 
 type FocusTargetResolution = {
@@ -279,20 +246,13 @@ export function buildSubagentsHelp() {
     "Subagents",
     "Usage:",
     "- /subagents list",
-    "- /subagents kill <id|#|all>",
     "- /subagents log <id|#> [limit] [tools]",
     "- /subagents info <id|#>",
-    "- /subagents send <id|#> <message>",
-    "- /subagents steer <id|#> <message>",
-    "- /subagents spawn <agentId> <task> [--model <model>] [--thinking <level>]",
     "- /focus <subagent-label|session-key|session-id|session-label>",
     "- /unfocus",
     "- /agents",
     "- /session idle <duration|off>",
     "- /session max-age <duration|off>",
-    "- /kill <id|#|all>",
-    "- /steer <id|#> <message>",
-    "- /tell <id|#> <message>",
     "",
     "Ids: use the list index (#), runId/session prefix, label, or full session key.",
   ].join("\n");

@@ -1,7 +1,6 @@
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
-import { buildOpenAICodexCliBackend } from "./cli-backend.js";
 import { buildOpenAIImageGenerationProvider } from "./image-generation-provider.js";
 import {
   openaiCodexMediaUnderstandingProvider,
@@ -41,10 +40,10 @@ export default definePluginEntry({
           mode: resolveOpenAIPromptOverlayMode(pluginConfig),
           modelProviderId: provider.id,
           modelId: ctx.modelId,
+          trigger: ctx.trigger,
         });
       },
     });
-    api.registerCliBackend(buildOpenAICodexCliBackend());
     api.registerProvider(buildProviderWithPromptContribution(buildOpenAIProvider()));
     api.registerProvider(buildProviderWithPromptContribution(buildOpenAICodexProviderPlugin()));
     api.registerMemoryEmbeddingProvider(openAiMemoryEmbeddingProviderAdapter);

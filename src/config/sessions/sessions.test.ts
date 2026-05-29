@@ -16,9 +16,28 @@ import {
 } from "./paths.js";
 import { evaluateSessionFreshness, resolveSessionResetPolicy } from "./reset.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
-import { clearSessionStoreCacheForTest, loadSessionStore, updateSessionStore } from "./store.js";
+import { readSessionStoreCache, writeSessionStoreCache } from "./store-cache.js";
+import {
+  clearSessionStoreCacheForTest,
+  loadSessionStore,
+  updateSessionStore,
+  updateSessionStoreEntry,
+} from "./store.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 import { mergeSessionEntry, mergeSessionEntryWithPolicy, type SessionEntry } from "./types.js";
+
+type WriteTextAtomicCall = Parameters<typeof jsonFiles.writeTextAtomic>;
+
+function requireWriteTextAtomicCall(
+  spy: { mock: { calls: WriteTextAtomicCall[] } },
+  callIndex = 0,
+): WriteTextAtomicCall {
+  const call = spy.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected writeTextAtomic call ${callIndex}`);
+  }
+  return call;
+}
 
 describe("session path safety", () => {
   it("rejects unsafe session IDs", () => {
@@ -126,10 +145,8 @@ describe("resolveSessionResetPolicy", () => {
       resetType: "direct",
     });
 
-    expect(policy).toMatchObject({
-      mode: "daily",
-      atHour: 4,
-    });
+    expect(policy.mode).toBe("daily");
+    expect(policy.atHour).toBe(4);
   });
 
   it("treats idleMinutes=0 as never expiring by inactivity", () => {
@@ -163,6 +180,7 @@ describe("resolveSessionResetPolicy", () => {
     });
 
     expect(freshness.fresh).toBe(false);
+    expect(freshness.staleReason).toBe("daily");
   });
 
   it("uses lastInteractionAt, not updatedAt, for idle reset freshness", () => {
@@ -178,10 +196,9 @@ describe("resolveSessionResetPolicy", () => {
       },
     });
 
-    expect(freshness).toMatchObject({
-      fresh: false,
-      idleExpiresAt: 5 * 60_000,
-    });
+    expect(freshness.fresh).toBe(false);
+    expect(freshness.idleExpiresAt).toBe(5 * 60_000);
+    expect(freshness.staleReason).toBe("idle");
   });
 
   it("falls back to sessionStartedAt, not updatedAt, for legacy idle freshness", () => {
@@ -197,10 +214,27 @@ describe("resolveSessionResetPolicy", () => {
       },
     });
 
-    expect(freshness).toMatchObject({
-      fresh: false,
-      idleExpiresAt: 5 * 60_000,
+    expect(freshness.fresh).toBe(false);
+    expect(freshness.idleExpiresAt).toBe(5 * 60_000);
+    expect(freshness.staleReason).toBe("idle");
+  });
+
+  it("reports the first expired reset deadline when daily and idle are both stale", () => {
+    const now = new Date(2026, 3, 25, 12, 0, 0, 0).getTime();
+    const freshness = evaluateSessionFreshness({
+      updatedAt: now,
+      sessionStartedAt: new Date(2026, 3, 24, 23, 0, 0, 0).getTime(),
+      lastInteractionAt: new Date(2026, 3, 25, 11, 0, 0, 0).getTime(),
+      now,
+      policy: {
+        mode: "daily",
+        atHour: 4,
+        idleMinutes: 30,
+      },
     });
+
+    expect(freshness.fresh).toBe(false);
+    expect(freshness.staleReason).toBe("daily");
   });
 
   it("does not let future legacy updatedAt values keep daily sessions fresh", () => {
@@ -229,10 +263,8 @@ describe("resolveSessionResetPolicy", () => {
       },
     });
 
-    expect(freshness).toMatchObject({
-      fresh: false,
-      idleExpiresAt: 5 * 60_000,
-    });
+    expect(freshness.fresh).toBe(false);
+    expect(freshness.idleExpiresAt).toBe(5 * 60_000);
   });
 });
 
@@ -319,6 +351,174 @@ describe("session store writer queue", () => {
     expect((store[key] as Record<string, unknown>).counter).toBe(N);
   });
 
+  it("drops non-object persisted session entries on load", async () => {
+    const { storePath } = await makeTmpStore({
+      "agent:main:good": { sessionId: "s-good", updatedAt: Date.now() },
+      "agent:main:null": null,
+      "agent:main:string": "not-a-session-entry",
+      "agent:main:array": [{ sessionId: "s-array", updatedAt: Date.now() }],
+    } as unknown as Record<string, SessionEntry>);
+
+    const store = loadSessionStore(storePath, { skipCache: true });
+
+    expect(store["agent:main:good"]?.sessionId).toBe("s-good");
+    expect(store["agent:main:null"]).toBeUndefined();
+    expect(store["agent:main:string"]).toBeUndefined();
+    expect(store["agent:main:array"]).toBeUndefined();
+  });
+
+  it("strips malformed pending final-delivery fields on load", async () => {
+    const { storePath } = await makeTmpStore({
+      "agent:main:bad-pending": {
+        sessionId: "s-bad-pending",
+        updatedAt: 100,
+        pendingFinalDelivery: "yes",
+        pendingFinalDeliveryText: { text: "would crash display sanitizers" },
+        pendingFinalDeliveryCreatedAt: "100",
+        pendingFinalDeliveryLastAttemptAt: -1,
+        pendingFinalDeliveryAttemptCount: "2",
+        pendingFinalDeliveryLastError: { message: "boom" },
+        pendingFinalDeliveryContext: {
+          channel: "telegram",
+          to: ["chat"],
+          accountId: { id: "default" },
+          threadId: {},
+        },
+        pendingFinalDeliveryIntentId: 123,
+      },
+      "agent:main:good-pending": {
+        sessionId: "s-good-pending",
+        updatedAt: 100,
+        pendingFinalDelivery: true,
+        pendingFinalDeliveryText: "hello",
+        pendingFinalDeliveryCreatedAt: 10,
+        pendingFinalDeliveryLastAttemptAt: 20,
+        pendingFinalDeliveryAttemptCount: 2,
+        pendingFinalDeliveryLastError: null,
+        pendingFinalDeliveryContext: {
+          channel: "Telegram",
+          to: " chat-1 ",
+          accountId: "Default",
+          threadId: 42.5,
+        },
+        pendingFinalDeliveryIntentId: "intent-1",
+      },
+    } as unknown as Record<string, SessionEntry>);
+
+    const store = loadSessionStore(storePath, { skipCache: true });
+    const bad = store["agent:main:bad-pending"];
+    const good = store["agent:main:good-pending"];
+
+    expect(bad).toMatchObject({
+      sessionId: "s-bad-pending",
+      updatedAt: 100,
+    });
+    expect(bad?.pendingFinalDelivery).toBeUndefined();
+    expect(bad?.pendingFinalDeliveryText).toBeUndefined();
+    expect(bad?.pendingFinalDeliveryCreatedAt).toBeUndefined();
+    expect(bad?.pendingFinalDeliveryLastAttemptAt).toBeUndefined();
+    expect(bad?.pendingFinalDeliveryAttemptCount).toBeUndefined();
+    expect(bad?.pendingFinalDeliveryLastError).toBeUndefined();
+    expect(bad?.pendingFinalDeliveryContext).toBeUndefined();
+    expect(bad?.pendingFinalDeliveryIntentId).toBeUndefined();
+
+    expect(good).toMatchObject({
+      pendingFinalDelivery: true,
+      pendingFinalDeliveryText: "hello",
+      pendingFinalDeliveryCreatedAt: 10,
+      pendingFinalDeliveryLastAttemptAt: 20,
+      pendingFinalDeliveryAttemptCount: 2,
+      pendingFinalDeliveryLastError: null,
+      pendingFinalDeliveryContext: {
+        channel: "telegram",
+        to: "chat-1",
+        accountId: "default",
+        threadId: 42,
+      },
+      pendingFinalDeliveryIntentId: "intent-1",
+    });
+  });
+
+  it("strips malformed plugin extension state on load", async () => {
+    const { storePath } = await makeTmpStore({
+      "agent:main:plugins": {
+        sessionId: "s-plugins",
+        updatedAt: 100,
+        pluginExtensions: {
+          " workflow-plugin ": {
+            " approval ": { state: "waiting" },
+            scalar: true,
+            huge: "x".repeat(70 * 1024),
+            emptyNamespace: undefined,
+          },
+          "bad-shape": "not-a-namespace-record",
+          "array-shape": [{ workflow: { state: "bad" } }],
+          "": { workflow: { state: "bad" } },
+        },
+        pluginExtensionSlotKeys: {
+          " workflow-plugin ": {
+            " approval ": " approvalSnapshot ",
+            reserved: "sessionId",
+            dotted: "approval.snapshot",
+            empty: "",
+          },
+          "bad-shape": "approvalSnapshot",
+          "": { workflow: "ignoredSlot" },
+        },
+      },
+    } as unknown as Record<string, SessionEntry>);
+
+    const store = loadSessionStore(storePath, { skipCache: true });
+    expect(store["agent:main:plugins"]?.pluginExtensions).toEqual({
+      "workflow-plugin": {
+        approval: { state: "waiting" },
+        scalar: true,
+      },
+    });
+    expect(store["agent:main:plugins"]?.pluginExtensionSlotKeys).toEqual({
+      "workflow-plugin": {
+        approval: "approvalSnapshot",
+      },
+    });
+  });
+
+  it("normalizes malformed persisted session entry fields on load", async () => {
+    const { storePath } = await makeTmpStore({
+      "agent:main:good": {
+        sessionId: " s-good ",
+        updatedAt: "definitely-not-a-time",
+        sessionFile: { path: "bad.jsonl" },
+      },
+      "agent:main:object-id": { sessionId: { nested: "bad" }, updatedAt: Date.now() },
+      "agent:main:unsafe-id": { sessionId: "../etc/passwd", updatedAt: Date.now() },
+    } as unknown as Record<string, SessionEntry>);
+
+    const store = loadSessionStore(storePath, { skipCache: true });
+
+    expect(store["agent:main:good"]?.sessionId).toBe("s-good");
+    expect(store["agent:main:good"]?.updatedAt).toBe(0);
+    expect(store["agent:main:good"]?.sessionFile).toBeUndefined();
+    expect(store["agent:main:object-id"]).toBeUndefined();
+    expect(store["agent:main:unsafe-id"]).toBeUndefined();
+  });
+
+  it("keeps metadata-only canonical sessions without treating their ids as transcript ids", async () => {
+    const { storePath } = await makeTmpStore({
+      "agent:main:metadata": {
+        sessionId: "agent:main:metadata",
+        updatedAt: Date.now(),
+        groupActivation: "always",
+      },
+    } as unknown as Record<string, SessionEntry>);
+
+    const store = loadSessionStore(storePath, { skipCache: true });
+
+    expect(store["agent:main:metadata"]).toMatchObject({
+      groupActivation: "always",
+    });
+    expect(store["agent:main:metadata"]?.sessionId).toBeUndefined();
+  });
+
   it("skips session store disk writes when payload is unchanged", async () => {
     const key = "agent:main:no-op-save";
     const { storePath } = await makeTmpStore({
@@ -334,6 +534,198 @@ describe("session store writer queue", () => {
       { skipMaintenance: true },
     );
     expect(writeSpy).not.toHaveBeenCalled();
+    writeSpy.mockRestore();
+  });
+
+  it("skips unchanged writes after persisting blobbed skills prompts", async () => {
+    const key = "agent:main:no-op-blobbed-save";
+    const { storePath } = await makeTmpStore({
+      [key]: {
+        sessionId: "s-noop-blobbed",
+        updatedAt: Date.now(),
+        skillsSnapshot: {
+          prompt: `<available_skills>\n${"shared prompt\n".repeat(200)}</available_skills>`,
+          skills: [{ name: "demo" }],
+          version: 1,
+        },
+      },
+    });
+
+    const writeSpy = vi.spyOn(jsonFiles, "writeTextAtomic");
+    await updateSessionStore(
+      storePath,
+      async (store) => {
+        store[key].displayName = "saved once";
+      },
+      { skipMaintenance: true },
+    );
+    writeSpy.mockClear();
+
+    await updateSessionStore(
+      storePath,
+      async () => {
+        // Intentionally no-op mutation after the disk JSON has prompt refs.
+      },
+      { skipMaintenance: true },
+    );
+
+    const storeWrites = writeSpy.mock.calls.filter(([targetPath]) => targetPath === storePath);
+    expect(storeWrites).toHaveLength(0);
+    writeSpy.mockClear();
+
+    await updateSessionStore(
+      storePath,
+      async () => {
+        // The first unchanged save must not clear the serialized comparison cache.
+      },
+      { skipMaintenance: true },
+    );
+
+    const secondStoreWrites = writeSpy.mock.calls.filter(
+      ([targetPath]) => targetPath === storePath,
+    );
+    expect(secondStoreWrites).toHaveLength(0);
+    writeSpy.mockRestore();
+  });
+
+  it("keeps unchanged entry saves from clearing blobbed store comparison cache", async () => {
+    const now = Date.now();
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    const key = "agent:main:no-op-blobbed-entry-save";
+    let writeSpy:
+      | {
+          mock: { calls: WriteTextAtomicCall[] };
+          mockClear: () => void;
+          mockRestore: () => void;
+        }
+      | undefined;
+    try {
+      const { storePath } = await makeTmpStore({
+        [key]: {
+          sessionId: "s-noop-blobbed-entry",
+          updatedAt: now,
+          displayName: "entry",
+          skillsSnapshot: {
+            prompt: `<available_skills>\n${"entry prompt\n".repeat(200)}</available_skills>`,
+            skills: [{ name: "demo" }],
+            version: 1,
+          },
+        },
+      });
+
+      writeSpy = vi.spyOn(jsonFiles, "writeTextAtomic");
+      await updateSessionStore(
+        storePath,
+        async (store) => {
+          store[key].displayName = "saved once";
+        },
+        { skipMaintenance: true },
+      );
+      writeSpy.mockClear();
+
+      await updateSessionStoreEntry({
+        storePath,
+        sessionKey: key,
+        update: async (entry) => ({ displayName: entry.displayName, updatedAt: entry.updatedAt }),
+        skipMaintenance: true,
+      });
+      expect(
+        writeSpy.mock.calls.filter((call: WriteTextAtomicCall) => call[0] === storePath),
+      ).toHaveLength(0);
+      writeSpy.mockClear();
+
+      await updateSessionStore(
+        storePath,
+        async () => {
+          // The unchanged entry save must leave the serialized comparison cache hot.
+        },
+        { skipMaintenance: true },
+      );
+      expect(
+        writeSpy.mock.calls.filter((call: WriteTextAtomicCall) => call[0] === storePath),
+      ).toHaveLength(0);
+    } finally {
+      writeSpy?.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("caches unchanged session stores from persisted JSON shape", async () => {
+    const key = "agent:main:no-op-cache";
+    const { storePath } = await makeTmpStore({
+      [key]: { sessionId: "s-noop-cache", updatedAt: Date.now() },
+    });
+
+    await updateSessionStore(
+      storePath,
+      async (store) => {
+        (store[key] as Record<string, unknown>).ephemeral = undefined;
+      },
+      { skipMaintenance: true },
+    );
+
+    expect(loadSessionStore(storePath)[key]).not.toHaveProperty("ephemeral");
+  });
+
+  it("clones session store cache hits from cached serialized JSON", () => {
+    const key = "agent:main:serialized-cache";
+    const storePath = "/tmp/openclaw-serialized-cache-test.json";
+    const store = {
+      [key]: {
+        sessionId: "s-serialized-cache",
+        updatedAt: Date.now(),
+        skillsSnapshot: {
+          prompt: "p".repeat(1024),
+          skills: [{ name: "demo" }],
+          version: 1,
+        },
+      },
+    } satisfies Record<string, SessionEntry>;
+    const serialized = JSON.stringify(store);
+    writeSessionStoreCache({
+      storePath,
+      store,
+      mtimeMs: 1,
+      sizeBytes: serialized.length,
+      serialized,
+      cloneSerialized: serialized,
+      takeOwnership: true,
+    });
+    store[key].sessionId = "mutated-cache-object";
+
+    const cached = readSessionStoreCache({
+      storePath,
+      mtimeMs: 1,
+      sizeBytes: serialized.length,
+    });
+
+    expect(cached?.[key]?.sessionId).toBe("s-serialized-cache");
+  });
+
+  it("keeps session store writes atomic while skipping durable fsync inside the writer lock", async () => {
+    const key = "agent:main:no-fsync";
+    const { storePath } = await makeTmpStore({
+      [key]: { sessionId: "s-no-fsync", updatedAt: Date.now(), counter: 0 },
+    });
+
+    const writeSpy = vi.spyOn(jsonFiles, "writeTextAtomic");
+    await updateSessionStore(
+      storePath,
+      async (store) => {
+        const entry = store[key] as Record<string, unknown>;
+        entry.counter = 1;
+      },
+      { skipMaintenance: true },
+    );
+
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    const [writtenPath, writtenText, writeOptions] = requireWriteTextAtomicCall(writeSpy);
+    expect(writtenPath).toBe(storePath);
+    expect(writtenText).toBeTypeOf("string");
+    expect(writeOptions?.durable).toBe(false);
+    expect(writeOptions?.mode).toBe(0o600);
+    expect(writeOptions?.beforeRename).toBeTypeOf("function");
     writeSpy.mockRestore();
   });
 
@@ -353,8 +745,8 @@ describe("session store writer queue", () => {
       store[key] = { ...store[key], modelOverride: "recovered" } as unknown as SessionEntry;
     });
 
-    for (const p of errors) {
-      await expect(p).rejects.toThrow();
+    for (const [index, p] of errors.entries()) {
+      await expect(p).rejects.toThrow(`fail-${index}`);
     }
     await success;
 

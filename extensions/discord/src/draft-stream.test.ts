@@ -1,4 +1,4 @@
-import { Routes } from "discord-api-types/v10";
+import { MessageFlags, Routes } from "discord-api-types/v10";
 import { describe, expect, it, vi } from "vitest";
 import { createDiscordDraftStream } from "./draft-stream.js";
 
@@ -57,6 +57,35 @@ describe("createDiscordDraftStream", () => {
     expect(stream.messageId()).toBe("m1");
   });
 
+  it("deletes the current preview without stopping later draft updates", async () => {
+    const rest = {
+      post: vi.fn().mockResolvedValueOnce({ id: "m1" }).mockResolvedValueOnce({ id: "m2" }),
+      patch: vi.fn(async () => undefined),
+      delete: vi.fn(async () => undefined),
+    };
+    const stream = createDiscordDraftStream({
+      rest: rest as never,
+      channelId: "c1",
+      throttleMs: 250,
+    });
+
+    stream.update("temporary commentary");
+    await stream.flush();
+    await stream.deleteCurrentMessage();
+    stream.update("tool progress");
+    await stream.flush();
+
+    expect(rest.delete).toHaveBeenCalledWith(Routes.channelMessage("c1", "m1"));
+    expect(rest.post).toHaveBeenNthCalledWith(2, Routes.channelMessages("c1"), {
+      body: {
+        content: "tool progress",
+        allowed_mentions: { parse: [] },
+      },
+    });
+    expect(rest.patch).not.toHaveBeenCalled();
+    expect(stream.messageId()).toBe("m2");
+  });
+
   it("suppresses mentions in preview creates and edits", async () => {
     const rest = {
       post: vi.fn(async () => ({ id: "m1" })),
@@ -88,6 +117,40 @@ describe("createDiscordDraftStream", () => {
     });
   });
 
+  it("suppresses link embeds in preview creates and edits when requested", async () => {
+    const rest = {
+      post: vi.fn(async () => ({ id: "m1" })),
+      patch: vi.fn(async () => undefined),
+      delete: vi.fn(async () => undefined),
+    };
+    const stream = createDiscordDraftStream({
+      rest: rest as never,
+      channelId: "c1",
+      throttleMs: 250,
+      suppressEmbeds: true,
+    });
+
+    stream.update("https://example.com");
+    await stream.flush();
+    stream.update("https://example.com/final");
+    await stream.flush();
+
+    expect(rest.post).toHaveBeenCalledWith(Routes.channelMessages("c1"), {
+      body: {
+        content: "https://example.com",
+        allowed_mentions: { parse: [] },
+        flags: MessageFlags.SuppressEmbeds,
+      },
+    });
+    expect(rest.patch).toHaveBeenCalledWith(Routes.channelMessage("c1", "m1"), {
+      body: {
+        content: "https://example.com/final",
+        allowed_mentions: { parse: [] },
+        flags: MessageFlags.SuppressEmbeds,
+      },
+    });
+  });
+
   it("stops previewing and warns once text exceeds the configured limit", async () => {
     const rest = {
       post: vi.fn(async () => ({ id: "m1" })),
@@ -107,7 +170,7 @@ describe("createDiscordDraftStream", () => {
     await stream.flush();
 
     expect(rest.post).not.toHaveBeenCalled();
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("discord stream preview stopped"));
+    expect(warn).toHaveBeenCalledWith("discord stream preview stopped (text length 6 > 5)");
     expect(stream.messageId()).toBeUndefined();
   });
 

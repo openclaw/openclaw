@@ -6,6 +6,8 @@ import {
   buildPluginRegistrySnapshotReport,
   buildPluginSnapshotReport,
   inspectPluginRegistry,
+  loadConfig,
+  readConfigFileSnapshot,
   resetPluginsCliTestState,
   refreshPluginRegistry,
   runPluginsCommand,
@@ -37,33 +39,38 @@ describe("plugins cli list", () => {
 
     await runPluginsCommand(["plugins", "list", "--json"]);
 
-    expect(buildPluginRegistrySnapshotReport).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: {},
-        logger: expect.objectContaining({
-          info: expect.any(Function),
-          warn: expect.any(Function),
-          error: expect.any(Function),
-        }),
-      }),
-    );
-
-    expect(JSON.parse(runtimeLogs[0] ?? "null")).toEqual({
-      workspaceDir: "/workspace",
-      registry: {
-        source: "persisted",
-        diagnostics: [],
+    expect(buildPluginRegistrySnapshotReport).toHaveBeenCalledTimes(1);
+    const [reportOptions] = buildPluginRegistrySnapshotReport.mock.calls[0] as [
+      {
+        config?: unknown;
+        logger?: { info?: unknown; warn?: unknown; error?: unknown };
       },
-      plugins: [
-        expect.objectContaining({
-          id: "demo",
-          imported: true,
-          activated: true,
-          explicitlyEnabled: true,
-        }),
-      ],
-      diagnostics: [],
-    });
+    ];
+    expect(reportOptions?.config).toEqual({});
+    expect(reportOptions?.logger?.info).toBeTypeOf("function");
+    expect(reportOptions?.logger?.warn).toBeTypeOf("function");
+    expect(reportOptions?.logger?.error).toBeTypeOf("function");
+
+    const output = JSON.parse(runtimeLogs[0] ?? "null") as {
+      workspaceDir?: string;
+      registry?: { source?: string; diagnostics?: unknown[] };
+      plugins?: Array<{
+        id?: string;
+        imported?: boolean;
+        activated?: boolean;
+        explicitlyEnabled?: boolean;
+      }>;
+      diagnostics?: unknown[];
+    };
+    expect(output.workspaceDir).toBe("/workspace");
+    expect(output.registry?.source).toBe("persisted");
+    expect(output.registry?.diagnostics).toEqual([]);
+    expect(output.plugins).toHaveLength(1);
+    expect(output.plugins?.[0]?.id).toBe("demo");
+    expect(output.plugins?.[0]?.imported).toBe(true);
+    expect(output.plugins?.[0]?.activated).toBe(true);
+    expect(output.plugins?.[0]?.explicitlyEnabled).toBe(true);
+    expect(output.diagnostics).toEqual([]);
   });
 
   it("keeps doctor on a module-loading snapshot", async () => {
@@ -74,7 +81,377 @@ describe("plugins cli list", () => {
 
     await runPluginsCommand(["plugins", "doctor"]);
 
-    expect(buildPluginDiagnosticsReport).toHaveBeenCalledWith({ effectiveOnly: true });
+    expect(buildPluginDiagnosticsReport).toHaveBeenCalledWith({ config: {}, effectiveOnly: true });
+    expect(runtimeLogs).toContain("No plugin issues detected.");
+  });
+
+  it("reports stale plugin config in doctor output without claiming full plugin health", async () => {
+    const sourceConfig = {
+      plugins: {
+        allow: ["lossless-claw"],
+        entries: {
+          "lossless-claw": { enabled: true },
+        },
+        slots: {
+          contextEngine: "lossless-claw",
+        },
+      },
+    };
+    loadConfig.mockReturnValue({});
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      path: "/tmp/openclaw-config.json5",
+      exists: true,
+      raw: "{}",
+      parsed: sourceConfig,
+      resolved: sourceConfig,
+      sourceConfig,
+      runtimeConfig: {},
+      config: {},
+      valid: true,
+      hash: "mock",
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+    buildPluginDiagnosticsReport.mockReturnValue({
+      plugins: [],
+      diagnostics: [],
+    });
+
+    await runPluginsCommand(["plugins", "doctor"]);
+
+    const output = runtimeLogs.join("\n");
+    expect(output).toContain("Plugin configuration:");
+    expect(output).toContain('plugins.allow: stale plugin reference "lossless-claw" was found.');
+    expect(output).toContain(
+      'plugins.entries.lossless-claw: stale plugin reference "lossless-claw" was found.',
+    );
+    expect(output).toContain(
+      'plugins.slots.contextEngine: slot references missing plugin "lossless-claw".',
+    );
+    expect(output).toContain(
+      'Run "openclaw doctor --fix" to remove stale plugin ids and dangling channel references.',
+    );
+    expect(output).toContain(
+      "No plugin install-tree issues detected; configuration warnings remain.",
+    );
+    expect(output).not.toContain("No plugin issues detected.");
+  });
+
+  it("reports missing configured Codex runtime plugin in doctor output", async () => {
+    const sourceConfig = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.5": {
+              agentRuntime: { id: "codex" },
+            },
+          },
+        },
+      },
+    };
+    loadConfig.mockReturnValue(sourceConfig);
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      path: "/tmp/openclaw-config.json5",
+      exists: true,
+      raw: "{}",
+      parsed: sourceConfig,
+      resolved: sourceConfig,
+      sourceConfig,
+      runtimeConfig: sourceConfig,
+      config: sourceConfig,
+      valid: true,
+      hash: "mock",
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+    buildPluginDiagnosticsReport.mockReturnValue({
+      plugins: [],
+      diagnostics: [],
+    });
+
+    await runPluginsCommand(["plugins", "doctor"]);
+
+    const output = runtimeLogs.join("\n");
+    expect(output).toContain("Plugin configuration:");
+    expect(output).toContain('Configured runtime "codex" requires the Codex plugin');
+    expect(output).toContain("openclaw doctor --fix");
+    expect(output).toContain("openclaw plugins install @openclaw/codex");
+    expect(output).toContain(
+      "No plugin install-tree issues detected; configuration warnings remain.",
+    );
+    expect(output).not.toContain("No plugin issues detected.");
+  });
+
+  it("reports missing configured ACPX runtime plugin in doctor output", async () => {
+    const sourceConfig = {
+      acp: {
+        backend: "acpx",
+      },
+    };
+    loadConfig.mockReturnValue(sourceConfig);
+    buildPluginDiagnosticsReport.mockReturnValue({
+      plugins: [],
+      diagnostics: [],
+    });
+
+    await runPluginsCommand(["plugins", "doctor"]);
+
+    const output = runtimeLogs.join("\n");
+    expect(output).toContain("Plugin configuration:");
+    expect(output).toContain('Configured runtime "acpx" requires the ACPX Runtime plugin');
+    expect(output).toContain("openclaw doctor --fix");
+    expect(output).toContain("openclaw plugins install @openclaw/acpx");
+    expect(output).not.toContain("No plugin issues detected.");
+  });
+
+  it("reports blocked configured ACPX runtime with ACP-specific guidance", async () => {
+    const sourceConfig = {
+      acp: {
+        backend: "acpx",
+      },
+      plugins: {
+        entries: {
+          acpx: { enabled: false },
+        },
+      },
+    };
+    loadConfig.mockReturnValue(sourceConfig);
+    buildPluginDiagnosticsReport.mockReturnValue({
+      plugins: [],
+      diagnostics: [],
+    });
+
+    await runPluginsCommand(["plugins", "doctor"]);
+
+    const output = runtimeLogs.join("\n");
+    expect(output).toContain('Configured runtime "acpx" requires the ACPX Runtime plugin');
+    expect(output).toContain("Set plugins.entries.acpx.enabled=true");
+    expect(output).toContain("disable ACP/acpx in acp config");
+    expect(output).not.toContain('runtime policy to "openclaw"');
+    expect(output).not.toContain("openclaw plugins install @openclaw/acpx");
+    expect(output).not.toContain("No plugin issues detected.");
+  });
+
+  it("reports disabled configured ACPX runtime with ACP-specific guidance", async () => {
+    const sourceConfig = {
+      acp: {
+        backend: "acpx",
+      },
+    };
+    loadConfig.mockReturnValue(sourceConfig);
+    buildPluginDiagnosticsReport.mockReturnValue({
+      plugins: [createPluginRecord({ id: "acpx", enabled: false, status: "disabled" })],
+      diagnostics: [],
+    });
+
+    await runPluginsCommand(["plugins", "doctor"]);
+
+    const output = runtimeLogs.join("\n");
+    expect(output).toContain('Configured runtime "acpx" requires the ACPX Runtime plugin');
+    expect(output).toContain('Enable the "acpx" plugin');
+    expect(output).toContain("disable ACP/acpx in acp config");
+    expect(output).not.toContain('runtime policy to "openclaw"');
+    expect(output).not.toContain("openclaw plugins install @openclaw/acpx");
+    expect(output).not.toContain("No plugin issues detected.");
+  });
+
+  it("does not report implicit OpenAI Codex preference as configured runtime", async () => {
+    const sourceConfig = {
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.5",
+        },
+      },
+    };
+    loadConfig.mockReturnValue(sourceConfig);
+    buildPluginDiagnosticsReport.mockReturnValue({
+      plugins: [],
+      diagnostics: [],
+    });
+
+    await runPluginsCommand(["plugins", "doctor"]);
+
+    const output = runtimeLogs.join("\n");
+    expect(output).not.toContain('Configured runtime "codex"');
+    expect(output).toContain("No plugin issues detected.");
+  });
+
+  it("does not report configured Codex runtime when the plugin is enabled", async () => {
+    const sourceConfig = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.5": {
+              agentRuntime: { id: "codex" },
+            },
+          },
+        },
+      },
+    };
+    loadConfig.mockReturnValue(sourceConfig);
+    buildPluginDiagnosticsReport.mockReturnValue({
+      plugins: [createPluginRecord({ id: "codex" })],
+      diagnostics: [],
+    });
+
+    await runPluginsCommand(["plugins", "doctor"]);
+
+    expect(runtimeLogs).toContain("No plugin issues detected.");
+  });
+
+  it("reports configured Codex runtime when the plugin record is disabled", async () => {
+    const sourceConfig = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.5": {
+              agentRuntime: { id: "codex" },
+            },
+          },
+        },
+      },
+    };
+    loadConfig.mockReturnValue(sourceConfig);
+    buildPluginDiagnosticsReport.mockReturnValue({
+      plugins: [createPluginRecord({ id: "codex", enabled: false, status: "disabled" })],
+      diagnostics: [],
+    });
+
+    await runPluginsCommand(["plugins", "doctor"]);
+
+    const output = runtimeLogs.join("\n");
+    expect(output).toContain('Configured runtime "codex" requires the Codex plugin');
+    expect(output).toContain('but "codex" is disabled');
+    expect(output).toContain('Enable the "codex" plugin');
+    expect(output).not.toContain("openclaw plugins install @openclaw/codex");
+    expect(output).not.toContain("No plugin issues detected.");
+  });
+
+  it("reports blocked configured Codex runtime without install advice", async () => {
+    const sourceConfig = {
+      plugins: {
+        deny: ["codex"],
+      },
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.5": {
+              agentRuntime: { id: "codex" },
+            },
+          },
+        },
+      },
+    };
+    loadConfig.mockReturnValue(sourceConfig);
+    buildPluginDiagnosticsReport.mockReturnValue({
+      plugins: [],
+      diagnostics: [],
+    });
+
+    await runPluginsCommand(["plugins", "doctor"]);
+
+    const output = runtimeLogs.join("\n");
+    expect(output).toContain('Configured runtime "codex" requires the Codex plugin');
+    expect(output).toContain('but "codex" is blocked by plugin configuration');
+    expect(output).toContain('Remove "codex" from plugins.deny');
+    expect(output).not.toContain('Run "openclaw doctor --fix" to install');
+    expect(output).not.toContain("openclaw plugins install @openclaw/codex");
+    expect(output).not.toContain("No plugin issues detected.");
+  });
+
+  it("reports disabled configured Codex runtime entry without install advice", async () => {
+    const sourceConfig = {
+      plugins: {
+        entries: {
+          codex: { enabled: false },
+        },
+      },
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.5": {
+              agentRuntime: { id: "codex" },
+            },
+          },
+        },
+      },
+    };
+    loadConfig.mockReturnValue(sourceConfig);
+    buildPluginDiagnosticsReport.mockReturnValue({
+      plugins: [],
+      diagnostics: [],
+    });
+
+    await runPluginsCommand(["plugins", "doctor"]);
+
+    const output = runtimeLogs.join("\n");
+    expect(output).toContain('Configured runtime "codex" requires the Codex plugin');
+    expect(output).toContain('but "codex" is blocked by plugin configuration');
+    expect(output).toContain("Set plugins.entries.codex.enabled=true");
+    expect(output).not.toContain('Run "openclaw doctor --fix" to install');
+    expect(output).not.toContain("openclaw plugins install @openclaw/codex");
+    expect(output).not.toContain("No plugin issues detected.");
+  });
+
+  it("reports config-selected plugin source shadowing in doctor output", async () => {
+    buildPluginDiagnosticsReport.mockReturnValue({
+      plugins: [
+        createPluginRecord({
+          id: "discord",
+          origin: "config",
+          source: "/tmp/openclaw-upstream/extensions/discord/index.ts",
+          status: "error",
+          error: "Cannot find module 'chalk'",
+        }),
+      ],
+      diagnostics: [
+        {
+          level: "warn",
+          pluginId: "discord",
+          source: "/tmp/openclaw/npm/node_modules/@openclaw/discord/index.ts",
+          message:
+            "duplicate plugin id resolved by explicit config-selected plugin; global plugin will be overridden by config plugin (/tmp/openclaw-upstream/extensions/discord/index.ts)",
+        },
+      ],
+    });
+
+    await runPluginsCommand(["plugins", "doctor"]);
+
+    const output = runtimeLogs.join("\n");
+    expect(output).toContain("Plugin source shadowing:");
+    expect(output).toContain(
+      "discord: duplicate plugin id resolved by explicit config-selected plugin",
+    );
+    expect(output).toContain("active: /tmp/openclaw-upstream/extensions/discord/index.ts");
+    expect(output).toContain("shadowed: /tmp/openclaw/npm/node_modules/@openclaw/discord/index.ts");
+    expect(output).toContain("openclaw plugins registry --refresh");
+  });
+
+  it("does not report healthy config-selected plugin source shadowing as doctor issue", async () => {
+    buildPluginDiagnosticsReport.mockReturnValue({
+      plugins: [
+        createPluginRecord({
+          id: "discord",
+          origin: "config",
+          source: "/tmp/openclaw-upstream/extensions/discord/index.ts",
+          status: "loaded",
+        }),
+      ],
+      diagnostics: [
+        {
+          level: "warn",
+          pluginId: "discord",
+          source: "/tmp/openclaw/npm/node_modules/@openclaw/discord/index.ts",
+          message:
+            "duplicate plugin id resolved by explicit config-selected plugin; global plugin will be overridden by config plugin (/tmp/openclaw-upstream/extensions/discord/index.ts)",
+        },
+      ],
+    });
+
+    await runPluginsCommand(["plugins", "doctor"]);
+
     expect(runtimeLogs).toContain("No plugin issues detected.");
   });
 
@@ -130,6 +507,11 @@ describe("plugins cli list", () => {
         version: "2026.5.1",
         clawhubPackage: "openclaw-mem0",
         clawhubChannel: "official",
+        artifactKind: "npm-pack",
+        artifactFormat: "tgz",
+        npmIntegrity: "sha512-clawpack",
+        npmShasum: "1".repeat(40),
+        npmTarballName: "openclaw-mem0-2026.5.1.tgz",
         clawpackSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         clawpackSpecVersion: 1,
         clawpackManifestSha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -154,7 +536,6 @@ describe("plugins cli list", () => {
       cliCommands: [],
       services: [],
       gatewayDiscoveryServices: [],
-      gatewayMethods: [],
       mcpServers: [],
       lspServers: [],
       httpRouteCount: 0,
@@ -175,6 +556,8 @@ describe("plugins cli list", () => {
     expect(runtimeLogs.join("\n")).toContain("Policy");
     expect(runtimeLogs.join("\n")).toContain("allowConversationAccess: true");
     expect(runtimeLogs.join("\n")).toContain("ClawHub package: openclaw-mem0");
+    expect(runtimeLogs.join("\n")).toContain("Artifact kind: npm-pack");
+    expect(runtimeLogs.join("\n")).toContain("Npm integrity: sha512-clawpack");
     expect(runtimeLogs.join("\n")).toContain(
       "ClawPack sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     );
@@ -201,7 +584,6 @@ describe("plugins cli list", () => {
       cliCommands: [],
       services: [],
       gatewayDiscoveryServices: [],
-      gatewayMethods: [],
       mcpServers: [],
       lspServers: [],
       httpRouteCount: 0,

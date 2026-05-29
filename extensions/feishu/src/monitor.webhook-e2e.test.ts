@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createFeishuRuntimeMockModule } from "./monitor.test-mocks.js";
 import { withRunningWebhookMonitor } from "./monitor.webhook.test-helpers.js";
 
@@ -20,6 +20,10 @@ vi.mock("./client.js", async () => {
 vi.mock("./runtime.js", () => createFeishuRuntimeMockModule());
 
 import { monitorFeishuProvider, stopFeishuMonitor } from "./monitor.js";
+
+beforeAll(async () => {
+  await import("./monitor.account.js");
+});
 
 function signFeishuPayload(params: {
   encryptKey: string;
@@ -61,6 +65,13 @@ async function postSignedPayload(url: string, payload: Record<string, unknown>) 
 
 afterEach(() => {
   stopFeishuMonitor();
+});
+
+afterAll(() => {
+  vi.doUnmock("./probe.js");
+  vi.doUnmock("./client.js");
+  vi.doUnmock("./runtime.js");
+  vi.resetModules();
 });
 
 describe("Feishu webhook signed-request e2e", () => {

@@ -1,7 +1,9 @@
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import type { ChannelHealthSummary, HealthSummary } from "../../commands/health.types.js";
 import { getStatusSummary } from "../../commands/status.js";
-import { ErrorCodes, errorShape } from "../protocol/index.js";
+import { listContextEngineQuarantines } from "../../context-engine/registry.js";
+import { getGatewayModelPricingHealth } from "../model-pricing-cache-state.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import { HEALTH_REFRESH_INTERVAL_MS } from "../server-constants.js";
 import { formatError } from "../server-utils.js";
@@ -82,6 +84,36 @@ function cachedHealthDiffersFromRuntime(
   return false;
 }
 
+function mergeCachedHealthRuntimeState(params: {
+  cached: HealthSummary;
+  eventLoop?: HealthSummary["eventLoop"];
+}): HealthSummary {
+  const { contextEngines: _cachedContextEngines, ...cached } = params.cached;
+  const quarantinedContextEngines: NonNullable<HealthSummary["contextEngines"]>["quarantined"] = [];
+  for (const entry of listContextEngineQuarantines()) {
+    const summary: NonNullable<HealthSummary["contextEngines"]>["quarantined"][number] = {
+      engineId: entry.engineId,
+      operation: entry.operation,
+      reason: entry.reason,
+      failedAt: entry.failedAt.getTime(),
+    };
+    if (entry.owner) {
+      summary.owner = entry.owner;
+    }
+    quarantinedContextEngines.push(summary);
+  }
+  return {
+    ...cached,
+    ...(params.eventLoop ? { eventLoop: params.eventLoop } : {}),
+    ...(quarantinedContextEngines.length > 0
+      ? { contextEngines: { quarantined: quarantinedContextEngines } }
+      : {}),
+    modelPricing: getGatewayModelPricingHealth({
+      enabled: params.cached.modelPricing?.state !== "disabled",
+    }),
+  };
+}
+
 export const healthHandlers: GatewayRequestHandlers = {
   health: async ({ respond, context, params, client }) => {
     const { getHealthCache, refreshHealthSnapshot, logHealth } = context;
@@ -107,7 +139,15 @@ export const healthHandlers: GatewayRequestHandlers = {
       !cachedDiffersFromRuntime &&
       now - cached.ts < HEALTH_REFRESH_INTERVAL_MS
     ) {
-      respond(true, cached, undefined, { cached: true });
+      respond(
+        true,
+        mergeCachedHealthRuntimeState({
+          cached,
+          eventLoop: context.getEventLoopHealth?.(),
+        }),
+        undefined,
+        { cached: true },
+      );
       void refreshHealthSnapshot({ probe: false, includeSensitive }).catch((err) =>
         logHealth.error(`background health refresh failed: ${formatError(err)}`),
       );
@@ -120,12 +160,15 @@ export const healthHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
     }
   },
-  status: async ({ respond, client, params }) => {
+  status: async ({ respond, client, params, context }) => {
     const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
     const status = await getStatusSummary({
       includeSensitive: scopes.includes(ADMIN_SCOPE),
       includeChannelSummary: params.includeChannelSummary !== false,
     });
+    if (context.getEventLoopHealth) {
+      status.eventLoop = context.getEventLoopHealth();
+    }
     respond(true, status, undefined);
   },
 };

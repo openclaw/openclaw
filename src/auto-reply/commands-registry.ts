@@ -7,22 +7,15 @@ import type { SkillCommandSpec } from "../agents/skills.js";
 import { getChannelPlugin, getLoadedChannelPlugin } from "../channels/plugins/index.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
-import {
-  isCommandEnabled,
-  listChatCommands,
-  listChatCommandsForConfig,
-} from "./commands-registry-list.js";
-import { normalizeCommandBody, resolveTextCommand } from "./commands-registry-normalize.js";
+import { listChatCommands, listChatCommandsForConfig } from "./commands-registry-list.js";
+import { normalizeCommandBody } from "./commands-registry-normalize.js";
 import { getChatCommands } from "./commands-registry.data.js";
 import type {
   ChatCommandDefinition,
   CommandArgChoiceContext,
   CommandArgDefinition,
-  CommandArgMenuSpec,
   CommandArgValues,
   CommandArgs,
-  CommandDetection,
-  CommandNormalizeOptions,
   NativeCommandSpec,
 } from "./commands-registry.types.js";
 import type { ThinkingCatalogEntry } from "./thinking.shared.js";
@@ -96,13 +89,39 @@ function toNativeCommandSpec(command: ChatCommandDefinition, provider?: string):
   return spec;
 }
 
+function resolveNativeNames(command: ChatCommandDefinition, provider?: string): string[] {
+  const primary = resolveNativeName(command, provider);
+  return [primary, ...(command.nativeAliases ?? [])].filter((name): name is string =>
+    Boolean(name),
+  );
+}
+
 function listNativeSpecsFromCommands(
   commands: ChatCommandDefinition[],
   provider?: string,
 ): NativeCommandSpec[] {
   return commands
     .filter((command) => command.scope !== "text" && command.nativeName)
-    .map((command) => toNativeCommandSpec(command, provider));
+    .flatMap((command) => {
+      const spec = toNativeCommandSpec(command, provider);
+      return resolveNativeNames(command, provider).map((name, index) => {
+        const nativeSpec: NativeCommandSpec = {
+          name,
+          description: spec.description,
+          acceptsArgs: spec.acceptsArgs,
+        };
+        if (index > 0) {
+          nativeSpec.isAlias = true;
+        }
+        if (spec.args) {
+          nativeSpec.args = spec.args;
+        }
+        if (spec.descriptionLocalizations) {
+          nativeSpec.descriptionLocalizations = spec.descriptionLocalizations;
+        }
+        return nativeSpec;
+      });
+    });
 }
 
 export function listNativeCommandSpecs(params?: {
@@ -134,8 +153,9 @@ export function findCommandByNativeName(
   return getChatCommands().find(
     (command) =>
       command.scope !== "text" &&
-      normalizeOptionalLowercaseString(resolveNativeName(command, provider, options)) ===
-        normalized,
+      [resolveNativeName(command, provider, options), ...(command.nativeAliases ?? [])].some(
+        (name) => normalizeOptionalLowercaseString(name) === normalized,
+      ),
   );
 }
 

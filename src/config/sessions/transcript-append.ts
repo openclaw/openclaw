@@ -2,11 +2,29 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
-import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
-import { acquireSessionWriteLock } from "../../agents/session-write-lock.js";
+import type { AgentMessage } from "../../agents/runtime/index.js";
+import {
+  acquireSessionWriteLock,
+  resolveSessionWriteLockOptions,
+} from "../../agents/session-write-lock.js";
+import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { redactSecrets } from "../../logging/redact.js";
+import { createSessionTranscriptHeader } from "./transcript-header.js";
+import {
+  appendJsonlEntry,
+  serializeJsonlLine,
+  writeJsonlEntry,
+  writeJsonlLines,
+} from "./transcript-jsonl.js";
+import { streamSessionTranscriptLinesReverse } from "./transcript-stream.js";
+import { resolveOwnedSessionTranscriptWriteLockRunner } from "./transcript-write-context.js";
+import { CURRENT_SESSION_VERSION } from "./version.js";
 
 const TRANSCRIPT_APPEND_SCAN_CHUNK_BYTES = 64 * 1024;
 const SESSION_MANAGER_APPEND_MAX_BYTES = 8 * 1024 * 1024;
+
+const transcriptAppendQueues = new Map<string, Promise<void>>();
 
 type TranscriptLeafInfo = {
   leafId?: string;
@@ -134,7 +152,7 @@ async function migrateLinearTranscriptToParentLinked(transcriptPath: string): Pr
     }
     const record = parsed as Record<string, unknown>;
     if (record.type === "session") {
-      output.push(JSON.stringify({ ...record, version: CURRENT_SESSION_VERSION }));
+      output.push(serializeJsonlLine({ ...record, version: CURRENT_SESSION_VERSION }));
       continue;
     }
     const id = normalizeEntryId(record.id) ?? generateEntryId(existingIds);
@@ -145,12 +163,9 @@ async function migrateLinearTranscriptToParentLinked(transcriptPath: string): Pr
     }
     previousId = id;
     leafId = id;
-    output.push(JSON.stringify(record));
+    output.push(serializeJsonlLine(record));
   }
-  await fs.writeFile(transcriptPath, `${output.join("\n")}\n`, {
-    encoding: "utf-8",
-    mode: 0o600,
-  });
+  await writeJsonlLines(transcriptPath, output, { mode: 0o600 });
   const result: { leafId?: string } = {};
   if (leafId) {
     result.leafId = leafId;
@@ -167,71 +182,211 @@ async function ensureTranscriptHeader(
     return;
   }
   await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
-  const header = {
-    type: "session",
-    version: CURRENT_SESSION_VERSION,
-    id: params.sessionId ?? randomUUID(),
-    timestamp: new Date().toISOString(),
-    cwd: params.cwd ?? process.cwd(),
-  };
-  await fs.writeFile(transcriptPath, `${JSON.stringify(header)}\n`, {
-    encoding: "utf-8",
+  const header = createSessionTranscriptHeader(params);
+  await writeJsonlEntry(transcriptPath, header, {
     mode: 0o600,
     flag: stat?.isFile() ? "w" : "wx",
   });
 }
 
-export async function appendSessionTranscriptMessage(params: {
+async function resolveTranscriptAppendQueueKey(transcriptPath: string): Promise<string> {
+  const resolvedTranscriptPath = path.resolve(transcriptPath);
+  const transcriptDir = path.dirname(resolvedTranscriptPath);
+  await fs.mkdir(transcriptDir, { recursive: true });
+  try {
+    return path.join(await fs.realpath(transcriptDir), path.basename(resolvedTranscriptPath));
+  } catch {
+    return resolvedTranscriptPath;
+  }
+}
+
+async function withTranscriptAppendQueue<T>(
+  transcriptPath: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const queueKey = await resolveTranscriptAppendQueueKey(transcriptPath);
+  const previous = transcriptAppendQueues.get(queueKey) ?? Promise.resolve();
+  let releaseCurrent!: () => void;
+  const current = new Promise<void>((resolve) => {
+    releaseCurrent = resolve;
+  });
+  const tail = previous.catch(() => undefined).then(() => current);
+  transcriptAppendQueues.set(queueKey, tail);
+  await previous.catch(() => undefined);
+  try {
+    return await fn();
+  } finally {
+    releaseCurrent();
+    if (transcriptAppendQueues.get(queueKey) === tail) {
+      transcriptAppendQueues.delete(queueKey);
+    }
+  }
+}
+
+type AppendSessionTranscriptMessageParams<TMessage = unknown> = {
   transcriptPath: string;
-  message: unknown;
+  message: TMessage;
   now?: number;
   sessionId?: string;
   cwd?: string;
   useRawWhenLinear?: boolean;
-}): Promise<{ messageId: string }> {
+  /** Opt into transcript idempotency lookup; default append stays O(1) for fresh keyed messages. */
+  idempotencyLookup?: "scan" | "caller-checked";
+  /** Runs under the transcript write lock after idempotency replay checks and before append. */
+  prepareMessageAfterIdempotencyCheck?: (message: TMessage) => TMessage | undefined;
+  config?: OpenClawConfig;
+};
+
+type AppendSessionTranscriptMessageResult<TMessage> = {
+  messageId: string;
+  message: TMessage;
+  appended: boolean;
+};
+
+function isTranscriptAgentMessage(value: unknown): value is AgentMessage {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    typeof (value as { role?: unknown }).role === "string"
+  );
+}
+
+export async function appendSessionTranscriptMessage<TMessage>(
+  params: AppendSessionTranscriptMessageParams<TMessage> & {
+    prepareMessageAfterIdempotencyCheck: (message: TMessage) => TMessage | undefined;
+  },
+): Promise<AppendSessionTranscriptMessageResult<TMessage> | undefined>;
+export async function appendSessionTranscriptMessage<TMessage>(
+  params: AppendSessionTranscriptMessageParams<TMessage>,
+): Promise<AppendSessionTranscriptMessageResult<TMessage>>;
+export async function appendSessionTranscriptMessage<TMessage>(
+  params: AppendSessionTranscriptMessageParams<TMessage>,
+): Promise<AppendSessionTranscriptMessageResult<TMessage> | undefined> {
+  const activeLockRunner = resolveOwnedSessionTranscriptWriteLockRunner({
+    sessionFile: params.transcriptPath,
+  });
+  if (activeLockRunner) {
+    // Active prompt-stream writes must acquire the session lock before joining
+    // the append FIFO; otherwise a hook that already owns the lock can deadlock
+    // behind the prompt append it is blocking.
+    return await activeLockRunner(() =>
+      withTranscriptAppendQueue(params.transcriptPath, () =>
+        appendSessionTranscriptMessageLocked(params),
+      ),
+    );
+  }
+  return await withTranscriptAppendQueue(params.transcriptPath, () =>
+    withSessionTranscriptWriteLock(params, () => appendSessionTranscriptMessageLocked(params)),
+  );
+}
+
+async function withSessionTranscriptWriteLock<T>(
+  params: Pick<AppendSessionTranscriptMessageParams, "transcriptPath" | "config">,
+  run: () => Promise<T> | T,
+): Promise<T> {
   const lock = await acquireSessionWriteLock({
     sessionFile: params.transcriptPath,
-    timeoutMs: 10_000,
+    ...resolveSessionWriteLockOptions(params.config),
     allowReentrant: true,
   });
   try {
-    const now = params.now ?? Date.now();
-    const messageId = randomUUID();
-    await ensureTranscriptHeader(params.transcriptPath, {
-      ...(params.sessionId ? { sessionId: params.sessionId } : {}),
-      ...(params.cwd ? { cwd: params.cwd } : {}),
-    });
-    const stat = await fs.stat(params.transcriptPath).catch(() => null);
-    let leafInfo: TranscriptLeafInfo = await readTranscriptLeafInfo(params.transcriptPath).catch(
-      () => ({
-        hasParentLinkedEntries: false,
-        nonSessionEntryCount: 0,
-      }),
-    );
-    const hasLinearEntries = !leafInfo.hasParentLinkedEntries && leafInfo.nonSessionEntryCount > 0;
-    const allowRawWhenLinear = params.useRawWhenLinear !== false;
-    const shouldRawAppend =
-      allowRawWhenLinear &&
-      hasLinearEntries &&
-      (stat?.size ?? 0) > SESSION_MANAGER_APPEND_MAX_BYTES;
-    if (hasLinearEntries && !shouldRawAppend) {
-      const migrated = await migrateLinearTranscriptToParentLinked(params.transcriptPath);
-      leafInfo = {
-        ...(migrated.leafId ? { leafId: migrated.leafId } : {}),
-        hasParentLinkedEntries: Boolean(migrated.leafId),
-        nonSessionEntryCount: leafInfo.nonSessionEntryCount,
-      };
-    }
-    const entry = {
-      type: "message",
-      id: messageId,
-      ...(shouldRawAppend ? {} : { parentId: leafInfo.leafId ?? null }),
-      timestamp: new Date(now).toISOString(),
-      message: params.message,
-    };
-    await fs.appendFile(params.transcriptPath, `${JSON.stringify(entry)}\n`, "utf-8");
-    return { messageId };
+    return await run();
   } finally {
     await lock.release();
   }
+}
+
+async function appendSessionTranscriptMessageLocked<TMessage>(
+  params: AppendSessionTranscriptMessageParams<TMessage>,
+): Promise<AppendSessionTranscriptMessageResult<TMessage> | undefined> {
+  const now = params.now ?? Date.now();
+  await ensureTranscriptHeader(params.transcriptPath, {
+    ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+    ...(params.cwd ? { cwd: params.cwd } : {}),
+  });
+  const idempotencyKey = readMessageIdempotencyKey(params.message);
+  const existing =
+    idempotencyKey && params.idempotencyLookup === "scan"
+      ? await findTranscriptMessageByIdempotencyKey(params.transcriptPath, idempotencyKey)
+      : undefined;
+  if (existing) {
+    return { ...existing, message: existing.message as TMessage, appended: false };
+  }
+
+  const message = params.prepareMessageAfterIdempotencyCheck
+    ? params.prepareMessageAfterIdempotencyCheck(params.message)
+    : params.message;
+  if (message === undefined) {
+    return undefined;
+  }
+
+  const messageId = randomUUID();
+  const stat = await fs.stat(params.transcriptPath).catch(() => null);
+  let leafInfo: TranscriptLeafInfo = await readTranscriptLeafInfo(params.transcriptPath).catch(
+    () => ({
+      hasParentLinkedEntries: false,
+      nonSessionEntryCount: 0,
+    }),
+  );
+  const hasLinearEntries = !leafInfo.hasParentLinkedEntries && leafInfo.nonSessionEntryCount > 0;
+  const allowRawWhenLinear = params.useRawWhenLinear !== false;
+  const shouldRawAppend =
+    allowRawWhenLinear && hasLinearEntries && (stat?.size ?? 0) > SESSION_MANAGER_APPEND_MAX_BYTES;
+  if (hasLinearEntries && !shouldRawAppend) {
+    const migrated = await migrateLinearTranscriptToParentLinked(params.transcriptPath);
+    leafInfo = {
+      ...(migrated.leafId ? { leafId: migrated.leafId } : {}),
+      hasParentLinkedEntries: Boolean(migrated.leafId),
+      nonSessionEntryCount: leafInfo.nonSessionEntryCount,
+    };
+  }
+  const finalMessage = (
+    isTranscriptAgentMessage(message)
+      ? redactTranscriptMessage(message, params.config)
+      : redactSecrets(message)
+  ) as TMessage;
+  const entry = {
+    type: "message",
+    id: messageId,
+    ...(shouldRawAppend ? {} : { parentId: leafInfo.leafId ?? null }),
+    timestamp: new Date(now).toISOString(),
+    message: finalMessage,
+  };
+  await appendJsonlEntry(params.transcriptPath, entry);
+  return { messageId, message: finalMessage, appended: true };
+}
+
+function readMessageIdempotencyKey(message: unknown): string | undefined {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return undefined;
+  }
+  const value = (message as { idempotencyKey?: unknown }).idempotencyKey;
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+async function findTranscriptMessageByIdempotencyKey(
+  transcriptPath: string,
+  idempotencyKey: string,
+): Promise<{ messageId: string; message: unknown } | undefined> {
+  for await (const line of streamSessionTranscriptLinesReverse(transcriptPath)) {
+    try {
+      const parsed = JSON.parse(line) as {
+        id?: unknown;
+        message?: unknown;
+      };
+      const message = parsed.message;
+      if (readMessageIdempotencyKey(message) !== idempotencyKey) {
+        continue;
+      }
+      return {
+        messageId:
+          typeof parsed.id === "string" && parsed.id.trim().length > 0 ? parsed.id : idempotencyKey,
+        message,
+      };
+    } catch {
+      continue;
+    }
+  }
+  return undefined;
 }

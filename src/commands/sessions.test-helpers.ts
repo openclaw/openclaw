@@ -9,8 +9,8 @@ const sessionsConfigState = vi.hoisted<{ loadConfig: () => Record<string, unknow
   loadConfig: () => ({
     agents: {
       defaults: {
-        model: { primary: "pi:opus" },
-        models: { "pi:opus": {} },
+        model: { primary: "test:opus" },
+        models: { "test:opus": {} },
         contextTokens: 32000,
       },
     },
@@ -73,12 +73,13 @@ export function writeStore(data: unknown, prefix = "sessions"): string {
 
 export async function runSessionsJson<T>(
   run: (
-    opts: { json?: boolean; store?: string; active?: string },
+    opts: { json?: boolean; store?: string; active?: string; limit?: string | number },
     runtime: RuntimeEnv,
   ) => Promise<void>,
   store: string,
   options?: {
     active?: string;
+    limit?: string | number;
   },
 ): Promise<T> {
   const { runtime, logs } = makeRuntime();
@@ -88,6 +89,7 @@ export async function runSessionsJson<T>(
         store,
         json: true,
         active: options?.active,
+        limit: options?.limit,
       },
       runtime,
     );

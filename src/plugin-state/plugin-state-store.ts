@@ -1,4 +1,5 @@
 import {
+  clearPluginStateSqliteStoreForTests,
   closePluginStateSqliteStore,
   MAX_PLUGIN_STATE_VALUE_BYTES,
   pluginStateClear,
@@ -7,6 +8,7 @@ import {
   pluginStateEntries,
   pluginStateLookup,
   pluginStateRegister,
+  pluginStateRegisterIfAbsent,
 } from "./plugin-state-store.sqlite.js";
 import type {
   OpenKeyedStoreOptions,
@@ -28,6 +30,8 @@ export type {
 export { PluginStateStoreError } from "./plugin-state-store.types.js";
 export {
   closePluginStateSqliteStore,
+  countPluginStateLiveEntries,
+  MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN,
   isPluginStateDatabaseOpen,
   probePluginStateStore,
   sweepExpiredPluginStateEntries,
@@ -217,20 +221,44 @@ function createKeyedStoreForPluginId<T>(
   const defaultTtlMs = validateOptionalTtlMs(options.defaultTtlMs);
   assertConsistentOptions(pluginId, namespace, { maxEntries, defaultTtlMs });
 
+  const prepareRegisterParams = (
+    key: string,
+    value: T,
+    opts?: { ttlMs?: number },
+  ): { key: string; valueJson: string; ttlMs?: number } => {
+    const normalizedKey = validateKey(key, "register");
+    assertJsonSerializable(value);
+    const json = JSON.stringify(value);
+    assertValueSize(json);
+    const ttlMs = validateOptionalTtlMs(opts?.ttlMs, "register") ?? defaultTtlMs;
+    return {
+      key: normalizedKey,
+      valueJson: json,
+      ...(ttlMs != null ? { ttlMs } : {}),
+    };
+  };
+
   return {
     async register(key, value, opts) {
-      const normalizedKey = validateKey(key, "register");
-      assertJsonSerializable(value);
-      const json = JSON.stringify(value);
-      assertValueSize(json);
-      const ttlMs = validateOptionalTtlMs(opts?.ttlMs, "register") ?? defaultTtlMs;
+      const params = prepareRegisterParams(key, value, opts);
       pluginStateRegister({
         pluginId,
         namespace,
-        key: normalizedKey,
-        valueJson: json,
+        key: params.key,
+        valueJson: params.valueJson,
         maxEntries,
-        ...(ttlMs != null ? { ttlMs } : {}),
+        ...(params.ttlMs != null ? { ttlMs: params.ttlMs } : {}),
+      });
+    },
+    async registerIfAbsent(key, value, opts) {
+      const params = prepareRegisterParams(key, value, opts);
+      return pluginStateRegisterIfAbsent({
+        pluginId,
+        namespace,
+        key: params.key,
+        valueJson: params.valueJson,
+        maxEntries,
+        ...(params.ttlMs != null ? { ttlMs: params.ttlMs } : {}),
       });
     },
     async lookup(key) {
@@ -270,7 +298,14 @@ export function createCorePluginStateKeyedStore<T>(
   return createKeyedStoreForPluginId<T>(options.ownerId, options);
 }
 
-export function resetPluginStateStoreForTests(): void {
-  closePluginStateSqliteStore();
+export function clearPluginStateStoreForTests(): void {
+  clearPluginStateSqliteStoreForTests();
+  namespaceOptionSignatures.clear();
+}
+
+export function resetPluginStateStoreForTests(options: { closeDatabase?: boolean } = {}): void {
+  if (options.closeDatabase !== false) {
+    closePluginStateSqliteStore();
+  }
   namespaceOptionSignatures.clear();
 }

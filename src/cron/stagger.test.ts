@@ -21,6 +21,8 @@ describe("cron stagger helpers", () => {
     expect(normalizeCronStaggerMs(-10)).toBe(0);
     expect(normalizeCronStaggerMs("")).toBeUndefined();
     expect(normalizeCronStaggerMs("abc")).toBeUndefined();
+    expect(normalizeCronStaggerMs("1e3")).toBeUndefined();
+    expect(normalizeCronStaggerMs("0x10")).toBeUndefined();
   });
 
   it("resolves effective stagger for cron schedules", () => {
@@ -35,9 +37,6 @@ describe("cron stagger helpers", () => {
   });
 
   it("handles missing runtime expr values without throwing", () => {
-    expect(() =>
-      resolveCronStaggerMs({ kind: "cron" } as unknown as { kind: "cron"; expr: string }),
-    ).not.toThrow();
     expect(
       resolveCronStaggerMs({ kind: "cron" } as unknown as { kind: "cron"; expr: string }),
     ).toBe(0);

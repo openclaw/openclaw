@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -12,10 +11,11 @@ import {
   type DevicePairingPendingRequest,
   type PairedDevice,
 } from "../infra/device-pairing.js";
-import { JsonFileReadError } from "../infra/json-files.js";
+import { JsonFileReadError, tryReadJsonSync } from "../infra/json-files.js";
 import type { DeviceAuthStore } from "../shared/device-auth.js";
 import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { normalizeUniqueSingleOrTrimmedStringList } from "../shared/string-normalization.js";
 import { note } from "../terminal/note.js";
 import { sanitizeTerminalText } from "../terminal/safe-text.js";
 
@@ -102,29 +102,6 @@ function isDeviceAuthStoreTokenEntry(value: unknown): value is DeviceAuthStore["
     "updatedAtMs" in value &&
     typeof value.updatedAtMs === "number"
   );
-}
-
-function uniqueStrings(...items: Array<string | string[] | undefined>): string[] {
-  const values = new Set<string>();
-  for (const item of items) {
-    if (!item) {
-      continue;
-    }
-    if (Array.isArray(item)) {
-      for (const value of item) {
-        const trimmed = value.trim();
-        if (trimmed) {
-          values.add(trimmed);
-        }
-      }
-      continue;
-    }
-    const trimmed = item.trim();
-    if (trimmed) {
-      values.add(trimmed);
-    }
-  }
-  return [...values];
 }
 
 function normalizeGatewayPairedDevice(device: GatewayListedPairedDevice): DoctorPairedDevice {
@@ -274,7 +251,9 @@ function resolvePendingPairingIssue(
       removeCommand: formatCliArgs(["openclaw", "devices", "remove", pending.deviceId]),
     };
   }
-  const requestedRoles = uniqueStrings(pending.roles, pending.role);
+  const requestedRoles = normalizeUniqueSingleOrTrimmedStringList(
+    [pending.roles, pending.role].flat(),
+  );
   const approvedRoles = listApprovedPairedDeviceRoles(paired);
   if (requestedRoles.some((role) => !approvedRoles.includes(role))) {
     return {
@@ -391,14 +370,7 @@ function collectPairedRecordIssues(snapshot: DoctorPairingSnapshot): string[] {
 }
 
 function readJsonFile(filePath: string): unknown {
-  try {
-    if (!fs.existsSync(filePath)) {
-      return null;
-    }
-    return JSON.parse(fs.readFileSync(filePath, "utf8"));
-  } catch {
-    return null;
-  }
+  return tryReadJsonSync(filePath);
 }
 
 function readLocalIdentity(env: NodeJS.ProcessEnv = process.env): StoredDeviceIdentity | null {
@@ -474,6 +446,16 @@ function collectLocalDeviceAuthIssues(snapshot: DoctorPairingSnapshot): string[]
     if (!role) {
       continue;
     }
+    const pairedToken = findTokenSummary(paired, role);
+    if (!pairedToken) {
+      if (approvedRoles.has(role)) {
+        continue;
+      }
+      lines.push(
+        `- Local cached ${role} device auth for ${deviceLabel} no longer has a matching active gateway token, and that role is no longer approved for this device. Reconnect with shared gateway auth to refresh local auth, or remove the stale cached ${role} auth entry.`,
+      );
+      continue;
+    }
     const rotateCommand = formatCliArgs([
       "openclaw",
       "devices",
@@ -483,16 +465,6 @@ function collectLocalDeviceAuthIssues(snapshot: DoctorPairingSnapshot): string[]
       "--role",
       role,
     ]);
-    const pairedToken = findTokenSummary(paired, role);
-    if (!pairedToken) {
-      if (approvedRoles.has(role)) {
-        continue;
-      }
-      lines.push(
-        `- Local cached ${role} device auth for ${deviceLabel} no longer has a matching active gateway token. Reconnect with shared gateway auth to refresh it, or rotate with ${rotateCommand}.`,
-      );
-      continue;
-    }
     const gatewayIssuedAtMs = pairedToken.rotatedAtMs ?? pairedToken.createdAtMs;
     if (entry.updatedAtMs < gatewayIssuedAtMs) {
       lines.push(

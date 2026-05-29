@@ -48,18 +48,21 @@ describe("MatrixAuthedHttpClient", () => {
     });
 
     expect(result).toEqual({ ok: true });
-    expect(performMatrixRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "GET",
-        endpoint: "https://matrix.example.org/_matrix/client/v3/account/whoami",
-        allowAbsoluteEndpoint: true,
-        ssrfPolicy: { allowPrivateNetwork: true },
-        dispatcherPolicy: {
-          mode: "explicit-proxy",
-          proxyUrl: "http://proxy.internal:8080",
-        },
-      }),
-    );
+    expect(performMatrixRequestMock).toHaveBeenCalledWith({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      method: "GET",
+      endpoint: "https://matrix.example.org/_matrix/client/v3/account/whoami",
+      qs: undefined,
+      body: undefined,
+      timeoutMs: 5000,
+      ssrfPolicy: { allowPrivateNetwork: true },
+      dispatcherPolicy: {
+        mode: "explicit-proxy",
+        proxyUrl: "http://proxy.internal:8080",
+      },
+      allowAbsoluteEndpoint: true,
+    });
   });
 
   it("returns plain text when response is not JSON", async () => {
@@ -120,15 +123,20 @@ describe("MatrixAuthedHttpClient", () => {
       homeserver: "https://matrix.example.org",
       accessToken: "token",
     });
-    await expect(
-      client.requestJson({
+    let rejection: unknown;
+    try {
+      await client.requestJson({
         method: "GET",
         endpoint: "/_matrix/client/v3/rooms",
         timeoutMs: 5000,
-      }),
-    ).rejects.toMatchObject({
-      message: "forbidden",
-      statusCode: 403,
-    });
+      });
+    } catch (error) {
+      rejection = error;
+    }
+
+    expect(rejection).toBeInstanceOf(Error);
+    const httpError = rejection as Error & { statusCode?: unknown };
+    expect(httpError.message).toBe("forbidden");
+    expect(httpError.statusCode).toBe(403);
   });
 });

@@ -28,6 +28,23 @@ enum GatewayWebSocketTestSupport {
         return obj["id"] as? String
     }
 
+    static func connectRequestParams(from message: URLSessionWebSocketTask.Message) -> [String: Any]? {
+        guard let obj = self.requestFrameObject(from: message) else { return nil }
+        guard (obj["type"] as? String) == "req", (obj["method"] as? String) == "connect" else {
+            return nil
+        }
+        return obj["params"] as? [String: Any]
+    }
+
+    static func connectScopes(from message: URLSessionWebSocketTask.Message) -> [String]? {
+        guard let obj = self.requestFrameObject(from: message) else { return nil }
+        guard (obj["type"] as? String) == "req", (obj["method"] as? String) == "connect" else {
+            return nil
+        }
+        let params = obj["params"] as? [String: Any]
+        return params?["scopes"] as? [String]
+    }
+
     static func connectOkData(id: String) -> Data {
         let json = """
         {
@@ -74,6 +91,7 @@ enum GatewayWebSocketTestSupport {
           "id": "\(id)",
           "ok": false,
           "error": {
+            "code": "INVALID_REQUEST",
             "message": "\(message)",
             "details": {
               "code": "\(detailCode)",

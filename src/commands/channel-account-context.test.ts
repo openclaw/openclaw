@@ -25,7 +25,7 @@ describe("resolveDefaultChannelAccountContext", () => {
     expect(result.account).toBe(account);
     expect(result.enabled).toBe(true);
     expect(result.configured).toBe(true);
-    expect(result.diagnostics).toEqual([]);
+    expect(result.diagnostics).toStrictEqual([]);
     expect(result.degraded).toBe(false);
   });
 
@@ -49,7 +49,7 @@ describe("resolveDefaultChannelAccountContext", () => {
     expect(isConfigured).toHaveBeenCalledWith(account, {});
     expect(result.enabled).toBe(false);
     expect(result.configured).toBe(false);
-    expect(result.diagnostics).toEqual([]);
+    expect(result.diagnostics).toStrictEqual([]);
     expect(result.degraded).toBe(false);
   });
 
@@ -76,9 +76,9 @@ describe("resolveDefaultChannelAccountContext", () => {
     expect(result.enabled).toBe(false);
     expect(result.configured).toBe(false);
     expect(result.degraded).toBe(true);
-    expect(result.diagnostics.some((entry) => entry.includes("failed to resolve account"))).toBe(
-      true,
-    );
+    expect(result.diagnostics).toStrictEqual([
+      "status: channels.demo.accounts.acc-err: failed to resolve account (missing secret); skipping read-only checks.",
+    ]);
   });
 
   it("prefers inspectAccount in read_only mode", async () => {

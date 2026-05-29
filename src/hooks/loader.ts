@@ -8,7 +8,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { openBoundaryFile } from "../infra/boundary-file-read.js";
+import { openRootFile } from "../infra/boundary-file-read.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -32,6 +32,15 @@ const loadedHookRegistrations = resolveGlobalSingleton<
 
 function safeLogValue(value: string): string {
   return sanitizeForLog(value);
+}
+
+function isNonEmptyRelativePathInsideRoot(relativePath: string): boolean {
+  return (
+    relativePath !== "" &&
+    relativePath !== ".." &&
+    !relativePath.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relativePath)
+  );
 }
 
 function maybeWarnTrustedHookSource(source: string): void {
@@ -119,7 +128,7 @@ export async function loadInternalHooks(
           );
           continue;
         }
-        const opened = await openBoundaryFile({
+        const opened = await openRootFile({
           absolutePath: entry.hook.handlerPath,
           rootPath: hookBaseDir,
           boundaryLabel: "hook directory",
@@ -211,11 +220,11 @@ export async function loadInternalHooks(
         continue;
       }
       const rel = path.relative(baseDirReal, modulePathSafe);
-      if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) {
+      if (!isNonEmptyRelativePathInsideRoot(rel)) {
         log.error(`Handler module path must stay within workspaceDir: ${safeLogValue(rawModule)}`);
         continue;
       }
-      const opened = await openBoundaryFile({
+      const opened = await openRootFile({
         absolutePath: modulePathSafe,
         rootPath: baseDirReal,
         boundaryLabel: "workspace directory",

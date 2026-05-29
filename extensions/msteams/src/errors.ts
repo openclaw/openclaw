@@ -1,6 +1,4 @@
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export function formatUnknownError(err: unknown): string {
   if (err instanceof Error) {
@@ -35,28 +33,31 @@ function extractStatusCode(err: unknown): number | null {
   if (!isRecord(err)) {
     return null;
   }
-  const direct = err.statusCode ?? err.status;
-  if (typeof direct === "number" && Number.isFinite(direct)) {
-    return direct;
-  }
-  if (typeof direct === "string") {
-    const parsed = Number.parseInt(direct, 10);
-    if (Number.isFinite(parsed)) {
-      return parsed;
+  const parseStatusCode = (value: unknown): number | null => {
+    if (typeof value === "number") {
+      return Number.isInteger(value) && value >= 100 && value <= 599 ? value : null;
     }
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (!/^\d{3}$/.test(trimmed)) {
+        return null;
+      }
+      const parsed = Number(trimmed);
+      return parsed >= 100 && parsed <= 599 ? parsed : null;
+    }
+    return null;
+  };
+  const direct = err.statusCode ?? err.status;
+  const directStatus = parseStatusCode(direct);
+  if (directStatus !== null) {
+    return directStatus;
   }
 
   const response = err.response;
   if (isRecord(response)) {
-    const status = response.status;
-    if (typeof status === "number" && Number.isFinite(status)) {
-      return status;
-    }
-    if (typeof status === "string") {
-      const parsed = Number.parseInt(status, 10);
-      if (Number.isFinite(parsed)) {
-        return parsed;
-      }
+    const responseStatus = parseStatusCode(response.status);
+    if (responseStatus !== null) {
+      return responseStatus;
     }
   }
 
@@ -104,7 +105,7 @@ function extractRetryAfterMs(err: unknown): number | null {
     return retryAfter >= 0 ? retryAfter * 1000 : null;
   }
   if (typeof retryAfter === "string") {
-    const parsed = Number.parseFloat(retryAfter);
+    const parsed = parseNonNegativeRetryAfterSeconds(retryAfter);
     if (Number.isFinite(parsed) && parsed >= 0) {
       return parsed * 1000;
     }
@@ -123,7 +124,7 @@ function extractRetryAfterMs(err: unknown): number | null {
   if (isRecord(headers)) {
     const raw = headers["retry-after"] ?? headers["Retry-After"];
     if (typeof raw === "string") {
-      const parsed = Number.parseFloat(raw);
+      const parsed = parseNonNegativeRetryAfterSeconds(raw);
       if (Number.isFinite(parsed) && parsed >= 0) {
         return parsed * 1000;
       }
@@ -139,7 +140,7 @@ function extractRetryAfterMs(err: unknown): number | null {
   ) {
     const raw = (headers as { get: (name: string) => string | null }).get("retry-after");
     if (raw) {
-      const parsed = Number.parseFloat(raw);
+      const parsed = parseNonNegativeRetryAfterSeconds(raw);
       if (Number.isFinite(parsed) && parsed >= 0) {
         return parsed * 1000;
       }
@@ -149,7 +150,21 @@ function extractRetryAfterMs(err: unknown): number | null {
   return null;
 }
 
-type MSTeamsSendErrorKind = "auth" | "throttled" | "transient" | "permanent" | "unknown";
+function parseNonNegativeRetryAfterSeconds(raw: string): number {
+  const trimmed = raw.trim();
+  if (!/^\d+(?:\.\d+)?$/.test(trimmed)) {
+    return Number.NaN;
+  }
+  return Number(trimmed);
+}
+
+type MSTeamsSendErrorKind =
+  | "auth"
+  | "throttled"
+  | "transient"
+  | "permanent"
+  | "network"
+  | "unknown";
 
 type MSTeamsSendErrorClassification = {
   kind: MSTeamsSendErrorKind;
@@ -204,6 +219,21 @@ export function classifyMSTeamsSendError(err: unknown): MSTeamsSendErrorClassifi
     return { kind: "permanent", statusCode, errorCode };
   }
 
+  // Transport-level errors (no HTTP status code) — check for well-known
+  // network error codes that indicate egress is blocked (#77674).
+  if (statusCode == null) {
+    const networkCode = isRecord(err) && typeof err.code === "string" ? err.code : null;
+    if (
+      networkCode === "ECONNREFUSED" ||
+      networkCode === "ENOTFOUND" ||
+      networkCode === "EHOSTUNREACH" ||
+      networkCode === "ETIMEDOUT" ||
+      networkCode === "ECONNRESET"
+    ) {
+      return { kind: "network", errorCode: networkCode };
+    }
+  }
+
   return {
     kind: "unknown",
     statusCode: statusCode ?? undefined,
@@ -241,6 +271,9 @@ export function formatMSTeamsSendErrorHint(
   }
   if (classification.kind === "transient") {
     return "transient Teams/Bot Framework error; retry may succeed";
+  }
+  if (classification.kind === "network") {
+    return "transport-level failure sending reply to Teams Bot Connector (smba.trafficmanager.net) — check egress firewall rules allow outbound HTTPS to smba.trafficmanager.net";
   }
   return undefined;
 }

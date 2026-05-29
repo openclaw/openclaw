@@ -19,24 +19,24 @@ the new architecture, this guide helps you migrate.
 The old plugin system provided two wide-open surfaces that let plugins import
 anything they needed from a single entry point:
 
-- **`openclaw/plugin-sdk/compat`** — a single import that re-exported dozens of
+- **`openclaw/plugin-sdk/compat`** - a single import that re-exported dozens of
   helpers. It was introduced to keep older hook-based plugins working while the
   new plugin architecture was being built.
-- **`openclaw/plugin-sdk/infra-runtime`** — a broad runtime helper barrel that
+- **`openclaw/plugin-sdk/infra-runtime`** - a broad runtime helper barrel that
   mixed system events, heartbeat state, delivery queues, fetch/proxy helpers,
   file helpers, approval types, and unrelated utilities.
-- **`openclaw/plugin-sdk/config-runtime`** — a broad config compatibility barrel
+- **`openclaw/plugin-sdk/config-runtime`** - a broad config compatibility barrel
   that still carries deprecated direct load/write helpers during the migration
   window.
-- **`openclaw/extension-api`** — a bridge that gave plugins direct access to
+- **`openclaw/extension-api`** - a bridge that gave plugins direct access to
   host-side helpers like the embedded agent runner.
-- **`api.registerEmbeddedExtensionFactory(...)`** — a removed Pi-only bundled
+- **`api.registerEmbeddedExtensionFactory(...)`** - a removed embedded-runner-only bundled
   extension hook that could observe embedded-runner events such as
   `tool_result`.
 
 The broad import surfaces are now **deprecated**. They still work at runtime,
 but new plugins must not use them, and existing plugins should migrate before
-the next major release removes them. The Pi-only embedded extension factory
+the next major release removes them. The embedded-runner-only extension factory
 registration API has been removed; use tool-result middleware instead.
 
 OpenClaw does not remove or reinterpret documented plugin behavior in the same
@@ -48,16 +48,16 @@ registration behavior.
 <Warning>
   The backwards-compatibility layer will be removed in a future major release.
   Plugins that still import from these surfaces will break when that happens.
-  Pi-only embedded extension factory registrations already no longer load.
+  Legacy embedded extension factory registrations already no longer load.
 </Warning>
 
 ## Why this changed
 
 The old approach caused problems:
 
-- **Slow startup** — importing one helper loaded dozens of unrelated modules
-- **Circular dependencies** — broad re-exports made it easy to create import cycles
-- **Unclear API surface** — no way to tell which exports were stable vs internal
+- **Slow startup** - importing one helper loaded dozens of unrelated modules
+- **Circular dependencies** - broad re-exports made it easy to create import cycles
+- **Unclear API surface** - no way to tell which exports were stable vs internal
 
 The modern plugin SDK fixes this: each import path (`openclaw/plugin-sdk/\<subpath\>`)
 is a small, self-contained module with a clear purpose and documented contract.
@@ -76,6 +76,130 @@ Current bundled provider examples:
   builders in its own `api.ts`
 - OpenRouter keeps provider builder and onboarding/config helpers in its own
   `api.ts`
+
+## Talk and realtime voice migration plan
+
+Realtime voice, telephony, meeting, and browser Talk code is moving from
+surface-local turn bookkeeping to a shared Talk session controller exported by
+`openclaw/plugin-sdk/realtime-voice`. The new controller owns the common Talk
+event envelope, active turn state, capture state, output-audio state, recent
+event history, and stale-turn rejection. Provider plugins should keep owning
+vendor-specific realtime sessions; surface plugins should keep owning capture,
+playback, telephony, and meeting quirks.
+
+This Talk migration is intentionally breaking-clean:
+
+1. Keep the shared controller/runtime primitives in
+   `plugin-sdk/realtime-voice`.
+2. Move bundled surfaces onto the shared controller: browser relay,
+   managed-room handoff, voice-call realtime, voice-call streaming STT, Google
+   Meet realtime, and native push-to-talk.
+3. Replace old Talk RPC families with the final `talk.session.*` and
+   `talk.client.*` API.
+4. Advertise one live Talk event channel in Gateway
+   `hello-ok.features.events`: `talk.event`.
+5. Delete the old realtime HTTP endpoint and any request-time instruction
+   override path.
+
+New code should not call `createTalkEventSequencer(...)` directly unless it is
+implementing a low-level adapter or test fixture. Prefer the shared controller
+so turn-scoped events cannot be emitted without a turn id, stale `turnEnd` /
+`turnCancel` calls cannot clear a newer active turn, and output-audio lifecycle
+events stay consistent across telephony, meetings, browser relay, managed-room
+handoff, and native Talk clients.
+
+The target public API shape is:
+
+```typescript
+// Gateway-owned Talk session API.
+await gateway.request("talk.session.create", {
+  mode: "realtime",
+  transport: "gateway-relay",
+  brain: "agent-consult",
+  sessionKey: "main",
+});
+await gateway.request("talk.session.appendAudio", { sessionId, audioBase64 });
+await gateway.request("talk.session.cancelOutput", { sessionId, reason: "barge-in" });
+await gateway.request("talk.session.submitToolResult", {
+  sessionId,
+  callId,
+  result: { status: "working" },
+  options: { willContinue: true },
+});
+await gateway.request("talk.session.submitToolResult", {
+  sessionId,
+  callId,
+  result: { status: "already_delivered" },
+  options: { suppressResponse: true },
+});
+await gateway.request("talk.session.submitToolResult", { sessionId, callId, result });
+await gateway.request("talk.session.close", { sessionId });
+
+// Client-owned provider session API.
+await gateway.request("talk.client.create", {
+  mode: "realtime",
+  transport: "webrtc",
+  brain: "agent-consult",
+  sessionKey: "main",
+});
+await gateway.request("talk.client.toolCall", { sessionKey, callId, name, args });
+await gateway.request("talk.client.steer", { sessionKey, text, mode: "steer" });
+```
+
+Browser-owned WebRTC/provider-websocket sessions use `talk.client.create`,
+because the browser owns the provider negotiation and media transport while the
+Gateway owns credentials, instructions, and tool policy. `talk.session.*` is the
+common Gateway-managed surface for gateway-relay realtime, gateway-relay
+transcription, and managed-room native STT/TTS sessions.
+
+Legacy configs that placed realtime selectors beside `talk.provider` /
+`talk.providers` should be repaired with `openclaw doctor --fix`; runtime Talk
+does not reinterpret speech/TTS provider config as realtime provider config.
+
+The supported `talk.session.create` combinations are intentionally small:
+
+| Mode            | Transport       | Brain           | Owner              | Notes                                                                                                              |
+| --------------- | --------------- | --------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------ |
+| `realtime`      | `gateway-relay` | `agent-consult` | Gateway            | Full-duplex provider audio bridged through the Gateway; tool calls are routed through the agent-consult tool.      |
+| `transcription` | `gateway-relay` | `none`          | Gateway            | Streaming STT only; callers send input audio and receive transcript events.                                        |
+| `stt-tts`       | `managed-room`  | `agent-consult` | Native/client room | Push-to-talk and walkie-talkie style rooms where the client owns capture/playback and the Gateway owns turn state. |
+| `stt-tts`       | `managed-room`  | `direct-tools`  | Native/client room | Admin-only room mode for trusted first-party surfaces that execute Gateway tool actions directly.                  |
+
+Removed method map:
+
+| Old                              | New                                                      |
+| -------------------------------- | -------------------------------------------------------- |
+| `talk.realtime.session`          | `talk.client.create`                                     |
+| `talk.realtime.toolCall`         | `talk.client.toolCall`                                   |
+| `talk.realtime.relayAudio`       | `talk.session.appendAudio`                               |
+| `talk.realtime.relayCancel`      | `talk.session.cancelOutput` or `talk.session.cancelTurn` |
+| `talk.realtime.relayToolResult`  | `talk.session.submitToolResult`                          |
+| `talk.realtime.relayStop`        | `talk.session.close`                                     |
+| `talk.transcription.session`     | `talk.session.create({ mode: "transcription" })`         |
+| `talk.transcription.relayAudio`  | `talk.session.appendAudio`                               |
+| `talk.transcription.relayCancel` | `talk.session.cancelTurn`                                |
+| `talk.transcription.relayStop`   | `talk.session.close`                                     |
+| `talk.handoff.create`            | `talk.session.create({ transport: "managed-room" })`     |
+| `talk.handoff.join`              | `talk.session.join`                                      |
+| `talk.handoff.revoke`            | `talk.session.close`                                     |
+
+The unified control vocabulary is also deliberately narrow:
+
+| Method                          | Applies to                                              | Contract                                                                                                                                                                                 |
+| ------------------------------- | ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `talk.session.appendAudio`      | `realtime/gateway-relay`, `transcription/gateway-relay` | Append a base64 PCM audio chunk to the provider session owned by the same Gateway connection.                                                                                            |
+| `talk.session.startTurn`        | `stt-tts/managed-room`                                  | Start a managed-room user turn.                                                                                                                                                          |
+| `talk.session.endTurn`          | `stt-tts/managed-room`                                  | End the active turn after stale-turn validation.                                                                                                                                         |
+| `talk.session.cancelTurn`       | all Gateway-owned sessions                              | Cancel active capture/provider/agent/TTS work for a turn.                                                                                                                                |
+| `talk.session.cancelOutput`     | `realtime/gateway-relay`                                | Stop assistant audio output without necessarily ending the user turn.                                                                                                                    |
+| `talk.session.submitToolResult` | `realtime/gateway-relay`                                | Complete a provider tool call emitted by the relay; pass `options.willContinue` for interim output or `options.suppressResponse` to satisfy the call without another assistant response. |
+| `talk.session.steer`            | agent-backed Talk sessions                              | Send spoken `status`, `steer`, `cancel`, or `followup` control to the active embedded run resolved from the Talk session.                                                                |
+| `talk.session.close`            | all unified sessions                                    | Stop relay sessions or revoke managed-room state, then forget the unified session id.                                                                                                    |
+
+Do not introduce provider or platform special cases in core to make this work.
+Core owns Talk session semantics. Provider plugins own vendor session setup.
+Voice-call and Google Meet own telephony/meeting adapters. Browser and native
+apps own device capture/playback UX.
 
 ## Compatibility policy
 
@@ -140,7 +264,7 @@ releases.
     helpers for external plugins during the migration window and warn once with
     the `runtime-config-load-write` compatibility code. Bundled plugins and repo
     runtime code are protected by scanner guardrails in
-    `pnpm check:deprecated-internal-config-api` and
+    `pnpm check:deprecated-api-usage` and
     `pnpm check:no-runtime-action-load-config`: new production plugin usage
     fails outright, direct config writes fail, gateway server methods must use
     the request runtime snapshot, runtime channel send/action/client helpers
@@ -153,7 +277,7 @@ releases.
 
     | Need | Import |
     | --- | --- |
-    | Config types such as `OpenClawConfig` | `openclaw/plugin-sdk/config-types` |
+    | Config types such as `OpenClawConfig` | `openclaw/plugin-sdk/config-contracts` |
     | Already-loaded config assertions and plugin-entry config lookup | `openclaw/plugin-sdk/plugin-config-runtime` |
     | Current runtime snapshot reads | `openclaw/plugin-sdk/runtime-config-snapshot` |
     | Config writes | `openclaw/plugin-sdk/config-mutation` |
@@ -170,17 +294,17 @@ releases.
 
   </Step>
 
-  <Step title="Migrate Pi tool-result extensions to middleware">
-    Bundled plugins must replace Pi-only
+  <Step title="Migrate embedded tool-result extensions to middleware">
+    Bundled plugins must replace embedded-runner-only
     `api.registerEmbeddedExtensionFactory(...)` tool-result handlers with
     runtime-neutral middleware.
 
     ```typescript
-    // Pi and Codex runtime dynamic tools
+    // OpenClaw and Codex runtime dynamic tools
     api.registerAgentToolResultMiddleware(async (event) => {
       return compactToolResult(event);
     }, {
-      runtimes: ["pi", "codex"],
+      runtimes: ["openclaw", "codex"],
     });
     ```
 
@@ -189,7 +313,7 @@ releases.
     ```json
     {
       "contracts": {
-        "agentToolResultMiddleware": ["pi", "codex"]
+        "agentToolResultMiddleware": ["openclaw", "codex"]
       }
     }
     ```
@@ -282,11 +406,11 @@ releases.
 
     ```typescript
     // Before (deprecated extension-api bridge)
-    import { runEmbeddedPiAgent } from "openclaw/extension-api";
-    const result = await runEmbeddedPiAgent({ sessionId, prompt });
+    import { runEmbeddedAgent } from "openclaw/extension-api";
+    const result = await runEmbeddedAgent({ sessionId, prompt });
 
     // After (injected runtime)
-    const result = await api.runtime.agent.runEmbeddedPiAgent({ sessionId, prompt });
+    const result = await api.runtime.agent.runEmbeddedAgent({ sessionId, prompt });
     ```
 
     The same pattern applies to other legacy bridge helpers:
@@ -311,7 +435,7 @@ releases.
     | Need | Import |
     | --- | --- |
     | System event queue helpers | `openclaw/plugin-sdk/system-event-runtime` |
-    | Heartbeat event and visibility helpers | `openclaw/plugin-sdk/heartbeat-runtime` |
+    | Heartbeat wake, event, and visibility helpers | `openclaw/plugin-sdk/heartbeat-runtime` |
     | Pending delivery queue drain | `openclaw/plugin-sdk/delivery-queue-runtime` |
     | Channel activity telemetry | `openclaw/plugin-sdk/channel-activity-runtime` |
     | In-memory dedupe caches | `openclaw/plugin-sdk/dedupe-runtime` |
@@ -345,16 +469,23 @@ releases.
     | `channelRouteIdentityKey(...)` | `channelRouteDedupeKey(...)` |
     | `channelRouteKey(...)` | `channelRouteCompactKey(...)` |
     | `ComparableChannelTarget` | `ChannelRouteParsedTarget` |
-    | `resolveComparableTargetForChannel(...)` | `resolveRouteTargetForChannel(...)` |
-    | `resolveComparableTargetForLoadedChannel(...)` | `resolveRouteTargetForLoadedChannel(...)` |
     | `comparableChannelTargetsMatch(...)` | `channelRouteTargetsMatchExact(...)` |
     | `comparableChannelTargetsShareRoute(...)` | `channelRouteTargetsShareConversation(...)` |
 
     The modern route helpers normalize `{ channel, to, accountId, threadId }`
     consistently across native approvals, reply suppression, inbound dedupe,
-    cron delivery, and session routing. If your plugin owns custom target
-    grammar, use `resolveChannelRouteTargetWithParser(...)` to adapt that
-    parser into the same route target contract.
+    cron delivery, and session routing.
+
+    Do not add new uses of `ChannelMessagingAdapter.parseExplicitTarget` or
+    the parser-backed loaded-route helpers (`parseExplicitTargetForLoadedChannel`
+    or `resolveRouteTargetForLoadedChannel`) or
+    `resolveChannelRouteTargetWithParser(...)` from `plugin-sdk/channel-route`.
+    Those hooks are deprecated and remain only for older plugins during the
+    migration window. New channel plugins should use
+    `messaging.targetResolver.resolveTarget(...)` for target id normalization
+    and directory-miss fallback, `messaging.inferTargetChatType(...)` when core
+    needs an early peer kind, and `messaging.resolveOutboundSessionRoute(...)`
+    for provider-native session and thread identity.
 
   </Step>
 
@@ -376,9 +507,9 @@ releases.
   | `plugin-sdk/config-schema` | Root config schema export | `OpenClawSchema` |
   | `plugin-sdk/provider-entry` | Single-provider entry helper | `defineSingleProviderPluginEntry` |
   | `plugin-sdk/channel-core` | Focused channel entry definitions and builders | `defineChannelPluginEntry`, `defineSetupPluginEntry`, `createChatChannelPlugin`, `createChannelPluginBase` |
-  | `plugin-sdk/setup` | Shared setup wizard helpers | Allowlist prompts, setup status builders |
-  | `plugin-sdk/setup-runtime` | Setup-time runtime helpers | Import-safe setup patch adapters, lookup-note helpers, `promptResolvedAllowFrom`, `splitSetupEntries`, delegated setup proxies |
-  | `plugin-sdk/setup-adapter-runtime` | Setup adapter helpers | `createEnvPatchedAccountSetupAdapter` |
+  | `plugin-sdk/setup` | Shared setup wizard helpers | Setup translator, allowlist prompts, setup status builders |
+  | `plugin-sdk/setup-runtime` | Setup-time runtime helpers | `createSetupTranslator`, import-safe setup patch adapters, lookup-note helpers, `promptResolvedAllowFrom`, `splitSetupEntries`, delegated setup proxies |
+  | `plugin-sdk/setup-adapter-runtime` | Deprecated setup adapter alias | Use `plugin-sdk/setup-runtime` |
   | `plugin-sdk/setup-tools` | Setup tooling helpers | `formatCliCommand`, `detectBinary`, `extractArchive`, `resolveBrewExecutable`, `formatDocsLink`, `CONFIG_DIR` |
   | `plugin-sdk/account-core` | Multi-account helpers | Account list/config/action-gate helpers |
   | `plugin-sdk/account-id` | Account-id helpers | `DEFAULT_ACCOUNT_ID`, account-id normalization |
@@ -393,13 +524,15 @@ releases.
   | `plugin-sdk/channel-config-schema-legacy` | Deprecated bundled config schemas | Compatibility alias only; use `plugin-sdk/bundled-channel-config-schema` for maintained bundled plugins |
   | `plugin-sdk/telegram-command-config` | Telegram command config helpers | Command-name normalization, description trimming, duplicate/conflict validation |
   | `plugin-sdk/channel-policy` | Group/DM policy resolution | `resolveChannelGroupRequireMention` |
-  | `plugin-sdk/channel-lifecycle` | Account status and draft stream lifecycle helpers | `createAccountStatusSink`, draft preview finalization helpers |
+  | `plugin-sdk/channel-lifecycle` | Deprecated compatibility facade | Use `plugin-sdk/channel-outbound` |
   | `plugin-sdk/inbound-envelope` | Inbound envelope helpers | Shared route + envelope builder helpers |
-  | `plugin-sdk/inbound-reply-dispatch` | Inbound reply helpers | Shared record-and-dispatch helpers |
-  | `plugin-sdk/messaging-targets` | Messaging target parsing | Target parsing/matching helpers |
+  | `plugin-sdk/channel-inbound` | Inbound receive helpers | Context building, formatting, roots, runners, prepared reply dispatch, and dispatch predicates |
+  | `plugin-sdk/messaging-targets` | Deprecated target parsing import path | Use `plugin-sdk/channel-targets` for generic target parsing helpers, `plugin-sdk/channel-route` for route comparison, and plugin-owned `messaging.targetResolver` / `messaging.resolveOutboundSessionRoute` for provider-specific target resolution |
   | `plugin-sdk/outbound-media` | Outbound media helpers | Shared outbound media loading |
-  | `plugin-sdk/outbound-send-deps` | Outbound send dependency helpers | Lightweight `resolveOutboundSendDep` lookup without importing the full outbound runtime |
-  | `plugin-sdk/outbound-runtime` | Outbound runtime helpers | Outbound delivery, identity/send delegate, session, formatting, and payload planning helpers |
+  | `plugin-sdk/outbound-send-deps` | Deprecated compatibility facade | Use `plugin-sdk/channel-outbound` |
+  | `plugin-sdk/channel-outbound` | Outbound message lifecycle helpers | Message adapters, receipts, durable send helpers, live preview/streaming helpers, reply options, lifecycle helpers, outbound identity, and payload planning |
+  | `plugin-sdk/channel-streaming` | Deprecated compatibility facade | Use `plugin-sdk/channel-outbound` |
+  | `plugin-sdk/outbound-runtime` | Deprecated compatibility facade | Use `plugin-sdk/channel-outbound` |
   | `plugin-sdk/thread-bindings-runtime` | Thread-binding helpers | Thread-binding lifecycle and adapter helpers |
   | `plugin-sdk/agent-media-payload` | Legacy media payload helpers | Agent media payload builder for legacy field layouts |
   | `plugin-sdk/channel-runtime` | Deprecated compatibility shim | Legacy channel runtime utilities only |
@@ -413,7 +546,7 @@ releases.
   | `plugin-sdk/process-runtime` | Process helpers | Shared exec helpers |
   | `plugin-sdk/cli-runtime` | CLI runtime helpers | Command formatting, waits, version helpers |
   | `plugin-sdk/gateway-runtime` | Gateway helpers | Gateway client, event-loop-ready start helper, and channel-status patch helpers |
-  | `plugin-sdk/config-runtime` | Deprecated config compatibility shim | Prefer `config-types`, `plugin-config-runtime`, `runtime-config-snapshot`, and `config-mutation` |
+  | `plugin-sdk/config-runtime` | Deprecated config compatibility shim | Prefer `config-contracts`, `plugin-config-runtime`, `runtime-config-snapshot`, and `config-mutation` |
   | `plugin-sdk/telegram-command-config` | Telegram command helpers | Fallback-stable Telegram command validation helpers when the bundled Telegram contract surface is unavailable |
   | `plugin-sdk/approval-runtime` | Approval prompt helpers | Exec/plugin approval payload, approval capability/profile helpers, native approval routing/runtime helpers, and structured approval display path formatting |
   | `plugin-sdk/approval-auth-runtime` | Approval auth helpers | Approver resolution, same-chat action auth |
@@ -425,11 +558,11 @@ releases.
   | `plugin-sdk/approval-native-runtime` | Approval target helpers | Native approval target/account binding helpers |
   | `plugin-sdk/approval-reply-runtime` | Approval reply helpers | Exec/plugin approval reply payload helpers |
   | `plugin-sdk/channel-runtime-context` | Channel runtime-context helpers | Generic channel runtime-context register/get/watch helpers |
-  | `plugin-sdk/security-runtime` | Security helpers | Shared trust, DM gating, external-content, and secret-collection helpers |
+  | `plugin-sdk/security-runtime` | Security helpers | Shared trust, DM gating, root-bounded file/path helpers, external-content, and secret-collection helpers |
   | `plugin-sdk/ssrf-policy` | SSRF policy helpers | Host allowlist and private-network policy helpers |
   | `plugin-sdk/ssrf-runtime` | SSRF runtime helpers | Pinned-dispatcher, guarded fetch, SSRF policy helpers |
   | `plugin-sdk/system-event-runtime` | System event helpers | `enqueueSystemEvent`, `peekSystemEventEntries` |
-  | `plugin-sdk/heartbeat-runtime` | Heartbeat helpers | Heartbeat event and visibility helpers |
+  | `plugin-sdk/heartbeat-runtime` | Heartbeat helpers | Heartbeat wake, event, and visibility helpers |
   | `plugin-sdk/delivery-queue-runtime` | Delivery queue helpers | `drainPendingDeliveries` |
   | `plugin-sdk/channel-activity-runtime` | Channel activity helpers | `recordChannelActivity` |
   | `plugin-sdk/dedupe-runtime` | Dedupe helpers | In-memory dedupe caches |
@@ -441,8 +574,7 @@ releases.
   | `plugin-sdk/fetch-runtime` | Wrapped fetch/proxy helpers | `resolveFetch`, proxy helpers, EnvHttpProxyAgent option helpers |
   | `plugin-sdk/host-runtime` | Host normalization helpers | `normalizeHostname`, `normalizeScpRemoteHost` |
   | `plugin-sdk/retry-runtime` | Retry helpers | `RetryConfig`, `retryAsync`, policy runners |
-  | `plugin-sdk/allow-from` | Allowlist formatting | `formatAllowFromLowercase` |
-  | `plugin-sdk/allowlist-resolution` | Allowlist input mapping | `mapAllowlistResolutionInputs` |
+  | `plugin-sdk/allow-from` | Allowlist formatting and input mapping | `formatAllowFromLowercase`, `mapAllowlistResolutionInputs` |
   | `plugin-sdk/command-auth` | Command gating and command-surface helpers | `resolveControlCommandGate`, sender-authorization helpers, command registry helpers including dynamic argument menu formatting |
   | `plugin-sdk/command-status` | Command status/help renderers | `buildCommandsMessage`, `buildCommandsMessagePaginated`, `buildHelpMessage` |
   | `plugin-sdk/secret-input` | Secret input parsing | Secret input helpers |
@@ -450,7 +582,7 @@ releases.
   | `plugin-sdk/webhook-request-guards` | Webhook body guard helpers | Request body read/limit helpers |
   | `plugin-sdk/reply-runtime` | Shared reply runtime | Inbound dispatch, heartbeat, reply planner, chunking |
   | `plugin-sdk/reply-dispatch-runtime` | Narrow reply dispatch helpers | Finalize, provider dispatch, and conversation-label helpers |
-  | `plugin-sdk/reply-history` | Reply-history helpers | `buildHistoryContext`, `buildPendingHistoryContextFromMap`, `recordPendingHistoryEntry`, `clearHistoryEntriesIfEnabled` |
+  | `plugin-sdk/reply-history` | Reply-history helpers | `createChannelHistoryWindow`; deprecated map-helper compatibility exports such as `buildPendingHistoryContextFromMap`, `recordPendingHistoryEntry`, and `clearHistoryEntriesIfEnabled` |
   | `plugin-sdk/reply-reference` | Reply reference planning | `createReplyReferencePlanner` |
   | `plugin-sdk/reply-chunking` | Reply chunk helpers | Text/markdown chunking helpers |
   | `plugin-sdk/session-store-runtime` | Session store helpers | Store path + updated-at helpers |
@@ -473,7 +605,6 @@ releases.
   | `plugin-sdk/provider-auth-runtime` | Provider runtime auth helpers | Runtime API-key resolution helpers |
   | `plugin-sdk/provider-auth-api-key` | Provider API-key setup helpers | API-key onboarding/profile-write helpers |
   | `plugin-sdk/provider-auth-result` | Provider auth-result helpers | Standard OAuth auth-result builder |
-  | `plugin-sdk/provider-auth-login` | Provider interactive login helpers | Shared interactive login helpers |
   | `plugin-sdk/provider-selection-runtime` | Provider selection helpers | Configured-or-auto provider selection and raw provider config merging |
   | `plugin-sdk/provider-env-vars` | Provider env-var helpers | Provider auth env-var lookup helpers |
   | `plugin-sdk/provider-model-shared` | Shared provider model/replay helpers | `ProviderReplayFamily`, `buildProviderReplayFamilyHooks`, `normalizeModelCompat`, shared replay-policy builders, provider-endpoint helpers, and model-id normalization helpers |
@@ -484,7 +615,7 @@ releases.
   | `plugin-sdk/provider-web-search-config-contract` | Provider web-search config helpers | Narrow web-search config/credential helpers for providers that do not need plugin-enable wiring |
   | `plugin-sdk/provider-web-search-contract` | Provider web-search contract helpers | Narrow web-search config/credential contract helpers such as `createWebSearchProviderContractFields`, `enablePluginInConfig`, `resolveProviderWebSearchPluginConfig`, and scoped credential setters/getters |
   | `plugin-sdk/provider-web-search` | Provider web-search helpers | Web-search provider registration/cache/runtime helpers |
-  | `plugin-sdk/provider-tools` | Provider tool/schema compat helpers | `ProviderToolCompatFamily`, `buildProviderToolCompatFamilyHooks`, Gemini schema cleanup + diagnostics, and xAI compat helpers such as `resolveXaiModelCompatPatch` / `applyXaiModelCompat` |
+  | `plugin-sdk/provider-tools` | Provider tool/schema compat helpers | `ProviderToolCompatFamily`, `buildProviderToolCompatFamilyHooks`, and DeepSeek/Gemini/OpenAI schema cleanup + diagnostics |
   | `plugin-sdk/provider-usage` | Provider usage helpers | `fetchClaudeUsage`, `fetchGeminiUsage`, `fetchGithubCopilotUsage`, and other provider usage helpers |
   | `plugin-sdk/provider-stream` | Provider stream wrapper helpers | `ProviderStreamFamily`, `buildProviderStreamFamilyHooks`, `composeProviderStreamWrappers`, stream wrapper types, and shared Anthropic/Bedrock/DeepSeek V4/Google/Kilocode/Moonshot/OpenAI/OpenRouter/Z.A.I/MiniMax/Copilot wrapper helpers |
   | `plugin-sdk/provider-transport-runtime` | Provider transport helpers | Native provider transport helpers such as guarded fetch, transport message transforms, and writable transport event streams |
@@ -492,12 +623,12 @@ releases.
   | `plugin-sdk/media-runtime` | Shared media helpers | Media fetch/transform/store helpers, ffprobe-backed video dimension probing, and media payload builders |
   | `plugin-sdk/media-generation-runtime` | Shared media-generation helpers | Shared failover helpers, candidate selection, and missing-model messaging for image/video/music generation |
   | `plugin-sdk/media-understanding` | Media-understanding helpers | Media understanding provider types plus provider-facing image/audio helper exports |
-  | `plugin-sdk/text-runtime` | Shared text helpers | Assistant-visible-text stripping, markdown render/chunking/table helpers, redaction helpers, directive-tag helpers, safe-text utilities, and related text/logging helpers |
+  | `plugin-sdk/text-runtime` | Deprecated broad text compatibility export | Use `string-coerce-runtime`, `text-chunking`, `text-utility-runtime`, and `logging-core` |
   | `plugin-sdk/text-chunking` | Text chunking helpers | Outbound text chunking helper |
   | `plugin-sdk/speech` | Speech helpers | Speech provider types plus provider-facing directive, registry, validation helpers, and OpenAI-compatible TTS builder |
   | `plugin-sdk/speech-core` | Shared speech core | Speech provider types, registry, directives, normalization |
   | `plugin-sdk/realtime-transcription` | Realtime transcription helpers | Provider types, registry helpers, and shared WebSocket session helper |
-  | `plugin-sdk/realtime-voice` | Realtime voice helpers | Provider types, registry/resolution helpers, and bridge session helpers |
+  | `plugin-sdk/realtime-voice` | Realtime voice helpers | Provider types, registry/resolution helpers, bridge session helpers, shared agent talk-back queues, active-run voice control, transcript/event health, echo suppression, consult question matching, forced-consult coordination, turn-context tracking, output activity tracking, and fast context consult helpers |
   | `plugin-sdk/image-generation` | Image-generation helpers | Image generation provider types plus image asset/data URL helpers and the OpenAI-compatible image provider builder |
   | `plugin-sdk/image-generation-core` | Shared image-generation core | Image-generation types, failover, auth, and registry helpers |
   | `plugin-sdk/music-generation` | Music-generation helpers | Music-generation provider/request/result types |
@@ -511,12 +642,13 @@ releases.
   | `plugin-sdk/channel-status` | Channel status helpers | Shared channel status snapshot/summary helpers |
   | `plugin-sdk/allowlist-config-edit` | Allowlist config helpers | Allowlist config edit/read helpers |
   | `plugin-sdk/group-access` | Group access helpers | Shared group-access decision helpers |
-  | `plugin-sdk/direct-dm` | Direct-DM helpers | Shared direct-DM auth/guard helpers |
+  | `plugin-sdk/direct-dm`, `plugin-sdk/direct-dm-access` | Deprecated compatibility facades | Use `plugin-sdk/channel-inbound` |
+  | `plugin-sdk/direct-dm-guard-policy` | Direct-DM guard helpers | Narrow pre-crypto guard policy helpers |
   | `plugin-sdk/extension-shared` | Shared extension helpers | Passive-channel/status and ambient proxy helper primitives |
   | `plugin-sdk/webhook-targets` | Webhook target helpers | Webhook target registry and route-install helpers |
-  | `plugin-sdk/webhook-path` | Webhook path helpers | Webhook path normalization helpers |
+  | `plugin-sdk/webhook-path` | Deprecated webhook path alias | Use `plugin-sdk/webhook-ingress` |
   | `plugin-sdk/web-media` | Shared web media helpers | Remote/local media loading helpers |
-  | `plugin-sdk/zod` | Zod re-export | Re-exported `zod` for plugin SDK consumers |
+  | `plugin-sdk/zod` | Deprecated Zod compatibility re-export | Import `zod` from `zod` directly |
   | `plugin-sdk/memory-core` | Bundled memory-core helpers | Memory manager/config/file/CLI helper surface |
   | `plugin-sdk/memory-core-engine-runtime` | Memory engine runtime facade | Memory index/search runtime facade |
   | `plugin-sdk/memory-core-host-engine-foundation` | Memory host foundation engine | Memory host foundation engine exports |
@@ -526,23 +658,24 @@ releases.
   | `plugin-sdk/memory-core-host-multimodal` | Memory host multimodal helpers | Memory host multimodal helpers |
   | `plugin-sdk/memory-core-host-query` | Memory host query helpers | Memory host query helpers |
   | `plugin-sdk/memory-core-host-secret` | Memory host secret helpers | Memory host secret helpers |
-  | `plugin-sdk/memory-core-host-events` | Memory host event journal helpers | Memory host event journal helpers |
+  | `plugin-sdk/memory-core-host-events` | Deprecated memory event alias | Use `plugin-sdk/memory-host-events` |
   | `plugin-sdk/memory-core-host-status` | Memory host status helpers | Memory host status helpers |
   | `plugin-sdk/memory-core-host-runtime-cli` | Memory host CLI runtime | Memory host CLI runtime helpers |
   | `plugin-sdk/memory-core-host-runtime-core` | Memory host core runtime | Memory host core runtime helpers |
   | `plugin-sdk/memory-core-host-runtime-files` | Memory host file/runtime helpers | Memory host file/runtime helpers |
   | `plugin-sdk/memory-host-core` | Memory host core runtime alias | Vendor-neutral alias for memory host core runtime helpers |
   | `plugin-sdk/memory-host-events` | Memory host event journal alias | Vendor-neutral alias for memory host event journal helpers |
-  | `plugin-sdk/memory-host-files` | Memory host file/runtime alias | Vendor-neutral alias for memory host file/runtime helpers |
+  | `plugin-sdk/memory-host-files` | Deprecated memory file/runtime alias | Use `plugin-sdk/memory-core-host-runtime-files` |
   | `plugin-sdk/memory-host-markdown` | Managed markdown helpers | Shared managed-markdown helpers for memory-adjacent plugins |
   | `plugin-sdk/memory-host-search` | Active memory search facade | Lazy active-memory search-manager runtime facade |
-  | `plugin-sdk/memory-host-status` | Memory host status alias | Vendor-neutral alias for memory host status helpers |
-  | `plugin-sdk/testing` | Test utilities | Legacy broad compatibility barrel; prefer focused test subpaths such as `plugin-sdk/plugin-test-runtime`, `plugin-sdk/channel-test-helpers`, `plugin-sdk/channel-target-testing`, `plugin-sdk/test-env`, and `plugin-sdk/test-fixtures` |
+  | `plugin-sdk/memory-host-status` | Deprecated memory host status alias | Use `plugin-sdk/memory-core-host-status` |
+  | `plugin-sdk/testing` | Test utilities | Repo-local deprecated compatibility barrel; use focused repo-local test subpaths such as `plugin-sdk/plugin-test-runtime`, `plugin-sdk/channel-test-helpers`, `plugin-sdk/channel-target-testing`, `plugin-sdk/test-env`, and `plugin-sdk/test-fixtures` |
 </Accordion>
 
 This table is intentionally the common migration subset, not the full SDK
-surface. The full list of 200+ entrypoints lives in
-`scripts/lib/plugin-sdk-entrypoints.json`.
+surface. The compiler entrypoint inventory lives in
+`scripts/lib/plugin-sdk-entrypoints.json`; package exports are generated from
+the public subset.
 
 Reserved bundled-plugin helper seams have been retired from the public SDK
 export map except for explicitly documented compatibility facades such as the
@@ -569,7 +702,7 @@ canonical replacement.
     `buildCommandsMessagePaginated`, `buildHelpMessage`.
 
     **New (`openclaw/plugin-sdk/command-status`)**: same signatures, same
-    exports — just imported from the narrower subpath. `command-auth`
+    exports - just imported from the narrower subpath. `command-auth`
     re-exports them as compat stubs.
 
     ```typescript
@@ -588,7 +721,7 @@ canonical replacement.
     `openclaw/plugin-sdk/channel-inbound` or
     `openclaw/plugin-sdk/channel-mention-gating`.
 
-    **New**: `resolveInboundMentionDecision({ facts, policy })` — returns a
+    **New**: `resolveInboundMentionDecision({ facts, policy })` - returns a
     single decision object instead of two split calls.
 
     Downstream channel plugins (Slack, Discord, Matrix, MS Teams) have already
@@ -604,7 +737,7 @@ canonical replacement.
 
     `channelActions*` helpers in `openclaw/plugin-sdk/channel-actions` are
     deprecated alongside raw "actions" channel exports. Expose capabilities
-    through the semantic `presentation` surface instead — channel plugins
+    through the semantic `presentation` surface instead - channel plugins
     declare what they render (cards, buttons, selects) rather than which raw
     action names they accept.
 
@@ -635,6 +768,29 @@ canonical replacement.
 
   </Accordion>
 
+  <Accordion title="deactivate hook → gateway_stop">
+    **Old**: `api.on("deactivate", handler)`.
+
+    **New**: `api.on("gateway_stop", handler)`. The event and context are the
+    same shutdown cleanup contract; only the hook name changes.
+
+    ```typescript
+    // Before
+    api.on("deactivate", async (event, ctx) => {
+      await stopPluginService(ctx);
+    });
+
+    // After
+    api.on("gateway_stop", async (event, ctx) => {
+      await stopPluginService(ctx);
+    });
+    ```
+
+    `deactivate` remains wired as a deprecated compatibility alias until after
+    2026-08-16.
+
+  </Accordion>
+
   <Accordion title="Provider discovery types → provider catalog types">
     Four discovery type aliases are now thin wrappers over the
     catalog-era types:
@@ -646,7 +802,7 @@ canonical replacement.
     | `ProviderDiscoveryResult` | `ProviderCatalogResult`   |
     | `ProviderPluginDiscovery` | `ProviderPluginCatalog`   |
 
-    Plus the legacy `ProviderCapabilities` static bag — provider plugins
+    Plus the legacy `ProviderCapabilities` static bag - provider plugins
     should use explicit provider hooks such as `buildReplayPolicy`,
     `normalizeToolSchemas`, and `wrapStreamFn` rather than a static object.
 
@@ -662,18 +818,22 @@ canonical replacement.
     ranked level list. OpenClaw downgrades stale stored values by profile
     rank automatically.
 
+    The context includes `provider`, `modelId`, optional merged `reasoning`,
+    and optional merged model `compat` facts. Provider plugins can use those
+    catalog facts to expose a model-specific profile only when the configured
+    request contract supports it.
+
     Implement one hook instead of three. The legacy hooks keep working during
     the deprecation window but are not composed with the profile result.
 
   </Accordion>
 
-  <Accordion title="External OAuth provider fallback → contracts.externalAuthProviders">
-    **Old**: implementing `resolveExternalOAuthProfiles(...)` without
-    declaring the provider in the plugin manifest.
+  <Accordion title="External auth providers → contracts.externalAuthProviders">
+    **Old**: implementing external auth hooks without declaring the provider
+    in the plugin manifest.
 
     **New**: declare `contracts.externalAuthProviders` in the plugin manifest
-    **and** implement `resolveExternalAuthProfiles(...)`. The old "auth
-    fallback" path emits a warning at runtime and will be removed.
+    **and** implement `resolveExternalAuthProfiles(...)`.
 
     ```json
     {
@@ -699,17 +859,31 @@ canonical replacement.
   </Accordion>
 
   <Accordion title="Memory plugin registration → registerMemoryCapability">
-    **Old**: three separate calls —
+    **Old**: three separate calls -
     `api.registerMemoryPromptSection(...)`,
     `api.registerMemoryFlushPlan(...)`,
     `api.registerMemoryRuntime(...)`.
 
-    **New**: one call on the memory-state API —
+    **New**: one call on the memory-state API -
     `registerMemoryCapability(pluginId, { promptBuilder, flushPlanResolver, runtime })`.
 
-    Same slots, single registration call. Additive memory helpers
-    (`registerMemoryPromptSupplement`, `registerMemoryCorpusSupplement`,
-    `registerMemoryEmbeddingProvider`) are not affected.
+    Same slots, single registration call. Additive prompt and corpus helpers
+    (`registerMemoryPromptSupplement`, `registerMemoryCorpusSupplement`) are
+    not affected.
+
+  </Accordion>
+
+  <Accordion title="Memory embedding provider API">
+    **Old**: `api.registerMemoryEmbeddingProvider(...)` plus
+    `contracts.memoryEmbeddingProviders`.
+
+    **New**: `api.registerEmbeddingProvider(...)` plus
+    `contracts.embeddingProviders`.
+
+    The generic embedding provider contract is reusable outside memory and is
+    the supported path for new providers. The memory-specific registration API
+    remains wired as deprecated compatibility while existing providers migrate.
+    Plugin inspection reports non-bundled usage as compatibility debt.
 
   </Accordion>
 
@@ -744,8 +918,8 @@ canonical replacement.
   </Accordion>
 
   <Accordion title="Embedded extension factories → agent tool-result middleware">
-    Covered in "How to migrate → Migrate Pi tool-result extensions to
-    middleware" above. Included here for completeness: the removed Pi-only
+    Covered in "How to migrate → Migrate embedded tool-result extensions to
+    middleware" above. Included here for completeness: the removed embedded-runner-only
     `api.registerEmbeddedExtensionFactory(...)` path is replaced by
     `api.registerAgentToolResultMiddleware(...)` with an explicit runtime
     list in `contracts.agentToolResultMiddleware`.
@@ -796,9 +970,9 @@ This is a temporary escape hatch, not a permanent solution.
 
 ## Related
 
-- [Getting Started](/plugins/building-plugins) — build your first plugin
-- [SDK Overview](/plugins/sdk-overview) — full subpath import reference
-- [Channel Plugins](/plugins/sdk-channel-plugins) — building channel plugins
-- [Provider Plugins](/plugins/sdk-provider-plugins) — building provider plugins
-- [Plugin Internals](/plugins/architecture) — architecture deep dive
-- [Plugin Manifest](/plugins/manifest) — manifest schema reference
+- [Getting Started](/plugins/building-plugins) - build your first plugin
+- [SDK Overview](/plugins/sdk-overview) - full subpath import reference
+- [Channel Plugins](/plugins/sdk-channel-plugins) - building channel plugins
+- [Provider Plugins](/plugins/sdk-provider-plugins) - building provider plugins
+- [Plugin Internals](/plugins/architecture) - architecture deep dive
+- [Plugin Manifest](/plugins/manifest) - manifest schema reference

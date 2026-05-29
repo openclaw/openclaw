@@ -1,8 +1,9 @@
 import type { OpenClawConfig } from "../config/types.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { PluginCompatCode } from "./compat/registry.js";
-import type { PluginCandidate } from "./discovery.js";
+import type { PluginCandidate, PluginDiscoveryResult } from "./discovery.js";
 import type { PluginInstallSourceInfo } from "./install-source-info.js";
+import type { InstalledPluginFileSignature } from "./installed-plugin-index-hash.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import type { PluginPackageChannel } from "./manifest.js";
@@ -48,6 +49,11 @@ export type InstalledPluginInstallRecordInfo = Pick<
   | "clawhubPackage"
   | "clawhubFamily"
   | "clawhubChannel"
+  | "artifactKind"
+  | "artifactFormat"
+  | "npmIntegrity"
+  | "npmShasum"
+  | "npmTarballName"
   | "clawpackSha256"
   | "clawpackSpecVersion"
   | "clawpackManifestSha256"
@@ -81,6 +87,7 @@ export type InstalledPluginIndexRecord = {
   packageChannel?: InstalledPluginPackageChannelInfo;
   manifestPath: string;
   manifestHash: string;
+  manifestFile?: InstalledPluginFileSignature;
   format?: PluginManifestRecord["format"];
   bundleFormat?: PluginManifestRecord["bundleFormat"];
   source?: string;
@@ -88,11 +95,13 @@ export type InstalledPluginIndexRecord = {
   packageJson?: {
     path: string;
     hash: string;
+    fileSignature?: InstalledPluginFileSignature;
   };
   rootDir: string;
   origin: PluginManifestRecord["origin"];
   enabled: boolean;
   enabledByDefault?: boolean;
+  enabledByDefaultOnPlatforms?: readonly string[];
   syntheticAuthRefs?: readonly string[];
   startup: InstalledPluginStartupInfo;
   compat: readonly PluginCompatCode[];
@@ -121,6 +130,7 @@ export type LoadInstalledPluginIndexParams = {
   installRecords?: Record<string, PluginInstallRecord>;
   candidates?: PluginCandidate[];
   diagnostics?: PluginDiagnostic[];
+  discovery?: PluginDiscoveryResult;
   now?: () => Date;
 };
 

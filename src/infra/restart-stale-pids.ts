@@ -4,7 +4,9 @@ import path from "node:path";
 import { resolveGatewayPort } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { isGatewayArgv } from "./gateway-process-argv.js";
+import { uniqueValues } from "../shared/string-normalization.js";
+import { isGatewayArgv, parseProcCmdline } from "./gateway-process-argv.js";
+import { parseStrictPositiveInteger } from "./parse-finite-number.js";
 import { resolveLsofCommandSync } from "./ports-lsof.js";
 import { getWindowsInstallRoots } from "./windows-install-roots.js";
 import {
@@ -104,6 +106,21 @@ function readParentPidFromProc(pid: number): number | null {
   }
 }
 
+function readParentPidFromPs(pid: number, spawnTimeoutMs: number): number | null {
+  try {
+    const res = spawnSync("ps", ["-o", "ppid=", "-p", String(pid)], {
+      encoding: "utf8",
+      timeout: spawnTimeoutMs,
+    });
+    if (res.error || res.status !== 0 || !res.stdout.trim()) {
+      return null;
+    }
+    return parseStrictPositiveInteger(res.stdout.trim()) ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Collect the set of PIDs whose termination would cascade-kill the caller:
  * the current process, its direct parent, and — where the platform permits
@@ -129,24 +146,28 @@ function readParentPidFromProc(pid: number): number | null {
  * install where the gateway spawns a direct-child sidecar.
  *
  * The walk is best-effort. `process.ppid` is provided by Node via a direct
- * syscall and is always available; transitive ancestors are only read on
- * Linux via `/proc`. macOS/Windows stop at ppid, which is sufficient for
- * the direct-child sidecar topology this bug describes; extending those
- * platforms can be done without touching the call sites.
+ * syscall and is always available; transitive ancestors are read on Linux via
+ * `/proc` and on macOS via `ps`. Windows stops at ppid.
  *
- * The function takes no parameters and exposes no hooks. Tests exercise
- * the real walk by stubbing `process.ppid` (and, on Linux, by mocking
- * `node:fs` to inject `/proc/<pid>/status` payloads) — there is no
- * reachable override for runtime callers to mutate.
+ * The function exposes no runtime hooks. Tests exercise the real walk by
+ * stubbing `process.ppid` (and, on Linux, by mocking `node:fs` to inject
+ * `/proc/<pid>/status` payloads) — there is no reachable override for
+ * runtime callers to mutate.
  */
-function getSelfAndAncestorPidsSync(): Set<number> {
+export function getSelfAndAncestorPidsSync(spawnTimeoutMs = SPAWN_TIMEOUT_MS): Set<number> {
   const pids = new Set<number>([process.pid]);
   const immediateParent = getParentPid();
   if (!Number.isFinite(immediateParent) || immediateParent <= 0) {
     return pids;
   }
   pids.add(immediateParent);
-  if (process.platform !== "linux") {
+  const readTransitiveParent =
+    process.platform === "linux"
+      ? readParentPidFromProc
+      : process.platform === "darwin"
+        ? (pid: number) => readParentPidFromPs(pid, spawnTimeoutMs)
+        : null;
+  if (!readTransitiveParent) {
     return pids;
   }
   // Transitive ancestor walk. Each hop's validity (positive pid, not already
@@ -155,7 +176,7 @@ function getSelfAndAncestorPidsSync(): Set<number> {
   // parent` after the same check, so no separate top-of-loop guard is needed.
   let current = immediateParent;
   for (let depth = 0; depth < MAX_ANCESTOR_WALK_DEPTH; depth++) {
-    const parent = readParentPidFromProc(current);
+    const parent = readTransitiveParent(current);
     if (parent == null || parent <= 0 || pids.has(parent)) {
       break;
     }
@@ -166,27 +187,27 @@ function getSelfAndAncestorPidsSync(): Set<number> {
 }
 
 /**
- * Parse openclaw gateway PIDs from lsof -Fpc stdout, excluding the current
+ * Parse raw PIDs from lsof -Fpc stdout, excluding the current
  * process and its ancestors (see `getSelfAndAncestorPidsSync` for the full
  * rationale). On Linux the ancestor lookup reads up to
  * `MAX_ANCESTOR_WALK_DEPTH` entries from `/proc/<pid>/status`; each read is
  * a virtual-filesystem access (no disk I/O, no external process), wrapped
- * in try/catch and degrades silently. On macOS/Windows the lookup is
- * in-memory via `process.ppid` only.
+ * in try/catch and degrades silently. On macOS the lookup shells out to `ps`
+ * with the caller's spawn timeout. Windows only uses the in-memory direct
+ * parent from `process.ppid`.
  */
-function parsePidsFromLsofOutput(stdout: string): number[] {
-  const pids: number[] = [];
+function parseLsofEntries(stdout: string): Array<{ pid: number; cmd?: string }> {
+  const entries: Array<{ pid: number; cmd?: string }> = [];
   let currentPid: number | undefined;
   let currentCmd: string | undefined;
+  const flush = () => {
+    if (currentPid != null) {
+      entries.push({ pid: currentPid, ...(currentCmd ? { cmd: currentCmd } : {}) });
+    }
+  };
   for (const line of stdout.split(/\r?\n/).filter(Boolean)) {
     if (line.startsWith("p")) {
-      if (
-        currentPid != null &&
-        currentCmd &&
-        normalizeLowercaseStringOrEmpty(currentCmd).includes("openclaw")
-      ) {
-        pids.push(currentPid);
-      }
+      flush();
       const parsed = Number.parseInt(line.slice(1), 10);
       currentPid = Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
       currentCmd = undefined;
@@ -194,19 +215,67 @@ function parsePidsFromLsofOutput(stdout: string): number[] {
       currentCmd = line.slice(1);
     }
   }
-  if (
-    currentPid != null &&
-    currentCmd &&
-    normalizeLowercaseStringOrEmpty(currentCmd).includes("openclaw")
-  ) {
-    pids.push(currentPid);
+  flush();
+  return entries;
+}
+
+function parsePsCommandLine(raw: string): string[] {
+  const args: string[] = [];
+  for (const match of raw.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)) {
+    const value = match[1] ?? match[2] ?? match[3];
+    if (value) {
+      args.push(value);
+    }
   }
+  return args;
+}
+
+function readUnixProcessArgsSync(pid: number, spawnTimeoutMs: number): string[] | null {
+  if (process.platform === "linux") {
+    try {
+      const args = parseProcCmdline(readFileSync(`/proc/${pid}/cmdline`, "utf8"));
+      if (args.length > 0) {
+        return args;
+      }
+    } catch {
+      // Fall back to ps below; /proc may be unavailable or restricted.
+    }
+  }
+  const res = spawnSync("ps", ["-ww", "-p", String(pid), "-o", "command="], {
+    encoding: "utf8",
+    timeout: spawnTimeoutMs,
+  });
+  if (res.error || res.status !== 0 || !res.stdout.trim()) {
+    return null;
+  }
+  return parsePsCommandLine(res.stdout.trim());
+}
+
+function verifyGatewayPidByArgvSync(pid: number, spawnTimeoutMs: number): boolean {
+  const args = readUnixProcessArgsSync(pid, spawnTimeoutMs);
+  return args != null && isGatewayArgv(args, { allowGatewayBinary: true });
+}
+
+function parsePidsFromLsofOutput(stdout: string, spawnTimeoutMs: number): number[] {
   // Deduplicate: dual-stack listeners (IPv4 + IPv6) cause lsof to emit the
   // same PID twice. Return each PID at most once to avoid double-killing.
   // Exclude self and ancestors — terminating any ancestor cascade-kills the
   // caller via the supervisor, recreating the #68451 restart loop.
-  const excluded = getSelfAndAncestorPidsSync();
-  return [...new Set(pids)].filter((pid) => !excluded.has(pid));
+  const excluded = getSelfAndAncestorPidsSync(spawnTimeoutMs);
+  const pids: number[] = [];
+  for (const entry of parseLsofEntries(stdout)) {
+    if (excluded.has(entry.pid)) {
+      continue;
+    }
+    if (entry.cmd && normalizeLowercaseStringOrEmpty(entry.cmd).includes("openclaw")) {
+      pids.push(entry.pid);
+      continue;
+    }
+    if (verifyGatewayPidByArgvSync(entry.pid, spawnTimeoutMs)) {
+      pids.push(entry.pid);
+    }
+  }
+  return uniqueValues(pids);
 }
 
 /**
@@ -217,7 +286,7 @@ function parsePidsFromLsofOutput(stdout: string): number[] {
  */
 function filterVerifiedWindowsGatewayPids(rawPids: number[]): number[] {
   const excluded = getSelfAndAncestorPidsSync();
-  return Array.from(new Set(rawPids))
+  return uniqueValues(rawPids)
     .filter((pid) => Number.isFinite(pid) && pid > 0 && !excluded.has(pid))
     .filter((pid) => {
       const args = readWindowsProcessArgsSync(pid);
@@ -231,7 +300,7 @@ function filterVerifiedWindowsGatewayPidsResult(
 ): WindowsListeningPidsResult {
   const excluded = getSelfAndAncestorPidsSync();
   const verified: number[] = [];
-  for (const pid of Array.from(new Set(rawPids))) {
+  for (const pid of uniqueValues(rawPids)) {
     if (!Number.isFinite(pid) || pid <= 0 || excluded.has(pid)) {
       continue;
     }
@@ -298,7 +367,7 @@ export function findGatewayPidsOnPortSync(
     );
     return [];
   }
-  return parsePidsFromLsofOutput(res.stdout);
+  return parsePidsFromLsofOutput(res.stdout, spawnTimeoutMs);
 }
 
 /**
@@ -345,7 +414,7 @@ function pollPortOnce(port: number): PollResult {
       // user namespaces), lsof can exit 1 AND still emit some output for the
       // processes it could read. Parse stdout when non-empty to avoid false-free.
       if (res.stdout) {
-        const pids = parsePidsFromLsofOutput(res.stdout);
+        const pids = parsePidsFromLsofOutput(res.stdout, POLL_SPAWN_TIMEOUT_MS);
         return pids.length === 0 ? { free: true } : { free: false };
       }
       return { free: true };
@@ -358,7 +427,7 @@ function pollPortOnce(port: number): PollResult {
     }
     // status === 0: lsof found listeners. Parse pids from the stdout we
     // already hold — no second lsof spawn, no new failure surface.
-    const pids = parsePidsFromLsofOutput(res.stdout);
+    const pids = parsePidsFromLsofOutput(res.stdout, POLL_SPAWN_TIMEOUT_MS);
     return pids.length === 0 ? { free: true } : { free: false };
   } catch {
     return { free: null, permanent: false };
@@ -552,7 +621,7 @@ export function cleanStaleGatewayProcessesSync(portOverride?: number): number[] 
   }
 }
 
-export const __testing = {
+export const testing = {
   setSleepSyncOverride(fn: ((ms: number) => void) | null) {
     sleepSyncOverride = fn;
   },
@@ -565,3 +634,4 @@ export const __testing = {
   /** Invoke sleepSync directly (bypasses the override) for unit-testing the real Atomics path. */
   callSleepSyncRaw: sleepSync,
 };
+export { testing as __testing };

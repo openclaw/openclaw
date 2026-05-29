@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { testing as cliBackendsTesting } from "../agents/cli-backends.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 
 const gatewayClientState = vi.hoisted(() => ({
@@ -23,7 +24,14 @@ vi.mock("./client.js", () => ({
 }));
 
 describe("gateway cli backend live helpers", () => {
+  let liveHelpers: typeof import("./gateway-cli-backend.live-helpers.js");
+
+  beforeAll(async () => {
+    liveHelpers = await import("./gateway-cli-backend.live-helpers.js");
+  });
+
   afterEach(() => {
+    cliBackendsTesting.resetDepsForTest();
     gatewayClientState.lastOptions = undefined;
     delete process.env.OPENCLAW_SKIP_CHANNELS;
     delete process.env.OPENCLAW_SKIP_PROVIDERS;
@@ -39,7 +47,7 @@ describe("gateway cli backend live helpers", () => {
 
   it("applies and restores live env including minimal gateway mode", async () => {
     const { applyCliBackendLiveEnv, restoreCliBackendLiveEnv, snapshotCliBackendLiveEnv } =
-      await import("./gateway-cli-backend.live-helpers.js");
+      liveHelpers;
 
     process.env.OPENCLAW_SKIP_CHANNELS = "old-channels";
     process.env.OPENCLAW_SKIP_PROVIDERS = "old-providers";
@@ -88,16 +96,15 @@ describe("gateway cli backend live helpers", () => {
       token: "gateway-token",
     });
 
-    expect(client).toBeTruthy();
-    expect(gatewayClientState.lastOptions).toMatchObject({
-      url: "ws://127.0.0.1:18789",
-      token: "gateway-token",
-      clientName: GATEWAY_CLIENT_NAMES.TEST,
-      clientDisplayName: "vitest-live",
-      clientVersion: "dev",
-      mode: GATEWAY_CLIENT_MODES.TEST,
-      connectChallengeTimeoutMs: 45_000,
-    });
+    expect(client.start).toBeTypeOf("function");
+    expect(client.stopAndWait).toBeTypeOf("function");
+    expect(gatewayClientState.lastOptions?.url).toBe("ws://127.0.0.1:18789");
+    expect(gatewayClientState.lastOptions?.token).toBe("gateway-token");
+    expect(gatewayClientState.lastOptions?.clientName).toBe(GATEWAY_CLIENT_NAMES.TEST);
+    expect(gatewayClientState.lastOptions?.clientDisplayName).toBe("vitest-live");
+    expect(gatewayClientState.lastOptions?.clientVersion).toBe("dev");
+    expect(gatewayClientState.lastOptions?.mode).toBe(GATEWAY_CLIENT_MODES.TEST);
+    expect(gatewayClientState.lastOptions?.connectChallengeTimeoutMs).toBe(45_000);
     expect(gatewayClientState.lastOptions).not.toHaveProperty("requestTimeoutMs");
   });
 
@@ -113,6 +120,56 @@ describe("gateway cli backend live helpers", () => {
     expect(shouldRunCliModelSwitchProbe("claude-cli", "claude-cli/claude-sonnet-4-6")).toBe(true);
     expect(shouldRunCliModelSwitchProbe("claude-cli", "claude-cli/claude-opus-4-6")).toBe(false);
     expect(shouldRunCliModelSwitchProbe("codex-cli", "codex-cli/gpt-5.5")).toBe(false);
+  });
+
+  it("rejects removed Codex CLI refs for live CLI backend selection", async () => {
+    const { resolveCliBackendLiveModelSelection } =
+      await import("./gateway-cli-backend.live-helpers.js");
+
+    expect(() =>
+      resolveCliBackendLiveModelSelection({
+        rawModel: "codex-cli/gpt-5.4",
+        defaultProvider: "claude-cli",
+      }),
+    ).toThrow(/codex-cli\/\.\.\. is no longer supported/u);
+  });
+
+  it("configures legacy CLI model refs as canonical provider models plus CLI runtime", async () => {
+    const { resolveCliBackendLiveModelSelection } =
+      await import("./gateway-cli-backend.live-helpers.js");
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [],
+      resolvePluginSetupRegistry: () => ({
+        providers: [],
+        cliBackends: [
+          {
+            pluginId: "claude",
+            backend: {
+              id: "claude-cli",
+              modelProvider: "anthropic",
+              config: { command: "claude", args: [] },
+            },
+          },
+        ],
+        configMigrations: [],
+        autoEnableProbes: [],
+        diagnostics: [],
+      }),
+    });
+
+    expect(
+      resolveCliBackendLiveModelSelection({
+        rawModel: "claude-cli/claude-sonnet-4-6",
+        defaultProvider: "claude-cli",
+        modelSwitchTarget: "claude-cli/claude-opus-4-6",
+      }),
+    ).toEqual({
+      providerId: "claude-cli",
+      cliModelKey: "claude-cli/claude-sonnet-4-6",
+      configModelKey: "anthropic/claude-sonnet-4-6",
+      configModelSwitchTarget: "anthropic/claude-opus-4-6",
+      agentRuntime: { id: "claude-cli" },
+    });
   });
 
   it("lets env disable the model switch probe", async () => {

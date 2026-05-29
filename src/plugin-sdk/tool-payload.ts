@@ -57,6 +57,16 @@ export type PlainTextToolCallParseOptions = {
 
 const DEFAULT_MAX_PLAIN_TEXT_TOOL_PAYLOAD_BYTES = 256_000;
 const END_TOOL_REQUEST = "[END_TOOL_REQUEST]";
+const HARMONY_CHANNEL_MARKER = "<|channel|>";
+const HARMONY_MESSAGE_MARKER = "<|message|>";
+const HARMONY_CALL_MARKER = "<|call|>";
+const XMLISH_PARAMETER_CLOSE = "</parameter>";
+
+type PlainTextToolCallOpening = {
+  end: number;
+  name: string;
+  requiresClosing: boolean;
+};
 
 function isToolNameChar(char: string | undefined): boolean {
   return Boolean(char && /[A-Za-z0-9_-]/.test(char));
@@ -88,11 +98,22 @@ function consumeLineBreak(text: string, start: number): number | null {
   return null;
 }
 
-function parseOpening(text: string, start: number): { end: number; name: string } | null {
+function parseBracketOpening(text: string, start: number): PlainTextToolCallOpening | null {
   if (text[start] !== "[") {
     return null;
   }
   let cursor = start + 1;
+  if (text.startsWith("tool:", cursor)) {
+    cursor += "tool:".length;
+    const nameStart = cursor;
+    while (isToolNameChar(text[cursor])) {
+      cursor += 1;
+    }
+    if (cursor === nameStart || text[cursor] !== "]") {
+      return null;
+    }
+    return { end: cursor + 1, name: text.slice(nameStart, cursor), requiresClosing: false };
+  }
   const nameStart = cursor;
   while (isToolNameChar(text[cursor])) {
     cursor += 1;
@@ -107,7 +128,57 @@ function parseOpening(text: string, start: number): { end: number; name: string 
   if (afterLineBreak === null) {
     return null;
   }
-  return { end: afterLineBreak, name };
+  return { end: afterLineBreak, name, requiresClosing: true };
+}
+
+function parseHarmonyOpening(text: string, start: number): PlainTextToolCallOpening | null {
+  let cursor = start;
+  if (text.startsWith(HARMONY_CHANNEL_MARKER, cursor)) {
+    cursor += HARMONY_CHANNEL_MARKER.length;
+  }
+  const channelStart = cursor;
+  while (/[A-Za-z_]/.test(text[cursor] ?? "")) {
+    cursor += 1;
+  }
+  const channel = text.slice(channelStart, cursor);
+  if (channel !== "commentary" && channel !== "analysis" && channel !== "final") {
+    return null;
+  }
+  cursor = skipHorizontalWhitespace(text, cursor);
+  if (!text.startsWith("to=", cursor)) {
+    return null;
+  }
+  cursor += 3;
+  const nameStart = cursor;
+  while (isToolNameChar(text[cursor])) {
+    cursor += 1;
+  }
+  if (cursor === nameStart) {
+    return null;
+  }
+  const name = text.slice(nameStart, cursor);
+  cursor = skipHorizontalWhitespace(text, cursor);
+  if (!text.startsWith("code", cursor)) {
+    return null;
+  }
+  cursor += 4;
+  cursor = skipWhitespace(text, cursor);
+  if (text.startsWith(HARMONY_MESSAGE_MARKER, cursor)) {
+    cursor = skipWhitespace(text, cursor + HARMONY_MESSAGE_MARKER.length);
+  }
+  return { end: cursor, name, requiresClosing: false };
+}
+
+function parseXmlishFunctionOpening(text: string, start: number): PlainTextToolCallOpening | null {
+  const match = /^<function=([A-Za-z0-9_.:-]{1,120})>\s*/i.exec(text.slice(start));
+  if (!match?.[1]) {
+    return null;
+  }
+  return { end: start + match[0].length, name: match[1], requiresClosing: false };
+}
+
+function parseOpening(text: string, start: number): PlainTextToolCallOpening | null {
+  return parseBracketOpening(text, start) ?? parseHarmonyOpening(text, start);
 }
 
 function consumeJsonObject(
@@ -174,6 +245,14 @@ function parseClosing(text: string, start: number, name: string): number | null 
   return null;
 }
 
+function parseOptionalHarmonyClosing(text: string, start: number): number {
+  const cursor = skipWhitespace(text, start);
+  if (text.startsWith(HARMONY_CALL_MARKER, cursor)) {
+    return cursor + HARMONY_CALL_MARKER.length;
+  }
+  return start;
+}
+
 function parsePlainTextToolCallBlockAt(
   text: string,
   start: number,
@@ -197,17 +276,91 @@ function parsePlainTextToolCallBlockAt(
   if (!payload) {
     return null;
   }
-  const end = parseClosing(text, payload.end, opening.name);
-  if (end === null) {
+  const closingEnd = opening.requiresClosing
+    ? parseClosing(text, payload.end, opening.name)
+    : parseOptionalHarmonyClosing(text, payload.end);
+  if (closingEnd === null) {
     return null;
   }
   return {
     arguments: payload.value,
-    end,
+    end: closingEnd,
     name: opening.name,
-    raw: text.slice(start, end),
+    raw: text.slice(start, closingEnd),
     start,
   };
+}
+
+function consumeXmlishParameterBlock(
+  text: string,
+  start: number,
+  maxPayloadBytes: number,
+): number | null {
+  const cursor = skipWhitespace(text, start);
+  const openMatch = /^<parameter=[A-Za-z0-9_.:-]{1,120}>\s*/i.exec(text.slice(cursor));
+  if (!openMatch) {
+    return null;
+  }
+  const payloadStart = cursor + openMatch[0].length;
+  const closeStart = text.toLowerCase().indexOf(XMLISH_PARAMETER_CLOSE, payloadStart);
+  if (closeStart === -1 || closeStart + XMLISH_PARAMETER_CLOSE.length - cursor > maxPayloadBytes) {
+    return null;
+  }
+  return closeStart + XMLISH_PARAMETER_CLOSE.length;
+}
+
+function consumeXmlishParameterBlocks(
+  text: string,
+  start: number,
+  maxPayloadBytes: number,
+): number | null {
+  let cursor = start;
+  let consumed = false;
+  while (true) {
+    const next = consumeXmlishParameterBlock(text, cursor, maxPayloadBytes);
+    if (next === null) {
+      break;
+    }
+    if (next - start > maxPayloadBytes) {
+      return null;
+    }
+    cursor = next;
+    consumed = true;
+  }
+  return consumed ? cursor : null;
+}
+
+function consumeOptionalXmlishFunctionClose(text: string, start: number): number {
+  const cursor = skipWhitespace(text, start);
+  return text.slice(cursor).toLowerCase().startsWith("</function>")
+    ? cursor + "</function>".length
+    : start;
+}
+
+function parseXmlishPlainTextToolCallBlockEndAt(
+  text: string,
+  start: number,
+  options?: PlainTextToolCallParseOptions,
+): number | null {
+  const opening = parseBracketOpening(text, start) ?? parseXmlishFunctionOpening(text, start);
+  if (!opening) {
+    return null;
+  }
+  const allowedToolNames = options?.allowedToolNames
+    ? new Set(options.allowedToolNames)
+    : undefined;
+  if (allowedToolNames && !allowedToolNames.has(opening.name)) {
+    return null;
+  }
+  const payloadEnd = consumeXmlishParameterBlocks(
+    text,
+    opening.end,
+    options?.maxPayloadBytes ?? DEFAULT_MAX_PLAIN_TEXT_TOOL_PAYLOAD_BYTES,
+  );
+  if (payloadEnd === null) {
+    return null;
+  }
+  return consumeOptionalXmlishFunctionClose(text, payloadEnd);
 }
 
 export function parseStandalonePlainTextToolCallBlocks(
@@ -228,7 +381,12 @@ export function parseStandalonePlainTextToolCallBlocks(
 }
 
 export function stripPlainTextToolCallBlocks(text: string): string {
-  if (!text || !/\[[A-Za-z0-9_-]+\]/.test(text)) {
+  if (
+    !text ||
+    (!/\[(?:tool:)?[A-Za-z0-9_-]+\]/.test(text) &&
+      !/(?:^|\n)\s*(?:<\|channel\|>)?(?:commentary|analysis|final)\s+to=/.test(text) &&
+      !/(?:^|\n)\s*<function=[A-Za-z0-9_.:-]{1,120}>/i.test(text))
+  ) {
     return text;
   }
   let result = "";
@@ -242,13 +400,18 @@ export function stripPlainTextToolCallBlocks(text: string): string {
     }
     const blockStart = skipHorizontalWhitespace(text, index);
     const block = parsePlainTextToolCallBlockAt(text, blockStart);
-    if (!block) {
+    const blockEnd = block?.end ?? parseXmlishPlainTextToolCallBlockEndAt(text, blockStart);
+    if (blockEnd === null) {
       index += 1;
       continue;
     }
     result += text.slice(cursor, index);
-    cursor = block.end;
-    index = block.end;
+    cursor = blockEnd;
+    const afterBlockLineBreak = consumeLineBreak(text, cursor);
+    if (afterBlockLineBreak !== null) {
+      cursor = afterBlockLineBreak;
+    }
+    index = cursor;
   }
   result += text.slice(cursor);
   return result;

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { afterAll, describe, it, expect, vi, beforeEach } from "vitest";
 import { resolveGroupName, clearGroupNameCache } from "./bot.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
@@ -40,6 +40,12 @@ describe("resolveGroupName", () => {
   const account = makeAccount();
   const log = vi.fn();
 
+  afterAll(() => {
+    vi.doUnmock("./chat.js");
+    vi.doUnmock("./client.js");
+    vi.resetModules();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     mockGetChatInfo.mockReset();
@@ -59,7 +65,9 @@ describe("resolveGroupName", () => {
     mockGetChatInfo.mockRejectedValue(new Error("network timeout"));
     const result = await resolveGroupName({ account, chatId: "oc_test2", log });
     expect(result).toBeUndefined();
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("getChatInfo failed"));
+    expect(log).toHaveBeenCalledWith(
+      "feishu[test-account]: getChatInfo failed for oc_test2: Error: network timeout",
+    );
   });
 
   it("returns undefined for whitespace-only name", async () => {

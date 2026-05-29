@@ -1,9 +1,24 @@
 // Intentional Knip unused-file findings. These are dynamic entrypoints,
 // generated/build inputs, manifest-discovered plugin surfaces, live-test
 // helpers, or package bridge files that static production scanning cannot see.
-export const KNIP_UNUSED_FILE_ALLOWLIST = [
+export const KNIP_UNUSED_FILE_ALLOWLIST = [];
+
+// Knip can disagree across supported local/CI platforms for files that are
+// only reachable through test-only import graphs, sparse-checkout proof
+// workspaces, dynamic entrypoints, manifest-discovered plugin surfaces, or
+// package bridge files. Ignore these when reported, but do not require them
+// to be reported.
+export const KNIP_OPTIONAL_UNUSED_FILE_ALLOWLIST = [
+  "extensions/acpx/src/runtime-internals/mcp-command-line.mjs",
+  "extensions/acpx/src/runtime-internals/mcp-proxy.mjs",
+  "extensions/canvas/src/host/a2ui-app/bootstrap.js",
+  "extensions/canvas/src/host/a2ui-app/rolldown.config.mjs",
+  "extensions/copilot/src/doctor-probes.ts",
+  "extensions/copilot/src/telemetry-bridge.ts",
+  "extensions/copilot/src/user-input-bridge.ts",
   "extensions/diffs/src/viewer-client.ts",
   "extensions/diffs/src/viewer-payload.ts",
+  "extensions/matrix/src/plugin-entry.runtime.js",
   "extensions/memory-core/src/memory-tool-manager-mock.ts",
   "src/agents/subagent-registry.runtime.ts",
   "src/auto-reply/inbound.group-require-mention-test-plugins.ts",
@@ -20,54 +35,13 @@ export const KNIP_UNUSED_FILE_ALLOWLIST = [
   "src/mcp/plugin-tools-handlers.ts",
   "src/mcp/plugin-tools-serve.ts",
   "src/mcp/tools-stdio-server.ts",
-  "src/memory-host-sdk/host/batch-error-utils.ts",
-  "src/memory-host-sdk/host/batch-http.ts",
-  "src/memory-host-sdk/host/batch-output.ts",
-  "src/memory-host-sdk/host/batch-provider-common.ts",
-  "src/memory-host-sdk/host/batch-runner.ts",
-  "src/memory-host-sdk/host/batch-status.ts",
-  "src/memory-host-sdk/host/batch-upload.ts",
-  "src/memory-host-sdk/host/batch-utils.ts",
-  "src/memory-host-sdk/host/embedding-chunk-limits.ts",
-  "src/memory-host-sdk/host/embedding-input-limits.ts",
-  "src/memory-host-sdk/host/embedding-model-limits.ts",
-  "src/memory-host-sdk/host/embedding-provider-adapter-utils.ts",
-  "src/memory-host-sdk/host/embedding-vectors.ts",
-  "src/memory-host-sdk/host/embeddings-debug.ts",
-  "src/memory-host-sdk/host/embeddings-model-normalize.ts",
-  "src/memory-host-sdk/host/embeddings-remote-client.ts",
-  "src/memory-host-sdk/host/embeddings-remote-fetch.ts",
-  "src/memory-host-sdk/host/embeddings-remote-provider.ts",
-  "src/memory-host-sdk/host/embeddings.ts",
-  "src/memory-host-sdk/host/embeddings.types.ts",
-  "src/memory-host-sdk/host/fs-utils.ts",
-  "src/memory-host-sdk/host/hash.ts",
-  "src/memory-host-sdk/host/internal.ts",
-  "src/memory-host-sdk/host/memory-schema.ts",
-  "src/memory-host-sdk/host/multimodal.ts",
-  "src/memory-host-sdk/host/node-llama.ts",
-  "src/memory-host-sdk/host/post-json.ts",
-  "src/memory-host-sdk/host/qmd-process.ts",
-  "src/memory-host-sdk/host/qmd-query-parser.ts",
-  "src/memory-host-sdk/host/qmd-scope.ts",
-  "src/memory-host-sdk/host/query-expansion.ts",
-  "src/memory-host-sdk/host/read-file-shared.ts",
-  "src/memory-host-sdk/host/read-file.ts",
-  "src/memory-host-sdk/host/remote-http.ts",
-  "src/memory-host-sdk/host/secret-input.ts",
-  "src/memory-host-sdk/host/session-files.ts",
-  "src/memory-host-sdk/host/sqlite-vec.ts",
-  "src/memory-host-sdk/host/sqlite.ts",
-  "src/memory-host-sdk/host/status-format.ts",
   "src/plugins/build-smoke-entry.ts",
   "src/plugins/contracts/host-hook-fixture.ts",
   "src/plugins/contracts/rootdir-boundary-canary.ts",
   "src/plugins/contracts/tts-contract-suites.ts",
   "src/plugins/runtime-sidecar-paths-baseline.ts",
   "src/tasks/task-registry-control.runtime.ts",
+  "extensions/qa-lab/src/auth-profile.fixture.ts",
+  "extensions/qa-lab/src/codex-plugin.fixture.ts",
+  "src/gateway/test/server-sessions-helpers.ts",
 ];
-
-// Knip can disagree across supported local/CI platforms for files that are
-// only reachable through test-only import graphs. Ignore these when reported,
-// but do not require them to be reported.
-export const KNIP_OPTIONAL_UNUSED_FILE_ALLOWLIST = ["src/gateway/test/server-sessions-helpers.ts"];

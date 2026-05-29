@@ -41,9 +41,8 @@ the Gateway, then restart the Gateway to load it.
       </Tab>
     </Tabs>
 
-    If npm reports the OpenClaw-owned package as deprecated, that package version
-    is from an older external package train; use a current packaged OpenClaw
-    build or the local folder path until a newer npm package is published.
+    Use the bare package to follow the current official release tag. Pin an
+    exact version only when you need a reproducible install.
 
     Restart the Gateway afterwards so the plugin loads.
 
@@ -116,7 +115,7 @@ Voice-call credentials accept SecretRefs. `plugins.entries.voice-call.config.twi
               responseSystemPrompt: "You are a concise baseball card specialist.",
               tts: {
                 providers: {
-                  openai: { voice: "alloy" },
+                  openai: { speakerVoice: "alloy" },
                 },
               },
             },
@@ -230,6 +229,8 @@ Current runtime behaviour:
 - Bundled realtime voice providers: Google Gemini Live (`google`) and OpenAI (`openai`), registered by their provider plugins.
 - Provider-owned raw config lives under `realtime.providers.<providerId>`.
 - Voice Call exposes the shared `openclaw_agent_consult` realtime tool by default. The realtime model can call it when the caller asks for deeper reasoning, current information, or normal OpenClaw tools.
+- `realtime.consultPolicy` optionally adds guidance for when the realtime model should call `openclaw_agent_consult`.
+- `realtime.agentContext.enabled` is default-off. When enabled, Voice Call injects a bounded agent identity and selected workspace-file capsule into the realtime provider instructions at session setup.
 - `realtime.fastContext.enabled` is default-off. When enabled, Voice Call first searches indexed memory/session context for the consult question and returns those snippets to the realtime model within `realtime.fastContext.timeoutMs` before falling back to the full consult agent only if `realtime.fastContext.fallbackToConsult` is true.
 - If `realtime.provider` points at an unregistered provider, or no realtime voice provider is registered at all, Voice Call logs a warning and skips realtime media instead of failing the whole plugin.
 - Consult session keys reuse the stored call session when available, then fall back to the configured `sessionScope` (`per-phone` by default, or `per-call` for isolated calls).
@@ -244,6 +245,50 @@ Current runtime behaviour:
 | `owner`          | Expose the consult tool and let the regular agent use the normal agent tool policy.                                                      |
 | `none`           | Do not expose the consult tool. Custom `realtime.tools` are still passed through to the realtime provider.                               |
 
+`realtime.consultPolicy` controls only the realtime model instructions:
+
+| Policy        | Guidance                                                                                        |
+| ------------- | ----------------------------------------------------------------------------------------------- |
+| `auto`        | Keep the default prompt and let the provider decide when to call the consult tool.              |
+| `substantive` | Answer simple conversational glue directly and consult before facts, memory, tools, or context. |
+| `always`      | Consult before every substantive answer.                                                        |
+
+### Agent voice context
+
+Enable `realtime.agentContext` when the voice bridge should sound like the
+configured OpenClaw agent without paying a full agent-consult round trip on
+ordinary turns. The context capsule is added once when the realtime session is
+created, so it does not add per-turn latency. Calls to
+`openclaw_agent_consult` still run the full OpenClaw agent and should be used
+for tool work, current information, memory lookups, or workspace state.
+
+```json5
+{
+  plugins: {
+    entries: {
+      "voice-call": {
+        config: {
+          agentId: "main",
+          realtime: {
+            enabled: true,
+            provider: "google",
+            toolPolicy: "safe-read-only",
+            consultPolicy: "substantive",
+            agentContext: {
+              enabled: true,
+              maxChars: 6000,
+              includeIdentity: true,
+              includeWorkspaceFiles: true,
+              files: ["SOUL.md", "IDENTITY.md", "USER.md"],
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
 ### Realtime provider examples
 
 <Tabs>
@@ -251,6 +296,9 @@ Current runtime behaviour:
     Defaults: API key from `realtime.providers.google.apiKey`,
     `GEMINI_API_KEY`, or `GOOGLE_GENERATIVE_AI_API_KEY`; model
     `gemini-2.5-flash-native-audio-preview-12-2025`; voice `Kore`.
+    `sessionResumption` and `contextWindowCompression` default on for longer,
+    reconnectable calls. Use `silenceDurationMs`, `startSensitivity`, and
+    `endSensitivity` to tune faster turn-taking on telephony audio.
 
     ```json5
     {
@@ -266,11 +314,17 @@ Current runtime behaviour:
                 provider: "google",
                 instructions: "Speak briefly. Call openclaw_agent_consult before using deeper tools.",
                 toolPolicy: "safe-read-only",
+                consultPolicy: "substantive",
+                consultThinkingLevel: "low",
+                consultFastMode: true,
+                agentContext: { enabled: true },
                 providers: {
                   google: {
                     apiKey: "${GEMINI_API_KEY}",
                     model: "gemini-2.5-flash-native-audio-preview-12-2025",
-                    voice: "Kore",
+                    speakerVoice: "Kore",
+                    silenceDurationMs: 500,
+                    startSensitivity: "high",
                   },
                 },
               },
@@ -401,7 +455,7 @@ speech on calls. You can override it under the plugin config with the
     provider: "elevenlabs",
     providers: {
       elevenlabs: {
-        voiceId: "pMsXgVXv3BLzUgSXRplE",
+        speakerVoiceId: "pMsXgVXv3BLzUgSXRplE",
         modelId: "eleven_multilingual_v2",
       },
     },
@@ -432,7 +486,7 @@ Behavior notes:
     tts: {
       provider: "openai",
       providers: {
-        openai: { voice: "alloy" },
+        openai: { speakerVoice: "alloy" },
       },
     },
   },
@@ -451,7 +505,7 @@ Behavior notes:
             providers: {
               elevenlabs: {
                 apiKey: "elevenlabs_key",
-                voiceId: "pMsXgVXv3BLzUgSXRplE",
+                speakerVoiceId: "pMsXgVXv3BLzUgSXRplE",
                 modelId: "eleven_multilingual_v2",
               },
             },
@@ -474,7 +528,7 @@ Behavior notes:
             providers: {
               openai: {
                 model: "gpt-4o-mini-tts",
-                voice: "marin",
+                speakerVoice: "marin",
               },
             },
           },
@@ -545,7 +599,7 @@ you can usually override only the provider voice:
   tts: {
     provider: "openai",
     providers: {
-      openai: { voice: "coral" },
+      openai: { speakerVoice: "coral" },
     },
   },
   numbers: {
@@ -554,7 +608,7 @@ you can usually override only the provider voice:
       responseSystemPrompt: "You are a concise baseball card specialist.",
       tts: {
         providers: {
-          openai: { voice: "alloy" },
+          openai: { speakerVoice: "alloy" },
         },
       },
     },
@@ -849,10 +903,11 @@ If Voice Call is green but the Meet participant never joins, check the Meet
 dial-in number, PIN, and `--dtmf-sequence`. The phone call can be healthy while
 the meeting rejects or ignores an incorrect DTMF sequence.
 
-Google Meet passes the Meet DTMF sequence and intro text to `voicecall.start`.
-For Twilio calls, Voice Call serves the DTMF TwiML first, redirects back to the
-webhook, then opens the realtime media stream so the saved intro is generated
-after the phone participant has joined the meeting.
+Google Meet starts the Twilio phone leg through `voicecall.start` with a
+pre-connect DTMF sequence. PIN-derived sequences include the Google Meet plugin's
+`voiceCall.dtmfDelayMs` as leading Twilio wait digits. The default is 12 seconds
+because Meet dial-in prompts can arrive late. Voice Call then redirects back to
+realtime handling before the intro greeting is requested.
 
 Use `openclaw logs --follow` for the live phase trace. A healthy Twilio Meet
 join logs this order:
@@ -861,7 +916,7 @@ join logs this order:
 - Voice Call stores pre-connect DTMF TwiML.
 - Twilio initial TwiML is consumed and served before realtime handling.
 - Voice Call serves realtime TwiML for the Twilio call.
-- The realtime bridge starts with the initial greeting queued.
+- Google Meet requests intro speech with `voicecall.speak` after the post-DTMF delay.
 
 `openclaw voicecall tail` still shows persisted call records; it is useful for
 call state and transcripts, but not every webhook/realtime transition appears

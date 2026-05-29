@@ -16,6 +16,14 @@ function createService(overrides: Partial<GatewayService>): GatewayService {
   });
 }
 
+function requireMockArg(mock: { mock: { calls: unknown[][] } }, label: string): unknown {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call[0];
+}
+
 describe("readServiceStatusSummary", () => {
   it("marks OpenClaw-managed services as installed", async () => {
     const summary = await readServiceStatusSummary(
@@ -76,21 +84,13 @@ describe("readServiceStatusSummary", () => {
       "Daemon",
     );
 
-    expect(isLoaded).toHaveBeenCalledWith(
-      expect.objectContaining({
-        env: expect.objectContaining({
-          OPENCLAW_GATEWAY_PORT: "18789",
-        }),
-      }),
-    );
-    expect(readRuntime).toHaveBeenCalledWith(
-      expect.objectContaining({
-        OPENCLAW_GATEWAY_PORT: "18789",
-      }),
-    );
+    const loadedArgs = requireMockArg(isLoaded, "isLoaded") as GatewayServiceEnvArgs;
+    expect(loadedArgs?.env?.OPENCLAW_GATEWAY_PORT).toBe("18789");
+    const runtimeEnv = requireMockArg(readRuntime, "readRuntime") as NodeJS.ProcessEnv;
+    expect(runtimeEnv?.OPENCLAW_GATEWAY_PORT).toBe("18789");
     expect(summary.installed).toBe(true);
     expect(summary.loaded).toBe(true);
-    expect(summary.runtime).toMatchObject({ status: "running" });
+    expect(summary.runtime?.status).toBe("running");
   });
 
   it("includes service layout diagnostics and flags source checkout entrypoints", async () => {
@@ -122,17 +122,19 @@ describe("readServiceStatusSummary", () => {
         "Daemon",
       );
 
-      expect(summary.layout).toMatchObject({
-        sourcePath: serviceFile,
-        sourcePathReal: path.join(realRoot, "openclaw-gateway.service"),
-        entrypoint,
-        entrypointReal: path.join(realRoot, "dist", "index.js"),
-        packageRoot: realRoot,
-        packageRootReal: realRoot,
-        packageVersion: "0.0.0-test",
-        entrypointSourceCheckout: true,
-      });
-      expect(summary.layout?.execStart).toContain("gateway run");
+      const layout = summary.layout;
+      if (!layout) {
+        throw new Error("Expected service layout diagnostics");
+      }
+      expect(layout.sourcePath).toBe(serviceFile);
+      expect(layout.sourcePathReal).toBe(path.join(realRoot, "openclaw-gateway.service"));
+      expect(layout.entrypoint).toBe(entrypoint);
+      expect(layout.entrypointReal).toBe(path.join(realRoot, "dist", "index.js"));
+      expect(layout.packageRoot).toBe(realRoot);
+      expect(layout.packageRootReal).toBe(realRoot);
+      expect(layout.packageVersion).toBe("0.0.0-test");
+      expect(layout.entrypointSourceCheckout).toBe(true);
+      expect(layout.execStart).toBe(`/usr/bin/node ${entrypoint} gateway run`);
     });
   });
 });

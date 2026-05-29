@@ -32,7 +32,7 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   danger: (value: string) => value,
 }));
 
-vi.mock("openclaw/plugin-sdk/text-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/string-coerce-runtime", () => ({
   normalizeOptionalString: (value: string | null | undefined) => {
     if (typeof value !== "string") {
       return undefined;
@@ -92,7 +92,7 @@ vi.mock("./presence.js", () => ({
   resolveDiscordPresenceUpdate: vi.fn(() => undefined),
 }));
 
-import { createDiscordRequestClient, DISCORD_REST_TIMEOUT_MS } from "../proxy-request-client.js";
+import { DISCORD_REST_TIMEOUT_MS } from "../proxy-request-client.js";
 import { registerDiscordListener } from "./listeners.js";
 import {
   createDiscordMonitorClient,
@@ -104,7 +104,6 @@ describe("createDiscordMonitorClient", () => {
   beforeEach(() => {
     registerVoiceClientSpy.mockReset();
     waitForDiscordGatewayPluginRegistrationMock.mockReset().mockReturnValue(undefined);
-    vi.mocked(createDiscordRequestClient).mockClear();
     vi.mocked(registerDiscordListener).mockClear();
   });
 
@@ -152,6 +151,14 @@ describe("createDiscordMonitorClient", () => {
     };
   }
 
+  function firstCreateClientCall(createClient: { mock: { calls: unknown[][] } }) {
+    const [call] = createClient.mock.calls;
+    if (!call) {
+      throw new Error("expected Discord client creation call");
+    }
+    return call;
+  }
+
   it("registers voice plugin listeners after gateway setup", async () => {
     const gatewayPlugin = {
       id: "gateway",
@@ -177,9 +184,9 @@ describe("createDiscordMonitorClient", () => {
     });
 
     expect(registerVoiceClientSpy).toHaveBeenCalledTimes(1);
-    expect(result.client.listeners).toEqual(
-      expect.arrayContaining([expect.objectContaining({ type: "voice-listener" })]),
-    );
+    expect(
+      result.client.listeners.map((listener) => (listener as { type?: string }).type),
+    ).toContain("voice-listener");
   });
 
   it("waits for gateway registration before creating the supervisor", async () => {
@@ -240,46 +247,53 @@ describe("createDiscordMonitorClient", () => {
       isDisallowedIntentsError: () => false,
     });
 
-    expect(createClient).toHaveBeenCalledWith(
-      expect.objectContaining({
-        requestOptions: {
-          timeout: DISCORD_REST_TIMEOUT_MS,
-          runtimeProfile: "persistent",
-          maxQueueSize: 1000,
-        },
-      }),
-      expect.any(Object),
-      expect.any(Array),
-    );
+    expect(createClient).toHaveBeenCalledTimes(1);
+    const [options, handlers, plugins] = firstCreateClientCall(createClient);
+    expect((options as { requestOptions?: unknown } | undefined)?.requestOptions).toEqual({
+      timeout: DISCORD_REST_TIMEOUT_MS,
+      runtimeProfile: "persistent",
+      maxQueueSize: 1000,
+    });
+    if (!handlers) {
+      throw new Error("expected Discord client handlers");
+    }
+    expect(Array.isArray(plugins)).toBe(true);
   });
 
-  it("passes REST timeout options to proxied Discord fetch", async () => {
-    const proxyFetch = vi.fn();
+  it("passes REST timeout options and fetch to internal Discord REST", async () => {
+    const restFetch = vi.fn();
+    const createClient = vi.fn(createClientWithPlugins);
 
     await createDiscordMonitorClient({
       accountId: "default",
       applicationId: "app-1",
       token: "token-1",
-      proxyFetch,
+      restFetch,
       commands: [],
       components: [],
       modals: [],
       voiceEnabled: false,
       discordConfig: {},
       runtime: createRuntime(),
-      createClient: createClientWithPlugins,
+      createClient,
       createGatewayPlugin: () => ({ id: "gateway" }) as never,
       createGatewaySupervisor: () => ({ shutdown: vi.fn(), handleError: vi.fn() }) as never,
       createAutoPresenceController: () => createAutoPresenceController() as never,
       isDisallowedIntentsError: () => false,
     });
 
-    expect(createDiscordRequestClient).toHaveBeenCalledWith("token-1", {
-      fetch: proxyFetch,
+    expect(createClient).toHaveBeenCalledTimes(1);
+    const [options, handlers, plugins] = firstCreateClientCall(createClient);
+    expect((options as { requestOptions?: unknown } | undefined)?.requestOptions).toEqual({
       timeout: DISCORD_REST_TIMEOUT_MS,
       runtimeProfile: "persistent",
       maxQueueSize: 1000,
+      fetch: restFetch,
     });
+    if (!handlers) {
+      throw new Error("expected Discord client handlers");
+    }
+    expect(Array.isArray(plugins)).toBe(true);
   });
 
   it("propagates gateway registration failures before supervisor startup", async () => {

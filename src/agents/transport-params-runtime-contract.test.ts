@@ -1,5 +1,5 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { Context, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   GPT_PARALLEL_TOOL_CALLS_PAYLOAD_APIS,
@@ -8,13 +8,13 @@ import {
   OPENAI_GPT5_TRANSPORT_DEFAULTS,
   UNRELATED_TOOL_CALLS_PAYLOAD_APIS,
 } from "../../test/helpers/agents/transport-params-runtime-contract.js";
+import { createOpenAIThinkingLevelWrapper } from "../llm/providers/stream-wrappers/openai.js";
 import {
-  __testing as extraParamsTesting,
+  testing as extraParamsTesting,
   applyExtraParamsToAgent,
   resolveExtraParams,
   resolvePreparedExtraParams,
-} from "./pi-embedded-runner/extra-params.js";
-import { createOpenAIThinkingLevelWrapper } from "./pi-embedded-runner/openai-stream-wrappers.js";
+} from "./embedded-agent-runner/extra-params.js";
 import { supportsGptParallelToolCallsPayload } from "./provider-api-families.js";
 
 beforeEach(() => {
@@ -25,7 +25,7 @@ afterEach(() => {
   extraParamsTesting.resetProviderRuntimeDepsForTest();
 });
 
-describe("transport params runtime contract (Pi/OpenAI path)", () => {
+describe("transport params runtime contract (embedded OpenClaw/OpenAI path)", () => {
   it.each(OPENAI_GPT5_TRANSPORT_DEFAULT_CASES)(
     "applies OpenAI GPT-5 transport defaults for $provider/$modelId",
     ({ provider, modelId }) => {
@@ -55,7 +55,6 @@ describe("transport params runtime contract (Pi/OpenAI path)", () => {
                 parallelToolCalls: false,
                 textVerbosity: "medium",
                 cached_content: "conversation-cache",
-                openaiWsWarmup: true,
               },
             },
           },
@@ -67,7 +66,6 @@ describe("transport params runtime contract (Pi/OpenAI path)", () => {
       parallel_tool_calls: false,
       text_verbosity: "medium",
       cachedContent: "conversation-cache",
-      openaiWsWarmup: true,
     });
   });
 
@@ -99,27 +97,6 @@ describe("transport params runtime contract (Pi/OpenAI path)", () => {
     expect(payload.parallel_tool_calls).toBe(true);
   });
 
-  it("propagates OpenAI GPT-5 warmup default through stream options", () => {
-    const { agent, calls } = createOptionsCaptureAgent();
-    applyExtraParamsToAgent(agent, undefined, "openai", "gpt-5.4");
-
-    void agent.streamFn?.(
-      {
-        api: "openai-responses",
-        provider: "openai",
-        id: "gpt-5.4",
-      } as Model<"openai-responses">,
-      { messages: [] },
-      {},
-    );
-
-    expect(calls).toEqual([
-      expect.objectContaining({
-        openaiWsWarmup: false,
-      }),
-    ]);
-  });
-
   it("maps OpenAI GPT-5 thinking level into Responses reasoning effort payloads", () => {
     extraParamsTesting.setProviderRuntimeDepsForTest({
       prepareProviderExtraParams: () => undefined,
@@ -145,7 +122,7 @@ describe("transport params runtime contract (Pi/OpenAI path)", () => {
   });
 
   it("composes provider preparation before transport patch resolution", () => {
-    const resolveProviderExtraParamsForTransport = vi.fn(() => ({
+    const resolveProviderExtraParamsForTransport = vi.fn((_params: unknown) => ({
       patch: {
         parallel_tool_calls: false,
         transportHookApplied: true,
@@ -173,22 +150,20 @@ describe("transport params runtime contract (Pi/OpenAI path)", () => {
       } as Model<"openai-responses">,
     });
 
-    expect(prepared).toMatchObject({
-      transport: "websocket",
-      preparedByProvider: true,
-      parallel_tool_calls: false,
-      transportHookApplied: true,
-    });
-    expect(resolveProviderExtraParamsForTransport).toHaveBeenCalledWith(
-      expect.objectContaining({
-        context: expect.objectContaining({
-          extraParams: expect.objectContaining({
-            preparedByProvider: true,
-          }),
-          transport: "websocket",
-        }),
-      }),
-    );
+    expect(prepared?.transport).toBe("websocket");
+    expect(prepared?.preparedByProvider).toBe(true);
+    expect(prepared?.parallel_tool_calls).toBe(false);
+    expect(prepared?.transportHookApplied).toBe(true);
+    const transportInput = resolveProviderExtraParamsForTransport.mock.calls.at(0)?.[0] as
+      | {
+          context?: {
+            extraParams?: { preparedByProvider?: boolean };
+            transport?: string;
+          };
+        }
+      | undefined;
+    expect(transportInput?.context?.extraParams?.preparedByProvider).toBe(true);
+    expect(transportInput?.context?.transport).toBe("websocket");
   });
 });
 
@@ -214,7 +189,7 @@ function runPayloadMutation(params: {
     params.thinkingLevel,
   );
   const context: Context = { messages: [] };
-  void agent.streamFn?.(params.model, context, {} as SimpleStreamOptions);
+  void agent.streamFn?.(params.model, context, {});
   return payload;
 }
 
@@ -224,16 +199,4 @@ function installNoopProviderRuntimeDeps() {
     resolveProviderExtraParamsForTransport: () => undefined,
     wrapProviderStreamFn: (params) => params.context.streamFn,
   });
-}
-
-function createOptionsCaptureAgent() {
-  const calls: Array<(SimpleStreamOptions & { openaiWsWarmup?: boolean }) | undefined> = [];
-  const baseStreamFn: StreamFn = (_model, _context, options) => {
-    calls.push(options as (SimpleStreamOptions & { openaiWsWarmup?: boolean }) | undefined);
-    return {} as ReturnType<StreamFn>;
-  };
-  return {
-    calls,
-    agent: { streamFn: baseStreamFn },
-  };
 }

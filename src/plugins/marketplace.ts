@@ -3,7 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { resolveArchiveKind } from "../infra/archive.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { pathExists } from "../infra/fs-safe.js";
 import { resolveOsHomeRelativePath } from "../infra/home-dir.js";
+import { tryReadJson } from "../infra/json-files.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -308,27 +310,13 @@ function parseMarketplaceManifest(
   };
 }
 
-async function pathExists(target: string): Promise<boolean> {
-  try {
-    await fs.access(target);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 async function readClaudeKnownMarketplaces(): Promise<Record<string, KnownMarketplaceRecord>> {
   const knownPath = resolveOsHomeRelativePath(CLAUDE_KNOWN_MARKETPLACES_PATH);
   if (!(await pathExists(knownPath))) {
     return {};
   }
 
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(await fs.readFile(knownPath, "utf-8"));
-  } catch {
-    return {};
-  }
+  const parsed = await tryReadJson<unknown>(knownPath);
 
   if (!parsed || typeof parsed !== "object") {
     return {};
@@ -631,6 +619,18 @@ function hasStreamingResponseBody(
   );
 }
 
+function parseMarketplaceContentLength(raw: string): number {
+  const trimmed = raw.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    throw new Error(`invalid content-length header: ${raw}`);
+  }
+  const size = Number(trimmed);
+  if (!Number.isSafeInteger(size)) {
+    throw new Error(`invalid content-length header: ${raw}`);
+  }
+  return size;
+}
+
 async function readMarketplaceChunkWithTimeout(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   chunkTimeoutMs: number,
@@ -767,8 +767,8 @@ async function downloadUrlToTempFile(
 
       const contentLength = response.headers.get("content-length");
       if (contentLength) {
-        const size = Number(contentLength);
-        if (Number.isFinite(size) && size > MAX_MARKETPLACE_ARCHIVE_BYTES) {
+        const size = parseMarketplaceContentLength(contentLength);
+        if (size > MAX_MARKETPLACE_ARCHIVE_BYTES) {
           throw new Error(
             `download too large: ${size} bytes (limit: ${MAX_MARKETPLACE_ARCHIVE_BYTES} bytes)`,
           );

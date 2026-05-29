@@ -2,7 +2,7 @@
 summary: "CLI backends: local AI CLI fallback with optional MCP tool bridge"
 read_when:
   - You want a reliable fallback when API providers fail
-  - You are running Codex CLI or other local AI CLIs and want to reuse them
+  - You are running local AI CLIs and want to reuse them
   - You want to understand the MCP loopback bridge for CLI backend tool access
 title: "CLI backends"
 ---
@@ -17,19 +17,25 @@ rate-limited, or temporarily misbehaving. This is intentionally conservative:
 - **Images can be passed through** if the CLI accepts image paths.
 
 This is designed as a **safety net** rather than a primary path. Use it when you
-want “always works” text responses without relying on external APIs.
+want "always works" text responses without relying on external APIs.
 
 If you want a full harness runtime with ACP session controls, background tasks,
 thread/conversation binding, and persistent external coding sessions, use
 [ACP Agents](/tools/acp-agents) instead. CLI backends are not ACP.
 
+<Tip>
+  Building a new backend plugin? Use
+  [CLI backend plugins](/plugins/cli-backend-plugins). This page is for users
+  configuring and operating an already registered backend.
+</Tip>
+
 ## Beginner-friendly quick start
 
-You can use Codex CLI **without any config** (the bundled OpenAI plugin
+You can use Claude Code CLI **without any config** (the bundled Anthropic plugin
 registers a default backend):
 
 ```bash
-openclaw agent --message "hi" --model codex-cli/gpt-5.5
+openclaw agent --message "hi" --model claude-cli/claude-sonnet-4-6
 ```
 
 If your gateway runs under launchd/systemd and PATH is minimal, add just the
@@ -40,8 +46,8 @@ command path:
   agents: {
     defaults: {
       cliBackends: {
-        "codex-cli": {
-          command: "/opt/homebrew/bin/codex",
+        "claude-cli": {
+          command: "/opt/homebrew/bin/claude",
         },
       },
     },
@@ -49,7 +55,7 @@ command path:
 }
 ```
 
-That’s it. No keys, no extra auth config needed beyond the CLI itself.
+That's it. No keys, no extra auth config needed beyond the CLI itself.
 
 If you use a bundled CLI backend as the **primary message provider** on a
 gateway host, OpenClaw now auto-loads the owning bundled plugin when your config
@@ -66,11 +72,11 @@ Add a CLI backend to your fallback list so it only runs when primary models fail
     defaults: {
       model: {
         primary: "anthropic/claude-opus-4-6",
-        fallbacks: ["codex-cli/gpt-5.5"],
+        fallbacks: ["claude-cli/claude-sonnet-4-6"],
       },
       models: {
         "anthropic/claude-opus-4-6": { alias: "Opus" },
-        "codex-cli/gpt-5.5": {},
+        "claude-cli/claude-sonnet-4-6": {},
       },
     },
   },
@@ -91,7 +97,7 @@ All CLI backends live under:
 agents.defaults.cliBackends
 ```
 
-Each entry is keyed by a **provider id** (e.g. `codex-cli`, `my-cli`).
+Each entry is keyed by a **provider id** (e.g. `claude-cli`, `my-cli`).
 The provider id becomes the left side of your model ref:
 
 ```
@@ -105,9 +111,6 @@ The provider id becomes the left side of your model ref:
   agents: {
     defaults: {
       cliBackends: {
-        "codex-cli": {
-          command: "/opt/homebrew/bin/codex",
-        },
         "my-cli": {
           command: "my-cli",
           args: ["--json"],
@@ -130,6 +133,9 @@ The provider id becomes the left side of your model ref:
           systemPromptWhen: "first",
           imageArg: "--image",
           imageMode: "repeat",
+          // Opt in only if this backend may reseed safe invalidated sessions
+          // from bounded raw OpenClaw transcript history before compaction.
+          reseedFromRawTranscriptWhenUncompacted: true,
           serialize: true,
         },
       },
@@ -140,7 +146,7 @@ The provider id becomes the left side of your model ref:
 
 ## How it works
 
-1. **Selects a backend** based on the provider prefix (`codex-cli/...`).
+1. **Selects a backend** based on the provider prefix (`claude-cli/...`).
 2. **Builds a system prompt** using the same OpenClaw prompt + workspace context.
 3. **Executes the CLI** with a session id (if supported) so history stays consistent.
    The bundled `claude-cli` backend keeps a Claude stdio process alive per
@@ -155,28 +161,31 @@ told us OpenClaw-style Claude CLI usage is allowed again, so OpenClaw treats
 a new policy.
 </Note>
 
-The bundled OpenAI `codex-cli` backend passes OpenClaw's system prompt through
-Codex's `model_instructions_file` config override (`-c
-model_instructions_file="..."`). Codex does not expose a Claude-style
-`--append-system-prompt` flag, so OpenClaw writes the assembled prompt to a
-temporary file for each fresh Codex CLI session.
-
-The bundled Anthropic `claude-cli` backend receives the OpenClaw skills snapshot
-two ways: the compact OpenClaw skills catalog in the appended system prompt, and
-a temporary Claude Code plugin passed with `--plugin-dir`. The plugin contains
-only the eligible skills for that agent/session, so Claude Code's native skill
-resolver sees the same filtered set that OpenClaw would otherwise advertise in
-the prompt. Skill env/API key overrides are still applied by OpenClaw to the
-child process environment for the run.
+The bundled Anthropic `claude-cli` backend prefers Claude Code's native skill
+resolver for OpenClaw skills. When the current skills snapshot includes at least
+one selected skill with a materialized path, OpenClaw passes a temporary Claude
+Code plugin with `--plugin-dir` and omits the duplicate OpenClaw skills catalog
+from the appended system prompt. If the snapshot has no materialized plugin
+skill, OpenClaw keeps the prompt catalog as a fallback. Skill env/API key
+overrides are still applied by OpenClaw to the child process environment for the
+run.
 
 Claude CLI also has its own noninteractive permission mode. OpenClaw maps that
-to the existing exec policy instead of adding Claude-specific config: when the
-effective requested exec policy is YOLO (`tools.exec.security: "full"` and
-`tools.exec.ask: "off"`), OpenClaw adds `--permission-mode bypassPermissions`.
-Per-agent `agents.list[].tools.exec` settings override global `tools.exec` for
-that agent. To force a different Claude mode, set explicit raw backend args
-such as `--permission-mode default` or `--permission-mode acceptEdits` under
-`agents.defaults.cliBackends.claude-cli.args` and matching `resumeArgs`.
+to the existing exec policy instead of adding Claude-specific policy config.
+For OpenClaw-managed Claude live sessions, the effective OpenClaw exec policy is
+authoritative: YOLO (`tools.exec.security: "full"` and
+`tools.exec.ask: "off"`) launches Claude with
+`--permission-mode bypassPermissions`, while restrictive effective exec policy
+launches Claude with `--permission-mode default`. Per-agent
+`agents.list[].tools.exec` settings override global `tools.exec` for that
+agent. Raw Claude backend args may still include `--permission-mode`, but live
+Claude launches normalize that flag to match the effective OpenClaw exec policy.
+
+The bundled Anthropic `claude-cli` backend also maps OpenClaw `/think` levels
+to Claude Code's native `--effort` flag for non-off levels. `minimal` and
+`low` map to `low`, `adaptive` and `medium` map to `medium`, and `high`,
+`xhigh`, and `max` map directly. Other CLI backends need their owning plugin to
+declare an equivalent argv mapper before `/think` can affect the spawned CLI.
 
 Before OpenClaw can use the bundled `claude-cli` backend, Claude Code itself
 must already be logged in on the same host:
@@ -219,6 +228,13 @@ binary is not already on `PATH`.
 - Stored CLI sessions are provider-owned continuity. The implicit daily session
   reset does not cut them; `/reset` and explicit `session.reset` policies still
   do.
+- Fresh CLI sessions normally reseed only from OpenClaw's compaction summary
+  plus post-compaction tail. To recover short sessions that are invalidated
+  before compaction, a backend can opt in with
+  `reseedFromRawTranscriptWhenUncompacted: true`. OpenClaw still keeps raw
+  transcript reseed bounded and limits it to safe invalidations such as missing
+  CLI transcripts, system-prompt/MCP changes, or session-expired retry; auth
+  profile or credential-epoch changes never reseed raw transcript history.
 
 Serialization notes:
 
@@ -270,7 +286,7 @@ load local files from plain paths.
 - `output: "json"` (default) tries to parse JSON and extract text + session id.
 - For Gemini CLI JSON output, OpenClaw reads reply text from `response` and
   usage from `stats` when `usage` is missing or empty.
-- `output: "jsonl"` parses JSONL streams (for example Codex CLI `--json`) and extracts the final agent message plus session
+- `output: "jsonl"` parses JSONL streams and extracts the final agent message plus session
   identifiers when present.
 - `output: "text"` treats stdout as the final response.
 
@@ -282,16 +298,19 @@ Input modes:
 
 ## Defaults (plugin-owned)
 
-The bundled OpenAI plugin also registers a default for `codex-cli`:
+Bundled CLI backend defaults live with their owning plugin. For example,
+Anthropic owns `claude-cli` and Google owns `google-gemini-cli`. OpenAI Codex
+agent runs use the Codex app-server harness through `openai/*`; OpenClaw no
+longer registers a bundled `codex-cli` backend.
 
-- `command: "codex"`
-- `args: ["exec","--json","--color","never","--sandbox","workspace-write","--skip-git-repo-check"]`
-- `resumeArgs: ["exec","resume","{sessionId}","-c","sandbox_mode=\"workspace-write\"","--skip-git-repo-check"]`
+The bundled Anthropic plugin registers a default for `claude-cli`:
+
+- `command: "claude"`
+- `args: ["-p","--output-format","stream-json","--include-partial-messages","--verbose", ...]`
 - `output: "jsonl"`
-- `resumeOutput: "text"`
+- `input: "stdin"`
 - `modelArg: "--model"`
-- `imageArg: "--image"`
-- `sessionMode: "existing"`
+- `sessionMode: "always"`
 
 The bundled Google plugin also registers a default for `google-gemini-cli`:
 
@@ -361,9 +380,6 @@ opt into a generated MCP config overlay with `bundleMcp: true`.
 Current bundled behavior:
 
 - `claude-cli`: generated strict MCP config file
-- `codex-cli`: inline config overrides for `mcp_servers`; the generated
-  OpenClaw loopback server is marked with Codex's per-server tool approval mode
-  so MCP calls cannot stall on local approval prompts
 - `google-gemini-cli`: generated Gemini system settings file
 
 When bundle MCP is enabled, OpenClaw:
@@ -384,6 +400,22 @@ minutes; set `0` to disable). One-shot embedded runs such as auth probes,
 slug generation, and active-memory recall request cleanup at run end so stdio
 children and Streamable HTTP/SSE streams do not outlive the run.
 
+## Reseed history cap
+
+When a fresh CLI session is seeded from a prior OpenClaw transcript (for
+example after a `session_expired` retry), the rendered
+`<conversation_history>` block is capped to keep reseed prompts from
+exploding. The default is `12288` characters (about 3000 tokens).
+
+Claude CLI backends automatically use a larger cap derived from the resolved
+Claude context tier. Standard 200K-token Claude runs keep a larger transcript
+slice, and 1M-token Claude runs keep a larger slice again, while other CLI
+backends keep the conservative default.
+
+- The cap only governs the reseed prompt's prior-history block. Live-session
+  output limits are tuned separately under `reliability.outputLimits`
+  (see [Sessions](#sessions)).
+
 ## Limitations
 
 - **No direct OpenClaw tool calls.** OpenClaw does not inject tool calls into
@@ -391,17 +423,14 @@ children and Streamable HTTP/SSE streams do not outlive the run.
   `bundleMcp: true`.
 - **Streaming is backend-specific.** Some backends stream JSONL; others buffer
   until exit.
-- **Structured outputs** depend on the CLI’s JSON format.
-- **Codex CLI sessions** resume via text output (no JSONL), which is less
-  structured than the initial `--json` run. OpenClaw sessions still work
-  normally.
+- **Structured outputs** depend on the CLI's JSON format.
 
 ## Troubleshooting
 
 - **CLI not found**: set `command` to a full path.
 - **Wrong model name**: use `modelAliases` to map `provider/model` → CLI model.
 - **No session continuity**: ensure `sessionArg` is set and `sessionMode` is not
-  `none` (Codex CLI currently cannot resume with JSON output).
+  `none`.
 - **Images ignored**: set `imageArg` (and verify CLI supports file paths).
 
 ## Related

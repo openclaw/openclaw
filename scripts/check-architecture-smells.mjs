@@ -15,6 +15,7 @@ import {
   resolveSourceRoots,
   runAsScript,
 } from "./lib/ts-guard-utils.mjs";
+import { mapWithConcurrency } from "./lib/source-file-scan-cache.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const scanRoots = resolveSourceRoots(repoRoot, ["src/plugin-sdk", "src/plugins/runtime"]);
@@ -170,14 +171,16 @@ export async function collectArchitectureSmells() {
       const files = (await collectTypeScriptFilesFromRoots(scanRoots)).toSorted((left, right) =>
         normalizeRepoPath(repoRoot, left).localeCompare(normalizeRepoPath(repoRoot, right)),
       );
-      const entriesByFile = await Promise.all(
-        files.map(async (filePath) => {
+      const entriesByFile = await mapWithConcurrency(
+        files,
+        undefined,
+        async (filePath) => {
           const source = await fs.readFile(filePath, "utf8");
           const entries = scanPluginSdkExtensionFacadeSmells(source, filePath);
           entries.push(...scanRuntimeTypeImplementationSmells(source, filePath));
           entries.push(...scanRuntimeServiceLocatorSmells(source, filePath));
           return entries;
-        }),
+        },
       );
       return entriesByFile.flat().toSorted(compareEntries);
     })();
@@ -216,9 +219,10 @@ function formatInventoryHuman(inventory) {
   return lines.join("\n");
 }
 
-async function runArchitectureSmellsCheck(argv = process.argv.slice(2), io) {
+async function runArchitectureSmellsCheck(argv, io) {
+  const args = argv ?? process.argv.slice(2);
   const streams = io ?? { stdout: process.stdout, stderr: process.stderr };
-  const json = argv.includes("--json");
+  const json = args.includes("--json");
   const inventory = await collectArchitectureSmells();
 
   if (json) {
@@ -231,7 +235,7 @@ async function runArchitectureSmellsCheck(argv = process.argv.slice(2), io) {
   return 0;
 }
 
-export async function main(argv = process.argv.slice(2), io) {
+export async function main(argv, io) {
   return await runArchitectureSmellsCheck(argv, io);
 }
 

@@ -1,17 +1,24 @@
 import { resolveProviderAuthAliasMap } from "../agents/provider-auth-aliases.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizePluginsConfig } from "../plugins/config-state.js";
+import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { isInstalledPluginEnabled } from "../plugins/installed-plugin-index.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import {
   isWorkspacePluginAllowedByConfig,
   normalizePluginConfigId,
 } from "../plugins/plugin-config-trust.js";
-import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import {
+  loadPluginMetadataSnapshot,
+  type PluginMetadataSnapshot,
+} from "../plugins/plugin-metadata-snapshot.js";
 import { hasKind } from "../plugins/slots.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 
 const CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
   anthropic: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
   openai: ["OPENAI_API_KEY"],
+  "openai-codex": ["CODEX_API_KEY", "OPENAI_API_KEY"],
   voyage: ["VOYAGE_API_KEY"],
   cerebras: ["CEREBRAS_API_KEY"],
   "anthropic-openai": ["ANTHROPIC_API_KEY"],
@@ -28,6 +35,7 @@ export type ProviderEnvVarLookupParams = {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   includeUntrustedWorkspacePlugins?: boolean;
+  metadataSnapshot?: PluginMetadataSnapshot;
 };
 
 export type ProviderAuthEvidence = {
@@ -38,6 +46,12 @@ export type ProviderAuthEvidence = {
   requiresAllEnv?: readonly string[];
   credentialMarker: string;
   source?: string;
+};
+
+export type ProviderAuthLookupMaps = {
+  aliasMap: Readonly<Record<string, string>>;
+  envCandidateMap: Readonly<Record<string, readonly string[]>>;
+  authEvidenceMap: Readonly<Record<string, readonly ProviderAuthEvidence[]>>;
 };
 
 function isWorkspacePluginTrustedForProviderEnvVars(
@@ -115,15 +129,68 @@ function appendUniqueAuthEvidence(
   }
 }
 
+function resolveProviderMetadataSnapshot(
+  params?: ProviderEnvVarLookupParams,
+): PluginMetadataSnapshot {
+  if (params?.metadataSnapshot) {
+    return params.metadataSnapshot;
+  }
+  const config = params?.config;
+  const env = params?.env ?? process.env;
+  let current: PluginMetadataSnapshot | undefined;
+  if (config) {
+    current = getCurrentPluginMetadataSnapshot({
+      config,
+      env,
+      ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+      allowWorkspaceScopedSnapshot: true,
+    });
+  } else {
+    current = getCurrentPluginMetadataSnapshot({
+      env,
+      ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+      allowWorkspaceScopedSnapshot: true,
+      requireDefaultDiscoveryContext: true,
+    });
+  }
+  if (current) {
+    return current;
+  }
+  if (config && normalizePluginsConfig(config.plugins).loadPaths.length === 0) {
+    const unscopedCurrent = getCurrentPluginMetadataSnapshot({
+      env,
+      ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+      allowWorkspaceScopedSnapshot: true,
+      requireDefaultDiscoveryContext: true,
+    });
+    if (unscopedCurrent) {
+      return unscopedCurrent;
+    }
+  }
+  return loadPluginMetadataSnapshot({
+    config: config ?? {},
+    workspaceDir: params?.workspaceDir,
+    env,
+    preferPersisted: false,
+  });
+}
+
 function resolveManifestProviderAuthEnvVarCandidates(
   params?: ProviderEnvVarLookupParams,
 ): Record<string, string[]> {
-  const snapshot = loadPluginMetadataSnapshot({
-    config: params?.config ?? {},
-    workspaceDir: params?.workspaceDir,
-    env: params?.env ?? process.env,
-    preferPersisted: false,
+  const snapshot = resolveProviderMetadataSnapshot(params);
+  const aliases = resolveProviderAuthAliasMap({
+    ...params,
+    metadataSnapshot: snapshot,
   });
+  return resolveManifestProviderAuthEnvVarCandidatesFromSnapshot(params, snapshot, aliases);
+}
+
+function resolveManifestProviderAuthEnvVarCandidatesFromSnapshot(
+  params: ProviderEnvVarLookupParams | undefined,
+  snapshot: PluginMetadataSnapshot,
+  aliases: Readonly<Record<string, string>>,
+): Record<string, string[]> {
   const candidates: Record<string, string[]> = {};
   for (const plugin of snapshot.plugins) {
     if (!shouldUsePluginProviderEnvVars(plugin, params)) {
@@ -140,7 +207,6 @@ function resolveManifestProviderAuthEnvVarCandidates(
       appendUniqueEnvVarCandidates(candidates, provider.id, provider.envVars ?? []);
     }
   }
-  const aliases = resolveProviderAuthAliasMap(params);
   for (const [alias, target] of Object.entries(aliases).toSorted(([left], [right]) =>
     left.localeCompare(right),
   )) {
@@ -155,12 +221,19 @@ function resolveManifestProviderAuthEnvVarCandidates(
 function resolveManifestProviderAuthEvidence(
   params?: ProviderEnvVarLookupParams,
 ): Record<string, ProviderAuthEvidence[]> {
-  const snapshot = loadPluginMetadataSnapshot({
-    config: params?.config ?? {},
-    workspaceDir: params?.workspaceDir,
-    env: params?.env ?? process.env,
-    preferPersisted: false,
+  const snapshot = resolveProviderMetadataSnapshot(params);
+  const aliases = resolveProviderAuthAliasMap({
+    ...params,
+    metadataSnapshot: snapshot,
   });
+  return resolveManifestProviderAuthEvidenceFromSnapshot(params, snapshot, aliases);
+}
+
+function resolveManifestProviderAuthEvidenceFromSnapshot(
+  params: ProviderEnvVarLookupParams | undefined,
+  snapshot: PluginMetadataSnapshot,
+  aliases: Readonly<Record<string, string>>,
+): Record<string, ProviderAuthEvidence[]> {
   const evidenceByProvider: Record<string, ProviderAuthEvidence[]> = {};
   for (const plugin of snapshot.plugins) {
     if (
@@ -176,7 +249,6 @@ function resolveManifestProviderAuthEvidence(
       appendUniqueAuthEvidence(evidenceByProvider, provider.id, provider.authEvidence ?? []);
     }
   }
-  const aliases = resolveProviderAuthAliasMap(params);
   for (const [alias, target] of Object.entries(aliases).toSorted(([left], [right]) =>
     left.localeCompare(right),
   )) {
@@ -201,6 +273,25 @@ export function resolveProviderAuthEvidence(
   params?: ProviderEnvVarLookupParams,
 ): Record<string, readonly ProviderAuthEvidence[]> {
   return resolveManifestProviderAuthEvidence(params);
+}
+
+export function resolveProviderAuthLookupMaps(
+  params?: ProviderEnvVarLookupParams,
+): ProviderAuthLookupMaps {
+  const snapshot = resolveProviderMetadataSnapshot(params);
+  const lookupParams = {
+    ...params,
+    metadataSnapshot: snapshot,
+  };
+  const aliasMap = resolveProviderAuthAliasMap(lookupParams);
+  return {
+    aliasMap,
+    envCandidateMap: {
+      ...resolveManifestProviderAuthEnvVarCandidatesFromSnapshot(params, snapshot, aliasMap),
+      ...CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES,
+    },
+    authEvidenceMap: resolveManifestProviderAuthEvidenceFromSnapshot(params, snapshot, aliasMap),
+  };
 }
 
 export function resolveProviderEnvVars(
@@ -279,7 +370,7 @@ export const PROVIDER_AUTH_ENV_VAR_CANDIDATES = createLazyReadonlyRecord(() =>
  */
 export const PROVIDER_ENV_VARS = createLazyReadonlyRecord(() => resolveProviderEnvVars());
 
-export const __testing = {
+export const testing = {
   resetProviderEnvVarCachesForTests(): void {
     for (const reset of lazyRecordCacheResetters) {
       reset();
@@ -301,16 +392,14 @@ export function getProviderEnvVars(
 // OPENCLAW_API_KEY authenticates the local OpenClaw bridge itself and must
 // remain available to child bridge/runtime processes.
 export function listKnownProviderAuthEnvVarNames(params?: ProviderEnvVarLookupParams): string[] {
-  return [
-    ...new Set([
-      ...Object.values(resolveProviderAuthEnvVarCandidates(params)).flatMap((keys) => keys),
-      ...Object.values(resolveProviderEnvVars(params)).flatMap((keys) => keys),
-    ]),
-  ];
+  return uniqueStrings([
+    ...Object.values(resolveProviderAuthEnvVarCandidates(params)).flatMap((keys) => keys),
+    ...Object.values(resolveProviderEnvVars(params)).flatMap((keys) => keys),
+  ]);
 }
 
 export function listKnownSecretEnvVarNames(params?: ProviderEnvVarLookupParams): string[] {
-  return [...new Set(Object.values(resolveProviderEnvVars(params)).flatMap((keys) => keys))];
+  return uniqueStrings(Object.values(resolveProviderEnvVars(params)).flatMap((keys) => keys));
 }
 
 export function omitEnvKeysCaseInsensitive(
@@ -335,3 +424,4 @@ export function omitEnvKeysCaseInsensitive(
   }
   return env;
 }
+export { testing as __testing };

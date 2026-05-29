@@ -20,6 +20,7 @@ export default defineSingleProviderPluginEntry({
   provider: {
     label: "Moonshot",
     docsPath: "/providers/moonshot",
+    aliases: ["moonshotai", "moonshot-ai"],
     auth: [
       {
         methodId: "api-key",
@@ -63,6 +64,7 @@ export default defineSingleProviderPluginEntry({
     ...buildProviderReplayFamilyHooks({
       family: "openai-compatible",
       sanitizeToolCallIds: false,
+      dropReasoningFromHistory: false,
     }),
     ...MOONSHOT_THINKING_STREAM_HOOKS,
     resolveThinkingProfile: () => ({

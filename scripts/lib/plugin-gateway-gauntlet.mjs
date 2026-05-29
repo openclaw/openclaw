@@ -1,8 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
+import {
+  NON_PACKAGED_BUNDLED_PLUGIN_DIRS,
+  collectBundledPluginBuildEntries,
+} from "./bundled-plugin-build-entries.mjs";
 
 const MANIFEST_NAMES = ["openclaw.plugin.json", "openclaw.plugin.json5"];
+const ANSI_PATTERN = new RegExp(String.raw`\u001B\[[0-9;]*m`, "gu");
 
 function isPlainObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -118,12 +123,14 @@ function collectOnboardingScopes(manifest) {
 
 function buildPluginMatrixEntry(params) {
   const { repoRoot, manifestPath, manifest } = params;
+  const pluginDir = path.dirname(manifestPath);
   const relativeManifestPath = path.relative(repoRoot, manifestPath);
   const commandAliases = collectCommandAliasRecords(manifest);
   return {
     id: manifest.id,
+    buildId: path.basename(pluginDir),
     name: normalizeString(manifest.name) || manifest.id,
-    dir: path.relative(repoRoot, path.dirname(manifestPath)),
+    dir: path.relative(repoRoot, pluginDir),
     manifestPath: relativeManifestPath,
     enabledByDefault: manifest.enabledByDefault === true,
     activation: isPlainObject(manifest.activation) ? manifest.activation : {},
@@ -142,13 +149,20 @@ function buildPluginMatrixEntry(params) {
 
 function discoverBundledPluginManifests(repoRoot) {
   const extensionsDir = path.join(repoRoot, "extensions");
+  const buildEntryDirs = new Set(
+    collectBundledPluginBuildEntries({ cwd: repoRoot }).map((entry) => entry.id),
+  );
   const entries = fs
     .readdirSync(extensionsDir, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
+    .filter((entry) => buildEntryDirs.has(entry.name))
     .flatMap((entry) => {
       const pluginDir = path.join(extensionsDir, entry.name);
       const manifestName = MANIFEST_NAMES.find((name) => fs.existsSync(path.join(pluginDir, name)));
       if (!manifestName) {
+        return [];
+      }
+      if (NON_PACKAGED_BUNDLED_PLUGIN_DIRS.has(entry.name)) {
         return [];
       }
       const manifestPath = path.join(pluginDir, manifestName);
@@ -335,14 +349,52 @@ function collectQaBaselineRegressionObservations(rows, thresholds = {}) {
 }
 
 function buildGauntletPrebuildEnv(env, options = {}) {
+  const buildIds = new Set(normalizeStringArray(options.buildIds));
+  const runtimeOnlyPrebuildEnv = options.skipDeclarationBuild
+    ? { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" }
+    : {};
+  const hasRuntimeOnlyPrebuildEnv = Object.keys(runtimeOnlyPrebuildEnv).length > 0;
+  if (options.includePrivateQa) {
+    for (const pluginId of NON_PACKAGED_BUNDLED_PLUGIN_DIRS) {
+      buildIds.add(pluginId);
+    }
+  }
   if (!options.includePrivateQa) {
-    return env;
+    return buildIds.size === 0 && !hasRuntimeOnlyPrebuildEnv
+      ? env
+      : {
+          ...env,
+          ...runtimeOnlyPrebuildEnv,
+          ...(buildIds.size > 0
+            ? {
+                OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: [...buildIds]
+                  .toSorted((left, right) => left.localeCompare(right))
+                  .join(","),
+              }
+            : {}),
+        };
   }
   return {
     ...env,
+    ...runtimeOnlyPrebuildEnv,
     OPENCLAW_BUILD_PRIVATE_QA: "1",
     OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
+    ...(buildIds.size > 0
+      ? {
+          OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: [...buildIds]
+            .toSorted((left, right) => left.localeCompare(right))
+            .join(","),
+        }
+      : {}),
   };
+}
+
+function detectCommandDiagnosticFailure(stdout, stderr) {
+  const output = `${stdout}\n${stderr}`.replace(ANSI_PATTERN, "");
+  if (/^\[plugins\]\s+\S+\s+failed to load from\s+/mu.test(output)) {
+    return "plugin-load-failure";
+  }
+  return null;
 }
 
 function collectGatewayCpuObservations(params) {
@@ -387,6 +439,7 @@ export {
   collectGatewayCpuObservations,
   collectMetricObservations,
   buildGauntletPrebuildEnv,
+  detectCommandDiagnosticFailure,
   discoverBundledPluginManifests,
   schemaHasRequiredFields,
   selectPluginEntries,

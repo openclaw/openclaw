@@ -70,6 +70,14 @@ function createOllamaFetchMock(params: {
   });
 }
 
+function mockCall(mock: { mock: { calls: unknown[][] } }, index = 0) {
+  return mock.mock.calls.at(index);
+}
+
+function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0, argIndex = 0) {
+  return mockCall(mock, index)?.at(argIndex);
+}
+
 function createLocalPrompter(): WizardPrompter {
   return {
     select: vi.fn().mockResolvedValueOnce("local-only"),
@@ -136,9 +144,10 @@ describe("ollama setup", () => {
 
   it("Docker setup defaults to the host Ollama endpoint", async () => {
     vi.stubEnv("OPENCLAW_DOCKER_SETUP", "1");
+    const text = vi.fn().mockResolvedValueOnce("http://host.docker.internal:11434");
     const prompter = {
       select: vi.fn().mockResolvedValueOnce("local-only"),
-      text: vi.fn().mockResolvedValueOnce("http://host.docker.internal:11434"),
+      text,
       note: vi.fn(async () => undefined),
     } as unknown as WizardPrompter;
 
@@ -150,13 +159,20 @@ describe("ollama setup", () => {
       prompter,
     });
 
-    expect(prompter.text).toHaveBeenCalledWith(
-      expect.objectContaining({
-        initialValue: "http://host.docker.internal:11434",
-        placeholder: "http://host.docker.internal:11434",
-      }),
-    );
-    expect(fetchMock.mock.calls[0]?.[0]).toBe("http://host.docker.internal:11434/api/tags");
+    const baseUrlPrompt = mockCallArg(text) as {
+      message?: string;
+      initialValue?: string;
+      placeholder?: string;
+      validate?: unknown;
+    };
+    expect(baseUrlPrompt).toEqual({
+      message: "Ollama base URL",
+      initialValue: "http://host.docker.internal:11434",
+      placeholder: "http://host.docker.internal:11434",
+      validate: baseUrlPrompt.validate,
+    });
+    expect(typeof baseUrlPrompt.validate).toBe("function");
+    expect(mockCallArg(fetchMock)).toBe("http://host.docker.internal:11434/api/tags");
     expect(result.config.models?.providers?.ollama?.baseUrl).toBe(
       "http://host.docker.internal:11434",
     );
@@ -266,12 +282,8 @@ describe("ollama setup", () => {
       allowSecretRefPrompt: false,
     });
 
-    expect(fetchMock.mock.calls.some((call) => requestUrl(call[0]).includes("127.0.0.1"))).toBe(
-      false,
-    );
-    expect(fetchMock.mock.calls.some((call) => requestUrl(call[0]).includes("ollama.com"))).toBe(
-      true,
-    );
+    const requestUrls = fetchMock.mock.calls.map((call) => requestUrl(call[0]));
+    expect(requestUrls).toEqual(["https://ollama.com/api/tags"]);
   });
 
   it("rejects the local marker during cloud-only setup", async () => {
@@ -301,11 +313,10 @@ describe("ollama setup", () => {
       prompter,
     });
 
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(fetchMock.mock.calls[0]?.[0]).toContain("/api/tags");
-    expect(fetchMock.mock.calls.some((call) => requestUrl(call[0]).includes("/api/me"))).toBe(
-      false,
-    );
+    expect(fetchMock.mock.calls.map((call) => requestUrl(call[0]))).toEqual([
+      "http://127.0.0.1:11434/api/tags",
+      "http://127.0.0.1:11434/api/show",
+    ]);
   });
 
   it("asks for Ollama mode before cloud api key", async () => {
@@ -431,12 +442,9 @@ describe("ollama setup", () => {
       "qwen3-coder:480b-cloud",
       "gpt-oss:120b-cloud",
     ]);
-    expect(fetchMock.mock.calls.some((call) => requestUrl(call[0]).endsWith("/api/show"))).toBe(
-      false,
-    );
-    expect(
-      fetchMock.mock.calls.some((call) => requestUrl(call[0]) === "https://ollama.com/api/tags"),
-    ).toBe(true);
+    const requestUrls = fetchMock.mock.calls.map((call) => requestUrl(call[0]));
+    expect(requestUrls.filter((url) => url.endsWith("/api/show"))).toEqual([]);
+    expect(requestUrls).toContain("https://ollama.com/api/tags");
   });
 
   it("uses /api/show context windows when building Ollama model configs", async () => {
@@ -485,8 +493,8 @@ describe("ollama setup", () => {
         });
 
         expect(fetchMock).toHaveBeenCalledTimes(2);
-        expect(fetchMock.mock.calls[1][0]).toContain("/api/pull");
-        const pullInit = fetchMock.mock.calls[1][1];
+        expect(mockCallArg(fetchMock, 1)).toContain("/api/pull");
+        const pullInit = mockCallArg(fetchMock, 1, 1) as RequestInit | undefined;
         expect(pullInit?.signal).toBeInstanceOf(AbortSignal);
         expect(pullInit?.signal?.aborted).toBe(false);
 
@@ -522,17 +530,16 @@ describe("ollama setup", () => {
           prompter,
         }).catch((err: unknown) => err);
 
-        for (let attempts = 0; attempts < 50 && fetchMock.mock.calls.length < 2; attempts += 1) {
-          await vi.advanceTimersByTimeAsync(0);
-          await Promise.resolve();
-        }
-        expect(fetchMock.mock.calls[1]?.[0]).toContain("/api/pull");
+        await vi.waitFor(() => expect(mockCallArg(fetchMock, 1)).toContain("/api/pull"));
 
         await vi.advanceTimersByTimeAsync(300_000);
-        await expect(pullPromise).resolves.toEqual(
-          expect.objectContaining({ message: "Failed to download selected Ollama model" }),
+        const pullError = await pullPromise;
+        expect(pullError).toBeInstanceOf(Error);
+        expect((pullError as Error).name).toBe("WizardCancelledError");
+        expect((pullError as Error).message).toBe("Failed to download selected Ollama model");
+        expect(progress.stop).toHaveBeenCalledWith(
+          "Failed to download gemma4: Ollama pull stalled: no data received for 300s",
         );
-        expect(progress.stop).toHaveBeenCalledWith(expect.stringContaining("Ollama pull stalled"));
       } finally {
         vi.useRealTimers();
       }
@@ -596,8 +603,8 @@ describe("ollama setup", () => {
         prompter,
       });
 
-      expect(fetchMock.mock.calls[0]?.[0]).toBe("http://127.0.0.1:11435/api/tags");
-      expect(fetchMock.mock.calls[1]?.[0]).toBe("http://127.0.0.1:11435/api/pull");
+      expect(mockCallArg(fetchMock)).toBe("http://127.0.0.1:11435/api/tags");
+      expect(mockCallArg(fetchMock, 1)).toBe("http://127.0.0.1:11435/api/pull");
     });
 
     it("skips pull for cloud models", async () => {
@@ -681,11 +688,9 @@ describe("ollama setup", () => {
       runtime,
     });
 
-    const pullRequest = fetchMock.mock.calls[1]?.[1];
+    const pullRequest = mockCallArg(fetchMock, 1, 1) as RequestInit | undefined;
     expect(JSON.parse(requestBodyText(pullRequest?.body))).toEqual({ name: "llama3.2:latest" });
-    expect(result.agents?.defaults?.model).toEqual(
-      expect.objectContaining({ primary: "ollama/llama3.2:latest" }),
-    );
+    expect(result.agents?.defaults?.model).toEqual({ primary: "ollama/llama3.2:latest" });
   });
 
   it("uses the discovered latest tag as the non-interactive default without pulling", async () => {
@@ -702,15 +707,12 @@ describe("ollama setup", () => {
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(fetchMock.mock.calls.some((call) => requestUrl(call[0]).endsWith("/api/pull"))).toBe(
-      false,
-    );
+    const requestUrls = fetchMock.mock.calls.map((call) => requestUrl(call[0]));
+    expect(requestUrls.filter((url) => url.endsWith("/api/pull"))).toEqual([]);
     expect(result.models?.providers?.ollama?.models?.map((model) => model.id)).toEqual([
       "gemma4:latest",
     ]);
-    expect(result.agents?.defaults?.model).toEqual(
-      expect.objectContaining({ primary: "ollama/gemma4:latest" }),
-    );
+    expect(result.agents?.defaults?.model).toEqual({ primary: "ollama/gemma4:latest" });
     expect(runtime.log).toHaveBeenCalledWith("Default Ollama model: gemma4:latest");
   });
 
@@ -732,9 +734,7 @@ describe("ollama setup", () => {
     expect(result.models?.providers?.ollama?.models?.map((model) => model.id)).toContain(
       "kimi-k2.5:cloud",
     );
-    expect(result.agents?.defaults?.model).toEqual(
-      expect.objectContaining({ primary: "ollama/kimi-k2.5:cloud" }),
-    );
+    expect(result.agents?.defaults?.model).toEqual({ primary: "ollama/kimi-k2.5:cloud" });
   });
 
   it("exits when Ollama is unreachable", async () => {
@@ -760,7 +760,10 @@ describe("ollama setup", () => {
     });
 
     expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Ollama could not be reached at http://127.0.0.1:11435."),
+      [
+        "Ollama could not be reached at http://127.0.0.1:11435.",
+        "Download it at https://ollama.com/download",
+      ].join("\n"),
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(result).toBe(nextConfig);

@@ -84,6 +84,26 @@ function findGatewayHandler(
   return registerGatewayMethod.mock.calls.find((call) => call[0] === method)?.[1];
 }
 
+function readGatewayMethodOptions(
+  registerGatewayMethod: ReturnType<typeof vi.fn>,
+  method: string,
+): unknown {
+  return registerGatewayMethod.mock.calls.find((call) => call[0] === method)?.[2];
+}
+
+function readRespondPayload(respond: { mock: { calls: Array<Array<unknown>> } }): unknown {
+  const call = respond.mock.calls[0];
+  expect(call?.[0]).toBe(true);
+  return call?.[1];
+}
+
+function readRespondError(respond: { mock: { calls: Array<Array<unknown>> } }): unknown {
+  const call = respond.mock.calls[0];
+  expect(call?.[0]).toBe(false);
+  expect(call?.[1]).toBeUndefined();
+  return call?.[2];
+}
+
 describe("memory-wiki gateway methods", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -141,6 +161,27 @@ describe("memory-wiki gateway methods", () => {
     } as never);
   });
 
+  it("registers Obsidian CLI methods with write scope", async () => {
+    const { config } = await createVault({ prefix: "memory-wiki-gateway-" });
+    const { api, registerGatewayMethod } = createPluginApi();
+
+    registerMemoryWikiGatewayMethods({ api, config });
+
+    expect(
+      Object.fromEntries(
+        registerGatewayMethod.mock.calls
+          .filter(([method]) => typeof method === "string" && method.startsWith("wiki.obsidian."))
+          .map(([method, , options]) => [method, options]),
+      ),
+    ).toEqual({
+      "wiki.obsidian.status": { scope: "operator.read" },
+      "wiki.obsidian.search": { scope: "operator.write" },
+      "wiki.obsidian.open": { scope: "operator.write" },
+      "wiki.obsidian.command": { scope: "operator.write" },
+      "wiki.obsidian.daily": { scope: "operator.write" },
+    });
+  });
+
   it("returns wiki status over the gateway", async () => {
     const { config } = await createVault({ prefix: "memory-wiki-gateway-" });
     const { api, registerGatewayMethod } = createPluginApi();
@@ -161,13 +202,10 @@ describe("memory-wiki gateway methods", () => {
     expect(resolveMemoryWikiStatus).toHaveBeenCalledWith(config, {
       appConfig: undefined,
     });
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        vaultMode: "isolated",
-        vaultExists: true,
-      }),
-    );
+    expect(readRespondPayload(respond)).toEqual({
+      vaultMode: "isolated",
+      vaultExists: true,
+    });
   });
 
   it("returns recent import runs over the gateway", async () => {
@@ -210,13 +248,27 @@ describe("memory-wiki gateway methods", () => {
     });
 
     expect(listMemoryWikiImportRuns).toHaveBeenCalledWith(config, { limit: 5 });
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        totalRuns: 1,
-        activeRuns: 1,
-      }),
-    );
+    expect(readRespondPayload(respond)).toEqual({
+      runs: [
+        {
+          runId: "chatgpt-abc123",
+          importType: "chatgpt",
+          appliedAt: "2026-04-10T10:00:00.000Z",
+          exportPath: "/tmp/chatgpt",
+          sourcePath: "/tmp/chatgpt/conversations.json",
+          conversationCount: 12,
+          createdCount: 4,
+          updatedCount: 2,
+          skippedCount: 6,
+          status: "applied",
+          pagePaths: ["sources/chatgpt-2026-04-10-alpha.md"],
+          samplePaths: ["sources/chatgpt-2026-04-10-alpha.md"],
+        },
+      ],
+      totalRuns: 1,
+      activeRuns: 1,
+      rolledBackRuns: 0,
+    });
   });
 
   it("returns import insights over the gateway", async () => {
@@ -267,21 +319,51 @@ describe("memory-wiki gateway methods", () => {
 
     expect(syncMemoryWikiImportedSources).toHaveBeenCalledWith({ config, appConfig: undefined });
     expect(listMemoryWikiImportInsights).toHaveBeenCalledWith(config);
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        sourceType: "chatgpt",
-        totalItems: 2,
-        totalClusters: 1,
-      }),
-    );
+    expect(readRespondPayload(respond)).toEqual({
+      sourceType: "chatgpt",
+      totalItems: 2,
+      totalClusters: 1,
+      clusters: [
+        {
+          key: "topic/travel",
+          label: "Travel",
+          itemCount: 2,
+          highRiskCount: 1,
+          withheldCount: 1,
+          preferenceSignalCount: 0,
+          updatedAt: "2026-04-10T10:00:00.000Z",
+          items: [
+            {
+              pagePath: "sources/chatgpt-2026-04-10-alpha.md",
+              title: "BA flight receipts process",
+              riskLevel: "low",
+              labels: ["domain/personal", "area/travel", "topic/travel"],
+              topicKey: "topic/travel",
+              topicLabel: "Travel",
+              digestStatus: "available",
+              firstUserLine: "how do i get receipts?",
+              lastUserLine: "that option does not exist",
+              preferenceSignals: [],
+            },
+          ],
+        },
+      ],
+    });
   });
 
   it("returns memory palace overview over the gateway", async () => {
     const { config } = await createVault({ prefix: "memory-wiki-gateway-" });
     const { api, registerGatewayMethod } = createPluginApi();
     vi.mocked(listMemoryWikiPalace).mockResolvedValue({
-      totalItems: 3,
+      totalItems: 1,
+      totalPages: 3,
+      pageCounts: {
+        synthesis: 1,
+        entity: 0,
+        concept: 0,
+        source: 1,
+        report: 1,
+      },
       totalClaims: 4,
       totalQuestions: 1,
       totalContradictions: 1,
@@ -324,13 +406,43 @@ describe("memory-wiki gateway methods", () => {
 
     expect(syncMemoryWikiImportedSources).toHaveBeenCalledWith({ config, appConfig: undefined });
     expect(listMemoryWikiPalace).toHaveBeenCalledWith(config);
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        totalItems: 3,
-        totalClaims: 4,
-      }),
-    );
+    expect(readRespondPayload(respond)).toEqual({
+      totalItems: 1,
+      totalPages: 3,
+      pageCounts: {
+        synthesis: 1,
+        entity: 0,
+        concept: 0,
+        source: 1,
+        report: 1,
+      },
+      totalClaims: 4,
+      totalQuestions: 1,
+      totalContradictions: 1,
+      clusters: [
+        {
+          key: "synthesis",
+          label: "Syntheses",
+          itemCount: 1,
+          claimCount: 2,
+          questionCount: 1,
+          contradictionCount: 0,
+          items: [
+            {
+              pagePath: "syntheses/travel-system.md",
+              title: "Travel system",
+              kind: "synthesis",
+              claimCount: 2,
+              questionCount: 1,
+              contradictionCount: 0,
+              claims: ["prefers direct receipts"],
+              questions: ["should this become a playbook?"],
+              contradictions: [],
+            },
+          ],
+        },
+      ],
+    });
   });
 
   it("validates required query params for wiki.search", async () => {
@@ -350,11 +462,41 @@ describe("memory-wiki gateway methods", () => {
     });
 
     expect(searchMemoryWiki).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ message: "query is required." }),
-    );
+    expect(readRespondError(respond)).toEqual({
+      code: "internal_error",
+      message: "query is required.",
+    });
+  });
+
+  it.each([
+    ["wiki.importRuns", { limit: 0 }, "limit must be a positive integer"],
+    [
+      "wiki.search",
+      { query: "Teams Azure", maxResults: 1.5 },
+      "maxResults must be a positive integer",
+    ],
+    ["wiki.get", { lookup: "Teams Azure", fromLine: 1.5 }, "fromLine must be a positive integer"],
+    ["wiki.get", { lookup: "Teams Azure", lineCount: 0 }, "lineCount must be a positive integer"],
+  ])("rejects invalid positive integer gateway param for %s", async (method, params, message) => {
+    const { config } = await createVault({ prefix: "memory-wiki-gateway-" });
+    const { api, registerGatewayMethod } = createPluginApi();
+
+    registerMemoryWikiGatewayMethods({ api, config });
+    const handler = findGatewayHandler(registerGatewayMethod, method);
+    if (!handler) {
+      throw new Error(`${method} handler missing`);
+    }
+    const respond = vi.fn();
+
+    await handler({
+      params,
+      respond,
+    });
+
+    expect(readRespondError(respond)).toEqual({
+      code: "internal_error",
+      message,
+    });
   });
 
   it("forwards wiki.search mode and corpus options over the gateway", async () => {
@@ -379,18 +521,70 @@ describe("memory-wiki gateway methods", () => {
       respond,
     });
 
-    expect(searchMemoryWiki).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config,
-        appConfig: undefined,
-        query: "Teams Azure",
-        maxResults: 3,
-        searchBackend: "local",
-        searchCorpus: "wiki",
-        mode: "route-question",
-      }),
-    );
-    expect(respond).toHaveBeenCalledWith(true, expect.anything());
+    expect(searchMemoryWiki).toHaveBeenCalledWith({
+      config,
+      appConfig: undefined,
+      query: "Teams Azure",
+      maxResults: 3,
+      searchBackend: "local",
+      searchCorpus: "wiki",
+      mode: "route-question",
+    });
+    expect(readRespondPayload(respond)).toEqual({
+      items: [],
+      total: 0,
+    });
+  });
+
+  it("passes the default agent scope to shared wiki.search gateway calls", async () => {
+    const { config } = await createVault({ prefix: "memory-wiki-gateway-" });
+    const { api, registerGatewayMethod } = createPluginApi();
+    const appConfig = {
+      agents: {
+        list: [{ id: "main", default: true }],
+      },
+    };
+
+    registerMemoryWikiGatewayMethods({ api, config, appConfig });
+    const handler = findGatewayHandler(registerGatewayMethod, "wiki.search");
+    if (!handler) {
+      throw new Error("wiki.search handler missing");
+    }
+    const respond = vi.fn();
+
+    await handler({
+      params: {
+        query: "sessions",
+        corpus: "memory",
+        backend: "shared",
+      },
+      respond,
+    });
+
+    expect(searchMemoryWiki).toHaveBeenCalledWith({
+      config,
+      appConfig,
+      agentId: "main",
+      query: "sessions",
+      maxResults: undefined,
+      searchBackend: "shared",
+      searchCorpus: "memory",
+      mode: undefined,
+    });
+  });
+
+  it("registers wiki.ingest with admin scope and keeps compile at write scope", async () => {
+    const { config } = await createVault({ prefix: "memory-wiki-gateway-" });
+    const { api, registerGatewayMethod } = createPluginApi();
+
+    registerMemoryWikiGatewayMethods({ api, config });
+
+    expect(readGatewayMethodOptions(registerGatewayMethod, "wiki.compile")).toEqual({
+      scope: "operator.write",
+    });
+    expect(readGatewayMethodOptions(registerGatewayMethod, "wiki.ingest")).toEqual({
+      scope: "operator.admin",
+    });
   });
 
   it("forwards ingest requests over the gateway", async () => {
@@ -417,12 +611,9 @@ describe("memory-wiki gateway methods", () => {
       inputPath: "/tmp/alpha-notes.txt",
       title: "Alpha",
     });
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        pagePath: "sources/alpha-notes.md",
-      }),
-    );
+    expect(readRespondPayload(respond)).toEqual({
+      pagePath: "sources/alpha-notes.md",
+    });
   });
 
   it("applies wiki mutations over the gateway", async () => {
@@ -450,17 +641,16 @@ describe("memory-wiki gateway methods", () => {
     expect(normalizeMemoryWikiMutationInput).toHaveBeenCalledWith(params);
     expect(applyMemoryWikiMutation).toHaveBeenCalledWith({
       config,
-      mutation: expect.objectContaining({
+      mutation: {
         op: "create_synthesis",
         title: "Gateway Alpha",
-      }),
+        body: "Gateway summary.",
+        sourceIds: ["source.alpha"],
+      },
     });
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        operation: "create_synthesis",
-        pagePath: "syntheses/gateway-alpha.md",
-      }),
-    );
+    expect(readRespondPayload(respond)).toEqual({
+      operation: "create_synthesis",
+      pagePath: "syntheses/gateway-alpha.md",
+    });
   });
 });

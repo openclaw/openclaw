@@ -10,6 +10,7 @@
  * Separated from gateway.ts for testability and to keep handleMessage thin.
  */
 
+import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import {
   parseAndSendMediaTags,
@@ -33,6 +34,7 @@ import {
 import { StreamingController, shouldUseOfficialC2cStream } from "../messaging/streaming-c2c.js";
 import { audioFileToSilkBase64 } from "../utils/audio.js";
 import type { InboundContext } from "./inbound-context.js";
+import { resolveResponseTimeoutMs } from "./response-timeout.js";
 import type {
   GatewayAccount,
   EngineLogger,
@@ -42,7 +44,12 @@ import type {
 
 // ============ Config ============
 
-const RESPONSE_TIMEOUT = 300_000;
+// Historical floor for the QQBot outbound response watchdog (5 min). The
+// effective wait budget is now derived from existing
+// `agents.defaults.timeoutSeconds` and `models.providers.<id>.timeoutSeconds`
+// via `resolveResponseTimeoutMs(cfg)` — see issue #85267, where a slow
+// local ollama/qwen3.5:27b turn was capped at 5 min despite a configured
+// 1800s provider timeout.
 const TOOL_ONLY_TIMEOUT = 60_000;
 const MAX_TOOL_RENEWALS = 3;
 const TOOL_MEDIA_SEND_TIMEOUT = 45_000;
@@ -94,7 +101,7 @@ export async function dispatchOutbound(
   const sendErrorMessage = (errorText: string) => sendErrorToTarget(replyCtx, errorText);
 
   // ---- Build ctxPayload ----
-  const ctxPayload = buildCtxPayload(inbound, runtime);
+  const ctxPayload = await buildCtxPayload(inbound, runtime, cfg);
 
   // ---- Deliver state ----
   let hasResponse = false;
@@ -149,12 +156,16 @@ export async function dispatchOutbound(
   };
 
   // ---- Timeout promise ----
+  // #85267: derive watchdog from existing agent / provider timeout config so
+  // a longer configured ceiling (e.g. slow local ollama models) is not
+  // silently undercut by a plugin-local 5-minute cap.
+  const responseTimeoutMs = resolveResponseTimeoutMs(cfg);
   const timeoutPromise = new Promise<void>((_, reject) => {
     timeoutId = setTimeout(() => {
       if (!hasResponse) {
         reject(new Error("Response timeout"));
       }
-    }, RESPONSE_TIMEOUT);
+    }, responseTimeoutMs);
   });
 
   // ---- Deliver deps ----
@@ -225,7 +236,7 @@ export async function dispatchOutbound(
   const storePath = runtime.channel.session.resolveStorePath(cfgWithSession.session?.store, {
     agentId,
   });
-  const dispatchPromise = runtime.channel.turn.run({
+  const dispatchPromise = runtime.channel.inbound.run({
     channel: "qqbot",
     accountId: inbound.route.accountId,
     raw: inbound,
@@ -512,64 +523,103 @@ export async function dispatchOutbound(
 
 // ============ ctxPayload builder ============
 
-function buildCtxPayload(
+function resolveCommandSource(
   inbound: InboundContext,
   runtime: GatewayPluginRuntime,
-): FinalizedMsgContext {
+  cfg: unknown,
+): "text" | undefined {
+  const commandBody = inbound.event.content;
+  if (!runtime.channel.commands?.isControlCommandMessage?.(commandBody, cfg)) {
+    return undefined;
+  }
+  return "text";
+}
+
+async function buildCtxPayload(
+  inbound: InboundContext,
+  runtime: GatewayPluginRuntime,
+  cfg: unknown,
+): Promise<FinalizedMsgContext> {
   const { event } = inbound;
-  return runtime.channel.reply.finalizeInboundContext({
-    Body: inbound.body,
-    BodyForAgent: inbound.agentBody,
-    RawBody: event.content,
-    CommandBody: event.content,
-    From: inbound.fromAddress,
-    To: inbound.fromAddress,
-    SessionKey: inbound.route.sessionKey,
-    AccountId: inbound.route.accountId,
-    ChatType: inbound.isGroupChat ? "group" : "direct",
-    GroupSystemPrompt: inbound.groupSystemPrompt,
-    SenderId: event.senderId,
-    SenderName: event.senderName,
-    Provider: "qqbot",
-    Surface: "qqbot",
-    MessageSid: event.messageId,
-    Timestamp: new Date(event.timestamp).getTime(),
-    OriginatingChannel: "qqbot",
-    OriginatingTo: inbound.fromAddress,
-    QQChannelId: event.channelId,
-    QQGuildId: event.guildId,
-    QQGroupOpenid: event.groupOpenid,
-    QQVoiceAsrReferAvailable: inbound.hasAsrReferFallback,
-    QQVoiceTranscriptSources: inbound.voiceTranscriptSources,
-    QQVoiceAttachmentPaths: inbound.uniqueVoicePaths,
-    QQVoiceAttachmentUrls: inbound.uniqueVoiceUrls,
-    QQVoiceAsrReferTexts: inbound.uniqueVoiceAsrReferTexts,
-    QQVoiceInputStrategy: "prefer_audio_stt_then_asr_fallback",
-    CommandAuthorized: inbound.commandAuthorized,
-    ...(inbound.voiceMediaTypes.length > 0
+  const commandSource = resolveCommandSource(inbound, runtime, cfg);
+  const hasImageMedia = inbound.localMediaPaths.length > 0 || inbound.remoteMediaUrls.length > 0;
+  return buildChannelInboundEventContext({
+    finalize: runtime.channel.reply.finalizeInboundContext,
+    channel: "qqbot",
+    accountId: inbound.route.accountId,
+    messageId: event.messageId,
+    timestamp: new Date(event.timestamp).getTime(),
+    from: inbound.fromAddress,
+    sender: {
+      id: event.senderId,
+      name: event.senderName,
+    },
+    conversation: {
+      kind: inbound.isGroupChat ? "group" : "direct",
+      id: inbound.peerId,
+    },
+    route: {
+      agentId: inbound.route.agentId ?? "main",
+      routeSessionKey: inbound.route.sessionKey,
+      accountId: inbound.route.accountId,
+    },
+    reply: {
+      to: inbound.fromAddress,
+    },
+    message: {
+      body: inbound.body,
+      bodyForAgent: inbound.agentBody,
+      rawBody: event.content,
+      commandBody: event.content,
+    },
+    access: {
+      commands: {
+        authorized: inbound.commandAuthorized,
+      },
+    },
+    command: commandSource
       ? {
-          MediaTypes: inbound.voiceMediaTypes,
-          MediaType: inbound.voiceMediaTypes[0],
+          kind: "text-slash",
+          body: event.content,
+          authorized: inbound.commandAuthorized,
         }
-      : {}),
-    ...(inbound.localMediaPaths.length > 0
-      ? {
-          MediaPaths: inbound.localMediaPaths,
-          MediaPath: inbound.localMediaPaths[0],
-          MediaTypes: inbound.localMediaTypes,
-          MediaType: inbound.localMediaTypes[0],
-        }
-      : {}),
-    ...(inbound.remoteMediaUrls.length > 0
-      ? { MediaUrls: inbound.remoteMediaUrls, MediaUrl: inbound.remoteMediaUrls[0] }
-      : {}),
-    ...(inbound.replyTo
-      ? {
-          ReplyToId: inbound.replyTo.id,
-          ReplyToBody: inbound.replyTo.body,
-          ReplyToSender: inbound.replyTo.sender,
-          ReplyToIsQuote: inbound.replyTo.isQuote,
-        }
-      : {}),
-  }) as FinalizedMsgContext;
+      : undefined,
+    media: hasImageMedia
+      ? undefined
+      : inbound.voiceMediaTypes.map((contentType) => ({ contentType })),
+    supplemental: {
+      quote: inbound.replyTo
+        ? {
+            id: inbound.replyTo.id,
+            body: inbound.replyTo.body,
+            sender: inbound.replyTo.sender,
+            isQuote: inbound.replyTo.isQuote,
+          }
+        : undefined,
+      groupSystemPrompt: inbound.groupSystemPrompt,
+    },
+    extra: {
+      QQChannelId: event.channelId,
+      QQGuildId: event.guildId,
+      QQGroupOpenid: event.groupOpenid,
+      QQVoiceAsrReferAvailable: inbound.hasAsrReferFallback,
+      QQVoiceTranscriptSources: inbound.voiceTranscriptSources,
+      QQVoiceAttachmentPaths: inbound.uniqueVoicePaths,
+      QQVoiceAttachmentUrls: inbound.uniqueVoiceUrls,
+      QQVoiceAsrReferTexts: inbound.uniqueVoiceAsrReferTexts,
+      QQVoiceInputStrategy: "prefer_audio_stt_then_asr_fallback",
+      ...(commandSource ? { CommandSource: commandSource } : {}),
+      ...(inbound.localMediaPaths.length > 0
+        ? {
+            MediaPaths: inbound.localMediaPaths,
+            MediaPath: inbound.localMediaPaths[0],
+            MediaTypes: inbound.localMediaTypes,
+            MediaType: inbound.localMediaTypes[0],
+          }
+        : {}),
+      ...(inbound.remoteMediaUrls.length > 0
+        ? { MediaUrls: inbound.remoteMediaUrls, MediaUrl: inbound.remoteMediaUrls[0] }
+        : {}),
+    },
+  });
 }

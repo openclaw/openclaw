@@ -2,10 +2,16 @@ import {
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "openclaw/plugin-sdk/provider-setup";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH } from "./defaults.js";
-import { discoverLmstudioModels, ensureLmstudioModelLoaded } from "./models.fetch.js";
 import {
+  discoverLmstudioModels,
+  ensureLmstudioModelLoaded,
+  fetchLmstudioModels,
+} from "./models.fetch.js";
+import {
+  mapLmstudioWireEntry,
+  normalizeLmstudioConfiguredCatalogEntry,
   normalizeLmstudioProviderConfig,
   resolveLmstudioInferenceBase,
   resolveLmstudioReasoningCompat,
@@ -21,6 +27,11 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
     ...actual,
     fetchWithSsrFGuard: (...args: unknown[]) => fetchWithSsrFGuardMock(...args),
   };
+});
+
+afterAll(() => {
+  vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
+  vi.resetModules();
 });
 
 describe("lmstudio-models", () => {
@@ -69,8 +80,10 @@ describe("lmstudio-models", () => {
     contextLength: number,
   ) => {
     const loadCall = findModelLoadCall(fetchMock);
-    expect(loadCall).toBeDefined();
-    const loadInit = loadCall?.[1] as RequestInit;
+    if (!loadCall) {
+      throw new Error("expected LM Studio model load request");
+    }
+    const loadInit = loadCall[1] as RequestInit;
     const loadBody = parseJsonRequestBody(loadInit) as { context_length: number };
     expect(loadBody.context_length).toBe(contextLength);
   };
@@ -122,6 +135,49 @@ describe("lmstudio-models", () => {
     });
   });
 
+  it("drops malformed configured catalog token metadata", () => {
+    expect(
+      normalizeLmstudioConfiguredCatalogEntry({
+        id: "bad-window",
+        contextWindow: Number.POSITIVE_INFINITY,
+        contextTokens: 4096.5,
+      }),
+    ).toMatchObject({
+      id: "bad-window",
+      contextWindow: undefined,
+      contextTokens: undefined,
+    });
+
+    expect(
+      normalizeLmstudioConfiguredCatalogEntry({
+        id: "bad-tokens",
+        contextWindow: -1,
+        contextTokens: 0,
+      }),
+    ).toMatchObject({
+      id: "bad-tokens",
+      contextWindow: undefined,
+      contextTokens: undefined,
+    });
+  });
+
+  it("drops malformed discovered context metadata", () => {
+    const model = mapLmstudioWireEntry({
+      type: "llm",
+      key: "bad-context",
+      max_context_length: 32768.5,
+      loaded_instances: [{ id: "loaded", config: { context_length: Number.POSITIVE_INFINITY } }],
+    });
+
+    expect(model).toMatchObject({
+      id: "bad-context",
+      contextWindow: SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
+      contextTokens: LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH,
+      maxTokens: SELF_HOSTED_DEFAULT_MAX_TOKENS,
+      loaded: false,
+    });
+  });
+
   it("resolves reasoning capability for supported and unsupported options", () => {
     expect(resolveLmstudioReasoningCapability({ capabilities: undefined })).toBe(false);
     expect(
@@ -146,7 +202,7 @@ describe("lmstudio-models", () => {
     ).toBe(false);
   });
 
-  it("maps LM Studio native reasoning options into OpenAI-compatible effort compat", () => {
+  it("maps LM Studio binary reasoning options into OpenAI-compatible effort compat", () => {
     expect(
       resolveLmstudioReasoningCompat({
         capabilities: {
@@ -158,14 +214,31 @@ describe("lmstudio-models", () => {
       }),
     ).toEqual({
       supportsReasoningEffort: true,
-      supportedReasoningEfforts: ["off", "on"],
-      reasoningEffortMap: expect.objectContaining({
-        off: "off",
-        none: "off",
-        low: "on",
-        medium: "on",
-        high: "on",
+      supportedReasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
+      reasoningEffortMap: {
+        off: "none",
+        none: "none",
+        adaptive: "xhigh",
+        max: "xhigh",
+      },
+    });
+
+    expect(
+      resolveLmstudioReasoningCompat({
+        capabilities: {
+          reasoning: {
+            allowed_options: ["low", "medium", "high"],
+            default: "low",
+          },
+        },
       }),
+    ).toEqual({
+      supportsReasoningEffort: true,
+      supportedReasoningEfforts: ["low", "medium", "high"],
+      reasoningEffortMap: {
+        adaptive: "high",
+        max: "high",
+      },
     });
 
     expect(
@@ -181,7 +254,7 @@ describe("lmstudio-models", () => {
   });
 
   it("discovers llm models and maps metadata", async () => {
-    const fetchMock = vi.fn(async (_url: string | URL) => ({
+    const fetchMock = vi.fn(async (_url: string | URL, _init?: RequestInit) => ({
       ok: true,
       json: async () => ({
         models: [
@@ -224,14 +297,16 @@ describe("lmstudio-models", () => {
       fetchImpl: asFetch(fetchMock),
     });
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      "http://localhost:1234/api/v1/models",
-      expect.objectContaining({
-        headers: {
-          Authorization: "Bearer lm-token",
-        },
-      }),
+    const modelsRequest = fetchMock.mock.calls.find(
+      ([url]) => url === "http://localhost:1234/api/v1/models",
     );
+    const modelsRequestOptions = modelsRequest?.[1] as
+      | { headers?: Record<string, string>; signal?: unknown }
+      | undefined;
+    expect(modelsRequestOptions?.headers).toEqual({
+      Authorization: "Bearer lm-token",
+    });
+    expect(modelsRequestOptions?.signal).toBeInstanceOf(AbortSignal);
 
     expect(models).toHaveLength(2);
     expect(models[0]).toEqual({
@@ -243,13 +318,13 @@ describe("lmstudio-models", () => {
       compat: {
         supportsUsageInStreaming: true,
         supportsReasoningEffort: true,
-        supportedReasoningEfforts: ["off", "on"],
-        reasoningEffortMap: expect.objectContaining({
-          off: "off",
-          none: "off",
-          medium: "on",
-          high: "on",
-        }),
+        supportedReasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
+        reasoningEffortMap: {
+          off: "none",
+          none: "none",
+          adaptive: "xhigh",
+          max: "xhigh",
+        },
       },
       contextWindow: 262144,
       contextTokens: LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH,
@@ -266,6 +341,42 @@ describe("lmstudio-models", () => {
       contextTokens: LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH,
       maxTokens: SELF_HOSTED_DEFAULT_MAX_TOKENS,
     });
+  });
+
+  it("reports malformed model list JSON with an owned error", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => {
+        throw new SyntaxError("bad json");
+      },
+    }));
+
+    const result = await fetchLmstudioModels({
+      baseUrl: "http://localhost:1234/v1",
+      fetchImpl: asFetch(fetchMock),
+    });
+
+    expect(result.reachable).toBe(false);
+    expect((result.error as Error).message).toBe("LM Studio model list: malformed JSON response");
+  });
+
+  it("reports wrong-shaped model list payloads with owned errors", async () => {
+    for (const payload of [[], { models: {} }, { models: [null] }]) {
+      const fetchMock = vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => payload,
+      }));
+
+      const result = await fetchLmstudioModels({
+        baseUrl: "http://localhost:1234/v1",
+        fetchImpl: asFetch(fetchMock),
+      });
+
+      expect(result.reachable).toBe(false);
+      expect((result.error as Error).message).toBe("LM Studio model list: malformed JSON response");
+    }
   });
 
   it("skips model load when already loaded", async () => {
@@ -301,6 +412,36 @@ describe("lmstudio-models", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expectLoadContextLength(fetchMock, 8192);
+  });
+
+  it("reports malformed model load JSON with an owned error", async () => {
+    const fetchMock = vi.fn(async (url: string | URL) => {
+      if (String(url).endsWith("/api/v1/models")) {
+        return {
+          ok: true,
+          json: async () => ({
+            models: [{ type: "llm", key: "qwen3-8b-instruct", loaded_instances: [] }],
+          }),
+        };
+      }
+      if (String(url).endsWith("/api/v1/models/load")) {
+        return {
+          ok: true,
+          json: async () => {
+            throw new SyntaxError("bad json");
+          },
+        };
+      }
+      throw new Error(`Unexpected fetch URL: ${String(url)}`);
+    });
+    vi.stubGlobal("fetch", asFetch(fetchMock));
+
+    await expect(
+      ensureLmstudioModelLoaded({
+        baseUrl: "http://localhost:1234/v1",
+        modelKey: "qwen3-8b-instruct",
+      }),
+    ).rejects.toThrow("LM Studio model load returned malformed JSON");
   });
 
   it("reloads model to the clamped default target when already loaded below the default window", async () => {
@@ -339,8 +480,13 @@ describe("lmstudio-models", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     const loadCall = findModelLoadCall(fetchMock);
-    expect(loadCall).toBeDefined();
-    expect(loadCall?.[1]).toMatchObject({
+    if (!loadCall) {
+      throw new Error("expected LM Studio model load request");
+    }
+    const loadInit = loadCall[1] as RequestInit;
+    const { signal, ...stableLoadInit } = loadInit;
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(stableLoadInit).toEqual({
       method: "POST",
       headers: {
         "X-Proxy-Auth": "required",
@@ -352,7 +498,6 @@ describe("lmstudio-models", () => {
         context_length: 32768,
       }),
     });
-    const loadInit = loadCall![1] as RequestInit;
     const loadBody = parseJsonRequestBody(loadInit) as { context_length: number };
     expect(loadBody.context_length).not.toBe(LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH);
   });
@@ -370,6 +515,24 @@ describe("lmstudio-models", () => {
     ).resolves.toBeUndefined();
 
     expectLoadContextLength(fetchMock, 8192);
+  });
+
+  it("omits malformed context lengths before loading models", async () => {
+    const fetchMock = createModelLoadFetchMock({
+      loadedContextLength: 4096.5,
+      maxContextLength: 32768.5,
+    });
+    vi.stubGlobal("fetch", asFetch(fetchMock));
+
+    await expect(
+      ensureLmstudioModelLoaded({
+        baseUrl: "http://localhost:1234/v1",
+        modelKey: "qwen3-8b-instruct",
+        requestedContextLength: 8192.5,
+      }),
+    ).resolves.toBeUndefined();
+
+    expectLoadContextLength(fetchMock, LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH);
   });
 
   it("throws when model discovery fails", async () => {

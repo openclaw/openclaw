@@ -2,7 +2,7 @@ import {
   createResolvedApproverActionAuthAdapter,
   resolveApprovalApprovers,
 } from "openclaw/plugin-sdk/approval-auth-runtime";
-import { normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveSignalAccount } from "./accounts.js";
 import { normalizeSignalMessagingTarget } from "./normalize.js";
 import { looksLikeUuid } from "./uuid.js";
@@ -19,15 +19,20 @@ function normalizeSignalApproverId(value: string | number): string | undefined {
   return e164.length > 1 ? e164 : undefined;
 }
 
+export function getSignalApprovalApprovers(params: {
+  cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
+  accountId?: string | null;
+}): string[] {
+  const account = resolveSignalAccount(params).config;
+  return resolveApprovalApprovers({
+    allowFrom: account.allowFrom,
+    defaultTo: account.defaultTo,
+    normalizeApprover: normalizeSignalApproverId,
+  });
+}
+
 export const signalApprovalAuth = createResolvedApproverActionAuthAdapter({
   channelLabel: "Signal",
-  resolveApprovers: ({ cfg, accountId }) => {
-    const account = resolveSignalAccount({ cfg, accountId }).config;
-    return resolveApprovalApprovers({
-      allowFrom: account.allowFrom,
-      defaultTo: account.defaultTo,
-      normalizeApprover: normalizeSignalApproverId,
-    });
-  },
+  resolveApprovers: getSignalApprovalApprovers,
   normalizeSenderId: (value) => normalizeSignalApproverId(value),
 });

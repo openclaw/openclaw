@@ -33,21 +33,87 @@ describe("overlayRuntimeExternalOAuthProfiles", () => {
         },
       ]);
 
-      expect(overlaid.profiles["openai-codex:default"]).toMatchObject({
-        access: "access-1",
-      });
+      const overlaidCodexProfile = overlaid.profiles["openai-codex:default"];
+      expect(overlaidCodexProfile?.type).toBe("oauth");
+      if (overlaidCodexProfile?.type !== "oauth") {
+        throw new Error("expected overlaid Codex OAuth profile");
+      }
+      expect(overlaidCodexProfile.access).toBe("access-1");
       expect(store.profiles["openai-codex:default"]).toBeUndefined();
 
       overlaid.profiles["openai:default"].provider = "mutated";
       overlaid.order!.openai.push("mutated");
 
-      expect(store.profiles["openai:default"]).toMatchObject({
-        provider: "openai",
-      });
+      expect(store.profiles["openai:default"]?.provider).toBe("openai");
       expect(store.order?.openai).toEqual(["openai:default"]);
       expect(structuredCloneSpy).not.toHaveBeenCalled();
     } finally {
       structuredCloneSpy.mockRestore();
     }
+  });
+
+  it("preserves existing runtime-only provenance for non-authoritative overlays", () => {
+    const store: AuthProfileStore = {
+      version: 1,
+      runtimeExternalProfileIds: ["minimax:minimax-cli"],
+      profiles: {
+        "anthropic:claude-cli": {
+          type: "oauth",
+          provider: "anthropic",
+          access: "old-access",
+          refresh: "old-refresh",
+          expires: 1,
+        },
+        "minimax:minimax-cli": {
+          type: "oauth",
+          provider: "minimax-portal",
+          access: "minimax-access",
+          refresh: "minimax-refresh",
+          expires: 1,
+        },
+      },
+    };
+
+    const overlaid = overlayRuntimeExternalOAuthProfiles(store, [
+      {
+        profileId: "anthropic:claude-cli",
+        credential: {
+          type: "oauth",
+          provider: "anthropic",
+          access: "new-access",
+          refresh: "new-refresh",
+          expires: 2,
+        },
+      },
+    ]);
+
+    expect(overlaid.runtimeExternalProfileIds).toEqual([
+      "anthropic:claude-cli",
+      "minimax:minimax-cli",
+    ]);
+  });
+
+  it("preserves existing runtime-only provenance for authoritative overlays", () => {
+    const store: AuthProfileStore = {
+      version: 1,
+      runtimeExternalProfileIds: ["minimax:minimax-cli"],
+      runtimeExternalProfileIdsAuthoritative: true,
+      profiles: {
+        "minimax:minimax-cli": {
+          type: "oauth",
+          provider: "minimax-portal",
+          access: "minimax-access",
+          refresh: "minimax-refresh",
+          expires: 1,
+        },
+      },
+    };
+
+    const overlaid = overlayRuntimeExternalOAuthProfiles(store, [], {
+      runtimeExternalProfileIdsAuthoritative: true,
+    });
+
+    expect(overlaid.runtimeExternalProfileIds).toEqual(["minimax:minimax-cli"]);
+    expect(overlaid.runtimeExternalProfileIdsAuthoritative).toBe(true);
   });
 });

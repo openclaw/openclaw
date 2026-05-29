@@ -17,13 +17,14 @@ openclaw backup create --dry-run --json
 openclaw backup create --verify
 openclaw backup create --no-include-workspace
 openclaw backup create --only-config
-openclaw backup verify ./2026-03-09T00-00-00.000Z-openclaw-backup.tar.gz
+openclaw backup verify ./2026-03-09T08-00-00.000+08-00-openclaw-backup.tar.gz
 ```
 
 ## Notes
 
 - The archive includes a `manifest.json` file with the resolved source paths and archive layout.
 - Default output is a timestamped `.tar.gz` archive in the current working directory.
+- Timestamped backup filenames use your machine's local timezone and include the UTC offset.
 - If the current working directory is inside a backed-up source tree, OpenClaw falls back to your home directory for the default archive location.
 - Existing archive files are never overwritten.
 - Output paths inside the source state/workspace trees are rejected to avoid self-inclusion.
@@ -52,6 +53,8 @@ they are not duplicated as separate top-level backup sources. Missing paths are
 skipped.
 
 The archive payload stores file contents from those source trees, and the embedded `manifest.json` records the resolved absolute source paths plus the archive layout used for each asset.
+
+During archive creation, OpenClaw skips known live-mutation files that do not have restoration value, including active agent session transcripts, cron run logs, rolling logs, delivery queues, socket/pid/temp files under the state directory, and related durable-queue temp files. The JSON result includes `skippedVolatileCount` so automation can see how many files were intentionally omitted.
 
 Installed plugin source and manifest files under the state directory's
 `extensions/` tree are included, but their nested `node_modules/` dependency

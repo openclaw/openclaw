@@ -8,6 +8,7 @@ import { defaultRuntime } from "../runtime.js";
 import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { shortenHomeInString, shortenHomePath } from "../utils.js";
+import { formatMissingPluginMessage } from "./error-format.js";
 import { quietPluginJsonLogger } from "./plugins-command-helpers.js";
 
 export type PluginInspectOptions = {
@@ -76,6 +77,21 @@ function formatInstallLines(install: PluginInstallRecord | undefined): string[] 
   }
   if (install.clawhubChannel) {
     lines.push(`ClawHub channel: ${install.clawhubChannel}`);
+  }
+  if (install.artifactKind) {
+    lines.push(`Artifact kind: ${install.artifactKind}`);
+  }
+  if (install.artifactFormat) {
+    lines.push(`Artifact format: ${install.artifactFormat}`);
+  }
+  if (install.npmIntegrity) {
+    lines.push(`Npm integrity: ${install.npmIntegrity}`);
+  }
+  if (install.npmShasum) {
+    lines.push(`Npm shasum: ${install.npmShasum}`);
+  }
+  if (install.npmTarballName) {
+    lines.push(`Npm tarball: ${install.npmTarballName}`);
   }
   if (install.clawpackSha256) {
     lines.push(`ClawPack sha256: ${install.clawpackSha256}`);
@@ -217,7 +233,7 @@ export async function runPluginsInspectCommand(
   );
   const targetPlugin = snapshotReport.plugins.find((entry) => entry.id === id || entry.name === id);
   if (!targetPlugin) {
-    defaultRuntime.error(`Plugin not found: ${id}`);
+    defaultRuntime.error(formatMissingPluginMessage({ id, includeSearch: true }));
     return defaultRuntime.exit(1);
   }
   const report = runtimeInspect
@@ -239,7 +255,9 @@ export async function runPluginsInspectCommand(
     report,
   });
   if (!inspect) {
-    defaultRuntime.error(`Plugin not found: ${id}`);
+    defaultRuntime.error(
+      formatMissingPluginMessage({ id, listCommand: "openclaw plugins list --json" }),
+    );
     return defaultRuntime.exit(1);
   }
   const install = installRecords[inspect.plugin.id];
@@ -325,7 +343,7 @@ export async function runPluginsInspectCommand(
   lines.push(...formatInspectSection("Commands", inspect.commands));
   lines.push(...formatInspectSection("CLI commands", inspect.cliCommands));
   lines.push(...formatInspectSection("Services", inspect.services));
-  lines.push(...formatInspectSection("Gateway methods", inspect.gatewayMethods));
+  lines.push(...formatInspectSection("Gateway methods", inspect.gatewayMethods ?? []));
   lines.push(
     ...formatInspectSection(
       "MCP servers",

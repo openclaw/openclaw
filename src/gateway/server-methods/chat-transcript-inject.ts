@@ -1,5 +1,6 @@
-import type { SessionManager } from "@mariozechner/pi-coding-agent";
+import type { SessionManager } from "../../agents/sessions/session-manager.js";
 import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 
@@ -16,6 +17,10 @@ export type GatewayInjectedTranscriptAppendResult = {
   messageId?: string;
   message?: Record<string, unknown>;
   error?: string;
+};
+
+export type GatewayInjectedTtsSupplementMarker = {
+  textSha256: string;
 };
 
 function resolveInjectedAssistantContent(params: {
@@ -50,7 +55,9 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   content?: Array<Record<string, unknown>>;
   idempotencyKey?: string;
   abortMeta?: GatewayInjectedAbortMeta;
+  ttsSupplement?: GatewayInjectedTtsSupplementMarker;
   now?: number;
+  config?: OpenClawConfig;
 }): Promise<GatewayInjectedTranscriptAppendResult> {
   const now = params.now ?? Date.now();
   const usage = {
@@ -80,7 +87,7 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
       { role: "assistant" }
     >["content"],
     timestamp: now,
-    // Pi stopReason is a strict enum; this is not model output, but we still store it as a
+    // stopReason is a strict runner enum; this is not model output, but we still store it as a
     // normal assistant message so it participates in the session parentId chain.
     stopReason: "stop",
     usage,
@@ -89,6 +96,7 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
     provider: "openclaw",
     model: "gateway-injected",
     ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
+    ...(params.ttsSupplement ? { openclawTtsSupplement: params.ttsSupplement } : {}),
     ...(params.abortMeta
       ? {
           openclawAbort: {
@@ -101,18 +109,19 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   };
 
   try {
-    const { messageId } = await appendSessionTranscriptMessage({
+    const { messageId, message: appendedMessage } = await appendSessionTranscriptMessage({
       transcriptPath: params.transcriptPath,
       message: messageBody,
       now,
       useRawWhenLinear: true,
+      config: params.config,
     });
     emitSessionTranscriptUpdate({
       sessionFile: params.transcriptPath,
-      message: messageBody,
+      message: appendedMessage,
       messageId,
     });
-    return { ok: true, messageId, message: messageBody };
+    return { ok: true, messageId, message: appendedMessage as unknown as Record<string, unknown> };
   } catch (err) {
     return { ok: false, error: formatErrorMessage(err) };
   }

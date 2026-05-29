@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
+import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createActiveRun,
@@ -16,6 +16,7 @@ type TranscriptLine = {
 const sessionEntryState = vi.hoisted(() => ({
   transcriptPath: "",
   sessionId: "",
+  hasEntry: true,
 }));
 
 vi.mock("../session-utils.js", async () => {
@@ -26,10 +27,12 @@ vi.mock("../session-utils.js", async () => {
     loadSessionEntry: () => ({
       cfg: {},
       storePath: path.join(path.dirname(sessionEntryState.transcriptPath), "sessions.json"),
-      entry: {
-        sessionId: sessionEntryState.sessionId,
-        sessionFile: sessionEntryState.transcriptPath,
-      },
+      entry: sessionEntryState.hasEntry
+        ? {
+            sessionId: sessionEntryState.sessionId,
+            sessionFile: sessionEntryState.transcriptPath,
+          }
+        : undefined,
       canonicalKey: "main",
     }),
   };
@@ -50,21 +53,102 @@ async function writeTranscriptHeader(transcriptPath: string, sessionId: string) 
 
 async function readTranscriptLines(transcriptPath: string): Promise<TranscriptLine[]> {
   const raw = await fs.readFile(transcriptPath, "utf-8");
-  return raw
-    .split(/\r?\n/)
-    .filter((line) => line.trim().length > 0)
-    .map((line) => {
-      try {
-        return JSON.parse(line) as TranscriptLine;
-      } catch {
-        return {};
-      }
-    });
+  const lines: TranscriptLine[] = [];
+  for (const line of raw.split(/\r?\n/)) {
+    if (line.trim().length === 0) {
+      continue;
+    }
+    try {
+      lines.push(JSON.parse(line) as TranscriptLine);
+    } catch {
+      lines.push({});
+    }
+  }
+  return lines;
 }
 
-function setMockSessionEntry(transcriptPath: string, sessionId: string) {
+function collectMessagesWithIdempotencyKey(
+  lines: TranscriptLine[],
+  idempotencyKey: string,
+): Record<string, unknown>[] {
+  const messages: Record<string, unknown>[] = [];
+  for (const line of lines) {
+    if (line.message?.idempotencyKey === idempotencyKey) {
+      messages.push(line.message);
+    }
+  }
+  return messages;
+}
+
+function findMessageWithIdempotencyKey(
+  lines: TranscriptLine[],
+  idempotencyKey: string,
+): Record<string, unknown> | undefined {
+  for (const line of lines) {
+    if (line.message?.idempotencyKey === idempotencyKey) {
+      return line.message;
+    }
+  }
+  return undefined;
+}
+
+function expectRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function expectAbortPayload(payload: unknown, expected?: { runIds?: string[] }) {
+  const actual = expectRecord(payload, "abort payload");
+  expect(actual.aborted).toBe(true);
+  if (expected?.runIds) {
+    expect(actual.runIds).toEqual(expected.runIds);
+  }
+  return actual;
+}
+
+function expectAbortPayloadContainsRunIds(payload: unknown, runIds: string[]) {
+  const actual = expectAbortPayload(payload);
+  expect(Array.isArray(actual.runIds)).toBe(true);
+  for (const runId of runIds) {
+    expect(actual.runIds as unknown[]).toContain(runId);
+  }
+}
+
+function requireLastRespondCall(respond: ReturnType<typeof vi.fn>): unknown[] {
+  const calls = respond.mock.calls;
+  const call = calls[calls.length - 1];
+  if (!call) {
+    throw new Error("expected respond call");
+  }
+  return call;
+}
+
+function expectPersistedAbortMessage(
+  message: unknown,
+  expected: {
+    idempotencyKey: string;
+    origin: string;
+    runId: string;
+    stopReason?: string;
+  },
+) {
+  const actual = expectRecord(message, "persisted abort message");
+  expect(actual.idempotencyKey).toBe(expected.idempotencyKey);
+  if (expected.stopReason) {
+    expect(actual.stopReason).toBe(expected.stopReason);
+  }
+  const abort = expectRecord(actual.openclawAbort, "persisted abort metadata");
+  expect(abort.aborted).toBe(true);
+  expect(abort.origin).toBe(expected.origin);
+  expect(abort.runId).toBe(expected.runId);
+}
+
+function setMockSessionEntry(transcriptPath: string, sessionId: string, hasEntry = true) {
   sessionEntryState.transcriptPath = transcriptPath;
   sessionEntryState.sessionId = sessionId;
+  sessionEntryState.hasEntry = hasEntry;
 }
 
 async function createTranscriptFixture(prefix: string) {
@@ -74,6 +158,14 @@ async function createTranscriptFixture(prefix: string) {
   await writeTranscriptHeader(transcriptPath, sessionId);
   setMockSessionEntry(transcriptPath, sessionId);
   return { transcriptPath, sessionId };
+}
+
+async function createMissingEntryFixture(prefix: string) {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  const transcriptPath = path.join(dir, "missing.jsonl");
+  const sessionId = "client-supplied-session";
+  setMockSessionEntry(transcriptPath, sessionId, false);
+  return { sessionId };
 }
 
 afterEach(() => {
@@ -108,9 +200,9 @@ describe("chat abort transcript persistence", () => {
       respond,
     });
 
-    const [ok1, payload1] = respond.mock.calls.at(-1) ?? [];
+    const [ok1, payload1] = requireLastRespondCall(respond);
     expect(ok1).toBe(true);
-    expect(payload1).toMatchObject({ aborted: true, runIds: [runId] });
+    expectAbortPayload(payload1, { runIds: [runId] });
 
     context.chatAbortControllers.set(runId, createActiveRun("main", { sessionId }));
     context.chatRunBuffers.set(runId, "Partial from run abort");
@@ -124,22 +216,125 @@ describe("chat abort transcript persistence", () => {
     });
 
     const lines = await readTranscriptLines(transcriptPath);
-    const persisted = lines
-      .map((line) => line.message)
-      .filter(
-        (message): message is Record<string, unknown> =>
-          Boolean(message) && message?.idempotencyKey === `${runId}:assistant`,
-      );
+    const persisted = collectMessagesWithIdempotencyKey(lines, `${runId}:assistant`);
 
     expect(persisted).toHaveLength(1);
-    expect(persisted[0]).toMatchObject({
-      stopReason: "stop",
+    expectPersistedAbortMessage(persisted[0], {
       idempotencyKey: `${runId}:assistant`,
-      openclawAbort: {
-        aborted: true,
-        origin: "rpc",
-        runId,
-      },
+      origin: "rpc",
+      runId,
+      stopReason: "stop",
+    });
+  });
+
+  it("does not let non-assistant idempotency collisions suppress abort partial persistence", async () => {
+    const { transcriptPath, sessionId } = await createTranscriptFixture(
+      "openclaw-chat-abort-idempotency-collision-",
+    );
+    const runId = "idem-abort-collision";
+    const idempotencyKey = `${runId}:assistant`;
+    await fs.appendFile(
+      transcriptPath,
+      `${JSON.stringify({
+        type: "message",
+        id: "user-message-with-colliding-key",
+        parentId: null,
+        timestamp: new Date(0).toISOString(),
+        message: {
+          role: "user",
+          content: "colliding user key",
+          timestamp: 1,
+          idempotencyKey,
+        },
+      })}\n`,
+      "utf-8",
+    );
+
+    const respond = vi.fn();
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([[runId, createActiveRun("main", { sessionId })]]),
+      chatRunBuffers: new Map([[runId, "Partial after collision"]]),
+      chatDeltaSentAt: new Map([[runId, Date.now()]]),
+      logGateway: { warn: vi.fn() },
+    });
+
+    await invokeChatAbortHandler({
+      handler: chatHandlers["chat.abort"],
+      context,
+      request: { sessionKey: "main", runId },
+      respond,
+    });
+
+    const lines = await readTranscriptLines(transcriptPath);
+    const assistantMessages = collectMessagesWithIdempotencyKey(lines, idempotencyKey).filter(
+      (message) => message.role === "assistant",
+    );
+
+    expect(assistantMessages).toHaveLength(1);
+    expectPersistedAbortMessage(assistantMessages[0], {
+      idempotencyKey,
+      origin: "rpc",
+      runId,
+      stopReason: "stop",
+    });
+  });
+
+  it("dedupes legacy assistant transcript entries without top-level ids", async () => {
+    const { transcriptPath, sessionId } = await createTranscriptFixture(
+      "openclaw-chat-abort-legacy-idempotency-",
+    );
+    const runId = "idem-abort-legacy";
+    const idempotencyKey = `${runId}:assistant`;
+    await fs.appendFile(
+      transcriptPath,
+      `${JSON.stringify({
+        type: "message",
+        timestamp: new Date(0).toISOString(),
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "legacy partial" }],
+          timestamp: 1,
+          stopReason: "stop",
+          api: "openai-responses",
+          provider: "openclaw",
+          model: "gateway-injected",
+          idempotencyKey,
+          openclawAbort: {
+            aborted: true,
+            origin: "rpc",
+            runId,
+          },
+        },
+      })}\n`,
+      "utf-8",
+    );
+
+    const respond = vi.fn();
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([[runId, createActiveRun("main", { sessionId })]]),
+      chatRunBuffers: new Map([[runId, "Duplicate partial"]]),
+      chatDeltaSentAt: new Map([[runId, Date.now()]]),
+      logGateway: { warn: vi.fn() },
+    });
+
+    await invokeChatAbortHandler({
+      handler: chatHandlers["chat.abort"],
+      context,
+      request: { sessionKey: "main", runId },
+      respond,
+    });
+
+    const lines = await readTranscriptLines(transcriptPath);
+    const assistantMessages = collectMessagesWithIdempotencyKey(lines, idempotencyKey).filter(
+      (message) => message.role === "assistant",
+    );
+
+    expect(assistantMessages).toHaveLength(1);
+    expectPersistedAbortMessage(assistantMessages[0], {
+      idempotencyKey,
+      origin: "rpc",
+      runId,
+      stopReason: "stop",
     });
   });
 
@@ -170,26 +365,18 @@ describe("chat abort transcript persistence", () => {
       respond,
     });
 
-    const [ok, payload] = respond.mock.calls.at(-1) ?? [];
+    const [ok, payload] = requireLastRespondCall(respond);
     expect(ok).toBe(true);
-    expect(payload).toMatchObject({ aborted: true });
-    expect(payload.runIds).toEqual(expect.arrayContaining(["run-a", "run-b"]));
+    expectAbortPayloadContainsRunIds(payload, ["run-a", "run-b"]);
 
     const lines = await readTranscriptLines(transcriptPath);
-    const runAPersisted = lines
-      .map((line) => line.message)
-      .find((message) => message?.idempotencyKey === "run-a:assistant");
-    const runBPersisted = lines
-      .map((line) => line.message)
-      .find((message) => message?.idempotencyKey === "run-b:assistant");
+    const runAPersisted = findMessageWithIdempotencyKey(lines, "run-a:assistant");
+    const runBPersisted = findMessageWithIdempotencyKey(lines, "run-b:assistant");
 
-    expect(runAPersisted).toMatchObject({
+    expectPersistedAbortMessage(runAPersisted, {
       idempotencyKey: "run-a:assistant",
-      openclawAbort: {
-        aborted: true,
-        origin: "rpc",
-        runId: "run-a",
-      },
+      origin: "rpc",
+      runId: "run-a",
     });
     expect(runBPersisted).toBeUndefined();
   });
@@ -203,9 +390,6 @@ describe("chat abort transcript persistence", () => {
       chatDeltaSentAt: new Map([["run-stop-1", Date.now()]]),
       removeChatRun: vi.fn().mockReturnValue({ sessionKey: "main", clientRunId: "client-stop-1" }),
       agentRunSeq: new Map<string, number>([["run-stop-1", 1]]),
-      dedupe: {
-        get: vi.fn(),
-      },
     });
 
     await chatHandlers["chat.send"]({
@@ -221,23 +405,111 @@ describe("chat abort transcript persistence", () => {
       isWebchatConnect: () => false,
     });
 
-    const [ok, payload] = respond.mock.calls.at(-1) ?? [];
+    const [ok, payload] = requireLastRespondCall(respond);
     expect(ok).toBe(true);
-    expect(payload).toMatchObject({ aborted: true, runIds: ["run-stop-1"] });
+    expectAbortPayload(payload, { runIds: ["run-stop-1"] });
 
     const lines = await readTranscriptLines(transcriptPath);
-    const persisted = lines
-      .map((line) => line.message)
-      .find((message) => message?.idempotencyKey === "run-stop-1:assistant");
+    const persisted = findMessageWithIdempotencyKey(lines, "run-stop-1:assistant");
 
-    expect(persisted).toMatchObject({
+    expectPersistedAbortMessage(persisted, {
       idempotencyKey: "run-stop-1:assistant",
-      openclawAbort: {
-        aborted: true,
-        origin: "stop-command",
-        runId: "run-stop-1",
-      },
+      origin: "stop-command",
+      runId: "run-stop-1",
     });
+  });
+
+  it("plain stop aborts runs tracked under the canonical session key", async () => {
+    const { sessionId } = await createTranscriptFixture("openclaw-chat-stop-canonical-");
+    const respond = vi.fn();
+    const active = createActiveRun("main", { sessionId });
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([["run-stop-canonical", active]]),
+      removeChatRun: vi.fn().mockReturnValue({
+        sessionKey: "main",
+        clientRunId: "run-stop-canonical",
+      }),
+    });
+
+    await chatHandlers["chat.send"]({
+      params: {
+        sessionKey: "alias-main",
+        message: "stop",
+        idempotencyKey: "idem-stop-canonical",
+      },
+      respond,
+      context: context as never,
+      req: {} as never,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    const [ok, payload] = requireLastRespondCall(respond);
+    expect(ok).toBe(true);
+    expectAbortPayload(payload, { runIds: ["run-stop-canonical"] });
+    expect(active.controller.signal.aborted).toBe(true);
+    expect(context.chatAbortControllers.has("run-stop-canonical")).toBe(false);
+  });
+
+  it("plain stop aborts raw-alias runs for the same backing session", async () => {
+    const { sessionId } = await createTranscriptFixture("openclaw-chat-stop-raw-alias-");
+    const respond = vi.fn();
+    const active = createActiveRun("alias-main", { sessionId });
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([["run-stop-raw-alias", active]]),
+      removeChatRun: vi.fn().mockReturnValue({
+        sessionKey: "alias-main",
+        clientRunId: "run-stop-raw-alias",
+      }),
+    });
+
+    await chatHandlers["chat.send"]({
+      params: {
+        sessionKey: "main",
+        message: "stop",
+        idempotencyKey: "idem-stop-raw-alias",
+      },
+      respond,
+      context: context as never,
+      req: {} as never,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    const [ok, payload] = requireLastRespondCall(respond);
+    expect(ok).toBe(true);
+    expectAbortPayload(payload, { runIds: ["run-stop-raw-alias"] });
+    expect(active.controller.signal.aborted).toBe(true);
+    expect(context.chatAbortControllers.has("run-stop-raw-alias")).toBe(false);
+  });
+
+  it("does not match stop targets by client-supplied session id without a stored entry", async () => {
+    const { sessionId } = await createMissingEntryFixture("openclaw-chat-stop-client-session-");
+    const respond = vi.fn();
+    const active = createActiveRun("third-session", { sessionId });
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([["run-stop-client-session", active]]),
+    });
+
+    await chatHandlers["chat.send"]({
+      params: {
+        sessionKey: "other-session",
+        sessionId,
+        message: "stop",
+        idempotencyKey: "idem-stop-client-session",
+      },
+      respond,
+      context: context as never,
+      req: {} as never,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    const [ok, payload] = requireLastRespondCall(respond);
+    expect(ok).toBe(true);
+    expect(expectRecord(payload, "abort payload").aborted).toBe(false);
+    expect(active.controller.signal.aborted).toBe(false);
+    expect(context.chatAbortControllers.has("run-stop-client-session")).toBe(true);
   });
 
   it("skips run-scoped transcript persistence when partial text is blank", async () => {
@@ -259,14 +531,12 @@ describe("chat abort transcript persistence", () => {
       respond,
     });
 
-    const [ok, payload] = respond.mock.calls.at(-1) ?? [];
+    const [ok, payload] = requireLastRespondCall(respond);
     expect(ok).toBe(true);
-    expect(payload).toMatchObject({ aborted: true, runIds: [runId] });
+    expectAbortPayload(payload, { runIds: [runId] });
 
     const lines = await readTranscriptLines(transcriptPath);
-    const persisted = lines
-      .map((line) => line.message)
-      .find((message) => message?.idempotencyKey === `${runId}:assistant`);
+    const persisted = findMessageWithIdempotencyKey(lines, `${runId}:assistant`);
     expect(persisted).toBeUndefined();
   });
 });

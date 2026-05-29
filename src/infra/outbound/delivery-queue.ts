@@ -5,9 +5,16 @@ export {
   failDelivery,
   loadPendingDelivery,
   loadPendingDeliveries,
+  markDeliveryPlatformOutcomeUnknown,
+  markDeliveryPlatformSendAttemptStarted,
   moveToFailed,
 } from "./delivery-queue-storage.js";
-export type { QueuedDelivery, QueuedDeliveryPayload } from "./delivery-queue-storage.js";
+export type {
+  QueuedDelivery,
+  QueuedDeliveryPayload,
+  QueuedReplyPayloadSendingHook,
+  QueuedRenderedMessageBatchPlan,
+} from "./delivery-queue-storage.js";
 export {
   computeBackoffMs,
   drainPendingDeliveries,

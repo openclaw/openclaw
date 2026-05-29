@@ -1,7 +1,8 @@
+import type { PluginDiscoveryResult } from "../plugins/discovery.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
-  configMayNeedPluginAutoEnable,
   resolveConfiguredPluginAutoEnableCandidates,
+  resolvePluginAutoEnableReadiness,
   resolvePluginAutoEnableManifestRegistry,
 } from "./plugin-auto-enable.shared.js";
 import type { PluginAutoEnableCandidate } from "./plugin-auto-enable.types.js";
@@ -11,10 +12,12 @@ export function detectPluginAutoEnableCandidates(params: {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   manifestRegistry?: PluginManifestRegistry;
+  discovery?: PluginDiscoveryResult;
 }): PluginAutoEnableCandidate[] {
   const env = params.env ?? process.env;
   const config = params.config ?? ({} as OpenClawConfig);
-  if (!configMayNeedPluginAutoEnable(config, env)) {
+  const readiness = resolvePluginAutoEnableReadiness(config, env, params.discovery);
+  if (!readiness.mayNeedAutoEnable) {
     return [];
   }
   const registry = resolvePluginAutoEnableManifestRegistry({
@@ -26,5 +29,6 @@ export function detectPluginAutoEnableCandidates(params: {
     config,
     env,
     registry,
+    configuredChannelIds: readiness.configuredChannelIds,
   });
 }

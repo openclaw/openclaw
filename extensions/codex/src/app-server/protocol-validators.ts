@@ -1,4 +1,4 @@
-import AjvPkg, { type ValidateFunction } from "ajv";
+import { Compile, type Validator as TypeBoxValidator } from "typebox/compile";
 import dynamicToolCallParamsSchema from "./protocol-generated/json/DynamicToolCallParams.json" with { type: "json" };
 import errorNotificationSchema from "./protocol-generated/json/v2/ErrorNotification.json" with { type: "json" };
 import modelListResponseSchema from "./protocol-generated/json/v2/ModelListResponse.json" with { type: "json" };
@@ -6,93 +6,303 @@ import threadResumeResponseSchema from "./protocol-generated/json/v2/ThreadResum
 import threadStartResponseSchema from "./protocol-generated/json/v2/ThreadStartResponse.json" with { type: "json" };
 import turnCompletedNotificationSchema from "./protocol-generated/json/v2/TurnCompletedNotification.json" with { type: "json" };
 import turnStartResponseSchema from "./protocol-generated/json/v2/TurnStartResponse.json" with { type: "json" };
-import type { v2 } from "./protocol-generated/typescript/index.js";
 import type {
   CodexDynamicToolCallParams,
+  CodexErrorNotification,
+  CodexModelListResponse,
+  CodexThreadForkResponse,
   CodexThreadResumeResponse,
   CodexThreadStartResponse,
   CodexTurn,
+  CodexTurnCompletedNotification,
   CodexTurnStartResponse,
 } from "./protocol.js";
 
-type AjvInstance = import("ajv").default;
+type ValidationError = {
+  instancePath?: string;
+  message?: string;
+};
 
-const AjvCtor = AjvPkg as unknown as new (opts?: object) => AjvInstance;
-const ajv = new AjvCtor({
-  allErrors: true,
-  strict: false,
-  useDefaults: true,
-  validateFormats: false,
-});
+type CodexValidator<T> = {
+  check: (value: unknown) => value is T;
+  errors: (value: unknown) => ValidationError[];
+};
 
-const validateDynamicToolCallParams = ajv.compile<CodexDynamicToolCallParams>(
+function compileCodexSchema<T>(schema: unknown): CodexValidator<T> {
+  const validator = Compile(normalizeJsonSchemaNode(schema) as never) as TypeBoxValidator;
+  return {
+    check: (value): value is T => validator.Check(value),
+    errors: (value) => [...validator.Errors(value)] as ValidationError[],
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+const schemaMapKeywords = new Set([
+  "$defs",
+  "definitions",
+  "dependentSchemas",
+  "patternProperties",
+  "properties",
+]);
+const schemaValueKeywords = new Set([
+  "additionalItems",
+  "additionalProperties",
+  "contains",
+  "else",
+  "if",
+  "items",
+  "not",
+  "propertyNames",
+  "then",
+  "unevaluatedItems",
+  "unevaluatedProperties",
+]);
+const schemaArrayKeywords = new Set(["allOf", "anyOf", "oneOf", "prefixItems"]);
+
+function schemaTypeIncludes(schema: Record<string, unknown>, type: string): boolean {
+  return schema.type === type || (Array.isArray(schema.type) && schema.type.includes(type));
+}
+
+function normalizeSchemaMap(value: unknown): unknown {
+  if (!isRecord(value)) {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => [key, normalizeJsonSchemaNode(entry)]),
+  );
+}
+
+function expandJsonSchemaTypeArray(schema: Record<string, unknown>): Record<string, unknown> {
+  const { type, ...rest } = schema;
+  if (!Array.isArray(type)) {
+    return schema;
+  }
+  return {
+    anyOf: type.map((entry) => Object.assign({}, rest, { type: entry })),
+  };
+}
+
+function normalizeJsonSchemaNode(schema: unknown): unknown {
+  if (Array.isArray(schema)) {
+    return schema.map((entry) => normalizeJsonSchemaNode(entry));
+  }
+  if (!isRecord(schema)) {
+    return schema;
+  }
+  const normalizedSchema = expandJsonSchemaTypeArray(schema);
+  return Object.fromEntries(
+    Object.entries(normalizedSchema).map(([key, value]) => {
+      if (schemaMapKeywords.has(key)) {
+        return [key, normalizeSchemaMap(value)];
+      }
+      if (schemaValueKeywords.has(key) || schemaArrayKeywords.has(key)) {
+        return [key, normalizeJsonSchemaNode(value)];
+      }
+      return [key, value];
+    }),
+  );
+}
+
+function readDefault(schema: unknown): unknown {
+  if (!isRecord(schema) || !Object.prototype.hasOwnProperty.call(schema, "default")) {
+    return undefined;
+  }
+  return structuredClone(schema.default);
+}
+
+function decodePointerSegment(segment: string): string {
+  return segment.replace(/~1/g, "/").replace(/~0/g, "~");
+}
+
+function resolveLocalRef(root: unknown, ref: string): unknown {
+  if (ref === "#") {
+    return root;
+  }
+  if (!ref.startsWith("#/")) {
+    return undefined;
+  }
+  let current = root;
+  for (const segment of ref.slice(2).split("/").map(decodePointerSegment)) {
+    if (!isRecord(current)) {
+      return undefined;
+    }
+    current = current[segment];
+  }
+  return current;
+}
+
+function applySchemaDefaults(
+  schema: unknown,
+  value: unknown,
+  root = schema,
+  resolvingRefs = new Set<string>(),
+): unknown {
+  if (value === undefined) {
+    const defaultValue = readDefault(schema);
+    if (defaultValue !== undefined) {
+      return defaultValue;
+    }
+  }
+  if (!isRecord(schema)) {
+    return value;
+  }
+  let nextValue = value;
+  if (typeof schema.$ref === "string" && !resolvingRefs.has(schema.$ref)) {
+    const target = resolveLocalRef(root, schema.$ref);
+    if (target !== undefined) {
+      resolvingRefs.add(schema.$ref);
+      nextValue = applySchemaDefaults(target, nextValue, root, resolvingRefs);
+      resolvingRefs.delete(schema.$ref);
+    }
+  }
+  for (const key of ["allOf"]) {
+    const branches = schema[key];
+    if (Array.isArray(branches)) {
+      for (const branch of branches) {
+        nextValue = applySchemaDefaults(branch, nextValue, root, resolvingRefs);
+      }
+    }
+  }
+  if (schemaTypeIncludes(schema, "object") && isRecord(nextValue) && isRecord(schema.properties)) {
+    for (const [key, propertySchema] of Object.entries(schema.properties)) {
+      const currentValue = nextValue[key];
+      const defaultedValue = applySchemaDefaults(propertySchema, currentValue, root, resolvingRefs);
+      if (defaultedValue !== undefined && defaultedValue !== currentValue) {
+        nextValue[key] = defaultedValue;
+      }
+    }
+    if (isRecord(schema.additionalProperties)) {
+      for (const key of Object.keys(nextValue)) {
+        if (Object.prototype.hasOwnProperty.call(schema.properties, key)) {
+          continue;
+        }
+        nextValue[key] = applySchemaDefaults(
+          schema.additionalProperties,
+          nextValue[key],
+          root,
+          resolvingRefs,
+        );
+      }
+    }
+  }
+  if (schemaTypeIncludes(schema, "array") && Array.isArray(nextValue) && isRecord(schema.items)) {
+    return nextValue.map((entry) => applySchemaDefaults(schema.items, entry, root, resolvingRefs));
+  }
+  return nextValue;
+}
+
+function normalizeWithDefaults(schema: unknown, value: unknown): unknown {
+  if (value === undefined || value === null) {
+    return value;
+  }
+  return applySchemaDefaults(schema, structuredClone(value));
+}
+
+const validateDynamicToolCallParams = compileCodexSchema<CodexDynamicToolCallParams>(
   dynamicToolCallParamsSchema,
 );
-const validateErrorNotification = ajv.compile<v2.ErrorNotification>(errorNotificationSchema);
-const validateModelListResponse = ajv.compile<v2.ModelListResponse>(modelListResponseSchema);
-const validateThreadResumeResponse = ajv.compile<CodexThreadResumeResponse>(
+const validateErrorNotification =
+  compileCodexSchema<CodexErrorNotification>(errorNotificationSchema);
+const validateModelListResponse =
+  compileCodexSchema<CodexModelListResponse>(modelListResponseSchema);
+const validateThreadResumeResponse = compileCodexSchema<CodexThreadResumeResponse>(
   threadResumeResponseSchema,
 );
 const validateThreadStartResponse =
-  ajv.compile<CodexThreadStartResponse>(threadStartResponseSchema);
-const validateTurnCompletedNotification = ajv.compile<v2.TurnCompletedNotification>(
+  compileCodexSchema<CodexThreadStartResponse>(threadStartResponseSchema);
+const validateTurnCompletedNotification = compileCodexSchema<CodexTurnCompletedNotification>(
   turnCompletedNotificationSchema,
 );
-const validateTurnStartResponse = ajv.compile<CodexTurnStartResponse>(turnStartResponseSchema);
+const validateTurnStartResponse =
+  compileCodexSchema<CodexTurnStartResponse>(turnStartResponseSchema);
 
 export function assertCodexThreadStartResponse(value: unknown): CodexThreadStartResponse {
-  return assertCodexShape(validateThreadStartResponse, value, "thread/start response");
+  const normalized = normalizeWithDefaults(
+    threadStartResponseSchema,
+    normalizeThreadResponse(value),
+  );
+  return assertCodexShape(validateThreadStartResponse, normalized, "thread/start response");
+}
+
+export function assertCodexThreadForkResponse(value: unknown): CodexThreadForkResponse {
+  const normalized = normalizeWithDefaults(
+    threadStartResponseSchema,
+    normalizeThreadResponse(value),
+  );
+  return assertCodexShape(validateThreadStartResponse, normalized, "thread/fork response");
 }
 
 export function assertCodexThreadResumeResponse(value: unknown): CodexThreadResumeResponse {
-  return assertCodexShape(validateThreadResumeResponse, value, "thread/resume response");
+  const normalized = normalizeWithDefaults(
+    threadResumeResponseSchema,
+    normalizeThreadResponse(value),
+  );
+  return assertCodexShape(validateThreadResumeResponse, normalized, "thread/resume response");
 }
 
 export function assertCodexTurnStartResponse(value: unknown): CodexTurnStartResponse {
-  return assertCodexShape(
-    validateTurnStartResponse,
+  const normalized = normalizeWithDefaults(
+    turnStartResponseSchema,
     normalizeTurnStartResponse(value),
-    "turn/start response",
   );
+  return assertCodexShape(validateTurnStartResponse, normalized, "turn/start response");
 }
 
 export function readCodexDynamicToolCallParams(
   value: unknown,
 ): CodexDynamicToolCallParams | undefined {
-  return readCodexShape(validateDynamicToolCallParams, value);
+  return readCodexShape(
+    validateDynamicToolCallParams,
+    normalizeWithDefaults(dynamicToolCallParamsSchema, value),
+  );
 }
 
-export function readCodexErrorNotification(value: unknown): v2.ErrorNotification | undefined {
-  return readCodexShape(validateErrorNotification, value);
+export function readCodexErrorNotification(value: unknown): CodexErrorNotification | undefined {
+  return readCodexShape(
+    validateErrorNotification,
+    normalizeWithDefaults(errorNotificationSchema, value),
+  );
 }
 
-export function readCodexModelListResponse(value: unknown): v2.ModelListResponse | undefined {
-  return readCodexShape(validateModelListResponse, value);
+export function readCodexModelListResponse(value: unknown): CodexModelListResponse | undefined {
+  return readCodexShape(
+    validateModelListResponse,
+    normalizeWithDefaults(modelListResponseSchema, value),
+  );
 }
 
 export function readCodexTurn(value: unknown): CodexTurn | undefined {
-  const response = readCodexShape(validateTurnStartResponse, { turn: normalizeTurn(value) });
+  const response = readCodexShape(
+    validateTurnStartResponse,
+    normalizeWithDefaults(turnStartResponseSchema, { turn: normalizeTurn(value) }),
+  );
   return response?.turn;
 }
 
 export function readCodexTurnCompletedNotification(
   value: unknown,
-): v2.TurnCompletedNotification | undefined {
+): CodexTurnCompletedNotification | undefined {
   return readCodexShape(
     validateTurnCompletedNotification,
-    normalizeTurnCompletedNotification(value),
+    normalizeWithDefaults(
+      turnCompletedNotificationSchema,
+      normalizeTurnCompletedNotification(value),
+    ),
   );
 }
 
-function assertCodexShape<T>(validate: ValidateFunction<T>, value: unknown, label: string): T {
-  if (validate(value)) {
+function assertCodexShape<T>(validate: CodexValidator<T>, value: unknown, label: string): T {
+  if (validate.check(value)) {
     return value;
   }
-  throw new Error(`Invalid Codex app-server ${label}: ${formatAjvErrors(validate)}`);
+  throw new Error(`Invalid Codex app-server ${label}: ${formatValidationErrors(validate, value)}`);
 }
 
-function readCodexShape<T>(validate: ValidateFunction<T>, value: unknown): T | undefined {
-  return validate(value) ? value : undefined;
+function readCodexShape<T>(validate: CodexValidator<T>, value: unknown): T | undefined {
+  return validate.check(value) ? value : undefined;
 }
 
 function normalizeTurn(value: unknown): unknown {
@@ -138,6 +348,23 @@ function normalizeThreadItem(value: unknown): unknown {
   }
 }
 
+function normalizeThreadResponse(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value) || !("thread" in value)) {
+    return value;
+  }
+  const thread = (value as { thread?: unknown }).thread;
+  if (thread && typeof thread === "object" && !Array.isArray(thread)) {
+    const t = thread as { id?: string; sessionId?: string };
+    if (typeof t.id === "string" && typeof t.sessionId !== "string") {
+      return { ...value, thread: { ...thread, sessionId: t.id } };
+    }
+    if (typeof t.sessionId === "string" && typeof t.id !== "string") {
+      return { ...value, thread: { ...thread, id: t.sessionId } };
+    }
+  }
+  return value;
+}
+
 function normalizeTurnStartResponse(value: unknown): unknown {
   if (!value || typeof value !== "object" || Array.isArray(value) || !("turn" in value)) {
     return value;
@@ -158,10 +385,15 @@ function normalizeTurnCompletedNotification(value: unknown): unknown {
   };
 }
 
-function formatAjvErrors(validate: ValidateFunction): string {
-  const errors = validate.errors;
+function formatValidationErrors(validate: CodexValidator<unknown>, value: unknown): string {
+  const errors = validate.errors(value);
   if (!errors || errors.length === 0) {
     return "schema validation failed";
   }
-  return ajv.errorsText(errors, { separator: "; " });
+  return errors
+    .map((error) => {
+      const message = error.message?.trim() || "schema validation failed";
+      return error.instancePath ? `${error.instancePath} ${message}` : message;
+    })
+    .join("; ");
 }

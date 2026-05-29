@@ -13,7 +13,19 @@ describe("OpenAI reasoning effort support", () => {
     expect(resolveOpenAIReasoningEffortForModel({ model, effort: "xhigh" })).toBe("xhigh");
   });
 
-  it("does not downgrade xhigh when Pi compat metadata declares it explicitly", () => {
+  it("preserves reasoning_effort metadata for gpt-5.4-mini in Chat Completions", () => {
+    const model = { provider: "openai", id: "gpt-5.4-mini", api: "openai-completions" };
+    expect(resolveOpenAISupportedReasoningEfforts(model)).toContain("medium");
+    expect(resolveOpenAIReasoningEffortForModel({ model, effort: "medium" })).toBe("medium");
+  });
+
+  it("preserves reasoning_effort for gpt-5.4-mini in Responses", () => {
+    const model = { provider: "openai", id: "gpt-5.4-mini", api: "openai-responses" };
+    expect(resolveOpenAISupportedReasoningEfforts(model)).toContain("medium");
+    expect(resolveOpenAIReasoningEffortForModel({ model, effort: "medium" })).toBe("medium");
+  });
+
+  it("does not downgrade xhigh when model compat metadata declares it explicitly", () => {
     const model = {
       provider: "openai-codex",
       id: "gpt-5.5",
@@ -64,5 +76,27 @@ describe("OpenAI reasoning effort support", () => {
         effort: "off",
       }),
     ).toBeUndefined();
+  });
+
+  it("honors compat metadata that disables reasoning effort payloads", () => {
+    const model = {
+      provider: "xai",
+      id: "grok-4.20-beta-latest-reasoning",
+      compat: { supportsReasoningEffort: false },
+    };
+
+    expect(resolveOpenAISupportedReasoningEfforts(model)).toEqual([]);
+    expect(resolveOpenAIReasoningEffortForModel({ model, effort: "high" })).toBeUndefined();
+  });
+
+  it("does not turn disabled reasoning into a fallback effort when compat omits none", () => {
+    const model = {
+      provider: "xai",
+      id: "grok-4.3",
+      compat: { supportedReasoningEfforts: ["low", "medium", "high"] },
+    };
+
+    expect(resolveOpenAIReasoningEffortForModel({ model, effort: "none" })).toBeUndefined();
+    expect(resolveOpenAIReasoningEffortForModel({ model, effort: "high" })).toBe("high");
   });
 });

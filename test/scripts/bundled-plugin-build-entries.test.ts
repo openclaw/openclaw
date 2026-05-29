@@ -2,9 +2,23 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  collectRootPackageExcludedExtensionDirs,
   listBundledPluginBuildEntries,
   listBundledPluginPackArtifacts,
 } from "../../scripts/lib/bundled-plugin-build-entries.mjs";
+import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
+
+function expectNoPrefixMatches(values: string[], prefix: string) {
+  expect(values.filter((value) => value.startsWith(prefix))).toEqual([]);
+}
+
+function expectSomePrefixMatch(values: string[], prefix: string) {
+  expect(values.filter((value) => value.startsWith(prefix))).not.toEqual([]);
+}
+
+function pickEntries(entries: Record<string, string>, keys: readonly string[]) {
+  return Object.fromEntries(keys.map((key) => [key, entries[key]]));
+}
 
 describe("bundled plugin build entries", () => {
   const bundledChannelEntrySources = ["index.ts", "channel-entry.ts", "setup-entry.ts"];
@@ -32,25 +46,88 @@ describe("bundled plugin build entries", () => {
 
   it("includes manifest-less runtime core support packages in dist build entries", () => {
     const entries = listBundledPluginBuildEntries();
-
-    expect(entries).toMatchObject({
+    const expectedEntries = {
       "extensions/image-generation-core/api": "extensions/image-generation-core/api.ts",
       "extensions/image-generation-core/runtime-api":
         "extensions/image-generation-core/runtime-api.ts",
       "extensions/media-understanding-core/runtime-api":
         "extensions/media-understanding-core/runtime-api.ts",
-      "extensions/speech-core/api": "extensions/speech-core/api.ts",
-      "extensions/speech-core/runtime-api": "extensions/speech-core/runtime-api.ts",
-    });
+    };
+
+    expect(pickEntries(entries, Object.keys(expectedEntries))).toStrictEqual(expectedEntries);
   });
 
   it("keeps the Matrix packaged runtime shim in bundled plugin build entries", () => {
     const entries = listBundledPluginBuildEntries();
-
-    expect(entries).toMatchObject({
+    const expectedEntries = {
       "extensions/matrix/plugin-entry.handlers.runtime":
         "extensions/matrix/plugin-entry.handlers.runtime.ts",
+    };
+
+    expect(pickEntries(entries, Object.keys(expectedEntries))).toStrictEqual(expectedEntries);
+  });
+
+  it("filters bundled plugin build entries for bounded script lanes", () => {
+    const entries = listBundledPluginBuildEntries({
+      env: {
+        ...process.env,
+        OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "active-memory,acpx",
+      },
     });
+    const entryKeys = Object.keys(entries);
+
+    expect(entryKeys).toEqual(expect.arrayContaining(["extensions/acpx/index"]));
+    expect(entryKeys.every((entry) => /^extensions\/(?:acpx|active-memory)\//u.test(entry))).toBe(
+      true,
+    );
+  });
+
+  it("rejects unknown bounded bundled plugin build ids", () => {
+    expect(() =>
+      listBundledPluginBuildEntries({
+        env: {
+          ...process.env,
+          OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "missing-plugin",
+        },
+      }),
+    ).toThrow(
+      "OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS references unknown bundled plugin id(s): missing-plugin",
+    );
+  });
+
+  it("keeps the Telegram ingress worker out of bundled plugin public-surface entries", () => {
+    const entries = listBundledPluginBuildEntries();
+
+    expect(entries["extensions/telegram/telegram-ingress-worker.runtime"]).toBeUndefined();
+  });
+
+  it("keeps top-level bundled plugin test helpers out of public-surface entries", () => {
+    const entries = listBundledPluginBuildEntries();
+
+    expect(entries["extensions/browser/test-support"]).toBeUndefined();
+    expect(entries["extensions/comfy/test-helpers"]).toBeUndefined();
+    expect(entries["extensions/minimax/provider-http.test-helpers"]).toBeUndefined();
+  });
+
+  it("discovers repo plugin build entries without directory scans", () => {
+    const payload = expectNoNodeFsScans<{
+      artifacts: number;
+      entries: number;
+    }>(
+      `
+        const build = await import("./scripts/lib/bundled-plugin-build-entries.mjs");
+        const entries = build.listBundledPluginBuildEntries();
+        const artifacts = build.listBundledPluginPackArtifacts();
+        return {
+          artifacts: artifacts.length,
+          entries: Object.keys(entries).length,
+        };
+      `,
+      { counters: ["readdirSync"] },
+    );
+
+    expect(payload.entries).toBeGreaterThan(0);
+    expect(payload.artifacts).toBeGreaterThan(0);
   });
 
   it("packs runtime core support packages without requiring plugin manifests", () => {
@@ -63,12 +140,10 @@ describe("bundled plugin build entries", () => {
     expect(artifacts).not.toContain(
       "dist/extensions/media-understanding-core/openclaw.plugin.json",
     );
-    expect(artifacts).toContain("dist/extensions/speech-core/runtime-api.js");
-    expect(artifacts).not.toContain("dist/extensions/speech-core/openclaw.plugin.json");
   });
 
   it("packs the Matrix packaged runtime shim", () => {
-    const artifacts = listBundledPluginPackArtifacts();
+    const artifacts = listBundledPluginPackArtifacts({ includeRootPackageExcludedDirs: true });
 
     expect(artifacts).toContain("dist/extensions/matrix/plugin-entry.handlers.runtime.js");
   });
@@ -76,27 +151,48 @@ describe("bundled plugin build entries", () => {
   it("keeps private QA bundles out of required npm pack artifacts", () => {
     const artifacts = listBundledPluginPackArtifacts();
 
-    expect(artifacts.some((artifact) => artifact.startsWith("dist/extensions/qa-channel/"))).toBe(
-      false,
-    );
-    expect(artifacts.some((artifact) => artifact.startsWith("dist/extensions/qa-lab/"))).toBe(
-      false,
-    );
-    expect(artifacts.some((artifact) => artifact.startsWith("dist/extensions/qa-matrix/"))).toBe(
-      false,
-    );
+    expectNoPrefixMatches(artifacts, "dist/extensions/qa-channel/");
+    expectNoPrefixMatches(artifacts, "dist/extensions/qa-lab/");
+    expectNoPrefixMatches(artifacts, "dist/extensions/qa-matrix/");
   });
 
   it("keeps explicitly downloadable plugins out of bundled package artifacts", () => {
     const entries = listBundledPluginBuildEntries();
     const artifacts = listBundledPluginPackArtifacts();
 
-    expect(Object.keys(entries).some((entry) => entry.startsWith("extensions/qqbot/"))).toBe(false);
-    expect(artifacts.some((artifact) => artifact.startsWith("dist/extensions/qqbot/"))).toBe(false);
+    for (const pluginId of ["acpx", "googlechat", "line"]) {
+      expectSomePrefixMatch(Object.keys(entries), `extensions/${pluginId}/`);
+      expectNoPrefixMatches(artifacts, `dist/extensions/${pluginId}/`);
+    }
+    for (const pluginId of ["qqbot", "whatsapp"]) {
+      expectNoPrefixMatches(Object.keys(entries), `extensions/${pluginId}/`);
+      expectNoPrefixMatches(artifacts, `dist/extensions/${pluginId}/`);
+    }
+  });
+
+  it("keeps external-only providers out of bundled dist entries", () => {
+    const entries = listBundledPluginBuildEntries();
+    const artifacts = listBundledPluginPackArtifacts();
+
+    for (const pluginId of ["amazon-bedrock", "amazon-bedrock-mantle", "anthropic-vertex"]) {
+      expectNoPrefixMatches(Object.keys(entries), `extensions/${pluginId}/`);
+      expectNoPrefixMatches(artifacts, `dist/extensions/${pluginId}/`);
+    }
+  });
+
+  it("keeps externalized runtime-dependency plugins out of bundled dist entries", () => {
+    const entries = listBundledPluginBuildEntries();
+    const artifacts = listBundledPluginPackArtifacts();
+
+    for (const pluginId of ["openshell", "slack"]) {
+      expectNoPrefixMatches(Object.keys(entries), `extensions/${pluginId}/`);
+      expectNoPrefixMatches(artifacts, `dist/extensions/${pluginId}/`);
+    }
   });
 
   it("keeps bundled channel secret contracts on packed top-level sidecars", () => {
     const artifacts = listBundledPluginPackArtifacts();
+    const excludedPackageDirs = collectRootPackageExcludedExtensionDirs();
     const offenders: string[] = [];
     const secretBackedPluginIds = new Set<string>();
 
@@ -111,9 +207,12 @@ describe("bundled plugin build entries", () => {
       expect(entry).toContain('specifier: "./secret-contract-api.js"');
     });
 
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
 
     for (const pluginId of [...secretBackedPluginIds].toSorted()) {
+      if (excludedPackageDirs.has(pluginId)) {
+        continue;
+      }
       const secretApiPath = path.join("extensions", pluginId, "secret-contract-api.ts");
       expect(fs.readFileSync(secretApiPath, "utf8")).toContain("channelSecrets");
       expect(artifacts).toContain(`dist/extensions/${pluginId}/secret-contract-api.js`);
@@ -135,6 +234,6 @@ describe("bundled plugin build entries", () => {
       }
     });
 
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 });

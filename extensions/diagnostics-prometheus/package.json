@@ -1,7 +1,7 @@
 {
   "name": "@openclaw/diagnostics-prometheus",
-  "version": "2026.5.2",
-  "description": "OpenClaw diagnostics Prometheus exporter",
+  "version": "2026.5.28",
+  "description": "OpenClaw diagnostics Prometheus exporter for runtime metrics.",
   "repository": {
     "type": "git",
     "url": "https://github.com/openclaw/openclaw"
@@ -15,15 +15,16 @@
       "./index.ts"
     ],
     "install": {
+      "clawhubSpec": "clawhub:@openclaw/diagnostics-prometheus",
       "npmSpec": "@openclaw/diagnostics-prometheus",
       "defaultChoice": "npm",
       "minHostVersion": ">=2026.4.25"
     },
     "compat": {
-      "pluginApi": ">=2026.5.2"
+      "pluginApi": ">=2026.5.28"
     },
     "build": {
-      "openclawVersion": "2026.5.2"
+      "openclawVersion": "2026.5.28"
     },
     "release": {
       "publishToClawHub": true,

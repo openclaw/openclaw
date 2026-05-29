@@ -131,6 +131,7 @@ describe("media-generation runtime shared candidates", () => {
   });
 
   it("disables implicit provider expansion when mediaGenerationAutoProviderFallback=false", () => {
+    let listProviderCalls = 0;
     const candidates = resolveCapabilityModelCandidates({
       cfg: {
         agents: {
@@ -143,16 +144,20 @@ describe("media-generation runtime shared candidates", () => {
         primary: "google/gemini-3.1-flash-image-preview",
       },
       parseModelRef,
-      listProviders: () => [
-        {
-          id: "openai",
-          defaultModel: "gpt-image-1",
-          isConfigured: () => true,
-        },
-      ],
+      listProviders: () => {
+        listProviderCalls += 1;
+        return [
+          {
+            id: "openai",
+            defaultModel: "gpt-image-1",
+            isConfigured: () => true,
+          },
+        ];
+      },
     });
 
     expect(candidates).toEqual([{ provider: "google", model: "gemini-3.1-flash-image-preview" }]);
+    expect(listProviderCalls).toBe(0);
   });
 
   it("treats an explicit model override as exact-only", () => {
@@ -181,12 +186,69 @@ describe("media-generation runtime shared candidates", () => {
 
     expect(candidates).toEqual([{ provider: "openai", model: "gpt-image-2" }]);
   });
+
+  it("resolves slash-containing provider model IDs from registered provider models", () => {
+    const candidates = resolveCapabilityModelCandidates({
+      cfg: {} as OpenClawConfig,
+      modelConfig: {
+        primary: "openai/gpt-image-2",
+      },
+      modelOverride: "fal-ai/flux/dev",
+      parseModelRef,
+      listProviders: () => [
+        {
+          id: "fal",
+          defaultModel: "fal-ai/flux/dev",
+          models: ["fal-ai/flux/dev", "fal-ai/flux/dev/image-to-image"],
+          isConfigured: () => true,
+        },
+      ],
+    });
+
+    expect(candidates).toEqual([{ provider: "fal", model: "fal-ai/flux/dev" }]);
+  });
+
+  it("prefers explicit provider refs over colliding slash-containing model IDs", () => {
+    const candidates = resolveCapabilityModelCandidates({
+      cfg: {} as OpenClawConfig,
+      modelConfig: {
+        primary: "google/lyria-3-pro-preview",
+      },
+      parseModelRef,
+      listProviders: () => [
+        {
+          id: "google",
+          defaultModel: "lyria-3-clip-preview",
+          models: ["lyria-3-clip-preview", "lyria-3-pro-preview"],
+          isConfigured: () => true,
+        },
+        {
+          id: "openrouter",
+          defaultModel: "google/lyria-3-clip-preview",
+          models: ["google/lyria-3-clip-preview", "google/lyria-3-pro-preview"],
+          isConfigured: () => true,
+        },
+      ],
+    });
+
+    expect(candidates[0]).toEqual({ provider: "google", model: "lyria-3-pro-preview" });
+  });
 });
 
 describe("media-generation runtime shared normalization", () => {
   it("derives reduced aspect ratios from size strings", () => {
     expect(deriveAspectRatioFromSize("1280x720")).toBe("16:9");
     expect(deriveAspectRatioFromSize("1024x1536")).toBe("2:3");
+  });
+
+  it("rejects unsafe size dimensions before deriving ratios", () => {
+    expect(deriveAspectRatioFromSize("9007199254740993x3")).toBeUndefined();
+    expect(
+      resolveClosestSize({
+        requestedSize: "9007199254740993x3",
+        supportedSizes: ["1024x1024", "1536x1024"],
+      }),
+    ).toBeUndefined();
   });
 
   it("maps unsupported sizes to the closest supported size", () => {
@@ -214,6 +276,26 @@ describe("media-generation runtime shared normalization", () => {
         supportedResolutions: ["1K", "4K"],
       }),
     ).toBe("1K");
+  });
+
+  it("maps video-style resolutions by numeric distance", () => {
+    expect(
+      resolveClosestResolution({
+        requestedResolution: "480P",
+        supportedResolutions: ["360P", "540P", "720P"],
+        order: ["360P", "480P", "540P", "720P"],
+      }),
+    ).toBe("540P");
+  });
+
+  it("does not map across image and video resolution units", () => {
+    expect(
+      resolveClosestResolution({
+        requestedResolution: "4K",
+        supportedResolutions: ["768P", "1080P"],
+        order: ["360P", "480P", "540P", "720P", "768P", "1080P"],
+      }),
+    ).toBeUndefined();
   });
 
   it("clamps durations to the closest supported max", () => {

@@ -6,7 +6,7 @@ import { WebSocket } from "ws";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { __testing as agentJobTesting } from "./server-methods/agent-job.js";
+import { testing as agentJobTesting } from "./server-methods/agent-job.js";
 import {
   connectOk,
   dispatchInboundMessageMock,
@@ -37,6 +37,10 @@ describe("gateway server chat", () => {
   beforeEach(() => {
     dispatchInboundMessageMock.mockReset();
   });
+
+  const removeTempDir = async (dir: string): Promise<void> => {
+    await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  };
 
   const buildNoReplyHistoryFixture = (includeMixedAssistant = false) => [
     {
@@ -109,7 +113,7 @@ describe("gateway server chat", () => {
       return await run(dir);
     } finally {
       testState.sessionStorePath = undefined;
-      await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+      await removeTempDir(dir);
     }
   };
 
@@ -126,9 +130,30 @@ describe("gateway server chat", () => {
       })
       .filter((value): value is string => typeof value === "string");
 
-  const expectAgentWaitTimeout = (res: Awaited<ReturnType<typeof rpcReq>>) => {
+  const expectRecordFields = (value: unknown, expected: Record<string, unknown>) => {
+    if (!value || typeof value !== "object") {
+      throw new Error("Expected record");
+    }
+    const actual = value as Record<string, unknown>;
+    for (const [key, expectedValue] of Object.entries(expected)) {
+      expect(actual[key]).toEqual(expectedValue);
+    }
+    return actual;
+  };
+
+  const expectStringRunId = (payload: unknown) => {
+    const actual = expectRecordFields(payload, {});
+    expect(typeof actual.runId).toBe("string");
+    return actual.runId as string;
+  };
+
+  const expectAgentWaitTimeout = (res: Awaited<ReturnType<typeof rpcReq>>, error?: string) => {
     expect(res.ok).toBe(true);
     expect(res.payload?.status).toBe("timeout");
+    if (error !== undefined) {
+      expect(res.payload?.error).toBe(error);
+      expect(res.payload?.pendingError).toBe(true);
+    }
   };
 
   const expectAgentWaitStartedAt = (res: Awaited<ReturnType<typeof rpcReq>>, startedAt: number) => {
@@ -223,7 +248,38 @@ describe("gateway server chat", () => {
       expect(res.payload?.messageSeq).toBe(1);
     } finally {
       testState.sessionStorePath = undefined;
-      await fs.rm(dir, { recursive: true, force: true });
+      await removeTempDir(dir);
+    }
+  });
+
+  test("sessions.send creates a configured agent main session before sending", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-send-agent-"));
+    testState.sessionStorePath = path.join(dir, "sessions.json");
+    testState.agentsConfig = {
+      list: [{ id: "main", default: true }, { id: "orion" }],
+    };
+    try {
+      await writeSessionStore({ entries: {} });
+
+      const res = await rpcReq(ws, "sessions.send", {
+        key: "agent:orion:main",
+        message: "hello orion",
+        idempotencyKey: "idem-sessions-send-orion",
+      });
+      expect(res.ok).toBe(true);
+      expect(res.payload?.runId).toBe("idem-sessions-send-orion");
+
+      const rawStore = JSON.parse(await fs.readFile(testState.sessionStorePath, "utf-8")) as Record<
+        string,
+        {
+          sessionId?: string;
+        }
+      >;
+      expect(rawStore["agent:orion:main"]?.sessionId).toBeTypeOf("string");
+    } finally {
+      testState.agentsConfig = undefined;
+      testState.sessionStorePath = undefined;
+      await removeTempDir(dir);
     }
   });
 
@@ -250,7 +306,7 @@ describe("gateway server chat", () => {
       expect(res.payload?.messageSeq).toBe(1);
     } finally {
       testState.sessionStorePath = undefined;
-      await fs.rm(dir, { recursive: true, force: true });
+      await removeTempDir(dir);
     }
   });
 
@@ -304,7 +360,7 @@ describe("gateway server chat", () => {
       if (abortRes.payload?.status === "aborted") {
         expect(abortRes.payload?.abortedRunId).toBe("idem-sessions-abort-1");
         const cancelledEvent = await cancelledEventP;
-        expect(cancelledEvent.payload?.data).toMatchObject({
+        expectRecordFields(cancelledEvent.payload?.data, {
           phase: "end",
           status: "cancelled",
           aborted: true,
@@ -315,7 +371,7 @@ describe("gateway server chat", () => {
           timeoutMs: 0,
         });
         expect(waitRes.ok).toBe(true);
-        expect(waitRes.payload).toMatchObject({
+        expectRecordFields(waitRes.payload, {
           runId: "idem-sessions-abort-1",
           status: "timeout",
           stopReason: "rpc",
@@ -325,7 +381,7 @@ describe("gateway server chat", () => {
       }
     } finally {
       testState.sessionStorePath = undefined;
-      await fs.rm(dir, { recursive: true, force: true });
+      await removeTempDir(dir);
     }
   });
 
@@ -360,7 +416,7 @@ describe("gateway server chat", () => {
       }
     } finally {
       testState.sessionStorePath = undefined;
-      await fs.rm(dir, { recursive: true, force: true });
+      await removeTempDir(dir);
     }
   });
 
@@ -488,15 +544,16 @@ describe("gateway server chat", () => {
         },
       });
 
-      const agentBlockedRes = await rpcReq(ws, "agent", {
+      vi.mocked(agentCommand).mockClear();
+      const agentAllowedRes = await rpcReq(ws, "agent", {
         sessionKey: "cron:job-1",
         message: "hi",
         idempotencyKey: "idem-2",
       });
-      expect(agentBlockedRes.ok).toBe(false);
-      expect((agentBlockedRes.error as { message?: string } | undefined)?.message ?? "").toMatch(
-        /send blocked/i,
-      );
+      expect(agentAllowedRes.ok).toBe(true);
+      expect(agentAllowedRes.payload?.status).toBe("accepted");
+      expect(agentAllowedRes.payload?.runId).toBe("idem-2");
+      await vi.waitFor(() => expect(agentCommand).toHaveBeenCalled());
 
       testState.sessionStorePath = undefined;
       testState.sessionConfig = undefined;
@@ -534,7 +591,7 @@ describe("gateway server chat", () => {
         CHAT_RESPONSE_TIMEOUT_MS,
       );
       expect(imgRes.ok).toBe(true);
-      expect(imgRes.payload?.runId).toBeDefined();
+      expectStringRunId(imgRes.payload);
       const reqIdOnly = "chat-img-only";
       ws.send(
         JSON.stringify({
@@ -563,7 +620,7 @@ describe("gateway server chat", () => {
         CHAT_RESPONSE_TIMEOUT_MS,
       );
       expect(imgOnlyRes.ok).toBe(true);
-      expect(imgOnlyRes.payload?.runId).toBeDefined();
+      expectStringRunId(imgOnlyRes.payload);
 
       const historyDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
       tempDirs.push(historyDir);
@@ -605,7 +662,7 @@ describe("gateway server chat", () => {
       if (webchatWs) {
         webchatWs.close();
       }
-      await Promise.all(tempDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
+      await Promise.all(tempDirs.map((dir) => removeTempDir(dir)));
     }
   });
 
@@ -640,6 +697,249 @@ describe("gateway server chat", () => {
     // because entry.text takes precedence over entry.content for the silent check.
     // The user message with NO_REPLY text is preserved (only assistant filtered).
     expect(textValues).toEqual(["hello", "real reply", "real text field reply", "NO_REPLY"]);
+  });
+
+  test("chat.history mirrors current-session message tool sends before NO_REPLY", async () => {
+    const replyText = "Here, love. Eva, not Evo.";
+    const historyMessages = await loadChatHistoryWithMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "Evo, you there?" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call-message-1",
+            name: "message",
+            arguments: {
+              action: "send",
+              message: replyText,
+            },
+          },
+        ],
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        toolName: "message",
+        toolCallId: "call-message-1",
+        content: { ok: true, messageId: "24268", chatId: "8455538490" },
+        timestamp: 3,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "NO_REPLY" }],
+        timestamp: 4,
+      },
+    ]);
+
+    expect(collectHistoryTextValues(historyMessages)).toEqual(["Evo, you there?", replyText]);
+    expect(
+      historyMessages.some((message) => {
+        if (!message || typeof message !== "object") {
+          return false;
+        }
+        const entry = message as { role?: unknown; openclawMessageToolMirror?: unknown };
+        return entry.role === "assistant" && Boolean(entry.openclawMessageToolMirror);
+      }),
+    ).toBe(true);
+  });
+
+  test("chat.history mirrors current-session message tool sends with channel hints", async () => {
+    const replyText = "Still the current chat.";
+    const historyMessages = await loadChatHistoryWithMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "reply here" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call-message-channel-hint",
+            name: "message",
+            arguments: {
+              action: "send",
+              channel: "telegram",
+              message: replyText,
+            },
+          },
+        ],
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        toolName: "message",
+        toolCallId: "call-message-channel-hint",
+        content: { ok: true, messageId: "24270", chatId: "current-run" },
+        timestamp: 3,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "NO_REPLY" }],
+        timestamp: 4,
+      },
+    ]);
+
+    expect(collectHistoryTextValues(historyMessages)).toEqual(["reply here", replyText]);
+    expect(
+      historyMessages.some(
+        (message) =>
+          Boolean(message) &&
+          typeof message === "object" &&
+          Boolean((message as { openclawMessageToolMirror?: unknown }).openclawMessageToolMirror),
+      ),
+    ).toBe(true);
+  });
+
+  test("chat.history does not mirror explicitly routed message tool sends", async () => {
+    const historyMessages = await loadChatHistoryWithMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "send that elsewhere" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call-message-remote",
+            name: "message",
+            arguments: {
+              action: "send",
+              to: "8455538490",
+              message: "Remote-only reply",
+            },
+          },
+        ],
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        toolName: "message",
+        toolCallId: "call-message-remote",
+        content: { ok: true, messageId: "24269", chatId: "8455538490" },
+        timestamp: 3,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "NO_REPLY" }],
+        timestamp: 4,
+      },
+    ]);
+
+    expect(collectHistoryTextValues(historyMessages)).toEqual(["send that elsewhere"]);
+    expect(
+      historyMessages.some(
+        (message) =>
+          Boolean(message) &&
+          typeof message === "object" &&
+          Boolean((message as { openclawMessageToolMirror?: unknown }).openclawMessageToolMirror),
+      ),
+    ).toBe(false);
+  });
+
+  test("chat.history does not mirror message tool sends from unmatched results", async () => {
+    const historyMessages = await loadChatHistoryWithMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "reply here" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call-message-expected",
+            name: "message",
+            arguments: {
+              action: "send",
+              message: "Should wait for matching result.",
+            },
+          },
+        ],
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        content: { ok: true, messageId: "wrong-result" },
+        timestamp: 3,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "NO_REPLY" }],
+        timestamp: 4,
+      },
+    ]);
+
+    expect(collectHistoryTextValues(historyMessages)).toEqual(["reply here"]);
+    expect(
+      historyMessages.some(
+        (message) =>
+          Boolean(message) &&
+          typeof message === "object" &&
+          Boolean((message as { openclawMessageToolMirror?: unknown }).openclawMessageToolMirror),
+      ),
+    ).toBe(false);
+  });
+
+  test("chat.history does not mirror dry-run message tool sends", async () => {
+    const historyMessages = await loadChatHistoryWithMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "preview that" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call-message-dry-run",
+            name: "message",
+            arguments: {
+              action: "send",
+              dryRun: true,
+              message: "Preview-only reply",
+            },
+          },
+        ],
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        toolName: "message",
+        toolCallId: "call-message-dry-run",
+        content: {
+          ok: true,
+          dryRun: true,
+          deliveryStatus: "dry_run",
+        },
+        timestamp: 3,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "NO_REPLY" }],
+        timestamp: 4,
+      },
+    ]);
+
+    expect(collectHistoryTextValues(historyMessages)).toEqual(["preview that"]);
+    expect(
+      historyMessages.some(
+        (message) =>
+          Boolean(message) &&
+          typeof message === "object" &&
+          Boolean((message as { openclawMessageToolMirror?: unknown }).openclawMessageToolMirror),
+      ),
+    ).toBe(false);
   });
 
   test("chat.history hides commentary-only assistant entries", async () => {
@@ -799,14 +1099,14 @@ describe("gateway server chat", () => {
       });
       const sideResult = await sideResultPromise;
       const finalEvent = await finalPromise;
-      expect(sideResult.payload).toMatchObject({
+      expectRecordFields(sideResult.payload, {
         kind: "btw",
         runId: "idem-btw-1",
         sessionKey: "agent:main:main",
         question: "what is 17 * 19?",
         text: "323",
       });
-      expect(finalEvent.payload).toMatchObject({
+      expectRecordFields(finalEvent.payload, {
         runId: "idem-btw-1",
         sessionKey: "agent:main:main",
         state: "final",
@@ -881,7 +1181,7 @@ describe("gateway server chat", () => {
         expect(dispatchInboundMessageMock).toHaveBeenCalled();
       });
       const sideResult = await sideResultPromise;
-      expect(sideResult.payload).toMatchObject({
+      expectRecordFields(sideResult.payload, {
         kind: "btw",
         runId: "idem-btw-block-1",
         question: "what changed?",
@@ -939,7 +1239,7 @@ describe("gateway server chat", () => {
         await finalPromise;
 
         let assistantMessage: Record<string, unknown> | undefined;
-        for (let attempt = 0; attempt < 50; attempt += 1) {
+        await vi.waitFor(async () => {
           const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
             sessionKey: "main",
           });
@@ -951,26 +1251,22 @@ describe("gateway server chat", () => {
               message !== null &&
               (message as { role?: unknown }).role === "assistant",
           );
-          if (assistantMessage) {
-            break;
+          if (!assistantMessage) {
+            throw new Error("Expected assistant history message");
           }
-          await new Promise((resolve) => setTimeout(resolve, 100));
-        }
-
-        expect(assistantMessage).toBeTruthy();
+        });
         const assistantContent = (assistantMessage as { content?: unknown[] }).content ?? [];
-        expect(assistantContent).toEqual([
-          { type: "text", text: "Image reply" },
-          expect.objectContaining({
-            type: "image",
-            url: expect.stringContaining("/api/chat/media/outgoing/"),
-            openUrl: expect.stringContaining("/full"),
-            alt: "Generated image 1",
-            mimeType: "image/png",
-            width: 1,
-            height: 1,
-          }),
-        ]);
+        expect(assistantContent).toHaveLength(2);
+        expect(assistantContent[0]).toEqual({ type: "text", text: "Image reply" });
+        const imageBlock = expectRecordFields(assistantContent[1], {
+          type: "image",
+          alt: "Generated image 1",
+          mimeType: "image/png",
+          width: 1,
+          height: 1,
+        });
+        expect(String(imageBlock.url)).toContain("/api/chat/media/outgoing/");
+        expect(String(imageBlock.openUrl)).toContain("/full");
         const serializedAssistant = JSON.stringify(assistantMessage);
         expect(serializedAssistant).not.toContain("data:image/png;base64");
         expect(serializedAssistant).not.toContain(pngB64);
@@ -1048,7 +1344,7 @@ describe("gateway server chat", () => {
       testState.agentConfig = undefined;
       testState.agentsConfig = undefined;
       testState.sessionStorePath = undefined;
-      await fs.rm(dir, { recursive: true, force: true });
+      await removeTempDir(dir);
     }
   });
 
@@ -1188,7 +1484,7 @@ describe("gateway server chat", () => {
     } finally {
       resolveAgentRun?.();
       testState.sessionStorePath = undefined;
-      await fs.rm(dir, { recursive: true, force: true });
+      await removeTempDir(dir);
     }
   });
 
@@ -1373,7 +1669,7 @@ describe("gateway server chat", () => {
         });
 
         const res = await waitP;
-        expectAgentWaitTimeout(res);
+        expectAgentWaitTimeout(res, "boom");
       }
 
       {
@@ -1402,7 +1698,7 @@ describe("gateway server chat", () => {
       }
     } finally {
       webchatWs.close();
-      await fs.rm(dir, { recursive: true, force: true });
+      await removeTempDir(dir);
       testState.sessionStorePath = undefined;
     }
   });

@@ -6,7 +6,17 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { InstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import { createPathResolutionEnv, withEnvAsync } from "../test-utils/env.js";
-import { collectPluginsTrustFindings } from "./audit-plugins-trust.js";
+
+type CollectPluginsTrustFindings =
+  typeof import("./audit-plugins-trust.js").collectPluginsTrustFindings;
+
+async function collectPluginsTrustFindingsForTest(
+  ...args: Parameters<CollectPluginsTrustFindings>
+): Promise<Awaited<ReturnType<CollectPluginsTrustFindings>>> {
+  vi.resetModules();
+  const { collectPluginsTrustFindings } = await import("./audit-plugins-trust.js");
+  return await collectPluginsTrustFindings(...args);
+}
 
 const mockChannelPlugins = vi.hoisted(() => [
   {
@@ -152,7 +162,18 @@ describe("security audit install metadata findings", () => {
   };
 
   const runInstallMetadataAudit = async (cfg: OpenClawConfig, stateDir: string) => {
-    return await collectPluginsTrustFindings({ cfg, stateDir });
+    return await collectPluginsTrustFindingsForTest({ cfg, stateDir });
+  };
+
+  const requireInstallFinding = (
+    findings: Awaited<ReturnType<typeof runInstallMetadataAudit>>,
+    checkId: string,
+  ) => {
+    const finding = findings.find((entry) => entry.checkId === checkId);
+    if (!finding) {
+      throw new Error(`Expected ${checkId} finding`);
+    }
+    return finding;
   };
 
   const writePluginIndexInstallRecords = async (
@@ -352,12 +373,10 @@ describe("security audit install metadata findings", () => {
       },
       reportedStateDir,
     );
-    const phantomFinding = reportedFindings.find(
-      (finding) => finding.checkId === "plugins.allow_phantom_entries",
-    );
-    expect(phantomFinding?.severity).toBe("warn");
-    expect(phantomFinding?.detail).toContain("ghost-plugin-xyz");
-    expect(phantomFinding?.detail).not.toContain("installed-plugin");
+    const phantomFinding = requireInstallFinding(reportedFindings, "plugins.allow_phantom_entries");
+    expect(phantomFinding.severity).toBe("warn");
+    expect(phantomFinding.detail).toContain("ghost-plugin-xyz");
+    expect(phantomFinding.detail).not.toContain("installed-plugin");
   });
 
   it("ignores install backup and debris dirs when auditing installed plugin roots", async () => {
@@ -377,15 +396,14 @@ describe("security audit install metadata findings", () => {
 
     const findings = await runInstallMetadataAudit({}, stateDir);
 
-    const noAllowlist = findings.find(
-      (finding) => finding.checkId === "plugins.extensions_no_allowlist",
-    );
-    expect(noAllowlist?.detail).toContain("Found 1 extension(s)");
+    const noAllowlist = requireInstallFinding(findings, "plugins.extensions_no_allowlist");
+    expect(noAllowlist.detail).toContain("Found 1 extension(s)");
 
-    const toolsReachable = findings.find(
-      (finding) => finding.checkId === "plugins.tools_reachable_permissive_policy",
+    const toolsReachable = requireInstallFinding(
+      findings,
+      "plugins.tools_reachable_permissive_policy",
     );
-    expect(toolsReachable?.detail).toContain("Enabled extension plugins: live-plugin.");
+    expect(toolsReachable.detail).toContain("Enabled extension plugins: live-plugin.");
     expect(findings.map((finding) => finding.detail).join("\n")).not.toContain(
       ".openclaw-install-backups",
     );
@@ -439,7 +457,7 @@ describe("security audit extension tool reachability findings", () => {
     {};
 
   const runSharedExtensionsAudit = async (config: OpenClawConfig) => {
-    return await collectPluginsTrustFindings({
+    return await collectPluginsTrustFindingsForTest({
       cfg: config,
       stateDir: sharedExtensionsStateDir,
     });

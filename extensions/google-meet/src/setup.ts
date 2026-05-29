@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { isBlockedHostnameOrIp } from "openclaw/plugin-sdk/ssrf-runtime";
+import { asRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { GoogleMeetConfig, GoogleMeetMode, GoogleMeetTransport } from "./config.js";
 
 type SetupCheck = {
@@ -109,7 +110,8 @@ export function getGoogleMeetSetupStatus(
   const mode = options?.mode ?? config.defaultMode;
   const transport = options?.transport ?? config.defaultTransport;
   const needsChromeRealtimeAudio =
-    mode === "realtime" && (transport === "chrome" || transport === "chrome-node");
+    (mode === "agent" || mode === "bidi") &&
+    (transport === "chrome" || transport === "chrome-node");
   const pluginEntries = asRecord(asRecord(fullConfig.plugins).entries);
   const pluginAllow = asRecord(fullConfig.plugins).allow;
   const voiceCallEntry = asRecord(pluginEntries["voice-call"]);
@@ -142,17 +144,24 @@ export function getGoogleMeetSetupStatus(
   });
 
   if (needsChromeRealtimeAudio) {
+    const hasCommandPair = Boolean(
+      config.chrome.audioInputCommand && config.chrome.audioOutputCommand,
+    );
+    const hasExternalBridge = Boolean(config.chrome.audioBridgeCommand);
+    const agentModeExternalBridgeInvalid = mode === "agent" && hasExternalBridge;
     checks.push({
       id: "audio-bridge",
-      ok: Boolean(
-        config.chrome.audioBridgeCommand ||
-        (config.chrome.audioInputCommand && config.chrome.audioOutputCommand),
-      ),
-      message: config.chrome.audioBridgeCommand
-        ? "Chrome audio bridge command configured"
-        : config.chrome.audioInputCommand && config.chrome.audioOutputCommand
-          ? `Chrome command-pair realtime audio bridge configured (${config.chrome.audioFormat})`
-          : "Chrome realtime audio bridge not configured",
+      ok:
+        mode === "agent"
+          ? hasCommandPair && !agentModeExternalBridgeInvalid
+          : hasExternalBridge || hasCommandPair,
+      message: agentModeExternalBridgeInvalid
+        ? "Chrome agent mode requires chrome.audioInputCommand and chrome.audioOutputCommand; chrome.audioBridgeCommand is bidi-only"
+        : hasExternalBridge
+          ? "Chrome audio bridge command configured"
+          : hasCommandPair
+            ? `Chrome command-pair talk-back audio bridge configured (${config.chrome.audioFormat})`
+            : "Chrome talk-back audio bridge not configured",
     });
   } else if (transport === "chrome" || transport === "chrome-node") {
     checks.push({
@@ -217,7 +226,8 @@ export function getGoogleMeetSetupStatus(
       Object.hasOwn(pluginEntries, "voice-call"));
   if (shouldCheckTwilioDelegation) {
     const voiceCallAllowed = !Array.isArray(pluginAllow) || pluginAllow.includes("voice-call");
-    const voiceCallEnabled = voiceCallEntry.enabled !== false;
+    const hasVoiceCallEntry = Object.hasOwn(pluginEntries, "voice-call");
+    const voiceCallEnabled = hasVoiceCallEntry && voiceCallEntry.enabled !== false;
     checks.push({
       id: "twilio-voice-call-plugin",
       ok: voiceCallAllowed && voiceCallEnabled,
@@ -263,14 +273,4 @@ export function addGoogleMeetSetupCheck(
     ok: checks.every((item) => item.ok),
     checks,
   };
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
-
-function normalizeOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }

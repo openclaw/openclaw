@@ -1,4 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizePluginsConfig } from "../plugins/config-state.js";
+import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import {
   isWorkspacePluginAllowedByConfig,
@@ -6,6 +8,7 @@ import {
 } from "../plugins/plugin-config-trust.js";
 import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { normalizeProviderId } from "./provider-id.js";
 
@@ -14,6 +17,7 @@ export type ProviderAuthAliasLookupParams = {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   includeUntrustedWorkspacePlugins?: boolean;
+  metadataSnapshot?: PluginMetadataSnapshot;
 };
 
 type ProviderAuthAliasCandidate = {
@@ -108,21 +112,53 @@ export function resolveProviderAuthAliasMap(
   params?: ProviderAuthAliasLookupParams,
 ): Record<string, string> {
   const env = params?.env ?? process.env;
-  const cacheKey = buildProviderAuthAliasMapCacheKey(params, env);
-  let envCache = providerAuthAliasMapCache.get(env);
-  if (!envCache) {
-    envCache = new Map<string, Record<string, string>>();
-    providerAuthAliasMapCache.set(env, envCache);
+  const config = params?.config;
+  let cacheKey: string | undefined;
+  let envCache: Map<string, Record<string, string>> | undefined;
+  if (!params?.metadataSnapshot) {
+    cacheKey = buildProviderAuthAliasMapCacheKey(params, env);
+    envCache = providerAuthAliasMapCache.get(env);
+    if (!envCache) {
+      envCache = new Map<string, Record<string, string>>();
+      providerAuthAliasMapCache.set(env, envCache);
+    }
+    const cached = envCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
   }
-  const cached = envCache.get(cacheKey);
-  if (cached) {
-    return cached;
-  }
-  const snapshot = loadPluginMetadataSnapshot({
-    config: params?.config ?? {},
-    workspaceDir: params?.workspaceDir,
-    env,
-  });
+  const snapshot =
+    params?.metadataSnapshot ??
+    (config
+      ? getCurrentPluginMetadataSnapshot({
+          config,
+          ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+          env,
+          allowWorkspaceScopedSnapshot: true,
+        })
+      : getCurrentPluginMetadataSnapshot({
+          ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+          env,
+          allowWorkspaceScopedSnapshot: true,
+          requireDefaultDiscoveryContext: true,
+        })) ??
+    (() => {
+      if (!config || normalizePluginsConfig(config.plugins).loadPaths.length !== 0) {
+        return undefined;
+      }
+      const currentSnapshot = getCurrentPluginMetadataSnapshot({
+        ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+        env,
+        allowWorkspaceScopedSnapshot: true,
+        requireDefaultDiscoveryContext: true,
+      });
+      return currentSnapshot;
+    })() ??
+    loadPluginMetadataSnapshot({
+      config: config ?? {},
+      ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+      env,
+    });
   const preferredAliases = new Map<string, ProviderAuthAliasCandidate>();
   const aliases: Record<string, string> = Object.create(null) as Record<string, string>;
   for (const plugin of snapshot.plugins) {
@@ -153,7 +189,9 @@ export function resolveProviderAuthAliasMap(
   for (const [alias, candidate] of preferredAliases) {
     aliases[alias] = candidate.target;
   }
-  envCache.set(cacheKey, aliases);
+  if (envCache && cacheKey) {
+    envCache.set(cacheKey, aliases);
+  }
   return aliases;
 }
 

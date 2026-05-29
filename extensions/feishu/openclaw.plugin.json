@@ -1,5 +1,7 @@
 {
   "id": "feishu",
+  "name": "Feishu/Lark",
+  "description": "OpenClaw Feishu/Lark channel plugin for chats and workplace tools (community maintained by @m1heng).",
   "activation": {
     "onStartup": false
   },
@@ -126,6 +128,7 @@
             "enum": ["auto", "raw", "card"]
           },
           "streaming": { "type": "boolean" },
+          "blockStreaming": { "type": "boolean" },
           "replyInThread": {
             "type": "string",
             "enum": ["disabled", "enabled"]
@@ -162,6 +165,7 @@
         "enum": ["auto", "raw", "card"]
       },
       "streaming": { "type": "boolean" },
+      "blockStreaming": { "type": "boolean" },
       "replyInThread": {
         "type": "string",
         "enum": ["disabled", "enabled"]

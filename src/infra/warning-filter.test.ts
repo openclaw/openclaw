@@ -129,10 +129,16 @@ describe("warning filter", () => {
       await flushWarnings();
       expect(
         seenWarnings.find((warning) => warning.code === "OPENCLAW_TEST_WARNING"),
-      ).toBeDefined();
-      expect(
-        seenWarnings.find((warning) => warning.message === "The punycode module is deprecated."),
-      ).toBeDefined();
+      ).toStrictEqual({
+        code: "OPENCLAW_TEST_WARNING",
+        name: "Warning",
+        message: "Visible warning",
+      });
+      expect(seenWarnings.find((warning) => warning.code === "DEP0040")).toStrictEqual({
+        code: "DEP0040",
+        name: "DeprecationWarning",
+        message: "The punycode module is deprecated.",
+      });
     } finally {
       process.off("warning", onWarning);
     }

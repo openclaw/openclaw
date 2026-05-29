@@ -1,12 +1,14 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { OPENROUTER_THINKING_STREAM_HOOKS } from "openclaw/plugin-sdk/provider-stream-family";
 import {
   createDeepSeekV4OpenAICompatibleThinkingWrapper,
+  type DeepSeekV4ReasoningEffort,
+  type DeepSeekV4ThinkingLevel,
   createPayloadPatchStreamWrapper,
-  stripTrailingAssistantPrefillMessages,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { isOpenRouterDeepSeekV4ModelId } from "./models.js";
 import {
   isOpenRouterProxyReasoningUnsupportedModel,
   normalizeOpenRouterBaseUrl,
@@ -25,22 +27,6 @@ function isOpenRouterAnthropicModelId(modelId: unknown): boolean {
     normalized?.startsWith("anthropic/") === true ||
     normalized?.startsWith("openrouter/anthropic/") === true
   );
-}
-
-function normalizeOpenRouterModelId(modelId: unknown): string | undefined {
-  const normalized = readString(modelId)?.toLowerCase();
-  return normalized?.startsWith("openrouter/")
-    ? normalized.slice("openrouter/".length)
-    : normalized;
-}
-
-function isOpenRouterDeepSeekV4ModelId(modelId: unknown): boolean {
-  const normalized = normalizeOpenRouterModelId(modelId);
-  if (!normalized?.startsWith("deepseek/")) {
-    return false;
-  }
-  const deepSeekModelId = normalized.slice("deepseek/".length).split(":", 1)[0];
-  return deepSeekModelId === "deepseek-v4-flash" || deepSeekModelId === "deepseek-v4-pro";
 }
 
 function isVerifiedOpenRouterRoute(model: Parameters<StreamFn>[0]): boolean {
@@ -70,6 +56,80 @@ function shouldPatchDeepSeekV4OpenRouterPayload(model: Parameters<StreamFn>[0]):
   );
 }
 
+function shouldPatchOpenRouterRoutingPayload(model: Parameters<StreamFn>[0]): boolean {
+  const api = readString(model.api);
+  return (api === undefined || api === "openai-completions") && isVerifiedOpenRouterRoute(model);
+}
+
+function assistantMessageHasOpenAIToolCalls(message: Record<string, unknown>): boolean {
+  return Array.isArray(message.tool_calls) && message.tool_calls.length > 0;
+}
+
+function isAnthropicToolCallContentBlock(value: unknown): boolean {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    ((value as { type?: unknown }).type === "tool_use" ||
+      (value as { type?: unknown }).type === "toolCall")
+  );
+}
+
+function assistantMessageHasAnthropicToolUse(message: Record<string, unknown>): boolean {
+  const content = message.content;
+  return Array.isArray(content) && content.some(isAnthropicToolCallContentBlock);
+}
+
+function shouldStripOpenRouterTrailingMessage(value: unknown): boolean {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const message = value as Record<string, unknown>;
+  return (
+    message.role === "assistant" &&
+    !assistantMessageHasOpenAIToolCalls(message) &&
+    !assistantMessageHasAnthropicToolUse(message)
+  );
+}
+
+function stripTrailingOpenRouterAssistantPrefillMessages(payload: Record<string, unknown>): number {
+  const messages = payload.messages;
+  if (!Array.isArray(messages)) {
+    return 0;
+  }
+
+  let keep = messages.length;
+  while (keep > 0 && shouldStripOpenRouterTrailingMessage(messages[keep - 1])) {
+    keep -= 1;
+  }
+  if (keep === messages.length) {
+    return 0;
+  }
+  const stripped = messages.length - keep;
+  messages.splice(keep);
+  return stripped;
+}
+
+function resolveOpenRouterDeepSeekV4ReasoningEffort(
+  thinkingLevel: DeepSeekV4ThinkingLevel,
+): DeepSeekV4ReasoningEffort {
+  switch (thinkingLevel) {
+    case "minimal":
+    case "low":
+    case "medium":
+    case "high":
+    case "xhigh":
+      return thinkingLevel;
+    case "max":
+      return "xhigh";
+    case "adaptive":
+      return "medium";
+    case "off":
+    case undefined:
+      return "high";
+  }
+  return "high";
+}
+
 function isEnabledReasoningValue(value: unknown): boolean {
   if (value === undefined || value === null || value === false) {
     return false;
@@ -94,7 +154,7 @@ function injectOpenRouterRouting(
   if (!providerRouting) {
     return baseStreamFn;
   }
-  return (model, context, options) =>
+  const routedStreamFn: StreamFn = (model, context, options) =>
     (
       baseStreamFn ??
       ((nextModel) => {
@@ -110,6 +170,17 @@ function injectOpenRouterRouting(
       context,
       options,
     );
+  return createPayloadPatchStreamWrapper(
+    routedStreamFn,
+    ({ payload }) => {
+      if (payload.provider === undefined) {
+        payload.provider = providerRouting;
+      }
+    },
+    {
+      shouldPatch: ({ model }) => shouldPatchOpenRouterRoutingPayload(model),
+    },
+  );
 }
 
 function createOpenRouterAnthropicPrefillWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
@@ -119,7 +190,7 @@ function createOpenRouterAnthropicPrefillWrapper(baseStreamFn: StreamFn | undefi
       if (!isOpenRouterReasoningPayloadEnabled(payload)) {
         return;
       }
-      const stripped = stripTrailingAssistantPrefillMessages(payload);
+      const stripped = stripTrailingOpenRouterAssistantPrefillMessages(payload);
       if (stripped > 0) {
         log.warn(
           `removed ${stripped} trailing assistant prefill message${stripped === 1 ? "" : "s"} because OpenRouter-routed Anthropic reasoning requires conversations to end with a user turn`,
@@ -140,6 +211,9 @@ function createOpenRouterDeepSeekV4ThinkingWrapper(
     baseStreamFn,
     thinkingLevel,
     shouldPatchModel: shouldPatchDeepSeekV4OpenRouterPayload,
+    resolveReasoningEffort: resolveOpenRouterDeepSeekV4ReasoningEffort,
+    shouldBackfillAssistantReasoningContent: (message) =>
+      !assistantMessageHasOpenAIToolCalls(message),
   });
 }
 
@@ -171,12 +245,3 @@ export function wrapOpenRouterProviderStream(
     createOpenRouterDeepSeekV4ThinkingWrapper(wrappedStreamFn, ctx.thinkingLevel),
   );
 }
-
-export const __testing = {
-  isOpenRouterDeepSeekV4ModelId,
-  isOpenRouterAnthropicModelId,
-  isOpenRouterReasoningPayloadEnabled,
-  isVerifiedOpenRouterRoute,
-  shouldPatchDeepSeekV4OpenRouterPayload,
-  shouldPatchAnthropicOpenRouterPayload,
-};

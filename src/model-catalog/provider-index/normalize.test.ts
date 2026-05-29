@@ -13,8 +13,9 @@ describe("OpenClaw provider index", () => {
             id: "moonshot",
             package: " @openclaw/plugin-moonshot ",
             install: {
+              clawhubSpec: " clawhub:openclaw/moonshot@2026.5.2 ",
               npmSpec: " @openclaw/plugin-moonshot@1.2.3 ",
-              defaultChoice: "npm",
+              defaultChoice: "clawhub",
               expectedIntegrity: " sha512-moonshot ",
             },
           },
@@ -63,8 +64,9 @@ describe("OpenClaw provider index", () => {
             id: "moonshot",
             package: "@openclaw/plugin-moonshot",
             install: {
+              clawhubSpec: "clawhub:openclaw/moonshot@2026.5.2",
               npmSpec: "@openclaw/plugin-moonshot@1.2.3",
-              defaultChoice: "npm",
+              defaultChoice: "clawhub",
               expectedIntegrity: "sha512-moonshot",
             },
           },
@@ -142,22 +144,14 @@ describe("OpenClaw provider index", () => {
 
     expect(index.providers.moonshot?.previewCatalog).not.toHaveProperty("api");
     expect(index.providers.moonshot?.previewCatalog).not.toHaveProperty("baseUrl");
-    expect(index.providers.moonshot?.previewCatalog?.models).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "kimi-k2.6",
-          status: "preview",
-        }),
-      ]),
+    const kimi = index.providers.moonshot?.previewCatalog?.models.find(
+      (model) => model.id === "kimi-k2.6",
     );
+    expect(kimi?.status).toBe("preview");
     expect(index.providers.deepseek?.plugin.id).toBe("deepseek");
-    expect(index.providers.deepseek?.previewCatalog?.models).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "deepseek-chat",
-          contextWindow: 131072,
-        }),
-      ]),
+    const deepseekChat = index.providers.deepseek?.previewCatalog?.models.find(
+      (model) => model.id === "deepseek-chat",
     );
+    expect(deepseekChat?.contextWindow).toBe(131072);
   });
 });

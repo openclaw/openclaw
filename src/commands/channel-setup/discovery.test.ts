@@ -159,16 +159,23 @@ describe("listManifestInstalledChannelIds", () => {
       env: { OPENCLAW_HOME: "/tmp/home" } as NodeJS.ProcessEnv,
     });
 
-    expect(resolved.entries).toEqual([
-      expect.objectContaining({
-        id: "telegram",
-        meta: expect.objectContaining({
-          label: "Telegram",
-          selectionLabel: "Telegram",
-          blurb: "bot token",
-          docsPath: "/channels/telegram",
-        }),
-      }),
-    ]);
+    expect(resolved).toStrictEqual({
+      entries: [
+        {
+          id: "telegram",
+          meta: {
+            id: "telegram",
+            label: "Telegram",
+            selectionLabel: "Telegram",
+            blurb: "bot token",
+            docsPath: "/channels/telegram",
+          },
+        },
+      ],
+      installedCatalogEntries: [],
+      installableCatalogEntries: [],
+      installedCatalogById: new Map(),
+      installableCatalogById: new Map(),
+    });
   });
 });

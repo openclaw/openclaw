@@ -15,6 +15,8 @@ import {
   normalizePluginsConfig,
   resolveEffectivePluginActivationState,
 } from "../plugins/config-state.js";
+import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { isPluginEnabledByDefaultForPlatform } from "../plugins/default-enablement.js";
 import {
   loadPluginManifestRegistry,
   type PluginManifestRecord,
@@ -31,7 +33,7 @@ const EMPTY_FACADE_BOUNDARY_CONFIG: OpenClawConfig = {};
 
 export type FacadePluginManifestLike = Pick<
   PluginManifestRecord,
-  "id" | "origin" | "enabledByDefault" | "rootDir" | "channels"
+  "id" | "origin" | "enabledByDefault" | "enabledByDefaultOnPlatforms" | "rootDir" | "channels"
 >;
 
 type FacadeModuleLocation = {
@@ -92,9 +94,19 @@ function getFacadeBoundaryResolvedConfig() {
 function getFacadeManifestRegistry(params: {
   env?: NodeJS.ProcessEnv;
 }): readonly PluginManifestRecord[] {
+  const envOption = params.env ? { env: params.env } : {};
+  const resolved = getFacadeBoundaryResolvedConfig();
+  const current = getCurrentPluginMetadataSnapshot({
+    config: resolved.config,
+    ...envOption,
+    allowWorkspaceScopedSnapshot: true,
+  });
+  if (current?.manifestRegistry) {
+    return current.manifestRegistry.plugins;
+  }
   return loadPluginManifestRegistry({
-    config: getFacadeBoundaryResolvedConfig().config,
-    ...(params.env ? { env: params.env } : {}),
+    config: resolved.config,
+    ...envOption,
   }).plugins;
 }
 
@@ -286,7 +298,7 @@ export function evaluateBundledPluginPublicSurfaceAccess(params: {
     origin: params.manifestRecord.origin,
     config: params.normalizedPluginsConfig,
     rootConfig: params.config,
-    enabledByDefault: params.manifestRecord.enabledByDefault,
+    enabledByDefault: isPluginEnabledByDefaultForPlatform(params.manifestRecord),
     activationSource: params.activationSource,
     autoEnabledReason: params.autoEnabledReasons[params.manifestRecord.id]?.[0],
   });

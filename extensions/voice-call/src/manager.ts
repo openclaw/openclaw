@@ -2,9 +2,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { VoiceCallConfig } from "./config.js";
-import type { CallManagerContext } from "./manager/context.js";
+import type { CallManagerContext, StreamSessionIssuer } from "./manager/context.js";
 import { processEvent as processManagerEvent } from "./manager/events.js";
 import { getCallByProviderCallId as getCallByProviderCallIdFromMaps } from "./manager/lookup.js";
 import {
@@ -35,6 +35,14 @@ function markRestoredCallSkipped(call: CallRecord, endReason: "completed" | "tim
   call.endedAt = Date.now();
   call.endReason = endReason;
   call.state = endReason;
+}
+
+function incrementRestoreStatusCount(
+  counts: Map<string, number>,
+  status: string | undefined,
+): void {
+  const key = normalizeOptionalString(status) ?? "terminal";
+  counts.set(key, (counts.get(key) ?? 0) + 1);
 }
 
 function resolveDefaultStoreBase(config: VoiceCallConfig, storePath?: string): string {
@@ -79,6 +87,13 @@ export class CallManager {
   private maxDurationTimers = new Map<CallId, NodeJS.Timeout>();
   private initialMessageInFlight = new Set<CallId>();
 
+  /**
+   * Carrier-side stream session issuer. Wired by the runtime when realtime is
+   * enabled so the manager can pre-issue stream URLs for providers (e.g.
+   * Telnyx) that attach Media Streaming at dial or answer time.
+   */
+  streamSessionIssuer: StreamSessionIssuer | undefined;
+
   constructor(config: VoiceCallConfig, storePath?: string) {
     this.config = config;
     this.storePath = resolveDefaultStoreBase(config, storePath);
@@ -110,6 +125,7 @@ export class CallManager {
     }
 
     // Restart max-duration timers for restored calls that are past the answered state
+    let skippedAlreadyElapsedTimers = 0;
     for (const [callId, call] of verified) {
       if (call.answeredAt && !TerminalStates.has(call.state)) {
         const elapsed = Date.now() - call.answeredAt;
@@ -120,9 +136,7 @@ export class CallManager {
           if (call.providerCallId) {
             this.providerCallIdMap.delete(call.providerCallId);
           }
-          console.log(
-            `[voice-call] Skipping restored call ${callId} (max duration already elapsed)`,
-          );
+          skippedAlreadyElapsedTimers += 1;
           continue;
         }
         startMaxDurationTimer({
@@ -135,6 +149,11 @@ export class CallManager {
         });
         console.log(`[voice-call] Restarted max-duration timer for restored call ${callId}`);
       }
+    }
+    if (skippedAlreadyElapsedTimers > 0) {
+      console.log(
+        `[voice-call] Skipped ${skippedAlreadyElapsedTimers} restored call(s) whose max-duration timer already elapsed`,
+      );
     }
 
     if (verified.size > 0) {
@@ -159,19 +178,23 @@ export class CallManager {
     const now = Date.now();
     const verified = new Map<CallId, CallRecord>();
     const verifyTasks: Array<{ callId: CallId; call: CallRecord; promise: Promise<void> }> = [];
+    let skippedNoProviderCallId = 0;
+    let skippedOlderThanMaxDuration = 0;
+    const skippedTerminalStatuses = new Map<string, number>();
+    let keptVerifiedActive = 0;
+    let keptUnknownProviderStatus = 0;
+    let keptVerificationFailures = 0;
 
     for (const [callId, call] of candidates) {
       // Skip calls without a provider ID — can't verify
       if (!call.providerCallId) {
-        console.log(`[voice-call] Skipping restored call ${callId} (no providerCallId)`);
+        skippedNoProviderCallId += 1;
         continue;
       }
 
       // Skip calls older than maxDurationSeconds (time-based fallback)
       if (now - call.startedAt > maxAgeMs) {
-        console.log(
-          `[voice-call] Skipping restored call ${callId} (older than maxDurationSeconds)`,
-        );
+        skippedOlderThanMaxDuration += 1;
         markRestoredCallSkipped(call, "timeout");
         persistCallRecord(this.storePath, call);
         await provider
@@ -196,25 +219,20 @@ export class CallManager {
           .getCallStatus({ providerCallId: call.providerCallId })
           .then((result) => {
             if (result.isTerminal) {
-              console.log(
-                `[voice-call] Skipping restored call ${callId} (provider status: ${result.status})`,
-              );
+              incrementRestoreStatusCount(skippedTerminalStatuses, result.status);
               markRestoredCallSkipped(call, "completed");
               persistCallRecord(this.storePath, call);
             } else if (result.isUnknown) {
-              console.log(
-                `[voice-call] Keeping restored call ${callId} (provider status unknown, relying on timer)`,
-              );
+              keptUnknownProviderStatus += 1;
               verified.set(callId, call);
             } else {
+              keptVerifiedActive += 1;
               verified.set(callId, call);
             }
           })
           .catch(() => {
             // Verification failed entirely — keep the call, rely on timer
-            console.log(
-              `[voice-call] Keeping restored call ${callId} (verification failed, relying on timer)`,
-            );
+            keptVerificationFailures += 1;
             verified.set(callId, call);
           }),
       };
@@ -222,6 +240,36 @@ export class CallManager {
     }
 
     await Promise.allSettled(verifyTasks.map((t) => t.promise));
+    if (skippedNoProviderCallId > 0) {
+      console.log(
+        `[voice-call] Skipped ${skippedNoProviderCallId} restored call(s) with no providerCallId`,
+      );
+    }
+    if (skippedOlderThanMaxDuration > 0) {
+      console.log(
+        `[voice-call] Skipped ${skippedOlderThanMaxDuration} restored call(s) older than maxDurationSeconds`,
+      );
+    }
+    for (const [status, count] of [...skippedTerminalStatuses].toSorted(([a], [b]) =>
+      a.localeCompare(b),
+    )) {
+      console.log(`[voice-call] Skipped ${count} restored call(s) with provider status: ${status}`);
+    }
+    if (keptVerifiedActive > 0) {
+      console.log(
+        `[voice-call] Kept ${keptVerifiedActive} restored call(s) confirmed active by provider`,
+      );
+    }
+    if (keptUnknownProviderStatus > 0) {
+      console.log(
+        `[voice-call] Kept ${keptUnknownProviderStatus} restored call(s) with unknown provider status (relying on timer)`,
+      );
+    }
+    if (keptVerificationFailures > 0) {
+      console.log(
+        `[voice-call] Kept ${keptVerificationFailures} restored call(s) after verification failure (relying on timer)`,
+      );
+    }
     return verified;
   }
 
@@ -298,6 +346,7 @@ export class CallManager {
       onCallAnswered: (call) => {
         this.maybeSpeakInitialMessageOnAnswered(call);
       },
+      streamSessionIssuer: this.streamSessionIssuer,
     };
   }
 

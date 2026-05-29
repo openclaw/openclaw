@@ -163,8 +163,18 @@ export const ja_JP: TranslationMap = {
     store: "ストア: {path}",
     active: "有効",
     limit: "制限",
+    filters: "フィルター",
+    showFilters: "フィルターを表示",
+    hideFilters: "フィルターを非表示",
+    sourceFilters: "セッションソースのフィルター",
     global: "グローバル",
     unknown: "不明",
+    showArchived: "アーカイブ済みを表示",
+    activeTooltip: "過去 {count} 分以内に更新されました。",
+    limitTooltip: "読み込むセッションの最大数。",
+    globalTooltip: "グローバルセッションを含めます。",
+    unknownTooltip: "不明なセッションを含めます。",
+    showArchivedTooltip: "アーカイブ済みセッションを含めます。",
     minutesPlaceholder: "分",
     searchPlaceholder: "キー、エージェント、ラベル、種類で絞り込み…",
     selected: "{count} 件選択中",
@@ -183,6 +193,8 @@ export const ja_JP: TranslationMap = {
     verbose: "詳細",
     reasoning: "推論",
     noSessions: "セッションが見つかりません。",
+    noSessionsMatchFilters: "フィルターに一致するセッションはありません。",
+    showAll: "すべて表示",
     inherit: "継承",
     defaultOption: "デフォルト（{value}）",
     offExplicit: "オフ（明示）",
@@ -195,13 +207,34 @@ export const ja_JP: TranslationMap = {
     autoThreshold: "自動しきい値",
     overflowRetry: "オーバーフロー時に再試行",
     timeoutRetry: "タイムアウト時に再試行",
-    tokenRange: "{before} → {after} トークン",
+    tokenRange: "{before} to {after} トークン",
     tokensBefore: "前: {count} トークン",
     tokenDeltaUnavailable: "トークン差分を利用できません",
     checkpoints: "{count} 個のチェックポイント",
     checkpoint: "{count} 個のチェックポイント",
-    showCheckpoints: "チェックポイントを表示",
-    hideCheckpoints: "チェックポイントを非表示",
+    showSessionDetails: "{count} のセッション詳細を表示",
+    hideSessionDetails: "{count} のセッション詳細を非表示",
+    sessionDetails: "セッション詳細",
+    compactionHistory: "圧縮履歴",
+    status: "ステータス",
+    statusLive: "ライブ",
+    statusIdle: "アイドル",
+    statusUnknown: "不明",
+    statusRunning: "実行中",
+    statusDone: "完了",
+    statusFailed: "失敗",
+    statusKilled: "強制終了",
+    statusTimeout: "タイムアウトしました",
+    model: "モデル",
+    provider: "プロバイダー",
+    runtime: "ランタイム",
+    surface: "サーフェス",
+    subject: "件名",
+    room: "ルーム",
+    space: "スペース",
+    sessionId: "セッション ID",
+    activeRun: "アクティブな実行",
+    archived: "アーカイブ済み",
     loadingCheckpoints: "チェックポイントを読み込み中…",
     noCheckpoints: "このセッションには圧縮チェックポイントが記録されていません。",
     noSummary: "要約は取得されていません。",
@@ -318,6 +351,12 @@ export const ja_JP: TranslationMap = {
     eventLogSubtitle: "Latest gateway events.",
     noEvents: "No events yet.",
   },
+  quickSettings: {
+    security: {
+      browserEnabled: "Browser enabled",
+      toolProfile: "Tool profile",
+    },
+  },
   execApproval: {
     expiresIn: "expires in {time}",
     expired: "expired",
@@ -326,6 +365,8 @@ export const ja_JP: TranslationMap = {
     pending: "{count} pending",
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
+    allowAlwaysUnavailable:
+      "有効な承認ポリシーでは毎回承認が必要なため、Allow Always は利用できません。",
     deny: "Deny",
     labels: {
       host: "Host",
@@ -357,6 +398,7 @@ export const ja_JP: TranslationMap = {
   },
   tabs: {
     agents: "エージェント",
+    activity: "アクティビティ",
     overview: "概要",
     channels: "チャンネル",
     instances: "インスタンス",
@@ -378,6 +420,7 @@ export const ja_JP: TranslationMap = {
   },
   subtitles: {
     agents: "ワークスペース、ツール、ID。",
+    activity: "ブラウザー内のツールアクティビティ概要。",
     overview: "ステータス、エントリーポイント、健全性。",
     channels: "チャンネルと設定。",
     instances: "接続されたクライアントとノード。",
@@ -396,6 +439,42 @@ export const ja_JP: TranslationMap = {
     debug: "スナップショット、イベント、RPC。",
     logs: "ライブ Gateway ログ。",
     dreams: "スリープ中のメモリ統合。",
+  },
+  activity: {
+    title: "アクティビティ",
+    subtitle: "ライブセッションイベントから生成される一時的なツールアクティビティ。",
+    visibleCount: "{visible} / {total}",
+    filtersLabel: "アクティビティフィルター",
+    search: "検索",
+    searchPlaceholder: "ツール、概要、実行、セッションで絞り込み",
+    toolFilter: "ツール",
+    allTools: "すべてのツール",
+    statusFilters: "ステータスフィルター",
+    autoFollow: "自動追従",
+    expandAll: "すべて展開",
+    collapseAll: "すべて折りたたむ",
+    clear: "クリア",
+    empty: "ツールアクティビティはまだありません。",
+    emptyFiltered: "これらのフィルターに一致するアクティビティはありません。",
+    entrySummary: "{argumentSummary}",
+    argumentHiddenOne: "1 件の引数が非表示",
+    argumentsHidden: "{count} 件の引数が非表示",
+    streamLabel: "ツールアクティビティエントリ",
+    toolCallId: "ツール呼び出し",
+    runId: "実行",
+    session: "セッション",
+    outputTruncated: "プレビューは編集され、切り詰められています。",
+    noOutputPreview: "出力プレビューはありません。",
+    status: {
+      running: "実行中",
+      done: "完了",
+      error: "エラー",
+    },
+    duration: {
+      ms: "{count} ms",
+      seconds: "{count} s",
+      minutes: "{minutes}m {seconds}s",
+    },
   },
   overview: {
     access: {
@@ -662,9 +741,6 @@ export const ja_JP: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle: "トークンの使用先、セッションが急増するタイミング、コストの要因を確認できます。",
-    },
     common: {
       emptyValue: "—",
       unknown: "不明",
@@ -683,6 +759,16 @@ export const ja_JP: TranslationMap = {
       today: "今日",
       last7d: "7日",
       last30d: "30日",
+      last90d: "90d",
+      last1y: "1y",
+      all: "すべて",
+    },
+    scope: {
+      instance: "現在のインスタンス",
+      instanceHint: "各論理セッションについて、アクティブなセッション ID のみを表示します。",
+      family: "履歴系譜",
+      familyHint: "既知のローテーション済みトランスクリプト基盤のセッション ID を集計します。",
+      familyIncluded: "履歴系譜には {count} 件のセッションインスタンスが含まれます。",
     },
     filters: {
       title: "フィルター",
@@ -725,6 +811,16 @@ export const ja_JP: TranslationMap = {
       sessionsCsv: "セッション CSV",
       dailyCsv: "日次 CSV",
       json: "JSON",
+    },
+    cacheStatus: {
+      warning:
+        "使用状況キャッシュをバックグラウンドで再構築しています。表示される合計は古い可能性があります。",
+      title: "{status}: 保留中 {pending}、古い {stale}、キャッシュ済み {cached}",
+      status: {
+        refreshing: "更新中",
+        stale: "古い",
+        partial: "一部",
+      },
     },
     empty: {
       title: "まずは日付範囲を選択",
@@ -895,6 +991,96 @@ export const ja_JP: TranslationMap = {
     showPassword: "パスワードを表示",
     hidePassword: "パスワードを非表示",
     togglePasswordVisibility: "パスワードの表示/非表示を切り替え",
+    failure: {
+      rawError: "生のエラー",
+      docsAuth: "Control UI 認証ドキュメント",
+      docsPairing: "デバイスペアリングのドキュメント",
+      docsInsecure: "安全でない HTTP のドキュメント",
+      authRequired: {
+        title: "認証が必要です",
+        summary:
+          "Gateway には到達できますが、このブラウザーが接続する前に一致するトークンまたはパスワードが必要です。",
+        stepPaste:
+          "openclaw dashboard --no-open のトークンを貼り付けるか、構成済みのパスワードを入力します。",
+        stepGenerate:
+          "トークンが構成されていない場合は、Gateway ホストで openclaw doctor --generate-gateway-token を実行します。",
+        stepConnect: "認証情報を更新したら、もう一度 Connect をクリックします。",
+      },
+      authFailed: {
+        title: "認証が一致しません",
+        summary:
+          "指定された認証情報は拒否されました。最も一般的な原因は、古いトークン、または別の Gateway URL からコピーしたトークンです。",
+        stepDashboard:
+          "openclaw dashboard --no-open を実行し、新しい URL を開くか、そのトークンを貼り付けます。",
+        stepReplace:
+          "古いトークン/パスワード値を置き換えてください。別の Gateway URL のトークンは再利用しないでください。",
+        stepMode:
+          "一致する認証モードを一度に 1 つだけ使用します。トークンモードでは gateway token、パスワードモードではパスワードを使います。",
+      },
+      rateLimited: {
+        title: "失敗した試行が多すぎます",
+        summary: "Gateway はこのクライアントの認証試行を一時的に制限しています。",
+        stepStop: "このタブからの再試行をしばらく停止します。",
+        stepWait: "認証リミッターが落ち着くのを待ってから、修正した認証情報で再接続します。",
+        stepCheckClients:
+          "共有ホストの場合は、他のクライアントが誤った再試行を繰り返していないか確認します。",
+      },
+      pairing: {
+        title: "デバイスペアリングが必要です",
+        scopeTitle: "スコープのアップグレードが保留中です",
+        roleTitle: "ロールのアップグレードが保留中です",
+        metadataTitle: "デバイス更新が保留中です",
+        summary:
+          "このブラウザーで Control UI を使用するには、Gateway ホストからの一度限りの承認が必要です。",
+        upgradeSummary:
+          "このブラウザーは既に認識されていますが、要求されたアクセスが変わったため、新しい承認が必要です。",
+        stepList: "Gateway ホストで openclaw devices list を実行します。",
+        stepApproveId: "このリクエストを承認します: openclaw devices approve {requestId}.",
+        stepApprove: "その一覧から保留中のブラウザー/デバイスリクエストを承認します。",
+        stepReconnect: "承認が完了したら再接続します。",
+      },
+      insecure: {
+        title: "安全なブラウザーコンテキストが必要です",
+        summary:
+          "このページは通常の HTTP で実行されているため、ブラウザーは Gateway が期待するデバイス ID を作成できません。",
+        stepHttps:
+          "HTTPS/Tailscale Serve を使用するか、Gateway ホストで http://127.0.0.1:18789 を開きます。",
+        stepLocalCompat:
+          "ローカルのトークンのみの互換性には、gateway.controlUi.allowInsecureAuth: true を設定します。",
+        stepAvoidDisable:
+          "リモート HTTP アクセスのためにデバイス認証を無効にすることは避けてください。",
+      },
+      origin: {
+        title: "ブラウザーオリジンは許可されていません",
+        summary: "Gateway は Control UI 接続を受け入れる前に、このページのオリジンを拒否しました。",
+        stepAllowedOrigins:
+          "このブラウザーオリジンを gateway.controlUi.allowedOrigins に追加します。",
+        stepFullOrigin:
+          "http://localhost:5173 のような完全なオリジンを使用し、ワイルドカードパターンは使わないでください。",
+        stepRestart: "許可オリジンを変更した後、Gateway を再起動または再読み込みします。",
+      },
+      protocol: {
+        title: "プロトコルが一致しません",
+        summary:
+          "提供された Control UI と実行中の Gateway で、サポートされる接続プロトコルが一致していません。",
+        stepDashboard:
+          "openclaw dashboard で提供元の dashboard を開き直し、UI と Gateway が同じインストールから来るようにします。",
+        stepDevUi:
+          "pnpm ui:dev を使用している場合は、現在の checkout に対して開発 UI を再ビルドまたは再起動します。",
+        stepRestart: "OpenClaw 更新後に Gateway を再起動し、現在のプロトコルを提供させます。",
+      },
+      network: {
+        title: "接続できません",
+        summary:
+          "ブラウザーは Gateway 接続を完了できませんでした。認証情報を再試行する前に、ターゲットとトランスポートを確認してください。",
+        stepGateway:
+          "openclaw status または openclaw gateway run で Gateway が実行中であることを確認します。",
+        stepUrl:
+          "WebSocket URL を確認し、Gateway が HTTPS/Tailscale Serve の背後にある場合は wss:// を使用します。",
+        stepDashboard:
+          "openclaw dashboard --no-open で dashboard を開き直し、現在の URL と認証詳細を再コピーします。",
+      },
+    },
   },
   chat: {
     disconnected: "Gateway から切断されました。",
@@ -902,6 +1088,10 @@ export const ja_JP: TranslationMap = {
     settings: "チャット設定",
     thinkingToggle: "アシスタントの思考 / 作業出力の表示を切り替え",
     toolCallsToggle: "ツール呼び出しとツール結果の表示を切り替え",
+    autoScrollMode: "自動スクロールモード",
+    autoScrollAlways: "常に",
+    autoScrollNearBottom: "下部付近",
+    autoScrollOff: "オフ",
     focusToggle: "フォーカスモードを切り替え（サイドバー + ページヘッダーを非表示）",
     hideCronSessions: "Cron セッションを非表示",
     showCronSessions: "Cron セッションを表示",
@@ -916,6 +1106,53 @@ export const ja_JP: TranslationMap = {
     updating: "更新中…",
     updateNow: "今すぐ更新",
     dismissUpdateBanner: "更新バナーを閉じる",
+    switchedSession: "{session} に切り替えました",
+    welcome: {
+      ready: "Ready to chat",
+      hintBeforeShortcut: "Type a message below ·",
+      hintAfterShortcut: "for commands",
+      suggestions: {
+        whatCanYouDo: "What can you do?",
+        summarizeRecentSessions: "Summarize my recent sessions",
+        configureChannel: "Help me configure a channel",
+        checkSystemHealth: "Check system health",
+      },
+    },
+    runControls: {
+      newSession: "New session",
+      export: "エクスポート",
+      exportChat: "Export chat",
+      queue: "Queue",
+      queueMessage: "Queue message",
+      stop: "Stop",
+      stopGenerating: "Stop generating",
+      send: "Send",
+      sendMessage: "Send message",
+    },
+    queue: {
+      retry: "再試行",
+      retrySend: "送信を再試行",
+      retryQueuedMessage: "キュー内のメッセージを再試行",
+    },
+    composer: {
+      placeholder: "Message {name} (Enter to send)",
+      placeholderWithAttachments: "Add a message or paste more images...",
+      placeholderDisconnected: "Connect to the gateway to start chatting...",
+      attachFile: "Attach file",
+      startTalk: "Start Talk",
+      stillListening: "まだ聞いています",
+      talkTranscript: "会話の文字起こし",
+      stopTalk: "Stop Talk",
+    },
+    selectors: {
+      agentFilter: "エージェントでセッションを絞り込む",
+      session: "Chat session",
+      sessionSearch: "セッションを検索",
+      clearSessionSearch: "セッション検索をクリア",
+      loadMoreSessions: "さらにセッションを読み込む",
+      model: "Chat model",
+      thinkingLevel: "Chat thinking level",
+    },
   },
   languages: {
     en: "英語",
@@ -1025,6 +1262,9 @@ export const ja_JP: TranslationMap = {
       ascending: "昇順",
       descending: "降順",
       reset: "リセット",
+      emptyTitle: "No scheduled jobs yet.",
+      emptyHint: "Create one from a plain-language prompt; advanced fields can wait.",
+      emptyFilteredHint: "Clear or change filters to see scheduled jobs.",
       noMatching: "一致するジョブはありません。",
       loading: "読み込み中...",
       loadMore: "さらにジョブを読み込む",
@@ -1060,6 +1300,7 @@ export const ja_JP: TranslationMap = {
     form: {
       editJob: "ジョブを編集",
       newJob: "新しいジョブ",
+      advancedJob: "Advanced job",
       updateSubtitle: "選択したスケジュール済みジョブを更新します。",
       createSubtitle: "スケジュールされたウェイクアップまたはエージェント実行を作成します。",
       required: "必須",

@@ -1,7 +1,13 @@
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
-import fs from "node:fs/promises";
 import path from "node:path";
+import { root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
+import {
+  classifyFsSafeReadError,
+  readAbsolutePath,
+  resolveCanonicalReadPath,
+  statRequiredDirectory,
+} from "./path-errors.js";
 
 const DIR_FETCH_HARD_MAX_BYTES = 16 * 1024 * 1024;
 const DIR_FETCH_DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
@@ -50,6 +56,10 @@ function clampMaxBytes(input: unknown): number {
 }
 
 function classifyFsError(err: unknown): DirFetchErrCode {
+  const safeCode = classifyFsSafeReadError(err);
+  if (safeCode) {
+    return safeCode;
+  }
   const code = (err as { code?: string } | null)?.code;
   if (code === "ENOENT") {
     return "NOT_FOUND";
@@ -145,18 +155,18 @@ async function listTarEntries(tarBuffer: Buffer): Promise<string[]> {
 
 async function listTreeEntries(root: string, maxEntries: number): Promise<string[] | "TOO_MANY"> {
   const results: string[] = [];
-  async function visit(dir: string): Promise<boolean> {
-    const entries = await fs.readdir(dir, { withFileTypes: true });
+  const rootHandle = await fsRoot(root);
+  async function visit(relativeDir: string): Promise<boolean> {
+    const entries = await rootHandle.list(relativeDir, { withFileTypes: true });
     entries.sort((left, right) => left.name.localeCompare(right.name));
     for (const entry of entries) {
-      const abs = path.join(dir, entry.name);
-      const rel = path.relative(root, abs).replace(/\\/gu, "/");
+      const rel = path.posix.join(relativeDir === "." ? "" : relativeDir, entry.name);
       results.push(rel);
       if (results.length > maxEntries) {
         return false;
       }
-      if (entry.isDirectory()) {
-        const ok = await visit(abs);
+      if (entry.isDirectory) {
+        const ok = await visit(rel);
         if (!ok) {
           return false;
         }
@@ -164,19 +174,13 @@ async function listTreeEntries(root: string, maxEntries: number): Promise<string
     }
     return true;
   }
-  return (await visit(root)) ? results : "TOO_MANY";
+  return (await visit(".")) ? results : "TOO_MANY";
 }
 
 export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchResult> {
-  const requestedPath = params.path;
-  if (typeof requestedPath !== "string" || requestedPath.length === 0) {
-    return { ok: false, code: "INVALID_PATH", message: "path required" };
-  }
-  if (requestedPath.includes("\0")) {
-    return { ok: false, code: "INVALID_PATH", message: "path contains NUL byte" };
-  }
-  if (!path.isAbsolute(requestedPath)) {
-    return { ok: false, code: "INVALID_PATH", message: "path must be absolute" };
+  const requestedPath = readAbsolutePath(params.path);
+  if (typeof requestedPath !== "string") {
+    return requestedPath;
   }
 
   const maxBytes = clampMaxBytes(params.maxBytes);
@@ -184,42 +188,19 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
   const followSymlinks = params.followSymlinks === true;
   const preflightOnly = params.preflightOnly === true;
 
-  let canonical: string;
-  try {
-    canonical = await fs.realpath(requestedPath);
-  } catch (err) {
-    const code = classifyFsError(err);
-    return {
-      ok: false,
-      code,
-      message: code === "NOT_FOUND" ? "directory not found" : `realpath failed: ${String(err)}`,
-    };
+  const canonical = await resolveCanonicalReadPath({
+    requestedPath,
+    followSymlinks,
+    classifyError: classifyFsError,
+    notFoundMessage: "directory not found",
+  });
+  if (typeof canonical !== "string") {
+    return canonical;
   }
 
-  if (!followSymlinks && canonical !== requestedPath) {
-    return {
-      ok: false,
-      code: "SYMLINK_REDIRECT",
-      message: `path traverses a symlink; refusing because followSymlinks=false (set plugins.entries.file-transfer.config.nodes.<node>.followSymlinks=true to allow, or update allowReadPaths to the canonical path)`,
-      canonicalPath: canonical,
-    };
-  }
-
-  let stats: Awaited<ReturnType<typeof fs.stat>>;
-  try {
-    stats = await fs.stat(canonical);
-  } catch (err) {
-    const code = classifyFsError(err);
-    return { ok: false, code, message: `stat failed: ${String(err)}`, canonicalPath: canonical };
-  }
-
-  if (!stats.isDirectory()) {
-    return {
-      ok: false,
-      code: "IS_FILE",
-      message: "path is not a directory",
-      canonicalPath: canonical,
-    };
+  const directory = await statRequiredDirectory(canonical, classifyFsError);
+  if (!directory.ok) {
+    return directory;
   }
 
   if (preflightOnly) {

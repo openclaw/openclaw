@@ -1,31 +1,31 @@
 ---
-summary: "macOS app flow for controlling a remote OpenClaw gateway over SSH"
+summary: "macOS app flow for controlling a remote OpenClaw gateway"
 read_when:
   - Setting up or debugging remote mac control
 title: "Remote control"
 ---
 
-# Remote OpenClaw (macOS ⇄ remote host)
-
-This flow lets the macOS app act as a full remote control for an OpenClaw gateway running on another host (desktop/server). It’s the app’s **Remote over SSH** (remote run) feature. All features—health checks, Voice Wake forwarding, and Web Chat—reuse the same remote SSH configuration from _Settings → General_.
+This flow lets the macOS app act as a full remote control for an OpenClaw gateway running on another host (desktop/server). The app can connect directly to trusted LAN/Tailnet gateway URLs or manage an SSH tunnel when the remote gateway is loopback-only. Health checks, Voice Wake forwarding, and Web Chat reuse the same remote configuration from _Settings → General_.
 
 ## Modes
 
 - **Local (this Mac)**: Everything runs on the laptop. No SSH involved.
 - **Remote over SSH (default)**: OpenClaw commands are executed on the remote host. The mac app opens an SSH connection with `-o BatchMode` plus your chosen identity/key and a local port-forward.
-- **Remote direct (ws/wss)**: No SSH tunnel. The mac app connects to the gateway URL directly (for example, via Tailscale Serve or a public HTTPS reverse proxy).
+- **Remote direct (ws/wss)**: No SSH tunnel. The mac app connects to the gateway URL directly (for example, via LAN, Tailscale, Tailscale Serve, or a public HTTPS reverse proxy).
 
 ## Remote transports
 
 Remote mode supports two transports:
 
-- **SSH tunnel** (default): Uses `ssh -N -L ...` to forward the gateway port to localhost. The gateway will see the node’s IP as `127.0.0.1` because the tunnel is loopback.
+- **SSH tunnel** (default): Uses `ssh -N -L ...` to forward the gateway port to localhost. The gateway will see the node's IP as `127.0.0.1` because the tunnel is loopback.
 - **Direct (ws/wss)**: Connects straight to the gateway URL. The gateway sees the real client IP.
 
 In SSH tunnel mode, discovered LAN/tailnet hostnames are saved as
 `gateway.remote.sshTarget`. The app keeps `gateway.remote.url` on the local
 tunnel endpoint, for example `ws://127.0.0.1:18789`, so CLI, Web Chat, and
 the local node-host service all use the same safe loopback transport.
+If the local tunnel port differs from the remote gateway port, set
+`gateway.remote.remotePort` to the port on the remote host.
 
 Browser automation in remote mode is owned by the CLI node host, not by the
 native macOS app node. The app starts the installed node host service when
@@ -38,12 +38,33 @@ node.
 
 1. Install Node + pnpm and build/install the OpenClaw CLI (`pnpm install && pnpm build && pnpm link --global`).
 2. Ensure `openclaw` is on PATH for non-interactive shells (symlink into `/usr/local/bin` or `/opt/homebrew/bin` if needed).
-3. Open SSH with key auth. We recommend **Tailscale** IPs for stable reachability off-LAN.
+3. For SSH transport only: open SSH with key auth. We recommend **Tailscale** IPs for stable reachability off-LAN.
 
 ## macOS app setup
 
+To preconfigure the app without the welcome flow:
+
+```bash
+openclaw-mac configure-remote \
+  --ssh-target user@gateway.local \
+  --local-port 18789 \
+  --remote-port 18789 \
+  --token "$OPENCLAW_GATEWAY_TOKEN"
+```
+
+For a gateway already reachable on a trusted LAN or Tailnet, skip SSH entirely:
+
+```bash
+openclaw-mac configure-remote \
+  --direct-url ws://192.168.0.202:18789 \
+  --token "$OPENCLAW_GATEWAY_TOKEN"
+```
+
+This writes the remote config, marks onboarding complete, and lets the app own
+the selected transport when it starts.
+
 1. Open _Settings → General_.
-2. Under **OpenClaw runs**, pick **Remote over SSH** and set:
+2. Under **OpenClaw runs**, pick **Remote** and set:
    - **Transport**: **SSH tunnel** or **Direct (ws/wss)**.
    - **SSH target**: `user@host` (optional `:port`).
      - If the gateway is on the same LAN and advertises Bonjour, pick it from the discovered list to auto-fill this field.
@@ -51,8 +72,8 @@ node.
    - **Identity file** (advanced): path to your key.
    - **Project root** (advanced): remote checkout path used for commands.
    - **CLI path** (advanced): optional path to a runnable `openclaw` entrypoint/binary (auto-filled when advertised).
-3. Hit **Test remote**. Success indicates the remote `openclaw status --json` runs correctly. Failures usually mean PATH/CLI issues; exit 127 means the CLI isn’t found remotely.
-4. Health checks and Web Chat will now run through this SSH tunnel automatically.
+3. Hit **Test remote**. Success indicates the remote `openclaw status --json` runs correctly. Failures usually mean PATH/CLI issues; exit 127 means the CLI isn't found remotely.
+4. Health checks and Web Chat will now run through the selected transport automatically.
 
 ## Web Chat
 
@@ -63,11 +84,11 @@ node.
 ## Permissions
 
 - The remote host needs the same TCC approvals as local (Automation, Accessibility, Screen Recording, Microphone, Speech Recognition, Notifications). Run onboarding on that machine to grant them once.
-- Nodes advertise their permission state via `node.list` / `node.describe` so agents know what’s available.
+- Nodes advertise their permission state via `node.list` / `node.describe` so agents know what's available.
 
 ## Security notes
 
-- Prefer loopback binds on the remote host and connect via SSH or Tailscale.
+- Prefer loopback binds on the remote host and connect via SSH, Tailscale Serve, or a trusted Tailnet/LAN direct URL.
 - SSH tunneling uses strict host-key checking; trust the host key first so it exists in `~/.ssh/known_hosts`.
 - If you bind the Gateway to a non-loopback interface, require valid Gateway auth: token, password, or an identity-aware reverse proxy with `gateway.auth.mode: "trusted-proxy"`.
 - See [Security](/gateway/security) and [Tailscale](/gateway/tailscale).
@@ -79,11 +100,11 @@ node.
 
 ## Troubleshooting
 
-- **exit 127 / not found**: `openclaw` isn’t on PATH for non-login shells. Add it to `/etc/paths`, your shell rc, or symlink into `/usr/local/bin`/`/opt/homebrew/bin`.
+- **exit 127 / not found**: `openclaw` isn't on PATH for non-login shells. Add it to `/etc/paths`, your shell rc, or symlink into `/usr/local/bin`/`/opt/homebrew/bin`.
 - **Health probe failed**: check SSH reachability, PATH, and that Baileys is logged in (`openclaw status --json`).
 - **Web Chat stuck**: confirm the gateway is running on the remote host and the forwarded port matches the gateway WS port; the UI requires a healthy WS connection.
 - **Node IP shows 127.0.0.1**: expected with the SSH tunnel. Switch **Transport** to **Direct (ws/wss)** if you want the gateway to see the real client IP.
-- **Dashboard works but Mac capabilities are offline**: this means the app's operator/control connection is healthy, but the companion node connection is not connected or is missing its command surface. Open the menu bar device section and check whether the Mac is `paired · disconnected`. For `wss://*.ts.net` Tailscale Serve endpoints, the app detects stale legacy TLS leaf pins after certificate rotation, clears the stale pin when macOS trusts the new certificate, and retries automatically. If the certificate is not system-trusted or the host is not a Tailscale Serve name, review the certificate or switch to **Remote over SSH**.
+- **Dashboard works but Mac capabilities are offline**: this means the app's operator/control connection is healthy, but the companion node connection is not connected or is missing its command surface. Open the menu bar device section and check whether the Mac is `paired · disconnected`. For `wss://*.ts.net` Tailscale Serve endpoints, the app detects stale legacy TLS leaf pins after certificate rotation, clears the stale pin when macOS trusts the new certificate, and retries automatically. If the certificate is not system-trusted or the host is not a Tailscale Serve name, set `gateway.remote.tlsFingerprint` to the expected certificate fingerprint, review the certificate, or switch to **Remote over SSH**.
 - **Voice Wake**: trigger phrases are forwarded automatically in remote mode; no separate forwarder is needed.
 
 ## Notification sounds
@@ -94,7 +115,7 @@ Pick sounds per notification from scripts with `openclaw` and `node.invoke`, e.g
 openclaw nodes notify --node <id> --title "Ping" --body "Remote gateway ready" --sound Glass
 ```
 
-There is no global “default sound” toggle in the app anymore; callers choose a sound (or none) per request.
+There is no global "default sound" toggle in the app anymore; callers choose a sound (or none) per request.
 
 ## Related
 

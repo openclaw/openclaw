@@ -2,13 +2,12 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
-  CURRENT_SESSION_VERSION,
   migrateSessionEntries,
   parseSessionEntries,
   type FileEntry,
-  type SessionEntry as PiSessionEntry,
+  type SessionEntry as AgentSessionEntry,
   type SessionHeader,
-} from "@mariozechner/pi-coding-agent";
+} from "../../agents/sessions/session-manager.js";
 import { derivePromptTokens } from "../../agents/usage.js";
 import {
   resolveSessionFilePath,
@@ -18,13 +17,15 @@ import {
   resolveFreshSessionTotalTokens,
   type SessionEntry as StoreSessionEntry,
 } from "../../config/sessions/types.js";
+import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import { readLatestRecentSessionUsageFromTranscriptAsync } from "../../gateway/session-utils.fs.js";
+import { readRegularFile } from "../../infra/fs-safe.js";
 
 type ForkSourceTranscript = {
   cwd: string;
   sessionDir: string;
   leafId: string | null;
-  branchEntries: PiSessionEntry[];
+  branchEntries: AgentSessionEntry[];
   labelsToWrite: Array<{ targetId: string; label: string; timestamp: string }>;
 };
 
@@ -105,7 +106,7 @@ export async function resolveParentForkTokenCountRuntime(params: {
   return maxPositiveTokenCount(cachedTokens, byteEstimateTokens);
 }
 
-function isSessionEntry(entry: FileEntry): entry is PiSessionEntry {
+function isSessionEntry(entry: FileEntry): entry is AgentSessionEntry {
   return (
     entry.type !== "session" &&
     typeof (entry as { id?: unknown }).id === "string" &&
@@ -114,15 +115,15 @@ function isSessionEntry(entry: FileEntry): entry is PiSessionEntry {
   );
 }
 
-function buildEntryIndex(entries: PiSessionEntry[]): Map<string, PiSessionEntry> {
+function buildEntryIndex(entries: AgentSessionEntry[]): Map<string, AgentSessionEntry> {
   return new Map(entries.map((entry) => [entry.id, entry]));
 }
 
 function readBranch(params: {
-  byId: Map<string, PiSessionEntry>;
+  byId: Map<string, AgentSessionEntry>;
   leafId: string | null;
-}): PiSessionEntry[] {
-  const branchEntries: PiSessionEntry[] = [];
+}): AgentSessionEntry[] {
+  const branchEntries: AgentSessionEntry[] = [];
   let current = params.leafId ? params.byId.get(params.leafId) : undefined;
   while (current) {
     branchEntries.unshift(current);
@@ -145,7 +146,7 @@ function generateEntryId(existingIds: Set<string>): string {
 }
 
 function collectBranchLabels(params: {
-  allEntries: PiSessionEntry[];
+  allEntries: AgentSessionEntry[];
   pathEntryIds: Set<string>;
 }): Array<{ targetId: string; label: string; timestamp: string }> {
   const labelsToWrite: Array<{ targetId: string; label: string; timestamp: string }> = [];
@@ -169,7 +170,7 @@ function collectBranchLabels(params: {
 async function readForkSourceTranscript(
   parentSessionFile: string,
 ): Promise<ForkSourceTranscript | null> {
-  const raw = await fs.readFile(parentSessionFile, "utf-8");
+  const raw = (await readRegularFile({ filePath: parentSessionFile })).buffer.toString("utf-8");
   const fileEntries = parseSessionEntries(raw);
   migrateSessionEntries(fileEntries);
   const header =
@@ -194,9 +195,9 @@ function buildBranchLabelEntries(params: {
   labelsToWrite: Array<{ targetId: string; label: string; timestamp: string }>;
   pathEntryIds: Set<string>;
   lastEntryId: string | null;
-}): PiSessionEntry[] {
+}): AgentSessionEntry[] {
   let parentId = params.lastEntryId;
-  const labelEntries: PiSessionEntry[] = [];
+  const labelEntries: AgentSessionEntry[] = [];
   for (const { targetId, label, timestamp } of params.labelsToWrite) {
     const labelEntry = {
       type: "label",
@@ -205,7 +206,7 @@ function buildBranchLabelEntries(params: {
       timestamp,
       targetId,
       label,
-    } satisfies PiSessionEntry;
+    } satisfies AgentSessionEntry;
     params.pathEntryIds.add(labelEntry.id);
     labelEntries.push(labelEntry);
     parentId = labelEntry.id;
@@ -281,15 +282,6 @@ async function writeBranchedSession(params: {
   return { sessionId, sessionFile };
 }
 
-async function fileExists(filePath: string): Promise<boolean> {
-  try {
-    const stat = await fs.stat(filePath);
-    return stat.isFile();
-  } catch {
-    return false;
-  }
-}
-
 export async function forkSessionFromParentRuntime(params: {
   parentEntry: StoreSessionEntry;
   agentId: string;
@@ -300,7 +292,7 @@ export async function forkSessionFromParentRuntime(params: {
     params.parentEntry,
     { agentId: params.agentId, sessionsDir: params.sessionsDir },
   );
-  if (!parentSessionFile || !(await fileExists(parentSessionFile))) {
+  if (!parentSessionFile) {
     return null;
   }
   try {

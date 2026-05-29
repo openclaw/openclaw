@@ -7,8 +7,7 @@ import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 
 vi.mock("./provider-auth-aliases.js", () => ({
-  resolveProviderIdForAuth: (provider: string) =>
-    provider.trim().toLowerCase() === "z.ai" ? "zai" : provider.trim().toLowerCase(),
+  resolveProviderIdForAuth: (provider: string) => provider.trim().toLowerCase(),
 }));
 
 function makeApiKeyStore(provider: string, profileIds: string[]): AuthProfileStore {
@@ -41,6 +40,67 @@ function makeApiKeyProfilesByProviderProvider(
 describe("resolveAuthProfileOrder", () => {
   const store = ANTHROPIC_STORE;
   const cfg = ANTHROPIC_CFG;
+
+  it("keeps config-only aws-sdk profiles for aws-sdk providers", () => {
+    const order = resolveAuthProfileOrder({
+      cfg: {
+        models: {
+          providers: {
+            "amazon-bedrock": {
+              auth: "aws-sdk",
+              baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+              api: "bedrock-converse-stream",
+              models: [],
+            },
+          },
+        },
+        auth: {
+          order: {
+            "amazon-bedrock": ["amazon-bedrock:default"],
+          },
+          profiles: {
+            "amazon-bedrock:default": {
+              provider: "amazon-bedrock",
+              mode: "aws-sdk",
+            },
+          },
+        },
+      },
+      store: { version: 1, profiles: {} },
+      provider: "amazon-bedrock",
+    });
+
+    expect(order).toEqual(["amazon-bedrock:default"]);
+  });
+
+  it("rejects config-only aws-sdk profiles for non aws-sdk providers", () => {
+    const order = resolveAuthProfileOrder({
+      cfg: {
+        models: {
+          providers: {
+            anthropic: {
+              auth: "api-key",
+              baseUrl: "https://api.anthropic.com",
+              api: "anthropic-messages",
+              models: [],
+            },
+          },
+        },
+        auth: {
+          profiles: {
+            "anthropic:aws": {
+              provider: "anthropic",
+              mode: "aws-sdk",
+            },
+          },
+        },
+      },
+      store: { version: 1, profiles: {} },
+      provider: "anthropic",
+    });
+
+    expect(order).toStrictEqual([]);
+  });
 
   function resolveWithAnthropicOrderAndUsage(params: {
     orderSource: "store" | "config";
@@ -107,7 +167,7 @@ describe("resolveAuthProfileOrder", () => {
     });
     expect(order[0]).toBe("anthropic:default");
   });
-  it("normalizes z.ai aliases in auth.order", () => {
+  it("does not match auth.order across provider id variants", () => {
     const order = resolveAuthProfileOrder({
       cfg: {
         auth: {
@@ -121,7 +181,7 @@ describe("resolveAuthProfileOrder", () => {
       store: makeApiKeyStore("zai", ["zai:default", "zai:work"]),
       provider: "zai",
     });
-    expect(order).toEqual(["zai:work", "zai:default"]);
+    expect(order).toEqual(["zai:default", "zai:work"]);
   });
   it("normalizes provider casing in auth.order keys", () => {
     const order = resolveAuthProfileOrder({
@@ -139,7 +199,7 @@ describe("resolveAuthProfileOrder", () => {
     });
     expect(order).toEqual(["openai:work", "openai:default"]);
   });
-  it("normalizes z.ai aliases in auth.profiles", () => {
+  it("does not match provider id variants in auth.profiles", () => {
     const order = resolveAuthProfileOrder({
       cfg: {
         auth: {
@@ -152,7 +212,7 @@ describe("resolveAuthProfileOrder", () => {
       store: makeApiKeyStore("zai", ["zai:default", "zai:work"]),
       provider: "zai",
     });
-    expect(order).toEqual(["zai:default", "zai:work"]);
+    expect(order).toEqual([]);
   });
   it("prioritizes oauth profiles when order missing", () => {
     const mixedStore: AuthProfileStore = {
@@ -305,7 +365,7 @@ describe("resolveAuthProfileOrder", () => {
       },
       provider: "openai-codex",
     });
-    expect(order).toEqual([]);
+    expect(order).toStrictEqual([]);
   });
   it("drops explicit order entries that belong to another provider", () => {
     const order = resolveAuthProfileOrder({
@@ -600,7 +660,7 @@ describe("resolveAuthProfileOrder", () => {
     },
   ])("$caseName", ({ profile }) => {
     const order = resolveMinimaxOrderWithProfile(profile);
-    expect(order).toEqual([]);
+    expect(order).toStrictEqual([]);
   });
   it("keeps api_key profiles backed by keyRef when plaintext key is absent", () => {
     const order = resolveAuthProfileOrder({
@@ -652,7 +712,7 @@ describe("resolveAuthProfileOrder", () => {
       },
       expires: 0,
     });
-    expect(order).toEqual([]);
+    expect(order).toStrictEqual([]);
   });
   it("keeps token profiles with inline token when no expires is set", () => {
     const order = resolveMinimaxOrderWithProfile({

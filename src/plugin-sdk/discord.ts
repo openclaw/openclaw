@@ -1,7 +1,11 @@
+/**
+ * @deprecated Public SDK subpath has no bundled extension production imports.
+ * Use generic channel SDK subpaths or plugin-local API barrels instead.
+ */
+
 import type {
   ChannelAccountSnapshot,
   ChannelGroupContext,
-  ChannelMessageActionAdapter,
   ChannelStatusIssue,
 } from "./channel-contract.js";
 import type { ChannelPlugin } from "./channel-core.js";

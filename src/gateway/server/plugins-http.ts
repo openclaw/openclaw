@@ -1,12 +1,15 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { Duplex } from "node:stream";
+import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../../packages/gateway-protocol/src/client-info.js";
+import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/index.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
-import { resolveActivePluginHttpRouteRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import type { AuthorizedGatewayHttpRequest } from "../http-utils.js";
-import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../protocol/client-info.js";
-import { PROTOCOL_VERSION } from "../protocol/index.js";
-import type { GatewayRequestOptions } from "../server-methods/types.js";
+import type { GatewayRequestContext, GatewayRequestOptions } from "../server-methods/types.js";
 import { resolvePluginRouteRuntimeOperatorScopes } from "./plugin-route-runtime-scopes.js";
 import {
   resolvePluginRoutePathContext,
@@ -47,6 +50,11 @@ function createPluginRouteRuntimeClient(
   };
 }
 
+function writeUpgradeUnauthorized(socket: Duplex) {
+  socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
+  socket.destroy();
+}
+
 export type PluginRouteDispatchContext = {
   gatewayAuthSatisfied?: boolean;
   gatewayRequestAuth?: AuthorizedGatewayHttpRequest;
@@ -60,13 +68,24 @@ export type PluginHttpRequestHandler = (
   dispatchContext?: PluginRouteDispatchContext,
 ) => Promise<boolean>;
 
+export type PluginHttpUpgradeHandler = (
+  req: IncomingMessage,
+  socket: Duplex,
+  head: Buffer,
+  pathContext?: PluginRoutePathContext,
+  dispatchContext?: PluginRouteDispatchContext,
+) => Promise<boolean>;
+
 export function createGatewayPluginRequestHandler(params: {
   registry: PluginRegistry;
+  getRouteRegistry?: () => PluginRegistry;
   log: SubsystemLogger;
+  getGatewayRequestContext?: () => GatewayRequestContext | undefined;
 }): PluginHttpRequestHandler {
   const { log } = params;
   return async (req, res, providedPathContext, dispatchContext) => {
-    const registry = resolveActivePluginHttpRouteRegistry(params.registry);
+    const registry = params.getRouteRegistry?.() ?? params.registry;
+    const gatewayRequestContext = params.getGatewayRequestContext?.();
     const routes = registry.httpRoutes ?? [];
     if (routes.length === 0) {
       return false;
@@ -131,8 +150,14 @@ export function createGatewayPluginRequestHandler(params: {
       try {
         const handled = await withPluginRuntimeGatewayRequestScope(
           {
+            ...(gatewayRequestContext ? { context: gatewayRequestContext } : {}),
             client: runtimeClient,
             isWebchatConnect: () => false,
+            ...(route.pluginId ? { pluginId: route.pluginId } : {}),
+            ...(route.source ? { pluginSource: route.source } : {}),
+            ...(route.gatewayMethodDispatchAllowed === true
+              ? { gatewayMethodDispatchAllowed: true }
+              : {}),
           },
           async () => route.handler(req, res),
         );
@@ -146,6 +171,107 @@ export function createGatewayPluginRequestHandler(params: {
           res.setHeader("Content-Type", "text/plain; charset=utf-8");
           res.end("Internal Server Error");
         }
+        return true;
+      }
+    }
+    return false;
+  };
+}
+
+export function createGatewayPluginUpgradeHandler(params: {
+  registry: PluginRegistry;
+  getRouteRegistry?: () => PluginRegistry;
+  log: SubsystemLogger;
+  getGatewayRequestContext?: () => GatewayRequestContext | undefined;
+}): PluginHttpUpgradeHandler {
+  const { log } = params;
+  return async (req, socket, head, providedPathContext, dispatchContext) => {
+    const registry = params.getRouteRegistry?.() ?? params.registry;
+    const gatewayRequestContext = params.getGatewayRequestContext?.();
+    const routes = registry.httpRoutes ?? [];
+    if (routes.length === 0) {
+      return false;
+    }
+
+    const pathContext =
+      providedPathContext ??
+      (() => {
+        const url = new URL(req.url ?? "/", "http://localhost");
+        return resolvePluginRoutePathContext(url.pathname);
+      })();
+    const matchedRoutes = findMatchingPluginHttpRoutes(registry, pathContext).filter(
+      (route) => typeof route.handleUpgrade === "function",
+    );
+    if (matchedRoutes.length === 0) {
+      return false;
+    }
+    const requiresGatewayAuth = matchedPluginRoutesRequireGatewayAuth(matchedRoutes);
+    if (requiresGatewayAuth && dispatchContext?.gatewayAuthSatisfied !== true) {
+      log.warn(`plugin http upgrade blocked without gateway auth (${pathContext.canonicalPath})`);
+      writeUpgradeUnauthorized(socket);
+      return true;
+    }
+    const gatewayRequestAuth = dispatchContext?.gatewayRequestAuth;
+    const gatewayRequestOperatorScopes = dispatchContext?.gatewayRequestOperatorScopes;
+
+    for (const route of matchedRoutes) {
+      if (route.auth !== "gateway") {
+        continue;
+      }
+      if (route.gatewayRuntimeScopeSurface === "trusted-operator") {
+        if (!gatewayRequestAuth) {
+          log.warn(
+            `plugin http upgrade blocked without caller auth context (${pathContext.canonicalPath})`,
+          );
+          writeUpgradeUnauthorized(socket);
+          return true;
+        }
+        continue;
+      }
+      if (gatewayRequestOperatorScopes === undefined) {
+        log.warn(
+          `plugin http upgrade blocked without caller scope context (${pathContext.canonicalPath})`,
+        );
+        writeUpgradeUnauthorized(socket);
+        return true;
+      }
+    }
+
+    for (const route of matchedRoutes) {
+      let runtimeScopes: readonly string[] = [];
+      if (route.auth === "gateway") {
+        if (route.gatewayRuntimeScopeSurface === "trusted-operator") {
+          runtimeScopes = resolvePluginRouteRuntimeOperatorScopes(
+            req,
+            gatewayRequestAuth!,
+            "trusted-operator",
+          );
+        } else {
+          runtimeScopes = gatewayRequestOperatorScopes!;
+        }
+      }
+
+      const runtimeClient = createPluginRouteRuntimeClient(runtimeScopes);
+      try {
+        const handled = await withPluginRuntimeGatewayRequestScope(
+          {
+            ...(gatewayRequestContext ? { context: gatewayRequestContext } : {}),
+            client: runtimeClient,
+            isWebchatConnect: () => false,
+            ...(route.pluginId ? { pluginId: route.pluginId } : {}),
+            ...(route.source ? { pluginSource: route.source } : {}),
+            ...(route.gatewayMethodDispatchAllowed === true
+              ? { gatewayMethodDispatchAllowed: true }
+              : {}),
+          },
+          async () => route.handleUpgrade?.(req, socket, head),
+        );
+        if (handled !== false) {
+          return true;
+        }
+      } catch (err) {
+        log.warn(`plugin http upgrade failed (${route.pluginId ?? "unknown"}): ${String(err)}`);
+        socket.destroy();
         return true;
       }
     }

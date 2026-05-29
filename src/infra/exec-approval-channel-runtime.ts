@@ -1,8 +1,8 @@
+import { readConnectErrorDetailCode } from "../../packages/gateway-protocol/src/connect-error-details.js";
+import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-readiness.js";
 import type { GatewayClient, GatewayReconnectPausedInfo } from "../gateway/client.js";
 import { createOperatorApprovalsGatewayClient } from "../gateway/operator-approvals-client.js";
-import { readConnectErrorDetailCode } from "../gateway/protocol/connect-error-details.js";
-import type { EventFrame } from "../gateway/protocol/index.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { formatErrorMessage } from "./errors.js";
 import type {
@@ -365,7 +365,11 @@ export function createExecApprovalChannelRuntime<
             },
           });
           if (!readiness.ready) {
-            throw new Error("gateway event loop readiness timeout");
+            throw new Error(
+              readiness.aborted
+                ? "gateway approval runtime start aborted before readiness"
+                : "gateway readiness unavailable before exec approval runtime start",
+            );
           }
           await ready;
           if (stopClientIfInactive(client)) {

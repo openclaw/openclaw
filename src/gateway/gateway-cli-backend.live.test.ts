@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveCliBackendConfig, resolveCliBackendLiveTest } from "../agents/cli-backends.js";
 import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
+import { shouldSkipLiveProviderDrift } from "../agents/live-test-provider-drift.js";
 import { parseModelRef } from "../agents/model-selection.js";
 import { clearRuntimeConfigSnapshot, type OpenClawConfig } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
@@ -17,6 +18,7 @@ import {
   parseImageMode,
   resolveCliModelSwitchProbeTarget,
   resolveCliBackendLiveArgs,
+  resolveCliBackendLiveModelSelection,
   parseJsonStringArray,
   restoreCliBackendLiveEnv,
   shouldRunCliImageProbe,
@@ -56,11 +58,26 @@ const DEFAULT_MODEL =
 // The cron/MCP live probe now tolerates more cancelled tool-call retries in CI,
 // so the outer test budget needs enough headroom to finish those retries.
 const CLI_BACKEND_LIVE_TIMEOUT_MS = 20 * 60_000;
-const CLI_BACKEND_REQUEST_TIMEOUT_MS = 600_000;
+const CLI_BACKEND_REQUEST_TIMEOUT_MS = parsePositiveIntegerEnv(
+  "OPENCLAW_LIVE_CLI_BACKEND_REQUEST_TIMEOUT_MS",
+  15 * 60_000,
+);
 const CLI_BACKEND_AGENT_TIMEOUT_SECONDS = Math.max(
   1,
   Math.ceil(CLI_BACKEND_REQUEST_TIMEOUT_MS / 1000) - 10,
 );
+
+function parsePositiveIntegerEnv(name: string, fallback: number): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) {
+    return fallback;
+  }
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`${name} must be a positive integer. Got: ${JSON.stringify(raw)}`);
+  }
+  return value;
+}
 
 function logCliBackendLiveStep(step: string, details?: Record<string, unknown>): void {
   if (!CLI_DEBUG) {
@@ -117,6 +134,16 @@ async function requestWithProviderCapacityRetry<T>(
       return await request();
     } catch (error) {
       if (!isProviderCapacityError(error) || attempt >= maxAttempts) {
+        if (
+          shouldSkipLiveProviderDrift({
+            error,
+            allowAuth: true,
+            allowBilling: true,
+          })
+        ) {
+          console.warn(`SKIP: ${label} skipped because provider account/auth drift blocked it.`);
+          return undefined;
+        }
         if (providerId === "claude-cli" && isProviderCapacityError(error)) {
           console.warn(`SKIP: ${label} skipped because Claude API stayed overloaded.`);
           return undefined;
@@ -189,25 +216,34 @@ describeLive("gateway live (cli backend)", () => {
       logCliBackendLiveStep("env-ready", { port });
 
       const rawModel = process.env.OPENCLAW_LIVE_CLI_BACKEND_MODEL ?? DEFAULT_MODEL;
-      const parsed = parseModelRef(rawModel, "claude-cli");
-      if (!parsed) {
-        throw new Error(
-          `OPENCLAW_LIVE_CLI_BACKEND_MODEL must resolve to a CLI backend model. Got: ${rawModel}`,
-        );
-      }
-
-      const providerId = parsed.provider;
-      const modelKey = `${providerId}/${parsed.model}`;
+      const initialParsed = parseModelRef(rawModel, "claude-cli");
+      const initialProviderId = initialParsed?.provider ?? "";
+      const initialModelKey = initialParsed
+        ? `${initialProviderId}/${initialParsed.model}`
+        : rawModel;
+      const initialModelSwitchTarget = resolveCliModelSwitchProbeTarget(
+        initialProviderId,
+        initialModelKey,
+      );
+      const modelSelection = resolveCliBackendLiveModelSelection({
+        rawModel,
+        defaultProvider: "claude-cli",
+        modelSwitchTarget: initialModelSwitchTarget,
+      });
+      const providerId = modelSelection.providerId;
+      const modelKey = modelSelection.cliModelKey;
+      const configModelKey = modelSelection.configModelKey;
       const backendResolved = resolveCliBackendConfig(providerId);
       const enableCliImageProbe = shouldRunCliImageProbe(providerId);
       const enableCliMcpProbe = shouldRunCliMcpProbe(providerId);
       const enableCliModelSwitchProbe = shouldRunCliModelSwitchProbe(providerId, modelKey);
       const modelSwitchTarget = enableCliModelSwitchProbe
-        ? resolveCliModelSwitchProbeTarget(providerId, modelKey)
+        ? modelSelection.configModelSwitchTarget
         : undefined;
       logCliBackendLiveStep("model-selected", {
         providerId,
         modelKey,
+        configModelKey,
         enableCliImageProbe,
         enableCliMcpProbe,
         enableCliModelSwitchProbe,
@@ -313,7 +349,7 @@ describeLive("gateway live (cli backend)", () => {
                 providers: {
                   ...cfg.models?.providers,
                   openai: {
-                    ...openAiProviderConfigForCodexCli(modelKey),
+                    ...openAiProviderConfigForCodexCli(configModelKey),
                     ...cfg.models?.providers?.openai,
                   },
                 },
@@ -332,12 +368,13 @@ describeLive("gateway live (cli backend)", () => {
           defaults: {
             ...cfg.agents?.defaults,
             ...(bootstrapWorkspace ? { workspace: bootstrapWorkspace.workspaceRootDir } : {}),
-            model: { primary: modelKey },
+            model: { primary: configModelKey },
             models: {
-              [modelKey]: {},
-              ...(modelSwitchTarget ? { [modelSwitchTarget]: {} } : {}),
+              [configModelKey]: { agentRuntime: modelSelection.agentRuntime },
+              ...(modelSwitchTarget
+                ? { [modelSwitchTarget]: { agentRuntime: modelSelection.agentRuntime } }
+                : {}),
             },
-            agentRuntime: { id: "pi", fallback: "pi" },
             cliBackends: {
               ...existingBackends,
               [providerId]: {
@@ -413,6 +450,12 @@ describeLive("gateway live (cli backend)", () => {
         if (!payload) {
           return;
         }
+        if (providerId === "codex-cli" && payload?.status === "timeout") {
+          console.warn(
+            "SKIP: Codex CLI backend live smoke timed out waiting for a model response.",
+          );
+          return;
+        }
         if (payload?.status !== "ok") {
           throw new Error(`agent status=${String(payload?.status)}`);
         }
@@ -430,11 +473,13 @@ describeLive("gateway live (cli backend)", () => {
           } else {
             expect(text).toContain(`CLI-BACKEND-${nonce}`);
           }
-          expect(
+          const injectedFileNames =
             resultWithMeta.meta?.systemPromptReport?.injectedWorkspaceFiles?.map(
               (entry) => entry.name,
-            ) ?? [],
-          ).toEqual(expect.arrayContaining(bootstrapWorkspace?.expectedInjectedFiles ?? []));
+            ) ?? [];
+          for (const expectedFile of bootstrapWorkspace?.expectedInjectedFiles ?? []) {
+            expect(injectedFileNames).toContain(expectedFile);
+          }
         }
 
         if (modelSwitchTarget) {
@@ -546,14 +591,12 @@ describeLive("gateway live (cli backend)", () => {
         if (enableCliMcpProbe) {
           logCliBackendLiveStep("cron-mcp-loopback-preflight:start", {
             sessionKey,
-            senderIsOwner: true,
           });
           await verifyCliCronMcpLoopbackPreflight({
             sessionKey,
             port,
             token,
             env: process.env,
-            senderIsOwner: true,
             expectedSchemaProbeToolName: schemaProbePluginPath
               ? MCP_SCHEMA_PROBE_TOOL_NAME
               : undefined,

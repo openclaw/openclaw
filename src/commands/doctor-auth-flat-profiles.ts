@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
-import { resolveAgentDir, listAgentIds } from "../agents/agent-scope.js";
+import { resolveAgentDir, resolveDefaultAgentDir, listAgentIds } from "../agents/agent-scope.js";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
 import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
 import {
@@ -11,8 +10,11 @@ import {
 import type { AuthProfileCredential, AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveStateDir } from "../config/paths.js";
+import type { AuthProfileConfig } from "../config/types.auth.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { coerceSecretRef } from "../config/types.secrets.js";
 import { loadJsonFile } from "../infra/json-file.js";
+import { isRecord } from "../shared/record-coerce.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
@@ -28,6 +30,20 @@ type LegacyFlatAuthProfileStore = {
   store: AuthProfileStore;
 };
 
+type AwsSdkProfileMarker = {
+  profileId: string;
+  provider: string;
+  email?: string;
+  displayName?: string;
+};
+
+type AwsSdkAuthProfileMarkerStore = {
+  agentDir?: string;
+  authPath: string;
+  raw: Record<string, unknown>;
+  profiles: AwsSdkProfileMarker[];
+};
+
 export type LegacyFlatAuthProfileRepairResult = {
   detected: string[];
   changes: string[];
@@ -36,16 +52,20 @@ export type LegacyFlatAuthProfileRepairResult = {
 
 const UNSAFE_LEGACY_AUTH_PROFILE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
 function readNonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
 function isSafeLegacyProviderKey(key: string): boolean {
   return key.trim().length > 0 && !UNSAFE_LEGACY_AUTH_PROFILE_KEYS.has(key);
+}
+
+function extractProviderFromProfileId(profileId: string): string | undefined {
+  const colon = profileId.indexOf(":");
+  if (colon <= 0) {
+    return undefined;
+  }
+  return readNonEmptyString(profileId.slice(0, colon));
 }
 
 function inferLegacyCredentialType(
@@ -154,8 +174,8 @@ function addCandidate(
   candidates.set(path.resolve(authPath), { agentDir, authPath });
 }
 
-function listExistingAgentDirsFromState(): string[] {
-  const root = path.join(resolveStateDir(), "agents");
+function listExistingAgentDirsFromState(env: NodeJS.ProcessEnv): string[] {
+  const root = path.join(resolveStateDir(env), "agents");
   let entries: fs.Dirent[];
   try {
     entries = fs.readdirSync(root, { withFileTypes: true });
@@ -174,13 +194,21 @@ function listExistingAgentDirsFromState(): string[] {
     });
 }
 
-function listAuthProfileRepairCandidates(cfg: OpenClawConfig): AuthProfileRepairCandidate[] {
+function listAuthProfileRepairCandidates(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+): AuthProfileRepairCandidate[] {
   const candidates = new Map<string, AuthProfileRepairCandidate>();
-  addCandidate(candidates, resolveOpenClawAgentDir());
-  for (const agentId of listAgentIds(cfg)) {
-    addCandidate(candidates, resolveAgentDir(cfg, agentId));
+  addCandidate(candidates, resolveDefaultAgentDir(cfg, env));
+  const envAgentDir =
+    readNonEmptyString(env.OPENCLAW_AGENT_DIR) ?? readNonEmptyString(env.PI_CODING_AGENT_DIR);
+  if (envAgentDir) {
+    addCandidate(candidates, envAgentDir);
   }
-  for (const agentDir of listExistingAgentDirsFromState()) {
+  for (const agentId of listAgentIds(cfg)) {
+    addCandidate(candidates, resolveAgentDir(cfg, agentId, env));
+  }
+  for (const agentDir of listExistingAgentDirsFromState(env)) {
     addCandidate(candidates, agentDir);
   }
   return [...candidates.values()];
@@ -212,37 +240,124 @@ function backupAuthProfileStore(authPath: string, now: () => number): string {
   return backupPath;
 }
 
+function backupAwsSdkProfileMarkerStore(authPath: string, now: () => number): string {
+  const backupPath = `${authPath}.aws-sdk-profile.${now()}.bak`;
+  fs.copyFileSync(authPath, backupPath);
+  return backupPath;
+}
+
+function resolveAwsSdkAuthProfileMarkerStore(
+  candidate: AuthProfileRepairCandidate,
+): AwsSdkAuthProfileMarkerStore | null {
+  if (!fs.existsSync(candidate.authPath)) {
+    return null;
+  }
+  const raw = loadJsonFile(candidate.authPath);
+  if (!isRecord(raw) || !isRecord(raw.profiles)) {
+    return null;
+  }
+  const markers: AwsSdkProfileMarker[] = [];
+  for (const [profileId, value] of Object.entries(raw.profiles)) {
+    if (!isRecord(value)) {
+      continue;
+    }
+    const mode = readNonEmptyString(value.type) ?? readNonEmptyString(value.mode);
+    if (mode !== "aws-sdk") {
+      continue;
+    }
+    const provider = readNonEmptyString(value.provider) ?? extractProviderFromProfileId(profileId);
+    if (!provider || !isSafeLegacyProviderKey(provider)) {
+      continue;
+    }
+    markers.push({
+      profileId,
+      provider,
+      ...(readNonEmptyString(value.email) ? { email: readNonEmptyString(value.email) } : {}),
+      ...(readNonEmptyString(value.displayName)
+        ? { displayName: readNonEmptyString(value.displayName) }
+        : {}),
+    });
+  }
+  return markers.length > 0
+    ? {
+        ...candidate,
+        raw,
+        profiles: markers,
+      }
+    : null;
+}
+
+function ensureConfigAuthProfiles(config: OpenClawConfig): Record<string, AuthProfileConfig> {
+  const root = config as Record<string, unknown>;
+  const auth = isRecord(root.auth) ? root.auth : {};
+  if (root.auth !== auth) {
+    root.auth = auth;
+  }
+  if (!isRecord(auth.profiles)) {
+    auth.profiles = {};
+  }
+  return auth.profiles as Record<string, AuthProfileConfig>;
+}
+
+function removeAwsSdkProfileMarkers(raw: Record<string, unknown>, profileIds: string[]): void {
+  if (!isRecord(raw.profiles)) {
+    return;
+  }
+  for (const profileId of profileIds) {
+    delete raw.profiles[profileId];
+  }
+}
+
 export async function maybeRepairLegacyFlatAuthProfileStores(params: {
   cfg: OpenClawConfig;
   prompter: DoctorPrompter;
   now?: () => number;
+  env?: NodeJS.ProcessEnv;
 }): Promise<LegacyFlatAuthProfileRepairResult> {
   const now = params.now ?? Date.now;
-  const legacyStores = listAuthProfileRepairCandidates(params.cfg)
+  const env = params.env ?? process.env;
+  const legacyStores = listAuthProfileRepairCandidates(params.cfg, env)
     .map(resolveLegacyFlatStore)
     .filter((entry): entry is LegacyFlatAuthProfileStore => entry !== null);
+  const awsSdkMarkerStores = listAuthProfileRepairCandidates(params.cfg, env)
+    .map(resolveAwsSdkAuthProfileMarkerStore)
+    .filter((entry): entry is AwsSdkAuthProfileMarkerStore => entry !== null);
 
   const result: LegacyFlatAuthProfileRepairResult = {
-    detected: legacyStores.map((entry) => entry.authPath),
+    detected: [
+      ...legacyStores.map((entry) => entry.authPath),
+      ...awsSdkMarkerStores.map((entry) => entry.authPath),
+    ],
     changes: [],
     warnings: [],
   };
-  if (legacyStores.length === 0) {
+  if (legacyStores.length === 0 && awsSdkMarkerStores.length === 0) {
     return result;
   }
 
-  note(
-    [
-      ...legacyStores.map(
-        (entry) => `- ${shortenHomePath(entry.authPath)} uses the legacy flat auth profile format.`,
-      ),
+  const noteLines = [
+    ...legacyStores.map(
+      (entry) => `- ${shortenHomePath(entry.authPath)} uses the legacy flat auth profile format.`,
+    ),
+    ...awsSdkMarkerStores.map(
+      (entry) =>
+        `- ${shortenHomePath(entry.authPath)} contains aws-sdk profile markers that belong in openclaw.json auth.profiles.`,
+    ),
+  ];
+  if (legacyStores.length > 0) {
+    noteLines.push(
       `- The gateway expects the canonical version/profiles store; ${formatCliCommand("openclaw doctor --fix")} rewrites this legacy shape with a backup.`,
-    ].join("\n"),
-    "Auth profiles",
-  );
+    );
+  }
+  if (awsSdkMarkerStores.length > 0) {
+    noteLines.push(
+      `- AWS SDK profile markers are routing metadata, not stored credentials; ${formatCliCommand("openclaw doctor --fix")} moves them to config with a backup.`,
+    );
+  }
+  note(noteLines.join("\n"), "Auth profiles");
 
   const shouldRepair = await params.prompter.confirmAutoFix({
-    message: "Rewrite legacy flat auth-profiles.json files now?",
+    message: "Repair legacy auth-profiles.json files now?",
     initialValue: true,
   });
   if (!shouldRepair) {
@@ -258,6 +373,143 @@ export async function maybeRepairLegacyFlatAuthProfileStores(params: {
       );
     } catch (err) {
       result.warnings.push(`Failed to rewrite ${shortenHomePath(entry.authPath)}: ${String(err)}`);
+    }
+  }
+  for (const entry of awsSdkMarkerStores) {
+    try {
+      const backupPath = backupAwsSdkProfileMarkerStore(entry.authPath, now);
+      const configProfiles = ensureConfigAuthProfiles(params.cfg);
+      for (const marker of entry.profiles) {
+        configProfiles[marker.profileId] = {
+          provider: marker.provider,
+          mode: "aws-sdk",
+          ...(marker.email ? { email: marker.email } : {}),
+          ...(marker.displayName ? { displayName: marker.displayName } : {}),
+        };
+      }
+      removeAwsSdkProfileMarkers(
+        entry.raw,
+        entry.profiles.map((profile) => profile.profileId),
+      );
+      fs.writeFileSync(entry.authPath, `${JSON.stringify(entry.raw, null, 2)}\n`);
+      result.changes.push(
+        `Moved aws-sdk profile metadata from ${shortenHomePath(entry.authPath)} to auth.profiles (backup: ${shortenHomePath(backupPath)}).`,
+      );
+    } catch (err) {
+      result.warnings.push(
+        `Failed to migrate aws-sdk profile markers from ${shortenHomePath(entry.authPath)}: ${String(err)}`,
+      );
+    }
+  }
+  clearRuntimeAuthProfileStoreSnapshots();
+  if (result.changes.length > 0) {
+    note(result.changes.map((change) => `- ${change}`).join("\n"), "Doctor changes");
+  }
+  if (result.warnings.length > 0) {
+    note(result.warnings.map((warning) => `- ${warning}`).join("\n"), "Doctor warnings");
+  }
+  return result;
+}
+
+type CanonicalApiKeyAliasRepair = {
+  authPath: string;
+  raw: Record<string, unknown>;
+  profileIds: string[];
+};
+
+function resolveCanonicalApiKeyAliasRepair(
+  candidate: AuthProfileRepairCandidate,
+): CanonicalApiKeyAliasRepair | null {
+  if (!fs.existsSync(candidate.authPath)) {
+    return null;
+  }
+  const raw = loadJsonFile(candidate.authPath);
+  if (!isRecord(raw) || !isRecord(raw.profiles)) {
+    return null;
+  }
+  const profileIds: string[] = [];
+  for (const [profileId, value] of Object.entries(raw.profiles)) {
+    if (!isRecord(value)) {
+      continue;
+    }
+    const type = readNonEmptyString(value.type) ?? readNonEmptyString(value.mode);
+    const hasApiKeyField =
+      readNonEmptyString(value["api_key"]) !== undefined ||
+      coerceSecretRef(value["api_key"]) !== null;
+    const hasCanonicalKey =
+      readNonEmptyString(value.key) !== undefined || coerceSecretRef(value.key) !== null;
+    const hasCanonicalKeyRef = coerceSecretRef(value.keyRef) !== null;
+    if (type === "api_key" && hasApiKeyField && !hasCanonicalKey && !hasCanonicalKeyRef) {
+      profileIds.push(profileId);
+    }
+  }
+  return profileIds.length > 0 ? { authPath: candidate.authPath, raw, profileIds } : null;
+}
+
+function backupCanonicalApiKeyAlias(authPath: string, now: () => number): string {
+  const backupPath = `${authPath}.api-key-alias.${now()}.bak`;
+  fs.copyFileSync(authPath, backupPath);
+  return backupPath;
+}
+
+export async function maybeRepairCanonicalApiKeyFieldAlias(params: {
+  cfg: OpenClawConfig;
+  prompter: DoctorPrompter;
+  now?: () => number;
+  env?: NodeJS.ProcessEnv;
+}): Promise<LegacyFlatAuthProfileRepairResult> {
+  const now = params.now ?? Date.now;
+  const env = params.env ?? process.env;
+  const repairs = listAuthProfileRepairCandidates(params.cfg, env)
+    .map(resolveCanonicalApiKeyAliasRepair)
+    .filter((entry): entry is CanonicalApiKeyAliasRepair => entry !== null);
+
+  const result: LegacyFlatAuthProfileRepairResult = {
+    detected: repairs.map((entry) => entry.authPath),
+    changes: [],
+    warnings: [],
+  };
+  if (repairs.length === 0) {
+    return result;
+  }
+
+  const noteLines = repairs.map(
+    (entry) =>
+      `- ${shortenHomePath(entry.authPath)} has ${entry.profileIds.length} profile(s) using the non-canonical "api_key" field; the canonical field is "key".`,
+  );
+  noteLines.push(
+    `- Runtime auth parsing only reads canonical "key" and "keyRef" fields, so these profiles are silently skipped; ${formatCliCommand("openclaw doctor --fix")} rewrites "api_key" to "key" with a backup.`,
+  );
+  note(noteLines.join("\n"), "Auth profiles");
+
+  const shouldRepair = await params.prompter.confirmAutoFix({
+    message: 'Rewrite non-canonical "api_key" fields to "key" now?',
+    initialValue: true,
+  });
+  if (!shouldRepair) {
+    return result;
+  }
+
+  for (const entry of repairs) {
+    try {
+      const backupPath = backupCanonicalApiKeyAlias(entry.authPath, now);
+      const profiles = entry.raw.profiles as Record<string, Record<string, unknown>>;
+      for (const profileId of entry.profileIds) {
+        const profile = profiles[profileId];
+        if (!isRecord(profile)) {
+          continue;
+        }
+        profile.key = profile["api_key"];
+        delete profile["api_key"];
+      }
+      fs.writeFileSync(entry.authPath, `${JSON.stringify(entry.raw, null, 2)}\n`);
+      result.changes.push(
+        `Rewrote ${entry.profileIds.length} "api_key" field(s) to "key" in ${shortenHomePath(entry.authPath)} (backup: ${shortenHomePath(backupPath)}).`,
+      );
+    } catch (err) {
+      result.warnings.push(
+        `Failed to rewrite "api_key" fields in ${shortenHomePath(entry.authPath)}: ${String(err)}`,
+      );
     }
   }
   clearRuntimeAuthProfileStoreSnapshots();

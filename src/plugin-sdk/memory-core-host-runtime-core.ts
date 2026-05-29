@@ -1,14 +1,24 @@
 export * from "../../packages/memory-host-sdk/src/runtime-core.js";
-export { DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR } from "../agents/pi-settings.js";
+export {
+  DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR,
+  /** @deprecated Use DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR. */
+  DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR as DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR,
+} from "../agents/agent-settings.js";
 export {
   asToolParamsRecord,
   jsonResult,
+  readFiniteNumberParam,
   readNumberParam,
+  readPositiveIntegerParam,
   readStringParam,
   type AnyAgentTool,
 } from "../agents/tools/common.js";
 export { resolveCronStyleNow } from "../agents/current-time.js";
-export { resolveDefaultAgentId, resolveSessionAgentId } from "../agents/agent-scope.js";
+export {
+  resolveDefaultAgentId,
+  resolveSessionAgentId,
+  resolveSessionAgentIds,
+} from "../agents/agent-scope.js";
 export { resolveMemorySearchConfig } from "../agents/memory-search.js";
 export { parseNonNegativeByteSize } from "../config/byte-size.js";
 export { getRuntimeConfig, loadConfig } from "../config/config.js";

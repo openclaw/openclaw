@@ -68,16 +68,25 @@ describe("commitment extraction", () => {
     };
   }
 
+  function expectSingleValidCandidate(
+    valid: ReturnType<typeof validateCommitmentCandidates>,
+  ): ReturnType<typeof validateCommitmentCandidates>[number] {
+    expect(valid).toHaveLength(1);
+    const [entry] = valid;
+    if (!entry) {
+      throw new Error("Expected one valid commitment candidate");
+    }
+    return entry;
+  }
+
   it("parses valid candidates from JSON output with surrounding text", () => {
     const parsed = parseCommitmentExtractionOutput(
       `noise {"candidates":[${JSON.stringify(candidate())}]} trailing`,
     );
 
     expect(parsed.candidates).toHaveLength(1);
-    expect(parsed.candidates[0]).toMatchObject({
-      kind: "event_check_in",
-      suggestedText: "How did the interview go?",
-    });
+    expect(parsed.candidates[0]?.kind).toBe("event_check_in");
+    expect(parsed.candidates[0]?.suggestedText).toBe("How did the interview go?");
   });
 
   it("omits routing scope identifiers from extractor prompts", () => {
@@ -149,9 +158,9 @@ describe("commitment extraction", () => {
       nowMs: writeMs,
     });
 
-    expect(valid).toHaveLength(1);
-    expect(valid[0]?.earliestMs).toBe(writeMs + 10 * 60_000);
-    expect(valid[0]?.latestMs).toBe(writeMs + 10 * 60_000 + 12 * 60 * 60_000);
+    const validCandidate = expectSingleValidCandidate(valid);
+    expect(validCandidate.earliestMs).toBe(writeMs + 10 * 60_000);
+    expect(validCandidate.latestMs).toBe(writeMs + 10 * 60_000 + 12 * 60 * 60_000);
   });
 
   it("persists inferred commitments and dedupes by scope and dedupe key", async () => {
@@ -181,10 +190,8 @@ describe("commitment extraction", () => {
     expect(created).toHaveLength(1);
     expect(deduped).toHaveLength(0);
     expect(store.commitments).toHaveLength(1);
-    expect(store.commitments[0]).toMatchObject({
-      reason: "Updated reason",
-      confidence: 0.97,
-      status: "pending",
-    });
+    expect(store.commitments[0]?.reason).toBe("Updated reason");
+    expect(store.commitments[0]?.confidence).toBe(0.97);
+    expect(store.commitments[0]?.status).toBe("pending");
   });
 });

@@ -9,7 +9,7 @@ export {
 } from "../../../../src/agents/agent-scope.js";
 export { requireApiKey, resolveApiKeyForProvider } from "../../../../src/agents/model-auth.js";
 export { stripInternalRuntimeContext } from "../../../../src/agents/internal-runtime-context.js";
-export { DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR } from "../../../../src/agents/pi-settings.js";
+export { DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR } from "../../../../src/agents/agent-settings.js";
 export {
   asToolParamsRecord,
   jsonResult,
@@ -74,7 +74,7 @@ export { isVerbose, setVerbose } from "../../../../src/globals.js";
 
 // IO, network, and logging helpers.
 export { isExecCompletionEvent } from "../../../../src/infra/heartbeat-events-filter.js";
-export { writeFileWithinRoot } from "../../../../src/infra/fs-safe.js";
+export { root } from "../../../../src/infra/fs-safe.js";
 export { fetchWithSsrFGuard } from "../../../../src/infra/net/fetch-guard.js";
 export { shouldUseEnvHttpProxyForUrl } from "../../../../src/infra/net/proxy-env.js";
 export { ssrfPolicyFromHttpBaseUrlAllowedHostname } from "../../../../src/infra/net/ssrf.js";
@@ -112,6 +112,7 @@ export type {
   MemoryEmbeddingBatchOptions,
   MemoryEmbeddingProvider,
   MemoryEmbeddingProviderAdapter,
+  MemoryEmbeddingProviderCallOptions,
   MemoryEmbeddingProviderCreateOptions,
   MemoryEmbeddingProviderCreateResult,
   MemoryEmbeddingProviderRuntime,

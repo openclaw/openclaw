@@ -96,6 +96,8 @@ describe("route-args", () => {
         "sqlite",
         "--active",
         "true",
+        "--limit",
+        "25",
       ]),
     ).toEqual({
       json: true,
@@ -103,8 +105,10 @@ describe("route-args", () => {
       agent: "default",
       store: "sqlite",
       active: "true",
+      limit: "25",
     });
     expect(parseSessionsRouteArgs(["node", "openclaw", "sessions", "--agent"])).toBeNull();
+    expect(parseSessionsRouteArgs(["node", "openclaw", "sessions", "--limit"])).toBeNull();
     expect(
       parseAgentsListRouteArgs(["node", "openclaw", "agents", "list", "--json", "--bindings"]),
     ).toEqual({
@@ -145,6 +149,30 @@ describe("route-args", () => {
       ]),
     ).toEqual({
       path: "update.channel",
+      cliOptions: {
+        dryRun: false,
+        allowExec: false,
+        json: false,
+      },
+    });
+    expect(
+      parseConfigUnsetRouteArgs([
+        "node",
+        "openclaw",
+        "config",
+        "unset",
+        "--dry-run",
+        "--json",
+        "--allow-exec",
+        "update.channel",
+      ]),
+    ).toEqual({
+      path: "update.channel",
+      cliOptions: {
+        dryRun: true,
+        allowExec: true,
+        json: true,
+      },
     });
     expect(parseConfigGetRouteArgs(["node", "openclaw", "config", "get", "--json"])).toBeNull();
   });

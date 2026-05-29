@@ -1,4 +1,6 @@
-import { formatRawAssistantErrorForUi } from "../agents/pi-embedded-helpers.js";
+import { formatRawAssistantErrorForUi } from "../agents/embedded-agent-helpers.js";
+import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { FallbackNoticeState } from "../status/fallback-notice-state.js";
 import { formatProviderModelRef } from "./model-runtime.js";
@@ -93,10 +95,11 @@ export function buildFallbackNotice(params: {
   activeProvider: string;
   activeModel: string;
   attempts: RuntimeFallbackAttempt[];
+  cfg?: OpenClawConfig;
 }): string | null {
   const selected = formatProviderModelRef(params.selectedProvider, params.selectedModel);
   const active = formatProviderModelRef(params.activeProvider, params.activeModel);
-  if (selected === active) {
+  if (areRuntimeModelRefsEquivalent(selected, active, { config: params.cfg })) {
     return null;
   }
   const reasonSummary = buildFallbackReasonSummary(params.attempts);
@@ -144,6 +147,7 @@ export function resolveFallbackTransition(params: {
   activeModel: string;
   attempts: RuntimeFallbackAttempt[];
   state?: FallbackNoticeState;
+  cfg?: OpenClawConfig;
 }): ResolvedFallbackTransition {
   const selectedModelRef = formatProviderModelRef(params.selectedProvider, params.selectedModel);
   const activeModelRef = formatProviderModelRef(params.activeProvider, params.activeModel);
@@ -152,13 +156,26 @@ export function resolveFallbackTransition(params: {
     activeModel: normalizeOptionalString(params.state?.fallbackNoticeActiveModel),
     reason: normalizeOptionalString(params.state?.fallbackNoticeReason),
   };
-  const fallbackActive = selectedModelRef !== activeModelRef;
+  const comparisonOptions = { config: params.cfg };
+  const fallbackActive = !areRuntimeModelRefsEquivalent(
+    selectedModelRef,
+    activeModelRef,
+    comparisonOptions,
+  );
   const fallbackTransitioned =
     fallbackActive &&
     (previousState.selectedModel !== selectedModelRef ||
       previousState.activeModel !== activeModelRef);
-  const fallbackCleared =
-    !fallbackActive && Boolean(previousState.selectedModel || previousState.activeModel);
+  const previousStateWasRealFallback = Boolean(
+    previousState.selectedModel &&
+    previousState.activeModel &&
+    !areRuntimeModelRefsEquivalent(
+      previousState.selectedModel,
+      previousState.activeModel,
+      comparisonOptions,
+    ),
+  );
+  const fallbackCleared = !fallbackActive && previousStateWasRealFallback;
   const reasonSummary = buildFallbackReasonSummary(params.attempts);
   const attemptSummaries = buildFallbackAttemptSummaries(params.attempts);
   const nextState = fallbackActive

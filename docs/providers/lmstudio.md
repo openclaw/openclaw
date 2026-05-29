@@ -94,7 +94,7 @@ This writes `models.providers.lmstudio` and sets the default model to
 `lmstudio:default` auth profile.
 
 Interactive setup can prompt for an optional preferred load context length and applies it across the discovered LM Studio models it saves into config.
-LM Studio plugin config trusts the configured LM Studio endpoint for model requests, including loopback, LAN, and tailnet hosts. You can opt out by setting `models.providers.lmstudio.request.allowPrivateNetwork: false`.
+LM Studio plugin config trusts the configured LM Studio endpoint for model requests, including loopback, LAN, and tailnet hosts. Metadata/link-local origins still require explicit opt-in. You can opt out by setting `models.providers.lmstudio.request.allowPrivateNetwork: false`.
 
 ## Configuration
 
@@ -117,10 +117,13 @@ Same streaming usage behavior applies to these OpenAI-compatible local backends:
 ### Thinking compatibility
 
 When LM Studio's `/api/v1/models` discovery reports model-specific reasoning
-options, OpenClaw preserves those native values in model compat metadata. For
-binary thinking models that advertise `allowed_options: ["off", "on"]`,
-OpenClaw maps disabled thinking to `off` and enabled `/think` levels to `on`
-instead of sending OpenAI-only values such as `low` or `medium`.
+options, OpenClaw exposes the matching OpenAI-compatible `reasoning_effort`
+values in model compat metadata. Current LM Studio builds can advertise binary
+UI options such as `allowed_options: ["off", "on"]` while rejecting those values
+on `/v1/chat/completions`; OpenClaw normalizes that binary discovery shape to
+`none`, `minimal`, `low`, `medium`, `high`, and `xhigh` before sending requests.
+Older saved LM Studio config that contains `off`/`on` reasoning maps is
+normalized the same way when the catalog is loaded.
 
 ### Explicit configuration
 
@@ -212,7 +215,7 @@ Use the LM Studio host's reachable address, keep `/v1`, and make sure LM Studio 
 }
 ```
 
-Unlike generic OpenAI-compatible providers, `lmstudio` automatically trusts its configured local/private endpoint for guarded model requests. Custom loopback provider IDs such as `localhost` or `127.0.0.1` are also trusted automatically; for LAN, tailnet, or private DNS custom provider IDs, set `models.providers.<id>.request.allowPrivateNetwork: true` explicitly.
+`lmstudio` automatically trusts its configured local/private endpoint for guarded model requests. Custom/local OpenAI-compatible provider entries also trust their exact configured `baseUrl` origin, except metadata/link-local origins; requests to different private ports or destinations still require `models.providers.<id>.request.allowPrivateNetwork: true`. Set `models.providers.<id>.request.allowPrivateNetwork: false` to opt out of exact-origin trust.
 
 ## Related
 

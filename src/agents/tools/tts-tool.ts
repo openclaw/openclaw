@@ -1,37 +1,26 @@
 import { Type } from "typebox";
-import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { textToSpeech } from "../../tts/tts.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import type { AnyAgentTool } from "./common.js";
-import { ToolInputError, readNumberParam, readStringParam } from "./common.js";
+import { readPositiveIntegerParam, readStringParam } from "./common.js";
 
 const TtsToolSchema = Type.Object({
-  text: Type.String({ description: "Text to convert to speech." }),
-  channel: Type.Optional(
-    Type.String({ description: "Optional channel id to pick output format." }),
-  ),
+  text: Type.String({ description: "Text to speak." }),
+  channel: Type.Optional(Type.String({ description: "Channel id; output-format hint." })),
   timeoutMs: Type.Optional(
-    Type.Number({
-      description: "Optional provider request timeout in milliseconds.",
+    Type.Integer({
+      description: "Provider timeout ms.",
       minimum: 1,
     }),
   ),
 });
 
 function readTtsTimeoutMs(args: Record<string, unknown>): number | undefined {
-  const timeoutMs = readNumberParam(args, "timeoutMs", {
-    integer: true,
-    strict: true,
+  return readPositiveIntegerParam(args, "timeoutMs", {
+    message: "timeoutMs must be a positive integer in milliseconds.",
   });
-  if (timeoutMs === undefined) {
-    return undefined;
-  }
-  if (timeoutMs <= 0) {
-    throw new ToolInputError("timeoutMs must be a positive integer in milliseconds.");
-  }
-  return timeoutMs;
 }
 
 /**
@@ -63,10 +52,9 @@ export function createTtsTool(opts?: {
   return {
     label: "TTS",
     name: "tts",
-    displaySummary: "Convert text to speech and return audio.",
+    displaySummary: "Text to speech audio.",
     description:
-      "Use only for explicit audio intent (audio, voice, speech, TTS) or active TTS config. Never use for ordinary text replies. " +
-      `Audio is delivered automatically from the tool result — reply with ${SILENT_REPLY_TOKEN} after a successful call to avoid duplicate messages.`,
+      "Use only for explicit audio intent (voice/speech/TTS) or active TTS config. Never use for ordinary text replies. Audio auto-delivered from tool result; after success follow reply instructions, no duplicate text/audio.",
     parameters: TtsToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;

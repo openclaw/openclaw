@@ -1,10 +1,20 @@
-import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { createToolFactoryHarness } from "./tool-factory-test-harness.js";
 
 const createFeishuClientMock = vi.fn((creds: { appId?: string } | undefined) => ({
   __appId: creds?.appId,
 }));
+
+function feishuClientAppId(callIndex: number): string | undefined {
+  const resolvedIndex =
+    callIndex < 0 ? createFeishuClientMock.mock.calls.length + callIndex : callIndex;
+  const call = createFeishuClientMock.mock.calls[resolvedIndex];
+  if (!call) {
+    throw new Error(`expected createFeishuClient call ${callIndex}`);
+  }
+  return call[0]?.appId;
+}
 
 vi.mock("./client.js", () => {
   return {
@@ -24,6 +34,12 @@ describe("feishu_doc account selection", () => {
 
   beforeAll(async () => {
     ({ registerFeishuDocTools } = await import("./docx.js"));
+  });
+
+  afterAll(() => {
+    vi.doUnmock("./client.js");
+    vi.doUnmock("@larksuiteoapi/node-sdk");
+    vi.resetModules();
   });
 
   beforeEach(() => {
@@ -57,8 +73,8 @@ describe("feishu_doc account selection", () => {
     await docToolB.execute("call-b", { action: "list_blocks", doc_token: "d" });
 
     expect(createFeishuClientMock).toHaveBeenCalledTimes(2);
-    expect(createFeishuClientMock.mock.calls[0]?.[0]?.appId).toBe("app-a");
-    expect(createFeishuClientMock.mock.calls[1]?.[0]?.appId).toBe("app-b");
+    expect(feishuClientAppId(0)).toBe("app-a");
+    expect(feishuClientAppId(1)).toBe("app-b");
   });
 
   test("explicit accountId param overrides agentAccountId context", async () => {
@@ -74,6 +90,6 @@ describe("feishu_doc account selection", () => {
       accountId: "a",
     });
 
-    expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-a");
+    expect(feishuClientAppId(-1)).toBe("app-a");
   });
 });

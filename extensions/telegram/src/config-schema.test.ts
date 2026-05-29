@@ -66,40 +66,61 @@ describe("telegram custom commands schema", () => {
     }
   });
 
-  it("accepts DM thread reply policy overrides", () => {
+  it("accepts mediaGroupFlushMs overrides per account", () => {
     const res = TelegramConfigSchema.safeParse({
-      dm: { threadReplies: "off" },
-      direct: {
-        "123456789": {
-          threadReplies: "inbound",
-        },
-      },
-      accounts: {
-        ops: {
-          dm: { threadReplies: "always" },
-        },
-      },
+      mediaGroupFlushMs: 750,
+      accounts: { ops: { mediaGroupFlushMs: 1500 } },
     });
 
     expect(res.success).toBe(true);
     if (res.success) {
-      expect(res.data.dm?.threadReplies).toBe("off");
-      expect(res.data.direct?.["123456789"]?.threadReplies).toBe("inbound");
-      expect(res.data.accounts?.ops?.dm?.threadReplies).toBe("always");
+      expect(res.data.mediaGroupFlushMs).toBe(750);
+      expect(res.data.accounts?.ops?.mediaGroupFlushMs).toBe(1500);
     }
   });
 
-  it("rejects unknown DM thread reply policy values", () => {
-    expectTelegramConfigIssue({ dm: { threadReplies: "first" } }, "dm.threadReplies");
+  it("rejects mediaGroupFlushMs outside the supported flush bounds", () => {
+    expectTelegramConfigIssue({ mediaGroupFlushMs: 9 }, "mediaGroupFlushMs");
+    expectTelegramConfigIssue({ mediaGroupFlushMs: 60_001 }, "mediaGroupFlushMs");
+  });
+
+  it("accepts Telegram native tool-progress draft config only on Telegram", () => {
+    expectTelegramConfigValid({
+      streaming: {
+        preview: {
+          toolProgress: true,
+          nativeToolProgress: true,
+          nativeToolProgressAllowFrom: ["123456789"],
+        },
+      },
+      accounts: {
+        ops: {
+          streaming: {
+            preview: {
+              nativeToolProgress: true,
+              nativeToolProgressAllowFrom: [123456789],
+            },
+          },
+        },
+      },
+    });
+  });
+
+  it("rejects removed DM thread reply policy keys", () => {
+    expectTelegramConfigIssue({ dm: { threadReplies: "off" } }, "");
+    expectTelegramConfigIssue(
+      { accounts: { ops: { dm: { threadReplies: "always" } } } },
+      ["accounts", "ops"].join("."),
+    );
     expectTelegramConfigIssue(
       {
         direct: {
           "123456789": {
-            threadReplies: "first",
+            threadReplies: "inbound",
           },
         },
       },
-      "direct.123456789.threadReplies",
+      "direct.123456789",
     );
   });
 
@@ -245,11 +266,26 @@ describe("telegram topic agentId schema", () => {
     expect(res.data.direct?.["123456789"]?.topics?.["99"]?.agentId).toBe("support");
   });
 
-  it("accepts DM threadReplies overrides", () => {
+  it("rejects removed per-DM threadReplies overrides", () => {
+    expectTelegramConfigIssue(
+      {
+        direct: {
+          "123456789": {
+            threadReplies: "inbound",
+          },
+        },
+      },
+      "direct.123456789",
+    );
+  });
+
+  it("accepts DM topic config without threadReplies overrides", () => {
     const res = TelegramConfigSchema.safeParse({
       direct: {
         "123456789": {
-          threadReplies: "inbound",
+          topics: {
+            "99": { agentId: "support" },
+          },
         },
       },
     });
@@ -259,7 +295,7 @@ describe("telegram topic agentId schema", () => {
       console.error(res.error.format());
       return;
     }
-    expect(res.data.direct?.["123456789"]?.threadReplies).toBe("inbound");
+    expect(res.data.direct?.["123456789"]?.topics?.["99"]?.agentId).toBe("support");
   });
 
   it("accepts empty config without agentId", () => {

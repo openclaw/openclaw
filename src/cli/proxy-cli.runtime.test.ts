@@ -43,6 +43,8 @@ describe("proxy cli runtime", () => {
     "OPENCLAW_DEBUG_PROXY_CERT_DIR",
     "OPENCLAW_DEBUG_PROXY_SESSION_ID",
     "OPENCLAW_DEBUG_PROXY_ENABLED",
+    "FORCE_COLOR",
+    "NO_COLOR",
   ] as const;
   const savedEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
   let tempDir = "";
@@ -54,6 +56,8 @@ describe("proxy cli runtime", () => {
     process.env.OPENCLAW_DEBUG_PROXY_CERT_DIR = path.join(tempDir, "certs");
     delete process.env.OPENCLAW_DEBUG_PROXY_ENABLED;
     delete process.env.OPENCLAW_DEBUG_PROXY_SESSION_ID;
+    delete process.env.FORCE_COLOR;
+    process.env.NO_COLOR = "1";
     getRuntimeConfigMock.mockReset();
     getRuntimeConfigMock.mockReturnValue({
       proxy: {
@@ -107,8 +111,11 @@ describe("proxy cli runtime", () => {
 
     await runProxyValidateCommand({
       proxyUrl: "http://override.example:3128",
+      proxyCaFile: "./ca.pem",
       allowedUrls: ["https://allowed.example/"],
       deniedUrls: ["http://127.0.0.1/"],
+      apnsReachability: true,
+      apnsAuthority: "https://api.sandbox.push.apple.com",
       timeoutMs: 1234,
     });
 
@@ -120,8 +127,11 @@ describe("proxy cli runtime", () => {
       },
       env: process.env,
       proxyUrlOverride: "http://override.example:3128",
+      proxyCaFileOverride: "./ca.pem",
       allowedUrls: ["https://allowed.example/"],
       deniedUrls: ["http://127.0.0.1/"],
+      apnsReachability: true,
+      apnsAuthority: "https://api.sandbox.push.apple.com",
       timeoutMs: 1234,
     });
     expect(process.stdout.write).toHaveBeenCalledWith(
@@ -270,7 +280,34 @@ describe("proxy cli runtime", () => {
         "Problems\n" +
         "  - proxyUrl must use http://\n\n" +
         "Next steps\n" +
-        "  Fix proxy.proxyUrl, OPENCLAW_PROXY_URL, or --proxy-url so it uses a reachable http:// proxy.\n",
+        "  Fix proxy.proxyUrl, OPENCLAW_PROXY_URL, or --proxy-url so it uses a reachable http:// or https:// proxy.\n",
+    );
+  });
+
+  it("prints CA-file guidance when proxy CA files cannot be read", async () => {
+    runProxyValidationMock.mockResolvedValueOnce({
+      ok: false,
+      config: {
+        enabled: true,
+        proxyUrl: "https://proxy.example:8443",
+        source: "config",
+        errors: ["proxy CA file could not be read (/missing/ca.pem): ENOENT"],
+      },
+      checks: [],
+    });
+    const { runProxyValidateCommand } = await import("./proxy-cli.runtime.js");
+
+    await runProxyValidateCommand({});
+
+    expect(process.stdout.write).toHaveBeenCalledWith(
+      "Proxy validation failed\n\n" +
+        "Proxy\n" +
+        "  Source: config\n" +
+        "  URL:    https://proxy.example:8443/\n\n" +
+        "Problems\n" +
+        "  - proxy CA file could not be read (/missing/ca.pem): ENOENT\n\n" +
+        "Next steps\n" +
+        "  Confirm proxy.tls.caFile or --proxy-ca-file points to a readable PEM CA file for the HTTPS proxy endpoint.\n",
     );
   });
 
@@ -305,6 +342,66 @@ describe("proxy cli runtime", () => {
         2,
       )}\n`,
     );
+  });
+
+  it("prints check errors on the same line", async () => {
+    runProxyValidationMock.mockResolvedValueOnce({
+      ok: true,
+      config: {
+        enabled: true,
+        proxyUrl: "http://proxy.example:3128",
+        source: "config",
+        errors: [],
+      },
+      checks: [
+        {
+          kind: "denied",
+          url: "http://127.0.0.1:12345/",
+          ok: true,
+          error: "fetch failed",
+        },
+      ],
+    });
+    const { runProxyValidateCommand } = await import("./proxy-cli.runtime.js");
+
+    await runProxyValidateCommand({});
+
+    expect(process.stdout.write).toHaveBeenCalledWith(
+      "Proxy validation passed\n\n" +
+        "Proxy\n" +
+        "  Source: config\n" +
+        "  URL:    http://proxy.example:3128/\n\n" +
+        "Checks\n" +
+        "  ✓ denied  http://127.0.0.1:12345/ — fetch failed\n",
+    );
+  });
+
+  it("applies the terminal color theme when rich output is enabled", async () => {
+    vi.resetModules();
+    vi.doMock("../terminal/theme.js", () => ({
+      colorize: (rich: boolean, color: (value: string) => string, value: string) =>
+        rich ? color(value) : value,
+      isRich: () => true,
+      theme: {
+        heading: (value: string) => `<heading>${value}</heading>`,
+        success: (value: string) => `<success>${value}</success>`,
+        error: (value: string) => `<error>${value}</error>`,
+        muted: (value: string) => `<muted>${value}</muted>`,
+        warn: (value: string) => `<warn>${value}</warn>`,
+      },
+    }));
+    try {
+      const { runProxyValidateCommand } = await import("./proxy-cli.runtime.js");
+
+      await runProxyValidateCommand({});
+
+      const output = String(vi.mocked(process.stdout.write).mock.calls.at(0)?.[0] ?? "");
+      expect(output).toContain("<success>Proxy validation passed</success>");
+      expect(output).toContain("<heading>Checks</heading>");
+      expect(output).toContain("<success>✓</success>");
+    } finally {
+      vi.doUnmock("../terminal/theme.js");
+    }
   });
 
   it("prints actionable check failure output", async () => {
@@ -343,8 +440,7 @@ describe("proxy cli runtime", () => {
         "  URL:    http://proxy.example:3128/\n\n" +
         "Checks\n" +
         "  ✓ allowed http://target.example/allowed HTTP 200\n" +
-        "  ✗ denied  http://target.example/allowed HTTP 200\n" +
-        "    Denied destination was reachable through the proxy\n\n" +
+        "  ✗ denied  http://target.example/allowed HTTP 200 — Denied destination was reachable through the proxy\n\n" +
         "Next steps\n" +
         "  Update the proxy ACL so denied destinations are blocked, or pass the expected --denied-url values.\n",
     );
@@ -397,6 +493,7 @@ describe("proxy cli runtime", () => {
     const { runDebugProxyRunCommand } = await import("./proxy-cli.runtime.js");
     const { getDebugProxyCaptureStore } = await import("../proxy-capture/store.sqlite.js");
 
+    const beforeRun = Date.now();
     await expect(
       runDebugProxyRunCommand({
         commandArgs: ["does-not-exist"],
@@ -411,6 +508,6 @@ describe("proxy cli runtime", () => {
     );
     const [session] = store.listSessions(5);
     expect(session?.mode).toBe("proxy-run");
-    expect(session?.endedAt).toEqual(expect.any(Number));
+    expect(session?.endedAt).toBeGreaterThanOrEqual(beforeRun);
   });
 });

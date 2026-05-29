@@ -58,6 +58,7 @@ export type CommandArgsParsing = "none" | "positional";
 export type ChatCommandDefinition = {
   key: string;
   nativeName?: string;
+  nativeAliases?: string[];
   description: string;
   /** Localized descriptions for native command surfaces that support them. */
   descriptionLocalizations?: Record<string, string>;
@@ -79,6 +80,7 @@ export type NativeCommandSpec = {
   descriptionLocalizations?: Record<string, string>;
   acceptsArgs: boolean;
   args?: CommandArgDefinition[];
+  isAlias?: boolean;
 };
 
 export type CommandNormalizeOptions = {

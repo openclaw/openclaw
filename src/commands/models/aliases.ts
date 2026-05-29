@@ -1,3 +1,4 @@
+import { formatCliCommand } from "../../cli/command-format.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { loadModelsConfig } from "./load-config.js";
@@ -55,7 +56,7 @@ export async function modelsAliasesAddCommand(
   const alias = normalizeAlias(aliasRaw);
   const cfg = await loadModelsConfig({ commandName: "models aliases add", runtime });
   const resolved = resolveModelTarget({ raw: modelRaw, cfg });
-  const _updated = await updateConfig((cfg) => {
+  await updateConfig((cfg) => {
     const modelKey = `${resolved.provider}/${resolved.model}`;
     const nextModels = { ...cfg.agents?.defaults?.models };
     for (const [key, entry] of Object.entries(nextModels)) {
@@ -95,7 +96,9 @@ export async function modelsAliasesRemoveCommand(aliasRaw: string, runtime: Runt
       }
     }
     if (!found) {
-      throw new Error(`Alias not found: ${alias}`);
+      throw new Error(
+        `Alias not found: ${alias}. Run ${formatCliCommand("openclaw models aliases list")} to see configured aliases.`,
+      );
     }
     return {
       ...cfg,

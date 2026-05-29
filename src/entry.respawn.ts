@@ -1,16 +1,33 @@
+import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
 import { resolveNodeStartupTlsEnvironment } from "./bootstrap/node-startup-env.js";
-import { shouldSkipRespawnForArgv } from "./cli/respawn-policy.js";
+import {
+  shouldSkipRespawnForArgv,
+  shouldSkipStartupEnvironmentRespawnForArgv,
+} from "./cli/respawn-policy.js";
+import { normalizeWindowsArgv } from "./cli/windows-argv.js";
 import { isTruthyEnvValue } from "./infra/env.js";
+import { attachChildProcessBridge } from "./process/child-process-bridge.js";
 
 export const EXPERIMENTAL_WARNING_FLAG = "--disable-warning=ExperimentalWarning";
 export const OPENCLAW_NODE_OPTIONS_READY = "OPENCLAW_NODE_OPTIONS_READY";
 export const OPENCLAW_NODE_EXTRA_CA_CERTS_READY = "OPENCLAW_NODE_EXTRA_CA_CERTS_READY";
+const WINDOWS_STACK_SIZE_FLAG = "--stack-size=8192";
+const CLI_RESPAWN_SIGNAL_EXIT_GRACE_MS = 1_000;
+const CLI_RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS = 1_000;
+const CLI_RESPAWN_SIGNAL_HARD_EXIT_GRACE_MS = 1_000;
 
 type CliRespawnPlan = {
   command: string;
   argv: string[];
   env: NodeJS.ProcessEnv;
+};
+
+type CliRespawnRuntime = {
+  spawn: typeof spawn;
+  attachChildProcessBridge: typeof attachChildProcessBridge;
+  exit: (code?: number) => never;
+  writeError: (message: string, error?: unknown) => void;
 };
 
 function pathModuleForPlatform(platform: NodeJS.Platform): typeof path.posix {
@@ -44,6 +61,16 @@ function hasExperimentalWarningSuppressed(
   return execArgv.some((arg) => arg === EXPERIMENTAL_WARNING_FLAG || arg === "--no-warnings");
 }
 
+function hasStackSizeConfigured(execArgv: string[]): boolean {
+  return execArgv.some(
+    (arg) =>
+      arg === "--stack-size" ||
+      arg.startsWith("--stack-size=") ||
+      arg === "--stack_size" ||
+      arg.startsWith("--stack_size="),
+  );
+}
+
 export function buildCliRespawnPlan(
   params: {
     argv?: string[];
@@ -59,18 +86,36 @@ export function buildCliRespawnPlan(
   const execArgv = params.execArgv ?? process.execArgv;
   const execPath = params.execPath ?? process.execPath;
   const platform = params.platform ?? process.platform;
+  const normalizedArgv =
+    platform === "win32" ? normalizeWindowsArgv(argv, { platform, execPath }) : argv;
 
-  if (shouldSkipRespawnForArgv(argv) || isTruthyEnvValue(env.OPENCLAW_NO_RESPAWN)) {
-    return null;
-  }
-
-  if (platform === "win32") {
+  if (
+    shouldSkipStartupEnvironmentRespawnForArgv(normalizedArgv) ||
+    isTruthyEnvValue(env.OPENCLAW_NO_RESPAWN)
+  ) {
     return null;
   }
 
   const childEnv: NodeJS.ProcessEnv = { ...env };
   const childExecArgv = [...execArgv];
   let needsRespawn = false;
+
+  if (platform === "win32") {
+    if (!hasStackSizeConfigured(childExecArgv)) {
+      childExecArgv.unshift(WINDOWS_STACK_SIZE_FLAG);
+      needsRespawn = true;
+    }
+
+    if (!needsRespawn) {
+      return null;
+    }
+
+    return {
+      command: resolveCliRespawnCommand({ execPath, platform }),
+      argv: [...childExecArgv, ...normalizedArgv.slice(1)],
+      env: childEnv,
+    };
+  }
 
   const autoNodeExtraCaCerts =
     params.autoNodeExtraCaCerts ??
@@ -90,6 +135,7 @@ export function buildCliRespawnPlan(
   }
 
   if (
+    !shouldSkipRespawnForArgv(argv) &&
     !isTruthyEnvValue(env[OPENCLAW_NODE_OPTIONS_READY]) &&
     !hasExperimentalWarningSuppressed({ env, execArgv })
   ) {
@@ -107,4 +153,91 @@ export function buildCliRespawnPlan(
     argv: [...childExecArgv, ...argv.slice(1)],
     env: childEnv,
   };
+}
+
+export function runCliRespawnPlan(
+  plan: CliRespawnPlan,
+  runtime: CliRespawnRuntime = {
+    spawn,
+    attachChildProcessBridge,
+    exit: process.exit.bind(process) as (code?: number) => never,
+    writeError: (message, error) => console.error(message, error),
+  },
+): ChildProcess {
+  const child = runtime.spawn(plan.command, plan.argv, {
+    stdio: "inherit",
+    env: plan.env,
+  });
+  let signalExitTimer: NodeJS.Timeout | undefined;
+  let signalForceKillTimer: NodeJS.Timeout | undefined;
+  let signalHardExitTimer: NodeJS.Timeout | undefined;
+  const clearSignalTimers = (): void => {
+    if (signalExitTimer) {
+      clearTimeout(signalExitTimer);
+      signalExitTimer = undefined;
+    }
+    if (signalForceKillTimer) {
+      clearTimeout(signalForceKillTimer);
+      signalForceKillTimer = undefined;
+    }
+    if (signalHardExitTimer) {
+      clearTimeout(signalHardExitTimer);
+      signalHardExitTimer = undefined;
+    }
+  };
+  const forceKillChild = (): void => {
+    try {
+      child.kill(process.platform === "win32" ? "SIGTERM" : "SIGKILL");
+    } catch {
+      // Best-effort shutdown fallback.
+    }
+  };
+  const requestChildTermination = (): void => {
+    try {
+      child.kill("SIGTERM");
+    } catch {
+      // Best-effort shutdown fallback.
+    }
+    signalForceKillTimer = setTimeout(() => {
+      forceKillChild();
+      signalHardExitTimer = setTimeout(() => {
+        runtime.exit(1);
+      }, CLI_RESPAWN_SIGNAL_HARD_EXIT_GRACE_MS);
+      signalHardExitTimer.unref?.();
+    }, CLI_RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS);
+    signalForceKillTimer.unref?.();
+  };
+  const scheduleParentExit = (): void => {
+    if (signalExitTimer) {
+      return;
+    }
+    signalExitTimer = setTimeout(() => {
+      requestChildTermination();
+    }, CLI_RESPAWN_SIGNAL_EXIT_GRACE_MS);
+    signalExitTimer.unref?.();
+  };
+
+  runtime.attachChildProcessBridge(child, {
+    onSignal: scheduleParentExit,
+  });
+
+  child.once("exit", (code, signal) => {
+    clearSignalTimers();
+    if (signal) {
+      runtime.exit(1);
+      return;
+    }
+    runtime.exit(code ?? 1);
+  });
+
+  child.once("error", (error) => {
+    clearSignalTimers();
+    runtime.writeError(
+      "[openclaw] Failed to respawn CLI:",
+      error instanceof Error ? (error.stack ?? error.message) : error,
+    );
+    runtime.exit(1);
+  });
+
+  return child;
 }

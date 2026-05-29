@@ -1,9 +1,18 @@
 import crypto from "node:crypto";
+import {
+  clearAutoFallbackPrimaryProbeSelection,
+  hasSessionAutoModelFallbackProvenance,
+  type AutoFallbackPrimaryProbe,
+} from "../../agents/agent-scope.js";
 import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import type { ExecToolDefaults } from "../../agents/bash-tools.js";
+import { resolveEmbeddedFullAccessState } from "../../agents/embedded-agent-runner/sandbox-info.js";
+import type { EmbeddedFullAccessBlockedReason } from "../../agents/embedded-agent-runner/types.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
-import { resolveEmbeddedFullAccessState } from "../../agents/pi-embedded-runner/sandbox-info.js";
-import type { EmbeddedFullAccessBlockedReason } from "../../agents/pi-embedded-runner/types.js";
+import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
+import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
+import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-codex-routing.js";
+import { normalizeProviderId } from "../../agents/provider-id.js";
 import { resolveIngressWorkspaceOverrideForSpawnedRun } from "../../agents/spawned-context.js";
 import type { SilentReplyPromptMode } from "../../agents/system-prompt.types.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
@@ -17,19 +26,25 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import { resolveSilentReplySettings } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
+import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
 import {
   isAcpSessionKey,
   isSubagentSessionKey,
   normalizeMainKey,
 } from "../../routing/session-key.js";
+import {
+  buildPersistedUserTurnMediaInputsFromFields,
+  createUserTurnTranscriptRecorder,
+  resolvePersistedUserTurnText,
+} from "../../sessions/user-turn-transcript.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { hasControlCommand } from "../command-detection.js";
+import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import { resolveEnvelopeFormatOptions } from "../envelope.js";
-import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../heartbeat.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import {
   type ElevatedLevel,
@@ -38,6 +53,7 @@ import {
   normalizeThinkLevel,
   type ReasoningLevel,
   resolveSupportedThinkingLevel,
+  type ThinkingCatalogEntry,
   type ThinkLevel,
   type VerboseLevel,
 } from "../thinking.js";
@@ -45,6 +61,7 @@ import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { applySessionHints } from "./body.js";
 import type { buildCommandContext } from "./commands.js";
+import { resolveCurrentTurnImages } from "./current-turn-images.js";
 import type { InlineDirectives } from "./directive-handling.js";
 import { isSystemEventProvider } from "./effective-reply-route.js";
 import { shouldUseReplyFastTestRuntime } from "./get-reply-fast-path.js";
@@ -56,35 +73,80 @@ import {
   resolveGroupSilentReplyBehavior,
 } from "./groups.js";
 import { hasInboundMedia } from "./inbound-media.js";
-import { buildInboundMetaSystemPrompt, buildInboundUserContextPrefix } from "./inbound-meta.js";
+import {
+  buildInboundMetaSystemPrompt,
+  buildInboundUserContextPrefix,
+  resolveInboundUserContextPromptJoiner,
+} from "./inbound-meta.js";
 import type { createModelSelectionState } from "./model-selection.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
-import { buildReplyPromptBodies } from "./prompt-prelude.js";
+import { buildReplyPromptEnvelope, buildReplyPromptEnvelopeBase } from "./prompt-prelude.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { resolveQueueSettings } from "./queue/settings-runtime.js";
-import { isSteeringQueueMode } from "./queue/steering.js";
+import {
+  REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
+  abortReplyRunBySessionId,
+  isReplyRunActiveForSessionId,
+  isReplyRunStreamingForSessionId,
+  resolveActiveReplyRunSessionId,
+  waitForReplyRunEndBySessionId,
+  type ReplyOperation,
+} from "./reply-run-registry.js";
+import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import { resolveBareSessionResetPromptState } from "./session-reset-prompt.js";
 import { resolveBareResetBootstrapFileAccess } from "./session-reset-prompt.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
+import { isInternalSourceReplyChannel } from "./source-reply-delivery-mode.js";
 import { buildSessionStartupContextPrelude, shouldApplyStartupContext } from "./startup-context.js";
 import { resolveTypingMode } from "./typing-mode.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 import type { TypingController } from "./typing.js";
 
+type InternalGetReplyOptions = GetReplyOptions & {
+  /**
+   * Dispatch-owned pre-run operation. This is intentionally not part of the
+   * public reply API; it lets dispatch prep and hook work share the same
+   * diagnostic/abort ownership as the eventual agent run.
+   */
+  replyOperation?: ReplyOperation;
+  /**
+   * Source-owned abort signal to persist with queued room-event followups. This
+   * can differ from abortSignal when dispatch temporarily borrows an active lane.
+   */
+  queuedFollowupAbortSignal?: AbortSignal;
+};
+
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
 
+function hasResolvedThinkingCatalogEntry(params: {
+  catalog?: readonly ThinkingCatalogEntry[];
+  provider: string;
+  model: string;
+}): boolean {
+  const modelId = normalizeOptionalString(params.model);
+  if (!modelId) {
+    return false;
+  }
+  const normalizedProvider = normalizeProviderId(params.provider);
+  const entry = params.catalog?.find(
+    (candidate) =>
+      normalizeProviderId(candidate.provider) === normalizedProvider && candidate.id === modelId,
+  );
+  return entry?.reasoning !== undefined;
+}
+
 export function resolvePromptSilentReplyConversationType(params: {
-  ctx: Pick<MsgContext, "ChatType" | "CommandSource" | "CommandTargetSessionKey" | "SessionKey">;
+  ctx: Pick<
+    MsgContext,
+    "ChatType" | "CommandSource" | "CommandTargetSessionKey" | "CommandTurn" | "SessionKey"
+  >;
   inboundSessionKey?: string;
 }): SilentReplyConversationType | undefined {
   const sourceSessionKey = params.inboundSessionKey ?? params.ctx.SessionKey;
-  if (
-    params.ctx.CommandSource === "native" &&
-    params.ctx.CommandTargetSessionKey &&
-    params.ctx.CommandTargetSessionKey !== sourceSessionKey
-  ) {
+  const commandTargetSessionKey = resolveCommandTurnTargetSessionKey(params.ctx);
+  if (commandTargetSessionKey && commandTargetSessionKey !== sourceSessionKey) {
     return undefined;
   }
   const chatType = normalizeChatType(params.ctx.ChatType);
@@ -100,6 +162,10 @@ export function resolvePromptSilentReplyConversationType(params: {
 function normalizePromptRouteChannel(raw?: string | null): string | undefined {
   const normalized = normalizeOptionalString(raw);
   return normalized && normalized !== "none" ? normalized : undefined;
+}
+
+function normalizeToolProgressDetail(value: unknown): "explain" | "raw" | undefined {
+  return value === "explain" || value === "raw" ? value : undefined;
 }
 
 function resolvePersistedPromptProvider(entry?: SessionEntry): string | undefined {
@@ -238,8 +304,8 @@ export function buildExecOverridePromptHint(params: {
     .join("\n");
 }
 
-const piEmbeddedRuntimeLoader = createLazyImportLoader(
-  () => import("../../agents/pi-embedded.runtime.js"),
+const embeddedAgentRuntimeLoader = createLazyImportLoader(
+  () => import("../../agents/embedded-agent.runtime.js"),
 );
 const agentRunnerRuntimeLoader = createLazyImportLoader(() => import("./agent-runner.runtime.js"));
 const sessionUpdatesRuntimeLoader = createLazyImportLoader(
@@ -248,10 +314,9 @@ const sessionUpdatesRuntimeLoader = createLazyImportLoader(
 const sessionStoreRuntimeLoader = createLazyImportLoader(
   () => import("../../config/sessions/store.runtime.js"),
 );
-const UNTRUSTED_SYSTEM_EVENT_LINE_RE = /^System \(untrusted\):/m;
 
-function loadPiEmbeddedRuntime() {
-  return piEmbeddedRuntimeLoader.load();
+function loadEmbeddedAgentRuntime() {
+  return embeddedAgentRuntimeLoader.load();
 }
 
 function loadAgentRunnerRuntime() {
@@ -283,6 +348,14 @@ function hasInboundHistoryBody(ctx: TemplateContext): boolean {
     Array.isArray(ctx.InboundHistory) &&
     ctx.InboundHistory.some((entry) => entry.body.replaceAll("\u0000", "").trim().length > 0)
   );
+}
+
+function hasReplyTargetContext(ctx: MsgContext | TemplateContext): boolean {
+  if (normalizeOptionalString(ctx.ReplyToBody)) {
+    return true;
+  }
+  const replyChain = (ctx as { ReplyChain?: unknown }).ReplyChain;
+  return Array.isArray(replyChain) && replyChain.length > 0;
 }
 
 type RunPreparedReplyParams = {
@@ -325,7 +398,6 @@ type RunPreparedReplyParams = {
   };
   typing: TypingController;
   opts?: GetReplyOptions;
-  defaultProvider: string;
   defaultModel: string;
   timeoutMs: number;
   isNewSession: boolean;
@@ -338,6 +410,7 @@ type RunPreparedReplyParams = {
   storePath?: string;
   workspaceDir: string;
   abortedLastRun: boolean;
+  autoFallbackPrimaryProbe?: AutoFallbackPrimaryProbe;
 };
 
 export async function runPreparedReply(
@@ -394,12 +467,32 @@ export async function runPreparedReply(
     abortedLastRun,
   } = params;
   const isHeartbeat = opts?.isHeartbeat === true;
+  const traceAttributes = {
+    provider,
+    hasSessionKey: Boolean(sessionKey),
+    isHeartbeat,
+    queueMode: perMessageQueueMode ?? "configured",
+  };
+  const traceRunPhase = <T>(name: string, run: () => Promise<T> | T): Promise<T> =>
+    measureDiagnosticsTimelineSpan(name, run, {
+      phase: "agent-turn",
+      config: cfg,
+      attributes: traceAttributes,
+    });
   const promptSessionCtx = resolvePromptSessionContextForSystemEvent({
     sessionCtx,
     sessionEntry,
     ctx,
     isHeartbeat,
   });
+  const inboundEventKind = promptSessionCtx.InboundEventKind;
+  const isInternalPromptChannel = isInternalSourceReplyChannel(promptSessionCtx);
+  const sourceReplyDeliveryMode =
+    inboundEventKind === "room_event" && !isInternalPromptChannel
+      ? "message_tool_only"
+      : isInternalPromptChannel && opts?.sourceReplyDeliveryMode === undefined
+        ? "automatic"
+        : opts?.sourceReplyDeliveryMode;
   const silentReplyConversationType = resolvePromptSilentReplyConversationType({
     ctx: promptSessionCtx,
     inboundSessionKey: ctx.SessionKey,
@@ -441,7 +534,7 @@ export async function runPreparedReply(
     isHeartbeat,
     typingPolicy,
     suppressTyping,
-    sourceReplyDeliveryMode: opts?.sourceReplyDeliveryMode,
+    sourceReplyDeliveryMode,
   });
   const shouldInjectGroupIntro = Boolean(
     isGroupChat && (isFirstTurnInSession || sessionEntry?.groupActivationNeedsSystemIntro),
@@ -449,19 +542,15 @@ export async function runPreparedReply(
   const directChatContext = isDirectChat
     ? buildDirectChatContext({
         sessionCtx: promptSessionCtx,
-        sourceReplyDeliveryMode: opts?.sourceReplyDeliveryMode,
-        silentReplyPolicy: silentReplySettings.policy,
-        silentReplyRewrite: silentReplySettings.rewrite,
-        silentToken: SILENT_REPLY_TOKEN,
+        sourceReplyDeliveryMode,
       })
     : "";
   // Always include persistent group chat context (provider + reply guidance).
   const groupChatContext = isGroupChat
     ? buildGroupChatContext({
         sessionCtx: promptSessionCtx,
-        sourceReplyDeliveryMode: opts?.sourceReplyDeliveryMode,
+        sourceReplyDeliveryMode,
         silentReplyPolicy: silentReplySettings.policy,
-        silentReplyRewrite: silentReplySettings.rewrite,
         silentToken: SILENT_REPLY_TOKEN,
       })
     : "";
@@ -474,7 +563,6 @@ export async function runPreparedReply(
         defaultActivation,
         silentToken: SILENT_REPLY_TOKEN,
         silentReplyPolicy: silentReplySettings.policy,
-        silentReplyRewrite: silentReplySettings.rewrite,
       })
     : "";
   const allowEmptyAssistantReplyAsSilent =
@@ -486,7 +574,6 @@ export async function runPreparedReply(
         sessionEntry,
         defaultActivation,
         silentReplyPolicy: silentReplySettings.policy,
-        silentReplyRewrite: silentReplySettings.rewrite,
       }).allowEmptyAssistantReplyAsSilent);
   const groupSystemPrompt = normalizeOptionalString(promptSessionCtx.GroupSystemPrompt) ?? "";
   const inboundMetaPrompt = buildInboundMetaSystemPrompt(
@@ -520,7 +607,7 @@ export async function runPreparedReply(
     }),
   ].filter(Boolean);
   const silentReplyPromptMode: SilentReplyPromptMode =
-    directChatContext || groupChatContext || opts?.sourceReplyDeliveryMode === "message_tool_only"
+    directChatContext || groupChatContext || sourceReplyDeliveryMode === "message_tool_only"
       ? "none"
       : "generic";
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
@@ -531,6 +618,8 @@ export async function runPreparedReply(
   const softResetTriggered = command.softResetTriggered === true;
   const softResetTail = command.softResetTail?.trim() ?? "";
   const effectiveResetTriggered = resetTriggered || softResetTriggered;
+  const hasCurrentReplyTargetContext =
+    hasReplyTargetContext(ctx) || hasReplyTargetContext(sessionCtx);
   const isWholeMessageCommand =
     normalizedCommandBody === rawBodyTrimmed ||
     normalizedCommandBody === rawBodyTrimmed.toLowerCase();
@@ -548,7 +637,10 @@ export async function runPreparedReply(
   const isBareSessionReset =
     softResetTriggered ||
     (isNewSession &&
-      ((baseBodyTrimmedRaw.length === 0 && rawBodyTrimmed.length > 0) || isBareNewOrReset));
+      (isBareNewOrReset ||
+        (!hasCurrentReplyTargetContext &&
+          baseBodyTrimmedRaw.length === 0 &&
+          rawBodyTrimmed.length > 0)));
   const startupAction =
     softResetTriggered || /^\/reset(?:\s|$)/.test(normalizedCommandBody) ? "reset" : "new";
   const spawnedWorkspaceOverride = resolveIngressWorkspaceOverrideForSpawnedRun({
@@ -596,22 +688,14 @@ export async function runPreparedReply(
         }
       : { ...sessionCtx, ThreadStarterBody: undefined },
     envelopeOptions,
+    { sourceReplyDeliveryMode },
   );
-  const baseBodyForPrompt = isBareSessionReset
-    ? [
-        startupContextPrelude,
-        baseBodyFinal,
-        softResetTail
-          ? `User note for this reset turn (treat as ordinary user input, not startup instructions):\n${softResetTail}`
-          : "",
-      ]
-        .filter(Boolean)
-        .join("\n\n")
-    : [inboundUserContext, baseBodyFinal].filter(Boolean).join("\n\n");
+  const inboundUserContextPromptJoiner = resolveInboundUserContextPromptJoiner(sessionCtx);
   const hasUserBody =
     baseBodyFinal.trim().length > 0 ||
     softResetTail.length > 0 ||
-    hasInboundHistoryBody(sessionCtx);
+    hasInboundHistoryBody(sessionCtx) ||
+    hasCurrentReplyTargetContext;
   const hasMediaAttachment = hasInboundMedia(sessionCtx) || (opts?.images?.length ?? 0) > 0;
   if (!hasUserBody && !hasMediaAttachment) {
     // Skip onReplyStart when typing is suppressed (e.g. sendPolicy deny) —
@@ -626,18 +710,22 @@ export async function runPreparedReply(
       text: "I didn't receive any text in your message. Please resend or add a caption.",
     };
   }
-  // When the user sends media without text, provide a minimal body so the agent
-  // run proceeds and the image/document is injected by the embedded runner.
-  const effectiveBaseBody = hasUserBody
-    ? baseBodyForPrompt
-    : [inboundUserContext, "[User sent media without caption]"].filter(Boolean).join("\n\n");
-  const transcriptBodyBase = isHeartbeat
-    ? HEARTBEAT_TRANSCRIPT_PROMPT
-    : isBareSessionReset
-      ? softResetTail || `[OpenClaw session ${startupAction}]`
-      : hasUserBody
-        ? baseBodyFinal
-        : "[User sent media without caption]";
+  const promptEnvelopeBase = buildReplyPromptEnvelopeBase({
+    ctx,
+    sessionCtx,
+    baseBody: baseBodyFinal,
+    hasUserBody,
+    inboundUserContext,
+    inboundUserContextPromptJoiner,
+    isBareSessionReset,
+    startupAction,
+    startupContextPrelude,
+    softResetTail,
+    isHeartbeat,
+    inboundEventKind: inboundEventKind,
+    sourceReplyDeliveryMode,
+  });
+  const effectiveBaseBody = promptEnvelopeBase.effectiveBaseBody;
   let prefixedBodyBase = await applySessionHints({
     baseBody: effectiveBaseBody,
     abortedLastRun,
@@ -655,7 +743,11 @@ export async function runPreparedReply(
   if (!resolvedThinkLevel && prefixedBodyBase) {
     const parts = prefixedBodyBase.split(/\s+/);
     const maybeLevel = normalizeThinkLevel(parts[0]);
-    const thinkingCatalog = maybeLevel ? await modelState.resolveThinkingCatalog() : undefined;
+    const thinkingCatalog = maybeLevel
+      ? await traceRunPhase("reply.resolve_thinking_catalog_for_hint", () =>
+          modelState.resolveThinkingCatalog(),
+        )
+      : undefined;
     if (
       maybeLevel &&
       isThinkingLevelSupported({ provider, model, level: maybeLevel, catalog: thinkingCatalog })
@@ -673,11 +765,12 @@ export async function runPreparedReply(
       ? `[Thread starter - for context]\n${threadStarterBody}`
       : undefined;
   const drainedSystemEventBlocks: string[] = [];
-  let forceSenderIsOwnerFalseFromSystemEvents = false;
   const rebuildPromptBodies = async (): Promise<{
     prefixedCommandBody: string;
     queuedBody: string;
+    transcriptBody: string;
     transcriptCommandBody: string;
+    currentInboundContext?: typeof promptEnvelopeBase.currentInboundContext;
   }> => {
     if (!useFastReplyRuntime) {
       const eventsBlock = await drainFormattedSystemEvents({
@@ -688,17 +781,23 @@ export async function runPreparedReply(
       });
       if (eventsBlock) {
         drainedSystemEventBlocks.push(eventsBlock);
-        if (UNTRUSTED_SYSTEM_EVENT_LINE_RE.test(eventsBlock)) {
-          forceSenderIsOwnerFalseFromSystemEvents = true;
-        }
       }
     }
-    return buildReplyPromptBodies({
+    return buildReplyPromptEnvelope({
       ctx,
       sessionCtx,
-      effectiveBaseBody,
+      baseBody: baseBodyFinal,
       prefixedBody: prefixedBodyCore,
-      transcriptBody: transcriptBodyBase,
+      hasUserBody,
+      inboundUserContext,
+      inboundUserContextPromptJoiner,
+      isBareSessionReset,
+      startupAction,
+      startupContextPrelude,
+      softResetTail,
+      isHeartbeat,
+      inboundEventKind: inboundEventKind,
+      sourceReplyDeliveryMode,
       threadContextNote,
       systemEventBlocks: drainedSystemEventBlocks,
     });
@@ -710,9 +809,9 @@ export async function runPreparedReply(
           skillsSnapshot: sessionEntry?.skillsSnapshot,
           systemSent: currentSystemSent,
         }
-      : await (async () => {
+      : await traceRunPhase("reply.ensure_skill_snapshot", async () => {
           const { ensureSkillSnapshot } = await loadSessionUpdatesRuntime();
-          return ensureSkillSnapshot({
+          return await ensureSkillSnapshot({
             sessionEntry,
             sessionStore,
             sessionKey,
@@ -723,23 +822,51 @@ export async function runPreparedReply(
             cfg,
             skillFilter: opts?.skillFilter,
           });
-        })();
+        });
   sessionEntry = skillResult.sessionEntry ?? sessionEntry;
   currentSystemSent = skillResult.systemSent;
   const skillsSnapshot = skillResult.skillsSnapshot;
-  let { prefixedCommandBody, queuedBody, transcriptCommandBody } = await rebuildPromptBodies();
+  let {
+    prefixedCommandBody,
+    queuedBody,
+    transcriptBody,
+    transcriptCommandBody,
+    currentInboundContext,
+  } = await traceRunPhase("reply.build_prompt_bodies", () => rebuildPromptBodies());
+  const isRoomEvent = inboundEventKind === "room_event";
   if (!resolvedThinkLevel) {
-    resolvedThinkLevel = await modelState.resolveDefaultThinkingLevel();
+    resolvedThinkLevel = await traceRunPhase("reply.resolve_default_thinking", () =>
+      modelState.resolveDefaultThinkingLevel(),
+    );
   }
-  const thinkingCatalog = await modelState.resolveThinkingCatalog();
-  if (
-    !isThinkingLevelSupported({
+  const allowedThinkingCatalog = modelState.allowedModelCatalog ?? [];
+  let thinkingCatalog = allowedThinkingCatalog.length > 0 ? allowedThinkingCatalog : undefined;
+  let thinkingLevelSupported = isThinkingLevelSupported({
+    provider,
+    model,
+    level: resolvedThinkLevel,
+    catalog: thinkingCatalog,
+  });
+  const shouldHydrateThinkingCatalog =
+    !thinkingLevelSupported ||
+    (resolvedThinkLevel !== "off" &&
+      !hasResolvedThinkingCatalogEntry({ catalog: thinkingCatalog, provider, model }));
+  if (shouldHydrateThinkingCatalog) {
+    // Hydrate the runtime model catalog only when the lightweight catalog cannot
+    // prove support or lacks reasoning metadata for the selected model. The full
+    // catalog load was a 14s+ reply-blocking cost for known Codex models that
+    // already publish authoritative thinking metadata.
+    thinkingCatalog = await traceRunPhase("reply.resolve_thinking_catalog", () =>
+      modelState.resolveThinkingCatalog(),
+    );
+    thinkingLevelSupported = isThinkingLevelSupported({
       provider,
       model,
       level: resolvedThinkLevel,
       catalog: thinkingCatalog,
-    })
-  ) {
+    });
+  }
+  if (!thinkingLevelSupported) {
     const explicitThink = directives.hasThinkDirective && directives.thinkLevel !== undefined;
     if (explicitThink) {
       typing.cleanup();
@@ -774,7 +901,14 @@ export async function runPreparedReply(
       }
     }
   }
-  const sessionIdFinal = sessionId ?? crypto.randomUUID();
+  const internalOpts = opts as InternalGetReplyOptions | undefined;
+  const providedReplyOperation = internalOpts?.replyOperation;
+  const isOwnPreDispatchOperationSession = (candidateSessionId: string | undefined): boolean =>
+    providedReplyOperation !== undefined &&
+    providedReplyOperation.result === null &&
+    providedReplyOperation.phase === "queued" &&
+    candidateSessionId === providedReplyOperation.sessionId;
+  const sessionIdFinal = sessionId ?? providedReplyOperation?.sessionId ?? crypto.randomUUID();
   const sessionFilePathOptions = resolveSessionFilePathOptions({ agentId, storePath });
   const resolvePreparedSessionState = (): {
     sessionEntry: SessionEntry | undefined;
@@ -814,86 +948,183 @@ export async function runPreparedReply(
         inlineMode: perMessageQueueMode,
         inlineOptions: perMessageQueueOptions,
       });
-  const piRuntime = useFastReplyRuntime ? null : await loadPiEmbeddedRuntime();
-  const sessionLaneKey = piRuntime
-    ? piRuntime.resolveEmbeddedSessionLane(sessionKey ?? sessionIdFinal)
+  const embeddedAgentRuntime = useFastReplyRuntime
+    ? null
+    : await traceRunPhase("reply.load_embedded_agent_runtime", () => loadEmbeddedAgentRuntime());
+  const resolveActiveEmbeddedSessionId = (sessionFile = preparedSessionState.sessionFile) =>
+    embeddedAgentRuntime?.resolveActiveEmbeddedRunSessionId(sessionKey) ??
+    embeddedAgentRuntime?.resolveActiveEmbeddedRunSessionIdBySessionFile?.(sessionFile);
+  const sessionLaneKey = embeddedAgentRuntime
+    ? embeddedAgentRuntime.resolveEmbeddedSessionLane(sessionKey ?? sessionIdFinal)
     : undefined;
   const laneSize = sessionLaneKey ? getQueueSize(sessionLaneKey) : 0;
-  if (resolvedQueue.mode === "interrupt" && sessionLaneKey && laneSize > 0) {
+  const activeRunQueueMode = effectiveResetTriggered ? "interrupt" : resolvedQueue.mode;
+  const rawActiveSessionIdForInterrupt = resolveActiveEmbeddedSessionId();
+  const activeSessionIdForInterrupt = isOwnPreDispatchOperationSession(
+    rawActiveSessionIdForInterrupt,
+  )
+    ? undefined
+    : rawActiveSessionIdForInterrupt;
+  if (
+    activeRunQueueMode === "interrupt" &&
+    !isRoomEvent &&
+    sessionLaneKey &&
+    (laneSize > 0 || activeSessionIdForInterrupt)
+  ) {
     const cleared = clearCommandLane(sessionLaneKey);
-    const activeSessionId = piRuntime?.resolveActiveEmbeddedRunSessionId(sessionKey);
-    const aborted = piRuntime?.abortEmbeddedPiRun(
-      activeSessionId ?? preparedSessionState.sessionId,
+    const aborted = embeddedAgentRuntime?.abortEmbeddedAgentRun(
+      activeSessionIdForInterrupt ?? preparedSessionState.sessionId,
     );
     logVerbose(`Interrupting ${sessionLaneKey} (cleared ${cleared}, aborted=${aborted})`);
   }
-  let authProfileId = useFastReplyRuntime
-    ? preparedSessionState.sessionEntry?.authProfileOverride
-    : await resolveSessionAuthProfileOverride({
-        cfg,
+  const agentHarnessPolicy = useFastReplyRuntime
+    ? undefined
+    : resolveAgentHarnessPolicy({
         provider,
-        agentDir,
-        sessionEntry: preparedSessionState.sessionEntry,
-        sessionStore,
-        sessionKey,
-        storePath,
-        isNewSession,
+        modelId: model,
+        config: cfg,
+        agentId,
+        sessionKey: runtimePolicySessionKey,
       });
-  const { runReplyAgent } = await loadAgentRunnerRuntime();
+  const resolveAcceptedAuthProfileProviders = () =>
+    agentHarnessPolicy
+      ? listOpenAIAuthProfileProvidersForAgentRuntime({
+          provider,
+          harnessRuntime: agentHarnessPolicy.runtime,
+          config: cfg,
+        })
+      : [provider];
+  const resolveRuntimeAuthProfile = async (): Promise<{
+    authProfileId?: string;
+    authProfileIdSource?: "auto" | "user";
+  }> => {
+    if (useFastReplyRuntime) {
+      return {
+        authProfileId: preparedSessionState.sessionEntry?.authProfileOverride,
+        authProfileIdSource: preparedSessionState.sessionEntry?.authProfileOverrideSource,
+      };
+    }
+    const shouldUseEphemeralSession = params.autoFallbackPrimaryProbe !== undefined;
+    const authSessionKey = shouldUseEphemeralSession ? (sessionKey ?? sessionIdFinal) : sessionKey;
+    const authSessionEntry =
+      shouldUseEphemeralSession && preparedSessionState.sessionEntry
+        ? { ...preparedSessionState.sessionEntry }
+        : preparedSessionState.sessionEntry;
+    if (params.autoFallbackPrimaryProbe && authSessionEntry) {
+      clearAutoFallbackPrimaryProbeSelection(authSessionEntry);
+    }
+    const authSessionStore =
+      shouldUseEphemeralSession && authSessionEntry
+        ? { [authSessionKey]: authSessionEntry }
+        : sessionStore;
+    const resolvedAuthProfileId = await resolveSessionAuthProfileOverride({
+      cfg,
+      provider,
+      acceptedProviderIds: resolveAcceptedAuthProfileProviders(),
+      agentDir,
+      sessionEntry: authSessionEntry,
+      sessionStore: authSessionStore,
+      sessionKey: authSessionKey,
+      storePath: shouldUseEphemeralSession ? undefined : storePath,
+      isNewSession,
+    });
+    return {
+      authProfileId: resolvedAuthProfileId,
+      authProfileIdSource:
+        resolvedAuthProfileId && authSessionEntry?.authProfileOverride === resolvedAuthProfileId
+          ? authSessionEntry.authProfileOverrideSource
+          : undefined,
+    };
+  };
+  let authProfileId: string | undefined;
+  let authProfileIdSource: "auto" | "user" | undefined;
+  ({ authProfileId, authProfileIdSource } = await traceRunPhase("reply.resolve_auth_profile", () =>
+    resolveRuntimeAuthProfile(),
+  ));
+  const { runReplyAgent } = await traceRunPhase("reply.load_agent_runner_runtime", () =>
+    loadAgentRunnerRuntime(),
+  );
   const queueKey = sessionKey ?? sessionIdFinal;
   preparedSessionState = resolvePreparedSessionState();
+  const resolveActiveReplyOperationSessionId = () =>
+    sessionKey ? resolveActiveReplyRunSessionId(sessionKey) : undefined;
   const resolveActiveQueueSessionId = () =>
-    piRuntime?.resolveActiveEmbeddedRunSessionId(sessionKey) ?? preparedSessionState.sessionId;
+    resolveActiveEmbeddedSessionId() ??
+    resolveActiveReplyOperationSessionId() ??
+    preparedSessionState.sessionId;
   const resolveQueueBusyState = () => {
-    const activeSessionId = resolveActiveQueueSessionId();
-    if (!activeSessionId || !piRuntime) {
+    const embeddedActiveSessionId = resolveActiveEmbeddedSessionId();
+    const replyOperationActiveSessionId = resolveActiveReplyOperationSessionId();
+    const activeSessionId =
+      embeddedActiveSessionId ?? replyOperationActiveSessionId ?? preparedSessionState.sessionId;
+    if (!activeSessionId || (!embeddedAgentRuntime && !replyOperationActiveSessionId)) {
       return { activeSessionId: undefined, isActive: false, isStreaming: false };
     }
+    if (isOwnPreDispatchOperationSession(activeSessionId)) {
+      return { activeSessionId, isActive: false, isStreaming: false };
+    }
+    const replyOperationActive =
+      replyOperationActiveSessionId != null &&
+      isReplyRunActiveForSessionId(replyOperationActiveSessionId);
     return {
       activeSessionId,
-      isActive: piRuntime.isEmbeddedPiRunActive(activeSessionId),
-      isStreaming: piRuntime.isEmbeddedPiRunStreaming(activeSessionId),
+      isActive:
+        (embeddedActiveSessionId != null &&
+          (embeddedAgentRuntime?.isEmbeddedAgentRunActive(embeddedActiveSessionId) ?? false)) ||
+        replyOperationActive,
+      isStreaming:
+        (embeddedActiveSessionId != null &&
+          (embeddedAgentRuntime?.isEmbeddedAgentRunStreaming(embeddedActiveSessionId) ?? false)) ||
+        (replyOperationActiveSessionId != null &&
+          isReplyRunStreamingForSessionId(replyOperationActiveSessionId)),
     };
   };
   let { activeSessionId, isActive, isStreaming } = resolveQueueBusyState();
-  const shouldSteer = isSteeringQueueMode(resolvedQueue.mode);
+  const isHeartbeatRun = opts?.isHeartbeat === true;
+  const shouldSteer =
+    !isRoomEvent && !isHeartbeatRun && !effectiveResetTriggered && resolvedQueue.mode === "steer";
   const shouldFollowup =
-    resolvedQueue.mode === "followup" ||
-    resolvedQueue.mode === "collect" ||
-    resolvedQueue.mode === "steer-backlog";
+    !effectiveResetTriggered &&
+    ((isRoomEvent && isActive) ||
+      resolvedQueue.mode === "steer" ||
+      resolvedQueue.mode === "followup" ||
+      resolvedQueue.mode === "collect");
   const activeRunQueueAction = resolveActiveRunQueueAction({
     isActive,
-    isHeartbeat: opts?.isHeartbeat === true,
+    isHeartbeat: isHeartbeatRun,
     shouldFollowup,
-    queueMode: resolvedQueue.mode,
+    queueMode: activeRunQueueMode,
+    resetTriggered: effectiveResetTriggered,
   });
   if (isActive && activeRunQueueAction === "run-now") {
     const queueState = await resolvePreparedReplyQueueState({
       activeRunQueueAction,
       activeSessionId: activeSessionId ?? resolveActiveQueueSessionId(),
-      queueMode: resolvedQueue.mode,
+      queueMode: activeRunQueueMode,
       sessionKey,
       sessionId: sessionIdFinal,
-      abortActiveRun: (activeRunSessionId) =>
-        piRuntime?.abortEmbeddedPiRun(activeRunSessionId) ?? false,
+      abortActiveRun: (activeRunSessionId) => {
+        const embeddedAborted =
+          embeddedAgentRuntime?.abortEmbeddedAgentRun(activeRunSessionId) ?? false;
+        const replyOperationAborted = abortReplyRunBySessionId(activeRunSessionId);
+        return embeddedAborted || replyOperationAborted;
+      },
       waitForActiveRunEnd: (activeRunSessionId) =>
-        piRuntime?.waitForEmbeddedPiRunEnd(activeRunSessionId) ?? Promise.resolve(undefined),
+        isReplyRunActiveForSessionId(activeRunSessionId)
+          ? waitForReplyRunEndBySessionId(activeRunSessionId, REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS)
+          : (embeddedAgentRuntime?.waitForEmbeddedAgentRunEnd(activeRunSessionId) ??
+            Promise.resolve(undefined)),
       refreshPreparedState: async () => {
         preparedSessionState = resolvePreparedSessionState();
-        authProfileId = useFastReplyRuntime
-          ? preparedSessionState.sessionEntry?.authProfileOverride
-          : await resolveSessionAuthProfileOverride({
-              cfg,
-              provider,
-              agentDir,
-              sessionEntry: preparedSessionState.sessionEntry,
-              sessionStore,
-              sessionKey,
-              storePath,
-              isNewSession,
-            });
+        ({ authProfileId, authProfileIdSource } = await resolveRuntimeAuthProfile());
         preparedSessionState = resolvePreparedSessionState();
-        ({ prefixedCommandBody, queuedBody, transcriptCommandBody } = await rebuildPromptBodies());
+        ({
+          prefixedCommandBody,
+          queuedBody,
+          transcriptBody,
+          transcriptCommandBody,
+          currentInboundContext,
+        } = await traceRunPhase("reply.build_prompt_bodies", () => rebuildPromptBodies()));
       },
       resolveBusyState: resolveQueueBusyState,
     });
@@ -903,24 +1134,88 @@ export async function runPreparedReply(
     }
     ({ activeSessionId, isActive, isStreaming } = queueState.busyState);
   }
-  const authProfileIdSource = preparedSessionState.sessionEntry?.authProfileOverrideSource;
   const runHasSessionModelOverride = Boolean(
     normalizeOptionalString(preparedSessionState.sessionEntry?.modelOverride) ||
     normalizeOptionalString(preparedSessionState.sessionEntry?.providerOverride),
   );
+  const runModelOverrideSource = runHasSessionModelOverride
+    ? preparedSessionState.sessionEntry?.modelOverrideSource
+    : undefined;
+  const runHasAutoFallbackProvenance =
+    runHasSessionModelOverride &&
+    hasSessionAutoModelFallbackProvenance(preparedSessionState.sessionEntry);
+  const originatingThreadId = resolveRoutedDeliveryThreadId({
+    ctx,
+    sessionKey,
+  });
+  const currentTurnImages = await traceRunPhase("reply.resolve_current_turn_images", () =>
+    resolveCurrentTurnImages({
+      ctx,
+      cfg,
+      images: opts?.images,
+      imageOrder: opts?.imageOrder,
+    }),
+  );
+  const queuedFollowupAbortSignal =
+    inboundEventKind === "room_event"
+      ? (internalOpts?.queuedFollowupAbortSignal ?? opts?.abortSignal)
+      : undefined;
+  const userTurnMediaForPersistence = buildPersistedUserTurnMediaInputsFromFields(ctx);
+  const inputProvenance = ctx.InputProvenance ?? sessionCtx.InputProvenance;
+  const userTurnTranscriptText = resolvePersistedUserTurnText(transcriptBody, {
+    hasMedia: userTurnMediaForPersistence.length > 0,
+  });
+  const userTurnInput =
+    userTurnTranscriptText !== undefined || userTurnMediaForPersistence.length > 0
+      ? {
+          text: userTurnTranscriptText,
+          ...(inputProvenance ? { provenance: inputProvenance } : {}),
+          ...(userTurnMediaForPersistence.length > 0
+            ? {
+                media: userTurnMediaForPersistence,
+                mediaOnlyText: "[User sent media without caption]",
+              }
+            : {}),
+        }
+      : undefined;
+  const userTurnTranscriptRecorder =
+    opts?.userTurnTranscriptRecorder ??
+    (userTurnInput
+      ? createUserTurnTranscriptRecorder({
+          input: userTurnInput,
+          target: () => ({
+            sessionId: preparedSessionState.sessionId,
+            sessionKey: sessionKey ?? preparedSessionState.sessionId,
+            sessionEntry: preparedSessionState.sessionEntry,
+            ...(sessionStore ? { sessionStore } : {}),
+            ...(storePath ? { storePath } : {}),
+            agentId,
+            cwd: workspaceDir,
+            config: cfg,
+          }),
+          errorContext: "reply user turn transcript",
+          beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+        })
+      : undefined);
   const followupRun = {
     prompt: queuedBody,
     transcriptPrompt: transcriptCommandBody,
+    ...(userTurnTranscriptRecorder ? { userTurnTranscriptRecorder } : {}),
+    currentInboundEventKind: inboundEventKind,
+    currentInboundContext,
+    ...(queuedFollowupAbortSignal ? { abortSignal: queuedFollowupAbortSignal } : {}),
+    deliveryCorrelations: opts?.queuedDeliveryCorrelations,
+    queuedLifecycle: opts?.queuedFollowupLifecycle,
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
     summaryLine: baseBodyTrimmedRaw,
     enqueuedAt: Date.now(),
-    images: opts?.images,
-    imageOrder: opts?.imageOrder,
+    images: currentTurnImages.images,
+    imageOrder: currentTurnImages.imageOrder,
     // Originating channel for reply routing.
     originatingChannel: ctx.OriginatingChannel,
     originatingTo: ctx.OriginatingTo,
     originatingAccountId: sessionCtx.AccountId,
-    originatingThreadId: ctx.MessageThreadId,
+    originatingThreadId,
     originatingChatType: ctx.ChatType,
     run: {
       agentId,
@@ -945,20 +1240,22 @@ export async function runPreparedReply(
       senderName: normalizeOptionalString(sessionCtx.SenderName),
       senderUsername: normalizeOptionalString(sessionCtx.SenderUsername),
       senderE164: normalizeOptionalString(sessionCtx.SenderE164),
-      senderIsOwner: forceSenderIsOwnerFalseFromSystemEvents ? false : command.senderIsOwner,
+      // Queued system events are prompt content in the same trusted session;
+      // they do not rewrite the sender identity used by command/action auth.
+      senderIsOwner: command.senderIsOwner,
       traceAuthorized:
-        (forceSenderIsOwnerFalseFromSystemEvents ? false : command.senderIsOwner) ||
-        (ctx.GatewayClientScopes ?? []).includes("operator.admin"),
+        command.senderIsOwner || (ctx.GatewayClientScopes ?? []).includes("operator.admin"),
       sessionFile: preparedSessionState.sessionFile,
       workspaceDir,
+      cwd: normalizeOptionalString(sessionEntry?.spawnedCwd),
       config: cfg,
       skillsSnapshot,
       provider,
       model,
       hasSessionModelOverride: runHasSessionModelOverride,
-      modelOverrideSource: runHasSessionModelOverride
-        ? preparedSessionState.sessionEntry?.modelOverrideSource
-        : undefined,
+      modelOverrideSource: runModelOverrideSource,
+      hasAutoFallbackProvenance: runHasAutoFallbackProvenance || undefined,
+      autoFallbackPrimaryProbe: params.autoFallbackPrimaryProbe,
       authProfileId,
       authProfileIdSource,
       thinkLevel: resolvedThinkLevel,
@@ -987,13 +1284,15 @@ export async function runPreparedReply(
       timeoutMs,
       blockReplyBreak: resolvedBlockStreamingBreak,
       ownerNumbers: command.ownerList.length > 0 ? command.ownerList : undefined,
-      inputProvenance: ctx.InputProvenance ?? sessionCtx.InputProvenance,
+      inputProvenance,
       extraSystemPrompt: extraSystemPromptParts.join("\n\n") || undefined,
-      sourceReplyDeliveryMode: opts?.sourceReplyDeliveryMode,
+      sourceReplyDeliveryMode,
       silentReplyPromptMode,
       extraSystemPromptStatic: extraSystemPromptStaticParts.join("\n\n"),
       skipProviderRuntimeHints: useFastReplyRuntime,
       allowEmptyAssistantReplyAsSilent,
+      suppressNextUserMessagePersistence: isRoomEvent,
+      suppressTranscriptOnlyAssistantPersistence: isRoomEvent,
       ...(!useFastReplyRuntime &&
       isReasoningTagProvider(provider, {
         config: cfg,
@@ -1025,8 +1324,9 @@ export async function runPreparedReply(
     isRunActive: () => {
       const latestSessionState = resolvePreparedSessionState();
       const latestActiveSessionId =
-        piRuntime?.resolveActiveEmbeddedRunSessionId(sessionKey) ?? latestSessionState.sessionId;
-      return piRuntime?.isEmbeddedPiRunActive(latestActiveSessionId) ?? false;
+        resolveActiveEmbeddedSessionId(latestSessionState.sessionFile) ??
+        latestSessionState.sessionId;
+      return embeddedAgentRuntime?.isEmbeddedAgentRunActive(latestActiveSessionId) ?? false;
     },
     isStreaming,
     opts,
@@ -1039,6 +1339,9 @@ export async function runPreparedReply(
     defaultModel,
     agentCfgContextTokens: agentCfg?.contextTokens,
     resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
+    toolProgressDetail:
+      normalizeToolProgressDetail(agentCfg?.toolProgressDetail) ??
+      normalizeToolProgressDetail(cfg.agents?.defaults?.toolProgressDetail),
     isNewSession,
     blockStreamingEnabled,
     blockReplyChunking,
@@ -1048,5 +1351,6 @@ export async function runPreparedReply(
     typingMode,
     resetTriggered: effectiveResetTriggered,
     replyThreadingOverride,
+    replyOperation: providedReplyOperation,
   });
 }

@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDiscordPluginBase, discordConfigAdapter } from "./shared.js";
 
@@ -61,6 +61,27 @@ describe("createDiscordPluginBase", () => {
       'duplicate bot token; using account "work"',
     );
     expect(plugin.config.isEnabled?.(workAccount, cfg)).toBe(true);
+  });
+
+  it("describes unresolved SecretRef tokens as startup-configured so startup reports the resolver error", () => {
+    const plugin = createDiscordPluginBase({ setup: {} as never });
+    const cfg = {
+      channels: {
+        discord: {
+          token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const account = plugin.config.resolveAccount(cfg, "default");
+    const described = plugin.config.describeAccount?.(account, cfg);
+
+    expect(account.token).toBe("");
+    expect(account.tokenSource).toBe("config");
+    expect(account.tokenStatus).toBe("configured_unavailable");
+    expect(plugin.config.isConfigured?.(account, cfg)).toBe(true);
+    expect(described?.configured).toBe(true);
+    expect(described?.tokenStatus).toBe("configured_unavailable");
   });
 });
 

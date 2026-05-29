@@ -18,8 +18,10 @@ function createGatewayInfoBody(overrides?: {
 }
 
 function resolveGatewayInfoFetch(resolve: ((value: Response) => void) | undefined): void {
-  expect(resolve).toBeDefined();
-  resolve!({
+  if (!resolve) {
+    throw new Error("expected pending gateway info fetch resolver");
+  }
+  resolve({
     ok: true,
     status: 200,
     text: async () => createGatewayInfoBody(),
@@ -33,20 +35,37 @@ const {
   captureWsEventSpy,
   GatewayPlugin,
   globalFetchMock,
+  HttpsAgent,
   HttpsProxyAgent,
+  fetchWithSsrFGuardMock,
   getLastAgent,
+  getLastProxyAgent,
   resolveDebugProxySettingsMock,
   resetLastAgent,
   webSocketSpy,
+  httpsAgentSpy,
   wsProxyAgentSpy,
 } = vi.hoisted(() => {
   const wsProxyAgentSpy = vi.fn();
+  const httpsAgentSpy = vi.fn();
   const globalFetchMock = vi.fn();
   const baseRegisterClientSpy = vi.fn();
   const webSocketSpy = vi.fn();
   const captureHttpExchangeSpy = vi.fn();
   const captureWsEventSpy = vi.fn();
   const resolveDebugProxySettingsMock = vi.fn(() => ({ enabled: false }));
+  const fetchWithSsrFGuardMock = vi.fn(async (params: { url: string; init?: RequestInit }) => {
+    const source = (await globalFetchMock(params.url, params.init)) as Response;
+    const body = await source.text();
+    return {
+      response: new Response(body, {
+        status: source.status,
+        statusText: source.statusText,
+        headers: source.headers,
+      }),
+      release: vi.fn(),
+    };
+  });
 
   const GatewayIntents = {
     Guilds: 1 << 0,
@@ -78,6 +97,16 @@ const {
     }
   }
 
+  class HttpsAgent {
+    static lastCreated: HttpsAgent | undefined;
+    options: unknown;
+    constructor(options?: unknown) {
+      this.options = options;
+      HttpsAgent.lastCreated = this;
+      httpsAgentSpy(options);
+    }
+  }
+
   class HttpsProxyAgent {
     static lastCreated: HttpsProxyAgent | undefined;
     proxyUrl: string;
@@ -96,12 +125,17 @@ const {
     GatewayIntents,
     GatewayPlugin,
     globalFetchMock,
+    HttpsAgent,
     HttpsProxyAgent,
-    getLastAgent: () => HttpsProxyAgent.lastCreated,
+    fetchWithSsrFGuardMock,
+    getLastAgent: () => HttpsAgent.lastCreated,
+    getLastProxyAgent: () => HttpsProxyAgent.lastCreated,
     captureHttpExchangeSpy,
     captureWsEventSpy,
+    httpsAgentSpy,
     resolveDebugProxySettingsMock,
     resetLastAgent: () => {
+      HttpsAgent.lastCreated = undefined;
       HttpsProxyAgent.lastCreated = undefined;
     },
     webSocketSpy,
@@ -120,8 +154,8 @@ vi.mock("../internal/gateway.js", () => ({
   GatewayPlugin,
 }));
 
-vi.mock("https-proxy-agent", () => ({
-  HttpsProxyAgent,
+vi.mock("node:https", () => ({
+  Agent: HttpsAgent,
 }));
 
 vi.mock("ws", () => ({
@@ -142,18 +176,7 @@ vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
-  fetchWithSsrFGuard: vi.fn(async (params: { url: string; init?: RequestInit }) => {
-    const source = (await globalFetchMock(params.url, params.init)) as Response;
-    const body = await source.text();
-    return {
-      response: new Response(body, {
-        status: source.status,
-        statusText: source.statusText,
-        headers: source.headers,
-      }),
-      release: vi.fn(),
-    };
-  }),
+  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
 describe("createDiscordGatewayPlugin", () => {
@@ -175,10 +198,34 @@ describe("createDiscordGatewayPlugin", () => {
     };
   }
 
+  type MockWithCalls = { mock: { calls: unknown[][] } };
+
+  function firstMockCall(mock: MockWithCalls, label: string): unknown[] {
+    const call = mock.mock.calls.at(0);
+    if (!call) {
+      throw new Error(`expected ${label} call`);
+    }
+    return call;
+  }
+
+  function firstMockArg(mock: MockWithCalls, label: string, index = 0) {
+    return firstMockCall(mock, label)[index];
+  }
+
+  function firstGuardedFetchCall() {
+    return firstMockArg(fetchWithSsrFGuardMock, "fetchWithSsrFGuardMock") as {
+      url: string;
+      init?: RequestInit & { signal?: unknown };
+      mode?: string;
+      dispatcherPolicy?: unknown;
+      policy?: unknown;
+    };
+  }
+
   function createProxyTestingOverrides() {
     return {
-      HttpsProxyAgentCtor:
-        HttpsProxyAgent as unknown as typeof import("https-proxy-agent").HttpsProxyAgent,
+      createProxyAgent: (proxyUrl: string) =>
+        new HttpsProxyAgent(proxyUrl) as unknown as import("node:http").Agent,
       webSocketCtor: function WebSocketCtor(
         url: string,
         options?: { agent?: unknown; handshakeTimeout?: number },
@@ -254,8 +301,9 @@ describe("createDiscordGatewayPlugin", () => {
     expect((plugin as unknown as { gatewayInfo?: { url?: string } }).gatewayInfo?.url).toBe(
       "wss://gateway.discord.gg/",
     );
-    expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining("discord: gateway metadata lookup failed transiently"),
+    expect(runtime.log).toHaveBeenCalledTimes(1);
+    expect(String(firstMockArg(runtime.log, "runtime.log"))).toContain(
+      "discord: gateway metadata lookup failed transiently",
     );
   }
 
@@ -279,6 +327,8 @@ describe("createDiscordGatewayPlugin", () => {
     vi.useRealTimers();
     baseRegisterClientSpy.mockClear();
     globalFetchMock.mockClear();
+    fetchWithSsrFGuardMock.mockClear();
+    httpsAgentSpy.mockClear();
     wsProxyAgentSpy.mockClear();
     webSocketSpy.mockClear();
     captureHttpExchangeSpy.mockClear();
@@ -301,12 +351,15 @@ describe("createDiscordGatewayPlugin", () => {
 
     await registerGatewayClientWithMetadata({ plugin, fetchMock: globalFetchMock });
 
-    expect(globalFetchMock).toHaveBeenCalledWith(
+    expect(globalFetchMock).toHaveBeenCalledTimes(1);
+    const fetchInit = firstMockArg(globalFetchMock, "globalFetchMock", 1) as
+      | { headers?: Record<string, string>; signal?: unknown }
+      | undefined;
+    expect(firstMockArg(globalFetchMock, "globalFetchMock")).toBe(
       "https://discord.com/api/v10/gateway/bot",
-      expect.objectContaining({
-        headers: { Authorization: "Bot token-123" },
-      }),
     );
+    expect(fetchInit?.headers).toEqual({ Authorization: "Bot token-123" });
+    expect(fetchInit?.signal).toBeInstanceOf(AbortSignal);
     expect(baseRegisterClientSpy).toHaveBeenCalledTimes(1);
   });
 
@@ -321,7 +374,14 @@ describe("createDiscordGatewayPlugin", () => {
       .createWebSocket;
     createWebSocket("wss://gateway.discord.gg");
 
+    expect(httpsAgentSpy).toHaveBeenCalledTimes(1);
+    const httpsAgentOptions = firstMockArg(httpsAgentSpy, "httpsAgentSpy") as
+      | { lookup?: unknown }
+      | undefined;
+    expect(Object.keys(httpsAgentOptions ?? {})).toEqual(["lookup"]);
+    expect(typeof httpsAgentOptions?.lookup).toBe("function");
     expect(webSocketSpy).toHaveBeenCalledWith("wss://gateway.discord.gg", {
+      agent: getLastAgent(),
       handshakeTimeout: 30_000,
     });
     expect(wsProxyAgentSpy).not.toHaveBeenCalled();
@@ -419,13 +479,13 @@ describe("createDiscordGatewayPlugin", () => {
     );
   });
 
-  it("uses proxy agent for gateway WebSocket when configured", async () => {
+  it("uses proxy agent for gateway WebSocket when configured", () => {
     const runtime = createRuntime();
 
     const plugin = createDiscordGatewayPlugin({
       discordConfig: { proxy: "http://127.0.0.1:8080" },
       runtime,
-      __testing: createProxyTestingOverrides(),
+      testing: createProxyTestingOverrides(),
     });
 
     expect(Object.getPrototypeOf(plugin)).not.toBe(GatewayPlugin.prototype);
@@ -435,15 +495,15 @@ describe("createDiscordGatewayPlugin", () => {
     createWebSocket("wss://gateway.discord.gg");
 
     expect(wsProxyAgentSpy).toHaveBeenCalledWith("http://127.0.0.1:8080");
-    expect(webSocketSpy).toHaveBeenCalledWith(
-      "wss://gateway.discord.gg",
-      expect.objectContaining({ agent: getLastAgent(), handshakeTimeout: 30_000 }),
-    );
+    expect(webSocketSpy).toHaveBeenCalledWith("wss://gateway.discord.gg", {
+      agent: getLastProxyAgent(),
+      handshakeTimeout: 30_000,
+    });
     expect(runtime.log).toHaveBeenCalledWith("discord: gateway proxy enabled");
     expect(runtime.error).not.toHaveBeenCalled();
   });
 
-  it("falls back to the default gateway plugin when proxy is invalid", async () => {
+  it("falls back to the default gateway plugin when proxy is invalid", () => {
     const runtime = createRuntime();
 
     const plugin = createDiscordGatewayPlugin({
@@ -454,24 +514,31 @@ describe("createDiscordGatewayPlugin", () => {
     expect(Object.getPrototypeOf(plugin)).not.toBe(GatewayPlugin.prototype);
     expect(runtime.error).toHaveBeenCalled();
     expect(runtime.log).not.toHaveBeenCalled();
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
   });
 
-  it("keeps gateway metadata lookup on the guarded direct fetch when proxy is configured", async () => {
+  it("routes gateway metadata lookup through the guarded proxy dispatcher", async () => {
     const runtime = createRuntime();
     const plugin = createDiscordGatewayPlugin({
       discordConfig: { proxy: "http://127.0.0.1:8080" },
       runtime,
-      __testing: createProxyTestingOverrides(),
+      testing: createProxyTestingOverrides(),
     });
 
     await registerGatewayClientWithMetadata({ plugin, fetchMock: globalFetchMock });
 
-    expect(globalFetchMock).toHaveBeenCalledWith(
-      "https://discord.com/api/v10/gateway/bot",
-      expect.objectContaining({
-        headers: { Authorization: "Bot token-123" },
-      }),
-    );
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+    const guardedFetch = firstGuardedFetchCall();
+    expect(guardedFetch.url).toBe("https://discord.com/api/v10/gateway/bot");
+    expect(guardedFetch.mode).toBe("trusted_explicit_proxy");
+    expect(guardedFetch.dispatcherPolicy).toEqual({
+      mode: "explicit-proxy",
+      proxyUrl: "http://127.0.0.1:8080",
+      allowPrivateProxy: true,
+    });
+    expect(guardedFetch.policy).toEqual({ allowedHostnames: ["discord.com"] });
+    expect(guardedFetch.init?.headers).toEqual({ Authorization: "Bot token-123" });
+    expect(guardedFetch.init?.signal).toBeInstanceOf(AbortSignal);
     expect(baseRegisterClientSpy).toHaveBeenCalledTimes(1);
   });
 
@@ -493,7 +560,7 @@ describe("createDiscordGatewayPlugin", () => {
     const plugin = createDiscordGatewayPlugin({
       discordConfig: { proxy: "http://[::1]:8080" },
       runtime,
-      __testing: createProxyTestingOverrides(),
+      testing: createProxyTestingOverrides(),
     });
 
     const createWebSocket = (plugin as unknown as { createWebSocket: (url: string) => unknown })
@@ -505,7 +572,7 @@ describe("createDiscordGatewayPlugin", () => {
     expect(runtime.error).not.toHaveBeenCalled();
   });
 
-  it("falls back to the default gateway plugin when proxy is remote", async () => {
+  it("falls back to the default gateway plugin when proxy is remote", () => {
     const runtime = createRuntime();
 
     const plugin = createDiscordGatewayPlugin({
@@ -514,7 +581,8 @@ describe("createDiscordGatewayPlugin", () => {
     });
 
     expect(Object.getPrototypeOf(plugin)).not.toBe(GatewayPlugin.prototype);
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("loopback host"));
+    expect(runtime.error).toHaveBeenCalledTimes(1);
+    expect(String(firstMockArg(runtime.error, "runtime.error"))).toContain("loopback host");
     expect(runtime.log).not.toHaveBeenCalled();
   });
 
@@ -545,8 +613,9 @@ describe("createDiscordGatewayPlugin", () => {
     expect((plugin as unknown as { gatewayInfo?: { url?: string } }).gatewayInfo?.url).toBe(
       "wss://gateway.discord.gg/",
     );
-    expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining("discord: gateway metadata lookup failed transiently"),
+    expect(runtime.log).toHaveBeenCalledTimes(1);
+    expect(String(firstMockArg(runtime.log, "runtime.log"))).toContain(
+      "discord: gateway metadata lookup failed transiently",
     );
   });
 
@@ -735,11 +804,15 @@ describe("createDiscordGatewayPlugin", () => {
 
     expect(globalFetchMock).toHaveBeenCalledTimes(2);
     expect(baseRegisterClientSpy).toHaveBeenCalledTimes(2);
-    expect(
-      (plugin as unknown as { gatewayInfo?: { url?: string; shards?: number } }).gatewayInfo,
-    ).toMatchObject({
+    expect((plugin as unknown as { gatewayInfo?: unknown }).gatewayInfo).toEqual({
       url: "wss://gateway.discord.gg/?v=10",
       shards: 8,
+      session_start_limit: {
+        total: 1000,
+        remaining: 999,
+        reset_after: 120_000,
+        max_concurrency: 16,
+      },
     });
   });
 });

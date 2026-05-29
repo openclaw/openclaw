@@ -8,6 +8,32 @@ import { ensureDebugProxyCa } from "./ca.js";
 import type { DebugProxySettings } from "./env.js";
 import { getDebugProxyCaptureStore } from "./store.sqlite.js";
 
+const TRUTHY_ENV = new Set(["1", "true", "yes", "on"]);
+const DEBUG_PROXY_DIRECT_CONNECT_OVERRIDE =
+  "OPENCLAW_DEBUG_PROXY_ALLOW_DIRECT_CONNECT_WITH_MANAGED_PROXY";
+
+function isTruthyEnvValue(value: string | undefined): boolean {
+  return TRUTHY_ENV.has((value ?? "").trim().toLowerCase());
+}
+
+function isManagedProxyActive(env: NodeJS.ProcessEnv = process.env): boolean {
+  return isTruthyEnvValue(env["OPENCLAW_PROXY_ACTIVE"]);
+}
+
+function allowsDirectConnectWithManagedProxy(env: NodeJS.ProcessEnv = process.env): boolean {
+  return isTruthyEnvValue(env[DEBUG_PROXY_DIRECT_CONNECT_OVERRIDE]);
+}
+
+export function assertDebugProxyDirectUpstreamAllowed(env: NodeJS.ProcessEnv = process.env): void {
+  if (!isManagedProxyActive(env) || allowsDirectConnectWithManagedProxy(env)) {
+    return;
+  }
+  throw new Error(
+    "Debug proxy direct upstream forwarding is disabled while managed proxy mode is active. " +
+      `Set ${DEBUG_PROXY_DIRECT_CONNECT_OVERRIDE}=1 only for approved local diagnostics.`,
+  );
+}
+
 type DebugProxyServerHandle = {
   proxyUrl: string;
   stop: () => Promise<void>;
@@ -38,6 +64,9 @@ export function parseConnectTarget(rawTarget: string | undefined): {
   }
   const hostname = trimmed.slice(0, lastColon).trim() || "127.0.0.1";
   const portText = trimmed.slice(lastColon + 1).trim();
+  if (!/^\d+$/.test(portText)) {
+    throw new Error("Invalid CONNECT target port");
+  }
   const port = Number(portText);
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
     throw new Error("Invalid CONNECT target port");
@@ -72,7 +101,61 @@ export async function startDebugProxyServer(params: {
 
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     const flowId = randomUUID();
-    const target = normalizeTargetUrl(req);
+    let target: URL;
+    try {
+      target = normalizeTargetUrl(req);
+    } catch (error) {
+      const message = "Invalid proxy target URL";
+      store.recordEvent({
+        sessionId: params.settings.sessionId,
+        ts: Date.now(),
+        sourceScope: "openclaw",
+        sourceProcess: params.settings.sourceProcess,
+        protocol: "http",
+        direction: "local",
+        kind: "error",
+        flowId,
+        method: req.method,
+        host: req.headers.host,
+        path: req.url ?? "",
+        errorText: error instanceof Error ? error.message : String(error),
+      });
+      const responseBody = `${message}\n`;
+      res.writeHead(400, {
+        Connection: "close",
+        "Content-Type": "text/plain; charset=utf-8",
+        "Content-Length": Buffer.byteLength(responseBody),
+      });
+      res.end(responseBody);
+      return;
+    }
+    try {
+      assertDebugProxyDirectUpstreamAllowed();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      store.recordEvent({
+        sessionId: params.settings.sessionId,
+        ts: Date.now(),
+        sourceScope: "openclaw",
+        sourceProcess: params.settings.sourceProcess,
+        protocol: target.protocol === "https:" ? "https" : "http",
+        direction: "local",
+        kind: "error",
+        flowId,
+        method: req.method,
+        host: target.host,
+        path: `${target.pathname}${target.search}`,
+        errorText: message,
+      });
+      const responseBody = `${message}\n`;
+      res.writeHead(403, {
+        Connection: "close",
+        "Content-Type": "text/plain; charset=utf-8",
+        "Content-Length": Buffer.byteLength(responseBody),
+      });
+      res.end(responseBody);
+      return;
+    }
     const body = await readBody(req);
     store.recordEvent({
       sessionId: params.settings.sessionId,
@@ -187,6 +270,29 @@ export async function startDebugProxyServer(params: {
       path: req.url ?? "",
       headersJson: JSON.stringify(req.headers),
     });
+    try {
+      assertDebugProxyDirectUpstreamAllowed();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      store.recordEvent({
+        sessionId: params.settings.sessionId,
+        ts: Date.now(),
+        sourceScope: "openclaw",
+        sourceProcess: params.settings.sourceProcess,
+        protocol: "connect",
+        direction: "local",
+        kind: "error",
+        flowId,
+        host: hostname,
+        path: req.url ?? "",
+        errorText: message,
+      });
+      const responseBody = `${message}\n`;
+      clientSocket.end(
+        `HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: ${Buffer.byteLength(responseBody)}\r\n\r\n${responseBody}`,
+      );
+      return;
+    }
     const upstreamSocket = net.connect(port, hostname, () => {
       clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
       if (head.length > 0) {
@@ -194,6 +300,22 @@ export async function startDebugProxyServer(params: {
       }
       clientSocket.pipe(upstreamSocket);
       upstreamSocket.pipe(clientSocket);
+    });
+    clientSocket.on("error", (error) => {
+      store.recordEvent({
+        sessionId: params.settings.sessionId,
+        ts: Date.now(),
+        sourceScope: "openclaw",
+        sourceProcess: params.settings.sourceProcess,
+        protocol: "connect",
+        direction: "local",
+        kind: "error",
+        flowId,
+        host: hostname,
+        path: req.url ?? "",
+        errorText: error.message,
+      });
+      upstreamSocket.destroy();
     });
     upstreamSocket.on("error", (error) => {
       store.recordEvent({
@@ -209,7 +331,7 @@ export async function startDebugProxyServer(params: {
         path: req.url ?? "",
         errorText: error.message,
       });
-      clientSocket.end();
+      clientSocket.destroy();
     });
   });
 

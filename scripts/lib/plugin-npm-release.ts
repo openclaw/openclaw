@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { validateExternalCodePluginPackageJson } from "../../packages/plugin-package-contract/src/index.ts";
 import { normalizeOptionalString } from "../../src/shared/string-coerce.ts";
 import { parseReleaseVersion } from "../openclaw-npm-release-check.ts";
 import { resolveNpmPublishPlan } from "./npm-publish-plan.mjs";
@@ -23,6 +24,14 @@ export type PluginPackageJson = {
       minHostVersion?: string;
       npmSpec?: string;
     };
+    compat?: {
+      pluginApi?: string;
+      minGatewayVersion?: string;
+    };
+    build?: {
+      openclawVersion?: string;
+      pluginSdkVersion?: string;
+    };
     release?: {
       publishToNpm?: boolean;
     };
@@ -34,8 +43,8 @@ export type PublishablePluginPackage = {
   packageDir: string;
   packageName: string;
   version: string;
-  channel: "stable" | "beta";
-  publishTag: "latest" | "beta";
+  channel: "stable" | "alpha" | "beta";
+  publishTag: "latest" | "alpha" | "beta";
   installNpmSpec?: string;
 };
 
@@ -117,7 +126,7 @@ export function resolvePublishablePluginVersion(params: {
   const parsedVersion = parseReleaseVersion(version);
   if (parsedVersion === null) {
     params.validationErrors.push(
-      `${params.extensionId}: package.json version must match YYYY.M.D, YYYY.M.D-N, or YYYY.M.D-beta.N; found "${version}".`,
+      `${params.extensionId}: package.json version must match YYYY.M.D, YYYY.M.D-N, YYYY.M.D-alpha.N, or YYYY.M.D-beta.N; found "${version}".`,
     );
     return null;
   }
@@ -244,7 +253,7 @@ export function collectPublishablePluginPackageErrors(
     errors.push("package.json version must be non-empty.");
   } else if (parseReleaseVersion(packageVersion) === null) {
     errors.push(
-      `package.json version must match YYYY.M.D, YYYY.M.D-N, or YYYY.M.D-beta.N; found "${packageVersion}".`,
+      `package.json version must match YYYY.M.D, YYYY.M.D-N, YYYY.M.D-alpha.N, or YYYY.M.D-beta.N; found "${packageVersion}".`,
     );
   }
   if (!Array.isArray(extensions) || extensions.length === 0) {
@@ -256,6 +265,9 @@ export function collectPublishablePluginPackageErrors(
   if (!installNpmSpec) {
     errors.push("openclaw.install.npmSpec must be a non-empty string for publishable plugins.");
   }
+  errors.push(
+    ...validateExternalCodePluginPackageJson(packageJson).issues.map((issue) => issue.message),
+  );
 
   return errors;
 }

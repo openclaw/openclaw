@@ -22,60 +22,6 @@ vi.mock("../infra/net/fetch-guard.js", () => ({
   fetchWithSsrFGuard: (...args: unknown[]) => fetchWithSsrFGuardMock(...args),
 }));
 
-// Download tests cover installer path handling; fs-safe has dedicated pinned-helper coverage.
-vi.mock("../infra/fs-pinned-write-helper.js", async () => {
-  const fs = await import("node:fs/promises");
-  const path = await import("node:path");
-  const { pipeline } = await import("node:stream/promises");
-
-  type PinnedWriteParams = {
-    rootPath: string;
-    relativeParentPath: string;
-    basename: string;
-    mkdir: boolean;
-    mode: number;
-    input:
-      | { kind: "buffer"; data: string | Buffer; encoding?: BufferEncoding }
-      | { kind: "stream"; stream: NodeJS.ReadableStream };
-  };
-
-  async function resolveParentPath(params: PinnedWriteParams): Promise<string> {
-    const parentPath = params.relativeParentPath
-      ? path.join(params.rootPath, ...params.relativeParentPath.split("/"))
-      : params.rootPath;
-    if (params.mkdir) {
-      await fs.mkdir(parentPath, { recursive: true });
-    }
-    return parentPath;
-  }
-
-  async function writePinnedTarget(params: PinnedWriteParams, targetPath: string) {
-    if (params.input.kind === "buffer") {
-      await fs.writeFile(targetPath, params.input.data, {
-        encoding: params.input.encoding,
-        mode: params.mode,
-      });
-      return;
-    }
-    const handle = await fs.open(targetPath, "w", params.mode);
-    try {
-      await pipeline(params.input.stream, handle.createWriteStream());
-    } finally {
-      await handle.close().catch(() => undefined);
-    }
-  }
-
-  return {
-    runPinnedWriteHelper: async (params: PinnedWriteParams) => {
-      const parentPath = await resolveParentPath(params);
-      const targetPath = path.join(parentPath, params.basename);
-      await writePinnedTarget(params, targetPath);
-      const stat = await fs.stat(targetPath);
-      return { dev: stat.dev, ino: stat.ino };
-    },
-  };
-});
-
 vi.mock("./skills.js", () => ({
   hasBinary: (bin: string) => hasBinaryMock(bin),
 }));
@@ -159,6 +105,19 @@ function mockArchiveResponse(buffer: Uint8Array): void {
   });
 }
 
+function createCancelableBody() {
+  let canceled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new Uint8Array([1, 2, 3]));
+    },
+    cancel() {
+      canceled = true;
+    },
+  });
+  return { stream, wasCanceled: () => canceled };
+}
+
 function runCommandResult(params?: Partial<Record<"code" | "stdout" | "stderr", string | number>>) {
   return {
     code: 0,
@@ -220,18 +179,25 @@ beforeEach(() => {
 describe("installDownloadSpec extraction safety", () => {
   it("rejects targetDir escapes outside the per-skill tools root", async () => {
     const beforeFetchCalls = fetchWithSsrFGuardMock.mock.calls.length;
+    const entry = buildEntry("relative-traversal");
+    const toolsRoot = resolveSkillToolsRootDir(entry);
+    const escapedTargetDir = path.resolve(toolsRoot, "../outside");
 
-    const result = await installDownloadSkill({
-      name: "relative-traversal",
-      url: "https://example.invalid/good.zip",
-      archive: "zip",
-      targetDir: "../outside",
+    const result = await installDownloadSpec({
+      entry,
+      spec: buildDownloadSpec({
+        url: "https://example.invalid/good.zip",
+        archive: "zip",
+        targetDir: "../outside",
+      }),
+      timeoutMs: 30_000,
     });
 
     expect(result.ok).toBe(false);
     expect(result.stderr).toContain("Refusing to install outside the skill tools directory");
     expect(fetchWithSsrFGuardMock.mock.calls.length).toBe(beforeFetchCalls);
-    expect(stateDir.length).toBeGreaterThan(0);
+    await expect(fileExists(toolsRoot)).resolves.toBe(true);
+    await expect(fileExists(escapedTargetDir)).resolves.toBe(false);
   });
 
   it("allows relative targetDir inside the per-skill tools root", async () => {
@@ -258,11 +224,42 @@ describe("installDownloadSpec extraction safety", () => {
     ).toBe("payload");
   });
 
+  it("cancels failed download response bodies before returning the error", async () => {
+    const { stream, wasCanceled } = createCancelableBody();
+    const release = vi.fn(async () => undefined);
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: {
+        ok: false,
+        status: 500,
+        statusText: "Server Error",
+        body: stream,
+      },
+      release,
+    });
+
+    const result = await installDownloadSpec({
+      entry: buildEntry("failed-download-body"),
+      spec: {
+        kind: "download",
+        id: "dl",
+        url: "https://example.invalid/broken.bin",
+        extract: false,
+        targetDir: "runtime",
+      },
+      timeoutMs: 30_000,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.stderr).toContain("Download failed (500 Server Error)");
+    expect(wasCanceled()).toBe(true);
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   it.runIf(process.platform !== "win32")(
     "fails closed when the lexical tools root is rebound before the final copy",
     async () => {
       const entry = buildEntry("base-rebind");
-      const safeRoot = resolveSkillToolsRootDir(entry);
+      const safeToolsRoot = resolveSkillToolsRootDir(entry);
       const outsideRoot = path.join(workspaceDir, "outside-root");
       await fs.mkdir(outsideRoot, { recursive: true });
 
@@ -274,9 +271,9 @@ describe("installDownloadSpec extraction safety", () => {
           body: Readable.from(
             (async function* () {
               yield Buffer.from("payload");
-              const reboundRoot = `${safeRoot}-rebound`;
-              await fs.rename(safeRoot, reboundRoot);
-              await fs.symlink(outsideRoot, safeRoot);
+              const reboundRoot = `${safeToolsRoot}-rebound`;
+              await fs.rename(safeToolsRoot, reboundRoot);
+              await fs.symlink(outsideRoot, safeToolsRoot);
             })(),
           ),
         },

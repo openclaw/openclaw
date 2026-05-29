@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveModelAuthLabel } from "./model-auth-label.js";
 
 const mocks = vi.hoisted(() => ({
   ensureAuthProfileStore: vi.fn(),
@@ -8,7 +9,8 @@ const mocks = vi.hoisted(() => ({
   resolveAuthProfileDisplayLabel: vi.fn(),
   resolveUsableCustomProviderApiKey: vi.fn(() => null),
   resolveEnvApiKey: vi.fn<() => { apiKey: string; source: string } | null>(() => null),
-  readCodexCliCredentialsCached: vi.fn<() => unknown>(() => null),
+  readClaudeCliCredentialsCached: vi.fn<(options?: unknown) => unknown>(() => null),
+  readCodexCliCredentialsCached: vi.fn<(options?: unknown) => unknown>(() => null),
 }));
 
 vi.mock("./auth-profiles.js", () => ({
@@ -25,17 +27,12 @@ vi.mock("./model-auth.js", () => ({
 }));
 
 vi.mock("./cli-credentials.js", () => ({
-  readClaudeCliCredentialsCached: () => null,
+  readClaudeCliCredentialsCached: mocks.readClaudeCliCredentialsCached,
   readCodexCliCredentialsCached: mocks.readCodexCliCredentialsCached,
 }));
 
-let resolveModelAuthLabel: typeof import("./model-auth-label.js").resolveModelAuthLabel;
-
 describe("resolveModelAuthLabel", () => {
-  beforeEach(async () => {
-    if (!resolveModelAuthLabel) {
-      ({ resolveModelAuthLabel } = await import("./model-auth-label.js"));
-    }
+  beforeEach(() => {
     mocks.ensureAuthProfileStore.mockReset();
     mocks.externalCliDiscoveryForProviderAuth.mockReset();
     mocks.externalCliDiscoveryForProviderAuth.mockReturnValue(undefined);
@@ -46,6 +43,8 @@ describe("resolveModelAuthLabel", () => {
     mocks.resolveUsableCustomProviderApiKey.mockReturnValue(null);
     mocks.resolveEnvApiKey.mockReset();
     mocks.resolveEnvApiKey.mockReturnValue(null);
+    mocks.readClaudeCliCredentialsCached.mockReset();
+    mocks.readClaudeCliCredentialsCached.mockReturnValue(null);
     mocks.readCodexCliCredentialsCached.mockReset();
     mocks.readCodexCliCredentialsCached.mockReturnValue(null);
   });
@@ -124,6 +123,38 @@ describe("resolveModelAuthLabel", () => {
     expect(label).toBe("oauth (anthropic:oauth)");
   });
 
+  it("uses accepted provider ids before falling back to provider env auth", () => {
+    mocks.ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {
+        "openai-codex:user@example.com": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 60_000,
+        },
+      },
+    } as never);
+    mocks.resolveAuthProfileOrder.mockImplementation(({ provider }: { provider?: string }) =>
+      provider === "openai-codex" ? ["openai-codex:user@example.com"] : [],
+    );
+    mocks.resolveAuthProfileDisplayLabel.mockReturnValue("openai-codex:user@example.com");
+    mocks.resolveEnvApiKey.mockReturnValue({
+      apiKey: "env-key-placeholder",
+      source: "env: OPENAI_API_KEY",
+    });
+
+    const label = resolveModelAuthLabel({
+      provider: "openai",
+      acceptedProviderIds: ["openai-codex"],
+      cfg: {},
+    });
+
+    expect(label).toBe("oauth (openai-codex:user@example.com)");
+    expect(mocks.resolveEnvApiKey).not.toHaveBeenCalled();
+  });
+
   it("shows codex cli auth for codex provider without auth profiles", () => {
     mocks.ensureAuthProfileStore.mockReturnValue({
       version: 1,
@@ -144,6 +175,36 @@ describe("resolveModelAuthLabel", () => {
     });
 
     expect(label).toBe("oauth (codex-cli)");
+    expect(mocks.readCodexCliCredentialsCached).toHaveBeenCalledWith({
+      ttlMs: 5_000,
+      allowKeychainPrompt: false,
+    });
+  });
+
+  it("shows claude cli auth for claude-cli provider without auth profiles", () => {
+    mocks.ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {},
+    } as never);
+    mocks.resolveAuthProfileOrder.mockReturnValue([]);
+    mocks.readClaudeCliCredentialsCached.mockReturnValue({
+      type: "oauth",
+      provider: "claude-cli",
+      access: "token",
+      refresh: "refresh",
+      expires: Date.now() + 60_000,
+    });
+
+    const label = resolveModelAuthLabel({
+      provider: "claude-cli",
+      cfg: {},
+    });
+
+    expect(label).toBe("oauth (claude-cli)");
+    expect(mocks.readClaudeCliCredentialsCached).toHaveBeenCalledWith({
+      ttlMs: 5_000,
+      allowKeychainPrompt: false,
+    });
   });
 
   it("can skip external auth profile overlays for status labels", () => {

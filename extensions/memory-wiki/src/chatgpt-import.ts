@@ -1,10 +1,12 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
 import {
   replaceManagedMarkdownBlock,
   withTrailingNewline,
 } from "openclaw/plugin-sdk/memory-host-markdown";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { compileMemoryWikiVault } from "./compile.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
@@ -292,7 +294,7 @@ function inferRisk(title: string, sampleText: string): ChatGptRiskAssessment {
     (rule) => rule.label,
   );
   if (reasons.length > 0) {
-    return { level: "high", reasons: [...new Set(reasons)] };
+    return { level: "high", reasons: uniqueStrings(reasons) };
   }
   if (/\b(career|job|salary|interview|offer|resume|cover letter)\b/i.test(blob)) {
     return { level: "medium", reasons: ["work_career"] };
@@ -679,8 +681,7 @@ async function writeImportRunRecord(
   record: ChatGptImportRunRecord,
 ): Promise<void> {
   const recordPath = resolveImportRunPath(vaultRoot, record.runId);
-  await fs.mkdir(path.dirname(recordPath), { recursive: true });
-  await fs.writeFile(recordPath, `${JSON.stringify(record, null, 2)}\n`, "utf8");
+  await writeJsonFileAtomically(recordPath, record);
 }
 
 async function readImportRunRecord(

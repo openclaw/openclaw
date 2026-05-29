@@ -1,9 +1,22 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { resolveDefaultAgentId, resolveSessionAgentId } from "openclaw/plugin-sdk/memory-host-core";
-import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-host-files";
 import { getActiveMemorySearchManager } from "openclaw/plugin-sdk/memory-host-search";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import {
+  extractTranscriptIdentityFromSessionsMemoryHit,
+  loadCombinedSessionStoreForGateway,
+  resolveTranscriptStemToSessionKeys,
+} from "openclaw/plugin-sdk/session-transcript-hit";
+import {
+  createAgentToAgentPolicy,
+  createSessionVisibilityGuard,
+  resolveEffectiveSessionToolsVisibility,
+} from "openclaw/plugin-sdk/session-visibility";
+import {
+  normalizeLowercaseStringOrEmpty,
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawConfig } from "../api.js";
 import { assessClaimFreshness, isClaimContestedStatus } from "./claim-health.js";
 import type { ResolvedMemoryWikiConfig, WikiSearchBackend, WikiSearchCorpus } from "./config.js";
@@ -71,6 +84,12 @@ const ROUTE_QUESTION_STOP_WORDS = new Set([
   "with",
   "would",
 ]);
+
+function normalizePositiveInteger(value: number | undefined, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(1, Math.floor(value))
+    : fallback;
+}
 
 export const WIKI_SEARCH_MODES = [
   "auto",
@@ -182,6 +201,43 @@ type QuerySearchOverrides = {
   searchBackend?: WikiSearchBackend;
   searchCorpus?: WikiSearchCorpus;
 };
+
+function sortWikiSearchResults(results: WikiSearchResult[]): WikiSearchResult[] {
+  return results.toSorted((left, right) => {
+    if (left.score !== right.score) {
+      return right.score - left.score;
+    }
+    return left.title.localeCompare(right.title);
+  });
+}
+
+function mergeWikiSearchCorpusResults(params: {
+  wikiResults: WikiSearchResult[];
+  memoryResults: WikiSearchResult[];
+  maxResults: number;
+  balanceCorpora: boolean;
+}): WikiSearchResult[] {
+  const wikiResults = sortWikiSearchResults(params.wikiResults);
+  const memoryResults = sortWikiSearchResults(params.memoryResults);
+  if (!params.balanceCorpora || wikiResults.length === 0 || memoryResults.length === 0) {
+    return sortWikiSearchResults([...wikiResults, ...memoryResults]).slice(0, params.maxResults);
+  }
+
+  const perCorpusCap = Math.ceil(params.maxResults / 2);
+  const selectedWiki = wikiResults.slice(0, perCorpusCap);
+  const selectedMemory = memoryResults.slice(0, perCorpusCap);
+  const selected = [...selectedWiki, ...selectedMemory];
+  if (selected.length < params.maxResults) {
+    selected.push(
+      ...sortWikiSearchResults([
+        ...wikiResults.slice(selectedWiki.length),
+        ...memoryResults.slice(selectedMemory.length),
+      ]).slice(0, params.maxResults - selected.length),
+    );
+  }
+
+  return sortWikiSearchResults(selected).slice(0, params.maxResults);
+}
 
 async function listWikiMarkdownFiles(rootDir: string): Promise<string[]> {
   const files = (
@@ -912,7 +968,58 @@ function normalizeLookupKey(value: string): string {
 function buildLookupCandidates(lookup: string): string[] {
   const normalized = normalizeLookupKey(lookup);
   const withExtension = normalized.endsWith(".md") ? normalized : `${normalized}.md`;
-  return [...new Set([normalized, withExtension])];
+  return uniqueStrings([normalized, withExtension]);
+}
+
+function shouldEnforceSessionVisibility(params: {
+  agentId?: string;
+  agentSessionKey?: string;
+  sandboxed?: boolean;
+}): boolean {
+  return (
+    params.sandboxed === true ||
+    Boolean(params.agentSessionKey?.trim()) ||
+    Boolean(params.agentId?.trim())
+  );
+}
+
+function shouldSearchSharedMemoryCorpus(config: ResolvedMemoryWikiConfig): boolean {
+  return config.search.corpus === "memory" || config.search.corpus === "all";
+}
+
+function shouldUseSharedMemory(config: ResolvedMemoryWikiConfig): boolean {
+  return config.search.backend === "shared" && shouldSearchSharedMemoryCorpus(config);
+}
+
+function assertSessionVisibilityAppConfig(params: {
+  config: ResolvedMemoryWikiConfig;
+  appConfig?: OpenClawConfig;
+  agentId?: string;
+  agentSessionKey?: string;
+  sandboxed?: boolean;
+  operation: string;
+}): void {
+  if (
+    shouldUseSharedMemory(params.config) &&
+    shouldEnforceSessionVisibility(params) &&
+    !params.appConfig
+  ) {
+    throw new Error(
+      `${params.operation} requires appConfig to enforce session visibility for session-bound shared memory calls.`,
+    );
+  }
+}
+
+const SESSION_MEMORY_PATH_PREFIXES = ["sessions/", "qmd/sessions/", "qmd/sessions-"] as const;
+const SESSION_MEMORY_ROOT_PATHS = ["qmd/sessions"] as const;
+
+// Keep these path shapes aligned with source: "sessions" hits in session-search-visibility and session-transcript-hit.
+export function isSessionMemoryPath(relPath: string): boolean {
+  const normalized = relPath.replace(/\\/g, "/");
+  return (
+    SESSION_MEMORY_PATH_PREFIXES.some((prefix) => normalized.startsWith(prefix)) ||
+    SESSION_MEMORY_ROOT_PATHS.some((rootPath) => normalized === rootPath)
+  );
 }
 
 function shouldSearchWiki(config: ResolvedMemoryWikiConfig): boolean {
@@ -923,11 +1030,7 @@ function shouldSearchSharedMemory(
   config: ResolvedMemoryWikiConfig,
   appConfig?: OpenClawConfig,
 ): boolean {
-  return (
-    config.search.backend === "shared" &&
-    appConfig !== undefined &&
-    (config.search.corpus === "memory" || config.search.corpus === "all")
-  );
+  return shouldUseSharedMemory(config) && appConfig !== undefined;
 }
 
 function resolveActiveMemoryAgentId(params: {
@@ -1071,8 +1174,8 @@ function buildClaimResultMetadata(claim: WikiClaim | undefined): Partial<WikiSea
     ...(claim.id ? { matchedClaimId: claim.id } : {}),
     ...(claim.status ? { matchedClaimStatus: claim.status } : {}),
     ...(typeof claim.confidence === "number" ? { matchedClaimConfidence: claim.confidence } : {}),
-    evidenceKinds: [...new Set(claim.evidence.flatMap((evidence) => evidence.kind ?? []))],
-    evidenceSourceIds: [...new Set(claim.evidence.flatMap((evidence) => evidence.sourceId ?? []))],
+    evidenceKinds: uniqueStrings(claim.evidence.flatMap((evidence) => evidence.kind ?? [])),
+    evidenceSourceIds: uniqueStrings(claim.evidence.flatMap((evidence) => evidence.sourceId ?? [])),
   };
 }
 
@@ -1113,6 +1216,173 @@ function toMemoryWikiSearchResult(
     searchMode: mode,
     ...(result.citation ? { citation: result.citation } : {}),
   };
+}
+
+async function filterMemoryWikiSearchHitsBySessionVisibility(params: {
+  cfg: OpenClawConfig;
+  agentId: string | undefined;
+  requesterSessionKey: string | undefined;
+  sandboxed: boolean;
+  hits: MemorySearchResult[];
+}): Promise<MemorySearchResult[]> {
+  if (!params.hits.some((hit) => hit.source === "sessions")) {
+    return params.hits;
+  }
+
+  const canReadSessionPath = await createSessionMemoryPathVisibilityChecker({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    requesterSessionKey: params.requesterSessionKey,
+    sandboxed: params.sandboxed,
+  });
+  return filterMemoryWikiSearchHitsWithSessionVisibility({
+    canReadSessionPath,
+    hits: params.hits,
+  });
+}
+
+type SessionMemoryPathVisibilityChecker = (relPath: string) => boolean;
+
+function filterSessionKeysByScopedAgent(params: {
+  cfg: OpenClawConfig;
+  keys: string[];
+  scopedAgentId: string | undefined;
+}): string[] {
+  const scopedAgentId = normalizeLowercaseStringOrEmpty(params.scopedAgentId);
+  if (!scopedAgentId) {
+    return params.keys;
+  }
+  return params.keys.filter((key) => {
+    if (params.cfg.session?.scope === "global" && key.trim().toLowerCase() === "global") {
+      return true;
+    }
+    const ownerAgentId = resolveSessionAgentId({
+      sessionKey: key,
+      config: params.cfg,
+    });
+    return normalizeLowercaseStringOrEmpty(ownerAgentId) === scopedAgentId;
+  });
+}
+
+async function createSessionMemoryPathVisibilityChecker(params: {
+  cfg: OpenClawConfig;
+  agentId: string | undefined;
+  requesterSessionKey: string | undefined;
+  sandboxed: boolean;
+}): Promise<SessionMemoryPathVisibilityChecker> {
+  const visibility = resolveEffectiveSessionToolsVisibility({
+    cfg: params.cfg,
+    sandboxed: params.sandboxed,
+  });
+  const a2aPolicy = createAgentToAgentPolicy(params.cfg);
+  const requesterAgentId = params.requesterSessionKey
+    ? resolveSessionAgentId({
+        sessionKey: params.requesterSessionKey,
+        config: params.cfg,
+      })
+    : undefined;
+  const scopedAgentId = params.agentId?.trim() || requesterAgentId;
+  const guard = params.requesterSessionKey
+    ? await createSessionVisibilityGuard({
+        action: "history",
+        requesterSessionKey: params.requesterSessionKey,
+        visibility,
+        a2aPolicy,
+      })
+    : null;
+
+  const { store: combinedSessionStore } = loadCombinedSessionStoreForGateway(
+    params.cfg,
+    scopedAgentId ? { agentId: scopedAgentId } : {},
+  );
+  return (relPath) => {
+    const identity = extractTranscriptIdentityFromSessionsMemoryHit(relPath);
+    if (!identity) {
+      return false;
+    }
+    const isQmdSessionPath = relPath.replace(/\\/g, "/").startsWith("qmd/");
+    const normalizedScopedAgentId = normalizeLowercaseStringOrEmpty(scopedAgentId);
+    const normalizedOwnerAgentId = normalizeLowercaseStringOrEmpty(identity.ownerAgentId);
+    if (
+      normalizedScopedAgentId &&
+      normalizedOwnerAgentId &&
+      normalizedOwnerAgentId !== normalizedScopedAgentId
+    ) {
+      return false;
+    }
+    const archivedOwnerMatchesScope = Boolean(
+      identity.archived &&
+      ((identity.ownerAgentId &&
+        (!normalizedScopedAgentId || normalizedOwnerAgentId === normalizedScopedAgentId)) ||
+        (isQmdSessionPath && scopedAgentId)),
+    );
+    const archivedOwnerAgentId = archivedOwnerMatchesScope
+      ? (identity.ownerAgentId ?? scopedAgentId)
+      : undefined;
+    const liveKeys = identity.liveStem
+      ? resolveTranscriptStemToSessionKeys({
+          store: combinedSessionStore,
+          stem: identity.liveStem,
+          allowQmdSlugFallback: false,
+        })
+      : [];
+    const keys = filterSessionKeysByScopedAgent({
+      cfg: params.cfg,
+      scopedAgentId,
+      keys:
+        liveKeys.length > 0
+          ? liveKeys
+          : resolveTranscriptStemToSessionKeys({
+              store: combinedSessionStore,
+              stem: identity.stem,
+              allowQmdSlugFallback: isQmdSessionPath && !identity.archived,
+              ...(archivedOwnerAgentId ? { archivedOwnerAgentId } : {}),
+            }),
+    });
+    if (!guard) {
+      return Boolean(scopedAgentId && keys.length > 0);
+    }
+    return keys.some((key) => guard.check(key).allowed);
+  };
+}
+
+function filterMemoryWikiSearchHitsWithSessionVisibility(params: {
+  canReadSessionPath: SessionMemoryPathVisibilityChecker;
+  hits: MemorySearchResult[];
+}): MemorySearchResult[] {
+  const next: MemorySearchResult[] = [];
+  for (const hit of params.hits) {
+    if (hit.source !== "sessions") {
+      next.push(hit);
+      continue;
+    }
+
+    if (params.canReadSessionPath(hit.path)) {
+      next.push(hit);
+    }
+  }
+  return next;
+}
+
+function canReadSessionMemoryPath(params: {
+  canReadSessionPath: SessionMemoryPathVisibilityChecker;
+  relPath: string;
+}): boolean {
+  // Reuses the search filter with a synthetic hit; update this if the filter needs more than path/source.
+  const filtered = filterMemoryWikiSearchHitsWithSessionVisibility({
+    canReadSessionPath: params.canReadSessionPath,
+    hits: [
+      {
+        path: params.relPath,
+        startLine: 1,
+        endLine: 1,
+        score: 0,
+        snippet: "",
+        source: "sessions",
+      },
+    ],
+  });
+  return filtered.length > 0;
 }
 
 async function searchWikiCorpus(params: {
@@ -1186,6 +1456,7 @@ export async function searchMemoryWiki(params: {
   appConfig?: OpenClawConfig;
   agentId?: string;
   agentSessionKey?: string;
+  sandboxed?: boolean;
   query: string;
   maxResults?: number;
   searchBackend?: WikiSearchBackend;
@@ -1193,8 +1464,16 @@ export async function searchMemoryWiki(params: {
   mode?: WikiSearchMode;
 }): Promise<WikiSearchResult[]> {
   const effectiveConfig = applySearchOverrides(params.config, params);
+  assertSessionVisibilityAppConfig({
+    config: effectiveConfig,
+    appConfig: params.appConfig,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    agentSessionKey: params.agentSessionKey,
+    sandboxed: params.sandboxed,
+    operation: "wiki_search",
+  });
   await initializeMemoryWikiVault(effectiveConfig);
-  const maxResults = Math.max(1, params.maxResults ?? 10);
+  const maxResults = normalizePositiveInteger(params.maxResults, 10);
   const mode = params.mode ?? "auto";
 
   const wikiResults = shouldSearchWiki(effectiveConfig)
@@ -1213,20 +1492,30 @@ export async function searchMemoryWiki(params: {
         agentSessionKey: params.agentSessionKey,
       })
     : null;
-  const memoryResults = sharedMemoryManager
-    ? (await sharedMemoryManager.search(params.query, { maxResults })).map((result) =>
-        toMemoryWikiSearchResult(result, mode),
-      )
+  let rawMemoryResults = sharedMemoryManager
+    ? await sharedMemoryManager.search(params.query, { maxResults })
     : [];
+  if (
+    params.appConfig &&
+    shouldEnforceSessionVisibility(params) &&
+    rawMemoryResults.some((hit) => hit.source === "sessions")
+  ) {
+    rawMemoryResults = await filterMemoryWikiSearchHitsBySessionVisibility({
+      cfg: params.appConfig,
+      agentId: params.agentId,
+      requesterSessionKey: params.agentSessionKey,
+      sandboxed: params.sandboxed === true,
+      hits: rawMemoryResults,
+    });
+  }
+  const memoryResults = rawMemoryResults.map((result) => toMemoryWikiSearchResult(result, mode));
 
-  return [...wikiResults, ...memoryResults]
-    .toSorted((left, right) => {
-      if (left.score !== right.score) {
-        return right.score - left.score;
-      }
-      return left.title.localeCompare(right.title);
-    })
-    .slice(0, maxResults);
+  return mergeWikiSearchCorpusResults({
+    wikiResults,
+    memoryResults,
+    maxResults,
+    balanceCorpora: effectiveConfig.search.corpus === "all",
+  });
 }
 
 export async function getMemoryWikiPage(params: {
@@ -1234,6 +1523,7 @@ export async function getMemoryWikiPage(params: {
   appConfig?: OpenClawConfig;
   agentId?: string;
   agentSessionKey?: string;
+  sandboxed?: boolean;
   lookup: string;
   fromLine?: number;
   lineCount?: number;
@@ -1241,9 +1531,17 @@ export async function getMemoryWikiPage(params: {
   searchCorpus?: WikiSearchCorpus;
 }): Promise<WikiGetResult | null> {
   const effectiveConfig = applySearchOverrides(params.config, params);
+  assertSessionVisibilityAppConfig({
+    config: effectiveConfig,
+    appConfig: params.appConfig,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    agentSessionKey: params.agentSessionKey,
+    sandboxed: params.sandboxed,
+    operation: "wiki_get",
+  });
   await initializeMemoryWikiVault(effectiveConfig);
-  const fromLine = Math.max(1, params.fromLine ?? 1);
-  const lineCount = Math.max(1, params.lineCount ?? 200);
+  const fromLine = normalizePositiveInteger(params.fromLine, 1);
+  const lineCount = normalizePositiveInteger(params.lineCount, 200);
 
   if (shouldSearchWiki(effectiveConfig)) {
     const digest = await readQueryDigestBundle(effectiveConfig.vault.path);
@@ -1292,7 +1590,31 @@ export async function getMemoryWikiPage(params: {
     return null;
   }
 
-  for (const relPath of buildLookupCandidates(params.lookup)) {
+  const lookupCandidates = buildLookupCandidates(params.lookup);
+  const canReadSessionPath =
+    params.appConfig &&
+    shouldEnforceSessionVisibility(params) &&
+    lookupCandidates.some((relPath) => isSessionMemoryPath(relPath))
+      ? await createSessionMemoryPathVisibilityChecker({
+          cfg: params.appConfig,
+          agentId: params.agentId,
+          requesterSessionKey: params.agentSessionKey,
+          sandboxed: params.sandboxed === true,
+        })
+      : null;
+
+  for (const relPath of lookupCandidates) {
+    if (
+      canReadSessionPath &&
+      isSessionMemoryPath(relPath) &&
+      !canReadSessionMemoryPath({
+        canReadSessionPath,
+        relPath,
+      })
+    ) {
+      continue;
+    }
+
     try {
       const result = await manager.readFile({
         relPath,

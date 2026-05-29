@@ -6,13 +6,32 @@ source scripts/lib/docker-e2e-logs.sh
 
 OPENCLAW_ENTRY="$(openclaw_e2e_resolve_entrypoint)"
 export OPENCLAW_ENTRY
+if [[ -z "${KITCHEN_SINK_TMP_DIR:-}" ]]; then
+  KITCHEN_SINK_TMP_DIR="$(mktemp -d "/tmp/openclaw-kitchen-sink.XXXXXX")"
+else
+  mkdir -p "$KITCHEN_SINK_TMP_DIR"
+fi
+export KITCHEN_SINK_TMP_DIR
+KITCHEN_SINK_CLI_TIMEOUT="${KITCHEN_SINK_CLI_TIMEOUT:-180s}"
 
 openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}"
+
+run_kitchen_sink_openclaw_logged() {
+  local label="$1"
+  shift
+  run_logged_print "$label" openclaw_e2e_maybe_timeout "$KITCHEN_SINK_CLI_TIMEOUT" node "$OPENCLAW_ENTRY" "$@"
+}
+
+run_kitchen_sink_openclaw_capture() {
+  local output_file="$1"
+  shift
+  openclaw_e2e_maybe_timeout "$KITCHEN_SINK_CLI_TIMEOUT" node "$OPENCLAW_ENTRY" "$@" >"$output_file"
+}
 
 run_expect_failure() {
   local label="$1"
   shift
-  local output_file="/tmp/kitchen-sink-expected-failure-${label}.txt"
+  local output_file="${KITCHEN_SINK_TMP_DIR}/kitchen-sink-expected-failure-${label}.txt"
   set +e
   "$@" >"$output_file" 2>&1
   local status="$?"
@@ -75,42 +94,58 @@ assert_kitchen_sink_removed() {
   node scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs assert-removed
 }
 
+assert_kitchen_sink_cutover_preinstalled() {
+  node scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs assert-cutover-preinstalled
+}
+
 run_success_scenario() {
   echo "Testing ${KITCHEN_SINK_LABEL} install from ${KITCHEN_SINK_SPEC}..."
-  run_logged_print "kitchen-sink-install-${KITCHEN_SINK_LABEL}" node "$OPENCLAW_ENTRY" plugins install "$KITCHEN_SINK_SPEC"
+  local install_args=("$KITCHEN_SINK_SPEC")
+  if [ -n "${KITCHEN_SINK_PREINSTALL_SPEC:-}" ]; then
+    run_kitchen_sink_openclaw_logged "kitchen-sink-preinstall-${KITCHEN_SINK_LABEL}" plugins install "$KITCHEN_SINK_PREINSTALL_SPEC"
+    assert_kitchen_sink_cutover_preinstalled
+    install_args+=("--force")
+  fi
+  run_kitchen_sink_openclaw_logged "kitchen-sink-install-${KITCHEN_SINK_LABEL}" plugins install "${install_args[@]}"
   configure_kitchen_sink_runtime
-  run_logged_print "kitchen-sink-enable-${KITCHEN_SINK_LABEL}" node "$OPENCLAW_ENTRY" plugins enable "$KITCHEN_SINK_ID"
-  node "$OPENCLAW_ENTRY" plugins list --json >"/tmp/kitchen-sink-${KITCHEN_SINK_LABEL}-plugins.json"
-  node "$OPENCLAW_ENTRY" plugins inspect "$KITCHEN_SINK_ID" --runtime --json >"/tmp/kitchen-sink-${KITCHEN_SINK_LABEL}-inspect.json"
-  node "$OPENCLAW_ENTRY" plugins inspect --all --runtime --json >"/tmp/kitchen-sink-${KITCHEN_SINK_LABEL}-inspect-all.json"
+  run_kitchen_sink_openclaw_logged "kitchen-sink-enable-${KITCHEN_SINK_LABEL}" plugins enable "$KITCHEN_SINK_ID"
+  run_kitchen_sink_openclaw_capture "${KITCHEN_SINK_TMP_DIR}/kitchen-sink-${KITCHEN_SINK_LABEL}-plugins.json" plugins list --json
+  run_kitchen_sink_openclaw_capture "${KITCHEN_SINK_TMP_DIR}/kitchen-sink-${KITCHEN_SINK_LABEL}-inspect.json" plugins inspect "$KITCHEN_SINK_ID" --runtime --json
+  run_kitchen_sink_openclaw_capture "${KITCHEN_SINK_TMP_DIR}/kitchen-sink-${KITCHEN_SINK_LABEL}-inspect-all.json" plugins inspect --all --runtime --json
   assert_kitchen_sink_installed
   if [ "$KITCHEN_SINK_SOURCE" = "clawhub" ]; then
-    run_logged_print "kitchen-sink-uninstall-${KITCHEN_SINK_LABEL}" node "$OPENCLAW_ENTRY" plugins uninstall "$KITCHEN_SINK_SPEC" --force
+    run_kitchen_sink_openclaw_logged "kitchen-sink-uninstall-${KITCHEN_SINK_LABEL}" plugins uninstall "$KITCHEN_SINK_SPEC" --force
   else
-    run_logged_print "kitchen-sink-uninstall-${KITCHEN_SINK_LABEL}" node "$OPENCLAW_ENTRY" plugins uninstall "$KITCHEN_SINK_ID" --force
+    run_kitchen_sink_openclaw_logged "kitchen-sink-uninstall-${KITCHEN_SINK_LABEL}" plugins uninstall "$KITCHEN_SINK_ID" --force
   fi
   remove_kitchen_sink_channel_config
-  node "$OPENCLAW_ENTRY" plugins list --json >"/tmp/kitchen-sink-${KITCHEN_SINK_LABEL}-uninstalled.json"
+  run_kitchen_sink_openclaw_capture "${KITCHEN_SINK_TMP_DIR}/kitchen-sink-${KITCHEN_SINK_LABEL}-uninstalled.json" plugins list --json
   assert_kitchen_sink_removed
 }
 
 run_failure_scenario() {
   echo "Testing expected ${KITCHEN_SINK_LABEL} install failure from ${KITCHEN_SINK_SPEC}..."
-  run_expect_failure "install-${KITCHEN_SINK_LABEL}" node "$OPENCLAW_ENTRY" plugins install "$KITCHEN_SINK_SPEC"
+  run_expect_failure "install-${KITCHEN_SINK_LABEL}" openclaw_e2e_maybe_timeout "$KITCHEN_SINK_CLI_TIMEOUT" node "$OPENCLAW_ENTRY" plugins install "$KITCHEN_SINK_SPEC"
   remove_kitchen_sink_channel_config
-  node "$OPENCLAW_ENTRY" plugins list --json >"/tmp/kitchen-sink-${KITCHEN_SINK_LABEL}-uninstalled.json"
+  run_kitchen_sink_openclaw_capture "${KITCHEN_SINK_TMP_DIR}/kitchen-sink-${KITCHEN_SINK_LABEL}-uninstalled.json" plugins list --json
   assert_kitchen_sink_removed
 }
 
-if [[ "$KITCHEN_SINK_SCENARIOS" == *"clawhub:"* ]] &&
-  [[ "${OPENCLAW_KITCHEN_SINK_LIVE_CLAWHUB:-0}" != "1" ]] &&
-  [[ -z "${OPENCLAW_CLAWHUB_URL:-}" && -z "${CLAWHUB_URL:-}" ]]; then
-  clawhub_fixture_dir="$(mktemp -d "/tmp/openclaw-kitchen-sink-clawhub.XXXXXX")"
-  start_kitchen_sink_clawhub_fixture_server "$clawhub_fixture_dir"
+if [[ "$KITCHEN_SINK_SCENARIOS" == *"clawhub:"* ]]; then
+  if [[ "${OPENCLAW_KITCHEN_SINK_LIVE_CLAWHUB:-0}" = "1" ]]; then
+    export OPENCLAW_CLAWHUB_URL="${OPENCLAW_CLAWHUB_URL:-${CLAWHUB_URL:-https://clawhub.ai}}"
+  else
+    if [[ -n "${OPENCLAW_CLAWHUB_URL:-}" || -n "${CLAWHUB_URL:-}" ]]; then
+      echo "Ignoring ambient ClawHub URL for fixture-mode kitchen-sink E2E; set OPENCLAW_KITCHEN_SINK_LIVE_CLAWHUB=1 for live ClawHub."
+    fi
+    unset OPENCLAW_CLAWHUB_URL CLAWHUB_URL
+    clawhub_fixture_dir="$(mktemp -d "${KITCHEN_SINK_TMP_DIR}/clawhub.XXXXXX")"
+    start_kitchen_sink_clawhub_fixture_server "$clawhub_fixture_dir"
+  fi
 fi
 
 scenario_count=0
-while IFS='|' read -r label spec plugin_id source expectation surface_mode personality; do
+while IFS='|' read -r label spec plugin_id source expectation surface_mode personality preinstall_spec; do
   if [ -z "${label:-}" ] || [[ "$label" == \#* ]]; then
     continue
   fi
@@ -122,6 +157,7 @@ while IFS='|' read -r label spec plugin_id source expectation surface_mode perso
   export KITCHEN_SINK_SURFACE_MODE="$surface_mode"
   export KITCHEN_SINK_PERSONALITY="${personality:-}"
   export OPENCLAW_KITCHEN_SINK_PERSONALITY="${personality:-}"
+  export KITCHEN_SINK_PREINSTALL_SPEC="${preinstall_spec:-}"
   case "$expectation" in
   success)
     run_success_scenario

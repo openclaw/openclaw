@@ -1,10 +1,18 @@
 import { createServer } from "node:http";
 import type { IncomingMessage } from "node:http";
 import net from "node:net";
-import * as grammy from "grammy";
+import { InputFile } from "grammy";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isDiagnosticsEnabled } from "openclaw/plugin-sdk/diagnostic-runtime";
+import {
+  logWebhookError,
+  logWebhookProcessed,
+  logWebhookReceived,
+  startDiagnosticHeartbeat,
+  stopDiagnosticHeartbeat,
+} from "openclaw/plugin-sdk/logging-core";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { BackoffPolicy, RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
   computeBackoff,
@@ -14,14 +22,7 @@ import {
 } from "openclaw/plugin-sdk/runtime-env";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
-import {
-  logWebhookError,
-  logWebhookProcessed,
-  logWebhookReceived,
-  normalizeOptionalString,
-  startDiagnosticHeartbeat,
-  stopDiagnosticHeartbeat,
-} from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   applyBasicWebhookRequestGuards,
   createFixedWindowRateLimiter,
@@ -46,13 +47,6 @@ const TELEGRAM_WEBHOOK_REGISTRATION_RETRY_POLICY: BackoffPolicy = {
   factor: 2,
   jitter: 0.2,
 };
-const InputFileCtor: typeof grammy.InputFile =
-  typeof grammy.InputFile === "function"
-    ? grammy.InputFile
-    : (class InputFileFallback {
-        constructor(public readonly path: string) {}
-      } as unknown as typeof grammy.InputFile);
-
 async function listenHttpServer(params: {
   server: ReturnType<typeof createServer>;
   port: number;
@@ -162,22 +156,12 @@ function isTrustedProxyAddress(
     }
     if (trimmed.includes("/")) {
       const [address, prefix] = trimmed.split("/", 2);
-      const parsedPrefix = Number.parseInt(prefix ?? "", 10);
+      const parsedPrefix = parseStrictNonNegativeInteger(prefix);
       const family = net.isIP(address);
-      if (
-        family === 4 &&
-        Number.isInteger(parsedPrefix) &&
-        parsedPrefix >= 0 &&
-        parsedPrefix <= 32
-      ) {
+      if (family === 4 && parsedPrefix !== undefined && parsedPrefix >= 0 && parsedPrefix <= 32) {
         blockList.addSubnet(address, parsedPrefix, "ipv4");
       }
-      if (
-        family === 6 &&
-        Number.isInteger(parsedPrefix) &&
-        parsedPrefix >= 0 &&
-        parsedPrefix <= 128
-      ) {
+      if (family === 6 && parsedPrefix !== undefined && parsedPrefix >= 0 && parsedPrefix <= 128) {
         blockList.addSubnet(address, parsedPrefix, "ipv6");
       }
       continue;
@@ -462,7 +446,7 @@ export async function startTelegramWebhook(opts: {
           bot.api.setWebhook(publicUrl, {
             secret_token: secret,
             allowed_updates: resolveTelegramAllowedUpdates(),
-            certificate: opts.webhookCertPath ? new InputFileCtor(opts.webhookCertPath) : undefined,
+            certificate: opts.webhookCertPath ? new InputFile(opts.webhookCertPath) : undefined,
           }),
       });
     } catch (err) {
