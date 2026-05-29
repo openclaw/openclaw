@@ -15,9 +15,9 @@ import type {
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { uniqueValues } from "../shared/string-normalization.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
+import { projectProviderCatalogResultToUnifiedTextRows } from "./provider-catalog-unified-text.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
 import type {
-  ProviderCatalogResult,
   ProviderPlugin,
   UnifiedModelCatalogProviderContext,
   UnifiedModelCatalogProviderPlugin,
@@ -56,33 +56,6 @@ function mergeModelCatalogHooks(
     const [leftRows, rightRows] = await Promise.all([left(ctx), right(ctx)]);
     return mergeCatalogHookResults(source, leftRows, rightRows);
   };
-}
-
-function projectProviderCatalogResultToUnifiedTextRows(params: {
-  providerId: string;
-  result: ProviderCatalogResult;
-  source: UnifiedModelCatalogEntry["source"];
-}): UnifiedModelCatalogEntry[] {
-  if (!params.result) {
-    return [];
-  }
-  const providers =
-    "provider" in params.result
-      ? { [params.providerId]: params.result.provider }
-      : params.result.providers;
-  const rows: UnifiedModelCatalogEntry[] = [];
-  for (const [providerId, providerConfig] of Object.entries(providers)) {
-    for (const model of providerConfig.models ?? []) {
-      rows.push({
-        kind: "text",
-        provider: providerId,
-        model: model.id,
-        ...(model.name ? { label: model.name } : {}),
-        source: params.source,
-      });
-    }
-  }
-  return rows;
 }
 
 export function createModelCatalogRegistrationHandlers(params: {

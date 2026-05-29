@@ -116,6 +116,26 @@ describe("pw-tools-core aria snapshot storage", () => {
     }
   });
 
+  it("uses the default aria node limit for non-finite limits", async () => {
+    const page = { id: "page-1" };
+    const rawNodes = [{ nodeId: "1" }];
+    const formattedNodes = [{ ref: "ax1", role: "document", name: "", depth: 0 }];
+
+    getPageForTargetId.mockResolvedValue(page);
+    withPageScopedCdpClient.mockResolvedValue({ nodes: rawNodes });
+    formatAriaSnapshot.mockReturnValue(formattedNodes);
+
+    const mod = await import("./pw-tools-core.snapshot.js");
+    const result = await mod.snapshotAriaViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+      limit: Number.NaN,
+    });
+
+    expect(result).toEqual({ nodes: formattedNodes });
+    expect(formatAriaSnapshot).toHaveBeenCalledWith(rawNodes, 500);
+  });
+
   it("forwards an explicit timeoutMs into the role-aria Playwright ariaSnapshot call", async () => {
     const ariaSnapshotMock = vi.fn().mockResolvedValue("");
     const page = { ariaSnapshot: ariaSnapshotMock };

@@ -4,6 +4,8 @@ import {
   asFiniteNumberInRange,
   asSafeIntegerInRange,
   parseFiniteNumber,
+  resolveIntegerOption,
+  resolveNonNegativeIntegerOption,
   parseStrictFiniteNumber,
   parseStrictInteger,
   parseStrictNonNegativeInteger,
@@ -64,5 +66,14 @@ describe("number-coercion", () => {
     expect(parseStrictPositiveInteger("0")).toBeUndefined();
     expect(parseStrictNonNegativeInteger("0")).toBe(0);
     expect(parseStrictNonNegativeInteger("-1")).toBeUndefined();
+  });
+
+  test("integer option helpers floor finite values and fall back for non-finite values", () => {
+    expect(resolveIntegerOption(7.9, 1, { min: 1, max: 10 })).toBe(7);
+    expect(resolveIntegerOption(Number.NaN, 4.9, { min: 1 })).toBe(4);
+    expect(resolveIntegerOption(Number.NEGATIVE_INFINITY, 4, { min: 1 })).toBe(4);
+    expect(resolveIntegerOption(-4, 1, { min: 0 })).toBe(0);
+    expect(resolveIntegerOption(40, 1, { max: 10 })).toBe(10);
+    expect(resolveNonNegativeIntegerOption(Number.NaN, 3.9)).toBe(3);
   });
 });

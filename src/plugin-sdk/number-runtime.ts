@@ -2,6 +2,8 @@
 
 export {
   parseFiniteNumber,
+  resolveIntegerOption,
+  resolveNonNegativeIntegerOption,
   parseStrictInteger,
   parseStrictFiniteNumber,
   parseStrictNonNegativeInteger,

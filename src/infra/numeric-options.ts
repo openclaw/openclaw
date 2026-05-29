@@ -1,5 +1,10 @@
+import {
+  resolveIntegerOption as resolveSharedIntegerOption,
+  resolveNonNegativeIntegerOption as resolveSharedNonNegativeIntegerOption,
+} from "../shared/number-coercion.js";
+
 export function resolveNonNegativeIntegerOption(value: number, fallback: number): number {
-  return Number.isFinite(value) ? Math.max(0, Math.floor(value)) : fallback;
+  return resolveSharedNonNegativeIntegerOption(value, fallback);
 }
 
 export function resolveIntegerOption(
@@ -7,6 +12,5 @@ export function resolveIntegerOption(
   fallback: number,
   params: { min: number },
 ): number {
-  const candidate = Number.isFinite(value) ? value : fallback;
-  return Math.max(params.min, Math.floor(candidate));
+  return resolveSharedIntegerOption(value, fallback, params);
 }
