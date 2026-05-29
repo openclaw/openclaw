@@ -1400,6 +1400,7 @@
                   "providers/deepinfra",
                   "providers/deepseek",
                   "providers/ds4",
+                  "providers/edenai",
                   "providers/elevenlabs",
                   "providers/fal",
                   "providers/fireworks",

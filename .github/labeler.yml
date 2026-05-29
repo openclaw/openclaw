@@ -355,6 +355,11 @@
       - any-glob-to-any-file:
           - "extensions/deepinfra/**"
           - "docs/providers/deepinfra.md"
+"extensions: edenai":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/edenai/**"
+          - "docs/providers/edenai.md"
 "extensions: tencent":
   - changed-files:
       - any-glob-to-any-file:

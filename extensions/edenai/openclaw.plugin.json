@@ -1,0 +1,63 @@
+{
+  "id": "edenai",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": ["edenai"],
+  "modelSupport": {
+    "modelPrefixes": ["edenai/"]
+  },
+  "providerEndpoints": [
+    {
+      "endpointClass": "edenai",
+      "hostSuffixes": ["edenai.run"]
+    }
+  ],
+  "modelPricing": {
+    "providers": {
+      "edenai": {
+        "openRouter": {
+          "passthroughProviderModel": true
+        },
+        "liteLLM": {
+          "passthroughProviderModel": true
+        }
+      }
+    }
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "edenai",
+        "authMethods": ["api-key"],
+        "envVars": ["EDENAI_API_KEY"]
+      }
+    ]
+  },
+  "providerAuthAliases": {
+    "eden": "edenai",
+    "eden-ai": "edenai",
+    "eden_ai": "edenai"
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "edenai",
+      "method": "api-key",
+      "choiceId": "edenai-api-key",
+      "choiceLabel": "Eden AI API key",
+      "groupId": "edenai",
+      "groupLabel": "Eden AI",
+      "groupHint": "API key",
+      "optionKey": "edenaiApiKey",
+      "cliFlag": "--edenai-api-key",
+      "cliOption": "--edenai-api-key <key>",
+      "cliDescription": "Eden AI API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
