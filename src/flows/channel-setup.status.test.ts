@@ -104,6 +104,7 @@ function requireFirstMockCall<const Calls extends readonly unknown[][]>(
 describe("resolveChannelSetupSelectionContributions", () => {
   beforeEach(async () => {
     vi.resetModules();
+    process.env.OPENCLAW_LOCALE = "en";
     vi.clearAllMocks();
     listChatChannels.mockReturnValue([
       makeMeta("discord", "Discord"),
