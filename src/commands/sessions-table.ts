@@ -7,6 +7,19 @@ export type SessionDisplayRow = {
   updatedAt: number | null;
   ageMs: number | null;
   sessionId?: string;
+  sessionFile?: string;
+  spawnedBy?: string;
+  spawnedWorkspaceDir?: string;
+  spawnedCwd?: string;
+  parentSessionKey?: string;
+  forkedFromParent?: boolean;
+  spawnDepth?: number;
+  subagentRole?: SessionEntry["subagentRole"];
+  subagentControlScope?: SessionEntry["subagentControlScope"];
+  sessionStartedAt?: number;
+  lastInteractionAt?: number;
+  label?: string;
+  status?: SessionEntry["status"];
   systemSent?: boolean;
   abortedLastRun?: boolean;
   thinkingLevel?: string;
@@ -39,6 +52,19 @@ export function toSessionDisplayRow(key: string, entry: SessionEntry): SessionDi
     updatedAt,
     ageMs: updatedAt ? Date.now() - updatedAt : null,
     sessionId: entry?.sessionId,
+    sessionFile: entry?.sessionFile,
+    spawnedBy: entry?.spawnedBy,
+    spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
+    spawnedCwd: entry?.spawnedCwd,
+    parentSessionKey: entry?.parentSessionKey,
+    forkedFromParent: entry?.forkedFromParent,
+    spawnDepth: entry?.spawnDepth,
+    subagentRole: entry?.subagentRole,
+    subagentControlScope: entry?.subagentControlScope,
+    sessionStartedAt: entry?.sessionStartedAt,
+    lastInteractionAt: entry?.lastInteractionAt,
+    label: entry?.label,
+    status: entry?.status,
     systemSent: entry?.systemSent,
     abortedLastRun: entry?.abortedLastRun,
     thinkingLevel: entry?.thinkingLevel,

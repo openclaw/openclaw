@@ -180,6 +180,65 @@ describe("sessionsCommand", () => {
     expect(group?.totalTokensFresh).toBe(false);
   });
 
+  it("exports subagent lineage metadata in JSON output", async () => {
+    const store = writeStore({
+      "agent:child:main": {
+        sessionId: "child-session",
+        updatedAt: Date.now() - 10 * 60_000,
+        sessionFile: "/tmp/openclaw/child-session.jsonl",
+        spawnedBy: "agent:main:main",
+        spawnedWorkspaceDir: "/workspace/project",
+        spawnedCwd: "/workspace/project/tasks",
+        parentSessionKey: "agent:main:main",
+        forkedFromParent: true,
+        spawnDepth: 1,
+        subagentRole: "leaf",
+        subagentControlScope: "none",
+        sessionStartedAt: Date.now() - 20 * 60_000,
+        lastInteractionAt: Date.now() - 5 * 60_000,
+        label: "research helper",
+        status: "done",
+        model: "test:opus",
+      },
+    });
+
+    const payload = await runSessionsJson<{
+      sessions?: Array<{
+        key: string;
+        sessionFile?: string;
+        spawnedBy?: string;
+        spawnedWorkspaceDir?: string;
+        spawnedCwd?: string;
+        parentSessionKey?: string;
+        forkedFromParent?: boolean;
+        spawnDepth?: number;
+        subagentRole?: string;
+        subagentControlScope?: string;
+        sessionStartedAt?: number;
+        lastInteractionAt?: number;
+        label?: string;
+        status?: string;
+      }>;
+    }>(sessionsCommand, store);
+
+    const child = payload.sessions?.find((row) => row.key === "agent:child:main");
+    expect(child).toMatchObject({
+      sessionFile: "/tmp/openclaw/child-session.jsonl",
+      spawnedBy: "agent:main:main",
+      spawnedWorkspaceDir: "/workspace/project",
+      spawnedCwd: "/workspace/project/tasks",
+      parentSessionKey: "agent:main:main",
+      forkedFromParent: true,
+      spawnDepth: 1,
+      subagentRole: "leaf",
+      subagentControlScope: "none",
+      sessionStartedAt: Date.now() - 20 * 60_000,
+      lastInteractionAt: Date.now() - 5 * 60_000,
+      label: "research helper",
+      status: "done",
+    });
+  });
+
   it("shows preserved stale totals in JSON output", async () => {
     const store = writeStore({
       main: {
