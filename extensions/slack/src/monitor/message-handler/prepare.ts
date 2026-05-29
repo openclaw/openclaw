@@ -1439,7 +1439,7 @@ export async function prepareSlackMessage(params: {
           : undefined,
     },
     replyToMode,
-    ...(assistantThreadContext?.threadTs
+    ...(assistantThreadContext?.threadTs && (isThreadReply || replyToMode !== "off")
       ? { forcedReplyThreadTs: assistantThreadContext.threadTs }
       : {}),
     ...(assistantThreadContext
