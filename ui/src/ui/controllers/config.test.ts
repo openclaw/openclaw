@@ -1067,4 +1067,24 @@ describe("runUpdate", () => {
     expect(state.pendingUpdateExpectedVersion).toBe("2.0.0");
     expect(state.updateStatusBanner).toBeNull();
   });
+
+  it("treats a started managed-service handoff as pending update instead of skipped", async () => {
+    const request = vi.fn().mockResolvedValue({
+      ok: true,
+      result: {
+        status: "skipped",
+        reason: "managed-service-handoff-started",
+        after: { version: "2.0.0" },
+      },
+      handoff: { status: "started", command: "openclaw update --yes --timeout 1800" },
+    });
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+
+    await runUpdate(state);
+
+    expect(state.pendingUpdateExpectedVersion).toBe("2.0.0");
+    expect(state.updateStatusBanner).toBeNull();
+  });
 });
