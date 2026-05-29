@@ -739,13 +739,11 @@ export async function runPreflightCompactionIfNeeded(params: {
     memoryFlushPlan?.reserveTokensFloor ??
       params.cfg.agents?.defaults?.compaction?.reserveTokensFloor,
     contextWindowTokens,
-    3,
     20_000,
   );
   const softThresholdTokens = resolveTokenThreshold(
     memoryFlushPlan?.softThresholdTokens,
     contextWindowTokens,
-    40,
     4_000,
   );
   const freshPersistedTokens = resolveFreshSessionTotalTokens(entry);
@@ -1029,8 +1027,8 @@ export async function runMemoryFlushIfNeeded(params: {
   const hasFreshPersistedPromptTokens =
     typeof persistedPromptTokens === "number" && entry?.totalTokensFresh === true;
 
-  const flushReserveTokensFloor = resolveTokenThreshold(memoryFlushPlan.reserveTokensFloor, contextWindowTokens, 3, 20_000);
-  const flushSoftThresholdTokens = resolveTokenThreshold(memoryFlushPlan.softThresholdTokens, contextWindowTokens, 40, 4_000);
+  const flushReserveTokensFloor = resolveTokenThreshold(memoryFlushPlan.reserveTokensFloor, contextWindowTokens, 20_000);
+  const flushSoftThresholdTokens = resolveTokenThreshold(memoryFlushPlan.softThresholdTokens, contextWindowTokens, 4_000);
   const flushThreshold =
     contextWindowTokens - flushReserveTokensFloor - flushSoftThresholdTokens;
 
