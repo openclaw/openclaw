@@ -560,6 +560,7 @@ const ToolExecBaseShape = {
   node: z.string().optional(),
   pathPrepend: z.array(z.string()).optional(),
   safeBins: z.array(z.string()).optional(),
+  denyPathPatterns: z.array(z.string()).optional(),
   strictInlineEval: z.boolean().optional(),
   commandHighlighting: z.boolean().optional(),
   safeBinTrustedDirs: z.array(z.string()).optional(),

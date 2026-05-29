@@ -11,7 +11,11 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { normalizeChatChannelId } from "../channels/ids.js";
+import { buildCommandPayloadCandidates } from "../infra/command-analysis/risks.js";
+import { unwrapDispatchWrappersForResolution } from "../infra/dispatch-wrapper-resolution.js";
+import { analyzeShellCommand } from "../infra/exec-approvals-analysis.js";
 import {
   type ExecAsk,
   type ExecHost,
@@ -28,6 +32,7 @@ import {
   parseOpenClawChannelsLoginShellCommand,
   rejectUnsafeExecControlShellCommand,
 } from "../infra/exec-control-command-guard.js";
+import { evaluateExecDenyPathMatch, formatExecDenyPathMessage } from "../infra/exec-deny-path.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
   isDangerousHostEnvOverrideVarName,
@@ -1568,6 +1573,40 @@ export function createExecTool(
         workdir = resolveWorkdir(rawWorkdir, warnings);
       }
       await rejectUnsafeExecControlShellCommand(params.command);
+
+      // Hard-deny path-pattern gate. Runs before host dispatch (gateway,
+      // node, or sandbox), and before approval/allowlist/safeBins, so that
+      // a denied path cannot be reached via security="full",
+      // bypassApprovals=true (elevated mode "full"), or any allowlist entry.
+      // See tools.exec.denyPathPatterns in docs/tools/exec-approvals-advanced.md.
+      const denyPathPatterns = defaults?.denyPathPatterns ?? [];
+      if (denyPathPatterns.length > 0) {
+        const rawArgv = splitShellArgs(params.command.trim());
+        const denyArgv = rawArgv
+          ? unwrapDispatchWrappersForResolution(stripPreflightEnvPrefix(rawArgv))
+          : [];
+        let denyShellPayload: string | null = null;
+        if (denyArgv.length > 0) {
+          let commandIdx = 0;
+          while (commandIdx < denyArgv.length && isShellEnvAssignmentToken(denyArgv[commandIdx])) {
+            commandIdx += 1;
+          }
+          const executable = normalizeOptionalLowercaseString(denyArgv[commandIdx]);
+          denyShellPayload = extractShellWrappedCommandPayload(
+            executable,
+            denyArgv.slice(commandIdx + 1),
+          );
+        }
+        const denyMatch = evaluateExecDenyPathMatch({
+          patterns: denyPathPatterns,
+          argv: denyArgv,
+          shellPayload: denyShellPayload ?? (rawArgv ? null : params.command),
+          cwd: host === "node" && !explicitWorkdir ? undefined : workdir,
+        });
+        if (denyMatch) {
+          throw new Error(formatExecDenyPathMessage(denyMatch));
+        }
+      }
 
       const inheritedBaseEnv = coerceEnv(process.env);
       const resolvedExecEnvState = getResolvedExecEnvPreparedState(params);
