@@ -1898,19 +1898,19 @@ describe("agent event handler", () => {
     );
   });
 
-  it("keeps chat send retry guards while hiding terminal session projection", () => {
+  it("keeps chat send retry guards while hiding terminal session projection across session aliases", () => {
     const trackedActiveRuns = new Map<
       string,
       { sessionKey: string; projectSessionActive?: boolean }
     >([
       ["provider-run", { sessionKey: "session-finished" }],
-      ["client-run", { sessionKey: "session-finished" }],
+      ["client-run", { sessionKey: "requested-session" }],
     ]);
     const { chatRunState, handler } = createHarness({
-      clearTrackedActiveRun: ({ runId, clientRunId, sessionKey }) => {
+      clearTrackedActiveRun: ({ runId, clientRunId }) => {
         for (const candidateRunId of new Set([runId, clientRunId])) {
           const entry = trackedActiveRuns.get(candidateRunId);
-          if (entry?.sessionKey === sessionKey) {
+          if (entry) {
             entry.projectSessionActive = false;
           }
         }
@@ -1937,6 +1937,7 @@ describe("agent event handler", () => {
     const retryGuard = trackedActiveRuns.get("client-run");
     expect(providerGuard?.projectSessionActive).toBe(false);
     expect(retryGuard).toBeDefined();
+    expect(retryGuard?.sessionKey).toBe("requested-session");
     expect(retryGuard?.projectSessionActive).toBe(false);
   });
 

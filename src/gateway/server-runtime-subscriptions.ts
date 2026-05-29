@@ -45,10 +45,12 @@ export function startGatewayEventSubscriptions(params: {
         toolEventRecipients: params.toolEventRecipients,
         sessionEventSubscribers: params.sessionEventSubscribers,
         sessionMessageSubscribers: params.sessionMessageSubscribers,
-        clearTrackedActiveRun: ({ runId, clientRunId, sessionKey }) => {
+        clearTrackedActiveRun: ({ runId, clientRunId }) => {
           for (const candidateRunId of new Set([runId, clientRunId])) {
             const entry = params.chatAbortControllers.get(candidateRunId);
-            if (entry?.sessionKey === sessionKey) {
+            // Chat abort entries can hold the requested key while chat run
+            // state holds the canonical key; the run ids are the scoped match.
+            if (entry) {
               entry.projectSessionActive = false;
             }
           }
