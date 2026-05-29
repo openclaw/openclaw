@@ -62,6 +62,11 @@ Name lookup:
 - Unresolved SecretRefs on unrelated channels do not block a targeted message action.
 - If the selected channel/account SecretRef is unresolved, the command fails closed for that action.
 
+When `--account` is omitted, OpenClaw first uses the selected channel's enabled
+default account. If that default is disabled or absent and exactly one
+configured account is enabled, it selects that account automatically. If zero or
+multiple configured accounts are enabled, pass `--account <id>` explicitly.
+
 ## Actions
 
 ### Core

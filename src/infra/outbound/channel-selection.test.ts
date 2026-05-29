@@ -52,19 +52,25 @@ type RuntimeModule = typeof import("../../runtime.js");
 
 let testing: ChannelSelectionModule["testing"];
 let listConfiguredMessageChannels: ChannelSelectionModule["listConfiguredMessageChannels"];
+let resolveMessageAccountSelection: ChannelSelectionModule["resolveMessageAccountSelection"];
 let resolveMessageChannelSelection: ChannelSelectionModule["resolveMessageChannelSelection"];
 let runtimeModule: RuntimeModule;
 
 beforeAll(async () => {
   runtimeModule = await import("../../runtime.js");
-  ({ testing, listConfiguredMessageChannels, resolveMessageChannelSelection } =
-    await import("./channel-selection.js"));
+  ({
+    testing,
+    listConfiguredMessageChannels,
+    resolveMessageAccountSelection,
+    resolveMessageChannelSelection,
+  } = await import("./channel-selection.js"));
 });
 
 function makePlugin(params: {
   id: string;
   accountIds?: string[];
   resolveAccount?: (accountId: string) => unknown;
+  defaultAccountId?: () => string;
   isEnabled?: (account: unknown) => boolean;
   isConfigured?: (account: unknown) => boolean | Promise<boolean>;
 }) {
@@ -74,6 +80,7 @@ function makePlugin(params: {
       listAccountIds: () => params.accountIds ?? ["default"],
       resolveAccount: (_cfg: unknown, accountId: string) =>
         params.resolveAccount ? params.resolveAccount(accountId) : {},
+      ...(params.defaultAccountId ? { defaultAccountId: params.defaultAccountId } : {}),
       ...(params.isEnabled ? { isEnabled: params.isEnabled } : {}),
       ...(params.isConfigured ? { isConfigured: params.isConfigured } : {}),
     },
@@ -158,6 +165,182 @@ describe("listConfiguredMessageChannels", () => {
     mocks.listChannelPlugins.mockReturnValue(plugins);
     await expect(listConfiguredMessageChannels({} as never)).resolves.toEqual(expected);
     expect(errorSpy).toHaveBeenCalledTimes(expectedErrors);
+  });
+});
+
+describe("resolveMessageAccountSelection", () => {
+  beforeEach(() => {
+    mocks.listChannelPlugins.mockReset();
+    mocks.listChannelPlugins.mockReturnValue([]);
+    mocks.resolveOutboundChannelPlugin.mockReset();
+    mocks.resolveOutboundChannelPlugin.mockImplementation(({ channel }: { channel: string }) => ({
+      id: channel,
+    }));
+  });
+
+  it("preserves an explicit account id without inspecting channel accounts", async () => {
+    mocks.resolveOutboundChannelPlugin.mockReturnValue(undefined);
+
+    await expect(
+      resolveMessageAccountSelection({
+        cfg: {} as never,
+        channel: "whatsapp",
+        accountId: " work ",
+      }),
+    ).resolves.toEqual({
+      accountId: "work",
+      source: "explicit",
+    });
+
+    expect(mocks.resolveOutboundChannelPlugin).not.toHaveBeenCalled();
+  });
+
+  it("uses the enabled configured default account", async () => {
+    mocks.resolveOutboundChannelPlugin.mockReturnValue(
+      makePlugin({
+        id: "whatsapp",
+        accountIds: ["default", "work"],
+        defaultAccountId: () => "work",
+        resolveAccount: (accountId) => ({ accountId, enabled: true, configured: true }),
+        isConfigured: (account) => (account as { configured?: boolean }).configured === true,
+      }),
+    );
+
+    await expect(
+      resolveMessageAccountSelection({
+        cfg: {} as never,
+        channel: "whatsapp",
+      }),
+    ).resolves.toEqual({
+      accountId: "work",
+      source: "configured-default",
+    });
+  });
+
+  it("uses the enabled literal default account when the plugin has no configured default hook", async () => {
+    mocks.resolveOutboundChannelPlugin.mockReturnValue(
+      makePlugin({
+        id: "whatsapp",
+        accountIds: ["default", "work"],
+        resolveAccount: (accountId) => ({ accountId, enabled: true }),
+      }),
+    );
+
+    await expect(
+      resolveMessageAccountSelection({
+        cfg: {} as never,
+        channel: "whatsapp",
+      }),
+    ).resolves.toEqual({
+      accountId: "default",
+      source: "configured-default",
+    });
+  });
+
+  it("does not infer an account for accountless plugins", async () => {
+    mocks.resolveOutboundChannelPlugin.mockReturnValue(
+      makePlugin({
+        id: "testchat",
+        accountIds: [],
+      }),
+    );
+
+    await expect(
+      resolveMessageAccountSelection({
+        cfg: {} as never,
+        channel: "testchat",
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("selects the only enabled configured account when the default account is disabled", async () => {
+    mocks.resolveOutboundChannelPlugin.mockReturnValue(
+      makePlugin({
+        id: "whatsapp",
+        accountIds: ["default", "xiaomi"],
+        defaultAccountId: () => "default",
+        resolveAccount: (accountId) => ({
+          accountId,
+          enabled: accountId !== "default",
+          configured: true,
+        }),
+        isConfigured: (account) => (account as { configured?: boolean }).configured === true,
+      }),
+    );
+
+    await expect(
+      resolveMessageAccountSelection({
+        cfg: {} as never,
+        channel: "whatsapp",
+      }),
+    ).resolves.toEqual({
+      accountId: "xiaomi",
+      source: "single-configured",
+    });
+  });
+
+  it("skips enabled accounts that are not configured", async () => {
+    mocks.resolveOutboundChannelPlugin.mockReturnValue(
+      makePlugin({
+        id: "whatsapp",
+        accountIds: ["default", "xiaomi"],
+        defaultAccountId: () => "default",
+        resolveAccount: (accountId) => ({
+          accountId,
+          enabled: true,
+          configured: accountId === "xiaomi",
+        }),
+        isConfigured: (account) => (account as { configured?: boolean }).configured === true,
+      }),
+    );
+
+    await expect(
+      resolveMessageAccountSelection({
+        cfg: {} as never,
+        channel: "whatsapp",
+      }),
+    ).resolves.toEqual({
+      accountId: "xiaomi",
+      source: "single-configured",
+    });
+  });
+
+  it("requires an explicit account when no enabled configured account exists", async () => {
+    mocks.resolveOutboundChannelPlugin.mockReturnValue(
+      makePlugin({
+        id: "whatsapp",
+        accountIds: ["default", "work"],
+        resolveAccount: (accountId) => ({ accountId, enabled: false }),
+      }),
+    );
+
+    await expect(
+      resolveMessageAccountSelection({
+        cfg: {} as never,
+        channel: "whatsapp",
+      }),
+    ).rejects.toThrow(
+      "Account is required for channel whatsapp because no enabled configured accounts were found.",
+    );
+  });
+
+  it("requires an explicit account when multiple enabled configured accounts exist", async () => {
+    mocks.resolveOutboundChannelPlugin.mockReturnValue(
+      makePlugin({
+        id: "whatsapp",
+        accountIds: ["work", "personal"],
+        resolveAccount: (accountId) => ({ accountId, enabled: true }),
+      }),
+    );
+
+    await expect(
+      resolveMessageAccountSelection({
+        cfg: {} as never,
+        channel: "whatsapp",
+      }),
+    ).rejects.toThrow(
+      "Account is required for channel whatsapp because multiple enabled configured accounts are available: work, personal.",
+    );
   });
 });
 

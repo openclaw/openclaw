@@ -52,6 +52,7 @@ import { throwIfAborted } from "./abort.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import {
   listConfiguredMessageChannels,
+  resolveMessageAccountSelection,
   resolveMessageChannelSelection,
 } from "./channel-selection.js";
 import type { OutboundSendDeps } from "./deliver.js";
@@ -1325,6 +1326,15 @@ export async function runMessageAction(
   });
 
   const channel = await resolveChannel(cfg, params, input.toolContext);
+  enforceCrossContextPolicy({
+    channel,
+    action,
+    args: params,
+    toolContext: input.toolContext,
+    cfg,
+    agentId: resolvedAgentId,
+  });
+
   let accountId = readStringParam(params, "accountId") ?? input.defaultAccountId;
   if (!accountId && resolvedAgentId) {
     accountId = resolveTargetBoundAccountId({
@@ -1333,6 +1343,14 @@ export async function runMessageAction(
       args: params,
       agentId: resolvedAgentId,
     });
+  }
+  if (!accountId) {
+    accountId = (
+      await resolveMessageAccountSelection({
+        cfg,
+        channel,
+      })
+    )?.accountId;
   }
   if (accountId) {
     params.accountId = accountId;
@@ -1399,15 +1417,6 @@ export async function runMessageAction(
     action,
     args: params,
     accountId,
-  });
-
-  enforceCrossContextPolicy({
-    channel,
-    action,
-    args: params,
-    toolContext: input.toolContext,
-    cfg,
-    agentId: resolvedAgentId,
   });
 
   const gateway = resolveGateway(input);

@@ -20,6 +20,7 @@ export type MessageChannelSelectionSource =
   | "explicit"
   | "tool-context-fallback"
   | "single-configured";
+export type MessageAccountSelectionSource = "explicit" | "configured-default" | "single-configured";
 
 const getMessageChannels = () => listDeliverableMessageChannels();
 
@@ -135,6 +136,19 @@ function isAccountEnabled(account: unknown): boolean {
   return enabled !== false;
 }
 
+function normalizeAccountId(value?: string | null): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed || undefined;
+}
+
+function pushUniqueAccountId(ids: string[], value?: string | null) {
+  const normalized = normalizeAccountId(value);
+  if (!normalized || ids.includes(normalized)) {
+    return;
+  }
+  ids.push(normalized);
+}
+
 const loggedChannelSelectionErrors = new Set<string>();
 
 function logChannelSelectionError(params: {
@@ -200,6 +214,46 @@ async function isPluginConfigured(plugin: ChannelPlugin, cfg: OpenClawConfig): P
   }
 
   return false;
+}
+
+async function isPluginAccountSelectable(params: {
+  plugin: ChannelPlugin;
+  cfg: OpenClawConfig;
+  accountId: string;
+}): Promise<boolean> {
+  let account: unknown;
+  try {
+    account = params.plugin.config.resolveAccount(params.cfg, params.accountId);
+  } catch (error) {
+    logChannelSelectionError({
+      pluginId: params.plugin.id,
+      accountId: params.accountId,
+      operation: "resolveAccount",
+      error,
+    });
+    return false;
+  }
+
+  const enabled = params.plugin.config.isEnabled
+    ? params.plugin.config.isEnabled(account, params.cfg)
+    : isAccountEnabled(account);
+  if (!enabled) {
+    return false;
+  }
+  if (!params.plugin.config.isConfigured) {
+    return true;
+  }
+  try {
+    return await params.plugin.config.isConfigured(account, params.cfg);
+  } catch (error) {
+    logChannelSelectionError({
+      pluginId: params.plugin.id,
+      accountId: params.accountId,
+      operation: "isConfigured",
+      error,
+    });
+    return false;
+  }
 }
 
 export async function listConfiguredMessageChannels(
@@ -291,6 +345,85 @@ export async function resolveMessageChannelSelection(params: {
     throw new Error(formatNoConfiguredChannelsMessage());
   }
   throw new Error(formatMultipleConfiguredChannelsMessage(configured));
+}
+
+export async function resolveMessageAccountSelection(params: {
+  cfg: OpenClawConfig;
+  channel: MessageChannelId;
+  accountId?: string | null;
+}): Promise<
+  | {
+      accountId: string;
+      source: MessageAccountSelectionSource;
+    }
+  | undefined
+> {
+  const explicitAccountId = normalizeAccountId(params.accountId);
+  if (explicitAccountId) {
+    return { accountId: explicitAccountId, source: "explicit" };
+  }
+
+  const plugin = resolveOutboundChannelPlugin({
+    channel: params.channel,
+    cfg: params.cfg,
+    allowBootstrap: true,
+  });
+  if (!plugin) {
+    throw new Error(`Channel is unavailable: ${params.channel}`);
+  }
+
+  const accountIds: string[] = [];
+  for (const accountId of plugin.config.listAccountIds(params.cfg)) {
+    pushUniqueAccountId(accountIds, accountId);
+  }
+  if (accountIds.length === 0) {
+    return undefined;
+  }
+
+  const defaultAccountId =
+    normalizeAccountId(plugin.config.defaultAccountId?.(params.cfg)) ??
+    (accountIds.includes("default") ? "default" : undefined);
+  if (
+    defaultAccountId &&
+    (await isPluginAccountSelectable({
+      plugin,
+      cfg: params.cfg,
+      accountId: defaultAccountId,
+    }))
+  ) {
+    return {
+      accountId: defaultAccountId,
+      source: "configured-default",
+    };
+  }
+
+  const selectableAccountIds: string[] = [];
+  for (const accountId of accountIds) {
+    if (
+      await isPluginAccountSelectable({
+        plugin,
+        cfg: params.cfg,
+        accountId,
+      })
+    ) {
+      selectableAccountIds.push(accountId);
+    }
+  }
+
+  if (selectableAccountIds.length === 1) {
+    return {
+      accountId: selectableAccountIds[0],
+      source: "single-configured",
+    };
+  }
+  if (selectableAccountIds.length === 0) {
+    throw new Error(
+      `Account is required for channel ${params.channel} because no enabled configured accounts were found. Pass accountId, or --account in the CLI, to choose an account explicitly.`,
+    );
+  }
+  throw new Error(
+    `Account is required for channel ${params.channel} because multiple enabled configured accounts are available: ${selectableAccountIds.join(", ")}. Pass accountId, or --account in the CLI, to choose one.`,
+  );
 }
 
 export const testing = {
