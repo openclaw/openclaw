@@ -72,6 +72,19 @@ describe("agent run terminal outcome", () => {
     });
   });
 
+  it("does not treat successful provider-started metadata as timeout without attribution phase", () => {
+    expect(
+      buildAgentRunTerminalOutcome({
+        status: "ok",
+        providerStarted: true,
+      }),
+    ).toEqual({
+      reason: "completed",
+      status: "ok",
+      providerStarted: true,
+    });
+  });
+
   it("prefers hard timeout evidence over default rpc cancellation metadata", () => {
     const timeout = buildAgentRunTerminalOutcome({
       status: "timeout",
@@ -88,6 +101,52 @@ describe("agent run terminal outcome", () => {
     expect(timeout.reason).toBe("hard_timeout");
     expect(timeout.status).toBe("timeout");
     expect(mergeAgentRunTerminalOutcome(timeout, earlierCompletion)).toBe(earlierCompletion);
+  });
+
+  it("classifies provider timeout lifecycle errors as hard timeouts", () => {
+    expect(
+      buildAgentRunTerminalOutcome({
+        status: "error",
+        error: "provider request timed out",
+        stopReason: "error",
+        timeoutPhase: "provider",
+        providerStarted: true,
+      }),
+    ).toMatchObject({
+      reason: "hard_timeout",
+      status: "timeout",
+      error: "provider request timed out",
+    });
+  });
+
+  it("classifies timeout attribution metadata as a hard timeout even on end events", () => {
+    expect(
+      buildAgentRunTerminalOutcome({
+        status: "ok",
+        timeoutPhase: "provider",
+        providerStarted: true,
+      }),
+    ).toMatchObject({
+      reason: "hard_timeout",
+      status: "timeout",
+    });
+  });
+
+  it("lets timeout attribution outrank blocked liveness", () => {
+    expect(
+      buildAgentRunTerminalOutcome({
+        status: "error",
+        error: "provider request timed out",
+        livenessState: "blocked",
+        timeoutPhase: "provider",
+        providerStarted: true,
+      }),
+    ).toMatchObject({
+      reason: "hard_timeout",
+      status: "timeout",
+      error: "provider request timed out",
+      livenessState: "blocked",
+    });
   });
 
   it("keeps a hard timeout over later aborts or failures for the same run", () => {

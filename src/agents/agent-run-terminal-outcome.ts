@@ -82,22 +82,24 @@ export function buildAgentRunTerminalOutcome(
   // Queue and gateway-draining timeouts are wait-layer uncertainty. Only
   // provider-started or provider-phase timeouts are sticky child-run facts.
   const hardTimeout =
-    input.status === "timeout" &&
-    (isHardAgentRunTimeoutPhase(timeoutPhase) || providerStarted === true);
+    isHardAgentRunTimeoutPhase(timeoutPhase) ||
+    ((input.status === "timeout" || input.status === "error") && providerStarted === true);
   const aborted = isAbortedAgentStopReason(stopReason);
   // ACP/model `stop` can be a normal successful finish. Treat rpc/stop as
   // cancellation only for non-success terminal payloads from abort paths.
   const cancelled = input.status !== "ok" && isCancellationStopReason(stopReason);
   const blocked = isBlockedLivenessState(livenessState);
-  const error = blocked
-    ? formatBlockedLivenessError(rawError)
-    : aborted && !rawError
-      ? AGENT_RUN_ABORTED_ERROR
-      : rawError;
-  const reason: AgentRunTerminalReason = blocked
-    ? "blocked"
-    : hardTimeout
-      ? "hard_timeout"
+  const error = hardTimeout
+    ? rawError
+    : blocked
+      ? formatBlockedLivenessError(rawError)
+      : aborted && !rawError
+        ? AGENT_RUN_ABORTED_ERROR
+        : rawError;
+  const reason: AgentRunTerminalReason = hardTimeout
+    ? "hard_timeout"
+    : blocked
+      ? "blocked"
       : aborted
         ? "aborted"
         : cancelled
@@ -112,8 +114,8 @@ export function buildAgentRunTerminalOutcome(
     status:
       reason === "completed"
         ? "ok"
-        : input.status === "timeout" &&
-            (reason === "hard_timeout" || reason === "timed_out" || reason === "cancelled")
+        : reason === "hard_timeout" ||
+            (input.status === "timeout" && (reason === "timed_out" || reason === "cancelled"))
           ? "timeout"
           : "error",
     ...(error ? { error } : {}),
