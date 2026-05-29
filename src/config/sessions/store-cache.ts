@@ -62,6 +62,7 @@ const SESSION_STORE_STRING_INTERN_STATS = {
   skippedSmall: 0,
   skippedFull: 0,
 };
+let sessionStoreRuntimeCacheMaxBytesOverride: number | null = null;
 let sessionStoreSerializedCacheBytes = 0;
 
 function parseNonNegativeInteger(value: string | undefined): number | null {
@@ -74,6 +75,7 @@ function parseNonNegativeInteger(value: string | undefined): number | null {
 
 function getSessionStoreRuntimeCacheMaxBytes(): number {
   return (
+    sessionStoreRuntimeCacheMaxBytesOverride ??
     parseNonNegativeInteger(process.env.OPENCLAW_SESSION_CACHE_MAX_BYTES) ??
     DEFAULT_SESSION_STORE_RUNTIME_CACHE_MAX_BYTES
   );
@@ -181,6 +183,10 @@ export function getSerializedSessionStoreCacheStatsForTest(): {
     maxBytes: getSerializedSessionStoreCacheMaxBytes(),
     runtimeMaxBytes: getSessionStoreRuntimeCacheMaxBytes(),
   };
+}
+
+export function setSessionStoreRuntimeCacheMaxBytesForTest(maxBytes: number | null): void {
+  sessionStoreRuntimeCacheMaxBytesOverride = maxBytes;
 }
 
 export function getSessionStoreSnapshotCacheStatsForTest(): {

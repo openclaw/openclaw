@@ -13,6 +13,7 @@ import {
   readSessionStoreCache,
   setSerializedSessionStore,
   setSerializedSessionStorePromptRefs,
+  setSessionStoreRuntimeCacheMaxBytesForTest,
   writeSessionStoreCache,
 } from "./sessions/store-cache.js";
 import {
@@ -69,15 +70,15 @@ describe("Session Store Cache", () => {
 
     // Reset environment variable
     delete process.env.OPENCLAW_SESSION_CACHE_TTL_MS;
-    delete process.env.OPENCLAW_SESSION_CACHE_MAX_BYTES;
     delete process.env.OPENCLAW_SESSION_SERIALIZED_CACHE_MAX_BYTES;
+    setSessionStoreRuntimeCacheMaxBytesForTest(null);
   });
 
   afterEach(() => {
     clearSessionStoreCacheForTest();
     delete process.env.OPENCLAW_SESSION_CACHE_TTL_MS;
-    delete process.env.OPENCLAW_SESSION_CACHE_MAX_BYTES;
     delete process.env.OPENCLAW_SESSION_SERIALIZED_CACHE_MAX_BYTES;
+    setSessionStoreRuntimeCacheMaxBytesForTest(null);
   });
 
   it("bounds the serialized session store cache by total bytes", () => {
@@ -94,7 +95,7 @@ describe("Session Store Cache", () => {
   });
 
   it("drops oversized session store runtime caches instead of retaining them in memory", async () => {
-    process.env.OPENCLAW_SESSION_CACHE_MAX_BYTES = "64";
+    setSessionStoreRuntimeCacheMaxBytesForTest(64);
     clearSessionStoreCacheForTest();
 
     const smallStore = {
@@ -191,7 +192,7 @@ describe("Session Store Cache", () => {
   });
 
   it("re-reads oversized session stores from disk instead of caching them", async () => {
-    process.env.OPENCLAW_SESSION_CACHE_MAX_BYTES = "64";
+    setSessionStoreRuntimeCacheMaxBytesForTest(64);
     clearSessionStoreCacheForTest();
 
     const testStore = createSingleSessionStore(
