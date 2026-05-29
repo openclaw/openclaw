@@ -69,11 +69,14 @@ describe("Session Store Cache", () => {
 
     // Reset environment variable
     delete process.env.OPENCLAW_SESSION_CACHE_TTL_MS;
+    delete process.env.OPENCLAW_SESSION_CACHE_MAX_BYTES;
+    delete process.env.OPENCLAW_SESSION_SERIALIZED_CACHE_MAX_BYTES;
   });
 
   afterEach(() => {
     clearSessionStoreCacheForTest();
     delete process.env.OPENCLAW_SESSION_CACHE_TTL_MS;
+    delete process.env.OPENCLAW_SESSION_CACHE_MAX_BYTES;
     delete process.env.OPENCLAW_SESSION_SERIALIZED_CACHE_MAX_BYTES;
   });
 
@@ -88,6 +91,41 @@ describe("Session Store Cache", () => {
     expect(getSerializedSessionStore("store:2")).toBe("b".repeat(40));
     expect(getSerializedSessionStoreCacheStatsForTest().entries).toBe(1);
     expect(getSerializedSessionStoreCacheStatsForTest().totalBytes).toBe(40);
+  });
+
+  it("drops oversized session store runtime caches instead of retaining them in memory", async () => {
+    process.env.OPENCLAW_SESSION_CACHE_MAX_BYTES = "64";
+    clearSessionStoreCacheForTest();
+
+    const smallStore = {
+      s: {
+        sessionId: "x",
+        updatedAt: 1,
+      },
+    } as Record<string, SessionEntry>;
+    const smallSerialized = JSON.stringify(smallStore);
+
+    writeSessionStoreCache({
+      storePath,
+      store: smallStore,
+      mtimeMs: 1,
+      sizeBytes: Buffer.byteLength(smallSerialized, "utf8"),
+      serialized: smallSerialized,
+      cloneSerialized: smallSerialized,
+    });
+
+    expect(getSerializedSessionStoreCacheStatsForTest().entries).toBe(1);
+    expect(getSessionStoreSnapshotCacheStatsForTest().entries).toBe(0);
+
+    expect(
+      readSessionStoreCache({
+        storePath,
+        mtimeMs: 1,
+        sizeBytes: 128,
+      }),
+    ).toBeNull();
+    expect(getSerializedSessionStoreCacheStatsForTest().entries).toBe(0);
+    expect(getSessionStoreSnapshotCacheStatsForTest().entries).toBe(0);
   });
 
   it("bounds the serialized session store cache by path count", () => {
@@ -149,6 +187,38 @@ describe("Session Store Cache", () => {
     const loaded2 = loadSessionStore(storePath);
     expect(loaded2).toEqual(testStore);
     expect(readSpy).toHaveBeenCalledTimes(0);
+    readSpy.mockRestore();
+  });
+
+  it("re-reads oversized session stores from disk instead of caching them", async () => {
+    process.env.OPENCLAW_SESSION_CACHE_MAX_BYTES = "64";
+    clearSessionStoreCacheForTest();
+
+    const testStore = createSingleSessionStore(
+      createSessionEntry({
+        displayName: "Oversized session store",
+        skillsSnapshot: {
+          prompt: "oversized prompt ".repeat(40),
+          skills: [{ name: "alpha" }],
+        },
+      }),
+    );
+
+    await saveSessionStore(storePath, testStore);
+    clearSessionStoreCacheForTest();
+
+    const readSpy = vi.spyOn(fs, "readFileSync");
+
+    const loaded1 = loadSessionStore(storePath);
+    const loaded2 = loadSessionStore(storePath);
+
+    expect(loaded1).toEqual(testStore);
+    expect(loaded2).toEqual(testStore);
+    expect(loaded1).not.toBe(loaded2);
+    expect(readSpy).toHaveBeenCalledTimes(2);
+    expect(getSerializedSessionStoreCacheStatsForTest().entries).toBe(0);
+    expect(getSessionStoreSnapshotCacheStatsForTest().entries).toBe(0);
+
     readSpy.mockRestore();
   });
 

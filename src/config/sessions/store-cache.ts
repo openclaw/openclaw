@@ -39,6 +39,7 @@ type SerializedSessionStoreCacheEntry = {
 };
 
 const DEFAULT_SESSION_STORE_TTL_MS = 45_000; // 45 seconds (between 30-60s)
+const DEFAULT_SESSION_STORE_RUNTIME_CACHE_MAX_BYTES = 16 * 1024 * 1024;
 const DEFAULT_SESSION_STORE_SERIALIZED_CACHE_MAX_ENTRIES = 64;
 const DEFAULT_SESSION_STORE_SERIALIZED_CACHE_MAX_BYTES = 64 * 1024 * 1024;
 const LARGE_SESSION_STORE_STRING_MIN_CHARS = 512;
@@ -71,6 +72,13 @@ function parseNonNegativeInteger(value: string | undefined): number | null {
   return parseStrictNonNegativeInteger(trimmed) ?? null;
 }
 
+function getSessionStoreRuntimeCacheMaxBytes(): number {
+  return (
+    parseNonNegativeInteger(process.env.OPENCLAW_SESSION_CACHE_MAX_BYTES) ??
+    DEFAULT_SESSION_STORE_RUNTIME_CACHE_MAX_BYTES
+  );
+}
+
 function getSerializedSessionStoreCacheMaxBytes(): number {
   return (
     parseNonNegativeInteger(process.env.OPENCLAW_SESSION_SERIALIZED_CACHE_MAX_BYTES) ??
@@ -80,6 +88,20 @@ function getSerializedSessionStoreCacheMaxBytes(): number {
 
 function getSerializedSessionStoreCacheMaxEntries(): number {
   return DEFAULT_SESSION_STORE_SERIALIZED_CACHE_MAX_ENTRIES;
+}
+
+function isSessionStoreRuntimeCacheable(sizeBytes?: number): boolean {
+  const maxBytes = getSessionStoreRuntimeCacheMaxBytes();
+  // Keep oversized session stores out of the live object/snapshot caches.
+  // They can still be loaded from disk on demand, but they should not stay
+  // resident as parsed object graphs in the gateway heap.
+  return (
+    maxBytes > 0 &&
+    (typeof sizeBytes !== "number" ||
+      !Number.isFinite(sizeBytes) ||
+      sizeBytes < 0 ||
+      sizeBytes <= maxBytes)
+  );
 }
 
 function resetSessionStoreStringInternStats(): void {
@@ -149,6 +171,7 @@ export function getSerializedSessionStoreCacheStatsForTest(): {
   totalBytes: number;
   maxEntries: number;
   maxBytes: number;
+  runtimeMaxBytes: number;
 } {
   pruneSerializedSessionStoreCache();
   return {
@@ -156,6 +179,7 @@ export function getSerializedSessionStoreCacheStatsForTest(): {
     totalBytes: sessionStoreSerializedCacheBytes,
     maxEntries: getSerializedSessionStoreCacheMaxEntries(),
     maxBytes: getSerializedSessionStoreCacheMaxBytes(),
+    runtimeMaxBytes: getSessionStoreRuntimeCacheMaxBytes(),
   };
 }
 
@@ -349,6 +373,9 @@ export function setSerializedSessionStore(
     typeof sizeBytesHint === "number" && Number.isFinite(sizeBytesHint) && sizeBytesHint >= 0
       ? sizeBytesHint
       : Buffer.byteLength(serialized, "utf8");
+  if (!isSessionStoreRuntimeCacheable(sizeBytes)) {
+    return;
+  }
   const maxEntries = getSerializedSessionStoreCacheMaxEntries();
   const maxBytes = getSerializedSessionStoreCacheMaxBytes();
   if (maxEntries <= 0 || maxBytes <= 0 || sizeBytes > maxBytes) {
@@ -373,6 +400,10 @@ export function readSessionStoreSnapshotCache(params: {
   mtimeMs?: number;
   sizeBytes?: number;
 }): SessionStoreSnapshot | null {
+  if (!isSessionStoreRuntimeCacheable(params.sizeBytes)) {
+    invalidateSessionStoreCache(params.storePath);
+    return null;
+  }
   const cached = SESSION_STORE_SNAPSHOT_CACHE.get(params.storePath);
   if (!cached) {
     return null;
@@ -392,6 +423,9 @@ export function writeSessionStoreSnapshotCache(params: {
   serialized?: string;
 }): SessionStoreSnapshot {
   const snapshot = cloneSessionStoreSnapshot(params.store, params.serialized);
+  if (!isSessionStoreRuntimeCacheable(params.sizeBytes)) {
+    return snapshot;
+  }
   SESSION_STORE_SNAPSHOT_CACHE.set(params.storePath, {
     snapshot,
     mtimeMs: params.mtimeMs,
@@ -406,6 +440,10 @@ export function readSessionStoreCache(params: {
   sizeBytes?: number;
   clone?: boolean;
 }): Record<string, SessionEntry> | null {
+  if (!isSessionStoreRuntimeCacheable(params.sizeBytes)) {
+    invalidateSessionStoreCache(params.storePath);
+    return null;
+  }
   const cached = SESSION_STORE_CACHE.get(params.storePath);
   if (!cached) {
     return null;
@@ -425,6 +463,10 @@ export function takeMutableSessionStoreCache(params: {
   mtimeMs?: number;
   sizeBytes?: number;
 }): Record<string, SessionEntry> | null {
+  if (!isSessionStoreRuntimeCacheable(params.sizeBytes)) {
+    invalidateSessionStoreCache(params.storePath);
+    return null;
+  }
   const cached = SESSION_STORE_CACHE.get(params.storePath);
   if (!cached) {
     return null;
@@ -448,6 +490,12 @@ export function writeSessionStoreCache(params: {
   takeOwnership?: boolean;
 }): void {
   bumpSessionStoreCacheVersion(params.storePath);
+  if (!isSessionStoreRuntimeCacheable(params.sizeBytes)) {
+    deleteSerializedSessionStore(params.storePath);
+    SESSION_STORE_CACHE.delete(params.storePath);
+    SESSION_STORE_SNAPSHOT_CACHE.delete(params.storePath);
+    return;
+  }
   const store =
     params.takeOwnership === true ? params.store : cloneSessionStoreRecord(params.store);
   if (params.takeOwnership === true) {
