@@ -141,4 +141,14 @@ describe("registerSlackMemberEvents", () => {
 
     expect(trackEvent).toHaveBeenCalledTimes(1);
   });
+
+  it("downgrades Slack member system events from owner authority", async () => {
+    await runMemberCase({ overrides: { dmPolicy: "open" } });
+
+    expect(memberMocks.enqueue).toHaveBeenCalledTimes(1);
+    expect(memberMocks.enqueue.mock.calls[0]?.[1]).toMatchObject({
+      forceSenderIsOwnerFalse: true,
+      trusted: false,
+    });
+  });
 });

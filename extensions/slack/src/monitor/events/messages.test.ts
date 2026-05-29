@@ -204,6 +204,19 @@ describe("registerSlackMessageEvents", () => {
     expect(messageQueueMock).toHaveBeenCalledTimes(calls);
   });
 
+  it("downgrades Slack message subtype system events from owner authority", async () => {
+    await runMessageCase({
+      overrides: { dmPolicy: "open" },
+      event: makeChangedEvent(),
+    });
+
+    expect(messageQueueMock).toHaveBeenCalledTimes(1);
+    expect(messageQueueMock.mock.calls[0]?.[1]).toMatchObject({
+      forceSenderIsOwnerFalse: true,
+      trusted: false,
+    });
+  });
+
   it("passes regular message events to the message handler", async () => {
     const { handleSlackMessage } = await invokeRegisteredHandler({
       eventName: "message",

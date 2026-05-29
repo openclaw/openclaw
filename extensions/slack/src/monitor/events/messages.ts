@@ -181,6 +181,8 @@ export function registerSlackMessageEvents(params: {
         enqueueSystemEvent(subtypeHandler.describe(ingressContext.channelLabel), {
           sessionKey: ingressContext.sessionKey,
           contextKey: subtypeHandler.contextKey(message),
+          forceSenderIsOwnerFalse: true,
+          trusted: false,
         });
         return;
       }
