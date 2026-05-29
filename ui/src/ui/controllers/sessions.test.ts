@@ -1263,7 +1263,7 @@ describe("applySessionsChangedEvent", () => {
         path: "(multiple)",
         count: 1,
         defaults: { modelProvider: null, model: null, contextTokens: null },
-        sessions: [{ key: "global", kind: "global", updatedAt: 1, status: "idle" }],
+        sessions: [{ key: "global", kind: "global", updatedAt: 1, status: "done" }],
       },
     });
 
@@ -1277,7 +1277,7 @@ describe("applySessionsChangedEvent", () => {
 
     expect(applied).toEqual({ applied: false });
     expect(state.sessionsResult?.sessions).toEqual([
-      { key: "global", kind: "global", updatedAt: 1, status: "idle" },
+      { key: "global", kind: "global", updatedAt: 1, status: "done" },
     ]);
   });
 
@@ -1291,7 +1291,7 @@ describe("applySessionsChangedEvent", () => {
         path: "(multiple)",
         count: 1,
         defaults: { modelProvider: null, model: null, contextTokens: null },
-        sessions: [{ key: "global", kind: "global", updatedAt: 1, status: "idle" }],
+        sessions: [{ key: "global", kind: "global", updatedAt: 1, status: "done" }],
       },
     });
 

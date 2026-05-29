@@ -1087,7 +1087,12 @@ describe("loadChatHistory filtering", () => {
     const request = vi.fn().mockResolvedValue({ messages: [] });
     const state = createState({
       sessionKey: "global",
-      hello: { snapshot: { sessionDefaults: { defaultAgentId: "ops" } } },
+      hello: {
+        type: "hello-ok",
+        protocol: 4,
+        auth: { role: "operator", scopes: [] },
+        snapshot: { sessionDefaults: { defaultAgentId: "ops" } },
+      },
       client: { request } as unknown as ChatState["client"],
       connected: true,
     });
@@ -1204,7 +1209,12 @@ describe("sendChatMessage", () => {
     const request = vi.fn().mockResolvedValue({ runId: "run-global", status: "started" });
     const state = createState({
       sessionKey: "global",
-      hello: { snapshot: { sessionDefaults: { defaultAgentId: "ops" } } },
+      hello: {
+        type: "hello-ok",
+        protocol: 4,
+        auth: { role: "operator", scopes: [] },
+        snapshot: { sessionDefaults: { defaultAgentId: "ops" } },
+      },
       connected: true,
       client: { request } as unknown as ChatState["client"],
     });

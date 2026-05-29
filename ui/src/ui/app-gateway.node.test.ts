@@ -953,7 +953,7 @@ describe("connectGateway", () => {
     const host = createHost();
     host.pendingAbort = { sessionKey: "global", agentId: "work" };
     host.assistantAgentId = "main";
-    host.agentsList = { defaultId: "main", agents: [], mainKey: "main" };
+    host.agentsList = { defaultId: "main", agents: [], mainKey: "main", scope: "global" };
 
     connectGateway(host);
     const client = requireGatewayClient();
@@ -1175,7 +1175,7 @@ describe("connectGateway", () => {
   it("stores selected-global BTW side results for agent main aliases", () => {
     const { host, client } = connectHostGateway();
     host.sessionKey = "agent:work:main";
-    host.agentsList = { defaultId: "main", agents: [], mainKey: "main" };
+    host.agentsList = { defaultId: "main", agents: [], mainKey: "main", scope: "global" };
 
     client.emitEvent({
       event: "chat.side_result",
@@ -1205,7 +1205,7 @@ describe("connectGateway", () => {
     const { host, client } = connectHostGateway();
     host.sessionKey = "global";
     host.assistantAgentId = "work";
-    host.agentsList = { defaultId: "main", agents: [], mainKey: "main" };
+    host.agentsList = { defaultId: "main", agents: [], mainKey: "main", scope: "global" };
 
     client.emitEvent({
       event: "chat.side_result",

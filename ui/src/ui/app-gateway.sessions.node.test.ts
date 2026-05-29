@@ -743,6 +743,9 @@ describe("handleGatewayEvent session.message", () => {
     const host = createHost();
     host.sessionKey = "global";
     host.hello = {
+      type: "hello-ok",
+      protocol: 4,
+      auth: { role: "operator", scopes: [] },
       snapshot: {
         sessionDefaults: {
           defaultAgentId: "work",

@@ -307,7 +307,12 @@ describe("refreshChat", () => {
     const host = makeHost({
       client: { request } as unknown as ChatHost["client"],
       sessionKey: "global",
-      hello: { snapshot: { sessionDefaults: { defaultAgentId: "ops" } } },
+      hello: {
+        type: "hello-ok",
+        protocol: 4,
+        auth: { role: "operator", scopes: [] },
+        snapshot: { sessionDefaults: { defaultAgentId: "ops" } },
+      },
     });
 
     const refresh = refreshChat(host);

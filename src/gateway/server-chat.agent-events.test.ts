@@ -1534,7 +1534,6 @@ describe("agent event handler", () => {
     vi.mocked(loadGatewaySessionRow).mockReturnValue({
       key: "global",
       kind: "global",
-      agentId: "work",
       model: "work-model",
       goal: {
         schemaVersion: 1,

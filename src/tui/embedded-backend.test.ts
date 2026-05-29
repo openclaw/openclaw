@@ -9,8 +9,10 @@ const createSessionGoalMock = vi.fn();
 const clearSessionGoalMock = vi.fn();
 const getSessionGoalMock = vi.fn();
 const updateSessionGoalStatusMock = vi.fn();
-const listSessionsFromStoreAsyncMock = vi.fn(async () => ({ sessions: [] }));
-const loadCombinedSessionStoreForGatewayMock = vi.fn(() => ({
+const listSessionsFromStoreAsyncMock = vi.fn(
+  async (_options?: unknown): Promise<{ sessions: unknown[] }> => ({ sessions: [] }),
+);
+const loadCombinedSessionStoreForGatewayMock = vi.fn((_options?: unknown) => ({
   storePath: "/tmp/openclaw-sessions.json",
   store: {},
 }));

@@ -5,7 +5,9 @@ const chatAbortMock = vi.fn();
 const resolveSessionKeyForRunMock = vi.fn();
 const listSessionsFromStoreAsyncMock = vi.fn();
 const loadCombinedSessionStoreForGatewayMock = vi.fn();
-const loadSessionEntryMock = vi.fn((sessionKey: string) => ({ canonicalKey: sessionKey }));
+const loadSessionEntryMock = vi.fn((sessionKey: string, _opts?: { agentId?: string }) => ({
+  canonicalKey: sessionKey,
+}));
 
 vi.mock("../server-session-key.js", () => ({
   resolveSessionKeyForRun: (...args: unknown[]) => resolveSessionKeyForRunMock(...args),
@@ -25,7 +27,7 @@ vi.mock("../session-utils.js", async () => {
     loadCombinedSessionStoreForGateway: (...args: unknown[]) =>
       loadCombinedSessionStoreForGatewayMock(...args),
     loadSessionEntry: (...args: unknown[]) =>
-      loadSessionEntryMock(...(args as [string, { agentId?: string } | undefined])),
+      loadSessionEntryMock(...(args as [string, { agentId?: string }?])),
   };
 });
 
