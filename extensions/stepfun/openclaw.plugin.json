@@ -25,6 +25,20 @@
         "api": "openai-completions",
         "models": [
           {
+            "id": "step-3.7-flash",
+            "name": "Step 3.7 Flash",
+            "reasoning": true,
+            "input": ["text", "image", "video"],
+            "contextWindow": 262144,
+            "maxTokens": 65536,
+            "cost": {
+              "input": 0.2,
+              "output": 1.15,
+              "cacheRead": 0.04,
+              "cacheWrite": 0
+            }
+          },
+          {
             "id": "step-3.5-flash",
             "name": "Step 3.5 Flash",
             "reasoning": true,
@@ -44,6 +58,20 @@
         "baseUrl": "https://api.stepfun.ai/step_plan/v1",
         "api": "openai-completions",
         "models": [
+          {
+            "id": "step-3.7-flash",
+            "name": "Step 3.7 Flash",
+            "reasoning": true,
+            "input": ["text", "image", "video"],
+            "contextWindow": 262144,
+            "maxTokens": 65536,
+            "cost": {
+              "input": 0.2,
+              "output": 1.15,
+              "cacheRead": 0.04,
+              "cacheWrite": 0
+            }
+          },
           {
             "id": "step-3.5-flash",
             "name": "Step 3.5 Flash",
