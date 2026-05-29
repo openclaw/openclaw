@@ -3,6 +3,9 @@ import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
 import type { SkillEntry } from "../types.js";
 import {
   buildSkillIndex,
+  buildSkillIndexEntries,
+  filterPromptVisibleSkillEntries,
+  filterUserInvocableSkillEntries,
   isSkillPromptVisible,
   isSkillRuntimeVisible,
   isSkillUserInvocable,
@@ -90,6 +93,15 @@ describe("skill index", () => {
       "prompt-hidden",
       "legacy-prompt-hidden",
     ]);
+    expect(filterPromptVisibleSkillEntries(index.entries.map((entry) => entry.entry))).toEqual([
+      runtimeHidden,
+      commandHidden,
+    ]);
+    expect(filterUserInvocableSkillEntries(index.entries.map((entry) => entry.entry))).toEqual([
+      runtimeHidden,
+      promptHidden,
+      legacyPromptHidden,
+    ]);
     expect(isSkillRuntimeVisible(runtimeHidden)).toBe(false);
     expect(isSkillPromptVisible(legacyPromptHidden)).toBe(false);
     expect(isSkillUserInvocable(commandHidden)).toBe(false);
@@ -124,6 +136,16 @@ describe("skill index", () => {
       skillKey: "workspace-key",
       agentAllowed: true,
     });
+    expect(
+      buildSkillIndexEntries([bundled, unknownBundled, workspace], {
+        bundledNames: new Set(["unknown-bundle"]),
+        agentSkillFilter: ["workspace"],
+      }).map(({ name, bundled, agentAllowed }) => ({ name, bundled, agentAllowed })),
+    ).toEqual([
+      { name: "bundle", bundled: true, agentAllowed: false },
+      { name: "unknown-bundle", bundled: true, agentAllowed: false },
+      { name: "workspace", bundled: false, agentAllowed: true },
+    ]);
   });
 });
 

@@ -15,7 +15,7 @@ import {
   resolveEffectiveAgentSkillsLimits,
 } from "../discovery/agent-filter.js";
 import { normalizeSkillFilter } from "../discovery/filter.js";
-import { buildSkillIndex } from "../discovery/skill-index.js";
+import { filterPromptVisibleSkillEntries } from "../discovery/skill-index.js";
 import type {
   OpenClawSkillMetadata,
   ParsedSkillFrontmatter,
@@ -1383,7 +1383,7 @@ function resolveWorkspaceSkillPromptState(
     effectiveSkillFilter,
     opts?.eligibility,
   );
-  const promptEntries = buildSkillIndex(eligible).promptVisibleEntries;
+  const promptEntries = filterPromptVisibleSkillEntries(eligible);
   const remoteNote = opts?.eligibility?.remote?.note?.trim();
   const resolvedSkills = promptEntries.map((entry) => entry.skill);
   // Derive prompt-facing skills with compacted paths (e.g. ~/...) once.

@@ -28,7 +28,7 @@ import type {
   SkillsInstallPreferences,
 } from "../types.js";
 import { resolveEffectiveAgentSkillFilter } from "./agent-filter.js";
-import { buildSkillIndex, type SkillIndexEntry } from "./skill-index.js";
+import { buildSkillIndexEntries, type SkillIndexEntry } from "./skill-index.js";
 
 export type SkillStatusConfigCheck = RequirementConfigCheck;
 
@@ -285,7 +285,7 @@ export function buildWorkspaceSkillStatus(
     });
   const prefs = resolveSkillsInstallPreferences(opts?.config);
   const clawhubLockRead = readClawHubSkillsLockfileStatusSync(workspaceDir);
-  const skillIndex = buildSkillIndex(skillEntries, {
+  const skillIndexEntries = buildSkillIndexEntries(skillEntries, {
     bundledNames: bundledContext.names,
     agentSkillFilter,
   });
@@ -294,7 +294,7 @@ export function buildWorkspaceSkillStatus(
     managedSkillsDir,
     agentId: opts?.agentId,
     agentSkillFilter,
-    skills: skillIndex.entries.map((entry) =>
+    skills: skillIndexEntries.map((entry) =>
       buildSkillStatus(
         entry,
         opts?.config,

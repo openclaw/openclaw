@@ -64,49 +64,46 @@ export function isSkillUserInvocable(entry: SkillEntry): boolean {
   return true;
 }
 
+export function filterPromptVisibleSkillEntries(entries: readonly SkillEntry[]): SkillEntry[] {
+  return entries.filter(isSkillPromptVisible);
+}
+
+export function filterUserInvocableSkillEntries(entries: readonly SkillEntry[]): SkillEntry[] {
+  return entries.filter(isSkillUserInvocable);
+}
+
+export function buildSkillIndexEntries(
+  entries: readonly SkillEntry[],
+  opts?: BuildSkillIndexOptions,
+): SkillIndexEntry[] {
+  const agentSkillSet =
+    opts?.agentSkillFilter === undefined ? undefined : new Set(opts.agentSkillFilter);
+  return entries.map((entry) => createSkillIndexEntry(entry, opts, agentSkillSet));
+}
+
 export function buildSkillIndex(
   entries: readonly SkillEntry[],
   opts?: BuildSkillIndexOptions,
 ): SkillIndex {
   const byName = new Map<string, SkillIndexEntry>();
   const normalized = new Map<string, SkillIndexEntry[]>();
-  const indexedEntries: SkillIndexEntry[] = [];
+  const indexedEntries = buildSkillIndexEntries(entries, opts);
   const runtimeEntries: SkillEntry[] = [];
   const promptVisibleEntries: SkillEntry[] = [];
   const userInvocableEntries: SkillEntry[] = [];
 
-  for (const entry of entries) {
-    const name = entry.skill.name;
-    const skillKey = resolveSkillKey(entry.skill, entry);
-    const source = resolveSkillSource(entry.skill);
-    const indexed: SkillIndexEntry = {
-      entry,
-      name,
-      normalizedName: normalizeSkillIndexName(name),
-      skillKey,
-      normalizedSkillKey: normalizeSkillIndexName(skillKey),
-      source,
-      bundled:
-        source === "openclaw-bundled" ||
-        (source === "unknown" && opts?.bundledNames?.has(name) === true),
-      agentAllowed: opts?.agentSkillFilter === undefined || opts.agentSkillFilter.includes(name),
-      runtimeVisible: isSkillRuntimeVisible(entry),
-      promptVisible: isSkillPromptVisible(entry),
-      userInvocable: isSkillUserInvocable(entry),
-    };
-
-    indexedEntries.push(indexed);
-    byName.set(name, indexed);
+  for (const indexed of indexedEntries) {
+    byName.set(indexed.name, indexed);
     addNormalizedEntry(normalized, indexed.normalizedName, indexed);
     addNormalizedEntry(normalized, indexed.normalizedSkillKey, indexed);
     if (indexed.runtimeVisible) {
-      runtimeEntries.push(entry);
+      runtimeEntries.push(indexed.entry);
     }
     if (indexed.promptVisible) {
-      promptVisibleEntries.push(entry);
+      promptVisibleEntries.push(indexed.entry);
     }
     if (indexed.userInvocable) {
-      userInvocableEntries.push(entry);
+      userInvocableEntries.push(indexed.entry);
     }
   }
 
@@ -117,6 +114,31 @@ export function buildSkillIndex(
     userInvocableEntries,
     byName,
     byNormalizedName: normalized,
+  };
+}
+
+function createSkillIndexEntry(
+  entry: SkillEntry,
+  opts: BuildSkillIndexOptions | undefined,
+  agentSkillSet: ReadonlySet<string> | undefined,
+): SkillIndexEntry {
+  const name = entry.skill.name;
+  const skillKey = resolveSkillKey(entry.skill, entry);
+  const source = resolveSkillSource(entry.skill);
+  return {
+    entry,
+    name,
+    normalizedName: normalizeSkillIndexName(name),
+    skillKey,
+    normalizedSkillKey: normalizeSkillIndexName(skillKey),
+    source,
+    bundled:
+      source === "openclaw-bundled" ||
+      (source === "unknown" && opts?.bundledNames?.has(name) === true),
+    agentAllowed: agentSkillSet === undefined || agentSkillSet.has(name),
+    runtimeVisible: isSkillRuntimeVisible(entry),
+    promptVisible: isSkillPromptVisible(entry),
+    userInvocable: isSkillUserInvocable(entry),
   };
 }
 
