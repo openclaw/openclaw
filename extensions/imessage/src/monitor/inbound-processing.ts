@@ -903,14 +903,13 @@ export async function buildIMessageInboundContext(params: {
     });
   }
 
-  const directReplyTarget = decision.isGroup
-    ? undefined
+  const imessageTo = decision.isGroup
+    ? chatTarget || `imessage:${decision.sender}`
     : buildDirectIMessageReplyTarget({
         cfg: params.cfg,
         accountId: decision.route.accountId,
         sender: decision.sender,
       });
-  const imessageTo = (decision.isGroup ? chatTarget : undefined) || directReplyTarget;
   // Async follow-ups can resume from the stored origin instead of the immediate
   // reply target. Keep direct SMS origins service-qualified the same way as To,
   // or the final resumed message can fall back to imessage:<phone>.
