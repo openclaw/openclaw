@@ -689,7 +689,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     );
   });
 
-  it("does not refresh history after a displayable non-local chat final", () => {
+  it("refreshes history after a displayable non-local chat final", () => {
     const { state, loadHistory, handleChatEvent } = createHandlersHarness({
       state: { activeChatRunId: null },
     });
@@ -701,7 +701,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       message: { content: [{ type: "text", text: "done" }] },
     });
 
-    expect(loadHistory).not.toHaveBeenCalled();
+    expect(loadHistory).toHaveBeenCalledTimes(1);
   });
 
   it("forces render when a command final only adds system text", () => {

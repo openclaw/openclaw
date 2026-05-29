@@ -513,7 +513,11 @@ export function createEventHandlers(context: EventHandlerContext) {
       }
       const hasDisplayableFinal = hasDisplayableFinalEvent(evt);
       if (hasDisplayableFinal) {
-        forgetLocalRunId?.(evt.runId);
+        if (isLocalRunId?.(evt.runId)) {
+          forgetLocalRunId?.(evt.runId);
+        } else {
+          maybeRefreshHistoryForRun(evt.runId);
+        }
       } else {
         maybeRefreshHistoryForRun(evt.runId);
       }
