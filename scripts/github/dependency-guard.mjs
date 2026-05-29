@@ -275,11 +275,7 @@ export function renderAuthorizedDependencyComment(override) {
   return lines.join("\n");
 }
 
-export function renderAutoscrubbedDependencyComment({
-  baseBranch,
-  lockfileChanges,
-  commitSha,
-}) {
+export function renderAutoscrubbedDependencyComment({ baseBranch, lockfileChanges, commitSha }) {
   const safeBranch = sanitizeDisplayValue(baseBranch ?? "main");
   const fileLines = lockfileChanges.map((path) => `- ${markdownCode(path)}`);
   return `${dependencyGraphGuardMarker}
@@ -330,19 +326,20 @@ export function renderBlockedDependencyComment({
     reasons.push(renderManifestChangeLine(change));
   }
   const autoscrubLines = renderAutoscrubStatusLines(autoscrubStatus);
-  const removalSteps = lockfileChanges.length > 0
-    ? [
-        "",
-        "To remove lockfile changes, restore them from the target branch:",
-        "",
-        "```bash",
-        "git fetch origin",
-        `git checkout ${baseRef} -- ${lockfileChanges.map(shellQuote).join(" ")}`,
-        `git commit -m ${shellQuote(autoscrubCommitMessage)}`,
-        "git push",
-        "```",
-      ]
-    : [];
+  const removalSteps =
+    lockfileChanges.length > 0
+      ? [
+          "",
+          "To remove lockfile changes, restore them from the target branch:",
+          "",
+          "```bash",
+          "git fetch origin",
+          `git checkout ${baseRef} -- ${lockfileChanges.map(shellQuote).join(" ")}`,
+          `git commit -m ${shellQuote(autoscrubCommitMessage)}`,
+          "git push",
+          "```",
+        ]
+      : [];
   return [
     dependencyGraphGuardMarker,
     "",
@@ -446,6 +443,21 @@ export function githubApi(token) {
   };
   return {
     request,
+    graphql: async (query, variables) => {
+      const result = await request("/graphql", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ query, variables }),
+      });
+      if (Array.isArray(result.errors) && result.errors.length > 0) {
+        const error = new Error(
+          result.errors.map((entry) => entry.message ?? "GraphQL error").join("; "),
+        );
+        error.errors = result.errors;
+        throw error;
+      }
+      return result.data;
+    },
     paginate: async (path) => {
       const items = [];
       for (let page = 1; ; page += 1) {
@@ -499,6 +511,23 @@ async function readContentFileMetadataAtRef(api, { owner, repo, path, ref }) {
     });
 }
 
+async function readBase64FileAtRef(api, { owner, repo, path, ref }) {
+  const file = await readContentFileMetadataAtRef(api, { owner, repo, path, ref });
+  if (!file) {
+    return null;
+  }
+  if (file.encoding === "base64" && typeof file.content === "string" && file.content.length > 0) {
+    return file.content.replace(/\s+/gu, "");
+  }
+  if (typeof file.sha === "string" && file.sha.length > 0) {
+    const blob = await api.request(`/repos/${owner}/${repo}/git/blobs/${file.sha}`);
+    if (blob.encoding === "base64" && typeof blob.content === "string" && blob.content.length > 0) {
+      return blob.content.replace(/\s+/gu, "");
+    }
+  }
+  throw new Error(`Unable to read base64 file contents for ${path}`);
+}
+
 async function collectDependencyManifestChanges(api, { owner, repo, pullRequest, files }) {
   const manifestPaths = files
     .map((file) => file.filename)
@@ -528,76 +557,50 @@ async function collectDependencyManifestChanges(api, { owner, repo, pullRequest,
   return changes;
 }
 
-function encodeGitRef(ref) {
-  return ref.split("/").map(encodeURIComponent).join("/");
-}
-
-async function createAutoscrubCommit(api, {
-  owner,
-  repo,
-  pullRequest,
-  lockfileChanges,
-  targetRepository,
-}) {
+async function createAutoscrubCommit(
+  api,
+  { owner, repo, pullRequest, lockfileChanges, targetRepository },
+) {
   const headSha = pullRequest.head.sha;
   const headRef = pullRequest.head.ref;
   const writeOwner = targetRepository.owner;
   const writeRepo = targetRepository.repo;
-  const writesBaseRepository = writeOwner === owner && writeRepo === repo;
-  const headCommit = await api.request(`/repos/${writeOwner}/${writeRepo}/git/commits/${headSha}`);
-  const treeEntries = [];
+  const additions = [];
+  const deletions = [];
   for (const path of lockfileChanges) {
-    const baseFile = await readContentFileMetadataAtRef(api, {
+    const contents = await readBase64FileAtRef(api, {
       owner,
       repo,
       path,
       ref: pullRequest.base?.sha,
     });
-    if (baseFile?.sha) {
-      let blobSha = baseFile.sha;
-      if (!writesBaseRepository && baseFile.encoding === "base64" && baseFile.content) {
-        const blob = await api.request(`/repos/${writeOwner}/${writeRepo}/git/blobs`, {
-          method: "POST",
-          body: JSON.stringify({
-            content: baseFile.content,
-            encoding: baseFile.encoding ?? "base64",
-          }),
-        });
-        blobSha = blob.sha;
-      }
-      treeEntries.push({
-        path,
-        mode: "100644",
-        type: "blob",
-        sha: blobSha,
-      });
+    if (contents) {
+      additions.push({ path, contents });
     } else {
-      treeEntries.push({ path, sha: null });
+      deletions.push({ path });
     }
   }
-  const tree = await api.request(`/repos/${writeOwner}/${writeRepo}/git/trees`, {
-    method: "POST",
-    body: JSON.stringify({
-      base_tree: headCommit.tree.sha,
-      tree: treeEntries,
-    }),
-  });
-  const commit = await api.request(`/repos/${writeOwner}/${writeRepo}/git/commits`, {
-    method: "POST",
-    body: JSON.stringify({
-      message: autoscrubCommitMessage,
-      tree: tree.sha,
-      parents: [headSha],
-    }),
-  });
-  await api.request(`/repos/${writeOwner}/${writeRepo}/git/refs/heads/${encodeGitRef(headRef)}`, {
-    method: "PATCH",
-    body: JSON.stringify({
-      sha: commit.sha,
-      force: false,
-    }),
-  });
-  return commit;
+  const data = await api.graphql(
+    `mutation CreateAutoscrubCommit($input: CreateCommitOnBranchInput!) {
+      createCommitOnBranch(input: $input) {
+        commit {
+          oid
+        }
+      }
+    }`,
+    {
+      input: {
+        branch: {
+          repositoryNameWithOwner: `${writeOwner}/${writeRepo}`,
+          branchName: headRef,
+        },
+        expectedHeadOid: headSha,
+        fileChanges: { additions, deletions },
+        message: { headline: autoscrubCommitMessage },
+      },
+    },
+  );
+  return { sha: data.createCommitOnBranch.commit.oid };
 }
 
 async function writeSummary(markdown) {
@@ -684,19 +687,23 @@ async function main() {
     if (!labelNames.has(label)) {
       return;
     }
-    await api.request(`${issuePath}/labels/${encodeURIComponent(label)}`, {
-      method: "DELETE",
-    }).catch(ignoreUnavailableWritePermission(`label "${label}" removal`));
+    await api
+      .request(`${issuePath}/labels/${encodeURIComponent(label)}`, {
+        method: "DELETE",
+      })
+      .catch(ignoreUnavailableWritePermission(`label "${label}" removal`));
     labelNames.delete(label);
   };
   const addLabelIfMissing = async (label) => {
     if (labelNames.has(label)) {
       return;
     }
-    await api.request(`${issuePath}/labels`, {
-      method: "POST",
-      body: JSON.stringify({ labels: [label] }),
-    }).catch(ignoreUnavailableWritePermission(`label "${label}" update`));
+    await api
+      .request(`${issuePath}/labels`, {
+        method: "POST",
+        body: JSON.stringify({ labels: [label] }),
+      })
+      .catch(ignoreUnavailableWritePermission(`label "${label}" update`));
     labelNames.add(label);
   };
   const deleteCommentIfPresent = async (comment) => {
@@ -711,15 +718,19 @@ async function main() {
   };
   const upsertComment = async (comment, body) => {
     if (comment) {
-      return await api.request(`/repos/${owner}/${repo}/issues/comments/${comment.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ body }),
-      }).catch(ignoreUnavailableWritePermission("comment update"));
+      return await api
+        .request(`/repos/${owner}/${repo}/issues/comments/${comment.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ body }),
+        })
+        .catch(ignoreUnavailableWritePermission("comment update"));
     }
-    return await api.request(`${issuePath}/comments`, {
-      method: "POST",
-      body: JSON.stringify({ body }),
-    }).catch(ignoreUnavailableWritePermission("comment creation"));
+    return await api
+      .request(`${issuePath}/comments`, {
+        method: "POST",
+        body: JSON.stringify({ body }),
+      })
+      .catch(ignoreUnavailableWritePermission("comment creation"));
   };
 
   if (dependencyGraphFiles.length === 0) {
@@ -786,7 +797,9 @@ async function main() {
   }
   if (mode === "detect") {
     await setOutput("autoscrub", "false");
-    await writeSummary("## Dependency Guard\n\nDependency graph enforcement deferred to the final guard job.");
+    await writeSummary(
+      "## Dependency Guard\n\nDependency graph enforcement deferred to the final guard job.",
+    );
     console.log("Dependency graph enforcement deferred to the final guard job.");
     return;
   }

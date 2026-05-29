@@ -55,9 +55,7 @@ describe("dependency guard workflow", () => {
       issues: "write",
     });
     expect(parsed.jobs?.["dependency-guard-autoscrub"]?.permissions).toEqual({
-      contents: "write",
-      "pull-requests": "write",
-      issues: "write",
+      contents: "read",
     });
     expect(parsed.jobs?.["dependency-guard-detect"]?.permissions).toBeUndefined();
     expect(parsed.jobs?.["dependency-guard"]?.permissions).toBeUndefined();
@@ -73,7 +71,6 @@ describe("dependency guard workflow", () => {
       "pnpm dlx",
       "actions: write",
       "id-token: write",
-      "secrets.",
       "github.rest.issues.createLabel",
     ];
 
@@ -89,11 +86,10 @@ describe("dependency guard workflow", () => {
     ];
     for (const job of jobs) {
       const steps = job?.steps ?? [];
-      expect(steps).toHaveLength(2);
       expect(steps[0].uses).toBe("actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd");
       expect(steps[0].with?.ref).toBe("${{ github.event.pull_request.base.sha }}");
       expect(steps[0].with?.["persist-credentials"]).toBe(false);
-      expect(steps[1].run).toBe("node scripts/github/dependency-guard.mjs");
+      expect(steps.at(-1)?.run).toBe("node scripts/github/dependency-guard.mjs");
     }
   });
 
@@ -113,7 +109,28 @@ describe("dependency guard workflow", () => {
     const autoscrubSteps = autoscrubJob?.steps ?? [];
     const finalSteps = finalJob?.steps ?? [];
     expect(detectSteps[1].env?.OPENCLAW_DEPENDENCY_GUARD_MODE).toBe("detect");
-    expect(autoscrubSteps[1].env?.OPENCLAW_DEPENDENCY_GUARD_MODE).toBe("autoscrub");
+    expect(autoscrubSteps[1].uses).toBe(
+      "actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3",
+    );
+    expect(autoscrubSteps[1].with).toMatchObject({
+      "app-id": "2729701",
+      "permission-contents": "write",
+      "permission-issues": "write",
+      "permission-pull-requests": "write",
+    });
+    expect(autoscrubSteps[2].uses).toBe(
+      "actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3",
+    );
+    expect(autoscrubSteps[2].with).toMatchObject({
+      "app-id": "2971289",
+      "permission-contents": "write",
+      "permission-issues": "write",
+      "permission-pull-requests": "write",
+    });
+    expect(autoscrubSteps[3].env?.GITHUB_TOKEN).toBe(
+      "${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}",
+    );
+    expect(autoscrubSteps[3].env?.OPENCLAW_DEPENDENCY_GUARD_MODE).toBe("autoscrub");
     expect(finalSteps[1].env?.OPENCLAW_DEPENDENCY_GUARD_MODE).toBe("enforce");
   });
 
