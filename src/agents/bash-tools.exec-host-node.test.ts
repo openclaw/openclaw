@@ -1972,6 +1972,50 @@ describe("executeNodeHostCommand", () => {
     ).toBe(false);
   });
 
+  it("prechecks denylist precedence for allowlist mode on older nodes", async () => {
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: {
+        allowlist: [],
+        denylist: [{ pattern: "curl", flags: "i" }],
+        file: { version: 1, agents: {} },
+      },
+      hostSecurity: "allowlist",
+      hostAsk: "always",
+      askFallback: "deny",
+    });
+    listNodesMock.mockResolvedValueOnce([
+      {
+        nodeId: "node-1",
+        commands: ["system.run", "system.run.prepare"],
+        connected: true,
+        platform: process.platform,
+      },
+    ]);
+
+    const result = await executeNodeHostCommand({
+      command: "curl https://example.test",
+      workdir: "/tmp/work",
+      env: {},
+      security: "allowlist",
+      ask: "always",
+      requestedNode: "node-1",
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+      agentId: "requested-agent",
+      sessionKey: "requested-session",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "denied",
+      reason: "denylist",
+      host: "node",
+      nodeId: "node-1",
+    });
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+    expect(registerExecApprovalRequestForHostOrThrowMock).not.toHaveBeenCalled();
+  });
+
   it("forwards host-tightened policy to node system run", async () => {
     resolveExecHostApprovalContextMock.mockReturnValueOnce({
       approvals: { allowlist: [], file: { version: 1, agents: {} } },
