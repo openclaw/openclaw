@@ -164,6 +164,14 @@ describe("browser state option collisions", () => {
     expect(getBrowserCliRuntime().exit).toHaveBeenCalledWith(1);
   });
 
+  it("rejects excessive viewport dimensions before resize dispatch", async () => {
+    await runBrowserCommand(["set", "viewport", "8193", "768"]);
+
+    expect(mocks.runBrowserResizeWithOutput).not.toHaveBeenCalled();
+    expectErrorMessage("Invalid width: maximum is 8192");
+    expect(getBrowserCliRuntime().exit).toHaveBeenCalledWith(1);
+  });
+
   it("errors when set media receives an invalid value", async () => {
     await runBrowserCommand(["set", "media", "sepia"]);
 

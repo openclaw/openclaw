@@ -1126,6 +1126,79 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("does not re-append promoted candidates whose marker key path contains spaces", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNoteInSubdir(workspaceDir, "project alpha", "2026-04-01", [
+        "alpha",
+        "The project alpha gateway should stay loopback-only on port 18789.",
+      ]);
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "project alpha gateway",
+        results: [
+          {
+            path: "memory/project alpha/2026-04-01.md",
+            startLine: 2,
+            endLine: 2,
+            score: 0.95,
+            snippet: "The project alpha gateway should stay loopback-only on port 18789.",
+            source: "memory",
+          },
+        ],
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+      expect(ranked.map((candidate) => candidate.key)).toContain(
+        "memory:memory/project alpha/2026-04-01.md:2:2",
+      );
+
+      const firstApply = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: ranked,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+      expect(firstApply.applied).toBe(1);
+      expect(firstApply.appended).toBe(1);
+
+      const storePath = resolveShortTermRecallStorePath(workspaceDir);
+      const rawStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
+        entries: Record<string, { promotedAt?: string }>;
+      };
+      for (const entry of Object.values(rawStore.entries)) {
+        delete entry.promotedAt;
+      }
+      await fs.writeFile(storePath, `${JSON.stringify(rawStore, null, 2)}\n`, "utf-8");
+
+      const secondApply = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: ranked,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+      expect(secondApply.applied).toBe(1);
+      expect(secondApply.appended).toBe(0);
+      expect(secondApply.reconciledExisting).toBe(1);
+
+      const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+      expect(memoryText).toContain(
+        "<!-- openclaw-memory-promotion:memory:memory/project alpha/2026-04-01.md:2:2 -->",
+      );
+      expect(memoryText.match(/openclaw-memory-promotion:/g)?.length).toBe(1);
+      expect(
+        memoryText.match(/The project alpha gateway should stay loopback-only on port 18789\./g)
+          ?.length,
+      ).toBe(1);
+    });
+  });
+
   it("filters out candidates older than maxAgeDays during ranking", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await recordShortTermRecalls({
@@ -1640,6 +1713,60 @@ describe("short-term promotion", () => {
       const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
       expect(memoryText).toContain("- Gateway binds loopback and port 18789");
       expect(memoryText).not.toContain("- - Gateway binds loopback and port 18789");
+    });
+  });
+
+  it("keeps promoted MEMORY.md entries compact while preserving provenance", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const longDailyEntry = [
+        "HanJammer reviewed the dashboard state and asked for durable memory hygiene.",
+        "The raw daily note also included implementation chatter, transient timings, repeated troubleshooting detail, and operational narration that should not be copied wholesale into MEMORY.md.",
+        "A curated long-term memory entry should preserve the stable conclusion without hauling the whole daily journal line into bootstrap context.",
+        "Extra filler keeps this source entry long enough to prove promotion output is bounded before it reaches the root memory file.",
+      ].join(" ");
+      await writeDailyMemoryNote(workspaceDir, "2026-04-01", [longDailyEntry]);
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "memory hygiene",
+        results: [
+          {
+            path: "memory/2026-04-01.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.92,
+            snippet: longDailyEntry,
+            source: "memory",
+          },
+        ],
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: ranked,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        maxPromotedSnippetTokens: 55,
+      });
+
+      expect(applied.applied).toBe(1);
+      const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+      const promotedLine = memoryText
+        .split("\n")
+        .find((line) => line.startsWith("- HanJammer reviewed the dashboard state"));
+      expect(promotedLine).toBeDefined();
+      expect(promotedLine?.length).toBeLessThan(340);
+      expect(promotedLine).toContain("...");
+      expect(promotedLine).toMatch(
+        /\[score=0\.\d{3} recalls=1 avg=0\.\d{3} source=memory\/2026-04-01\.md:1-1\]/,
+      );
+      expect(memoryText).toMatch(/<!-- openclaw-memory-promotion:[^\n]+ -->/);
     });
   });
 

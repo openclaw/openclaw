@@ -5,6 +5,7 @@ import type { AnyAgentTool } from "./tools/common.js";
 
 export type BundleMcpToolRuntime = {
   tools: AnyAgentTool[];
+  diagnostics?: readonly McpToolCatalogDiagnostic[];
   dispose: () => Promise<void>;
 };
 
@@ -29,6 +30,14 @@ export type McpToolCatalog = {
   generatedAt: number;
   servers: Record<string, McpServerCatalog>;
   tools: McpCatalogTool[];
+  diagnostics?: readonly McpToolCatalogDiagnostic[];
+};
+
+export type McpToolCatalogDiagnostic = {
+  serverName: string;
+  safeServerName: string;
+  launchSummary: string;
+  message: string;
 };
 
 export type SessionMcpRuntime = {

@@ -46,6 +46,10 @@ describe("talk realtime gateway relay", () => {
     const broadcast = vi.fn();
     const nodeSendToSession = vi.fn();
     const removeChatRun = vi.fn(() => ({ sessionKey: "main", clientRunId: "run-1" }));
+    const chatRunBuffers = new Map([["run-1", "partial answer"]]);
+    const chatDeltaSentAt = new Map<string, number>();
+    const chatDeltaLastBroadcastLen = new Map<string, number>();
+    const chatDeltaLastBroadcastText = new Map<string, string>();
     const agentDeltaSentAt = new Map([["run-1:assistant", Date.now()]]);
     const bufferedAgentEvents = new Map([
       [
@@ -77,13 +81,23 @@ describe("talk realtime gateway relay", () => {
           },
         ],
       ]),
-      chatRunBuffers: new Map([["run-1", "partial answer"]]),
-      chatDeltaSentAt: new Map(),
-      chatDeltaLastBroadcastLen: new Map(),
-      chatDeltaLastBroadcastText: new Map(),
+      chatRunBuffers,
+      chatDeltaSentAt,
+      chatDeltaLastBroadcastLen,
+      chatDeltaLastBroadcastText,
       agentDeltaSentAt,
       bufferedAgentEvents,
       chatAbortedRuns: new Map(),
+      clearChatRunState: (runId: string) => {
+        chatRunBuffers.delete(runId);
+        chatDeltaSentAt.delete(runId);
+        chatDeltaLastBroadcastLen.delete(runId);
+        chatDeltaLastBroadcastText.delete(runId);
+        for (const key of [runId, `${runId}:assistant`, `${runId}:thinking`]) {
+          agentDeltaSentAt.delete(key);
+          bufferedAgentEvents.delete(key);
+        }
+      },
       removeChatRun,
       agentRunSeq: new Map(),
     } as never;
@@ -1311,6 +1325,10 @@ describe("talk realtime gateway relay", () => {
     const broadcast = vi.fn();
     const nodeSendToSession = vi.fn();
     const removeChatRun = vi.fn(() => ({ sessionKey: "main", clientRunId: "run-1" }));
+    const chatRunBuffers = new Map([["run-1", "partial answer"]]);
+    const chatDeltaSentAt = new Map<string, number>();
+    const chatDeltaLastBroadcastLen = new Map<string, number>();
+    const chatDeltaLastBroadcastText = new Map<string, string>();
     const agentDeltaSentAt = new Map([["run-1:assistant", Date.now()]]);
     const bufferedAgentEvents = new Map([
       [
@@ -1360,13 +1378,23 @@ describe("talk realtime gateway relay", () => {
           },
         ],
       ]),
-      chatRunBuffers: new Map([["run-1", "partial answer"]]),
-      chatDeltaSentAt: new Map(),
-      chatDeltaLastBroadcastLen: new Map(),
-      chatDeltaLastBroadcastText: new Map(),
+      chatRunBuffers,
+      chatDeltaSentAt,
+      chatDeltaLastBroadcastLen,
+      chatDeltaLastBroadcastText,
       agentDeltaSentAt,
       bufferedAgentEvents,
       chatAbortedRuns: new Map(),
+      clearChatRunState: (runId: string) => {
+        chatRunBuffers.delete(runId);
+        chatDeltaSentAt.delete(runId);
+        chatDeltaLastBroadcastLen.delete(runId);
+        chatDeltaLastBroadcastText.delete(runId);
+        for (const key of [runId, `${runId}:assistant`, `${runId}:thinking`]) {
+          agentDeltaSentAt.delete(key);
+          bufferedAgentEvents.delete(key);
+        }
+      },
       removeChatRun,
       agentRunSeq: new Map(),
     } as never;

@@ -2540,16 +2540,25 @@ export function projectConfigOntoRuntimeSourceSnapshot(config: OpenClawConfig): 
   return coerceConfig(applyMergePatch(projectedSource, runtimePatch));
 }
 
-export function loadConfig(options?: { skipPluginValidation?: boolean }): OpenClawConfig {
+export function loadConfig(options?: {
+  skipPluginValidation?: boolean;
+  pin?: boolean;
+}): OpenClawConfig {
+  const loadFresh = () =>
+    createConfigIO(options?.skipPluginValidation ? { pluginValidation: "skip" } : {}).loadConfig();
+  if (options?.pin === false) {
+    return loadFresh();
+  }
   // First successful load becomes the process snapshot. Long-lived runtimes
   // should swap this snapshot via explicit reload/watcher paths instead of
   // reparsing openclaw.json on hot code paths.
-  return loadPinnedRuntimeConfig(() =>
-    createConfigIO(options?.skipPluginValidation ? { pluginValidation: "skip" } : {}).loadConfig(),
-  );
+  return loadPinnedRuntimeConfig(loadFresh);
 }
 
-export function getRuntimeConfig(options?: { skipPluginValidation?: boolean }): OpenClawConfig {
+export function getRuntimeConfig(options?: {
+  skipPluginValidation?: boolean;
+  pin?: boolean;
+}): OpenClawConfig {
   return loadConfig(options);
 }
 

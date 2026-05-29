@@ -1696,8 +1696,8 @@ describe("image tool implicit imageModel config", () => {
             items: { type: "string" },
           },
           model: { type: "string" },
-          maxBytesMb: { type: "number" },
-          maxImages: { type: "number" },
+          maxBytesMb: { type: "number", exclusiveMinimum: 0 },
+          maxImages: { type: "integer", minimum: 1 },
         },
       });
     });
@@ -2341,6 +2341,40 @@ describe("image tool MiniMax VLM routing", () => {
     expect(tooManyDetails?.error).toBe("too_many_images");
     expect(tooManyDetails?.count).toBe(2);
     expect(tooManyDetails?.max).toBe(1);
+  });
+
+  it("rejects invalid image cap values before loading images", async () => {
+    const { fetch, tool } = await createMinimaxVlmFixture({ status_code: 0, status_msg: "" });
+
+    await expect(
+      tool.execute("t1", {
+        prompt: "Compare these images.",
+        image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+        maxImages: 1.5,
+      }),
+    ).rejects.toThrow("maxImages must be a positive integer");
+
+    await expect(
+      tool.execute("t2", {
+        prompt: "Compare these images.",
+        image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+        maxBytesMb: 0,
+      }),
+    ).rejects.toThrow("maxBytesMb must be greater than 0");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("accepts string image caps through shared numeric readers", async () => {
+    const { fetch, tool } = await createMinimaxVlmFixture({ status_code: 0, status_msg: "" });
+
+    await tool.execute("t1", {
+      prompt: "Describe this image.",
+      image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+      maxImages: "1",
+      maxBytesMb: "1",
+    });
+
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 
   it("surfaces MiniMax API errors from /v1/coding_plan/vlm", async () => {

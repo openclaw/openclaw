@@ -54,6 +54,11 @@ export function parseCommandArgs(argsString: string): string[] {
   return args;
 }
 
+function parseSafeNonNegativeInteger(raw: string): number | undefined {
+  const parsed = Number(raw);
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
 /**
  * Substitute argument placeholders in template content
  * Supports:
@@ -71,21 +76,32 @@ export function substituteArgs(content: string, args: string[]): string {
   // Replace $1, $2, etc. with positional args FIRST (before wildcards)
   // This prevents wildcard replacement values containing $<digit> patterns from being re-substituted
   result = result.replace(/\$(\d+)/g, (_, num) => {
-    const index = Number.parseInt(num, 10) - 1;
+    const parsed = parseSafeNonNegativeInteger(num);
+    if (parsed === undefined || parsed <= 0) {
+      return "";
+    }
+    const index = parsed - 1;
     return args[index] ?? "";
   });
 
   // Replace ${@:start} or ${@:start:length} with sliced args (bash-style)
   // Process BEFORE simple $@ to avoid conflicts
   result = result.replace(/\$\{@:(\d+)(?::(\d+))?\}/g, (_, startStr, lengthStr) => {
-    let start = Number.parseInt(startStr, 10) - 1; // Convert to 0-indexed (user provides 1-indexed)
+    const parsedStart = parseSafeNonNegativeInteger(startStr);
+    if (parsedStart === undefined) {
+      return "";
+    }
+    let start = parsedStart - 1; // Convert to 0-indexed (user provides 1-indexed)
     // Treat 0 as 1 (bash convention: args start at 1)
     if (start < 0) {
       start = 0;
     }
 
     if (lengthStr) {
-      const length = Number.parseInt(lengthStr, 10);
+      const length = parseSafeNonNegativeInteger(lengthStr);
+      if (length === undefined) {
+        return "";
+      }
       return args.slice(start, start + length).join(" ");
     }
     return args.slice(start).join(" ");

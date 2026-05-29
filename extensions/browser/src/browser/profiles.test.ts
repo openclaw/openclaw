@@ -125,6 +125,7 @@ describe("getUsedPorts", () => {
   it("ignores invalid cdpUrl values", () => {
     const profiles = {
       bad: { cdpUrl: "notaurl" },
+      portZero: { cdpUrl: "http://127.0.0.1:0" },
     };
     const used = getUsedPorts(profiles);
     expect(used.size).toBe(0);

@@ -13,6 +13,7 @@ type PackedVersion = {
   archive: Buffer;
   dependencies?: Record<string, string>;
   integrity: string;
+  openclaw?: Record<string, unknown>;
   optionalDependencies?: Record<string, string>;
   peerDependencies?: Record<string, string>;
   peerDependenciesMeta?: Record<string, { optional?: boolean }>;
@@ -56,6 +57,7 @@ async function packPlugin(params: {
   dependencies?: Record<string, string>;
   packageName: string;
   optionalDependencies?: Record<string, string>;
+  openclaw?: Record<string, unknown>;
   peerDependencies?: Record<string, string>;
   peerDependenciesMeta?: Record<string, { optional?: boolean }>;
   pluginId: string;
@@ -78,7 +80,7 @@ async function packPlugin(params: {
         name: params.packageName,
         version: params.version,
         type: "module",
-        openclaw: { extensions: ["./dist/index.js"] },
+        openclaw: params.openclaw ?? { extensions: ["./dist/index.js"] },
         ...(params.dependencies ? { dependencies: params.dependencies } : {}),
         ...(params.optionalDependencies
           ? { optionalDependencies: params.optionalDependencies }
@@ -129,6 +131,7 @@ async function packPlugin(params: {
     archive,
     ...(params.dependencies ? { dependencies: params.dependencies } : {}),
     integrity: `sha512-${crypto.createHash("sha512").update(archive).digest("base64")}`,
+    ...(params.openclaw ? { openclaw: params.openclaw } : {}),
     ...(params.optionalDependencies ? { optionalDependencies: params.optionalDependencies } : {}),
     ...(params.peerDependencies ? { peerDependencies: params.peerDependencies } : {}),
     ...(peerDependenciesMeta ? { peerDependenciesMeta } : {}),
@@ -172,6 +175,7 @@ async function startStaticRegistry(
                 {
                   name: pkg.packageName,
                   version,
+                  ...(entry.openclaw ? { openclaw: entry.openclaw } : {}),
                   ...(entry.dependencies ? { dependencies: entry.dependencies } : {}),
                   ...(entry.optionalDependencies
                     ? { optionalDependencies: entry.optionalDependencies }
@@ -255,6 +259,7 @@ async function startMutableRegistry(params: {
               {
                 name: params.packageName,
                 version,
+                ...(entry.openclaw ? { openclaw: entry.openclaw } : {}),
                 ...(entry.peerDependencies ? { peerDependencies: entry.peerDependencies } : {}),
                 ...(entry.peerDependenciesMeta
                   ? { peerDependenciesMeta: entry.peerDependenciesMeta }
@@ -297,6 +302,74 @@ async function startMutableRegistry(params: {
 }
 
 describe("installPluginFromNpmSpec e2e", () => {
+  it("installs the newest compatible stable package when npm latest requires a newer plugin API", async () => {
+    const rootDir = await makeTempDir("npm-plugin-compatible-version-e2e");
+    const npmRoot = path.join(rootDir, "managed-npm");
+    const packageName = `compatible-plugin-${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
+    const compatibleOpenClaw = {
+      extensions: ["./dist/index.js"],
+      install: { minHostVersion: ">=2026.4.25" },
+      compat: { pluginApi: ">=2026.5.10-beta.1" },
+    };
+    const incompatibleOpenClaw = {
+      extensions: ["./dist/index.js"],
+      install: { minHostVersion: ">=2026.4.25" },
+      compat: { pluginApi: ">=2026.5.27" },
+    };
+    const versions = [
+      await packPlugin({
+        packageName,
+        pluginId: packageName,
+        version: "2026.5.26",
+        rootDir,
+        openclaw: compatibleOpenClaw,
+      }),
+      await packPlugin({
+        packageName,
+        pluginId: packageName,
+        version: "2026.5.27",
+        rootDir,
+        openclaw: incompatibleOpenClaw,
+      }),
+    ];
+    const registry = await startStaticRegistry([{ packageName, latest: "2026.5.27", versions }]);
+    process.env.NPM_CONFIG_REGISTRY = registry;
+    process.env.npm_config_registry = registry;
+    const previousHostVersion = process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
+    process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = "2026.5.10-beta.1";
+    const warnings: string[] = [];
+
+    try {
+      const result = await installPluginFromNpmSpec({
+        spec: packageName,
+        npmDir: npmRoot,
+        logger: { warn: (message) => warnings.push(message) },
+      });
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        return;
+      }
+      expect(result.npmResolution?.version).toBe("2026.5.26");
+      expect(result.npmResolution?.resolvedSpec).toBe(`${packageName}@2026.5.26`);
+      expect(warnings.join("\n")).toContain(`using newest compatible ${packageName}@2026.5.26`);
+      const projectRoot = pluginNpmProjectRoot(npmRoot, packageName);
+      const installedPackageJson = JSON.parse(
+        await fs.readFile(
+          path.join(projectRoot, "node_modules", packageName, "package.json"),
+          "utf8",
+        ),
+      ) as { version?: string };
+      expect(installedPackageJson.version).toBe("2026.5.26");
+    } finally {
+      if (previousHostVersion === undefined) {
+        delete process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
+      } else {
+        process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = previousHostVersion;
+      }
+    }
+  });
+
   it("scrubs root openclaw materialized by required npm peers", async () => {
     const rootDir = await makeTempDir("npm-plugin-required-peer-e2e");
     const npmRoot = path.join(rootDir, "managed-npm");

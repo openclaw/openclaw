@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from "node:fs/promises";
+import { readBoundedResponseText } from "./lib/bounded-response-text.mjs";
 
 const DEFAULT_ENDPOINT_PREFIX = "/qa-credentials/v1";
 const DEFAULT_ACQUIRE_TIMEOUT_MS = 90_000;
@@ -163,41 +164,6 @@ function resolveConfig() {
     siteUrl,
     authToken,
   };
-}
-
-async function readBoundedResponseText(response, label, byteLimit, timeoutPromise) {
-  const contentLength = response.headers.get("content-length");
-  if (contentLength) {
-    const parsedLength = Number(contentLength);
-    if (Number.isSafeInteger(parsedLength) && parsedLength > byteLimit) {
-      await response.body?.cancel().catch(() => {});
-      throw taggedError(`${label} response body exceeded ${byteLimit} bytes`, "ETOOBIG");
-    }
-  }
-  if (!response.body) {
-    return "";
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let byteCount = 0;
-  let text = "";
-  try {
-    while (true) {
-      const { done, value } = await Promise.race([reader.read(), timeoutPromise]);
-      if (done) {
-        return text + decoder.decode();
-      }
-      byteCount += value.byteLength;
-      if (byteCount > byteLimit) {
-        await reader.cancel().catch(() => {});
-        throw taggedError(`${label} response body exceeded ${byteLimit} bytes`, "ETOOBIG");
-      }
-      text += decoder.decode(value, { stream: true });
-    }
-  } finally {
-    reader.releaseLock();
-  }
 }
 
 function parseBrokerPayload(rawPayload, response) {

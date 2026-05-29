@@ -512,9 +512,22 @@ export async function fetchJson(url, options = {}) {
 }
 
 export async function readBoundedResponseText(response, byteLimit = FETCH_BODY_MAX_BYTES) {
+  const contentLength = response.headers?.get?.("content-length");
+  if (contentLength) {
+    const parsedContentLength = Number(contentLength);
+    if (Number.isFinite(parsedContentLength) && parsedContentLength > byteLimit) {
+      await response.body?.cancel?.().catch(() => undefined);
+      throw createFetchBodyTooLargeError(byteLimit);
+    }
+  }
+
   const reader = response.body?.getReader?.();
   if (!reader) {
-    return await response.text();
+    const text = await response.text();
+    if (Buffer.byteLength(text, "utf8") > byteLimit) {
+      throw createFetchBodyTooLargeError(byteLimit);
+    }
+    return text;
   }
   const chunks = [];
   let totalBytes = 0;
@@ -527,13 +540,17 @@ export async function readBoundedResponseText(response, byteLimit = FETCH_BODY_M
     totalBytes += chunk.byteLength;
     if (totalBytes > byteLimit) {
       await reader.cancel().catch(() => undefined);
-      throw Object.assign(new Error(`fetch response body exceeded ${byteLimit} bytes`), {
-        code: "ETOOBIG",
-      });
+      throw createFetchBodyTooLargeError(byteLimit);
     }
     chunks.push(chunk);
   }
   return Buffer.concat(chunks, totalBytes).toString("utf8");
+}
+
+function createFetchBodyTooLargeError(byteLimit) {
+  return Object.assign(new Error(`fetch response body exceeded ${byteLimit} bytes`), {
+    code: "ETOOBIG",
+  });
 }
 
 function configureKitchenSink(env, port) {
@@ -714,9 +731,14 @@ export async function waitForGatewayReady(child, port, logPath, options = {}) {
   const timeoutMs = Math.max(1, options.timeoutMs ?? READY_TIMEOUT_MS);
   const pollDelayMs = Math.max(1, options.pollDelayMs ?? 250);
   const logReportedReady = createGatewayReadyLogScanner(logPath);
+  const exitedBeforeReadyError = () =>
+    new Error(`gateway exited before ready\n${tailFile(logPath)}`);
+  if (hasChildExited(child)) {
+    throw exitedBeforeReadyError();
+  }
   while (Date.now() - started < timeoutMs) {
     if (hasChildExited(child)) {
-      throw new Error(`gateway exited before ready\n${tailFile(logPath)}`);
+      throw exitedBeforeReadyError();
     }
     try {
       const readyz = await fetchJson(`http://127.0.0.1:${port}/readyz`, {
@@ -733,6 +755,9 @@ export async function waitForGatewayReady(child, port, logPath, options = {}) {
       lastError = `${lastError}; gateway log reported ready before HTTP readiness`;
     }
     await delay(pollDelayMs);
+  }
+  if (hasChildExited(child)) {
+    throw new Error(`gateway exited before ready\n${tailFile(logPath)}`);
   }
   throw new Error(`gateway did not become ready: ${lastError}\n${tailFile(logPath)}`);
 }

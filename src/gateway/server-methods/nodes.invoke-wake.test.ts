@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ErrorCodes } from "../protocol/index.js";
+import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import {
   clearNodeWakeState,
   maybeSendNodeWakeNudge,
@@ -729,13 +729,17 @@ describe("node.invoke APNs wake path", () => {
       apnsReason: "Unregistered",
       apnsStatus: 410,
     });
-    expect(mocks.resolveApnsRelayConfigFromEnv).toHaveBeenCalledWith(process.env, {
-      push: {
-        apns: {
-          relay: DEFAULT_RELAY_CONFIG,
+    expect(mocks.resolveApnsRelayConfigFromEnv).toHaveBeenCalledWith(
+      process.env,
+      {
+        push: {
+          apns: {
+            relay: DEFAULT_RELAY_CONFIG,
+          },
         },
       },
-    });
+      { registrationRelayOrigin: undefined },
+    );
     expect(mocks.shouldClearStoredApnsRegistration).toHaveBeenCalledWith({
       registration,
       result: {

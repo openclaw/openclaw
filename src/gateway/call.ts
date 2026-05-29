@@ -1,4 +1,10 @@
 import { randomUUID } from "node:crypto";
+import { isLoopbackIpAddress } from "@openclaw/net-policy/ip";
+import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import {
+  MIN_CLIENT_PROTOCOL_VERSION,
+  PROTOCOL_VERSION,
+} from "../../packages/gateway-protocol/src/index.js";
 import { getRuntimeConfig } from "../config/io.js";
 import {
   resolveConfigPath as resolveConfigPathFromPaths,
@@ -9,8 +15,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadDeviceAuthToken } from "../infra/device-auth-store.js";
 import { loadOrCreateDeviceIdentity, type DeviceIdentity } from "../infra/device-identity.js";
 import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
-import { isLoopbackIpAddress } from "../shared/net/ip.js";
-import { redactSensitiveUrlLikeString } from "../shared/net/redact-sensitive-url.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   GATEWAY_CLIENT_MODES,
@@ -49,7 +53,6 @@ import {
   resolveLeastPrivilegeOperatorScopesForMethod,
   type OperatorScope,
 } from "./method-scopes.js";
-import { MIN_CLIENT_PROTOCOL_VERSION, PROTOCOL_VERSION } from "./protocol/index.js";
 export type { GatewayConnectionDetails };
 
 export type GatewayRequestFunction = <T = Record<string, unknown>>(
@@ -134,6 +137,24 @@ export class GatewayTransportError extends Error {
   }
 }
 
+export class GatewayCredentialsRequiredError extends Error {
+  readonly method: string;
+  readonly configPath: string;
+
+  constructor(params: { method: string; configPath: string }) {
+    super(
+      [
+        `gateway ${params.method} requires credentials before opening a websocket`,
+        "Fix: configure gateway.auth token/password, pair this device, or pass --token/--password.",
+        `Config: ${params.configPath}`,
+      ].join("\n"),
+    );
+    this.name = "GatewayCredentialsRequiredError";
+    this.method = params.method;
+    this.configPath = params.configPath;
+  }
+}
+
 export type GatewayTransportErrorJson = {
   ok: false;
   error: {
@@ -196,6 +217,19 @@ export function isGatewayTransportError(value: unknown): value is GatewayTranspo
     typeof candidate.connectionDetails === "object" &&
     candidate.connectionDetails !== null
   );
+}
+
+export function isGatewayCredentialsRequiredError(
+  value: unknown,
+): value is GatewayCredentialsRequiredError {
+  if (value instanceof GatewayCredentialsRequiredError) {
+    return true;
+  }
+  if (!(value instanceof Error) || value.name !== "GatewayCredentialsRequiredError") {
+    return false;
+  }
+  const candidate = value as Partial<GatewayCredentialsRequiredError>;
+  return typeof candidate.method === "string" && typeof candidate.configPath === "string";
 }
 
 const defaultCreateGatewayClient = (opts: GatewayClientOptions) => new GatewayClient(opts);
@@ -410,13 +444,10 @@ function ensureGatewayCallCanAuthenticate(params: {
   if (hasStoredOperatorDeviceAuthToken(params.deviceIdentity)) {
     return;
   }
-  throw new Error(
-    [
-      `gateway ${params.opts.method} requires credentials before opening a websocket`,
-      "Fix: configure gateway.auth token/password, pair this device, or pass --token/--password.",
-      `Config: ${params.context.configPath}`,
-    ].join("\n"),
-  );
+  throw new GatewayCredentialsRequiredError({
+    method: params.opts.method,
+    configPath: params.context.configPath,
+  });
 }
 
 export type { ExplicitGatewayAuth } from "./credentials.js";

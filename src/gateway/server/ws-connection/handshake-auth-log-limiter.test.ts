@@ -47,6 +47,31 @@ describe("HandshakeAuthLogLimiter", () => {
     });
   });
 
+  it("uses default limits for non-finite options", () => {
+    const limiter = new HandshakeAuthLogLimiter({
+      intervalMs: Number.NaN,
+      maxEntries: Number.POSITIVE_INFINITY,
+    });
+
+    expect(limiter.register("first", 0)).toEqual({
+      shouldLog: true,
+      suppressedSinceLastLog: 0,
+    });
+    expect(limiter.register("first", 1_000)).toEqual({
+      shouldLog: false,
+      suppressedSinceLastLog: 0,
+    });
+
+    for (let i = 0; i < 256; i += 1) {
+      limiter.register(`key-${i}`, i);
+    }
+
+    expect(limiter.register("first", 2_000)).toEqual({
+      shouldLog: true,
+      suppressedSinceLastLog: 0,
+    });
+  });
+
   it("only rate-limits benign missing-credential startup retries", () => {
     expect(
       shouldLimitMissingCredentialAuthLog({

@@ -1,15 +1,18 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cliBackendLog } from "../cli-runner/log.js";
 import {
   buildClaudeCliFallbackContextPrelude,
   claudeCliSessionTranscriptHasContent,
+  claudeCliSessionTranscriptPath,
   createAcpVisibleTextAccumulator,
   formatClaudeCliFallbackPrelude,
   resolveFallbackRetryPrompt,
   sessionFileHasContent,
 } from "./attempt-execution.helpers.js";
+import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
 
 describe("resolveFallbackRetryPrompt", () => {
   const originalBody = "Summarize the quarterly earnings report and highlight key trends.";
@@ -363,6 +366,92 @@ describe("sessionFileHasContent", () => {
   });
 });
 
+describe("claudeCliSessionTranscriptPath", () => {
+  it("returns null for malformed session ids", () => {
+    expect(
+      claudeCliSessionTranscriptPath({
+        sessionId: "../escape",
+        workspaceDir: "/tmp/ws",
+        homeDir: "/home/x",
+      }),
+    ).toBeNull();
+    expect(
+      claudeCliSessionTranscriptPath({
+        sessionId: "",
+        workspaceDir: "/tmp/ws",
+        homeDir: "/home/x",
+      }),
+    ).toBeNull();
+  });
+
+  it("returns null when workspaceDir is empty or whitespace", () => {
+    expect(
+      claudeCliSessionTranscriptPath({
+        sessionId: "abc",
+        workspaceDir: "",
+        homeDir: "/home/x",
+      }),
+    ).toBeNull();
+    expect(
+      claudeCliSessionTranscriptPath({
+        sessionId: "abc",
+        workspaceDir: "   ",
+        homeDir: "/home/x",
+      }),
+    ).toBeNull();
+  });
+
+  it("uses the canonical Claude project dir resolver", () => {
+    expect(
+      claudeCliSessionTranscriptPath({
+        sessionId: "11111111-2222-3333-4444-555555555555",
+        workspaceDir: "/home/faris/.openclaw/workspace",
+        homeDir: "/home/faris",
+      }),
+    ).toBe(
+      path.join(
+        "/home/faris",
+        ".claude",
+        "projects",
+        "-home-faris--openclaw-workspace",
+        "11111111-2222-3333-4444-555555555555.jsonl",
+      ),
+    );
+    expect(
+      claudeCliSessionTranscriptPath({
+        sessionId: "session-x",
+        workspaceDir: "/tmp/foo_bar.baz",
+        homeDir: "/home/x",
+      }),
+    ).toBe(path.join("/home/x", ".claude", "projects", "-tmp-foo-bar-baz", "session-x.jsonl"));
+  });
+
+  it("canonicalizes symlinked workspaces before resolving the Claude project dir", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "oc-claude-project-link-"));
+    try {
+      const workspaceDir = path.join(root, "workspace");
+      const linkDir = path.join(root, "workspace-link");
+      await fs.mkdir(workspaceDir);
+      await fs.symlink(workspaceDir, linkDir, "dir");
+
+      expect(
+        claudeCliSessionTranscriptPath({
+          sessionId: "session-link",
+          workspaceDir: linkDir,
+          homeDir: root,
+        }),
+      ).toBe(
+        path.join(
+          resolveClaudeCliProjectDirForWorkspace({ workspaceDir, homeDir: root }),
+          "session-link.jsonl",
+        ),
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("claudeCliSessionTranscriptHasContent", () => {
   let tmpDir: string;
 
@@ -374,33 +463,45 @@ describe("claudeCliSessionTranscriptHasContent", () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  async function writeClaudeProjectFile(sessionId: string, content: string) {
-    const projectDir = path.join(tmpDir, ".claude", "projects", "demo-workspace");
+  async function makeWorkspace() {
+    const workspaceDir = await fs.mkdtemp(path.join(tmpDir, "ws-"));
+    return workspaceDir;
+  }
+
+  async function writeClaudeProjectFile(workspaceDir: string, sessionId: string, content: string) {
+    const projectDir = resolveClaudeCliProjectDirForWorkspace({ workspaceDir, homeDir: tmpDir });
     await fs.mkdir(projectDir, { recursive: true });
     const file = path.join(projectDir, `${sessionId}.jsonl`);
     await fs.writeFile(file, content, "utf-8");
     return file;
   }
 
+  const GRACE_MS = 250;
+
   it("returns false when the Claude project transcript is missing or empty", async () => {
+    const workspaceDir = await makeWorkspace();
     expect(
       await claudeCliSessionTranscriptHasContent({
         sessionId: "missing-session",
+        workspaceDir,
         homeDir: tmpDir,
       }),
     ).toBe(false);
 
-    await writeClaudeProjectFile("empty-session", "");
+    await writeClaudeProjectFile(workspaceDir, "empty-session", "");
     expect(
       await claudeCliSessionTranscriptHasContent({
         sessionId: "empty-session",
+        workspaceDir,
         homeDir: tmpDir,
       }),
     ).toBe(false);
   });
 
   it("returns true when the Claude project transcript has an assistant message", async () => {
+    const workspaceDir = await makeWorkspace();
     await writeClaudeProjectFile(
+      workspaceDir,
       "session-with-assistant",
       `${JSON.stringify({
         type: "assistant",
@@ -414,19 +515,194 @@ describe("claudeCliSessionTranscriptHasContent", () => {
     expect(
       await claudeCliSessionTranscriptHasContent({
         sessionId: "session-with-assistant",
+        workspaceDir,
         homeDir: tmpDir,
       }),
     ).toBe(true);
   });
 
   it("rejects path-like session ids instead of escaping the Claude projects tree", async () => {
-    await writeClaudeProjectFile("safe-session", "");
+    const workspaceDir = await makeWorkspace();
+    await writeClaudeProjectFile(workspaceDir, "safe-session", "");
     expect(
       await claudeCliSessionTranscriptHasContent({
         sessionId: "../safe-session",
+        workspaceDir,
         homeDir: tmpDir,
       }),
     ).toBe(false);
+  });
+
+  it("returns false when workspaceDir is missing (path cannot be computed)", async () => {
+    expect(
+      await claudeCliSessionTranscriptHasContent({
+        sessionId: "any-session",
+        workspaceDir: undefined,
+        homeDir: tmpDir,
+      }),
+    ).toBe(false);
+  });
+
+  it("returns true immediately when the assistant message is already flushed (no grace sleep)", async () => {
+    const workspaceDir = await makeWorkspace();
+    await writeClaudeProjectFile(
+      workspaceDir,
+      "already-flushed",
+      `${JSON.stringify({
+        type: "assistant",
+        message: { role: "assistant", content: [{ type: "text", text: "ack" }] },
+      })}\n`,
+    );
+
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      expect(
+        await claudeCliSessionTranscriptHasContent({
+          sessionId: "already-flushed",
+          workspaceDir,
+          homeDir: tmpDir,
+        }),
+      ).toBe(true);
+      const graceCalls = setTimeoutSpy.mock.calls.filter(([, delay]) => delay === GRACE_MS);
+      expect(graceCalls).toHaveLength(0);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
+  it("returns true on the second scan when the assistant message lands during the grace window", async () => {
+    const workspaceDir = await makeWorkspace();
+    const sessionId = "fs-flush-latency";
+    const file = await writeClaudeProjectFile(
+      workspaceDir,
+      sessionId,
+      `${JSON.stringify({
+        type: "user",
+        message: { role: "user", content: [{ type: "text", text: "hi" }] },
+      })}\n`,
+    );
+
+    let graceFires = 0;
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
+      handler: (...args: unknown[]) => void,
+      delay?: number,
+    ) => {
+      if (delay === GRACE_MS) {
+        graceFires += 1;
+        const flush = fs.appendFile(
+          file,
+          `${JSON.stringify({
+            type: "assistant",
+            message: { role: "assistant", content: [{ type: "text", text: "ack" }] },
+          })}\n`,
+          "utf-8",
+        );
+        void flush.then(() => {
+          handler();
+        });
+        return 0 as unknown as ReturnType<typeof setTimeout>;
+      }
+      return 0 as unknown as ReturnType<typeof setTimeout>;
+    }) as typeof setTimeout);
+
+    try {
+      expect(
+        await claudeCliSessionTranscriptHasContent({
+          sessionId,
+          workspaceDir,
+          homeDir: tmpDir,
+        }),
+      ).toBe(true);
+      expect(graceFires).toBe(1);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
+  it("returns false and emits a structured v4 warn when the JSONL never appears", async () => {
+    const workspaceDir = await makeWorkspace();
+    const warnSpy = vi.spyOn(cliBackendLog, "warn").mockImplementation(() => undefined);
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
+      handler: (...args: unknown[]) => void,
+      delay?: number,
+    ) => {
+      if (delay === GRACE_MS) {
+        handler();
+        return 0 as unknown as ReturnType<typeof setTimeout>;
+      }
+      return 0 as unknown as ReturnType<typeof setTimeout>;
+    }) as typeof setTimeout);
+
+    try {
+      expect(
+        await claudeCliSessionTranscriptHasContent({
+          sessionId: "ghost-session",
+          workspaceDir,
+          homeDir: tmpDir,
+        }),
+      ).toBe(false);
+      const v4Warnings = warnSpy.mock.calls.filter(
+        ([msg]) => typeof msg === "string" && msg.startsWith("claude-cli transcript probe v4 miss"),
+      );
+      expect(v4Warnings).toHaveLength(1);
+      const message = v4Warnings[0]?.[0];
+      expect(message).toContain("sessionId=ghost-session");
+      expect(message).toContain(`grace ${GRACE_MS}ms`);
+      expect(message).toContain("fileExists=false");
+      expect(message).toContain(
+        `expectedPath=${claudeCliSessionTranscriptPath({
+          sessionId: "ghost-session",
+          workspaceDir,
+          homeDir: tmpDir,
+        })}`,
+      );
+    } finally {
+      setTimeoutSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("returns false and emits a v4 warn flagging fileExists=true when the JSONL stays headerless", async () => {
+    const workspaceDir = await makeWorkspace();
+    const sessionId = "user-header-only";
+    await writeClaudeProjectFile(
+      workspaceDir,
+      sessionId,
+      `${JSON.stringify({
+        type: "user",
+        message: { role: "user", content: [{ type: "text", text: "hi" }] },
+      })}\n`,
+    );
+
+    const warnSpy = vi.spyOn(cliBackendLog, "warn").mockImplementation(() => undefined);
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
+      handler: (...args: unknown[]) => void,
+      delay?: number,
+    ) => {
+      if (delay === GRACE_MS) {
+        handler();
+        return 0 as unknown as ReturnType<typeof setTimeout>;
+      }
+      return 0 as unknown as ReturnType<typeof setTimeout>;
+    }) as typeof setTimeout);
+
+    try {
+      expect(
+        await claudeCliSessionTranscriptHasContent({
+          sessionId,
+          workspaceDir,
+          homeDir: tmpDir,
+        }),
+      ).toBe(false);
+      const v4Warnings = warnSpy.mock.calls.filter(
+        ([msg]) => typeof msg === "string" && msg.startsWith("claude-cli transcript probe v4 miss"),
+      );
+      expect(v4Warnings).toHaveLength(1);
+      expect(v4Warnings[0]?.[0]).toContain("fileExists=true");
+    } finally {
+      setTimeoutSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
   });
 });
 

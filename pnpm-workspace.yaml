@@ -37,6 +37,11 @@ minimumReleaseAgeExclude:
   - "@earendil-works/pi-tui"
   - "@google/genai@2.6.0"
   - "@larksuiteoapi/node-sdk@1.66.0"
+  - "@microsoft/teams.api@2.0.12"
+  - "@microsoft/teams.apps@2.0.12"
+  - "@microsoft/teams.cards@2.0.12"
+  - "@microsoft/teams.common@2.0.12"
+  - "@microsoft/teams.graph@2.0.12"
   - "@openai/codex"
   - "@openai/codex-*"
   - "@pierre/diffs@1.2.3"
@@ -115,4 +120,4 @@ packageExtensions:
         optional: true
 
 patchedDependencies:
-  '@agentclientprotocol/claude-agent-acp@0.37.0': patches/@agentclientprotocol__claude-agent-acp@0.37.0.patch
+  "@agentclientprotocol/claude-agent-acp@0.37.0": patches/@agentclientprotocol__claude-agent-acp@0.37.0.patch

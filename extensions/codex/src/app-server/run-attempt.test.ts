@@ -273,22 +273,18 @@ async function buildCodexTurnContextForTest(
     cwd: workspaceDir,
     appServer: resolveCodexAppServerRuntimeOptions({}),
     promptText: codexTurnPromptText,
-    turnScopedDeveloperInstructions:
-      workspaceBootstrapContext.turnScopedDeveloperInstructions,
+    turnScopedDeveloperInstructions: workspaceBootstrapContext.turnScopedDeveloperInstructions,
     heartbeatCollaborationInstructions:
       workspaceBootstrapContext.heartbeatCollaborationInstructions,
   });
   const collaborationInstructions =
     turnStartParams.collaborationMode?.settings?.developer_instructions ?? "";
-  const inputText =
-    turnStartParams.input?.find((item) => item.type === "text")?.text ?? "";
+  const inputText = turnStartParams.input?.find((item) => item.type === "text")?.text ?? "";
   const systemPromptReport = buildCodexSystemPromptReport({
     attempt: params,
     sessionKey: params.sessionKey ?? params.sessionId,
     workspaceDir,
-    developerInstructions: [threadDeveloperInstructions, collaborationInstructions].join(
-      "\n\n",
-    ),
+    developerInstructions: [threadDeveloperInstructions, collaborationInstructions].join("\n\n"),
     workspaceBootstrapContext,
     skillsPrompt: "",
     tools: dynamicTools,
@@ -1974,9 +1970,7 @@ describe("runCodexAppServerAttempt", () => {
       developerInstructions?: string;
     };
     expect(threadStartParams.config?.instructions).toBeUndefined();
-    expect(threadStartParams.developerInstructions).toContain(
-      "OpenClaw Workspace Instructions",
-    );
+    expect(threadStartParams.developerInstructions).toContain("OpenClaw Workspace Instructions");
     expect(threadStartParams.developerInstructions).toContain(toolGuidance);
     expect(threadStartParams.developerInstructions).not.toContain(agentsGuidance);
     expect(threadStartParams.developerInstructions).not.toContain(soulGuidance);
@@ -2004,10 +1998,8 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).toBe("hello");
     expect(inputText).not.toContain(agentsGuidance);
     expect(result.systemPromptReport?.systemPrompt.chars).toBe(
-      [
-        threadStartParams.developerInstructions ?? "",
-        collaborationInstructions,
-      ].join("\n\n").length,
+      [threadStartParams.developerInstructions ?? "", collaborationInstructions].join("\n\n")
+        .length,
     );
   });
 
@@ -2517,6 +2509,27 @@ describe("runCodexAppServerAttempt", () => {
     const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
       pluginConfig: { appServer: { mode: "yolo" } },
     });
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const startRequest = harness.requests.find((request) => request.method === "thread/start");
+    const startParams = startRequest?.params as Record<string, unknown> | undefined;
+    expect(startParams?.approvalPolicy).toBe("never");
+    expect(startParams?.sandbox).toBe("danger-full-access");
+  });
+
+  it("keeps normalized full exec mode unpromoted when OpenClaw tool policy exists", async () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: vi.fn() }]),
+    );
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.config = { tools: { exec: { mode: "full" } } } as never;
+
+    const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;

@@ -6,10 +6,12 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import {
+  MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN,
   clearPluginStateStoreForTests,
   closePluginStateSqliteStore,
   createCorePluginStateKeyedStore,
   createPluginStateKeyedStore,
+  createPluginStateSyncKeyedStore,
   PluginStateStoreError,
   probePluginStateStore,
   resetPluginStateStoreForTests,
@@ -75,6 +77,22 @@ describe("plugin state keyed store", () => {
         maxEntries: 10,
       });
       await expect(reopened.lookup("interaction:1")).resolves.toEqual({ count: 1 });
+    });
+  });
+
+  it("supports synchronous keyed store callers", async () => {
+    await withPluginStateTestState(async () => {
+      const store = createPluginStateSyncKeyedStore<{ count: number }>("discord", {
+        namespace: "sync-components",
+        maxEntries: 10,
+      });
+
+      expect(store.registerIfAbsent("interaction:1", { count: 1 })).toBe(true);
+      expect(store.registerIfAbsent("interaction:1", { count: 2 })).toBe(false);
+      expect(store.lookup("interaction:1")).toEqual({ count: 1 });
+      expect(store.entries()).toMatchObject([{ key: "interaction:1", value: { count: 1 } }]);
+      expect(store.consume("interaction:1")).toEqual({ count: 1 });
+      expect(store.lookup("interaction:1")).toBeUndefined();
     });
   });
 
@@ -210,7 +228,7 @@ describe("plugin state keyed store", () => {
       expect((await evicting.entries()).map((entry) => entry.key)).toEqual(["b", "c"]);
 
       seedPluginStateEntriesForTests([
-        ...Array.from({ length: 5_999 }, (_, entryIndex) => ({
+        ...Array.from({ length: MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN - 1 }, (_, entryIndex) => ({
           pluginId: "limited-plugin",
           namespace: "limit",
           key: `k-${entryIndex}`,
@@ -225,7 +243,7 @@ describe("plugin state keyed store", () => {
       ]);
       const limited = createPluginStateKeyedStore("limited-plugin", {
         namespace: "limit",
-        maxEntries: 6_001,
+        maxEntries: MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN + 1,
       });
       const sibling = createPluginStateKeyedStore("limited-plugin", {
         namespace: "sibling",
@@ -342,7 +360,7 @@ describe("plugin state keyed store", () => {
   it("evicts current namespace rows when sibling namespaces consume plugin row budget", async () => {
     await withPluginStateTestState(async () => {
       seedPluginStateEntriesForTests([
-        ...Array.from({ length: 5_989 }, (_, entryIndex) => ({
+        ...Array.from({ length: MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN - 11 }, (_, entryIndex) => ({
           pluginId: "telegram",
           namespace: "telegram.message-cache",
           key: `k-${entryIndex}`,
@@ -358,7 +376,7 @@ describe("plugin state keyed store", () => {
 
       const messageStore = createPluginStateKeyedStore("telegram", {
         namespace: "telegram.message-cache",
-        maxEntries: 6_000,
+        maxEntries: MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN,
       });
       const topicStore = createPluginStateKeyedStore("telegram", {
         namespace: "telegram.topic-name-cache",
@@ -378,7 +396,9 @@ describe("plugin state keyed store", () => {
         kind: "topic",
         entryIndex: 0,
       });
-      await expect(messageStore.entries()).resolves.toHaveLength(5_989);
+      await expect(messageStore.entries()).resolves.toHaveLength(
+        MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN - 11,
+      );
       await expect(topicStore.entries()).resolves.toHaveLength(11);
     });
   });
@@ -436,7 +456,7 @@ describe("plugin state keyed store", () => {
   it("rejects plugin overflow when the current namespace cannot shed old rows", async () => {
     await withPluginStateTestState(async () => {
       seedPluginStateEntriesForTests(
-        Array.from({ length: 6_000 }, (_, entryIndex) => ({
+        Array.from({ length: MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN }, (_, entryIndex) => ({
           pluginId: "telegram",
           namespace: "telegram.topic-name-cache",
           key: `topic-${entryIndex}`,
@@ -446,11 +466,11 @@ describe("plugin state keyed store", () => {
 
       const messageStore = createPluginStateKeyedStore("telegram", {
         namespace: "telegram.message-cache",
-        maxEntries: 6_000,
+        maxEntries: MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN,
       });
       const topicStore = createPluginStateKeyedStore("telegram", {
         namespace: "telegram.topic-name-cache",
-        maxEntries: 6_000,
+        maxEntries: MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN,
       });
 
       await expectPluginStateStoreError(messageStore.register("new-message", { fresh: true }), {
