@@ -1451,6 +1451,37 @@ describe("tryDispatchAcpReply", () => {
     expect(dispatcherCall(dispatcher.sendFinalReply).text).toContain("ACP metadata is missing.");
   });
 
+  it("unbinds stale bound conversations before surfacing missing-cwd ACP resolution errors", async () => {
+    const canonicalSessionKey = "agent:main:main";
+    managerMocks.resolveSession.mockReturnValue({
+      kind: "stale",
+      sessionKey: canonicalSessionKey,
+      error: new AcpRuntimeError(
+        "ACP_SESSION_INIT_FAILED",
+        "working directory does not exist: /home/bob/missing",
+      ),
+    });
+    bindingServiceMocks.unbind.mockResolvedValueOnce([]);
+    const { dispatcher } = createDispatcher();
+
+    await runDispatch({
+      bodyForAgent: "test",
+      dispatcher,
+      sessionKeyOverride: "main",
+    });
+
+    expect(managerMocks.runTurn).not.toHaveBeenCalled();
+    expect(bindingServiceMocks.unbind).toHaveBeenCalledTimes(1);
+    expect(bindingServiceMocks.unbind).toHaveBeenCalledWith({
+      targetSessionKey: canonicalSessionKey,
+      reason: "acp-session-init-failed",
+    });
+    expect(dispatcherCall(dispatcher.sendFinalReply).isError).toBe(true);
+    expect(dispatcherCall(dispatcher.sendFinalReply).text).toContain(
+      "working directory does not exist",
+    );
+  });
+
   it("does not unbind valid bindings on generic ACP runTurn init failure", async () => {
     setReadyAcpResolution();
     // Match the post-reset module instance so dispatch-acp preserves the ACP error code.
@@ -1469,6 +1500,54 @@ describe("tryDispatchAcpReply", () => {
     expect(dispatcherCall(dispatcher.sendFinalReply).text).toContain(
       "Could not initialize ACP session runtime.",
     );
+  });
+
+  it("unbinds stale bindings on generic ACP init failure when the persisted cwd is missing", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-missing-acp-cwd-"));
+    const missingCwd = path.join(root, "removed-workspace");
+    managerMocks.resolveSession.mockReturnValue({
+      kind: "ready",
+      sessionKey,
+      meta: createAcpSessionMeta({
+        runtimeOptions: {
+          cwd: missingCwd,
+        },
+      }),
+    });
+    managerMocks.runTurn.mockRejectedValueOnce(
+      new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "Could not initialize ACP session runtime."),
+    );
+    bindingServiceMocks.unbind.mockResolvedValueOnce([
+      {
+        bindingId: "telegram:default:8352721935",
+        targetSessionKey: sessionKey,
+        targetKind: "session",
+        conversation: {
+          channel: "telegram",
+          accountId: "default",
+          conversationId: "8352721935",
+        },
+        status: "active",
+        boundAt: 0,
+      },
+    ]);
+    const { dispatcher } = createDispatcher();
+
+    try {
+      await runDispatch({
+        bodyForAgent: "test",
+        dispatcher,
+      });
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+
+    expect(bindingServiceMocks.unbind).toHaveBeenCalledTimes(1);
+    expect(bindingServiceMocks.unbind).toHaveBeenCalledWith({
+      targetSessionKey: sessionKey,
+      reason: "acp-session-init-failed",
+    });
+    expect(dispatcherCall(dispatcher.sendFinalReply).isError).toBe(true);
   });
 
   it("unbinds stale bindings on ACP runTurn missing-metadata failures", async () => {
