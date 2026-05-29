@@ -91,7 +91,6 @@ overrides:
   yauzl: 3.2.1
   protobufjs: 8.4.0
   uuid: 14.0.0
-  libsodium-wrappers-sumo: 0.7.15
 
 allowBuilds:
   "@openclaw/fs-safe": true

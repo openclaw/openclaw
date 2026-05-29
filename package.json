@@ -1844,7 +1844,6 @@
     "@openclaw/fs-safe": "0.3.0",
     "@openclaw/proxyline": "0.3.3",
     "@silvia-odwyer/photon-node": "0.3.4",
-    "age-encryption": "0.1.5",
     "chalk": "5.6.2",
     "chokidar": "5.0.0",
     "clawpdf": "0.2.0",
@@ -1864,7 +1863,6 @@
     "json5": "2.2.3",
     "jszip": "3.10.1",
     "kysely": "0.29.2",
-    "libsodium-wrappers-sumo": "0.7.15",
     "linkedom": "0.18.12",
     "markdown-it": "14.2.0",
     "minimatch": "10.2.5",
@@ -1932,8 +1930,7 @@
     "follow-redirects": "1.16.0",
     "ip-address": "10.2.0",
     "node-domexception": "npm:@nolyfill/domexception@1.0.28",
-    "uuid": "14.0.0",
-    "libsodium-wrappers-sumo": "0.7.15"
+    "uuid": "14.0.0"
   },
   "engines": {
     "node": ">=22.19.0"

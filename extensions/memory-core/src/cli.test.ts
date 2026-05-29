@@ -585,7 +585,9 @@ describe("memory cli", () => {
         await runMemoryCli(["export", "--encrypted", "--out", backupPath, "--json"]);
         await runMemoryCli(["import", "--encrypted", "--in", backupPath, "--target", restoreDir]);
 
-        await expect(fs.readFile(backupPath, "utf-8")).resolves.toContain("age-encryption.org");
+        await expect(fs.readFile(backupPath, "utf-8")).resolves.toContain(
+          "openclaw-memory-backup-v1",
+        );
         await expect(fs.readFile(path.join(restoreDir, "MEMORY.md"), "utf-8")).resolves.toBe(
           "Remember local-first privacy.\n",
         );

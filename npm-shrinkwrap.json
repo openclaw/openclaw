@@ -26,7 +26,6 @@
         "@openclaw/fs-safe": "0.3.0",
         "@openclaw/proxyline": "0.3.3",
         "@silvia-odwyer/photon-node": "0.3.4",
-        "age-encryption": "0.1.5",
         "chalk": "5.6.2",
         "chokidar": "5.0.0",
         "clawpdf": "0.2.0",
@@ -46,7 +45,6 @@
         "json5": "2.2.3",
         "jszip": "3.10.1",
         "kysely": "0.29.2",
-        "libsodium-wrappers-sumo": "0.7.15",
         "linkedom": "0.18.12",
         "markdown-it": "14.2.0",
         "minimatch": "10.2.5",
@@ -990,16 +988,6 @@
         "node": ">= 0.6"
       }
     },
-    "node_modules/age-encryption": {
-      "version": "0.1.5",
-      "resolved": "https://registry.npmjs.org/age-encryption/-/age-encryption-0.1.5.tgz",
-      "integrity": "sha512-dCYck6yQczeJHq+Jj+nc3ziBAxcod1DLlNkyLgwJyIOXh32NzzKm3kybXCZuDhecgWLGp1FDEUW2QxqGuHtjuw==",
-      "license": "BSD-3-Clause",
-      "dependencies": {
-        "bech32-buffer": "^0.2.1",
-        "libsodium-wrappers-sumo": "^0.7.11"
-      }
-    },
     "node_modules/agent-base": {
       "version": "7.1.4",
       "resolved": "https://registry.npmjs.org/agent-base/-/agent-base-7.1.4.tgz",
@@ -1112,15 +1100,6 @@
         }
       ],
       "license": "MIT"
-    },
-    "node_modules/bech32-buffer": {
-      "version": "0.2.1",
-      "resolved": "https://registry.npmjs.org/bech32-buffer/-/bech32-buffer-0.2.1.tgz",
-      "integrity": "sha512-fCG1TyZuCN48Sdw97p/IR39fvqpFlWDVpG7qnuU1Uc3+Xtc/0uqAp8U7bMW/bGuVF5CcNVIXwxQsWwUr6un6FQ==",
-      "license": "Apache-2.0",
-      "engines": {
-        "node": ">=8"
-      }
     },
     "node_modules/bignumber.js": {
       "version": "9.3.1",
@@ -2490,21 +2469,6 @@
       "license": "MIT",
       "engines": {
         "node": ">=22.0.0"
-      }
-    },
-    "node_modules/libsodium-sumo": {
-      "version": "0.7.16",
-      "resolved": "https://registry.npmjs.org/libsodium-sumo/-/libsodium-sumo-0.7.16.tgz",
-      "integrity": "sha512-x6atrz2AdXCJg6G709x9W9TTJRI6/0NcL5dD0l5GGVqNE48UJmDsjO4RUWYTeyXXUpg+NXZ2SHECaZnFRYzwGA==",
-      "license": "ISC"
-    },
-    "node_modules/libsodium-wrappers-sumo": {
-      "version": "0.7.15",
-      "resolved": "https://registry.npmjs.org/libsodium-wrappers-sumo/-/libsodium-wrappers-sumo-0.7.15.tgz",
-      "integrity": "sha512-aSWY8wKDZh5TC7rMvEdTHoyppVq/1dTSAeAR7H6pzd6QRT3vQWcT5pGwCotLcpPEOLXX6VvqihSPkpEhYAjANA==",
-      "license": "ISC",
-      "dependencies": {
-        "libsodium-sumo": "^0.7.15"
       }
     },
     "node_modules/lie": {

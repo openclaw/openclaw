@@ -1,6 +1,12 @@
+import { createCipheriv, createDecipheriv, randomBytes, scrypt } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import ageInit from "age-encryption";
+import { promisify } from "node:util";
+
+const encryptedBackupMagic = "openclaw-memory-backup-v1";
+const encryptedBackupCipher = "aes-256-gcm";
+const encryptedBackupKdf = "scrypt";
+const scryptAsync = promisify(scrypt);
 
 export type MemoryBackupFile = {
   path: string;
@@ -110,6 +116,10 @@ export async function collectMemoryBackupArchive(params: {
   };
 }
 
+async function deriveBackupKey(passphrase: string, salt: Buffer): Promise<Buffer> {
+  return (await scryptAsync(passphrase, salt, 32)) as Buffer;
+}
+
 export async function encryptMemoryBackupArchive(
   archive: MemoryBackupArchive,
   passphrase: string,
@@ -117,12 +127,22 @@ export async function encryptMemoryBackupArchive(
   if (!passphrase) {
     throw new Error("Memory backup passphrase is required.");
   }
-  const { Encrypter } = await ageInit();
-  const plaintext = JSON.stringify(archive);
-  const encrypter = new Encrypter();
-  encrypter.setPassphrase(passphrase);
-  const ciphertext = encrypter.encrypt(new TextEncoder().encode(plaintext));
-  return Buffer.from(ciphertext);
+  const plaintext = Buffer.from(JSON.stringify(archive), "utf8");
+  const salt = randomBytes(16);
+  const iv = randomBytes(12);
+  const key = await deriveBackupKey(passphrase, salt);
+  const cipher = createCipheriv(encryptedBackupCipher, key, iv);
+  const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+  const payload = {
+    magic: encryptedBackupMagic,
+    kdf: encryptedBackupKdf,
+    cipher: encryptedBackupCipher,
+    salt: salt.toString("base64"),
+    iv: iv.toString("base64"),
+    tag: cipher.getAuthTag().toString("base64"),
+    data: ciphertext.toString("base64"),
+  };
+  return Buffer.from(JSON.stringify(payload), "utf8");
 }
 
 export async function decryptMemoryBackupArchive(
@@ -132,11 +152,39 @@ export async function decryptMemoryBackupArchive(
   if (!passphrase) {
     throw new Error("Memory backup passphrase is required.");
   }
-  const { Decrypter } = await ageInit();
-  const decrypter = new Decrypter();
-  decrypter.addPassphrase(passphrase);
-  const decrypted = decrypter.decrypt(new Uint8Array(input));
-  const plaintext = new TextDecoder().decode(decrypted);
+  let payload: Partial<{
+    magic: string;
+    kdf: string;
+    cipher: string;
+    salt: string;
+    iv: string;
+    tag: string;
+    data: string;
+  }>;
+  try {
+    payload = JSON.parse(input.toString("utf8"));
+  } catch (err) {
+    throw new Error("Unsupported encrypted memory backup archive.", { cause: err });
+  }
+  if (
+    payload.magic !== encryptedBackupMagic ||
+    payload.kdf !== encryptedBackupKdf ||
+    payload.cipher !== encryptedBackupCipher ||
+    typeof payload.salt !== "string" ||
+    typeof payload.iv !== "string" ||
+    typeof payload.tag !== "string" ||
+    typeof payload.data !== "string"
+  ) {
+    throw new Error("Unsupported encrypted memory backup archive.");
+  }
+  const salt = Buffer.from(payload.salt, "base64");
+  const iv = Buffer.from(payload.iv, "base64");
+  const tag = Buffer.from(payload.tag, "base64");
+  const ciphertext = Buffer.from(payload.data, "base64");
+  const key = await deriveBackupKey(passphrase, salt);
+  const decipher = createDecipheriv(encryptedBackupCipher, key, iv);
+  decipher.setAuthTag(tag);
+  const plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString("utf8");
   const archive = JSON.parse(plaintext) as Partial<MemoryBackupArchive>;
   if (archive.version !== 1 || !Array.isArray(archive.files)) {
     throw new Error("Unsupported memory backup archive.");

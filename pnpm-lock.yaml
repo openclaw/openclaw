@@ -31,7 +31,6 @@ overrides:
   yauzl: 3.2.1
   protobufjs: 8.4.0
   uuid: 14.0.0
-  libsodium-wrappers-sumo: 0.7.15
 
 packageExtensionsChecksum: sha256-zZ8fyodhMTumshonC7kktCqTPsiHL3UAyS9vltFAlMo=
 
@@ -90,9 +89,6 @@ importers:
       '@silvia-odwyer/photon-node':
         specifier: 0.3.4
         version: 0.3.4
-      age-encryption:
-        specifier: 0.1.5
-        version: 0.1.5
       chalk:
         specifier: 5.6.2
         version: 5.6.2
@@ -150,9 +146,6 @@ importers:
       kysely:
         specifier: 0.29.2
         version: 0.29.2
-      libsodium-wrappers-sumo:
-        specifier: 0.7.15
-        version: 0.7.15
       linkedom:
         specifier: 0.18.12
         version: 0.18.12
@@ -1018,9 +1011,6 @@ importers:
 
   extensions/memory-core:
     dependencies:
-      age-encryption:
-        specifier: 0.1.5
-        version: 0.1.5
       chokidar:
         specifier: 5.0.0
         version: 5.0.0
@@ -4342,9 +4332,6 @@ packages:
     engines: {node: '>=22.13.0'}
     hasBin: true
 
-  age-encryption@0.1.5:
-    resolution: {integrity: sha512-dCYck6yQczeJHq+Jj+nc3ziBAxcod1DLlNkyLgwJyIOXh32NzzKm3kybXCZuDhecgWLGp1FDEUW2QxqGuHtjuw==}
-
   agent-base@7.1.4:
     resolution: {integrity: sha512-MnA+YT8fwfJPgBx3m60MNqakm30XOkyIoH1y6huTQvC0PwZG7ki8NacLBcrPbNoo8vEZy7Jpuk7+jMO+CUovTQ==}
     engines: {node: '>= 14'}
@@ -4523,10 +4510,6 @@ packages:
 
   base64-js@1.5.1:
     resolution: {integrity: sha512-AKpaYlHn8t4SVbOHCy+b5+KKgvR4vrsD8vbvrbiQJps7fKDTkjkDry6ji0rUJjC0kzbNePLwzxq8iypo41qeWA==}
-
-  bech32-buffer@0.2.1:
-    resolution: {integrity: sha512-fCG1TyZuCN48Sdw97p/IR39fvqpFlWDVpG7qnuU1Uc3+Xtc/0uqAp8U7bMW/bGuVF5CcNVIXwxQsWwUr6un6FQ==}
-    engines: {node: '>=8'}
 
   bidi-js@1.0.3:
     resolution: {integrity: sha512-RKshQI1R3YQ+n9YJz2QQ147P66ELpa1FQEg20Dk8oW9t2KgLbpDLLp9aGZ7y8WHSshDknG0bknqGw5/tyCs5tw==}
@@ -5550,12 +5533,6 @@ packages:
 
   libsignal@6.0.0:
     resolution: {integrity: sha512-d/5V3YFtDljbFMufz4ncyUYGYhJl+vzAe+c2EFFBQ6bz1h8Q3IOMEGXYMzlibU60I+e8GagMMpji18iez3P1hA==}
-
-  libsodium-sumo@0.7.16:
-    resolution: {integrity: sha512-x6atrz2AdXCJg6G709x9W9TTJRI6/0NcL5dD0l5GGVqNE48UJmDsjO4RUWYTeyXXUpg+NXZ2SHECaZnFRYzwGA==}
-
-  libsodium-wrappers-sumo@0.7.15:
-    resolution: {integrity: sha512-aSWY8wKDZh5TC7rMvEdTHoyppVq/1dTSAeAR7H6pzd6QRT3vQWcT5pGwCotLcpPEOLXX6VvqihSPkpEhYAjANA==}
 
   lie@3.3.0:
     resolution: {integrity: sha512-UaiMJzeWRlEujzAuw5LokY1L5ecNQYZKfmyZ9L7wDHb/p5etKaxXhohBcrw0EYby+G/NA52vRSN4N39dxHAIwQ==}
@@ -9970,11 +9947,6 @@ snapshots:
       - bare-buffer
       - react-native-b4a
 
-  age-encryption@0.1.5:
-    dependencies:
-      bech32-buffer: 0.2.1
-      libsodium-wrappers-sumo: 0.7.15
-
   agent-base@7.1.4: {}
 
   ajv-formats@3.0.1(ajv@8.20.0):
@@ -10142,8 +10114,6 @@ snapshots:
   base-x@5.0.1: {}
 
   base64-js@1.5.1: {}
-
-  bech32-buffer@0.2.1: {}
 
   bidi-js@1.0.3:
     dependencies:
@@ -11296,12 +11266,6 @@ snapshots:
     dependencies:
       curve25519-js: 0.0.4
       protobufjs: 8.4.0
-
-  libsodium-sumo@0.7.16: {}
-
-  libsodium-wrappers-sumo@0.7.15:
-    dependencies:
-      libsodium-sumo: 0.7.16
 
   lie@3.3.0:
     dependencies:
