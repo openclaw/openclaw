@@ -25,6 +25,12 @@ import {
   transformProviderSystemPrompt,
 } from "../../plugins/provider-runtime.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-key.js";
+import { resolveSkillsPromptForRun } from "../../skills/loading/workspace.js";
+import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
+import {
+  applySkillEnvOverrides,
+  applySkillEnvOverridesFromSnapshot,
+} from "../../skills/runtime/env-overrides.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
@@ -101,12 +107,6 @@ import {
 } from "../session-write-lock.js";
 import { createAgentSession, estimateTokens, SessionManager } from "../sessions/index.js";
 import { detectRuntimeShell } from "../shell-utils.js";
-import {
-  applySkillEnvOverrides,
-  applySkillEnvOverridesFromSnapshot,
-  resolveSkillsPromptForRun,
-} from "../skills.js";
-import { resolveSystemPromptOverride } from "../system-prompt-override.js";
 import { filterRuntimeCompatibleTools } from "../tool-schema-projection.js";
 import { logRuntimeToolSchemaQuarantine } from "../tool-schema-quarantine.js";
 import {
@@ -149,18 +149,13 @@ import { resolveModelAsync } from "./model.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "./replay-history.js";
 import { createEmbeddedAgentResourceLoader } from "./resource-loader.js";
 import { resolveAttemptSpawnWorkspaceDir } from "./run/attempt.thread-helpers.js";
-import { buildEmbeddedSandboxInfo } from "./sandbox-info.js";
+import { buildEmbeddedSandboxInfo, resolveEmbeddedSandboxInfoExecPolicy } from "./sandbox-info.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "./session-manager-cache.js";
-import { resolveEmbeddedRunSkillEntries } from "./skills-runtime.js";
 import {
   resolveEmbeddedAgentBaseStreamFn,
   resolveEmbeddedAgentStreamFn,
 } from "./stream-resolution.js";
-import {
-  applySystemPromptOverrideToSession,
-  buildEmbeddedSystemPrompt,
-  createSystemPromptOverride,
-} from "./system-prompt.js";
+import { applySystemPromptToSession, buildEmbeddedSystemPrompt } from "./system-prompt.js";
 import {
   collectAllowedToolNames,
   collectRegisteredToolNames,
@@ -435,6 +430,7 @@ export async function compactEmbeddedAgentSessionDirect(
   const fallbackAgentId = resolveSessionAgentIds({
     sessionKey: params.sandboxSessionKey ?? params.sessionKey,
     config: params.config,
+    agentId: params.agentId,
   }).sessionAgentId;
   const fallbackSessionKey = params.sandboxSessionKey ?? params.sessionKey ?? params.sessionId;
   try {
@@ -538,6 +534,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
   const earlyAgentIds = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
     config: params.config,
+    agentId: params.agentId,
   });
   const agentDir =
     params.agentDir ?? resolveAgentDir(params.config ?? {}, earlyAgentIds.sessionAgentId);
@@ -633,6 +630,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
   const { sessionAgentId: effectiveSkillAgentId } = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
     config: params.config,
+    agentId: params.agentId,
   });
 
   let restoreSkillEnv: (() => void) | undefined;
@@ -746,6 +744,8 @@ async function compactEmbeddedAgentSessionDirectOnce(
     const runAbortController = new AbortController();
     const toolsRaw = createOpenClawCodingTools({
       exec: {
+        ...params.execOverrides,
+        config: params.config,
         elevated: params.bashElevated,
       },
       sandbox,
@@ -876,6 +876,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
     const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
       sessionKey: params.sessionKey,
       config: params.config,
+      agentId: params.agentId,
     });
     // Resolve channel-specific message actions for system prompt
     const channelActions = runtimeChannel
@@ -919,7 +920,18 @@ async function compactEmbeddedAgentSessionDirectOnce(
         }),
       }),
     };
-    const sandboxInfo = buildEmbeddedSandboxInfo(sandbox, params.bashElevated);
+    const sandboxInfoExecPolicy = resolveEmbeddedSandboxInfoExecPolicy({
+      config: params.config,
+      agentId: sessionAgentId,
+      sessionKey: params.sessionKey,
+      sandboxAvailable: sandbox?.enabled === true,
+      execOverrides: params.execOverrides,
+    });
+    const sandboxInfo = buildEmbeddedSandboxInfo(
+      sandbox,
+      params.bashElevated,
+      sandboxInfoExecPolicy,
+    );
     const reasoningTagHint = isReasoningTagProvider(provider, {
       config: params.config,
       workspaceDir: effectiveWorkspace,
@@ -960,67 +972,60 @@ async function compactEmbeddedAgentSessionDirectOnce(
     };
     const promptContribution =
       runtimePlan.prompt.resolveSystemPromptContribution(promptContributionContext);
-    const buildSystemPromptOverride = (defaultThinkLevel: ThinkLevel) => {
-      const builtSystemPrompt =
-        resolveSystemPromptOverride({
+    const buildSystemPromptText = (defaultThinkLevel: ThinkLevel) => {
+      const builtSystemPrompt = buildEmbeddedSystemPrompt({
+        config: params.config,
+        agentId: sessionAgentId,
+        workspaceDir: effectiveWorkspace,
+        defaultThinkLevel,
+        reasoningLevel: params.reasoningLevel ?? "off",
+        extraSystemPrompt: params.extraSystemPrompt,
+        ownerNumbers: params.ownerNumbers,
+        reasoningTagHint,
+        heartbeatPrompt: resolveHeartbeatPromptForSystemPrompt({
           config: params.config,
           agentId: sessionAgentId,
-        }) ??
-        buildEmbeddedSystemPrompt({
-          config: params.config,
-          agentId: sessionAgentId,
-          workspaceDir: effectiveWorkspace,
-          defaultThinkLevel,
-          reasoningLevel: params.reasoningLevel ?? "off",
-          extraSystemPrompt: params.extraSystemPrompt,
-          ownerNumbers: params.ownerNumbers,
-          reasoningTagHint,
-          heartbeatPrompt: resolveHeartbeatPromptForSystemPrompt({
-            config: params.config,
-            agentId: sessionAgentId,
-            defaultAgentId,
-          }),
-          skillsPrompt,
-          docsPath: openClawReferences.docsPath ?? undefined,
-          sourcePath: openClawReferences.sourcePath ?? undefined,
-          promptMode,
-          promptSurface,
-          sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-          acpEnabled: isAcpRuntimeSpawnAvailable({
-            config: params.config,
-            sandboxed: sandboxInfo?.enabled === true,
-          }),
-          runtimeInfo,
-          reactionGuidance,
-          messageToolHints,
-          sandboxInfo,
-          tools: effectiveTools,
-          userTimezone,
-          userTime,
-          userTimeFormat,
-          contextFiles,
-          promptContribution,
-          nativeCommandGuidanceLines,
-        });
-      return createSystemPromptOverride(
-        transformProviderSystemPrompt({
-          provider,
-          config: params.config,
-          workspaceDir: effectiveWorkspace,
-          context: {
-            config: params.config,
-            agentDir,
-            workspaceDir: effectiveWorkspace,
-            provider,
-            modelId,
-            promptMode,
-            runtimeChannel,
-            runtimeCapabilities,
-            agentId: sessionAgentId,
-            systemPrompt: builtSystemPrompt,
-          },
+          defaultAgentId,
         }),
-      );
+        skillsPrompt,
+        docsPath: openClawReferences.docsPath ?? undefined,
+        sourcePath: openClawReferences.sourcePath ?? undefined,
+        promptMode,
+        promptSurface,
+        sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+        acpEnabled: isAcpRuntimeSpawnAvailable({
+          config: params.config,
+          sandboxed: sandboxInfo?.enabled === true,
+        }),
+        runtimeInfo,
+        reactionGuidance,
+        messageToolHints,
+        sandboxInfo,
+        tools: effectiveTools,
+        userTimezone,
+        userTime,
+        userTimeFormat,
+        contextFiles,
+        promptContribution,
+        nativeCommandGuidanceLines,
+      });
+      return transformProviderSystemPrompt({
+        provider,
+        config: params.config,
+        workspaceDir: effectiveWorkspace,
+        context: {
+          config: params.config,
+          agentDir,
+          workspaceDir: effectiveWorkspace,
+          provider,
+          modelId,
+          promptMode,
+          runtimeChannel,
+          runtimeCapabilities,
+          agentId: sessionAgentId,
+          systemPrompt: builtSystemPrompt,
+        },
+      });
     };
 
     const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config);
@@ -1136,6 +1141,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
         // Rebuild the compaction session on retry so provider wrappers, payload
         // shaping, and the embedded system prompt all reflect the fallback level.
         attemptedThinking.add(thinkLevel);
+        const systemPromptText = buildSystemPromptText(thinkLevel);
         let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
         try {
           const createdSession = await createAgentSession({
@@ -1152,8 +1158,8 @@ async function compactEmbeddedAgentSessionDirectOnce(
             resourceLoader,
           });
           session = createdSession.session;
-          applySystemPromptOverrideToSession(session, buildSystemPromptOverride(thinkLevel)());
           session.setActiveToolsByName(sessionToolAllowlist);
+          applySystemPromptToSession(session, systemPromptText);
           // Compaction builds the same embedded system prompt, so it must flow
           // through the same transport/payload shaping stack as normal turns.
           prepareCompactionSessionAgent({
@@ -1369,6 +1375,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
           await runPostCompactionSideEffects({
             config: params.config,
             sessionKey: params.sessionKey,
+            agentId: sessionAgentId,
             sessionFile: activeSessionFile,
           });
           if (params.config && params.sessionKey && checkpointSnapshot) {

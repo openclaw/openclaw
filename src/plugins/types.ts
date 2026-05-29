@@ -1823,6 +1823,7 @@ export type SpeechProviderPlugin = {
   autoSelectOrder?: number;
   /** Default provider operation timeout in milliseconds when caller/config omit timeoutMs. */
   defaultTimeoutMs?: number;
+  defaultModel?: string;
   models?: readonly string[];
   voices?: readonly string[];
   resolveConfig?: (ctx: SpeechProviderResolveConfigContext) => SpeechProviderConfig;
@@ -1856,6 +1857,7 @@ export type RealtimeTranscriptionProviderPlugin = {
   label: string;
   aliases?: string[];
   defaultModel?: string;
+  models?: readonly string[];
   autoSelectOrder?: number;
   resolveConfig?: (
     ctx: RealtimeTranscriptionProviderResolveConfigContext,
@@ -1881,6 +1883,7 @@ export type RealtimeVoiceProviderPlugin = {
   label: string;
   aliases?: string[];
   defaultModel?: string;
+  models?: readonly string[];
   autoSelectOrder?: number;
   capabilities?: RealtimeVoiceProviderCapabilities;
   resolveConfig?: (ctx: RealtimeVoiceProviderResolveConfigContext) => RealtimeVoiceProviderConfig;

@@ -9,6 +9,7 @@ import { stageQaMockAuthProfiles } from "../extensions/qa-lab/src/providers/shar
 import { buildQaGatewayConfig } from "../extensions/qa-lab/src/qa-gateway-config.js";
 import { resetConfigRuntimeState } from "../src/config/config.js";
 import { startGatewayServer } from "../src/gateway/server.js";
+import { readBoundedResponseText } from "./lib/bounded-response.ts";
 
 type Lane = "normal" | "code";
 
@@ -56,50 +57,8 @@ function timeoutError(message: string) {
   return Object.assign(new Error(message), { code: "ETIMEDOUT" });
 }
 
-function bodyTooLargeError(url: string, byteLimit: number) {
-  return Object.assign(new Error(`HTTP response from ${url} exceeded ${byteLimit} bytes`), {
-    code: "ETOOBIG",
-  });
-}
-
-async function readBoundedResponseText(
-  response: Response,
-  url: string,
-  byteLimit: number,
-  timeoutPromise: Promise<never>,
-) {
-  const contentLength = response.headers.get("content-length");
-  if (contentLength) {
-    const parsedLength = Number(contentLength);
-    if (Number.isSafeInteger(parsedLength) && parsedLength > byteLimit) {
-      await response.body?.cancel().catch(() => {});
-      throw bodyTooLargeError(url, byteLimit);
-    }
-  }
-  if (!response.body) {
-    return "";
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let byteCount = 0;
-  let text = "";
-  try {
-    while (true) {
-      const { done, value } = await Promise.race([reader.read(), timeoutPromise]);
-      if (done) {
-        return text + decoder.decode();
-      }
-      byteCount += value.byteLength;
-      if (byteCount > byteLimit) {
-        await reader.cancel().catch(() => {});
-        throw bodyTooLargeError(url, byteLimit);
-      }
-      text += decoder.decode(value, { stream: true });
-    }
-  } finally {
-    reader.releaseLock();
-  }
+function bodyTooLargeErrorMessage(url: string, byteLimit: number) {
+  return `HTTP response from ${url} exceeded ${byteLimit} bytes`;
 }
 
 async function freePort(): Promise<number> {
@@ -208,7 +167,13 @@ export async function fetchJson(
       }),
       timeoutPromise,
     ]);
-    text = await readBoundedResponseText(response, url, maxBodyBytes, timeoutPromise);
+    text = await readBoundedResponseText(response, url, maxBodyBytes, {
+      createTooLargeError(message) {
+        return Object.assign(new Error(message), { code: "ETOOBIG" });
+      },
+      formatTooLargeMessage: bodyTooLargeErrorMessage,
+      timeoutPromise,
+    });
   } finally {
     if (timeout) {
       clearTimeout(timeout);

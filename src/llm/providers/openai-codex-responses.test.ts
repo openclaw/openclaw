@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "../../shared/number-coercion.js";
 import type { Context, Model } from "../types.js";
 import {
   extractOpenAICodexAccountId,
@@ -147,6 +148,25 @@ describe("streamOpenAICodexResponses transport", () => {
 
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toContain("Request timed out after 5ms");
+  });
+
+  it("caps oversized timeoutMs before creating request abort signals", async () => {
+    stubHangingFetch(MAX_TIMER_TIMEOUT_MS);
+
+    const stream = streamOpenAICodexResponses(model, context, {
+      apiKey: createJwt({
+        "https://api.openai.com/auth": {
+          chatgpt_account_id: "acct-1",
+        },
+      }),
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+      transport: "sse",
+    });
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toContain(`Request timed out after ${MAX_TIMER_TIMEOUT_MS}ms`);
   });
 
   it("honors timeoutMs for default websocket transport requests", async () => {

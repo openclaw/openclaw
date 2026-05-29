@@ -4,7 +4,7 @@ import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snap
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginManifestModelIdNormalizationProvider } from "./manifest.js";
 import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
-import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js";
+import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-workspace-state.js";
 
 type ManifestModelIdNormalizationLookupParams = {
   config?: OpenClawConfig;

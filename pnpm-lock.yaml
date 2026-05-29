@@ -134,9 +134,6 @@ importers:
       ignore:
         specifier: 7.0.5
         version: 7.0.5
-      ipaddr.js:
-        specifier: 2.4.0
-        version: 2.4.0
       jiti:
         specifier: 2.7.0
         version: 2.7.0
@@ -185,9 +182,6 @@ importers:
       tar:
         specifier: 7.5.15
         version: 7.5.15
-      tokenjuice:
-        specifier: 0.8.0
-        version: 0.8.0
       tree-sitter-bash:
         specifier: 0.25.1
         version: 0.25.1
@@ -545,8 +539,40 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/codex-supervisor:
+    dependencies:
+      '@modelcontextprotocol/sdk':
+        specifier: 1.29.0
+        version: 1.29.0(zod@4.4.3)
+      typebox:
+        specifier: 1.1.38
+        version: 1.1.38
+      ws:
+        specifier: 8.21.0
+        version: 8.21.0
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/comfy:
     devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
+  extensions/copilot:
+    dependencies:
+      '@github/copilot-sdk':
+        specifier: 1.0.0-beta.4
+        version: 1.0.0-beta.4
+    devDependencies:
+      '@github/copilot':
+        specifier: 1.0.48
+        version: 1.0.48
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
@@ -1436,12 +1462,6 @@ importers:
         specifier: workspace:*
         version: link:../..
 
-  extensions/speech-core:
-    devDependencies:
-      '@openclaw/plugin-sdk':
-        specifier: workspace:*
-        version: link:../../packages/plugin-sdk
-
   extensions/stepfun:
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -1542,6 +1562,9 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/tts-local-cli:
     devDependencies:
@@ -1674,6 +1697,19 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/workboard:
+    dependencies:
+      typebox:
+        specifier: 1.1.38
+        version: 1.1.38
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/xai:
     dependencies:
       typebox:
@@ -1743,13 +1779,47 @@ importers:
         specifier: 2.9.0
         version: 2.9.0
 
+  packages/gateway-client:
+    dependencies:
+      '@openclaw/gateway-protocol':
+        specifier: workspace:*
+        version: link:../gateway-protocol
+      ipaddr.js:
+        specifier: 2.4.0
+        version: 2.4.0
+      ws:
+        specifier: 8.21.0
+        version: 8.21.0
+
+  packages/gateway-protocol:
+    dependencies:
+      typebox:
+        specifier: 1.1.38
+        version: 1.1.38
+
   packages/memory-host-sdk: {}
+
+  packages/net-policy:
+    dependencies:
+      ipaddr.js:
+        specifier: 2.4.0
+        version: 2.4.0
 
   packages/plugin-package-contract: {}
 
   packages/plugin-sdk: {}
 
-  packages/sdk: {}
+  packages/sdk:
+    dependencies:
+      '@openclaw/gateway-client':
+        specifier: workspace:*
+        version: link:../gateway-client
+
+  packages/speech-core:
+    dependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   ui:
     dependencies:
@@ -2526,6 +2596,50 @@ packages:
     peerDependenciesMeta:
       '@noble/hashes':
         optional: true
+
+  '@github/copilot-darwin-arm64@1.0.48':
+    resolution: {integrity: sha512-82MLoMQwPVVFM8EYssihFxSEPUYtZADE8rMzQ3jG9HgRg2qjQSfnHQS1mKe64dlXswZUK/onw6/8kjnW5I4pPg==}
+    cpu: [arm64]
+    os: [darwin]
+    hasBin: true
+
+  '@github/copilot-darwin-x64@1.0.48':
+    resolution: {integrity: sha512-1VQ5r5F0h8GwboXmZTcutqcJT+iCpPXAF27QqodmpKEvW9aYfG8g9X2kFJOzDZoX+SA3Uaka9qXdYKF2xT6Uog==}
+    cpu: [x64]
+    os: [darwin]
+    hasBin: true
+
+  '@github/copilot-linux-arm64@1.0.48':
+    resolution: {integrity: sha512-PmsGnb0DZlI+Bf53l9HM1PAHHkUcMyB4y8v/7tnC/jDOV5dGF124n0HnDNfJLOLiJGiQGodthIif6QtPaAxpeA==}
+    cpu: [arm64]
+    os: [linux]
+    hasBin: true
+
+  '@github/copilot-linux-x64@1.0.48':
+    resolution: {integrity: sha512-b2cc4euSlke9fYHXXsS2EL9UYbctN0h4lZvtAcKUDY+RCnpYAQOVBZK+c1R9dQrtsT6Z/yUv7PuFPSs8qdtc2Q==}
+    cpu: [x64]
+    os: [linux]
+    hasBin: true
+
+  '@github/copilot-sdk@1.0.0-beta.4':
+    resolution: {integrity: sha512-DcVMN2FWODxamFS9nTls8AW3QsyMnj6JDVBNRVBXaTY9kEhGHCjt8lp7sJp95/vyl52hvEb4/68Oh6SdFU9O/Q==}
+    engines: {node: '>=20.0.0'}
+
+  '@github/copilot-win32-arm64@1.0.48':
+    resolution: {integrity: sha512-VEEOwddtpJ3DTbXGhnK6K8im4ofl9m08q1m/K++sNvWV8wkkOSOQBTiPdyUsuU/TXAoFhb8tZMIJv+6NnMBtMw==}
+    cpu: [arm64]
+    os: [win32]
+    hasBin: true
+
+  '@github/copilot-win32-x64@1.0.48':
+    resolution: {integrity: sha512-93BzvXLPHTyy1gWBXQY/IWIHor4IAwZuuo7/obG80/Qa6U0WeaN9slz/FBJvrsgVNrrRfEID5Xm3At+S6Kj67Q==}
+    cpu: [x64]
+    os: [win32]
+    hasBin: true
+
+  '@github/copilot@1.0.48':
+    resolution: {integrity: sha512-U5SzyTEq376UU9A4Sd3TEKz+Y2nRUd90cLO4Hc1otaB8yFSy9Ur2UVGcI2/wCoodL3a39k6WbdgNzFxr0gWFRQ==}
+    hasBin: true
 
   '@google/genai@2.6.0':
     resolution: {integrity: sha512-HjoW3mPuEn7pnuKABJl9VbDoWDSF4nbwYKYvYYor7YjPeDxrrBxHzu2d1Prcd+BAuC4w+85UP6y7ZdcrQAoO7g==}
@@ -6971,6 +7085,10 @@ packages:
     resolution: {integrity: sha512-Dhxzh5HZuiHQhbvTW9AMetFfBHDMYpo23Uo9btPXgdYP+3T5S+p+jgNy7spra+veYhBP2dCSgxR/i2Y02h5/6w==}
     engines: {node: '>=0.10.0'}
 
+  vscode-jsonrpc@8.2.1:
+    resolution: {integrity: sha512-kdjOSJ2lLIn7r1rtrMbbNCHjyMPfRnowdKjBQ+mGq6NAW5QY2bEZC/khaC5OR8svbbjvLEaIXkOq45e2X9BIbQ==}
+    engines: {node: '>=14.0.0'}
+
   w3c-xmlserializer@5.0.0:
     resolution: {integrity: sha512-o8qghlI8NZHU1lLPrpi2+Uq7abh4GGPpYANlalzWxyWteJOCsr/P+oPBA49TOLu5FTZO4d3F9MnWJfiMo4BkmA==}
     engines: {node: '>=18'}
@@ -8106,6 +8224,39 @@ snapshots:
   '@exodus/bytes@1.15.1(@noble/hashes@2.0.1)':
     optionalDependencies:
       '@noble/hashes': 2.0.1
+
+  '@github/copilot-darwin-arm64@1.0.48':
+    optional: true
+
+  '@github/copilot-darwin-x64@1.0.48':
+    optional: true
+
+  '@github/copilot-linux-arm64@1.0.48':
+    optional: true
+
+  '@github/copilot-linux-x64@1.0.48':
+    optional: true
+
+  '@github/copilot-sdk@1.0.0-beta.4':
+    dependencies:
+      '@github/copilot': 1.0.48
+      vscode-jsonrpc: 8.2.1
+      zod: 4.4.3
+
+  '@github/copilot-win32-arm64@1.0.48':
+    optional: true
+
+  '@github/copilot-win32-x64@1.0.48':
+    optional: true
+
+  '@github/copilot@1.0.48':
+    optionalDependencies:
+      '@github/copilot-darwin-arm64': 1.0.48
+      '@github/copilot-darwin-x64': 1.0.48
+      '@github/copilot-linux-arm64': 1.0.48
+      '@github/copilot-linux-x64': 1.0.48
+      '@github/copilot-win32-arm64': 1.0.48
+      '@github/copilot-win32-x64': 1.0.48
 
   '@google/genai@2.6.0(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))':
     dependencies:
@@ -12877,6 +13028,8 @@ snapshots:
       - msw
 
   void-elements@3.1.0: {}
+
+  vscode-jsonrpc@8.2.1: {}
 
   w3c-xmlserializer@5.0.0:
     dependencies:

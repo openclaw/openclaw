@@ -11,6 +11,7 @@
 import { Buffer } from "node:buffer";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { Command } from "commander";
 import {
   clearMemoryPluginState,
   getMemoryCapabilityRegistration,
@@ -630,6 +631,151 @@ describe("memory plugin e2e", () => {
     }
   });
 
+  test("normalizes memory_recall limit before querying LanceDB", async () => {
+    const embeddingsCreate = vi.fn(async () => ({
+      data: [{ embedding: [0.1, 0.2, 0.3] }],
+    }));
+    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const toArray = vi.fn(async () => []);
+    const limit = vi.fn(() => ({ toArray }));
+    const vectorSearch = vi.fn(() => ({ limit }));
+    const loadLanceDbModule = vi.fn(async () => ({
+      connect: vi.fn(async () => ({
+        tableNames: vi.fn(async () => ["memories"]),
+        openTable: vi.fn(async () => ({
+          vectorSearch,
+          countRows: vi.fn(async () => 0),
+          add: vi.fn(async () => undefined),
+          delete: vi.fn(async () => undefined),
+        })),
+      })),
+    }));
+
+    await withMockedOpenAiMemoryPlugin({
+      ensureGlobalUndiciEnvProxyDispatcher,
+      embeddingsCreate,
+      loadLanceDbModule,
+      run: async (dynamicMemoryPlugin) => {
+        const registeredTools: any[] = [];
+        const mockApi = {
+          id: "memory-lancedb",
+          name: "Memory (LanceDB)",
+          source: "test",
+          config: {},
+          pluginConfig: {
+            embedding: {
+              apiKey: OPENAI_API_KEY,
+              model: "text-embedding-3-small",
+            },
+            dbPath: getDbPath(),
+            autoCapture: false,
+            autoRecall: false,
+          },
+          runtime: {},
+          logger: {
+            info: vi.fn(),
+            warn: vi.fn(),
+            error: vi.fn(),
+            debug: vi.fn(),
+          },
+          registerTool: (tool: any, opts: any) => {
+            registeredTools.push({ tool, opts });
+          },
+          registerCli: vi.fn(),
+          registerService: vi.fn(),
+          on: vi.fn(),
+          resolvePath: (filePath: string) => filePath,
+        };
+
+        dynamicMemoryPlugin.register(mockApi as any);
+        const recallTool = registeredTools.find((t) => t.opts?.name === "memory_recall")?.tool;
+        if (!recallTool) {
+          throw new Error("memory_recall tool was not registered");
+        }
+
+        await recallTool.execute("test-call-string-limit", {
+          query: "project memory",
+          limit: "3",
+        });
+
+        expect(limit).toHaveBeenLastCalledWith(3);
+        await expect(
+          recallTool.execute("test-call-fractional-limit", {
+            query: "project memory",
+            limit: "3.5",
+          }),
+        ).rejects.toThrow("limit must be a positive integer");
+      },
+    });
+  });
+
+  test("normalizes signed decimal CLI limits through the shared parser", async () => {
+    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const toArray = vi.fn(async () => []);
+    const limit = vi.fn(() => ({ toArray }));
+    const select = vi.fn(() => ({ limit, toArray }));
+    const query = vi.fn(() => ({ select }));
+    const loadLanceDbModule = vi.fn(async () => ({
+      connect: vi.fn(async () => ({
+        tableNames: vi.fn(async () => ["memories"]),
+        openTable: vi.fn(async () => ({
+          query,
+          countRows: vi.fn(async () => 0),
+          add: vi.fn(async () => undefined),
+          delete: vi.fn(async () => undefined),
+        })),
+      })),
+    }));
+
+    await withMockedOpenAiMemoryPlugin({
+      ensureGlobalUndiciEnvProxyDispatcher,
+      loadLanceDbModule,
+      run: async (dynamicMemoryPlugin) => {
+        const registerCli = vi.fn();
+        const mockApi = {
+          id: "memory-lancedb",
+          name: "Memory (LanceDB)",
+          source: "test",
+          config: {},
+          pluginConfig: {
+            embedding: {
+              apiKey: OPENAI_API_KEY,
+              model: "text-embedding-3-small",
+            },
+            dbPath: getDbPath(),
+            autoCapture: false,
+            autoRecall: false,
+          },
+          runtime: {},
+          logger: {
+            info: vi.fn(),
+            warn: vi.fn(),
+            error: vi.fn(),
+            debug: vi.fn(),
+          },
+          registerTool: vi.fn(),
+          registerCli,
+          registerService: vi.fn(),
+          on: vi.fn(),
+          resolvePath: (filePath: string) => filePath,
+        };
+        const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+        try {
+          dynamicMemoryPlugin.register(mockApi as any);
+          const registrar = firstMockArg(registerCli as unknown as MockCallSource, "cli registrar");
+          const program = new Command();
+          (registrar as (params: { program: Command }) => void)({ program });
+
+          await program.parseAsync(["node", "openclaw", "ltm", "list", "--limit", "+03"]);
+
+          expect(limit).toHaveBeenCalledWith(3);
+        } finally {
+          log.mockRestore();
+        }
+      },
+    });
+  });
+
   test("keeps before_prompt_build registered but inert when auto-recall is disabled", async () => {
     const on = vi.fn();
     const mockApi = {
@@ -828,7 +974,18 @@ describe("memory plugin e2e", () => {
 
   test("bounds auto-recall latency during prompt build", async () => {
     vi.useFakeTimers();
-    const post = vi.fn(() => new Promise(() => undefined));
+    const post = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          setTimeout(
+            () =>
+              resolve({
+                data: [{ embedding: [0.1, 0.2, 0.3] }],
+              }),
+            30_000,
+          );
+        }),
+    );
     const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
     const loadLanceDbModule = vi.fn(async () => ({
       connect: vi.fn(async () => ({
@@ -901,6 +1058,7 @@ describe("memory plugin e2e", () => {
           expect(logger.warn).toHaveBeenCalledWith(
             "memory-lancedb: auto-recall timed out after 15000ms; skipping memory injection to avoid stalling agent startup",
           );
+          await vi.advanceTimersByTimeAsync(15_000);
         },
       });
     } finally {
@@ -2330,6 +2488,7 @@ describe("memory plugin e2e", () => {
     const customTooLong = `I always prefer this style. ${"x".repeat(1600)}`;
     expect(shouldCapture(customAllowed, { maxChars: 1500 })).toBe(true);
     expect(shouldCapture(customTooLong, { maxChars: 1500 })).toBe(false);
+    expect(shouldCapture(defaultTooLong, { maxChars: Number.NaN })).toBe(false);
   });
 
   test("normalizeRecallQuery trims whitespace and bounds embedding input", () => {
@@ -2337,6 +2496,7 @@ describe("memory plugin e2e", () => {
       "remember the blue mug",
     );
     expect(normalizeRecallQuery(`look up ${"x".repeat(200)}`, 120)).toHaveLength(120);
+    expect(normalizeRecallQuery(`look up ${"x".repeat(2000)}`, Number.NaN)).toHaveLength(1000);
   });
 
   test("normalizeEmbeddingVector accepts float arrays and base64 float32 responses", () => {
@@ -2464,9 +2624,19 @@ describe("memory plugin e2e", () => {
         expect(loadLanceDbModule).not.toHaveBeenCalled();
         expect(add).not.toHaveBeenCalled();
 
+        await expect(
+          storeTool.execute("test-call-bad-importance", {
+            text: "The user prefers concise replies",
+            importance: "1.5",
+          }),
+        ).rejects.toThrow("importance must be a finite number");
+        expect(embeddingsCreate).not.toHaveBeenCalled();
+        expect(loadLanceDbModule).not.toHaveBeenCalled();
+        expect(add).not.toHaveBeenCalled();
+
         const stored = await storeTool.execute("test-call-store", {
           text: "The user prefers concise replies",
-          importance: 0.8,
+          importance: "0.8",
           category: "preference",
         });
 
@@ -2478,6 +2648,7 @@ describe("memory plugin e2e", () => {
         });
         expect(add).toHaveBeenCalledTimes(1);
         expect(firstAddedMemory(add).text).toBe("The user prefers concise replies");
+        expect(firstAddedMemory(add).importance).toBe(0.8);
       },
     });
   });
@@ -2528,14 +2699,16 @@ describe("memory plugin e2e", () => {
         post = vi.fn(async () => ({ data: [{ embedding: [0.1, 0.2, 0.3] }] }));
       },
     }));
-    vi.doMock("@lancedb/lancedb", () => ({
-      connect: vi.fn(async () => ({
-        tableNames: vi.fn(async () => ["memories"]),
-        openTable: vi.fn(async () => ({
-          vectorSearch,
-          countRows: vi.fn(async () => 2),
-          add: vi.fn(async () => undefined),
-          delete: vi.fn(async () => undefined),
+    vi.doMock("./lancedb-runtime.js", () => ({
+      loadLanceDbModule: vi.fn(async () => ({
+        connect: vi.fn(async () => ({
+          tableNames: vi.fn(async () => ["memories"]),
+          openTable: vi.fn(async () => ({
+            vectorSearch,
+            countRows: vi.fn(async () => 2),
+            add: vi.fn(async () => undefined),
+            delete: vi.fn(async () => undefined),
+          })),
         })),
       })),
     }));
@@ -2583,7 +2756,7 @@ describe("memory plugin e2e", () => {
       expect(text).not.toMatch(/\[a1b2c3d4\]/);
     } finally {
       vi.doUnmock("openai");
-      vi.doUnmock("@lancedb/lancedb");
+      vi.doUnmock("./lancedb-runtime.js");
       vi.resetModules();
     }
   });

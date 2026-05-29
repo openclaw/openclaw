@@ -39,6 +39,11 @@ import { getCurrentPluginMetadataSnapshot } from "../../../plugins/current-plugi
 import { buildAgentHookContextChannelFields } from "../../../plugins/hook-agent-context.js";
 import { resolveBlockMessage } from "../../../plugins/hook-decision-types.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
+import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
+import {
+  resolveProviderRuntimePluginHandle,
+  type ProviderRuntimePluginHandle,
+} from "../../../plugins/provider-hook-runtime.js";
 import {
   extractModelCompat,
   resolveToolCallArgumentsEncoding,
@@ -52,6 +57,12 @@ import { getPluginToolMeta } from "../../../plugins/tools.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../../sessions/input-provenance.js";
 import { normalizeOptionalString } from "../../../shared/string-coerce.js";
+import { resolveSkillsPromptForRun } from "../../../skills/loading/workspace.js";
+import { resolveEmbeddedRunSkillEntries } from "../../../skills/runtime/embedded-run-entries.js";
+import {
+  applySkillEnvOverrides,
+  applySkillEnvOverridesFromSnapshot,
+} from "../../../skills/runtime/env-overrides.js";
 import {
   buildTrajectoryArtifacts,
   buildTrajectoryRunMetadata,
@@ -160,17 +171,11 @@ import { sanitizeToolUseResultPairing } from "../../session-transcript-repair.js
 import { acquireSessionWriteLock } from "../../session-write-lock.js";
 import { createAgentSession, SessionManager } from "../../sessions/index.js";
 import { detectRuntimeShell } from "../../shell-utils.js";
-import {
-  applySkillEnvOverrides,
-  applySkillEnvOverridesFromSnapshot,
-  resolveSkillsPromptForRun,
-} from "../../skills.js";
 import { buildActiveSubagentSystemPromptAddition } from "../../subagent-active-context.js";
 import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
 } from "../../subagent-capabilities.js";
-import { resolveSystemPromptOverride } from "../../system-prompt-override.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt } from "../../system-prompt.js";
@@ -235,10 +240,9 @@ import {
   updateActiveEmbeddedRunSessionFile,
   updateActiveEmbeddedRunSnapshot,
 } from "../runs.js";
-import { buildEmbeddedSandboxInfo } from "../sandbox-info.js";
+import { buildEmbeddedSandboxInfo, resolveEmbeddedSandboxInfoExecPolicy } from "../sandbox-info.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "../session-manager-cache.js";
 import { prepareSessionManagerForRun } from "../session-manager-init.js";
-import { resolveEmbeddedRunSkillEntries } from "../skills-runtime.js";
 import {
   describeEmbeddedAgentStreamStrategy,
   resetEmbeddedAgentBaseStreamFnCacheForTest,
@@ -246,7 +250,7 @@ import {
   resolveEmbeddedAgentBaseStreamFn,
   resolveEmbeddedAgentStreamFn,
 } from "../stream-resolution.js";
-import { applySystemPromptOverrideToSession } from "../system-prompt.js";
+import { applySystemPromptToSession } from "../system-prompt.js";
 import {
   dropReasoningFromHistory,
   dropThinkingBlocks,
@@ -780,6 +784,36 @@ export async function runEmbeddedAttempt(
   }
   const effectiveCwd = sandbox?.enabled ? effectiveWorkspace : (requestedCwd ?? effectiveWorkspace);
   await fs.mkdir(effectiveWorkspace, { recursive: true });
+  let currentPluginMetadataSnapshotResolved = false;
+  let currentPluginMetadataSnapshot: PluginMetadataSnapshot | undefined;
+  const getCurrentAttemptPluginMetadataSnapshot = () => {
+    if (!currentPluginMetadataSnapshotResolved) {
+      currentPluginMetadataSnapshot = getCurrentPluginMetadataSnapshot({
+        config: params.config,
+        env: process.env,
+        workspaceDir: effectiveWorkspace,
+      });
+      currentPluginMetadataSnapshotResolved = true;
+    }
+    return currentPluginMetadataSnapshot;
+  };
+  let providerRuntimeHandle: ProviderRuntimePluginHandle | undefined;
+  const getProviderRuntimeHandle = () => {
+    if (providerRuntimeHandle?.plugin) {
+      return providerRuntimeHandle;
+    }
+    const resolvedHandle = resolveProviderRuntimePluginHandle({
+      provider: params.provider,
+      modelId: params.modelId,
+      config: params.config,
+      workspaceDir: effectiveWorkspace,
+      env: process.env,
+    });
+    if (resolvedHandle.plugin) {
+      providerRuntimeHandle = resolvedHandle;
+    }
+    return resolvedHandle;
+  };
   const { sessionAgentId } = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
     config: params.config,
@@ -965,7 +999,8 @@ export async function runEmbeddedAttempt(
         host: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
       });
     }
-    const activeContextEnginePluginId = resolveContextEngineOwnerPluginId(activeContextEngine);
+    const resolveActiveContextEnginePluginId = () =>
+      resolveContextEngineOwnerPluginId(activeContextEngine);
     const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
     const diagnosticTrace = freezeDiagnosticTraceContext(
       createDiagnosticTraceContextFromActiveScope(),
@@ -1061,6 +1096,7 @@ export async function runEmbeddedAttempt(
             ...buildEmbeddedAttemptToolRunContext({ ...params, trace: runTrace }),
             exec: {
               ...params.execOverrides,
+              config: params.config,
               elevated: params.bashElevated,
             },
             sandbox,
@@ -1315,6 +1351,7 @@ export async function runEmbeddedAttempt(
       modelId: params.modelId,
       modelApi: params.model.api,
       model: params.model,
+      runtimeHandle: getProviderRuntimeHandle(),
     });
     const clientTools = toolsEnabled && !isRawModelRun ? params.clientTools : undefined;
     const bundleMcpEnabled = shouldCreateBundleMcpRuntimeForAttempt({
@@ -1394,6 +1431,7 @@ export async function runEmbeddedAttempt(
             modelId: params.modelId,
             modelApi: params.model.api,
             model: params.model,
+            runtimeHandle: getProviderRuntimeHandle(),
           })
         : filteredBundledTools;
     const projectedUncompactedEffectiveTools = filterLocalModelLeanTools({
@@ -1540,6 +1578,7 @@ export async function runEmbeddedAttempt(
       modelId: params.modelId,
       modelApi: params.model.api,
       model: params.model,
+      runtimeHandle: getProviderRuntimeHandle(),
     });
 
     const machineName = await getMachineDisplayName();
@@ -1557,7 +1596,18 @@ export async function runEmbeddedAttempt(
             accountId: params.agentAccountId,
           })
         : undefined;
-    const sandboxInfo = buildEmbeddedSandboxInfo(sandbox, params.bashElevated);
+    const sandboxInfoExecPolicy = resolveEmbeddedSandboxInfoExecPolicy({
+      config: params.config,
+      agentId: sessionAgentId,
+      sessionKey: params.sessionKey,
+      sandboxAvailable: sandbox?.enabled === true,
+      execOverrides: params.execOverrides,
+    });
+    const sandboxInfo = buildEmbeddedSandboxInfo(
+      sandbox,
+      params.bashElevated,
+      sandboxInfoExecPolicy,
+    );
     const reasoningTagHint = isReasoningTagProvider(params.provider, {
       config: params.config,
       workspaceDir: effectiveWorkspace,
@@ -1565,6 +1615,7 @@ export async function runEmbeddedAttempt(
       modelId: params.modelId,
       modelApi: params.model.api,
       model: params.model,
+      runtimeHandle: getProviderRuntimeHandle(),
     });
     // Resolve channel-specific message actions for system prompt
     const channelActions = runtimeChannel
@@ -1668,20 +1719,20 @@ export async function runEmbeddedAttempt(
         provider: params.provider,
         config: params.config,
         workspaceDir: effectiveWorkspace,
+        runtimeHandle: getProviderRuntimeHandle(),
         context: promptContributionContext,
       });
 
     const bootstrapTruncationNotice = buildBootstrapPromptWarningNotice(
       bootstrapPromptWarning.lines,
     );
-    const systemPromptOverrideText = resolveSystemPromptOverride({
-      config: params.config,
-      agentId: sessionAgentId,
-    });
     const attemptSystemPrompt = buildAttemptSystemPrompt({
       isRawModelRun,
-      systemPromptOverrideText,
-      transformProviderSystemPrompt,
+      transformProviderSystemPrompt: (transformParams) =>
+        transformProviderSystemPrompt({
+          ...transformParams,
+          runtimeHandle: getProviderRuntimeHandle(),
+        }),
       embeddedSystemPrompt: {
         config: params.config,
         agentId: sessionAgentId,
@@ -1767,8 +1818,7 @@ export async function runEmbeddedAttempt(
       skillsPrompt,
       tools: effectiveTools,
     });
-    const systemPromptOverride = attemptSystemPrompt.systemPromptOverride;
-    let systemPromptText = systemPromptOverride();
+    let systemPromptText = attemptSystemPrompt.systemPrompt;
     prepStages.mark("system-prompt");
 
     const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config);
@@ -1866,7 +1916,7 @@ export async function runEmbeddedAttempt(
           agentDir,
           tokenBudget: params.contextTokenBudget,
           activeAgentId: sessionAgentId,
-          contextEnginePluginId: activeContextEnginePluginId,
+          contextEnginePluginId: resolveActiveContextEnginePluginId(),
         }),
         runMaintenance: async (contextParams) =>
           await runContextEngineMaintenance({
@@ -1895,11 +1945,7 @@ export async function runEmbeddedAttempt(
         cwd: effectiveCwd,
         agentDir,
         cfg: params.config,
-        pluginMetadataSnapshot: getCurrentPluginMetadataSnapshot({
-          config: params.config,
-          env: process.env,
-          workspaceDir: effectiveWorkspace,
-        }),
+        pluginMetadataSnapshot: getCurrentAttemptPluginMetadataSnapshot(),
         contextTokenBudget: params.contextTokenBudget,
       });
       const autoCompactionGuardArgs = {
@@ -2103,12 +2149,16 @@ export async function runEmbeddedAttempt(
         },
       });
       session = createdSession.session;
-      applySystemPromptOverrideToSession(session, systemPromptText);
       if (!session) {
         throw new Error("Embedded agent session missing");
       }
       session.setActiveToolsByName(sessionToolAllowlist);
       const activeSession = session;
+      const setActiveSessionSystemPrompt = (nextSystemPrompt: string) => {
+        systemPromptText = nextSystemPrompt;
+        applySystemPromptToSession(activeSession, nextSystemPrompt);
+      };
+      setActiveSessionSystemPrompt(systemPromptText);
       installMessageToolOnlyTerminalHook({
         agent: activeSession.agent,
         sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
@@ -2117,11 +2167,10 @@ export async function runEmbeddedAttempt(
       if (isRawModelRun) {
         // Raw model probes should measure exactly the requested prompt against
         // the selected provider/model. Reset clears restored transcript state
-        // and queues; the empty system override prevents the runtime from rebuilding the
+        // and queues; the empty system prompt prevents the runtime from rebuilding the
         // normal OpenClaw agent/tool prompt when `session.prompt()` starts.
         activeSession.agent.reset();
-        applySystemPromptOverrideToSession(activeSession, "");
-        systemPromptText = "";
+        setActiveSessionSystemPrompt("");
       }
       if (typeof activeSession.agent.convertToLlm === "function") {
         const baseConvertToLlm = activeSession.agent.convertToLlm.bind(activeSession.agent);
@@ -2403,6 +2452,7 @@ export async function runEmbeddedAttempt(
         provider: params.provider,
         config: params.config,
         workspaceDir: effectiveWorkspace,
+        runtimeHandle: getProviderRuntimeHandle(),
       });
       if (providerTextTransforms) {
         activeSession.agent.streamFn = wrapStreamFnTextTransforms({
@@ -2668,8 +2718,7 @@ export async function runEmbeddedAttempt(
       try {
         if (isRawModelRun) {
           activeSession.agent.reset();
-          applySystemPromptOverrideToSession(activeSession, "");
-          systemPromptText = "";
+          setActiveSessionSystemPrompt("");
           cacheTrace?.recordStage("session:raw-model-run", {
             messages: activeSession.messages,
             system: systemPromptText,
@@ -2727,6 +2776,8 @@ export async function runEmbeddedAttempt(
               await updateSessionStoreEntry({
                 storePath,
                 sessionKey: params.sessionKey,
+                skipMaintenance: true,
+                takeCacheOwnership: true,
                 update: async (entry) => {
                   if (entry.quotaSuspension?.state !== "resuming") {
                     return null;
@@ -2746,11 +2797,12 @@ export async function runEmbeddedAttempt(
               hasSessionsYield: effectiveTools.some((tool) => tool.name === "sessions_yield"),
             });
             if (activeSubagentPromptAddition) {
-              systemPromptText = prependSystemPromptAddition({
-                systemPrompt: systemPromptText,
-                systemPromptAddition: activeSubagentPromptAddition,
-              });
-              applySystemPromptOverrideToSession(activeSession, systemPromptText);
+              setActiveSessionSystemPrompt(
+                prependSystemPromptAddition({
+                  systemPrompt: systemPromptText,
+                  systemPromptAddition: activeSubagentPromptAddition,
+                }),
+              );
             }
           }
 
@@ -2812,11 +2864,12 @@ export async function runEmbeddedAttempt(
                 preassemblyContextEngineMessagesForPrecheck;
             }
             if (assembled.systemPromptAddition) {
-              systemPromptText = prependSystemPromptAddition({
-                systemPrompt: systemPromptText,
-                systemPromptAddition: assembled.systemPromptAddition,
-              });
-              applySystemPromptOverrideToSession(activeSession, systemPromptText);
+              setActiveSessionSystemPrompt(
+                prependSystemPromptAddition({
+                  systemPrompt: systemPromptText,
+                  systemPromptAddition: assembled.systemPromptAddition,
+                }),
+              );
               log.debug(
                 `context engine: prepended system prompt addition (${assembled.systemPromptAddition.length} chars)`,
               );
@@ -3197,6 +3250,7 @@ export async function runEmbeddedAttempt(
             sessionFile: params.sessionFile,
             sessionId: params.sessionId,
             sessionKey: params.sessionKey,
+            agentId: sessionAgentId,
           });
           if (truncationResult.truncated) {
             preflightRecovery = {
@@ -3284,9 +3338,8 @@ export async function runEmbeddedAttempt(
           }
           const legacySystemPrompt = normalizeOptionalString(hookResult?.systemPrompt) ?? "";
           if (legacySystemPrompt) {
-            applySystemPromptOverrideToSession(activeSession, legacySystemPrompt);
-            systemPromptText = legacySystemPrompt;
-            log.debug(`hooks: applied systemPrompt override (${legacySystemPrompt.length} chars)`);
+            setActiveSessionSystemPrompt(legacySystemPrompt);
+            log.debug(`hooks: applied systemPrompt (${legacySystemPrompt.length} chars)`);
           }
           const prependedOrAppendedSystemPrompt = composeSystemPromptWithHookContext({
             baseSystemPrompt: systemPromptText,
@@ -3300,8 +3353,7 @@ export async function runEmbeddedAttempt(
           if (prependedOrAppendedSystemPrompt) {
             const prependSystemLen = hookResult?.prependSystemContext?.trim().length ?? 0;
             const appendSystemLen = hookResult?.appendSystemContext?.trim().length ?? 0;
-            applySystemPromptOverrideToSession(activeSession, prependedOrAppendedSystemPrompt);
-            systemPromptText = prependedOrAppendedSystemPrompt;
+            setActiveSessionSystemPrompt(prependedOrAppendedSystemPrompt);
             log.debug(
               `hooks: applied prependSystemContext/appendSystemContext (${prependSystemLen}+${appendSystemLen} chars)`,
             );
@@ -3312,8 +3364,7 @@ export async function runEmbeddedAttempt(
           model: runtimeInfo.model,
         });
         if (modelAwareSystemPrompt !== systemPromptText) {
-          applySystemPromptOverrideToSession(activeSession, modelAwareSystemPrompt);
-          systemPromptText = modelAwareSystemPrompt;
+          setActiveSessionSystemPrompt(modelAwareSystemPrompt);
         }
 
         if (cacheObservabilityEnabled) {
@@ -3488,8 +3539,7 @@ export async function runEmbeddedAttempt(
               appendSystemContext: runtimeSystemContext,
             });
             if (runtimeSystemPrompt) {
-              applySystemPromptOverrideToSession(activeSession, runtimeSystemPrompt);
-              systemPromptText = runtimeSystemPrompt;
+              setActiveSessionSystemPrompt(runtimeSystemPrompt);
             }
           }
           const runtimeContextForHook = promptSubmission.runtimeOnly
@@ -3863,6 +3913,7 @@ export async function runEmbeddedAttempt(
               sessionFile: params.sessionFile,
               sessionId: params.sessionId,
               sessionKey: params.sessionKey,
+              agentId: sessionAgentId,
             });
             if (truncationResult.truncated) {
               preflightRecovery = {
@@ -4245,7 +4296,7 @@ export async function runEmbeddedAttempt(
             lastCallUsage,
             promptCache,
             activeAgentId: sessionAgentId,
-            contextEnginePluginId: activeContextEnginePluginId,
+            contextEnginePluginId: resolveActiveContextEnginePluginId(),
           });
           await finalizeAttemptContextEngineTurn({
             contextEngine: activeContextEngine,

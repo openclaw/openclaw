@@ -3,11 +3,24 @@ import {
   asFiniteNumber,
   asFiniteNumberInRange,
   asSafeIntegerInRange,
+  clampTimerTimeoutMs,
+  finiteSecondsToTimerSafeMilliseconds,
+  MAX_TIMER_TIMEOUT_MS,
+  MAX_TIMER_TIMEOUT_SECONDS,
+  nonNegativeSecondsToSafeMilliseconds,
   parseFiniteNumber,
+  positiveSecondsToSafeMilliseconds,
+  resolveIntegerOption,
+  resolveExpiresAtMsFromDurationSeconds,
+  resolveExpiresAtMsFromDurationOrEpoch,
+  resolveExpiresAtMsFromEpochSeconds,
+  resolveNonNegativeIntegerOption,
+  resolveOptionalIntegerOption,
   parseStrictFiniteNumber,
   parseStrictInteger,
   parseStrictNonNegativeInteger,
   parseStrictPositiveInteger,
+  resolveTimerTimeoutMs,
 } from "./number-coercion.js";
 
 describe("number-coercion", () => {
@@ -64,5 +77,75 @@ describe("number-coercion", () => {
     expect(parseStrictPositiveInteger("0")).toBeUndefined();
     expect(parseStrictNonNegativeInteger("0")).toBe(0);
     expect(parseStrictNonNegativeInteger("-1")).toBeUndefined();
+  });
+
+  test("timer timeout helpers centralize Node-safe bounds", () => {
+    expect(MAX_TIMER_TIMEOUT_SECONDS).toBe(2_147_000);
+    expect(finiteSecondsToTimerSafeMilliseconds(1.5)).toBe(1_500);
+    expect(finiteSecondsToTimerSafeMilliseconds(1.5, { floorSeconds: true })).toBe(1_000);
+    expect(finiteSecondsToTimerSafeMilliseconds(10_000_000)).toBe(MAX_TIMER_TIMEOUT_MS);
+    expect(finiteSecondsToTimerSafeMilliseconds("10")).toBeUndefined();
+    expect(finiteSecondsToTimerSafeMilliseconds(Number.POSITIVE_INFINITY)).toBeUndefined();
+    expect(clampTimerTimeoutMs(0, 10)).toBe(10);
+    expect(clampTimerTimeoutMs(10_000_000_000)).toBe(MAX_TIMER_TIMEOUT_MS);
+    expect(clampTimerTimeoutMs(Number.NaN)).toBeUndefined();
+    expect(resolveTimerTimeoutMs(Number.NaN, 5000)).toBe(5000);
+    expect(resolveTimerTimeoutMs(Number.NaN, 0, 0)).toBe(0);
+    expect(resolveTimerTimeoutMs(Number.NaN, Number.POSITIVE_INFINITY, 25)).toBe(25);
+    expect(resolveTimerTimeoutMs(Number.MAX_SAFE_INTEGER, 5000)).toBe(MAX_TIMER_TIMEOUT_MS);
+  });
+
+  test("seconds helpers reject unsafe millisecond values", () => {
+    expect(positiveSecondsToSafeMilliseconds("10")).toBe(10_000);
+    expect(positiveSecondsToSafeMilliseconds("0")).toBeUndefined();
+    expect(positiveSecondsToSafeMilliseconds("1e309")).toBeUndefined();
+    expect(nonNegativeSecondsToSafeMilliseconds("0")).toBe(0);
+    expect(nonNegativeSecondsToSafeMilliseconds("-1")).toBeUndefined();
+  });
+
+  test("expiry helpers resolve safe absolute timestamps", () => {
+    expect(
+      resolveExpiresAtMsFromDurationSeconds("3600", {
+        nowMs: 1_000,
+        bufferMs: 300,
+      }),
+    ).toBe(3_600_700);
+    expect(
+      resolveExpiresAtMsFromDurationSeconds("10", {
+        nowMs: 1_000,
+        bufferMs: 20_000,
+        minRemainingMs: 30_000,
+      }),
+    ).toBe(31_000);
+    expect(resolveExpiresAtMsFromDurationSeconds("1e309", { nowMs: 1_000 })).toBeUndefined();
+    expect(resolveExpiresAtMsFromEpochSeconds("3600", { bufferMs: 300 })).toBe(3_599_700);
+    expect(resolveExpiresAtMsFromEpochSeconds("1e309")).toBeUndefined();
+  });
+
+  test("mixed expiry helper handles relative seconds, epoch seconds, and absolute milliseconds", () => {
+    expect(resolveExpiresAtMsFromDurationOrEpoch(86_400, { nowMs: 1_700_000_000_000 })).toBe(
+      1_700_086_400_000,
+    );
+    expect(resolveExpiresAtMsFromDurationOrEpoch(1_700_000_000)).toBe(1_700_000_000_000);
+    expect(resolveExpiresAtMsFromDurationOrEpoch(1_700_000_000_000)).toBe(1_700_000_000_000);
+    expect(resolveExpiresAtMsFromDurationOrEpoch(Number.POSITIVE_INFINITY)).toBeUndefined();
+    expect(resolveExpiresAtMsFromDurationOrEpoch(Number.MAX_SAFE_INTEGER + 1)).toBeUndefined();
+  });
+
+  test("integer option helpers floor finite values and fall back for non-finite values", () => {
+    expect(resolveIntegerOption(7.9, 1, { min: 1, max: 10 })).toBe(7);
+    expect(resolveIntegerOption(Number.NaN, 4.9, { min: 1 })).toBe(4);
+    expect(resolveIntegerOption(Number.NEGATIVE_INFINITY, 4, { min: 1 })).toBe(4);
+    expect(resolveIntegerOption(-4, 1, { min: 0 })).toBe(0);
+    expect(resolveIntegerOption(40, 1, { max: 10 })).toBe(10);
+    expect(resolveNonNegativeIntegerOption(Number.NaN, 3.9)).toBe(3);
+  });
+
+  test("optional integer option helper rejects non-finite values", () => {
+    expect(resolveOptionalIntegerOption(7.9, { min: 1, max: 10 })).toBe(7);
+    expect(resolveOptionalIntegerOption(Number.NaN, { min: 1 })).toBeUndefined();
+    expect(resolveOptionalIntegerOption(Number.POSITIVE_INFINITY, { min: 1 })).toBeUndefined();
+    expect(resolveOptionalIntegerOption(-4, { min: 0 })).toBe(0);
+    expect(resolveOptionalIntegerOption(40, { max: 10 })).toBe(10);
   });
 });

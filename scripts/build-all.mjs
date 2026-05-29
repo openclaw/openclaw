@@ -42,6 +42,11 @@ export const BUILD_ALL_STEPS = [
     windowsNodeOptions: `--max-old-space-size=${WINDOWS_BUILD_MAX_OLD_SPACE_MB}`,
     cache: {
       inputs: [
+        "package.json",
+        "pnpm-lock.yaml",
+        "npm-shrinkwrap.json",
+        "packages/plugin-sdk/package.json",
+        "packages/memory-host-sdk/package.json",
         "tsconfig.json",
         "tsconfig.plugin-sdk.dts.json",
         "src/plugin-sdk",

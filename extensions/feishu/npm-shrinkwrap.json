@@ -13,7 +13,7 @@
         "zod": "4.4.3"
       },
       "peerDependencies": {
-        "openclaw": ">=2026.5.28"
+        "openclaw": ">=2026.5.29"
       },
       "peerDependenciesMeta": {
         "openclaw": {

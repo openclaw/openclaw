@@ -1,13 +1,13 @@
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { SkillSnapshot } from "../../skills/types.js";
 import {
   listActiveProcessSessionReferences,
   type ActiveProcessSessionReference,
 } from "../bash-process-references.js";
 import type { ExecElevatedDefaults } from "../bash-tools.js";
 import { resolveSelectedOpenAIRuntimeProvider } from "../openai-codex-routing.js";
-import type { SkillSnapshot } from "../skills.js";
 
 export type EmbeddedCompactionRuntimeContext = {
   sessionKey?: string;

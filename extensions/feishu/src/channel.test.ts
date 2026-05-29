@@ -96,6 +96,12 @@ afterAll(() => {
   vi.resetModules();
 });
 
+describe("feishuPlugin metadata", () => {
+  it("opts announce delivery into persisted session lookup", () => {
+    expect(feishuPlugin.meta.preferSessionLookupForAnnounceTarget).toBe(true);
+  });
+});
+
 describe("feishuPlugin.status.probeAccount", () => {
   it("uses current account credentials for multi-account config", async () => {
     const cfg = {
@@ -1039,6 +1045,25 @@ describe("feishuPlugin actions", () => {
     const peers = requireArray(details.peers, "peers");
     expect(requireRecord(groups[0], "group").id).toBe("oc_group_1");
     expect(requireRecord(peers[0], "peer").id).toBe("ou_1");
+  });
+
+  it("accepts plus-signed channel-list limits", async () => {
+    listFeishuDirectoryGroupsLiveMock.mockResolvedValueOnce([{ kind: "group", id: "oc_group_1" }]);
+
+    await feishuPlugin.actions?.handleAction?.({
+      action: "channel-list",
+      params: { query: "eng", limit: "+05", scope: "groups" },
+      cfg,
+      accountId: undefined,
+    } as never);
+
+    expect(listFeishuDirectoryGroupsLiveMock).toHaveBeenCalledWith({
+      cfg,
+      query: "eng",
+      limit: 5,
+      fallbackToStatic: false,
+      accountId: undefined,
+    });
   });
 
   it("ignores malformed channel-list limits", async () => {
