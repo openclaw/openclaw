@@ -670,21 +670,34 @@ function isAttachmentCommandFallbackError(error: unknown): boolean {
   );
 }
 
-async function resolveAttachmentChatGuid(params: {
+async function resolveAttachmentChatTarget(params: {
   target: ReturnType<typeof parseIMessageTarget>;
   runCliJson: (args: readonly string[]) => Promise<Record<string, unknown>>;
 }): Promise<string | null> {
   if (params.target.kind === "chat_guid") {
     return params.target.chatGuid;
   }
-  if (params.target.kind !== "chat_id") {
-    return null;
+  if (params.target.kind === "chat_identifier") {
+    return params.target.chatIdentifier;
+  }
+  if (params.target.kind === "handle") {
+    const normalizedHandle = normalizeIMessageHandle(params.target.to);
+    if (!normalizedHandle) {
+      return null;
+    }
+    if (params.target.service === "sms") {
+      return `SMS;-;${normalizedHandle}`;
+    }
+    if (params.target.service === "imessage") {
+      return `iMessage;-;${normalizedHandle}`;
+    }
+    return `any;-;${normalizedHandle}`;
   }
   const result = await params.runCliJson(["group", "--chat-id", String(params.target.chatId)]);
   return stringValue(result.guid) ?? stringValue(result.chat_guid) ?? null;
 }
 
-async function trySendAttachmentForExplicitChat(params: {
+async function trySendAttachmentForTarget(params: {
   accountId: string;
   dbPath?: string;
   target: ReturnType<typeof parseIMessageTarget>;
@@ -693,9 +706,9 @@ async function trySendAttachmentForExplicitChat(params: {
   runCliJson: (args: readonly string[]) => Promise<Record<string, unknown>>;
   resolveMessageGuidImpl?: IMessageSendOpts["resolveMessageGuidImpl"];
 }): Promise<IMessageSendResult | null> {
-  let attachmentChatGuid: string | null = null;
+  let attachmentChatTarget: string | null = null;
   try {
-    attachmentChatGuid = await resolveAttachmentChatGuid({
+    attachmentChatTarget = await resolveAttachmentChatTarget({
       target: params.target,
       runCliJson: params.runCliJson,
     });
@@ -705,7 +718,7 @@ async function trySendAttachmentForExplicitChat(params: {
     }
     throw error;
   }
-  if (!attachmentChatGuid) {
+  if (!attachmentChatTarget) {
     return null;
   }
 
@@ -714,7 +727,7 @@ async function trySendAttachmentForExplicitChat(params: {
     result = await params.runCliJson([
       "send-attachment",
       "--chat",
-      attachmentChatGuid,
+      attachmentChatTarget,
       "--file",
       params.filePath,
       "--transport",
@@ -758,7 +771,14 @@ async function trySendAttachmentForExplicitChat(params: {
     rememberIMessageReplyCache({
       accountId: params.accountId,
       messageId: resolvedId,
-      chatGuid: params.target.kind === "chat_guid" ? params.target.chatGuid : attachmentChatGuid,
+      chatGuid:
+        params.target.kind === "chat_guid"
+          ? params.target.chatGuid
+          : params.target.kind === "chat_identifier"
+            ? params.target.chatIdentifier
+            : params.target.kind === "handle"
+              ? attachmentChatTarget
+              : attachmentChatTarget,
       chatId: params.target.kind === "chat_id" ? params.target.chatId : undefined,
       timestamp: Date.now(),
       isFromMe: true,
@@ -854,8 +874,8 @@ export async function sendMessageIMessage(
     opts.runCliJson ??
     ((args: readonly string[]) => runIMessageCliJson(cliPath, dbPath, args, opts.timeoutMs));
 
-  if (filePath && !message.trim() && !resolvedReplyToId) {
-    const attachmentResult = await trySendAttachmentForExplicitChat({
+  if (filePath && !resolvedReplyToId) {
+    const attachmentResult = await trySendAttachmentForTarget({
       accountId: account.accountId,
       dbPath: chatDbLookupPath,
       target,
@@ -865,7 +885,32 @@ export async function sendMessageIMessage(
       resolveMessageGuidImpl: opts.resolveMessageGuidImpl,
     });
     if (attachmentResult) {
-      return attachmentResult;
+      if (!message.trim()) {
+        return attachmentResult;
+      }
+      const captionResult = await sendMessageIMessage(to, text, {
+        ...opts,
+        client:
+          opts.client ??
+          (opts.createClient
+            ? await opts.createClient({ cliPath, dbPath })
+            : await createIMessageRpcClient({ cliPath, dbPath })),
+        mediaUrl: undefined,
+      });
+      return {
+        messageId: attachmentResult.messageId,
+        ...((captionResult.guid ?? attachmentResult.guid)
+          ? { guid: captionResult.guid ?? attachmentResult.guid }
+          : {}),
+        sentText: captionResult.sentText,
+        ...((captionResult.echoText ?? attachmentResult.echoText)
+          ? { echoText: captionResult.echoText ?? attachmentResult.echoText }
+          : {}),
+        receipt: createMessageReceiptFromOutboundResults({
+          results: [{ receipt: attachmentResult.receipt }, { receipt: captionResult.receipt }],
+          sentAt: Math.max(attachmentResult.receipt.sentAt, captionResult.receipt.sentAt),
+        }),
+      };
     }
   }
   const params: Record<string, unknown> = {

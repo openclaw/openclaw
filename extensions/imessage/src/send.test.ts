@@ -241,11 +241,11 @@ describe("sendMessageIMessage receipts", () => {
     expect(client.request).not.toHaveBeenCalled();
   });
 
-  it("keeps DM handle media sends on the existing rpc send path", async () => {
+  it("routes DM handle media-only sends through send-attachment", async () => {
     const client = createClient({ message_id: 12345 });
-    const runCliJson = vi.fn();
+    const runCliJson = vi.fn().mockResolvedValueOnce({ messageId: "p:0/dm-media-guid" });
 
-    await sendMessageIMessage("+15551234567", "", {
+    const result = await sendMessageIMessage("+155****4567", "", {
       config: IMESSAGE_TEST_CFG,
       client,
       mediaUrl: "/tmp/image.png",
@@ -253,16 +253,78 @@ describe("sendMessageIMessage receipts", () => {
       runCliJson,
     });
 
-    expect(runCliJson).not.toHaveBeenCalled();
+    expect(result.messageId).toBe("p:0/dm-media-guid");
+    expect(runCliJson).toHaveBeenCalledTimes(1);
+    const attachmentArgs = runCliJson.mock.calls[0]?.[0] as string[];
+    expect(attachmentArgs[0]).toBe("send-attachment");
+    expect(attachmentArgs[1]).toBe("--chat");
+    expect(attachmentArgs[2]).toMatch(/^any;-;/);
+    expect(attachmentArgs.slice(3)).toEqual(["--file", "/tmp/image.png", "--transport", "auto"]);
+    expect(client.request).not.toHaveBeenCalled();
+  });
+
+  it("sends DM handle media captions as attachment plus follow-up text", async () => {
+    const client = createClient({ guid: "p:0/caption-guid" });
+    const runCliJson = vi.fn().mockResolvedValueOnce({ messageId: "p:0/dm-media-guid" });
+
+    const result = await sendMessageIMessage("imessage:+155****4567", "caption", {
+      config: IMESSAGE_TEST_CFG,
+      client,
+      mediaUrl: "/tmp/image.png",
+      resolveAttachmentImpl: async () => ({ path: "/tmp/image.png", contentType: "image/png" }),
+      runCliJson,
+    });
+
+    expect(runCliJson).toHaveBeenCalledTimes(1);
+    const captionAttachmentArgs = runCliJson.mock.calls[0]?.[0] as string[];
+    expect(captionAttachmentArgs[0]).toBe("send-attachment");
+    expect(captionAttachmentArgs[1]).toBe("--chat");
+    expect(captionAttachmentArgs[2]).toMatch(/^iMessage;-;/);
+    expect(captionAttachmentArgs.slice(3)).toEqual([
+      "--file",
+      "/tmp/image.png",
+      "--transport",
+      "auto",
+    ]);
     expect(client.request).toHaveBeenCalledWith(
       "send",
       expect.objectContaining({
-        to: "+15551234567",
-        file: "/tmp/image.png",
-        text: "",
+        to: "+155****4567",
+        text: "caption",
       }),
       expect.any(Object),
     );
+    expect(result.sentText).toBe("caption");
+    expect(result.receipt.platformMessageIds).toEqual(["p:0/dm-media-guid", "p:0/caption-guid"]);
+    expect(result.receipt.parts.map((part) => part.kind)).toEqual(["media", "text"]);
+  });
+
+  it("sends explicit chat media captions as attachment plus follow-up text", async () => {
+    const client = createClient({ guid: "p:0/caption-guid" });
+    const runCliJson = vi.fn().mockResolvedValueOnce({ messageId: "p:0/chat-media-guid" });
+
+    const result = await sendMessageIMessage("chat_guid:chat-1", "caption", {
+      config: IMESSAGE_TEST_CFG,
+      client,
+      mediaUrl: "/tmp/image.png",
+      resolveAttachmentImpl: async () => ({ path: "/tmp/image.png", contentType: "image/png" }),
+      runCliJson,
+    });
+
+    expect(runCliJson.mock.calls).toEqual([
+      [["send-attachment", "--chat", "chat-1", "--file", "/tmp/image.png", "--transport", "auto"]],
+    ]);
+    expect(client.request).toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({
+        chat_guid: "chat-1",
+        text: "caption",
+      }),
+      expect.any(Object),
+    );
+    expect(result.sentText).toBe("caption");
+    expect(result.receipt.platformMessageIds).toEqual(["p:0/chat-media-guid", "p:0/caption-guid"]);
+    expect(result.receipt.parts.map((part) => part.kind)).toEqual(["media", "text"]);
   });
 
   it("preserves literal media placeholder text when no attachment is sent", async () => {
