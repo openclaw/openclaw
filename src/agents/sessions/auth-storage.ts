@@ -20,6 +20,7 @@ import type {
   OAuthLoginCallbacks,
   OAuthProviderId,
 } from "../../llm/utils/oauth/types.js";
+import { replaceFileAtomicSync } from "../../infra/replace-file.js";
 import { getAgentDir } from "../config.js";
 import { resolveConfigValue } from "./resolve-config-value.js";
 
@@ -116,8 +117,14 @@ export class FileAuthStorageBackend implements AuthStorageBackend {
       const current = existsSync(this.authPath) ? readFileSync(this.authPath, "utf-8") : undefined;
       const { result, next } = fn(current);
       if (next !== undefined) {
-        writeFileSync(this.authPath, next, "utf-8");
-        chmodSync(this.authPath, 0o600);
+        replaceFileAtomicSync({
+          filePath: this.authPath,
+          content: next,
+          mode: 0o600,
+          tempPrefix: "auth.json",
+          syncTempFile: true,
+          syncParentDir: true,
+        });
       }
       return result;
     } finally {
@@ -161,8 +168,14 @@ export class FileAuthStorageBackend implements AuthStorageBackend {
       const { result, next } = await fn(current);
       throwIfCompromised();
       if (next !== undefined) {
-        writeFileSync(this.authPath, next, "utf-8");
-        chmodSync(this.authPath, 0o600);
+        replaceFileAtomicSync({
+          filePath: this.authPath,
+          content: next,
+          mode: 0o600,
+          tempPrefix: "auth.json",
+          syncTempFile: true,
+          syncParentDir: true,
+        });
       }
       throwIfCompromised();
       return result;
