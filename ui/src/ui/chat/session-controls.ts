@@ -372,7 +372,17 @@ async function applyChatSessionPickerSearch(state: AppViewState) {
   clearChatSessionPickerSearchTimer(state);
   const query = normalizeOptionalString(state.chatSessionPickerQuery) ?? "";
   if (!query) {
-    clearChatSessionPickerSearch(state);
+    // Only clear when a previous search query needs to be undone.
+    // Skipping when there is nothing to revert prevents a destructive
+    // re-render during the blur→click sequence: the blur handler fires
+    // before the click event, and clearChatSessionPickerSearch nullifies
+    // chatSessionPickerResult + triggers requestHostUpdate.  The Lit
+    // microtask re-render rebuilds the option list DOM between pointerdown
+    // and pointerup, causing the browser to drop the click event entirely
+    // (pointerdown/pointerup target mismatch).
+    if (state.chatSessionPickerAppliedQuery) {
+      clearChatSessionPickerSearch(state);
+    }
     return;
   }
   if (query === state.chatSessionPickerAppliedQuery && state.chatSessionPickerResult) {

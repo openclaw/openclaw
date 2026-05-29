@@ -1433,6 +1433,43 @@ describe("chat session controls", () => {
     });
   });
 
+  it("does not destroy picker result on blur when search query is empty", () => {
+    // Regression test: when the search input loses focus while the query
+    // is empty (user never typed anything), applyChatSessionPickerSearch
+    // must NOT clear chatSessionPickerResult.  A destructive clear causes
+    // a Lit re-render between pointerdown and pointerup, shifting the DOM
+    // so the click event never fires on the picker option button.
+    const { state } = createChatHeaderState();
+    state.sessionsIncludeGlobal = false;
+    state.sessionsIncludeUnknown = false;
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    // Open picker — this populates chatSessionPickerResult
+    container.querySelector<HTMLButtonElement>('button[data-chat-session-select="true"]')!.click();
+    render(renderChatSessionSelect(state), container);
+    const input = container.querySelector<HTMLInputElement>(
+      'input[data-chat-session-picker-search="true"]',
+    );
+    expect(input).toBeInstanceOf(HTMLInputElement);
+
+    // Wait for initial load to complete
+    expect(state.chatSessionPickerOpen).toBe(true);
+
+    // Simulate the result being populated (as if server responded)
+    state.chatSessionPickerResult = state.sessionsResult;
+    render(renderChatSessionSelect(state), container);
+
+    const resultBefore = state.chatSessionPickerResult;
+    expect(resultBefore).not.toBeNull();
+
+    // Blur with empty query — must NOT clear the result
+    input!.dispatchEvent(new FocusEvent("blur", { bubbles: false }));
+
+    expect(state.chatSessionPickerResult).toBe(resultBefore);
+    expect(state.chatSessionPickerOpen).toBe(true);
+  });
+
   it("clears applied chat session picker search when the input is cleared", async () => {
     const { state } = createChatHeaderState();
     state.sessionsIncludeGlobal = false;
