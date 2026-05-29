@@ -1111,9 +1111,9 @@ export const ar: TranslationMap = {
       sendMessage: "Send message",
     },
     queue: {
-      retry: "Retry",
-      retrySend: "Retry send",
-      retryQueuedMessage: "Retry queued message",
+      retry: "إعادة المحاولة",
+      retrySend: "إعادة الإرسال",
+      retryQueuedMessage: "إعادة محاولة الرسالة في قائمة الانتظار",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",

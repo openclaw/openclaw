@@ -186,6 +186,7 @@ describe("resolveBuildAllSteps", () => {
       "check-plugin-sdk-exports",
       "plugins:assets:copy",
       "copy-hook-metadata",
+      "copy-copilot-sdk-manifest",
       "copy-export-html-templates",
       "ui:build",
       "write-build-info",

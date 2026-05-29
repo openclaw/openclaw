@@ -76,6 +76,20 @@ describe("normalizeClaudeSettingSourcesArgs", () => {
   });
 });
 
+describe("Claude CLI model aliases", () => {
+  it("keeps pinned Claude CLI model refs on exact selectors", () => {
+    const aliases = buildAnthropicCliBackend().config.modelAliases;
+
+    expect(aliases?.["opus"]).toBe("opus");
+    expect(aliases?.["opus-4.8"]).toBe("claude-opus-4-8");
+    expect(aliases?.["opus-4.7"]).toBe("claude-opus-4-7");
+    expect(aliases?.["opus-4.6"]).toBe("claude-opus-4-6");
+    expect(aliases?.["claude-opus-4-8"]).toBe("claude-opus-4-8");
+    expect(aliases?.["claude-opus-4-7"]).toBe("claude-opus-4-7");
+    expect(aliases?.["claude-opus-4-6"]).toBe("claude-opus-4-6");
+  });
+});
+
 describe("resolveClaudeCliExecutionArgs", () => {
   it("omits effort args when thinking is off", () => {
     expect(

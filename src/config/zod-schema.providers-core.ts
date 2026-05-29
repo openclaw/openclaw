@@ -102,6 +102,9 @@ const ChannelStreamingProgressSchema = z
     commandText: z.enum(["raw", "status"]).optional(),
   })
   .strict();
+const DiscordStreamingProgressSchema = ChannelStreamingProgressSchema.extend({
+  commentary: z.boolean().optional(),
+}).strict();
 const SlackStreamingProgressSchema = ChannelStreamingProgressSchema.extend({
   nativeTaskCards: z.boolean().optional(),
 }).strict();
@@ -116,6 +119,9 @@ const ChannelPreviewStreamingConfigSchema = z
   .strict();
 const TelegramPreviewStreamingConfigSchema = ChannelPreviewStreamingConfigSchema.extend({
   preview: TelegramStreamingPreviewSchema.optional(),
+}).strict();
+const DiscordPreviewStreamingConfigSchema = ChannelPreviewStreamingConfigSchema.extend({
+  progress: DiscordStreamingProgressSchema.optional(),
 }).strict();
 const SlackStreamingConfigSchema = ChannelPreviewStreamingConfigSchema.extend({
   nativeTransport: z.boolean().optional(),
@@ -574,6 +580,8 @@ const DiscordVoiceRealtimeSchema = z
   .object({
     provider: z.string().min(1).optional(),
     model: z.string().min(1).optional(),
+    speakerVoice: z.string().min(1).optional(),
+    speakerVoiceId: z.string().min(1).optional(),
     voice: z.string().min(1).optional(),
     instructions: z.string().min(1).optional(),
     toolPolicy: DiscordVoiceRealtimeToolPolicySchema.optional(),
@@ -650,7 +658,7 @@ export const DiscordAccountSchema = z
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
     textChunkLimit: z.number().int().positive().optional(),
     suppressEmbeds: z.boolean().optional(),
-    streaming: ChannelPreviewStreamingConfigSchema.optional(),
+    streaming: DiscordPreviewStreamingConfigSchema.optional(),
     maxLinesPerMessage: z.number().int().positive().optional(),
     mediaMaxMb: z.number().positive().optional(),
     retry: RetryConfigSchema,

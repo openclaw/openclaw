@@ -1133,9 +1133,9 @@ export const it: TranslationMap = {
       sendMessage: "Send message",
     },
     queue: {
-      retry: "Retry",
-      retrySend: "Retry send",
-      retryQueuedMessage: "Retry queued message",
+      retry: "Riprova",
+      retrySend: "Riprova invio",
+      retryQueuedMessage: "Riprova messaggio in coda",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",

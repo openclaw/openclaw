@@ -1130,9 +1130,9 @@ export const ja_JP: TranslationMap = {
       sendMessage: "Send message",
     },
     queue: {
-      retry: "Retry",
-      retrySend: "Retry send",
-      retryQueuedMessage: "Retry queued message",
+      retry: "再試行",
+      retrySend: "送信を再試行",
+      retryQueuedMessage: "キュー内のメッセージを再試行",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",

@@ -118,6 +118,7 @@ export function buildInworldSpeechProvider(): SpeechProviderPlugin {
     id: "inworld",
     label: "Inworld",
     autoSelectOrder: 30,
+    defaultModel: DEFAULT_INWORLD_MODEL_ID,
     models: INWORLD_TTS_MODELS,
     resolveConfig: ({ rawConfig }) => normalizeInworldProviderConfig(rawConfig),
     parseDirectiveToken,

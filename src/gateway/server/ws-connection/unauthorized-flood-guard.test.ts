@@ -31,6 +31,25 @@ describe("UnauthorizedFloodGuard", () => {
     });
   });
 
+  it("uses default thresholds for non-finite options", () => {
+    const guard = new UnauthorizedFloodGuard({
+      closeAfter: Number.NaN,
+      logEvery: Number.POSITIVE_INFINITY,
+    });
+
+    for (let i = 0; i < 10; i += 1) {
+      expect(guard.registerUnauthorized().shouldClose).toBe(false);
+    }
+
+    const eleventh = guard.registerUnauthorized();
+    expect(eleventh).toMatchObject({
+      shouldClose: true,
+      shouldLog: true,
+      count: 11,
+      suppressedSinceLastLog: 9,
+    });
+  });
+
   it("resets counters", () => {
     const guard = new UnauthorizedFloodGuard({ closeAfter: 10, logEvery: 50 });
     guard.registerUnauthorized();

@@ -231,6 +231,11 @@ export type AgentEventHandlerOptions = {
   loadGatewaySessionRowForSnapshot?: typeof loadGatewaySessionRow;
   lifecycleErrorRetryGraceMs?: number;
   isChatSendRunActive?: (runId: string) => boolean;
+  clearTrackedActiveRun?: (params: {
+    runId: string;
+    clientRunId: string;
+    sessionKey: string;
+  }) => void;
 };
 
 export function createAgentEventHandler({
@@ -247,6 +252,7 @@ export function createAgentEventHandler({
   loadGatewaySessionRowForSnapshot = loadGatewaySessionRow,
   lifecycleErrorRetryGraceMs = AGENT_LIFECYCLE_ERROR_RETRY_GRACE_MS,
   isChatSendRunActive = () => false,
+  clearTrackedActiveRun,
 }: AgentEventHandlerOptions) {
   type TerminalLifecycleOptions = { skipChatErrorFinal?: boolean };
   type PendingTerminalLifecycleError = {
@@ -462,6 +468,7 @@ export function createAgentEventHandler({
     agentRunSeq.delete(clientRunId);
 
     if (sessionKey) {
+      clearTrackedActiveRun?.({ runId: evt.runId, clientRunId, sessionKey });
       void persistGatewaySessionLifecycleEvent({ sessionKey, event: evt }).catch(() => undefined);
       const sessionEventConnIds = sessionEventSubscribers.getAll();
       if (sessionEventConnIds.size > 0) {

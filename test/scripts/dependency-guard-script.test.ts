@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import {
   dependencyGuardCommentHeadSha,
   dependencyFieldChanges,
@@ -71,13 +70,7 @@ describe("dependency guard script", () => {
           scripts: { test: "new" },
         },
       ),
-    ).toEqual([
-      "optionalDependencies",
-      "peerDependencies",
-      "overrides",
-      "packageManager",
-      "pnpm",
-    ]);
+    ).toEqual(["optionalDependencies", "peerDependencies", "overrides", "packageManager", "pnpm"]);
   });
 
   it("accepts only security-member override commands for the current head sha", () => {

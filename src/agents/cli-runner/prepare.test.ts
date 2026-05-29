@@ -1849,7 +1849,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
               input: "stdin",
               sessionMode: "existing",
               modelAliases: {
-                "claude-opus-4-7": "opus",
+                "claude-opus-4-8": "opus",
               },
             },
           },
@@ -1873,7 +1873,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         workspaceDir: dir,
         prompt: "latest ask",
         provider: "claude-cli",
-        model: "claude-opus-4-7",
+        model: "claude-opus-4-8",
         timeoutMs: 1_000,
         runId: "run-auto-claude-alias-reseed-history-chars",
         config: createCliBackendConfig(),

@@ -1,5 +1,11 @@
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { coerceFiniteScheduleNumber } from "./schedule-number.js";
+import { normalizeCronStaggerMs } from "./stagger.js";
+
+type CronScheduleIdentityInput = { schedule?: unknown; enabled?: unknown } & Record<
+  string,
+  unknown
+>;
 
 function readString(record: Record<string, unknown>, key: string): string | undefined {
   return normalizeOptionalString(record[key]);
@@ -7,6 +13,10 @@ function readString(record: Record<string, unknown>, key: string): string | unde
 
 function readNumber(record: Record<string, unknown>, key: string): number | undefined {
   return coerceFiniteScheduleNumber(record[key]);
+}
+
+function readStaggerMs(record: Record<string, unknown>): number | undefined {
+  return normalizeCronStaggerMs(record.staggerMs);
 }
 
 function schedulePayloadFromRecord(
@@ -23,7 +33,7 @@ function schedulePayloadFromRecord(
   const everyMs = readNumber(schedule, "everyMs");
   const anchorMs = readNumber(schedule, "anchorMs");
   const tz = readString(schedule, "tz");
-  const staggerMs = readNumber(schedule, "staggerMs");
+  const staggerMs = readStaggerMs(schedule);
   const kind =
     rawKind === "at" || rawKind === "every" || rawKind === "cron"
       ? rawKind
@@ -52,7 +62,7 @@ function schedulePayloadFromRecord(
 }
 
 function resolveSchedulePayload(
-  job: { schedule?: unknown } & Record<string, unknown>,
+  job: CronScheduleIdentityInput,
 ): ReturnType<typeof schedulePayloadFromRecord> {
   if (job.schedule && typeof job.schedule === "object" && !Array.isArray(job.schedule)) {
     return schedulePayloadFromRecord(job.schedule as Record<string, unknown>);
@@ -60,9 +70,7 @@ function resolveSchedulePayload(
   return schedulePayloadFromRecord(job);
 }
 
-export function tryCronScheduleIdentity(
-  job: { schedule?: unknown; enabled?: unknown } & Record<string, unknown>,
-): string | undefined {
+export function tryCronScheduleIdentity(job: CronScheduleIdentityInput): string | undefined {
   const schedule = resolveSchedulePayload(job);
   if (!schedule) {
     return undefined;
@@ -75,11 +83,11 @@ export function tryCronScheduleIdentity(
 }
 
 export function cronSchedulingInputsEqual(
-  previous: { schedule?: unknown; enabled?: unknown },
-  next: { schedule?: unknown; enabled?: unknown },
+  previous: CronScheduleIdentityInput,
+  next: CronScheduleIdentityInput,
 ): boolean {
-  const previousIdentity = tryCronScheduleIdentity(previous as Record<string, unknown>);
-  const nextIdentity = tryCronScheduleIdentity(next as Record<string, unknown>);
+  const previousIdentity = tryCronScheduleIdentity(previous);
+  const nextIdentity = tryCronScheduleIdentity(next);
   return (
     previousIdentity !== undefined &&
     nextIdentity !== undefined &&

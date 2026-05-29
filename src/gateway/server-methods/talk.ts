@@ -8,6 +8,10 @@ import {
   validateTalkModeParams,
   validateTalkSpeakParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  withSpeakerSelectionCompat,
+  withSpeakerSelectionFallbackCompat,
+} from "../../../packages/speech-core/speaker.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { redactConfigObject } from "../../config/redact-snapshot.js";
 import {
@@ -104,6 +108,31 @@ function resolveTalkVoiceId(
   return requested;
 }
 
+function withTalkBaseTtsSpeakerSelectionCompat(
+  baseTts: Record<string, unknown>,
+): Record<string, unknown> {
+  const next = withSpeakerSelectionCompat(baseTts);
+  const providers = asRecord(baseTts.providers);
+  if (providers) {
+    next.providers = Object.fromEntries(
+      Object.entries(providers).map(([providerId, providerConfig]) => [
+        providerId,
+        withSpeakerSelectionCompat(asRecord(providerConfig) ?? {}),
+      ]),
+    );
+  }
+  for (const [key, value] of Object.entries(baseTts)) {
+    if (key === "providers") {
+      continue;
+    }
+    const record = asRecord(value);
+    if (record) {
+      next[key] = withSpeakerSelectionCompat(record);
+    }
+  }
+  return next;
+}
+
 function buildTalkTtsConfig(
   config: OpenClawConfig,
 ):
@@ -126,8 +155,10 @@ function buildTalkTtsConfig(
     };
   }
 
-  const baseTts = config.messages?.tts ?? {};
-  const providerConfig = resolved.config;
+  const baseTts = withTalkBaseTtsSpeakerSelectionCompat(
+    asRecord(config.messages?.tts) ?? {},
+  ) as TtsConfig;
+  const providerConfig = withSpeakerSelectionFallbackCompat(resolved.config);
   const resolvedProviderConfig =
     speechProvider.resolveTalkConfig?.({
       cfg: config,
@@ -392,10 +423,14 @@ function resolveTalkResponseFromConfig(params: {
   }
 
   const speechProvider = getSpeechProvider(provider, params.runtimeConfig);
-  const sourceBaseTts = asRecord(params.sourceConfig.messages?.tts) ?? {};
-  const runtimeBaseTts = asRecord(params.runtimeConfig.messages?.tts) ?? {};
-  const sourceProviderConfig = sourceResolved?.config ?? {};
-  const runtimeProviderConfig = runtimeResolved?.config ?? {};
+  const sourceBaseTts = withTalkBaseTtsSpeakerSelectionCompat(
+    asRecord(params.sourceConfig.messages?.tts) ?? {},
+  );
+  const runtimeBaseTts = withTalkBaseTtsSpeakerSelectionCompat(
+    asRecord(params.runtimeConfig.messages?.tts) ?? {},
+  );
+  const sourceProviderConfig = withSpeakerSelectionFallbackCompat(sourceResolved?.config);
+  const runtimeProviderConfig = withSpeakerSelectionFallbackCompat(runtimeResolved?.config);
   const selectedBaseTts =
     Object.keys(runtimeBaseTts).length > 0
       ? runtimeBaseTts

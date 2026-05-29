@@ -35,6 +35,7 @@ async function writeListToolsMcpServer(params: {
   logPath: string;
   delayMs?: number;
   hang?: boolean;
+  inputSchema?: unknown;
 }): Promise<void> {
   await writeExecutable(
     params.filePath,
@@ -44,6 +45,7 @@ import fs from "node:fs/promises";
 const logPath = ${JSON.stringify(params.logPath)};
 const delayMs = ${params.delayMs ?? 0};
 const hang = ${params.hang === true};
+const inputSchema = ${JSON.stringify(params.inputSchema ?? { type: "object", properties: {} })};
 
 let buffer = "";
 let pendingTimer;
@@ -90,7 +92,7 @@ function handle(message) {
             {
               name: "slow_tool",
               description: "Returned after a slow catalog response.",
-              inputSchema: { type: "object", properties: {} },
+              inputSchema,
             },
           ],
         },
@@ -652,6 +654,46 @@ describe("session MCP runtime", () => {
     } finally {
       await runtime.dispose();
       await Promise.race([catalogResult, new Promise((resolve) => setTimeout(resolve, 1000))]);
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("records diagnostics when tools/list returns an invalid tool schema", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-invalid-schema-"));
+    const serverPath = path.join(tempDir, "invalid-schema.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      inputSchema: { type: "array", items: { type: "number" } },
+    });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-invalid-schema",
+      sessionKey: "agent:test:session-invalid-schema",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            dofbot: {
+              command: process.execPath,
+              args: [serverPath],
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      const catalog = await runtime.getCatalog();
+
+      expect(catalog.servers).toEqual({});
+      expect(catalog.tools).toEqual([]);
+      expect(catalog.diagnostics?.[0]?.serverName).toBe("dofbot");
+      expect(catalog.diagnostics?.[0]?.message).toContain("Invalid input: expected");
+      expect(catalog.diagnostics?.[0]?.message).toContain("object");
+    } finally {
+      await runtime.dispose();
       await fs.rm(tempDir, { recursive: true, force: true });
     }
   });

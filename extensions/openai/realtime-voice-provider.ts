@@ -209,7 +209,7 @@ function normalizeProviderConfig(
       path: "plugins.entries.voice-call.config.realtime.providers.openai.apiKey",
     }),
     model: trimToUndefined(raw?.model),
-    voice: normalizeOpenAIRealtimeVoice(raw?.voice),
+    voice: normalizeOpenAIRealtimeVoice(raw?.speakerVoice ?? raw?.voice),
     temperature: asFiniteNumber(raw?.temperature),
     vadThreshold: asUnitInterval(raw?.vadThreshold),
     silenceDurationMs: asNonNegativeInteger(raw?.silenceDurationMs),

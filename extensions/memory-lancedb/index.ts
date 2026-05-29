@@ -139,8 +139,14 @@ export function normalizeRecallQuery(
   maxChars: number = DEFAULT_RECALL_MAX_CHARS,
 ): string {
   const normalized = text.replace(/\s+/g, " ").trim();
-  const limit = Math.max(0, Math.floor(maxChars));
+  const limit = normalizeMaxChars(maxChars, DEFAULT_RECALL_MAX_CHARS);
   return normalized.length > limit ? truncateUtf16Safe(normalized, limit).trimEnd() : normalized;
+}
+
+function normalizeMaxChars(value: number | undefined, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(0, Math.floor(value))
+    : fallback;
 }
 
 function messageFingerprint(message: unknown): string {
@@ -572,7 +578,7 @@ export function shouldCapture(
   text: string,
   options?: { customTriggers?: string[]; maxChars?: number },
 ): boolean {
-  const maxChars = options?.maxChars ?? DEFAULT_CAPTURE_MAX_CHARS;
+  const maxChars = normalizeMaxChars(options?.maxChars, DEFAULT_CAPTURE_MAX_CHARS);
   if (text.length > maxChars) {
     return false;
   }

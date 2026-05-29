@@ -2408,6 +2408,7 @@ describe("memory plugin e2e", () => {
     const customTooLong = `I always prefer this style. ${"x".repeat(1600)}`;
     expect(shouldCapture(customAllowed, { maxChars: 1500 })).toBe(true);
     expect(shouldCapture(customTooLong, { maxChars: 1500 })).toBe(false);
+    expect(shouldCapture(defaultTooLong, { maxChars: Number.NaN })).toBe(false);
   });
 
   test("normalizeRecallQuery trims whitespace and bounds embedding input", () => {
@@ -2415,6 +2416,7 @@ describe("memory plugin e2e", () => {
       "remember the blue mug",
     );
     expect(normalizeRecallQuery(`look up ${"x".repeat(200)}`, 120)).toHaveLength(120);
+    expect(normalizeRecallQuery(`look up ${"x".repeat(2000)}`, Number.NaN)).toHaveLength(1000);
   });
 
   test("normalizeEmbeddingVector accepts float arrays and base64 float32 responses", () => {

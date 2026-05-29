@@ -2,6 +2,12 @@
 
 Docs: https://docs.openclaw.ai
 
+## Unreleased
+
+### Fixes
+
+- Cron: retry recurring jobs after transient model rate limits before waiting for the next scheduled slot.
+
 ## 2026.5.28
 
 ### Highlights

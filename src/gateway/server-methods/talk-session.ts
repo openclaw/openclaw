@@ -261,6 +261,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           providerConfigs: realtimeConfig.providers,
           cfg: runtimeConfig,
           cfgForResolve: runtimeConfig,
+          defaultModel: realtimeConfig.model,
           noRegisteredProviderMessage: "No realtime voice provider registered",
         });
         const launchOptions = buildRealtimeVoiceLaunchOptions({
@@ -317,6 +318,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           config: runtimeConfig,
           configuredProviderId: transcriptionConfig.provider,
           providerConfigs: transcriptionConfig.providers,
+          defaultModel: transcriptionConfig.model,
         });
         const session = createTalkTranscriptionRelaySession({
           context,

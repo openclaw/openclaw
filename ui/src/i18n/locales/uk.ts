@@ -1129,9 +1129,9 @@ export const uk: TranslationMap = {
       sendMessage: "Send message",
     },
     queue: {
-      retry: "Retry",
-      retrySend: "Retry send",
-      retryQueuedMessage: "Retry queued message",
+      retry: "Повторити",
+      retrySend: "Повторити надсилання",
+      retryQueuedMessage: "Повторити надсилання повідомлення в черзі",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",

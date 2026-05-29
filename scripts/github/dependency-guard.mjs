@@ -75,7 +75,9 @@ function stableJson(value) {
 }
 
 export function sanitizeDisplayValue(value) {
-  return String(value).replace(/[\p{Cc}]/gu, "?").slice(0, 240);
+  return String(value)
+    .replace(/[\p{Cc}]/gu, "?")
+    .slice(0, 240);
 }
 
 export function markdownCode(value) {
@@ -242,10 +244,7 @@ export function renderAuthorizedDependencyComment(override) {
   if (override.reason) {
     lines.push(`- Reason: ${markdownCode(override.reason)}`);
   }
-  lines.push(
-    "",
-    "A later push changes the PR head SHA and requires a fresh security approval.",
-  );
+  lines.push("", "A later push changes the PR head SHA and requires a fresh security approval.");
   return lines.join("\n");
 }
 
@@ -278,19 +277,20 @@ export function renderBlockedDependencyComment({
       `- ${markdownCode(change.path)} changed ${change.fields.map(markdownCode).join(", ")}.`,
     );
   }
-  const removalSteps = lockfileChanges.length > 0
-    ? [
-        "",
-        "To remove accidental lockfile residue, restore the lockfile changes from the target branch:",
-        "",
-        "```bash",
-        "git fetch origin",
-        `git checkout ${baseRef} -- ${lockfileChanges.map(shellQuote).join(" ")}`,
-        'git commit -m "Remove dependency lockfile change"',
-        "git push",
-        "```",
-      ]
-    : [];
+  const removalSteps =
+    lockfileChanges.length > 0
+      ? [
+          "",
+          "To remove accidental lockfile residue, restore the lockfile changes from the target branch:",
+          "",
+          "```bash",
+          "git fetch origin",
+          `git checkout ${baseRef} -- ${lockfileChanges.map(shellQuote).join(" ")}`,
+          'git commit -m "Remove dependency lockfile change"',
+          "git push",
+          "```",
+        ]
+      : [];
   return [
     dependencyGraphGuardMarker,
     "",
@@ -328,7 +328,9 @@ function githubApi(token) {
       return null;
     }
     if (!response.ok) {
-      const error = new Error(`${response.status} ${response.statusText}: ${await response.text()}`);
+      const error = new Error(
+        `${response.status} ${response.statusText}: ${await response.text()}`,
+      );
       error.status = response.status;
       throw error;
     }
@@ -477,39 +479,49 @@ async function main() {
     if (!labelNames.has(label)) {
       return;
     }
-    await api.request(`${issuePath}/labels/${encodeURIComponent(label)}`, {
-      method: "DELETE",
-    }).catch(ignoreUnavailableWritePermission(`label "${label}" removal`));
+    await api
+      .request(`${issuePath}/labels/${encodeURIComponent(label)}`, {
+        method: "DELETE",
+      })
+      .catch(ignoreUnavailableWritePermission(`label "${label}" removal`));
   };
   const addLabelIfMissing = async (label) => {
     if (labelNames.has(label)) {
       return;
     }
-    await api.request(`${issuePath}/labels`, {
-      method: "POST",
-      body: JSON.stringify({ labels: [label] }),
-    }).catch(ignoreUnavailableWritePermission(`label "${label}" update`));
+    await api
+      .request(`${issuePath}/labels`, {
+        method: "POST",
+        body: JSON.stringify({ labels: [label] }),
+      })
+      .catch(ignoreUnavailableWritePermission(`label "${label}" update`));
   };
   const deleteCommentIfPresent = async (comment) => {
     if (!comment) {
       return;
     }
-    await api.request(`/repos/${owner}/${repo}/issues/comments/${comment.id}`, {
-      method: "DELETE",
-    }).catch(ignoreUnavailableWritePermission("comment deletion"));
+    await api
+      .request(`/repos/${owner}/${repo}/issues/comments/${comment.id}`, {
+        method: "DELETE",
+      })
+      .catch(ignoreUnavailableWritePermission("comment deletion"));
   };
   const upsertComment = async (comment, body) => {
     if (comment) {
-      await api.request(`/repos/${owner}/${repo}/issues/comments/${comment.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ body }),
-      }).catch(ignoreUnavailableWritePermission("comment update"));
+      await api
+        .request(`/repos/${owner}/${repo}/issues/comments/${comment.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ body }),
+        })
+        .catch(ignoreUnavailableWritePermission("comment update"));
       return;
     }
-    await api.request(`${issuePath}/comments`, {
-      method: "POST",
-      body: JSON.stringify({ body }),
-    }).catch(ignoreUnavailableWritePermission("comment creation"));
+    await api
+      .request(`${issuePath}/comments`, {
+        method: "POST",
+        body: JSON.stringify({ body }),
+      })
+      .catch(ignoreUnavailableWritePermission("comment creation"));
   };
 
   if (dependencyGraphFiles.length === 0) {

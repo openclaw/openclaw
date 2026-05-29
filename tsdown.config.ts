@@ -371,6 +371,15 @@ function buildGatewayClientDistEntries(): Record<string, string> {
   };
 }
 
+function buildSpeechCoreDistEntries(): Record<string, string> {
+  return {
+    api: "packages/speech-core/api.ts",
+    "runtime-api": "packages/speech-core/runtime-api.ts",
+    speaker: "packages/speech-core/speaker.ts",
+    "voice-models": "packages/speech-core/voice-models.ts",
+  };
+}
+
 function shouldExternalizeAgentCoreDependency(id: string): boolean {
   return (
     id === "ignore" ||
@@ -394,6 +403,10 @@ function shouldExternalizeGatewayClientDependency(id: string): boolean {
     id === "@openclaw/gateway-protocol" ||
     id.startsWith("@openclaw/gateway-protocol/")
   );
+}
+
+function shouldExternalizeSpeechCoreDependency(id: string): boolean {
+  return id === "openclaw" || id.startsWith("openclaw/");
 }
 
 const coreDistEntries = buildCoreDistEntries();
@@ -454,6 +467,15 @@ export default defineConfig([
     outDir: "packages/gateway-client/dist",
     deps: {
       neverBundle: shouldExternalizeGatewayClientDependency,
+    },
+  }),
+  nodeWorkspacePackageBuildConfig({
+    clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    entry: buildSpeechCoreDistEntries(),
+    outDir: "packages/speech-core/dist",
+    deps: {
+      neverBundle: shouldExternalizeSpeechCoreDependency,
     },
   }),
   nodeBuildConfig({
