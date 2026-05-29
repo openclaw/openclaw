@@ -1,4 +1,5 @@
 import { chmodSync, copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { delimiter, join, win32 } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -14,6 +15,7 @@ import {
   shellQuote,
 } from "../../scripts/e2e/parallels/common.ts";
 import { resolveHostCommandInvocation } from "../../scripts/e2e/parallels/host-command.ts";
+import { testing as hostServerTesting } from "../../scripts/e2e/parallels/host-server.ts";
 import { spawnNodeEvalSync } from "../../src/test-utils/node-process.js";
 
 const WRAPPERS = {
@@ -95,6 +97,19 @@ function withEnv<T>(env: Record<string, string>, callback: () => T): T {
   }
 }
 
+async function unusedLoopbackPort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  await new Promise<void>((resolve, reject) =>
+    server.close((error) => (error ? reject(error) : resolve())),
+  );
+  if (!address || typeof address === "string") {
+    throw new Error("Expected TCP server address.");
+  }
+  return address.port;
+}
+
 describe("Parallels smoke model selection", () => {
   it("keeps the public shell entrypoints as thin TypeScript launchers", () => {
     for (const [platform, wrapperPath] of Object.entries(WRAPPERS)) {
@@ -173,6 +188,57 @@ describe("Parallels smoke model selection", () => {
       expect(script, scriptPath).not.toContain("def aliases(name: str)");
     }
   });
+
+  it("bounds host artifact server startup stderr", () => {
+    const retained = hostServerTesting.appendBoundedOutput(
+      "a".repeat(10),
+      Buffer.from("b".repeat(10)),
+      12,
+    );
+    expect(retained).toBe(`${"a".repeat(2)}${"b".repeat(10)}`);
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "reports only the bounded host artifact server stderr tail",
+    async () => {
+      const tempDir = mkdtempSync(join(tmpdir(), "openclaw-parallels-host-server-"));
+      const fakePython = join(tempDir, "python3");
+      writeFileSync(
+        fakePython,
+        `#!/usr/bin/env bash
+set -euo pipefail
+printf 'BEGIN_MARKER\\n' >&2
+head -c 200000 </dev/zero | tr '\\0' x >&2
+printf '\\nTAIL_MARKER\\n' >&2
+exit 42
+`,
+      );
+      chmodSync(fakePython, 0o755);
+
+      try {
+        const port = await unusedLoopbackPort();
+        const result = spawnNodeEvalSync(
+          `import { startHostServer } from "./${TS_PATHS.hostServer}"; await startHostServer({ dir: ".", hostIp: "127.0.0.1", port: ${port}, artifactPath: "artifact.tgz", label: "artifact" });`,
+          {
+            env: {
+              ...process.env,
+              PATH: `${tempDir}${delimiter}${process.env.PATH ?? ""}`,
+            },
+            imports: ["tsx"],
+            maxBuffer: 1024 * 1024,
+          },
+        );
+
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain("host artifact server exited early");
+        expect(result.stderr).toContain("TAIL_MARKER");
+        expect(result.stderr).not.toContain("BEGIN_MARKER");
+        expect(Buffer.byteLength(result.stderr, "utf8")).toBeLessThan(90 * 1024);
+      } finally {
+        rmSync(tempDir, { force: true, recursive: true });
+      }
+    },
+  );
 
   it("quotes shell args and resolves fuzzy snapshot hints through the shared TypeScript helper", () => {
     const tempDir = mkdtempSync(join(tmpdir(), "openclaw-parallels-helper-"));

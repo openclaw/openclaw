@@ -27,30 +27,33 @@ function toAgentToolResult(params: {
   const content = Array.isArray(params.result.content)
     ? (params.result.content as AgentToolResult<unknown>["content"])
     : [];
-  const normalizedContent: AgentToolResult<unknown>["content"] =
-    content.length > 0
+  const structuredContentBlock =
+    params.result.structuredContent !== undefined
+      ? ({
+          type: "text",
+          text: `structuredContent:\n${JSON.stringify(params.result.structuredContent, null, 2)}`,
+        } as const)
+      : null;
+  // Structured MCP results are the canonical model payload here; replacing
+  // mirrored content avoids duplicating large tool output in the prompt.
+  const normalizedContent: AgentToolResult<unknown>["content"] = structuredContentBlock
+    ? [structuredContentBlock]
+    : content.length > 0
       ? content
-      : params.result.structuredContent !== undefined
-        ? [
-            {
-              type: "text",
-              text: JSON.stringify(params.result.structuredContent, null, 2),
-            },
-          ]
-        : ([
-            {
-              type: "text",
-              text: JSON.stringify(
-                {
-                  status: params.result.isError === true ? "error" : "ok",
-                  server: params.serverName,
-                  tool: params.toolName,
-                },
-                null,
-                2,
-              ),
-            },
-          ] as AgentToolResult<unknown>["content"]);
+      : ([
+          {
+            type: "text",
+            text: JSON.stringify(
+              {
+                status: params.result.isError === true ? "error" : "ok",
+                server: params.serverName,
+                tool: params.toolName,
+              },
+              null,
+              2,
+            ),
+          },
+        ] as AgentToolResult<unknown>["content"]);
   const details: Record<string, unknown> = {
     mcpServer: params.serverName,
     mcpTool: params.toolName,

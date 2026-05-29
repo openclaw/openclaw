@@ -115,6 +115,41 @@ describe("runway video generation provider", () => {
     expect(metadata.endpoint).toBe("/v1/text_to_video");
   });
 
+  it("does not round malformed duration values into create requests", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({ id: "task-duration" }),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce({
+        json: async () => ({
+          id: "task-duration",
+          status: "SUCCEEDED",
+          output: ["https://example.com/out.mp4"],
+        }),
+        headers: new Headers(),
+      })
+      .mockResolvedValueOnce({
+        arrayBuffer: async () => Buffer.from("mp4-bytes"),
+        headers: new Headers({ "content-type": "video/mp4" }),
+      });
+
+    const provider = buildRunwayVideoGenerationProvider();
+    await provider.generateVideo({
+      provider: "runway",
+      model: "gen4.5",
+      prompt: "a tiny lobster DJ under neon lights",
+      cfg: {},
+      durationSeconds: 4.5,
+      aspectRatio: "16:9",
+    });
+
+    expect(postJsonRequestMock).toHaveBeenCalledTimes(1);
+    expect(firstPostJsonRequest().body?.duration).toBe(5);
+  });
+
   it("accepts local image buffers by converting them into data URIs", async () => {
     postJsonRequestMock.mockResolvedValue({
       response: {

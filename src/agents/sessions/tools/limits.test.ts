@@ -33,6 +33,20 @@ describe("session tool limits", () => {
     expect(Buffer.byteLength(output, "utf8")).toBe(16);
   });
 
+  it("does not exceed the byte cap when clipping multibyte text", () => {
+    const output = appendBoundedTextTail("ignored", "é", 1);
+
+    expect(output).toBe("");
+    expect(Buffer.byteLength(output, "utf8")).toBeLessThanOrEqual(1);
+  });
+
+  it("keeps complete multibyte characters at the bounded tail", () => {
+    const output = appendBoundedTextTail("prefix", "aé", 2);
+
+    expect(output).toBe("é");
+    expect(Buffer.byteLength(output, "utf8")).toBe(2);
+  });
+
   it("uses the session stderr tail limit by default", () => {
     const output = appendBoundedTextTail("", "x".repeat(SESSION_TOOL_STDERR_TAIL_BYTES + 1));
 

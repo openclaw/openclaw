@@ -78,6 +78,22 @@ describe("msteams attachment allowlists", () => {
     });
   });
 
+  it("allows Azure China Bot Framework attachment URLs with auth by default", () => {
+    const policy = resolveAttachmentFetchPolicy();
+    const url = "https://msteams.botframework.azure.cn/teams/v3/attachments/att-1/views/original";
+    const headers = new Headers();
+
+    expect(isUrlAllowed(url, policy.allowHosts)).toBe(true);
+    applyAuthorizationHeaderForUrl({
+      headers,
+      url,
+      authAllowHosts: policy.authAllowHosts,
+      bearerToken: "token-1",
+    });
+
+    expect(headers.get("Authorization")).toBe("Bearer token-1");
+  });
+
   it("requires https and host suffix match", () => {
     const allowHosts = resolveAllowedHosts(["sharepoint.com"]);
     expect(isUrlAllowed("https://contoso.sharepoint.com/file.png", allowHosts)).toBe(true);

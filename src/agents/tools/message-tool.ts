@@ -1,4 +1,8 @@
 import { Type, type TSchema } from "typebox";
+import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../../packages/gateway-protocol/src/client-info.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import {
@@ -21,7 +25,6 @@ import { getScopedChannelsCommandSecretTargets } from "../../cli/command-secret-
 import { resolveMessageSecretScope } from "../../cli/message-secret-scope.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../gateway/protocol/client-info.js";
 import { getToolResult, runMessageAction } from "../../infra/outbound/message-action-runner.js";
 import { resolveAllowedMessageActions } from "../../infra/outbound/outbound-policy.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
@@ -39,8 +42,9 @@ import { resolveSessionAgentId } from "../agent-scope.js";
 import { listAllChannelSupportedActions, listChannelSupportedActions } from "../channel-tools.js";
 import { channelTargetSchema, channelTargetsSchema, stringEnum } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult, readNumberParam, readStringParam } from "./common.js";
-import { resolveGatewayOptions } from "./gateway.js";
+import { jsonResult, readStringParam } from "./common.js";
+import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
+import { readGatewayCallOptions, resolveGatewayOptions } from "./gateway.js";
 
 const AllMessageActions = CHANNEL_MESSAGE_ACTION_NAMES;
 const MESSAGE_TOOL_THREAD_READ_HINT =
@@ -421,11 +425,7 @@ function buildModerationSchema() {
 }
 
 function buildGatewaySchema() {
-  return {
-    gatewayUrl: Type.Optional(Type.String()),
-    gatewayToken: Type.Optional(Type.String()),
-    timeoutMs: Type.Optional(Type.Number()),
-  };
+  return gatewayCallOptionSchemaProperties();
 }
 
 function buildPresenceSchema() {
@@ -1014,11 +1014,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         params.accountId = accountId;
       }
 
-      const gatewayResolved = resolveGatewayOptions({
-        gatewayUrl: readStringParam(params, "gatewayUrl", { trim: false }),
-        gatewayToken: readStringParam(params, "gatewayToken", { trim: false }),
-        timeoutMs: readNumberParam(params, "timeoutMs"),
-      });
+      const gatewayResolved = resolveGatewayOptions(readGatewayCallOptions(params));
       const gateway = {
         url: gatewayResolved.url,
         token: gatewayResolved.token,

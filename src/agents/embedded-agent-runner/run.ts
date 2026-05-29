@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import { resolveStorePath, updateSessionStoreEntry } from "../../config/sessions.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import {
   resolveContextEngine,
@@ -207,7 +208,54 @@ const MID_TURN_PRECHECK_CONTINUATION_PROMPT =
   "Continue from the current transcript after the latest tool result. Do not repeat the original user request, and do not rerun completed tools unless the transcript shows they are still needed.";
 const COMPACTION_CONTINUATION_RETRY_INSTRUCTION =
   "The previous attempt compacted the conversation context before producing a final user-visible answer. Continue from the compacted transcript and produce the final answer now. Do not restart from scratch, do not repeat completed work, and do not rerun tools unless the transcript clearly lacks required evidence.";
+const NO_REAL_CONVERSATION_MESSAGES_REASON = "no real conversation messages";
 type EmbeddedRunAttemptForRunner = Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
+
+function isNoRealConversationCompactionNoop(params: {
+  ok?: boolean;
+  compacted?: boolean;
+  reason?: string;
+}): boolean {
+  return (
+    params.ok === true &&
+    params.compacted === false &&
+    params.reason === NO_REAL_CONVERSATION_MESSAGES_REASON
+  );
+}
+
+async function resetNoRealConversationTokenSnapshot(params: {
+  config?: RunEmbeddedAgentParams["config"];
+  sessionKey?: string;
+  agentId?: string;
+}): Promise<void> {
+  if (!params.sessionKey) {
+    return;
+  }
+  const storePath = resolveStorePath(params.config?.session?.store, { agentId: params.agentId });
+  try {
+    await updateSessionStoreEntry({
+      storePath,
+      sessionKey: params.sessionKey,
+      skipMaintenance: true,
+      takeCacheOwnership: true,
+      update: async () => ({
+        totalTokens: 0,
+        totalTokensFresh: true,
+        inputTokens: undefined,
+        outputTokens: undefined,
+        cacheRead: undefined,
+        cacheWrite: undefined,
+        contextBudgetStatus: undefined,
+        updatedAt: Date.now(),
+      }),
+    });
+  } catch (err) {
+    log.warn(
+      `[context-overflow-precheck] failed to reset stale context snapshot for ` +
+        `${params.sessionKey}: ${String(err)}`,
+    );
+  }
+}
 
 function resolveAttemptDispatchApiKey(params: {
   apiKeyInfo: ApiKeyInfo | null;
@@ -733,17 +781,26 @@ export async function runEmbeddedAgent(
         pluginHarnessOwnsTransport &&
         provider === OPENAI_CODEX_PROVIDER_ID &&
         effectiveModel.api === "openai-codex-responses";
+      const openClawNativeCodexResponsesNeedsAuthBootstrap =
+        !pluginHarnessOwnsTransport &&
+        provider === OPENAI_CODEX_PROVIDER_ID &&
+        effectiveModel.api === "openai-codex-responses";
       let piExternalCliAuthScope = pluginHarnessOwnsTransport
         ? { ignoreAutoPreferredProfile: false }
-        : resolveExternalCliAuthOverlayScopeFromSelection({
-            provider,
-            cfg: params.config,
-            agentId: params.agentId,
-            modelId,
-            workspaceDir: resolvedWorkspace,
-            userLockedAuthProfileId:
-              params.authProfileIdSource === "user" ? params.authProfileId : undefined,
-          });
+        : openClawNativeCodexResponsesNeedsAuthBootstrap
+          ? {
+              providerIds: [OPENAI_CODEX_PROVIDER_ID],
+              ignoreAutoPreferredProfile: false,
+            }
+          : resolveExternalCliAuthOverlayScopeFromSelection({
+              provider,
+              cfg: params.config,
+              agentId: params.agentId,
+              modelId,
+              workspaceDir: resolvedWorkspace,
+              userLockedAuthProfileId:
+                params.authProfileIdSource === "user" ? params.authProfileId : undefined,
+            });
       let noExternalAuthStore: AuthProfileStore | undefined;
       if (
         !pluginHarnessOwnsTransport &&
@@ -2114,6 +2171,23 @@ export async function runEmbeddedAgent(
                 };
               }
               await runOwnsCompactionAfterHook("overflow recovery", compactResult);
+              if (preflightRecovery && isNoRealConversationCompactionNoop(compactResult)) {
+                lastCompactionTokensAfter = undefined;
+                lastContextBudgetStatus = undefined;
+                await resetNoRealConversationTokenSnapshot({
+                  config: params.config,
+                  sessionKey: params.sessionKey,
+                  agentId: sessionAgentId,
+                });
+                log.info(
+                  `[context-overflow-precheck] stale token state had no real conversation messages for ` +
+                    `${provider}/${modelId}; resetting the context snapshot and retrying prompt`,
+                );
+                if (preflightRecovery.source === "mid-turn") {
+                  continueFromCurrentTranscript();
+                }
+                continue;
+              }
               if (compactResult.compacted) {
                 adoptCompactionTranscript(compactResult);
                 if (

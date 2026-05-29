@@ -541,6 +541,22 @@ function matchWildcardComparator(token: string): "any" | "none" | null {
   return operator === ">" || operator === "<" ? "none" : "any";
 }
 
+function shouldPreservePluginApiPrereleaseFloor(target: string): boolean {
+  return Boolean(
+    parseComparableSemver(normalizePartialComparableVersion(target).version)?.prerelease?.length,
+  );
+}
+
+function normalizePluginApiVersionForComparator(version: string, target: string): string {
+  const normalizedCorrection = normalizeCalVerNumericCorrectionForPluginApi(version);
+  if (normalizedCorrection) {
+    return normalizedCorrection;
+  }
+  return shouldPreservePluginApiPrereleaseFloor(target)
+    ? version
+    : normalizeCalVerCorrectionForPluginApi(version);
+}
+
 function satisfiesComparator(version: string, token: string): boolean {
   const trimmed = token.trim();
   if (!trimmed) {
@@ -553,8 +569,9 @@ function satisfiesComparator(version: string, token: string): boolean {
   if (trimmed.startsWith("^")) {
     const base = trimmed.slice(1).trim();
     const upperBound = upperBoundForCaret(base);
-    const lowerCmp = compareSemver(version, base);
-    const upperCmp = upperBound ? compareSemver(version, upperBound) : null;
+    const comparableVersion = normalizePluginApiVersionForComparator(version, base);
+    const lowerCmp = compareSemver(comparableVersion, base);
+    const upperCmp = upperBound ? compareSemver(comparableVersion, upperBound) : null;
     return lowerCmp != null && upperCmp != null && lowerCmp >= 0 && upperCmp < 0;
   }
 
@@ -567,8 +584,9 @@ function satisfiesComparator(version: string, token: string): boolean {
   if (!target) {
     return false;
   }
+  const comparableVersion = normalizePluginApiVersionForComparator(version, target);
   const normalizedTarget = normalizePartialComparableVersion(target);
-  const cmp = compareSemver(version, normalizedTarget.version);
+  const cmp = compareSemver(comparableVersion, normalizedTarget.version);
   if (cmp == null) {
     return false;
   }
@@ -595,7 +613,15 @@ function satisfiesSemverRange(version: string, range: string): boolean {
   return tokens.every((token) => satisfiesComparator(version, token));
 }
 
-const OPENCLAW_CALVER_STABLE_CORRECTION_PATTERN = /^[vV]?(\d{4}\.\d{1,2}\.\d{1,2})-\d+$/;
+const OPENCLAW_CALVER_STABLE_CORRECTION_PATTERN =
+  /^[vV]?(\d{4}\.\d{1,2}\.\d{1,2})(?:-\d+|-(?:alpha|beta|rc)\.\d+)$/i;
+const OPENCLAW_CALVER_NUMERIC_CORRECTION_PATTERN = /^[vV]?(\d{4}\.\d{1,2}\.\d{1,2})-\d+$/;
+
+function normalizeCalVerNumericCorrectionForPluginApi(
+  pluginApiVersion: string,
+): string | undefined {
+  return OPENCLAW_CALVER_NUMERIC_CORRECTION_PATTERN.exec(pluginApiVersion.trim())?.[1];
+}
 
 function normalizeCalVerCorrectionForPluginApi(pluginApiVersion: string): string {
   const match = OPENCLAW_CALVER_STABLE_CORRECTION_PATTERN.exec(pluginApiVersion.trim());
@@ -1263,10 +1289,7 @@ export function satisfiesPluginApiRange(
   if (!pluginApiRange) {
     return true;
   }
-  return satisfiesSemverRange(
-    normalizeCalVerCorrectionForPluginApi(pluginApiVersion),
-    pluginApiRange,
-  );
+  return satisfiesSemverRange(pluginApiVersion, pluginApiRange);
 }
 
 export function satisfiesGatewayMinimum(

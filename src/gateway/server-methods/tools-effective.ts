@@ -1,4 +1,10 @@
 import {
+  ErrorCodes,
+  errorShape,
+  formatValidationErrors,
+  validateToolsEffectiveParams,
+} from "../../../packages/gateway-protocol/src/index.js";
+import {
   buildEffectiveToolInventoryGroups,
   buildRuntimeCompatibleToolInventory,
 } from "../../agents/tools-effective-inventory.js";
@@ -10,12 +16,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logDebug, logWarn } from "../../logger.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import {
-  ErrorCodes,
-  errorShape,
-  formatValidationErrors,
-  validateToolsEffectiveParams,
-} from "../protocol/index.js";
 import {
   applyFinalEffectiveToolPolicy,
   buildBundleMcpToolsFromCatalog,

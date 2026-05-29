@@ -1,8 +1,8 @@
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import type { ChannelHealthSummary, HealthSummary } from "../../commands/health.types.js";
 import { getStatusSummary } from "../../commands/status.js";
 import { getGatewayModelPricingHealth } from "../model-pricing-cache-state.js";
-import { ErrorCodes, errorShape } from "../protocol/index.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import { HEALTH_REFRESH_INTERVAL_MS } from "../server-constants.js";
 import { formatError } from "../server-utils.js";

@@ -397,6 +397,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/docker-e2e-timings.mjs", ["test/scripts/docker-e2e-helper-cli.test.ts"]],
   ["scripts/kova-ci-summary.mjs", ["test/scripts/kova-ci-summary.test.ts"]],
   ["scripts/test-extension-batch.mjs", ["test/scripts/test-extension.test.ts"]],
+  ["scripts/zai-fallback-repro.ts", ["test/scripts/zai-fallback-repro.test.ts"]],
   ["scripts/lib/extension-test-plan.mjs", ["test/scripts/test-extension.test.ts"]],
   ["scripts/lib/vitest-batch-runner.mjs", ["test/scripts/test-extension.test.ts"]],
   ["scripts/lib/ci-node-test-plan.mjs", ["test/scripts/ci-node-test-plan.test.ts"]],
@@ -461,6 +462,7 @@ const TOOLING_TEST_TARGETS = new Map([
     "test/scripts/vitest-local-scheduling.test.ts",
     ["test/scripts/vitest-local-scheduling.test.ts"],
   ],
+  ["test/scripts/zai-fallback-repro.test.ts", ["test/scripts/zai-fallback-repro.test.ts"]],
 ]);
 const GROUP_VISIBLE_REPLY_TEST_TARGETS = [
   "src/auto-reply/reply/dispatch-acp.test.ts",

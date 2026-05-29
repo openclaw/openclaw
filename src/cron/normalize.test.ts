@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { validateCronAddParams, validateCronUpdateParams } from "../gateway/protocol/index.js";
+import {
+  validateCronAddParams,
+  validateCronUpdateParams,
+} from "../../packages/gateway-protocol/src/index.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "./normalize.js";
 import { DEFAULT_TOP_OF_HOUR_STAGGER_MS } from "./stagger.js";
 

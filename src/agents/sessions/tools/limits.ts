@@ -7,6 +7,24 @@ export function normalizePositiveLimit(value: number | undefined, fallback: numb
 
 export const SESSION_TOOL_STDERR_TAIL_BYTES = 64 * 1024;
 
+function decodeUtf8TextTail(buffer: Buffer, maxBytes: number): string {
+  const chars = Array.from(buffer.toString("utf8"));
+  const kept: string[] = [];
+  let bytes = 0;
+
+  for (let i = chars.length - 1; i >= 0; i--) {
+    const char = chars[i] ?? "";
+    const charBytes = Buffer.byteLength(char, "utf8");
+    if (bytes + charBytes > maxBytes) {
+      break;
+    }
+    kept.push(char);
+    bytes += charBytes;
+  }
+
+  return kept.toReversed().join("");
+}
+
 export function appendBoundedTextTail(
   current: string,
   chunk: Buffer | string,
@@ -15,7 +33,7 @@ export function appendBoundedTextTail(
   const effectiveMaxBytes = normalizePositiveLimit(maxBytes, SESSION_TOOL_STDERR_TAIL_BYTES);
   const chunkBuffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
   if (chunkBuffer.byteLength >= effectiveMaxBytes) {
-    return chunkBuffer.subarray(chunkBuffer.byteLength - effectiveMaxBytes).toString("utf8");
+    return decodeUtf8TextTail(chunkBuffer, effectiveMaxBytes);
   }
 
   const currentBuffer = Buffer.from(current);
@@ -26,5 +44,5 @@ export function appendBoundedTextTail(
 
   const currentTailBytes = Math.max(0, effectiveMaxBytes - chunkBuffer.byteLength);
   const currentTail = currentBuffer.subarray(currentBuffer.byteLength - currentTailBytes);
-  return Buffer.concat([currentTail, chunkBuffer], effectiveMaxBytes).toString("utf8");
+  return decodeUtf8TextTail(Buffer.concat([currentTail, chunkBuffer]), effectiveMaxBytes);
 }

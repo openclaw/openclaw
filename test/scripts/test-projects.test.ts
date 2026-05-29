@@ -214,6 +214,13 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
+  it("routes Z.AI fallback repro script changes through its regression test", () => {
+    expect(resolveChangedTestTargetPlan(["scripts/zai-fallback-repro.ts"])).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/zai-fallback-repro.test.ts"],
+    });
+  });
+
   it("routes group visible reply config changes through channel delivery regressions", () => {
     expect(
       resolveChangedTestTargetPlan([

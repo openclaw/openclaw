@@ -24,6 +24,7 @@ import {
   hasChildExited,
   makeEnv,
   readPositiveInt,
+  readBoundedResponseText,
   runCommand,
   sampleProcess,
   sampleWindowsProcessByPort,
@@ -618,6 +619,27 @@ describe("kitchen-sink RPC process sampling", () => {
       }),
     ).resolves.toEqual({ ok: true, status: 200, body: { status: "live" } });
     expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("bounds HTTP probe response bodies", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(new Response("x".repeat(1025), { status: 200 }));
+
+    await expect(
+      fetchJson("http://127.0.0.1:19680/healthz", {
+        attempts: 1,
+        fetchImpl,
+        maxBodyBytes: 1024,
+      }),
+    ).rejects.toMatchObject({
+      code: "ETOOBIG",
+      message: "fetch response body exceeded 1024 bytes",
+    });
+  });
+
+  it("reads bounded response streams", async () => {
+    await expect(readBoundedResponseText(new Response('{"status":"live"}'), 1024)).resolves.toBe(
+      '{"status":"live"}',
+    );
   });
 
   it("times out stalled HTTP probe response bodies", async () => {

@@ -9,10 +9,11 @@ export function registerBrowserNavigationCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
 ) {
-  const parseRequiredNumber = (value: unknown, label: string): number | undefined => {
-    const parsed = Number(value);
-    if (!Number.isFinite(parsed)) {
-      defaultRuntime.error(danger(`Invalid ${label}: must be a finite number`));
+  const parsePositiveInteger = (value: unknown, label: string): number | undefined => {
+    const raw = typeof value === "string" ? value.trim() : String(value);
+    const parsed = /^\d+$/.test(raw) ? Number(raw) : Number.NaN;
+    if (!Number.isSafeInteger(parsed) || parsed < 1) {
+      defaultRuntime.error(danger(`Invalid ${label}: must be a positive integer`));
       defaultRuntime.exit(1);
       return undefined;
     }
@@ -54,12 +55,12 @@ export function registerBrowserNavigationCommands(
   browser
     .command("resize")
     .description("Resize the viewport")
-    .argument("<width>", "Viewport width", (v: string) => Number(v))
-    .argument("<height>", "Viewport height", (v: string) => Number(v))
+    .argument("<width>", "Viewport width")
+    .argument("<height>", "Viewport height")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
-    .action(async (width: number, height: number, opts, cmd) => {
-      const normalizedWidth = parseRequiredNumber(width, "width");
-      const normalizedHeight = parseRequiredNumber(height, "height");
+    .action(async (width: string, height: string, opts, cmd) => {
+      const normalizedWidth = parsePositiveInteger(width, "width");
+      const normalizedHeight = parsePositiveInteger(height, "height");
       if (normalizedWidth === undefined || normalizedHeight === undefined) {
         return;
       }

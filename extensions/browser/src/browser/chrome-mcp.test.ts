@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clickChromeMcpElement,
   buildChromeMcpArgs,
+  decodeChromeMcpStderrTail,
   ensureChromeMcpAvailable,
   evaluateChromeMcpScript,
   listChromeMcpTabs,
@@ -449,6 +450,14 @@ describe("chrome MCP page parsing", () => {
     );
     expect(message).not.toContain(homeDir);
     expect(message).not.toContain(userDataDir);
+  });
+
+  it("keeps Chrome MCP stderr tails within the byte cap without splitting UTF-8", () => {
+    const output = decodeChromeMcpStderrTail(Buffer.from(`${"x".repeat(8191)}é`));
+
+    expect(output).toMatch(/é$/);
+    expect(output).not.toContain("�");
+    expect(Buffer.byteLength(output, "utf8")).toBeLessThanOrEqual(8192);
   });
 
   it("parses new_page text responses and returns the created tab", async () => {

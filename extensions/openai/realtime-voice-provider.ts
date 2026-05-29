@@ -211,9 +211,9 @@ function normalizeProviderConfig(
     model: trimToUndefined(raw?.model),
     voice: normalizeOpenAIRealtimeVoice(raw?.voice),
     temperature: asFiniteNumber(raw?.temperature),
-    vadThreshold: asFiniteNumber(raw?.vadThreshold),
-    silenceDurationMs: asFiniteNumber(raw?.silenceDurationMs),
-    prefixPaddingMs: asFiniteNumber(raw?.prefixPaddingMs),
+    vadThreshold: asUnitInterval(raw?.vadThreshold),
+    silenceDurationMs: asNonNegativeInteger(raw?.silenceDurationMs),
+    prefixPaddingMs: asNonNegativeInteger(raw?.prefixPaddingMs),
     interruptResponseOnInputAudio:
       typeof raw?.interruptResponseOnInputAudio === "boolean"
         ? raw.interruptResponseOnInputAudio
@@ -228,7 +228,12 @@ function normalizeProviderConfig(
 
 function asNonNegativeInteger(value: unknown): number | undefined {
   const number = asFiniteNumber(value);
-  return number === undefined || number < 0 ? undefined : Math.floor(number);
+  return number !== undefined && Number.isSafeInteger(number) && number >= 0 ? number : undefined;
+}
+
+function asUnitInterval(value: unknown): number | undefined {
+  const number = asFiniteNumber(value);
+  return number !== undefined && number >= 0 && number <= 1 ? number : undefined;
 }
 
 type OpenAIRealtimeApiKeyResolution =

@@ -7,6 +7,7 @@ import {
   type NodeListNode,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
+import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import { wrapExternalContent } from "openclaw/plugin-sdk/security-runtime";
 import { appendFileTransferAudit } from "../shared/audit.js";
 import { throwFromNodePayload } from "../shared/errors.js";
@@ -37,9 +38,7 @@ export function createFileFetchTool(): AnyAgentTool {
         throw new Error("path required");
       }
       const requestedMax =
-        typeof params.maxBytes === "number" && Number.isFinite(params.maxBytes)
-          ? Math.floor(params.maxBytes)
-          : FILE_FETCH_DEFAULT_MAX_BYTES;
+        readPositiveIntegerParam(params, "maxBytes") ?? FILE_FETCH_DEFAULT_MAX_BYTES;
       const maxBytes = Math.max(1, Math.min(requestedMax, FILE_FETCH_HARD_MAX_BYTES));
 
       const gatewayOpts = readGatewayCallOptions(params);
