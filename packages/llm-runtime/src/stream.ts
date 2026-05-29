@@ -7,7 +7,9 @@ import type {
   ProviderStreamOptions,
   SimpleStreamOptions,
   StreamOptions,
-} from "@openclaw/llm-core";
+} from "../../llm-core/src/index.js";
+// Type-only source import keeps plugin SDK declarations self-contained; package
+// runtime emits no llm-core import from this module.
 import { getApiProvider } from "./api-registry.js";
 
 function resolveApiProvider(api: Api) {
