@@ -311,7 +311,7 @@ export function createDiscordDraftPreviewController(params: {
       if (!text && !itemId) {
         return;
       }
-      const normalized = normalizeCommentaryProgressText(text);
+      const normalized = normalizeCommentaryProgressText(text ?? "");
       const lineId = itemId ? `commentary:${itemId}` : normalized ? `commentary:${normalized}` : "";
       if (!normalized) {
         if (lineId) {
