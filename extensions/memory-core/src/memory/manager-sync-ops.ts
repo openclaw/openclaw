@@ -278,6 +278,20 @@ export abstract class MemoryManagerSyncOps {
     return row?.found === 1;
   }
 
+  protected backfillChunkIdentityFromMeta(meta: MemoryIndexMeta | null): void {
+    if (!meta) {
+      return;
+    }
+    this.db
+      .prepare(
+        `UPDATE chunks
+            SET provider = ?, provider_key = ?
+          WHERE (provider = 'unknown' OR provider IS NULL)
+            AND model = ?`,
+      )
+      .run(meta.provider, meta.providerKey ?? "", meta.model);
+  }
+
   protected resolveCurrentIndexIdentityState(params?: {
     meta?: MemoryIndexMeta | null;
     provider?: { id: string; model: string } | null;
@@ -1536,6 +1550,7 @@ export abstract class MemoryManagerSyncOps {
 
   private async syncSessionFiles(params: {
     needsFullReindex: boolean;
+    reindexUnchanged?: boolean;
     targetSessionFiles?: string[];
     progress?: MemorySyncProgressState;
   }) {
@@ -1623,7 +1638,7 @@ export abstract class MemoryManagerSyncOps {
           path: entry.path,
           existingHashes,
         });
-        if (!params.needsFullReindex && existingHash === entry.hash) {
+        if (!params.needsFullReindex && !params.reindexUnchanged && existingHash === entry.hash) {
           if (params.progress) {
             params.progress.completed += 1;
             params.progress.report({
@@ -1752,6 +1767,7 @@ export abstract class MemoryManagerSyncOps {
     }
     const vectorReady = await this.ensureVectorReady();
     const meta = this.readMeta();
+    this.backfillChunkIdentityFromMeta(meta);
     const targetSessionFiles = this.normalizeTargetSessionFiles(params?.sessionFiles);
     const hasTargetSessionFiles = targetSessionFiles !== null;
     if (params?.reason === "cli" && !params.force && !hasTargetSessionFiles) {
@@ -1778,29 +1794,22 @@ export abstract class MemoryManagerSyncOps {
       hasIndexedChunks: this.hasIndexedChunks(),
       ftsTokenizer: this.settings.store.fts.tokenizer,
     });
-    const needsFullReindex =
-      (params?.force && !hasTargetSessionFiles) || indexIdentity.status !== "valid";
+    const hasIndexedChunks = this.hasIndexedChunks();
+    const needsInitialIndex = indexIdentity.status !== "valid" && !hasIndexedChunks;
+    const needsFullReindex = (params?.force && !hasTargetSessionFiles) || needsInitialIndex;
     if (!needsFullReindex) {
       const targetedSessionSync = await runMemoryTargetedSessionSync({
         hasSessionSource: this.sources.has("sessions"),
         targetSessionFiles,
         reason: params?.reason,
         progress: progress ?? undefined,
-        useUnsafeReindex:
-          process.env.OPENCLAW_TEST_FAST === "1" &&
-          process.env.OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX === "1",
+        reindexUnchanged: indexIdentity.status !== "valid",
         sessionsDirtyFiles: this.sessionsDirtyFiles,
         syncSessionFiles: async (targetedParams) => {
           await this.syncSessionFiles(targetedParams);
         },
         shouldFallbackOnError: (err) => this.shouldFallbackOnError(err),
         activateFallbackProvider: async (reason) => await this.activateFallbackProvider(reason),
-        runSafeReindex: async (reindexParams) => {
-          await this.runSafeReindex(reindexParams);
-        },
-        runUnsafeReindex: async (reindexParams) => {
-          await this.runUnsafeReindex(reindexParams);
-        },
       });
       if (targetedSessionSync.handled) {
         this.sessionsDirty = targetedSessionSync.sessionsDirty;
@@ -1856,20 +1865,17 @@ export abstract class MemoryManagerSyncOps {
       const activated =
         this.shouldFallbackOnError(err) && (await this.activateFallbackProvider(reason));
       if (activated) {
-        await this.runSafeReindex({
-          reason: params?.reason ?? "fallback",
-          force: true,
-          progress: progress ?? undefined,
-        });
+        if (params?.force && !hasTargetSessionFiles) {
+          await this.runSafeReindex({
+            reason: params?.reason ?? "fallback",
+            force: true,
+            progress: progress ?? undefined,
+          });
+        }
         return;
       }
       if (!this.provider && this.fts.enabled && this.shouldFallbackOnError(err)) {
-        log.warn(`memory embeddings unavailable; rebuilding lexical memory index only: ${reason}`);
-        await this.runSafeReindex({
-          reason: params?.reason ?? "embedding-degraded",
-          force: true,
-          progress: progress ?? undefined,
-        });
+        log.warn(`memory embeddings unavailable; leaving memory index dirty: ${reason}`);
         return;
       }
       throw err;

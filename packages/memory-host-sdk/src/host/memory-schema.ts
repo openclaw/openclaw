@@ -32,6 +32,8 @@ export function ensureMemoryIndexSchema(params: {
       start_line INTEGER NOT NULL,
       end_line INTEGER NOT NULL,
       hash TEXT NOT NULL,
+      provider TEXT NOT NULL DEFAULT 'unknown',
+      provider_key TEXT NOT NULL DEFAULT '',
       model TEXT NOT NULL,
       text TEXT NOT NULL,
       embedding TEXT NOT NULL,
@@ -83,8 +85,13 @@ export function ensureMemoryIndexSchema(params: {
 
   ensureColumn(params.db, "files", "source", "TEXT NOT NULL DEFAULT 'memory'");
   ensureColumn(params.db, "chunks", "source", "TEXT NOT NULL DEFAULT 'memory'");
+  ensureColumn(params.db, "chunks", "provider", "TEXT NOT NULL DEFAULT 'unknown'");
+  ensureColumn(params.db, "chunks", "provider_key", "TEXT NOT NULL DEFAULT ''");
   params.db.exec(`CREATE INDEX IF NOT EXISTS idx_chunks_path ON chunks(path);`);
   params.db.exec(`CREATE INDEX IF NOT EXISTS idx_chunks_source ON chunks(source);`);
+  params.db.exec(
+    `CREATE INDEX IF NOT EXISTS idx_chunks_identity ON chunks(provider, model, provider_key);`,
+  );
 
   return { ftsAvailable, ...(ftsError ? { ftsError } : {}) };
 }

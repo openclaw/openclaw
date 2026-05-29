@@ -86,7 +86,7 @@ export function resolveConfiguredScopeHash(params: {
   );
 }
 
-export function shouldRunFullMemoryReindex(params: {
+export function isMemoryIndexIdentityDirty(params: {
   meta: MemoryIndexMeta | null;
   provider: { id: string; model: string } | null;
   providerKey?: string;

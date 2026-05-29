@@ -270,6 +270,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       extensionPath: params.settings.store.vector.extensionPath,
     };
     const meta = this.readMeta();
+    this.backfillChunkIdentityFromMeta(meta);
     if (meta?.vectorDims) {
       this.vector.dims = meta.vectorDims;
     }
@@ -464,29 +465,18 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         return false;
       });
       if (activatedFallback) {
-        await this.runSafeReindex({ reason: "fallback", force: true });
+        this.refreshIndexIdentityDirty({
+          providerKeyKnown: this.providerInitialized,
+        });
       }
     }
     const indexIdentity = this.refreshIndexIdentityDirty({
       providerKeyKnown: this.providerInitialized,
     });
-    if (indexIdentity.status !== "valid") {
-      try {
-        await this.sync({ reason: "search", force: true });
-      } catch (err) {
-        log.warn(`memory sync failed (search-bootstrap): ${String(err)}`);
-        return [];
-      }
-      hasIndexedContent = this.hasIndexedContent();
-      if (
-        this.refreshIndexIdentityDirty({
-          providerKeyKnown: this.providerInitialized,
-        }).status !== "valid" ||
-        !hasIndexedContent
-      ) {
-        return [];
-      }
+    if (indexIdentity.status === "missing") {
+      return [];
     }
+    let keywordIndexTrusted = indexIdentity.status === "valid";
     const minScore = opts?.minScore ?? this.settings.query.minScore;
     const maxResults = opts?.maxResults ?? this.settings.query.maxResults;
     const searchSources =
@@ -509,6 +499,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
 
     // FTS-only mode: no embedding provider available
     if (!this.provider) {
+      if (!keywordIndexTrusted) {
+        return [];
+      }
       if (!this.fts.enabled || !this.fts.available) {
         log.warn("memory search: no provider and FTS unavailable");
         return [];
@@ -575,7 +568,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
 
     // If FTS isn't available, hybrid mode cannot use keyword search; degrade to vector-only.
     const loadKeywordResults = async () =>
-      hybrid.enabled && this.fts.enabled && this.fts.available
+      keywordIndexTrusted && hybrid.enabled && this.fts.enabled && this.fts.available
         ? await this.searchKeyword(
             cleaned,
             candidates,
@@ -602,7 +595,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
           })
         : false;
       if (activatedFallback) {
-        await this.runSafeReindex({ reason: "fallback", force: true });
+        keywordIndexTrusted =
+          this.refreshIndexIdentityDirty({
+            providerKeyKnown: this.providerInitialized,
+          }).status === "valid";
         keywordResults = await loadKeywordResults();
         queryVec = await this.embedQueryWithRetry(cleaned);
       } else if (!this.provider && this.fts.enabled && this.fts.available) {
@@ -701,6 +697,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     const results = await searchVector({
       db: this.db,
       vectorTable: VECTOR_TABLE,
+      providerId: this.provider.id,
+      providerKey: this.providerKey,
       providerModel: this.provider.model,
       queryVec,
       limit,

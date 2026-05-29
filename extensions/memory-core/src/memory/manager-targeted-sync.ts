@@ -27,25 +27,16 @@ export async function runMemoryTargetedSessionSync(params: {
   targetSessionFiles: Set<string> | null;
   reason?: string;
   progress?: TargetedSyncProgress;
-  useUnsafeReindex: boolean;
+  reindexUnchanged?: boolean;
   sessionsDirtyFiles: Set<string>;
   syncSessionFiles: (params: {
     needsFullReindex: boolean;
+    reindexUnchanged?: boolean;
     targetSessionFiles?: string[];
     progress?: TargetedSyncProgress;
   }) => Promise<void>;
   shouldFallbackOnError: (err: unknown) => boolean;
   activateFallbackProvider: (reason: string) => Promise<boolean>;
-  runSafeReindex: (params: {
-    reason?: string;
-    force?: boolean;
-    progress?: TargetedSyncProgress;
-  }) => Promise<void>;
-  runUnsafeReindex: (params: {
-    reason?: string;
-    force?: boolean;
-    progress?: TargetedSyncProgress;
-  }) => Promise<void>;
 }): Promise<{ handled: boolean; sessionsDirty: boolean }> {
   if (!params.hasSessionSource || !params.targetSessionFiles) {
     return {
@@ -57,6 +48,7 @@ export async function runMemoryTargetedSessionSync(params: {
   try {
     await params.syncSessionFiles({
       needsFullReindex: false,
+      reindexUnchanged: params.reindexUnchanged,
       targetSessionFiles: Array.from(params.targetSessionFiles),
       progress: params.progress,
     });
@@ -74,19 +66,18 @@ export async function runMemoryTargetedSessionSync(params: {
     if (!activated) {
       throw err;
     }
-    const reindexParams = {
-      reason: params.reason,
-      force: true,
+    await params.syncSessionFiles({
+      needsFullReindex: false,
+      reindexUnchanged: true,
+      targetSessionFiles: Array.from(params.targetSessionFiles),
       progress: params.progress,
-    };
-    if (params.useUnsafeReindex) {
-      await params.runUnsafeReindex(reindexParams);
-    } else {
-      await params.runSafeReindex(reindexParams);
-    }
+    });
     return {
       handled: true,
-      sessionsDirty: params.sessionsDirtyFiles.size > 0,
+      sessionsDirty: clearMemorySyncedSessionFiles({
+        sessionsDirtyFiles: params.sessionsDirtyFiles,
+        targetSessionFiles: params.targetSessionFiles,
+      }),
     };
   }
 }

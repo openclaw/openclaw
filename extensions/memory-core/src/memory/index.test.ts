@@ -405,7 +405,7 @@ describe("memory index", () => {
     }
   });
 
-  it("reindexes on search when existing metadata belongs to another provider", async () => {
+  it("does not full-reindex on search when existing metadata belongs to another provider", async () => {
     const dbPath = path.join(workspaceDir, "index-provider-cutover.sqlite");
     const oldCfg = createCfg({
       storePath: dbPath,
@@ -429,12 +429,27 @@ describe("memory index", () => {
         status: "mismatched",
         reason: "index was built for model old-embed, expected new-embed",
       });
+      embedBatchCalls = 0;
 
       const results = await nextManager.search("alpha");
 
-      expect(results[0]?.snippet).toContain("Alpha memory line");
-      expect(nextManager.status().dirty).toBe(false);
-      expect(nextManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+      expect(results).toStrictEqual([]);
+      expect(embedBatchCalls).toBe(0);
+      expect(nextManager.status().dirty).toBe(true);
+
+      await fs.writeFile(
+        path.join(memoryDir, "2026-01-12.md"),
+        "# Log\nAlpha memory line changed.\nZebra memory line.",
+      );
+      await nextManager.sync({ reason: "watch" });
+
+      const repairedResults = await nextManager.search("alpha");
+      expect(repairedResults[0]?.snippet).toContain("Alpha memory line changed");
+      expect(nextManager.status().dirty).toBe(true);
+      expect(nextManager.status().custom?.indexIdentity).toEqual({
+        status: "mismatched",
+        reason: "index was built for model old-embed, expected new-embed",
+      });
     } finally {
       await nextManager.close?.();
     }
@@ -502,8 +517,11 @@ describe("memory index", () => {
       const results = await nextManager.search("alpha");
 
       expect(results).toStrictEqual([]);
-      expect(nextManager.status().dirty).toBe(false);
-      expect(nextManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+      expect(nextManager.status().dirty).toBe(true);
+      expect(nextManager.status().custom?.indexIdentity).toEqual({
+        status: "missing",
+        reason: "index metadata is missing",
+      });
     } finally {
       await nextManager.close?.();
     }
@@ -652,7 +670,7 @@ describe("memory index", () => {
     }
   });
 
-  it("runs identity reindex before targeted session sync after provider cutover", async () => {
+  it("keeps provider cutover repair targeted during targeted session sync", async () => {
     try {
       vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state-targeted-cutover"));
       const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
@@ -702,10 +720,23 @@ describe("memory index", () => {
 
         await nextManager.sync({ reason: "test", sessionFiles: [sessionFile] });
 
-        expect(nextManager.status().dirty).toBe(false);
-        expect(nextManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+        expect(nextManager.status().dirty).toBe(true);
+        expect(nextManager.status().custom?.indexIdentity).toEqual({
+          status: "mismatched",
+          reason: "index was built for model old-embed, expected new-embed",
+        });
         const results = await nextManager.search("alpha");
-        expect(results.some((result) => result.path.endsWith("memory/2026-01-12.md"))).toBe(true);
+        expect(results.some((result) => result.path.endsWith("memory/2026-01-12.md"))).toBe(false);
+        const currentSessionChunks = (
+          nextManager as unknown as {
+            db: { prepare: (sql: string) => { get: (...args: unknown[]) => { c: number } } };
+          }
+        ).db
+          .prepare(
+            "SELECT COUNT(*) AS c FROM chunks WHERE source = 'sessions' AND provider = ? AND model = ?",
+          )
+          .get("gemini", "new-embed").c;
+        expect(currentSessionChunks).toBeGreaterThan(0);
       } finally {
         await nextManager.close?.();
       }
@@ -1272,11 +1303,7 @@ describe("memory index", () => {
 
     const results = await manager.search("alpha");
 
-    expect(results.length).toBeGreaterThan(0);
-    const resultKeys = results.map(
-      (result) => `${result.source}:${result.path}:${result.startLine}:${result.endLine}`,
-    );
-    expect(new Set(resultKeys).size).toBe(resultKeys.length);
+    expect(results).toStrictEqual([]);
     expect(providerCalls.slice(callsBeforeSearch).map((call) => call.provider)).toContain(
       "fallback-provider",
     );
@@ -1328,7 +1355,7 @@ describe("memory index", () => {
 
     const results = await manager.search("alpha");
 
-    expect(results.length).toBeGreaterThan(0);
+    expect(results).toStrictEqual([]);
     expect(providerCalls.slice(callsBeforeSearch).map((call) => call.provider)).toContain(
       "fallback-provider",
     );

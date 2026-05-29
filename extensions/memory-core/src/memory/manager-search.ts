@@ -129,6 +129,8 @@ function planKeywordSearch(params: {
 export async function searchVector(params: {
   db: DatabaseSync;
   vectorTable: string;
+  providerId?: string;
+  providerKey?: string;
   providerModel: string;
   queryVec: number[];
   limit: number;
@@ -140,6 +142,14 @@ export async function searchVector(params: {
   if (params.queryVec.length === 0 || params.limit <= 0) {
     return [];
   }
+  const identityClause =
+    params.providerId && params.providerKey !== undefined
+      ? " AND c.provider = ? AND c.provider_key = ?"
+      : "";
+  const identityParams =
+    params.providerId && params.providerKey !== undefined
+      ? [params.providerId, params.providerKey]
+      : [];
   if (await params.ensureVectorReady(params.queryVec.length)) {
     // Use sqlite-vec's native KNN (MATCH ? AND k = ?) for candidate selection,
     // which runs in ~O(log N + k) via the vec0 index, instead of the previous
@@ -157,7 +167,7 @@ export async function searchVector(params: {
             `       vec_distance_cosine(v.embedding, ?) AS dist\n` +
             `  FROM ${params.vectorTable} v\n` +
             `  JOIN chunks c ON c.id = v.id\n` +
-            ` WHERE v.embedding MATCH ? AND k = ? AND c.model = ?${params.sourceFilterVec.sql}\n` +
+            ` WHERE v.embedding MATCH ? AND k = ? AND c.model = ?${identityClause}${params.sourceFilterVec.sql}\n` +
             ` ORDER BY dist ASC\n` +
             ` LIMIT ?`,
         )
@@ -166,6 +176,7 @@ export async function searchVector(params: {
           qBlob,
           candidateLimit,
           params.providerModel,
+          ...identityParams,
           ...params.sourceFilterVec.params,
           params.limit,
         ) as Array<{
@@ -184,9 +195,9 @@ export async function searchVector(params: {
       const matchingChunkCount = readCount(
         params.db
           .prepare(
-            `SELECT COUNT(*) AS count FROM chunks c WHERE c.model = ?${params.sourceFilterVec.sql}`,
+            `SELECT COUNT(*) AS count FROM chunks c WHERE c.model = ?${identityClause}${params.sourceFilterVec.sql}`,
           )
-          .get(params.providerModel, ...params.sourceFilterVec.params) as
+          .get(params.providerModel, ...identityParams, ...params.sourceFilterVec.params) as
           | { count?: number | bigint }
           | undefined,
       );
@@ -215,6 +226,8 @@ export async function searchVector(params: {
 
   return await searchChunksByEmbedding({
     db: params.db,
+    providerId: params.providerId,
+    providerKey: params.providerKey,
     providerModel: params.providerModel,
     sourceFilter: params.sourceFilterChunks,
     queryVec: params.queryVec,
@@ -225,6 +238,8 @@ export async function searchVector(params: {
 
 async function searchChunksByEmbedding(params: {
   db: DatabaseSync;
+  providerId?: string;
+  providerKey?: string;
   providerModel: string;
   sourceFilter: { sql: string; params: SearchSource[] };
   queryVec: number[];
@@ -237,10 +252,18 @@ async function searchChunksByEmbedding(params: {
   // Keep batches bounded instead of calling `.all()` across the entire chunks
   // table, and do not hold a sqlite iterator open across the setImmediate yield
   // below. The rowid cursor keeps memory bounded without OFFSET rescans.
+  const identityClause =
+    params.providerId && params.providerKey !== undefined
+      ? " AND provider = ? AND provider_key = ?"
+      : "";
+  const identityParams =
+    params.providerId && params.providerKey !== undefined
+      ? [params.providerId, params.providerKey]
+      : [];
   const stmt = params.db.prepare(
     `SELECT rowid, id, path, start_line, end_line, text, embedding, source\n` +
       `  FROM chunks\n` +
-      ` WHERE model = ? AND rowid > ?${params.sourceFilter.sql}\n` +
+      ` WHERE model = ?${identityClause} AND rowid > ?${params.sourceFilter.sql}\n` +
       ` ORDER BY rowid ASC\n` +
       ` LIMIT ?`,
   );
@@ -260,6 +283,7 @@ async function searchChunksByEmbedding(params: {
   while (true) {
     const batch = stmt.all(
       params.providerModel,
+      ...identityParams,
       lastRowid,
       ...params.sourceFilter.params,
       FALLBACK_VECTOR_BATCH_SIZE,

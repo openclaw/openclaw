@@ -573,10 +573,16 @@ describe("searchVector sqlite-vec KNN", () => {
 
   function insertFallbackChunk(
     db: InstanceType<typeof DatabaseSync>,
-    params: { id: string; model: string; vector: number[] },
+    params: {
+      id: string;
+      model: string;
+      vector: number[];
+      provider?: string;
+      providerKey?: string;
+    },
   ): void {
     db.prepare(
-      "INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO chunks (id, path, source, start_line, end_line, hash, provider, provider_key, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     ).run(
       params.id,
       `memory/${params.id}.md`,
@@ -584,12 +590,52 @@ describe("searchVector sqlite-vec KNN", () => {
       1,
       1,
       params.id,
+      params.provider ?? "unknown",
+      params.providerKey ?? "",
       params.model,
       `chunk ${params.id}`,
       JSON.stringify(params.vector),
       1,
     );
   }
+
+  it("filters fallback vector rows by provider identity when supplied", async () => {
+    const db = createFallbackDb();
+    try {
+      insertFallbackChunk(db, {
+        id: "old-provider",
+        model: "shared-model",
+        provider: "openai",
+        providerKey: "old-key",
+        vector: [1, 0],
+      });
+      insertFallbackChunk(db, {
+        id: "current-provider",
+        model: "shared-model",
+        provider: "ollama",
+        providerKey: "new-key",
+        vector: [0.9, 0.1],
+      });
+
+      const results = await searchVector({
+        db,
+        vectorTable: "chunks_vec",
+        providerId: "ollama",
+        providerKey: "new-key",
+        providerModel: "shared-model",
+        queryVec: [1, 0],
+        limit: 5,
+        snippetMaxChars: 200,
+        ensureVectorReady: async () => false,
+        sourceFilterVec: { sql: "", params: [] },
+        sourceFilterChunks: { sql: "", params: [] },
+      });
+
+      expect(results.map((result) => result.id)).toEqual(["current-provider"]);
+    } finally {
+      db.close();
+    }
+  });
 
   it("returns an empty result set when no chunks match the provider model", async () => {
     const db = createFallbackDb();
