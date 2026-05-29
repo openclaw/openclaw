@@ -28,6 +28,7 @@ type FlowRegistryRow = {
   blocked_summary: string | null;
   state_json: string | null;
   wait_json: string | null;
+  tags_json: string | null;
   cancel_requested_at: number | bigint | null;
   created_at: number | bigint;
   updated_at: number | bigint;
@@ -68,6 +69,7 @@ const FLOW_RUNS_COLUMNS = `
   blocked_summary TEXT,
   state_json TEXT,
   wait_json TEXT,
+  tags_json TEXT,
   cancel_requested_at INTEGER,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
@@ -126,6 +128,7 @@ function rowToFlowRecord(row: FlowRegistryRow): TaskFlowRecord {
   const requesterOrigin = parseDeliveryContextJson(row.requester_origin_json);
   const stateJson = parseJsonValue<JsonValue>(row.state_json);
   const waitJson = parseJsonValue<JsonValue>(row.wait_json);
+  const tags = parseJsonValue<Record<string, string>>(row.tags_json);
   return {
     flowId: row.flow_id,
     syncMode: rowToSyncMode(row),
@@ -141,6 +144,7 @@ function rowToFlowRecord(row: FlowRegistryRow): TaskFlowRecord {
     ...(row.blocked_summary ? { blockedSummary: row.blocked_summary } : {}),
     ...(stateJson !== undefined ? { stateJson } : {}),
     ...(waitJson !== undefined ? { waitJson } : {}),
+    ...(tags ? { tags } : {}),
     ...(cancelRequestedAt != null ? { cancelRequestedAt } : {}),
     createdAt: normalizeNumber(row.created_at) ?? 0,
     updatedAt: normalizeNumber(row.updated_at) ?? 0,
@@ -164,6 +168,7 @@ function bindFlowRecord(record: TaskFlowRecord) {
     blocked_summary: record.blockedSummary ?? null,
     state_json: serializeJson(record.stateJson),
     wait_json: serializeJson(record.waitJson),
+    tags_json: serializeJson(record.tags),
     cancel_requested_at: record.cancelRequestedAt ?? null,
     created_at: record.createdAt,
     updated_at: record.updatedAt,
@@ -190,6 +195,7 @@ function createStatements(db: DatabaseSync): FlowRegistryStatements {
         blocked_summary,
         state_json,
         wait_json,
+        tags_json,
         cancel_requested_at,
         created_at,
         updated_at,
@@ -213,6 +219,7 @@ function createStatements(db: DatabaseSync): FlowRegistryStatements {
         blocked_summary,
         state_json,
         wait_json,
+        tags_json,
         cancel_requested_at,
         created_at,
         updated_at,
@@ -232,6 +239,7 @@ function createStatements(db: DatabaseSync): FlowRegistryStatements {
         @blocked_summary,
         @state_json,
         @wait_json,
+        @tags_json,
         @cancel_requested_at,
         @created_at,
         @updated_at,
@@ -251,6 +259,7 @@ function createStatements(db: DatabaseSync): FlowRegistryStatements {
         blocked_summary = excluded.blocked_summary,
         state_json = excluded.state_json,
         wait_json = excluded.wait_json,
+        tags_json = excluded.tags_json,
         cancel_requested_at = excluded.cancel_requested_at,
         created_at = excluded.created_at,
         updated_at = excluded.updated_at,
@@ -290,6 +299,7 @@ function rebuildLegacyFlowRunsTable(db: DatabaseSync) {
       blocked_summary,
       state_json,
       wait_json,
+      tags_json,
       cancel_requested_at,
       created_at,
       updated_at,
@@ -316,6 +326,8 @@ function rebuildLegacyFlowRunsTable(db: DatabaseSync) {
       blocked_summary,
       state_json,
       wait_json,
+      CASE WHEN EXISTS (SELECT 1 FROM pragma_table_info('flow_runs') WHERE name = 'tags_json')
+        THEN tags_json ELSE NULL END,
       cancel_requested_at,
       created_at,
       updated_at,
@@ -393,6 +405,9 @@ function ensureSchema(db: DatabaseSync) {
   }
   if (!hasFlowRunsColumn(db, "cancel_requested_at")) {
     db.exec(`ALTER TABLE flow_runs ADD COLUMN cancel_requested_at INTEGER;`);
+  }
+  if (!hasFlowRunsColumn(db, "tags_json")) {
+    db.exec(`ALTER TABLE flow_runs ADD COLUMN tags_json TEXT;`);
   }
   if (hasFlowRunsColumn(db, "owner_session_key")) {
     // Populate the canonical fields before rebuilding so existing rows survive the legacy-column

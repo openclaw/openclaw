@@ -1,4 +1,11 @@
 import crypto from "node:crypto";
+import { fireAndForgetHook } from "../hooks/fire-and-forget.js";
+import {
+  createInternalHookEvent,
+  hasInternalHookListeners,
+  triggerInternalHook,
+} from "../hooks/internal-hooks.js";
+import { emitTrustedDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
@@ -54,6 +61,7 @@ type FlowRecordPatch = Omit<
   controllerId?: string | null;
   stateJson?: JsonValue | null;
   waitJson?: JsonValue | null;
+  tags?: Record<string, string> | null;
   cancelRequestedAt?: number | null;
   endedAt?: number | null;
 };
@@ -69,6 +77,7 @@ type FlowRecordCreateFields = {
   blockedSummary?: string | null;
   stateJson?: JsonValue | null;
   waitJson?: JsonValue | null;
+  tags?: Record<string, string> | null;
   cancelRequestedAt?: number | null;
   createdAt?: number;
   updatedAt?: number;
@@ -109,6 +118,7 @@ function cloneFlowRecord(record: TaskFlowRecord): TaskFlowRecord {
       ? { stateJson: cloneStructuredValue(record.stateJson)! }
       : {}),
     ...(record.waitJson !== undefined ? { waitJson: cloneStructuredValue(record.waitJson)! } : {}),
+    ...(record.tags ? { tags: { ...record.tags } } : {}),
   };
 }
 
@@ -133,6 +143,7 @@ function normalizeRestoredFlowRecord(record: TaskFlowRecord): TaskFlowRecord {
       ? { stateJson: cloneStructuredValue(record.stateJson)! }
       : {}),
     ...(record.waitJson !== undefined ? { waitJson: cloneStructuredValue(record.waitJson)! } : {}),
+    ...(record.tags ? { tags: { ...record.tags } } : {}),
     revision: Math.max(0, record.revision),
     cancelRequestedAt: record.cancelRequestedAt ?? undefined,
     endedAt: record.endedAt ?? undefined,
@@ -159,8 +170,124 @@ function ensureNotifyPolicy(notifyPolicy?: TaskNotifyPolicy): TaskNotifyPolicy {
   return notifyPolicy ?? "done_only";
 }
 
+function flowRecordToHookSnapshot(flow: TaskFlowRecord) {
+  return {
+    flowId: flow.flowId,
+    syncMode: flow.syncMode,
+    ownerKey: flow.ownerKey,
+    status: flow.status,
+    goal: flow.goal,
+    ...(flow.currentStep ? { currentStep: flow.currentStep } : {}),
+    ...(flow.controllerId ? { controllerId: flow.controllerId } : {}),
+    ...(flow.tags ? { tags: { ...flow.tags } } : {}),
+    createdAt: flow.createdAt,
+    updatedAt: flow.updatedAt,
+    ...(flow.endedAt != null ? { endedAt: flow.endedAt } : {}),
+  };
+}
+
+function emitTaskFlowHookEvents(next: TaskFlowRecord, previous?: TaskFlowRecord): void {
+  const isNew = !previous;
+  const statusChanged = previous != null && previous.status !== next.status;
+
+  if (isNew) {
+    emitTrustedDiagnosticEvent({
+      type: "task.flow.created",
+      flowId: next.flowId,
+      syncMode: next.syncMode,
+      ownerKey: next.ownerKey,
+      goal: next.goal,
+      ...(next.controllerId ? { controllerId: next.controllerId } : {}),
+      ...(next.tags ? { tags: { ...next.tags } } : {}),
+    });
+
+    if (hasInternalHookListeners("task", "flow:created")) {
+      fireAndForgetHook(
+        triggerInternalHook(
+          createInternalHookEvent("task", "flow:created", next.ownerKey, {
+            flow: flowRecordToHookSnapshot(next),
+          }),
+        ),
+        "task:flow:created hook",
+        (msg) => log.warn(msg),
+      );
+    }
+  }
+
+  if (statusChanged) {
+    const durationMs = (next.updatedAt || Date.now()) - next.createdAt;
+
+    emitTrustedDiagnosticEvent({
+      type: "task.flow.transition",
+      flowId: next.flowId,
+      syncMode: next.syncMode,
+      ownerKey: next.ownerKey,
+      goal: next.goal,
+      previousStatus: previous.status,
+      status: next.status,
+      ...(next.currentStep ? { currentStep: next.currentStep } : {}),
+      ...(next.controllerId ? { controllerId: next.controllerId } : {}),
+      ...(next.tags ? { tags: { ...next.tags } } : {}),
+      durationMs,
+    });
+
+    if (hasInternalHookListeners("task", "flow:transition")) {
+      fireAndForgetHook(
+        triggerInternalHook(
+          createInternalHookEvent("task", "flow:transition", next.ownerKey, {
+            flow: flowRecordToHookSnapshot(next),
+            previousStatus: previous.status,
+            durationMs,
+          }),
+        ),
+        "task:flow:transition hook",
+        (msg) => log.warn(msg),
+      );
+    }
+  }
+}
+
+function emitTaskFlowDeletedHookEvent(flowId: string, previous: TaskFlowRecord): void {
+  emitTrustedDiagnosticEvent({
+    type: "task.flow.deleted",
+    flowId,
+    ownerKey: previous.ownerKey,
+    previousStatus: previous.status,
+    ...(previous.tags ? { tags: { ...previous.tags } } : {}),
+  });
+
+  if (!hasInternalHookListeners("task", "flow:deleted")) {
+    return;
+  }
+  fireAndForgetHook(
+    triggerInternalHook(
+      createInternalHookEvent("task", "flow:deleted", previous.ownerKey, {
+        flowId,
+        previous: flowRecordToHookSnapshot(previous),
+      }),
+    ),
+    "task:flow:deleted hook",
+    (msg) => log.warn(msg),
+  );
+}
+
 function normalizeJsonBlob(value: JsonValue | null | undefined): JsonValue | undefined {
   return value === undefined ? undefined : cloneStructuredValue(value);
+}
+
+function normalizeTags(
+  value: Record<string, string> | null | undefined,
+): Record<string, string> | undefined {
+  if (value == null) {
+    return undefined;
+  }
+  const result: Record<string, string> = {};
+  for (const [key, val] of Object.entries(value)) {
+    if (typeof key === "string" && typeof val === "string") {
+      result[key] = val;
+    }
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
 }
 
 function assertFlowOwnerKey(ownerKey: string): string {
@@ -289,6 +416,7 @@ function buildFlowRecord(params: CreateFlowRecordParams): TaskFlowRecord {
   const now = params.createdAt ?? Date.now();
   const syncMode = params.syncMode ?? "managed";
   const controllerId = syncMode === "managed" ? assertControllerId(params.controllerId) : undefined;
+  const tags = normalizeTags(params.tags);
   return {
     flowId: crypto.randomUUID(),
     syncMode,
@@ -310,6 +438,7 @@ function buildFlowRecord(params: CreateFlowRecordParams): TaskFlowRecord {
     ...(normalizeJsonBlob(params.waitJson) !== undefined
       ? { waitJson: normalizeJsonBlob(params.waitJson)! }
       : {}),
+    ...(tags ? { tags } : {}),
     ...(params.cancelRequestedAt != null ? { cancelRequestedAt: params.cancelRequestedAt } : {}),
     createdAt: now,
     updatedAt: params.updatedAt ?? now,
@@ -346,6 +475,7 @@ function applyFlowPatch(current: TaskFlowRecord, patch: FlowRecordPatch): TaskFl
     stateJson:
       patch.stateJson === undefined ? current.stateJson : normalizeJsonBlob(patch.stateJson),
     waitJson: patch.waitJson === undefined ? current.waitJson : normalizeJsonBlob(patch.waitJson),
+    tags: patch.tags === undefined ? current.tags : normalizeTags(patch.tags),
     cancelRequestedAt:
       patch.cancelRequestedAt === undefined
         ? current.cancelRequestedAt
@@ -364,6 +494,7 @@ function writeFlowRecord(next: TaskFlowRecord, previous?: TaskFlowRecord): TaskF
     flow: cloneFlowRecord(next),
     ...(previous ? { previous: cloneFlowRecord(previous) } : {}),
   }));
+  emitTaskFlowHookEvents(next, previous);
   return cloneFlowRecord(next);
 }
 
@@ -690,6 +821,7 @@ export function deleteTaskFlowRecordById(flowId: string): boolean {
     flowId,
     previous: cloneFlowRecord(current),
   }));
+  emitTaskFlowDeletedHookEvent(flowId, current);
   return true;
 }
 

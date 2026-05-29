@@ -62,6 +62,10 @@ openclaw hooks info session-memory
 | `message:transcribed`    | After audio transcription completes                        |
 | `message:preprocessed`   | After media and link preprocessing completes or is skipped |
 | `message:sent`           | Outbound message delivered                                 |
+| `task:flow:created`      | A new task flow record is created                          |
+| `task:flow:transition`   | A task flow's status changes                               |
+| `task:flow:deleted`      | A task flow record is removed                              |
+| `task`                   | Any task flow event (general listener)                     |
 
 ## Writing hooks
 
@@ -142,6 +146,12 @@ reply channel and ignore pushed messages.
 **Bootstrap events** (`agent:bootstrap`): `context.bootstrapFiles` (mutable array), `context.agentId`.
 
 **Session patch events** (`session:patch`): `context.sessionEntry`, `context.patch` (only changed fields), `context.cfg`. Only privileged clients can trigger patch events.
+
+**Task flow events** (`task:flow:created`): `context.flow` with `flowId`, `syncMode`, `ownerKey`, `status`, `goal`, `controllerId?`, `tags?`, `createdAt`.
+
+**Task flow events** (`task:flow:transition`): `context.flow` (same shape as created), `context.previousStatus`, `context.durationMs` (milliseconds since flow creation).
+
+**Task flow events** (`task:flow:deleted`): `context.flowId`, `context.previous` (flow snapshot before deletion including `tags`).
 
 **Compaction events**: `session:compact:before` includes `messageCount`, `tokenCount`. `session:compact:after` adds `compactedCount`, `summaryLength`, `tokensBefore`, `tokensAfter`.
 

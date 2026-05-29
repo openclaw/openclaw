@@ -176,6 +176,81 @@ export type SessionPatchHookEvent = InternalHookEvent & {
   context: SessionPatchHookContext;
 };
 
+// ============================================================================
+// Task Flow Hook Events
+// ============================================================================
+
+export type TaskFlowCreatedHookContext = {
+  /** The created flow record. */
+  flow: {
+    flowId: string;
+    syncMode: string;
+    ownerKey: string;
+    status: string;
+    goal: string;
+    currentStep?: string;
+    controllerId?: string;
+    tags?: Record<string, string>;
+    createdAt: number;
+  };
+};
+
+export type TaskFlowCreatedHookEvent = InternalHookEvent & {
+  type: "task";
+  action: "flow:created";
+  context: TaskFlowCreatedHookContext;
+};
+
+export type TaskFlowTransitionHookContext = {
+  /** The flow record after the transition. */
+  flow: {
+    flowId: string;
+    syncMode: string;
+    ownerKey: string;
+    status: string;
+    goal: string;
+    currentStep?: string;
+    controllerId?: string;
+    tags?: Record<string, string>;
+    createdAt: number;
+    updatedAt: number;
+    endedAt?: number;
+  };
+  /** The status before the transition. */
+  previousStatus: string;
+  /** Elapsed time since flow creation in milliseconds. */
+  durationMs: number;
+};
+
+export type TaskFlowTransitionHookEvent = InternalHookEvent & {
+  type: "task";
+  action: "flow:transition";
+  context: TaskFlowTransitionHookContext;
+};
+
+export type TaskFlowDeletedHookContext = {
+  /** The ID of the deleted flow. */
+  flowId: string;
+  /** The flow record before deletion. */
+  previous: {
+    flowId: string;
+    syncMode: string;
+    ownerKey: string;
+    status: string;
+    goal: string;
+    tags?: Record<string, string>;
+    createdAt: number;
+    updatedAt: number;
+    endedAt?: number;
+  };
+};
+
+export type TaskFlowDeletedHookEvent = InternalHookEvent & {
+  type: "task";
+  action: "flow:deleted";
+  context: TaskFlowDeletedHookContext;
+};
+
 /**
  * Registry of hook handlers by event key.
  *
@@ -459,4 +534,38 @@ export function isSessionPatchEvent(event: InternalHookEvent): event is SessionP
     typeof context.sessionEntry === "object" &&
     context.sessionEntry !== null
   );
+}
+
+export function isTaskFlowCreatedEvent(
+  event: InternalHookEvent,
+): event is TaskFlowCreatedHookEvent {
+  if (!isHookEventTypeAndAction(event, "task", "flow:created")) {
+    return false;
+  }
+  const context = getHookContext<TaskFlowCreatedHookContext>(event);
+  return context?.flow != null && typeof context.flow.flowId === "string";
+}
+
+export function isTaskFlowTransitionEvent(
+  event: InternalHookEvent,
+): event is TaskFlowTransitionHookEvent {
+  if (!isHookEventTypeAndAction(event, "task", "flow:transition")) {
+    return false;
+  }
+  const context = getHookContext<TaskFlowTransitionHookContext>(event);
+  return (
+    context?.flow != null &&
+    typeof context.flow.flowId === "string" &&
+    typeof context.previousStatus === "string"
+  );
+}
+
+export function isTaskFlowDeletedEvent(
+  event: InternalHookEvent,
+): event is TaskFlowDeletedHookEvent {
+  if (!isHookEventTypeAndAction(event, "task", "flow:deleted")) {
+    return false;
+  }
+  const context = getHookContext<TaskFlowDeletedHookContext>(event);
+  return context != null && typeof context.flowId === "string" && context.previous != null;
 }

@@ -36,6 +36,7 @@ export type TaskFlowRecord = {
   blockedSummary?: string;
   stateJson?: JsonValue;
   waitJson?: JsonValue;
+  tags?: Record<string, string>;
   cancelRequestedAt?: number;
   createdAt: number;
   updatedAt: number;
