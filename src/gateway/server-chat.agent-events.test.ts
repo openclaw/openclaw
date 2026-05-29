@@ -1902,7 +1902,10 @@ describe("agent event handler", () => {
     const trackedActiveRuns = new Map<
       string,
       { sessionKey: string; projectSessionActive?: boolean }
-    >([["client-run", { sessionKey: "session-finished" }]]);
+    >([
+      ["provider-run", { sessionKey: "session-finished" }],
+      ["client-run", { sessionKey: "session-finished" }],
+    ]);
     const { chatRunState, handler } = createHarness({
       clearTrackedActiveRun: ({ runId, clientRunId, sessionKey }) => {
         for (const candidateRunId of new Set([runId, clientRunId])) {
@@ -1930,7 +1933,9 @@ describe("agent event handler", () => {
       },
     });
 
+    const providerGuard = trackedActiveRuns.get("provider-run");
     const retryGuard = trackedActiveRuns.get("client-run");
+    expect(providerGuard?.projectSessionActive).toBe(false);
     expect(retryGuard).toBeDefined();
     expect(retryGuard?.projectSessionActive).toBe(false);
   });
