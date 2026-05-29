@@ -52,10 +52,22 @@ describe("workboard gateway methods", () => {
       "workboard.cards.comment",
       "workboard.cards.link",
       "workboard.cards.proof",
+      "workboard.cards.artifact",
+      "workboard.cards.claim",
+      "workboard.cards.heartbeat",
+      "workboard.cards.release",
+      "workboard.cards.unblock",
+      "workboard.cards.bulk",
+      "workboard.cards.diagnostics",
+      "workboard.cards.diagnostics.refresh",
       "workboard.cards.archive",
       "workboard.cards.export",
     ]);
     expect(methods.get("workboard.cards.list")?.opts).toEqual({ scope: "operator.read" });
+    expect(methods.get("workboard.cards.diagnostics")?.opts).toEqual({ scope: "operator.read" });
+    expect(methods.get("workboard.cards.diagnostics.refresh")?.opts).toEqual({
+      scope: "operator.write",
+    });
     expect(methods.get("workboard.cards.export")?.opts).toEqual({ scope: "operator.read" });
     expect(methods.get("workboard.cards.create")?.opts).toEqual({ scope: "operator.write" });
 
@@ -151,6 +163,63 @@ describe("workboard gateway methods", () => {
     expect(respond.mock.calls[0]?.[0]).toBe(false);
     expect(respond.mock.calls[0]?.[2]).toMatchObject({
       message: "labels must be 40 characters or fewer.",
+    });
+  });
+
+  it("claims, heartbeats, and bulk-updates cards through gateway methods", async () => {
+    type RegisteredMethod = {
+      handler: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
+      opts: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[2];
+    };
+    const methods = new Map<string, RegisteredMethod>();
+    const api = {
+      runtime: {
+        state: {
+          openKeyedStore: vi.fn(() => createMemoryStore()),
+        },
+      },
+      registerGatewayMethod: vi.fn(
+        (method: string, handler: RegisteredMethod["handler"], opts: RegisteredMethod["opts"]) => {
+          methods.set(method, { handler, opts });
+        },
+      ),
+    } as unknown as OpenClawPluginApi;
+
+    registerWorkboardGatewayMethods({ api });
+
+    const createRespond = vi.fn();
+    await methods.get("workboard.cards.create")?.handler({
+      params: { title: "Claim me" },
+      respond: createRespond,
+    } as never);
+    const cardId = createRespond.mock.calls[0]?.[1]?.card.id;
+
+    const claimRespond = vi.fn();
+    await methods.get("workboard.cards.claim")?.handler({
+      params: { id: cardId, ownerId: "main" },
+      respond: claimRespond,
+    } as never);
+    expect(claimRespond.mock.calls[0]?.[1]).toMatchObject({
+      card: { status: "running", metadata: { claim: { ownerId: "main" } } },
+      token: expect.any(String),
+    });
+
+    const heartbeatRespond = vi.fn();
+    await methods.get("workboard.cards.heartbeat")?.handler({
+      params: { id: cardId, ownerId: "main", note: "alive" },
+      respond: heartbeatRespond,
+    } as never);
+    expect(heartbeatRespond.mock.calls[0]?.[1]).toMatchObject({
+      card: { metadata: { comments: [expect.objectContaining({ body: "alive" })] } },
+    });
+
+    const bulkRespond = vi.fn();
+    await methods.get("workboard.cards.bulk")?.handler({
+      params: { ids: [cardId], patch: { priority: "urgent" } },
+      respond: bulkRespond,
+    } as never);
+    expect(bulkRespond.mock.calls[0]?.[1]).toMatchObject({
+      cards: [expect.objectContaining({ priority: "urgent" })],
     });
   });
 });

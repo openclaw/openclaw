@@ -48,8 +48,8 @@ Each card stores:
 - optional agent id
 - optional linked session, run, task, or source URL
 - optional execution metadata for a Codex or Claude session started from the card
-- compact metadata for attempts, comments, links, proof, templates, archive state, and stale-session detection
-- recent card events such as created, moved, linked, attempt, proof, archive, stale, or agent-updated changes
+- compact metadata for attempts, comments, links, proof, artifacts, claims, diagnostics, notifications, templates, archive state, and stale-session detection
+- recent card events such as created, moved, linked, claimed, heartbeat, attempt, proof, artifact, diagnostic, notification, archive, stale, or agent-updated changes
 
 Cards are stored in the plugin's Gateway state. They are local to the Gateway
 state directory and move with the rest of that Gateway's OpenClaw state.
@@ -79,6 +79,31 @@ run id, and lifecycle status on the card. Codex executions use
 Each linked execution also records an attempt summary on the same card record.
 The attempt summary keeps the engine, mode, model, run id, timestamps, status,
 and rolling failure count so repeated failures remain visible on the board.
+
+## Agent coordination
+
+Workboard also exposes optional agent tools for board-aware workflows:
+
+- `workboard_list` lists compact cards with claim and diagnostic state.
+- `workboard_read` returns one card plus bounded worker context built from notes,
+  attempts, comments, links, proof, artifacts, and active diagnostics.
+- `workboard_claim` claims a card for the calling agent and moves backlog or todo
+  cards into `running`.
+- `workboard_heartbeat` refreshes the claim heartbeat during longer runs.
+- `workboard_release` releases the claim after completion, pause, or handoff and
+  can move the card to a next status.
+- `workboard_comment`, `workboard_proof`, and `workboard_unblock` let an agent
+  add handoff notes, attach proof or artifact references, and move blocked work
+  back to `todo`.
+
+Claimed cards reject agent-tool mutations from other agents unless the caller
+has the claim token returned by `workboard_claim`. Dashboard operators still use
+the normal Gateway RPC surface and can recover or reassign cards.
+
+Workboard diagnostics are computed from local card metadata. The built-in checks
+flag assigned cards that wait too long, running cards without recent heartbeat,
+blocked cards that need attention, repeated failures, done cards without proof,
+and running cards that only have a loose session link.
 
 ## Session lifecycle sync
 
@@ -136,7 +161,10 @@ The plugin registers Gateway RPC methods under the `workboard.*` namespace:
 
 - `workboard.cards.list` requires `operator.read`
 - `workboard.cards.export` requires `operator.read`
-- create, update, move, delete, comment, link, proof, and archive methods require `operator.write`
+- `workboard.cards.diagnostics` requires `operator.read`
+- `workboard.cards.diagnostics.refresh` requires `operator.write`
+- create, update, move, delete, comment, link, proof, artifact, claim, heartbeat,
+  release, unblock, bulk, and archive methods require `operator.write`
 
 Browsers connected with read-only operator access can inspect the board but
 cannot mutate cards.
