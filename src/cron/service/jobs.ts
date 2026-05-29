@@ -890,6 +890,11 @@ function mergeCronDelivery(
 
   if (typeof patch.mode === "string") {
     next.mode = (patch.mode as string) === "deliver" ? "announce" : patch.mode;
+    if (next.mode === "webhook") {
+      next.channel = undefined;
+      next.threadId = undefined;
+      next.accountId = undefined;
+    }
   }
   if ("channel" in patch) {
     next.channel = normalizeOptionalString(patch.channel);

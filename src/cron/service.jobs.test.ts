@@ -76,6 +76,27 @@ describe("applyJobPatch", () => {
     expect(job.delivery).toEqual({ mode: "webhook", to: "https://example.invalid/cron" });
   });
 
+  it("clears chat delivery fields when switching delivery to webhook", () => {
+    const job = createIsolatedAgentTurnJob("job-webhook-switch", {
+      mode: "announce",
+      channel: "telegram",
+      to: "-100123",
+      threadId: 42,
+      accountId: "coordinator",
+    });
+
+    applyJobPatch(job, {
+      delivery: { mode: "webhook", to: "https://example.invalid/cron" },
+    });
+
+    expect(job.delivery).toEqual({
+      mode: "webhook",
+      to: "https://example.invalid/cron",
+      bestEffort: undefined,
+      failureDestination: undefined,
+    });
+  });
+
   it("applies explicit delivery patches", () => {
     const job = createIsolatedAgentTurnJob("job-2", {
       mode: "announce",
