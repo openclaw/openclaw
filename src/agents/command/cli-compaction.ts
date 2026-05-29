@@ -30,6 +30,8 @@ import { SessionManager } from "../sessions/index.js";
 import type { SkillSnapshot } from "../skills.js";
 import { recordCliCompactionInStore as recordCliCompactionInStoreImpl } from "./session-store.js";
 
+const CODEX_APP_SERVER_OWNS_AUTO_COMPACTION_REASON = "codex app-server owns automatic compaction";
+
 type SessionManagerLike = ReturnType<typeof SessionManager.open>;
 type SettingsManagerLike = {
   getCompactionReserveTokens: () => number;
@@ -69,6 +71,7 @@ type NativeHarnessCliCompactionOutcome = {
   compacted: boolean;
   result?: EmbeddedAgentCompactResult;
   fallbackToContextEngine?: boolean;
+  skipped?: boolean;
   failureReason?: string;
 };
 type CliTranscriptCompactionOutcome = {
@@ -173,6 +176,16 @@ function isUnsupportedNativeHarnessCompaction(
   result: EmbeddedAgentCompactResult | undefined,
 ): boolean {
   return result?.ok === false && result.failure?.reason === "unsupported_harness_compaction";
+}
+
+function isIntentionalNativeAutoCompactionSkip(
+  result: EmbeddedAgentCompactResult | undefined,
+): boolean {
+  return (
+    result?.ok === true &&
+    result.compacted === false &&
+    result.reason === CODEX_APP_SERVER_OWNS_AUTO_COMPACTION_REASON
+  );
 }
 
 function readAgentIdFromSessionKey(sessionKey: string): string | undefined {
@@ -400,6 +413,13 @@ async function compactNativeHarnessCliTranscript(params: {
   }
 
   if (!result?.compacted) {
+    if (isIntentionalNativeAutoCompactionSkip(result)) {
+      return {
+        compacted: false,
+        skipped: true,
+        failureReason: CODEX_APP_SERVER_OWNS_AUTO_COMPACTION_REASON,
+      };
+    }
     const fallbackToContextEngine =
       isUnsupportedNativeHarnessCompaction(result) ||
       isRecoverableNativeHarnessBindingFailure(result);
@@ -520,6 +540,8 @@ export async function runCliTurnCompactionLifecycle(params: {
       compacted = true;
       nativeCompactionResult = nativeOutcome.result;
       useContextEngineCompaction = false;
+    } else if (nativeOutcome.skipped) {
+      return params.sessionEntry;
     } else if (!nativeOutcome.fallbackToContextEngine) {
       throw new Error(
         `CLI native harness compaction failed for ${params.provider}/${params.model}: ${
