@@ -20,7 +20,6 @@ import {
   resolveSkillConfig,
   resolveSkillsInstallPreferences,
 } from "../loading/config.js";
-import { resolveSkillSource } from "../loading/source.js";
 import { loadWorkspaceSkillEntries } from "../loading/workspace.js";
 import type {
   SkillEntry,
@@ -29,6 +28,7 @@ import type {
   SkillsInstallPreferences,
 } from "../types.js";
 import { resolveEffectiveAgentSkillFilter } from "./agent-filter.js";
+import { buildSkillIndex, type SkillIndexEntry } from "./skill-index.js";
 
 export type SkillStatusConfigCheck = RequirementConfigCheck;
 
@@ -73,10 +73,6 @@ export type SkillStatusReport = {
   agentSkillFilter?: string[];
   skills: SkillStatusEntry[];
 };
-
-function resolveSkillKey(entry: SkillEntry): string {
-  return entry.metadata?.skillKey ?? entry.skill.name;
-}
 
 function selectPreferredInstallSpec(
   install: SkillInstallSpec[],
@@ -186,46 +182,22 @@ function normalizeInstallOptions(
   return [toOption(preferred.spec, preferred.index)];
 }
 
-function isSkillVisibleInAvailableSkillsPrompt(entry: SkillEntry): boolean {
-  if (entry.exposure) {
-    return (
-      entry.exposure.includeInAvailableSkillsPrompt ||
-      !("includeInAvailableSkillsPrompt" in entry.exposure)
-    );
-  }
-  if (entry.invocation) {
-    return !entry.invocation.disableModelInvocation;
-  }
-  return !entry.skill.disableModelInvocation;
-}
-
-function isSkillUserInvocable(entry: SkillEntry): boolean {
-  if (entry.exposure) {
-    return entry.exposure.userInvocable || !("userInvocable" in entry.exposure);
-  }
-  if (entry.invocation) {
-    return entry.invocation.userInvocable || !("userInvocable" in entry.invocation);
-  }
-  return true;
-}
-
 function buildSkillStatus(
-  entry: SkillEntry,
+  indexed: SkillIndexEntry,
   config?: OpenClawConfig,
   prefs?: SkillsInstallPreferences,
   eligibility?: SkillEligibilityContext,
-  bundledNames?: Set<string>,
   agentSkillFilter?: string[],
   workspaceDir?: string,
   clawhubLockRead?: ClawHubSkillsLockfileStatusRead,
 ): SkillStatusEntry {
-  const skillKey = resolveSkillKey(entry);
+  const entry = indexed.entry;
+  const skillKey = indexed.skillKey;
   const skillConfig = resolveSkillConfig(config, skillKey);
   const disabled = skillConfig?.enabled === false;
   const allowBundled = resolveBundledAllowlist(config);
   const blockedByAllowlist = !isBundledSkillAllowed(entry, allowBundled);
-  const blockedByAgentFilter =
-    agentSkillFilter !== undefined && !agentSkillFilter.includes(entry.skill.name);
+  const blockedByAgentFilter = agentSkillFilter !== undefined && !indexed.agentAllowed;
   const always = entry.metadata?.always === true;
   const isEnvSatisfied = (envName: string) =>
     Boolean(
@@ -234,10 +206,8 @@ function buildSkillStatus(
       (skillConfig?.apiKey && entry.metadata?.primaryEnv === envName),
     );
   const isConfigSatisfied = (pathStr: string) => isConfigPathTruthy(config, pathStr);
-  const skillSource = resolveSkillSource(entry.skill);
-  const bundled =
-    skillSource === "openclaw-bundled" ||
-    (skillSource === "unknown" && bundledNames?.has(entry.skill.name) === true);
+  const skillSource = indexed.source;
+  const bundled = indexed.bundled;
 
   const { emoji, homepage, required, missing, requirementsSatisfied, configChecks } =
     evaluateEntryRequirementsForCurrentPlatform({
@@ -250,7 +220,7 @@ function buildSkillStatus(
     });
   const eligible = !disabled && !blockedByAllowlist && requirementsSatisfied;
   const availableToAgent = eligible && !blockedByAgentFilter;
-  const userInvocable = isSkillUserInvocable(entry);
+  const userInvocable = indexed.userInvocable;
 
   const clawhub =
     workspaceDir && !bundled
@@ -279,7 +249,7 @@ function buildSkillStatus(
     blockedByAllowlist,
     blockedByAgentFilter,
     eligible,
-    modelVisible: availableToAgent && isSkillVisibleInAvailableSkillsPrompt(entry),
+    modelVisible: availableToAgent && indexed.promptVisible,
     userInvocable,
     commandVisible: availableToAgent && userInvocable,
     requirements: required,
@@ -315,18 +285,21 @@ export function buildWorkspaceSkillStatus(
     });
   const prefs = resolveSkillsInstallPreferences(opts?.config);
   const clawhubLockRead = readClawHubSkillsLockfileStatusSync(workspaceDir);
+  const skillIndex = buildSkillIndex(skillEntries, {
+    bundledNames: bundledContext.names,
+    agentSkillFilter,
+  });
   return {
     workspaceDir,
     managedSkillsDir,
     agentId: opts?.agentId,
     agentSkillFilter,
-    skills: skillEntries.map((entry) =>
+    skills: skillIndex.entries.map((entry) =>
       buildSkillStatus(
         entry,
         opts?.config,
         prefs,
         opts?.eligibility,
-        bundledContext.names,
         agentSkillFilter,
         workspaceDir,
         clawhubLockRead,

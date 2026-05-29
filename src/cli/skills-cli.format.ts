@@ -1,3 +1,4 @@
+import { normalizeSkillIndexName } from "../skills/discovery/skill-index.js";
 import type { SkillStatusEntry, SkillStatusReport } from "../skills/discovery/status.js";
 import { sanitizeForLog, stripAnsi } from "../terminal/ansi.js";
 import { decorativeEmoji, decorativePrefix } from "../terminal/decorative-emoji.js";
@@ -104,13 +105,7 @@ function formatSkillMissingSummary(skill: SkillStatusEntry): string {
 }
 
 function normalizeSkillLookupToken(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[\s_/]+/g, "-")
-    .replace(/[^a-z0-9-]+/g, "")
-    .replace(/-+/g, "-")
-    .replace(/^-+|-+$/g, "");
+  return normalizeSkillIndexName(value);
 }
 
 function resolveSkillByName(
