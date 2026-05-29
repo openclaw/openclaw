@@ -6,6 +6,7 @@ export const dependencyChangeMarker = "<!-- openclaw:dependency-guard -->";
 export const dependencyGraphGuardMarker = "<!-- openclaw:dependency-graph-guard -->";
 export const dependencyChangedLabel = "dependencies-changed";
 export const allowDependenciesCommand = "/allow-dependencies-change";
+export const GITHUB_ERROR_BODY_MAX_BYTES = 64 * 1024;
 
 const maxListedFiles = 25;
 const securityTeamSlug = process.env.OPENCLAW_SECURITY_TEAM_SLUG ?? "openclaw-secops";
@@ -312,7 +313,55 @@ export function renderBlockedDependencyComment({
   ].join("\n");
 }
 
-function githubApi(token) {
+function githubErrorBodyTooLarge(maxBytes) {
+  return new Error(`GitHub error response body exceeded ${maxBytes} bytes`);
+}
+
+export async function readBoundedGitHubErrorText(response, maxBytes = GITHUB_ERROR_BODY_MAX_BYTES) {
+  const contentLength = Number(response.headers.get("content-length") ?? "");
+  if (Number.isSafeInteger(contentLength) && contentLength > maxBytes) {
+    await response.body?.cancel().catch(() => undefined);
+    throw githubErrorBodyTooLarge(maxBytes);
+  }
+  if (!response.body) {
+    return "";
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const chunks = [];
+  let totalBytes = 0;
+  let canceled = false;
+
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        const tail = decoder.decode();
+        if (tail) {
+          chunks.push(tail);
+        }
+        break;
+      }
+
+      totalBytes += value.byteLength;
+      if (totalBytes > maxBytes) {
+        canceled = true;
+        await reader.cancel().catch(() => undefined);
+        throw githubErrorBodyTooLarge(maxBytes);
+      }
+      chunks.push(decoder.decode(value, { stream: true }));
+    }
+  } finally {
+    if (!canceled) {
+      reader.releaseLock();
+    }
+  }
+
+  return chunks.join("");
+}
+
+export function githubApi(token) {
   const baseHeaders = {
     accept: "application/vnd.github+json",
     authorization: `Bearer ${token}`,
@@ -328,9 +377,13 @@ function githubApi(token) {
       return null;
     }
     if (!response.ok) {
-      const error = new Error(
-        `${response.status} ${response.statusText}: ${await response.text()}`,
-      );
+      let errorText;
+      try {
+        errorText = await readBoundedGitHubErrorText(response);
+      } catch (bodyError) {
+        errorText = bodyError instanceof Error ? bodyError.message : String(bodyError);
+      }
+      const error = new Error(`${response.status} ${response.statusText}: ${errorText}`);
       error.status = response.status;
       throw error;
     }

@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 import {
@@ -13,10 +12,10 @@ import {
   type ClaudeCliFallbackSeed,
   readClaudeCliFallbackSeed,
 } from "../../gateway/cli-session-history.js";
+import { cliBackendLog } from "../cli-runner/log.js";
+import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
 
-/** Maximum number of JSONL records to inspect before giving up. */
 const SESSION_FILE_MAX_RECORDS = 500;
-const CLAUDE_PROJECTS_RELATIVE_DIR = path.join(".claude", "projects");
 
 function normalizeClaudeCliSessionId(sessionId: string | undefined): string | undefined {
   const trimmed = sessionId?.trim();
@@ -26,14 +25,16 @@ function normalizeClaudeCliSessionId(sessionId: string | undefined): string | un
   return trimmed;
 }
 
-async function jsonlFileHasAssistantMessage(filePath: string | undefined): Promise<boolean> {
+type JsonlFileScan = { fileExists: boolean; hasAssistant: boolean };
+
+async function scanJsonlFile(filePath: string | undefined): Promise<JsonlFileScan> {
   if (!filePath) {
-    return false;
+    return { fileExists: false, hasAssistant: false };
   }
   try {
     const stat = await fs.lstat(filePath);
     if (stat.isSymbolicLink() || !stat.isFile()) {
-      return false;
+      return { fileExists: false, hasAssistant: false };
     }
 
     const fh = await fs.open(filePath, "r");
@@ -56,16 +57,20 @@ async function jsonlFileHasAssistantMessage(filePath: string | undefined): Promi
         }
         const rec = obj as Record<string, unknown> | null;
         if ((rec?.message as Record<string, unknown> | undefined)?.role === "assistant") {
-          return true;
+          return { fileExists: true, hasAssistant: true };
         }
       }
-      return false;
+      return { fileExists: true, hasAssistant: false };
     } finally {
       await fh.close();
     }
   } catch {
-    return false;
+    return { fileExists: false, hasAssistant: false };
   }
+}
+
+async function jsonlFileHasAssistantMessage(filePath: string | undefined): Promise<boolean> {
+  return (await scanJsonlFile(filePath)).hasAssistant;
 }
 
 /**
@@ -77,31 +82,58 @@ export async function sessionFileHasContent(sessionFile: string | undefined): Pr
   return await jsonlFileHasAssistantMessage(sessionFile);
 }
 
-export async function claudeCliSessionTranscriptHasContent(params: {
+export function claudeCliSessionTranscriptPath(params: {
   sessionId: string | undefined;
+  workspaceDir: string | undefined;
   homeDir?: string;
-}): Promise<boolean> {
+}): string | null {
   const sessionId = normalizeClaudeCliSessionId(params.sessionId);
   if (!sessionId) {
+    return null;
+  }
+  const workspaceDir = params.workspaceDir?.trim();
+  if (!workspaceDir) {
+    return null;
+  }
+  return path.join(
+    resolveClaudeCliProjectDirForWorkspace({
+      workspaceDir,
+      homeDir: params.homeDir,
+    }),
+    `${sessionId}.jsonl`,
+  );
+}
+
+const CLAUDE_CLI_TRANSCRIPT_FLUSH_GRACE_MS = 250;
+
+export async function claudeCliSessionTranscriptHasContent(params: {
+  sessionId: string | undefined;
+  workspaceDir: string | undefined;
+  homeDir?: string;
+}): Promise<boolean> {
+  const expectedPath = claudeCliSessionTranscriptPath({
+    sessionId: params.sessionId,
+    workspaceDir: params.workspaceDir,
+    homeDir: params.homeDir,
+  });
+  if (!expectedPath) {
     return false;
   }
-  const homeDir = params.homeDir?.trim() || process.env.HOME || os.homedir();
-  const projectsDir = path.join(homeDir, CLAUDE_PROJECTS_RELATIVE_DIR);
-  let projectEntries: import("node:fs").Dirent[];
-  try {
-    projectEntries = await fs.readdir(projectsDir, { withFileTypes: true });
-  } catch {
-    return false;
+  const first = await scanJsonlFile(expectedPath);
+  if (first.hasAssistant) {
+    return true;
   }
-  for (const entry of projectEntries) {
-    if (!entry.isDirectory()) {
-      continue;
-    }
-    const candidate = path.join(projectsDir, entry.name, `${sessionId}.jsonl`);
-    if (await jsonlFileHasAssistantMessage(candidate)) {
-      return true;
-    }
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, CLAUDE_CLI_TRANSCRIPT_FLUSH_GRACE_MS);
+  });
+  const second = await scanJsonlFile(expectedPath);
+  if (second.hasAssistant) {
+    return true;
   }
+  const sessionId = normalizeClaudeCliSessionId(params.sessionId);
+  cliBackendLog.warn(
+    `claude-cli transcript probe v4 miss (sessionId-deterministic path, grace ${CLAUDE_CLI_TRANSCRIPT_FLUSH_GRACE_MS}ms): sessionId=${sessionId ?? ""} expectedPath=${expectedPath} fileExists=${second.fileExists}`,
+  );
   return false;
 }
 

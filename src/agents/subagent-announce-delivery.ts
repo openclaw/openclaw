@@ -15,6 +15,7 @@ import {
 import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
 import { isCronRunSessionKey, isCronSessionKey } from "../sessions/session-key-utils.js";
 import { isNonTerminalAgentRunStatus } from "../shared/agent-run-status.js";
+import { clampTimerTimeoutMs } from "../shared/number-coercion.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { normalizeStringEntries, uniqueStrings } from "../shared/string-normalization.js";
 import { mergeDeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
@@ -67,7 +68,6 @@ import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
 
 const DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS = 120_000;
-const MAX_TIMER_SAFE_TIMEOUT_MS = 2_147_000_000;
 type SubagentAnnounceDeliveryDeps = {
   dispatchGatewayMethodInProcess: typeof dispatchGatewayMethodInProcess;
   getRuntimeConfig: typeof getRuntimeConfig;
@@ -319,10 +319,7 @@ async function resolveActiveWakeWithRetries(
 
 export function resolveSubagentAnnounceTimeoutMs(cfg: OpenClawConfig): number {
   const configured = cfg.agents?.defaults?.subagents?.announceTimeoutMs;
-  if (typeof configured !== "number" || !Number.isFinite(configured)) {
-    return DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS;
-  }
-  return Math.min(Math.max(1, Math.floor(configured)), MAX_TIMER_SAFE_TIMEOUT_MS);
+  return clampTimerTimeoutMs(configured) ?? DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS;
 }
 
 export function isInternalAnnounceRequesterSession(sessionKey: string | undefined): boolean {

@@ -389,7 +389,7 @@ describe("xAI OAuth", () => {
         }),
       );
     vi.stubGlobal("fetch", fetchImpl);
-    const note = vi.fn(async () => {});
+    const note = vi.fn<(message: string, title?: string) => Promise<void>>(async () => {});
     const openUrl = vi.fn(async () => {});
     const log = vi.fn();
     const runtime = { ...createRuntimeEnv(), log };
@@ -478,7 +478,7 @@ describe("xAI OAuth", () => {
         }),
       );
     vi.stubGlobal("fetch", fetchImpl);
-    const note = vi.fn(async () => {});
+    const note = vi.fn<(message: string, title?: string) => Promise<void>>(async () => {});
     const ctx: ProviderAuthContext = {
       config: {},
       isRemote: true,
@@ -497,7 +497,10 @@ describe("xAI OAuth", () => {
 
     await loginXaiDeviceCode(ctx);
 
-    expect(note.mock.calls[0]?.[0] ?? "").toContain("Code expires in 5 minutes.");
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("Code expires in 5 minutes."),
+      "xAI device code",
+    );
     expect(progress.stop).toHaveBeenCalledWith("xAI device code complete");
   });
 });

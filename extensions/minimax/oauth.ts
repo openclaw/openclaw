@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
+import { resolveExpiresAtMsFromDurationOrEpoch } from "openclaw/plugin-sdk/number-runtime";
 import { generatePkceVerifierChallenge, toFormUrlEncoded } from "openclaw/plugin-sdk/provider-auth";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -61,14 +62,12 @@ type TokenResult =
  * Normalize MiniMax token endpoint `expired_in` values to the auth-profile
  * contract: absolute Unix milliseconds.
  */
-export function normalizeOAuthExpires(expiredIn: number, now = Date.now()): number {
-  if (expiredIn < MINIMAX_RELATIVE_EXPIRY_SECONDS_THRESHOLD) {
-    return now + expiredIn * 1000;
-  }
-  if (expiredIn < MINIMAX_ABSOLUTE_EXPIRY_MS_THRESHOLD) {
-    return expiredIn * 1000;
-  }
-  return expiredIn;
+export function normalizeOAuthExpires(expiredIn: unknown, now = Date.now()): number | undefined {
+  return resolveExpiresAtMsFromDurationOrEpoch(expiredIn, {
+    nowMs: now,
+    relativeSecondsThreshold: MINIMAX_RELATIVE_EXPIRY_SECONDS_THRESHOLD,
+    absoluteMillisecondsThreshold: MINIMAX_ABSOLUTE_EXPIRY_MS_THRESHOLD,
+  });
 }
 
 function generatePkce(): { verifier: string; challenge: string; state: string } {
@@ -199,7 +198,7 @@ async function pollOAuthToken(params: {
       status: string;
       access_token?: string | null;
       refresh_token?: string | null;
-      expired_in?: number | null;
+      expired_in?: unknown;
       token_type?: string;
       resource_url?: string;
       notification_message?: string;
@@ -216,13 +215,17 @@ async function pollOAuthToken(params: {
     if (!tokenPayload.access_token || !tokenPayload.refresh_token || !tokenPayload.expired_in) {
       return { status: "error", message: "MiniMax OAuth returned incomplete token payload." };
     }
+    const expires = normalizeOAuthExpires(tokenPayload.expired_in);
+    if (expires === undefined) {
+      return { status: "error", message: "MiniMax OAuth returned invalid token expiry." };
+    }
 
     return {
       status: "success",
       token: {
         access: tokenPayload.access_token,
         refresh: tokenPayload.refresh_token,
-        expires: normalizeOAuthExpires(tokenPayload.expired_in),
+        expires,
         resourceUrl: tokenPayload.resource_url,
         notification_message: tokenPayload.notification_message,
       },

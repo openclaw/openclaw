@@ -1,14 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
+  GITHUB_ERROR_BODY_MAX_BYTES,
   dependencyGuardCommentHeadSha,
   dependencyFieldChanges,
   dependencyOverrideExpectedSha,
   findDependencyOverrideCommand,
   findDependencyOverrideCommandAsync,
+  githubApi,
   isDependencyGuardAuthorizedForHead,
   isDependencyFile,
   isDependencyManifest,
   isPackageLockfile,
+  readBoundedGitHubErrorText,
   renderAuthorizedDependencyComment,
   renderBlockedDependencyComment,
   renderClearedDependencyGuardComment,
@@ -268,5 +271,55 @@ describe("dependency guard script", () => {
   it("sanitizes display values", () => {
     expect(sanitizeDisplayValue("abc\u0000def")).toBe("abc?def");
     expect(sanitizeDisplayValue("x".repeat(300))).toHaveLength(240);
+  });
+
+  it("bounds GitHub error bodies by content-length", async () => {
+    const response = new Response("ignored", {
+      headers: { "content-length": String(GITHUB_ERROR_BODY_MAX_BYTES + 1) },
+    });
+
+    await expect(readBoundedGitHubErrorText(response)).rejects.toThrow(
+      `GitHub error response body exceeded ${GITHUB_ERROR_BODY_MAX_BYTES} bytes`,
+    );
+  });
+
+  it("bounds GitHub error bodies by streamed bytes", async () => {
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(new Uint8Array(GITHUB_ERROR_BODY_MAX_BYTES + 1));
+          controller.close();
+        },
+      }),
+    );
+
+    await expect(readBoundedGitHubErrorText(response)).rejects.toThrow(
+      `GitHub error response body exceeded ${GITHUB_ERROR_BODY_MAX_BYTES} bytes`,
+    );
+  });
+
+  it("preserves GitHub status when an error body exceeds the cap", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (() =>
+      Promise.resolve(
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(new Uint8Array(GITHUB_ERROR_BODY_MAX_BYTES + 1));
+              controller.close();
+            },
+          }),
+          { status: 403, statusText: "Forbidden" },
+        ),
+      )) as typeof fetch;
+
+    try {
+      await expect(githubApi("token").request("/repos/openclaw/openclaw")).rejects.toMatchObject({
+        message: `403 Forbidden: GitHub error response body exceeded ${GITHUB_ERROR_BODY_MAX_BYTES} bytes`,
+        status: 403,
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });
