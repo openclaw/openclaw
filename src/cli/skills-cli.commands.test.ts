@@ -204,7 +204,8 @@ vi.mock("../skills/lifecycle/source-install.js", () => ({
     raw.startsWith("/"),
 }));
 
-vi.mock("../skills/discovery/status.js", () => ({
+vi.mock("../skills/discovery/status.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../skills/discovery/status.js")>()),
   buildWorkspaceSkillStatus: (workspaceDir: string, options?: unknown) =>
     mocks.buildWorkspaceSkillStatusMock(workspaceDir, options),
 }));
