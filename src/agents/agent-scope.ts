@@ -299,6 +299,7 @@ export function resolveSessionAgentIds(params: {
 export function resolveSessionAgentId(params: {
   sessionKey?: string;
   config?: OpenClawConfig;
+  agentId?: string;
 }): string {
   return resolveSessionAgentIds(params).sessionAgentId;
 }

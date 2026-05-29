@@ -187,6 +187,8 @@ export const tr: TranslationMap = {
     updated: "Güncellendi",
     tokens: "Tokenlar",
     compaction: "Sıkıştırma",
+    goal: "Hedef",
+    goalNote: "Hedef notu",
     thinking: "Düşünme",
     fast: "Hızlı",
     verbose: "Ayrıntılı",

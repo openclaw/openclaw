@@ -185,6 +185,8 @@ export const es: TranslationMap = {
     updated: "Actualizado",
     tokens: "Tokens",
     compaction: "Compactación",
+    goal: "Objetivo",
+    goalNote: "Nota del objetivo",
     thinking: "Pensamiento",
     fast: "Rápido",
     verbose: "Detallado",

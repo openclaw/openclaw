@@ -184,6 +184,8 @@ export const ar: TranslationMap = {
     updated: "تم التحديث",
     tokens: "الرموز",
     compaction: "الضغط",
+    goal: "الهدف",
+    goalNote: "ملاحظة الهدف",
     thinking: "التفكير",
     fast: "سريع",
     verbose: "مطوّل",

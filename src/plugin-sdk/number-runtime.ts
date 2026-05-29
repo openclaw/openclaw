@@ -2,8 +2,11 @@
 
 export {
   asFiniteNumberInRange,
+  asSafeIntegerInRange,
   parseFiniteNumber,
   clampTimerTimeoutMs,
+  clampPositiveTimerTimeoutMs,
+  resolvePositiveTimerTimeoutMs,
   resolveTimerTimeoutMs,
   finiteSecondsToTimerSafeMilliseconds,
   MAX_TIMER_TIMEOUT_MS,

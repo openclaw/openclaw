@@ -186,6 +186,8 @@ export const uk: TranslationMap = {
     updated: "Оновлено",
     tokens: "Токени",
     compaction: "Стиснення",
+    goal: "Мета",
+    goalNote: "Примітка до мети",
     thinking: "Обмірковування",
     fast: "Швидко",
     verbose: "Докладно",

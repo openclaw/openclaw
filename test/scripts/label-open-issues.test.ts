@@ -10,17 +10,16 @@ const labelItem = {
 
 describe("label-open-issues helpers", () => {
   it("classifies items from OpenAI structured response text", async () => {
-    const response = {
-      ok: true,
-      status: 200,
-      json: async () => ({
+    const response = new Response(
+      JSON.stringify({
         output_text: JSON.stringify({
           category: "bug",
           isSupport: true,
           isSkillOnly: false,
         }),
       }),
-    } as Response;
+      { status: 200 },
+    );
 
     await expect(
       testing.classifyItem(labelItem, "issue", {
@@ -55,11 +54,7 @@ describe("label-open-issues helpers", () => {
   });
 
   it("times out stalled OpenAI classification body reads", async () => {
-    const response = {
-      ok: true,
-      status: 200,
-      json: () => new Promise(() => {}),
-    } as Response;
+    const response = new Response(new ReadableStream({}), { status: 200 });
     const request = testing.classifyItem(labelItem, "issue", {
       apiKey: "test-key",
       model: "test-model",
@@ -94,6 +89,53 @@ describe("label-open-issues helpers", () => {
     expect(message).toContain("[truncated]");
     expect(message).not.toContain(tail);
     expect(message.length).toBeLessThan(4300);
+  });
+
+  it("reads bounded OpenAI classification JSON responses", async () => {
+    await expect(
+      testing.readBoundedOpenAIJson(new Response('{"output_text":"{}"}'), 1024),
+    ).resolves.toEqual({ output_text: "{}" });
+  });
+
+  it("rejects oversized OpenAI classification JSON responses by content length", async () => {
+    let canceled = false;
+    const response = new Response(
+      new ReadableStream({
+        cancel() {
+          canceled = true;
+        },
+      }),
+      {
+        headers: {
+          "content-length": "1025",
+        },
+      },
+    );
+
+    await expect(testing.readBoundedOpenAIJson(response, 1024)).rejects.toMatchObject({
+      code: "ETOOBIG",
+      message: "OpenAI classification response body exceeded 1024 bytes",
+    });
+    expect(canceled).toBe(true);
+  });
+
+  it("rejects oversized streamed OpenAI classification JSON responses", async () => {
+    const encoder = new TextEncoder();
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode('{"output_text":"'));
+          controller.enqueue(encoder.encode("x".repeat(1024)));
+          controller.enqueue(encoder.encode('"}'));
+          controller.close();
+        },
+      }),
+    );
+
+    await expect(testing.readBoundedOpenAIJson(response, 1024)).rejects.toMatchObject({
+      code: "ETOOBIG",
+      message: "OpenAI classification response body exceeded 1024 bytes",
+    });
   });
 
   it("rejects invalid OpenAI classification timeout values", () => {

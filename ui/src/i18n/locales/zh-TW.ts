@@ -183,6 +183,8 @@ export const zh_TW: TranslationMap = {
     updated: "已更新",
     tokens: "Token",
     compaction: "壓縮",
+    goal: "目標",
+    goalNote: "目標備註",
     thinking: "思考",
     fast: "快速",
     verbose: "詳細",

@@ -43,6 +43,7 @@ export const DEFAULT_SESSION_WRITE_LOCK_MAX_HOLD_MS = 5 * 60 * 1000;
 export const DEFAULT_SESSION_WRITE_LOCK_ACQUIRE_TIMEOUT_MS = 60_000;
 const DEFAULT_WATCHDOG_INTERVAL_MS = 60_000;
 const DEFAULT_TIMEOUT_GRACE_MS = 2 * 60 * 1000;
+const REPORT_ONLY_STALE_LOCK_REASONS = new Set(["too-old", "hold-exceeded"]);
 
 /**
  * Yield control to the event loop so other sessions can make progress
@@ -530,7 +531,10 @@ function shouldTreatAsNonOpenClawOwner(params: {
   heldByThisProcess: boolean;
   readOwnerProcessArgs: SessionLockOwnerProcessArgsReader;
 }): boolean {
-  if (params.inspected.stale || params.inspected.pid === null || !params.inspected.pidAlive) {
+  if (params.inspected.pid === null || !params.inspected.pidAlive) {
+    return false;
+  }
+  if (params.inspected.staleReasons.includes("recycled-pid")) {
     return false;
   }
   if (params.inspected.pid === process.pid && params.heldByThisProcess) {
@@ -576,6 +580,21 @@ async function shouldReclaimContendedLockFile(
     const code = (error as { code?: string } | null)?.code;
     return code !== "ENOENT";
   }
+}
+
+async function shouldRemoveLockDuringCleanup(
+  lockPath: string,
+  details: LockInspectionDetails,
+  staleMs: number,
+  nowMs: number,
+): Promise<boolean> {
+  if (!details.stale) {
+    return false;
+  }
+  if (details.staleReasons.every((reason) => REPORT_ONLY_STALE_LOCK_REASONS.has(reason))) {
+    return false;
+  }
+  return await shouldReclaimContendedLockFile(lockPath, details, staleMs, nowMs);
 }
 
 function sessionLockHeldByThisProcess(normalizedSessionFile: string): boolean {
@@ -728,7 +747,7 @@ export async function cleanStaleLockFiles(params: {
       removed: false,
     };
 
-    if (lockInfo.stale && removeStale) {
+    if (removeStale && (await shouldRemoveLockDuringCleanup(lockPath, lockInfo, staleMs, nowMs))) {
       await fs.rm(lockPath, { force: true });
       lockInfo.removed = true;
       cleaned.push(lockInfo);

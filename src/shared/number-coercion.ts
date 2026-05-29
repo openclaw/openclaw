@@ -105,6 +105,18 @@ export function clampTimerTimeoutMs(valueMs: unknown, minMs = 1): number | undef
   return Math.min(Math.max(Math.floor(value), min), MAX_TIMER_TIMEOUT_MS);
 }
 
+export function clampPositiveTimerTimeoutMs(valueMs: unknown): number | undefined {
+  const value = asFiniteNumber(valueMs);
+  if (value === undefined || value <= 0) {
+    return undefined;
+  }
+  return clampTimerTimeoutMs(value);
+}
+
+export function resolvePositiveTimerTimeoutMs(valueMs: unknown, fallbackMs: number): number {
+  return clampPositiveTimerTimeoutMs(valueMs) ?? resolveTimerTimeoutMs(fallbackMs, 1);
+}
+
 export function resolveTimerTimeoutMs(valueMs: unknown, fallbackMs: number, minMs = 1): number {
   const value = asFiniteNumber(valueMs) ?? asFiniteNumber(fallbackMs);
   const min = Math.max(0, Math.floor(minMs));

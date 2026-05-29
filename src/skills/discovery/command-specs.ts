@@ -12,6 +12,7 @@ import {
 } from "../loading/workspace.js";
 import type { SkillEligibilityContext, SkillCommandSpec, SkillEntry } from "../types.js";
 import { resolveEffectiveAgentSkillFilter } from "./agent-filter.js";
+import { filterUserInvocableSkillEntries } from "./skill-index.js";
 
 const skillsLogger = createSubsystemLogger("skills");
 const skillCommandDebugOnce = new Set<string>();
@@ -98,7 +99,7 @@ export function buildWorkspaceSkillCommandSpecs(
         skillFilter: effectiveSkillFilter,
         eligibility: opts?.eligibility,
       });
-  const userInvocable = eligible.filter((entry) => entry.invocation?.userInvocable !== false);
+  const userInvocable = filterUserInvocableSkillEntries(eligible);
   const used = new Set<string>();
   for (const reserved of opts?.reservedNames ?? []) {
     used.add(normalizeLowercaseStringOrEmpty(reserved));

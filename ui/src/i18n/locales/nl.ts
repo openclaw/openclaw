@@ -187,6 +187,8 @@ export const nl: TranslationMap = {
     updated: "Bijgewerkt",
     tokens: "Tokens",
     compaction: "Compactie",
+    goal: "Doel",
+    goalNote: "Doelnotitie",
     thinking: "Denken",
     fast: "Snel",
     verbose: "Uitgebreid",

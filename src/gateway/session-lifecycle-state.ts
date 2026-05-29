@@ -145,6 +145,7 @@ export function derivePersistedSessionLifecyclePatch(params: {
 
 export async function persistGatewaySessionLifecycleEvent(params: {
   sessionKey: string;
+  agentId?: string;
   event: LifecycleEventLike;
 }): Promise<void> {
   const phase = resolveLifecyclePhase(params.event);
@@ -152,7 +153,10 @@ export async function persistGatewaySessionLifecycleEvent(params: {
     return;
   }
 
-  const sessionEntry = loadSessionEntry(params.sessionKey, { clone: false });
+  const sessionEntry = loadSessionEntry(params.sessionKey, {
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    clone: false,
+  });
   if (!sessionEntry.entry) {
     return;
   }

@@ -186,6 +186,8 @@ export const fa: TranslationMap = {
     updated: "به‌روزشده",
     tokens: "توکن‌ها",
     compaction: "فشرده‌سازی",
+    goal: "هدف",
+    goalNote: "یادداشت هدف",
     thinking: "تفکر",
     fast: "سریع",
     verbose: "پرگویی",

@@ -56,6 +56,7 @@ const state = vi.hoisted(() => ({
   sessionEntryMock: undefined as unknown,
   sessionStoreMock: undefined as unknown,
   storePathMock: undefined as string | undefined,
+  resolvedSessionKeyMock: undefined as string | undefined,
 }));
 
 vi.mock("./model-fallback.js", () => ({
@@ -119,7 +120,7 @@ vi.mock("./command/session-store.runtime.js", () => ({
 vi.mock("./command/session.js", () => ({
   resolveSession: () => ({
     sessionId: "session-1",
-    sessionKey: "agent:main:main",
+    sessionKey: state.resolvedSessionKeyMock ?? "agent:main:main",
     sessionEntry: state.sessionEntryMock ?? {
       sessionId: "session-1",
       updatedAt: Date.now(),
@@ -668,9 +669,12 @@ vi.mock("../acp/control-plane/manager.js", () => ({
 }));
 
 let agentCommand: typeof import("./agent-command.js").agentCommand;
+let agentCommandTesting: typeof import("./agent-command.js").testing;
 
 beforeAll(async () => {
-  agentCommand ??= (await import("./agent-command.js")).agentCommand;
+  const mod = await import("./agent-command.js");
+  agentCommand ??= mod.agentCommand;
+  agentCommandTesting ??= mod.testing;
 });
 
 type FallbackRunnerParams = {
@@ -808,6 +812,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.resolveAcpDispatchPolicyErrorMock.mockReturnValue(null);
     state.resolveAcpExplicitTurnPolicyErrorMock.mockReturnValue(null);
     state.runtimeConfigMock = undefined;
+    delete (state.defaultRuntimeConfig.agents as { list?: unknown }).list;
     state.isThinkingLevelSupportedMock.mockReturnValue(true);
     state.resolveThinkingDefaultMock.mockReturnValue("low");
     state.resolveAgentSkillsFilterMock.mockReturnValue(undefined);
@@ -845,6 +850,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.sessionEntryMock = undefined;
     state.sessionStoreMock = undefined;
     state.storePathMock = undefined;
+    state.resolvedSessionKeyMock = undefined;
     state.persistSessionEntryMock.mockImplementation(async (...args: unknown[]) => {
       const params = args[0] as {
         sessionStore?: Record<string, unknown>;
@@ -1039,6 +1045,23 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expectRecordFields(mockCallArg(state.deliverAgentCommandResultMock), {
       expectedSessionIdForFreshDelivery: "session-1",
     });
+  });
+
+  it("keeps explicit-agent global keys literal before command routing", () => {
+    expect(
+      agentCommandTesting.resolveExplicitAgentCommandSessionKey({
+        rawExplicitSessionKey: "global",
+        agentIdOverride: "work",
+        cfg: {},
+      }),
+    ).toBe("global");
+    expect(
+      agentCommandTesting.resolveExplicitAgentCommandSessionKey({
+        rawExplicitSessionKey: "main",
+        agentIdOverride: "work",
+        cfg: {},
+      }),
+    ).toBe("agent:work:main");
   });
 
   it("persists explicit overrides even when ingress skips the initial touch", async () => {

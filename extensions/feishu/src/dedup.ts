@@ -216,6 +216,26 @@ export async function recordProcessedFeishuMessage(
   return await tryRecordMessagePersistent(normalizedMessageId, namespace, log);
 }
 
+export async function forgetProcessedFeishuMessage(
+  messageId: string | undefined | null,
+  namespace = "global",
+  log?: (...args: unknown[]) => void,
+): Promise<boolean> {
+  const normalizedNamespace = normalizeNamespace(namespace);
+  const normalizedMessageId = normalizeMessageId(messageId);
+  if (!normalizedMessageId) {
+    return false;
+  }
+  memory.delete(memoryKey(normalizedNamespace, normalizedMessageId));
+  const key = dedupeStoreKey(normalizedNamespace, normalizedMessageId);
+  try {
+    return openDedupStore(normalizedNamespace).delete(key);
+  } catch (error) {
+    log?.(`feishu-dedup: persistent delete failed: ${String(error)}`);
+    return false;
+  }
+}
+
 export async function hasProcessedFeishuMessage(
   messageId: string | undefined | null,
   namespace = "global",

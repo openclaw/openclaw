@@ -808,7 +808,15 @@ describe("connectCodexAppServerEndpoint", () => {
     const sawProbeRequest = new Promise<void>((resolve) => {
       server.once("connection", (socket) => {
         socket.on("message", (data) => {
-          const request = JSON.parse(data.toString()) as Record<string, unknown>;
+          const messageText =
+            typeof data === "string"
+              ? data
+              : Array.isArray(data)
+                ? Buffer.concat(data).toString()
+                : data instanceof ArrayBuffer
+                  ? Buffer.from(new Uint8Array(data)).toString()
+                  : Buffer.from(data).toString();
+          const request = JSON.parse(messageText) as Record<string, unknown>;
           if (request.method === "initialize") {
             socket.send(JSON.stringify({ id: request.id, result: {} }));
           }

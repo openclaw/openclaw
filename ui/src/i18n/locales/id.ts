@@ -185,6 +185,8 @@ export const id: TranslationMap = {
     updated: "Diperbarui",
     tokens: "Token",
     compaction: "Pemadatan",
+    goal: "Tujuan",
+    goalNote: "Catatan tujuan",
     thinking: "Thinking",
     fast: "Cepat",
     verbose: "Verbose",

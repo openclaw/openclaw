@@ -2,6 +2,7 @@ import { createHash, createPrivateKey, sign as signJwt } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
+import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -766,9 +767,7 @@ async function sendApnsRequest(params: {
 }
 
 function resolveApnsTimeoutMs(timeoutMs: number | undefined): number {
-  return typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
-    ? Math.max(1000, Math.trunc(timeoutMs))
-    : DEFAULT_APNS_TIMEOUT_MS;
+  return resolveTimerTimeoutMs(timeoutMs, DEFAULT_APNS_TIMEOUT_MS, 1000);
 }
 
 function resolveDirectSendContext(params: {
