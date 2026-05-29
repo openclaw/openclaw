@@ -89,6 +89,41 @@ function resolveGatewayInflightMap(params: { context: GatewayRequestContext; ded
   return { kind: "ready", inflightMap };
 }
 
+function resolveGatewayInflightStart(params: {
+  context: GatewayRequestContext;
+  dedupeKey: string;
+  respond: RespondFn;
+}):
+  | {
+      kind: "ready";
+      inflightMap: Map<string, Promise<InflightResult>>;
+    }
+  | {
+      kind: "handled";
+      done: Promise<void>;
+    } {
+  const inflight = resolveGatewayInflightMap({
+    context: params.context,
+    dedupeKey: params.dedupeKey,
+  });
+  if (inflight.kind === "cached") {
+    params.respond(inflight.cached.ok, inflight.cached.payload, inflight.cached.error, {
+      cached: true,
+    });
+    return { kind: "handled", done: Promise.resolve() };
+  }
+  if (inflight.kind === "inflight") {
+    return {
+      kind: "handled",
+      done: inflight.inflight.then((result) => {
+        const meta = result.meta ? { ...result.meta, cached: true } : { cached: true };
+        params.respond(result.ok, result.payload, result.error, meta);
+      }),
+    };
+  }
+  return { kind: "ready", inflightMap: inflight.inflightMap };
+}
+
 async function runGatewayInflightWork(params: {
   inflightMap: Map<string, Promise<InflightResult>>;
   dedupeKey: string;
@@ -349,23 +384,12 @@ export const sendHandlers: GatewayRequestHandlers = {
     };
     const idem = request.idempotencyKey;
     const dedupeKey = `message.action:${idem}`;
-    const inflight = resolveGatewayInflightMap({ context, dedupeKey });
-    if (inflight.kind === "cached") {
-      respond(inflight.cached.ok, inflight.cached.payload, inflight.cached.error, {
-        cached: true,
-      });
+    const inflightStart = resolveGatewayInflightStart({ context, dedupeKey, respond });
+    if (inflightStart.kind === "handled") {
+      await inflightStart.done;
       return;
     }
-    if (inflight.kind === "inflight") {
-      const result = await inflight.inflight;
-      const meta = result.meta ? { ...result.meta, cached: true } : { cached: true };
-      respond(result.ok, result.payload, result.error, meta);
-      return;
-    }
-    if (inflight.kind !== "ready") {
-      return;
-    }
-    const inflightMap = inflight.inflightMap;
+    const inflightMap = inflightStart.inflightMap;
     const work = (async (): Promise<InflightResult> => {
       const resolvedChannel = await resolveRequestedChannel({
         requestChannel: request.channel,
@@ -480,20 +504,12 @@ export const sendHandlers: GatewayRequestHandlers = {
     };
     const idem = request.idempotencyKey;
     const dedupeKey = `send:${idem}`;
-    const inflight = resolveGatewayInflightMap({ context, dedupeKey });
-    if (inflight.kind === "cached") {
-      respond(inflight.cached.ok, inflight.cached.payload, inflight.cached.error, {
-        cached: true,
-      });
+    const inflightStart = resolveGatewayInflightStart({ context, dedupeKey, respond });
+    if (inflightStart.kind === "handled") {
+      await inflightStart.done;
       return;
     }
-    if (inflight.kind === "inflight") {
-      const result = await inflight.inflight;
-      const meta = result.meta ? { ...result.meta, cached: true } : { cached: true };
-      respond(result.ok, result.payload, result.error, meta);
-      return;
-    }
-    const inflightMap = inflight.inflightMap;
+    const inflightMap = inflightStart.inflightMap;
     const to = normalizeOptionalString(request.to) ?? "";
     const message = normalizeOptionalString(request.message) ?? "";
     const mediaUrl = normalizeOptionalString(request.mediaUrl);
@@ -700,23 +716,12 @@ export const sendHandlers: GatewayRequestHandlers = {
     };
     const idem = request.idempotencyKey;
     const dedupeKey = `poll:${idem}`;
-    const inflight = resolveGatewayInflightMap({ context, dedupeKey });
-    if (inflight.kind === "cached") {
-      respond(inflight.cached.ok, inflight.cached.payload, inflight.cached.error, {
-        cached: true,
-      });
+    const inflightStart = resolveGatewayInflightStart({ context, dedupeKey, respond });
+    if (inflightStart.kind === "handled") {
+      await inflightStart.done;
       return;
     }
-    if (inflight.kind === "inflight") {
-      const result = await inflight.inflight;
-      const meta = result.meta ? { ...result.meta, cached: true } : { cached: true };
-      respond(result.ok, result.payload, result.error, meta);
-      return;
-    }
-    if (inflight.kind !== "ready") {
-      return;
-    }
-    const inflightMap = inflight.inflightMap;
+    const inflightMap = inflightStart.inflightMap;
     const work = (async (): Promise<InflightResult> => {
       const resolvedChannel = await resolveRequestedChannel({
         requestChannel: request.channel,

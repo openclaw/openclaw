@@ -1,9 +1,10 @@
 function parseStrictPositiveInteger(value: string): number | undefined {
-  if (!/^[1-9]\d*$/u.test(value)) {
+  const trimmed = value.trim();
+  if (!/^\+?\d+$/u.test(trimmed)) {
     return undefined;
   }
-  const parsed = Number(value);
-  return Number.isSafeInteger(parsed) ? parsed : undefined;
+  const parsed = Number(trimmed);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
 export const MAX_SAFE_TIMEOUT_DELAY_MS = 2_147_483_647;

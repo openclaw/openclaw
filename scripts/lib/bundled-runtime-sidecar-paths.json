@@ -16,5 +16,6 @@
   "dist/extensions/telegram/runtime-setter-api.js",
   "dist/extensions/tokenjuice/runtime-api.js",
   "dist/extensions/webhooks/runtime-api.js",
+  "dist/extensions/workboard/runtime-api.js",
   "dist/extensions/zai/runtime-api.js"
 ]

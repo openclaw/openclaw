@@ -1,5 +1,10 @@
-import type { ConfigUiHint } from "../config-ui-hints-types.js";
-import { normalizeLowercaseStringOrEmpty } from "../string-coerce.js";
+type ConfigUiHintTags = {
+  tags?: string[];
+};
+
+function normalizeLowercaseStringOrEmpty(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
 
 export const SENSITIVE_URL_HINT_TAG = "url-secret";
 
@@ -39,7 +44,7 @@ export function isSensitiveUrlConfigPath(path: string): boolean {
   return /^mcp\.servers\.(?:\*|[^.]+)\.url$/.test(path);
 }
 
-export function hasSensitiveUrlHintTag(hint: Pick<ConfigUiHint, "tags"> | undefined): boolean {
+export function hasSensitiveUrlHintTag(hint: ConfigUiHintTags | undefined): boolean {
   return hint?.tags?.includes(SENSITIVE_URL_HINT_TAG) === true;
 }
 
