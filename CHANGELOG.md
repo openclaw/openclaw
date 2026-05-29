@@ -7,6 +7,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Cron: retry recurring jobs after transient model rate limits before waiting for the next scheduled slot.
+- Codex: treat a completed `image_generation_call` as a tool handoff so the app-server idle watchdog no longer retires the turn before the final response is delivered. (#87948)
 
 ## 2026.5.28
 

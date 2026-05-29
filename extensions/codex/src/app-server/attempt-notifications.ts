@@ -146,6 +146,17 @@ export function isPendingOpenClawDynamicToolCompletionNotification(
   return itemType === undefined || itemType === "dynamicToolCall";
 }
 
+// Raw response item types that signal a built-in/tool call produced output
+// mid-turn. Recognizing one marks the turn as having crossed a tool handoff, so
+// a following raw assistant completion can release the turn instead of being
+// retired by the idle watchdog. `image_generation_call` completes inline like a
+// tool output (the model continues to a final message afterward), so it belongs
+// here alongside `custom_tool_call_output`. (#87948, follows #82274)
+const RAW_TOOL_OUTPUT_COMPLETION_ITEM_TYPES: ReadonlySet<string> = new Set([
+  "custom_tool_call_output",
+  "image_generation_call",
+]);
+
 export function isRawToolOutputCompletionNotification(
   notification: CodexServerNotification,
 ): boolean {
@@ -153,7 +164,8 @@ export function isRawToolOutputCompletionNotification(
     return false;
   }
   const item = isJsonObject(notification.params.item) ? notification.params.item : undefined;
-  return item ? readString(item, "type") === "custom_tool_call_output" : false;
+  const itemType = item ? readString(item, "type") : undefined;
+  return itemType !== undefined && RAW_TOOL_OUTPUT_COMPLETION_ITEM_TYPES.has(itemType);
 }
 
 export function isNativeToolProgressNotification(notification: CodexServerNotification): boolean {
