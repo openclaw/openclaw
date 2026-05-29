@@ -2,6 +2,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { resolveExpiresAtMsFromDurationOrEpoch } from "openclaw/plugin-sdk/number-runtime";
 import { generatePkceVerifierChallenge, toFormUrlEncoded } from "openclaw/plugin-sdk/provider-auth";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 
 export type MiniMaxRegion = "cn" | "global";
 
@@ -28,6 +29,7 @@ function getOAuthEndpoints(region: MiniMaxRegion) {
     tokenEndpoint: `${config.baseUrl}/oauth/token`,
     clientId: config.clientId,
     baseUrl: config.baseUrl,
+    hostname: new URL(config.baseUrl).hostname,
   };
 }
 
@@ -78,39 +80,47 @@ async function requestOAuthCode(params: {
   region: MiniMaxRegion;
 }): Promise<MiniMaxOAuthAuthorization> {
   const endpoints = getOAuthEndpoints(params.region);
-  const response = await fetch(endpoints.codeEndpoint, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-      Accept: "application/json",
-      "x-request-id": randomUUID(),
+  const { response, release } = await fetchWithSsrFGuard({
+    url: endpoints.codeEndpoint,
+    init: {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Accept: "application/json",
+        "x-request-id": randomUUID(),
+      },
+      body: toFormUrlEncoded({
+        response_type: "code",
+        client_id: endpoints.clientId,
+        scope: MINIMAX_OAUTH_SCOPE,
+        code_challenge: params.challenge,
+        code_challenge_method: "S256",
+        state: params.state,
+      }),
     },
-    body: toFormUrlEncoded({
-      response_type: "code",
-      client_id: endpoints.clientId,
-      scope: MINIMAX_OAUTH_SCOPE,
-      code_challenge: params.challenge,
-      code_challenge_method: "S256",
-      state: params.state,
-    }),
+    policy: { allowedHostnames: [endpoints.hostname] },
+    auditContext: "minimax.oauth.code",
   });
+  try {
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`MiniMax OAuth authorization failed: ${text || response.statusText}`);
+    }
 
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`MiniMax OAuth authorization failed: ${text || response.statusText}`);
+    const payload = (await response.json()) as MiniMaxOAuthAuthorization & { error?: string };
+    if (!payload.user_code || !payload.verification_uri) {
+      throw new Error(
+        payload.error ??
+          "MiniMax OAuth authorization returned an incomplete payload (missing user_code or verification_uri).",
+      );
+    }
+    if (payload.state !== params.state) {
+      throw new Error("MiniMax OAuth state mismatch: possible CSRF attack or session corruption.");
+    }
+    return payload;
+  } finally {
+    await release();
   }
-
-  const payload = (await response.json()) as MiniMaxOAuthAuthorization & { error?: string };
-  if (!payload.user_code || !payload.verification_uri) {
-    throw new Error(
-      payload.error ??
-        "MiniMax OAuth authorization returned an incomplete payload (missing user_code or verification_uri).",
-    );
-  }
-  if (payload.state !== params.state) {
-    throw new Error("MiniMax OAuth state mismatch: possible CSRF attack or session corruption.");
-  }
-  return payload;
 }
 
 async function pollOAuthToken(params: {
@@ -119,20 +129,32 @@ async function pollOAuthToken(params: {
   region: MiniMaxRegion;
 }): Promise<TokenResult> {
   const endpoints = getOAuthEndpoints(params.region);
-  const response = await fetch(endpoints.tokenEndpoint, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-      Accept: "application/json",
+  const { response, release } = await fetchWithSsrFGuard({
+    url: endpoints.tokenEndpoint,
+    init: {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Accept: "application/json",
+      },
+      body: toFormUrlEncoded({
+        grant_type: MINIMAX_OAUTH_GRANT_TYPE,
+        client_id: endpoints.clientId,
+        user_code: params.userCode,
+        code_verifier: params.verifier,
+      }),
     },
-    body: toFormUrlEncoded({
-      grant_type: MINIMAX_OAUTH_GRANT_TYPE,
-      client_id: endpoints.clientId,
-      user_code: params.userCode,
-      code_verifier: params.verifier,
-    }),
+    policy: { allowedHostnames: [endpoints.hostname] },
+    auditContext: "minimax.oauth.token",
   });
+  try {
+    return await parseMiniMaxOAuthTokenResponse(response);
+  } finally {
+    await release();
+  }
+}
 
+async function parseMiniMaxOAuthTokenResponse(response: Response): Promise<TokenResult> {
   const text = await response.text();
   let payload:
     | {
