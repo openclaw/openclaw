@@ -863,6 +863,7 @@ describe("loadSessions", () => {
     await loadSessions(state);
 
     expect(request).toHaveBeenCalledWith("sessions.list", {
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
@@ -892,6 +893,7 @@ describe("loadSessions", () => {
     });
 
     expect(request).toHaveBeenCalledWith("sessions.list", {
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
