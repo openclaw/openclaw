@@ -162,7 +162,9 @@ function appendBlockReplyChunk(ctx: EmbeddedAgentSubscribeContext, chunk: string
 }
 
 function resetBlockTagState(
-  state: EmbeddedAgentSubscribeState["blockState"] | EmbeddedAgentSubscribeState["partialBlockState"],
+  state:
+    | EmbeddedAgentSubscribeState["blockState"]
+    | EmbeddedAgentSubscribeState["partialBlockState"],
 ) {
   state.thinking = false;
   state.final = false;
@@ -698,11 +700,17 @@ export function handleMessageUpdate(
   const finalParsedDelta =
     evtType === "text_end" ? ctx.consumePartialReplyDirectives("", { final: true }) : null;
   const parsedStreamDirectives = mergeReplyDirectiveResults(parsedDelta, finalParsedDelta);
-  const previousCleaned = ctx.state.lastStreamedAssistantCleaned ?? "";
   const parsedFull = parseReplyDirectives(splitTrailingDirective(next).text);
-  const cleanedText = parsedFull.text;
+  const previousCleaned = ctx.state.lastStreamedAssistantCleaned ?? "";
   const { mediaUrls, hasMedia } = resolveSendableOutboundReplyParts(parsedStreamDirectives ?? {});
   const hasAudio = Boolean(parsedStreamDirectives?.audioAsVoice);
+  const streamDirectiveOnly = Boolean(
+    parsedStreamDirectives &&
+    (hasMedia || hasAudio) &&
+    !parsedStreamDirectives.text?.trim() &&
+    !previousCleaned,
+  );
+  const cleanedText = streamDirectiveOnly ? "" : parsedFull.text;
   if (next || hasMedia || hasAudio || isUnphasedReplacementDelta) {
     if (shouldUsePhaseAwareBlockReply) {
       recordPendingAssistantReplyDirectives(ctx.state, parsedStreamDirectives);
@@ -859,8 +867,6 @@ export function handleMessageEnd(
     ctx.blockChunker?.reset();
     resetBlockTagState(ctx.state.blockState);
     resetBlockTagState(ctx.state.partialBlockState);
-    ctx.state.lastStreamedAssistant = undefined;
-    ctx.state.lastStreamedAssistantCleaned = undefined;
     ctx.state.reasoningStreamOpen = false;
   };
 
