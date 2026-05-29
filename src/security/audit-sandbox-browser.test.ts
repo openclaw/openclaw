@@ -34,6 +34,14 @@ afterEach(() => {
 });
 
 describe("security audit sandbox browser findings", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("warns when sandbox browser containers have missing or stale hash labels", async () => {
     const findings = await collectSandboxBrowserHashLabelFindings({
       execDockerRawFn: async (args: string[]) => {
