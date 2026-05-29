@@ -29,7 +29,11 @@ import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import { setReplyPayloadMetadata, type GetReplyOptions, type ReplyPayload } from "../types.js";
 import { PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE } from "./provider-request-error-classifier.js";
-import { createReplyDispatcher, type ReplyDispatcher } from "./reply-dispatcher.js";
+import {
+  createReplyDispatcher,
+  type ReplyDispatchBeforeDeliver,
+  type ReplyDispatcher,
+} from "./reply-dispatcher.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { buildTestCtx } from "./test-ctx.js";
 
@@ -582,11 +586,39 @@ beforeAll(async () => {
 });
 
 function createDispatcher(): ReplyDispatcher {
+  let beforeDeliver: ReplyDispatchBeforeDeliver | undefined;
+  const beforeDeliverTasks: Promise<unknown>[] = [];
+  const runBeforeDeliver = (kind: "tool" | "block" | "final", payload: ReplyPayload): void => {
+    if (!beforeDeliver) {
+      return;
+    }
+    beforeDeliverTasks.push(Promise.resolve(beforeDeliver(payload, { kind })));
+  };
   return {
-    sendToolResult: vi.fn(() => true),
-    sendBlockReply: vi.fn(() => true),
-    sendFinalReply: vi.fn(() => true),
-    waitForIdle: vi.fn(async () => {}),
+    sendToolResult: vi.fn((payload) => {
+      runBeforeDeliver("tool", payload);
+      return true;
+    }),
+    sendBlockReply: vi.fn((payload) => {
+      runBeforeDeliver("block", payload);
+      return true;
+    }),
+    sendFinalReply: vi.fn((payload) => {
+      runBeforeDeliver("final", payload);
+      return true;
+    }),
+    appendBeforeDeliver: vi.fn((hook) => {
+      const previousBeforeDeliver = beforeDeliver;
+      beforeDeliver = previousBeforeDeliver
+        ? async (payload, info) => {
+            const previousPayload = await previousBeforeDeliver(payload, info);
+            return previousPayload ? hook(previousPayload, info) : null;
+          }
+        : hook;
+    }),
+    waitForIdle: vi.fn(async () => {
+      await Promise.all(beforeDeliverTasks);
+    }),
     getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
     getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
     markComplete: vi.fn(),
@@ -7428,6 +7460,67 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       text: "message tool reply",
       mediaUrls: undefined,
       idempotencyKey: "run-1:internal-source-reply:0",
+      updateMode: "inline",
+      config: emptyConfig,
+    });
+  });
+
+  it("mirrors post-hook internal source reply payloads into the active transcript", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const dispatcher = createDispatcher();
+    dispatcher.appendBeforeDeliver?.((payload, info) => {
+      if (info.kind !== "final") {
+        return payload;
+      }
+      return setReplyPayloadMetadata(
+        {
+          ...payload,
+          text: "redacted hook reply",
+          mediaUrl: undefined,
+          mediaUrls: ["https://example.com/redacted.png"],
+        },
+        getReplyPayloadMetadata(payload) ?? {},
+      );
+    });
+    const sourceReply = setReplyPayloadMetadata(
+      { text: "secret message tool reply", mediaUrl: "https://example.com/secret.png" },
+      {
+        deliverDespiteSourceReplySuppression: true,
+        sourceReplyTranscriptMirror: {
+          sessionKey: "agent:main",
+          agentId: "main",
+          text: "secret message tool reply",
+          mediaUrls: ["https://example.com/secret.png"],
+          idempotencyKey: "run-1:internal-source-reply:rewritten",
+        },
+      },
+    );
+    const replyResolver = vi.fn(async () => sourceReply satisfies ReplyPayload);
+    transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: "webchat", Surface: "webchat", SessionKey: "agent:main" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    });
+
+    expect(result.queuedFinal).toBe(true);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(sourceReply);
+    expect(transcriptMocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
+      sessionKey: "agent:main",
+      agentId: "main",
+      text: "redacted hook reply",
+      mediaUrls: ["https://example.com/redacted.png"],
+      idempotencyKey: "run-1:internal-source-reply:rewritten",
       updateMode: "inline",
       config: emptyConfig,
     });

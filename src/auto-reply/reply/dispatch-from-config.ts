@@ -143,6 +143,10 @@ import {
 import { resolveStoredModelOverride } from "./stored-model-override.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 
+type SourceReplyTranscriptMirror = NonNullable<
+  NonNullable<ReturnType<typeof getReplyPayloadMetadata>>["sourceReplyTranscriptMirror"]
+>;
+
 class DispatchReplyOperationAbortedError extends Error {
   constructor() {
     super("Dispatch reply operation aborted");
@@ -703,7 +707,7 @@ async function clearPendingFinalDeliveryAfterSuccess(params: {
 }
 
 async function mirrorInternalSourceReplyToTranscript(params: {
-  metadata: NonNullable<ReturnType<typeof getReplyPayloadMetadata>>["sourceReplyTranscriptMirror"];
+  metadata?: SourceReplyTranscriptMirror;
   cfg: OpenClawConfig;
 }): Promise<void> {
   const mirror = params.metadata;
@@ -734,22 +738,63 @@ function getDispatcherFinalOutcomeCounts(dispatcher: ReplyDispatcher): {
   };
 }
 
+function sourceReplyTranscriptMirrorForDeliveredPayload(
+  metadata: SourceReplyTranscriptMirror,
+  payload: ReplyPayload,
+): SourceReplyTranscriptMirror {
+  const sendable = resolveSendableOutboundReplyParts(payload);
+  return {
+    ...metadata,
+    text: sendable.text,
+    mediaUrls: sendable.mediaUrls.length > 0 ? sendable.mediaUrls : undefined,
+  };
+}
+
+function captureDeliveredSourceReplyTranscriptMirror(params: {
+  dispatcher: ReplyDispatcher;
+  metadata?: SourceReplyTranscriptMirror;
+}): () => SourceReplyTranscriptMirror | undefined {
+  if (!params.metadata || !params.dispatcher.appendBeforeDeliver) {
+    return () => params.metadata;
+  }
+  let deliveredMetadata: SourceReplyTranscriptMirror | undefined;
+  const { idempotencyKey, sessionKey } = params.metadata;
+  params.dispatcher.appendBeforeDeliver((payload, info) => {
+    if (info.kind !== "final") {
+      return payload;
+    }
+    const payloadMetadata = getReplyPayloadMetadata(payload)?.sourceReplyTranscriptMirror;
+    if (!payloadMetadata) {
+      return payload;
+    }
+    if (
+      payloadMetadata.idempotencyKey === idempotencyKey &&
+      payloadMetadata.sessionKey === sessionKey
+    ) {
+      deliveredMetadata = sourceReplyTranscriptMirrorForDeliveredPayload(payloadMetadata, payload);
+    }
+    return payload;
+  });
+  return () => deliveredMetadata;
+}
+
 async function mirrorInternalSourceReplyAfterDispatcherDelivery(params: {
   dispatcher: ReplyDispatcher;
   before: { cancelled: number; failed: number };
-  metadata: NonNullable<ReturnType<typeof getReplyPayloadMetadata>>["sourceReplyTranscriptMirror"];
+  metadata: () => SourceReplyTranscriptMirror | undefined;
   cfg: OpenClawConfig;
 }): Promise<void> {
-  if (!params.metadata) {
-    return;
-  }
   await params.dispatcher.waitForIdle();
   const after = getDispatcherFinalOutcomeCounts(params.dispatcher);
   if (after.cancelled > params.before.cancelled || after.failed > params.before.failed) {
     return;
   }
+  const metadata = params.metadata();
+  if (!metadata) {
+    return;
+  }
   await mirrorInternalSourceReplyToTranscript({
-    metadata: params.metadata,
+    metadata,
     cfg: params.cfg,
   });
 }
@@ -1904,12 +1949,16 @@ export async function dispatchReplyFromConfig(
       throwIfFinalDeliveryAborted();
       markInboundDedupeReplayUnsafe();
       const finalOutcomeBefore = getDispatcherFinalOutcomeCounts(dispatcher);
+      const deliveredSourceReplyTranscriptMirror = captureDeliveredSourceReplyTranscriptMirror({
+        dispatcher,
+        metadata: sourceReplyTranscriptMirror,
+      });
       const queuedFinal = dispatcher.sendFinalReply(normalizedPayload);
       if (queuedFinal) {
         await mirrorInternalSourceReplyAfterDispatcherDelivery({
           dispatcher,
           before: finalOutcomeBefore,
-          metadata: sourceReplyTranscriptMirror,
+          metadata: deliveredSourceReplyTranscriptMirror,
           cfg,
         });
       }
