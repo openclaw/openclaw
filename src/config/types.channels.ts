@@ -1,4 +1,4 @@
-import type { ContextVisibilityMode, GroupPolicy } from "./types.base.js";
+import type { ContextVisibilityMode, GroupPolicy, TextChunkMode } from "./types.base.js";
 import type { ChannelBotLoopProtectionConfig } from "./types.bot-loop-protection.js";
 import type {
   ChannelHealthMonitorConfig,
@@ -27,6 +27,10 @@ export type ChannelDefaultsConfig = {
   heartbeat?: ChannelHeartbeatVisibilityConfig;
   /** Default pair loop guard settings for channels that support bot loop protection. */
   botLoopProtection?: ChannelBotLoopProtectionConfig;
+  /** Default outbound text chunk limit for channels (overridden by per-channel textChunkLimit). */
+  textChunkLimit?: number;
+  /** Default outbound chunk mode for channels (overridden by per-channel chunkMode). */
+  chunkMode?: TextChunkMode;
 };
 
 export type ChannelModelByChannelConfig = Record<string, Record<string, string>>;

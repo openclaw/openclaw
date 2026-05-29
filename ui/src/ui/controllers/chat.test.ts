@@ -1097,12 +1097,7 @@ describe("sendChatMessage", () => {
     const contentParts = content as unknown[];
     expect(contentParts).toHaveLength(2);
     expect(contentParts[0]).toEqual({ type: "text", text: "summarize" });
-    const attachmentPart = requireRecord(contentParts[1]);
-    expect(attachmentPart.type).toBe("attachment");
-    const attachmentPreview = requireRecord(attachmentPart.attachment);
-    expect(attachmentPreview.kind).toBe("document");
-    expect(attachmentPreview.label).toBe("brief.pdf");
-    expect(attachmentPreview.mimeType).toBe("application/pdf");
+    expect(contentParts[1]).toEqual({ type: "text", text: "Attached file: brief.pdf" });
   });
 
   it("serializes attachments from the side payload store without copying data URLs into chat state", async () => {
@@ -1227,6 +1222,83 @@ describe("sendChatMessage", () => {
       },
     ]);
     expect(JSON.stringify(captionedState.chatMessages)).not.toContain("data:image/png;base64");
+  });
+
+  it("keeps inline audio data URLs out of optimistic chat state", async () => {
+    const request = vi.fn().mockResolvedValue({ runId: "run-1", status: "started" });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+    const audioBase64 = "A".repeat(512 * 1024);
+    const audioDataUrl = `data:audio/mp4;base64,${audioBase64}`;
+
+    const result = await sendChatMessage(state, "transcribe", [
+      {
+        id: "att-audio",
+        dataUrl: audioDataUrl,
+        mimeType: "audio/mp4",
+        fileName: "recording.m4a",
+      },
+    ]);
+
+    expect(result).toMatch(UUID_V4_RE);
+    expect(request).toHaveBeenCalledTimes(1);
+    const [requestMethod, requestParams] = requireFirstRequestCall(request);
+    expect(requestMethod).toBe("chat.send");
+    const sendParams = requireRecord(requestParams);
+    expect(sendParams.message).toBe("transcribe");
+    expect(sendParams.attachments).toEqual([
+      {
+        type: "file",
+        mimeType: "audio/mp4",
+        fileName: "recording.m4a",
+        content: audioBase64,
+      },
+    ]);
+    expect(state.chatMessages).toStrictEqual([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "transcribe" },
+          { type: "text", text: "Attached audio: recording.m4a" },
+        ],
+        timestamp: expect.any(Number),
+      },
+    ]);
+    expect(JSON.stringify(state.chatMessages)).not.toContain("data:audio/mp4;base64");
+  });
+
+  it("keeps inline document data URLs out of optimistic chat state", async () => {
+    const request = vi.fn().mockResolvedValue({ runId: "run-1", status: "started" });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+    const pdfBase64 = "B".repeat(256 * 1024);
+    const pdfDataUrl = `data:application/pdf;base64,${pdfBase64}`;
+
+    const result = await sendChatMessage(state, "summarize", [
+      {
+        id: "att-doc",
+        dataUrl: pdfDataUrl,
+        mimeType: "application/pdf",
+        fileName: "report.pdf",
+      },
+    ]);
+
+    expect(result).toMatch(UUID_V4_RE);
+    expect(state.chatMessages).toStrictEqual([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "summarize" },
+          { type: "text", text: "Attached file: report.pdf" },
+        ],
+        timestamp: expect.any(Number),
+      },
+    ]);
+    expect(JSON.stringify(state.chatMessages)).not.toContain("data:application/pdf;base64");
   });
 
   it("formats structured non-auth connect failures for chat send", async () => {

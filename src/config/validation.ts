@@ -1487,7 +1487,7 @@ function validateConfigObjectWithPluginsBase(
     };
   };
 
-  const allowedChannels = new Set<string>(["defaults", "modelByChannel", ...bundledChannelIds]);
+  const allowedChannels = new Set<string>(["defaults", "modelByChannel", "webchat", ...bundledChannelIds]);
 
   if (config.channels && isRecord(config.channels)) {
     for (const key of Object.keys(config.channels)) {

@@ -74,6 +74,11 @@ export function resolveTextChunkLimit(
   if (typeof providerOverride === "number" && providerOverride > 0) {
     return providerOverride;
   }
+  const channelDefaults = cfg?.channels?.defaults as ProviderChunkConfig | undefined;
+  const defaultsOverride = resolveChunkLimitForProvider(channelDefaults, accountId);
+  if (typeof defaultsOverride === "number" && defaultsOverride > 0) {
+    return defaultsOverride;
+  }
   return fallback;
 }
 
@@ -108,7 +113,12 @@ export function resolveChunkMode(
   const providerConfig = (channelsConfig?.[provider] ??
     (cfg as Record<string, unknown> | undefined)?.[provider]) as ProviderChunkConfig | undefined;
   const mode = resolveChunkModeForProvider(providerConfig, accountId);
-  return mode ?? DEFAULT_CHUNK_MODE;
+  if (mode) {
+    return mode;
+  }
+  const channelDefaults = cfg?.channels?.defaults as ProviderChunkConfig | undefined;
+  const defaultsMode = resolveChunkModeForProvider(channelDefaults, accountId);
+  return defaultsMode ?? DEFAULT_CHUNK_MODE;
 }
 
 /**

@@ -350,6 +350,22 @@ describe("resolveTextChunkLimit", () => {
       options: undefined,
       expected: 4000,
     },
+    {
+      name: "falls back to channels.defaults.textChunkLimit when provider has no override",
+      cfg: { channels: { defaults: { textChunkLimit: 8000 } } },
+      provider: "webchat" as const,
+      accountId: undefined,
+      options: undefined,
+      expected: 8000,
+    },
+    {
+      name: "provider override takes precedence over channels.defaults",
+      cfg: { channels: { defaults: { textChunkLimit: 8000 }, telegram: { textChunkLimit: 6000 } } },
+      provider: "telegram" as const,
+      accountId: undefined,
+      options: undefined,
+      expected: 6000,
+    },
   ] as const)("$name", ({ cfg, provider, accountId, options, expected }) => {
     expect(resolveTextChunkLimit(cfg as never, provider, accountId, options)).toBe(expected);
   });
@@ -609,6 +625,23 @@ describe("resolveChunkMode", () => {
       provider: "webchat",
       accountId: undefined,
       expected: "newline",
+    },
+    {
+      cfg: { channels: { defaults: { chunkMode: "newline" as const } } },
+      provider: "webchat",
+      accountId: undefined,
+      expected: "newline",
+    },
+    {
+      cfg: {
+        channels: {
+          defaults: { chunkMode: "newline" as const },
+          slack: { chunkMode: "length" as const },
+        },
+      },
+      provider: "slack",
+      accountId: undefined,
+      expected: "length",
     },
   ] as const)(
     "resolves default/provider/account/internal chunk mode for $provider $accountId",

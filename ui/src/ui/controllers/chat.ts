@@ -388,9 +388,15 @@ function isInlineDataUrl(value: string): boolean {
   return /^\s*data:/iu.test(value);
 }
 
-function formatInlineImageAttachmentPlaceholder(attachment: ChatAttachment): string {
+function formatInlineAttachmentPlaceholder(attachment: ChatAttachment): string {
   const label = attachment.fileName?.trim();
-  return label ? `Attached image: ${label}` : "Attached image";
+  if (attachment.mimeType.startsWith("image/")) {
+    return label ? `Attached image: ${label}` : "Attached image";
+  }
+  if (attachment.mimeType.startsWith("audio/")) {
+    return label ? `Attached audio: ${label}` : "Attached audio";
+  }
+  return label ? `Attached file: ${label}` : "Attached file";
 }
 
 function buildApiAttachments(attachments?: ChatAttachment[]) {
@@ -606,11 +612,11 @@ export function appendUserChatMessage(
       if (!previewUrl) {
         continue;
       }
+      if (isInlineDataUrl(previewUrl)) {
+        contentBlocks.push({ type: "text", text: formatInlineAttachmentPlaceholder(att) });
+        continue;
+      }
       if (att.mimeType.startsWith("image/")) {
-        if (isInlineDataUrl(previewUrl)) {
-          contentBlocks.push({ type: "text", text: formatInlineImageAttachmentPlaceholder(att) });
-          continue;
-        }
         contentBlocks.push({
           type: "image",
           url: previewUrl,
