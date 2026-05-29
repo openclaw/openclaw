@@ -601,6 +601,73 @@ describe("memory index", () => {
     }
   });
 
+  it("preserves memory dirty events raised during session identity reindex", async () => {
+    try {
+      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state-dirty-during-session"));
+      const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
+      await fs.mkdir(sessionsDir, { recursive: true });
+      await fs.writeFile(
+        path.join(sessionsDir, "session-dirty-during-reindex.jsonl"),
+        [
+          JSON.stringify({
+            type: "session",
+            id: "session-dirty-during-reindex",
+            timestamp: "2026-04-07T15:24:04.113Z",
+          }),
+          JSON.stringify({
+            type: "message",
+            message: {
+              role: "assistant",
+              timestamp: "2026-04-07T15:25:04.113Z",
+              content: [{ type: "text", text: "Dirty during session marker." }],
+            },
+          }),
+        ].join("\n") + "\n",
+        "utf8",
+      );
+
+      const dbPath = path.join(workspaceDir, "index-dirty-during-session.sqlite");
+      const oldCfg = createCfg({
+        storePath: dbPath,
+        sources: ["memory", "sessions"],
+        sessionMemory: true,
+        model: "old-embed",
+      });
+      const oldManager = await getFreshManager(oldCfg);
+      await oldManager.sync({ reason: "test", force: true });
+      await oldManager.close?.();
+
+      const nextCfg = createCfg({
+        storePath: dbPath,
+        sources: ["memory", "sessions"],
+        sessionMemory: true,
+        provider: "gemini",
+        model: "new-embed",
+      });
+      const nextManager = await getFreshManager(nextCfg);
+      try {
+        const fields = nextManager as unknown as {
+          dirty: boolean;
+          syncSessionFiles: (params: unknown) => Promise<void>;
+        };
+        const syncSessionFiles = fields.syncSessionFiles.bind(nextManager);
+        fields.syncSessionFiles = async (params) => {
+          fields.dirty = true;
+          await syncSessionFiles(params);
+        };
+
+        await nextManager.sync({ reason: "test", force: true });
+
+        expect(nextManager.status().dirty).toBe(true);
+        expect(nextManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+      } finally {
+        await nextManager.close?.();
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("closes embedding providers when memory index managers close", async () => {
     const cfg = createCfg({
       storePath: indexMainPath,
