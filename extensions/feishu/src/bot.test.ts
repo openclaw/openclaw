@@ -916,10 +916,11 @@ describe("handleFeishuMessage ACP routing", () => {
     expect(dispatcherOptions.allowReasoningPreview).toBe(true);
   });
 
-  it("drops message gracefully when channel runtime inbound is not wired", async () => {
+  it("throws to preserve retry when channel runtime inbound is not wired", async () => {
     // Simulate issue #87646: runtime exists but channel.inbound.run is missing.
     // This can happen during cold starts when the gateway hasn't finished
     // wiring createRuntimeChannel() into the feishu plugin's runtime store.
+    // The guard now throws instead of returning so Feishu's webhook can retry.
     const incompleteRuntime = createFeishuBotRuntime({
       channel: { inbound: undefined } as never,
     });
@@ -928,7 +929,7 @@ describe("handleFeishuMessage ACP routing", () => {
     const logSpy = vi.fn();
     vi.spyOn(await import("./runtime.js"), "getFeishuRuntime").mockReturnValue(incompleteRuntime);
 
-    // Should not throw — message is dropped with a log warning.
+    // Should throw — message is rejected to preserve Feishu retry semantics.
     await expect(
       dispatchMessage({
         cfg: {
@@ -946,7 +947,7 @@ describe("handleFeishuMessage ACP routing", () => {
           },
         },
       }),
-    ).resolves.toBeUndefined();
+    ).rejects.toThrow(/channel runtime not ready/);
 
     // inbound.run should NOT have been called.
     expect(incompleteRuntime.channel.inbound.run).toBeUndefined();

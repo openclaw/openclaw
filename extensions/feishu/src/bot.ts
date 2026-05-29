@@ -84,24 +84,25 @@ const permissionErrorNotifiedAt = new Map<string, number>();
  * In that state core.channel.inbound.run is undefined and any dispatch attempt
  * would crash the handler.
  *
- * Returns the bound run function when ready, or null if the runtime is not
- * wired yet (caller should log and skip/return).
+ * Returns the bound run function when ready, or throws if the runtime is not
+ * wired yet — throwing preserves Feishu's webhook retry semantics so the
+ * message is not permanently dropped.
  */
 function getChannelInboundRun(
   core: ReturnType<typeof getFeishuRuntime>,
   log: (msg: string) => void,
   context: string,
-): typeof core.channel.inbound.run | null {
+): typeof core.channel.inbound.run {
   if (typeof core.channel?.inbound?.run === "function") {
     return core.channel.inbound.run;
   }
   const channelKeys = core.channel ? Object.keys(core.channel) : [];
   const inboundKeys = core.channel?.inbound ? Object.keys(core.channel.inbound) : [];
-  log(
+  const msg =
     `[${context}] channel runtime not ready ` +
-    `(channel=[${channelKeys}], inbound=[${inboundKeys}]); skipping`,
-  );
-  return null;
+    `(channel=[${channelKeys}], inbound=[${inboundKeys}]); rejecting to preserve retry`;
+  log(msg);
+  throw new Error(msg);
 }
 const PERMISSION_ERROR_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
 
@@ -1522,7 +1523,6 @@ export async function handleFeishuMessage(params: {
             `feishu[${account.accountId}]: broadcast active dispatch agent=${agentId} (session=${agentSessionKey})`,
           );
           const broadcastInboundRun = getChannelInboundRun(core, log, `feishu[${account.accountId}] broadcast-active`);
-          if (broadcastInboundRun) {
           await broadcastInboundRun({
             channel: "feishu",
             accountId: route.accountId,
@@ -1564,7 +1564,6 @@ export async function handleFeishuMessage(params: {
               }),
             },
           });
-          } // end broadcastInboundRun check
         } else {
           // Observer agent: no-op dispatcher (session entry + inference, no Feishu reply).
           // Strip CommandAuthorized so slash commands (e.g. /reset) don't silently
@@ -1584,7 +1583,6 @@ export async function handleFeishuMessage(params: {
             `feishu[${account.accountId}]: broadcast observer dispatch agent=${agentId} (session=${agentSessionKey})`,
           );
           const observerInboundRun = getChannelInboundRun(core, log, `feishu[${account.accountId}] broadcast-observer`);
-          if (observerInboundRun) {
           await observerInboundRun({
             channel: "feishu",
             accountId: route.accountId,
@@ -1619,7 +1617,6 @@ export async function handleFeishuMessage(params: {
               }),
             },
           });
-          } // end observerInboundRun check
         }
       };
 
@@ -1692,7 +1689,6 @@ export async function handleFeishuMessage(params: {
       log(`feishu[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);
 
       const inboundRun = getChannelInboundRun(core, log, `feishu[${account.accountId}]`);
-      if (!inboundRun) return;
 
       const turnResult = await inboundRun({
         channel: "feishu",
