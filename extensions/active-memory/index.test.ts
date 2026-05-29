@@ -3649,6 +3649,51 @@ describe("active-memory plugin", () => {
     expect(prompt).not.toContain("Bounded memory search query:\nUntrusted Discord message body");
   });
 
+  it("trims OpenClaw runtime envelopes before building the recall conversation context", async () => {
+    api.pluginConfig = {
+      agents: ["main"],
+      allowedChatTypes: ["direct", "group"],
+      queryMode: "recent",
+      recentUserChars: 120,
+      recentAssistantChars: 80,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    const runtimeEnvelope = [
+      "OpenClaw runtime context for this turn:",
+      "Treat this OpenClaw-provided context as supporting project/user reference.",
+      "Conversation context (untrusted, chronological, selected for current message):",
+      "RUNTIME_CONTEXT_FILLER ".repeat(1_500),
+      "Current user request:",
+      "do you remember my flight seat preference?",
+    ].join("\n");
+
+    await hooks.before_prompt_build(
+      {
+        prompt: runtimeEnvelope,
+        messages: [
+          { role: "user", content: "i am booking a flight tomorrow" },
+          { role: "assistant", content: "sure, let's plan it" },
+        ],
+      },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:telegram:group:private-topic",
+        messageProvider: "telegram",
+        channelId: "telegram",
+      },
+    );
+
+    const prompt = lastEmbeddedPrompt();
+    expect(prompt).toContain(
+      "Bounded memory search query:\ndo you remember my flight seat preference?",
+    );
+    expect(prompt).toContain("Latest user message:\ndo you remember my flight seat preference?");
+    expect(prompt).toContain("user: i am booking a flight tomorrow");
+    expect(prompt).not.toContain("OpenClaw runtime context for this turn");
+    expect(prompt).not.toContain("RUNTIME_CONTEXT_FILLER");
+  });
+
   it("supports full mode by sending the whole conversation", async () => {
     api.pluginConfig = {
       agents: ["main"],

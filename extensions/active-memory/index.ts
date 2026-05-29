@@ -90,6 +90,7 @@ const DEFAULT_TRANSCRIPT_READ_MAX_LINES = 2_000;
 const DEFAULT_TRANSCRIPT_READ_MAX_BYTES = 50 * 1024 * 1024;
 const TIMEOUT_PARTIAL_DATA_GRACE_MS = 500;
 const MAX_ACTIVE_MEMORY_SEARCH_QUERY_CHARS = 480;
+const MAX_ACTIVE_MEMORY_LATEST_MESSAGE_CHARS = 2_000;
 const TERMINAL_MEMORY_SEARCH_POLL_INTERVAL_MS = 25;
 
 const NO_RECALL_VALUES = new Set([
@@ -2216,6 +2217,46 @@ function stripExternalUntrustedBlocks(text: string): string {
   );
 }
 
+function extractCurrentUserRequestFromPrompt(prompt: string): string {
+  const matches = [...prompt.matchAll(/(?:^|\n)Current user request:\s*\n?/gi)];
+  const lastMatch = matches.at(-1);
+  if (!lastMatch || lastMatch.index === undefined) {
+    return prompt;
+  }
+  return prompt.slice(lastMatch.index + lastMatch[0].length);
+}
+
+function clampLatestUserMessage(text: string): string {
+  const normalized = text.trim();
+  return normalized.length > MAX_ACTIVE_MEMORY_LATEST_MESSAGE_CHARS
+    ? normalized.slice(0, MAX_ACTIVE_MEMORY_LATEST_MESSAGE_CHARS).trim()
+    : normalized;
+}
+
+function deriveLatestUserMessageForRecall(params: {
+  prompt: string;
+  recentTurns: ActiveRecallRecentTurn[];
+}): string {
+  const extractedPrompt = extractCurrentUserRequestFromPrompt(params.prompt);
+  if (extractedPrompt !== params.prompt) {
+    return clampLatestUserMessage(
+      stripActiveMemoryXmlBlocks(stripExternalUntrustedBlocks(extractedPrompt)),
+    );
+  }
+  if (params.prompt.trim().length <= MAX_ACTIVE_MEMORY_LATEST_MESSAGE_CHARS) {
+    return clampLatestUserMessage(stripActiveMemoryXmlBlocks(params.prompt));
+  }
+  const latestRecentUser = [...params.recentTurns]
+    .toReversed()
+    .find((turn) => turn.role === "user" && turn.text.trim().length > 0);
+  if (latestRecentUser) {
+    return clampLatestUserMessage(latestRecentUser.text);
+  }
+  return clampLatestUserMessage(
+    stripActiveMemoryXmlBlocks(stripJsonFences(stripExternalUntrustedBlocks(params.prompt))),
+  );
+}
+
 function stripJsonFences(text: string): string {
   return text.replace(/```(?:json)?\s*[\s\S]*?```/gi, " ");
 }
@@ -3108,13 +3149,17 @@ export default definePluginEntry({
             return undefined;
           }
           const recentTurns = extractRecentTurns(event.messages);
+          const latestUserMessage = deriveLatestUserMessageForRecall({
+            prompt: event.prompt,
+            recentTurns,
+          });
           const query = buildQuery({
-            latestUserMessage: event.prompt,
+            latestUserMessage,
             recentTurns,
             config,
           });
           const searchQuery = buildSearchQuery({
-            latestUserMessage: event.prompt,
+            latestUserMessage,
             recentTurns,
           });
           const result = await maybeResolveActiveRecall({
