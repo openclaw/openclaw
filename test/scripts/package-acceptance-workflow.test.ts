@@ -141,7 +141,13 @@ describe("package acceptance workflow", () => {
     expect(hydratePnpm.run).toContain('corepack enable --install-directory "$PNPM_HOME"');
     expect(hydratePnpm.run).toContain("COREPACK_HOME");
     expect(workflowStep(hydrate, "Fetch main ref").run).toContain(
-      'git fetch --no-tags --depth=50 origin "+refs/heads/main:refs/remotes/origin/main"',
+      "timeout --signal=TERM --kill-after=10s 30s git",
+    );
+    expect(workflowStep(hydrate, "Fetch main ref").run).toContain(
+      "fetch --no-tags --prune --no-recurse-submodules --depth=50 origin",
+    );
+    expect(workflowStep(hydrate, "Fetch main ref").run).toContain(
+      '"+refs/heads/main:refs/remotes/origin/main"',
     );
     expect(workflowStep(hydrate, "Prepare Crabbox shell").if).toBeUndefined();
     expect(workflowStep(hydrate, "Ensure Docker is running").if).toBeUndefined();
@@ -178,9 +184,11 @@ describe("package acceptance workflow", () => {
     );
     const hydrateWindowsFetch = workflowStep(hydrateWindowsDaemon, "Fetch main ref");
     expect(hydrateWindowsFetch.shell).toBe("powershell");
-    expect(hydrateWindowsFetch.run).toContain(
-      'git fetch --no-tags --depth=50 origin "+refs/heads/main:refs/remotes/origin/main"',
-    );
+    expect(hydrateWindowsFetch.run).toContain("Start-Process git");
+    expect(hydrateWindowsFetch.run).toContain("WaitForExit(30000)");
+    expect(hydrateWindowsFetch.run).toContain('"fetch"');
+    expect(hydrateWindowsFetch.run).toContain('"--depth=50"');
+    expect(hydrateWindowsFetch.run).toContain('"+refs/heads/main:refs/remotes/origin/main"');
     expect(workflowStep(hydrateWindowsDaemon, "Mark Crabbox ready").shell).toBe("powershell");
     expect(workflowStep(hydrateWindowsDaemon, "Mark Crabbox ready").run).toContain('"NODE_BIN"');
     expect(workflowStep(hydrateWindowsDaemon, "Mark Crabbox ready").run).toContain('"PNPM_HOME"');
@@ -577,7 +585,7 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("suite_id: native-live-src-gateway-profiles-anthropic-opus");
     expect(workflow).toContain("suite_id: native-live-src-gateway-profiles-anthropic-sonnet-haiku");
     expect(workflow).toContain("suite_group: native-live-src-gateway-profiles-anthropic");
-    expect(workflow).toContain("OPENCLAW_LIVE_GATEWAY_MODELS=anthropic/claude-opus-4-7");
+    expect(workflow).toContain("OPENCLAW_LIVE_GATEWAY_MODELS=anthropic/claude-opus-4-8");
     expect(workflow).toContain("anthropic/claude-sonnet-4-6,anthropic/claude-haiku-4-5");
     expect(workflow).toMatch(
       /suite_id: native-live-src-gateway-profiles-fireworks[\s\S]*?advisory: true/u,

@@ -10,6 +10,8 @@ type QaGatewayMutationEnv = Pick<
   "gateway" | "transport" | "providerMode" | "primaryModel" | "alternateModel"
 >;
 
+const QA_MERGE_PATCH_BLOCKED_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
 async function fetchJson<T>(url: string): Promise<T> {
   const { response, release } = await fetchWithSsrFGuard({
     url,
@@ -170,6 +172,9 @@ function applyQaMergePatch(target: unknown, patch: unknown): unknown {
   }
   const base = isPlainObject(target) ? structuredClone(target) : {};
   for (const [key, value] of Object.entries(patch)) {
+    if (QA_MERGE_PATCH_BLOCKED_KEYS.has(key)) {
+      continue;
+    }
     if (value === null) {
       delete base[key];
       continue;

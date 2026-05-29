@@ -118,7 +118,7 @@ export function normalizeMemoryWikiMutationInput(rawParams: unknown): ApplyMemor
       ...(Array.isArray(params.claims) ? { claims: normalizeWikiClaims(params.claims) } : {}),
       ...(params.contradictions ? { contradictions: params.contradictions } : {}),
       ...(params.questions ? { questions: params.questions } : {}),
-      ...(confidence !== undefined ? { confidence } : {}),
+      ...(typeof confidence === "number" ? { confidence } : {}),
       ...(params.status ? { status: params.status } : {}),
     };
   }

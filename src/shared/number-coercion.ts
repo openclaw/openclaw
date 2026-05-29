@@ -107,6 +107,19 @@ export function resolveIntegerOption(
   return range.max === undefined ? minBounded : Math.min(range.max, minBounded);
 }
 
+export function resolveOptionalIntegerOption(
+  value: unknown,
+  range: {
+    min?: number;
+    max?: number;
+  } = {},
+): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  return resolveIntegerOption(value, value, range);
+}
+
 export function resolveNonNegativeIntegerOption(value: unknown, fallback: number): number {
   return resolveIntegerOption(value, fallback, { min: 0 });
 }

@@ -16,6 +16,7 @@ import {
   type PolicyAuthProfileEvidence,
   type PolicyAgentWorkspaceEvidence,
   type PolicyEvidence,
+  type PolicyIngressEvidence,
   type PolicySandboxPostureEvidence,
   type PolicyToolPostureEvidence,
 } from "../policy-state.js";
@@ -32,6 +33,10 @@ const CHECK_IDS = {
   policyDeniedModelProvider: "policy/models-denied-provider",
   policyUnapprovedModelProvider: "policy/models-unapproved-provider",
   policyPrivateNetworkAccess: "policy/network-private-access-enabled",
+  policyIngressDmPolicyUnapproved: "policy/ingress-dm-policy-unapproved",
+  policyIngressDmScopeUnapproved: "policy/ingress-dm-scope-unapproved",
+  policyIngressOpenGroupsDenied: "policy/ingress-open-groups-denied",
+  policyIngressGroupMentionRequired: "policy/ingress-group-mention-required",
   policyGatewayNonLoopbackBind: "policy/gateway-non-loopback-bind",
   policyGatewayAuthDisabled: "policy/gateway-auth-disabled",
   policyGatewayRateLimitMissing: "policy/gateway-rate-limit-missing",
@@ -83,6 +88,10 @@ export const POLICY_CHECK_IDS = [
   CHECK_IDS.policyDeniedModelProvider,
   CHECK_IDS.policyUnapprovedModelProvider,
   CHECK_IDS.policyPrivateNetworkAccess,
+  CHECK_IDS.policyIngressDmPolicyUnapproved,
+  CHECK_IDS.policyIngressDmScopeUnapproved,
+  CHECK_IDS.policyIngressOpenGroupsDenied,
+  CHECK_IDS.policyIngressGroupMentionRequired,
   CHECK_IDS.policyGatewayNonLoopbackBind,
   CHECK_IDS.policyGatewayAuthDisabled,
   CHECK_IDS.policyGatewayRateLimitMissing,
@@ -126,21 +135,25 @@ export const POLICY_CHECK_IDS = [
 export type PolicyStrictnessKind =
   | "allowlist-subset"
   | "denylist-superset"
+  | "ordered-string"
   | "requires-true"
   | "requires-false"
   | "exact-list";
 
 export type PolicyEmptyListSemantics = "disabled" | "meaningful";
 
-export type PolicyScopeSelectorKind = "agentIds";
+export type PolicyScopeSelectorKind = "agentIds" | "channelIds";
 
 export type PolicyRuleMetadata = {
   readonly policyPath: readonly string[];
   readonly strictness: PolicyStrictnessKind;
-  readonly valueType: "boolean" | "string" | "string-list";
+  readonly valueType: "boolean" | "channel-provider-deny-rules" | "string" | "string-list";
   readonly checkIds: readonly (typeof POLICY_CHECK_IDS)[number][];
   readonly emptyList?: PolicyEmptyListSemantics;
+  readonly allowedValues?: readonly string[];
   readonly caseSensitive?: boolean;
+  readonly normalizeValues?: "model-provider";
+  readonly orderedValues?: readonly string[];
   readonly scopeSelectors?: readonly PolicyScopeSelectorKind[];
 };
 
@@ -179,6 +192,7 @@ const SANDBOX_POLICY_RULE_METADATA = [
     valueType: "string-list",
     checkIds: [CHECK_IDS.policySandboxModeUnapproved],
     emptyList: "disabled",
+    allowedValues: ["off", "non-main", "all"],
     scopeSelectors: ["agentIds"],
   },
   {
@@ -207,11 +221,113 @@ const SANDBOX_POLICY_RULE_METADATA = [
 
 export const POLICY_RULE_METADATA = [
   {
+    policyPath: ["channels", "denyRules"],
+    strictness: "denylist-superset",
+    valueType: "channel-provider-deny-rules",
+    checkIds: [CHECK_IDS.policyDeniedChannelProvider],
+    emptyList: "meaningful",
+    caseSensitive: true,
+  },
+  {
+    policyPath: ["mcp", "servers", "allow"],
+    strictness: "allowlist-subset",
+    valueType: "string-list",
+    checkIds: [CHECK_IDS.policyUnapprovedMcpServer],
+    emptyList: "disabled",
+    caseSensitive: true,
+  },
+  {
+    policyPath: ["mcp", "servers", "deny"],
+    strictness: "denylist-superset",
+    valueType: "string-list",
+    checkIds: [CHECK_IDS.policyDeniedMcpServer],
+    caseSensitive: true,
+  },
+  {
+    policyPath: ["models", "providers", "allow"],
+    strictness: "allowlist-subset",
+    valueType: "string-list",
+    checkIds: [CHECK_IDS.policyUnapprovedModelProvider],
+    emptyList: "disabled",
+    normalizeValues: "model-provider",
+  },
+  {
+    policyPath: ["models", "providers", "deny"],
+    strictness: "denylist-superset",
+    valueType: "string-list",
+    checkIds: [CHECK_IDS.policyDeniedModelProvider],
+    normalizeValues: "model-provider",
+  },
+  {
+    policyPath: ["network", "privateNetwork", "allow"],
+    strictness: "requires-false",
+    valueType: "boolean",
+    checkIds: [CHECK_IDS.policyPrivateNetworkAccess],
+  },
+  {
+    policyPath: ["ingress", "session", "requireDmScope"],
+    strictness: "ordered-string",
+    valueType: "string",
+    orderedValues: ["main", "per-peer", "per-channel-peer", "per-account-channel-peer"],
+    checkIds: [CHECK_IDS.policyIngressDmScopeUnapproved],
+  },
+  {
+    policyPath: ["gateway", "exposure", "allowNonLoopbackBind"],
+    strictness: "requires-false",
+    valueType: "boolean",
+    checkIds: [CHECK_IDS.policyGatewayNonLoopbackBind],
+  },
+  {
+    policyPath: ["gateway", "exposure", "allowTailscaleFunnel"],
+    strictness: "requires-false",
+    valueType: "boolean",
+    checkIds: [CHECK_IDS.policyGatewayTailscaleFunnel],
+  },
+  {
+    policyPath: ["gateway", "auth", "requireAuth"],
+    strictness: "requires-true",
+    valueType: "boolean",
+    checkIds: [CHECK_IDS.policyGatewayAuthDisabled],
+  },
+  {
+    policyPath: ["gateway", "auth", "requireExplicitRateLimit"],
+    strictness: "requires-true",
+    valueType: "boolean",
+    checkIds: [CHECK_IDS.policyGatewayRateLimitMissing],
+  },
+  {
+    policyPath: ["gateway", "controlUi", "allowInsecure"],
+    strictness: "requires-false",
+    valueType: "boolean",
+    checkIds: [CHECK_IDS.policyGatewayControlUiInsecure],
+  },
+  {
+    policyPath: ["gateway", "remote", "allow"],
+    strictness: "requires-false",
+    valueType: "boolean",
+    checkIds: [CHECK_IDS.policyGatewayRemoteEnabled],
+  },
+  {
+    policyPath: ["gateway", "http", "denyEndpoints"],
+    strictness: "denylist-superset",
+    valueType: "string-list",
+    checkIds: [CHECK_IDS.policyGatewayHttpEndpointEnabled],
+    allowedValues: ["chatCompletions", "responses"],
+    caseSensitive: true,
+  },
+  {
+    policyPath: ["gateway", "http", "requireUrlAllowlists"],
+    strictness: "requires-true",
+    valueType: "boolean",
+    checkIds: [CHECK_IDS.policyGatewayHttpUrlFetchUnrestricted],
+  },
+  {
     policyPath: ["agents", "workspace", "allowedAccess"],
     strictness: "allowlist-subset",
     valueType: "string-list",
     checkIds: [CHECK_IDS.policyAgentsWorkspaceAccessDenied],
     emptyList: "disabled",
+    allowedValues: ["none", "ro", "rw"],
     scopeSelectors: ["agentIds"],
   },
   {
@@ -219,6 +335,7 @@ export const POLICY_RULE_METADATA = [
     strictness: "denylist-superset",
     valueType: "string-list",
     checkIds: [CHECK_IDS.policyAgentsToolNotDenied],
+    allowedValues: ["exec", "process", "write", "edit", "apply_patch"],
     scopeSelectors: ["agentIds"],
   },
   {
@@ -227,6 +344,7 @@ export const POLICY_RULE_METADATA = [
     valueType: "string-list",
     checkIds: [CHECK_IDS.policyToolsProfileUnapproved],
     emptyList: "disabled",
+    allowedValues: ["minimal", "coding", "messaging", "full"],
     scopeSelectors: ["agentIds"],
   },
   {
@@ -242,6 +360,7 @@ export const POLICY_RULE_METADATA = [
     valueType: "string-list",
     checkIds: [CHECK_IDS.policyToolsExecSecurityUnapproved],
     emptyList: "disabled",
+    allowedValues: ["deny", "allowlist", "full"],
     scopeSelectors: ["agentIds"],
   },
   {
@@ -250,6 +369,7 @@ export const POLICY_RULE_METADATA = [
     valueType: "string-list",
     checkIds: [CHECK_IDS.policyToolsExecAskUnapproved],
     emptyList: "disabled",
+    allowedValues: ["off", "on-miss", "always"],
     scopeSelectors: ["agentIds"],
   },
   {
@@ -258,6 +378,7 @@ export const POLICY_RULE_METADATA = [
     valueType: "string-list",
     checkIds: [CHECK_IDS.policyToolsExecHostUnapproved],
     emptyList: "disabled",
+    allowedValues: ["auto", "sandbox", "gateway", "node"],
     scopeSelectors: ["agentIds"],
   },
   {
@@ -282,8 +403,77 @@ export const POLICY_RULE_METADATA = [
     checkIds: [CHECK_IDS.policyToolsRequiredDenyMissing],
     scopeSelectors: ["agentIds"],
   },
+  {
+    policyPath: ["tools", "requireMetadata"],
+    strictness: "denylist-superset",
+    valueType: "string-list",
+    checkIds: [
+      CHECK_IDS.policyMissingToolRisk,
+      CHECK_IDS.policyMissingToolSensitivity,
+      CHECK_IDS.policyMissingToolOwner,
+    ],
+    allowedValues: ["risk", "sensitivity", "owner"],
+  },
   ...SANDBOX_POLICY_RULE_METADATA,
+  {
+    policyPath: ["ingress", "channels", "allowDmPolicies"],
+    strictness: "allowlist-subset",
+    valueType: "string-list",
+    checkIds: [CHECK_IDS.policyIngressDmPolicyUnapproved],
+    emptyList: "disabled",
+    allowedValues: ["pairing", "allowlist", "open", "disabled"],
+    scopeSelectors: ["channelIds"],
+  },
+  {
+    policyPath: ["ingress", "channels", "denyOpenGroups"],
+    strictness: "requires-true",
+    valueType: "boolean",
+    checkIds: [CHECK_IDS.policyIngressOpenGroupsDenied],
+    scopeSelectors: ["channelIds"],
+  },
+  {
+    policyPath: ["ingress", "channels", "requireMentionInGroups"],
+    strictness: "requires-true",
+    valueType: "boolean",
+    checkIds: [CHECK_IDS.policyIngressGroupMentionRequired],
+    scopeSelectors: ["channelIds"],
+  },
+  {
+    policyPath: ["secrets", "requireManagedProviders"],
+    strictness: "requires-true",
+    valueType: "boolean",
+    checkIds: [CHECK_IDS.policySecretsUnmanagedProvider],
+  },
+  {
+    policyPath: ["secrets", "denySources"],
+    strictness: "denylist-superset",
+    valueType: "string-list",
+    checkIds: [CHECK_IDS.policySecretsDeniedProviderSource],
+  },
+  {
+    policyPath: ["secrets", "allowInsecureProviders"],
+    strictness: "requires-false",
+    valueType: "boolean",
+    checkIds: [CHECK_IDS.policySecretsInsecureProvider],
+  },
+  {
+    policyPath: ["auth", "profiles", "requireMetadata"],
+    strictness: "denylist-superset",
+    valueType: "string-list",
+    checkIds: [CHECK_IDS.policyAuthProfileInvalidMetadata],
+    allowedValues: ["provider", "mode"],
+  },
+  {
+    policyPath: ["auth", "profiles", "allowModes"],
+    strictness: "allowlist-subset",
+    valueType: "string-list",
+    checkIds: [CHECK_IDS.policyAuthProfileUnapprovedMode],
+    emptyList: "disabled",
+    allowedValues: ["api_key", "aws-sdk", "oauth", "token"],
+  },
 ] as const satisfies readonly PolicyRuleMetadata[];
+
+const POLICY_RULES: readonly PolicyRuleMetadata[] = POLICY_RULE_METADATA;
 
 const KNOWN_RISK_LEVELS = ["low", "medium", "high", "critical"] as const;
 const KNOWN_SENSITIVITY_LEVELS = ["public", "internal", "confidential", "restricted"] as const;
@@ -291,6 +481,13 @@ const SUPPORTED_TOOL_METADATA = ["risk", "sensitivity", "owner"] as const;
 const SUPPORTED_AUTH_PROFILE_METADATA = ["provider", "mode"] as const;
 const SUPPORTED_AUTH_PROFILE_MODES = ["api_key", "aws-sdk", "oauth", "token"] as const;
 const SUPPORTED_GATEWAY_HTTP_ENDPOINTS = ["chatCompletions", "responses"] as const;
+const SUPPORTED_DM_POLICIES = ["pairing", "allowlist", "open", "disabled"] as const;
+const SUPPORTED_DM_SCOPES = [
+  "main",
+  "per-peer",
+  "per-channel-peer",
+  "per-account-channel-peer",
+] as const;
 const SUPPORTED_AGENT_WORKSPACE_DENY_TOOLS = [
   "exec",
   "process",
@@ -337,6 +534,10 @@ export function registerPolicyDoctorChecks(host?: PolicyDoctorRegistrationHost):
   registerHealthCheck(policyModelsDeniedProviderCheck);
   registerHealthCheck(policyModelsUnapprovedProviderCheck);
   registerHealthCheck(policyNetworkPrivateAccessCheck);
+  registerHealthCheck(policyIngressDmPolicyUnapprovedCheck);
+  registerHealthCheck(policyIngressDmScopeUnapprovedCheck);
+  registerHealthCheck(policyIngressOpenGroupsDeniedCheck);
+  registerHealthCheck(policyIngressGroupMentionRequiredCheck);
   registerHealthCheck(policyGatewayNonLoopbackBindCheck);
   registerHealthCheck(policyGatewayAuthDisabledCheck);
   registerHealthCheck(policyGatewayRateLimitMissingCheck);
@@ -514,6 +715,46 @@ const policyNetworkPrivateAccessCheck: HealthCheck = {
   source: "policy",
   async detect(ctx) {
     return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyPrivateNetworkAccess);
+  },
+};
+
+const policyIngressDmPolicyUnapprovedCheck: HealthCheck = {
+  id: CHECK_IDS.policyIngressDmPolicyUnapproved,
+  kind: "plugin",
+  description: "Channel direct-message access policy matches ingress requirements.",
+  source: "policy",
+  async detect(ctx) {
+    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyIngressDmPolicyUnapproved);
+  },
+};
+
+const policyIngressDmScopeUnapprovedCheck: HealthCheck = {
+  id: CHECK_IDS.policyIngressDmScopeUnapproved,
+  kind: "plugin",
+  description: "Direct-message sessions use the policy-required isolation scope.",
+  source: "policy",
+  async detect(ctx) {
+    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyIngressDmScopeUnapproved);
+  },
+};
+
+const policyIngressOpenGroupsDeniedCheck: HealthCheck = {
+  id: CHECK_IDS.policyIngressOpenGroupsDenied,
+  kind: "plugin",
+  description: "Channel group access does not use open group policy when denied.",
+  source: "policy",
+  async detect(ctx) {
+    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyIngressOpenGroupsDenied);
+  },
+};
+
+const policyIngressGroupMentionRequiredCheck: HealthCheck = {
+  id: CHECK_IDS.policyIngressGroupMentionRequired,
+  kind: "plugin",
+  description: "Channel group access keeps mention gates enabled when required.",
+  source: "policy",
+  async detect(ctx) {
+    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyIngressGroupMentionRequired);
   },
 };
 
@@ -931,6 +1172,7 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
   const settings = policySettings(ctx);
   const policyPath = policyDisplayName(ctx);
   let evidence: PolicyEvidence = collectPolicyEvidence(ctx.cfg as Record<string, unknown>, {
+    includeIngress: false,
     includeGatewayExposure: false,
     includeAgentWorkspace: false,
     includeToolPosture: false,
@@ -1023,6 +1265,7 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
     metadataRequirementFindings.length === 0 ? requiredToolMetadata(policy) : new Set<string>();
   const includeSecrets = policyHasSecretRules(policy);
   const includeAuthProfiles = policyHasAuthProfileRules(policy);
+  const includeIngress = policyHasIngressRules(policy);
   const includeGatewayExposure = policyHasGatewayRules(policy);
   const includeAgentWorkspace = policyHasAgentWorkspaceRules(policy);
   const includeSandboxPosture = policyHasSandboxPostureRules(policy);
@@ -1030,6 +1273,7 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
     const toolsFile = await readWorkspaceFile(ctx, "TOOLS.md");
     evidence = await collectPolicyEvidence(ctx.cfg as Record<string, unknown>, {
       toolsRaw: toolsFile?.raw ?? "",
+      includeIngress,
       includeGatewayExposure,
       includeAgentWorkspace,
       includeToolPosture: policyHasToolPostureRules(policy),
@@ -1039,6 +1283,7 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
     });
   } else {
     evidence = collectPolicyEvidence(ctx.cfg as Record<string, unknown>, {
+      includeIngress,
       includeGatewayExposure,
       includeAgentWorkspace,
       includeToolPosture: policyHasToolPostureRules(policy),
@@ -1053,6 +1298,7 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
     ...mcpServerFindings(policy, policyFile.ocDocName, evidence),
     ...modelProviderFindings(policy, policyFile.ocDocName, evidence),
     ...networkFindings(policy, policyFile.ocDocName, evidence),
+    ...ingressFindings(policy, policyFile.displayName, policyFile.ocDocName, evidence),
     ...gatewayExposureFindings(policy, policyFile.ocDocName, evidence),
     ...agentWorkspaceFindings(policy, policyFile.displayName, policyFile.ocDocName, evidence),
     ...toolPostureFindings(policy, policyFile.displayName, policyFile.ocDocName, evidence),
@@ -1259,7 +1505,7 @@ function toolMetadataRequirementFindings(
   ];
 }
 
-function policyContainerShapeFindings(
+export function policyContainerShapeFindings(
   policy: unknown,
   policyPath: string,
   policyDocName: string,
@@ -1444,6 +1690,13 @@ function policyContainerShapeFindings(
   if (sandboxFinding !== undefined) {
     return [sandboxFinding];
   }
+  const ingressFinding = ingressPolicyShapeFinding(policy.ingress, {
+    policyDocName,
+    policyPath,
+  });
+  if (ingressFinding !== undefined) {
+    return [ingressFinding];
+  }
   const gatewayFinding = gatewayPolicyShapeFinding(policy.gateway, {
     policyDocName,
     policyPath,
@@ -1467,6 +1720,85 @@ function policyContainerShapeFindings(
     return [scopesFinding];
   }
   return [];
+}
+
+function ingressPolicyShapeFinding(
+  value: unknown,
+  params: {
+    readonly policyDocName: string;
+    readonly policyPath: string;
+    readonly targetPrefix?: string;
+    readonly propertyPrefix?: string;
+    readonly allowSession?: boolean;
+  },
+): HealthFinding | undefined {
+  const targetPrefix = params.targetPrefix ?? "ingress";
+  const propertyPrefix = params.propertyPrefix ?? "ingress";
+  const allowSession = params.allowSession ?? true;
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!isRecord(value)) {
+    return policyShapeFinding(
+      params.policyPath,
+      `oc://${params.policyDocName}/${targetPrefix}`,
+      `${params.policyPath} ${propertyPrefix} must be an object.`,
+      `Fix ${params.policyPath} so ${propertyPrefix} is an object.`,
+    );
+  }
+  if (!allowSession && value.session !== undefined) {
+    return policyShapeFinding(
+      params.policyPath,
+      `oc://${params.policyDocName}/${targetPrefix}/session`,
+      `${params.policyPath} ${propertyPrefix}.session is not supported by the channelIds selector.`,
+      `Move session ingress rules to top-level ingress; scoped ingress currently supports ingress.channels.*.`,
+    );
+  }
+  for (const section of ["session", "channels"] as const) {
+    if (value[section] !== undefined && !isRecord(value[section])) {
+      return policyShapeFinding(
+        params.policyPath,
+        `oc://${params.policyDocName}/${targetPrefix}/${section}`,
+        `${params.policyPath} ${propertyPrefix}.${section} must be an object.`,
+        `Fix ${params.policyPath} so ${propertyPrefix}.${section} is an object.`,
+      );
+    }
+  }
+  const session = isRecord(value.session) ? value.session : {};
+  if (
+    session.requireDmScope !== undefined &&
+    !SUPPORTED_DM_SCOPES.includes(session.requireDmScope as (typeof SUPPORTED_DM_SCOPES)[number])
+  ) {
+    return policyShapeFinding(
+      params.policyPath,
+      `oc://${params.policyDocName}/${targetPrefix}/session/requireDmScope`,
+      `${params.policyPath} ${propertyPrefix}.session.requireDmScope must be a supported DM scope.`,
+      `Use supported DM scopes: ${SUPPORTED_DM_SCOPES.join(", ")}.`,
+    );
+  }
+  const channels = isRecord(value.channels) ? value.channels : {};
+  const allowDmPoliciesFinding = policyStringArrayPropertyShapeFinding(channels.allowDmPolicies, {
+    allowed: SUPPORTED_DM_POLICIES,
+    policyDocName: params.policyDocName,
+    policyPath: params.policyPath,
+    property: `${propertyPrefix}.channels.allowDmPolicies`,
+    target: `${targetPrefix}/channels/allowDmPolicies`,
+    valueName: "DM policy",
+  });
+  if (allowDmPoliciesFinding !== undefined) {
+    return allowDmPoliciesFinding;
+  }
+  for (const key of ["denyOpenGroups", "requireMentionInGroups"] as const) {
+    if (channels[key] !== undefined && typeof channels[key] !== "boolean") {
+      return policyShapeFinding(
+        params.policyPath,
+        `oc://${params.policyDocName}/${targetPrefix}/channels/${key}`,
+        `${params.policyPath} ${propertyPrefix}.channels.${key} must be a boolean.`,
+        `Set ${propertyPrefix}.channels.${key} to true or false.`,
+      );
+    }
+  }
+  return undefined;
 }
 
 function agentsPolicyShapeFinding(
@@ -1528,60 +1860,74 @@ function scopedPolicyShapeFinding(
         `Fix ${params.policyPath} so the named policy scope is an object.`,
       );
     }
-    if (overlay.agentIds === undefined) {
+    const hasAgentIds = overlay.agentIds !== undefined;
+    const hasChannelIds = overlay.channelIds !== undefined;
+    if (!hasAgentIds && !hasChannelIds) {
       return policyShapeFinding(
         params.policyPath,
-        `oc://${params.policyDocName}/${targetPrefix}/agentIds`,
-        `${params.policyPath} scopes.${scopeName}.agentIds is required for scoped policy.`,
-        `List the runtime agent ids that this named policy scope applies to.`,
+        `oc://${params.policyDocName}/${targetPrefix}`,
+        `${params.policyPath} scopes.${scopeName} must define at least one selector.`,
+        `List agentIds for agent-scoped policy or channelIds for channel-scoped ingress policy.`,
       );
     }
-    const agentIdsFinding = policyStringArrayPropertyShapeFinding(overlay.agentIds, {
+    const agentIdsFinding = scopedSelectorShapeFinding(overlay.agentIds, {
       policyDocName: params.policyDocName,
       policyPath: params.policyPath,
       property: `scopes.${scopeName}.agentIds`,
       target: `${targetPrefix}/agentIds`,
       valueName: "agent id",
+      normalize: normalizeAgentId,
     });
     if (agentIdsFinding !== undefined) {
       return agentIdsFinding;
     }
-    if (Array.isArray(overlay.agentIds) && overlay.agentIds.length === 0) {
+    const channelIdsFinding = scopedSelectorShapeFinding(overlay.channelIds, {
+      policyDocName: params.policyDocName,
+      policyPath: params.policyPath,
+      property: `scopes.${scopeName}.channelIds`,
+      target: `${targetPrefix}/channelIds`,
+      valueName: "channel id",
+      normalize: normalizePolicyChannelId,
+    });
+    if (channelIdsFinding !== undefined) {
+      return channelIdsFinding;
+    }
+    if (overlay.ingress !== undefined && !hasChannelIds) {
       return policyShapeFinding(
         params.policyPath,
-        `oc://${params.policyDocName}/${targetPrefix}/agentIds`,
-        `${params.policyPath} scopes.${scopeName}.agentIds must include at least one agent id.`,
-        `Add one or more runtime agent ids to ${params.policyPath} scopes.${scopeName}.agentIds.`,
+        `oc://${params.policyDocName}/${targetPrefix}/ingress`,
+        `${params.policyPath} scopes.${scopeName}.ingress requires the channelIds selector.`,
+        `Move global ingress rules to top-level ingress, or list channelIds for channel-scoped ingress policy.`,
       );
     }
-    if (Array.isArray(overlay.agentIds)) {
-      const seen = new Map<string, number>();
-      for (const [index, agentId] of overlay.agentIds.entries()) {
-        if (typeof agentId !== "string") {
-          continue;
-        }
-        const normalized = normalizeAgentId(agentId);
-        const previous = seen.get(normalized);
-        if (previous !== undefined) {
-          return policyShapeFinding(
-            params.policyPath,
-            `oc://${params.policyDocName}/${targetPrefix}/agentIds/#${index}`,
-            `${params.policyPath} scopes.${scopeName}.agentIds[${index}] duplicates agentIds[${previous}] after normalization.`,
-            `List each runtime agent id only once per named policy scope.`,
-          );
-        }
-        seen.set(normalized, index);
-      }
+    if (
+      (overlay.agents !== undefined ||
+        overlay.tools !== undefined ||
+        overlay.sandbox !== undefined) &&
+      !hasAgentIds
+    ) {
+      return policyShapeFinding(
+        params.policyPath,
+        `oc://${params.policyDocName}/${targetPrefix}`,
+        `${params.policyPath} scopes.${scopeName} uses agent-scoped sections without agentIds.`,
+        `List agentIds for agents.workspace, tools, or sandbox policy sections.`,
+      );
     }
     const unsupportedKey = Object.keys(overlay).find(
-      (key) => key !== "agentIds" && key !== "agents" && key !== "tools" && key !== "sandbox",
+      (key) =>
+        key !== "agentIds" &&
+        key !== "channelIds" &&
+        key !== "agents" &&
+        key !== "tools" &&
+        key !== "sandbox" &&
+        key !== "ingress",
     );
     if (unsupportedKey !== undefined) {
       return policyShapeFinding(
         params.policyPath,
         `oc://${params.policyDocName}/${targetPrefix}/${ocPathSegment(unsupportedKey)}`,
-        `${params.policyPath} scopes.${scopeName}.${unsupportedKey} is not supported by the agentIds selector.`,
-        `Use only agentIds with agents.workspace, tools, or sandbox in this policy scope.`,
+        `${params.policyPath} scopes.${scopeName}.${unsupportedKey} is not a supported scoped policy section.`,
+        `Use agentIds with agents.workspace, tools, or sandbox, and channelIds with ingress.channels.`,
       );
     }
     if (overlay.agents !== undefined && !isRecord(overlay.agents)) {
@@ -1639,12 +1985,76 @@ function scopedPolicyShapeFinding(
     if (sandboxFinding !== undefined) {
       return sandboxFinding;
     }
+    const ingressFinding = ingressPolicyShapeFinding(overlay.ingress, {
+      policyDocName: params.policyDocName,
+      policyPath: params.policyPath,
+      targetPrefix: `${targetPrefix}/ingress`,
+      propertyPrefix: `scopes.${scopeName}.ingress`,
+      allowSession: false,
+    });
+    if (ingressFinding !== undefined) {
+      return ingressFinding;
+    }
   }
-  return duplicateScopedAgentFieldFinding(value, {
+  return duplicateScopedPolicyFieldFinding(value, {
     policyDocName: params.policyDocName,
     policyPath: params.policyPath,
     policy: params.policy,
   });
+}
+
+function scopedSelectorShapeFinding(
+  value: unknown,
+  params: {
+    readonly policyDocName: string;
+    readonly policyPath: string;
+    readonly property: string;
+    readonly target: string;
+    readonly valueName: string;
+    readonly normalize: (value: string) => string;
+  },
+): HealthFinding | undefined {
+  const selectorFinding = policyStringArrayPropertyShapeFinding(value, {
+    policyDocName: params.policyDocName,
+    policyPath: params.policyPath,
+    property: params.property,
+    target: params.target,
+    valueName: params.valueName,
+  });
+  if (selectorFinding !== undefined) {
+    return selectorFinding;
+  }
+  if (value === undefined) {
+    return undefined;
+  }
+  if (Array.isArray(value) && value.length === 0) {
+    return policyShapeFinding(
+      params.policyPath,
+      `oc://${params.policyDocName}/${params.target}`,
+      `${params.policyPath} ${params.property} must include at least one ${params.valueName}.`,
+      `Add one or more ${params.valueName}s to ${params.policyPath} ${params.property}.`,
+    );
+  }
+  if (Array.isArray(value)) {
+    const seen = new Map<string, number>();
+    for (const [index, rawValue] of value.entries()) {
+      if (typeof rawValue !== "string") {
+        continue;
+      }
+      const normalized = params.normalize(rawValue);
+      const previous = seen.get(normalized);
+      if (previous !== undefined) {
+        return policyShapeFinding(
+          params.policyPath,
+          `oc://${params.policyDocName}/${params.target}/#${index}`,
+          `${params.policyPath} ${params.property}[${index}] duplicates ${params.property}[${previous}] after normalization.`,
+          `List each ${params.valueName} only once per named policy scope.`,
+        );
+      }
+      seen.set(normalized, index);
+    }
+  }
+  return undefined;
 }
 
 function scopedToolsPolicyShapeFinding(
@@ -2439,6 +2849,262 @@ function networkFindings(
         fixHint: "Disable this private-network access setting or update policy after review.",
       };
     });
+}
+
+function ingressFindings(
+  policy: unknown,
+  policyPath: string,
+  policyDocName: string,
+  evidence: PolicyEvidence,
+): readonly HealthFinding[] {
+  if (!isRecord(policy)) {
+    return [];
+  }
+  const findings: HealthFinding[] = [];
+  const ingressPolicy = policy.ingress;
+  if (
+    ingressPolicyShapeFinding(ingressPolicy, { policyDocName, policyPath }) === undefined &&
+    isRecord(ingressPolicy)
+  ) {
+    findings.push(
+      ...ingressFindingsForRule(ingressPolicy, policyDocName, "ingress", evidence, () => true),
+    );
+  }
+  if (hasValidScopedPolicy(policy, policyPath, policyDocName)) {
+    for (const target of channelScopedPolicyTargets(policy)) {
+      if (
+        ingressPolicyShapeFinding(target.overlay.ingress, {
+          policyDocName,
+          policyPath,
+          targetPrefix: `scopes/${ocPathSegment(target.scopeName)}/ingress`,
+          propertyPrefix: `scopes.${target.scopeName}.ingress`,
+          allowSession: false,
+        }) !== undefined ||
+        !isRecord(target.overlay.ingress)
+      ) {
+        continue;
+      }
+      findings.push(
+        ...ingressFindingsForRule(
+          target.overlay.ingress,
+          policyDocName,
+          `scopes/${ocPathSegment(target.scopeName)}/ingress`,
+          evidence,
+          (entry) => scopedIngressChannelMatches(entry, target.channelId),
+        ),
+      );
+    }
+  }
+  return findings;
+}
+
+function ingressFindingsForRule(
+  ingressPolicy: Record<string, unknown> | undefined,
+  policyDocName: string,
+  requirementBase: string,
+  evidence: PolicyEvidence,
+  evidenceFilter: (entry: PolicyIngressEvidence) => boolean,
+): readonly HealthFinding[] {
+  if (!isRecord(ingressPolicy)) {
+    return [];
+  }
+  return [
+    ...ingressDmScopeFindings(
+      ingressPolicy,
+      policyDocName,
+      requirementBase,
+      evidence,
+      evidenceFilter,
+    ),
+    ...ingressDmPolicyFindings(
+      ingressPolicy,
+      policyDocName,
+      requirementBase,
+      evidence,
+      evidenceFilter,
+    ),
+    ...ingressOpenGroupFindings(
+      ingressPolicy,
+      policyDocName,
+      requirementBase,
+      evidence,
+      evidenceFilter,
+    ),
+    ...ingressRequireMentionFindings(
+      ingressPolicy,
+      policyDocName,
+      requirementBase,
+      evidence,
+      evidenceFilter,
+    ),
+  ];
+}
+
+function ingressDmScopeFindings(
+  ingressPolicy: Record<string, unknown>,
+  policyDocName: string,
+  requirementBase: string,
+  evidence: PolicyEvidence,
+  evidenceFilter: (entry: PolicyIngressEvidence) => boolean,
+): readonly HealthFinding[] {
+  const required = readString(ingressPolicy, ["session", "requireDmScope"]);
+  if (required === undefined) {
+    return [];
+  }
+  return ingressEntries(evidence, "sessionDmScope")
+    .filter(evidenceFilter)
+    .filter((entry) => entry.value !== required)
+    .map((entry) =>
+      ingressFinding(entry, {
+        checkId: CHECK_IDS.policyIngressDmScopeUnapproved,
+        message: `session.dmScope '${entry.value ?? ""}' does not match policy.`,
+        requirement: `oc://${policyDocName}/${requirementBase}/session/requireDmScope`,
+        fixHint:
+          "Set session.dmScope to the required isolation scope or update policy after review.",
+      }),
+    );
+}
+
+function ingressDmPolicyFindings(
+  ingressPolicy: Record<string, unknown>,
+  policyDocName: string,
+  requirementBase: string,
+  evidence: PolicyEvidence,
+  evidenceFilter: (entry: PolicyIngressEvidence) => boolean,
+): readonly HealthFinding[] {
+  const allowed = new Set(readStringList(ingressPolicy, ["channels", "allowDmPolicies"]));
+  if (allowed.size === 0) {
+    return [];
+  }
+  return ingressEntries(evidence, "channelDmPolicy")
+    .filter(evidenceFilter)
+    .filter((entry) => typeof entry.value === "string" && !allowed.has(entry.value.toLowerCase()))
+    .map((entry) =>
+      ingressFinding(entry, {
+        checkId: CHECK_IDS.policyIngressDmPolicyUnapproved,
+        message: `${ingressLabel(entry)} uses unapproved DM policy '${entry.value ?? ""}'.`,
+        requirement: `oc://${policyDocName}/${requirementBase}/channels/allowDmPolicies`,
+        fixHint: "Set the channel DM policy to an allowed value or update policy after review.",
+      }),
+    );
+}
+
+function ingressOpenGroupFindings(
+  ingressPolicy: Record<string, unknown>,
+  policyDocName: string,
+  requirementBase: string,
+  evidence: PolicyEvidence,
+  evidenceFilter: (entry: PolicyIngressEvidence) => boolean,
+): readonly HealthFinding[] {
+  if (readPolicyBoolean(ingressPolicy, ["channels", "denyOpenGroups"]) !== true) {
+    return [];
+  }
+  return ingressEntries(evidence, "channelGroupPolicy")
+    .filter(evidenceFilter)
+    .filter((entry) => entry.value !== "allowlist" && entry.value !== "disabled")
+    .map((entry) =>
+      ingressFinding(entry, {
+        checkId: CHECK_IDS.policyIngressOpenGroupsDenied,
+        message: `${ingressLabel(entry)} allows open group ingress.`,
+        requirement: `oc://${policyDocName}/${requirementBase}/channels/denyOpenGroups`,
+        fixHint: "Set groupPolicy to allowlist or disabled, or update policy after review.",
+      }),
+    );
+}
+
+function ingressRequireMentionFindings(
+  ingressPolicy: Record<string, unknown>,
+  policyDocName: string,
+  requirementBase: string,
+  evidence: PolicyEvidence,
+  evidenceFilter: (entry: PolicyIngressEvidence) => boolean,
+): readonly HealthFinding[] {
+  if (readPolicyBoolean(ingressPolicy, ["channels", "requireMentionInGroups"]) !== true) {
+    return [];
+  }
+  const groupPolicies = ingressEntries(evidence, "channelGroupPolicy").filter(evidenceFilter);
+  return ingressEntries(evidence, "channelRequireMention")
+    .filter(evidenceFilter)
+    .filter((entry) => !isGroupIngressDisabled(entry, groupPolicies))
+    .filter((entry) => entry.value !== true)
+    .map((entry) =>
+      ingressFinding(entry, {
+        checkId: CHECK_IDS.policyIngressGroupMentionRequired,
+        message: `${ingressLabel(entry)} does not require group mentions.`,
+        requirement: `oc://${policyDocName}/${requirementBase}/channels/requireMentionInGroups`,
+        fixHint:
+          "Set requireMention=true for the channel/group entry or update policy after review.",
+      }),
+    );
+}
+
+function isGroupIngressDisabled(
+  entry: PolicyIngressEvidence,
+  groupPolicies: readonly PolicyIngressEvidence[],
+): boolean {
+  const entryParent = ocPathParent(entry.source);
+  const channelDefaultsParent = "oc://openclaw.config/channels/defaults";
+  const matches = groupPolicies
+    .filter((candidate) => {
+      const candidateParent = ocPathParent(candidate.source);
+      return (
+        candidate.channel === entry.channel &&
+        (candidate.accountId ?? "") === (entry.accountId ?? "") &&
+        (candidateParent === channelDefaultsParent ||
+          entryParent === candidateParent ||
+          entryParent.startsWith(`${candidateParent}/`))
+      );
+    })
+    .toSorted(
+      (left, right) => ocPathParent(right.source).length - ocPathParent(left.source).length,
+    );
+  return matches[0]?.value === "disabled";
+}
+
+function ocPathParent(source: string): string {
+  return source.slice(0, Math.max(0, source.lastIndexOf("/")));
+}
+
+function ingressEntries(
+  evidence: PolicyEvidence,
+  kind: PolicyIngressEvidence["kind"],
+): readonly PolicyIngressEvidence[] {
+  return (evidence.ingress ?? []).filter((entry) => entry.kind === kind);
+}
+
+function scopedIngressChannelMatches(
+  entry: PolicyIngressEvidence,
+  policyChannelId: string,
+): boolean {
+  return normalizePolicyChannelId(entry.channel ?? "") === policyChannelId;
+}
+
+function ingressFinding(
+  entry: PolicyIngressEvidence,
+  params: {
+    readonly checkId: (typeof POLICY_CHECK_IDS)[number];
+    readonly message: string;
+    readonly requirement: string;
+    readonly fixHint: string;
+  },
+): HealthFinding {
+  return {
+    checkId: params.checkId,
+    severity: "error",
+    message: params.message,
+    source: "policy",
+    path: "openclaw config",
+    ocPath: entry.source,
+    target: entry.source,
+    requirement: params.requirement,
+    fixHint: params.fixHint,
+  };
+}
+
+function ingressLabel(entry: PolicyIngressEvidence): string {
+  const account = entry.accountId === undefined ? "" : ` account '${entry.accountId}'`;
+  const group = entry.groupId === undefined ? "" : ` group '${entry.groupId}'`;
+  return `channel '${entry.channel ?? "unknown"}'${account}${group}`;
 }
 
 function gatewayExposureFindings(
@@ -3766,6 +4432,32 @@ function policyHasAuthProfileRules(policy: unknown): boolean {
   );
 }
 
+function policyHasIngressRules(policy: unknown): boolean {
+  if (!isRecord(policy)) {
+    return false;
+  }
+  if (ingressPolicyHasRules(policy.ingress)) {
+    return true;
+  }
+  return agentScopedPolicyOverlays(policy).some(([, overlay]) =>
+    ingressPolicyHasRules(overlay.ingress),
+  );
+}
+
+function ingressPolicyHasRules(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+  const ingress = value;
+  return (
+    (isRecord(ingress.session) && ingress.session.requireDmScope !== undefined) ||
+    (isRecord(ingress.channels) &&
+      (ingress.channels.allowDmPolicies !== undefined ||
+        ingress.channels.denyOpenGroups !== undefined ||
+        ingress.channels.requireMentionInGroups !== undefined))
+  );
+}
+
 function policyHasGatewayRules(policy: unknown): boolean {
   if (!isRecord(policy) || !isRecord(policy.gateway)) {
     return false;
@@ -3866,6 +4558,12 @@ type AgentScopedPolicyTarget = {
   readonly overlay: Record<string, unknown>;
 };
 
+type ChannelScopedPolicyTarget = {
+  readonly scopeName: string;
+  readonly channelId: string;
+  readonly overlay: Record<string, unknown>;
+};
+
 function agentScopedPolicyOverlays(
   policy: unknown,
 ): readonly (readonly [string, Record<string, unknown>])[] {
@@ -3893,7 +4591,23 @@ function agentScopedPolicyTargets(policy: unknown): readonly AgentScopedPolicyTa
   return targets;
 }
 
-type ScopedAgentPolicyField = {
+function channelScopedPolicyTargets(policy: unknown): readonly ChannelScopedPolicyTarget[] {
+  const targets: ChannelScopedPolicyTarget[] = [];
+  for (const [scopeName, overlay] of agentScopedPolicyOverlays(policy)) {
+    if (!Array.isArray(overlay.channelIds)) {
+      continue;
+    }
+    for (const rawChannelId of overlay.channelIds) {
+      if (typeof rawChannelId !== "string" || rawChannelId.trim() === "") {
+        continue;
+      }
+      targets.push({ scopeName, channelId: normalizePolicyChannelId(rawChannelId), overlay });
+    }
+  }
+  return targets;
+}
+
+type ScopedPolicyField = {
   readonly fieldPath: string;
   readonly propertyPath: string;
   readonly targetPath: string;
@@ -3901,12 +4615,39 @@ type ScopedAgentPolicyField = {
   readonly value: unknown;
 };
 
-function duplicateScopedAgentFieldFinding(
-  scopedAgents: Record<string, unknown>,
+function duplicateScopedPolicyFieldFinding(
+  scopes: Record<string, unknown>,
   params: {
     readonly policyDocName: string;
     readonly policyPath: string;
     readonly policy: Record<string, unknown>;
+  },
+): HealthFinding | undefined {
+  return (
+    duplicateScopedFieldFinding(scopes, {
+      ...params,
+      selector: "agentIds",
+      selectorLabel: "agent",
+      normalize: normalizeAgentId,
+    }) ??
+    duplicateScopedFieldFinding(scopes, {
+      ...params,
+      selector: "channelIds",
+      selectorLabel: "channel",
+      normalize: normalizePolicyChannelId,
+    })
+  );
+}
+
+function duplicateScopedFieldFinding(
+  scopes: Record<string, unknown>,
+  params: {
+    readonly policyDocName: string;
+    readonly policyPath: string;
+    readonly policy: Record<string, unknown>;
+    readonly selector: PolicyScopeSelectorKind;
+    readonly selectorLabel: string;
+    readonly normalize: (value: string) => string;
   },
 ): HealthFinding | undefined {
   const seen = new Map<
@@ -3914,22 +4655,23 @@ function duplicateScopedAgentFieldFinding(
     {
       readonly scopeName: string;
       readonly propertyPath: string;
-      readonly field: ScopedAgentPolicyField;
+      readonly field: ScopedPolicyField;
     }
   >();
-  for (const [scopeName, overlay] of Object.entries(scopedAgents)) {
+  for (const [scopeName, overlay] of Object.entries(scopes)) {
     if (!isRecord(overlay)) {
       continue;
     }
-    if (!Array.isArray(overlay.agentIds)) {
+    const selectorValues = overlay[params.selector];
+    if (!Array.isArray(selectorValues)) {
       continue;
     }
-    const fields = scopedAgentPolicyFields(scopeName, overlay);
-    for (const rawAgentId of overlay.agentIds) {
-      if (typeof rawAgentId !== "string" || rawAgentId.trim() === "") {
+    const fields = scopedPolicyFields(scopeName, overlay, params.selector);
+    for (const rawSelectorValue of selectorValues) {
+      if (typeof rawSelectorValue !== "string" || rawSelectorValue.trim() === "") {
         continue;
       }
-      const agentId = normalizeAgentId(rawAgentId);
+      const selectorValue = params.normalize(rawSelectorValue);
       for (const field of fields) {
         const topLevelValue = getPolicyPath(params.policy, field.metadata.policyPath);
         if (
@@ -3943,7 +4685,7 @@ function duplicateScopedAgentFieldFinding(
             `Use an equally or more restrictive scoped value, or remove the scoped override.`,
           );
         }
-        const key = `${agentId}\0${field.fieldPath}`;
+        const key = `${selectorValue}\0${field.fieldPath}`;
         const previous = seen.get(key);
         if (previous !== undefined) {
           if (isPolicyValueAtLeastAsStrict(field.metadata, field.value, previous.field.value)) {
@@ -3957,8 +4699,8 @@ function duplicateScopedAgentFieldFinding(
           return policyShapeFinding(
             params.policyPath,
             `oc://${params.policyDocName}/${field.targetPath}`,
-            `${params.policyPath} scopes.${scopeName}.${field.propertyPath} is not an equally or more restrictive override of ${previous.propertyPath} for agent '${agentId}'.`,
-            `Use one effective scoped value per agent, or make later scoped values stricter according to policy metadata.`,
+            `${params.policyPath} scopes.${scopeName}.${field.propertyPath} is not an equally or more restrictive override of ${previous.propertyPath} for ${params.selectorLabel} '${selectorValue}'.`,
+            `Use one effective scoped value per ${params.selectorLabel}, or make later scoped values stricter according to policy metadata.`,
           );
         }
         seen.set(key, {
@@ -3972,12 +4714,13 @@ function duplicateScopedAgentFieldFinding(
   return undefined;
 }
 
-function scopedAgentPolicyFields(
+function scopedPolicyFields(
   scopeName: string,
   overlay: Record<string, unknown>,
-): readonly ScopedAgentPolicyField[] {
+  selector: PolicyScopeSelectorKind,
+): readonly ScopedPolicyField[] {
   const prefix = `scopes/${ocPathSegment(scopeName)}`;
-  return POLICY_RULE_METADATA.filter((rule) => rule.scopeSelectors?.includes("agentIds"))
+  return POLICY_RULES.filter((rule) => rule.scopeSelectors?.includes(selector) === true)
     .map((rule) => ({ rule, value: scopedPolicyValue(overlay, rule.policyPath) }))
     .filter((entry) => entry.value !== undefined)
     .map(({ rule, value }) => ({
@@ -3999,6 +4742,8 @@ export function isPolicyValueAtLeastAsStrict(
       return isPolicyAllowlistSubset(metadata, candidate, baseline);
     case "denylist-superset":
       return isPolicyDenylistSuperset(metadata, candidate, baseline);
+    case "ordered-string":
+      return isPolicyOrderedStringAtLeastAsStrict(metadata, candidate, baseline);
     case "requires-true":
       return baseline !== true || candidate === true;
     case "requires-false":
@@ -4007,6 +4752,28 @@ export function isPolicyValueAtLeastAsStrict(
       return samePolicyStringList(candidate, baseline, metadata);
   }
   return false;
+}
+
+function isPolicyOrderedStringAtLeastAsStrict(
+  metadata: PolicyRuleMetadata,
+  candidate: unknown,
+  baseline: unknown,
+): boolean {
+  const candidateValue = policyString(candidate, metadata);
+  const baselineValue = policyString(baseline, metadata);
+  if (
+    candidateValue === undefined ||
+    baselineValue === undefined ||
+    metadata.orderedValues === undefined
+  ) {
+    return false;
+  }
+  const orderedValues = metadata.orderedValues.map((entry) =>
+    metadata.caseSensitive === true ? entry : entry.toLowerCase(),
+  );
+  const candidateIndex = orderedValues.indexOf(candidateValue);
+  const baselineIndex = orderedValues.indexOf(baselineValue);
+  return candidateIndex >= 0 && baselineIndex >= 0 && candidateIndex >= baselineIndex;
 }
 
 function isPolicyAllowlistSubset(
@@ -4070,13 +4837,51 @@ function policyStringList(
   value: unknown,
   metadata: PolicyRuleMetadata,
 ): readonly string[] | undefined {
+  if (metadata.valueType === "channel-provider-deny-rules") {
+    return channelProviderDenyRuleList(value, metadata);
+  }
   if (!Array.isArray(value) || !value.every((entry) => typeof entry === "string")) {
     return undefined;
   }
   return value
     .map((entry) => entry.trim())
     .filter(Boolean)
-    .map((entry) => (metadata.caseSensitive === true ? entry : entry.toLowerCase()));
+    .map((entry) => normalizePolicyStringListEntry(entry, metadata));
+}
+
+function normalizePolicyStringListEntry(entry: string, metadata: PolicyRuleMetadata): string {
+  if (metadata.normalizeValues === "model-provider") {
+    return normalizeProviderId(entry);
+  }
+  return metadata.caseSensitive === true ? entry : entry.toLowerCase();
+}
+
+function channelProviderDenyRuleList(
+  value: unknown,
+  metadata: PolicyRuleMetadata,
+): readonly string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const providers: string[] = [];
+  for (const entry of value) {
+    if (!isChannelDenyRule(entry)) {
+      return undefined;
+    }
+    const provider = entry.when?.provider?.trim();
+    if (provider !== undefined && provider !== "") {
+      providers.push(metadata.caseSensitive === true ? provider : provider.toLowerCase());
+    }
+  }
+  return providers;
+}
+
+function policyString(value: unknown, metadata: PolicyRuleMetadata): string | undefined {
+  if (typeof value !== "string" || value.trim() === "") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return metadata.caseSensitive === true ? trimmed : trimmed.toLowerCase();
 }
 
 function scopedPolicyValue(overlay: Record<string, unknown>, path: readonly string[]): unknown {
@@ -4724,6 +5529,17 @@ function readStringList(
   return readPolicyStringArray(policy, path, options) ?? [];
 }
 
+function readString(policy: unknown, path: readonly string[]): string | undefined {
+  let current: unknown = policy;
+  for (const part of path) {
+    if (!isRecord(current)) {
+      return undefined;
+    }
+    current = current[part];
+  }
+  return typeof current === "string" ? current.trim().toLowerCase() : undefined;
+}
+
 function ocPathSegment(value: string): string {
   if (/^(?:[A-Za-z0-9_-]+|#\d+)$/.test(value)) {
     return value;
@@ -4777,6 +5593,10 @@ function normalizePolicyToolName(value: string): string {
     return "apply_patch";
   }
   return normalized;
+}
+
+function normalizePolicyChannelId(value: string): string {
+  return value.trim().toLowerCase();
 }
 
 function policyPathSetting(ctx: HealthCheckContext): string {

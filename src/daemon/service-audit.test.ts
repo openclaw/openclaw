@@ -353,6 +353,9 @@ describe("auditGatewayServiceConfig", () => {
     expect(
       readGatewayServiceCommandPort(["/usr/bin/node", "entry.js", "gateway", "--port=0"]),
     ).toBe(undefined);
+    expect(
+      readGatewayServiceCommandPort(["/usr/bin/node", "entry.js", "gateway", "--port=65536"]),
+    ).toBe(undefined);
   });
 
   it("flags gateway service port drift from the expected config port", async () => {
@@ -373,6 +376,28 @@ describe("auditGatewayServiceConfig", () => {
       code: SERVICE_AUDIT_CODES.gatewayPortMismatch,
       message: "Gateway service port does not match current gateway config.",
       detail: "18789 -> 18888",
+      level: "recommended",
+    });
+  });
+
+  it("flags explicit invalid gateway service ports", async () => {
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "/tmp" },
+      platform: "win32",
+      expectedPort: 18888,
+      command: {
+        programArguments: ["/usr/bin/node", "entry.js", "gateway", "--port=65536"],
+        environment: {},
+      },
+    });
+
+    const issue = audit.issues.find(
+      (entry) => entry.code === SERVICE_AUDIT_CODES.gatewayPortMismatch,
+    );
+    expect(issue).toStrictEqual({
+      code: SERVICE_AUDIT_CODES.gatewayPortMismatch,
+      message: "Gateway service port does not match current gateway config.",
+      detail: "65536 -> 18888",
       level: "recommended",
     });
   });

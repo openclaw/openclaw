@@ -15,6 +15,7 @@ import {
   collectPolicyEvidence,
   createPolicyAttestation,
   policyDocumentHash,
+  scanPolicyIngress,
   scanPolicyMcpServers,
 } from "../policy-state.js";
 import {
@@ -113,45 +114,135 @@ describe("registerPolicyDoctorChecks", () => {
 
   it("describes strictness for agent-scoped policy fields", () => {
     expect(
-      POLICY_RULE_METADATA.filter((rule) => rule.scopeSelectors?.includes("agentIds")).map(
-        (rule: PolicyRuleMetadata) => {
+      (POLICY_RULE_METADATA as readonly PolicyRuleMetadata[])
+        .filter(
+          (rule) =>
+            rule.scopeSelectors?.includes("agentIds") ||
+            rule.scopeSelectors?.includes("channelIds"),
+        )
+        .map((rule) => {
           const description: {
             path: string;
             strictness: PolicyRuleMetadata["strictness"];
+            selectors: PolicyRuleMetadata["scopeSelectors"];
             emptyList?: PolicyRuleMetadata["emptyList"];
           } = {
             path: rule.policyPath.join("."),
             strictness: rule.strictness,
+            selectors: rule.scopeSelectors,
           };
           if (rule.emptyList !== undefined) {
             description.emptyList = rule.emptyList;
           }
           return description;
-        },
-      ),
+        }),
     ).toEqual([
       {
         path: "agents.workspace.allowedAccess",
         strictness: "allowlist-subset",
         emptyList: "disabled",
+        selectors: ["agentIds"],
       },
-      { path: "agents.workspace.denyTools", strictness: "denylist-superset" },
-      { path: "tools.profiles.allow", strictness: "allowlist-subset", emptyList: "disabled" },
-      { path: "tools.fs.requireWorkspaceOnly", strictness: "requires-true" },
-      { path: "tools.exec.allowSecurity", strictness: "allowlist-subset", emptyList: "disabled" },
-      { path: "tools.exec.requireAsk", strictness: "allowlist-subset", emptyList: "disabled" },
-      { path: "tools.exec.allowHosts", strictness: "allowlist-subset", emptyList: "disabled" },
-      { path: "tools.elevated.allow", strictness: "requires-false" },
-      { path: "tools.alsoAllow.expected", strictness: "exact-list", emptyList: "meaningful" },
-      { path: "tools.denyTools", strictness: "denylist-superset" },
-      { path: "sandbox.requireMode", strictness: "allowlist-subset", emptyList: "disabled" },
-      { path: "sandbox.allowBackends", strictness: "allowlist-subset", emptyList: "disabled" },
-      { path: "sandbox.containers.denyHostNetwork", strictness: "requires-true" },
-      { path: "sandbox.containers.denyContainerNamespaceJoin", strictness: "requires-true" },
-      { path: "sandbox.containers.requireReadOnlyMounts", strictness: "requires-true" },
-      { path: "sandbox.containers.denyContainerRuntimeSocketMounts", strictness: "requires-true" },
-      { path: "sandbox.containers.denyUnconfinedProfiles", strictness: "requires-true" },
-      { path: "sandbox.browser.requireCdpSourceRange", strictness: "requires-true" },
+      {
+        path: "agents.workspace.denyTools",
+        strictness: "denylist-superset",
+        selectors: ["agentIds"],
+      },
+      {
+        path: "tools.profiles.allow",
+        strictness: "allowlist-subset",
+        emptyList: "disabled",
+        selectors: ["agentIds"],
+      },
+      {
+        path: "tools.fs.requireWorkspaceOnly",
+        strictness: "requires-true",
+        selectors: ["agentIds"],
+      },
+      {
+        path: "tools.exec.allowSecurity",
+        strictness: "allowlist-subset",
+        emptyList: "disabled",
+        selectors: ["agentIds"],
+      },
+      {
+        path: "tools.exec.requireAsk",
+        strictness: "allowlist-subset",
+        emptyList: "disabled",
+        selectors: ["agentIds"],
+      },
+      {
+        path: "tools.exec.allowHosts",
+        strictness: "allowlist-subset",
+        emptyList: "disabled",
+        selectors: ["agentIds"],
+      },
+      { path: "tools.elevated.allow", strictness: "requires-false", selectors: ["agentIds"] },
+      {
+        path: "tools.alsoAllow.expected",
+        strictness: "exact-list",
+        emptyList: "meaningful",
+        selectors: ["agentIds"],
+      },
+      { path: "tools.denyTools", strictness: "denylist-superset", selectors: ["agentIds"] },
+      {
+        path: "sandbox.requireMode",
+        strictness: "allowlist-subset",
+        emptyList: "disabled",
+        selectors: ["agentIds"],
+      },
+      {
+        path: "sandbox.allowBackends",
+        strictness: "allowlist-subset",
+        emptyList: "disabled",
+        selectors: ["agentIds"],
+      },
+      {
+        path: "sandbox.containers.denyHostNetwork",
+        strictness: "requires-true",
+        selectors: ["agentIds"],
+      },
+      {
+        path: "sandbox.containers.denyContainerNamespaceJoin",
+        strictness: "requires-true",
+        selectors: ["agentIds"],
+      },
+      {
+        path: "sandbox.containers.requireReadOnlyMounts",
+        strictness: "requires-true",
+        selectors: ["agentIds"],
+      },
+      {
+        path: "sandbox.containers.denyContainerRuntimeSocketMounts",
+        strictness: "requires-true",
+        selectors: ["agentIds"],
+      },
+      {
+        path: "sandbox.containers.denyUnconfinedProfiles",
+        strictness: "requires-true",
+        selectors: ["agentIds"],
+      },
+      {
+        path: "sandbox.browser.requireCdpSourceRange",
+        strictness: "requires-true",
+        selectors: ["agentIds"],
+      },
+      {
+        path: "ingress.channels.allowDmPolicies",
+        strictness: "allowlist-subset",
+        emptyList: "disabled",
+        selectors: ["channelIds"],
+      },
+      {
+        path: "ingress.channels.denyOpenGroups",
+        strictness: "requires-true",
+        selectors: ["channelIds"],
+      },
+      {
+        path: "ingress.channels.requireMentionInGroups",
+        strictness: "requires-true",
+        selectors: ["channelIds"],
+      },
     ]);
   });
 
@@ -426,6 +517,10 @@ describe("registerPolicyDoctorChecks", () => {
       "policy/models-denied-provider",
       "policy/models-unapproved-provider",
       "policy/network-private-access-enabled",
+      "policy/ingress-dm-policy-unapproved",
+      "policy/ingress-dm-scope-unapproved",
+      "policy/ingress-open-groups-denied",
+      "policy/ingress-group-mention-required",
       "policy/gateway-non-loopback-bind",
       "policy/gateway-auth-disabled",
       "policy/gateway-rate-limit-missing",
@@ -603,7 +698,7 @@ describe("registerPolicyDoctorChecks", () => {
     [
       "scopes agent missing agentIds",
       { scopes: { coding: { tools: { exec: { allowHosts: ["sandbox"] } } } } },
-      "oc://policy.jsonc/scopes/coding/agentIds",
+      "oc://policy.jsonc/scopes/coding",
     ],
     [
       "scopes agent empty agentIds",
@@ -714,7 +809,58 @@ describe("registerPolicyDoctorChecks", () => {
       },
       "oc://policy.jsonc/scopes/sebby/ingress",
     ],
+    [
+      "scopes channel ingress allowDmPolicies invalid",
+      {
+        scopes: {
+          telegramIngress: {
+            channelIds: ["telegram"],
+            ingress: { channels: { allowDmPolicies: ["public"] } },
+          },
+        },
+      },
+      "oc://policy.jsonc/scopes/telegramIngress/ingress/channels/allowDmPolicies/#0",
+    ],
+    [
+      "scopes channel ingress session unsupported",
+      {
+        scopes: {
+          telegramIngress: {
+            channelIds: ["telegram"],
+            ingress: { session: { requireDmScope: "per-channel-peer" } },
+          },
+        },
+      },
+      "oc://policy.jsonc/scopes/telegramIngress/ingress/session",
+    ],
     ["channels array", { channels: [] }, "oc://policy.jsonc/channels"],
+    ["ingress array", { ingress: [] }, "oc://policy.jsonc/ingress"],
+    ["ingress session array", { ingress: { session: [] } }, "oc://policy.jsonc/ingress/session"],
+    [
+      "ingress requireDmScope invalid",
+      { ingress: { session: { requireDmScope: "shared" } } },
+      "oc://policy.jsonc/ingress/session/requireDmScope",
+    ],
+    [
+      "ingress allowDmPolicies string",
+      { ingress: { channels: { allowDmPolicies: "pairing" } } },
+      "oc://policy.jsonc/ingress/channels/allowDmPolicies",
+    ],
+    [
+      "ingress allowDmPolicies invalid",
+      { ingress: { channels: { allowDmPolicies: ["pairing", "public"] } } },
+      "oc://policy.jsonc/ingress/channels/allowDmPolicies/#1",
+    ],
+    [
+      "ingress denyOpenGroups string",
+      { ingress: { channels: { denyOpenGroups: "true" } } },
+      "oc://policy.jsonc/ingress/channels/denyOpenGroups",
+    ],
+    [
+      "ingress requireMentionInGroups string",
+      { ingress: { channels: { requireMentionInGroups: "true" } } },
+      "oc://policy.jsonc/ingress/channels/requireMentionInGroups",
+    ],
     ["mcp array", { mcp: [] }, "oc://policy.jsonc/mcp"],
     ["mcp servers array", { mcp: { servers: [] } }, "oc://policy.jsonc/mcp/servers"],
     [
@@ -977,6 +1123,7 @@ describe("registerPolicyDoctorChecks", () => {
       evidence: collectPolicyEvidence(
         {},
         {
+          includeIngress: false,
           includeGatewayExposure: false,
           includeAgentWorkspace: false,
           includeToolPosture: false,
@@ -1009,6 +1156,7 @@ describe("registerPolicyDoctorChecks", () => {
       evidence: collectPolicyEvidence(
         {},
         {
+          includeIngress: false,
           includeGatewayExposure: false,
           includeAgentWorkspace: false,
           includeToolPosture: false,
@@ -1053,6 +1201,7 @@ describe("registerPolicyDoctorChecks", () => {
           },
         },
         {
+          includeIngress: false,
           includeGatewayExposure: false,
           includeAgentWorkspace: false,
           includeToolPosture: false,
@@ -1083,6 +1232,7 @@ describe("registerPolicyDoctorChecks", () => {
 
     expect(result.findings).toEqual([]);
     const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>, {
+      includeIngress: false,
       includeGatewayExposure: false,
       includeAgentWorkspace: false,
       includeToolPosture: false,
@@ -1090,6 +1240,7 @@ describe("registerPolicyDoctorChecks", () => {
       includeSecrets: false,
       includeAuthProfiles: false,
     });
+    expect(evidence).not.toHaveProperty("ingress");
     expect(evidence).not.toHaveProperty("gatewayExposure");
     expect(evidence).not.toHaveProperty("agentWorkspace");
     expect(evidence).not.toHaveProperty("sandboxPosture");
@@ -2144,6 +2295,1423 @@ describe("registerPolicyDoctorChecks", () => {
     const result = await runPolicyDoctorLint(ctx(configPath, cfg));
 
     expect(result.findings).toEqual([]);
+  });
+
+  it("reports ingress channel access conformance findings", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      session: { dmScope: "main" },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          groupPolicy: "open",
+          requireMention: true,
+          groups: {
+            ops: { requireMention: false },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        ingress: {
+          session: { requireDmScope: "per-channel-peer" },
+          channels: {
+            allowDmPolicies: ["pairing", "allowlist", "disabled"],
+            denyOpenGroups: true,
+            requireMentionInGroups: true,
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyDoctorLint(ctx(configPath, cfg));
+
+    expect(result.findings).toHaveLength(4);
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/ingress-dm-scope-unapproved",
+          severity: "error",
+          ocPath: "oc://openclaw.config/session/dmScope",
+          requirement: "oc://policy.jsonc/ingress/session/requireDmScope",
+        }),
+        expect.objectContaining({
+          checkId: "policy/ingress-dm-policy-unapproved",
+          severity: "error",
+          ocPath: "oc://openclaw.config/channels/telegram/dmPolicy",
+          requirement: "oc://policy.jsonc/ingress/channels/allowDmPolicies",
+        }),
+        expect.objectContaining({
+          checkId: "policy/ingress-open-groups-denied",
+          severity: "error",
+          ocPath: "oc://openclaw.config/channels/telegram/groupPolicy",
+          requirement: "oc://policy.jsonc/ingress/channels/denyOpenGroups",
+        }),
+        expect.objectContaining({
+          checkId: "policy/ingress-group-mention-required",
+          severity: "error",
+          ocPath: "oc://openclaw.config/channels/telegram/groups/ops/requireMention",
+          requirement: "oc://policy.jsonc/ingress/channels/requireMentionInGroups",
+        }),
+      ]),
+    );
+  });
+
+  it("normalizes mixed-case session DM scope before checking ingress policy", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      session: { dmScope: "Per-Channel-Peer" },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        ingress: {
+          session: { requireDmScope: "per-channel-peer" },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyDoctorLint(ctx(configPath, cfg));
+
+    expect(result.findings).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/ingress-dm-scope-unapproved",
+        }),
+      ]),
+    );
+  });
+
+  it("applies channel-scoped ingress claims to matching channel posture", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      session: { dmScope: "main" },
+      channels: {
+        telegram: {
+          enabled: true,
+          provider: "telegram",
+          dmPolicy: "open",
+          groupPolicy: "open",
+          requireMention: false,
+        },
+      },
+    } as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        ingress: {
+          session: { requireDmScope: "per-channel-peer" },
+        },
+        scopes: {
+          telegramIngress: {
+            channelIds: ["telegram"],
+            ingress: {
+              channels: {
+                allowDmPolicies: ["pairing"],
+                denyOpenGroups: true,
+                requireMentionInGroups: true,
+              },
+            },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyChecks(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/ingress-dm-scope-unapproved",
+          requirement: "oc://policy.jsonc/ingress/session/requireDmScope",
+        }),
+        expect.objectContaining({
+          checkId: "policy/ingress-dm-policy-unapproved",
+          requirement: "oc://policy.jsonc/scopes/telegramIngress/ingress/channels/allowDmPolicies",
+        }),
+        expect.objectContaining({
+          checkId: "policy/ingress-open-groups-denied",
+          requirement: "oc://policy.jsonc/scopes/telegramIngress/ingress/channels/denyOpenGroups",
+        }),
+        expect.objectContaining({
+          checkId: "policy/ingress-group-mention-required",
+          requirement:
+            "oc://policy.jsonc/scopes/telegramIngress/ingress/channels/requireMentionInGroups",
+        }),
+      ]),
+    );
+  });
+
+  it("does not apply channel-scoped ingress claims from invalid scopes", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          groupPolicy: "open",
+          requireMention: false,
+        },
+      },
+    } as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        scopes: {
+          telegramIngress: {
+            channelIds: ["telegram"],
+            agents: {},
+            ingress: {
+              channels: {
+                allowDmPolicies: ["pairing"],
+                denyOpenGroups: true,
+                requireMentionInGroups: true,
+              },
+            },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyChecks(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/policy-jsonc-invalid",
+          target: "oc://policy.jsonc/scopes/telegramIngress",
+        }),
+      ]),
+    );
+    expect(result.findings).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ checkId: "policy/ingress-dm-policy-unapproved" }),
+        expect.objectContaining({ checkId: "policy/ingress-open-groups-denied" }),
+        expect.objectContaining({ checkId: "policy/ingress-group-mention-required" }),
+      ]),
+    );
+  });
+
+  it("does not treat wildcard groupPolicy as channel ingress posture", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      channels: {
+        telegram: {
+          enabled: true,
+          provider: "telegram",
+          groupPolicy: "open",
+          requireMention: false,
+          groups: {
+            "*": {
+              groupPolicy: "disabled",
+              requireMention: false,
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        ingress: {
+          channels: {
+            denyOpenGroups: true,
+            requireMentionInGroups: true,
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyChecks(ctx(configPath, cfg));
+    const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>);
+
+    expect(evidence.ingress).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "channelGroupPolicy",
+          source: "oc://openclaw.config/channels/telegram/groupPolicy",
+          value: "open",
+        }),
+      ]),
+    );
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ checkId: "policy/ingress-open-groups-denied" }),
+        expect.objectContaining({ checkId: "policy/ingress-group-mention-required" }),
+      ]),
+    );
+  });
+
+  it("honors wildcard mention ingress for channel posture", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      channels: {
+        telegram: {
+          enabled: true,
+          provider: "telegram",
+          groupPolicy: "allowlist",
+          requireMention: false,
+          groups: {
+            "*": { requireMention: true },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        ingress: {
+          channels: {
+            requireMentionInGroups: true,
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyChecks(ctx(configPath, cfg));
+    const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>);
+
+    expect(evidence.ingress).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "channelRequireMention",
+          source: 'oc://openclaw.config/channels/telegram/groups/"*"/requireMention',
+          value: true,
+        }),
+      ]),
+    );
+    expect(result.findings).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ checkId: "policy/ingress-group-mention-required" }),
+      ]),
+    );
+  });
+
+  it("honors strict channel group policy defaults", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      channels: {
+        signal: {
+          enabled: true,
+          provider: "signal",
+          dmPolicy: "pairing",
+          requireMention: true,
+        },
+      },
+    } as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        ingress: {
+          channels: {
+            denyOpenGroups: true,
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyChecks(ctx(configPath, cfg));
+    const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>);
+
+    expect(evidence.ingress).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          channel: "signal",
+          explicit: false,
+          kind: "channelGroupPolicy",
+          source: "oc://openclaw.config/channels/signal/groupPolicy",
+          value: "allowlist",
+        }),
+      ]),
+    );
+    expect(result.findings).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ checkId: "policy/ingress-open-groups-denied" }),
+      ]),
+    );
+  });
+
+  it("treats disabled nested DM config as disabled ingress", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      channels: {
+        slack: {
+          dmPolicy: "open",
+          dm: { enabled: false },
+          groupPolicy: "allowlist",
+        },
+      },
+    } as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        ingress: {
+          channels: {
+            allowDmPolicies: ["disabled"],
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyChecks(ctx(configPath, cfg));
+    const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>);
+
+    expect(evidence.ingress).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          channel: "slack",
+          kind: "channelDmPolicy",
+          source: "oc://openclaw.config/channels/slack/dm/enabled",
+          value: "disabled",
+        }),
+      ]),
+    );
+    expect(result.findings).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ checkId: "policy/ingress-dm-policy-unapproved" }),
+      ]),
+    );
+  });
+
+  it("ignores disabled channel and account ingress posture", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          enabled: false,
+          dmPolicy: "open",
+          groupPolicy: "open",
+          requireMention: false,
+        },
+        slack: {
+          dmPolicy: "allowlist",
+          groupPolicy: "allowlist",
+          accounts: {
+            disabled: {
+              enabled: false,
+              dmPolicy: "open",
+              groupPolicy: "open",
+              requireMention: false,
+            },
+          },
+        },
+      },
+    };
+
+    const evidence = scanPolicyIngress(cfg);
+
+    expect(evidence).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ channel: "telegram" }),
+        expect.objectContaining({ accountId: "disabled" }),
+      ]),
+    );
+  });
+
+  it("records nested ingress mention overrides", () => {
+    const cfg = {
+      channels: {
+        discord: {
+          guilds: {
+            ops: {
+              channels: {
+                releases: { requireMention: false },
+              },
+            },
+          },
+        },
+        msteams: {
+          teams: {
+            engineering: {
+              channels: {
+                general: { requireMention: false },
+              },
+            },
+          },
+        },
+        matrix: {
+          rooms: {
+            standup: { requireMention: false },
+          },
+        },
+        telegram: {
+          groups: {
+            ops: {
+              topics: {
+                incidents: { requireMention: false },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    expect(scanPolicyIngress(cfg)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          source:
+            "oc://openclaw.config/channels/discord/guilds/ops/channels/releases/requireMention",
+          value: false,
+        }),
+        expect.objectContaining({
+          source:
+            "oc://openclaw.config/channels/msteams/teams/engineering/channels/general/requireMention",
+          value: false,
+        }),
+        expect.objectContaining({
+          source: "oc://openclaw.config/channels/matrix/rooms/standup/requireMention",
+          value: false,
+        }),
+        expect.objectContaining({
+          source:
+            "oc://openclaw.config/channels/telegram/groups/ops/topics/incidents/requireMention",
+          value: false,
+        }),
+      ]),
+    );
+  });
+
+  it("uses effective ingress defaults when policy governs omitted fields", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      session: { dmScope: "per-channel-peer" },
+      channels: {
+        qqbot: {},
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        ingress: {
+          session: { requireDmScope: "per-channel-peer" },
+          channels: {
+            allowDmPolicies: ["pairing", "allowlist", "disabled"],
+            denyOpenGroups: true,
+            requireMentionInGroups: true,
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyDoctorLint(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/ingress-open-groups-denied",
+        ocPath: "oc://openclaw.config/channels/qqbot/groupPolicy",
+      }),
+    ]);
+  });
+
+  it("infers allowlist group posture from configured groups", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      session: { dmScope: "per-channel-peer" },
+      channels: {
+        telegram: {
+          dmPolicy: "pairing",
+          groups: {
+            ops: {},
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        ingress: {
+          channels: {
+            allowDmPolicies: ["pairing"],
+            denyOpenGroups: true,
+            requireMentionInGroups: true,
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyDoctorLint(ctx(configPath, cfg));
+    const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>);
+
+    expect(evidence.ingress).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "channelGroupPolicy",
+          source: "oc://openclaw.config/channels/telegram/groups",
+          value: "allowlist",
+        }),
+        expect.objectContaining({
+          kind: "channelRequireMention",
+          source: "oc://openclaw.config/channels/telegram/requireMention",
+          value: true,
+        }),
+      ]),
+    );
+    expect(result.findings).toEqual([]);
+  });
+
+  it("does not infer allowlist posture from Slack channel entries", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      session: { dmScope: "per-channel-peer" },
+      channels: {
+        slack: {
+          dmPolicy: "pairing",
+          channels: {
+            releases: { requireMention: true },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        ingress: {
+          channels: {
+            denyOpenGroups: true,
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyDoctorLint(ctx(configPath, cfg));
+    const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>);
+
+    expect(evidence.ingress).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          channel: "slack",
+          kind: "channelGroupPolicy",
+          source: "oc://openclaw.config/channels/slack/groupPolicy",
+          value: "open",
+        }),
+      ]),
+    );
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/ingress-open-groups-denied",
+          ocPath: "oc://openclaw.config/channels/slack/groupPolicy",
+        }),
+      ]),
+    );
+  });
+
+  it("ignores nested groupPolicy when channel ingress is disabled", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      session: { dmScope: "per-channel-peer" },
+      channels: {
+        telegram: {
+          dmPolicy: "pairing",
+          groupPolicy: "disabled",
+          groups: {
+            ops: {
+              groupPolicy: "open",
+              requireMention: false,
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        ingress: {
+          session: { requireDmScope: "per-channel-peer" },
+          channels: {
+            allowDmPolicies: ["pairing", "allowlist", "disabled"],
+            denyOpenGroups: true,
+            requireMentionInGroups: true,
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyDoctorLint(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual([]);
+  });
+
+  it("does not let nested groupPolicy re-enable disabled channel ingress", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      session: { dmScope: "per-channel-peer" },
+      channels: {
+        telegram: {
+          dmPolicy: "pairing",
+          groupPolicy: "disabled",
+          groups: {
+            ops: {
+              topics: {
+                incidents: { groupPolicy: "open", requireMention: false },
+              },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        ingress: {
+          session: { requireDmScope: "per-channel-peer" },
+          channels: {
+            allowDmPolicies: ["pairing", "allowlist", "disabled"],
+            denyOpenGroups: true,
+            requireMentionInGroups: true,
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyDoctorLint(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual([]);
+  });
+
+  it("does not treat disabled parent groupPolicy as nested runtime enforcement", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      session: { dmScope: "per-channel-peer" },
+      channels: {
+        telegram: {
+          dmPolicy: "pairing",
+          groupPolicy: "allowlist",
+          requireMention: true,
+          groups: {
+            ops: {
+              groupPolicy: "disabled",
+              topics: {
+                incidents: { requireMention: false },
+              },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        ingress: {
+          session: { requireDmScope: "per-channel-peer" },
+          channels: {
+            allowDmPolicies: ["pairing", "allowlist", "disabled"],
+            denyOpenGroups: true,
+            requireMentionInGroups: true,
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyDoctorLint(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/ingress-group-mention-required",
+          ocPath:
+            "oc://openclaw.config/channels/telegram/groups/ops/topics/incidents/requireMention",
+        }),
+      ]),
+    );
+  });
+
+  it("does not require mention gates when group ingress is disabled", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      session: { dmScope: "per-channel-peer" },
+      channels: {
+        telegram: {
+          dmPolicy: "pairing",
+          groupPolicy: "disabled",
+        },
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        ingress: {
+          session: { requireDmScope: "per-channel-peer" },
+          channels: {
+            allowDmPolicies: ["pairing", "allowlist", "disabled"],
+            denyOpenGroups: true,
+            requireMentionInGroups: true,
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyDoctorLint(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual([]);
+  });
+
+  it("does not require mention gates when group ingress is disabled by channel defaults", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      session: { dmScope: "per-channel-peer" },
+      channels: {
+        defaults: { groupPolicy: "disabled" },
+        telegram: {
+          dmPolicy: "pairing",
+          requireMention: false,
+        },
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        ingress: {
+          session: { requireDmScope: "per-channel-peer" },
+          channels: {
+            allowDmPolicies: ["pairing", "allowlist", "disabled"],
+            denyOpenGroups: true,
+            requireMentionInGroups: true,
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyDoctorLint(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual([]);
+  });
+
+  it("accepts wildcard group mention defaults as channel mention posture", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      session: { dmScope: "per-channel-peer" },
+      channels: {
+        telegram: {
+          dmPolicy: "pairing",
+          groupPolicy: "allowlist",
+          groups: {
+            "*": { requireMention: true },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        ingress: {
+          session: { requireDmScope: "per-channel-peer" },
+          channels: {
+            allowDmPolicies: ["pairing", "allowlist", "disabled"],
+            denyOpenGroups: true,
+            requireMentionInGroups: true,
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyDoctorLint(ctx(configPath, cfg));
+    const evidence = scanPolicyIngress(cfg as unknown as Record<string, unknown>);
+
+    expect(evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "channelRequireMention",
+          source: 'oc://openclaw.config/channels/telegram/groups/"*"/requireMention',
+          value: true,
+        }),
+      ]),
+    );
+    expect(result.findings).toEqual([]);
+  });
+
+  it("records only supported inherited channel defaults in ingress posture", () => {
+    const cfg = {
+      channels: {
+        defaults: {
+          dmPolicy: "open",
+          groupPolicy: "open",
+          requireMention: false,
+        },
+        telegram: {},
+        slack: {
+          accounts: {
+            work: {},
+          },
+        },
+      },
+    };
+
+    expect(scanPolicyIngress(cfg)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ channel: "telegram", kind: "channelGroupPolicy", value: "open" }),
+        expect.objectContaining({
+          accountId: "work",
+          kind: "channelDmPolicy",
+          value: "pairing",
+        }),
+        expect.objectContaining({
+          accountId: "work",
+          kind: "channelRequireMention",
+          value: true,
+        }),
+      ]),
+    );
+  });
+
+  it("uses Feishu open-group mention defaults", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      channels: {
+        feishu: {
+          groupPolicy: "open",
+        },
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        ingress: {
+          channels: {
+            requireMentionInGroups: true,
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyDoctorLint(ctx(configPath, cfg));
+    const evidence = scanPolicyIngress(cfg as unknown as Record<string, unknown>);
+
+    expect(evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          channel: "feishu",
+          kind: "channelRequireMention",
+          value: false,
+        }),
+      ]),
+    );
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/ingress-group-mention-required",
+          ocPath: "oc://openclaw.config/channels/feishu/requireMention",
+        }),
+      ]),
+    );
+  });
+
+  it.each([
+    ["clickclack", { baseUrl: "https://app.clickclack.chat", workspace: "wsp_1", token: "ccb" }],
+    ["feishu", { appId: "cli_a", appSecret: "secret" }],
+    ["irc", { host: "irc.example.com", nick: "claw" }],
+    ["line", { channelAccessToken: "line-token" }],
+    ["mattermost", { baseUrl: "https://mattermost.example.com", botToken: "mm-token" }],
+    ["nextcloud-talk", { baseUrl: "https://nextcloud.example.com", botSecret: "nc-secret" }],
+    ["qqbot", { appId: "qqbot-app", clientSecret: "qqbot-secret" }],
+    ["synology-chat", { token: "synology-token" }],
+    ["tlon", { ship: "zod" }],
+    ["twitch", { username: "openclaw" }],
+  ])("evaluates %s implicit default account posture with named accounts", async (channel, root) => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      session: { dmScope: "per-channel-peer" },
+      channels: {
+        [channel]: {
+          ...root,
+          dmPolicy: "open",
+          groupPolicy: "allowlist",
+          requireMention: true,
+          accounts: {
+            work: {
+              dmPolicy: "allowlist",
+              groupPolicy: "allowlist",
+              requireMention: true,
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        ingress: {
+          session: { requireDmScope: "per-channel-peer" },
+          channels: {
+            allowDmPolicies: ["pairing", "allowlist", "disabled"],
+            denyOpenGroups: true,
+            requireMentionInGroups: true,
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyDoctorLint(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/ingress-dm-policy-unapproved",
+          ocPath: `oc://openclaw.config/channels/${channel}/dmPolicy`,
+        }),
+      ]),
+    );
+  });
+
+  it("does not evaluate channels with only disabled named accounts", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      session: { dmScope: "per-channel-peer" },
+      channels: {
+        slack: {
+          accounts: {
+            work: {
+              enabled: false,
+              dmPolicy: "open",
+              groupPolicy: "open",
+              requireMention: false,
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        ingress: {
+          session: { requireDmScope: "per-channel-peer" },
+          channels: {
+            allowDmPolicies: ["pairing", "allowlist", "disabled"],
+            denyOpenGroups: true,
+            requireMentionInGroups: true,
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyDoctorLint(ctx(configPath, cfg));
+    const evidence = scanPolicyIngress(cfg as unknown as Record<string, unknown>);
+
+    expect(result.findings).toEqual([]);
+    expect(evidence).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          channel: "slack",
+          kind: "channelDmPolicy",
+        }),
+      ]),
+    );
+  });
+
+  it("does not evaluate channel root defaults as a named account", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      session: { dmScope: "per-channel-peer" },
+      channels: {
+        slack: {
+          accounts: {
+            work: {
+              dmPolicy: "allowlist",
+              groupPolicy: "allowlist",
+              requireMention: true,
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        ingress: {
+          session: { requireDmScope: "per-channel-peer" },
+          channels: {
+            allowDmPolicies: ["pairing", "allowlist", "disabled"],
+            denyOpenGroups: true,
+            requireMentionInGroups: true,
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyDoctorLint(ctx(configPath, cfg));
+    const evidence = scanPolicyIngress(cfg as unknown as Record<string, unknown>);
+
+    expect(result.findings).toEqual([]);
+    expect(evidence).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          channel: "slack",
+          accountId: undefined,
+          kind: "channelDmPolicy",
+        }),
+      ]),
+    );
+  });
+
+  it("evaluates implicit default account posture with named accounts", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      session: { dmScope: "per-channel-peer" },
+      channels: {
+        discord: {
+          token: "root-token",
+          dmPolicy: "open",
+          groupPolicy: "allowlist",
+          requireMention: true,
+          accounts: {
+            work: {
+              dmPolicy: "allowlist",
+              groupPolicy: "allowlist",
+              requireMention: true,
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        ingress: {
+          session: { requireDmScope: "per-channel-peer" },
+          channels: {
+            allowDmPolicies: ["pairing", "allowlist", "disabled"],
+            denyOpenGroups: true,
+            requireMentionInGroups: true,
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyDoctorLint(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/ingress-dm-policy-unapproved",
+          ocPath: "oc://openclaw.config/channels/discord/dmPolicy",
+        }),
+      ]),
+    );
+  });
+
+  it("does not inherit Telegram root groups into multi-account named accounts", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      session: { dmScope: "per-channel-peer" },
+      channels: {
+        telegram: {
+          dmPolicy: "pairing",
+          groupPolicy: "allowlist",
+          groups: {
+            ops: {
+              groupPolicy: "open",
+              requireMention: false,
+            },
+          },
+          accounts: {
+            work: {
+              botToken: "work-token",
+              dmPolicy: "allowlist",
+              groupPolicy: "allowlist",
+              requireMention: true,
+            },
+            personal: {
+              botToken: "personal-token",
+              dmPolicy: "allowlist",
+              groupPolicy: "allowlist",
+              requireMention: true,
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        ingress: {
+          session: { requireDmScope: "per-channel-peer" },
+          channels: {
+            allowDmPolicies: ["pairing", "allowlist", "disabled"],
+            denyOpenGroups: true,
+            requireMentionInGroups: true,
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyDoctorLint(ctx(configPath, cfg));
+    const evidence = scanPolicyIngress(cfg as unknown as Record<string, unknown>);
+
+    expect(evidence).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          accountId: "work",
+          groupId: "ops",
+          kind: "channelRequireMention",
+        }),
+      ]),
+    );
+    expect(result.findings).toEqual([]);
+  });
+
+  it("lets Telegram account groups override root group inheritance", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          groups: {
+            ops: {
+              groupPolicy: "open",
+              requireMention: false,
+            },
+          },
+          accounts: {
+            work: {
+              groups: {},
+            },
+          },
+        },
+      },
+    };
+
+    const evidence = scanPolicyIngress(cfg);
+
+    expect(evidence).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          accountId: "work",
+          groupId: "ops",
+          kind: "channelRequireMention",
+        }),
+      ]),
+    );
+  });
+
+  it("records inherited root group overrides for multi-account ingress", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      session: { dmScope: "per-channel-peer" },
+      channels: {
+        slack: {
+          botToken: "root-token",
+          dmPolicy: "pairing",
+          groupPolicy: "disabled",
+          groups: {
+            ops: {
+              groupPolicy: "open",
+              requireMention: false,
+            },
+          },
+          accounts: {
+            work: {
+              dmPolicy: "allowlist",
+            },
+            personal: {
+              dmPolicy: "allowlist",
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        ingress: {
+          session: { requireDmScope: "per-channel-peer" },
+          channels: {
+            allowDmPolicies: ["pairing", "allowlist", "disabled"],
+            denyOpenGroups: true,
+            requireMentionInGroups: true,
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyDoctorLint(ctx(configPath, cfg));
+    const evidence = scanPolicyIngress(cfg as unknown as Record<string, unknown>);
+
+    expect(evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          accountId: "work",
+          groupId: "ops",
+          kind: "channelRequireMention",
+          source: "oc://openclaw.config/channels/slack/groups/ops/requireMention",
+          value: false,
+        }),
+        expect.objectContaining({
+          accountId: "personal",
+          groupId: "ops",
+          kind: "channelRequireMention",
+          source: "oc://openclaw.config/channels/slack/groups/ops/requireMention",
+          value: false,
+        }),
+      ]),
+    );
+    expect(result.findings).toEqual([]);
+  });
+
+  it("evaluates Telegram implicit default account posture with named accounts", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      session: { dmScope: "per-channel-peer" },
+      channels: {
+        telegram: {
+          botToken: "root-token",
+          dmPolicy: "open",
+          groupPolicy: "allowlist",
+          requireMention: true,
+          accounts: {
+            work: {
+              dmPolicy: "allowlist",
+              groupPolicy: "allowlist",
+              requireMention: true,
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        ingress: {
+          session: { requireDmScope: "per-channel-peer" },
+          channels: {
+            allowDmPolicies: ["pairing", "allowlist", "disabled"],
+            denyOpenGroups: true,
+            requireMentionInGroups: true,
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyDoctorLint(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/ingress-dm-policy-unapproved",
+          ocPath: "oc://openclaw.config/channels/telegram/dmPolicy",
+        }),
+      ]),
+    );
+  });
+
+  it("accepts inherited account ingress posture", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      session: { dmScope: "per-channel-peer" },
+      channels: {
+        slack: {
+          dmPolicy: "allowlist",
+          groupPolicy: "allowlist",
+          requireMention: true,
+          accounts: {
+            work: {},
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        ingress: {
+          session: { requireDmScope: "per-channel-peer" },
+          channels: {
+            allowDmPolicies: ["pairing", "allowlist", "disabled"],
+            denyOpenGroups: true,
+            requireMentionInGroups: true,
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyDoctorLint(ctx(configPath, cfg));
+    const evidence = scanPolicyIngress(cfg as unknown as Record<string, unknown>);
+
+    expect(result.findings).toEqual([]);
+    expect(evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "slack-work-dm-policy",
+          kind: "channelDmPolicy",
+          source: "oc://openclaw.config/channels/slack/dmPolicy",
+          value: "allowlist",
+        }),
+      ]),
+    );
   });
 
   it("reports private-network SSRF settings denied by policy", async () => {

@@ -209,6 +209,32 @@ export const sharedVitestConfig = {
         find: "@openclaw/gateway-protocol",
         replacement: path.join(repoRoot, "packages", "gateway-protocol", "src", "index.ts"),
       },
+      {
+        find: "@openclaw/net-policy/ip",
+        replacement: path.join(repoRoot, "packages", "net-policy", "src", "ip.ts"),
+      },
+      {
+        find: "@openclaw/net-policy/ipv4",
+        replacement: path.join(repoRoot, "packages", "net-policy", "src", "ipv4.ts"),
+      },
+      {
+        find: "@openclaw/net-policy/redact-sensitive-url",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "net-policy",
+          "src",
+          "redact-sensitive-url.ts",
+        ),
+      },
+      {
+        find: "@openclaw/net-policy/url-userinfo",
+        replacement: path.join(repoRoot, "packages", "net-policy", "src", "url-userinfo.ts"),
+      },
+      {
+        find: "@openclaw/net-policy",
+        replacement: path.join(repoRoot, "packages", "net-policy", "src", "index.ts"),
+      },
       ...sourcePluginSdkSubpaths.map((subpath) => ({
         find: `openclaw/plugin-sdk/${subpath}`,
         replacement: path.join(repoRoot, "src", "plugin-sdk", `${subpath}.ts`),

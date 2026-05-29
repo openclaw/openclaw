@@ -335,11 +335,7 @@ function sanitizeJitiCachePathSegment(value) {
 
 function resolveJitiFsCacheTmpDir() {
   let tmpDir = os.tmpdir();
-  if (
-    process.env.TMPDIR &&
-    tmpDir === process.cwd() &&
-    !process.env.JITI_RESPECT_TMPDIR_ENV
-  ) {
+  if (process.env.TMPDIR && tmpDir === process.cwd() && !process.env.JITI_RESPECT_TMPDIR_ENV) {
     const originalTmpDir = process.env.TMPDIR;
     delete process.env.TMPDIR;
     try {

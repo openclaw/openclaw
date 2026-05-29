@@ -1,6 +1,5 @@
 import path from "node:path";
 import { ensureMediaDir, saveMediaBuffer } from "../../media/store.js";
-import { resolveBrowserNavigationProxyMode } from "../browser-proxy-mode.js";
 import { captureScreenshot, snapshotAria, snapshotRoleViaCdp } from "../cdp.js";
 import {
   evaluateChromeMcpScript,
@@ -18,15 +17,16 @@ import {
   assertBrowserNavigationAllowed,
   assertBrowserNavigationResultAllowed,
 } from "../navigation-guard.js";
-import { withBrowserNavigationPolicy } from "../navigation-guard.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import {
   DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
   DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
   normalizeBrowserScreenshot,
 } from "../screenshot.js";
-import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
+import type { BrowserRouteContext } from "../server-context.js";
+import { normalizeBrowserTimerDelayMs } from "../timer-delay.js";
 import {
+  browserNavigationPolicyForProfile,
   getPwAiModule,
   handleRouteError,
   readBody,
@@ -42,19 +42,11 @@ import {
   shouldUsePlaywrightForScreenshot,
 } from "./agent.snapshot.plan.js";
 import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
+import { readRoutePositiveInteger } from "./route-numeric.js";
 import type { BrowserResponse, BrowserRouteRegistrar } from "./types.js";
-import { asyncBrowserRoute, jsonError, toBoolean, toNumber, toStringOrEmpty } from "./utils.js";
+import { asyncBrowserRoute, jsonError, toBoolean, toStringOrEmpty } from "./utils.js";
 
 const CHROME_MCP_OVERLAY_ATTR = "data-openclaw-mcp-overlay";
-
-function browserNavigationPolicyForProfile(ctx: BrowserRouteContext, profileCtx: ProfileContext) {
-  return withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy, {
-    browserProxyMode: resolveBrowserNavigationProxyMode({
-      resolved: ctx.state().resolved,
-      profile: profileCtx.profile,
-    }),
-  });
-}
 
 async function collectChromeMcpSnapshotUrls(params: {
   profileName: string;
@@ -367,11 +359,16 @@ export function registerBrowserAgentSnapshotRoutes(
       const element = toStringOrEmpty(body.element) || undefined;
       const labels = toBoolean(body.labels) ?? false;
       const type = body.type === "jpeg" ? "jpeg" : "png";
-      const timeoutMsRaw = toNumber(body.timeoutMs);
-      const timeoutMs =
-        timeoutMsRaw !== undefined
-          ? Math.max(1, Math.floor(timeoutMsRaw))
-          : DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS;
+      let timeoutMs: number;
+      try {
+        const timeoutMsRaw = readRoutePositiveInteger(body.timeoutMs, "timeoutMs");
+        timeoutMs =
+          timeoutMsRaw !== undefined
+            ? normalizeBrowserTimerDelayMs(timeoutMsRaw)
+            : DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS;
+      } catch (err) {
+        return jsonError(res, 400, String(err instanceof Error ? err.message : err));
+      }
 
       if (fullPage && (ref || element)) {
         return jsonError(res, 400, "fullPage is not supported for element screenshots");

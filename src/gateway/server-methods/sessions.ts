@@ -701,7 +701,11 @@ function collectTrackedActiveSessionRunKeys(
     return keys;
   }
   for (const active of context.chatAbortControllers.values()) {
-    if (typeof active.sessionKey === "string" && active.sessionKey.trim()) {
+    if (
+      active.projectSessionActive !== false &&
+      typeof active.sessionKey === "string" &&
+      active.sessionKey.trim()
+    ) {
       keys.add(active.sessionKey);
     }
   }

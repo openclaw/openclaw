@@ -272,22 +272,18 @@ async function buildCodexTurnContextForTest(
     cwd: workspaceDir,
     appServer: resolveCodexAppServerRuntimeOptions({}),
     promptText: codexTurnPromptText,
-    turnScopedDeveloperInstructions:
-      workspaceBootstrapContext.turnScopedDeveloperInstructions,
+    turnScopedDeveloperInstructions: workspaceBootstrapContext.turnScopedDeveloperInstructions,
     heartbeatCollaborationInstructions:
       workspaceBootstrapContext.heartbeatCollaborationInstructions,
   });
   const collaborationInstructions =
     turnStartParams.collaborationMode?.settings?.developer_instructions ?? "";
-  const inputText =
-    turnStartParams.input?.find((item) => item.type === "text")?.text ?? "";
+  const inputText = turnStartParams.input?.find((item) => item.type === "text")?.text ?? "";
   const systemPromptReport = buildCodexSystemPromptReport({
     attempt: params,
     sessionKey: params.sessionKey ?? params.sessionId,
     workspaceDir,
-    developerInstructions: [threadDeveloperInstructions, collaborationInstructions].join(
-      "\n\n",
-    ),
+    developerInstructions: [threadDeveloperInstructions, collaborationInstructions].join("\n\n"),
     workspaceBootstrapContext,
     skillsPrompt: "",
     tools: dynamicTools,
@@ -1973,9 +1969,7 @@ describe("runCodexAppServerAttempt", () => {
       developerInstructions?: string;
     };
     expect(threadStartParams.config?.instructions).toBeUndefined();
-    expect(threadStartParams.developerInstructions).toContain(
-      "OpenClaw Workspace Instructions",
-    );
+    expect(threadStartParams.developerInstructions).toContain("OpenClaw Workspace Instructions");
     expect(threadStartParams.developerInstructions).toContain(toolGuidance);
     expect(threadStartParams.developerInstructions).not.toContain(agentsGuidance);
     expect(threadStartParams.developerInstructions).not.toContain(soulGuidance);
@@ -2003,10 +1997,8 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).toBe("hello");
     expect(inputText).not.toContain(agentsGuidance);
     expect(result.systemPromptReport?.systemPrompt.chars).toBe(
-      [
-        threadStartParams.developerInstructions ?? "",
-        collaborationInstructions,
-      ].join("\n\n").length,
+      [threadStartParams.developerInstructions ?? "", collaborationInstructions].join("\n\n")
+        .length,
     );
   });
 

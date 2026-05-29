@@ -65,6 +65,26 @@ function createResourceLoaderWithHandlers(
 }
 
 describe("createAgentSession tool defaults", () => {
+  it("forwards max thinking budgets from settings to the agent", async () => {
+    const { session } = await createAgentSession({
+      model: testModel,
+      resourceLoader: createEmptyResourceLoader(),
+      sessionManager: SessionManager.inMemory(),
+      settingsManager: SettingsManager.inMemory({
+        thinkingBudgets: {
+          high: 16_384,
+          max: 32_768,
+        },
+      }),
+      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
+    });
+
+    expect(session.agent.thinkingBudgets).toEqual({
+      high: 16_384,
+      max: 32_768,
+    });
+  });
+
   it("keeps custom tools active when only builtin tools are disabled", async () => {
     const customTool: ToolDefinition = {
       name: "custom_lookup",
