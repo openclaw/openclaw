@@ -7,6 +7,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Cron: retry recurring jobs after transient model rate limits before waiting for the next scheduled slot.
+- Browser/doctor: detect the installed Chrome version on Windows from the Chromium build directory (with file metadata via PowerShell as a fallback) instead of `chrome.exe --version`, which prints nothing to stdout on Windows, so `openclaw doctor` no longer falsely warns "Could not determine the installed Chrome version" for a working Chrome 144+ install. (#87312)
 
 ## 2026.5.28
 

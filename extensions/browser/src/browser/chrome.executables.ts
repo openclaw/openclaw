@@ -17,6 +17,7 @@ const CHROME_VERSION_RE = /\b(\d+)(?:\.\d+){1,3}\b/g;
 const PLAYWRIGHT_BROWSERS_PATH_ENV = "PLAYWRIGHT_BROWSERS_PATH";
 const BROWSER_VERSION_TIMEOUT_MS = 6000;
 const MAC_PLISTBUDDY_TIMEOUT_MS = 800;
+const WINDOWS_FILE_METADATA_TIMEOUT_MS = 4000;
 
 const CHROMIUM_BUNDLE_IDS = new Set([
   "com.google.Chrome",
@@ -741,6 +742,13 @@ export function readBrowserVersion(executablePath: string): string | null {
     }
   }
 
+  if (process.platform === "win32") {
+    // `chrome.exe --version` does not print to stdout on Windows (the GUI binary
+    // does not attach to the parent console), so the `--version` probe below is
+    // useless there. Resolve the build version from the install layout instead.
+    return readWindowsBrowserVersion(executablePath);
+  }
+
   const output = execText(executablePath, ["--version"], BROWSER_VERSION_TIMEOUT_MS);
   if (!output) {
     return null;
@@ -759,6 +767,58 @@ function readMacBundleBrowserVersion(executablePath: string): string | null {
     ["-c", "Print :CFBundleShortVersionString", plistPath],
     MAC_PLISTBUDDY_TIMEOUT_MS,
   );
+}
+
+// Matches a full Chromium build directory name like "148.0.7778.179".
+const WINDOWS_VERSION_DIR_RE = /^\d+(?:\.\d+){1,3}$/;
+
+function compareChromiumVersions(a: string, b: string): number {
+  const partsA = a.split(".");
+  const partsB = b.split(".");
+  const len = Math.max(partsA.length, partsB.length);
+  for (let i = 0; i < len; i++) {
+    const diff =
+      (Number.parseInt(partsA[i] ?? "0", 10) || 0) - (Number.parseInt(partsB[i] ?? "0", 10) || 0);
+    if (diff !== 0) {
+      return diff;
+    }
+  }
+  return 0;
+}
+
+function quoteForPowerShell(value: string): string {
+  // PowerShell single-quoted strings escape a literal quote by doubling it.
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+function readWindowsBrowserVersion(executablePath: string): string | null {
+  // Chromium installers lay each build out under `...\Application\<version>\`,
+  // so the newest sibling version directory is a fast, dependency-free signal.
+  const dir = path.win32.dirname(executablePath);
+  let versionDirs: string[] = [];
+  try {
+    versionDirs = fs.readdirSync(dir).filter((name) => WINDOWS_VERSION_DIR_RE.test(name));
+  } catch {
+    versionDirs = [];
+  }
+  const newest = versionDirs.toSorted(compareChromiumVersions).at(-1);
+  if (newest) {
+    return newest;
+  }
+
+  // Fall back to the executable's file metadata for non-standard layouts
+  // (portable/custom installs without a versioned directory).
+  const output = execText(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      `(Get-Item -LiteralPath ${quoteForPowerShell(executablePath)}).VersionInfo.ProductVersion`,
+    ],
+    WINDOWS_FILE_METADATA_TIMEOUT_MS,
+  );
+  return output ? output.replace(/\s+/g, " ").trim() : null;
 }
 
 function resolveMacAppBundlePath(executablePath: string): string | null {
