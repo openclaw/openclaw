@@ -1,11 +1,13 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
+  chmodSync,
   closeSync,
   existsSync,
   mkdirSync,
   openSync,
   readFileSync,
+  statSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -23,13 +25,15 @@ const MIN_SPEAKEASY_TEXT_CHARS = 20;
 const SPEAKEASY_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const SPEAKEASY_DAILY_GENERATION_CAP = 50;
 const SPEAKEASY_CACHE_LOCK_TIMEOUT_MS = 1000;
+const SPEAKEASY_CACHE_LOCK_STALE_MS = 30_000;
 const SPEAKEASY_TTS_TIMEOUT_MS = 120_000;
 const SPEAKEASY_VOICE_NOTE_EXTENSIONS = new Set([".oga", ".ogg", ".opus"]);
 const TELEGRAM_MAX_INLINE_BUTTON_ACTIONS = 100;
 const SPEAKEASY_STDIN_ARGV_WRAPPER = [
-  "import runpy, sys",
+  "import os, runpy, sys",
   "script = sys.argv[1]",
   "text = sys.stdin.read()",
+  "sys.path.insert(0, os.path.dirname(script))",
   "sys.argv = [script, text]",
   "runpy.run_path(script, run_name='__main__')",
 ].join("\n");
@@ -150,7 +154,11 @@ export function loadSpeakeasyCache(cfg: OpenClawConfig): SpeakeasyVoiceCache {
 export function writeSpeakeasyCache(cfg: OpenClawConfig, cache: SpeakeasyVoiceCache): void {
   const cachePath = resolveSpeakeasyCachePath(cfg);
   mkdirSync(path.dirname(cachePath), { recursive: true });
-  writeFileSync(cachePath, `${JSON.stringify(cache, null, 2)}\n`, "utf8");
+  writeFileSync(cachePath, `${JSON.stringify(cache, null, 2)}\n`, {
+    encoding: "utf8",
+    mode: 0o600,
+  });
+  chmodSync(cachePath, 0o600);
 }
 
 function waitForSpeakeasyCacheLock(): void {
@@ -164,25 +172,43 @@ function acquireSpeakeasyCacheLock(cachePath: string): () => void {
   while (true) {
     let fd: number | undefined;
     try {
-      fd = openSync(lockPath, "wx");
+      fd = openSync(lockPath, "wx", 0o600);
       return () => {
         if (fd !== undefined) {
           closeSync(fd);
         }
-        unlinkSync(lockPath);
+        try {
+          unlinkSync(lockPath);
+        } catch {
+          // Best effort: another recovery path may have already removed a stale lock.
+        }
       };
     } catch (err) {
-      if (
-        !err ||
-        typeof err !== "object" ||
-        !("code" in err) ||
-        err.code !== "EEXIST" ||
-        Date.now() >= deadline
-      ) {
+      if (isFileAlreadyExistsError(err) && recoverStaleSpeakeasyCacheLock(lockPath)) {
+        continue;
+      }
+      if (!isFileAlreadyExistsError(err) || Date.now() >= deadline) {
         throw err;
       }
       waitForSpeakeasyCacheLock();
     }
+  }
+}
+
+function isFileAlreadyExistsError(err: unknown): boolean {
+  return Boolean(err && typeof err === "object" && "code" in err && err.code === "EEXIST");
+}
+
+function recoverStaleSpeakeasyCacheLock(lockPath: string): boolean {
+  try {
+    const ageMs = Date.now() - statSync(lockPath).mtimeMs;
+    if (ageMs < SPEAKEASY_CACHE_LOCK_STALE_MS) {
+      return false;
+    }
+    unlinkSync(lockPath);
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -485,17 +511,23 @@ function runSpeakeasyTtsScript(params: {
     let stdout = "";
     let stderr = "";
     let settled = false;
+    const settle = (fn: () => void): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      fn();
+    };
     const child = spawn("python3", ["-c", SPEAKEASY_STDIN_ARGV_WRAPPER, params.scriptPath], {
       cwd: params.cwd,
       stdio: ["pipe", "pipe", "pipe"],
     });
     const timeout = setTimeout(() => {
-      if (settled) {
-        return;
-      }
-      settled = true;
       child.kill("SIGTERM");
-      reject(new Error(`Speakeasy TTS timed out after ${SPEAKEASY_TTS_TIMEOUT_MS}ms`));
+      settle(() =>
+        reject(new Error(`Speakeasy TTS timed out after ${SPEAKEASY_TTS_TIMEOUT_MS}ms`)),
+      );
     }, SPEAKEASY_TTS_TIMEOUT_MS);
 
     child.stdout.setEncoding("utf8");
@@ -510,29 +542,30 @@ function runSpeakeasyTtsScript(params: {
       stderr += chunk;
     });
     child.on("error", (err) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timeout);
-      reject(err);
+      settle(() => reject(err));
     });
     child.on("close", (code, signal) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timeout);
-      if (code === 0) {
-        resolve(stdout);
-        return;
-      }
-      reject(
-        new Error(
-          `Speakeasy TTS failed${signal ? ` with signal ${signal}` : ` with exit code ${code}`}: ${stderr.trim()}`,
-        ),
-      );
+      settle(() => {
+        if (code === 0) {
+          resolve(stdout);
+          return;
+        }
+        reject(
+          new Error(
+            `Speakeasy TTS failed${signal ? ` with signal ${signal}` : ` with exit code ${code}`}: ${stderr.trim()}`,
+          ),
+        );
+      });
     });
-    child.stdin.end(params.text);
+    child.stdin.on("error", (err) => {
+      child.kill("SIGTERM");
+      settle(() => reject(err));
+    });
+    try {
+      child.stdin.end(params.text);
+    } catch (err) {
+      child.kill("SIGTERM");
+      settle(() => reject(err instanceof Error ? err : new Error(String(err))));
+    }
   });
 }

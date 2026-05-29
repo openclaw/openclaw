@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -42,7 +42,7 @@ async function withSpeakeasyWorkspace<T>(
 
 describe("speakeasy voice button", () => {
   it("adds one cached callback button to eligible enabled DM text replies", async () => {
-    await withSpeakeasyWorkspace(async ({ cfg }) => {
+    await withSpeakeasyWorkspace(async ({ cfg, workspaceDir }) => {
       const reply = withSpeakeasyVoiceButton({
         reply: { text: "This reply is long enough to qualify for on-demand voice playback." },
         cfg,
@@ -69,6 +69,9 @@ describe("speakeasy voice button", () => {
           text: "This reply is long enough to qualify for on-demand voice playback.",
         },
       );
+      expect(
+        (await stat(path.join(workspaceDir, "state", "speakeasy-cache.json"))).mode & 0o777,
+      ).toBe(0o600);
     });
   });
 
@@ -168,6 +171,47 @@ describe("speakeasy voice button", () => {
       await expect(generateSpeakeasyVoiceNote({ cfg, text: "Hello from Speakeasy" })).resolves.toBe(
         path.join(workspaceDir, "state", "speakeasy", "out.ogg"),
       );
+    });
+  });
+
+  it("preserves script-directory imports for the TTS helper wrapper", async () => {
+    await withSpeakeasyWorkspace(async ({ cfg, workspaceDir }) => {
+      await mkdir(path.join(workspaceDir, "scripts"), { recursive: true });
+      await writeFile(
+        path.join(workspaceDir, "scripts", "speakeasy_helper.py"),
+        "def output_path():\n    return 'state/speakeasy/helper.ogg'\n",
+      );
+      const scriptPath = path.join(workspaceDir, "scripts", "tts_elevenlabs_v2.py");
+      await writeFile(
+        scriptPath,
+        [
+          "#!/usr/bin/env python3",
+          "from speakeasy_helper import output_path",
+          "print(output_path())",
+          "",
+        ].join("\n"),
+      );
+      await chmod(scriptPath, 0o755);
+
+      await expect(generateSpeakeasyVoiceNote({ cfg, text: "Hello from Speakeasy" })).resolves.toBe(
+        path.join(workspaceDir, "state", "speakeasy", "helper.ogg"),
+      );
+    });
+  });
+
+  it("rejects instead of crashing when a fast-failing TTS helper closes stdin early", async () => {
+    await withSpeakeasyWorkspace(async ({ cfg, workspaceDir }) => {
+      await mkdir(path.join(workspaceDir, "scripts"), { recursive: true });
+      const scriptPath = path.join(workspaceDir, "scripts", "tts_elevenlabs_v2.py");
+      await writeFile(
+        scriptPath,
+        ["#!/usr/bin/env python3", "raise SystemExit('fast fail')", ""].join("\n"),
+      );
+      await chmod(scriptPath, 0o755);
+
+      await expect(
+        generateSpeakeasyVoiceNote({ cfg, text: "x".repeat(1024 * 1024) }),
+      ).rejects.toThrow();
     });
   });
 
@@ -314,6 +358,28 @@ describe("speakeasy voice button", () => {
       releaseSpeakeasyVoiceGenerationReservation({ cfg, chatId: "123" });
       cache = loadSpeakeasyCache(cfg);
       expect(cache.generations[`123:${today}`]).toBeUndefined();
+    });
+  });
+
+  it("recovers stale cache locks", async () => {
+    await withSpeakeasyWorkspace(async ({ cfg, workspaceDir }) => {
+      const cachePath = path.join(workspaceDir, "state", "speakeasy-cache.json");
+      const lockPath = `${cachePath}.lock`;
+      await writeFile(lockPath, "");
+      const stale = new Date(Date.now() - 60_000);
+      await utimes(lockPath, stale, stale);
+
+      const reply = withSpeakeasyVoiceButton({
+        reply: { text: "This reply is long enough to qualify for on-demand voice playback." },
+        cfg,
+        chatId: "123",
+      }) as {
+        channelData?: { telegram?: { buttons?: Array<Array<{ callback_data: string }>> } };
+      };
+
+      expect(reply.channelData?.telegram?.buttons?.[0]?.[0]?.callback_data).toMatch(
+        /^tts:speakeasy:/,
+      );
     });
   });
 });
