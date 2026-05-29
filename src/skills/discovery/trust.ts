@@ -46,13 +46,27 @@ export function resolveSkillOwner(params: {
   sourceLabel: string;
   skillPath: string;
 }): string {
-  if (params.sourceKind === "workspace") return "workspace";
-  if (params.sourceKind === "generated") return "workspace";
-  if (params.sourceKind === "bundled") return "openclaw-release";
-  if (params.sourceKind === "clawhub") return "clawhub";
-  if (params.sourceKind === "plugin") return "plugin";
-  if (params.sourceKind === "system") return "openclaw-system";
-  if (params.sourceLabel === "agents-skills-personal") return "user";
+  if (params.sourceKind === "workspace") {
+    return "workspace";
+  }
+  if (params.sourceKind === "generated") {
+    return "workspace";
+  }
+  if (params.sourceKind === "bundled") {
+    return "openclaw-release";
+  }
+  if (params.sourceKind === "clawhub") {
+    return "clawhub";
+  }
+  if (params.sourceKind === "plugin") {
+    return "plugin";
+  }
+  if (params.sourceKind === "system") {
+    return "openclaw-system";
+  }
+  if (params.sourceLabel === "agents-skills-personal") {
+    return "user";
+  }
   return path.basename(path.dirname(params.skillPath)) || "extra";
 }
 
@@ -72,6 +86,7 @@ export function resolveSkillWritablePolicy(sourceKind: SkillSourceKind): SkillWr
     case "extra":
       return { writable: false, reason: "extra-root-load-only" };
   }
+  return { writable: false, reason: "unknown-source-load-only" };
 }
 
 export function resolveSkillTrustInfo(entry: SkillEntry): SkillTrustInfo {

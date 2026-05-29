@@ -224,7 +224,7 @@ describe("SkillsService", () => {
         return workspaceDir;
       }),
     );
-    const firstWorkspace = workspaces[0]!;
+    const firstWorkspace = workspaces[0];
     const first = service.getIndex({
       workspaceDir: firstWorkspace,
       ...isolatedSkillRoots(firstWorkspace),

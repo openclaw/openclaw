@@ -93,7 +93,7 @@ function listCandidateSkillDirs(dir: string): string[] {
           entry.isDirectory() && !entry.name.startsWith(".") && entry.name !== "node_modules",
       )
       .map((entry) => path.join(dir, entry.name))
-      .sort((left, right) => left.localeCompare(right));
+      .toSorted((left, right) => left.localeCompare(right));
   } catch {
     return [];
   }

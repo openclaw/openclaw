@@ -65,12 +65,14 @@ function resolveCompactHomePrefixes(): string[] {
   const realHomes = resolvedHomes
     .map((home) => tryRealpath(home))
     .filter((home): home is string => !!home);
-  return uniqueStrings([...resolvedHomes, ...realHomes]).sort((a, b) => b.length - a.length);
+  return uniqueStrings([...resolvedHomes, ...realHomes]).toSorted((a, b) => b.length - a.length);
 }
 
 function compactSkillPaths(skills: Skill[]): Skill[] {
   const homes = resolveCompactHomePrefixes();
-  if (homes.length === 0) return skills;
+  if (homes.length === 0) {
+    return skills;
+  }
   return skills.map((s) => ({
     ...s,
     filePath: compactHomePath(s.filePath, homes),
@@ -106,12 +108,12 @@ function compactPathForConsoleMessage(filePath: string): string {
 
 function isSkillVisibleInAvailableSkillsPrompt(entry: SkillEntry): boolean {
   if (entry.exposure) {
-    return entry.exposure.includeInAvailableSkillsPrompt !== false;
+    return entry.exposure.includeInAvailableSkillsPrompt ?? true;
   }
   if (entry.invocation) {
-    return entry.invocation.disableModelInvocation !== true;
+    return !entry.invocation.disableModelInvocation;
   }
-  return entry.skill.disableModelInvocation !== true;
+  return !entry.skill.disableModelInvocation;
 }
 
 function filterSkillEntries(
@@ -839,8 +841,7 @@ function loadGeneratedPluginSkillRecords(params: {
 
   if (loadedSkills.length > maxSkillsLoadedPerSource) {
     return loadedSkills
-      .slice()
-      .sort((a, b) => a.skill.name.localeCompare(b.skill.name, "en"))
+      .toSorted((a, b) => a.skill.name.localeCompare(b.skill.name, "en"))
       .slice(0, maxSkillsLoadedPerSource);
   }
   return loadedSkills;
@@ -1107,8 +1108,7 @@ function loadSkillEntries(
 
     if (loadedSkills.length > maxSkillsLoadedPerSource) {
       return loadedSkills
-        .slice()
-        .sort((a, b) => a.skill.name.localeCompare(b.skill.name, "en"))
+        .toSorted((a, b) => a.skill.name.localeCompare(b.skill.name, "en"))
         .slice(0, maxSkillsLoadedPerSource);
     }
 
@@ -1193,7 +1193,7 @@ function loadSkillEntries(
   }
 
   const skillEntries: SkillEntry[] = Array.from(merged.values())
-    .sort((a, b) => a.skill.name.localeCompare(b.skill.name, "en"))
+    .toSorted((a, b) => a.skill.name.localeCompare(b.skill.name, "en"))
     .map((record) => {
       const skill = record.skill;
       const frontmatter =
@@ -1205,22 +1205,27 @@ function loadSkillEntries(
         }) ??
         ({} as ParsedSkillFrontmatter);
       const invocation = resolveSkillInvocationPolicy(frontmatter);
-      return {
+      const entry: SkillEntry = {
         skill,
         frontmatter,
         metadata: resolveSkillEntryMetadata({ frontmatter, skillDir: skill.baseDir }),
         invocation,
-        ...(record.syncSourceDir !== undefined ? { syncSourceDir: record.syncSourceDir } : {}),
-        ...(record.syncDirName !== undefined ? { syncDirName: record.syncDirName } : {}),
         exposure: {
           includeInRuntimeRegistry: true,
           // Freshly loaded entries preserve the documented disable-model-invocation
           // contract, while legacy entries without exposure metadata still use the
           // fallback in isSkillVisibleInAvailableSkillsPrompt().
-          includeInAvailableSkillsPrompt: invocation.disableModelInvocation !== true,
-          userInvocable: invocation.userInvocable !== false,
+          includeInAvailableSkillsPrompt: !invocation.disableModelInvocation,
+          userInvocable: invocation.userInvocable ?? true,
         },
       };
+      if (record.syncSourceDir !== undefined) {
+        entry.syncSourceDir = record.syncSourceDir;
+      }
+      if (record.syncDirName !== undefined) {
+        entry.syncDirName = record.syncDirName;
+      }
+      return entry;
     });
   return skillEntries;
 }
@@ -1240,7 +1245,9 @@ function escapeXml(str: string): string {
  * preserving awareness of all skills before resorting to dropping.
  */
 export function formatSkillsCompact(skills: Skill[]): string {
-  if (skills.length === 0) return "";
+  if (skills.length === 0) {
+    return "";
+  }
   const lines = [
     "\n\nThe following skills provide specialized instructions for specific tasks.",
     "Use the read tool to load a skill's file when the task matches its name.",
@@ -1392,9 +1399,9 @@ function resolveWorkspaceSkillPromptState(
   // Budget checks and final render both use this same representation so the
   // tier decision is based on the exact strings that end up in the prompt.
   // resolvedSkills keeps canonical paths for snapshot / runtime consumers.
-  const promptSkills = compactSkillPaths(resolvedSkills)
-    .slice()
-    .sort((a, b) => a.name.localeCompare(b.name, "en"));
+  const promptSkills = compactSkillPaths(resolvedSkills).toSorted((a, b) =>
+    a.name.localeCompare(b.name, "en"),
+  );
   const { skillsForPrompt, truncated, compact } = applySkillsPromptLimits({
     skills: promptSkills,
     config: opts?.config,

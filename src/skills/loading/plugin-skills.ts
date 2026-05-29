@@ -151,7 +151,9 @@ function collectSkillTargets(dir: string, targets: Map<string, string>): void {
   }).entries;
   for (const entry of entries) {
     const childPath = entry.path;
-    if (!hasPublishableSkillFile({ skillDir: childPath, rootDir: dir })) continue;
+    if (!hasPublishableSkillFile({ skillDir: childPath, rootDir: dir })) {
+      continue;
+    }
     const basename = entry.name;
     const existing = targets.get(basename);
     if (existing) {

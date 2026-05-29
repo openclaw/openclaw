@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ArchiveLogger } from "../../infra/archive.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   installSkillArchiveFromPath,
@@ -52,7 +53,7 @@ export async function installUploadedSkillArchive(params: {
   timeoutMs?: number;
   workspaceDir: string;
   config: OpenClawConfig;
-  log?: (message: string) => void;
+  log?: ArchiveLogger;
   store?: SkillUploadStore;
 }): Promise<UploadedSkillInstallResult> {
   const store = params.store ?? defaultSkillUploadStore;
