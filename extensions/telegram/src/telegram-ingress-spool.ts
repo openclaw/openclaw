@@ -385,6 +385,28 @@ export async function listTelegramSpooledUpdateClaims(params: {
   return claims;
 }
 
+/**
+ * Clear all `.failed` files from the spool directory.
+ * Call this when a channel restarts to prevent stale timeout tombstones
+ * from blocking new message processing.
+ */
+export async function clearTelegramFailedUpdateTombs(params: { spoolDir: string }): Promise<void> {
+  let entries: string[];
+  try {
+    entries = await fs.readdir(params.spoolDir);
+  } catch (err) {
+    if ((err as { code?: string }).code === "ENOENT") {
+      return;
+    }
+    throw err;
+  }
+  await Promise.all(
+    entries
+      .filter((e) => e.endsWith(".failed"))
+      .map((file) => fs.unlink(path.join(params.spoolDir, file)).catch(() => {})),
+  );
+}
+
 export async function recoverStaleTelegramSpooledUpdateClaims(params: {
   spoolDir: string;
   staleMs?: number;

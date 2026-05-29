@@ -299,6 +299,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         setStatus: opts.setStatus,
         isolatedIngress: {
           enabled: opts.isolatedIngress?.enabled ?? true,
+          clearFailedUpdatesOnStart: opts.isolatedIngress?.clearFailedUpdatesOnStart ?? true,
           apiRoot: account.config.apiRoot,
           timeoutSeconds: account.config.timeoutSeconds,
           proxy: account.config.proxy,

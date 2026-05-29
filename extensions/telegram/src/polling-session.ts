@@ -1,4 +1,5 @@
 import { type RunOptions, run } from "@grammyjs/runner";
+import fs from "node:fs/promises";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
 import { drainPendingDeliveries } from "openclaw/plugin-sdk/delivery-queue-runtime";
@@ -24,6 +25,7 @@ import { TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS } from "./request-timeouts.js";
 import { getTelegramSequentialKey } from "./sequential-key.js";
 import {
   claimTelegramSpooledUpdate,
+  clearTelegramFailedUpdateTombs,
   deleteTelegramSpooledUpdate,
   failTelegramSpooledUpdateClaim,
   isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess,
@@ -185,6 +187,10 @@ type TelegramPollingSessionOpts = {
     drainIntervalMs?: number;
     spooledUpdateHandlerTimeoutMs?: number;
     spooledUpdateHandlerAbortGraceMs?: number;
+    /** Clear stale `.failed` files from the spool on session start.
+     *  This prevents lanes from staying guarded after a channel restart that
+     *  interrupted timed-out handlers from a previous session. */
+    clearFailedUpdatesOnStart?: boolean;
   };
 };
 
@@ -727,6 +733,10 @@ export class TelegramPollingSession {
     }
     const spoolDir =
       ingress.spoolDir ?? resolveTelegramIngressSpoolDir({ accountId: this.opts.accountId });
+    if (ingress.clearFailedUpdatesOnStart) {
+      await clearTelegramFailedUpdateTombs({ spoolDir });
+      this.opts.log(`[telegram][diag] cleared stale failed-update tombstones from spool`);
+    }
     const workerFactory = ingress.createWorker ?? createTelegramIngressWorker;
     const worker = workerFactory({
       token: this.opts.token,

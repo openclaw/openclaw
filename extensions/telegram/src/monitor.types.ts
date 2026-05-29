@@ -25,6 +25,7 @@ export type MonitorTelegramOpts = {
   setStatus?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
   isolatedIngress?: {
     enabled?: boolean;
+    clearFailedUpdatesOnStart?: boolean;
   };
 };
 
