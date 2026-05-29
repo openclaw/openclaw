@@ -92,7 +92,7 @@ describe("setupOfficialPluginInstalls", () => {
   });
 
   it("installs selected optional official plugins through the shared onboarding installer", async () => {
-    const multiselect = vi.fn(async <T,>(_params: WizardMultiSelectParams<T>) => [
+    const multiselect = vi.fn(async <T>(_params: WizardMultiSelectParams<T>) => [
       "diagnostics-otel" as T,
     ]);
     const prompter = createWizardPrompter({
