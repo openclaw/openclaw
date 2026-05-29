@@ -203,6 +203,7 @@ import {
 import { releaseCodexSandboxExecServerEnvironment } from "./sandbox-exec-server.js";
 import {
   clearCodexAppServerBinding,
+  clearCodexAppServerBindingForThread,
   readCodexAppServerBinding,
   type CodexAppServerThreadBinding,
 } from "./session-binding.js";
@@ -1278,11 +1279,16 @@ export async function runCodexAppServerAttempt(
     // projection.  A queued terminal event should suppress short false-idle
     // guards, while the full attempt watchdog still releases a wedged queue.
     const isNativeResponseStreamDelta = isNativeResponseStreamDeltaNotification(notification);
-    if (correlation.matchesActiveTurn !== false || isNativeResponseStreamDelta) {
+    const nativeResponseStreamDeltaMatchesActiveTurn =
+      isNativeResponseStreamDelta &&
+      (correlation.matchesActiveTurn === true ||
+        (isUnscopedCodexNotification(correlation) &&
+          canAttributeUnscopedNativeResponseDeltaToThisTurn(client)));
+    if (correlation.matchesActiveTurn !== false || nativeResponseStreamDeltaMatchesActiveTurn) {
       // Raw response deltas can stream large custom tool inputs before Codex
       // emits the app-server item/tool call notification we usually track.
-      // Count forwarded deltas as activity so the completion guard does not
-      // abort an actively generated side-effecting edit.
+      // Only unscoped deltas from a single-lease client are attributable here;
+      // concurrent leased turns receive the same broadcast notification.
       turnWatches.noteNotificationReceived(
         notification.method,
         isNativeResponseStreamDelta
@@ -1897,7 +1903,7 @@ export async function runCodexAppServerAttempt(
     if (shouldRetireClient) {
       void (async () => {
         // Timed-out native turns cannot be safely resumed on the same thread.
-        await clearCodexAppServerBinding(activeSessionFile);
+        await clearCodexAppServerBindingForThread(activeSessionFile, thread.threadId);
         await retireCodexAppServerClientAfterTimedOutTurn(client, {
           threadId: thread.threadId,
           turnId: activeTurnId,
@@ -2218,6 +2224,22 @@ async function clearCodexBindingAfterInvalidImagePayload(
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
+}
+
+function canAttributeUnscopedNativeResponseDeltaToThisTurn(client: CodexAppServerClient): boolean {
+  const activeLeases = client.getActiveSharedLeaseCountForUnscopedNotifications?.();
+  return activeLeases === undefined || activeLeases <= 1;
+}
+
+function isUnscopedCodexNotification(
+  correlation: ReturnType<typeof describeCodexNotificationCorrelation>,
+): boolean {
+  return (
+    !correlation.threadId &&
+    !correlation.turnId &&
+    !correlation.nestedTurnThreadId &&
+    !correlation.nestedTurnId
+  );
 }
 
 function shouldRetryContextEngineTurnOnFreshCodexThread(params: {
