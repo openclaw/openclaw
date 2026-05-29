@@ -25,6 +25,7 @@ import {
 import {
   resolveDefaultPluginNpmDir,
   resolveDefaultPluginExtensionsDir,
+  resolvePluginNpmPackageDir,
   resolvePluginInstallDir,
 } from "../../../plugins/install-paths.js";
 import { installPluginFromNpmSpec } from "../../../plugins/install.js";
@@ -114,20 +115,13 @@ function addConfiguredPluginId(ids: Set<string>, value: unknown): void {
   }
 }
 
-function addConfiguredAgentRuntimePluginIds(
-  ids: Set<string>,
-  cfg: OpenClawConfig,
-  env?: NodeJS.ProcessEnv,
-): void {
-  for (const runtime of collectConfiguredRuntimePluginIds(cfg, env ?? process.env, {
-    includeEnvRuntime: false,
-    includeLegacyAgentRuntimes: false,
-  })) {
+function addConfiguredAgentRuntimePluginIds(ids: Set<string>, cfg: OpenClawConfig): void {
+  for (const runtime of collectConfiguredRuntimePluginIds(cfg)) {
     addConfiguredPluginId(ids, runtime);
   }
 }
 
-function collectConfiguredPluginIds(cfg: OpenClawConfig, env?: NodeJS.ProcessEnv): Set<string> {
+function collectConfiguredPluginIds(cfg: OpenClawConfig): Set<string> {
   const ids = new Set<string>();
   const plugins = asObjectRecord(cfg.plugins);
   if (plugins?.enabled === false) {
@@ -147,7 +141,7 @@ function collectConfiguredPluginIds(cfg: OpenClawConfig, env?: NodeJS.ProcessEnv
       ids.add(installEntry.pluginId);
     }
   }
-  addConfiguredAgentRuntimePluginIds(ids, cfg, env);
+  addConfiguredAgentRuntimePluginIds(ids, cfg);
   return ids;
 }
 
@@ -233,8 +227,7 @@ function collectDownloadableInstallCandidates(params: {
   configuredChannelOwnerPluginIds?: ReadonlyMap<string, ReadonlySet<string>>;
   blockedPluginIds?: ReadonlySet<string>;
 }): DownloadableInstallCandidate[] {
-  const configuredPluginIds =
-    params.configuredPluginIds ?? collectConfiguredPluginIds(params.cfg, params.env);
+  const configuredPluginIds = params.configuredPluginIds ?? collectConfiguredPluginIds(params.cfg);
   const configuredChannelIds =
     params.configuredChannelIds ?? collectConfiguredChannelIds(params.cfg, params.env);
   const candidates = new Map<string, DownloadableInstallCandidate>();
@@ -610,6 +603,16 @@ function pathsEqual(left: string, right: string): boolean {
 }
 
 function resolveNpmPackageInstallPath(params: { packageName: string; npmRoot: string }): string {
+  return resolvePluginNpmPackageDir({
+    npmDir: params.npmRoot,
+    packageName: params.packageName,
+  });
+}
+
+function resolveLegacyNpmPackageInstallPath(params: {
+  packageName: string;
+  npmRoot: string;
+}): string {
   return path.join(params.npmRoot, "node_modules", ...params.packageName.split("/"));
 }
 
@@ -706,11 +709,20 @@ function resolveSafeBrokenOfficialInstallRemovalPath(params: {
   if (!parsedNpmSpec?.name) {
     return null;
   }
-  const expectedNpmPath = resolveNpmPackageInstallPath({
-    packageName: parsedNpmSpec.name,
-    npmRoot: resolveDefaultPluginNpmDir(params.env),
-  });
-  return pathsEqual(resolvedInstallPath, expectedNpmPath) ? resolvedInstallPath : null;
+  const npmRoot = resolveDefaultPluginNpmDir(params.env);
+  const expectedNpmPaths = [
+    resolveNpmPackageInstallPath({
+      packageName: parsedNpmSpec.name,
+      npmRoot,
+    }),
+    resolveLegacyNpmPackageInstallPath({
+      packageName: parsedNpmSpec.name,
+      npmRoot,
+    }),
+  ];
+  return expectedNpmPaths.some((expectedPath) => pathsEqual(resolvedInstallPath, expectedPath))
+    ? resolvedInstallPath
+    : null;
 }
 
 function recordMatchesBundledPackage(
@@ -936,7 +948,14 @@ function resolveExistingCandidateNpmPackagePath(params: {
     packageName: npmName,
     npmRoot: params.npmDir,
   });
-  return existsSync(packagePath) ? packagePath : null;
+  if (existsSync(packagePath)) {
+    return packagePath;
+  }
+  const legacyPackagePath = resolveLegacyNpmPackageInstallPath({
+    packageName: npmName,
+    npmRoot: params.npmDir,
+  });
+  return existsSync(legacyPackagePath) ? legacyPackagePath : null;
 }
 
 function resolveExistingCandidateClawHubPackagePath(params: {
@@ -1029,7 +1048,7 @@ export async function repairMissingConfiguredPluginInstalls(params: {
   return repairMissingPluginInstalls({
     cfg: params.cfg,
     env: params.env,
-    pluginIds: collectConfiguredPluginIds(params.cfg, params.env),
+    pluginIds: collectConfiguredPluginIds(params.cfg),
     channelIds: collectConfiguredChannelIds(params.cfg, params.env),
     blockedPluginIds: collectBlockedPluginIds(params.cfg),
     ...(params.baselineRecords ? { baselineRecords: params.baselineRecords } : {}),

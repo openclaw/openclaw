@@ -66,7 +66,10 @@ function configure() {
     defaults: {
       ...cfg.agents?.defaults,
       model: { primary: modelRef, fallbacks: [] },
-      agentRuntime: { id: "codex" },
+      models: {
+        ...cfg.agents?.defaults?.models,
+        [modelRef]: { agentRuntime: { id: "codex" } },
+      },
       workspace: path.join(state, "workspace"),
       skipBootstrap: true,
       timeoutSeconds: 420,
@@ -207,15 +210,28 @@ function codexInstallPath() {
   return record.installPath.replace(/^~(?=$|\/)/u, process.env.HOME);
 }
 
+function codexNpmProjectRoot() {
+  const installPath = codexInstallPath();
+  const packageRoot = "@openclaw/codex"
+    .split("/")
+    .reduce((current) => path.dirname(current), installPath);
+  return path.basename(packageRoot) === "node_modules"
+    ? path.dirname(packageRoot)
+    : managedNpmRoot();
+}
+
 function findPackageJson(packageName) {
   const parts = packageName.split("/");
+  const projectRoot = codexNpmProjectRoot();
   const candidates =
     packageName.startsWith("@") && parts.length === 2
       ? [
+          path.join(projectRoot, "node_modules", parts[0], parts[1], "package.json"),
           path.join(codexInstallPath(), "node_modules", parts[0], parts[1], "package.json"),
           path.join(managedNpmRoot(), "node_modules", parts[0], parts[1], "package.json"),
         ]
       : [
+          path.join(projectRoot, "node_modules", packageName, "package.json"),
           path.join(codexInstallPath(), "node_modules", packageName, "package.json"),
           path.join(managedNpmRoot(), "node_modules", packageName, "package.json"),
         ];
@@ -253,6 +269,7 @@ function assertNpmDeps() {
 function resolveCodexBin() {
   const commandName = process.platform === "win32" ? "codex.cmd" : "codex";
   const candidates = [
+    path.join(codexNpmProjectRoot(), "node_modules", ".bin", commandName),
     path.join(codexInstallPath(), "node_modules", ".bin", commandName),
     path.join(managedNpmRoot(), "node_modules", ".bin", commandName),
   ];

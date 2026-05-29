@@ -38,6 +38,9 @@ export async function buildDiffsViewerRuntime(targetName) {
     target: "es2020",
     format: "esm",
     minify: true,
+    define: {
+      NaN: "Number.NaN",
+    },
     legalComments: "none",
     outfile: outputPath,
     write: false,

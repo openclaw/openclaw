@@ -47,6 +47,8 @@ Replace the label with `ai.openclaw.<profile>` when running a named profile.
 If the LaunchAgent isn't installed, enable it from the app or run
 `openclaw gateway install`.
 
+If the gateway repeatedly disappears for minutes to hours and only resumes when you touch the Control UI or SSH into the host, see the troubleshooting note for macOS Maintenance Sleep / `ENETDOWN` crashes and launchd's respawn-protection gate in [Gateway troubleshooting](/gateway/troubleshooting#macos-gateway-silently-stops-responding-then-resumes-when-you-touch-the-dashboard).
+
 ## Node capabilities (mac)
 
 The macOS app presents itself as a node. Common commands:

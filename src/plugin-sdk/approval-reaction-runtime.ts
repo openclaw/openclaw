@@ -1,3 +1,7 @@
+/**
+ * @deprecated Compatibility subpath for shipped approval reaction helpers.
+ * New plugin code should use the focused approval runtime/reply subpaths.
+ */
 import { sanitizeForPromptLiteral } from "../agents/sanitize-for-prompt.js";
 import { formatApprovalDisplayPath } from "../infra/approval-display-paths.js";
 import { buildPendingApprovalView } from "../infra/approval-view-model.js";
@@ -13,9 +17,8 @@ import {
   buildApprovalPendingReplyPayload,
   buildPluginApprovalPendingReplyPayload,
 } from "./approval-renderers.js";
-import type { ReplyPayload } from "./reply-payload.js";
-
 export { shouldSuppressLocalNativeExecApprovalPrompt } from "./approval-native-helpers.js";
+import type { ReplyPayload } from "./reply-payload.js";
 
 type ApprovalKind = "exec" | "plugin";
 type KeyedStore<TValue> = {
@@ -206,12 +209,17 @@ function buildManualInstructionSection(params: {
   return lines;
 }
 
-function listDecisionActions(actions: PendingApprovalView["actions"]): ExecApprovalReplyDecision[] {
-  return normalizeDecisionList(
-    actions.flatMap((action) => (action.kind === "decision" ? [action.decision] : [])),
+function buildCommandActionInstructionSection(actions: PendingApprovalView["actions"]): string[] {
+  return actions.flatMap((action) =>
+    action.command.trim() ? [`${action.label}: ${action.command}`] : [],
   );
 }
 
+function listDecisionActions(actions: PendingApprovalView["actions"]): ExecApprovalReplyDecision[] {
+  return normalizeDecisionList(
+    actions.flatMap((action) => ("decision" in action && action.decision ? [action.decision] : [])),
+  );
+}
 function buildApprovalReactionPromptText(params: {
   view: PendingApprovalView;
   nowMs: number;
@@ -277,6 +285,10 @@ function buildApprovalReactionPromptText(params: {
   }
   if (params.reactionHint) {
     sections.push(params.reactionHint);
+  }
+  const commandInstructions = buildCommandActionInstructionSection(view.actions);
+  if (commandInstructions.length > 0) {
+    sections.push(commandInstructions.join("\n"));
   }
   const manualInstructions = buildManualInstructionSection({
     approvalId: view.approvalId,

@@ -1,14 +1,8 @@
-import type { StreamFn } from "@earendil-works/pi-agent-core";
-import {
-  calculateCost,
-  getEnvApiKey,
-  parseStreamingJson,
-  type AnthropicOptions,
-  type Context,
-  type Model,
-  type SimpleStreamOptions,
-  type ThinkingLevel,
-} from "@earendil-works/pi-ai";
+import { getEnvApiKey } from "../llm/env-api-keys.js";
+import { calculateCost } from "../llm/model-utils.js";
+import type { AnthropicOptions } from "../llm/providers/anthropic.js";
+import type { Context, Model, SimpleStreamOptions, ThinkingLevel } from "../llm/types.js";
+import { parseStreamingJson } from "../llm/utils/json-parse.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
@@ -19,6 +13,7 @@ import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dyn
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
+import type { StreamFn } from "./runtime/index.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
 import {
   coerceTransportToolCallArguments,
@@ -385,7 +380,10 @@ function convertAnthropicMessages(
               text: sanitizeTransportPayloadText(block.thinking),
             });
           } else {
-            const thinking = sanitizeTransportPayloadText(block.thinking);
+            const thinking =
+              block.thinkingSignature === "reasoning_content"
+                ? sanitizeTransportPayloadText(block.thinking)
+                : block.thinking;
             if (block.thinkingSignature === "reasoning_content") {
               if (allowReasoningContentReplay) {
                 blocks.push({
@@ -961,6 +959,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         );
         stream.push({ type: "start", partial: output as never });
         const blocks = output.content;
+        const signatureDeltaIndexes = new Set<number>();
         const allowReasoningContentReplay = supportsReasoningContentReplay(model);
         const reasoningContentThinkingBlocks = new Map<number, number>();
         const reasoningContentTextBlocks = new Map<number, number>();
@@ -1126,9 +1125,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             }
             if (contentBlock?.type === "thinking") {
               const thinking =
-                typeof contentBlock.thinking === "string"
-                  ? sanitizeTransportPayloadText(contentBlock.thinking)
-                  : "";
+                typeof contentBlock.thinking === "string" ? contentBlock.thinking : "";
               const block: TransportContentBlock = {
                 type: "thinking",
                 thinking,
@@ -1295,7 +1292,12 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               delta?.type === "signature_delta" &&
               typeof delta.signature === "string"
             ) {
-              block.thinkingSignature = delta.signature;
+              const signatureIndex = eventIndexKey(event.index);
+              if (!signatureDeltaIndexes.has(signatureIndex)) {
+                signatureDeltaIndexes.add(signatureIndex);
+                block.thinkingSignature = "";
+              }
+              block.thinkingSignature = (block.thinkingSignature || "") + delta.signature;
             }
             continue;
           }

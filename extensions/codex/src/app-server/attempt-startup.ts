@@ -82,9 +82,12 @@ export async function startCodexAttemptThread(params: {
   buildAttemptParams: () => EmbeddedRunAttemptParams;
   sessionAgentId: string;
   effectiveWorkspace: string;
+  effectiveCwd: string;
   dynamicTools: CodexDynamicToolSpec[];
   developerInstructions: string | undefined;
-  finalConfigPatch: Parameters<typeof startOrResumeThread>[0]["finalConfigPatch"];
+  finalConfigPatch?: Parameters<typeof startOrResumeThread>[0]["finalConfigPatch"];
+  buildFinalConfigPatch?: Parameters<typeof startOrResumeThread>[0]["buildFinalConfigPatch"];
+  nativeHookRelayGeneration?: string;
   bundleMcpThreadConfig: CodexBundleMcpThreadConfig;
   nativeToolSurfaceEnabled: boolean;
   sandboxExecServerEnabled: boolean;
@@ -93,10 +96,11 @@ export async function startCodexAttemptThread(params: {
   startupTimeoutMs: number;
   signal: AbortSignal;
   onStartupTimeout: () => void | Promise<void>;
+  spawnedBy: EmbeddedRunAttemptParams["spawnedBy"];
 }): Promise<StartCodexAttemptThreadResult> {
   let pluginAppServer = params.appServer;
   let releaseSharedClientLease: (() => void) | undefined;
-  let startupClientForCleanup: CodexAppServerClient | undefined;
+  let startupClientForAbandonedRequestCleanup: CodexAppServerClient | undefined;
   let releaseStartupResourcesOnTimeout: (() => Promise<void>) | undefined;
   try {
     const startupResult = await withCodexStartupTimeout({
@@ -181,7 +185,7 @@ export async function startCodexAttemptThread(params: {
             };
             releaseSharedClientLease = startupClientLease;
             attemptedClient = startupClient;
-            startupClientForCleanup = startupClient;
+            startupClientForAbandonedRequestCleanup = startupClient;
             await ensureCodexComputerUse({
               client: startupClient,
               pluginConfig: params.pluginConfig,
@@ -235,7 +239,7 @@ export async function startCodexAttemptThread(params: {
               params.nativeToolSurfaceEnabled,
             );
             const startupExecutionCwd = resolveCodexAppServerExecutionCwd({
-              effectiveWorkspace: params.effectiveWorkspace,
+              effectiveCwd: params.effectiveCwd,
               environment: startupSandboxEnvironment,
               nativeToolSurfaceEnabled: params.nativeToolSurfaceEnabled,
             });
@@ -253,6 +257,8 @@ export async function startCodexAttemptThread(params: {
                 developerInstructions: params.developerInstructions,
                 config: threadConfig,
                 finalConfigPatch: params.finalConfigPatch,
+                buildFinalConfigPatch: params.buildFinalConfigPatch,
+                nativeHookRelayGeneration: params.nativeHookRelayGeneration,
                 nativeCodeModeEnabled: params.nativeToolSurfaceEnabled,
                 nativeCodeModeOnlyEnabled: params.appServer.codeModeOnly,
                 userMcpServersEnabled: params.nativeToolSurfaceEnabled,
@@ -328,8 +334,8 @@ export async function startCodexAttemptThread(params: {
             }
             const failedClient = attemptedClient;
             const clearedSharedClient = clearSharedCodexAppServerClientIfCurrent(failedClient);
-            if (startupClientForCleanup === failedClient) {
-              startupClientForCleanup = undefined;
+            if (startupClientForAbandonedRequestCleanup === failedClient) {
+              startupClientForAbandonedRequestCleanup = undefined;
             }
             attemptedClient = undefined;
             if (attempt >= CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS) {
@@ -359,7 +365,7 @@ export async function startCodexAttemptThread(params: {
         throw new Error("codex app-server startup retry loop exited unexpectedly");
       },
     });
-    startupClientForCleanup = undefined;
+    startupClientForAbandonedRequestCleanup = undefined;
     if (!releaseSharedClientLease) {
       throw new Error("codex app-server startup succeeded without a shared client lease");
     }
@@ -369,7 +375,38 @@ export async function startCodexAttemptThread(params: {
       releaseSharedClientLease,
     };
   } catch (error) {
-    clearSharedCodexAppServerClientIfCurrent(startupClientForCleanup);
+    if (
+      params.signal.aborted ||
+      shouldClearSharedClientAfterStartupRace(error) ||
+      shouldClearSharedClientAfterStartupFailure({
+        error,
+        spawnedBy: params.spawnedBy,
+      })
+    ) {
+      clearSharedCodexAppServerClientIfCurrent(startupClientForAbandonedRequestCleanup);
+    }
     throw error;
   }
+}
+
+function shouldClearSharedClientAfterStartupRace(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error.message === "codex app-server startup timed out" ||
+      error.message === "codex app-server startup aborted" ||
+      error.message.endsWith(" timed out"))
+  );
+}
+
+function shouldClearSharedClientAfterStartupFailure(params: {
+  error: unknown;
+  spawnedBy: EmbeddedRunAttemptParams["spawnedBy"];
+}): boolean {
+  if (!(params.error instanceof Error)) {
+    return !params.spawnedBy;
+  }
+  if (params.error.message.includes("write EPIPE")) {
+    return true;
+  }
+  return !params.spawnedBy;
 }

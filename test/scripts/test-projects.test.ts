@@ -207,6 +207,20 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
+  it("routes control UI i18n script changes through its regression test", () => {
+    expect(resolveChangedTestTargetPlan(["scripts/control-ui-i18n.ts"])).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/control-ui-i18n.test.ts"],
+    });
+  });
+
+  it("routes Z.AI fallback repro script changes through its regression test", () => {
+    expect(resolveChangedTestTargetPlan(["scripts/zai-fallback-repro.ts"])).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/zai-fallback-repro.test.ts"],
+    });
+  });
+
   it("routes group visible reply config changes through channel delivery regressions", () => {
     expect(
       resolveChangedTestTargetPlan([
@@ -375,7 +389,7 @@ describe("scripts/test-projects changed-target routing", () => {
       findUnmatchedExplicitTestTargets(
         [
           "test/vitest/vitest.agents-core.config.ts",
-          "test/vitest/vitest.agents-pi-embedded.config.ts",
+          "test/vitest/vitest.agents-embedded-agent.config.ts",
           "test/vitest/vitest.agents-support.config.ts",
           "test/vitest/vitest.agents-tools.config.ts",
         ],
@@ -1051,7 +1065,7 @@ describe("scripts/test-projects changed-target routing", () => {
 
   it.each([
     "test/vitest/vitest.agents-core.config.ts",
-    "test/vitest/vitest.agents-pi-embedded.config.ts",
+    "test/vitest/vitest.agents-embedded-agent.config.ts",
     "test/vitest/vitest.agents-support.config.ts",
     "test/vitest/vitest.agents-tools.config.ts",
   ])("routes split agents vitest config %s to itself", (target) => {
@@ -1471,7 +1485,7 @@ describe("scripts/test-projects full-suite sharding", () => {
       "test/vitest/vitest.commands-light.config.ts",
       "test/vitest/vitest.commands.config.ts",
       "test/vitest/vitest.agents-core.config.ts",
-      "test/vitest/vitest.agents-pi-embedded.config.ts",
+      "test/vitest/vitest.agents-embedded-agent.config.ts",
       "test/vitest/vitest.agents-support.config.ts",
       "test/vitest/vitest.agents-tools.config.ts",
       "test/vitest/vitest.daemon.config.ts",

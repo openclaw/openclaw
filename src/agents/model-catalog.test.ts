@@ -1,8 +1,10 @@
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
+import { PLUGIN_MODEL_CATALOG_GENERATED_BY } from "./plugin-model-catalog.js";
 
-type PiSdkModule = typeof import("./pi-model-discovery.js");
+type AgentModelDiscoveryModule = typeof import("./agent-model-discovery.js");
 
 let setModelCatalogImportForTest: typeof import("./model-catalog.js").setModelCatalogImportForTest;
 let findModelCatalogEntry: typeof import("./model-catalog.js").findModelCatalogEntry;
@@ -47,33 +49,43 @@ function mockCatalogImportFailThenRecover() {
     return {
       discoverAuthStorage: () => ({}),
       AuthStorage: function AuthStorage() {},
+      discoverModels: () => ({
+        getAll() {
+          return [{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }];
+        },
+      }),
       ModelRegistry: class {
         getAll() {
           return [{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }];
         }
       },
-    } as unknown as PiSdkModule;
+    } as unknown as AgentModelDiscoveryModule;
   });
   return () => call;
 }
 
-function mockPiDiscoveryModels(models: unknown[]) {
+function mockAgentDiscoveryModels(models: unknown[]) {
   setModelCatalogImportForTest(
     async () =>
       ({
         discoverAuthStorage: () => ({}),
         AuthStorage: function AuthStorage() {},
+        discoverModels: () => ({
+          getAll() {
+            return models;
+          },
+        }),
         ModelRegistry: class {
           getAll() {
             return models;
           }
         },
-      }) as unknown as PiSdkModule,
+      }) as unknown as AgentModelDiscoveryModule,
   );
 }
 
 function mockSingleOpenAiCatalogModel() {
-  mockPiDiscoveryModels([{ id: "gpt-4.1", provider: "openai", name: "GPT-4.1" }]);
+  mockAgentDiscoveryModels([{ id: "gpt-4.1", provider: "openai", name: "GPT-4.1" }]);
 }
 
 function emptyPluginMetadataSnapshot() {
@@ -83,6 +95,16 @@ function emptyPluginMetadataSnapshot() {
     index: {
       policyHash: "test-policy",
       plugins: [],
+    },
+    owners: {
+      channels: new Map(),
+      channelConfigs: new Map(),
+      providers: new Map(),
+      modelCatalogProviders: new Map(),
+      cliBackends: new Map(),
+      setupProviders: new Map(),
+      commandAliases: new Map(),
+      contracts: new Map(),
     },
     plugins: [],
   };
@@ -219,13 +241,19 @@ describe("loadModelCatalog", () => {
       ensureOpenClawModelsJson: ensureOpenClawModelsJsonMock,
     }));
     vi.doMock("./agent-scope.js", () => ({
+      resolveAgentWorkspaceDir: (cfg: OpenClawConfig, agentId: string) => {
+        const entry = cfg.agents?.list?.find((entry) => entry.id === agentId);
+        return entry?.workspace ?? cfg.agents?.defaults?.workspace ?? "/tmp/openclaw-workspace";
+      },
       resolveDefaultAgentDir: () => "/tmp/openclaw",
+      resolveDefaultAgentId: (cfg: OpenClawConfig) =>
+        cfg.agents?.list?.find((entry) => entry.default)?.id ?? cfg.agents?.list?.[0]?.id ?? "main",
     }));
     vi.doMock("../plugins/provider-runtime.runtime.js", () => ({
       augmentModelCatalogWithProviderPlugins: vi.fn().mockResolvedValue([]),
     }));
-    currentPluginMetadataSnapshotMock = vi.fn<(...args: unknown[]) => unknown>();
-    loadPluginMetadataSnapshotMock = vi.fn<(...args: unknown[]) => unknown>();
+    currentPluginMetadataSnapshotMock = vi.fn(() => emptyPluginMetadataSnapshot());
+    loadPluginMetadataSnapshotMock = vi.fn(() => emptyPluginMetadataSnapshot());
     vi.doMock("../plugins/current-plugin-metadata-snapshot.js", () => ({
       getCurrentPluginMetadataSnapshot: currentPluginMetadataSnapshotMock,
     }));
@@ -295,9 +323,43 @@ describe("loadModelCatalog", () => {
     }
   });
 
+  it("uses the resolved default agent workspace for registry discovery", async () => {
+    const discoverModels = vi.fn(() => ({
+      getAll() {
+        return [];
+      },
+    }));
+    setModelCatalogImportForTest(
+      async () =>
+        ({
+          discoverAuthStorage: () => ({}),
+          AuthStorage: function AuthStorage() {},
+          discoverModels,
+          ModelRegistry: class {
+            getAll() {
+              return [];
+            }
+          },
+        }) as unknown as AgentModelDiscoveryModule,
+    );
+    const config = {
+      agents: {
+        list: [{ id: "workspace-agent", default: true, workspace: "/tmp/workspace-agent" }],
+      },
+    } as OpenClawConfig;
+
+    await loadModelCatalog({ config });
+
+    expect(discoverModels).toHaveBeenCalledWith(
+      expect.anything(),
+      "/tmp/openclaw",
+      expect.objectContaining({ workspaceDir: "/tmp/workspace-agent" }),
+    );
+  });
+
   it("reloads dynamic registry entries after clearing the cache", async () => {
     const models = [{ id: "existing", name: "Existing", provider: "ollama" }];
-    mockPiDiscoveryModels(models);
+    mockAgentDiscoveryModels(models);
 
     const first = await loadModelCatalog({ config: {} as OpenClawConfig });
     expect(first).toStrictEqual([
@@ -314,7 +376,7 @@ describe("loadModelCatalog", () => {
 
     models.push({ id: "glm-5.1:cloud", name: "GLM 5.1 Cloud", provider: "ollama" });
     resetModelCatalogCacheForTest();
-    mockPiDiscoveryModels(models);
+    mockAgentDiscoveryModels(models);
 
     const second = await loadModelCatalog({ config: {} as OpenClawConfig });
     expect(second).toStrictEqual([
@@ -347,6 +409,20 @@ describe("loadModelCatalog", () => {
           ({
             discoverAuthStorage: () => ({}),
             AuthStorage: function AuthStorage() {},
+            discoverModels: () => ({
+              getAll() {
+                return [
+                  { id: "gpt-4.1", name: "GPT-4.1", provider: "openai" },
+                  {
+                    get id() {
+                      throw new Error("boom");
+                    },
+                    provider: "openai",
+                    name: "bad",
+                  },
+                ];
+              },
+            }),
             ModelRegistry: class {
               getAll() {
                 return [
@@ -361,7 +437,7 @@ describe("loadModelCatalog", () => {
                 ];
               }
             },
-          }) as unknown as PiSdkModule,
+          }) as unknown as AgentModelDiscoveryModule,
       );
 
       const result = await loadModelCatalog({ config: {} as OpenClawConfig });
@@ -373,10 +449,12 @@ describe("loadModelCatalog", () => {
   });
 
   it("does not prepare models.json or import provider discovery when loading fallback catalog in read-only mode", async () => {
-    const importPiSdk = vi.fn(async () => {
+    const importAgentDiscoveryModule = vi.fn(async () => {
       throw new Error("provider discovery should not load");
     });
-    setModelCatalogImportForTest(importPiSdk as unknown as () => Promise<PiSdkModule>);
+    setModelCatalogImportForTest(
+      importAgentDiscoveryModule as unknown as () => Promise<AgentModelDiscoveryModule>,
+    );
     currentPluginMetadataSnapshotMock.mockReturnValueOnce(undefined);
     loadPluginMetadataSnapshotMock.mockImplementationOnce(() => {
       throw new Error("metadata scan should not run");
@@ -409,7 +487,7 @@ describe("loadModelCatalog", () => {
     const entry = requireCatalogEntry(result, "openai", "gpt-test");
     expect(entry.name).toBe("GPT Test");
     expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
-    expect(importPiSdk).not.toHaveBeenCalled();
+    expect(importAgentDiscoveryModule).not.toHaveBeenCalled();
     expect(loadPluginMetadataSnapshotMock).not.toHaveBeenCalled();
   });
 
@@ -464,6 +542,79 @@ describe("loadModelCatalog", () => {
     expect(augmentCatalogMock).not.toHaveBeenCalled();
   });
 
+  it("loads generated plugin catalog rows in read-only mode", async () => {
+    const catalogPath = "/tmp/openclaw/plugins/read-only-shard/catalog.json";
+    mkdirSync("/tmp/openclaw/plugins/read-only-shard", { recursive: true });
+    writeFileSync(catalogPath, "{}");
+    try {
+      readFileMock.mockImplementation(async (pathname: string) => {
+        if (pathname.endsWith("models.json")) {
+          return JSON.stringify({ providers: {} });
+        }
+        if (pathname === catalogPath) {
+          return JSON.stringify({
+            generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+            providers: {
+              zai: {
+                models: [
+                  {
+                    id: "glm-5.1",
+                    name: "GLM 5.1",
+                    reasoning: true,
+                    contextWindow: 131072,
+                    input: ["text"],
+                  },
+                ],
+              },
+            },
+          });
+        }
+        throw Object.assign(new Error("not found"), { code: "ENOENT" });
+      });
+      loadPluginMetadataSnapshotMock.mockReturnValueOnce({
+        ...emptyPluginMetadataSnapshot(),
+        index: {
+          policyHash: "test-policy",
+          plugins: [{ pluginId: "read-only-shard", enabled: true }],
+        },
+        normalizePluginId: (id: string) => id,
+        owners: {
+          providers: new Map([["zai", ["read-only-shard"]]]),
+          modelCatalogProviders: new Map([["zai", ["read-only-shard"]]]),
+          setupProviders: new Map(),
+        },
+      });
+
+      const result = await loadModelCatalog({
+        config: {
+          agents: {
+            list: [{ id: "workspace-agent", default: true, workspace: "/tmp/read-only-workspace" }],
+          },
+        } as OpenClawConfig,
+        readOnly: true,
+      });
+
+      expect(requireCatalogEntry(result, "zai", "glm-5.1")).toMatchObject({
+        provider: "zai",
+        id: "glm-5.1",
+        name: "GLM 5.1",
+        reasoning: true,
+        contextWindow: 131072,
+      });
+      expect(
+        loadPluginMetadataSnapshotMock.mock.calls.some(([call]) => {
+          return (
+            typeof call === "object" &&
+            call !== null &&
+            (call as { workspaceDir?: string }).workspaceDir === "/tmp/read-only-workspace"
+          );
+        }),
+      ).toBe(true);
+    } finally {
+      rmSync("/tmp/openclaw/plugins/read-only-shard", { recursive: true, force: true });
+    }
+  });
+
   it("falls back to manifest catalog rows when persisted read-only catalog has no model rows", async () => {
     readFileMock.mockResolvedValueOnce(
       JSON.stringify({
@@ -504,10 +655,12 @@ describe("loadModelCatalog", () => {
         },
       ],
     });
-    const importPiSdk = vi.fn(async () => {
+    const importAgentDiscoveryModule = vi.fn(async () => {
       throw new Error("provider discovery should not load");
     });
-    setModelCatalogImportForTest(importPiSdk as unknown as () => Promise<PiSdkModule>);
+    setModelCatalogImportForTest(
+      importAgentDiscoveryModule as unknown as () => Promise<AgentModelDiscoveryModule>,
+    );
 
     const result = await loadModelCatalog({ config: {} as OpenClawConfig, readOnly: true });
 
@@ -521,7 +674,7 @@ describe("loadModelCatalog", () => {
       },
     ]);
     expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
-    expect(importPiSdk).not.toHaveBeenCalled();
+    expect(importAgentDiscoveryModule).not.toHaveBeenCalled();
   });
 
   it("preserves registry defaults for minimal persisted read-only catalog rows", async () => {
@@ -703,7 +856,7 @@ describe("loadModelCatalog", () => {
   it("loads manifest model id policies once for discovered catalog rows", async () => {
     currentPluginMetadataSnapshotMock.mockReturnValue(undefined);
     loadPluginMetadataSnapshotMock.mockReturnValue(modelIdNormalizationSnapshot());
-    mockPiDiscoveryModels([
+    mockAgentDiscoveryModels([
       { provider: "custom", id: "model-a", name: "Model A" },
       { provider: "custom", id: "model-b", name: "Model B" },
       { provider: "custom", id: "model-c", name: "Model C" },
@@ -759,7 +912,7 @@ describe("loadModelCatalog", () => {
   });
 
   it("does not synthesize stale openai-codex/gpt-5.3-codex-spark entries from gpt-5.4", async () => {
-    mockPiDiscoveryModels([
+    mockAgentDiscoveryModels([
       {
         id: "gpt-5.4",
         provider: "openai-codex",
@@ -782,7 +935,7 @@ describe("loadModelCatalog", () => {
   });
 
   it("filters stale gpt-5.3-codex-spark built-ins from the catalog", async () => {
-    mockPiDiscoveryModels([
+    mockAgentDiscoveryModels([
       {
         id: "gpt-5.3-codex-spark",
         provider: "openai",
@@ -816,7 +969,7 @@ describe("loadModelCatalog", () => {
   });
 
   it("keeps available openai-codex 5.1/5.2/5.3 built-ins in the catalog", async () => {
-    mockPiDiscoveryModels([
+    mockAgentDiscoveryModels([
       {
         id: "gpt-5.1-codex-mini",
         provider: "openai-codex",
@@ -861,7 +1014,7 @@ describe("loadModelCatalog", () => {
   });
 
   it("does not synthesize gpt-5.4 OpenAI forward-compat entries from template models", async () => {
-    mockPiDiscoveryModels([
+    mockAgentDiscoveryModels([
       {
         id: "gpt-5.2",
         provider: "openai",
@@ -1082,7 +1235,7 @@ describe("loadModelCatalog", () => {
   });
 
   it("overlays configured model compat onto discovered catalog rows", async () => {
-    mockPiDiscoveryModels([
+    mockAgentDiscoveryModels([
       {
         id: "Qwen/Qwen3-8B",
         name: "Qwen3 8B",
@@ -1244,8 +1397,8 @@ describe("loadModelCatalog", () => {
     expect(entry.contextWindow).toBe(128_000);
   });
 
-  it("dedupes configured models against discovered provider aliases", async () => {
-    mockPiDiscoveryModels([{ id: "glm-5", provider: "z.ai", name: "GLM-5" }]);
+  it("dedupes configured models without rewriting provider ids", async () => {
+    mockAgentDiscoveryModels([{ id: "glm-5", provider: "z.ai", name: "GLM-5" }]);
 
     const result = await loadModelCatalog({
       config: {
@@ -1273,9 +1426,9 @@ describe("loadModelCatalog", () => {
     const matches = result.filter((entry) => findModelInCatalog([entry], "z-ai", "glm-5"));
     expect(matches).toHaveLength(1);
     const match = matches[0];
-    expect(match?.provider).toBe("z.ai");
+    expect(match?.provider).toBe("z-ai");
     expect(match?.id).toBe("glm-5");
-    expect(match?.name).toBe("GLM-5");
+    expect(match?.name).toBe("Configured GLM-5");
   });
 
   it("does not add unrelated models when provider plugins return nothing", async () => {
@@ -1289,7 +1442,7 @@ describe("loadModelCatalog", () => {
   });
 
   it("does not duplicate provider-owned supplemental models already present in ModelRegistry", async () => {
-    mockPiDiscoveryModels([
+    mockAgentDiscoveryModels([
       {
         id: "kilo/auto",
         provider: "kilocode",
@@ -1316,14 +1469,10 @@ describe("loadModelCatalog", () => {
     expect(matches[0]?.name).toBe("Kilo Auto");
   });
 
-  it("matches models across canonical provider aliases", () => {
+  it("does not match models across provider id variants", () => {
     expect(
       findModelInCatalog([{ provider: "z.ai", id: "glm-5", name: "GLM-5" }], "z-ai", "glm-5"),
-    ).toEqual({
-      provider: "z.ai",
-      id: "glm-5",
-      name: "GLM-5",
-    });
+    ).toBeUndefined();
   });
 
   it("resolves catalog entries with explicit providers and unique providerless matches", () => {

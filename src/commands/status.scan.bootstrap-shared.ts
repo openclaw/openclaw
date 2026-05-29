@@ -65,6 +65,8 @@ type StatusScanCoreBootstrapParams<TAgentStatus> = {
   skipUpdateCheck?: boolean;
   fetchGitUpdate?: boolean;
   includeRegistryUpdate?: boolean;
+  includeLocalStatusRpcFallback?: boolean;
+  gatewayProbeTimeoutMs?: number;
   getTailnetHostname: (runner: StatusScanExecRunner) => Promise<string | null>;
   getUpdateCheckResult: (params: {
     timeoutMs: number;
@@ -84,13 +86,15 @@ export async function createStatusScanCoreBootstrap<TAgentStatus>(
     hasConfiguredChannels: params.hasConfiguredChannels,
     all: params.opts.all,
   });
-  const updateTimeoutMs = params.opts.all ? 6500 : 2500;
+  const statusTimeoutMs = params.opts.timeoutMs ?? 10_000;
+  const updateTimeoutMs = Math.min(params.opts.all ? 6500 : 2500, statusTimeoutMs);
+  const tailscaleTimeoutMs = Math.min(1200, statusTimeoutMs);
   const tailscaleDnsPromise =
     tailscaleMode === "off"
       ? Promise.resolve<string | null>(null)
       : params
           .getTailnetHostname((cmd, args) =>
-            runExec(cmd, args, { timeoutMs: 1200, maxBuffer: 200_000 }),
+            runExec(cmd, args, { timeoutMs: tailscaleTimeoutMs, maxBuffer: 200_000 }),
           )
           .catch(() => null);
   const skipNetworkUpdate = skipColdStartNetworkChecks || params.skipUpdateCheck === true;
@@ -109,7 +113,11 @@ export async function createStatusScanCoreBootstrap<TAgentStatus>(
     cfg: params.cfg,
     opts: {
       ...params.opts,
+      ...(params.gatewayProbeTimeoutMs !== undefined
+        ? { timeoutMs: params.gatewayProbeTimeoutMs }
+        : {}),
       ...(skipColdStartNetworkChecks ? { skipProbe: true } : {}),
+      localStatusRpcFallback: params.includeLocalStatusRpcFallback !== false,
     },
   });
 

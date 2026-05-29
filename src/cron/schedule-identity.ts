@@ -1,14 +1,12 @@
-import { asFiniteNumber } from "../shared/number-coercion.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import type { CronJob } from "./types.js";
+import { coerceFiniteScheduleNumber } from "./schedule-number.js";
 
 function readString(record: Record<string, unknown>, key: string): string | undefined {
   return normalizeOptionalString(record[key]);
 }
 
 function readNumber(record: Record<string, unknown>, key: string): number | undefined {
-  const value = record[key];
-  return asFiniteNumber(value);
+  return coerceFiniteScheduleNumber(record[key]);
 }
 
 function schedulePayloadFromRecord(
@@ -77,8 +75,8 @@ export function tryCronScheduleIdentity(
 }
 
 export function cronSchedulingInputsEqual(
-  previous: Pick<CronJob, "schedule"> & { enabled?: unknown },
-  next: Pick<CronJob, "schedule"> & { enabled?: unknown },
+  previous: { schedule?: unknown; enabled?: unknown },
+  next: { schedule?: unknown; enabled?: unknown },
 ): boolean {
   const previousIdentity = tryCronScheduleIdentity(previous as Record<string, unknown>);
   const nextIdentity = tryCronScheduleIdentity(next as Record<string, unknown>);

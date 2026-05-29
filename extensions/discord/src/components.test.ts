@@ -106,6 +106,95 @@ describe("discord components", () => {
     ).toThrow("options");
   });
 
+  it("rejects malformed component count and length limits", () => {
+    expect(() =>
+      readDiscordComponentSpec({
+        blocks: [
+          {
+            type: "actions",
+            select: {
+              type: "string",
+              minValues: -1,
+              options: [{ label: "One", value: "one" }],
+            },
+          },
+        ],
+      }),
+    ).toThrow("components.blocks[0].select.minValues");
+
+    expect(() =>
+      readDiscordComponentSpec({
+        modal: {
+          title: "Details",
+          fields: [{ type: "text", label: "Name", maxLength: 0 }],
+        },
+      }),
+    ).toThrow("components.modal.fields[0].maxLength");
+
+    expect(() =>
+      readDiscordComponentSpec({
+        modal: {
+          title: "Details",
+          fields: [
+            {
+              type: "select",
+              label: "Priority",
+              minValues: 0,
+              options: [{ label: "High", value: "high" }],
+            },
+          ],
+        },
+      }),
+    ).toThrow("components.modal.fields[0].minValues");
+
+    expect(() =>
+      readDiscordComponentSpec({
+        modal: {
+          title: "Details",
+          fields: [
+            {
+              type: "checkbox",
+              label: "Choices",
+              maxValues: 25,
+              options: [{ label: "One", value: "one" }],
+            },
+          ],
+        },
+      }),
+    ).toThrow("components.modal.fields[0].maxValues");
+
+    expect(() =>
+      readDiscordComponentSpec({
+        blocks: [
+          {
+            type: "actions",
+            select: {
+              type: "string",
+              maxValues: 0,
+              options: [{ label: "One", value: "one" }],
+            },
+          },
+        ],
+      }),
+    ).toThrow("components.blocks[0].select.maxValues");
+
+    expect(() =>
+      readDiscordComponentSpec({
+        modal: {
+          title: "Details",
+          fields: [
+            {
+              type: "radio",
+              label: "Choice",
+              minValues: 1,
+              options: [{ label: "One", value: "one" }],
+            },
+          ],
+        },
+      }),
+    ).toThrow("components.modal.fields[0].minValues/maxValues");
+  });
+
   it("requires attachment references for file blocks", () => {
     expect(() =>
       readDiscordComponentSpec({

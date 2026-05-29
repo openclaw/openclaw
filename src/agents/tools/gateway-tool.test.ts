@@ -22,7 +22,10 @@ const {
     },
     threadId: "thread-42",
   })),
-  formatDoctorNonInteractiveHintMock: vi.fn(() => "Run: openclaw doctor --non-interactive"),
+  formatDoctorNonInteractiveHintMock: vi.fn(
+    () =>
+      "Recommended follow-up: run openclaw doctor --non-interactive in a terminal or approvals-capable OpenClaw surface.",
+  ),
   writeRestartSentinelMock: vi.fn(async (_payload: RestartSentinelPayload) => "/tmp/restart"),
   removeRestartSentinelFileMock: vi.fn(async (_path: string | null | undefined) => undefined),
   scheduleGatewaySigusr1RestartMock: vi.fn((_opts?: ScheduleGatewayRestartArgs) => ({
@@ -98,7 +101,9 @@ describe("gateway tool restart continuation", () => {
       threadId: "thread-42",
     });
     formatDoctorNonInteractiveHintMock.mockReset();
-    formatDoctorNonInteractiveHintMock.mockReturnValue("Run: openclaw doctor --non-interactive");
+    formatDoctorNonInteractiveHintMock.mockReturnValue(
+      "Recommended follow-up: run openclaw doctor --non-interactive in a terminal or approvals-capable OpenClaw surface.",
+    );
     writeRestartSentinelMock.mockReset();
     writeRestartSentinelMock.mockResolvedValue("/tmp/restart");
     removeRestartSentinelFileMock.mockClear();
@@ -115,6 +120,21 @@ describe("gateway tool restart continuation", () => {
       };
     };
     expect(parameters.properties?.continuationKind).toBeUndefined();
+  });
+
+  it("advertises restart delays as non-negative integers", async () => {
+    const tool = createGatewayTool();
+
+    const parameters = tool.parameters as {
+      properties?: {
+        delayMs?: { minimum?: number; type?: string };
+        restartDelayMs?: { minimum?: number; type?: string };
+        timeoutMs?: { minimum?: number; type?: string };
+      };
+    };
+    expect(parameters.properties?.delayMs).toMatchObject({ type: "integer", minimum: 0 });
+    expect(parameters.properties?.restartDelayMs).toMatchObject({ type: "integer", minimum: 0 });
+    expect(parameters.properties?.timeoutMs).toMatchObject({ type: "integer", minimum: 1 });
   });
 
   it("instructs agents to use continuationMessage when a restart still needs a reply", async () => {
@@ -163,6 +183,35 @@ describe("gateway tool restart continuation", () => {
     expect(typeof restartArgs.emitHooks?.beforeEmit).toBe("function");
     expect(typeof restartArgs.emitHooks?.afterEmitRejected).toBe("function");
     expect(result?.details).toEqual({ scheduled: true, delayMs: 250 });
+  });
+
+  it.each([-1, 1.5, "soon"])("rejects invalid restart delayMs value %s", async (delayMs) => {
+    const tool = createGatewayTool({
+      agentSessionKey: "agent:main:main",
+      config: {},
+    });
+
+    await expect(
+      tool.execute?.("tool-call-invalid-delay", {
+        action: "restart",
+        delayMs,
+      }),
+    ).rejects.toThrow("delayMs must be a non-negative integer");
+    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts string restart delayMs values through the shared numeric reader", async () => {
+    const tool = createGatewayTool({
+      agentSessionKey: "agent:main:main",
+      config: {},
+    });
+
+    await tool.execute?.("tool-call-string-delay", {
+      action: "restart",
+      delayMs: "250",
+    });
+
+    expect(requireScheduledRestartArgs().delayMs).toBe(250);
   });
 
   it("coerces legacy continuationKind inputs to an agentTurn", async () => {

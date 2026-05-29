@@ -3,7 +3,7 @@ import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   jsonResult,
-  readNumberParam,
+  readPositiveIntegerParam,
   readStringParam,
 } from "openclaw/plugin-sdk/provider-web-search";
 import { Type } from "typebox";
@@ -38,7 +38,7 @@ const TavilyExtractToolSchema = Type.Object(
       description: '"basic" (default) or "advanced" (for JS-heavy pages).',
     }),
     chunks_per_source: Type.Optional(
-      Type.Number({
+      Type.Integer({
         description: "Chunks per URL (1-5, requires query).",
         minimum: 1,
         maximum: 5,
@@ -69,8 +69,9 @@ export function createTavilyExtractTool(api: OpenClawPluginApi, ctx?: TavilyTool
       }
       const query = readStringParam(rawParams, "query") || undefined;
       const extractDepth = readStringParam(rawParams, "extract_depth") || undefined;
-      const chunksPerSource = readNumberParam(rawParams, "chunks_per_source", {
-        integer: true,
+      const chunksPerSource = readPositiveIntegerParam(rawParams, "chunks_per_source", {
+        max: 5,
+        message: "chunks_per_source must be an integer from 1 to 5.",
       });
       if (chunksPerSource !== undefined && !query) {
         throw new Error("tavily_extract requires query when chunks_per_source is set.");

@@ -48,6 +48,7 @@ export type DynamicToolBuildParams = {
   params: EmbeddedRunAttemptParams;
   resolvedWorkspace: string;
   effectiveWorkspace: string;
+  effectiveCwd?: string;
   sandboxSessionKey: string;
   sandbox: OpenClawSandboxContext;
   nativeToolSurfaceEnabled?: boolean;
@@ -207,11 +208,15 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     sessionId: params.sessionId,
     runId: params.runId,
     agentDir,
+    cwd: input.effectiveCwd ?? input.effectiveWorkspace,
     workspaceDir: input.effectiveWorkspace,
-    spawnWorkspaceDir: resolveAttemptSpawnWorkspaceDir({
-      sandbox: input.sandbox,
-      resolvedWorkspace: input.resolvedWorkspace,
-    }),
+    spawnWorkspaceDir:
+      input.effectiveCwd && input.effectiveCwd !== input.effectiveWorkspace
+        ? input.resolvedWorkspace
+        : resolveAttemptSpawnWorkspaceDir({
+            sandbox: input.sandbox,
+            resolvedWorkspace: input.resolvedWorkspace,
+          }),
     config: params.config,
     authProfileStore: params.toolAuthProfileStore ?? params.authProfileStore,
     abortSignal: input.runAbortController.signal,
@@ -461,13 +466,13 @@ export function resolveCodexSandboxEnvironmentSelection(
 }
 
 export function resolveCodexAppServerExecutionCwd(params: {
-  effectiveWorkspace: string;
+  effectiveCwd: string;
   environment?: CodexSandboxExecEnvironment;
   nativeToolSurfaceEnabled: boolean;
 }): string {
   return params.environment && params.nativeToolSurfaceEnabled
     ? params.environment.cwd
-    : params.effectiveWorkspace;
+    : params.effectiveCwd;
 }
 
 export function resolveCodexExternalSandboxPolicyForOpenClawSandbox(

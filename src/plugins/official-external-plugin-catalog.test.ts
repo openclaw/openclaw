@@ -47,7 +47,7 @@ describe("official external plugin catalog", () => {
         npmSpec: "@openclaw/diffs-language-pack",
         clawhubSpec: "clawhub:@openclaw/diffs-language-pack",
         defaultChoice: "npm",
-        minHostVersion: ">=2026.4.30",
+        minHostVersion: ">=2026.5.27",
       },
     );
   });

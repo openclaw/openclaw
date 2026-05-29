@@ -5,7 +5,15 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { validateExecApprovalRequestParams } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { registerLegacyContextEngine } from "../../context-engine/legacy.registration.js";
+import {
+  clearContextEngineRuntimeQuarantine,
+  clearContextEnginesForOwner,
+  registerContextEngineForOwner,
+  resolveContextEngine,
+} from "../../context-engine/registry.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js";
 import {
@@ -16,7 +24,6 @@ import { resetLogger, setLoggerOverride } from "../../logging.js";
 import { asOptionalRecord } from "../../shared/record-coerce.js";
 import { projectRecentChatDisplayMessages } from "../chat-display-projection.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
-import { validateExecApprovalRequestParams } from "../protocol/index.js";
 import { waitForAgentJob } from "./agent-job.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
@@ -335,6 +342,52 @@ describe("waitForAgentJob", () => {
     expect(fresh?.status).toBe("ok");
     expect(fresh?.startedAt).toBe(200);
     expect(fresh?.endedAt).toBe(210);
+  });
+
+  it("surfaces pending error diagnostics when outer timeout fires before error grace period", async () => {
+    // Preserve the retry grace: the caller timeout may carry the pending error
+    // reason, but it must not cache a terminal error before a later start can
+    // cancel the pending snapshot.
+    vi.useFakeTimers();
+    try {
+      const runId = `run-pending-error-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const waitPromise = waitForAgentJob({ runId, timeoutMs: 5_000 });
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "error", error: "transient-auth-failure" },
+      });
+
+      await vi.advanceTimersByTimeAsync(6_000);
+
+      const result = await waitPromise;
+      expect(result).not.toBeNull();
+      expect(result?.status).toBe("timeout");
+      expect(result?.error).toBe("transient-auth-failure");
+      expect(result?.pendingError).toBe(true);
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 12_000 },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "end", startedAt: 12_000, endedAt: 12_100 },
+      });
+
+      const recovered = await waitForAgentJob({ runId, timeoutMs: 1_000 });
+      expectRecordFields(recovered, {
+        status: "ok",
+        startedAt: 12_000,
+        endedAt: 12_100,
+      });
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -2991,6 +3044,7 @@ describe("gateway healthHandlers.status scope handling", () => {
 describe("gateway healthHandlers.health cache freshness", () => {
   let healthHandlers: typeof import("./health.js").healthHandlers;
   let pricingState: typeof import("../model-pricing-cache-state.js");
+  const contextEngineTestOwner = "plugin:health-test";
 
   beforeAll(async () => {
     ({ healthHandlers } = await import("./health.js"));
@@ -2999,10 +3053,15 @@ describe("gateway healthHandlers.health cache freshness", () => {
 
   beforeEach(() => {
     pricingState.clearGatewayModelPricingCacheState();
+    registerLegacyContextEngine();
+    clearContextEnginesForOwner(contextEngineTestOwner);
+    clearContextEngineRuntimeQuarantine();
   });
 
   afterEach(() => {
     pricingState.clearGatewayModelPricingCacheState();
+    clearContextEnginesForOwner(contextEngineTestOwner);
+    clearContextEngineRuntimeQuarantine();
   });
 
   it("refreshes cached health when runtime channel lifecycle has changed", async () => {
@@ -3204,6 +3263,83 @@ describe("gateway healthHandlers.health cache freshness", () => {
       probe: false,
       includeSensitive: false,
     });
+  });
+
+  it("merges live context-engine quarantine state into cached health responses", async () => {
+    const engineId = `health-context-engine-${Date.now()}`;
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    registerContextEngineForOwner(
+      engineId,
+      () => ({
+        info: { id: "lcm", name: "Lossless Claw Memory" },
+        ingest: async () => ({ ingested: false }),
+        assemble: async () => {
+          throw new Error("lcm transcript store is corrupt");
+        },
+        compact: async () => ({ ok: true, compacted: false }),
+      }),
+      contextEngineTestOwner,
+    );
+    try {
+      const contextEngine = await resolveContextEngine({
+        plugins: { slots: { contextEngine: engineId } },
+      } as OpenClawConfig);
+      await contextEngine.assemble({ sessionId: "s1", messages: [] });
+
+      const cached = {
+        ok: true,
+        ts: Date.now(),
+        durationMs: 1,
+        channels: {},
+        channelOrder: [],
+        channelLabels: {},
+        heartbeatSeconds: 0,
+        defaultAgentId: "main",
+        agents: [],
+        sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+      };
+      const respond = vi.fn();
+      const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
+
+      await healthHandlers.health({
+        req: {} as never,
+        params: {} as never,
+        respond: respond as never,
+        context: {
+          getHealthCache: () => cached,
+          refreshHealthSnapshot,
+          getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+          logHealth: { error: vi.fn() },
+        } as never,
+        client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+        isWebchatConnect: () => false,
+      });
+
+      const payload = mockCallArg(respond, 0, 1) as
+        | {
+            contextEngines?: {
+              quarantined?: Array<{
+                engineId?: string;
+                owner?: string;
+                operation?: string;
+                reason?: string;
+                failedAt?: number;
+              }>;
+            };
+          }
+        | undefined;
+      expect(payload?.contextEngines?.quarantined).toHaveLength(1);
+      expect(payload?.contextEngines?.quarantined?.[0]).toMatchObject({
+        engineId,
+        owner: contextEngineTestOwner,
+        operation: "assemble",
+        reason: "lcm transcript store is corrupt",
+      });
+      expect(typeof payload?.contextEngines?.quarantined?.[0]?.failedAt).toBe("number");
+      expect(mockCallArg(respond, 0, 3)).toEqual({ cached: true });
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 
   it("refreshes cached health when a runtime account is missing from the cached account summary", async () => {

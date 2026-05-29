@@ -685,6 +685,15 @@ type MessageSentEvent = {
   messageId?: string;
 };
 
+/**
+ * Best-effort session identifier for delivery telemetry only. Falls back to
+ * `policyKey` as a last resort so diagnostic emission still has a stable
+ * string when neither mirror nor canonical key are available. **Do not use
+ * this value for hook-context correlation** — use `sessionKeyForInternalHooks`
+ * (mirror.sessionKey ?? session.key, no policyKey fallback) instead, so we
+ * never accidentally hand the policy key to plugins that expect the canonical
+ * session key.
+ */
 function sessionKeyForDeliveryDiagnostics(params: {
   mirror?: DeliveryMirror;
   session?: OutboundSessionContext;
@@ -1005,6 +1014,14 @@ function createMessageSentEmitter(params: {
       channelId: params.channel,
       accountId: params.accountId ?? undefined,
       conversationId: params.to,
+      // Mirror the canonical outbound session key into the `message_sent`
+      // hook context so plugins that observe both `message_sending` and
+      // `message_sent` see the same `sessionKey` (and so it matches the
+      // value the internal `message:sent` hook fires with). The value is
+      // already computed for the internal hook below; reusing it here
+      // keeps the contract documented in `PluginHookMessageContext`
+      // honest for both outbound delivery hooks.
+      sessionKey: params.sessionKeyForInternalHooks,
       messageId: event.messageId,
       isGroup: params.mirrorIsGroup,
       groupId: params.mirrorGroupId,
@@ -1052,6 +1069,7 @@ async function applyMessageSendingHook(params: {
   accountId?: string;
   replyToId?: string | null;
   threadId?: string | number | null;
+  sessionKey?: string;
 }): Promise<{
   cancelled: boolean;
   cancelReason?: string;
@@ -1085,6 +1103,7 @@ async function applyMessageSendingHook(params: {
         channelId: params.channel,
         accountId: params.accountId ?? undefined,
         conversationId: params.to,
+        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
       },
     );
     if (sendingResult?.cancel) {
@@ -1454,6 +1473,15 @@ async function deliverOutboundPayloadsCore(
     });
   }
   const hookRunner = getGlobalHookRunner();
+  // Canonical session key forwarded to internal lifecycle hooks
+  // (`message:sent` event, `message_sending` plugin hook ctx, etc.). Mirror
+  // delivery wins because mirror sends are explicitly bound to the mirror's
+  // session; otherwise we use `session.key`, which by contract equals the
+  // agent runtime's `params.sessionKey` for the run that produced the
+  // payload (see OutboundSessionContext.key JSDoc). We deliberately do NOT
+  // fall back to `session.policyKey` here — the policy key describes the
+  // delivery target's policy, not the canonical control session, and
+  // handing it to plugins that correlate against agent_end would be wrong.
   const sessionKeyForInternalHooks = params.mirror?.sessionKey ?? params.session?.key;
   const mirrorIsGroup = params.mirror?.isGroup;
   const mirrorGroupId = params.mirror?.groupId;
@@ -1535,6 +1563,7 @@ async function deliverOutboundPayloadsCore(
         accountId,
         replyToId: resolveCurrentReplyTo(payload).replyToId,
         threadId: params.threadId,
+        sessionKey: sessionKeyForInternalHooks,
       });
       if (hookResult.cancelled) {
         const hookEffect =

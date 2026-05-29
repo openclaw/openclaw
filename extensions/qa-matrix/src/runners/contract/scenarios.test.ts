@@ -315,7 +315,6 @@ describe("matrix live qa scenarios", () => {
       "matrix-room-tool-progress-preview-opt-out",
       "matrix-room-tool-progress-error",
       "matrix-room-tool-progress-mention-safety",
-      "matrix-room-block-streaming",
       "matrix-room-image-understanding-attachment",
       "matrix-room-generated-image-delivery",
       "matrix-media-type-coverage",
@@ -4164,13 +4163,16 @@ describe("matrix live qa scenarios", () => {
     expect(body).toMatch(
       /Step 1: send an assistant text block containing only this exact marker: `MATRIX_QA_BLOCK_ONE_[A-F0-9]{8}`/,
     );
+    expect(body).toContain("That first marker block must be emitted before any tool call.");
     expect(body).toContain(
-      "Step 2: do not stop after that marker. Use the read tool exactly once on `QA_KICKOFF_TASK.md`.",
+      "Step 2: after the first marker block, use the read tool exactly once on `QA_KICKOFF_TASK.md`.",
     );
     expect(body).toMatch(
       /Step 3: after that read completes, send a final assistant text block containing only this exact marker: `MATRIX_QA_BLOCK_TWO_[A-F0-9]{8}`/,
     );
+    expect(body).toContain("Never put both markers in the same assistant text block.");
     expect(scenario.configOverrides?.toolProfile).toBe("coding");
+    expect(scenario.providerMode).toBe("mock-openai");
     expect(mockObjectArg(waitForRoomEvent, "waitForRoomEvent", 1).since).toBe(
       "driver-sync-block-one",
     );

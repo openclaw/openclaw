@@ -6,6 +6,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { pathToFileURL } from "node:url";
 
 const ISSUE_FILE_COUNTS = [
   ["memory/transcripts", 9394],
@@ -23,6 +24,7 @@ const ISSUE_FILE_COUNTS = [
 const ISSUE_MEMORY_FILE_COUNT = ISSUE_FILE_COUNTS.reduce((sum, [, count]) => sum + count, 0);
 const DEFAULT_FILE_COUNT = 512;
 const DEFAULT_MAX_WORKSPACE_REG_FDS = process.platform === "darwin" ? 8 : 64;
+export const GATEWAY_READY_OUTPUT_MAX_CHARS = 128 * 1024;
 
 const SKIP_GATEWAY_ENV = {
   NODE_ENV: "test",
@@ -58,15 +60,21 @@ Options:
 `.trim();
 }
 
-function readNumber(value, label) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed < 0) {
-    throw new Error(`${label} must be a non-negative number`);
+const NON_NEGATIVE_INTEGER_PATTERN = /^(0|[1-9]\d*)$/u;
+
+export function readNumber(value, label) {
+  const raw = String(value).trim();
+  if (!NON_NEGATIVE_INTEGER_PATTERN.test(raw)) {
+    throw new Error(`${label} must be a non-negative integer`);
   }
-  return Math.floor(parsed);
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error(`${label} must be a safe integer`);
+  }
+  return parsed;
 }
 
-function readPositiveNumber(value, label) {
+export function readPositiveNumber(value, label) {
   const parsed = readNumber(value, label);
   if (parsed <= 0) {
     throw new Error(`${label} must be greater than 0`);
@@ -74,18 +82,26 @@ function readPositiveNumber(value, label) {
   return parsed;
 }
 
-function parseArgs(argv) {
+function readNumberEnv(name, fallback) {
+  const raw = process.env[name];
+  return raw == null || raw.trim() === "" ? fallback : readNumber(raw, name);
+}
+
+function readPositiveNumberEnv(name, fallback) {
+  const raw = process.env[name];
+  return raw == null || raw.trim() === "" ? fallback : readPositiveNumber(raw, name);
+}
+
+export function parseArgs(argv) {
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const options = {
-    fileCount: Number(process.env.OPENCLAW_MEMORY_FD_REPRO_FILES || DEFAULT_FILE_COUNT),
+    fileCount: undefined,
     mode: process.env.OPENCLAW_MEMORY_FD_REPRO_MODE || "fixed",
-    maxWorkspaceRegFds: Number(
-      process.env.OPENCLAW_MEMORY_FD_REPRO_MAX_WORKSPACE_REG_FDS || DEFAULT_MAX_WORKSPACE_REG_FDS,
-    ),
+    maxWorkspaceRegFds: undefined,
     minLeakedFds: undefined,
-    invokeTimeoutMs: Number(process.env.OPENCLAW_MEMORY_FD_REPRO_TIMEOUT_MS || 30_000),
-    sampleDelayMs: Number(process.env.OPENCLAW_MEMORY_FD_REPRO_SAMPLE_DELAY_MS || 1_000),
-    settleDelayMs: Number(process.env.OPENCLAW_MEMORY_FD_REPRO_SETTLE_DELAY_MS || 5_000),
+    invokeTimeoutMs: undefined,
+    sampleDelayMs: undefined,
+    settleDelayMs: undefined,
     outputDir: path.resolve(".artifacts", "memory-fd-repro", stamp),
     keep: process.env.OPENCLAW_MEMORY_FD_REPRO_KEEP === "1",
     allowNonDarwin: process.env.OPENCLAW_MEMORY_FD_REPRO_ALLOW_NON_DARWIN === "1",
@@ -155,6 +171,14 @@ function parseArgs(argv) {
   if (!["fixed", "leak", "report"].includes(options.mode)) {
     throw new Error('--mode must be "fixed", "leak", or "report"');
   }
+  options.fileCount ??= readPositiveNumberEnv("OPENCLAW_MEMORY_FD_REPRO_FILES", DEFAULT_FILE_COUNT);
+  options.maxWorkspaceRegFds ??= readNumberEnv(
+    "OPENCLAW_MEMORY_FD_REPRO_MAX_WORKSPACE_REG_FDS",
+    DEFAULT_MAX_WORKSPACE_REG_FDS,
+  );
+  options.invokeTimeoutMs ??= readPositiveNumberEnv("OPENCLAW_MEMORY_FD_REPRO_TIMEOUT_MS", 30_000);
+  options.sampleDelayMs ??= readNumberEnv("OPENCLAW_MEMORY_FD_REPRO_SAMPLE_DELAY_MS", 1_000);
+  options.settleDelayMs ??= readNumberEnv("OPENCLAW_MEMORY_FD_REPRO_SETTLE_DELAY_MS", 5_000);
   if (!Number.isFinite(options.fileCount) || options.fileCount <= 0) {
     throw new Error("file count must be greater than 0");
   }
@@ -261,6 +285,19 @@ function writeConfig({ homeDir, workspaceDir, port, token }) {
   return configPath;
 }
 
+export function updateGatewayReadyOutputState(
+  state,
+  chunk,
+  maxChars = GATEWAY_READY_OUTPUT_MAX_CHARS,
+) {
+  const text = String(chunk);
+  const combined = `${state.tail ?? ""}${text}`;
+  return {
+    tail: combined.length > maxChars ? combined.slice(-maxChars) : combined,
+    readySeen: Boolean(state.readySeen || combined.includes("[gateway] ready")),
+  };
+}
+
 function runLsofForPid(pid) {
   const result = spawnSync("lsof", ["-nP", "-p", String(pid)], {
     encoding: "utf8",
@@ -327,22 +364,26 @@ function sampleFds({ label, pid, workspaceRealPath }) {
   return sample;
 }
 
-async function waitForGatewayReady({ child, port, logPath, timeoutMs }) {
+export function hasChildExited(child) {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
+export async function waitForGatewayReady({ child, port, logPath, timeoutMs }) {
   const startedAt = Date.now();
-  let output = "";
+  let outputState = { tail: "", readySeen: false };
   const append = (chunk) => {
     const text = chunk.toString();
-    output += text;
+    outputState = updateGatewayReadyOutputState(outputState, text);
     fs.appendFileSync(logPath, text);
   };
   child.stdout.on("data", append);
   child.stderr.on("data", append);
 
   while (Date.now() - startedAt < timeoutMs) {
-    if (output.includes("[gateway] ready") && findGatewayPid(port)) {
+    if (outputState.readySeen && findGatewayPid(port)) {
       return;
     }
-    if (child.exitCode !== null) {
+    if (hasChildExited(child)) {
       throw new Error(`gateway exited before ready; see ${logPath}`);
     }
     await sleep(100);
@@ -350,26 +391,41 @@ async function waitForGatewayReady({ child, port, logPath, timeoutMs }) {
   throw new Error(`gateway did not become ready within ${timeoutMs}ms; see ${logPath}`);
 }
 
-async function stopGateway({ child, port }) {
-  if (child.exitCode === null) {
+export async function stopGateway({ child, port }) {
+  return stopGatewayWithRuntime({
+    child,
+    port,
+    findGatewayPidFn: findGatewayPid,
+    killProcess: (pid, signal) => process.kill(pid, signal),
+  });
+}
+
+export async function stopGatewayWithRuntime({
+  child,
+  port,
+  findGatewayPidFn,
+  killProcess,
+  listenerSettleDelayMs = 500,
+}) {
+  if (!hasChildExited(child)) {
     child.kill("SIGINT");
     for (let i = 0; i < 50; i += 1) {
-      if (child.exitCode !== null) {
+      if (hasChildExited(child)) {
         break;
       }
       await sleep(100);
     }
   }
-  const listenerPid = findGatewayPid(port);
+  const listenerPid = findGatewayPidFn(port);
   if (listenerPid) {
     try {
-      process.kill(listenerPid, "SIGTERM");
+      killProcess(listenerPid, "SIGTERM");
     } catch {}
-    await sleep(500);
-    const stillListening = findGatewayPid(port);
+    await sleep(listenerSettleDelayMs);
+    const stillListening = findGatewayPidFn(port);
     if (stillListening) {
       try {
-        process.kill(stillListening, "SIGKILL");
+        killProcess(stillListening, "SIGKILL");
       } catch {}
     }
   }
@@ -545,9 +601,16 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(
-    `[memory-fd-repro] failed: ${error instanceof Error ? error.message : String(error)}`,
-  );
-  process.exit(1);
-});
+function isMainModule() {
+  const entrypoint = process.argv[1];
+  return Boolean(entrypoint && import.meta.url === pathToFileURL(path.resolve(entrypoint)).href);
+}
+
+if (isMainModule()) {
+  main().catch((error) => {
+    console.error(
+      `[memory-fd-repro] failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    process.exit(1);
+  });
+}

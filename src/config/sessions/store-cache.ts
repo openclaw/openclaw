@@ -1,4 +1,6 @@
+import { parseStrictNonNegativeInteger } from "../../infra/parse-finite-number.js";
 import { createExpiringMapCache, isCacheEnabled, resolveCacheTtlMs } from "../cache-utils.js";
+import { clearSessionSkillPromptRefCache } from "./skill-prompt-blobs.js";
 import type { SessionEntry } from "./types.js";
 
 export type DeepReadonly<T> = T extends (...args: never[]) => unknown
@@ -64,8 +66,7 @@ function parseNonNegativeInteger(value: string | undefined): number | null {
   if (!trimmed) {
     return null;
   }
-  const parsed = Number.parseInt(trimmed, 10);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+  return parseStrictNonNegativeInteger(trimmed) ?? null;
 }
 
 function getSerializedSessionStoreCacheMaxBytes(): number {
@@ -196,10 +197,22 @@ function cloneJsonLikeValue<T>(value: T): T {
     return value;
   }
   if (Array.isArray(value)) {
-    return value.map((item) => cloneJsonLikeValue(item)) as T;
+    const cloned: unknown[] = [];
+    cloned.length = value.length;
+    for (let index = 0; index < value.length; index += 1) {
+      if (!(index in value)) {
+        continue;
+      }
+      cloned[index] = cloneJsonLikeValue(value[index]);
+    }
+    return cloned as T;
   }
   const cloned: Record<string, unknown> = {};
-  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+  for (const key in value as Record<string, unknown>) {
+    if (!Object.prototype.hasOwnProperty.call(value, key)) {
+      continue;
+    }
+    const child = (value as Record<string, unknown>)[key];
     if (child === undefined) {
       continue;
     }
@@ -230,6 +243,10 @@ export function cloneSessionStoreSnapshot(
   return deepFreeze(cloned);
 }
 
+export function cloneSessionStoreSnapshotEntry(entry: SessionEntry): SessionStoreSnapshotEntry {
+  return deepFreeze(cloneSessionStoreRecord({ entry }).entry);
+}
+
 export function getSessionStoreTtl(): number {
   return resolveCacheTtlMs({
     envValue: process.env.OPENCLAW_SESSION_CACHE_TTL_MS,
@@ -247,6 +264,7 @@ export function clearSessionStoreCaches(): void {
   SESSION_STORE_SERIALIZED_CACHE.clear();
   sessionStoreSerializedCacheBytes = 0;
   SESSION_STORE_STRING_INTERN_POOL.clear();
+  clearSessionSkillPromptRefCache();
   resetSessionStoreStringInternStats();
 }
 
@@ -392,6 +410,7 @@ export function writeSessionStoreCache(params: {
   mtimeMs?: number;
   sizeBytes?: number;
   serialized?: string;
+  cloneSerialized?: string;
   takeOwnership?: boolean;
 }): void {
   const store =
@@ -403,7 +422,7 @@ export function writeSessionStoreCache(params: {
     store,
     mtimeMs: params.mtimeMs,
     sizeBytes: params.sizeBytes,
-    serialized: params.serialized,
+    serialized: params.cloneSerialized,
   });
   setSerializedSessionStore(params.storePath, params.serialized, params.sizeBytes);
 }

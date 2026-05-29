@@ -17,6 +17,7 @@ type PnpmBuildConfig = {
 };
 
 type RootPackageJson = {
+  files?: string[];
   pnpm?: PnpmBuildConfig;
 };
 
@@ -63,18 +64,19 @@ describe("package manager build policy", () => {
     expect(workspace.onlyBuiltDependencies).toBeUndefined();
   });
 
+  it("includes third-party notices in the published root package", () => {
+    const packageJson = readJson("package.json") as RootPackageJson;
+
+    expect(packageJson.files).toContain("THIRD_PARTY_NOTICES.md");
+  });
+
   it("keeps npm shrinkwrap aligned with workspace overrides", () => {
     const workspace = parse(
       fs.readFileSync("pnpm-workspace.yaml", "utf8"),
     ) as WorkspaceDependencyPolicy;
     const shrinkwrap = readJson("npm-shrinkwrap.json") as NpmShrinkwrap;
 
-    for (const packageName of [
-      "@anthropic-ai/sdk",
-      "hono",
-      "@aws-sdk/client-bedrock-runtime",
-      "protobufjs",
-    ]) {
+    for (const packageName of ["@anthropic-ai/sdk", "hono", "protobufjs"]) {
       expect(shrinkwrap.packages?.[`node_modules/${packageName}`]?.version).toBe(
         String(workspace.overrides?.[packageName]),
       );
@@ -84,11 +86,15 @@ describe("package manager build policy", () => {
   it("pins forked transitive dependencies with parent-scoped shrinkwrap overrides", () => {
     const overrides = readShrinkwrapOverrides() as Record<string, unknown>;
 
+    const packages = collectPnpmLockPackages();
+
     expect(overrides["lru-cache"]).toBeUndefined();
     expect(overrides["lru-memoizer@2.3.0"]).toMatchObject({
       "lru-cache": { ".": "6.0.0", yallist: "4.0.0" },
     });
-    expect(overrides["lru-memoizer@3.0.0"]).toMatchObject({ "lru-cache": "11.5.0" });
+    if (packages.has("lru-memoizer@3.0.0")) {
+      expect(overrides["lru-memoizer@3.0.0"]).toMatchObject({ "lru-cache": "11.5.0" });
+    }
   });
 
   it("can preserve current forked shrinkwrap dependencies with parent-scoped overrides", () => {

@@ -65,9 +65,10 @@ const NO_REPLY_WINDOW_MS = 8_000;
 const NO_REPLY_WINDOW_ENV = "OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS";
 
 export function resolveMatrixQaNoReplyWindowMs(timeoutMs: number) {
-  const raw = process.env[NO_REPLY_WINDOW_ENV];
-  const parsed = raw === undefined ? NO_REPLY_WINDOW_MS : Number(raw);
-  const windowMs = Number.isFinite(parsed) && parsed >= 1 ? Math.floor(parsed) : NO_REPLY_WINDOW_MS;
+  const raw = process.env[NO_REPLY_WINDOW_ENV]?.trim();
+  const parsed =
+    raw === undefined ? NO_REPLY_WINDOW_MS : /^\d+$/.test(raw) ? Number(raw) : Number.NaN;
+  const windowMs = Number.isSafeInteger(parsed) && parsed >= 1 ? parsed : NO_REPLY_WINDOW_MS;
   return Math.min(windowMs, timeoutMs);
 }
 
@@ -137,8 +138,10 @@ export function buildMatrixBlockStreamingPrompt(
   return [
     `${sutUserId} Block streaming QA check: complete this whole sequence in one turn.`,
     `Step 1: send an assistant text block containing only this exact marker: \`${firstText}\`.`,
-    "Step 2: do not stop after that marker. Use the read tool exactly once on `QA_KICKOFF_TASK.md`.",
+    "That first marker block must be emitted before any tool call.",
+    "Step 2: after the first marker block, use the read tool exactly once on `QA_KICKOFF_TASK.md`.",
     `Step 3: after that read completes, send a final assistant text block containing only this exact marker: \`${secondText}\`.`,
+    "Never put both markers in the same assistant text block.",
   ].join("\n");
 }
 

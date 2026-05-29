@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../packages/gateway-protocol/src/client-info.js";
 import { resolveStateDir } from "../config/paths.js";
 import { loadDeviceAuthToken } from "../infra/device-auth-store.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -8,7 +12,6 @@ import { MAX_SAFE_TIMEOUT_DELAY_MS, resolveSafeTimeoutDelayMs } from "../utils/t
 import { startGatewayClientWhenEventLoopReady } from "./client-start-readiness.js";
 import { GatewayClient, GatewayClientRequestError } from "./client.js";
 import { READ_SCOPE } from "./method-scopes.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "./protocol/client-info.js";
 
 export type GatewayProbeAuth = {
   token?: string;
@@ -65,6 +68,7 @@ const DEVICE_IDENTITY_REQUIRED_CLOSE_CODE = 1008;
 const DEVICE_IDENTITY_REQUIRED_CLOSE_REASON = "device identity required";
 const DEVICE_REQUIRED_PROBE_FAILURE_THRESHOLD = 3;
 const DEVICE_REQUIRED_PROBE_TTL_MS = 5 * 60_000;
+const PROBE_CLIENT_STOP_TIMEOUT_MS = 1_000;
 
 type DeviceRequiredProbeCacheEntry = {
   failures: number;
@@ -299,20 +303,26 @@ export async function probeGateway(opts: {
       settled = true;
       startAbort.abort();
       clearProbeTimer();
-      client.stop();
-      if (result.ok) {
-        clearDeviceRequiredProbeFailures(cacheKey);
-      } else if (cacheEligible && isDeviceIdentityRequiredClose(result.close)) {
-        noteDeviceRequiredProbeFailure(cacheKey, Date.now());
-      }
-      const { connectErrorDetails: resultConnectErrorDetails, ...rest } = result;
-      resolve({
-        url: opts.url,
-        ...rest,
-        ...(resultConnectErrorDetails != null
-          ? { connectErrorDetails: resultConnectErrorDetails }
-          : {}),
-      });
+      void (async () => {
+        try {
+          await client.stopAndWait({ timeoutMs: PROBE_CLIENT_STOP_TIMEOUT_MS });
+        } catch {
+          client.stop();
+        }
+        if (result.ok) {
+          clearDeviceRequiredProbeFailures(cacheKey);
+        } else if (cacheEligible && isDeviceIdentityRequiredClose(result.close)) {
+          noteDeviceRequiredProbeFailure(cacheKey, Date.now());
+        }
+        const { connectErrorDetails: resultConnectErrorDetails, ...rest } = result;
+        resolve({
+          url: opts.url,
+          ...rest,
+          ...(resultConnectErrorDetails != null
+            ? { connectErrorDetails: resultConnectErrorDetails }
+            : {}),
+        });
+      })();
     };
     const settleProbe = (params: {
       ok: boolean;

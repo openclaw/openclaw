@@ -5,14 +5,15 @@ const email = process.env.OPENWEBUI_ADMIN_EMAIL ?? "";
 const password = process.env.OPENWEBUI_ADMIN_PASSWORD ?? "";
 const expectedNonce = process.env.OPENWEBUI_EXPECTED_NONCE ?? "";
 const prompt = process.env.OPENWEBUI_PROMPT ?? "";
-const modelAttempts = readPositiveInt(process.env.OPENWEBUI_MODEL_ATTEMPTS, 72);
-const modelRetryMs = readNonNegativeInt(process.env.OPENWEBUI_MODEL_RETRY_MS, 5000);
-const fetchTimeoutMs = readPositiveInt(process.env.OPENWEBUI_FETCH_TIMEOUT_MS, 720000);
+const modelAttempts = readPositiveInt("OPENWEBUI_MODEL_ATTEMPTS", 72);
+const modelRetryMs = readNonNegativeInt("OPENWEBUI_MODEL_RETRY_MS", 5000);
+const fetchTimeoutMs = readPositiveInt("OPENWEBUI_FETCH_TIMEOUT_MS", 720000);
 const controlTimeoutMs = readPositiveInt(
-  process.env.OPENWEBUI_CONTROL_TIMEOUT_MS,
+  "OPENWEBUI_CONTROL_TIMEOUT_MS",
   Math.min(fetchTimeoutMs, 30000),
 );
-const chatTimeoutMs = readPositiveInt(process.env.OPENWEBUI_CHAT_TIMEOUT_MS, fetchTimeoutMs);
+const chatTimeoutMs = readPositiveInt("OPENWEBUI_CHAT_TIMEOUT_MS", fetchTimeoutMs);
+const responseBodyMaxBytes = readPositiveInt("OPENWEBUI_RESPONSE_BODY_MAX_BYTES", 1024 * 1024);
 const smokeMode =
   process.env.OPENWEBUI_SMOKE_MODE ?? process.env.OPENCLAW_OPENWEBUI_SMOKE_MODE ?? "chat";
 
@@ -30,19 +31,47 @@ if (smokeMode !== "models" && smokeMode !== "chat") {
   throw new Error(`Unsupported OPENWEBUI_SMOKE_MODE: ${smokeMode}`);
 }
 
-function readPositiveInt(raw, fallback) {
-  const parsed = Number.parseInt(String(raw || ""), 10);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+function readPositiveInt(name, fallback) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") {
+    return fallback;
+  }
+  const text = raw.trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${name} must be a positive integer; got: ${raw}`);
+  }
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`${name} must be a positive integer; got: ${raw}`);
+  }
+  return parsed;
 }
 
-function readNonNegativeInt(raw, fallback) {
-  const parsed = Number.parseInt(String(raw || ""), 10);
-  return Number.isInteger(parsed) && parsed >= 0 ? parsed : fallback;
+function readNonNegativeInt(name, fallback) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") {
+    return fallback;
+  }
+  const text = raw.trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${name} must be a non-negative integer; got: ${raw}`);
+  }
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    throw new Error(`${name} must be a non-negative integer; got: ${raw}`);
+  }
+  return parsed;
 }
 
 function createTimeoutError(label, timeoutMs) {
   const error = new Error(`${label} timed out after ${timeoutMs}ms`);
   error.code = "ETIMEDOUT";
+  return error;
+}
+
+function createBodyTooLargeError(label, byteLimit) {
+  const error = new Error(`${label} response body exceeded ${byteLimit} bytes`);
+  error.code = "ETOOBIG";
   return error;
 }
 
@@ -62,6 +91,51 @@ async function withRequestTimeout(label, timeoutMs, run) {
     throw error;
   } finally {
     clearTimeout(timer);
+  }
+}
+
+async function readBoundedResponseText(response, label, byteLimit = responseBodyMaxBytes) {
+  const contentLength = response.headers.get("content-length");
+  if (contentLength) {
+    const parsedLength = Number(contentLength);
+    if (Number.isSafeInteger(parsedLength) && parsedLength > byteLimit) {
+      await response.body?.cancel().catch(() => {});
+      throw createBodyTooLargeError(label, byteLimit);
+    }
+  }
+  if (!response.body) {
+    return "";
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let byteCount = 0;
+  let text = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        return text + decoder.decode();
+      }
+      byteCount += value.byteLength;
+      if (byteCount > byteLimit) {
+        await reader.cancel().catch(() => {});
+        throw createBodyTooLargeError(label, byteLimit);
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+async function readBoundedResponseJson(response, label) {
+  const body = await readBoundedResponseText(response, label);
+  try {
+    return JSON.parse(body);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`${label} returned invalid JSON: ${message}`, { cause: error });
   }
 }
 
@@ -103,12 +177,12 @@ async function fetchSignin() {
       signal,
     });
     if (!response.ok) {
-      const body = await response.text();
+      const body = await readBoundedResponseText(response, "Open WebUI signin");
       throw new Error(`signin failed: HTTP ${response.status} ${body}`);
     }
     return {
       cookie: getCookieHeader(response),
-      json: await response.json(),
+      json: await readBoundedResponseJson(response, "Open WebUI signin"),
     };
   });
 }
@@ -123,11 +197,11 @@ async function fetchModels(authHeaders, attempt) {
         return {
           ok: false,
           status: response.status,
-          text: await response.text(),
+          text: await readBoundedResponseText(response, `Open WebUI models attempt ${attempt}`),
         };
       }
       return {
-        json: await response.json(),
+        json: await readBoundedResponseJson(response, `Open WebUI models attempt ${attempt}`),
         ok: true,
       };
     },
@@ -149,11 +223,10 @@ async function fetchChatCompletion(authHeaders, targetModel) {
       signal,
     });
     if (!response.ok) {
-      throw new Error(
-        `/api/chat/completions failed: HTTP ${response.status} ${await response.text()}`,
-      );
+      const body = await readBoundedResponseText(response, "Open WebUI chat completion");
+      throw new Error(`/api/chat/completions failed: HTTP ${response.status} ${body}`);
     }
-    return await response.json();
+    return await readBoundedResponseJson(response, "Open WebUI chat completion");
   });
 }
 

@@ -16,8 +16,43 @@ describe("filterSupportedLanguageHints", () => {
 
   it("normalizes common aliases to base viewer languages", async () => {
     await expect(
-      filterSupportedLanguageHints(["ts", "c++", "c#", "bash", "dockerfile"]),
-    ).resolves.toEqual(["typescript", "cpp", "csharp", "sh", "docker"]);
+      filterSupportedLanguageHints(["ts", "c++", "c#", "bash", "dockerfile", "rb", "kt", "ps1"]),
+    ).resolves.toEqual([
+      "typescript",
+      "cpp",
+      "csharp",
+      "sh",
+      "docker",
+      "ruby",
+      "kotlin",
+      "powershell",
+    ]);
+  });
+
+  it("keeps mainstream languages in the base viewer without the language pack", async () => {
+    await expect(
+      filterSupportedLanguageHints([
+        "ruby",
+        "swift",
+        "kotlin",
+        "r",
+        "dart",
+        "lua",
+        "powershell",
+        "xml",
+        "toml",
+      ]),
+    ).resolves.toEqual([
+      "ruby",
+      "swift",
+      "kotlin",
+      "r",
+      "dart",
+      "lua",
+      "powershell",
+      "xml",
+      "toml",
+    ]);
   });
 
   it("drops uncommon languages without the language pack", async () => {

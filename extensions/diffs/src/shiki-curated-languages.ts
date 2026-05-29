@@ -18,6 +18,15 @@ const csharp = () => import("@shikijs/langs/csharp");
 const php = () => import("@shikijs/langs/php");
 const sql = () => import("@shikijs/langs/sql");
 const docker = () => import("@shikijs/langs/docker");
+const ruby = () => import("@shikijs/langs/ruby");
+const swift = () => import("@shikijs/langs/swift");
+const kotlin = () => import("@shikijs/langs/kotlin");
+const r = () => import("@shikijs/langs/r");
+const dart = () => import("@shikijs/langs/dart");
+const lua = () => import("@shikijs/langs/lua");
+const powershell = () => import("@shikijs/langs/powershell");
+const xml = () => import("@shikijs/langs/xml");
+const toml = () => import("@shikijs/langs/toml");
 
 type CuratedLanguageInfo = {
   readonly id: string;
@@ -47,6 +56,15 @@ export const bundledLanguagesInfo = [
   { id: "php", name: "PHP", import: php },
   { id: "sql", name: "SQL", import: sql },
   { id: "docker", name: "Docker", aliases: ["dockerfile"], import: docker },
+  { id: "ruby", name: "Ruby", aliases: ["rb"], import: ruby },
+  { id: "swift", name: "Swift", import: swift },
+  { id: "kotlin", name: "Kotlin", aliases: ["kt", "kts"], import: kotlin },
+  { id: "r", name: "R", import: r },
+  { id: "dart", name: "Dart", import: dart },
+  { id: "lua", name: "Lua", import: lua },
+  { id: "powershell", name: "PowerShell", aliases: ["ps", "ps1"], import: powershell },
+  { id: "xml", name: "XML", import: xml },
+  { id: "toml", name: "TOML", import: toml },
 ] as const satisfies readonly CuratedLanguageInfo[];
 
 export const bundledLanguagesBase = Object.fromEntries(

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ErrorCodes, errorShape } from "../../protocol/index.js";
+import { ErrorCodes, errorShape } from "../../../../packages/gateway-protocol/src/index.js";
 import { isUnauthorizedRoleError, UnauthorizedFloodGuard } from "./unauthorized-flood-guard.js";
 
 describe("UnauthorizedFloodGuard", () => {

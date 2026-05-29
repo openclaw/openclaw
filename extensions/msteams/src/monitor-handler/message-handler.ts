@@ -26,6 +26,7 @@ import {
   summarizeMSTeamsHtmlAttachments,
 } from "../attachments.js";
 import { isRecord } from "../attachments/shared.js";
+import { tryNormalizeBotFrameworkServiceUrl } from "../bot-framework-service-url.js";
 import type { StoredConversationReference } from "../conversation-store.js";
 import { formatUnknownError } from "../errors.js";
 import {
@@ -154,6 +155,7 @@ function buildStoredConversationReference(params: {
   const channelDataTenantId = activity.channelData?.tenant?.id;
   const tenantId = channelDataTenantId ?? conversation?.tenantId;
   const aadObjectId = from?.aadObjectId;
+  const serviceUrl = tryNormalizeBotFrameworkServiceUrl(activity.serviceUrl);
   return {
     activityId: activity.id,
     user: from ? { id: from.id, name: from.name, aadObjectId: from.aadObjectId } : undefined,
@@ -168,7 +170,7 @@ function buildStoredConversationReference(params: {
     ...(aadObjectId ? { aadObjectId } : {}),
     teamId,
     channelId: activity.channelId,
-    serviceUrl: activity.serviceUrl,
+    ...(serviceUrl ? { serviceUrl } : {}),
     locale: activity.locale,
     ...(clientInfo?.timezone ? { timezone: clientInfo.timezone } : {}),
     ...(threadId ? { threadId } : {}),
@@ -180,7 +182,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     cfg,
     runtime,
     appId,
-    adapter,
+    app,
     tokenProvider,
     textLimit,
     mediaMaxBytes,
@@ -836,7 +838,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       accountId: route.accountId,
       runtime,
       log,
-      adapter,
+      app,
       appId,
       conversationRef,
       context,

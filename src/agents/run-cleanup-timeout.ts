@@ -1,4 +1,5 @@
 import { formatErrorMessage } from "../infra/errors.js";
+import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 
 export const AGENT_CLEANUP_STEP_TIMEOUT_MS = 10_000;
 export const AGENT_CLEANUP_STEP_TIMEOUT_ENV = "OPENCLAW_AGENT_CLEANUP_TIMEOUT_MS";
@@ -23,12 +24,7 @@ function parseTimeoutEnvValue(value: string | undefined): number | undefined {
   if (!trimmed) {
     return undefined;
   }
-  const timeoutMs = Number(trimmed);
-  if (!Number.isFinite(timeoutMs)) {
-    return undefined;
-  }
-  const normalized = Math.floor(timeoutMs);
-  return normalized > 0 ? normalized : undefined;
+  return parseStrictPositiveInteger(trimmed);
 }
 
 function resolveCleanupTimeoutDetails(
@@ -64,7 +60,7 @@ export function resolveAgentCleanupStepTimeoutMs(params: {
   }
 
   const env = params.env ?? process.env;
-  if (params.step === "pi-trajectory-flush") {
+  if (params.step === "openclaw-trajectory-flush") {
     const trajectoryTimeoutMs = parseTimeoutEnvValue(env[TRAJECTORY_FLUSH_TIMEOUT_ENV]);
     if (trajectoryTimeoutMs !== undefined) {
       return trajectoryTimeoutMs;

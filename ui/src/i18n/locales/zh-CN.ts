@@ -360,7 +360,7 @@ export const zh_CN: TranslationMap = {
     pending: "{count} 个待处理",
     allowOnce: "允许一次",
     alwaysAllow: "始终允许",
-    allowAlwaysUnavailable: "当前审批策略要求每次审批，因此「始终允许」不可用。",
+    allowAlwaysUnavailable: "有效的批准策略要求每次都批准，因此“始终允许”不可用。",
     deny: "拒绝",
     labels: {
       host: "主机",
@@ -457,7 +457,7 @@ export const zh_CN: TranslationMap = {
     toolCallId: "工具调用",
     runId: "运行",
     session: "会话",
-    outputTruncated: "预览已裁剪截断。",
+    outputTruncated: "预览已隐藏并截断。",
     noOutputPreview: "无输出预览。",
     status: {
       running: "运行中",
@@ -1088,6 +1088,11 @@ export const zh_CN: TranslationMap = {
       stopGenerating: "停止生成",
       send: "发送",
       sendMessage: "发送消息",
+    },
+    queue: {
+      retry: "Retry",
+      retrySend: "Retry send",
+      retryQueuedMessage: "Retry queued message",
     },
     composer: {
       placeholder: "给 {name} 发消息（Enter 发送）",

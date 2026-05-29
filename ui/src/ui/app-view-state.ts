@@ -13,6 +13,7 @@ import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
 import type {
   ClawHubSearchResult,
+  ClawHubSkillSecurityVerdict,
   ClawHubSkillDetail,
   SkillMessage,
 } from "./controllers/skills.ts";
@@ -321,6 +322,7 @@ export type AppViewState = {
   usageStartDate: string;
   usageEndDate: string;
   usageScope: "instance" | "family";
+  usageAgentId: string | null;
   usageSelectedSessions: string[];
   usageSelectedDays: string[];
   usageSelectedHours: number[];
@@ -357,6 +359,8 @@ export type AppViewState = {
   | "cronQuickCreateStep"
   | "cronQuickCreateDraft"
   | "cronJobsLoadingMore"
+  | "cronJobsReloadPending"
+  | "cronJobsReloadPendingTableFilters"
   | "cronJobs"
   | "cronJobsTotal"
   | "cronJobsHasMore"
@@ -399,6 +403,7 @@ export type AppViewState = {
     skillMessages: Record<string, SkillMessage>;
     skillsBusyKey: string | null;
     skillsDetailKey: string | null;
+    skillsDetailTab: "overview" | "card";
     clawhubSearchQuery: string;
     clawhubSearchResults: ClawHubSearchResult[] | null;
     clawhubSearchLoading: boolean;
@@ -409,6 +414,13 @@ export type AppViewState = {
     clawhubDetailError: string | null;
     clawhubInstallSlug: string | null;
     clawhubInstallMessage: { kind: "success" | "error"; text: string } | null;
+    clawhubVerdicts: Record<string, ClawHubSkillSecurityVerdict>;
+    clawhubVerdictsLoading: boolean;
+    clawhubVerdictsError: string | null;
+    skillCardContents: Record<string, string>;
+    skillCardContentKeys: Record<string, string>;
+    skillCardLoadingKey: string | null;
+    skillCardErrors: Record<string, string>;
     healthLoading: boolean;
     healthResult: HealthSummary | null;
     healthError: string | null;
@@ -518,6 +530,7 @@ export type AppViewState = {
     steerQueuedChatMessage: (id: string) => Promise<void>;
     handleAbortChat: (opts?: ChatAbortOptions) => Promise<void>;
     removeQueuedMessage: (id: string) => void;
+    retryQueuedChatMessage: (id: string) => Promise<void>;
     handleChatScroll: (event: Event) => void;
     resetToolStream: () => void;
     resetChatScroll: () => void;
