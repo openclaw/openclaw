@@ -620,9 +620,27 @@ describe("RequestClient", () => {
     await expectRateLimitError(client.get("/channels/c1/messages"), { retryAfter: 7 });
   });
 
+  it("falls back to Retry-After when the rate limit body value is unsafe", async () => {
+    const client = new RequestClient("test-token", {
+      queueRequests: false,
+      fetch: async () =>
+        new Response(
+          JSON.stringify({ message: "Slow down", retry_after: "9007199254741", global: false }),
+          {
+            status: 429,
+            headers: { "Retry-After": "7" },
+          },
+        ),
+    });
+
+    await expectRateLimitError(client.get("/channels/c1/messages"), { retryAfter: 7 });
+  });
+
   it.each([
     ["hex", "0x10"],
     ["fractional", "1.5"],
+    ["unsafe-ms", "9007199254741"],
+    ["unsafe-integer", "9007199254740993"],
     ["overflow", `1${"0".repeat(309)}`],
   ])("rejects invalid Retry-After numeric strings: %s", async (_label, header) => {
     const client = new RequestClient("test-token", {
