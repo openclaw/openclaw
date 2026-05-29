@@ -106,6 +106,8 @@ const CODEX_PROMPT_TOTAL_INPUT_KEYS = [
 
 const MAX_TOOL_OUTPUT_DELTA_MESSAGES_PER_ITEM = 20;
 const TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS = 12_000;
+const MISSING_TOOL_RESULT_ERROR =
+  "SYSTEM_RUN_DENIED: OpenClaw recorded a tool.call without a matching tool.result before the Codex turn completed; treating the turn as failed.";
 const TRANSCRIPT_PROGRESS_SUPPRESSED_TOOL_NAMES = new Set([
   "message",
   "messages",
@@ -165,6 +167,9 @@ export class CodexAppServerEventProjector {
   private readonly toolTranscriptMessages: AgentMessage[] = [];
   private readonly toolTranscriptCallIds = new Set<string>();
   private readonly toolTranscriptResultIds = new Set<string>();
+  private readonly toolTranscriptNamesById = new Map<string, string>();
+  private readonly toolTrajectoryCallIds = new Set<string>();
+  private readonly toolTrajectoryResultIds = new Set<string>();
   private readonly transcriptToolProgressCallIds = new Set<string>();
   private lastNativeToolError: EmbeddedRunAttemptResult["lastToolError"];
   private readonly nativeGeneratedMediaUrls = new Set<string>();
@@ -176,6 +181,7 @@ export class CodexAppServerEventProjector {
   private completedTurn: CodexTurn | undefined;
   private promptError: unknown;
   private promptErrorSource: EmbeddedRunAttemptResult["promptErrorSource"] = null;
+  private synthesizedMissingToolResultError: string | null = null;
   private aborted = false;
   private tokenUsage: ReturnType<typeof normalizeUsage>;
   private guardianReviewCount = 0;
@@ -270,6 +276,7 @@ export class CodexAppServerEventProjector {
     toolTelemetry: CodexAppServerToolTelemetry,
     options?: { yieldDetected?: boolean },
   ): EmbeddedRunAttemptResult {
+    this.synthesizeMissingToolResults();
     const assistantTexts = this.collectAssistantTexts();
     const reasoningText = collectReasoningTextValues(
       this.reasoningTextByGroup,
@@ -319,6 +326,7 @@ export class CodexAppServerEventProjector {
     const turnFailed = this.completedTurn?.status === "failed";
     const promptError =
       this.promptError ??
+      this.synthesizedMissingToolResultError ??
       (turnFailed ? (this.completedTurn?.error?.message ?? "codex app-server turn failed") : null);
     const agentHarnessResultClassification = classifyAgentHarnessTerminalOutcome({
       assistantTexts,
@@ -1036,6 +1044,7 @@ export class CodexAppServerEventProjector {
     status: ReturnType<typeof itemStatus>;
   }): void {
     if (params.phase === "start") {
+      this.toolTrajectoryCallIds.add(params.item.id);
       this.options.trajectoryRecorder?.recordEvent("tool.call", {
         threadId: this.threadId,
         turnId: this.turnId,
@@ -1046,6 +1055,7 @@ export class CodexAppServerEventProjector {
       });
       return;
     }
+    this.toolTrajectoryResultIds.add(params.item.id);
     const toolResult = itemToolResult(params.item).result;
     const output = itemOutputText(params.item, this.toolResultOutputTextByItem);
     this.options.trajectoryRecorder?.recordEvent("tool.result", {
@@ -1308,6 +1318,7 @@ export class CodexAppServerEventProjector {
       return;
     }
     this.toolTranscriptCallIds.add(params.id);
+    this.toolTranscriptNamesById.set(params.id, params.name);
     this.toolTranscriptArgumentsById.set(params.id, params.arguments);
     if (!shouldEmitTranscriptToolProgress(params.name, params.arguments)) {
       this.transcriptToolProgressSuppressedIds.add(params.id);
@@ -1321,6 +1332,45 @@ export class CodexAppServerEventProjector {
         `${this.turnId}:tool:${params.id}:call`,
       ),
     );
+  }
+
+  private synthesizeMissingToolResults(): void {
+    const missingIds = [...this.toolTranscriptCallIds].filter(
+      (id) => !this.toolTranscriptResultIds.has(id),
+    );
+    if (missingIds.length === 0) {
+      return;
+    }
+    for (const id of missingIds) {
+      const name = this.toolTranscriptNamesById.get(id) ?? "tool";
+      const text = `${MISSING_TOOL_RESULT_ERROR} toolCallId=${id}; toolName=${name}`;
+      this.recordToolTranscriptResult({
+        id,
+        name,
+        text,
+        isError: true,
+      });
+      if (this.toolTrajectoryCallIds.has(id) && !this.toolTrajectoryResultIds.has(id)) {
+        this.toolTrajectoryResultIds.add(id);
+        this.options.trajectoryRecorder?.recordEvent("tool.result", {
+          threadId: this.threadId,
+          turnId: this.turnId,
+          itemId: id,
+          toolCallId: id,
+          name,
+          status: "failed",
+          isError: true,
+          result: { status: "failed", reason: "missing_tool_result" },
+          output: text,
+        });
+      }
+    }
+    if (!this.synthesizedMissingToolResultError) {
+      this.synthesizedMissingToolResultError =
+        missingIds.length === 1
+          ? MISSING_TOOL_RESULT_ERROR
+          : `${MISSING_TOOL_RESULT_ERROR} missingToolResultCount=${missingIds.length}`;
+    }
   }
 
   private recordToolTranscriptResult(params: ToolTranscriptResultInput): void {

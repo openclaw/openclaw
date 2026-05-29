@@ -1649,6 +1649,81 @@ describe("CodexAppServerEventProjector", () => {
     ).toHaveLength(1);
   });
 
+  it("fails closed and synthesizes a result when a native tool call never completes", async () => {
+    const trajectoryRecorder = {
+      filePath: "trajectory.jsonl",
+      recordEvent: vi.fn(),
+      flush: vi.fn(async () => undefined),
+    };
+    const projector = await createProjector(await createParams(), { trajectoryRecorder });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-denied",
+          command: "/bin/zsh -lc 'python3 tools/topic_scout_daily.py --deliver-report'",
+          cwd: "/Users/sompisjunsui/.openclaw/workspace",
+          processId: null,
+          source: "agent",
+          status: "inProgress",
+          commandActions: [],
+          aggregatedOutput: null,
+          exitCode: null,
+          durationMs: null,
+        },
+      }),
+    );
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "agentMessage",
+          id: "msg-denied",
+          text: "SYSTEM_RUN_DENIED topic-scout-daily did not run the owned wrapper",
+        },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(String(result.promptError)).toContain("SYSTEM_RUN_DENIED");
+    expect(result.messagesSnapshot.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "toolResult",
+      "assistant",
+    ]);
+    const toolResultMessage = requireRecord(result.messagesSnapshot[2], "tool result message");
+    expect(toolResultMessage.role).toBe("toolResult");
+    expect(toolResultMessage.toolCallId).toBe("cmd-denied");
+    expect(toolResultMessage.toolName).toBe("bash");
+    expect(toolResultMessage.isError).toBe(true);
+    const toolResultContent = requireArray(toolResultMessage.content, "tool result content");
+    expect(JSON.stringify(toolResultContent)).toContain("without a matching tool.result");
+    expect(trajectoryRecorder.recordEvent).toHaveBeenCalledWith("tool.call", {
+      threadId: THREAD_ID,
+      turnId: TURN_ID,
+      itemId: "cmd-denied",
+      toolCallId: "cmd-denied",
+      name: "bash",
+      arguments: {
+        command: "/bin/zsh -lc 'python3 tools/topic_scout_daily.py --deliver-report'",
+        cwd: "/Users/sompisjunsui/.openclaw/workspace",
+      },
+    });
+    expect(trajectoryRecorder.recordEvent).toHaveBeenCalledWith("tool.result", {
+      threadId: THREAD_ID,
+      turnId: TURN_ID,
+      itemId: "cmd-denied",
+      toolCallId: "cmd-denied",
+      name: "bash",
+      status: "failed",
+      isError: true,
+      result: { status: "failed", reason: "missing_tool_result" },
+      output: expect.stringContaining("SYSTEM_RUN_DENIED"),
+    });
+  });
+
   it("does not synthesize completed progress for running turn completion snapshots", async () => {
     const onAgentEvent = vi.fn();
     const projector = await createProjector({ ...(await createParams()), onAgentEvent });
