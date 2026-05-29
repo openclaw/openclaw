@@ -591,6 +591,13 @@ export async function dispatchWhatsAppBufferedReply(params: {
     : resolveWhatsAppDisableBlockStreaming(params.cfg);
   let didSendReply = false;
   let didLogHeartbeatStrip = false;
+  // Tracks whether we are inside a <think> block across streaming chunks.
+  // When dispatchReplyWithBufferedBlockDispatcher delivers text in paragraph-level
+  // blocks, a malformed Gemini response (e.g. unclosed <think>) will have the
+  // opening tag in the first chunk and raw reasoning in subsequent chunks (no tag).
+  // Without this flag, those subsequent chunks pass through normalizeWhatsApp*
+  // unchanged and leak to the user.
+  let suppressDueToThinkBlock = false;
 
   const deliverNormalizedPayload = async (
     normalizedDeliveryPayload: DeliverableWhatsAppOutboundPayload<ReplyPayload>,
@@ -669,6 +676,15 @@ export async function dispatchWhatsAppBufferedReply(params: {
       deliver: async (payload: ReplyPayload, info: { kind: ReplyLifecycleKind }) => {
         const deliveryPayload = resolveWhatsAppDeliverablePayload(payload, info);
         if (!deliveryPayload) {
+          return whatsAppReplyDeliveryVisibility(false);
+        }
+        // Stateful <think> block suppression across streaming chunks.
+        // If a chunk opens a <think> block, flag all subsequent chunks as
+        // suppressed until </think> or <final> appears.
+        const chunkText = deliveryPayload.text ?? "";
+        if (/<think>/i.test(chunkText)) suppressDueToThinkBlock = true;
+        if (/<\/think>/i.test(chunkText) || /<final>/i.test(chunkText)) suppressDueToThinkBlock = false;
+        if (suppressDueToThinkBlock && !deliveryPayload.hasMedia) {
           return whatsAppReplyDeliveryVisibility(false);
         }
         const normalizedOutboundPayload = normalizeWhatsAppOutboundPayload(deliveryPayload, {

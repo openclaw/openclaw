@@ -1002,6 +1002,52 @@ describe("whatsapp inbound dispatch", () => {
     expect(rememberSentText).not.toHaveBeenCalled();
   });
 
+  it("suppresses streaming chunks that follow an opening <think> tag", async () => {
+    // Regression test for Gemini 2.5 Pro thinking tag leak via streaming chunks.
+    // When dispatchReplyWithBufferedBlockDispatcher delivers text in paragraph-level
+    // blocks, a malformed Gemini response (unclosed <think>) looks like:
+    //   Chunk 1: "<think>reasoning begins..."  → stripped to empty → not sent
+    //   Chunk 2: "more reasoning content..."   → NO <think> tag → was leaking!
+    //   Chunk 3: "actual answer"               → NO <think> tag → was leaking!
+    // The stateful suppressDueToThinkBlock flag must suppress chunks 2 and 3.
+    const deliverReply = vi.fn(async () => acceptedDeliveryResult());
+    const rememberSentText = vi.fn();
+
+    await dispatchBufferedReply({ deliverReply, rememberSentText });
+
+    const deliver = getCapturedDeliver();
+    expect(deliver).toBeTypeOf("function");
+
+    // Chunk 1: opens <think> — gets stripped to empty by normalizer, not sent
+    await deliver?.({ text: "<think>The user is asking about Wallace..." }, { kind: "block" });
+    // Chunk 2: pure reasoning text, NO <think> tag — must be suppressed by state flag
+    await deliver?.({ text: "1. Recall previous context: ..." }, { kind: "block" });
+    // Chunk 3: more reasoning — must also be suppressed
+    await deliver?.({ text: "2. Provide correct information..." }, { kind: "block" });
+
+    expect(deliverReply).not.toHaveBeenCalled();
+    expect(rememberSentText).not.toHaveBeenCalled();
+  });
+
+  it("resumes sending after </think> clears the suppression flag", async () => {
+    // After a </think> or <final> tag, the suppression flag should clear
+    // so that the actual answer can be delivered.
+    const deliverReply = vi.fn(async () => acceptedDeliveryResult());
+    const rememberSentText = vi.fn();
+
+    await dispatchBufferedReply({ deliverReply, rememberSentText });
+
+    const deliver = getCapturedDeliver();
+    expect(deliver).toBeTypeOf("function");
+
+    // Chunk 1: opens <think>
+    await deliver?.({ text: "<think>reasoning...</think>" }, { kind: "block" });
+    // Chunk 2: answer in <final> — flag was reset by </think>, should be sent
+    await deliver?.({ text: "<final>The actual answer.</final>" }, { kind: "final" });
+
+    expect(deliverReply).toHaveBeenCalledTimes(1);
+  });
+
   it("maps WhatsApp blockStreaming=true to disableBlockStreaming=false", async () => {
     await dispatchBufferedReply();
 
