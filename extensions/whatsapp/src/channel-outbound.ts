@@ -10,6 +10,10 @@ import { resolveWhatsAppOutboundTarget } from "./resolve-outbound-target.js";
 import { getWhatsAppRuntime } from "./runtime.js";
 import { sendMessageWhatsApp, sendPollWhatsApp } from "./send.js";
 
+// normalizeWhatsAppChannelPayloadText uses normalizeWhatsAppPayloadTextPreservingIndentation
+// ("history" profile) which calls sanitizeAssistantVisibleTextWithProfile then
+// stripResidualReasoningTags as a defensive fallback — guaranteeing <think>/<final>
+// tags are never delivered to WhatsApp recipients even in streaming edge cases.
 export function normalizeWhatsAppChannelPayloadText(text: string | undefined): string {
   return normalizeWhatsAppPayloadTextPreservingIndentation(text);
 }

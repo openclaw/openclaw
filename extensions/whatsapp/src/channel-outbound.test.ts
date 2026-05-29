@@ -132,7 +132,8 @@ describe("whatsappChannelOutbound", () => {
   // Regression tests for Gemini reasoning tag leak (#87712 / related to #6328).
   // Gemini 2.5 Pro with reasoning:true emits <think>/<final> tags that must be
   // stripped before delivery. These tests ensure the WhatsApp delivery pipeline
-  // strips them consistently across all outbound paths.
+  // strips them consistently across all outbound paths, including streaming edge
+  // cases where the upstream sanitizer may leave residual tag fragments.
   it("strips Gemini <think>/<final> reasoning tags from payload text", () => {
     const raw = "<think>\nThis is internal reasoning.\n</think>\n<final>\nUser-visible answer.\n</final>";
     expect(whatsappChannelOutbound.normalizePayload?.({ payload: { text: raw } })).toEqual({
@@ -144,6 +145,14 @@ describe("whatsappChannelOutbound", () => {
     const raw = "<think>\nInternal reasoning only.\n</think>\n\nActual reply here.";
     expect(whatsappChannelOutbound.normalizePayload?.({ payload: { text: raw } })).toEqual({
       text: "Actual reply here.",
+    });
+  });
+
+  it("strips unclosed <think> from truncated streaming responses", () => {
+    // Streaming edge case: response was cut off mid-think block — no </think> or <final>.
+    const raw = "<think>\nStill thinking about this, the stream was cu";
+    expect(whatsappChannelOutbound.normalizePayload?.({ payload: { text: raw } })).toEqual({
+      text: "",
     });
   });
 

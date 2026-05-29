@@ -7,7 +7,6 @@ import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plug
 import { resolveWhatsAppDocumentFileName } from "./document-filename.js";
 import { formatError } from "./session-errors.js";
 import {
-  sanitizeAssistantVisibleText,
   sanitizeAssistantVisibleTextWithProfile,
   stripToolCallXmlTags,
   sleep,
@@ -58,16 +57,36 @@ function stripWhatsAppPluralToolXml(text: string): string {
   return stripToolCallXmlTags(text, { stripFunctionCallsXmlPayloads: true });
 }
 
-function finalizeWhatsAppVisibleText(text: string): string {
-  return sanitizeForPlainText(stripWhatsAppPluralToolXml(text));
+// Defensive regex fallback for <think>/<final> reasoning tags. Called after the
+// main sanitizer to catch edge cases such as unclosed tags in streaming responses,
+// where the sanitizer's strict-mode parser may leave residual tag fragments.
+function stripResidualReasoningTags(text: string): string {
+  // If a <final> block is present, extract only its content — that is the
+  // user-visible response. Everything outside (including <think>) is discarded.
+  const finalMatch = /<final>([\s\S]*?)<\/final>/.exec(text);
+  if (finalMatch) {
+    return finalMatch[1] ?? "";
+  }
+  // No <final>: drop closed <think>…</think> blocks, then any unclosed <think>
+  // tail (i.e. a streaming response that started a think block but never closed it).
+  return text.replace(/<think>[\s\S]*?<\/think>/g, "").replace(/<think>[\s\S]*/g, "");
 }
 
-// Uses the "delivery" profile which includes reasoningMode:"strict" to strip
-// <think>/<final> tags emitted by Gemini and other reasoning-capable models.
+function finalizeWhatsAppVisibleText(text: string): string {
+  // stripResidualReasoningTags runs before the plaintext sanitizer so that any
+  // tags missed by the upstream sanitizer profile are removed before delivery.
+  return sanitizeForPlainText(stripWhatsAppPluralToolXml(stripResidualReasoningTags(text)));
+}
+
+// Uses the "delivery" sanitizer profile (reasoningMode:"strict") to strip
+// <think>/<final> tags emitted by Gemini and other reasoning-capable models,
+// followed by a defensive regex fallback for unclosed/streaming edge cases.
 // See: extensions/whatsapp/src/channel-outbound.ts for the channel path which
 // uses normalizeWhatsAppPayloadTextPreservingIndentation ("history" profile).
 export function normalizeWhatsAppPayloadText(text: string | undefined): string {
-  return finalizeWhatsAppVisibleText(sanitizeAssistantVisibleText(text ?? "")).trimStart();
+  return finalizeWhatsAppVisibleText(
+    sanitizeAssistantVisibleTextWithProfile(text ?? "", "delivery"),
+  ).trimStart();
 }
 
 function stripLeadingBlankLines(text: string): string {
