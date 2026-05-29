@@ -13,6 +13,7 @@ import type { TemplateContext } from "../templating.js";
 const MAX_UNTRUSTED_JSON_STRING_CHARS = 2_000;
 const MAX_UNTRUSTED_HISTORY_ENTRIES = 20;
 const MAX_UNTRUSTED_TRANSCRIPT_FIELD_CHARS = 500;
+const MAX_UNTRUSTED_TRANSCRIPT_BODY_CHARS = 8_000;
 const MESSAGE_TOOL_DELIVERY_HINT = "Delivery: to send a message, use the `message` tool.";
 
 type InboundUserContextPrefixOptions = {
@@ -100,6 +101,26 @@ function sanitizeTranscriptField(value: unknown): string | undefined {
     .trim();
 }
 
+function truncateUntrustedTranscriptBody(value: string): string {
+  if (value.length <= MAX_UNTRUSTED_TRANSCRIPT_BODY_CHARS) {
+    return value;
+  }
+  return `${truncateUtf16Safe(
+    value,
+    Math.max(0, MAX_UNTRUSTED_TRANSCRIPT_BODY_CHARS - 14),
+  ).trimEnd()}…[truncated]`;
+}
+
+function sanitizeTranscriptBody(value: unknown): string | undefined {
+  const body = sanitizePromptBody(value);
+  if (!body) {
+    return undefined;
+  }
+  return neutralizeMarkdownFences(truncateUntrustedTranscriptBody(body))
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function formatUntrustedStructuredContextLabel(label: unknown): string {
   const normalized = normalizePromptMetadataString(label);
   return normalized
@@ -156,7 +177,7 @@ function formatChatWindowMessage(
   const replyToId = sanitizeTranscriptField(value["reply_to_id"]);
   const mediaType = sanitizeTranscriptField(value["media_type"]);
   const mediaRef = sanitizeTranscriptField(value["media_ref"]);
-  const body = sanitizeTranscriptField(value["body"]);
+  const body = sanitizeTranscriptBody(value["body"]);
   const details = [
     messageId ? `#${messageId}` : undefined,
     timestamp,
@@ -312,7 +333,7 @@ function isTelegramInboundContext(ctx: TemplateContext): boolean {
 }
 
 function resolveInlineReplyQuote(ctx: TemplateContext): string | undefined {
-  return sanitizeTranscriptField(ctx.ReplyToQuoteText) ?? sanitizeTranscriptField(ctx.ReplyToBody);
+  return sanitizeTranscriptBody(ctx.ReplyToQuoteText) ?? sanitizeTranscriptBody(ctx.ReplyToBody);
 }
 
 function formatTelegramCurrentMessageContext(ctx: TemplateContext): string | undefined {

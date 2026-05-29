@@ -945,6 +945,104 @@ describe("buildInboundUserContextPrefix", () => {
     expect(text).toContain('"body": "');
   });
 
+  it("preserves chat window message body past the 500-char field cap", () => {
+    const longBody = "a".repeat(1_500);
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      UntrustedStructuredContext: [
+        {
+          label: "Conversation context",
+          source: "telegram",
+          type: "chat_window",
+          payload: {
+            order: "chronological",
+            relation: "before_current_message",
+            messages: [
+              {
+                message_id: "100",
+                sender: "bot",
+                body: longBody,
+              },
+            ],
+          },
+        },
+      ],
+    } as TemplateContext);
+
+    expect(text).not.toContain("…[truncated]");
+    expect(text).toContain("a".repeat(1_500));
+  });
+
+  it("truncates chat window message body at the body cap (8000 chars)", () => {
+    const hugeBody = "b".repeat(10_000);
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      UntrustedStructuredContext: [
+        {
+          label: "Conversation context",
+          source: "telegram",
+          type: "chat_window",
+          payload: {
+            order: "chronological",
+            relation: "before_current_message",
+            messages: [
+              {
+                message_id: "200",
+                sender: "bot",
+                body: hugeBody,
+              },
+            ],
+          },
+        },
+      ],
+    } as TemplateContext);
+
+    expect(text).not.toContain(hugeBody);
+    expect(text).toContain("…[truncated]");
+  });
+
+  it("still truncates short metadata fields at 500 chars in chat window messages", () => {
+    const longSender = "s".repeat(600);
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      UntrustedStructuredContext: [
+        {
+          label: "Conversation context",
+          source: "telegram",
+          type: "chat_window",
+          payload: {
+            order: "chronological",
+            relation: "before_current_message",
+            messages: [
+              {
+                message_id: "300",
+                sender: longSender,
+                body: "short body",
+              },
+            ],
+          },
+        },
+      ],
+    } as TemplateContext);
+
+    expect(text).not.toContain(longSender);
+    expect(text).toContain("…[truncated]");
+    expect(text).toContain("short body");
+  });
+
+  it("preserves reply quote text past the 500-char field cap", () => {
+    const longQuote = "q".repeat(1_500);
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      Surface: "telegram",
+      MessageSid: "500",
+      ReplyToQuoteText: longQuote,
+    } as TemplateContext);
+
+    expect(text).not.toContain("…[truncated]");
+    expect(text).toContain("q".repeat(1_500));
+  });
+
   it("caps serialized inbound history to the most recent bounded tail", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "group",
