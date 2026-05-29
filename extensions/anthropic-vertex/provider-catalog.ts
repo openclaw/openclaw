@@ -15,6 +15,7 @@ function buildAnthropicVertexModel(params: {
   input: ModelDefinitionConfig["input"];
   cost: ModelDefinitionConfig["cost"];
   maxTokens: number;
+  thinkingLevelMap?: ModelDefinitionConfig["thinkingLevelMap"];
 }): ModelDefinitionConfig {
   return {
     id: params.id,
@@ -24,6 +25,7 @@ function buildAnthropicVertexModel(params: {
     cost: params.cost,
     contextWindow: ANTHROPIC_VERTEX_DEFAULT_CONTEXT_WINDOW,
     maxTokens: params.maxTokens,
+    ...(params.thinkingLevelMap ? { thinkingLevelMap: params.thinkingLevelMap } : {}),
   };
 }
 
@@ -36,6 +38,7 @@ function buildAnthropicVertexCatalog(): ModelDefinitionConfig[] {
       input: ["text", "image"],
       cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
       maxTokens: 128000,
+      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
     }),
     buildAnthropicVertexModel({
       id: "claude-opus-4-6",

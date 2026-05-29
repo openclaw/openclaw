@@ -81,6 +81,10 @@ describe("anthropic-vertex provider plugin", () => {
       "claude-opus-4-6",
       "claude-sonnet-4-6",
     ]);
+    expect(result.provider.models[0]?.thinkingLevelMap).toEqual({
+      xhigh: "xhigh",
+      max: "max",
+    });
   });
 
   it("owns Anthropic-style replay policy", async () => {
