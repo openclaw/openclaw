@@ -40,7 +40,8 @@ function expectFields(value: unknown, expected: Record<string, unknown>): void {
 }
 
 function readLastJsonWrite(): Record<string, unknown> {
-  const [payload, space] = mocks.defaultRuntime.writeJson.mock.calls.at(-1) ?? [];
+  const calls = mocks.defaultRuntime.writeJson.mock.calls;
+  const [payload, space] = calls[calls.length - 1] ?? [];
   expect(space).toBe(0);
   if (!payload || typeof payload !== "object") {
     throw new Error("expected JSON write payload object");
@@ -56,6 +57,18 @@ function readFirstPolicyScope(payload: Record<string, unknown>): Record<string, 
     throw new Error("expected first policy scope object");
   }
   return scope as Record<string, unknown>;
+}
+
+function readFirstReplaceConfigArg(): Record<string, unknown> {
+  const call = mocks.replaceConfigFile.mock.calls[0];
+  if (!call) {
+    throw new Error("expected replaceConfigFile call");
+  }
+  const arg = call[0];
+  if (!arg || typeof arg !== "object") {
+    throw new Error("expected replaceConfigFile argument");
+  }
+  return arg as Record<string, unknown>;
 }
 
 const mocks = vi.hoisted(() => {
@@ -109,6 +122,7 @@ const mocks = vi.hoisted(() => {
       return {
         path: "/tmp/openclaw.json",
         previousHash: "hash-1",
+        persistedHash: "hash-1",
         snapshot: { path: "/tmp/openclaw.json" },
         nextConfig: draft,
         result: undefined,
@@ -120,6 +134,7 @@ const mocks = vi.hoisted(() => {
         return {
           path: "/tmp/openclaw.json",
           previousHash: "hash-1",
+          persistedHash: "hash-1",
           snapshot: { path: "/tmp/openclaw.json" },
           nextConfig,
         };
@@ -221,6 +236,7 @@ describe("exec-policy CLI", () => {
         return {
           path: "/tmp/openclaw.json",
           previousHash: "hash-1",
+          persistedHash: "hash-1",
           snapshot: { path: "/tmp/openclaw.json" },
           nextConfig: draft,
           result: undefined,
@@ -234,6 +250,7 @@ describe("exec-policy CLI", () => {
         return {
           path: "/tmp/openclaw.json",
           previousHash: "hash-1",
+          persistedHash: "hash-1",
           snapshot: { path: "/tmp/openclaw.json" },
           nextConfig,
         };
@@ -338,7 +355,7 @@ describe("exec-policy CLI", () => {
       ask: "off",
       askFallback: "full",
     });
-    const [replaceConfigArg] = mocks.replaceConfigFile.mock.calls[0] ?? [];
+    const replaceConfigArg = readFirstReplaceConfigArg();
     expectFields(replaceConfigArg, { baseHash: "config-hash-1" });
     expect(mocks.saveExecApprovals).toHaveBeenCalledTimes(1);
     expect(mocks.replaceConfigFile).toHaveBeenCalledTimes(1);

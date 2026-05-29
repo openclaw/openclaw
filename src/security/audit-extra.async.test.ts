@@ -3,13 +3,13 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import * as skillScanner from "../skills/security/scanner.js";
 import {
   collectInstalledSkillsCodeSafetyFindings,
   collectPluginsCodeSafetyFindings,
 } from "./audit-extra.async.js";
-import * as skillScanner from "./skill-scanner.js";
 
-vi.mock("../agents/skills.js", () => ({
+vi.mock("../skills/loading/workspace.js", () => ({
   loadWorkspaceSkillEntries: (workspaceDir: string) => {
     const sep = workspaceDir.includes("\\") ? "\\" : "/";
     const baseDir = `${workspaceDir}${sep}skills${sep}evil-skill`;
@@ -108,6 +108,7 @@ description: test skill
         critical: 1,
         warn: 0,
         info: 0,
+        truncated: false,
         findings: [
           {
             ruleId: "dangerous-exec",
@@ -173,6 +174,7 @@ description: test skill
         critical: dirPath.includes(`${path.sep}demo`) ? 1 : 0,
         warn: 0,
         info: 0,
+        truncated: false,
         findings: dirPath.includes(`${path.sep}demo`)
           ? [
               {

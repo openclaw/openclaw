@@ -75,16 +75,14 @@ jobs:
 
       - name: install.sh in Docker
         run: |
-          docker run --rm \
-            -e OPENCLAW_NO_ONBOARD=1 \
-            -e OPENCLAW_NO_PROMPT=1 \
+          timeout --kill-after=30s 20m docker run --rm \
             -v "$PWD/scripts/install.sh:/tmp/install.sh:ro" \
             node:24-bookworm-slim \
-            bash -lc 'bash /tmp/install.sh --no-prompt --no-onboard --version latest && openclaw --version'
+            bash -lc 'bash /tmp/install.sh --version latest && openclaw --version'
 
       - name: install-cli.sh in Docker
         run: |
-          docker run --rm \
+          timeout --kill-after=30s 20m docker run --rm \
             -e OPENCLAW_NO_ONBOARD=1 \
             -e OPENCLAW_NO_PROMPT=1 \
             -v "$PWD/scripts/install-cli.sh:/tmp/install-cli.sh:ro" \
@@ -92,7 +90,7 @@ jobs:
             bash -lc 'apt-get update -y && apt-get install -y curl && bash /tmp/install-cli.sh --prefix /tmp/openclaw --no-onboard --version latest && /tmp/openclaw/bin/openclaw --version'
 
   macos-installer:
-    runs-on: macos-latest
+    runs-on: macos-15
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -134,20 +132,29 @@ jobs:
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'workflow_dispatch' && inputs.sync_website)
     runs-on: ubuntu-24.04
+    env:
+      OPENCLAW_GH_TOKEN: ${{ secrets.OPENCLAW_GH_TOKEN }}
     steps:
+      - name: Skip website sync without token
+        if: env.OPENCLAW_GH_TOKEN == ''
+        run: echo "OPENCLAW_GH_TOKEN is not configured; installer verification passed, skipping website sync."
+
       - name: Checkout OpenClaw
+        if: env.OPENCLAW_GH_TOKEN != ''
         uses: actions/checkout@v6
         with:
           path: openclaw
 
       - name: Checkout openclaw.ai
+        if: env.OPENCLAW_GH_TOKEN != ''
         uses: actions/checkout@v6
         with:
           repository: openclaw/openclaw.ai
-          token: ${{ secrets.OPENCLAW_GH_TOKEN }}
+          token: ${{ env.OPENCLAW_GH_TOKEN }}
           path: openclaw.ai
 
       - name: Sync installer scripts
+        if: env.OPENCLAW_GH_TOKEN != ''
         run: |
           cp openclaw/scripts/install.sh openclaw.ai/public/install.sh
           cp openclaw/scripts/install-cli.sh openclaw.ai/public/install-cli.sh
@@ -156,6 +163,7 @@ jobs:
           chmod +x openclaw.ai/public/install.sh openclaw.ai/public/install-cli.sh
 
       - name: Check for changes
+        if: env.OPENCLAW_GH_TOKEN != ''
         id: changes
         working-directory: openclaw.ai
         run: |
@@ -196,7 +204,10 @@ jobs:
         run: |
           git config user.name "openclaw-installer-sync[bot]"
           git config user.email "openclaw-installer-sync[bot]@users.noreply.github.com"
-          git add public/install.sh public/install-cli.sh public/install.ps1 public/install.cmd
+          git add public/install.sh public/install-cli.sh public/install.ps1
+          if git ls-files --error-unmatch public/install.cmd >/dev/null 2>&1; then
+            git add -u -- public/install.cmd
+          fi
           git commit -m "chore: sync installers from openclaw ${GITHUB_SHA::12}"
           git pull --rebase origin main
           git push origin HEAD:main

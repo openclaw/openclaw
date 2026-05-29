@@ -1,9 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { Readable } from "node:stream";
 import JSZip from "jszip";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
-import sharp from "sharp";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { createSolidPngBuffer, createTinyJpegBuffer } from "../../test/helpers/image-fixtures.js";
 import { isPathWithinBase } from "../../test/helpers/paths.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 
@@ -406,6 +407,83 @@ describe("media store", () => {
       },
     },
     {
+      name: "saves streams with detected extension without buffering first",
+      run: async () => {
+        await withTempStore(async (store) => {
+          const saved = await store.saveMediaStream(
+            Readable.from([Buffer.from([0xff, 0xd8, 0xff, 0x00])]),
+            undefined,
+            "stream-inbound",
+            1024,
+            "photo.bin",
+          );
+
+          expect(saved.id).toMatch(/^photo---[a-f0-9-]{36}\.jpg$/);
+          expect(saved.size).toBe(4);
+          expect(saved.contentType).toBe("image/jpeg");
+          await expect(fs.readFile(saved.path)).resolves.toEqual(
+            Buffer.from([0xff, 0xd8, 0xff, 0x00]),
+          );
+        });
+      },
+    },
+    {
+      name: "uses original filename to detect generic stream content type",
+      run: async () => {
+        await withTempStore(async (store) => {
+          const saved = await store.saveMediaStream(
+            Readable.from([Buffer.from("name,value\none,1\n")]),
+            "application/octet-stream",
+            "stream-inbound",
+            1024,
+            "report.csv",
+          );
+
+          expect(saved.id).toMatch(/^report---[a-f0-9-]{36}\.csv$/);
+          expect(saved.contentType).toBe("text/csv");
+        });
+      },
+    },
+    {
+      name: "prefers detected stream mime over generic zip header extension",
+      run: async () => {
+        await withTempStore(async (store) => {
+          const saved = await store.saveMediaStream(
+            Readable.from([Buffer.from("docx")]),
+            "application/zip",
+            "stream-inbound",
+            1024,
+            undefined,
+            "document.docx",
+          );
+
+          expect(saved.id).toMatch(/^[a-f0-9-]{36}\.docx$/);
+          expect(saved.contentType).toBe(
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          );
+        });
+      },
+    },
+    {
+      name: "rejects oversized streams before writing a final artifact",
+      run: async () => {
+        await withTempStore(async (store, home) => {
+          await expect(
+            store.saveMediaStream(
+              Readable.from([Buffer.alloc(4), Buffer.alloc(4)]),
+              "application/octet-stream",
+              "oversized-stream",
+              7,
+            ),
+          ).rejects.toThrow("Media exceeds 0MB limit");
+
+          const targetDir = path.join(home, ".openclaw", "media", "oversized-stream");
+          const entries = await fs.readdir(targetDir).catch(() => []);
+          expect(entries).toStrictEqual([]);
+        });
+      },
+    },
+    {
       name: "saves buffers when the best-effort fsync step reports EPERM",
       run: async () => {
         await withTempStore(async (store) => {
@@ -566,15 +644,19 @@ describe("media store", () => {
     {
       name: "saves jpeg buffers with the detected extension",
       bufferFactory: async () => {
-        return await sharp({
-          create: { width: 2, height: 2, channels: 3, background: "#123456" },
-        })
-          .jpeg({ quality: 80 })
-          .toBuffer();
+        return createTinyJpegBuffer();
       },
       contentType: "image/jpeg",
       expectedContentType: "image/jpeg",
       expectedExtension: ".jpg",
+    },
+    {
+      name: "uses original filename to detect generic buffer content type",
+      buffer: Buffer.from("name,value\none,1\n"),
+      contentType: "application/octet-stream",
+      originalFilename: "report.csv",
+      expectedContentType: "text/csv",
+      expectedExtension: ".csv",
     },
     {
       name: "preserves original extension for generic file buffers",
@@ -583,6 +665,21 @@ describe("media store", () => {
       originalFilename: "report.custom",
       expectedContentType: "application/octet-stream",
       expectedExtension: ".custom",
+    },
+    {
+      name: "does not preserve image header extensions for generic container buffers",
+      bufferFactory: async () => {
+        const zip = new JSZip();
+        zip.file("hello.txt", "hi");
+        return await zip.generateAsync({ type: "nodebuffer" });
+      },
+      contentType: "image/png",
+      originalFilename: "fake.png",
+      expectedContentType: "application/zip",
+      expectedExtension: ".zip",
+      assertSaved: async (saved: Awaited<ReturnType<typeof store.saveMediaBuffer>>) => {
+        expect(path.basename(saved.path)).toMatch(/^fake---[a-f0-9-]{36}\.zip$/);
+      },
     },
   ] as const)("$name", async (testCase) => {
     const buffer =
@@ -598,7 +695,13 @@ describe("media store", () => {
       ...("originalFilename" in testCase
         ? {
             assertSaved: async (saved: Awaited<ReturnType<typeof store.saveMediaBuffer>>) => {
-              expect(path.basename(saved.path)).toMatch(/^report---.+\.custom$/);
+              const escapedExtension = testCase.expectedExtension.replace(
+                /[.*+?^${}()|[\]\\]/g,
+                "\\$&",
+              );
+              expect(path.basename(saved.path)).toMatch(
+                new RegExp(`^report---.+${escapedExtension}$`),
+              );
             },
           }
         : {}),
@@ -738,11 +841,7 @@ describe("media store", () => {
       name: "renames media based on detected mime even when extension is wrong",
       relativeSourcePath: "image-wrong.bin",
       contentsFactory: async () => {
-        return await sharp({
-          create: { width: 2, height: 2, channels: 3, background: "#00ff00" },
-        })
-          .png()
-          .toBuffer();
+        return createSolidPngBuffer(2, 2, { r: 0, g: 255, b: 0 });
       },
       expectedContentType: "image/png",
       expectedExtension: ".png",
@@ -849,6 +948,18 @@ describe("media store", () => {
         filename: "报告_2024---a1b2c3d4-e5f6-7890-abcd-ef1234567890.pdf",
         expected: "报告_2024.pdf",
         basePath: "/media",
+      },
+      {
+        name: "extracts from Windows paths on non-Windows hosts",
+        filename: "report---a1b2c3d4-e5f6-7890-abcd-ef1234567890.pdf",
+        expected: "report.pdf",
+        basePath: String.raw`C:\media\inbound`,
+      },
+      {
+        name: "extracts from mixed-separator paths",
+        filename: "photo---a1b2c3d4-e5f6-7890-abcd-ef1234567890.png",
+        expected: "photo.png",
+        basePath: String.raw`C:\media/inbound`,
       },
     ] as const)("$name", async ({ filename, expected, basePath }) => {
       await expectOriginalFilenameCase({ filename, expected, basePath });

@@ -255,9 +255,11 @@ describe("requestExecApprovalDecision", () => {
           host: "gateway",
           id: "approval-id",
           nodeId: undefined,
+          requireDeliveryRoute: undefined,
           resolvedPath: undefined,
           security: "allowlist",
           sessionKey: undefined,
+          suppressDelivery: undefined,
           systemRunPlan: undefined,
           timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
           twoPhase: true,
@@ -286,9 +288,7 @@ describe("requestExecApprovalDecision", () => {
       ask: "always",
     });
 
-    const payload = vi.mocked(callGatewayTool).mock.calls[0]?.[2] as
-      | ApprovalRequestPayload
-      | undefined;
+    const payload = requireApprovalRequestPayload(0);
     expect(payload?.commandSpans).toStrictEqual([
       { startIndex: 0, endIndex: 2 },
       { startIndex: 0, endIndex: 4 },
@@ -311,9 +311,7 @@ describe("requestExecApprovalDecision", () => {
 
     expect(commandExplainerMock.explainShellCommand).not.toHaveBeenCalled();
     expect(commandExplainerMock.formatCommandSpans).not.toHaveBeenCalled();
-    const payload = vi.mocked(callGatewayTool).mock.calls[0]?.[2] as
-      | { commandSpans?: unknown }
-      | undefined;
+    const payload = requireApprovalRequestPayload(0);
     expect(payload?.commandSpans).toBeUndefined();
   });
 
@@ -332,9 +330,7 @@ describe("requestExecApprovalDecision", () => {
 
     expect(commandExplainerMock.explainShellCommand).not.toHaveBeenCalled();
     expect(commandExplainerMock.formatCommandSpans).not.toHaveBeenCalled();
-    const payload = vi.mocked(callGatewayTool).mock.calls[0]?.[2] as
-      | { commandSpans?: unknown }
-      | undefined;
+    const payload = requireApprovalRequestPayload(0);
     expect(payload?.commandSpans).toBeUndefined();
   });
 
@@ -357,9 +353,7 @@ describe("requestExecApprovalDecision", () => {
       ask: "always",
     });
 
-    const payload = vi.mocked(callGatewayTool).mock.calls[0]?.[2] as
-      | ApprovalRequestPayload
-      | undefined;
+    const payload = requireApprovalRequestPayload(0);
     expect(payload?.commandSpans).toStrictEqual([{ startIndex: 0, endIndex: 4 }]);
   });
 
@@ -444,9 +438,7 @@ describe("requestExecApprovalDecision", () => {
       ask: "always",
     });
 
-    const payload = vi.mocked(callGatewayTool).mock.calls[0]?.[2] as
-      | ApprovalRequestPayload
-      | undefined;
+    const payload = requireApprovalRequestPayload(0);
     expect(payload?.commandSpans).toEqual([{ startIndex: 0, endIndex: 4 }]);
   });
 });

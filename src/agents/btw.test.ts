@@ -10,6 +10,9 @@ const ensureOpenClawModelsJsonMock = vi.fn();
 const discoverAuthStorageMock = vi.fn();
 const discoverModelsMock = vi.fn();
 const resolveModelWithRegistryMock = vi.fn();
+const ensureAuthProfileStoreMock = vi.fn();
+const ensureAuthProfileStoreWithoutExternalProfilesMock = vi.fn();
+const resolveModelAsyncMock = vi.fn();
 const getApiKeyForModelMock = vi.fn();
 const requireApiKeyMock = vi.fn();
 const resolveSessionAuthProfileOverrideMock = vi.fn();
@@ -20,25 +23,30 @@ const resolveAgentWorkspaceDirMock = vi.fn();
 const listAgentEntriesMock = vi.fn();
 const prepareProviderRuntimeAuthMock = vi.fn();
 const registerProviderStreamForModelMock = vi.fn();
+const resolveEmbeddedAgentStreamFnMock = vi.fn();
 const diagDebugMock = vi.fn();
 
-vi.mock("@earendil-works/pi-ai", async () => {
-  const original =
-    await vi.importActual<typeof import("@earendil-works/pi-ai")>("@earendil-works/pi-ai");
+vi.mock("../llm/stream.js", async () => {
+  const original = await vi.importActual<typeof import("../llm/stream.js")>("../llm/stream.js");
   return {
     ...original,
     streamSimple: (...args: unknown[]) => streamSimpleMock(...args),
   };
 });
 
-vi.mock("node:fs/promises", () => ({
-  default: {
+vi.mock("node:fs/promises", async () => {
+  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+  return {
+    ...actual,
+    default: {
+      ...actual,
+      readFile: (...args: unknown[]) => readFileMock(...args),
+    },
     readFile: (...args: unknown[]) => readFileMock(...args),
-  },
-  readFile: (...args: unknown[]) => readFileMock(...args),
-}));
+  };
+});
 
-vi.mock("@earendil-works/pi-coding-agent", () => ({
+vi.mock("./sessions/session-manager.js", () => ({
   buildSessionContext: (...args: unknown[]) => buildSessionContextMock(...args),
   generateSummary: vi.fn(async () => "summary"),
   migrateSessionEntries: (...args: unknown[]) => migrateSessionEntriesMock(...args),
@@ -49,21 +57,49 @@ vi.mock("./models-config.js", () => ({
   ensureOpenClawModelsJson: (...args: unknown[]) => ensureOpenClawModelsJsonMock(...args),
 }));
 
-vi.mock("./pi-model-discovery.js", () => ({
+vi.mock("./agent-model-discovery.js", () => ({
   discoverAuthStorage: (...args: unknown[]) => discoverAuthStorageMock(...args),
   discoverModels: (...args: unknown[]) => discoverModelsMock(...args),
 }));
 
-vi.mock("./pi-embedded-runner/model.js", () => ({
+vi.mock("./embedded-agent-runner/model.js", () => ({
+  resolveModelAsync: (...args: unknown[]) => resolveModelAsyncMock(...args),
   resolveModelWithRegistry: (...args: unknown[]) => resolveModelWithRegistryMock(...args),
 }));
 
 vi.mock("./model-auth.js", () => ({
+  ensureAuthProfileStore: (...args: unknown[]) => ensureAuthProfileStoreMock(...args),
+  ensureAuthProfileStoreWithoutExternalProfiles: (...args: unknown[]) =>
+    ensureAuthProfileStoreWithoutExternalProfilesMock(...args),
   getApiKeyForModel: (...args: unknown[]) => getApiKeyForModelMock(...args),
   requireApiKey: (...args: unknown[]) => requireApiKeyMock(...args),
 }));
 
-vi.mock("./pi-embedded-runner/runs.js", () => ({
+vi.mock("./model-runtime-aliases.js", () => ({
+  resolveCliRuntimeExecutionProvider: ({
+    provider,
+    cfg,
+    modelId,
+  }: {
+    provider?: string;
+    cfg?: {
+      agents?: {
+        defaults?: {
+          models?: Record<string, { agentRuntime?: { id?: string } }>;
+        };
+      };
+    };
+    modelId?: string;
+  }) => {
+    const key = provider && modelId ? `${provider}/${modelId}` : undefined;
+    const runtime = key
+      ? cfg?.agents?.defaults?.models?.[key]?.agentRuntime?.id?.trim()
+      : undefined;
+    return runtime || undefined;
+  },
+}));
+
+vi.mock("./embedded-agent-runner/runs.js", () => ({
   getActiveEmbeddedRunSnapshot: (...args: unknown[]) => getActiveEmbeddedRunSnapshotMock(...args),
 }));
 
@@ -81,6 +117,10 @@ vi.mock("../plugins/provider-runtime.js", () => ({
 vi.mock("./provider-stream.js", () => ({
   registerProviderStreamForModel: (...args: unknown[]) =>
     registerProviderStreamForModelMock(...args),
+}));
+
+vi.mock("./embedded-agent-runner/stream-resolution.js", () => ({
+  resolveEmbeddedAgentStreamFn: (...args: unknown[]) => resolveEmbeddedAgentStreamFnMock(...args),
 }));
 
 vi.mock("./auth-profiles/session-override.js", () => ({
@@ -243,10 +283,29 @@ function mockActiveTranscript(messages: unknown[]) {
   });
 }
 
+function mockCall(
+  mockFn: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } },
+  callIndex = 0,
+): ReadonlyArray<unknown> {
+  const call = mockFn.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`Expected mock call ${callIndex + 1}`);
+  }
+  return call;
+}
+
+function mockArg(
+  mockFn: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } },
+  callIndex: number,
+  argIndex: number,
+): unknown {
+  return mockCall(mockFn, callIndex)[argIndex];
+}
+
 async function runMathSideQuestionAndCaptureContext() {
   mockDoneAnswer(MATH_ANSWER);
   await runMathSideQuestion();
-  const [, context] = streamSimpleMock.mock.calls[0] ?? [];
+  const context = mockArg(streamSimpleMock, 0, 1);
   return context;
 }
 
@@ -340,7 +399,10 @@ describe("runBtwSideQuestion", () => {
     ensureOpenClawModelsJsonMock.mockReset();
     discoverAuthStorageMock.mockReset();
     discoverModelsMock.mockReset();
+    resolveModelAsyncMock.mockReset();
     resolveModelWithRegistryMock.mockReset();
+    ensureAuthProfileStoreMock.mockReset();
+    ensureAuthProfileStoreWithoutExternalProfilesMock.mockReset();
     getApiKeyForModelMock.mockReset();
     requireApiKeyMock.mockReset();
     resolveSessionAuthProfileOverrideMock.mockReset();
@@ -351,6 +413,7 @@ describe("runBtwSideQuestion", () => {
     listAgentEntriesMock.mockReset();
     prepareProviderRuntimeAuthMock.mockReset();
     registerProviderStreamForModelMock.mockReset();
+    resolveEmbeddedAgentStreamFnMock.mockReset();
     diagDebugMock.mockReset();
     clearAgentHarnesses();
 
@@ -378,6 +441,8 @@ describe("runBtwSideQuestion", () => {
       id: "claude-sonnet-4-6",
       api: "anthropic-messages",
     });
+    ensureAuthProfileStoreMock.mockReturnValue({ version: 1, profiles: {} });
+    ensureAuthProfileStoreWithoutExternalProfilesMock.mockReturnValue({ version: 1, profiles: {} });
     getApiKeyForModelMock.mockResolvedValue({ apiKey: "secret", mode: "api-key", source: "test" });
     requireApiKeyMock.mockReturnValue("secret");
     resolveSessionAuthProfileOverrideMock.mockResolvedValue("profile-1");
@@ -388,6 +453,11 @@ describe("runBtwSideQuestion", () => {
     listAgentEntriesMock.mockReturnValue([]);
     prepareProviderRuntimeAuthMock.mockResolvedValue(undefined);
     registerProviderStreamForModelMock.mockReturnValue(undefined);
+    resolveEmbeddedAgentStreamFnMock.mockImplementation(
+      (params: { currentStreamFn: unknown; providerStreamFn?: unknown }) => {
+        return params.providerStreamFn ?? params.currentStreamFn;
+      },
+    );
   });
 
   it("streams blocks without persisting BTW data to disk", async () => {
@@ -474,9 +544,12 @@ describe("runBtwSideQuestion", () => {
     const result = await runSideQuestion();
 
     expect(result).toEqual({ text: "Final answer." });
-    const ensureArgs = ensureOpenClawModelsJsonMock.mock.calls[0];
+    const ensureArgs = mockCall(ensureOpenClawModelsJsonMock);
     expect(ensureArgs?.[1]).toBe(DEFAULT_AGENT_DIR);
     expect(ensureArgs?.[2]).toEqual({ workspaceDir: "/tmp/workspace" });
+    expect(discoverModelsMock).toHaveBeenCalledWith(undefined, DEFAULT_AGENT_DIR, {
+      workspaceDir: "/tmp/workspace",
+    });
   });
 
   it("routes Codex-selected BTW questions through the harness side-question hook", async () => {
@@ -523,7 +596,9 @@ describe("runBtwSideQuestion", () => {
     expect(sideQuestionParams.agentId).toBe("main");
     expect(sideQuestionParams.workspaceDir).toBe("/tmp/workspace");
     expect(sideQuestionParams.authProfileId).toBe("openai-codex:work");
-    expect(codexSideQuestionMock.mock.calls[0]?.[0].sessionFile).toContain("session-1.jsonl");
+    expect(
+      (mockArg(codexSideQuestionMock, 0, 0) as { sessionFile?: string }).sessionFile,
+    ).toContain("session-1.jsonl");
     expect(streamSimpleMock).not.toHaveBeenCalled();
     expect(registerProviderStreamForModelMock).not.toHaveBeenCalled();
   });
@@ -562,6 +637,203 @@ describe("runBtwSideQuestion", () => {
     expect(streamSimpleMock).toHaveBeenCalledTimes(1);
   });
 
+  it("does not let an auto-selected stale Anthropic profile suppress Claude CLI auth for BTW", async () => {
+    const claudeAuthStore = {
+      version: 1 as const,
+      profiles: {
+        "anthropic:api": {
+          type: "api_key" as const,
+          provider: "anthropic",
+          key: "static-key",
+        },
+        "anthropic:claude-cli": {
+          type: "oauth" as const,
+          provider: "claude-cli",
+          access: "claude-cli-access",
+          refresh: "claude-cli-refresh",
+          expires: Date.now() + 60_000,
+        },
+      },
+    };
+    ensureAuthProfileStoreMock.mockReturnValueOnce(claudeAuthStore);
+    getApiKeyForModelMock.mockResolvedValueOnce({
+      apiKey: "claude-cli-access",
+      mode: "oauth",
+      source: "profile:anthropic:claude-cli",
+      profileId: "anthropic:claude-cli",
+    });
+    requireApiKeyMock.mockReturnValueOnce("claude-cli-access");
+    mockDoneAnswer("Claude CLI answer.");
+
+    const result = await runSideQuestion({
+      cfg: {
+        auth: {
+          order: { anthropic: ["anthropic:claude-cli"] },
+          profiles: {
+            "anthropic:api": { provider: "anthropic", mode: "api_key" },
+            "anthropic:claude-cli": { provider: "claude-cli", mode: "oauth" },
+          },
+        },
+      } as never,
+      sessionEntry: createSessionEntry({
+        authProfileOverride: "anthropic:api",
+        authProfileOverrideSource: "auto",
+      }),
+    });
+
+    expect(result).toEqual({ text: "Claude CLI answer." });
+    expect(ensureAuthProfileStoreMock).toHaveBeenCalledWith(DEFAULT_AGENT_DIR, {
+      externalCliProviderIds: ["claude-cli"],
+      allowKeychainPrompt: false,
+    });
+    expect(ensureAuthProfileStoreWithoutExternalProfilesMock).not.toHaveBeenCalled();
+    expectRecordFields(mockArg(getApiKeyForModelMock, 0, 0), {
+      profileId: undefined,
+      store: claudeAuthStore,
+    });
+    expectRecordFields(mockArg(prepareProviderRuntimeAuthMock, 0, 0), {
+      provider: "anthropic",
+    });
+    expectRecordFields(
+      (mockArg(prepareProviderRuntimeAuthMock, 0, 0) as { context?: unknown }).context,
+      {
+        profileId: "anthropic:claude-cli",
+        authMode: "oauth",
+      },
+    );
+    expectRecordFields(mockArg(resolveEmbeddedAgentStreamFnMock, 0, 0), {
+      authProfileId: "anthropic:claude-cli",
+    });
+  });
+
+  it("loads Claude CLI auth for BTW from persisted auth-store order", async () => {
+    const staticAuthStore = {
+      version: 1 as const,
+      profiles: {},
+      order: { anthropic: ["anthropic:claude-cli"] },
+    };
+    const claudeAuthStore = {
+      version: 1 as const,
+      profiles: {
+        "anthropic:claude-cli": {
+          type: "oauth" as const,
+          provider: "claude-cli",
+          access: "claude-cli-access",
+          refresh: "claude-cli-refresh",
+          expires: Date.now() + 60_000,
+        },
+      },
+    };
+    ensureAuthProfileStoreWithoutExternalProfilesMock.mockReturnValueOnce(staticAuthStore);
+    ensureAuthProfileStoreMock.mockReturnValueOnce(claudeAuthStore);
+    getApiKeyForModelMock.mockResolvedValueOnce({
+      apiKey: "claude-cli-access",
+      mode: "oauth",
+      source: "profile:anthropic:claude-cli",
+      profileId: "anthropic:claude-cli",
+    });
+    requireApiKeyMock.mockReturnValueOnce("claude-cli-access");
+    resolveSessionAuthProfileOverrideMock.mockResolvedValueOnce(undefined);
+    mockDoneAnswer("Claude CLI answer.");
+
+    const result = await runSideQuestion();
+
+    expect(result).toEqual({ text: "Claude CLI answer." });
+    expect(ensureAuthProfileStoreWithoutExternalProfilesMock).toHaveBeenCalledWith(
+      DEFAULT_AGENT_DIR,
+      { allowKeychainPrompt: false },
+    );
+    expect(ensureAuthProfileStoreMock).toHaveBeenCalledWith(DEFAULT_AGENT_DIR, {
+      externalCliProviderIds: ["claude-cli"],
+      allowKeychainPrompt: false,
+    });
+    expectRecordFields(mockArg(getApiKeyForModelMock, 0, 0), {
+      profileId: undefined,
+      store: claudeAuthStore,
+    });
+  });
+
+  it("keeps user-locked static Anthropic auth for BTW", async () => {
+    getApiKeyForModelMock.mockResolvedValueOnce({
+      apiKey: "static-key",
+      mode: "api-key",
+      source: "profile:anthropic:api",
+      profileId: "anthropic:api",
+    });
+    requireApiKeyMock.mockReturnValueOnce("static-key");
+    resolveSessionAuthProfileOverrideMock.mockResolvedValueOnce("anthropic:api");
+    mockDoneAnswer("Static answer.");
+
+    await runSideQuestion({
+      cfg: {
+        auth: {
+          order: { anthropic: ["anthropic:claude-cli"] },
+          profiles: {
+            "anthropic:api": { provider: "anthropic", mode: "api_key" },
+            "anthropic:claude-cli": { provider: "claude-cli", mode: "oauth" },
+          },
+        },
+      } as never,
+      sessionEntry: createSessionEntry({
+        authProfileOverride: "anthropic:api",
+        authProfileOverrideSource: "user",
+      }),
+    });
+
+    expect(ensureAuthProfileStoreMock).not.toHaveBeenCalled();
+    expectRecordFields(mockArg(getApiKeyForModelMock, 0, 0), {
+      profileId: "anthropic:api",
+    });
+    expect((mockArg(getApiKeyForModelMock, 0, 0) as { store?: unknown }).store).toBeUndefined();
+    expectRecordFields(
+      (mockArg(prepareProviderRuntimeAuthMock, 0, 0) as { context?: unknown }).context,
+      {
+        profileId: "anthropic:api",
+        authMode: "api-key",
+      },
+    );
+  });
+
+  it("keeps legacy source-less user-locked Anthropic auth for BTW", async () => {
+    getApiKeyForModelMock.mockResolvedValueOnce({
+      apiKey: "static-key",
+      mode: "api-key",
+      source: "profile:anthropic:api",
+      profileId: "anthropic:api",
+    });
+    requireApiKeyMock.mockReturnValueOnce("static-key");
+    resolveSessionAuthProfileOverrideMock.mockResolvedValueOnce("anthropic:api");
+    mockDoneAnswer("Legacy static answer.");
+
+    await runSideQuestion({
+      cfg: {
+        auth: {
+          order: { anthropic: ["anthropic:claude-cli"] },
+          profiles: {
+            "anthropic:api": { provider: "anthropic", mode: "api_key" },
+            "anthropic:claude-cli": { provider: "claude-cli", mode: "oauth" },
+          },
+        },
+      } as never,
+      sessionEntry: createSessionEntry({
+        authProfileOverride: "anthropic:api",
+      }),
+    });
+
+    expect(ensureAuthProfileStoreMock).not.toHaveBeenCalled();
+    expectRecordFields(mockArg(getApiKeyForModelMock, 0, 0), {
+      profileId: "anthropic:api",
+    });
+    expect((mockArg(getApiKeyForModelMock, 0, 0) as { store?: unknown }).store).toBeUndefined();
+    expectRecordFields(
+      (mockArg(prepareProviderRuntimeAuthMock, 0, 0) as { context?: unknown }).context,
+      {
+        profileId: "anthropic:api",
+        authMode: "api-key",
+      },
+    );
+  });
+
   it("applies provider runtime auth before streaming github-copilot BTW questions", async () => {
     resolveModelWithRegistryMock.mockReturnValue({
       provider: "github-copilot",
@@ -588,22 +860,19 @@ describe("runBtwSideQuestion", () => {
     });
 
     expect(result).toEqual({ text: "Copilot answer." });
-    const runtimeAuthParams = expectRecordFields(
-      prepareProviderRuntimeAuthMock.mock.calls[0]?.[0],
-      {
-        provider: "github-copilot",
-        workspaceDir: "/tmp/workspace",
-      },
-    );
+    const runtimeAuthParams = expectRecordFields(mockArg(prepareProviderRuntimeAuthMock, 0, 0), {
+      provider: "github-copilot",
+      workspaceDir: "/tmp/workspace",
+    });
     expectRecordFields(runtimeAuthParams.context, {
       provider: "github-copilot",
       modelId: "gpt-5.4",
       workspaceDir: "/tmp/workspace",
       apiKey: "github-token",
       authMode: "token",
-      profileId: "profile-1",
+      profileId: "github-copilot:github",
     });
-    const [streamModel, , streamOptions] = streamSimpleMock.mock.calls[0] ?? [];
+    const [streamModel, , streamOptions] = mockCall(streamSimpleMock);
     expectRecordFields(streamModel, {
       provider: "github-copilot",
       id: "gpt-5.4",
@@ -631,12 +900,9 @@ describe("runBtwSideQuestion", () => {
     const result = await runSideQuestion({ provider: "ollama", model: "glm-5.1" });
 
     expect(result).toEqual({ text: "Ollama Cloud answer." });
-    const registerParams = expectRecordFields(
-      registerProviderStreamForModelMock.mock.calls[0]?.[0],
-      {
-        workspaceDir: "/tmp/workspace",
-      },
-    );
+    const registerParams = expectRecordFields(mockArg(registerProviderStreamForModelMock, 0, 0), {
+      workspaceDir: "/tmp/workspace",
+    });
     expectRecordFields(registerParams.model, {
       provider: "ollama",
       api: "openai-completions",
@@ -646,13 +912,58 @@ describe("runBtwSideQuestion", () => {
     expect(streamSimpleMock).not.toHaveBeenCalled();
   });
 
-  it("falls back to streamSimple when no provider stream fn is registered", async () => {
+  it("routes MiniMax Anthropic fallback streams through the embedded resolver", async () => {
+    resolveModelWithRegistryMock.mockReturnValue({
+      provider: "minimax-portal",
+      id: "MiniMax-M2.7",
+      api: "anthropic-messages",
+      baseUrl: "https://api.minimax.io/anthropic",
+      maxTokens: 196_608,
+    });
+    registerProviderStreamForModelMock.mockReturnValue(undefined);
+    const resolvedStreamFn = vi
+      .fn()
+      .mockReturnValue(makeAsyncEvents([createDoneEvent("MiniMax answer.")]));
+    resolveEmbeddedAgentStreamFnMock.mockReturnValueOnce(resolvedStreamFn);
+
+    const result = await runSideQuestion({
+      provider: "minimax-portal",
+      model: "MiniMax-M2.7",
+    });
+
+    expect(result).toEqual({ text: "MiniMax answer." });
+    const resolverParams = expectRecordFields(mockArg(resolveEmbeddedAgentStreamFnMock, 0, 0), {
+      sessionId: "session-1",
+      resolvedApiKey: "secret",
+      authProfileId: "profile-1",
+    });
+    expect(resolverParams.providerStreamFn).toBeUndefined();
+    expectRecordFields(resolverParams.model, {
+      provider: "minimax-portal",
+      id: "MiniMax-M2.7",
+      api: "anthropic-messages",
+      maxTokens: 196_608,
+    });
+    expect(resolvedStreamFn).toHaveBeenCalledTimes(1);
+    expect(streamSimpleMock).not.toHaveBeenCalled();
+  });
+
+  it("uses the embedded resolver fallback when no provider stream fn is registered", async () => {
     registerProviderStreamForModelMock.mockReturnValue(undefined);
     mockDoneAnswer("Fallback answer.");
 
     const result = await runSideQuestion();
 
     expect(result).toEqual({ text: "Fallback answer." });
+    expect(resolveEmbeddedAgentStreamFnMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        currentStreamFn: expect.any(Function),
+        providerStreamFn: undefined,
+        sessionId: "session-1",
+        resolvedApiKey: "secret",
+        authProfileId: "profile-1",
+      }),
+    );
     expect(streamSimpleMock).toHaveBeenCalledTimes(1);
   });
 
@@ -661,7 +972,7 @@ describe("runBtwSideQuestion", () => {
 
     await runSideQuestion();
 
-    const [, , options] = streamSimpleMock.mock.calls[0] ?? [];
+    const options = mockArg(streamSimpleMock, 0, 2);
     const onPayload = (options as { onPayload?: (payload: unknown) => void })?.onPayload;
     const payloadWithEmptyTools = { messages: [], tools: [] as unknown[] };
 
@@ -712,7 +1023,7 @@ describe("runBtwSideQuestion", () => {
     const result = await runSideQuestion({ resolvedThinkLevel: "adaptive" });
 
     expect(result).toEqual({ text: "Final answer." });
-    const [, , options] = streamSimpleMock.mock.calls[0] ?? [];
+    const options = mockArg(streamSimpleMock, 0, 2);
     expect((options as { reasoning?: unknown } | undefined)?.reasoning).toBeUndefined();
   });
 
@@ -816,6 +1127,7 @@ describe("runBtwSideQuestion", () => {
 
     const result = await runMathSideQuestion();
 
+    expect(buildSessionContextMock).toHaveBeenCalledTimes(1);
     expect(buildSessionContextMock).toHaveBeenCalledWith([assistantEntry]);
     expect(result).toEqual({ text: MATH_ANSWER });
   });
@@ -843,6 +1155,7 @@ describe("runBtwSideQuestion", () => {
 
     const result = await runMathSideQuestion();
 
+    expect(buildSessionContextMock).toHaveBeenCalledTimes(1);
     expect(buildSessionContextMock).toHaveBeenCalledWith([userEntry, assistantEntry]);
     expect(result).toEqual({ text: MATH_ANSWER });
   });
@@ -865,6 +1178,7 @@ describe("runBtwSideQuestion", () => {
 
     const result = await runMathSideQuestion();
 
+    expect(buildSessionContextMock).toHaveBeenCalledTimes(1);
     expect(buildSessionContextMock).toHaveBeenCalledWith([userEntry, assistantEntry]);
     expect(result).toEqual({ text: MATH_ANSWER });
     expect(diagDebugMock).toHaveBeenCalledWith(
@@ -878,7 +1192,7 @@ describe("runBtwSideQuestion", () => {
     const result = await runMathSideQuestion();
 
     expect(result).toEqual({ text: MATH_ANSWER });
-    expect(buildSessionContextMock).toHaveBeenCalled();
+    expect(buildSessionContextMock).toHaveBeenCalledTimes(1);
   });
 
   it("does not log transcript persistence warnings because BTW no longer writes to disk", async () => {

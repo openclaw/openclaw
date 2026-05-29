@@ -1,6 +1,6 @@
-import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
+import { normalizeLowercaseStringOrEmpty, uniqueStrings } from "../string-coerce.ts";
 import { extractQueryTerms } from "../usage-helpers.ts";
-import { CostDailyEntry, UsageAggregates, UsageSessionEntry } from "./usageTypes.ts";
+import type { CostDailyEntry, UsageAggregates, UsageSessionEntry } from "./usageTypes.ts";
 
 function downloadTextFile(filename: string, content: string, type = "text/plain") {
   const blob = new Blob([content], { type: `${type};charset=utf-8` });
@@ -143,13 +143,7 @@ const buildQuerySuggestions = (
   const value = normalizeLowercaseStringOrEmpty(rawValue);
 
   const unique = (items: Array<string | undefined>): string[] => {
-    const set = new Set<string>();
-    for (const item of items) {
-      if (item) {
-        set.add(item);
-      }
-    }
-    return Array.from(set);
+    return uniqueStrings(items.filter((item): item is string => Boolean(item)));
   };
 
   const agents = unique(sessions.map((s) => s.agentId)).slice(0, 6);

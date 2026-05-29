@@ -11,6 +11,19 @@ import {
 import { createMessageReceiveContext, shouldAckMessageAfterStage } from "./receive.js";
 import { classifyDurableSendRecoveryState, createDurableMessageStateRecord } from "./state.js";
 
+function requireMockCall(
+  mock: { mock: { calls: unknown[][] } },
+  callIndex: number,
+  label: string,
+): unknown[] {
+  const resolvedIndex = callIndex < 0 ? mock.mock.calls.length + callIndex : callIndex;
+  const call = mock.mock.calls[resolvedIndex];
+  if (!call) {
+    throw new Error(`expected ${label} call ${callIndex}`);
+  }
+  return call;
+}
+
 describe("message lifecycle primitives", () => {
   it("tracks live preview finalization state", () => {
     const receipt = {
@@ -86,20 +99,52 @@ describe("message lifecycle primitives", () => {
     expect(liveState.receipt?.primaryPlatformMessageId).toBe("preview-1");
     expect(liveState.receipt?.platformMessageIds).toEqual(["preview-1"]);
     expect(onPreviewFinalized).toHaveBeenCalledTimes(1);
-    const [previewId, receiptArg, stateArg] = onPreviewFinalized.mock.calls[0] as unknown as [
-      string,
-      { primaryPlatformMessageId?: string },
-      unknown,
-    ];
+    const [previewId, receiptArg, stateArg] = requireMockCall(
+      onPreviewFinalized,
+      0,
+      "preview finalized",
+    ) as [string, { primaryPlatformMessageId?: string }, unknown];
     expect(previewId).toBe("preview-1");
     expect(receiptArg.primaryPlatformMessageId).toBe("preview-1");
     expect(stateArg).toBe(liveState);
+  });
+
+  it("delivers supplemental payloads after finalizing live previews", async () => {
+    const editFinal = vi.fn(async () => undefined);
+    const deliverNormally = vi.fn(async () => undefined);
+    const deliverSupplemental = vi.fn(async () => true);
+
+    const result = await deliverFinalizableLivePreview<
+      { text?: string; mediaUrl: string },
+      string,
+      { text?: string }
+    >({
+      kind: "final",
+      payload: { text: "done", mediaUrl: "file:///tmp/reply.mp3" },
+      draft: {
+        flush: vi.fn(async () => undefined),
+        id: () => "preview-1",
+        seal: vi.fn(async () => undefined),
+        clear: vi.fn(async () => undefined),
+      },
+      buildFinalEdit: (payload) => ({ text: payload.text }),
+      buildSupplementalPayload: (payload) => ({ mediaUrl: payload.mediaUrl }),
+      editFinal,
+      deliverNormally,
+      deliverSupplemental,
+    });
+
+    expect(result.kind).toBe("preview-finalized");
+    expect(editFinal).toHaveBeenCalledWith("preview-1", { text: "done" });
+    expect(deliverNormally).not.toHaveBeenCalled();
+    expect(deliverSupplemental).toHaveBeenCalledWith({ mediaUrl: "file:///tmp/reply.mp3" });
   });
 
   it("treats live preview fallback delivery as terminal state", async () => {
     const discardPending = vi.fn(async () => undefined);
     const clear = vi.fn(async () => undefined);
     const deliverNormally = vi.fn(async () => true);
+    const onNormalDelivered = vi.fn(async () => undefined);
 
     const result = await deliverFinalizableLivePreview({
       kind: "final",
@@ -113,11 +158,13 @@ describe("message lifecycle primitives", () => {
       buildFinalEdit: () => undefined,
       editFinal: vi.fn(async () => undefined),
       deliverNormally,
+      onNormalDelivered,
     });
 
     expect(result.kind).toBe("normal-delivered");
     expect(discardPending).toHaveBeenCalledTimes(1);
     expect(deliverNormally).toHaveBeenCalledWith({ text: "with media" });
+    expect(onNormalDelivered).toHaveBeenCalledTimes(1);
     expect(clear).toHaveBeenCalledTimes(1);
     const liveState = result.liveState;
     if (!liveState) {
@@ -125,6 +172,35 @@ describe("message lifecycle primitives", () => {
     }
     expect(liveState.phase).toBe("cancelled");
     expect(liveState.canFinalizeInPlace).toBe(false);
+  });
+
+  it("does not complete live preview fallback state when normal delivery throws", async () => {
+    const discardPending = vi.fn(async () => undefined);
+    const clear = vi.fn(async () => undefined);
+    const onNormalDelivered = vi.fn(async () => undefined);
+
+    await expect(
+      deliverFinalizableLivePreview({
+        kind: "final",
+        payload: { text: "with media" },
+        draft: {
+          flush: vi.fn(async () => undefined),
+          id: () => "preview-2",
+          discardPending,
+          clear,
+        },
+        buildFinalEdit: () => undefined,
+        editFinal: vi.fn(async () => undefined),
+        deliverNormally: vi.fn(async () => {
+          throw new Error("send failed");
+        }),
+        onNormalDelivered,
+      }),
+    ).rejects.toThrow("send failed");
+
+    expect(discardPending).toHaveBeenCalledTimes(1);
+    expect(onNormalDelivered).not.toHaveBeenCalled();
+    expect(clear).not.toHaveBeenCalled();
   });
 
   it("delivers through finalizable live preview adapters", async () => {
@@ -213,7 +289,7 @@ describe("message lifecycle primitives", () => {
     expect(result.liveState?.phase).toBe("previewing");
     expect(deliverNormally).not.toHaveBeenCalled();
     expect(handlePreviewEditError).toHaveBeenCalledTimes(1);
-    const [editErrorContext] = handlePreviewEditError.mock.calls[0] as unknown as [
+    const [editErrorContext] = requireMockCall(handlePreviewEditError, 0, "preview edit error") as [
       { error: unknown; id?: string; edit?: unknown; payload?: unknown },
     ];
     expect(editErrorContext.error).toBe(editError);

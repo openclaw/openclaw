@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { resolveMissingRequestedScope } from "../shared/operator-scope-compat.js";
 import { normalizeArrayBackedTrimmedStringList } from "../shared/string-normalization.js";
 import { type NodeApprovalScope, resolveNodePairApprovalScopes } from "./node-pairing-authz.js";
+import { sameNodeApprovalSurfaceSet, sameNodePermissionSurface } from "./node-pairing-surface.js";
 import {
   createAsyncLock,
   pruneExpiredPending,
@@ -16,6 +17,8 @@ import { generatePairingToken, verifyPairingToken } from "./pairing-token.js";
 
 type NodeDeclaredSurface = {
   nodeId: string;
+  clientId?: string;
+  clientMode?: string;
   displayName?: string;
   platform?: string;
   version?: string;
@@ -39,6 +42,15 @@ export type NodePairingPendingRequest = NodePairingRequestInput & {
   requestId: string;
   silent?: boolean;
   ts: number;
+};
+
+export type NodePairingSupersededRequest = Pick<NodePairingPendingRequest, "requestId" | "nodeId">;
+
+export type RequestNodePairingResult = {
+  status: "pending";
+  request: NodePairingPendingRequest;
+  created: boolean;
+  superseded?: NodePairingSupersededRequest[];
 };
 
 type NodePairingPendingEntry = NodePairingPendingRequest & {
@@ -77,6 +89,8 @@ function buildPendingNodePairingRequest(params: {
   return {
     requestId: params.requestId ?? randomUUID(),
     nodeId: params.req.nodeId,
+    clientId: params.req.clientId,
+    clientMode: params.req.clientMode,
     displayName: params.req.displayName,
     platform: params.req.platform,
     version: params.req.version,
@@ -99,6 +113,8 @@ function refreshPendingNodePairingRequest(
 ): NodePairingPendingRequest {
   return {
     ...existing,
+    clientId: incoming.clientId ?? existing.clientId,
+    clientMode: incoming.clientMode ?? existing.clientMode,
     displayName: incoming.displayName ?? existing.displayName,
     platform: incoming.platform ?? existing.platform,
     version: incoming.version ?? existing.version,
@@ -113,6 +129,47 @@ function refreshPendingNodePairingRequest(
     // Preserve interactive visibility if either request needs attention.
     silent: Boolean(existing.silent && incoming.silent),
     ts: Date.now(),
+  };
+}
+
+function samePendingApprovalSurface(
+  existing: NodePairingPendingRequest,
+  incoming: NodePairingRequestInput,
+): boolean {
+  const incomingCaps = normalizeArrayBackedTrimmedStringList(incoming.caps) ?? existing.caps;
+  const incomingCommands =
+    normalizeArrayBackedTrimmedStringList(incoming.commands) ?? existing.commands;
+  const incomingPermissions = incoming.permissions ?? existing.permissions;
+  return (
+    sameNodeApprovalSurfaceSet(existing.caps, incomingCaps) &&
+    sameNodeApprovalSurfaceSet(existing.commands, incomingCommands) &&
+    sameNodePermissionSurface(existing.permissions, incomingPermissions)
+  );
+}
+
+function mergeNodePairingReplacementInput(params: {
+  existing: readonly NodePairingPendingRequest[];
+  incoming: NodePairingRequestInput;
+}): NodePairingRequestInput {
+  const latest = params.existing[0];
+  return {
+    nodeId: params.incoming.nodeId,
+    clientId: params.incoming.clientId ?? latest?.clientId,
+    clientMode: params.incoming.clientMode ?? latest?.clientMode,
+    displayName: params.incoming.displayName ?? latest?.displayName,
+    platform: params.incoming.platform ?? latest?.platform,
+    version: params.incoming.version ?? latest?.version,
+    coreVersion: params.incoming.coreVersion ?? latest?.coreVersion,
+    uiVersion: params.incoming.uiVersion ?? latest?.uiVersion,
+    deviceFamily: params.incoming.deviceFamily ?? latest?.deviceFamily,
+    modelIdentifier: params.incoming.modelIdentifier ?? latest?.modelIdentifier,
+    caps: params.incoming.caps ?? latest?.caps,
+    commands: params.incoming.commands ?? latest?.commands,
+    permissions: params.incoming.permissions ?? latest?.permissions,
+    remoteIp: params.incoming.remoteIp ?? latest?.remoteIp,
+    silent: Boolean(
+      params.incoming.silent && params.existing.every((pending) => pending.silent === true),
+    ),
   };
 }
 
@@ -186,11 +243,7 @@ export async function getPairedNode(
 export async function requestNodePairing(
   req: NodePairingRequestInput,
   baseDir?: string,
-): Promise<{
-  status: "pending";
-  request: NodePairingPendingRequest;
-  created: boolean;
-}> {
+): Promise<RequestNodePairingResult> {
   return await withLock(async () => {
     const state = await loadState(baseDir);
     const nodeId = normalizeNodeId(req.nodeId);
@@ -200,26 +253,27 @@ export async function requestNodePairing(
     const pendingForNode = Object.values(state.pendingById)
       .filter((pending) => pending.nodeId === nodeId)
       .toSorted((left, right) => right.ts - left.ts);
-    return await reconcilePendingPairingRequests({
+    const result = await reconcilePendingPairingRequests({
       pendingById: state.pendingById,
       existing: pendingForNode,
       incoming: {
         ...req,
         nodeId,
       },
-      canRefreshSingle: () => true,
+      canRefreshSingle: (existing, incoming) => samePendingApprovalSurface(existing, incoming),
       refreshSingle: (existing, incoming) => refreshPendingNodePairingRequest(existing, incoming),
       buildReplacement: ({ existing, incoming }) =>
         buildPendingNodePairingRequest({
-          req: {
-            ...incoming,
-            silent: Boolean(
-              incoming.silent && existing.every((pending) => pending.silent === true),
-            ),
-          },
+          req: mergeNodePairingReplacementInput({ existing, incoming }),
         }),
       persist: async () => await persistState(state, baseDir),
     });
+    const superseded = result.created
+      ? pendingForNode
+          .filter((pending) => pending.requestId !== result.request.requestId)
+          .map((pending) => ({ requestId: pending.requestId, nodeId: pending.nodeId }))
+      : [];
+    return superseded.length > 0 ? { ...result, superseded } : result;
   });
 }
 
@@ -249,6 +303,8 @@ export async function approveNodePairing(
     const node: NodePairingPairedNode = {
       nodeId: pending.nodeId,
       token: newToken(),
+      clientId: pending.clientId,
+      clientMode: pending.clientMode,
       displayName: pending.displayName,
       platform: pending.platform,
       version: pending.version,
@@ -335,6 +391,8 @@ export async function updatePairedNodeMetadata(
 
     const next: NodePairingPairedNode = {
       ...existing,
+      clientId: patch.clientId ?? existing.clientId,
+      clientMode: patch.clientMode ?? existing.clientMode,
       displayName: patch.displayName ?? existing.displayName,
       platform: patch.platform ?? existing.platform,
       version: patch.version ?? existing.version,

@@ -1,4 +1,4 @@
-import type { Chat, Message } from "@grammyjs/types";
+import type { Chat, Message } from "grammy/types";
 import { describe, expect, it } from "vitest";
 import { getTelegramSequentialKey } from "./sequential-key.js";
 
@@ -79,6 +79,41 @@ describe("getTelegramSequentialKey", () => {
       "telegram:123:control",
     ],
     [
+      {
+        message: mockMessage({
+          chat: mockChat({ id: -100, type: "supergroup", is_forum: true }),
+          is_topic_message: true,
+          message_thread_id: 5907,
+          text: "/stop@vacs_tars_bot",
+        }),
+      },
+      "telegram:-100:control",
+    ],
+    [
+      {
+        me: { username: "openclaw_bot" } as never,
+        message: mockMessage({
+          chat: mockChat({ id: -100, type: "supergroup", is_forum: true }),
+          is_topic_message: true,
+          message_thread_id: 5907,
+          text: "/stop@some_other_bot",
+        }),
+      },
+      "telegram:-100:topic:5907",
+    ],
+    [
+      {
+        me: { username: "openclaw_bot" } as never,
+        message: mockMessage({
+          chat: mockChat({ id: -100, type: "supergroup", is_forum: true }),
+          is_topic_message: true,
+          message_thread_id: 5907,
+          text: "/stop@openclaw_bot!",
+        }),
+      },
+      "telegram:-100:control",
+    ],
+    [
       { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/status" }) },
       "telegram:123:control",
     ],
@@ -107,10 +142,31 @@ describe("getTelegramSequentialKey", () => {
       "telegram:123:control",
     ],
     [
+      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/diagnostics" }) },
+      "telegram:123",
+    ],
+    [
+      {
+        message: mockMessage({
+          chat: mockChat({ id: 123 }),
+          text: "/diagnostics confirm abc123def456",
+        }),
+      },
+      "telegram:123",
+    ],
+    [
       { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/export-session" }) },
       "telegram:123",
     ],
     [{ message: mockMessage({ chat: mockChat({ id: 123 }), text: "/export" }) }, "telegram:123"],
+    [
+      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/export-trajectory" }) },
+      "telegram:123",
+    ],
+    [
+      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/trajectory" }) },
+      "telegram:123",
+    ],
     [
       { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/btw what is the time?" }) },
       "telegram:123:btw:1",

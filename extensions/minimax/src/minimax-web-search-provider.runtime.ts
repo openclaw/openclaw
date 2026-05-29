@@ -1,6 +1,7 @@
 import {
   createProviderHttpError,
   formatProviderHttpErrorMessage,
+  readProviderJsonResponse,
 } from "openclaw/plugin-sdk/provider-http";
 import {
   DEFAULT_SEARCH_COUNT,
@@ -9,9 +10,10 @@ import {
   mergeScopedSearchConfig,
   readCachedSearchPayload,
   readConfiguredSecretString,
-  readNumberParam,
+  readPositiveIntegerParam,
   readProviderEnvValue,
   readStringParam,
+  MAX_SEARCH_COUNT,
   resolveProviderWebSearchPluginConfig,
   resolveSearchCacheTtlMs,
   resolveSearchCount,
@@ -145,7 +147,10 @@ async function runMiniMaxSearch(params: {
         throw await createProviderHttpError(res, "MiniMax Search API error");
       }
 
-      const data = (await res.json()) as MiniMaxSearchResponse;
+      const data = await readProviderJsonResponse<MiniMaxSearchResponse>(
+        res,
+        "MiniMax Search API error",
+      );
 
       if (data.base_resp?.status_code && data.base_resp.status_code !== 0) {
         throw new Error(
@@ -210,7 +215,12 @@ export async function executeMiniMaxWebSearchProviderTool(
   const params = args;
   const query = readStringParam(params, "query", { required: true });
   const count =
-    readNumberParam(params, "count", { integer: true }) ?? searchConfig?.maxResults ?? undefined;
+    readPositiveIntegerParam(params, "count", {
+      max: MAX_SEARCH_COUNT,
+      message: `count must be an integer from 1 to ${MAX_SEARCH_COUNT}.`,
+    }) ??
+    searchConfig?.maxResults ??
+    undefined;
 
   const resolvedCount = resolveSearchCount(count, DEFAULT_SEARCH_COUNT);
   const endpoint = resolveMiniMaxEndpoint(searchConfig, config);
@@ -255,10 +265,12 @@ export async function executeMiniMaxWebSearchProviderTool(
   return payload;
 }
 
-export const __testing = {
+export const testing = {
   MINIMAX_SEARCH_ENDPOINT_GLOBAL,
   MINIMAX_SEARCH_ENDPOINT_CN,
   resolveMiniMaxApiKey,
   resolveMiniMaxEndpoint,
   resolveMiniMaxRegion,
+  readMiniMaxSearchJsonResponse: readProviderJsonResponse<MiniMaxSearchResponse>,
 } as const;
+export { testing as __testing };

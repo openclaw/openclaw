@@ -1,10 +1,17 @@
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
 import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { classifyBundledExtensionSourcePath } from "../../../../scripts/lib/extension-source-classifier.mjs";
 import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "../../../plugin-sdk/test-helpers/public-artifacts.js";
 import { loadPluginManifestRegistry } from "../../../plugins/manifest-registry.js";
+import { expectNoReaddirSyncDuring } from "../../../test-utils/fs-scan-assertions.js";
+import {
+  listGitTrackedFiles,
+  toRepoPath,
+  toRepoRelativePath,
+} from "../../../test-utils/repo-files.js";
 
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const REPO_ROOT = resolve(ROOT_DIR, "..");
@@ -48,7 +55,7 @@ const GUARDED_CHANNEL_EXTENSIONS = new Set([
 
 function resolveBundledPluginSourceRoot(rootDir: string): string {
   const sourceRoot = resolve(REPO_ROOT, BUNDLED_PLUGIN_ROOT_DIR, basename(rootDir));
-  return existsSync(sourceRoot) ? sourceRoot : rootDir;
+  return fs.existsSync(sourceRoot) ? sourceRoot : rootDir;
 }
 
 function bundledPluginFile(pluginId: string, relativePath: string): string {
@@ -261,6 +268,7 @@ const RE_EXPORT_STAR_RE =
 const RE_EXPORT_NAMED_RE = /^\s*export\s+(?:type\s+)?\{[^}]*\}\s+from\s*["']([^"']+)["']/gmu;
 const DYNAMIC_IMPORT_RE = /\bimport\s*\(\s*["']([^"']+)["']\s*\)/gmu;
 const REQUIRE_RE = /\brequire\s*\(\s*["']([^"']+)["']\s*\)/gmu;
+const trackedSourceFilesByRoot = new Map<string, readonly string[] | null>();
 
 type SourceFileCollectorOptions = {
   rootDir: string;
@@ -274,13 +282,58 @@ function readSource(path: string): string {
   if (cached !== undefined) {
     return cached;
   }
-  const text = readFileSync(fullPath, "utf8");
+  const text = fs.readFileSync(fullPath, "utf8");
   sourceTextCache.set(fullPath, text);
   return text;
 }
 
 function normalizePath(path: string): string {
-  return path.replaceAll("\\", "/");
+  return toRepoPath(path);
+}
+
+function repoRelativePath(path: string): string {
+  return toRepoRelativePath(REPO_ROOT, path);
+}
+
+function listTrackedSourceFiles(options: SourceFileCollectorOptions): string[] | null {
+  const relativeRoot = repoRelativePath(options.rootDir);
+  if (!relativeRoot || relativeRoot.startsWith("..")) {
+    return null;
+  }
+  if (trackedSourceFilesByRoot.has(relativeRoot)) {
+    const files = trackedSourceFilesByRoot.get(relativeRoot);
+    return files ? [...files] : null;
+  }
+  const trackedFiles = listGitTrackedFiles({ repoRoot: REPO_ROOT, pathspecs: relativeRoot });
+  if (!trackedFiles) {
+    trackedSourceFilesByRoot.set(relativeRoot, null);
+    return null;
+  }
+  const files = trackedFiles
+    .filter((line) => {
+      if (!/\.(?:[cm]?ts|[cm]?js|tsx|jsx)$/u.test(line) || line.endsWith(".d.ts")) {
+        return false;
+      }
+      if (!fs.existsSync(resolve(REPO_ROOT, line))) {
+        return false;
+      }
+      const parts = line.split("/");
+      return !parts.some(
+        (part) => part === "node_modules" || part === "dist" || part === "coverage",
+      );
+    })
+    .map((line) => resolve(REPO_ROOT, line))
+    .filter((fullPath) => {
+      const normalizedFullPath = normalizePath(fullPath);
+      const entryName = basename(fullPath);
+      return !(
+        options.shouldSkipPath?.(normalizedFullPath) ||
+        options.shouldSkipEntry?.({ entryName, normalizedFullPath })
+      );
+    })
+    .toSorted();
+  trackedSourceFilesByRoot.set(relativeRoot, files);
+  return [...files];
 }
 
 function collectSourceFiles(
@@ -290,6 +343,11 @@ function collectSourceFiles(
   if (cached) {
     return cached;
   }
+  const trackedFiles = listTrackedSourceFiles(options);
+  if (trackedFiles) {
+    return trackedFiles;
+  }
+
   const files: string[] = [];
   const stack = [options.rootDir];
   while (stack.length > 0) {
@@ -297,7 +355,7 @@ function collectSourceFiles(
     if (!current) {
       continue;
     }
-    for (const entry of readdirSync(current, { withFileTypes: true })) {
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
       const fullPath = resolve(current, entry.name);
       const normalizedFullPath = normalizePath(fullPath);
       if (entry.isDirectory()) {
@@ -357,6 +415,55 @@ function collectExtensionSourceFiles(): string[] {
     }),
   );
   return extensionSourceFilesCache;
+}
+
+function isGuardedExtensionSourceFile(relativePath: string): boolean {
+  if (!/\.(?:[cm]?ts|[cm]?js|tsx|jsx)$/u.test(relativePath) || relativePath.endsWith(".d.ts")) {
+    return false;
+  }
+  if (relativePath.split("/").some((part) => part === "node_modules" || part === "dist")) {
+    return false;
+  }
+  const entryName = basename(relativePath);
+  return !(
+    classifyBundledExtensionSourcePath(resolve(REPO_ROOT, relativePath)).isTestLike ||
+    entryName === "api.ts" ||
+    entryName === "runtime-api.ts"
+  );
+}
+
+function collectExtensionForbiddenImportMatches(literals: readonly string[]): string[] {
+  const result = spawnSync(
+    "git",
+    [
+      "grep",
+      "-n",
+      "-F",
+      ...literals.flatMap((literal) => ["-e", literal]),
+      "--",
+      BUNDLED_PLUGIN_ROOT_DIR,
+    ],
+    {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+      maxBuffer: 8 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"],
+    },
+  );
+  if (result.status === 1) {
+    return [];
+  }
+  if (result.status !== 0) {
+    throw new Error("git grep failed while checking extension import guardrails");
+  }
+  return result.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => {
+      const file = line.split(":", 1)[0];
+      return file ? isGuardedExtensionSourceFile(file) : false;
+    })
+    .toSorted();
 }
 
 function collectCoreSourceFiles(): string[] {
@@ -529,6 +636,16 @@ function expectCoreSourceStaysOffPluginSpecificSdkFacades(file: string, imports:
 }
 
 describe("channel import guardrails", () => {
+  it("lists channel import guardrail sources from git without walking roots", () => {
+    expectNoReaddirSyncDuring(() => {
+      const coreSources = collectCoreSourceFiles();
+      const telegramSources = collectExtensionFiles("telegram");
+
+      expect(coreSources.length).toBeGreaterThan(0);
+      expect(telegramSources.length).toBeGreaterThan(0);
+    });
+  });
+
   it("keeps channel helper modules off their own SDK barrels", () => {
     for (const source of SAME_CHANNEL_SDK_GUARDS) {
       const text = readSource(source.path);
@@ -559,25 +676,18 @@ describe("channel import guardrails", () => {
   });
 
   it("keeps bundled extension source files off root and compat plugin-sdk imports", () => {
-    for (const file of collectExtensionSourceFiles()) {
-      const text = readSource(file);
-      expect(text, `${file} should not import openclaw/plugin-sdk root`).not.toMatch(
-        /["']openclaw\/plugin-sdk["']/,
-      );
-      expect(text, `${file} should not import openclaw/plugin-sdk/compat`).not.toMatch(
-        /["']openclaw\/plugin-sdk\/compat["']/,
-      );
-    }
+    expect(
+      collectExtensionForbiddenImportMatches([
+        `"openclaw/plugin-sdk"`,
+        `'openclaw/plugin-sdk'`,
+        `"openclaw/plugin-sdk/compat"`,
+        `'openclaw/plugin-sdk/compat'`,
+      ]),
+    ).toEqual([]);
   });
 
   it("keeps bundled extension source files off legacy core send-deps src imports", () => {
-    const legacyCoreSendDepsImport = /["'][^"']*src\/infra\/outbound\/send-deps\.[cm]?[jt]s["']/;
-    for (const file of collectExtensionSourceFiles()) {
-      const text = readSource(file);
-      expect(text, `${file} should not import src/infra/outbound/send-deps.*`).not.toMatch(
-        legacyCoreSendDepsImport,
-      );
-    }
+    expect(collectExtensionForbiddenImportMatches(["src/infra/outbound/send-deps"])).toEqual([]);
   });
 
   it("keeps core production files off plugin-private src imports", () => {
@@ -589,9 +699,18 @@ describe("channel import guardrails", () => {
     }
   });
 
-  it("keeps extension production files off other extensions' private src imports", () => {
-    for (const file of collectExtensionSourceFiles()) {
-      expectNoSiblingExtensionPrivateSrcImports(file, getSourceAnalysis(file).importSpecifiers);
+  describe("extension private src import guardrails", () => {
+    for (const extensionId of BUNDLED_EXTENSION_IDS.toSorted((left, right) =>
+      left.localeCompare(right),
+    )) {
+      it(`${extensionId} stays off other extensions' private src imports`, () => {
+        for (const file of collectExtensionFiles(extensionId)) {
+          if (basename(file) === "api.ts") {
+            continue;
+          }
+          expectNoSiblingExtensionPrivateSrcImports(file, getSourceAnalysis(file).importSpecifiers);
+        }
+      });
     }
   });
 

@@ -170,23 +170,23 @@ describe("openai codex provider", () => {
     const apiKey = requireAuthMethod(provider, "api-key");
 
     expectRecordFields(oauth.wizard, "oauth wizard", {
-      choiceLabel: "OpenAI Codex Browser Login",
-      groupId: "openai-codex",
-      groupLabel: "OpenAI Codex",
-      groupHint: "ChatGPT/Codex sign-in",
+      choiceLabel: "ChatGPT/Codex Browser Login",
+      groupId: "openai",
+      groupLabel: "OpenAI",
+      groupHint: "ChatGPT/Codex sign-in or API key",
     });
     expectRecordFields(deviceCode.wizard, "device-code wizard", {
-      choiceLabel: "OpenAI Codex Device Pairing",
-      groupId: "openai-codex",
-      groupLabel: "OpenAI Codex",
-      groupHint: "ChatGPT/Codex sign-in",
+      choiceLabel: "ChatGPT/Codex Device Pairing",
+      groupId: "openai",
+      groupLabel: "OpenAI",
+      groupHint: "ChatGPT/Codex sign-in or API key",
     });
     expectRecordFields(apiKey.wizard, "api-key wizard", {
       choiceLabel: "OpenAI API Key Backup",
       choiceHint: "Use an OpenAI API key when your Codex subscription is unavailable",
-      groupId: "openai-codex",
-      groupLabel: "OpenAI Codex",
-      groupHint: "ChatGPT/Codex sign-in",
+      groupId: "openai",
+      groupLabel: "OpenAI",
+      groupHint: "ChatGPT/Codex sign-in or API key",
     });
   });
 
@@ -222,19 +222,20 @@ describe("openai codex provider", () => {
     const deviceCode = requireAuthMethod(provider, "device-code");
 
     expect(provider.auth?.map((method) => method.id)).toEqual(["oauth", "device-code", "api-key"]);
-    expect(oauth.label).toBe("OpenAI Codex Browser Login");
+    expect(oauth.label).toBe("ChatGPT/Codex Browser Login");
     expect(oauth.hint).toBe("Sign in with OpenAI in your browser");
     expectRecordFields(oauth.wizard, "oauth wizard", {
       choiceId: "openai-codex",
-      choiceLabel: "OpenAI Codex Browser Login",
+      choiceLabel: "ChatGPT/Codex Browser Login",
       assistantPriority: -30,
+      onboardingFeatured: true,
     });
-    expect(deviceCode.label).toBe("OpenAI Codex Device Pairing");
+    expect(deviceCode.label).toBe("ChatGPT/Codex Device Pairing");
     expect(deviceCode.hint).toBe("Pair in browser with a device code");
     expect(deviceCode.kind).toBe("device_code");
     expectRecordFields(deviceCode.wizard, "device-code wizard", {
       choiceId: "openai-codex-device-code",
-      choiceLabel: "OpenAI Codex Device Pairing",
+      choiceLabel: "ChatGPT/Codex Device Pairing",
       assistantPriority: -10,
     });
   });
@@ -419,7 +420,7 @@ describe("openai codex provider", () => {
     });
   });
 
-  it("keeps Pi cost metadata but applies Codex context metadata for gpt-5.5", () => {
+  it("keeps OpenClaw cost metadata but applies Codex context metadata for gpt-5.5", () => {
     const provider = buildOpenAICodexProviderPlugin();
 
     const model = provider.resolveDynamicModel?.({
@@ -443,6 +444,7 @@ describe("openai codex provider", () => {
       id: "gpt-5.5",
       api: "openai-codex-responses",
       baseUrl: "https://chatgpt.com/backend-api",
+      input: ["text", "image"],
       contextWindow: 400_000,
       contextTokens: 272_000,
       maxTokens: 128_000,
@@ -456,6 +458,40 @@ describe("openai codex provider", () => {
       contextTokens: 272_000,
       maxTokens: 128_000,
       cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
+    });
+  });
+
+  it("repairs sparse configured gpt-5.5 catalog rows to remain image-capable", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+    const sparseConfiguredModel = {
+      id: "gpt-5.5",
+      name: "gpt-5.5",
+      provider: "openai-codex",
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      reasoning: false,
+      input: ["text"] as const,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200_000,
+      maxTokens: 8_192,
+    };
+
+    const model = provider.resolveDynamicModel?.({
+      provider: "openai-codex",
+      modelId: "gpt-5.5",
+      modelRegistry: {
+        find: (providerId: string, modelId: string) =>
+          providerId === "openai-codex" && modelId === "gpt-5.5" ? sparseConfiguredModel : null,
+      } as never,
+    });
+
+    expectModelFields(model, {
+      id: "gpt-5.5",
+      api: "openai-codex-responses",
+      input: ["text", "image"],
+      contextWindow: 400_000,
+      contextTokens: 200_000,
+      maxTokens: 8_192,
     });
   });
 
@@ -786,6 +822,93 @@ describe("openai codex provider", () => {
       api: "openai-codex-responses",
       baseUrl: "https://chatgpt.com/backend-api/codex",
     });
+  });
+
+  it("restores [text,image] input on stale gpt-5.5 rows that omit the input field", () => {
+    // Regression: persisted/configured catalog rows can omit the `input` field
+    // for openai-codex models. When that row wins the catalog merge,
+    // `modelSupportsInput(entry, "image")` returns false and the gateway routes
+    // inbound images down the claim-check offload path (`media://inbound/<id>`)
+    // instead of inlining them. Mirror of the Anthropic precedent set by
+    // upstream #83756.
+    const provider = buildOpenAICodexProviderPlugin();
+
+    const model = provider.normalizeResolvedModel?.({
+      provider: "openai-codex",
+      modelId: "gpt-5.5",
+      model: {
+        id: "gpt-5.5",
+        name: "gpt-5.5",
+        provider: "openai-codex",
+        api: "openai-codex-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        reasoning: true,
+        // No `input` field at all — the stale persisted/configured row shape.
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_050_000,
+        contextTokens: 272_000,
+        maxTokens: 128_000,
+      },
+    } as never);
+
+    expect(model?.input).toEqual(["text", "image"]);
+  });
+
+  it("preserves [text,image] input on rows that already declare image capability", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+
+    const model = provider.normalizeResolvedModel?.({
+      provider: "openai-codex",
+      modelId: "gpt-5.5",
+      model: {
+        id: "gpt-5.5",
+        name: "gpt-5.5",
+        provider: "openai-codex",
+        api: "openai-codex-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_050_000,
+        contextTokens: 272_000,
+        maxTokens: 128_000,
+      },
+    } as never);
+
+    // Existing image capability untouched; transport is already canonical so
+    // normalizeResolvedModel may return undefined (no-op).
+    if (model) {
+      expect(model.input).toEqual(["text", "image"]);
+    }
+  });
+
+  it("leaves codex-suffix and legacy model rows text-only (not vision-capable)", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+
+    const model = provider.normalizeResolvedModel?.({
+      provider: "openai-codex",
+      modelId: "gpt-5.3-codex",
+      model: {
+        id: "gpt-5.3-codex",
+        name: "gpt-5.3-codex",
+        provider: "openai-codex",
+        api: "openai-codex-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        reasoning: true,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 400_000,
+        contextTokens: 272_000,
+        maxTokens: 128_000,
+      },
+    } as never);
+
+    // No image capability should be added — gpt-5.X-codex models are
+    // Codex CLI / agent-mode only and not in the documented vision list.
+    // normalizeResolvedModel may return undefined (no transport change) or a
+    // model with the existing input array; either way `image` must not appear.
+    if (model?.input) {
+      expect(model.input).not.toContain("image");
+    }
   });
 
   it("normalizes transport metadata for stale /backend-api/v1 codex routes", () => {

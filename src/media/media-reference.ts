@@ -23,6 +23,11 @@ type InboundMediaReference = {
   sourceType: "uri" | "path";
 };
 
+type InboundMediaUri = {
+  id: string;
+  normalizedSource: string;
+};
+
 export function normalizeMediaReferenceSource(source: string): string {
   const trimmed = source.trim();
   if (/^media:\/\//i.test(trimmed)) {
@@ -87,6 +92,15 @@ function maybeLocalPathFromSource(source: string): string | null {
   return null;
 }
 
+function relativePathEscapesBase(relativePath: string): boolean {
+  return (
+    relativePath === ".." ||
+    relativePath.startsWith("../") ||
+    relativePath.startsWith("..\\") ||
+    path.isAbsolute(relativePath)
+  );
+}
+
 async function resolvePathForContainment(candidate: string): Promise<string> {
   try {
     return await fs.realpath(candidate);
@@ -95,9 +109,8 @@ async function resolvePathForContainment(candidate: string): Promise<string> {
   }
 }
 
-async function resolveInboundMediaUri(
-  normalizedSource: string,
-): Promise<InboundMediaReference | null> {
+export function parseInboundMediaUri(source: string): InboundMediaUri | null {
+  const normalizedSource = normalizeMediaReferenceSource(source);
   if (!/^media:\/\//i.test(normalizedSource)) {
     return null;
   }
@@ -127,15 +140,42 @@ async function resolveInboundMediaUri(
     });
   }
 
-  if (!id || id.includes("/") || id.includes("\\")) {
+  if (!id || id.includes("/") || id.includes("\\") || id.includes("\0")) {
     throw new MediaReferenceError("invalid-path", `Invalid media URI: ${normalizedSource}`);
   }
 
   return {
     id,
     normalizedSource,
-    physicalPath: await resolveInboundMediaPath(id, normalizedSource),
+  };
+}
+
+async function resolveInboundMediaUri(
+  normalizedSource: string,
+): Promise<InboundMediaReference | null> {
+  const uri = parseInboundMediaUri(normalizedSource);
+  if (!uri) {
+    return null;
+  }
+  return {
+    ...uri,
+    physicalPath: await resolveInboundMediaPath(uri.id, uri.normalizedSource),
     sourceType: "uri",
+  };
+}
+
+export function resolveMediaReferenceSandboxPath(
+  source: string,
+  inboundDir = "media/inbound",
+): { resolved: string; rewrittenFrom?: string } {
+  const normalizedSource = normalizeMediaReferenceSource(source);
+  const uri = parseInboundMediaUri(normalizedSource);
+  if (!uri) {
+    return { resolved: normalizedSource };
+  }
+  return {
+    resolved: path.posix.join(inboundDir.replace(/\\/g, "/"), uri.id),
+    rewrittenFrom: uri.normalizedSource,
   };
 }
 
@@ -161,13 +201,13 @@ export async function resolveInboundMediaReference(
   const rawResolvedPath = path.resolve(localPath);
   const rawRel = path.relative(rawInboundDir, rawResolvedPath);
   const rel =
-    rawRel && !rawRel.startsWith("..") && !path.isAbsolute(rawRel)
+    rawRel && !relativePathEscapesBase(rawRel)
       ? rawRel
       : path.relative(
           await resolvePathForContainment(rawInboundDir),
           await resolvePathForContainment(localPath),
         );
-  if (!rel || rel.startsWith("..") || path.isAbsolute(rel) || rel.includes(path.sep)) {
+  if (!rel || relativePathEscapesBase(rel) || rel.includes(path.sep)) {
     return null;
   }
 

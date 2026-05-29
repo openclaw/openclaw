@@ -8,8 +8,14 @@ import {
   stripHeartbeatTokenForDisplay,
 } from "../chat/heartbeat-display.ts";
 import { extractText } from "../chat/message-extract.ts";
+import { reconcileChatRunLifecycle } from "../chat/run-lifecycle.ts";
 import { formatConnectError } from "../connect-error.ts";
-import { GatewayRequestError, type GatewayBrowserClient } from "../gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient, type GatewayHelloOk } from "../gateway.ts";
+import {
+  areUiSessionKeysEquivalent,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import type { ChatAttachment } from "../ui-types.ts";
 import { generateUUID } from "../uuid.ts";
@@ -43,8 +49,12 @@ function shouldApplyChatHistoryResult(
   state: ChatState,
   version: number,
   sessionKey: string,
+  agentId?: string | null,
 ): boolean {
-  return isLatestChatHistoryRequest(state, version) && state.sessionKey === sessionKey;
+  if (!isLatestChatHistoryRequest(state, version) || state.sessionKey !== sessionKey) {
+    return false;
+  }
+  return !isSelectedGlobalEventSessionKey(sessionKey) || resolveSelectedAgentId(state) === agentId;
 }
 
 function isSilentReplyStream(text: string): boolean {
@@ -117,6 +127,14 @@ function isEmptyUserTextOnlyMessage(message: unknown): boolean {
   if (normalizeLowercaseStringOrEmpty(entry.role) !== "user") {
     return false;
   }
+  const mediaPaths = Array.isArray(entry.MediaPaths)
+    ? entry.MediaPaths
+    : typeof entry.MediaPath === "string"
+      ? [entry.MediaPath]
+      : [];
+  if (mediaPaths.some((value) => typeof value === "string" && value.trim())) {
+    return false;
+  }
   if (!isTextOnlyContent(entry.content ?? entry.text)) {
     return false;
   }
@@ -143,8 +161,8 @@ function hasTranscriptMeta(message: unknown): boolean {
   return Boolean(
     message &&
     typeof message === "object" &&
-    (message as { __openclaw?: unknown }).__openclaw &&
-    typeof (message as { __openclaw?: unknown }).__openclaw === "object",
+    (message as { __openclaw?: unknown })["__openclaw"] &&
+    typeof (message as { __openclaw?: unknown })["__openclaw"] === "object",
   );
 }
 
@@ -270,15 +288,99 @@ export type ChatState = {
   chatStreamStartedAt: number | null;
   lastError: string | null;
   resetChatInputHistoryNavigation?: () => void;
+  assistantAgentId?: string | null;
+  agentsList?: { defaultId?: string | null } | null;
+  hello?: GatewayHelloOk | null;
 };
 
 export type ChatEventPayload = {
   runId?: string;
   sessionKey: string;
+  agentId?: string;
   state: "delta" | "final" | "aborted" | "error";
   message?: unknown;
   errorMessage?: string;
 };
+
+function isGlobalSessionKey(sessionKey: string | undefined | null): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(sessionKey);
+  return normalized === "global";
+}
+
+function isSelectedGlobalEventSessionKey(sessionKey: string | undefined | null): boolean {
+  if (isGlobalSessionKey(sessionKey)) {
+    return true;
+  }
+  const parsed = parseAgentSessionKey(sessionKey);
+  return normalizeLowercaseStringOrEmpty(parsed?.rest) === "main";
+}
+
+function resolveSelectedAgentId(state: ChatState): string | undefined {
+  const parsed = parseAgentSessionKey(state.sessionKey);
+  if (parsed?.agentId) {
+    return normalizeAgentId(parsed.agentId);
+  }
+  const snapshot = state.hello?.snapshot as
+    | { sessionDefaults?: { defaultAgentId?: string } }
+    | undefined;
+  const assistantAgentId =
+    typeof state.assistantAgentId === "string" && state.assistantAgentId.trim()
+      ? state.assistantAgentId
+      : undefined;
+  const defaultAgentId =
+    typeof state.agentsList?.defaultId === "string" && state.agentsList.defaultId.trim()
+      ? state.agentsList.defaultId
+      : undefined;
+  const helloDefaultAgentId =
+    typeof snapshot?.sessionDefaults?.defaultAgentId === "string" &&
+    snapshot.sessionDefaults.defaultAgentId.trim()
+      ? snapshot.sessionDefaults.defaultAgentId
+      : undefined;
+  const selectedAgentId = assistantAgentId ?? defaultAgentId ?? helloDefaultAgentId;
+  return selectedAgentId ? normalizeAgentId(selectedAgentId) : undefined;
+}
+
+function resolveDefaultAgentId(state: ChatState): string | undefined {
+  const snapshot = state.hello?.snapshot as
+    | { sessionDefaults?: { defaultAgentId?: string } }
+    | undefined;
+  const agentId =
+    typeof state.agentsList?.defaultId === "string" && state.agentsList.defaultId.trim()
+      ? state.agentsList.defaultId
+      : typeof snapshot?.sessionDefaults?.defaultAgentId === "string" &&
+          snapshot.sessionDefaults.defaultAgentId.trim()
+        ? snapshot.sessionDefaults.defaultAgentId
+        : undefined;
+  return agentId ? normalizeAgentId(agentId) : undefined;
+}
+
+function chatEventAgentScopeMatches(state: ChatState, payload: ChatEventPayload): boolean {
+  if (
+    !isSelectedGlobalEventSessionKey(state.sessionKey) ||
+    !isGlobalSessionKey(payload.sessionKey)
+  ) {
+    return true;
+  }
+  const payloadAgentId =
+    typeof payload.agentId === "string" && payload.agentId.trim()
+      ? normalizeAgentId(payload.agentId)
+      : undefined;
+  const selectedAgentId = resolveSelectedAgentId(state);
+  return payloadAgentId
+    ? selectedAgentId !== undefined && payloadAgentId === selectedAgentId
+    : selectedAgentId === undefined || selectedAgentId === resolveDefaultAgentId(state);
+}
+
+function chatEventSessionMatches(state: ChatState, payload: ChatEventPayload): boolean {
+  if (areUiSessionKeysEquivalent(payload.sessionKey, state.sessionKey)) {
+    return chatEventAgentScopeMatches(state, payload);
+  }
+  return (
+    isGlobalSessionKey(payload.sessionKey) &&
+    isSelectedGlobalEventSessionKey(state.sessionKey) &&
+    chatEventAgentScopeMatches(state, payload)
+  );
+}
 
 function maybeResetToolStream(state: ChatState) {
   const toolHost = state as ChatState & Partial<Parameters<typeof resetToolStream>[0]>;
@@ -298,6 +400,9 @@ export async function loadChatHistory(state: ChatState) {
   }
   const sessionKey = state.sessionKey;
   const requestVersion = beginChatHistoryRequest(state);
+  const requestAgentId = isSelectedGlobalEventSessionKey(sessionKey)
+    ? resolveSelectedAgentId(state)
+    : null;
   const startedAt = Date.now();
   const previousMessages = state.chatMessages;
   // Any pending input-history snapshot becomes invalid once we start reloading transcript state.
@@ -314,12 +419,13 @@ export async function loadChatHistory(state: ChatState) {
           thinkingLevel?: string;
         }>("chat.history", {
           sessionKey,
+          ...(requestAgentId ? { agentId: requestAgentId } : {}),
           limit: CHAT_HISTORY_REQUEST_LIMIT,
           maxChars: CHAT_HISTORY_REQUEST_MAX_CHARS,
         });
         break;
       } catch (err) {
-        if (!shouldApplyChatHistoryResult(state, requestVersion, sessionKey)) {
+        if (!shouldApplyChatHistoryResult(state, requestVersion, sessionKey, requestAgentId)) {
           return;
         }
         const withinStartupRetryWindow =
@@ -334,7 +440,7 @@ export async function loadChatHistory(state: ChatState) {
         throw err;
       }
     }
-    if (!shouldApplyChatHistoryResult(state, requestVersion, sessionKey)) {
+    if (!shouldApplyChatHistoryResult(state, requestVersion, sessionKey, requestAgentId)) {
       return;
     }
     const messages = Array.isArray(res.messages) ? res.messages : [];
@@ -349,7 +455,7 @@ export async function loadChatHistory(state: ChatState) {
     state.chatStream = null;
     state.chatStreamStartedAt = null;
   } catch (err) {
-    if (!shouldApplyChatHistoryResult(state, requestVersion, sessionKey)) {
+    if (!shouldApplyChatHistoryResult(state, requestVersion, sessionKey, requestAgentId)) {
       return;
     }
     if (isMissingOperatorReadScopeError(err)) {
@@ -374,6 +480,15 @@ function dataUrlToBase64(dataUrl: string): { content: string; mimeType: string }
   return { mimeType: match[1], content: match[2] };
 }
 
+function isInlineDataUrl(value: string): boolean {
+  return /^\s*data:/iu.test(value);
+}
+
+function formatInlineImageAttachmentPlaceholder(attachment: ChatAttachment): string {
+  const label = attachment.fileName?.trim();
+  return label ? `Attached image: ${label}` : "Attached image";
+}
+
 function buildApiAttachments(attachments?: ChatAttachment[]) {
   const hasAttachments = attachments && attachments.length > 0;
   return hasAttachments
@@ -395,22 +510,60 @@ function buildApiAttachments(attachments?: ChatAttachment[]) {
     : undefined;
 }
 
-async function requestChatSend(
+export type ChatSendAckStatus = "started" | "in_flight" | "ok";
+
+export type ChatSendAck = {
+  runId: string;
+  status: ChatSendAckStatus;
+};
+
+function normalizeChatSendAck(payload: unknown, fallbackRunId: string): ChatSendAck {
+  if (!payload || typeof payload !== "object") {
+    return { runId: fallbackRunId, status: "started" };
+  }
+  const record = payload as Record<string, unknown>;
+  const runId =
+    typeof record.runId === "string" && record.runId.trim() ? record.runId.trim() : fallbackRunId;
+  const status = record.status;
+  return {
+    runId,
+    status: status === "in_flight" || status === "ok" ? status : "started",
+  };
+}
+
+export async function requestChatSend(
   state: ChatState,
-  params: { message: string; attachments?: ChatAttachment[]; runId: string },
-) {
+  params: {
+    message: string;
+    attachments?: ChatAttachment[];
+    runId: string;
+    sessionKey?: string;
+    agentId?: string;
+  },
+): Promise<ChatSendAck> {
+  const sessionKey = params.sessionKey ?? state.sessionKey;
+  const selectedAgentId = params.agentId
+    ? normalizeAgentId(params.agentId)
+    : resolveSelectedAgentId(state);
+  const currentSessionId = state.currentSessionId;
+  const canReuseCurrentSessionId =
+    sessionKey === state.sessionKey &&
+    (!isGlobalSessionKey(sessionKey) ||
+      (selectedAgentId !== undefined && selectedAgentId === resolveSelectedAgentId(state)));
   const sessionId =
-    typeof state.currentSessionId === "string" && state.currentSessionId.trim()
-      ? state.currentSessionId.trim()
+    canReuseCurrentSessionId && typeof currentSessionId === "string" && currentSessionId.trim()
+      ? currentSessionId.trim()
       : undefined;
-  await state.client!.request("chat.send", {
-    sessionKey: state.sessionKey,
+  const payload = await state.client!.request("chat.send", {
+    sessionKey,
+    ...(isGlobalSessionKey(sessionKey) && selectedAgentId ? { agentId: selectedAgentId } : {}),
     ...(sessionId ? { sessionId } : {}),
     message: params.message,
     deliver: false,
     idempotencyKey: params.runId,
     attachments: buildApiAttachments(params.attachments),
   });
+  return normalizeChatSendAck(payload, params.runId);
 }
 
 type AssistantMessageNormalizationOptions = {
@@ -480,8 +633,61 @@ export async function sendChatMessage(
   }
 
   const now = Date.now();
+  appendUserChatMessage(state, msg, attachments, now);
 
-  // Build user message content blocks
+  state.chatSending = true;
+  state.lastError = null;
+  reconcileChatRunLifecycle(state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0], {
+    clearRunStatus: true,
+  });
+  const runId = generateUUID();
+  state.chatRunId = runId;
+  state.chatStream = "";
+  state.chatStreamStartedAt = now;
+
+  try {
+    const ack = await requestChatSend(state, { message: msg, attachments, runId });
+    if (ack.status === "ok") {
+      state.chatRunId = null;
+      state.chatStream = null;
+      state.chatStreamStartedAt = null;
+    } else {
+      state.chatRunId = ack.runId;
+    }
+    return ack.status === "ok" ? ack.runId : runId;
+  } catch (err) {
+    const error = formatConnectError(err);
+    reconcileChatRunLifecycle(state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0], {
+      outcome: "interrupted",
+      sessionStatus: "failed",
+      runId,
+      sessionKey: state.sessionKey,
+      clearLocalRun: true,
+      clearChatStream: true,
+    });
+    state.lastError = error;
+    state.chatMessages = [
+      ...state.chatMessages,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Error: " + error }],
+        timestamp: Date.now(),
+      },
+    ];
+    return null;
+  } finally {
+    state.chatSending = false;
+  }
+}
+
+export function appendUserChatMessage(
+  state: ChatState,
+  message: string,
+  attachments?: ChatAttachment[],
+  timestamp = Date.now(),
+) {
+  const msg = message.trim();
+  const hasAttachments = attachments && attachments.length > 0;
   const contentBlocks: Array<{
     type: string;
     text?: string;
@@ -497,7 +703,6 @@ export async function sendChatMessage(
   if (msg) {
     contentBlocks.push({ type: "text", text: msg });
   }
-  // Add image previews to the message for display
   if (hasAttachments) {
     for (const att of attachments) {
       const previewUrl = getChatAttachmentPreviewUrl(att);
@@ -505,6 +710,10 @@ export async function sendChatMessage(
         continue;
       }
       if (att.mimeType.startsWith("image/")) {
+        if (isInlineDataUrl(previewUrl)) {
+          contentBlocks.push({ type: "text", text: formatInlineImageAttachmentPlaceholder(att) });
+          continue;
+        }
         contentBlocks.push({
           type: "image",
           url: previewUrl,
@@ -523,43 +732,37 @@ export async function sendChatMessage(
       });
     }
   }
-
   state.chatMessages = [
     ...state.chatMessages,
     {
       role: "user",
       content: contentBlocks,
-      timestamp: now,
+      timestamp,
     },
   ];
+}
 
-  state.chatSending = true;
+async function sendChatMessageWithGeneratedRunId(
+  state: ChatState,
+  message: string,
+  attachments?: ChatAttachment[],
+): Promise<string | null> {
+  if (!state.client || !state.connected) {
+    return null;
+  }
+  const msg = message.trim();
+  const hasAttachments = attachments && attachments.length > 0;
+  if (!msg && !hasAttachments) {
+    return null;
+  }
   state.lastError = null;
   const runId = generateUUID();
-  state.chatRunId = runId;
-  state.chatStream = "";
-  state.chatStreamStartedAt = now;
-
   try {
-    await requestChatSend(state, { message: msg, attachments, runId });
-    return runId;
+    const ack = await requestChatSend(state, { message: msg, attachments, runId });
+    return ack.runId;
   } catch (err) {
-    const error = formatConnectError(err);
-    state.chatRunId = null;
-    state.chatStream = null;
-    state.chatStreamStartedAt = null;
-    state.lastError = error;
-    state.chatMessages = [
-      ...state.chatMessages,
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "Error: " + error }],
-        timestamp: Date.now(),
-      },
-    ];
+    state.lastError = formatConnectError(err);
     return null;
-  } finally {
-    state.chatSending = false;
   }
 }
 
@@ -568,23 +771,7 @@ export async function sendDetachedChatMessage(
   message: string,
   attachments?: ChatAttachment[],
 ): Promise<string | null> {
-  if (!state.client || !state.connected) {
-    return null;
-  }
-  const msg = message.trim();
-  const hasAttachments = attachments && attachments.length > 0;
-  if (!msg && !hasAttachments) {
-    return null;
-  }
-  state.lastError = null;
-  const runId = generateUUID();
-  try {
-    await requestChatSend(state, { message: msg, attachments, runId });
-    return runId;
-  } catch (err) {
-    state.lastError = formatConnectError(err);
-    return null;
-  }
+  return sendChatMessageWithGeneratedRunId(state, message, attachments);
 }
 
 export async function sendSteerChatMessage(
@@ -592,23 +779,7 @@ export async function sendSteerChatMessage(
   message: string,
   attachments?: ChatAttachment[],
 ): Promise<string | null> {
-  if (!state.client || !state.connected) {
-    return null;
-  }
-  const msg = message.trim();
-  const hasAttachments = attachments && attachments.length > 0;
-  if (!msg && !hasAttachments) {
-    return null;
-  }
-  state.lastError = null;
-  const runId = generateUUID();
-  try {
-    await requestChatSend(state, { message: msg, attachments, runId });
-    return runId;
-  } catch (err) {
-    state.lastError = formatConnectError(err);
-    return null;
-  }
+  return sendChatMessageWithGeneratedRunId(state, message, attachments);
 }
 
 export async function abortChatRun(state: ChatState): Promise<boolean> {
@@ -619,7 +790,22 @@ export async function abortChatRun(state: ChatState): Promise<boolean> {
   try {
     await state.client.request(
       "chat.abort",
-      runId ? { sessionKey: state.sessionKey, runId } : { sessionKey: state.sessionKey },
+      runId
+        ? {
+            sessionKey: state.sessionKey,
+            ...(() => {
+              const agentId = resolveSelectedAgentId(state);
+              return isGlobalSessionKey(state.sessionKey) && agentId ? { agentId } : {};
+            })(),
+            runId,
+          }
+        : {
+            sessionKey: state.sessionKey,
+            ...(() => {
+              const agentId = resolveSelectedAgentId(state);
+              return isGlobalSessionKey(state.sessionKey) && agentId ? { agentId } : {};
+            })(),
+          },
     );
     return true;
   } catch (err) {
@@ -632,13 +818,17 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   if (!payload) {
     return null;
   }
-  const sessionMatches = payload.sessionKey === state.sessionKey;
+  const sessionMatches = chatEventSessionMatches(state, payload);
   const activeRunMatches =
     state.chatRunId !== null &&
     typeof payload.runId === "string" &&
     payload.runId === state.chatRunId;
   if (!sessionMatches && !activeRunMatches) {
     return null;
+  }
+  if (!state.chatRunId && sessionMatches && typeof payload.runId === "string") {
+    state.chatRunId = payload.runId;
+    state.chatStreamStartedAt ??= Date.now();
   }
 
   // Terminal events for the active client run carry runId; missing-runId events are unowned.
@@ -655,6 +845,21 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     }
     return null;
   }
+
+  const terminalRunId = payload.runId ?? state.chatRunId;
+  const reconcileTerminalRun = (
+    outcome: "done" | "interrupted",
+    sessionStatus: "done" | "failed" | "killed",
+  ) =>
+    reconcileChatRunLifecycle(state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0], {
+      outcome,
+      sessionStatus,
+      runId: terminalRunId,
+      sessionKey: state.sessionKey,
+      sessionKeys: sessionMatches ? [state.sessionKey, payload.sessionKey] : [],
+      clearLocalRun: true,
+      clearChatStream: true,
+    });
 
   if (payload.state === "delta") {
     const next = extractText(payload.message);
@@ -683,9 +888,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
         },
       ];
     }
-    state.chatStream = null;
-    state.chatRunId = null;
-    state.chatStreamStartedAt = null;
+    reconcileTerminalRun("done", "done");
   } else if (payload.state === "aborted") {
     const normalizedMessage = normalizeAbortedAssistantMessage(payload.message);
     if (normalizedMessage && !shouldHideAssistantChatMessage(normalizedMessage)) {
@@ -707,13 +910,9 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
         ];
       }
     }
-    state.chatStream = null;
-    state.chatRunId = null;
-    state.chatStreamStartedAt = null;
+    reconcileTerminalRun("interrupted", "killed");
   } else if (payload.state === "error") {
-    state.chatStream = null;
-    state.chatRunId = null;
-    state.chatStreamStartedAt = null;
+    reconcileTerminalRun("interrupted", "failed");
     state.lastError = payload.errorMessage ?? "chat error";
   }
   return payload.state;

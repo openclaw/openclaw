@@ -1,20 +1,22 @@
 import { canExecRequestNode } from "../../agents/exec-defaults.js";
-import { buildWorkspaceSkillStatus } from "../../agents/skills-status.js";
 import { readConfigFileSnapshot, resolveGatewayPort } from "../../config/config.js";
 import { readLastGatewayErrorLine } from "../../daemon/diagnostics.js";
 import { inspectPortUsage } from "../../infra/ports.js";
 import { readRestartSentinel } from "../../infra/restart-sentinel.js";
-import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { buildPluginCompatibilityNotices } from "../../plugins/status.js";
+import { buildWorkspaceSkillStatus } from "../../skills/discovery/status.js";
+import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
 import { buildStatusAllOverviewRows } from "../status-overview-rows.ts";
 import {
   buildStatusOverviewSurfaceFromOverview,
   type StatusOverviewSurface,
 } from "../status-overview-surface.ts";
 import {
+  resolveStatusGatewayDiagnosticsSafe,
   resolveStatusGatewayHealthSafe,
   type resolveStatusServiceSummaries,
 } from "../status-runtime-shared.ts";
+import { formatUpdateRestartStatusValue } from "../status-update-restart.ts";
 import { resolveStatusAllConnectionDetails } from "../status.gateway-connection.ts";
 import type { NodeOnlyGatewayInfo } from "../status.node-mode.js";
 import type { StatusScanOverviewResult } from "../status.scan-overview.ts";
@@ -66,8 +68,10 @@ async function resolveStatusAllLocalDiagnosis(params: {
     pluginCompatibility: ReturnType<typeof buildPluginCompatibilityNotices>;
     channelsStatus: StatusScanOverviewResult["channelsStatus"];
     channelIssues: StatusScanOverviewResult["channelIssues"];
+    agentStatus: StatusScanOverviewResult["agentStatus"];
     gatewayReachable: boolean;
     health: StatusGatewayHealthSafe | undefined;
+    deliveryDiagnostics: unknown;
     nodeOnlyGateway: NodeOnlyGatewayInfo | null;
   };
 }> {
@@ -82,6 +86,14 @@ async function resolveStatusAllLocalDiagnosis(params: {
         timeoutMs: Math.min(8000, params.timeoutMs ?? 10_000),
         gatewayReachable: params.gatewayReachable,
         gatewayProbeError: params.gatewayProbe?.error ?? null,
+        ...(params.gatewayCallOverrides ? { callOverrides: params.gatewayCallOverrides } : {}),
+      });
+  const diagnostics = params.nodeOnlyGateway
+    ? null
+    : await resolveStatusGatewayDiagnosticsSafe({
+        config: overview.cfg,
+        timeoutMs: Math.min(5000, params.timeoutMs ?? 10_000),
+        gatewayReachable: params.gatewayReachable,
         ...(params.gatewayCallOverrides ? { callOverrides: params.gatewayCallOverrides } : {}),
       });
 
@@ -142,8 +154,10 @@ async function resolveStatusAllLocalDiagnosis(params: {
       pluginCompatibility,
       channelsStatus: overview.channelsStatus,
       channelIssues: overview.channelIssues,
+      agentStatus: overview.agentStatus,
       gatewayReachable: params.gatewayReachable,
       health,
+      deliveryDiagnostics: diagnostics,
       nodeOnlyGateway: params.nodeOnlyGateway,
     },
   };
@@ -179,6 +193,7 @@ export async function buildStatusAllReportData(params: {
     osLabel: params.overview.osSummary.label,
     configPath,
     secretDiagnosticsCount: params.overview.secretDiagnostics.length,
+    updateRestartValue: formatUpdateRestartStatusValue(diagnosis.sentinel?.payload),
     agentStatus: params.overview.agentStatus,
     tailscaleBackendState: diagnosis.tailscale.backendState,
   });

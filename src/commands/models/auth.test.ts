@@ -10,7 +10,6 @@ type AuthRunCall = {
 
 type ResolvePluginProvidersCall = {
   activate?: boolean;
-  bundledProviderAllowlistCompat?: boolean;
   bundledProviderVitestCompat?: boolean;
   config?: unknown;
   includeUntrustedWorkspacePlugins?: boolean;
@@ -39,6 +38,7 @@ const mocks = vi.hoisted(() => ({
   clackCancel: vi.fn(),
   clackConfirm: vi.fn(),
   clackIsCancel: vi.fn((value: unknown) => value === Symbol.for("clack:cancel")),
+  clackPassword: vi.fn(),
   clackSelect: vi.fn(),
   clackText: vi.fn(),
   resolveDefaultAgentId: vi.fn(),
@@ -46,6 +46,7 @@ const mocks = vi.hoisted(() => ({
   resolveAgentWorkspaceDir: vi.fn(),
   resolveDefaultAgentWorkspaceDir: vi.fn(),
   upsertAuthProfile: vi.fn(),
+  upsertAuthProfileWithLock: vi.fn(),
   resolvePluginProviders: vi.fn(),
   createClackPrompter: vi.fn(),
   loadValidConfigOrThrow: vi.fn(),
@@ -53,6 +54,7 @@ const mocks = vi.hoisted(() => ({
   logConfigUpdated: vi.fn(),
   openUrl: vi.fn(),
   isRemoteEnvironment: vi.fn(() => false),
+  validateAnthropicSetupToken: vi.fn<() => string | undefined>(() => undefined),
   loadAuthProfileStoreForRuntime: vi.fn(),
   listProfilesForProvider: vi.fn(),
   promoteAuthProfileInOrder: vi.fn(),
@@ -65,6 +67,7 @@ vi.mock("../../agents/auth-profiles/profiles.js", () => ({
   listProfilesForProvider: mocks.listProfilesForProvider,
   promoteAuthProfileInOrder: mocks.promoteAuthProfileInOrder,
   upsertAuthProfile: mocks.upsertAuthProfile,
+  upsertAuthProfileWithLock: mocks.upsertAuthProfileWithLock,
 }));
 
 vi.mock("../../agents/auth-profiles/store.js", () => ({
@@ -106,6 +109,7 @@ vi.mock("@clack/prompts", () => ({
   cancel: mocks.clackCancel,
   confirm: mocks.clackConfirm,
   isCancel: mocks.clackIsCancel,
+  password: mocks.clackPassword,
   select: mocks.clackSelect,
   text: mocks.clackText,
 }));
@@ -166,7 +170,7 @@ vi.mock("../../plugins/provider-oauth-flow.js", () => ({
 }));
 
 vi.mock("../auth-token.js", () => ({
-  validateAnthropicSetupToken: vi.fn(() => undefined),
+  validateAnthropicSetupToken: mocks.validateAnthropicSetupToken,
 }));
 
 vi.mock("../../plugins/provider-auth-choice-helpers.js", async (importOriginal) => {
@@ -254,6 +258,7 @@ vi.mock("../../plugins/provider-auth-choice-helpers.js", async (importOriginal) 
 const {
   modelsAuthAddCommand,
   modelsAuthLoginCommand,
+  modelsAuthPasteApiKeyCommand,
   modelsAuthPasteTokenCommand,
   modelsAuthSetupTokenCommand,
 } = await import("./auth.js");
@@ -281,6 +286,34 @@ function withInteractiveStdin() {
     } else if (!hadOwnIsTTY) {
       delete (stdin as { isTTY?: boolean }).isTTY;
     }
+  };
+}
+
+function withPipedStdin(input: string) {
+  const stdin = process.stdin as NodeJS.ReadStream & { isTTY?: boolean };
+  const restoreInteractive = withInteractiveStdin();
+  const previousAsyncIteratorDescriptor = Object.getOwnPropertyDescriptor(
+    stdin,
+    Symbol.asyncIterator,
+  );
+  Object.defineProperty(stdin, "isTTY", {
+    configurable: true,
+    enumerable: true,
+    get: () => false,
+  });
+  Object.defineProperty(stdin, Symbol.asyncIterator, {
+    configurable: true,
+    value: async function* () {
+      yield input;
+    },
+  });
+  return () => {
+    if (previousAsyncIteratorDescriptor) {
+      Object.defineProperty(stdin, Symbol.asyncIterator, previousAsyncIteratorDescriptor);
+    } else {
+      Reflect.deleteProperty(stdin, Symbol.asyncIterator);
+    }
+    restoreInteractive();
   };
 }
 
@@ -320,9 +353,13 @@ describe("modelsAuthLoginCommand", () => {
     mocks.clackIsCancel.mockImplementation(
       (value: unknown) => value === Symbol.for("clack:cancel"),
     );
+    mocks.clackPassword.mockReset();
     mocks.clackSelect.mockReset();
     mocks.clackText.mockReset();
-    mocks.upsertAuthProfile.mockReset();
+    mocks.validateAnthropicSetupToken.mockReset();
+    mocks.validateAnthropicSetupToken.mockReturnValue(undefined);
+    mocks.upsertAuthProfileWithLock.mockReset();
+    mocks.upsertAuthProfileWithLock.mockResolvedValue({ version: 1, profiles: {} });
     mocks.promoteAuthProfileInOrder.mockReset();
 
     mocks.resolveDefaultAgentId.mockReturnValue("main");
@@ -437,7 +474,7 @@ describe("modelsAuthLoginCommand", () => {
       runProviderAuth.mock.invocationCallOrder[0],
     );
     expect(runProviderAuth).toHaveBeenCalledOnce();
-    const upsertCall = readMockCallArg(mocks.upsertAuthProfile) as UpsertAuthProfileCall;
+    const upsertCall = readMockCallArg(mocks.upsertAuthProfileWithLock) as UpsertAuthProfileCall;
     expect(upsertCall.profileId).toBe("openai-codex:user@example.com");
     expect(upsertCall.credential?.type).toBe("oauth");
     expect(upsertCall.credential?.provider).toBe("openai-codex");
@@ -735,9 +772,9 @@ describe("modelsAuthLoginCommand", () => {
     const authRunCall = readMockCallArg(runProviderAuth) as AuthRunCall;
     expect(authRunCall.agentDir).toBe("/tmp/openclaw/agents/coder");
     expect(authRunCall.workspaceDir).toBe("/tmp/openclaw/workspaces/coder");
-    expect((readMockCallArg(mocks.upsertAuthProfile) as UpsertAuthProfileCall).agentDir).toBe(
-      "/tmp/openclaw/agents/coder",
-    );
+    expect(
+      (readMockCallArg(mocks.upsertAuthProfileWithLock) as UpsertAuthProfileCall).agentDir,
+    ).toBe("/tmp/openclaw/agents/coder");
   });
 
   it("loads the owning plugin for an explicit provider even in a clean config", async () => {
@@ -785,13 +822,12 @@ describe("modelsAuthLoginCommand", () => {
     ) as ResolvePluginProvidersCall;
     expect(providerResolutionCall.config).toEqual({});
     expect(providerResolutionCall.workspaceDir).toBe("/tmp/openclaw/workspace");
-    expect(providerResolutionCall.bundledProviderAllowlistCompat).toBe(true);
     expect(providerResolutionCall.bundledProviderVitestCompat).toBe(true);
     expect(providerResolutionCall.includeUntrustedWorkspacePlugins).toBe(false);
     expect(providerResolutionCall.providerRefs).toEqual(["anthropic"]);
     expect(providerResolutionCall.activate).toBe(true);
     expect(runClaudeCliMigration).toHaveBeenCalledOnce();
-    expect(mocks.upsertAuthProfile).not.toHaveBeenCalled();
+    expect(mocks.upsertAuthProfileWithLock).not.toHaveBeenCalled();
     expect(lastUpdatedConfig?.agents?.defaults?.model).toEqual({
       primary: "claude-cli/claude-sonnet-4-6",
     });
@@ -928,7 +964,7 @@ describe("modelsAuthLoginCommand", () => {
         (order) => order < runClaudeCliMigration.mock.invocationCallOrder[0],
       ),
     ).toBe(true);
-    expect(mocks.upsertAuthProfile).not.toHaveBeenCalled();
+    expect(mocks.upsertAuthProfileWithLock).not.toHaveBeenCalled();
     expect(lastUpdatedConfig?.agents?.defaults?.model).toEqual({
       primary: "claude-cli/claude-sonnet-4-6",
       fallbacks: ["claude-cli/claude-opus-4-6", "openai/gpt-5.2"],
@@ -1037,6 +1073,36 @@ describe("modelsAuthLoginCommand", () => {
     );
   });
 
+  it("normalizes retired Google Gemini login defaults before config writes", async () => {
+    const runtime = createRuntime();
+    runProviderAuth.mockResolvedValue({
+      profiles: [
+        {
+          profileId: "google:default",
+          credential: { type: "api_key", provider: "google", key: "gemini-demo" },
+        },
+      ],
+      defaultModel: "google/gemini-3-pro-preview",
+    });
+    mocks.resolvePluginProviders.mockReturnValue([
+      createProvider({
+        id: "google",
+        label: "Google",
+        run: runProviderAuth as ProviderPlugin["auth"][number]["run"],
+      }),
+    ]);
+
+    await modelsAuthLoginCommand({ provider: "google", setDefault: true }, runtime);
+
+    expect(lastUpdatedConfig?.agents?.defaults?.model).toEqual({
+      primary: "google/gemini-3.1-pro-preview",
+    });
+    expect(lastUpdatedConfig?.agents?.defaults?.models).toEqual({
+      "google/gemini-3.1-pro-preview": {},
+    });
+    expect(runtime.log).toHaveBeenCalledWith("Default model set to google/gemini-3.1-pro-preview");
+  });
+
   it("overwrites an existing primary when login uses --set-default", async () => {
     const runtime = createRuntime();
     currentConfig = {
@@ -1095,7 +1161,7 @@ describe("modelsAuthLoginCommand", () => {
         "exit:0",
       );
 
-      expect(mocks.upsertAuthProfile).not.toHaveBeenCalled();
+      expect(mocks.upsertAuthProfileWithLock).not.toHaveBeenCalled();
       expect(mocks.updateConfig).not.toHaveBeenCalled();
       expect(mocks.logConfigUpdated).not.toHaveBeenCalled();
     } finally {
@@ -1109,7 +1175,7 @@ describe("modelsAuthLoginCommand", () => {
 
     await modelsAuthPasteTokenCommand({ provider: "anthropic" }, runtime);
 
-    expect(mocks.upsertAuthProfile).toHaveBeenCalledWith({
+    expect(mocks.upsertAuthProfileWithLock).toHaveBeenCalledWith({
       profileId: "anthropic:manual",
       credential: {
         type: "token",
@@ -1137,7 +1203,7 @@ describe("modelsAuthLoginCommand", () => {
     await modelsAuthPasteTokenCommand({ provider: "openai", agent: "coder" }, runtime);
 
     expect(mocks.resolveDefaultAgentId).not.toHaveBeenCalled();
-    expect(mocks.upsertAuthProfile).toHaveBeenCalledWith({
+    expect(mocks.upsertAuthProfileWithLock).toHaveBeenCalledWith({
       profileId: "openai:manual",
       credential: {
         type: "token",
@@ -1146,6 +1212,157 @@ describe("modelsAuthLoginCommand", () => {
       },
       agentDir: "/tmp/openclaw/agents/coder",
     });
+  });
+
+  it("rejects OpenAI API keys pasted as OpenAI Codex token material", async () => {
+    const runtime = createRuntime();
+    const validateMessages: string[] = [];
+    mocks.clackText.mockImplementation(
+      async (params: { validate?: (value: string) => string | undefined }) => {
+        const message = params.validate?.("sk-openai-codex-api-key-value");
+        if (message) {
+          validateMessages.push(message);
+          throw new Error(message);
+        }
+        return "sk-openai-codex-api-key-value";
+      },
+    );
+
+    await expect(
+      modelsAuthPasteTokenCommand({ provider: "openai-codex" }, runtime),
+    ).rejects.toThrow("paste-api-key --provider openai-codex");
+
+    expect(validateMessages).toEqual([
+      "That looks like an OpenAI API key. Use openclaw models auth paste-api-key --provider openai-codex for API-key auth.",
+    ]);
+    expect(mocks.upsertAuthProfileWithLock).not.toHaveBeenCalled();
+    expect(mocks.updateConfig).not.toHaveBeenCalled();
+  });
+
+  it("rejects piped OpenAI API keys as OpenAI Codex token material", async () => {
+    const runtime = createRuntime();
+    restoreStdin?.();
+    restoreStdin = withPipedStdin("sk-openai-codex-api-key-value\n");
+
+    await expect(
+      modelsAuthPasteTokenCommand({ provider: "openai-codex" }, runtime),
+    ).rejects.toThrow("paste-api-key --provider openai-codex");
+
+    expect(mocks.clackText).not.toHaveBeenCalled();
+    expect(mocks.upsertAuthProfileWithLock).not.toHaveBeenCalled();
+    expect(mocks.updateConfig).not.toHaveBeenCalled();
+  });
+
+  it("rejects line-wrapped piped OpenAI API keys as OpenAI Codex token material", async () => {
+    const runtime = createRuntime();
+    restoreStdin?.();
+    restoreStdin = withPipedStdin("sk-openai-\ncodex-api-key-value\n");
+
+    await expect(
+      modelsAuthPasteTokenCommand({ provider: "openai-codex" }, runtime),
+    ).rejects.toThrow("paste-api-key --provider openai-codex");
+
+    expect(mocks.clackText).not.toHaveBeenCalled();
+    expect(mocks.upsertAuthProfileWithLock).not.toHaveBeenCalled();
+    expect(mocks.updateConfig).not.toHaveBeenCalled();
+  });
+
+  it("writes pasted API keys to the requested agent store", async () => {
+    const runtime = createRuntime();
+    useCoderAgentConfig();
+    mocks.clackPassword.mockResolvedValue("sk-openai-codex-api-key-value");
+
+    await modelsAuthPasteApiKeyCommand({ provider: "openai-codex", agent: "coder" }, runtime);
+
+    expect(mocks.resolveDefaultAgentId).not.toHaveBeenCalled();
+    expect(mocks.upsertAuthProfileWithLock).toHaveBeenCalledWith({
+      profileId: "openai-codex:manual",
+      credential: {
+        type: "api_key",
+        provider: "openai-codex",
+        key: "sk-openai-codex-api-key-value",
+      },
+      agentDir: "/tmp/openclaw/agents/coder",
+    });
+    expect(lastUpdatedConfig?.auth?.profiles?.["openai-codex:manual"]).toEqual({
+      provider: "openai-codex",
+      mode: "api_key",
+    });
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Auth profile: openai-codex:manual (openai-codex/api_key)",
+    );
+  });
+
+  it("writes piped OpenAI Codex API keys to API-key profiles", async () => {
+    const runtime = createRuntime();
+    restoreStdin?.();
+    restoreStdin = withPipedStdin("sk-openai-codex-api-key-value\n");
+
+    await modelsAuthPasteApiKeyCommand({ provider: "openai-codex" }, runtime);
+
+    expect(mocks.clackPassword).not.toHaveBeenCalled();
+    expect(mocks.upsertAuthProfileWithLock).toHaveBeenCalledWith({
+      profileId: "openai-codex:manual",
+      credential: {
+        type: "api_key",
+        provider: "openai-codex",
+        key: "sk-openai-codex-api-key-value",
+      },
+      agentDir: "/tmp/openclaw/agents/main",
+    });
+    expect(lastUpdatedConfig?.auth?.profiles?.["openai-codex:manual"]).toEqual({
+      provider: "openai-codex",
+      mode: "api_key",
+    });
+  });
+
+  it("normalizes line-wrapped piped OpenAI Codex API keys before storing", async () => {
+    const runtime = createRuntime();
+    restoreStdin?.();
+    restoreStdin = withPipedStdin("sk-openai-\ncodex-api-key-value\n");
+
+    await modelsAuthPasteApiKeyCommand({ provider: "openai-codex" }, runtime);
+
+    expect(mocks.clackPassword).not.toHaveBeenCalled();
+    expect(mocks.upsertAuthProfileWithLock).toHaveBeenCalledWith({
+      profileId: "openai-codex:manual",
+      credential: {
+        type: "api_key",
+        provider: "openai-codex",
+        key: "sk-openai-codex-api-key-value",
+      },
+      agentDir: "/tmp/openclaw/agents/main",
+    });
+    expect(lastUpdatedConfig?.auth?.profiles?.["openai-codex:manual"]).toEqual({
+      provider: "openai-codex",
+      mode: "api_key",
+    });
+  });
+
+  it("rejects token material pasted into the OpenAI Codex API-key command", async () => {
+    const runtime = createRuntime();
+    const jwtLikeToken = ["eyJhbGciOiJub25l", "eyJzdWIiOiJjb2RleCJ9", "signature123456"].join(".");
+    const validateMessages: string[] = [];
+    mocks.clackPassword.mockImplementation(
+      async (params: { validate?: (value: string) => string | undefined }) => {
+        const message = params.validate?.(jwtLikeToken);
+        if (message) {
+          validateMessages.push(message);
+          throw new Error(message);
+        }
+        return jwtLikeToken;
+      },
+    );
+
+    await expect(
+      modelsAuthPasteApiKeyCommand({ provider: "openai-codex" }, runtime),
+    ).rejects.toThrow("paste-token --provider openai-codex");
+
+    expect(validateMessages).toEqual([
+      "That looks like token or OAuth material, not an OpenAI API key. Use openclaw models auth paste-token --provider openai-codex for token auth material.",
+    ]);
+    expect(mocks.upsertAuthProfileWithLock).not.toHaveBeenCalled();
+    expect(mocks.updateConfig).not.toHaveBeenCalled();
   });
 
   it("rejects an unknown agent before prompting for pasted tokens", async () => {
@@ -1159,7 +1376,7 @@ describe("modelsAuthLoginCommand", () => {
     );
 
     expect(mocks.clackText).not.toHaveBeenCalled();
-    expect(mocks.upsertAuthProfile).not.toHaveBeenCalled();
+    expect(mocks.upsertAuthProfileWithLock).not.toHaveBeenCalled();
     expect(mocks.updateConfig).not.toHaveBeenCalled();
   });
 
@@ -1195,7 +1412,7 @@ describe("modelsAuthLoginCommand", () => {
     await modelsAuthSetupTokenCommand({ provider: "moonshot", yes: true }, runtime);
 
     expect(runTokenAuth).toHaveBeenCalledOnce();
-    expect(mocks.upsertAuthProfile).toHaveBeenCalledWith({
+    expect(mocks.upsertAuthProfileWithLock).toHaveBeenCalledWith({
       profileId: "moonshot:token",
       credential: {
         type: "token",
@@ -1242,9 +1459,9 @@ describe("modelsAuthLoginCommand", () => {
     const tokenAuthCall = readMockCallArg(runTokenAuth) as AuthRunCall;
     expect(tokenAuthCall.agentDir).toBe("/tmp/openclaw/agents/coder");
     expect(tokenAuthCall.workspaceDir).toBe("/tmp/openclaw/workspaces/coder");
-    expect((readMockCallArg(mocks.upsertAuthProfile) as UpsertAuthProfileCall).agentDir).toBe(
-      "/tmp/openclaw/agents/coder",
-    );
+    expect(
+      (readMockCallArg(mocks.upsertAuthProfileWithLock) as UpsertAuthProfileCall).agentDir,
+    ).toBe("/tmp/openclaw/agents/coder");
   });
 
   it("uses the requested agent store for interactive token auth add", async () => {
@@ -1284,9 +1501,9 @@ describe("modelsAuthLoginCommand", () => {
     const tokenAuthCall = readMockCallArg(runTokenAuth) as AuthRunCall;
     expect(tokenAuthCall.agentDir).toBe("/tmp/openclaw/agents/coder");
     expect(tokenAuthCall.workspaceDir).toBe("/tmp/openclaw/workspaces/coder");
-    expect((readMockCallArg(mocks.upsertAuthProfile) as UpsertAuthProfileCall).agentDir).toBe(
-      "/tmp/openclaw/agents/coder",
-    );
+    expect(
+      (readMockCallArg(mocks.upsertAuthProfileWithLock) as UpsertAuthProfileCall).agentDir,
+    ).toBe("/tmp/openclaw/agents/coder");
   });
 
   it("keeps the requested agent store when interactive auth add falls back to paste-token", async () => {
@@ -1303,7 +1520,7 @@ describe("modelsAuthLoginCommand", () => {
     await modelsAuthAddCommand({ agent: "coder" }, runtime);
 
     expect(mocks.resolveDefaultAgentId).not.toHaveBeenCalled();
-    expect(mocks.upsertAuthProfile).toHaveBeenCalledWith({
+    expect(mocks.upsertAuthProfileWithLock).toHaveBeenCalledWith({
       profileId: "openai:manual",
       credential: {
         type: "token",

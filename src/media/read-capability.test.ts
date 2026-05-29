@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
+import { getDefaultMediaLocalRoots } from "./local-roots.js";
 import { resolveAgentScopedOutboundMediaAccess } from "./read-capability.js";
 
 vi.mock("../channels/plugins/index.js", () => ({
@@ -18,8 +19,10 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
     });
 
     expect(Object.keys(result)).toStrictEqual(["localRoots", "readFile", "workspaceDir"]);
-    expect(Array.isArray(result.localRoots)).toBe(true);
-    expect(result.localRoots?.length).toBeGreaterThan(0);
+    expect(result.localRoots).toStrictEqual([
+      ...getDefaultMediaLocalRoots(),
+      "/tmp/media-workspace",
+    ]);
     expect(typeof result.readFile).toBe("function");
     expect(result.workspaceDir).toBe("/tmp/media-workspace");
   });
@@ -32,10 +35,28 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
     });
 
     expect(Object.keys(result)).toStrictEqual(["localRoots", "readFile", "workspaceDir"]);
-    expect(Array.isArray(result.localRoots)).toBe(true);
-    expect(result.localRoots?.length).toBeGreaterThan(0);
+    expect(result.localRoots).toStrictEqual([
+      ...getDefaultMediaLocalRoots(),
+      "/tmp/explicit-workspace",
+    ]);
     expect(typeof result.readFile).toBe("function");
     expect(result.workspaceDir).toBe("/tmp/explicit-workspace");
+  });
+
+  it("keeps explicit workspaceDir in localRoots when agent id is unavailable", () => {
+    const workspaceDir = "/tmp/openclaw-home/workspace-xiaoqian";
+    const result = resolveAgentScopedOutboundMediaAccess({
+      cfg: {
+        tools: {
+          fs: { workspaceOnly: true },
+        },
+      } as OpenClawConfig,
+      workspaceDir,
+      mediaSources: [`${workspaceDir}/report.html`],
+    });
+
+    expect(result.localRoots).toContain(workspaceDir);
+    expect(result.workspaceDir).toBe(workspaceDir);
   });
 
   it("does not enable host reads when sender group policy denies read", () => {

@@ -68,6 +68,10 @@
       "types": "./dist/src/plugin-sdk/transport-ready-runtime.d.ts",
       "default": "./src/transport-ready-runtime.ts"
     },
+    "./exec-approvals-runtime": {
+      "types": "./dist/src/plugin-sdk/exec-approvals-runtime.d.ts",
+      "default": "./src/exec-approvals-runtime.ts"
+    },
     "./core": {
       "types": "./dist/src/plugin-sdk/core.d.ts",
       "default": "./src/core.ts"
@@ -107,6 +111,10 @@
     "./cli-runtime": {
       "types": "./dist/src/plugin-sdk/cli-runtime.d.ts",
       "default": "./src/cli-runtime.ts"
+    },
+    "./gateway-method-runtime": {
+      "types": "./dist/src/plugin-sdk/gateway-method-runtime.d.ts",
+      "default": "./src/gateway-method-runtime.ts"
     },
     "./error-runtime": {
       "types": "./dist/src/plugin-sdk/error-runtime.d.ts",

@@ -14,11 +14,29 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import {
+  runGitHubCopilotDeviceFlow,
+  setGitHubCopilotDeviceFlowFetchGuardForTesting,
+} from "./login.js";
 
 const mocks = vi.hoisted(() => ({
   githubCopilotLoginCommand: vi.fn(),
+  fetchWithSsrFGuard: vi.fn(async (params: { url: string; init?: RequestInit }) => ({
+    response: await fetch(params.url, params.init),
+    release: vi.fn(async () => {}),
+  })),
   resolveCopilotApiToken: vi.fn(),
 }));
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/ssrf-runtime")>(
+    "openclaw/plugin-sdk/ssrf-runtime",
+  );
+  return {
+    ...actual,
+    fetchWithSsrFGuard: mocks.fetchWithSsrFGuard,
+  };
+});
 
 vi.mock("./register.runtime.js", () => ({
   DEFAULT_COPILOT_API_BASE_URL: "https://api.githubcopilot.test",
@@ -49,6 +67,7 @@ type GithubCopilotTestModelCatalogProvider = {
 afterEach(async () => {
   vi.clearAllMocks();
   vi.unstubAllGlobals();
+  setGitHubCopilotDeviceFlowFetchGuardForTesting(null);
   clearRuntimeAuthProfileStoreSnapshots();
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
@@ -64,7 +83,7 @@ async function createAgentDir() {
   return dir;
 }
 
-function _registerProvider() {
+function registerProviderForTest() {
   return registerProviderWithPluginConfig({});
 }
 
@@ -313,7 +332,7 @@ describe("github-copilot plugin", () => {
         },
       }),
     );
-    const fetchMock = vi.fn(async (input: unknown) => {
+    const fetchMock = vi.fn(async (input: unknown, _init?: RequestInit) => {
       const target =
         typeof input === "string"
           ? input
@@ -343,6 +362,11 @@ describe("github-copilot plugin", () => {
       throw new Error(`unexpected fetch in github-copilot refresh test: ${target}`);
     });
     vi.stubGlobal("fetch", fetchMock);
+    setGitHubCopilotDeviceFlowFetchGuardForTesting(async (params) => ({
+      response: await fetchMock(params.url, params.init),
+      finalUrl: params.url,
+      release: async () => {},
+    }));
     const prompter = {
       confirm: vi.fn(async () => true),
       note: vi.fn(),
@@ -390,6 +414,25 @@ describe("github-copilot plugin", () => {
         delete (process.stdin as { isTTY?: boolean }).isTTY;
       }
     }
+  });
+
+  it("rejects unsafe GitHub device code lifetimes before polling", async () => {
+    const release = vi.fn(async () => {});
+    setGitHubCopilotDeviceFlowFetchGuardForTesting(async () => ({
+      response: new Response(
+        '{"device_code":"device-code-stub","user_code":"ABCD-1234","verification_uri":"https://github.com/login/device","expires_in":1e309,"interval":0}',
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+      finalUrl: "https://github.com/login/device/code",
+      release,
+    }));
+
+    const showCode = vi.fn();
+    await expect(runGitHubCopilotDeviceFlow({ showCode })).rejects.toThrow(
+      "GitHub device code response missing fields",
+    );
+    expect(showCode).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledTimes(1);
   });
 
   it("stores GitHub Copilot token from non-interactive onboarding", async () => {

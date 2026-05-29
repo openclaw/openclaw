@@ -12,6 +12,7 @@ type DiscoveredBeacon = Awaited<
 >[number];
 
 const callGateway = vi.fn<(opts: unknown) => Promise<{ ok: true }>>(async () => ({ ok: true }));
+const formatGatewayTransportErrorJson = vi.fn();
 const startGatewayServer = vi.fn<
   (port: number, opts?: unknown) => Promise<{ close: () => Promise<void> }>
 >(async () => ({
@@ -44,6 +45,7 @@ vi.mock(
   new URL("../../gateway/call.ts", new URL("./gateway-cli/call.ts", import.meta.url)).href,
   () => ({
     callGateway: (opts: unknown) => callGateway(opts),
+    formatGatewayTransportErrorJson: (error: unknown) => formatGatewayTransportErrorJson(error),
     randomIdempotencyKey: () => "rk_test",
   }),
 );
@@ -122,6 +124,14 @@ async function expectGatewayExit(args: string[]) {
   await expect(runGatewayCommand(args)).rejects.toThrow("__exit__:1");
 }
 
+function firstMockArg(mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } }): unknown {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error("expected mock to have at least one call");
+  }
+  return call[0];
+}
+
 describe("gateway-cli coverage", () => {
   beforeEach(() => {
     gatewayProgram = createGatewayProgram();
@@ -132,8 +142,11 @@ describe("gateway-cli coverage", () => {
     defaultRuntime.writeStdout.mockClear();
     defaultRuntime.writeJson.mockClear();
     defaultRuntime.exit.mockClear();
+    startGatewayServer.mockClear();
     inspectPortUsage.mockClear();
     formatPortDiagnostics.mockClear();
+    formatGatewayTransportErrorJson.mockReset();
+    formatGatewayTransportErrorJson.mockReturnValue(null);
   });
 
   it("registers call/health commands and routes to callGateway", async () => {
@@ -166,14 +179,37 @@ describe("gateway-cli coverage", () => {
       "--json",
     ]);
 
-    const stabilityCall = callGateway.mock.calls[0]?.[0] as
-      | { method?: string; params?: unknown }
-      | undefined;
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    const stabilityCall = firstMockArg(callGateway) as { method?: string; params?: unknown };
     expect(stabilityCall?.method).toBe("diagnostics.stability");
     expect(stabilityCall?.params).toEqual({
       limit: 5,
       type: "payload.large",
     });
+  });
+
+  it("writes JSON for gateway health transport failures in JSON mode", async () => {
+    const error = new Error("gateway closed (1006)");
+    const payload = {
+      ok: false,
+      error: {
+        type: "gateway_transport_error",
+        kind: "closed",
+        message: "gateway closed (1006)",
+      },
+      gateway: {
+        url: "ws://127.0.0.1:18789",
+        urlSource: "local loopback",
+      },
+    };
+    callGateway.mockRejectedValueOnce(error);
+    formatGatewayTransportErrorJson.mockReturnValueOnce(payload);
+
+    await expectGatewayExit(["gateway", "health", "--json"]);
+
+    expect(formatGatewayTransportErrorJson).toHaveBeenCalledWith(error);
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(payload);
+    expect(runtimeErrors.join("\n")).not.toContain("gateway closed");
   });
 
   it("prints the latest stability bundle without calling Gateway", async () => {
@@ -197,6 +233,41 @@ describe("gateway-cli coverage", () => {
           uptimeMs: 2000,
         },
         host: { hostname: "test-host" },
+        evidence: {
+          memoryPressure: {
+            level: "critical",
+            reason: "rss_threshold",
+            memory: {
+              rssBytes: 4096,
+              heapTotalBytes: 2048,
+              heapUsedBytes: 1536,
+              externalBytes: 128,
+              arrayBuffersBytes: 64,
+            },
+            thresholdBytes: 3000,
+            heapStatistics: {
+              totalHeapSizeBytes: 2048,
+              totalHeapSizeExecutableBytes: 256,
+              totalPhysicalSizeBytes: 2048,
+              totalAvailableSizeBytes: 8192,
+              usedHeapSizeBytes: 1536,
+              heapSizeLimitBytes: 4096,
+              mallocedMemoryBytes: 32,
+              externalMemoryBytes: 128,
+            },
+            activeResources: {
+              total: 2,
+              byType: { Timeout: 2 },
+            },
+            topSessionFiles: [
+              {
+                relativePath: "agents/<agent>/sessions/<session>.jsonl",
+                sizeBytes: 4096,
+                mtimeMs: Date.parse("2026-04-22T12:00:00.000Z"),
+              },
+            ],
+          },
+        },
         snapshot: {
           generatedAt: "2026-04-22T12:00:00.000Z",
           capacity: 1000,
@@ -238,6 +309,10 @@ describe("gateway-cli coverage", () => {
       expect(callGateway).not.toHaveBeenCalled();
       expect(output).toContain("Stability bundle");
       expect(output).toContain("gateway.restart_startup_failed");
+      expect(output).toContain("Memory pressure");
+      expect(output).toContain("rss_threshold");
+      expect(output).toContain("Largest session files");
+      expect(output).toContain("agents/<agent>/sessions/<session>.jsonl");
       expect(output).toContain("payload.large");
       expect(output).toContain("gateway.http.json");
     } finally {
@@ -265,9 +340,7 @@ describe("gateway-cli coverage", () => {
       );
 
       expect(callGateway).toHaveBeenCalledTimes(1);
-      const healthCall = callGateway.mock.calls[0]?.[0] as
-        | { method?: string; timeoutMs?: number }
-        | undefined;
+      const healthCall = firstMockArg(callGateway) as { method?: string; timeoutMs?: number };
       expect(healthCall?.method).toBe("health");
       expect(healthCall?.timeoutMs).toBe(3000);
       expect(fs.existsSync(outputPath)).toBe(true);
@@ -278,6 +351,18 @@ describe("gateway-cli coverage", () => {
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
+  });
+
+  it.each([
+    ["--log-lines", "5000x"],
+    ["--log-bytes", "1mb"],
+  ])("rejects partial gateway diagnostics export %s", async (flag, value) => {
+    callGateway.mockClear();
+
+    await expectGatewayExit(["gateway", "diagnostics", "export", flag, value, "--json"]);
+
+    expect(runtimeErrors.join("\n")).toContain(`${flag} must be a positive integer`);
+    expect(callGateway).not.toHaveBeenCalled();
   });
 
   it("registers gateway discover and prints json output", async () => {
@@ -320,11 +405,19 @@ describe("gateway-cli coverage", () => {
     expect(runtimeErrors.join("\n")).toContain("Gateway call failed:");
   });
 
-  it("validates gateway ports and handles force/start errors", async () => {
-    // Invalid port
-    await expectGatewayExit(["gateway", "--port", "0", "--token", "test-token"]);
+  it("validates gateway call timeout before opening a transport", async () => {
+    callGateway.mockClear();
+    await expectGatewayExit(["gateway", "call", "health", "--timeout", "nope", "--json"]);
 
-    // Force free failure
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(runtimeErrors.join("\n")).toContain("Invalid --timeout");
+  });
+
+  it("validates gateway ports before starting", async () => {
+    await expectGatewayExit(["gateway", "--port", "0", "--token", "test-token"]);
+  });
+
+  it("reports force-free port failures", async () => {
     forceFreePortAndWait.mockImplementationOnce(async () => {
       throw new Error("boom");
     });
@@ -337,8 +430,9 @@ describe("gateway-cli coverage", () => {
       "--force",
       "--allow-unconfigured",
     ]);
+  });
 
-    // Start failure (generic)
+  it("reports gateway start failures without leaking signal listeners", async () => {
     startGatewayServer.mockRejectedValueOnce(new Error("nope"));
     const beforeSigterm = new Set(process.listeners("SIGTERM"));
     const beforeSigint = new Set(process.listeners("SIGINT"));
@@ -386,7 +480,7 @@ describe("gateway-cli coverage", () => {
           runGatewayCommand(["gateway", "--token", "test-token", "--allow-unconfigured"]),
         ).rejects.toThrow("__exit__:0");
 
-        expect(startGatewayServer).toHaveBeenCalled();
+        expect(startGatewayServer).toHaveBeenCalledTimes(1);
         expect(runtimeErrors.join("\n")).toContain("Gateway failed to start:");
         expect(runtimeErrors.join("\n")).toContain("gateway stop");
       },

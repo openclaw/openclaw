@@ -1,3 +1,4 @@
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
   buildSearchCacheKey,
   DEFAULT_SEARCH_COUNT,
@@ -5,7 +6,7 @@ import {
   parseIsoDateRange,
   readCachedSearchPayload,
   readConfiguredSecretString,
-  readNumberParam,
+  readPositiveIntegerParam,
   readProviderEnvValue,
   readStringParam,
   resolveProviderWebSearchPluginConfig,
@@ -65,6 +66,14 @@ type ExaSearchResult = {
 type ExaSearchResponse = {
   results?: unknown;
 };
+
+async function readExaSearchResults(response: Response): Promise<ExaSearchResult[]> {
+  try {
+    return normalizeExaResults(await response.json());
+  } catch (cause) {
+    throw new Error("Exa API returned malformed JSON", { cause });
+  }
+}
 
 function normalizeExaFreshness(value: string | undefined): ExaFreshness | undefined {
   const trimmed = normalizeOptionalLowercaseString(value);
@@ -163,11 +172,11 @@ function isErrorPayload(value: unknown): value is { error: string; message: stri
 }
 
 function resolveExaSearchCount(value: unknown, fallback: number): number {
-  const parsed = typeof value === "number" ? value : Number(value);
-  if (!Number.isFinite(parsed)) {
+  const parsed = parseStrictPositiveInteger(value);
+  if (parsed === undefined) {
     return fallback;
   }
-  return Math.max(1, Math.min(EXA_MAX_SEARCH_COUNT, Math.floor(parsed)));
+  return Math.min(EXA_MAX_SEARCH_COUNT, parsed);
 }
 
 function parseExaContents(
@@ -400,11 +409,7 @@ async function runExaSearch(params: {
         const detail = await res.text();
         throw new Error(`Exa API error (${res.status}): ${detail || res.statusText}`);
       }
-      try {
-        return normalizeExaResults(await res.json());
-      } catch (error) {
-        throw new Error(`Exa API returned invalid JSON: ${String(error)}`, { cause: error });
-      }
+      return readExaSearchResults(res);
     },
   );
 }
@@ -470,7 +475,12 @@ export async function executeExaWebSearchProviderTool(
     ? (rawType as ExaSearchType)
     : "auto";
   const count =
-    readNumberParam(params, "count", { integer: true }) ?? searchConfig?.maxResults ?? undefined;
+    readPositiveIntegerParam(params, "count", {
+      max: EXA_MAX_SEARCH_COUNT,
+      message: `count must be an integer from 1 to ${EXA_MAX_SEARCH_COUNT}.`,
+    }) ??
+    searchConfig?.maxResults ??
+    undefined;
   const rawFreshness = readStringParam(params, "freshness");
   const freshness = normalizeExaFreshness(rawFreshness);
   if (rawFreshness && !freshness) {
@@ -585,7 +595,7 @@ export async function executeExaWebSearchProviderTool(
   return payload;
 }
 
-export const __testing = {
+export const testing = {
   normalizeExaResults,
   normalizeExaFreshness,
   parseExaContents,
@@ -596,4 +606,6 @@ export const __testing = {
   resolveExaSearchCount,
   resolveExaSearchEndpoint,
   resolveFreshnessStartDate,
+  readExaSearchResults,
 } as const;
+export { testing as __testing };

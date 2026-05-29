@@ -8,6 +8,8 @@ vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
 
 import { buildXiaomiSpeechProvider } from "./speech-provider.js";
 
+const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
+
 describe("buildXiaomiSpeechProvider", () => {
   const provider = buildXiaomiSpeechProvider();
 
@@ -162,7 +164,7 @@ describe("buildXiaomiSpeechProvider", () => {
       expect(result.audioBuffer.toString()).toBe("fake-mp3-audio");
 
       expect(mockFetch).toHaveBeenCalledOnce();
-      const [url, init] = mockFetch.mock.calls[0];
+      const [url, init] = mockFetch.mock.calls[0] ?? [];
       expect(url).toBe("https://api.xiaomimimo.com/v1/chat/completions");
       expect(init?.headers).toEqual({
         "api-key": "sk-test",
@@ -206,6 +208,37 @@ describe("buildXiaomiSpeechProvider", () => {
         tempPrefix: "tts-xiaomi-",
         timeoutMs: 30000,
       });
+    });
+
+    it("caps oversized TTS request timeouts before scheduling or fetching", async () => {
+      const audio = Buffer.from("fake-mp3-audio").toString("base64");
+      const timeoutSpy = vi
+        .spyOn(globalThis, "setTimeout")
+        .mockReturnValue(1 as unknown as ReturnType<typeof setTimeout>);
+      const clearTimeoutSpy = vi
+        .spyOn(globalThis, "clearTimeout")
+        .mockImplementation(() => undefined);
+      vi.mocked(globalThis.fetch).mockResolvedValueOnce(
+        new Response(JSON.stringify({ choices: [{ message: { audio: { data: audio } } }] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+
+      try {
+        await provider.synthesize({
+          text: "Hello from OpenClaw.",
+          cfg: {} as never,
+          providerConfig: { apiKey: "sk-test" },
+          target: "audio-file",
+          timeoutMs: MAX_TIMER_TIMEOUT_MS + 1_000_000,
+        });
+
+        expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+      } finally {
+        timeoutSpy.mockRestore();
+        clearTimeoutSpy.mockRestore();
+      }
     });
 
     it("throws when API key is missing", async () => {

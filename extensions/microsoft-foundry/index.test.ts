@@ -235,6 +235,19 @@ function mockAzureCliToken(params: { accessToken: string; expiresInMs: number; d
   );
 }
 
+function mockAzureCliTokenRaw(stdout: string) {
+  execFileMock.mockImplementationOnce(
+    (
+      _file: unknown,
+      _args: unknown,
+      _options: unknown,
+      callback: (error: Error | null, stdout: string, stderr: string) => void,
+    ) => {
+      callback(null, stdout, "");
+    },
+  );
+}
+
 function mockAzureCliLoginFailure(delayMs?: number) {
   execFileMock.mockImplementationOnce(
     (
@@ -304,6 +317,39 @@ describe("microsoft-foundry plugin", () => {
     });
 
     expect(config.auth?.order?.["microsoft-foundry"]).toEqual(["microsoft-foundry:default"]);
+  });
+
+  it("tolerates timeout-only provider overlays when selecting a Foundry model", async () => {
+    const provider = registerProvider();
+    const config = {
+      models: {
+        providers: {
+          "microsoft-foundry": {
+            baseUrl: "",
+            models: [],
+            timeoutSeconds: 120,
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    await provider.onModelSelected?.({
+      config,
+      model: "microsoft-foundry/gpt-5.4",
+      prompter: {} as never,
+      agentDir: defaultFoundryAgentDir,
+    });
+
+    expect(config.models?.providers?.["microsoft-foundry"]?.models).toEqual([]);
+    expect(config.models?.providers?.["microsoft-foundry"]?.timeoutSeconds).toBe(120);
+  });
+
+  it("reports malformed Azure CLI token JSON with an owned error", async () => {
+    mockAzureCliTokenRaw("{not json");
+
+    await expect(getAccessTokenResultAsync()).rejects.toThrow(
+      "Azure CLI returned malformed access token JSON.",
+    );
   });
 
   it("fails clearly when the selected Azure subscription is not in the enabled list", async () => {
@@ -513,6 +559,8 @@ describe("microsoft-foundry plugin", () => {
     expect(usesFoundryResponsesByDefault("gpt-5.4")).toBe(true);
     expect(usesFoundryResponsesByDefault("gpt-5.2-codex")).toBe(true);
     expect(usesFoundryResponsesByDefault("o4-mini")).toBe(true);
+    expect(usesFoundryResponsesByDefault("DeepSeek-V4-Pro")).toBe(true);
+    expect(usesFoundryResponsesByDefault("DeepSeek-V4-Flash")).toBe(true);
     expect(usesFoundryResponsesByDefault("MAI-DS-R1")).toBe(false);
     expect(requiresFoundryMaxCompletionTokens("gpt-5.4")).toBe(true);
     expect(requiresFoundryMaxCompletionTokens("o3")).toBe(true);

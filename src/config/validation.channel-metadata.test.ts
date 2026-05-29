@@ -73,6 +73,35 @@ function createPluginConfigSchemaRegistry(): PluginManifestRegistry {
   };
 }
 
+function createExternalFeishuSchemaRegistry(): PluginManifestRegistry {
+  return {
+    diagnostics: [],
+    plugins: [
+      createPluginManifestRecord({
+        id: "openclaw-lark",
+        origin: "global",
+        channels: ["feishu"],
+        channelConfigs: {
+          feishu: {
+            schema: {
+              type: "object",
+              properties: {
+                appId: { type: "string" },
+                appSecret: { type: "string" },
+                replyMode: { type: "string", enum: ["thread", "direct"] },
+                footer: { type: "string" },
+              },
+              required: ["appId", "appSecret"],
+              additionalProperties: false,
+            },
+            uiHints: {},
+          },
+        },
+      }),
+    ],
+  };
+}
+
 function createCompatPluginConfigSchemaRegistry(): PluginManifestRegistry {
   return {
     diagnostics: [],
@@ -122,6 +151,9 @@ vi.mock("../plugins/plugin-registry.js", () => ({
 
 vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: () => ({
+    manifestRegistry: mockLoadPluginManifestRegistry(),
+  }),
+  resolvePluginMetadataSnapshot: () => ({
     manifestRegistry: mockLoadPluginManifestRegistry(),
   }),
 }));
@@ -174,6 +206,31 @@ describe("validateConfigObjectWithPlugins channel metadata (applyDefaults: true)
       expect(result.config.channels?.telegram?.dmPolicy).toBe("pairing");
     }
   });
+
+  it("accepts Discord agent component TTL in generated bundled channel metadata", () => {
+    const result = validateConfigObjectWithPlugins({
+      channels: {
+        discord: {
+          agentComponents: {
+            ttlMs: 120_000,
+          },
+          accounts: {
+            work: {
+              agentComponents: {
+                ttlMs: 60_000,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.config.channels?.discord?.agentComponents?.ttlMs).toBe(120_000);
+      expect(result.config.channels?.discord?.accounts?.work?.agentComponents?.ttlMs).toBe(60_000);
+    }
+  });
 });
 
 describe("validateConfigObjectRawWithPlugins channel metadata", () => {
@@ -200,6 +257,45 @@ describe("validateConfigObjectRawWithPlugins channel metadata", () => {
       expect(result.config.channels?.telegram?.dmPolicy).toBe("pairing");
     }
   });
+
+  it("uses external plugin channel schemas for raw validation", () => {
+    mockLoadPluginManifestRegistry.mockReturnValue(createExternalFeishuSchemaRegistry());
+
+    const result = validateConfigObjectRawWithPlugins({
+      channels: {
+        feishu: {
+          appId: "app-id",
+          appSecret: "secret",
+          replyMode: "thread",
+          footer: "OpenClaw",
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("keeps raw channel validation diagnostics plugin-agnostic", () => {
+    const result = validateConfigObjectRawWithPlugins({
+      channels: {
+        telegram: {
+          groups: ["-1001234567890"],
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues).toContainEqual(
+        expect.objectContaining({
+          path: "channels.telegram.groups",
+          message: expect.stringContaining("invalid config:"),
+        }),
+      );
+      expect(result.issues[0]?.message).not.toContain("Telegram groups");
+      expect(result.issues[0]?.message).not.toContain("openclaw doctor --fix");
+    }
+  });
 });
 
 describe("validateConfigObjectRawWithPlugins plugin config defaults", () => {
@@ -224,6 +320,20 @@ describe("validateConfigObjectRawWithPlugins plugin config defaults", () => {
 });
 
 describe("validateConfigObjectWithPlugins bundled allowlist compatibility", () => {
+  it("accepts the shipped deprecated bundledDiscovery marker", () => {
+    const result = validateConfigObjectWithPlugins({
+      plugins: {
+        allow: ["telegram"],
+        bundledDiscovery: "compat",
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.config.plugins?.bundledDiscovery).toBe("compat");
+    }
+  });
+
   it("reuses the manifest registry loaded for compatibility during plugin validation", () => {
     mockLoadPluginManifestRegistry.mockReturnValue(createCompatPluginConfigSchemaRegistry());
 
@@ -271,7 +381,7 @@ describe("validateConfigObjectWithPlugins bundled allowlist compatibility", () =
   });
 
   it("loads a plugin metadata snapshot once during plugin validation", () => {
-    const loadPluginMetadataSnapshot = vi.fn((_config: unknown) => ({
+    const loadPluginMetadataSnapshot = vi.fn((configForTest: unknown) => ({
       manifestRegistry: createPluginConfigSchemaRegistry(),
     }));
 

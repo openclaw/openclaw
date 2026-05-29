@@ -9,7 +9,12 @@
 import fs from "node:fs/promises";
 import nodePath from "node:path";
 import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
-import { detectMime } from "openclaw/plugin-sdk/media-runtime";
+import { detectMime, parseMediaContentLength } from "openclaw/plugin-sdk/media-runtime";
+import {
+  parseStrictNonNegativeInteger,
+  resolveTimerTimeoutMs,
+} from "openclaw/plugin-sdk/number-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import WebSocket from "ws";
 
 export type ContainerRpcOptions = {
@@ -75,8 +80,9 @@ async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: numbe
   if (!fetchImpl) {
     throw new Error("fetch is not available");
   }
+  const safeTimeoutMs = resolveTimerTimeoutMs(timeoutMs, DEFAULT_TIMEOUT_MS);
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const timer = setTimeout(() => controller.abort(), safeTimeoutMs);
   try {
     return await fetchImpl(url, { ...init, signal: controller.signal });
   } finally {
@@ -92,12 +98,7 @@ function normalizeMaxResponseBytes(value: number | undefined): number {
 }
 
 function readContentLength(res: Response): number | undefined {
-  const raw = res.headers?.get("content-length");
-  if (!raw) {
-    return undefined;
-  }
-  const parsed = Number(raw);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+  return parseMediaContentLength(res.headers?.get("content-length") ?? null) ?? undefined;
 }
 
 async function readCappedResponseBuffer(res: Response, maxResponseBytes: number): Promise<Buffer> {
@@ -105,36 +106,9 @@ async function readCappedResponseBuffer(res: Response, maxResponseBytes: number)
   if (contentLength !== undefined && contentLength > maxResponseBytes) {
     throw new Error("Signal REST attachment exceeded size limit");
   }
-
-  const reader = res.body?.getReader();
-  if (!reader) {
-    const arrayBuffer = await res.arrayBuffer();
-    if (arrayBuffer.byteLength > maxResponseBytes) {
-      throw new Error("Signal REST attachment exceeded size limit");
-    }
-    return Buffer.from(arrayBuffer);
-  }
-
-  const chunks: Buffer[] = [];
-  let totalBytes = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-      const chunk = Buffer.from(value ?? new Uint8Array());
-      totalBytes += chunk.byteLength;
-      if (totalBytes > maxResponseBytes) {
-        await reader.cancel().catch(() => {});
-        throw new Error("Signal REST attachment exceeded size limit");
-      }
-      chunks.push(chunk);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  return Buffer.concat(chunks);
+  return await readResponseWithLimit(res, maxResponseBytes, {
+    onOverflow: () => new Error("Signal REST attachment exceeded size limit"),
+  });
 }
 
 /**
@@ -172,12 +146,13 @@ function containerReceiveCheck(
 ): Promise<{ ok: boolean; status?: number | null; error?: string | null }> {
   const wsUrl = `${normalizedBaseUrl.replace(/^http/, "ws")}/v1/receive/${encodeURIComponent(account)}`;
   return new Promise((resolve) => {
+    const safeTimeoutMs = resolveTimerTimeoutMs(timeoutMs, DEFAULT_TIMEOUT_MS);
     let settled = false;
     let ws: WebSocket | undefined;
     const timer = setTimeout(() => {
       settle({ ok: false, status: null, error: "Signal container receive WebSocket timed out" });
       ws?.terminate();
-    }, timeoutMs);
+    }, safeTimeoutMs);
     timer.unref?.();
     const settle = (result: { ok: boolean; status?: number | null; error?: string | null }) => {
       if (settled) {
@@ -446,9 +421,8 @@ function parseContainerSendTimestamp(raw: unknown): number | undefined {
   if (raw == null) {
     return undefined;
   }
-  const timestamp =
-    typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : Number.NaN;
-  if (!Number.isFinite(timestamp)) {
+  const timestamp = parseStrictNonNegativeInteger(raw);
+  if (timestamp === undefined) {
     throw new Error("Signal REST send returned invalid timestamp");
   }
   return timestamp;

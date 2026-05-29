@@ -1,3 +1,4 @@
+import { parseBrowserHttpUrl, redactCdpUrl } from "openclaw/plugin-sdk/browser-config";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import WebSocket from "ws";
 import { isLoopbackHost } from "../gateway/net.js";
@@ -6,46 +7,19 @@ import {
   type SsrFPolicy,
   resolvePinnedHostnameWithPolicy,
 } from "../infra/net/ssrf.js";
-import { redactSensitiveText } from "../logging/redact.js";
-import { getDirectAgentForCdp, withNoProxyForCdpUrl } from "./cdp-proxy-bypass.js";
+import {
+  getDirectAgentForCdp,
+  withManagedProxyForCdpUrl,
+  withNoProxyForCdpUrl,
+} from "./cdp-proxy-bypass.js";
 import { CDP_HTTP_REQUEST_TIMEOUT_MS, CDP_WS_HANDSHAKE_TIMEOUT_MS } from "./cdp-timeouts.js";
 import { BrowserCdpEndpointBlockedError } from "./errors.js";
 import { resolveBrowserRateLimitMessage } from "./rate-limit-message.js";
 import { withAllowedHostname } from "./ssrf-policy-helpers.js";
+import { normalizeBrowserTimerDelayMs } from "./timer-delay.js";
 
 export { isLoopbackHost };
-
-export function parseBrowserHttpUrl(raw: string, label: string) {
-  const trimmed = raw.trim();
-  const parsed = new URL(trimmed);
-  const allowed = ["http:", "https:", "ws:", "wss:"];
-  if (!allowed.includes(parsed.protocol)) {
-    throw new Error(`${label} must be http(s) or ws(s), got: ${parsed.protocol.replace(":", "")}`);
-  }
-
-  const isSecure = parsed.protocol === "https:" || parsed.protocol === "wss:";
-  const port =
-    parsed.port && Number.parseInt(parsed.port, 10) > 0
-      ? Number.parseInt(parsed.port, 10)
-      : isSecure
-        ? 443
-        : 80;
-
-  // WHATWG URL rejects invalid ports (non-numeric, negative, >65535), and
-  // the ternary above falls back to 80/443 for empty or zero parsed.port,
-  // so this defensive guard is unreachable at runtime. Kept as a
-  // belt-and-braces check against parser drift.
-  /* c8 ignore next 3 */
-  if (Number.isNaN(port) || port <= 0 || port > 65535) {
-    throw new Error(`${label} has invalid port: ${parsed.port}`);
-  }
-
-  return {
-    parsed,
-    port,
-    normalized: parsed.toString().replace(/\/$/, ""),
-  };
-}
+export { parseBrowserHttpUrl, redactCdpUrl };
 
 /**
  * Returns true when the URL uses a WebSocket protocol (ws: or wss:).
@@ -115,24 +89,6 @@ export async function assertCdpEndpointAllowed(
   }
 }
 
-export function redactCdpUrl(cdpUrl: string | null | undefined): string | null | undefined {
-  if (typeof cdpUrl !== "string") {
-    return cdpUrl;
-  }
-  const trimmed = cdpUrl.trim();
-  if (!trimmed) {
-    return trimmed;
-  }
-  try {
-    const parsed = new URL(trimmed);
-    parsed.username = "";
-    parsed.password = "";
-    return redactSensitiveText(parsed.toString().replace(/\/$/, ""));
-  } catch {
-    return redactSensitiveText(trimmed);
-  }
-}
-
 type CdpResponse = {
   id: number;
   result?: unknown;
@@ -187,6 +143,20 @@ export function getHeadersWithAuth(url: string, headers: Record<string, string> 
   return mergedHeaders;
 }
 
+function stripUrlCredentials(url: string): string {
+  try {
+    const parsed = new URL(url);
+    if (!parsed.username && !parsed.password) {
+      return url;
+    }
+    parsed.username = "";
+    parsed.password = "";
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+}
+
 export function appendCdpPath(cdpUrl: string, path: string): string {
   const url = new URL(cdpUrl);
   const basePath = url.pathname.replace(/\/$/, "");
@@ -227,7 +197,7 @@ function createCdpSender(ws: WebSocket, opts?: { commandTimeoutMs?: number }) {
   const pending = new Map<number, Pending>();
   const commandTimeoutMs =
     typeof opts?.commandTimeoutMs === "number" && Number.isFinite(opts.commandTimeoutMs)
-      ? Math.max(1, Math.floor(opts.commandTimeoutMs))
+      ? normalizeBrowserTimerDelayMs(opts.commandTimeoutMs)
       : undefined;
 
   const clearPendingTimer = (p: Pending) => {
@@ -337,7 +307,7 @@ export async function fetchCdpChecked(
   ssrfPolicy?: SsrFPolicy,
 ): Promise<CdpFetchResult> {
   const ctrl = new AbortController();
-  const t = setTimeout(ctrl.abort.bind(ctrl), timeoutMs);
+  const t = setTimeout(ctrl.abort.bind(ctrl), normalizeBrowserTimerDelayMs(timeoutMs));
   let guardedRelease: (() => Promise<void>) | undefined;
   let released = false;
   const release = async () => {
@@ -350,21 +320,24 @@ export async function fetchCdpChecked(
   };
   try {
     const headers = getHeadersWithAuth(url, (init?.headers as Record<string, string>) || {});
-    const res = await withNoProxyForCdpUrl(url, async () => {
-      const parsedUrl = new URL(url);
-      const policy = isLoopbackHost(parsedUrl.hostname)
-        ? withAllowedHostname(ssrfPolicy, parsedUrl.hostname)
-        : (ssrfPolicy ?? { allowPrivateNetwork: true });
-      const guarded = await fetchWithSsrFGuard({
-        url,
-        init: { ...init, headers },
-        signal: ctrl.signal,
-        policy,
-        auditContext: "browser-cdp",
-      });
-      guardedRelease = guarded.release;
-      return guarded.response;
-    });
+    const fetchUrl = stripUrlCredentials(url);
+    const res = await withManagedProxyForCdpUrl(fetchUrl, () =>
+      withNoProxyForCdpUrl(url, async () => {
+        const parsedUrl = new URL(fetchUrl);
+        const policy = isLoopbackHost(parsedUrl.hostname)
+          ? withAllowedHostname(ssrfPolicy, parsedUrl.hostname)
+          : (ssrfPolicy ?? { allowPrivateNetwork: true });
+        const guarded = await fetchWithSsrFGuard({
+          url: fetchUrl,
+          init: { ...init, headers },
+          signal: ctrl.signal,
+          policy,
+          auditContext: "browser-cdp",
+        });
+        guardedRelease = guarded.release;
+        return guarded.response;
+      }),
+    );
     if (!res.ok) {
       if (res.status === 429) {
         // Do not reflect upstream response text into the error surface (log/agent injection risk)
@@ -402,11 +375,16 @@ export function openCdpWebSocket(
       ? Math.max(1, Math.floor(opts.handshakeTimeoutMs))
       : CDP_WS_HANDSHAKE_TIMEOUT_MS;
   const agent = getDirectAgentForCdp(wsUrl);
-  return new WebSocket(wsUrl, {
-    handshakeTimeout: handshakeTimeoutMs,
-    ...(Object.keys(headers).length ? { headers } : {}),
-    ...(agent ? { agent } : {}),
-  });
+  const bypassUrl = stripUrlCredentials(wsUrl);
+  return withManagedProxyForCdpUrl(
+    bypassUrl,
+    () =>
+      new WebSocket(wsUrl, {
+        handshakeTimeout: handshakeTimeoutMs,
+        ...(Object.keys(headers).length ? { headers } : {}),
+        ...(agent ? { agent } : {}),
+      }),
+  );
 }
 
 type CdpSocketOptions = {

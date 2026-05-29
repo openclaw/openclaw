@@ -21,6 +21,7 @@ import {
   resolveSlackThreadHistoryFilterPolicy,
   shouldIncludeBotThreadStarterContext,
 } from "./prepare-thread-context-root.js";
+import { resolveSlackTimestampMs } from "./timestamp.js";
 
 type SlackMediaModule = typeof import("../media.js");
 let slackMediaModulePromise: Promise<SlackMediaModule> | undefined;
@@ -103,6 +104,7 @@ export async function resolveSlackThreadContextData(params: {
   roomLabel: string;
   storePath: string;
   sessionKey: string;
+  forceInitialHistory?: boolean;
   allowFromLower: string[];
   allowNameMatching: boolean;
   contextVisibilityMode: ContextVisibilityMode;
@@ -213,7 +215,10 @@ export async function resolveSlackThreadContextData(params: {
 
   const threadInitialHistoryLimit = params.account.config?.thread?.initialHistoryLimit ?? 20;
 
-  if (threadInitialHistoryLimit > 0 && !threadSessionPreviousTimestamp) {
+  if (
+    threadInitialHistoryLimit > 0 &&
+    (!threadSessionPreviousTimestamp || params.forceInitialHistory)
+  ) {
     const currentBotRootTs = starter?.ts ?? params.threadTs;
     const threadHistory = await resolveSlackThreadHistory({
       channelId: params.message.channel,
@@ -306,7 +311,7 @@ export async function resolveSlackThreadContextData(params: {
           formatInboundEnvelope({
             channel: "Slack",
             from: `${msgSenderName} (${role})`,
-            timestamp: historyMsg.ts ? Math.round(Number(historyMsg.ts) * 1000) : undefined,
+            timestamp: resolveSlackTimestampMs(historyMsg.ts),
             body: msgWithId,
             chatType: "channel",
             envelope: params.envelopeOptions,

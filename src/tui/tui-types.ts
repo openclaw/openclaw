@@ -1,3 +1,5 @@
+import type { SessionGoal } from "../config/sessions/types.js";
+
 export type TuiOptions = {
   local?: boolean;
   url?: string;
@@ -9,6 +11,11 @@ export type TuiOptions = {
   timeoutMs?: number;
   historyLimit?: number;
   message?: string;
+  /**
+   * Internal CLI guard: after the standalone TUI returns, force the child
+   * process out if imported runtime handles keep the event loop alive.
+   */
+  forceProcessExitOnReturn?: boolean;
 };
 
 export type TuiExitReason = "exit" | "return-to-crestodian";
@@ -21,6 +28,7 @@ export type TuiResult = {
 export type ChatEvent = {
   runId: string;
   sessionKey: string;
+  agentId?: string;
   state: "delta" | "final" | "aborted" | "error";
   message?: unknown;
   errorMessage?: string;
@@ -30,6 +38,7 @@ export type BtwEvent = {
   kind: "btw";
   runId?: string;
   sessionKey?: string;
+  agentId?: string;
   question: string;
   text: string;
   isError?: boolean;
@@ -58,6 +67,7 @@ export type SessionInfo = {
   inputTokens?: number | null;
   outputTokens?: number | null;
   totalTokens?: number | null;
+  goal?: SessionGoal;
   responseUsage?: ResponseUsageMode;
   updatedAt?: number | null;
   displayName?: string;

@@ -105,11 +105,11 @@ describe("config observe recovery", () => {
   }
 
   function expectWarnContaining(warn: ReturnType<typeof vi.fn>, expected: string) {
-    expect(warnMessages(warn).some((message) => message.includes(expected))).toBe(true);
+    expect(warnMessages(warn).join("\n")).toContain(expected);
   }
 
   function expectWarnNotContaining(warn: ReturnType<typeof vi.fn>, expected: string) {
-    expect(warnMessages(warn).some((message) => message.includes(expected))).toBe(false);
+    expect(warnMessages(warn).join("\n")).not.toContain(expected);
   }
 
   function observeSuspicious(observe: Record<string, unknown> | undefined): string[] {
@@ -451,6 +451,87 @@ describe("config observe recovery", () => {
       expect(observe?.valid).toBe(false);
       expect(observe?.restoreErrorCode).toBe("EACCES");
       expect(observe?.restoreErrorMessage).toBe("EACCES: permission denied");
+    });
+  });
+
+  it("retries recovery on next launch after a failed copyFile restore", async () => {
+    await withSuiteHome(async (home) => {
+      const { deps, configPath, auditPath, warn } = makeDeps(home);
+      await seedConfigBackup(configPath, recoverableTelegramConfig);
+      const clobbered = await writeClobberedUpdateChannel(configPath);
+
+      const copyError = Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+      const failingFs: ObserveRecoveryDeps["fs"] = {
+        ...deps.fs,
+        promises: {
+          ...deps.fs.promises,
+          copyFile: () => Promise.reject(copyError),
+        },
+      };
+      await maybeRecoverSuspiciousConfigRead({
+        deps: { ...deps, fs: failingFs },
+        configPath,
+        raw: clobbered.raw,
+        parsed: clobbered.parsed,
+      });
+
+      expectWarnContaining(warn, "Config auto-restore from backup failed:");
+      const firstEvents = await readObserveEvents(auditPath);
+      expect(firstEvents).toHaveLength(1);
+      expect(firstEvents[0]?.restoredFromBackup).toBe(false);
+
+      const retryResult = await maybeRecoverSuspiciousConfigRead({
+        deps,
+        configPath,
+        raw: clobbered.raw,
+        parsed: clobbered.parsed,
+      });
+
+      expect((retryResult.parsed as { gateway?: { mode?: string } }).gateway?.mode).toBe("local");
+      await expect(fsp.readFile(configPath, "utf-8")).resolves.not.toBe(clobbered.raw);
+      const retryEvents = await readObserveEvents(auditPath);
+      expect(retryEvents).toHaveLength(2);
+      expect(retryEvents[1]?.restoredFromBackup).toBe(true);
+    });
+  });
+
+  it("sync recovery retries on next launch after a failed copyFileSync restore", async () => {
+    await withSuiteHome(async (home) => {
+      const { deps, configPath, auditPath, warn } = makeDeps(home);
+      await seedConfigBackup(configPath, recoverableTelegramConfig);
+      const clobbered = await writeClobberedUpdateChannel(configPath);
+
+      const copyError = Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+      const failingFs: ObserveRecoveryDeps["fs"] = {
+        ...deps.fs,
+        copyFileSync: () => {
+          throw copyError;
+        },
+      };
+      maybeRecoverSuspiciousConfigReadSync({
+        deps: { ...deps, fs: failingFs },
+        configPath,
+        raw: clobbered.raw,
+        parsed: clobbered.parsed,
+      });
+
+      expectWarnContaining(warn, "Config auto-restore from backup failed:");
+      const firstEvents = await readObserveEvents(auditPath);
+      expect(firstEvents).toHaveLength(1);
+      expect(firstEvents[0]?.restoredFromBackup).toBe(false);
+
+      const retryResult = maybeRecoverSuspiciousConfigReadSync({
+        deps,
+        configPath,
+        raw: clobbered.raw,
+        parsed: clobbered.parsed,
+      });
+
+      expect((retryResult.parsed as { gateway?: { mode?: string } }).gateway?.mode).toBe("local");
+      await expect(fsp.readFile(configPath, "utf-8")).resolves.not.toBe(clobbered.raw);
+      const retryEvents = await readObserveEvents(auditPath);
+      expect(retryEvents).toHaveLength(2);
+      expect(retryEvents[1]?.restoredFromBackup).toBe(true);
     });
   });
 

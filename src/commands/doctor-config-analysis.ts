@@ -61,10 +61,24 @@ export function resolveConfigPathTarget(root: unknown, path: Array<string | numb
   return current;
 }
 
+function isUpdateInProgress(): boolean {
+  const value = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
+  return value === "1" || value === "true";
+}
+
+const ROOT_STRIP_PROTECTED_KEYS = new Set(["defaultModel"]);
+const STRIP_PROTECTED_KEYS: Record<string, Set<string>> = {
+  plugins: new Set(["installs"]),
+};
+
 export function stripUnknownConfigKeys(config: OpenClawConfig): {
   config: OpenClawConfig;
   removed: string[];
 } {
+  if (isUpdateInProgress()) {
+    return { config, removed: [] };
+  }
+
   const parsed = OpenClawSchema.safeParse(config);
   if (parsed.success) {
     return { config, removed: [] };
@@ -82,8 +96,19 @@ export function stripUnknownConfigKeys(config: OpenClawConfig): {
       continue;
     }
     const record = target as Record<string, unknown>;
+    const parentKey =
+      issuePath.length === 1 && typeof issuePath[0] === "string" ? issuePath[0] : undefined;
+    const protectedSet =
+      issuePath.length === 0
+        ? ROOT_STRIP_PROTECTED_KEYS
+        : parentKey
+          ? STRIP_PROTECTED_KEYS[parentKey]
+          : undefined;
     for (const key of issue.keys) {
       if (typeof key !== "string" || !(key in record)) {
+        continue;
+      }
+      if (protectedSet?.has(key)) {
         continue;
       }
       delete record[key];

@@ -25,6 +25,10 @@ describe("engine/tools/remind-logic", () => {
       expect(parseRelativeTime("1h30m")).toBe(90 * 60_000);
     });
 
+    it("parses separated relative time tokens", () => {
+      expect(parseRelativeTime("1h 30m")).toBe(90 * 60_000);
+    });
+
     it("parses days", () => {
       expect(parseRelativeTime("2d")).toBe(2 * 86_400_000);
     });
@@ -39,6 +43,8 @@ describe("engine/tools/remind-logic", () => {
 
     it("returns null for unparseable input", () => {
       expect(parseRelativeTime("never")).toBeNull();
+      expect(parseRelativeTime("5m later")).toBeNull();
+      expect(parseRelativeTime("about 5m")).toBeNull();
     });
 
     it("is case insensitive", () => {
@@ -110,7 +116,7 @@ describe("engine/tools/remind-logic", () => {
         action: "list",
         summary: undefined,
       });
-      expect((result.details as { _instruction: string })._instruction).not.toContain(
+      expect((result.details as { _instruction: string })["_instruction"]).not.toContain(
         "Use the cron tool",
       );
       expect(result.details).not.toHaveProperty("cronParams");

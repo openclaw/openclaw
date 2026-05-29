@@ -1,4 +1,5 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { redactSensitiveFieldValue, redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 
 type CodexContextProjection = {
   developerInstructionAddition?: string;
@@ -18,7 +19,7 @@ const MAX_RENDERED_CONTEXT_CHARS = 1_000_000;
 const DEFAULT_TEXT_PART_CHARS = 6_000;
 const MAX_TEXT_PART_CHARS = 128_000;
 const APPROX_RENDERED_CHARS_PER_TOKEN = 4;
-const DEFAULT_PROJECTION_RESERVE_TOKENS = 20_000;
+export const DEFAULT_CODEX_PROJECTION_RESERVE_TOKENS = 20_000;
 const MIN_PROMPT_BUDGET_RATIO = 0.5;
 const MIN_PROMPT_BUDGET_TOKENS = 8_000;
 
@@ -31,12 +32,14 @@ export function projectContextEngineAssemblyForCodex(params: {
   prompt: string;
   systemPromptAddition?: string;
   maxRenderedContextChars?: number;
+  toolPayloadMode?: "elide" | "preserve";
 }): CodexContextProjection {
   const prompt = params.prompt.trim();
   const contextMessages = dropDuplicateTrailingPrompt(params.assembledMessages, prompt);
   const maxRenderedContextChars = normalizeRenderedContextMaxChars(params.maxRenderedContextChars);
   const renderedContext = renderMessagesForCodexContext(contextMessages, {
     maxTextPartChars: resolveTextPartMaxChars(maxRenderedContextChars),
+    toolPayloadMode: params.toolPayloadMode ?? "elide",
   });
   const promptText = renderedContext
     ? [
@@ -44,7 +47,7 @@ export function projectContextEngineAssemblyForCodex(params: {
         CONTEXT_SAFETY_NOTE,
         "",
         CONTEXT_OPEN,
-        truncateText(renderedContext, maxRenderedContextChars),
+        truncateOlderContext(renderedContext, maxRenderedContextChars),
         CONTEXT_CLOSE,
         "",
         REQUEST_HEADER,
@@ -91,7 +94,7 @@ export function resolveCodexContextEngineProjectionReserveTokens(params: {
   if (configuredReserveTokens !== undefined) {
     return Math.max(
       configuredReserveTokens,
-      configuredReserveTokensFloor ?? DEFAULT_PROJECTION_RESERVE_TOKENS,
+      configuredReserveTokensFloor ?? DEFAULT_CODEX_PROJECTION_RESERVE_TOKENS,
     );
   }
   if (configuredReserveTokensFloor !== undefined) {
@@ -109,7 +112,7 @@ function resolveProjectionPromptBudgetTokens(params: {
     Number.isFinite(params.reserveTokens) &&
     params.reserveTokens >= 0
       ? Math.floor(params.reserveTokens)
-      : DEFAULT_PROJECTION_RESERVE_TOKENS;
+      : DEFAULT_CODEX_PROJECTION_RESERVE_TOKENS;
   const minPromptBudget = Math.min(
     MIN_PROMPT_BUDGET_TOKENS,
     Math.max(1, Math.floor(params.contextTokenBudget * MIN_PROMPT_BUDGET_RATIO)),
@@ -145,7 +148,7 @@ function dropDuplicateTrailingPrompt(messages: AgentMessage[], prompt: string): 
 
 function renderMessagesForCodexContext(
   messages: AgentMessage[],
-  options: { maxTextPartChars: number },
+  options: { maxTextPartChars: number; toolPayloadMode: "elide" | "preserve" },
 ): string {
   return messages
     .map((message) => {
@@ -156,7 +159,10 @@ function renderMessagesForCodexContext(
     .join("\n\n");
 }
 
-function renderMessageBody(message: AgentMessage, options: { maxTextPartChars: number }): string {
+function renderMessageBody(
+  message: AgentMessage,
+  options: { maxTextPartChars: number; toolPayloadMode: "elide" | "preserve" },
+): string {
   if (!hasMessageContent(message)) {
     return "";
   }
@@ -173,7 +179,10 @@ function renderMessageBody(message: AgentMessage, options: { maxTextPartChars: n
     .trim();
 }
 
-function renderMessagePart(part: unknown, options: { maxTextPartChars: number }): string {
+function renderMessagePart(
+  part: unknown,
+  options: { maxTextPartChars: number; toolPayloadMode: "elide" | "preserve" },
+): string {
   if (!part || typeof part !== "object") {
     return "";
   }
@@ -188,14 +197,141 @@ function renderMessagePart(part: unknown, options: { maxTextPartChars: number })
     return "[image omitted]";
   }
   if (type === "toolCall" || type === "tool_use") {
-    return `tool call${typeof record.name === "string" ? `: ${record.name}` : ""} [input omitted]`;
+    const label = `tool call${typeof record.name === "string" ? `: ${record.name}` : ""}`;
+    if (options.toolPayloadMode === "preserve") {
+      return truncateText(
+        `${label}\n${stableJson(renderToolCallPayload(record))}`,
+        options.maxTextPartChars,
+      );
+    }
+    return `${label} [input omitted]`;
   }
   if (type === "toolResult" || type === "tool_result") {
     const label =
       typeof record.toolUseId === "string" ? `tool result: ${record.toolUseId}` : "tool result";
+    if (options.toolPayloadMode === "preserve") {
+      return truncateText(
+        `${label}\n${stableJson(renderToolResultPayload(record))}`,
+        options.maxTextPartChars,
+      );
+    }
     return `${label} [content omitted]`;
   }
   return `[${type ?? "non-text"} content omitted]`;
+}
+
+function renderToolCallPayload(record: Record<string, unknown>): Record<string, unknown> {
+  const payload: Record<string, unknown> = pickToolPayloadMetadata(record);
+  const input = record.input ?? record.arguments;
+  if (input !== undefined) {
+    payload.inputShape = summarizeToolInputShape(input);
+  }
+  return payload;
+}
+
+function renderToolResultPayload(record: Record<string, unknown>): Record<string, unknown> {
+  const payload: Record<string, unknown> = pickToolPayloadMetadata(record);
+  for (const [key, value] of Object.entries(record)) {
+    if (TOOL_PAYLOAD_METADATA_KEYS.has(key)) {
+      continue;
+    }
+    payload[key] = redactPreservedToolValue(key, value);
+  }
+  return payload;
+}
+
+const TOOL_PAYLOAD_METADATA_KEYS = new Set([
+  "type",
+  "name",
+  "id",
+  "callId",
+  "toolCallId",
+  "toolUseId",
+]);
+
+function pickToolPayloadMetadata(record: Record<string, unknown>): Record<string, unknown> {
+  const payload: Record<string, unknown> = {};
+  for (const key of TOOL_PAYLOAD_METADATA_KEYS) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) {
+      payload[key] = redactSensitiveFieldValue(key, value);
+    }
+  }
+  return payload;
+}
+
+// Tool-call inputs can contain shell commands and credentials. For bootstrap
+// continuity, retain object structure and primitive types instead of values.
+function summarizeToolInputShape(value: unknown, seen = new WeakSet<object>()): unknown {
+  if (value === null) {
+    return null;
+  }
+  if (Array.isArray(value)) {
+    if (seen.has(value)) {
+      return "[Circular]";
+    }
+    seen.add(value);
+    return value.map((entry) => summarizeToolInputShape(entry, seen));
+  }
+  if (value && typeof value === "object") {
+    if (seen.has(value)) {
+      return "[Circular]";
+    }
+    seen.add(value);
+    const out: Record<string, unknown> = {};
+    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+      out[key] = summarizeToolInputShape(child, seen);
+    }
+    return out;
+  }
+  return `[${typeof value}]`;
+}
+
+// Tool results are the useful carried context for a fresh Codex thread, so keep
+// their content while applying the same text/field redaction used for tool logs.
+function redactPreservedToolValue(
+  key: string,
+  value: unknown,
+  seen = new WeakSet<object>(),
+): unknown {
+  if (typeof value === "string") {
+    return redactSensitiveFieldValue(key, redactToolPayloadText(value));
+  }
+  if (
+    value === null ||
+    value === undefined ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    if (seen.has(value)) {
+      return "[Circular]";
+    }
+    seen.add(value);
+    return value.map((entry) => redactPreservedToolValue(key, entry, seen));
+  }
+  if (value && typeof value === "object") {
+    if (seen.has(value)) {
+      return "[Circular]";
+    }
+    seen.add(value);
+    const out: Record<string, unknown> = {};
+    for (const [childKey, child] of Object.entries(value as Record<string, unknown>)) {
+      out[childKey] = redactPreservedToolValue(childKey, child, seen);
+    }
+    return out;
+  }
+  return `[${typeof value}]`;
+}
+
+function stableJson(value: unknown): string {
+  try {
+    return JSON.stringify(value, null, 2) ?? "";
+  } catch {
+    return "[unserializable payload omitted]";
+  }
 }
 
 function extractMessageText(message: AgentMessage): string {
@@ -244,4 +380,24 @@ function truncateText(text: string, maxChars: number): string {
   return text.length > maxChars
     ? `${text.slice(0, maxChars)}\n[truncated ${text.length - maxChars} chars]`
     : text;
+}
+
+function truncateOlderContext(text: string, maxChars: number): string {
+  if (text.length <= maxChars) {
+    return text;
+  }
+  if (maxChars <= 0) {
+    return "";
+  }
+
+  const buildMarker = (omittedChars: number): string =>
+    `[truncated ${omittedChars} chars from older context]\n`;
+  let marker = buildMarker(text.length - maxChars);
+  let tailChars = Math.max(0, maxChars - marker.length);
+  marker = buildMarker(text.length - tailChars);
+  if (marker.length >= maxChars) {
+    return marker.slice(0, maxChars);
+  }
+  tailChars = maxChars - marker.length;
+  return `${marker}${text.slice(text.length - tailChars).trimStart()}`;
 }

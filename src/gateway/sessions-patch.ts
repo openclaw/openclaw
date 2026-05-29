@@ -1,11 +1,23 @@
 import { randomUUID } from "node:crypto";
+import {
+  ErrorCodes,
+  type ErrorShape,
+  errorShape,
+  type SessionsPatchParams,
+} from "../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  normalizeInheritedToolAllowlist,
+  normalizeInheritedToolDenylist,
+} from "../agents/inherited-tool-deny.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import {
   resolveAllowedModelRef,
   resolveDefaultModelForAgent,
   resolveSubagentConfiguredModelSelection,
 } from "../agents/model-selection.js";
+import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
   formatThinkingLevels,
@@ -39,12 +51,6 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
-import {
-  ErrorCodes,
-  type ErrorShape,
-  errorShape,
-  type SessionsPatchParams,
-} from "./protocol/index.js";
 
 function invalid(message: string): { ok: false; error: ErrorShape } {
   return { ok: false, error: errorShape(ErrorCodes.INVALID_REQUEST, message) };
@@ -64,6 +70,43 @@ function normalizeExecAsk(raw: string): "off" | "on-miss" | "always" | undefined
     return normalized;
   }
   return undefined;
+}
+
+function shouldPreserveSessionAuthProfileOverride(params: {
+  cfg: OpenClawConfig;
+  entry: SessionEntry;
+  currentProvider: string;
+  provider: string;
+}): boolean {
+  const profileOverride = normalizeOptionalString(params.entry.authProfileOverride);
+  if (!profileOverride) {
+    return false;
+  }
+  const provider = normalizeOptionalLowercaseString(params.provider);
+  if (!provider) {
+    return false;
+  }
+  const resolvesToTargetProvider = (rawProvider: string | undefined): boolean => {
+    const candidate = normalizeOptionalLowercaseString(rawProvider);
+    if (!candidate) {
+      return false;
+    }
+    return (
+      resolveProviderIdForAuth(candidate, { config: params.cfg }) ===
+      resolveProviderIdForAuth(provider, { config: params.cfg })
+    );
+  };
+  const delimiterIndex = profileOverride.indexOf(":");
+  if (delimiterIndex < 0) {
+    return resolvesToTargetProvider(params.currentProvider);
+  }
+  const profileProvider = normalizeOptionalLowercaseString(
+    profileOverride.slice(0, delimiterIndex),
+  );
+  if (!profileProvider) {
+    return false;
+  }
+  return resolvesToTargetProvider(profileProvider);
 }
 
 function supportsSpawnLineage(storeKey: string): boolean {
@@ -90,13 +133,16 @@ export async function applySessionsPatchToStore(params: {
   cfg: OpenClawConfig;
   store: Record<string, SessionEntry>;
   storeKey: string;
+  agentId?: string;
   patch: SessionsPatchParams;
   loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
 }): Promise<{ ok: true; entry: SessionEntry } | { ok: false; error: ErrorShape }> {
   const { cfg, store, storeKey, patch } = params;
   const now = Date.now();
   const parsedAgent = parseAgentSessionKey(storeKey);
-  const sessionAgentId = normalizeAgentId(parsedAgent?.agentId ?? resolveDefaultAgentId(cfg));
+  const sessionAgentId = normalizeAgentId(
+    params.agentId ?? parsedAgent?.agentId ?? resolveDefaultAgentId(cfg),
+  );
   const resolvedDefault = resolveDefaultModelForAgent({ cfg, agentId: sessionAgentId });
   const subagentModelHint = isSubagentSessionKey(storeKey)
     ? resolveSubagentConfiguredModelSelection({ cfg, agentId: sessionAgentId })
@@ -115,12 +161,21 @@ export async function applySessionsPatchToStore(params: {
   };
 
   const existing = store[storeKey];
-  const next: SessionEntry = existing
+  const next: SessionEntry = existing?.sessionId
     ? {
         ...existing,
         updatedAt: Math.max(existing.updatedAt ?? 0, now),
       }
-    : { sessionId: randomUUID(), updatedAt: now };
+    : {
+        ...existing,
+        sessionId: randomUUID(),
+        sessionFile: undefined,
+        updatedAt: Math.max(existing?.updatedAt ?? 0, now),
+      };
+  if (existing && !existing.sessionId) {
+    delete next.label;
+    delete next.displayName;
+  }
 
   if ("spawnedBy" in patch) {
     const raw = patch.spawnedBy;
@@ -161,6 +216,27 @@ export async function applySessionsPatchToStore(params: {
         return invalid("spawnedWorkspaceDir cannot be changed once set");
       }
       next.spawnedWorkspaceDir = trimmed;
+    }
+  }
+
+  if ("spawnedCwd" in patch) {
+    const raw = patch.spawnedCwd;
+    if (raw === null) {
+      if (existing?.spawnedCwd) {
+        return invalid("spawnedCwd cannot be cleared once set");
+      }
+    } else if (raw !== undefined) {
+      if (!supportsSpawnLineage(storeKey)) {
+        return invalid("spawnedCwd is only supported for subagent:* or acp:* sessions");
+      }
+      const trimmed = normalizeOptionalString(raw) ?? "";
+      if (!trimmed) {
+        return invalid("invalid spawnedCwd: empty");
+      }
+      if (existing?.spawnedCwd && existing.spawnedCwd !== trimmed) {
+        return invalid("spawnedCwd cannot be changed once set");
+      }
+      next.spawnedCwd = trimmed;
     }
   }
 
@@ -225,6 +301,46 @@ export async function applySessionsPatchToStore(params: {
         return invalid("subagentControlScope cannot be changed once set");
       }
       next.subagentControlScope = normalized;
+    }
+  }
+
+  if ("inheritedToolDeny" in patch) {
+    const raw = patch.inheritedToolDeny;
+    if (raw === null) {
+      delete next.inheritedToolDeny;
+    } else if (raw !== undefined) {
+      if (!Array.isArray(raw)) {
+        return invalid("invalid inheritedToolDeny (use an array of tool names)");
+      }
+      if (!supportsSpawnLineage(storeKey)) {
+        return invalid("inheritedToolDeny is only supported for subagent:* or acp:* sessions");
+      }
+      const inheritedToolDeny = normalizeInheritedToolDenylist(raw);
+      if (inheritedToolDeny.length > 0) {
+        next.inheritedToolDeny = inheritedToolDeny;
+      } else {
+        delete next.inheritedToolDeny;
+      }
+    }
+  }
+
+  if ("inheritedToolAllow" in patch) {
+    const raw = patch.inheritedToolAllow;
+    if (raw === null) {
+      delete next.inheritedToolAllow;
+    } else if (raw !== undefined) {
+      if (!Array.isArray(raw)) {
+        return invalid("invalid inheritedToolAllow (use an array of tool names)");
+      }
+      if (!supportsSpawnLineage(storeKey)) {
+        return invalid("inheritedToolAllow is only supported for subagent:* or acp:* sessions");
+      }
+      const inheritedToolAllow = normalizeInheritedToolAllowlist(raw);
+      if (inheritedToolAllow.length > 0) {
+        next.inheritedToolAllow = inheritedToolAllow;
+      } else {
+        delete next.inheritedToolAllow;
+      }
     }
   }
 
@@ -408,6 +524,12 @@ export async function applySessionsPatchToStore(params: {
           model: resolvedDefault.model,
           isDefault: true,
         },
+        preserveAuthProfileOverride: shouldPreserveSessionAuthProfileOverride({
+          cfg,
+          currentProvider: next.providerOverride ?? next.modelProvider ?? resolvedDefault.provider,
+          entry: next,
+          provider: resolvedDefault.provider,
+        }),
         markLiveSwitchPending: true,
       });
     } else if (raw !== undefined) {
@@ -428,10 +550,12 @@ export async function applySessionsPatchToStore(params: {
           error: errorShape(ErrorCodes.UNAVAILABLE, "model catalog unavailable"),
         };
       }
+      const { model: modelWithoutProfile, profile: trailingProfile } =
+        splitTrailingAuthProfile(trimmed);
       const resolved = resolveAllowedModelRef({
         cfg,
         catalog,
-        raw: trimmed,
+        raw: modelWithoutProfile,
         defaultProvider: resolvedDefault.provider,
         defaultModel: subagentModelHint ?? resolvedDefault.model,
       });
@@ -448,6 +572,13 @@ export async function applySessionsPatchToStore(params: {
           model: resolved.ref.model,
           isDefault,
         },
+        profileOverride: trailingProfile || undefined,
+        preserveAuthProfileOverride: shouldPreserveSessionAuthProfileOverride({
+          cfg,
+          currentProvider: next.providerOverride ?? next.modelProvider ?? resolvedDefault.provider,
+          entry: next,
+          provider: resolved.ref.provider,
+        }),
         markLiveSwitchPending: true,
       });
     }

@@ -104,7 +104,6 @@ export class AgentComponentButton extends Button {
     enqueueSystemEvent(eventText, {
       sessionKey: route.sessionKey,
       contextKey: `discord:agent-button:${channelId}:${componentId}:${userId}`,
-      trusted: false,
     });
 
     await ackComponentInteraction({ interaction, replyOpts, label: "agent button" });
@@ -197,7 +196,6 @@ export class AgentSelectMenu extends StringSelectMenu {
     enqueueSystemEvent(eventText, {
       sessionKey: route.sessionKey,
       contextKey: `discord:agent-select:${channelId}:${componentId}:${userId}`,
-      trusted: false,
     });
 
     await ackComponentInteraction({ interaction, replyOpts, label: "agent select" });

@@ -148,8 +148,8 @@ function mockProcessPlatform(platform: NodeJS.Platform) {
   });
 }
 
-async function runRepair(cfg: OpenClawConfig) {
-  await maybeRepairGatewayServiceConfig(cfg, "local", makeDoctorIo(), makeDoctorPrompts());
+async function runRepair(cfg: OpenClawConfig, options: { allowExecSecretRefs?: boolean } = {}) {
+  await maybeRepairGatewayServiceConfig(cfg, "local", makeDoctorIo(), makeDoctorPrompts(), options);
 }
 
 async function runNonInteractiveRepair(params: {
@@ -202,7 +202,7 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
 }
 
 function callArg(mock: { mock: { calls: Array<Array<unknown>> } }, index: number, label: string) {
-  const call = mock.mock.calls.at(index);
+  const call = mock.mock.calls[index];
   if (!call) {
     throw new Error(`Expected mock call: ${label}`);
   }
@@ -246,25 +246,25 @@ function expectCallConfigGatewayAuthToken(
   mock: { mock: { calls: Array<Array<unknown>> } },
   expected: string,
 ) {
-  const matched = mock.mock.calls.some(([value]) => {
+  const matchingCalls = mock.mock.calls.filter(([value]) => {
     const options = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
     return readGatewayAuthToken(options.config) === expected;
   });
-  expect(matched).toBe(true);
+  expect(matchingCalls).not.toEqual([]);
 }
 
 function expectNoteContaining(messagePart: string, title: string) {
   const messages = mocks.note.mock.calls
     .filter(([, callTitle]) => callTitle === title)
     .map(([message]) => String(message));
-  expect(messages.some((message) => message.includes(messagePart))).toBe(true);
+  expect(messages.join("\n")).toContain(messagePart);
 }
 
 function expectNoNoteContaining(messagePart: string, title: string) {
   const messages = mocks.note.mock.calls
     .filter(([, callTitle]) => callTitle === title)
     .map(([message]) => String(message));
-  expect(messages.some((message) => message.includes(messagePart))).toBe(false);
+  expect(messages.join("\n")).not.toContain(messagePart);
 }
 
 function setupGatewayEntrypointRepairScenario(params: {
@@ -368,6 +368,37 @@ describe("maybeRepairGatewayServiceConfig", () => {
     expect(mocks.install).toHaveBeenCalledTimes(1);
   });
 
+  it("passes exec SecretRef policy into service token resolution", async () => {
+    setupGatewayTokenRepairScenario();
+
+    const cfg: OpenClawConfig = {
+      gateway: {
+        auth: {
+          mode: "token",
+          token: {
+            source: "exec",
+            provider: "execmain",
+            id: "gateway/token",
+          },
+        },
+      },
+      secrets: {
+        providers: {
+          execmain: {
+            source: "exec",
+            command: process.execPath,
+          },
+        },
+      },
+    };
+
+    await runRepair(cfg, { allowExecSecretRefs: true });
+
+    expect(mocks.resolveGatewayAuthTokenForService).toHaveBeenCalledWith(cfg, process.env, {
+      allowExecSecretRefs: true,
+    });
+  });
+
   it("does not duplicate gateway runtime warnings already emitted by the node install plan", async () => {
     const nvmNode = "/home/orin/.nvm/versions/node/v22.22.2/bin/node";
     mocks.readCommand.mockResolvedValue({
@@ -376,7 +407,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
     });
     mocks.buildGatewayInstallPlan.mockImplementation(async ({ warn }) => {
       warn?.(
-        "System Node 20.20.2 at /usr/bin/node is below the required Node 22.16+. Using /home/orin/.nvm/versions/node/v22.22.2/bin/node for the daemon.",
+        "System Node 20.20.2 at /usr/bin/node is below the required Node 22.19+. Using /home/orin/.nvm/versions/node/v22.22.2/bin/node for the daemon.",
         "Gateway runtime",
       );
       return {
@@ -402,12 +433,10 @@ describe("maybeRepairGatewayServiceConfig", () => {
     const runtimeNotes = mocks.note.mock.calls.filter(([, title]) => title === "Gateway runtime");
     const runtimeMessages = runtimeNotes.map(([message]) => message);
     expect(runtimeMessages).not.toContain("duplicate doctor runtime warning");
-    expect(runtimeMessages.some((message) => String(message).includes("not found"))).toBe(false);
-    expect(
-      runtimeMessages.some((message) =>
-        String(message).includes("Using /home/orin/.nvm/versions/node/v22.22.2/bin/node"),
-      ),
-    ).toBe(true);
+    expect(runtimeMessages.map((message) => String(message)).join("\n")).not.toContain("not found");
+    expect(runtimeMessages.map((message) => String(message)).join("\n")).toContain(
+      "Using /home/orin/.nvm/versions/node/v22.22.2/bin/node",
+    );
   });
 
   it("passes planned managed env keys into service audit for legacy inline secret detection", async () => {
@@ -510,10 +539,11 @@ describe("maybeRepairGatewayServiceConfig", () => {
     await runRepair({ gateway: {} });
 
     expect(mocks.install).toHaveBeenCalledOnce();
-    const installOptions = mocks.install.mock.calls[0]?.[0];
-    expect(installOptions?.environment).toStrictEqual({});
-    expect(Object.hasOwn(installOptions?.environment ?? {}, "HTTP_PROXY")).toBe(false);
-    expect(Object.hasOwn(installOptions?.environment ?? {}, "HTTPS_PROXY")).toBe(false);
+    const installOptions = requireRecord(callArg(mocks.install, 0, "gateway install"), "install");
+    const environment = requireRecord(installOptions.environment, "install environment");
+    expect(environment).toStrictEqual({});
+    expect(Object.hasOwn(environment, "HTTP_PROXY")).toBe(false);
+    expect(Object.hasOwn(environment, "HTTPS_PROXY")).toBe(false);
   });
 
   it("uses OPENCLAW_GATEWAY_TOKEN when config token is missing", async () => {

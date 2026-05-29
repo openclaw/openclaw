@@ -148,6 +148,41 @@ describe("handleSlackAction", () => {
     expectLastSlackSend("Second", params.cfg);
   }
 
+  it("fails closed for same-channel sends from thread-required contexts with no thread ts", async () => {
+    const cfg = slackConfig();
+    sendSlackMessage.mockClear();
+
+    await expect(
+      handleSlackAction(
+        { action: "sendMessage", to: "channel:C123", content: "keep private" },
+        cfg,
+        {
+          currentChannelId: "C123",
+          replyToMode: "all",
+          sameChannelThreadRequired: true,
+        },
+      ),
+    ).rejects.toThrow("Slack thread context is required");
+    expect(sendSlackMessage).not.toHaveBeenCalled();
+  });
+
+  it("allows explicit top-level sends from thread-required contexts", async () => {
+    const cfg = slackConfig();
+    sendSlackMessage.mockClear();
+
+    await handleSlackAction(
+      { action: "sendMessage", to: "channel:C123", content: "root", topLevel: true },
+      cfg,
+      {
+        currentChannelId: "C123",
+        replyToMode: "all",
+        sameChannelThreadRequired: true,
+      },
+    );
+
+    expectLastSlackSend("root", cfg);
+  });
+
   async function resolveReadToken(cfg: OpenClawConfig): Promise<string | undefined> {
     readSlackMessages.mockClear();
     readSlackMessages.mockResolvedValueOnce({ messages: [], hasMore: false });
@@ -263,6 +298,20 @@ describe("handleSlackAction", () => {
     ).rejects.toThrow(/Slack reactions are disabled/);
   });
 
+  it("rejects Slack reaction reads for non-allowlisted target channels", async () => {
+    const cfg = slackConfig({
+      groupPolicy: "allowlist",
+      channels: {
+        C_ALLOWED: { enabled: true },
+      },
+    });
+
+    await expect(
+      handleSlackAction({ action: "reactions", channelId: "C_OTHER", messageId: "123.456" }, cfg),
+    ).rejects.toThrow("Slack read target channel is not allowed.");
+    expect(listSlackReactions).not.toHaveBeenCalled();
+  });
+
   it("passes threadTs to sendSlackMessage for thread replies", async () => {
     const cfg = slackConfig();
     await handleSlackAction(
@@ -309,6 +358,7 @@ describe("handleSlackAction", () => {
       {
         action: "downloadFile",
         fileId: "F123",
+        channelId: "C1",
       },
       slackConfig(),
     );
@@ -316,6 +366,34 @@ describe("handleSlackAction", () => {
     expect(requireRecordArg(downloadSlackFile, "downloadSlackFile", 0, 1).maxBytes).toBe(
       20 * 1024 * 1024,
     );
+    expect(requireDetails(result).ok).toBe(false);
+  });
+
+  it("fails closed for downloadFile when no channel target can be authorized", async () => {
+    await expect(
+      handleSlackAction({ action: "downloadFile", fileId: "F123" }, slackConfig()),
+    ).rejects.toThrow(
+      "Slack file download requires channelId or to so the read target can be authorized.",
+    );
+    expect(downloadSlackFile).not.toHaveBeenCalled();
+  });
+
+  it("uses current channel context to authorize downloadFile", async () => {
+    downloadSlackFile.mockResolvedValueOnce(null);
+    const cfg = slackConfig({
+      groupPolicy: "allowlist",
+      channels: {
+        C1: { enabled: true },
+      },
+    });
+
+    const result = await handleSlackAction({ action: "downloadFile", fileId: "F123" }, cfg, {
+      currentChannelId: "C1",
+    });
+
+    expectRecordFields(requireRecordArg(downloadSlackFile, "downloadSlackFile", 0, 1), {
+      channelId: "C1",
+    });
     expect(requireDetails(result).ok).toBe(false);
   });
 
@@ -351,6 +429,7 @@ describe("handleSlackAction", () => {
       {
         action: "downloadFile",
         fileId: "F123",
+        channelId: "C1",
       },
       slackConfig(),
     );
@@ -359,7 +438,7 @@ describe("handleSlackAction", () => {
     const firstContent = requireRecord(result.content[0], "first content item");
     expect(firstContent.type).toBe("text");
     expect(String(firstContent.text)).toContain("/tmp/openclaw-media/report.pdf");
-    expect(result.content.some((entry) => entry.type === "image")).toBe(false);
+    expect(result.content.map((entry) => entry.type)).not.toContain("image");
     const details = requireDetails(result);
     expectRecordFields(details, {
       ok: true,
@@ -369,20 +448,24 @@ describe("handleSlackAction", () => {
     });
     expect(details.media).toEqual({
       mediaUrl: "/tmp/openclaw-media/report.pdf",
+      outbound: false,
       contentType: "application/pdf",
     });
   });
 
   it("forwards resolved botToken to action functions instead of relying on config re-read", async () => {
     downloadSlackFile.mockResolvedValueOnce(null);
-    await handleSlackAction({ action: "downloadFile", fileId: "F123" }, slackConfig());
+    await handleSlackAction(
+      { action: "downloadFile", fileId: "F123", channelId: "C1" },
+      slackConfig(),
+    );
     expect(requireRecordArg(downloadSlackFile, "downloadSlackFile", 0, 1).token).toBe("tok");
   });
 
   it("keeps resolved userToken for downloadFile reads when configured", async () => {
     downloadSlackFile.mockResolvedValueOnce(null);
     await handleSlackAction(
-      { action: "downloadFile", fileId: "F123" },
+      { action: "downloadFile", fileId: "F123", channelId: "C1" },
       slackConfig({
         accounts: {
           default: {
@@ -793,6 +876,134 @@ describe("handleSlackAction", () => {
     });
   });
 
+  it("parses string readMessages limits before reading Slack messages", async () => {
+    readSlackMessages.mockResolvedValueOnce({ messages: [], hasMore: false });
+
+    await handleSlackAction(
+      { action: "readMessages", channelId: "C1", limit: "20" },
+      slackConfig(),
+    );
+
+    expectRecordFields(requireRecordArg(readSlackMessages, "readSlackMessages", 0, 1), {
+      limit: 20,
+    });
+  });
+
+  it("rejects fractional readMessages limits before reading Slack messages", async () => {
+    await expect(
+      handleSlackAction({ action: "readMessages", channelId: "C1", limit: 2.5 }, slackConfig()),
+    ).rejects.toThrow("limit must be a positive integer.");
+    expect(readSlackMessages).not.toHaveBeenCalled();
+  });
+
+  it("reads from allowlisted Slack target channels", async () => {
+    readSlackMessages.mockResolvedValueOnce({ messages: [], hasMore: false });
+
+    const cfg = slackConfig({
+      groupPolicy: "allowlist",
+      channels: {
+        C_ALLOWED: { enabled: true },
+      },
+    });
+    await handleSlackAction({ action: "readMessages", channelId: "C_ALLOWED" }, cfg);
+
+    expect(requireMockArg(readSlackMessages, "readSlackMessages", 0, 0)).toBe("C_ALLOWED");
+  });
+
+  it("rejects Slack reads for non-allowlisted target channels", async () => {
+    const cfg = slackConfig({
+      groupPolicy: "allowlist",
+      channels: {
+        C_ALLOWED: { enabled: true },
+      },
+    });
+
+    await expect(
+      handleSlackAction({ action: "readMessages", channelId: "C_OTHER" }, cfg),
+    ).rejects.toThrow("Slack read target channel is not allowed.");
+    expect(readSlackMessages).not.toHaveBeenCalled();
+  });
+
+  it("allows Slack reads from unlisted targets when group policy is open", async () => {
+    readSlackMessages.mockResolvedValueOnce({ messages: [], hasMore: false });
+
+    const cfg = slackConfig({
+      groupPolicy: "open",
+      channels: {
+        C_CONFIGURED: { enabled: true },
+      },
+    });
+    await handleSlackAction({ action: "readMessages", channelId: "C_OTHER" }, cfg);
+
+    expect(requireMockArg(readSlackMessages, "readSlackMessages", 0, 0)).toBe("C_OTHER");
+  });
+
+  it("rejects Slack reads from disabled targets when group policy is open", async () => {
+    const cfg = slackConfig({
+      groupPolicy: "open",
+      channels: {
+        C_DISABLED: { enabled: false },
+      },
+    });
+
+    await expect(
+      handleSlackAction({ action: "readMessages", channelId: "C_DISABLED" }, cfg),
+    ).rejects.toThrow("Slack read target channel is not allowed.");
+    expect(readSlackMessages).not.toHaveBeenCalled();
+  });
+
+  it("fails closed for read-like Slack actions when provider config is missing", async () => {
+    const cfg = {} as OpenClawConfig;
+
+    await expect(
+      handleSlackAction({ action: "readMessages", channelId: "C1" }, cfg),
+    ).rejects.toThrow("Slack read target channel is not allowed.");
+    expect(readSlackMessages).not.toHaveBeenCalled();
+
+    await expect(
+      handleSlackAction({ action: "reactions", channelId: "C1", messageId: "123.456" }, cfg),
+    ).rejects.toThrow("Slack read target channel is not allowed.");
+    expect(listSlackReactions).not.toHaveBeenCalled();
+
+    await expect(
+      handleSlackAction({ action: "downloadFile", fileId: "F123", channelId: "C1" }, cfg),
+    ).rejects.toThrow("Slack read target channel is not allowed.");
+    expect(downloadSlackFile).not.toHaveBeenCalled();
+
+    await expect(handleSlackAction({ action: "listPins", channelId: "C1" }, cfg)).rejects.toThrow(
+      "Slack read target channel is not allowed.",
+    );
+    expect(listSlackPins).not.toHaveBeenCalled();
+  });
+
+  it("rejects Slack file downloads for non-allowlisted target channels", async () => {
+    const cfg = slackConfig({
+      groupPolicy: "allowlist",
+      channels: {
+        C_ALLOWED: { enabled: true },
+      },
+    });
+
+    await expect(
+      handleSlackAction({ action: "downloadFile", fileId: "F123", channelId: "C_OTHER" }, cfg),
+    ).rejects.toThrow("Slack read target channel is not allowed.");
+    expect(downloadSlackFile).not.toHaveBeenCalled();
+  });
+
+  it("rejects Slack pin reads for non-allowlisted target channels", async () => {
+    const cfg = slackConfig({
+      groupPolicy: "allowlist",
+      channels: {
+        C_ALLOWED: { enabled: true },
+      },
+    });
+
+    await expect(
+      handleSlackAction({ action: "listPins", channelId: "C_OTHER" }, cfg),
+    ).rejects.toThrow("Slack read target channel is not allowed.");
+    expect(listSlackPins).not.toHaveBeenCalled();
+  });
+
   it("passes messageId through to readSlackMessages", async () => {
     readSlackMessages.mockResolvedValueOnce({ messages: [], hasMore: false });
 
@@ -925,5 +1136,12 @@ describe("handleSlackAction", () => {
         tada: "https://example.com/tada.png",
       },
     });
+  });
+
+  it("rejects fractional emoji-list limits before reading emojis", async () => {
+    await expect(
+      handleSlackAction({ action: "emojiList", limit: 2.5 }, slackConfig()),
+    ).rejects.toThrow("limit must be a positive integer.");
+    expect(listSlackEmojis).not.toHaveBeenCalled();
   });
 });

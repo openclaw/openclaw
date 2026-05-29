@@ -13,6 +13,8 @@ const tasksAuditJsonCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const channelsListCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const channelsStatusCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const agentsListCommandMock = vi.hoisted(() => vi.fn(async () => {}));
+const runPluginsListCommandMock = vi.hoisted(() => vi.fn(async () => {}));
+const pluginsCliLoadedMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../config-cli.js", () => ({
   runConfigGet: runConfigGetMock,
@@ -51,9 +53,20 @@ vi.mock("../../commands/channels/status.js", () => ({
   channelsStatusCommand: channelsStatusCommandMock,
 }));
 
-vi.mock("../../commands/agents.js", () => ({
+vi.mock("../../commands/agents.commands.list.js", () => ({
   agentsListCommand: agentsListCommandMock,
 }));
+
+vi.mock("../plugins-list-command.js", () => ({
+  runPluginsListCommand: runPluginsListCommandMock,
+}));
+
+vi.mock("../plugins-cli.js", () => {
+  pluginsCliLoadedMock();
+  return {
+    registerPluginsCli: vi.fn(),
+  };
+});
 
 describe("program routes", () => {
   beforeEach(() => {
@@ -147,6 +160,29 @@ describe("program routes", () => {
     expect(channelsStatusCommandMock).toHaveBeenCalledWith(
       { channel: "imsg", json: true, probe: true, timeout: "5000" },
       defaultRuntime,
+    );
+  });
+
+  it("routes plugins list JSON without importing the full plugins CLI", async () => {
+    const route = expectRoute(["plugins", "list"]);
+    expect(route.loadPlugins).toBeUndefined();
+    expect(route.canRun?.(["node", "openclaw", "plugins", "list"])).toBe(false);
+
+    await expect(
+      route.run(["node", "openclaw", "plugins", "list", "--json", "--enabled", "--verbose"]),
+    ).resolves.toBe(true);
+
+    expect(runPluginsListCommandMock).toHaveBeenCalledWith(
+      { json: true, enabled: true, verbose: true },
+      defaultRuntime,
+    );
+    expect(pluginsCliLoadedMock).not.toHaveBeenCalled();
+  });
+
+  it("returns false for plugins list JSON route with unsupported arguments", async () => {
+    await expectRunFalse(
+      ["plugins", "list"],
+      ["node", "openclaw", "plugins", "list", "--json", "--wat"],
     );
   });
 
@@ -308,7 +344,14 @@ describe("program routes", () => {
     await expect(
       route.run(["node", "openclaw", "--profile", "work", "config", "unset", "update.channel"]),
     ).resolves.toBe(true);
-    expect(runConfigUnsetMock).toHaveBeenCalledWith({ path: "update.channel" });
+    expect(runConfigUnsetMock).toHaveBeenCalledWith({
+      path: "update.channel",
+      cliOptions: {
+        dryRun: false,
+        allowExec: false,
+        json: false,
+      },
+    });
   });
 
   it("passes config get path when root value options appear after subcommand", async () => {
@@ -333,7 +376,38 @@ describe("program routes", () => {
     await expect(
       route.run(["node", "openclaw", "config", "unset", "--profile", "work", "update.channel"]),
     ).resolves.toBe(true);
-    expect(runConfigUnsetMock).toHaveBeenCalledWith({ path: "update.channel" });
+    expect(runConfigUnsetMock).toHaveBeenCalledWith({
+      path: "update.channel",
+      cliOptions: {
+        dryRun: false,
+        allowExec: false,
+        json: false,
+      },
+    });
+  });
+
+  it("passes config unset dry-run options", async () => {
+    const route = expectRoute(["config", "unset"]);
+    await expect(
+      route.run([
+        "node",
+        "openclaw",
+        "config",
+        "unset",
+        "--dry-run",
+        "--json",
+        "--allow-exec",
+        "update.channel",
+      ]),
+    ).resolves.toBe(true);
+    expect(runConfigUnsetMock).toHaveBeenCalledWith({
+      path: "update.channel",
+      cliOptions: {
+        dryRun: true,
+        allowExec: true,
+        json: true,
+      },
+    });
   });
 
   it("returns false for config get route when unknown option appears", async () => {
@@ -517,6 +591,10 @@ describe("program routes", () => {
     await expectRunFalse(
       ["tasks", "audit"],
       ["node", "openclaw", "tasks", "audit", "--json", "--limit"],
+    );
+    await expectRunFalse(
+      ["tasks", "audit"],
+      ["node", "openclaw", "tasks", "audit", "--json", "--limit", "5abc"],
     );
     await expectRunFalse(
       ["tasks", "audit"],

@@ -49,6 +49,18 @@ afterEach(() => {
   vi.resetAllMocks();
 });
 
+function firstMockArg(mockFn: ReturnType<typeof vi.fn>, label: string): Record<string, any> {
+  const call = mockFn.mock.calls[0];
+  if (!call) {
+    throw new Error(`Expected ${label} call`);
+  }
+  const arg = call.at(0);
+  if (!arg || typeof arg !== "object") {
+    throw new Error(`Expected ${label} first argument`);
+  }
+  return arg as Record<string, any>;
+}
+
 describe("resolveGatewayDevMode", () => {
   it("detects dev mode for src ts entrypoints", () => {
     expect(resolveGatewayDevMode(["node", "/Users/me/openclaw/src/cli/index.ts"])).toBe(true);
@@ -128,10 +140,37 @@ describe("buildGatewayInstallPlan", () => {
     expect(plan.environment).toEqual({ OPENCLAW_PORT: "3000" });
     expect(mocks.resolvePreferredNodePath).not.toHaveBeenCalled();
     expect(mocks.buildServiceEnvironment).toHaveBeenCalledOnce();
-    const serviceEnvRequest = mocks.buildServiceEnvironment.mock.calls[0]?.[0];
+    const serviceEnvRequest = firstMockArg(
+      mocks.buildServiceEnvironment,
+      "buildServiceEnvironment",
+    );
     expect(serviceEnvRequest?.env).toStrictEqual({ HOME: isolatedHome });
     expect(serviceEnvRequest?.port).toBe(3000);
     expect(serviceEnvRequest?.extraPathDirs).toStrictEqual(["/custom"]);
+  });
+
+  it("adds the active openclaw command bin directory to the managed service PATH", async () => {
+    mockNodeGatewayPlanFixture();
+    const originalArgv = process.argv;
+    const openclawBinPath = path.join(isolatedHome, ".npm-global", "bin", "openclaw");
+    process.argv = ["node", openclawBinPath, "gateway", "install"];
+
+    try {
+      await buildGatewayInstallPlan({
+        env: { HOME: isolatedHome },
+        port: 3000,
+        runtime: "node",
+        nodePath: "/opt/homebrew/opt/node/bin/node",
+        platform: "darwin",
+      });
+    } finally {
+      process.argv = originalArgv;
+    }
+
+    expect(mocks.buildServiceEnvironment).toHaveBeenCalledOnce();
+    expect(
+      firstMockArg(mocks.buildServiceEnvironment, "buildServiceEnvironment").extraPathDirs,
+    ).toStrictEqual(["/opt/homebrew/opt/node/bin", path.dirname(openclawBinPath)]);
   });
 
   it("does not prepend '.' when nodePath is a bare executable name", async () => {
@@ -145,7 +184,9 @@ describe("buildGatewayInstallPlan", () => {
     });
 
     expect(mocks.buildServiceEnvironment).toHaveBeenCalledOnce();
-    expect(mocks.buildServiceEnvironment.mock.calls[0]?.[0]?.extraPathDirs).toBeUndefined();
+    expect(
+      firstMockArg(mocks.buildServiceEnvironment, "buildServiceEnvironment").extraPathDirs,
+    ).toBeUndefined();
   });
 
   it("emits warnings when renderSystemNodeWarning returns one", async () => {
@@ -184,7 +225,9 @@ describe("buildGatewayInstallPlan", () => {
 
     expect(plan.workingDirectory).toBe(path.join(isolatedHome, ".openclaw"));
     expect(mocks.buildServiceEnvironment).toHaveBeenCalledOnce();
-    expect(mocks.buildServiceEnvironment.mock.calls[0]?.[0]?.platform).toBe("darwin");
+    expect(firstMockArg(mocks.buildServiceEnvironment, "buildServiceEnvironment").platform).toBe(
+      "darwin",
+    );
   });
 
   it("does not invent a working directory for non-macOS service installs", async () => {
@@ -221,12 +264,51 @@ describe("buildGatewayInstallPlan", () => {
     });
 
     expect(mocks.resolveGatewayProgramArguments).toHaveBeenCalledOnce();
-    expect(mocks.resolveGatewayProgramArguments.mock.calls[0]?.[0]?.wrapperPath).toBe(wrapperPath);
+    expect(
+      firstMockArg(mocks.resolveGatewayProgramArguments, "resolveGatewayProgramArguments")
+        .wrapperPath,
+    ).toBe(wrapperPath);
     expect(mocks.buildServiceEnvironment).toHaveBeenCalledOnce();
-    expect(mocks.buildServiceEnvironment.mock.calls[0]?.[0]?.env?.OPENCLAW_WRAPPER).toBe(
-      wrapperPath,
-    );
+    expect(
+      firstMockArg(mocks.buildServiceEnvironment, "buildServiceEnvironment").env?.OPENCLAW_WRAPPER,
+    ).toBe(wrapperPath);
     expect(plan.environment.OPENCLAW_WRAPPER).toBe(wrapperPath);
+  });
+
+  it("clears a Windows wrapper env that points at the generated gateway.cmd script", async () => {
+    const selfWrapperPath = path.join(isolatedHome, ".openclaw", "gateway.cmd");
+    const warn = vi.fn();
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: isolatedPlanEnv({
+        OPENCLAW_WRAPPER: selfWrapperPath,
+      }),
+      port: 3000,
+      runtime: "node",
+      platform: "win32",
+      warn,
+    });
+
+    expect(mocks.resolveGatewayProgramArguments).toHaveBeenCalledOnce();
+    expect(
+      firstMockArg(mocks.resolveGatewayProgramArguments, "resolveGatewayProgramArguments")
+        .wrapperPath,
+    ).toBeUndefined();
+    expect(mocks.buildServiceEnvironment).toHaveBeenCalledOnce();
+    expect(
+      firstMockArg(mocks.buildServiceEnvironment, "buildServiceEnvironment").env?.OPENCLAW_WRAPPER,
+    ).toBeUndefined();
+    expect(plan.environment.OPENCLAW_WRAPPER).toBeUndefined();
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Ignoring OPENCLAW_WRAPPER because it points to the Windows task script",
+      ),
+    );
   });
 
   it("tracks safe config env keys without embedding literal values", async () => {
@@ -395,7 +477,7 @@ describe("buildGatewayInstallPlan", () => {
       'Exec SecretRef passEnv ref "HOME" blocked by host-env security policy',
       "Config SecretRef",
     );
-    const warningMessages = warn.mock.calls.map(([message]) => message);
+    const warningOutput = warn.mock.calls.map(([message]) => message).join("\n");
     for (const blockedName of [
       "XDG_CONFIG_HOME",
       "XDG_CONFIG_DIRS",
@@ -405,7 +487,7 @@ describe("buildGatewayInstallPlan", () => {
       "DOCKER_HOST",
       "NODE_TLS_REJECT_UNAUTHORIZED",
     ]) {
-      expect(warningMessages.some((message) => message.includes(blockedName))).toBe(true);
+      expect(warningOutput).toContain(blockedName);
     }
     expect(warn.mock.calls.every(([, title]) => title === "Config SecretRef")).toBe(true);
   });

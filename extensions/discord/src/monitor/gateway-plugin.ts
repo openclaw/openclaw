@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
+import type { Agent as HttpAgent } from "node:http";
 import { Agent as HttpsAgent } from "node:https";
-import * as httpsProxyAgent from "https-proxy-agent";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createNodeProxyAgent } from "openclaw/plugin-sdk/fetch-runtime";
 import {
   captureWsEvent,
   resolveEffectiveDebugProxyUrl,
@@ -17,7 +18,7 @@ import { resolveDiscordVoiceEnabled } from "../voice/config.js";
 import { DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT } from "./gateway-handle.js";
 import {
   fetchDiscordGatewayInfoWithTimeout,
-  fetchDiscordGatewayMetadataDirect,
+  fetchDiscordGatewayMetadataGuarded,
   resolveDiscordGatewayInfoTimeoutMs,
   resolveGatewayInfoWithFallback,
   type DiscordGatewayFetch,
@@ -36,9 +37,7 @@ type DiscordGatewayWebSocketCtor = new (
   url: string,
   options?: { agent?: unknown; handshakeTimeout?: number },
 ) => ws.WebSocket;
-type DiscordGatewayWebSocketAgent =
-  | InstanceType<typeof HttpsAgent>
-  | InstanceType<typeof httpsProxyAgent.HttpsProxyAgent<string>>;
+type DiscordGatewayWebSocketAgent = InstanceType<typeof HttpsAgent> | HttpAgent;
 const registrationPromises = new WeakMap<discordGateway.GatewayPlugin, Promise<void>>();
 type DiscordGatewayClient = Parameters<discordGateway.GatewayPlugin["registerClient"]>[0];
 type GatewayPluginTestingOptions = {
@@ -49,7 +48,7 @@ type GatewayPluginTestingOptions = {
   webSocketCtor?: DiscordGatewayWebSocketCtor;
 };
 type CreateDiscordGatewayPluginTestingOptions = GatewayPluginTestingOptions & {
-  HttpsProxyAgentCtor?: typeof httpsProxyAgent.HttpsProxyAgent;
+  createProxyAgent?: (proxyUrl: string) => HttpAgent;
 };
 type DiscordGatewayRegistrationState = {
   client?: DiscordGatewayClient;
@@ -230,18 +229,22 @@ function createGatewayPlugin(params: {
   return new OpenClawGatewayPlugin();
 }
 
-function createDiscordGatewayMetadataFetch(debugCaptureEnabled: boolean): DiscordGatewayFetch {
+function createDiscordGatewayMetadataFetch(
+  debugCaptureEnabled: boolean,
+  proxyUrl?: string,
+): DiscordGatewayFetch {
   return (input, init) =>
-    fetchDiscordGatewayMetadataDirect(
-      input,
-      init,
-      debugCaptureEnabled
-        ? false
+    fetchDiscordGatewayMetadataGuarded(input, init, {
+      ...(debugCaptureEnabled
+        ? {}
         : {
-            flowId: randomUUID(),
-            meta: { subsystem: "discord-gateway-metadata" },
-          },
-    );
+            capture: {
+              flowId: randomUUID(),
+              meta: { subsystem: "discord-gateway-metadata" },
+            },
+          }),
+      ...(proxyUrl ? { proxyUrl } : {}),
+    });
 }
 
 export function waitForDiscordGatewayPluginRegistration(
@@ -256,7 +259,7 @@ export function waitForDiscordGatewayPluginRegistration(
 export function createDiscordGatewayPlugin(params: {
   discordConfig: DiscordAccountConfig;
   runtime: RuntimeEnv;
-  __testing?: CreateDiscordGatewayPluginTestingOptions;
+  testing?: CreateDiscordGatewayPluginTestingOptions;
 }): discordGateway.GatewayPlugin {
   const intents = resolveDiscordGatewayIntents({
     intentsConfig: params.discordConfig?.intents,
@@ -276,13 +279,15 @@ export function createDiscordGatewayPlugin(params: {
   if (proxy) {
     try {
       validateDiscordProxyUrl(proxy);
-      const HttpsProxyAgentCtor =
-        params.__testing?.HttpsProxyAgentCtor ?? httpsProxyAgent.HttpsProxyAgent;
-      wsAgent = new HttpsProxyAgentCtor<string>(proxy);
+      wsAgent =
+        params.testing?.createProxyAgent?.(proxy) ??
+        createNodeProxyAgent({ mode: "explicit", proxyUrl: proxy, protocol: "https" });
+      fetchImpl = createDiscordGatewayMetadataFetch(debugProxySettings.enabled, proxy);
       params.runtime.log?.("discord: gateway proxy enabled");
     } catch (err) {
       params.runtime.error?.(danger(`discord: invalid gateway proxy: ${String(err)}`));
-      fetchImpl = (input, init) => fetchDiscordGatewayMetadataDirect(input, init, false);
+      fetchImpl = (input, init) =>
+        fetchDiscordGatewayMetadataGuarded(input, init, { capture: false });
     }
   }
 
@@ -296,7 +301,7 @@ export function createDiscordGatewayPlugin(params: {
     gatewayInfoTimeoutMs,
     fetchImpl,
     runtime: params.runtime,
-    testing: params.__testing,
+    testing: params.testing,
     ...(wsAgent ? { wsAgent } : {}),
   });
 }

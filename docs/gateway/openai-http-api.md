@@ -42,6 +42,10 @@ Notes:
 - When `gateway.auth.mode="trusted-proxy"`, the HTTP request must come from a
   configured trusted proxy source; same-host loopback proxies require explicit
   `gateway.auth.trustedProxy.allowLoopback = true`.
+- Internal same-host callers that bypass the proxy can use
+  `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD` as a local direct
+  fallback. Any `Forwarded`, `X-Forwarded-*`, or `X-Real-IP` header evidence
+  keeps the request on the trusted-proxy path instead.
 - If `gateway.auth.rateLimit` is configured and too many auth failures occur, the endpoint returns `429` with `Retry-After`.
 
 ## Security boundary (important)
@@ -73,6 +77,14 @@ Auth matrix:
   - only lose owner semantics when the caller explicitly narrows scopes and omits `operator.admin`
 
 See [Security](/gateway/security) and [Remote access](/gateway/remote).
+
+## When to use this endpoint
+
+Use `/v1/chat/completions` when you are integrating tooling or a trusted app-side backend with an existing gateway and can safely hold gateway operator credentials.
+
+- Prefer this over adding a new built-in channel when your integration is just another operator/client surface for the same gateway.
+- For native mobile clients that connect directly to a remote gateway, prefer [WebChat](/web/webchat) or the [Gateway Protocol](/gateway/protocol) and implement the paired-device bootstrap/device-token flow so the device does not need a shared HTTP token/password.
+- Build a channel plugin instead when you are integrating an external messaging network with its own users, rooms, webhook delivery, or outbound transport. See [Building plugins](/plugins/building-plugins).
 
 ## Agent-first model contract
 
@@ -131,6 +143,8 @@ Set `gateway.http.endpoints.chatCompletions.enabled` to `false`:
 By default the endpoint is **stateless per request** (a new session key is generated each call).
 
 If the request includes an OpenAI `user` string, the Gateway derives a stable session key from it, so repeated calls can share an agent session.
+
+For custom apps, the safest default is to reuse the same `user` value per conversation thread. Avoid account-level identifiers unless you explicitly want multiple conversations or devices to share one OpenClaw session. Use `x-openclaw-session-key` when you need explicit routing control across multiple clients or threads.
 
 ## Why this surface matters
 
@@ -201,6 +215,15 @@ Set `stream: true` to receive Server-Sent Events (SSE):
 - `tool_choice`: `"auto"`, `"none"`
 - `messages[*].role: "tool"` follow-up turns
 - `messages[*].tool_call_id` for binding tool results back to a prior tool call
+- `max_completion_tokens`: number; per-call cap for total completion tokens (reasoning tokens included). Current OpenAI Chat Completions field name; preferred when both `max_completion_tokens` and `max_tokens` are sent.
+- `max_tokens`: number; legacy alias accepted for backwards compatibility. Ignored when `max_completion_tokens` is also present.
+- `temperature`: number; best-effort sampling temperature forwarded to the upstream provider via the agent stream-param channel.
+- `top_p`: number; best-effort nucleus sampling forwarded to the upstream provider via the agent stream-param channel.
+- `frequency_penalty`: number; best-effort frequency penalty forwarded to the upstream provider via the agent stream-param channel. Validated range: -2.0 to 2.0. Returns `400 invalid_request_error` for out-of-range values.
+- `presence_penalty`: number; best-effort presence penalty forwarded to the upstream provider via the agent stream-param channel. Validated range: -2.0 to 2.0. Returns `400 invalid_request_error` for out-of-range values.
+- `seed`: number (integer); best-effort seed forwarded to the upstream provider via the agent stream-param channel. Returns `400 invalid_request_error` for non-integer values.
+
+When either token-cap field is set, the value is forwarded to the upstream provider via the agent stream-param channel. The actual wire field name sent to the upstream provider is chosen by the provider transport: `max_completion_tokens` for OpenAI-family endpoints, and `max_tokens` for providers that only accept the legacy name (such as Mistral and Chutes). Sampling fields (`temperature`, `top_p`, `frequency_penalty`, `presence_penalty`, `seed`) follow the same stream-param channel; the ChatGPT-based Codex Responses backend strips them server-side since it uses fixed sampling.
 
 ### Unsupported variants
 
@@ -273,6 +296,21 @@ curl -sS http://127.0.0.1:18789/v1/models \
 If that returns `openclaw/default`, most Open WebUI setups can connect with the same base URL and token.
 
 ## Examples
+
+Stable session for one app conversation:
+
+```bash
+curl -sS http://127.0.0.1:18789/v1/chat/completions \
+  -H 'Authorization: Bearer YOUR_TOKEN' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "openclaw/default",
+    "user": "conv:YOUR_CONVERSATION_ID",
+    "messages": [{"role":"user","content":"Summarize my tasks for today"}]
+  }'
+```
+
+Reuse the same `user` value on later calls for that conversation to continue the same agent session.
 
 Non-streaming:
 

@@ -1,5 +1,5 @@
-import type { StreamFn } from "@earendil-works/pi-agent-core";
-import type { Context, Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import type { Context, Model, SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAICodexProviderPlugin } from "./openai-codex-provider.js";
 import { buildOpenAIProvider } from "./openai-provider.js";
@@ -112,7 +112,7 @@ function expectCatalogEntry(entries: unknown, id: string, expected: Record<strin
 
 function expectNoCatalogEntry(entries: unknown, id: string): void {
   expect(Array.isArray(entries)).toBe(true);
-  expect((entries as Array<Record<string, unknown>>).some((entry) => entry.id === id)).toBe(false);
+  expect((entries as Array<Record<string, unknown>>).map((entry) => entry.id)).not.toContain(id);
 }
 
 describe("buildOpenAIProvider", () => {
@@ -132,7 +132,7 @@ describe("buildOpenAIProvider", () => {
       choiceHint: "Use your OpenAI API key directly",
       groupId: "openai",
       groupLabel: "OpenAI",
-      groupHint: "ChatGPT subscription or API key",
+      groupHint: "ChatGPT/Codex sign-in or API key",
     });
   });
 
@@ -213,16 +213,16 @@ describe("buildOpenAIProvider", () => {
           provider: "openai",
           modelId: "gpt-5.4-mini",
         } as never)
-        ?.levels.some((level) => level.id === "xhigh"),
-    ).toBe(true);
+        ?.levels.map((level) => level.id),
+    ).toContain("xhigh");
     expect(
       provider
         .resolveThinkingProfile?.({
           provider: "openai",
           modelId: "gpt-5.4-nano",
         } as never)
-        ?.levels.some((level) => level.id === "xhigh"),
-    ).toBe(true);
+        ?.levels.map((level) => level.id),
+    ).toContain("xhigh");
 
     const entries = provider.augmentModelCatalog?.({
       env: process.env,
@@ -356,7 +356,7 @@ describe("buildOpenAIProvider", () => {
     });
   });
 
-  it("leaves gpt-5.5 to Pi and resolves gpt-5.5-pro locally", () => {
+  it("resolves gpt-5.5 locally without cached catalog metadata", () => {
     const provider = buildOpenAIProvider();
 
     const model = provider.resolveDynamicModel?.({
@@ -380,6 +380,25 @@ describe("buildOpenAIProvider", () => {
             : null,
       } as never,
     });
+
+    expectFields(model, {
+      provider: "openai",
+      id: "gpt-5.5",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      contextWindow: 1_000_000,
+      contextTokens: 272_000,
+      maxTokens: 128_000,
+      mediaInput: {
+        image: { maxSidePx: 6000, preferredSidePx: 2048, tokenMode: "detail" },
+      },
+      cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+    });
+  });
+
+  it("resolves gpt-5.5-pro locally", () => {
+    const provider = buildOpenAIProvider();
+
     const pro = provider.resolveDynamicModel?.({
       provider: "openai",
       modelId: "gpt-5.5-pro",
@@ -402,7 +421,6 @@ describe("buildOpenAIProvider", () => {
       } as never,
     });
 
-    expect(model).toBeUndefined();
     expectFields(pro, {
       provider: "openai",
       id: "gpt-5.5-pro",
@@ -423,8 +441,8 @@ describe("buildOpenAIProvider", () => {
           provider: "openai",
           modelId: "gpt-5.5",
         } as never)
-        ?.levels.some((level) => level.id === "xhigh"),
-    ).toBe(true);
+        ?.levels.map((level) => level.id),
+    ).toContain("xhigh");
 
     const entries = provider.augmentModelCatalog?.({
       env: process.env,
@@ -435,7 +453,7 @@ describe("buildOpenAIProvider", () => {
     expectNoCatalogEntry(entries, "chat-latest");
   });
 
-  it("keeps modern live selection on OpenAI 5.2+ and current Codex models", () => {
+  it("keeps modern live selection on current OpenAI and Codex models", () => {
     const provider = buildOpenAIProvider();
     const codexProvider = buildOpenAICodexProviderPlugin();
 
@@ -450,7 +468,7 @@ describe("buildOpenAIProvider", () => {
         provider: "openai",
         modelId: "gpt-5.2",
       } as never),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       provider.isModernModelRef?.({
         provider: "openai",

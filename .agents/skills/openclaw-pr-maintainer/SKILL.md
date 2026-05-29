@@ -24,6 +24,36 @@ gitcrawl search openclaw/openclaw --query "<scope or title keywords>" --mode hyb
 gitcrawl cluster-detail openclaw/openclaw --id <cluster-id> --member-limit 20 --body-chars 280 --json
 ```
 
+## Claim specific review targets
+
+When a maintainer asks Codex to review, triage, fix, or land a specific OpenClaw issue/PR, check assignment before deep work.
+
+- Identify the requesting maintainer's GitHub login. In this environment, default Peter to `steipete`; if another maintainer is clearly the requester, use that maintainer's bare login.
+- Read current assignees with live `gh issue view` / `gh pr view`; `gitcrawl` is not enough for assignment state.
+- If unassigned, assign the requester before deep review. This is allowed for specific requested targets; do not auto-assign broad discovery candidates or shortlists.
+- If assigned to someone else, say so clearly before analysis and include assignment age:
+  - fresh: assigned within 6h; treat as actively owned unless user explicitly asks to continue or reassign
+  - stale: assigned 6h+ ago; treat as ownership hint, not a hard block; continue only with that caveat
+- If assigned to requester plus others, mention co-assignees and continue.
+- If assignment event time is unavailable, say `assigned, time unknown`; treat as assigned, not stale.
+- Never remove or replace assignees unless explicitly asked.
+
+Assignment time proof:
+
+```bash
+gh api "repos/openclaw/openclaw/issues/<number>/timeline" --paginate \
+  -H "Accept: application/vnd.github+json" \
+  --jq '[.[] | select(.event=="assigned") | {assignee:.assignee.login, assigner:.assigner.login, actor:.actor.login, created_at}]'
+```
+
+Use the newest `assigned` event for each current assignee. Issue timeline events expose `created_at`; GitHub GraphQL `AssignedEvent.createdAt` is also valid when REST pagination is awkward.
+
+Claim command for issues or PRs:
+
+```bash
+gh api -X POST "repos/openclaw/openclaw/issues/<number>/assignees" -f 'assignees[]=<login>' >/dev/null
+```
+
 ## Surface opener identity
 
 - For every reviewed, triaged, closed, or landed issue/PR, show the opener's human name when available, GitHub login, and account age.
@@ -109,12 +139,12 @@ Issue triage is review/prove/patch-local by default:
 2. Fix only issues that are easy, high-confidence, and narrowly owned by the implicated path.
 3. Add focused regression proof when practical.
 4. Stop with the dirty diff, touched files, and test/gate output for maintainer review.
-5. After maintainer approval to ship, make one commit per accepted fix, with its own changelog entry when user-facing.
+5. After maintainer approval to ship, make one commit per accepted fix, with release-note context in the PR body or commit message when user-facing.
 6. Pull/rebase, push, then comment and close only the issues that were fixed or explicitly triaged closed.
 
 Do not batch unrelated issue fixes into one commit. Do not publish, comment, close, or label during the review/prove phase.
 
-Missing changelog is not a PR review finding or merge blocker. If landing/fixing a user-visible change, add/update changelog automatically when practical; never ask or block solely on it.
+Missing `CHANGELOG.md` is not a PR review finding or merge blocker. If landing/fixing a user-visible change, make sure the PR body or commit message captures the release-note context; never ask or block solely on it.
 
 Only list candidates that pass all gates:
 
@@ -138,8 +168,21 @@ Output only qualifying candidates, with: ref, surface, proof, cause, fix sketch,
 
 - Start every PR review with 1-3 plain sentences explaining what the change does and why it matters. Put this before `Findings`.
 - Then list findings first. If none, say `No blocking findings` or `No findings`.
-- Always answer: bug/behavior being fixed, PR/issue URL and affected surface, and best-fix verdict.
+- Show size near the top as `LOC: +<additions>/-<deletions> (<changedFiles> files)`, using live PR stats or local diff stats.
+- Always answer: bug/behavior being fixed, PR/issue URL and affected surface, provenance for regressions when traceable, and best-fix verdict.
+- For bug/regression fixes, include a compact `Provenance:` line after cause/root-cause when a bounded history pass can identify it. Use `git log -S/-G`, `git blame`, linked PRs/issues, and tests.
+- Provenance must separate roles when they differ: blamed code author username, blamed PR author username, blamed PR merger/committer username, automerge trigger when known, current PR author username, PR number, and date. Do not collapse them into one "introduced by" actor.
+- If the blamed PR was merged by `clawsweeper[bot]` or another automation, identify the human trigger when practical. Check live PR timeline/comments first; if rate-limited, use gitcrawl/cache or public PR HTML. Look for maintainer command comments such as `@clawsweeper automerge`, `/landpr`, labels/events that armed automerge, and ClawSweeper status comments. Report `automerge triggered by @login`; if not found, say trigger unknown rather than naming the bot as the human decision-maker.
+- For any confirmed bug, run `git blame` on the implicated line(s) after identifying the root cause. Report who broke it as the blamed PR merger/committer, and also name the blamed code author. Include the PR number. If no PR is traceable, use the blamed commit as the provenance: commit SHA, date, and author username. Do not guess a merger or frame missing PR metadata as a separate finding.
+- Phrase provenance as `introduced by`, `made visible by`, or `carried forward by`, with confidence (`clear`, `likely`, `unknown`). If unclear, say what evidence is missing instead of guessing. For features, docs, and refactors, use `Provenance: N/A` or omit it when no broken behavior is being fixed.
 - Keep summaries compact, but include enough proof that the verdict is auditable without rereading the PR.
+
+LOC proof:
+
+```bash
+gh pr view <number> --json additions,deletions,changedFiles \
+  --jq '"LOC: +\(.additions)/-\(.deletions) (\(.changedFiles) files)"'
+```
 
 ## Read beyond the diff
 
@@ -160,8 +203,9 @@ Output only qualifying candidates, with: ref, surface, proof, cause, fix sketch,
 - Before landing, require:
   1. symptom evidence such as a repro, logs, or a failing test
   2. a verified root cause in code with file/line
-  3. a fix that touches the implicated code path
-  4. a regression test when feasible, or explicit manual verification plus a reason no test was added
+  3. blame-backed provenance for regressions when traceable, including blamed PR merger and automerge trigger when known, or commit SHA/date when no PR is traceable
+  4. a fix that touches the implicated code path
+  5. a regression test when feasible, or explicit manual verification plus a reason no test was added
 - If the claim is unsubstantiated or likely wrong, request evidence or changes instead of merging.
 - If the linked issue appears outdated or incorrect, correct triage first. Do not merge a speculative fix.
 - If Crabbox/E2E proof is blocked, say exactly why and use the closest available
@@ -209,11 +253,11 @@ gh search issues --repo openclaw/openclaw --match title,body --limit 50 \
 
 ## Follow PR review and landing hygiene
 
-- Never mention merge conflicts that are relatively easy to resolve, such as
-  `CHANGELOG.md` entries, in review-only output. These are landing mechanics,
-  not correctness findings.
+- Never mention release-note bookkeeping in review-only output. It is landing
+  or release-generation mechanics, not a correctness finding.
 - If bot review conversations exist on your PR, address them and resolve them yourself once fixed.
 - Leave a review conversation unresolved only when reviewer or maintainer judgment is still needed.
+- Before landing any PR with non-trivial code changes, run `$autoreview` until no accepted/actionable findings remain, unless equivalent manual review already covered it, the change is trivial/docs-only, or the user opts out.
 - When landing or merging any PR, follow the global `/landpr` process.
 - Use `scripts/committer "<msg>" <file...>` for scoped commits instead of manual `git add` and `git commit`.
 - Keep commit messages concise and action-oriented.

@@ -2,7 +2,12 @@ import JSON5 from "json5";
 import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../../i18n/index.ts";
 import { icons } from "../icons.ts";
-import { BORDER_RADIUS_STOPS, type BorderRadiusStop } from "../storage.ts";
+import {
+  BORDER_RADIUS_STOPS,
+  TEXT_SCALE_STOPS,
+  type BorderRadiusStop,
+  type TextScaleStop,
+} from "../storage.ts";
 import type { ThemeTransitionContext } from "../theme-transition.ts";
 import type { ThemeMode, ThemeName } from "../theme.ts";
 import type { ConfigUiHints } from "../types.ts";
@@ -24,6 +29,14 @@ const BORDER_RADIUS_LABELS: Record<BorderRadiusStop, string> = {
   50: "Default",
   75: "Round",
   100: "Full",
+};
+
+const TEXT_SCALE_LABELS: Record<TextScaleStop, string> = {
+  90: "Small",
+  100: "Default",
+  110: "Large",
+  125: "XL",
+  140: "XXL",
 };
 
 export type WebPushUiState = {
@@ -85,10 +98,13 @@ export type ConfigProps = {
   onOpenCustomThemeImport?: () => void;
   borderRadius: number;
   setBorderRadius: (value: number) => void;
+  textScale: number;
+  setTextScale: (value: number) => void;
   gatewayUrl: string;
   assistantName: string;
   configPath?: string | null;
   navRootLabel?: string;
+  showRootTab?: boolean;
   includeSections?: string[];
   excludeSections?: string[];
   includeVirtualSections?: boolean;
@@ -1063,6 +1079,26 @@ function renderAppearanceSection(props: ConfigProps) {
       </div>
 
       <div class="settings-appearance__section">
+        <h3 class="settings-appearance__heading">Text size</h3>
+        <div class="settings-text-scale">
+          <div class="settings-text-scale__options">
+            ${TEXT_SCALE_STOPS.map(
+              (stop) => html`
+                <button
+                  type="button"
+                  class="settings-text-scale__btn ${stop === props.textScale ? "active" : ""}"
+                  @click=${() => props.setTextScale(stop)}
+                >
+                  <span class="settings-text-scale__sample">${TEXT_SCALE_LABELS[stop]}</span>
+                  <span class="settings-text-scale__label">${stop}%</span>
+                </button>
+              `,
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-appearance__section">
         <h3 class="settings-appearance__heading">Connection</h3>
         <div class="settings-info-grid">
           <div class="settings-info-row">
@@ -1156,6 +1192,7 @@ export function resetConfigViewStateForTests() {
 
 export function renderConfig(props: ConfigProps) {
   const showModeToggle = props.showModeToggle ?? false;
+  const showRootTab = props.showRootTab ?? true;
   const validity = props.valid == null ? "unknown" : props.valid ? "valid" : "invalid";
   const includeVirtualSections = props.includeVirtualSections ?? true;
   const include = props.includeSections?.length ? new Set(props.includeSections) : null;
@@ -1215,7 +1252,9 @@ export function renderConfig(props: ConfigProps) {
   const effectiveSubsection = null;
 
   const topTabs = [
-    { key: null as string | null, label: props.navRootLabel ?? "Settings" },
+    ...(showRootTab
+      ? [{ key: null as string | null, label: props.navRootLabel ?? "Settings" }]
+      : []),
     ...[...visibleCategories, ...(otherCategory ? [otherCategory] : [])].flatMap((cat) =>
       cat.sections.map((s) => ({ key: s.key, label: s.label })),
     ),

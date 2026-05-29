@@ -29,13 +29,39 @@ ensure_home_env() {
 
 ensure_home_env
 
+resolve_openclaw_effective_home() {
+  local openclaw_home="${OPENCLAW_HOME:-}"
+  if [[ -z "$openclaw_home" ]]; then
+    echo "$HOME"
+    return 0
+  fi
+
+  case "$openclaw_home" in
+    \~)
+      echo "$HOME"
+      ;;
+    \~/*)
+      echo "${HOME}/${openclaw_home#~/}"
+      ;;
+    *)
+      echo "$openclaw_home"
+      ;;
+  esac
+}
+
+OPENCLAW_EFFECTIVE_HOME="$(resolve_openclaw_effective_home)"
 PREFIX="${OPENCLAW_PREFIX:-${HOME}/.openclaw}"
 OPENCLAW_VERSION="${OPENCLAW_VERSION:-latest}"
 NODE_VERSION="${OPENCLAW_NODE_VERSION:-22.22.0}"
-SHARP_IGNORE_GLOBAL_LIBVIPS="${SHARP_IGNORE_GLOBAL_LIBVIPS:-1}"
+NODE_VERSION_REQUESTED=0
+if [[ -n "${OPENCLAW_NODE_VERSION:-}" ]]; then
+  NODE_VERSION_REQUESTED=1
+fi
+MIN_NODE_VERSION="22.19.0"
+APK_NODE_BIN_DIR="/usr/bin"
 NPM_LOGLEVEL="${OPENCLAW_NPM_LOGLEVEL:-error}"
 INSTALL_METHOD="${OPENCLAW_INSTALL_METHOD:-npm}"
-GIT_DIR="${OPENCLAW_GIT_DIR:-${HOME}/openclaw}"
+GIT_DIR="${OPENCLAW_GIT_DIR:-${OPENCLAW_EFFECTIVE_HOME}/openclaw}"
 GIT_UPDATE="${OPENCLAW_GIT_UPDATE:-1}"
 JSON=0
 RUN_ONBOARD=0
@@ -46,11 +72,11 @@ print_usage() {
   cat <<EOF
 Usage: install-cli.sh [options]
   --json                              Emit NDJSON events (no human output)
-  --prefix <path>                     Install prefix (default: ~/.openclaw)
+  --prefix <path>                     Install prefix (default: ~/.openclaw; use \$OPENCLAW_PREFIX to override)
   --install-method, --method npm|git  Install via npm (default) or from a git checkout
   --npm                               Shortcut for --install-method npm
   --git, --github                     Shortcut for --install-method git
-  --git-dir, --dir <path>             Checkout directory (default: ~/openclaw)
+  --git-dir, --dir <path>             Checkout directory (default: ~/openclaw, or \$OPENCLAW_HOME/openclaw)
   --version <ver>                     OpenClaw version (default: latest)
   --node-version <ver>                Node version (default: 22.22.0)
   --onboard                           Run "openclaw onboard" after install
@@ -58,9 +84,10 @@ Usage: install-cli.sh [options]
   --set-npm-prefix                    Force npm prefix to ~/.npm-global if current prefix is not writable (Linux)
 
 Environment variables:
-  SHARP_IGNORE_GLOBAL_LIBVIPS=0|1    Default: 1 (avoid sharp building against global libvips)
   OPENCLAW_NPM_LOGLEVEL=error|warn|notice  Default: error (hide npm deprecation noise)
   OPENCLAW_INSTALL_METHOD=git|npm
+  OPENCLAW_HOME=...
+  OPENCLAW_PREFIX=...
   OPENCLAW_VERSION=latest|next|<semver>
   OPENCLAW_GIT_DIR=...
   OPENCLAW_GIT_UPDATE=0|1
@@ -100,7 +127,7 @@ download_file() {
 }
 
 cleanup_legacy_submodules() {
-  local repo_dir="${1:-${OPENCLAW_GIT_DIR:-${HOME}/openclaw}}"
+  local repo_dir="${1:-${OPENCLAW_GIT_DIR:-${OPENCLAW_EFFECTIVE_HOME}/openclaw}}"
   local legacy_dir="${repo_dir}/Peekaboo"
   if [[ -d "$legacy_dir" ]]; then
     emit_json "{\"event\":\"step\",\"name\":\"legacy-submodule\",\"status\":\"start\",\"path\":\"${legacy_dir//\"/\\\"}\"}"
@@ -192,6 +219,14 @@ ensure_git() {
         else
           fail "Git missing and sudo unavailable. Install git and retry."
         fi
+      elif command -v apk >/dev/null 2>&1; then
+        if is_root; then
+          apk add --no-cache git
+        elif has_sudo; then
+          sudo apk add --no-cache git
+        else
+          fail "Git missing and sudo unavailable. Install git and retry."
+        fi
       else
         fail "Git missing and package manager not found. Install git and retry."
       fi
@@ -220,18 +255,31 @@ parse_args() {
         shift
         ;;
       --prefix)
+        if [[ $# -lt 2 || "${2:-}" == --* ]]; then
+          fail "Missing value for $1"
+        fi
         PREFIX="$2"
         shift 2
         ;;
       --version)
+        if [[ $# -lt 2 || "${2:-}" == --* ]]; then
+          fail "Missing value for $1"
+        fi
         OPENCLAW_VERSION="$2"
         shift 2
         ;;
       --node-version)
+        if [[ $# -lt 2 || "${2:-}" == --* ]]; then
+          fail "Missing value for $1"
+        fi
         NODE_VERSION="$2"
+        NODE_VERSION_REQUESTED=1
         shift 2
         ;;
       --install-method|--method)
+        if [[ $# -lt 2 || "${2:-}" == --* ]]; then
+          fail "Missing value for $1"
+        fi
         INSTALL_METHOD="$2"
         shift 2
         ;;
@@ -244,6 +292,9 @@ parse_args() {
         shift
         ;;
       --git-dir|--dir)
+        if [[ $# -lt 2 || "${2:-}" == --* ]]; then
+          fail "Missing value for $1"
+        fi
         GIT_DIR="$2"
         shift 2
         ;;
@@ -306,6 +357,177 @@ npm_bin() {
   echo "$(node_dir)/bin/npm"
 }
 
+command_path_without_node_prefix() {
+  local name="$1"
+  local path_entry
+  local prefix_bin
+  local filtered_path=""
+  local separator=""
+  local -a path_entries=()
+
+  prefix_bin="$(node_dir)/bin"
+  IFS=: read -r -a path_entries <<<"$PATH"
+  for path_entry in "${path_entries[@]}"; do
+    if [[ "$path_entry" == "$prefix_bin" ]]; then
+      continue
+    fi
+    filtered_path="${filtered_path}${separator}${path_entry}"
+    separator=":"
+  done
+
+  PATH="$filtered_path" command -v "$name" 2>/dev/null
+}
+
+is_musl_linux() {
+  if [[ "$(os_detect)" != "linux" ]]; then
+    return 1
+  fi
+  if [[ -f /etc/alpine-release ]]; then
+    return 0
+  fi
+  ldd --version 2>&1 | grep -qi musl
+}
+
+link_node_runtime_paths() {
+  local node_path="$1"
+  local npm_path="$2"
+  local dir
+  local runtime_bin
+  local resolved
+  dir="$(node_dir)"
+  runtime_bin="${node_path%/*}"
+
+  mkdir -p "${dir}/bin" "${PREFIX}/tools"
+  ln -sfn "$node_path" "${dir}/bin/node"
+  ln -sfn "$npm_path" "${dir}/bin/npm"
+  for name in npx corepack; do
+    if [[ -x "${runtime_bin}/${name}" ]]; then
+      ln -sfn "${runtime_bin}/${name}" "${dir}/bin/${name}"
+      continue
+    fi
+    resolved="$(command_path_without_node_prefix "$name" || true)"
+    if [[ -n "$resolved" && "$resolved" != "${dir}/bin/${name}" ]]; then
+      ln -sfn "$resolved" "${dir}/bin/${name}"
+    fi
+  done
+  ln -sfn "$dir" "${PREFIX}/tools/node"
+}
+
+linked_node_is_usable() {
+  local current_version
+  local required_version
+
+  if [[ ! -x "$(node_bin)" || ! -x "$(npm_bin)" ]]; then
+    return 1
+  fi
+
+  current_version="$("$(node_bin)" -v 2>/dev/null || echo "")"
+  required_version="$(required_node_version)"
+  if ! semver_at_least "$current_version" "$required_version"; then
+    return 1
+  fi
+
+  "$(node_bin)" -e "require('node:sqlite')" >/dev/null 2>&1
+}
+
+semver_at_least() {
+  local version="${1#v}"
+  local required="${2#v}"
+  local version_major version_minor version_patch
+  local required_major required_minor required_patch
+
+  IFS=. read -r version_major version_minor version_patch <<<"$version"
+  IFS=. read -r required_major required_minor required_patch <<<"$required"
+  version_minor="${version_minor:-0}"
+  version_patch="${version_patch:-0}"
+  required_minor="${required_minor:-0}"
+  required_patch="${required_patch:-0}"
+
+  for part in "$version_major" "$version_minor" "$version_patch" "$required_major" "$required_minor" "$required_patch"; do
+    if [[ ! "$part" =~ ^[0-9]+$ ]]; then
+      return 1
+    fi
+  done
+
+  if ((version_major != required_major)); then
+    ((version_major > required_major))
+    return
+  fi
+  if ((version_minor != required_minor)); then
+    ((version_minor > required_minor))
+    return
+  fi
+  ((version_patch >= required_patch))
+}
+
+required_node_version() {
+  if [[ "$NODE_VERSION_REQUESTED" == "1" ]] && semver_at_least "$NODE_VERSION" "$MIN_NODE_VERSION"; then
+    printf '%s\n' "$NODE_VERSION"
+    return
+  fi
+  printf '%s\n' "$MIN_NODE_VERSION"
+}
+
+try_link_usable_node_runtime_from_path() {
+  local path_entry
+  local prefix_bin
+  local -a path_entries=()
+
+  prefix_bin="$(node_dir)/bin"
+  IFS=: read -r -a path_entries <<<"$PATH"
+  for path_entry in "${path_entries[@]}"; do
+    if [[ -z "$path_entry" ]]; then
+      path_entry="."
+    fi
+    if [[ "$path_entry" == "$prefix_bin" ]]; then
+      continue
+    fi
+    if [[ -x "${path_entry}/node" && -x "${path_entry}/npm" ]]; then
+      link_node_runtime_paths "${path_entry}/node" "${path_entry}/npm"
+      if linked_node_is_usable; then
+        return 0
+      fi
+    fi
+  done
+  return 1
+}
+
+install_alpine_node() {
+  local installed_version
+  local required_version
+
+  emit_json "{\"event\":\"step\",\"name\":\"node\",\"status\":\"start\",\"method\":\"apk\"}"
+  if try_link_usable_node_runtime_from_path; then
+    installed_version="$("$(node_bin)" -v 2>/dev/null || echo unknown)"
+    emit_json "{\"event\":\"step\",\"name\":\"node\",\"status\":\"ok\",\"method\":\"system\",\"version\":\"${installed_version}\"}"
+    return
+  fi
+
+  log "Installing Node via apk (Alpine Linux detected)..."
+  if is_root; then
+    apk add --no-cache nodejs npm
+  elif has_sudo; then
+    sudo apk add --no-cache nodejs npm
+  else
+    fail "Alpine Linux detected, but Node musl tarballs are unavailable and sudo is unavailable. Install nodejs and npm with apk, then retry."
+  fi
+
+  if [[ -x "${APK_NODE_BIN_DIR}/node" && -x "${APK_NODE_BIN_DIR}/npm" ]]; then
+    link_node_runtime_paths "${APK_NODE_BIN_DIR}/node" "${APK_NODE_BIN_DIR}/npm"
+  elif ! try_link_usable_node_runtime_from_path; then
+    fail "apk Node install failed. Install nodejs and npm manually, then retry."
+  fi
+
+  if ! linked_node_is_usable; then
+    installed_version="$("$(node_bin)" -v 2>/dev/null || echo unknown)"
+    required_version="$(required_node_version)"
+    fail "Alpine Node package must provide Node >= ${required_version} with node:sqlite; found ${installed_version}."
+  fi
+
+  installed_version="$("$(node_bin)" -v 2>/dev/null || echo unknown)"
+  emit_json "{\"event\":\"step\",\"name\":\"node\",\"status\":\"ok\",\"method\":\"apk\",\"version\":\"${installed_version}\"}"
+}
+
 set_pnpm_cmd() {
   PNPM_CMD=("$@")
 }
@@ -364,13 +586,169 @@ run_pnpm() {
   "${PNPM_CMD[@]}" "$@"
 }
 
+to_lowercase_ascii() {
+  printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]'
+}
+
+is_openclaw_source_package_install_spec() {
+  local value="${1:-}"
+  local normalized_value=""
+  normalized_value="$(to_lowercase_ascii "$value")"
+  normalized_value="${normalized_value#openclaw@}"
+
+  [[ "$normalized_value" == "main" ]] && return 0
+  [[ "$normalized_value" =~ ^github:openclaw/openclaw($|[#/]) ]] && return 0
+
+  normalized_value="${normalized_value#git+}"
+  [[ "$normalized_value" =~ ^https?://github\.com/openclaw/openclaw(\.git)?($|[?#]) ]] && return 0
+  [[ "$normalized_value" =~ ^ssh://git@github\.com[:/]openclaw/openclaw(\.git)?($|[?#]) ]] && return 0
+  [[ "$normalized_value" =~ ^git://github\.com/openclaw/openclaw(\.git)?($|[?#]) ]] && return 0
+  [[ "$normalized_value" =~ ^git@github\.com:openclaw/openclaw(\.git)?($|[?#]) ]] && return 0
+  return 1
+}
+
+resolve_git_openclaw_ref() {
+  local requested="${OPENCLAW_VERSION:-latest}"
+  local resolved_version=""
+
+  case "$requested" in
+    ""|latest)
+      resolved_version="$("$(npm_bin)" view "openclaw" "dist-tags.${requested:-latest}" 2>/dev/null || true)"
+      if [[ -n "$resolved_version" ]]; then
+        echo "v${resolved_version}"
+        return 0
+      fi
+      echo "main"
+      return 0
+      ;;
+    next|beta)
+      resolved_version="$("$(npm_bin)" view "openclaw" "dist-tags.${requested:-latest}" 2>/dev/null || true)"
+      if [[ -n "$resolved_version" ]]; then
+        echo "v${resolved_version}"
+        return 0
+      fi
+      echo "$requested"
+      return 0
+      ;;
+    main)
+      echo "main"
+      return 0
+      ;;
+    v[0-9]*)
+      echo "$requested"
+      return 0
+      ;;
+    [0-9]*.[0-9]*.[0-9]*)
+      echo "v${requested}"
+      return 0
+      ;;
+    *)
+      echo "$requested"
+      return 0
+      ;;
+  esac
+}
+
+checkout_git_openclaw_ref() {
+  local repo_dir="$1"
+  local ref="$2"
+
+  if [[ -z "$ref" ]]; then
+    return 0
+  fi
+
+  if [[ "$ref" == "main" ]]; then
+    git -C "$repo_dir" fetch --no-tags origin main
+    git -C "$repo_dir" checkout main
+    if [[ "$GIT_UPDATE" == "1" ]]; then
+      git -C "$repo_dir" pull --rebase --no-tags || true
+    fi
+    return 0
+  fi
+
+  if git -C "$repo_dir" ls-remote --exit-code --heads origin "$ref" >/dev/null 2>&1; then
+    git -C "$repo_dir" fetch --no-tags origin "refs/heads/${ref}:refs/remotes/origin/${ref}"
+    git -C "$repo_dir" checkout -B "$ref" "origin/$ref"
+    if [[ "$GIT_UPDATE" == "1" ]]; then
+      git -C "$repo_dir" pull --rebase --no-tags || true
+    fi
+    return 0
+  fi
+
+  git -C "$repo_dir" fetch --tags origin
+
+  if git -C "$repo_dir" rev-parse --verify --quiet "refs/tags/${ref}^{commit}" >/dev/null; then
+    git -C "$repo_dir" checkout --detach "$ref"
+    return 0
+  fi
+
+  if git -C "$repo_dir" rev-parse --verify --quiet "${ref}^{commit}" >/dev/null; then
+    git -C "$repo_dir" checkout --detach "$ref"
+    return 0
+  fi
+
+  fail "Requested git version not found: ${ref}"
+}
+
+git_install_lockfile_flag() {
+  local repo_dir="$1"
+  local ref="$2"
+
+  if [[ "$ref" == "main" ]] || git -C "$repo_dir" ls-remote --exit-code --heads origin "$ref" >/dev/null 2>&1; then
+    echo "--no-frozen-lockfile"
+    return 0
+  fi
+
+  echo "--frozen-lockfile"
+}
+
+repo_pnpm_spec() {
+  local repo_dir="$1"
+  local package_json="${repo_dir}/package.json"
+
+  if [[ ! -f "$package_json" ]]; then
+    return 1
+  fi
+
+  sed -n -E 's/^[[:space:]]*"packageManager"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' "$package_json" | head -n1
+}
+
+activate_repo_pnpm_version() {
+  local repo_dir="$1"
+  local spec
+  local version
+  local corepack_cmd=""
+
+  spec="$(repo_pnpm_spec "$repo_dir" || true)"
+  if [[ "$spec" != pnpm@* ]]; then
+    return 0
+  fi
+
+  version="${spec#pnpm@}"
+  version="${version%%+*}"
+  if [[ -z "$version" ]]; then
+    return 0
+  fi
+
+  if [[ -x "$(node_dir)/bin/corepack" ]]; then
+    corepack_cmd="$(node_dir)/bin/corepack"
+  elif command -v corepack >/dev/null 2>&1; then
+    corepack_cmd="$(command -v corepack)"
+  fi
+
+  if [[ -n "$corepack_cmd" ]]; then
+    log "Activating repo pnpm ${version}"
+    "$corepack_cmd" prepare "pnpm@${version}" --activate >/dev/null 2>&1 || true
+    detect_pnpm_cmd || true
+  fi
+}
+
 install_node() {
   local os
   local arch
   local url
   local tmp
   local dir
-  local current_major
   local base_url
   local tarball
   local expected_sha
@@ -380,12 +758,14 @@ install_node() {
   arch="$(arch_detect)"
   dir="$(node_dir)"
 
-  if [[ -x "$(node_bin)" ]]; then
-    current_major="$("$(node_bin)" -v 2>/dev/null | tr -d 'v' | cut -d'.' -f1 || echo "")"
-    if [[ -n "$current_major" && "$current_major" -ge 22 ]]; then
-      emit_json "{\"event\":\"step\",\"name\":\"node\",\"status\":\"skip\",\"path\":\"${dir//\"/\\\\\\\"}\"}"
-      return
-    fi
+  if [[ "$os" == "linux" ]] && command -v apk >/dev/null 2>&1 && is_musl_linux; then
+    install_alpine_node
+    return
+  fi
+
+  if linked_node_is_usable; then
+    emit_json "{\"event\":\"step\",\"name\":\"node\",\"status\":\"skip\",\"path\":\"${dir//\"/\\\\\\\"}\"}"
+    return
   fi
 
   emit_json "{\"event\":\"step\",\"name\":\"node\",\"status\":\"start\",\"version\":\"${NODE_VERSION}\"}"
@@ -419,8 +799,12 @@ install_node() {
 
   ln -sfn "$dir" "${PREFIX}/tools/node"
 
-  if ! "$(node_bin)" -e "require('node:sqlite')" >/dev/null 2>&1; then
-    fail "Installed Node ${NODE_VERSION} is missing node:sqlite; re-run with --node-version 22.22.0 (or newer)"
+  if ! linked_node_is_usable; then
+    local installed_version
+    local required_version
+    installed_version="$("$(node_bin)" -v 2>/dev/null || echo unknown)"
+    required_version="$(required_node_version)"
+    fail "Installed Node ${NODE_VERSION} must provide Node >= ${required_version} with node:sqlite; found ${installed_version}. Re-run with --node-version 22.22.0 (or newer)"
   fi
   emit_json "{\"event\":\"step\",\"name\":\"node\",\"status\":\"ok\",\"version\":\"${NODE_VERSION}\"}"
 }
@@ -448,7 +832,7 @@ ensure_pnpm() {
 
   emit_json "{\"event\":\"step\",\"name\":\"pnpm\",\"status\":\"start\",\"method\":\"npm\"}"
   log "Installing pnpm via npm..."
-  SHARP_IGNORE_GLOBAL_LIBVIPS="$SHARP_IGNORE_GLOBAL_LIBVIPS" "$(npm_bin)" install -g --prefix "$PREFIX" pnpm@11
+  "$(npm_bin)" install -g --prefix "$PREFIX" pnpm@11
   detect_pnpm_cmd || true
   emit_json "{\"event\":\"step\",\"name\":\"pnpm\",\"status\":\"ok\"}"
   return 0
@@ -486,12 +870,108 @@ fix_npm_prefix_if_needed() {
   log "Configured npm prefix to ${target}"
 }
 
+resolve_npm_config_path() {
+  local raw="$1"
+  if [[ -z "$raw" || "$raw" == "null" || "$raw" == "undefined" ]]; then
+    return 1
+  fi
+  if [[ "$raw" == \~/* && -n "${HOME:-}" ]]; then
+    printf '%s\n' "${HOME}/${raw#"~/"}"
+    return 0
+  fi
+  if [[ "$raw" == "\${HOME}/"* && -n "${HOME:-}" ]]; then
+    printf '%s\n' "${HOME}/${raw#"\${HOME}/"}"
+    return 0
+  fi
+  printf '%s\n' "$raw"
+}
+
+npm_config_file_has_key() {
+  local file="$1"
+  local key="$2"
+  [[ -f "$file" ]] || return 1
+  grep -Eiq "^[[:space:]]*${key}[[:space:]]*=" "$file"
+}
+
+npm_command_path() {
+  local npm_cmd="$1"
+  local npm_path="$npm_cmd"
+  if [[ "$npm_path" != */* ]]; then
+    npm_path="$(command -v "$npm_cmd" 2>/dev/null)" || return 1
+  fi
+  if command -v node >/dev/null 2>&1; then
+    node -e 'const fs = require("node:fs"); console.log(fs.realpathSync(process.argv[1]));' "$npm_path" 2>/dev/null && return 0
+  fi
+  printf '%s\n' "$npm_path"
+}
+
+npm_builtin_config_path() {
+  local npm_cmd="$1"
+  local npm_path
+  npm_path="$(npm_command_path "$npm_cmd")" || return 1
+  local npm_root
+  npm_root="$(cd "$(dirname "$npm_path")/.." >/dev/null 2>&1 && pwd -P)" || return 1
+  printf '%s\n' "${npm_root}/npmrc"
+}
+
+npm_config_has_raw_key() {
+  local npm_cmd="$1"
+  local key="$2"
+  local raw=""
+  local file=""
+  local -a files=()
+
+  raw="${NPM_CONFIG_USERCONFIG:-${npm_config_userconfig:-}}"
+  if [[ -n "$raw" ]]; then
+    file="$(resolve_npm_config_path "$raw" 2>/dev/null || true)"
+    [[ -n "$file" ]] && files+=("$file")
+  elif [[ -n "${HOME:-}" ]]; then
+    files+=("${HOME}/.npmrc")
+  fi
+
+  raw="${NPM_CONFIG_GLOBALCONFIG:-${npm_config_globalconfig:-}}"
+  if [[ -n "$raw" ]]; then
+    file="$(resolve_npm_config_path "$raw" 2>/dev/null || true)"
+    [[ -n "$file" ]] && files+=("$file")
+  fi
+
+  raw="$(env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$npm_cmd" config get globalconfig --global 2>/dev/null || true)"
+  file="$(resolve_npm_config_path "$raw" 2>/dev/null || true)"
+  [[ -n "$file" ]] && files+=("$file")
+
+  file="$(npm_builtin_config_path "$npm_cmd" 2>/dev/null || true)"
+  [[ -n "$file" ]] && files+=("$file")
+
+  for file in "${files[@]}"; do
+    if npm_config_file_has_key "$file" "$key"; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 install_openclaw() {
   local requested="${OPENCLAW_VERSION:-latest}"
+  if is_openclaw_source_package_install_spec "$requested"; then
+    fail "npm installs do not support OpenClaw GitHub source targets like '${requested}'. Use --install-method git --version main, latest, beta, an exact version, or a built .tgz package."
+  fi
+  local freshness_flag="--min-release-age=0"
+  local min_release_age=""
+  min_release_age="$(env -u NPM_CONFIG_BEFORE -u npm_config_before "$(npm_bin)" config get min-release-age --global 2>/dev/null || true)"
+  if npm_config_has_raw_key "$(npm_bin)" "min-release-age"; then
+    freshness_flag="--min-release-age=0"
+  elif [[ -z "$min_release_age" || "$min_release_age" == "null" || "$min_release_age" == "undefined" ]]; then
+    local before_value=""
+    before_value="$(env -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$(npm_bin)" config get before --global 2>/dev/null || true)"
+    if [[ -n "$before_value" && "$before_value" != "null" && "$before_value" != "undefined" ]]; then
+      freshness_flag="--before=$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')"
+    fi
+  fi
   local npm_args=(
     --loglevel "$NPM_LOGLEVEL"
     --no-fund
     --no-audit
+    "$freshness_flag"
   )
   emit_json "{\"event\":\"step\",\"name\":\"openclaw\",\"status\":\"start\",\"version\":\"${requested}\"}"
   log "Installing OpenClaw (${requested})..."
@@ -500,14 +980,14 @@ install_openclaw() {
   fi
 
   if [[ "${requested}" == "latest" ]]; then
-    if ! SHARP_IGNORE_GLOBAL_LIBVIPS="$SHARP_IGNORE_GLOBAL_LIBVIPS" "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@latest"; then
+    if ! env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@latest"; then
       log "npm install openclaw@latest failed; retrying openclaw@next"
       emit_json "{\"event\":\"step\",\"name\":\"openclaw\",\"status\":\"retry\",\"version\":\"next\"}"
-      SHARP_IGNORE_GLOBAL_LIBVIPS="$SHARP_IGNORE_GLOBAL_LIBVIPS" "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@next"
+      env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@next"
       requested="next"
     fi
   else
-    SHARP_IGNORE_GLOBAL_LIBVIPS="$SHARP_IGNORE_GLOBAL_LIBVIPS" "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@${requested}"
+    env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@${requested}"
   fi
 
   mkdir -p "${PREFIX}/bin"
@@ -588,18 +1068,22 @@ install_openclaw_from_git() {
     git clone "$repo_url" "$repo_dir"
   fi
 
-  if [[ "$GIT_UPDATE" == "1" ]]; then
-    if [[ -z "$(git -C "$repo_dir" status --porcelain 2>/dev/null || true)" ]]; then
-      git -C "$repo_dir" pull --rebase || true
-    else
-      log "Repo is dirty; skipping git pull"
-    fi
+  local git_ref
+  git_ref="$(resolve_git_openclaw_ref)"
+  if [[ -z "$(git -C "$repo_dir" status --porcelain 2>/dev/null || true)" ]]; then
+    log "Using git ref: ${git_ref}"
+    checkout_git_openclaw_ref "$repo_dir" "$git_ref"
+  else
+    log "Repo is dirty; skipping git checkout/update"
   fi
 
   cleanup_legacy_submodules "$repo_dir"
   ensure_pnpm_git_prepare_allowlist "$repo_dir"
+  activate_repo_pnpm_version "$repo_dir"
 
-  SHARP_IGNORE_GLOBAL_LIBVIPS="$SHARP_IGNORE_GLOBAL_LIBVIPS" run_pnpm -C "$repo_dir" install
+  local install_lockfile_flag
+  install_lockfile_flag="$(git_install_lockfile_flag "$repo_dir" "$git_ref")"
+  CI="${CI:-true}" run_pnpm -C "$repo_dir" install "$install_lockfile_flag"
 
   if ! run_pnpm -C "$repo_dir" ui:build; then
     log "UI build failed; continuing (CLI may still work)"

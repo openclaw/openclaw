@@ -1,10 +1,19 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { validateExecApprovalRequestParams } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { registerLegacyContextEngine } from "../../context-engine/legacy.registration.js";
+import {
+  clearContextEngineRuntimeQuarantine,
+  clearContextEnginesForOwner,
+  registerContextEngineForOwner,
+  resolveContextEngine,
+} from "../../context-engine/registry.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js";
 import {
@@ -12,15 +21,16 @@ import {
   buildSystemRunApprovalEnvBinding,
 } from "../../infra/system-run-approval-binding.js";
 import { resetLogger, setLoggerOverride } from "../../logging.js";
+import { asOptionalRecord } from "../../shared/record-coerce.js";
 import { projectRecentChatDisplayMessages } from "../chat-display-projection.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
-import { validateExecApprovalRequestParams } from "../protocol/index.js";
 import { waitForAgentJob } from "./agent-job.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
   augmentChatHistoryWithCanvasBlocks,
+  dropPreSessionStartAnnouncePairs,
   resolveEffectiveChatHistoryMaxChars,
   sanitizeChatHistoryMessages,
   sanitizeChatSendMessageInput,
@@ -75,6 +85,7 @@ describe("waitForAgentJob", () => {
     startedAt: number;
     endedAt: number;
     aborted?: boolean;
+    stopReason?: string;
   }) {
     const runId = `${params.runIdPrefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const waitPromise = waitForAgentJob({ runId, timeoutMs: 1_000 });
@@ -87,7 +98,12 @@ describe("waitForAgentJob", () => {
     emitAgentEvent({
       runId,
       stream: "lifecycle",
-      data: { phase: "end", endedAt: params.endedAt, aborted: params.aborted },
+      data: {
+        phase: "end",
+        endedAt: params.endedAt,
+        aborted: params.aborted,
+        ...(params.stopReason ? { stopReason: params.stopReason } : {}),
+      },
     });
 
     return waitPromise;
@@ -107,7 +123,13 @@ describe("waitForAgentJob", () => {
       emitAgentEvent({
         runId,
         stream: "lifecycle",
-        data: { phase: "end", endedAt: 200, aborted: true },
+        data: {
+          phase: "end",
+          endedAt: 200,
+          aborted: true,
+          timeoutPhase: "provider",
+          providerStarted: true,
+        },
       });
 
       await vi.advanceTimersByTimeAsync(15_000);
@@ -116,6 +138,8 @@ describe("waitForAgentJob", () => {
         status: "timeout",
         startedAt: 100,
         endedAt: 200,
+        timeoutPhase: "provider",
+        providerStarted: true,
       });
     } finally {
       vi.useRealTimers();
@@ -132,6 +156,53 @@ describe("waitForAgentJob", () => {
       status: "ok",
       startedAt: 300,
       endedAt: 400,
+    });
+  });
+
+  it("maps aborted stop reasons to error snapshots instead of ok", async () => {
+    const snapshot = await runLifecycleScenario({
+      runIdPrefix: "run-aborted-stop-reason",
+      startedAt: 410,
+      endedAt: 420,
+      stopReason: "aborted",
+    });
+    expectRecordFields(snapshot, {
+      status: "error",
+      startedAt: 410,
+      endedAt: 420,
+      stopReason: "aborted",
+      error: "agent run aborted",
+    });
+  });
+
+  it("maps blocked lifecycle end events to error snapshots", async () => {
+    const runId = `run-blocked-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const waitPromise = waitForAgentJob({ runId, timeoutMs: 1_000 });
+
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 450 },
+    });
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        startedAt: 450,
+        endedAt: 500,
+        livenessState: "blocked",
+        error: "Context overflow: prompt too large for the model.",
+      },
+    });
+
+    const snapshot = await waitPromise;
+    expectRecordFields(snapshot, {
+      status: "error",
+      startedAt: 450,
+      endedAt: 500,
+      error: "Context overflow: prompt too large for the model.",
+      livenessState: "blocked",
     });
   });
 
@@ -271,6 +342,52 @@ describe("waitForAgentJob", () => {
     expect(fresh?.status).toBe("ok");
     expect(fresh?.startedAt).toBe(200);
     expect(fresh?.endedAt).toBe(210);
+  });
+
+  it("surfaces pending error diagnostics when outer timeout fires before error grace period", async () => {
+    // Preserve the retry grace: the caller timeout may carry the pending error
+    // reason, but it must not cache a terminal error before a later start can
+    // cancel the pending snapshot.
+    vi.useFakeTimers();
+    try {
+      const runId = `run-pending-error-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const waitPromise = waitForAgentJob({ runId, timeoutMs: 5_000 });
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "error", error: "transient-auth-failure" },
+      });
+
+      await vi.advanceTimersByTimeAsync(6_000);
+
+      const result = await waitPromise;
+      expect(result).not.toBeNull();
+      expect(result?.status).toBe("timeout");
+      expect(result?.error).toBe("transient-auth-failure");
+      expect(result?.pendingError).toBe(true);
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 12_000 },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "end", startedAt: 12_000, endedAt: 12_100 },
+      });
+
+      const recovered = await waitForAgentJob({ runId, timeoutMs: 1_000 });
+      expectRecordFields(recovered, {
+        status: "ok",
+        startedAt: 12_000,
+        endedAt: 12_100,
+      });
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -460,6 +577,73 @@ describe("sanitizeChatHistoryMessages", () => {
     ]);
   });
 
+  it("strips internal reasoning replay metadata from chat history", () => {
+    const result = sanitizeChatHistoryMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "Need a tool.",
+            thinkingSignature: "large-provider-payload",
+            openclawReasoningReplay: {
+              v: 1,
+              source: "openai-responses",
+              provider: "openai-codex",
+              api: "openai-codex-responses",
+              model: "gpt-5.5",
+            },
+          },
+          { type: "text", text: "Checking." },
+        ],
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "Need a tool.",
+          },
+          { type: "text", text: "Checking." },
+        ],
+        timestamp: 1,
+      },
+    ]);
+  });
+
+  it("preserves OpenAI-compatible assistant usage aliases for display context", () => {
+    const result = sanitizeChatHistoryMessages([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "done" }],
+        usage: {
+          prompt_tokens: 11,
+          completion_tokens: 1,
+          total_tokens: 12,
+          provider_payload: "discard",
+        },
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "done" }],
+        usage: {
+          prompt_tokens: 11,
+          completion_tokens: 1,
+          total_tokens: 12,
+        },
+        timestamp: 1,
+      },
+    ]);
+  });
+
   it("drops commentary-only assistant entries when phase exists only in textSignature", () => {
     const result = sanitizeChatHistoryMessages([
       {
@@ -581,6 +765,82 @@ describe("projectRecentChatDisplayMessages", () => {
     ]);
   });
 
+  it("drops duplicate ACP gateway-injected assistant replies from chat history", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "good morning" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "acp-runtime",
+        content: [{ type: "text", text: "Good morning." }],
+        timestamp: 2,
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "gateway-injected",
+        content: [{ type: "text", text: "Good morning." }],
+        idempotencyKey: "run-1",
+        timestamp: 3,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "good morning" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "acp-runtime",
+        content: [{ type: "text", text: "Good morning." }],
+        timestamp: 2,
+      },
+    ]);
+  });
+
+  it("keeps gateway-injected assistant replies when they are not duplicate ACP text", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "acp-runtime",
+        content: [{ type: "text", text: "First answer." }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "gateway-injected",
+        content: [{ type: "text", text: "Second answer." }],
+        timestamp: 2,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "acp-runtime",
+        content: [{ type: "text", text: "First answer." }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "gateway-injected",
+        content: [{ type: "text", text: "Second answer." }],
+        timestamp: 2,
+      },
+    ]);
+  });
+
   it("applies history limits after dropping display-hidden messages", () => {
     const result = projectRecentChatDisplayMessages(
       [
@@ -588,11 +848,476 @@ describe("projectRecentChatDisplayMessages", () => {
         { role: "assistant", content: "older answer", timestamp: 2 },
         { role: "assistant", content: "NO_REPLY", timestamp: 3 },
         { role: "assistant", content: "ANNOUNCE_SKIP", timestamp: 4 },
+        {
+          role: "custom",
+          customType: "openclaw.runtime-context",
+          content: "hidden runtime context",
+          display: false,
+          timestamp: 5,
+        },
       ],
       { maxMessages: 1 },
     );
 
     expect(result).toEqual([{ role: "assistant", content: "older answer", timestamp: 2 }]);
+  });
+
+  it("keeps media-only user messages while dropping empty text-only user messages", () => {
+    const mediaOnly = {
+      role: "user",
+      content: "",
+      MediaPath: "/tmp/openclaw/user-upload.png",
+      timestamp: 1,
+    };
+    const multiMediaOnly = {
+      role: "user",
+      content: "",
+      MediaPaths: ["/tmp/openclaw/first.png", "/tmp/openclaw/second.jpg"],
+      timestamp: 2,
+    };
+    const result = projectRecentChatDisplayMessages([
+      mediaOnly,
+      multiMediaOnly,
+      { role: "user", content: "", timestamp: 3 },
+    ]);
+
+    expect(result).toEqual([mediaOnly, multiMediaOnly]);
+  });
+
+  it("merges delayed TTS supplements into their original assistant message", () => {
+    const visibleText = "**Here** is the answer.";
+    const spokenText = "Here is the answer.";
+    const textSha256 = createHash("sha256").update(visibleText).digest("hex");
+
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "first" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: visibleText }],
+        timestamp: 2,
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "second" }],
+        timestamp: 3,
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Audio reply" },
+          {
+            type: "attachment",
+            attachment: {
+              url: "/tmp/tts.mp3",
+              kind: "audio",
+              label: "tts.mp3",
+              mimeType: "audio/mpeg",
+            },
+          },
+        ],
+        openclawTtsSupplement: { textSha256, spokenText },
+        timestamp: 4,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "first" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: visibleText },
+          {
+            type: "attachment",
+            attachment: {
+              url: "/tmp/tts.mp3",
+              kind: "audio",
+              label: "tts.mp3",
+              mimeType: "audio/mpeg",
+            },
+          },
+        ],
+        timestamp: 2,
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "second" }],
+        timestamp: 3,
+      },
+    ]);
+  });
+
+  it("merges delayed TTS supplements when directive tags are stripped for display", () => {
+    const rawVisibleText = "[[reply_to_current]]Visible answer.";
+    const projectedVisibleText = "Visible answer.";
+    const textSha256 = createHash("sha256").update(projectedVisibleText).digest("hex");
+
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: rawVisibleText }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Audio reply" },
+          {
+            type: "attachment",
+            attachment: {
+              url: "/tmp/tts.mp3",
+              kind: "audio",
+              label: "tts.mp3",
+              mimeType: "audio/mpeg",
+            },
+          },
+        ],
+        openclawTtsSupplement: { textSha256 },
+        timestamp: 2,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: projectedVisibleText },
+          {
+            type: "attachment",
+            attachment: {
+              url: "/tmp/tts.mp3",
+              kind: "audio",
+              label: "tts.mp3",
+              mimeType: "audio/mpeg",
+            },
+          },
+        ],
+        timestamp: 1,
+      },
+    ]);
+  });
+
+  it("merges delayed TTS supplements before display truncation", () => {
+    const projectedVisibleText = "Visible answer ".repeat(8).trim();
+    const rawVisibleText = `[[reply_to_current]]${projectedVisibleText}`;
+    const textSha256 = createHash("sha256").update(projectedVisibleText).digest("hex");
+
+    const result = projectRecentChatDisplayMessages(
+      [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: rawVisibleText }],
+          timestamp: 1,
+        },
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "Audio reply" },
+            {
+              type: "attachment",
+              attachment: {
+                url: "/tmp/tts.mp3",
+                kind: "audio",
+                label: "tts.mp3",
+                mimeType: "audio/mpeg",
+              },
+            },
+          ],
+          openclawTtsSupplement: { textSha256 },
+          timestamp: 2,
+        },
+      ],
+      { maxChars: 24 },
+    );
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: `${projectedVisibleText.slice(0, 24)}\n...(truncated)...` },
+          {
+            type: "attachment",
+            attachment: {
+              url: "/tmp/tts.mp3",
+              kind: "audio",
+              label: "tts.mp3",
+              mimeType: "audio/mpeg",
+            },
+          },
+        ],
+        timestamp: 1,
+      },
+    ]);
+  });
+
+  it("does not merge visible TTS finals into an older identical assistant message", () => {
+    const visibleText = "Done.";
+    const textSha256 = createHash("sha256").update(visibleText).digest("hex");
+    const ttsSupplement = { textSha256 };
+
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: visibleText }],
+        timestamp: 1,
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "again" }],
+        timestamp: 2,
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: visibleText },
+          {
+            type: "attachment",
+            attachment: {
+              url: "/tmp/tts.mp3",
+              kind: "audio",
+              label: "tts.mp3",
+              mimeType: "audio/mpeg",
+            },
+          },
+        ],
+        openclawTtsSupplement: ttsSupplement,
+        timestamp: 3,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: visibleText }],
+        timestamp: 1,
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "again" }],
+        timestamp: 2,
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: visibleText },
+          {
+            type: "attachment",
+            attachment: {
+              url: "/tmp/tts.mp3",
+              kind: "audio",
+              label: "tts.mp3",
+              mimeType: "audio/mpeg",
+            },
+          },
+        ],
+        openclawTtsSupplement: ttsSupplement,
+        timestamp: 3,
+      },
+    ]);
+  });
+});
+
+describe("dropPreSessionStartAnnouncePairs (#85648)", () => {
+  const announceProvenance = {
+    kind: "inter_session",
+    sourceSessionKey: "agent:main:subagent:child",
+    sourceChannel: "internal",
+    sourceTool: "subagent_announce",
+  };
+  const cutoff = 1_700_000_000_000;
+
+  it("drops a pre-cutoff announce user message together with its adjacent assistant reply", () => {
+    const messages = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "real prior" }],
+        __openclaw: { seq: 1, recordTimestampMs: cutoff - 86_400_000 },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "real reply" }],
+        __openclaw: { seq: 2, recordTimestampMs: cutoff - 86_400_000 },
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "[Inter-session message] sourceTool=subagent_announce" }],
+        provenance: announceProvenance,
+        __openclaw: { seq: 3, recordTimestampMs: cutoff - 1_000 },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "fanfic lore-bible summary" }],
+        __openclaw: { seq: 4, recordTimestampMs: cutoff - 1_000 },
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "fresh user turn" }],
+        __openclaw: { seq: 5, recordTimestampMs: cutoff + 5_000 },
+      },
+    ];
+    const out = dropPreSessionStartAnnouncePairs(messages, cutoff);
+    expect(out.map((m) => asOptionalRecord(asOptionalRecord(m)?.["__openclaw"])?.["seq"])).toEqual([
+      1, 2, 5,
+    ]);
+  });
+
+  it("drops imported CLI-shaped announce pairs using timestamp and text fallback", () => {
+    const messages = [
+      {
+        role: "user",
+        content: [
+          "[Inter-session message] sourceSession=agent:main:subagent:child sourceChannel=internal sourceTool=subagent_announce",
+          "This content was routed by OpenClaw from another session or internal tool.",
+        ].join("\n"),
+        timestamp: cutoff - 1_000,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "stale imported assistant reply" }],
+        timestamp: cutoff - 500,
+      },
+      {
+        role: "user",
+        content: "fresh imported turn",
+        timestamp: cutoff + 1_000,
+      },
+    ];
+    const out = dropPreSessionStartAnnouncePairs(messages, cutoff);
+    expect(out).toEqual([messages[2]]);
+  });
+
+  it("keeps a mid-session announce pair whose timestamp is at or after the cutoff", () => {
+    const messages = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "[Inter-session message] sourceTool=subagent_announce" }],
+        provenance: announceProvenance,
+        __openclaw: { seq: 1, recordTimestampMs: cutoff + 1_000 },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "current-session reply" }],
+        __openclaw: { seq: 2, recordTimestampMs: cutoff + 2_000 },
+      },
+    ];
+    const out = dropPreSessionStartAnnouncePairs(messages, cutoff);
+    expect(out).toEqual(messages);
+  });
+
+  it("keeps an adjacent assistant reply when only the announce user predates the cutoff", () => {
+    const messages = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "[Inter-session message] sourceTool=subagent_announce" }],
+        provenance: announceProvenance,
+        __openclaw: { seq: 1, recordTimestampMs: cutoff - 1_000 },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "fresh-session reply" }],
+        __openclaw: { seq: 2, recordTimestampMs: cutoff + 1_000 },
+      },
+    ];
+    const out = dropPreSessionStartAnnouncePairs(messages, cutoff);
+    expect(out).toEqual([messages[1]]);
+  });
+
+  it("keeps an adjacent assistant reply when its record timestamp is missing", () => {
+    const messages = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "[Inter-session message] sourceTool=subagent_announce" }],
+        provenance: announceProvenance,
+        __openclaw: { seq: 1, recordTimestampMs: cutoff - 1_000 },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "timestampless reply" }],
+        __openclaw: { seq: 2 },
+      },
+    ];
+    const out = dropPreSessionStartAnnouncePairs(messages, cutoff);
+    expect(out).toEqual([messages[1]]);
+  });
+
+  it("returns the input unchanged when sessionStartedAt is undefined", () => {
+    const messages = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "[Inter-session message] sourceTool=subagent_announce" }],
+        provenance: announceProvenance,
+        __openclaw: { seq: 1, recordTimestampMs: cutoff - 1_000 },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "would-be-stripped reply" }],
+        __openclaw: { seq: 2, recordTimestampMs: cutoff - 1_000 },
+      },
+    ];
+    const out = dropPreSessionStartAnnouncePairs(messages, undefined);
+    expect(out).toBe(messages);
+  });
+
+  it("drops a trailing pre-cutoff announce user message even with no assistant reply", () => {
+    const messages = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "real prior" }],
+        __openclaw: { seq: 1, recordTimestampMs: cutoff + 1_000 },
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "[Inter-session message] sourceTool=subagent_announce" }],
+        provenance: announceProvenance,
+        __openclaw: { seq: 2, recordTimestampMs: cutoff - 1_000 },
+      },
+    ];
+    const out = dropPreSessionStartAnnouncePairs(messages, cutoff);
+    expect(out.map((m) => asOptionalRecord(asOptionalRecord(m)?.["__openclaw"])?.["seq"])).toEqual([
+      1,
+    ]);
+  });
+
+  it("does not drop a normal pre-cutoff user message that is not a subagent_announce", () => {
+    const messages = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "older user turn" }],
+        __openclaw: { seq: 1, recordTimestampMs: cutoff - 1_000 },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "older reply" }],
+        __openclaw: { seq: 2, recordTimestampMs: cutoff - 1_000 },
+      },
+    ];
+    const out = dropPreSessionStartAnnouncePairs(messages, cutoff);
+    expect(out).toEqual(messages);
+  });
+
+  it("does not drop a pre-cutoff announce when its record timestamp is missing", () => {
+    const messages = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "[Inter-session message] sourceTool=subagent_announce" }],
+        provenance: announceProvenance,
+        __openclaw: { seq: 1 },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "reply" }],
+        __openclaw: { seq: 2 },
+      },
+    ];
+    const out = dropPreSessionStartAnnouncePairs(messages, cutoff);
+    expect(out).toEqual(messages);
   });
 });
 
@@ -765,12 +1490,13 @@ describe("exec approval handlers", () => {
     handlers: ExecApprovalHandlers;
     id: string;
     respond: ReturnType<typeof vi.fn>;
+    client?: ExecApprovalGetArgs["client"];
   }) {
     return params.handlers["exec.approval.get"]({
       params: { id: params.id } as ExecApprovalGetArgs["params"],
       respond: params.respond as unknown as ExecApprovalGetArgs["respond"],
       context: {} as ExecApprovalGetArgs["context"],
-      client: null,
+      client: params.client ?? null,
       req: { id: "req-get", type: "req", method: "exec.approval.get" },
       isWebchatConnect: execApprovalNoop,
     });
@@ -779,12 +1505,13 @@ describe("exec approval handlers", () => {
   async function listExecApprovals(params: {
     handlers: ExecApprovalHandlers;
     respond: ReturnType<typeof vi.fn>;
+    client?: ExecApprovalResolveArgs["client"];
   }) {
     return params.handlers["exec.approval.list"]({
       params: {} as never,
       respond: params.respond as never,
       context: {} as never,
-      client: null,
+      client: params.client ?? null,
       req: { id: "req-list", type: "req", method: "exec.approval.list" },
       isWebchatConnect: execApprovalNoop,
     });
@@ -795,6 +1522,7 @@ describe("exec approval handlers", () => {
     respond: ReturnType<typeof vi.fn>;
     context: { broadcast: (event: string, payload: unknown) => void };
     params?: Record<string, unknown>;
+    client?: ExecApprovalRequestArgs["client"];
   }) {
     const requestParams = {
       ...defaultExecApprovalRequestParams,
@@ -838,7 +1566,7 @@ describe("exec approval handlers", () => {
         hasExecApprovalClients: () => true,
         ...params.context,
       }),
-      client: null,
+      client: params.client ?? null,
       req: { id: "req-1", type: "req", method: "exec.approval.request" },
       isWebchatConnect: execApprovalNoop,
     });
@@ -850,6 +1578,7 @@ describe("exec approval handlers", () => {
     decision?: "allow-once" | "allow-always" | "deny";
     respond: ReturnType<typeof vi.fn>;
     context: { broadcast: (event: string, payload: unknown) => void };
+    client?: ExecApprovalResolveArgs["client"];
   }) {
     return params.handlers["exec.approval.resolve"]({
       params: {
@@ -858,7 +1587,7 @@ describe("exec approval handlers", () => {
       } as ExecApprovalResolveArgs["params"],
       respond: params.respond as unknown as ExecApprovalResolveArgs["respond"],
       context: toExecApprovalResolveContext(params.context),
-      client: null,
+      client: params.client ?? null,
       req: { id: "req-2", type: "req", method: "exec.approval.resolve" },
       isWebchatConnect: execApprovalNoop,
     });
@@ -915,7 +1644,7 @@ describe("exec approval handlers", () => {
     });
     const respond = vi.fn();
     const context = {
-      broadcast: (_event: string, _payload: unknown) => {},
+      broadcast: (eventValue: string, _payload: unknown) => {},
       hasExecApprovalClients: () => false,
     };
     return {
@@ -1003,6 +1732,31 @@ describe("exec approval handlers", () => {
     expect(mockCallArg(respond)).toBe(false);
     expect(mockCallArg(respond, 0, 1)).toBeUndefined();
     expectRecordFields(mockCallArg(respond, 0, 2), { message: "command is required" });
+  });
+
+  it("rejects approval requests when the command display would be truncated", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        command: `printf visible # ${"A".repeat(18 * 1024)}\nprintf hidden`,
+        host: "gateway",
+        nodeId: undefined,
+        systemRunPlan: undefined,
+      },
+    });
+
+    expect(mockCallArg(respond)).toBe(false);
+    expect(mockCallArg(respond, 0, 1)).toBeUndefined();
+    expectRecordFields(mockCallArg(respond, 0, 2), {
+      message: "command exceeds exec approval display limit",
+    });
+    expectRecordFields((mockCallArg(respond, 0, 2) as { details?: unknown }).details, {
+      reason: "EXEC_APPROVAL_COMMAND_DISPLAY_LIMIT",
+    });
+    expect(broadcasts).toEqual([]);
   });
 
   it("returns pending approval details for exec.approval.get", async () => {
@@ -1118,6 +1872,83 @@ describe("exec approval handlers", () => {
       context,
     });
     await requestPromise;
+  });
+
+  it("lists and resolves only exec approvals owned by the caller", async () => {
+    const manager = new ExecApprovalManager();
+    const handlers = createExecApprovalHandlers(manager);
+    const context = {
+      broadcast: (eventValue: string, _payload: unknown) => {},
+    };
+    const ownerClient = {
+      connId: "conn-owner",
+      connect: {
+        client: { id: "client-owner" },
+        device: { id: "device-owner" },
+      },
+    } as unknown as ExecApprovalResolveArgs["client"];
+    const otherClient = {
+      connId: "conn-other",
+      connect: {
+        client: { id: "client-other" },
+        device: { id: "device-other" },
+      },
+    } as unknown as ExecApprovalResolveArgs["client"];
+
+    const visible = manager.create({ command: "echo visible" }, 60_000, "approval-abcd-visible");
+    visible.requestedByDeviceId = "device-owner";
+    visible.requestedByConnId = "conn-owner";
+    visible.requestedByClientId = "client-owner";
+    void manager.register(visible, 60_000);
+
+    const hidden = manager.create({ command: "echo hidden" }, 60_000, "approval-abcd-hidden");
+    hidden.requestedByDeviceId = "device-other";
+    hidden.requestedByConnId = "conn-other";
+    hidden.requestedByClientId = "client-other";
+    void manager.register(hidden, 60_000);
+
+    const listRespond = vi.fn();
+    await listExecApprovals({ handlers, respond: listRespond, client: ownerClient });
+    expect(mockCallArg(listRespond)).toBe(true);
+    const approvals = mockCallArg(listRespond, 0, 1) as Array<Record<string, unknown>>;
+    expect(approvals.map((entry) => entry.id)).toEqual(["approval-abcd-visible"]);
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: "approval-abcd",
+      respond: resolveRespond,
+      context,
+      client: ownerClient,
+    });
+    expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(manager.getSnapshot(visible.id)?.decision).toBe("allow-once");
+    expect(manager.getSnapshot(hidden.id)?.decision).toBeUndefined();
+
+    const hiddenRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: hidden.id,
+      respond: hiddenRespond,
+      context,
+      client: ownerClient,
+    });
+    expect(mockCallArg(hiddenRespond)).toBe(false);
+    expectRecordFields(mockCallArg(hiddenRespond, 0, 2), {
+      code: "INVALID_REQUEST",
+      message: "unknown or expired approval id",
+    });
+    expect(manager.getSnapshot(hidden.id)?.decision).toBeUndefined();
+
+    const otherRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: hidden.id,
+      respond: otherRespond,
+      context,
+      client: otherClient,
+    });
+    expect(otherRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
   });
 
   it("returns not found for stale exec.approval.get ids", async () => {
@@ -1525,9 +2356,7 @@ describe("exec approval handlers", () => {
       },
     });
     const { request } = getRequestedExecApprovalPayload(broadcasts);
-    expect(request["commandAnalysis"]).toEqual(
-      expect.objectContaining({ commandCount: 1, nestedCommandCount: 0 }),
-    );
+    expectRecordFields(request["commandAnalysis"], { commandCount: 1, nestedCommandCount: 0 });
     expect(request["commandSpans"]).toBeUndefined();
   });
 
@@ -1549,9 +2378,7 @@ describe("exec approval handlers", () => {
       },
     });
     const { request } = getRequestedExecApprovalPayload(broadcasts);
-    expect(request["commandAnalysis"]).toEqual(
-      expect.objectContaining({ commandCount: 1, nestedCommandCount: 0 }),
-    );
+    expectRecordFields(request["commandAnalysis"], { commandCount: 1, nestedCommandCount: 0 });
     expect(request["commandSpans"]).toBeUndefined();
   });
 
@@ -1670,7 +2497,7 @@ describe("exec approval handlers", () => {
     const handlers = createExecApprovalHandlers(manager);
     const respond = vi.fn();
     const context = {
-      broadcast: (_event: string, _payload: unknown) => {},
+      broadcast: (eventValue: string, _payload: unknown) => {},
     };
 
     const record = manager.create({ command: "echo ok" }, 60_000, "approval-12345678-aaaa");
@@ -1692,7 +2519,7 @@ describe("exec approval handlers", () => {
     const handlers = createExecApprovalHandlers(manager);
     const respond = vi.fn();
     const context = {
-      broadcast: (_event: string, _payload: unknown) => {},
+      broadcast: (eventValue: string, _payload: unknown) => {},
     };
 
     void manager.register(
@@ -1742,7 +2569,7 @@ describe("exec approval handlers", () => {
     const manager = new ExecApprovalManager();
     const handlers = createExecApprovalHandlers(manager);
     const context = {
-      broadcast: (_event: string, _payload: unknown) => {},
+      broadcast: (eventValue: string, _payload: unknown) => {},
       hasExecApprovalClients: () => true,
     };
     const respondOne = vi.fn();
@@ -1951,6 +2778,57 @@ describe("exec approval handlers", () => {
 
     manager.resolve("approval-ios-push", "allow-once");
     await requestPromise;
+  });
+
+  it("does not count iOS push delivery to hidden approval targets as a route", async () => {
+    const iosPushDelivery = {
+      handleRequested: vi.fn(
+        async (
+          _request: unknown,
+          opts?: {
+            isTargetVisible?: (target: { deviceId: string; scopes: readonly string[] }) => boolean;
+          },
+        ) =>
+          opts?.isTargetVisible?.({
+            deviceId: "device-other",
+            scopes: ["operator.approvals"],
+          }) ?? true,
+      ),
+      handleResolved: vi.fn(async () => {}),
+      handleExpired: vi.fn(async () => {}),
+    };
+    const { manager, handlers, respond, context } = createForwardingExecApprovalFixture({
+      iosPushDelivery,
+    });
+    const expireSpy = vi.spyOn(manager, "expire");
+
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      client: {
+        connId: "conn-owner",
+        connect: {
+          client: { id: "client-owner" },
+          device: { id: "device-owner" },
+          scopes: ["operator.approvals"],
+        },
+      } as unknown as ExecApprovalRequestArgs["client"],
+      params: {
+        timeoutMs: 60_000,
+        id: "approval-ios-hidden-push",
+        host: "gateway",
+      },
+    });
+
+    expect(iosPushDelivery.handleRequested).toHaveBeenCalledTimes(1);
+    expect(expireSpy).toHaveBeenCalledWith("approval-ios-hidden-push", "no-approval-route");
+    expect(lastMockCallArg(respond)).toBe(true);
+    expectRecordFields(lastMockCallArg(respond, 1), {
+      id: "approval-ios-hidden-push",
+      decision: null,
+    });
+    expect(lastMockCallArg(respond, 2)).toBeUndefined();
   });
 
   it("sends iOS cleanup delivery on resolve", async () => {
@@ -2166,6 +3044,7 @@ describe("gateway healthHandlers.status scope handling", () => {
 describe("gateway healthHandlers.health cache freshness", () => {
   let healthHandlers: typeof import("./health.js").healthHandlers;
   let pricingState: typeof import("../model-pricing-cache-state.js");
+  const contextEngineTestOwner = "plugin:health-test";
 
   beforeAll(async () => {
     ({ healthHandlers } = await import("./health.js"));
@@ -2174,10 +3053,15 @@ describe("gateway healthHandlers.health cache freshness", () => {
 
   beforeEach(() => {
     pricingState.clearGatewayModelPricingCacheState();
+    registerLegacyContextEngine();
+    clearContextEnginesForOwner(contextEngineTestOwner);
+    clearContextEngineRuntimeQuarantine();
   });
 
   afterEach(() => {
     pricingState.clearGatewayModelPricingCacheState();
+    clearContextEnginesForOwner(contextEngineTestOwner);
+    clearContextEngineRuntimeQuarantine();
   });
 
   it("refreshes cached health when runtime channel lifecycle has changed", async () => {
@@ -2379,6 +3263,83 @@ describe("gateway healthHandlers.health cache freshness", () => {
       probe: false,
       includeSensitive: false,
     });
+  });
+
+  it("merges live context-engine quarantine state into cached health responses", async () => {
+    const engineId = `health-context-engine-${Date.now()}`;
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    registerContextEngineForOwner(
+      engineId,
+      () => ({
+        info: { id: "lcm", name: "Lossless Claw Memory" },
+        ingest: async () => ({ ingested: false }),
+        assemble: async () => {
+          throw new Error("lcm transcript store is corrupt");
+        },
+        compact: async () => ({ ok: true, compacted: false }),
+      }),
+      contextEngineTestOwner,
+    );
+    try {
+      const contextEngine = await resolveContextEngine({
+        plugins: { slots: { contextEngine: engineId } },
+      } as OpenClawConfig);
+      await contextEngine.assemble({ sessionId: "s1", messages: [] });
+
+      const cached = {
+        ok: true,
+        ts: Date.now(),
+        durationMs: 1,
+        channels: {},
+        channelOrder: [],
+        channelLabels: {},
+        heartbeatSeconds: 0,
+        defaultAgentId: "main",
+        agents: [],
+        sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+      };
+      const respond = vi.fn();
+      const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
+
+      await healthHandlers.health({
+        req: {} as never,
+        params: {} as never,
+        respond: respond as never,
+        context: {
+          getHealthCache: () => cached,
+          refreshHealthSnapshot,
+          getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+          logHealth: { error: vi.fn() },
+        } as never,
+        client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+        isWebchatConnect: () => false,
+      });
+
+      const payload = mockCallArg(respond, 0, 1) as
+        | {
+            contextEngines?: {
+              quarantined?: Array<{
+                engineId?: string;
+                owner?: string;
+                operation?: string;
+                reason?: string;
+                failedAt?: number;
+              }>;
+            };
+          }
+        | undefined;
+      expect(payload?.contextEngines?.quarantined).toHaveLength(1);
+      expect(payload?.contextEngines?.quarantined?.[0]).toMatchObject({
+        engineId,
+        owner: contextEngineTestOwner,
+        operation: "assemble",
+        reason: "lcm transcript store is corrupt",
+      });
+      expect(typeof payload?.contextEngines?.quarantined?.[0]?.failedAt).toBe("number");
+      expect(mockCallArg(respond, 0, 3)).toEqual({ cached: true });
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 
   it("refreshes cached health when a runtime account is missing from the cached account summary", async () => {

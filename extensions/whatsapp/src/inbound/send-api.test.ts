@@ -2,12 +2,16 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { AnyMessageContent, MiscMessageGenerationOptions, WAMessage } from "baileys";
-import { listMessageReceiptPlatformIds } from "openclaw/plugin-sdk/channel-message";
+import { listMessageReceiptPlatformIds } from "openclaw/plugin-sdk/channel-outbound";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveWhatsAppOutboundMentions } from "./outbound-mentions.js";
 import { createWebSendApi } from "./send-api.js";
 
 const recordChannelActivity = vi.hoisted(() => vi.fn());
+const imageOps = vi.hoisted(() => ({
+  getImageMetadata: vi.fn(),
+  resizeToJpeg: vi.fn(),
+}));
 
 vi.mock("openclaw/plugin-sdk/channel-activity-runtime", async () => {
   const actual = await vi.importActual<
@@ -19,11 +23,36 @@ vi.mock("openclaw/plugin-sdk/channel-activity-runtime", async () => {
   };
 });
 
+vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/media-runtime")>(
+    "openclaw/plugin-sdk/media-runtime",
+  );
+  return {
+    ...actual,
+    getImageMetadata: imageOps.getImageMetadata,
+    resizeToJpeg: imageOps.resizeToJpeg,
+  };
+});
+
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null) {
     throw new Error(`${label} was not an object`);
   }
   return value as Record<string, unknown>;
+}
+
+type MockCallSource = {
+  mock: {
+    calls: ArrayLike<ReadonlyArray<unknown>>;
+  };
+};
+
+function requireMockArg(mock: MockCallSource, callIndex: number, argIndex: number, label: string) {
+  const call = mock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`missing ${label} call ${callIndex + 1}`);
+  }
+  return call[argIndex];
 }
 
 describe("createWebSendApi", () => {
@@ -39,6 +68,8 @@ describe("createWebSendApi", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    imageOps.getImageMetadata.mockResolvedValue(null);
+    imageOps.resizeToJpeg.mockRejectedValue(new Error("unexpected thumbnail generation"));
     api = createWebSendApi({
       sock: { sendMessage, sendPresenceUpdate },
       defaultAccountId: "main",
@@ -52,11 +83,21 @@ describe("createWebSendApi", () => {
   }
 
   function requireSendContent(callIndex = 0): Record<string, unknown> {
-    return requireRecord(sendMessage.mock.calls[callIndex]?.[1], "sent message content");
+    return requireRecord(
+      requireMockArg(sendMessage, callIndex, 1, "sent message"),
+      "sent message content",
+    );
   }
 
   function requireSendOptions(callIndex = 0): Record<string, unknown> {
-    return requireRecord(sendMessage.mock.calls[callIndex]?.[2], "sent message options");
+    return requireRecord(
+      requireMockArg(sendMessage, callIndex, 2, "sent message"),
+      "sent message options",
+    );
+  }
+
+  function expectFirstSendJid(jid: string) {
+    expect(requireMockArg(sendMessage, 0, 0, "sent message")).toBe(jid);
   }
 
   function expectSendContentFields(callIndex: number, fields: Record<string, unknown>) {
@@ -73,7 +114,7 @@ describe("createWebSendApi", () => {
   it("uses sendOptions fileName for outbound documents", async () => {
     const payload = Buffer.from("pdf");
     await api.sendMessage("+1555", "doc", payload, "application/pdf", { fileName: "invoice.pdf" });
-    expect(sendMessage.mock.calls[0]?.[0]).toBe("1555@s.whatsapp.net");
+    expectFirstSendJid("1555@s.whatsapp.net");
     expectSendContentFields(0, {
       document: payload,
       fileName: "invoice.pdf",
@@ -87,15 +128,87 @@ describe("createWebSendApi", () => {
     });
   });
 
-  it("falls back to default document filename when fileName is absent", async () => {
+  it("falls back to a MIME-aware document filename when fileName is absent", async () => {
     const payload = Buffer.from("pdf");
     await api.sendMessage("+1555", "doc", payload, "application/pdf");
-    expect(sendMessage.mock.calls[0]?.[0]).toBe("1555@s.whatsapp.net");
+    expectFirstSendJid("1555@s.whatsapp.net");
+    expectSendContentFields(0, {
+      document: payload,
+      fileName: "file.pdf",
+      caption: "doc",
+      mimetype: "application/pdf",
+    });
+  });
+
+  it("uses MIME mappings for text document filename fallbacks", async () => {
+    const payload = Buffer.from("a,b\n1,2\n");
+    await api.sendMessage("+1555", "doc", payload, "text/csv");
+
+    expectSendContentFields(0, {
+      document: payload,
+      fileName: "file.csv",
+      caption: "doc",
+      mimetype: "text/csv",
+    });
+  });
+
+  it("keeps the plain default document filename when MIME has no extension mapping", async () => {
+    const payload = Buffer.from("unknown");
+    await api.sendMessage("+1555", "doc", payload, "application/x-custom");
+
     expectSendContentFields(0, {
       document: payload,
       fileName: "file",
       caption: "doc",
-      mimetype: "application/pdf",
+      mimetype: "application/x-custom",
+    });
+  });
+
+  it("sends visual media as document when sendOptions.asDocument is true", async () => {
+    const payload = Buffer.from("img");
+    await api.sendMessage("+1555", "promo", payload, "image/png", {
+      asDocument: true,
+      fileName: "promo.png",
+    });
+    expect(sendMessage).toHaveBeenCalledWith(
+      "1555@s.whatsapp.net",
+      expect.objectContaining({
+        document: payload,
+        fileName: "promo.png",
+        caption: "promo",
+        mimetype: "image/png",
+      }),
+    );
+  });
+
+  it("uses MIME-aware filename fallback for forced visual documents", async () => {
+    const payload = Buffer.from("img");
+    await api.sendMessage("+1555", "promo", payload, "image/png", {
+      asDocument: true,
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      "1555@s.whatsapp.net",
+      expect.objectContaining({
+        document: payload,
+        fileName: "file.png",
+        caption: "promo",
+        mimetype: "image/png",
+      }),
+    );
+  });
+
+  it("does not force audio media onto the document branch", async () => {
+    const payload = Buffer.from("aud");
+    await api.sendMessage("+1555", "voice", payload, "audio/ogg", {
+      asDocument: true,
+      fileName: "voice.ogg",
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith("1555@s.whatsapp.net", {
+      audio: payload,
+      ptt: true,
+      mimetype: "audio/ogg",
     });
   });
 
@@ -143,11 +256,35 @@ describe("createWebSendApi", () => {
   it("supports image media with caption", async () => {
     const payload = Buffer.from("img");
     await api.sendMessage("+1555", "cap", payload, "image/jpeg");
-    expect(sendMessage.mock.calls[0]?.[0]).toBe("1555@s.whatsapp.net");
+    expectFirstSendJid("1555@s.whatsapp.net");
     expectSendContentFields(0, {
       image: payload,
       caption: "cap",
       mimetype: "image/jpeg",
+    });
+  });
+
+  it("prepopulates image thumbnails and dimensions before Baileys media upload", async () => {
+    const payload = Buffer.from("img");
+    const thumbnail = Buffer.from("thumb");
+    imageOps.getImageMetadata.mockResolvedValueOnce({ width: 640, height: 480 });
+    imageOps.resizeToJpeg.mockResolvedValueOnce(thumbnail);
+
+    await api.sendMessage("+1555", "cap", payload, "image/png");
+
+    expect(imageOps.resizeToJpeg).toHaveBeenCalledWith({
+      buffer: payload,
+      maxSide: 32,
+      quality: 50,
+      withoutEnlargement: true,
+    });
+    expectSendContentFields(0, {
+      image: payload,
+      caption: "cap",
+      mimetype: "image/png",
+      jpegThumbnail: thumbnail.toString("base64"),
+      width: 640,
+      height: 480,
     });
   });
 
@@ -166,7 +303,7 @@ describe("createWebSendApi", () => {
 
     await api.sendMessage("120363000000000000@g.us", "cap @15551234567", payload, "image/jpeg");
 
-    expect(sendMessage.mock.calls[0]?.[0]).toBe("120363000000000000@g.us");
+    expectFirstSendJid("120363000000000000@g.us");
     expectSendContentFields(0, {
       image: payload,
       caption: "cap @15551234567",
@@ -175,10 +312,43 @@ describe("createWebSendApi", () => {
     });
   });
 
+  it("uses resolved mention caption text for forced-document media", async () => {
+    api = createWebSendApi({
+      sock: { sendMessage, sendPresenceUpdate },
+      defaultAccountId: "main",
+      resolveOutboundMentions: ({ jid, text }) =>
+        resolveWhatsAppOutboundMentions({
+          chatJid: jid,
+          text,
+          participants: [
+            {
+              id: "277038292303944:4@lid",
+              phoneNumber: "5511976136970@s.whatsapp.net",
+            },
+          ],
+        }),
+    });
+    const payload = Buffer.from("img");
+
+    await api.sendMessage("120363000000000000@g.us", "cap @+5511976136970", payload, "image/jpeg", {
+      asDocument: true,
+      fileName: "promo.jpg",
+    });
+
+    expectFirstSendJid("120363000000000000@g.us");
+    expectSendContentFields(0, {
+      document: payload,
+      fileName: "promo.jpg",
+      caption: "cap @277038292303944",
+      mimetype: "image/jpeg",
+      mentions: ["277038292303944@lid"],
+    });
+  });
+
   it("supports audio as push-to-talk voice note", async () => {
     const payload = Buffer.from("aud");
     await api.sendMessage("+1555", "", payload, "audio/ogg", { accountId: "alt" });
-    expect(sendMessage.mock.calls[0]?.[0]).toBe("1555@s.whatsapp.net");
+    expectFirstSendJid("1555@s.whatsapp.net");
     expectSendContentFields(0, {
       audio: payload,
       ptt: true,
@@ -197,7 +367,7 @@ describe("createWebSendApi", () => {
       .mockResolvedValueOnce({ key: { id: "voice-1" } })
       .mockResolvedValueOnce({ key: { id: "voice-text-1" } });
     const res = await api.sendMessage("+1555", "voice text", payload, "audio/ogg");
-    expect(sendMessage.mock.calls[0]?.[0]).toBe("1555@s.whatsapp.net");
+    expectFirstSendJid("1555@s.whatsapp.net");
     expectSendContentFields(0, {
       audio: payload,
       ptt: true,
@@ -220,7 +390,7 @@ describe("createWebSendApi", () => {
   it("supports video media and gifPlayback option", async () => {
     const payload = Buffer.from("vid");
     await api.sendMessage("+1555", "cap", payload, "video/mp4", { gifPlayback: true });
-    expect(sendMessage.mock.calls[0]?.[0]).toBe("1555@s.whatsapp.net");
+    expectFirstSendJid("1555@s.whatsapp.net");
     expectSendContentFields(0, {
       video: payload,
       caption: "cap",
@@ -241,7 +411,7 @@ describe("createWebSendApi", () => {
       options: ["a", "b"],
       maxSelections: 2,
     });
-    expect(sendMessage.mock.calls[0]?.[0]).toBe("1555@s.whatsapp.net");
+    expectFirstSendJid("1555@s.whatsapp.net");
     expect(requireSendContent().poll).toEqual({
       name: "Q?",
       values: ["a", "b"],
@@ -257,7 +427,7 @@ describe("createWebSendApi", () => {
 
   it("sends reactions with participant JID normalization", async () => {
     const res = await api.sendReaction("+1555", "msg-2", "👍", false, "+1999");
-    expect(sendMessage.mock.calls[0]?.[0]).toBe("1555@s.whatsapp.net");
+    expectFirstSendJid("1555@s.whatsapp.net");
     const react = requireRecord(requireSendContent().react, "reaction content");
     expect(react.text).toBe("👍");
     expectRecordFields(requireRecord(react.key, "reaction key"), {
@@ -288,7 +458,7 @@ describe("createWebSendApi", () => {
 
   it("keeps direct-chat reactions without a participant key", async () => {
     await api.sendReaction("+1555", "msg-2", "👍", false);
-    expect(sendMessage.mock.calls[0]?.[0]).toBe("1555@s.whatsapp.net");
+    expectFirstSendJid("1555@s.whatsapp.net");
     const react = requireRecord(requireSendContent().react, "reaction content");
     expect(react.text).toBe("👍");
     expectRecordFields(requireRecord(react.key, "reaction key"), {
@@ -301,7 +471,7 @@ describe("createWebSendApi", () => {
 
   it("preserves LID participants in reaction keys", async () => {
     await api.sendReaction("12345@g.us", "msg-2", "👍", false, "123@lid");
-    expect(sendMessage.mock.calls[0]?.[0]).toBe("12345@g.us");
+    expectFirstSendJid("12345@g.us");
     const react = requireRecord(requireSendContent().react, "reaction content");
     expect(react.text).toBe("👍");
     expectRecordFields(requireRecord(react.key, "reaction key"), {
@@ -334,7 +504,7 @@ describe("createWebSendApi", () => {
 
     await api.sendMessage("123", "hello", mediaBuffer, undefined);
 
-    expect(sendMessage.mock.calls[0]?.[0]).toBe("123@s.whatsapp.net");
+    expectFirstSendJid("123@s.whatsapp.net");
     expectSendContentFields(0, {
       document: mediaBuffer,
       mimetype: "application/octet-stream",
@@ -358,8 +528,8 @@ describe("createWebSendApi", () => {
       },
     });
 
-    expect(sendMessage.mock.calls[0]?.[0]).toBe("1555@s.whatsapp.net");
-    expect(sendMessage.mock.calls[0]?.[1]).toEqual({ text: "hello" });
+    expectFirstSendJid("1555@s.whatsapp.net");
+    expect(requireMockArg(sendMessage, 0, 1, "sent message")).toEqual({ text: "hello" });
     const quoted = requireRecord(requireSendOptions().quoted, "quoted message");
     expectRecordFields(requireRecord(quoted.key, "quoted key"), {
       remoteJid: "277038292303944@lid",
@@ -420,9 +590,34 @@ describe("createWebSendApi LID resolution (issue #67378)", () => {
       authDir,
     });
     await api.sendPoll("+15555550000", { question: "Q?", options: ["a", "b"] });
-    expect(sendMessage.mock.calls[0]?.[0]).toBe("987654@lid");
-    const payload = requireRecord(sendMessage.mock.calls[0]?.[1], "send poll payload");
+    expect(requireMockArg(sendMessage, 0, 0, "send poll")).toBe("987654@lid");
+    const payload = requireRecord(
+      requireMockArg(sendMessage, 0, 1, "send poll"),
+      "send poll payload",
+    );
     expect("poll" in payload).toBe(true);
+  });
+
+  it("resolves PN to LID for sendReaction", async () => {
+    const api = createWebSendApi({
+      sock: { sendMessage, sendPresenceUpdate },
+      defaultAccountId: "main",
+      authDir,
+    });
+    await api.sendReaction("+15555550000", "msg-2", "1️⃣", true);
+    expect(requireMockArg(sendMessage, 0, 0, "send reaction")).toBe("987654@lid");
+    const payload = requireRecord(
+      requireMockArg(sendMessage, 0, 1, "send reaction"),
+      "send reaction payload",
+    );
+    const react = requireRecord(payload.react, "reaction content");
+    expect(react.text).toBe("1️⃣");
+    expect(requireRecord(react.key, "reaction key")).toMatchObject({
+      remoteJid: "987654@lid",
+      id: "msg-2",
+      fromMe: true,
+    });
+    expect(requireRecord(react.key, "reaction key").participant).toBeUndefined();
   });
 
   it("resolves PN to LID for sendComposingTo presence", async () => {

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveStateDir } from "../config/paths.js";
+import { isRecord as isPlainRecord } from "../shared/record-coerce.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { writeJson } from "./json-files.js";
 
@@ -22,6 +23,7 @@ export type RestartSentinelStep = {
 export type RestartSentinelStats = {
   mode?: string;
   root?: string;
+  handoffId?: string;
   before?: Record<string, unknown> | null;
   after?: Record<string, unknown> | null;
   steps?: RestartSentinelStep[];
@@ -71,7 +73,10 @@ const SENTINEL_FILENAME = "restart-sentinel.json";
 export function formatDoctorNonInteractiveHint(
   env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
 ): string {
-  return `Run: ${formatCliCommand("openclaw doctor --non-interactive", env)}`;
+  return `Recommended follow-up: run ${formatCliCommand(
+    "openclaw doctor --non-interactive",
+    env,
+  )} in a terminal or approvals-capable OpenClaw surface.`;
 }
 
 export function resolveRestartSentinelPath(env: NodeJS.ProcessEnv = process.env): string {
@@ -86,10 +91,6 @@ export async function writeRestartSentinel(
   const data: RestartSentinel = { version: 1, payload };
   await writeJson(filePath, data, { trailingNewline: true, dirMode: 0o700 });
   return filePath;
-}
-
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function cloneRestartSentinelPayload(payload: RestartSentinelPayload): RestartSentinelPayload {
@@ -142,10 +143,12 @@ export async function markUpdateRestartSentinelFailure(
     if (payload.kind !== "update") {
       return null;
     }
+    const payloadWithoutContinuation = { ...payload };
+    delete payloadWithoutContinuation.continuation;
     const stats = payload.stats ? { ...payload.stats } : {};
     stats.reason = reason;
     return {
-      ...payload,
+      ...payloadWithoutContinuation,
       status: "error",
       stats,
     };

@@ -23,7 +23,7 @@ function warningLines(): string[] {
 }
 
 function expectNoMissingDefaultWarning() {
-  expect(warningLines().some((line) => line.includes("accounts.default is missing"))).toBe(false);
+  expect(warningLines().join("\n")).not.toContain("accounts.default is missing");
 }
 
 function resolveAccountWithEnv(
@@ -145,6 +145,33 @@ describe("resolveTelegramAccount", () => {
     expect(accounts.map((account) => account.accountId)).toEqual(["work"]);
     expect(accounts[0]?.token).toBe("tok-work");
   });
+
+  it("keeps the implicit default account when named accounts are added to top-level credentials (#82780)", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: "tok-default",
+          accounts: {
+            fusion: {
+              enabled: false,
+              name: "Fusion",
+              botToken: "tok-fusion",
+            },
+          },
+        },
+      },
+      bindings: [{ agentId: "fusion", match: { channel: "telegram", accountId: "fusion" } }],
+    } as unknown as OpenClawConfig;
+
+    expect(listTelegramAccountIds(cfg)).toEqual(["default", "fusion"]);
+    expect(resolveDefaultTelegramAccountId(cfg)).toBe("default");
+    expectNoMissingDefaultWarning();
+
+    const accounts = listEnabledTelegramAccounts(cfg);
+    expect(accounts.map((account) => account.accountId)).toEqual(["default"]);
+    expect(accounts[0]?.token).toBe("tok-default");
+    expect(accounts[0]?.tokenSource).toBe("config");
+  });
 });
 
 describe("resolveDefaultTelegramAccountId", () => {
@@ -197,6 +224,23 @@ describe("resolveDefaultTelegramAccountId", () => {
     };
 
     resolveDefaultTelegramAccountId(cfg);
+    expectNoMissingDefaultWarning();
+  });
+
+  it("does not warn when explicit defaultAccount is first in multi-account fallback order (#83948)", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          defaultAccount: "alerts",
+          accounts: {
+            alerts: { botToken: "tok-alerts" },
+            work: { botToken: "tok-work" },
+          },
+        },
+      },
+    };
+
+    expect(resolveDefaultTelegramAccountId(cfg)).toBe("alerts");
     expectNoMissingDefaultWarning();
   });
 
@@ -526,6 +570,24 @@ describe("resolveTelegramAccount groups inheritance (#30673)", () => {
             groups: { "-100123": { requireMention: false } },
             accounts: {
               default: { botToken: "123:default" },
+            },
+          },
+        },
+      },
+      accountId: "default",
+    });
+
+    expect(resolved.config.groups).toEqual({ "-100123": { requireMention: false } });
+  });
+
+  it("inherits channel-level groups when single-account explicitly sets `groups: {}` (regression: #79427)", () => {
+    const resolved = resolveTelegramAccount({
+      cfg: {
+        channels: {
+          telegram: {
+            groups: { "-100123": { requireMention: false } },
+            accounts: {
+              default: { botToken: "123:default", groups: {} },
             },
           },
         },

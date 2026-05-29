@@ -85,7 +85,6 @@ export function applyLocalOxlintPolicy(args, env, hostResources) {
 
   insertBeforeSeparator(nextArgs, "--type-aware");
   insertBeforeSeparator(nextArgs, "--tsconfig", "config/tsconfig/oxlint.json");
-  insertBeforeSeparator(nextArgs, "--allow", "eslint/no-underscore-dangle");
   if (
     !hasFlag(nextArgs, "--report-unused-disable-directives") &&
     !hasFlag(nextArgs, "--report-unused-disable-directives-severity")
@@ -93,8 +92,16 @@ export function applyLocalOxlintPolicy(args, env, hostResources) {
     insertBeforeSeparator(nextArgs, "--report-unused-disable-directives-severity", "error");
   }
 
-  if (shouldThrottleLocalHeavyChecks(nextEnv, hostResources) && !hasFlag(nextArgs, "--threads")) {
-    insertBeforeSeparator(nextArgs, "--threads=1");
+  if (shouldThrottleLocalHeavyChecks(nextEnv, hostResources)) {
+    if (!hasFlag(nextArgs, "--threads")) {
+      insertBeforeSeparator(nextArgs, "--threads=1");
+    }
+    if (!nextEnv.GOGC) {
+      nextEnv.GOGC = DEFAULT_LOCAL_GO_GC;
+    }
+    if (!nextEnv.GOMEMLIMIT) {
+      nextEnv.GOMEMLIMIT = DEFAULT_LOCAL_GO_MEMORY_LIMIT;
+    }
   }
 
   return { env: nextEnv, args: nextArgs };
@@ -188,8 +195,7 @@ export function acquireLocalHeavyCheckLockSync(params) {
     return () => {};
   }
 
-  const commonDir = resolveGitCommonDir(params.cwd);
-  const locksDir = path.join(commonDir, "openclaw-local-checks");
+  const locksDir = resolveHeavyCheckLocksDir(params.cwd, env);
   const lockDir = path.join(locksDir, `${params.lockName ?? "heavy-check"}.lock`);
   const ownerPath = path.join(lockDir, "owner.json");
   const timeoutMs = readPositiveInt(
@@ -271,6 +277,32 @@ export function acquireLocalHeavyCheckLockSync(params) {
       sleepSync(pollMs);
     }
   }
+}
+
+function resolveHeavyCheckLocksDir(cwd, env) {
+  const lockScope = env.OPENCLAW_HEAVY_CHECK_LOCK_SCOPE?.trim().toLowerCase();
+  if (lockScope === "worktree") {
+    return path.join(resolveGitWorktreeRoot(cwd), ".artifacts", "openclaw-local-checks");
+  }
+
+  return path.join(resolveGitCommonDir(cwd), "openclaw-local-checks");
+}
+
+function resolveGitWorktreeRoot(cwd) {
+  const result = spawnSync("git", ["rev-parse", "--show-toplevel"], {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+
+  if (result.status === 0) {
+    const raw = result.stdout.trim();
+    if (raw.length > 0) {
+      return path.resolve(cwd, raw);
+    }
+  }
+
+  return cwd;
 }
 
 function resolveGitCommonDir(cwd) {

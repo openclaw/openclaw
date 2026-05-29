@@ -28,11 +28,16 @@ export function decodeStrictBase64(value: string, maxDecodedBytes: number): Buff
   return decoded;
 }
 
-type SubagentInlineAttachment = {
+export type SubagentInlineAttachment = {
   name: string;
   content: string;
   encoding?: "utf8" | "base64";
   mimeType?: string;
+};
+
+type AcpInlineImageAttachment = {
+  mediaType: string;
+  data: string;
 };
 
 type AttachmentLimits = {
@@ -94,9 +99,124 @@ function resolveAttachmentLimits(config: OpenClawConfig): AttachmentLimits {
   };
 }
 
+export function resolveAcpSessionsSpawnImageAttachments(params: {
+  config: OpenClawConfig;
+  attachments?: SubagentInlineAttachment[];
+}):
+  | { status: "ok"; attachments: AcpInlineImageAttachment[] }
+  | { status: "forbidden"; error: string }
+  | { status: "error"; error: string }
+  | null {
+  const requestedAttachments = Array.isArray(params.attachments) ? params.attachments : [];
+  if (requestedAttachments.length === 0) {
+    return null;
+  }
+
+  const limits = resolveAttachmentLimits(params.config);
+  if (!limits.enabled) {
+    return {
+      status: "forbidden",
+      error:
+        "attachments are disabled for sessions_spawn (enable tools.sessions_spawn.attachments.enabled)",
+    };
+  }
+  if (requestedAttachments.length > limits.maxFiles) {
+    return {
+      status: "error",
+      error: `attachments_file_count_exceeded (maxFiles=${limits.maxFiles})`,
+    };
+  }
+
+  const fail = (error: string): never => {
+    throw new Error(error);
+  };
+
+  try {
+    const seen = new Set<string>();
+    const attachments: AcpInlineImageAttachment[] = [];
+    let totalBytes = 0;
+
+    for (const raw of requestedAttachments) {
+      const name = normalizeOptionalString(raw?.name) ?? "";
+      const contentVal = typeof raw?.content === "string" ? raw.content : "";
+      const encodingRaw = normalizeOptionalString(raw?.encoding) ?? "utf8";
+      const encoding = encodingRaw === "base64" ? "base64" : "utf8";
+      const mimeType = normalizeOptionalString(raw?.mimeType) ?? "";
+
+      if (!name) {
+        fail("attachments_invalid_name (empty)");
+      }
+      if (name.includes("/") || name.includes("\\") || name.includes("\u0000")) {
+        fail(`attachments_invalid_name (${name})`);
+      }
+      if (
+        Array.from(name).some((char) => {
+          const code = char.codePointAt(0) ?? 0;
+          return code < 0x20 || code === 0x7f;
+        })
+      ) {
+        fail(`attachments_invalid_name (${name})`);
+      }
+      if (name === "." || name === ".." || name === ".manifest.json") {
+        fail(`attachments_invalid_name (${name})`);
+      }
+      if (seen.has(name)) {
+        fail(`attachments_duplicate_name (${name})`);
+      }
+      seen.add(name);
+      if (!mimeType.startsWith("image/")) {
+        fail(`attachments_unsupported_for_acp (name=${name} mimeType=${mimeType || "unknown"})`);
+      }
+
+      let buf: Buffer;
+      if (encoding === "base64") {
+        const strictBuf = decodeStrictBase64(contentVal, limits.maxFileBytes);
+        if (strictBuf === null) {
+          throw new Error("attachments_invalid_base64_or_too_large");
+        }
+        buf = strictBuf;
+      } else {
+        const estimatedBytes = Buffer.byteLength(contentVal, "utf8");
+        if (estimatedBytes > limits.maxFileBytes) {
+          fail(
+            `attachments_file_bytes_exceeded (name=${name} bytes=${estimatedBytes} maxFileBytes=${limits.maxFileBytes})`,
+          );
+        }
+        buf = Buffer.from(contentVal, "utf8");
+      }
+
+      const bytes = buf.byteLength;
+      if (bytes > limits.maxFileBytes) {
+        fail(
+          `attachments_file_bytes_exceeded (name=${name} bytes=${bytes} maxFileBytes=${limits.maxFileBytes})`,
+        );
+      }
+      totalBytes += bytes;
+      if (totalBytes > limits.maxTotalBytes) {
+        fail(
+          `attachments_total_bytes_exceeded (totalBytes=${totalBytes} maxTotalBytes=${limits.maxTotalBytes})`,
+        );
+      }
+
+      attachments.push({
+        mediaType: mimeType,
+        data: buf.toString("base64"),
+      });
+    }
+
+    return { status: "ok", attachments };
+  } catch (err) {
+    return {
+      status: "error",
+      error: err instanceof Error ? err.message : "attachments_materialization_failed",
+    };
+  }
+}
+
 export async function materializeSubagentAttachments(params: {
   config: OpenClawConfig;
   targetAgentId: string;
+  workspaceDir?: string;
   attachments?: SubagentInlineAttachment[];
   mountPathHint?: string;
 }): Promise<MaterializeSubagentAttachmentsResult | null> {
@@ -121,7 +241,9 @@ export async function materializeSubagentAttachments(params: {
   }
 
   const attachmentId = crypto.randomUUID();
-  const childWorkspaceDir = resolveAgentWorkspaceDir(params.config, params.targetAgentId);
+  const childWorkspaceDir =
+    normalizeOptionalString(params.workspaceDir) ??
+    resolveAgentWorkspaceDir(params.config, params.targetAgentId);
   const absRootDir = path.join(childWorkspaceDir, ".openclaw", "attachments");
   const relDir = path.posix.join(".openclaw", "attachments", attachmentId);
   const absDir = path.join(absRootDir, attachmentId);
