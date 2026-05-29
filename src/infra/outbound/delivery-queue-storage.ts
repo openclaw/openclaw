@@ -55,6 +55,8 @@ export type QueuedDeliveryPayload = {
   bestEffort?: boolean;
   gifPlayback?: boolean;
   forceDocument?: boolean;
+  /** True when message_sending was applied before enqueue and must not replay. */
+  skipMessageSendingHooks?: boolean;
   silent?: boolean;
   mirror?: OutboundMirror;
   /** Session context needed to preserve outbound media policy on recovery. */
@@ -164,6 +166,7 @@ export async function enqueueDelivery(
     bestEffort: params.bestEffort,
     gifPlayback: params.gifPlayback,
     forceDocument: params.forceDocument,
+    skipMessageSendingHooks: params.skipMessageSendingHooks,
     silent: params.silent,
     mirror: params.mirror,
     session: params.session,

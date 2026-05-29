@@ -641,22 +641,11 @@ type DeliverOutboundPayloadsCoreParams = {
   mediaAccess?: OutboundMediaAccess;
   gifPlayback?: boolean;
   forceDocument?: boolean;
+  skipMessageSendingHooks?: boolean;
   abortSignal?: AbortSignal;
   bestEffort?: boolean;
   onError?: (err: unknown, payload: NormalizedOutboundPayload) => void;
   onPayload?: (payload: NormalizedOutboundPayload) => void;
-  beforePayloadDelivery?: {
-    run: (params: {
-      payload: ReplyPayload;
-      payloadSummary: NormalizedOutboundPayload;
-      index: number;
-      channel: Exclude<OutboundChannel, "none">;
-      to: string;
-      accountId?: string;
-    }) => Promise<ReplyPayload | null> | ReplyPayload | null;
-    cancelledReason: OutboundPayloadDeliverySuppressionReason;
-    emptyReason: OutboundPayloadDeliverySuppressionReason;
-  };
   onPayloadDeliveryOutcome?: (outcome: OutboundPayloadDeliveryOutcome) => void;
   /** Session/agent context used for hooks and media local-root scoping. */
   session?: OutboundSessionContext;
@@ -1251,6 +1240,7 @@ export async function deliverOutboundPayloadsInternal(
         bestEffort: params.bestEffort,
         gifPlayback: params.gifPlayback,
         forceDocument: params.forceDocument,
+        skipMessageSendingHooks: params.skipMessageSendingHooks,
         silent: params.silent,
         mirror: params.mirror,
         session: params.session,
@@ -1506,7 +1496,10 @@ async function deliverOutboundPayloadsCore(
     mirrorIsGroup,
     mirrorGroupId,
   });
-  const hasMessageSendingHooks = hookRunner?.hasHooks("message_sending") ?? false;
+  const hasMessageSendingHooks =
+    params.skipMessageSendingHooks === true
+      ? false
+      : (hookRunner?.hasHooks("message_sending") ?? false);
   const diagnosticSessionKey = sessionKeyForDeliveryDiagnostics(params);
   if (hasMessageSentHooks && params.session?.agentId && !sessionKeyForInternalHooks) {
     log.warn(
@@ -1594,31 +1587,8 @@ async function deliverOutboundPayloadsCore(
         );
         continue;
       }
-      let deliveryPayload = hookResult.payload;
-      let beforePayloadDeliveryChanged = false;
-      if (params.beforePayloadDelivery) {
-        const nextPayload = await params.beforePayloadDelivery.run({
-          payload: deliveryPayload,
-          payloadSummary: hookResult.payloadSummary,
-          index: payloadIndex,
-          channel,
-          to,
-          ...(accountId ? { accountId } : {}),
-        });
-        if (!nextPayload) {
-          recordPayloadOutcome(
-            suppressedPayloadOutcome({
-              index: payloadIndex,
-              reason: params.beforePayloadDelivery.cancelledReason,
-            }),
-          );
-          continue;
-        }
-        beforePayloadDeliveryChanged = nextPayload !== deliveryPayload;
-        deliveryPayload = nextPayload;
-      }
       const renderedPayload = stripInternalRuntimeScaffoldingFromPayload(
-        await renderPresentationForDelivery(handler, deliveryPayload),
+        await renderPresentationForDelivery(handler, hookResult.payload),
       );
       const normalizedEffectivePayload = handler.normalizePayload
         ? handler.normalizePayload(renderedPayload)
@@ -1634,9 +1604,7 @@ async function deliverOutboundPayloadsCore(
             index: payloadIndex,
             reason: hookResult.contentRewritten
               ? "empty_after_message_sending_hook"
-              : beforePayloadDeliveryChanged
-                ? params.beforePayloadDelivery!.emptyReason
-                : "no_visible_payload",
+              : "no_visible_payload",
           }),
         );
         continue;

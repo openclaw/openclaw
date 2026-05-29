@@ -1553,60 +1553,31 @@ describe("deliverOutboundPayloads", () => {
     expect(requireMockCallArg(sendText, "sendText").text).toBe("visible");
   });
 
-  it("runs beforePayloadDelivery after message_sending rewrites payload text", async () => {
+  it("skips message_sending hooks when caller already applied them before enqueue", async () => {
     hookMocks.runner.hasHooks.mockImplementation(
       (hookName?: string) => hookName === "message_sending",
     );
-    hookMocks.runner.runMessageSending.mockResolvedValue({ content: "redacted" });
-    const beforePayloadDelivery = vi.fn(({ payload }: { payload: DeliverOutboundPayload }) => ({
-      ...payload,
-      channelData: { copiedText: payload.text },
-    }));
-    const sendPayload = vi.fn().mockResolvedValue({
-      channel: "matrix" as const,
-      messageId: "payload",
+    hookMocks.runner.runMessageSending.mockResolvedValue({ content: "should-not-run" });
+    const sendText = vi.fn().mockResolvedValue({
+      channel: "matrix",
+      messageId: "sent",
       roomId: "!room",
     });
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "matrix",
-            outbound: {
-              deliveryMode: "direct",
-              sendText: vi.fn(),
-              sendMedia: vi.fn(),
-              sendPayload,
-            },
-          }),
-        },
-      ]),
-    );
 
     await deliverOutboundPayloads({
       cfg: {},
       channel: "matrix",
       to: "!room",
-      payloads: [{ text: "secret" }],
-      beforePayloadDelivery: {
-        run: beforePayloadDelivery,
-        cancelledReason: "cancelled_by_reply_payload_sending_hook",
-        emptyReason: "empty_after_reply_payload_sending_hook",
-      },
+      payloads: [{ text: "already redacted" }],
+      deps: { matrix: sendText },
+      skipMessageSendingHooks: true,
     });
 
-    expect(beforePayloadDelivery).toHaveBeenCalledWith(
-      expect.objectContaining({
-        payload: expect.objectContaining({ text: "redacted" }),
-        payloadSummary: expect.objectContaining({ text: "redacted" }),
-      }),
+    expect(hookMocks.runner.runMessageSending).not.toHaveBeenCalled();
+    expect(requireMatrixSendCall(sendText)[1]).toBe("already redacted");
+    expect(queueMocks.enqueueDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({ skipMessageSendingHooks: true }),
     );
-    expect(requireMockCallArg(sendPayload, "sendPayload").payload).toMatchObject({
-      text: "redacted",
-      channelData: { copiedText: "redacted" },
-    });
   });
 
   it("strips internal runtime scaffolding before adapter payload normalization copies text", async () => {

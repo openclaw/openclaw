@@ -51,7 +51,6 @@ import {
   type FollowupRun,
 } from "./queue.js";
 import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
-import { runReplyPayloadSendingHook } from "./reply-payload-sending-hook.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
@@ -305,32 +304,10 @@ export function createFollowupRunner(params: {
       if (!opts?.onBlockReply) {
         return;
       }
-      const dispatcherChannel =
-        resolveOriginMessageProvider({
-          provider: queued.run.messageProvider,
-        }) ?? "unknown";
-      const hookedPayload = await runReplyPayloadSendingHook({
-        payload,
-        kind: replyKind,
-        channel: dispatcherChannel,
-        sessionKey: queued.run.sessionKey,
-        runId: options.runId,
-        context: {
-          channelId: dispatcherChannel,
-          ...(queued.run.agentAccountId ? { accountId: queued.run.agentAccountId } : {}),
-          ...(queued.originatingTo ? { conversationId: queued.originatingTo } : {}),
-          ...(queued.run.sessionKey ? { sessionKey: queued.run.sessionKey } : {}),
-          ...(queued.run.senderId ? { senderId: queued.run.senderId } : {}),
-          ...(options.runId ? { runId: options.runId } : {}),
-        },
-      });
-      if (!hookedPayload || !hasOutboundReplyContent(hookedPayload)) {
+      if (deliveryPlan.isSilentPayload(payload)) {
         return;
       }
-      if (deliveryPlan.isSilentPayload(hookedPayload)) {
-        return;
-      }
-      await opts.onBlockReply(hookedPayload);
+      await opts.onBlockReply(payload);
     };
     for (const payload of sendablePayloads) {
       const providerRoute = deliveryPlan.resolveFollowupRoute({

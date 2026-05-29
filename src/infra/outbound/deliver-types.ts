@@ -18,9 +18,7 @@ export type OutboundDeliveryResult = {
 
 export type OutboundPayloadDeliverySuppressionReason =
   | "cancelled_by_message_sending_hook"
-  | "cancelled_by_reply_payload_sending_hook"
   | "empty_after_message_sending_hook"
-  | "empty_after_reply_payload_sending_hook"
   | "no_visible_payload"
   | "adapter_returned_no_identity";
 

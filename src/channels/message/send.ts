@@ -4,7 +4,6 @@ import type { OutboundDeliveryResult } from "../../infra/outbound/deliver-types.
 import {
   isOutboundDeliveryError,
   type OutboundPayloadDeliveryOutcome,
-  type OutboundPayloadDeliverySuppressionReason,
 } from "../../infra/outbound/deliver-types.js";
 import {
   deliverOutboundPayloadsInternal,
@@ -39,7 +38,10 @@ export type DurableMessageBatchSendParams = Omit<
 };
 
 export type DurableMessageSuppressionReason =
-  | OutboundPayloadDeliverySuppressionReason
+  | "cancelled_by_message_sending_hook"
+  | "empty_after_message_sending_hook"
+  | "no_visible_payload"
+  | "adapter_returned_no_identity"
   | "no_visible_result";
 
 export type DurableMessageFailureStage = "platform_send" | "queue" | "unknown";
