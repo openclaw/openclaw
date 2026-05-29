@@ -278,7 +278,7 @@ export function registerCronEditCommand(cron: Command) {
           const hasAgentTurnPatch =
             hasAgentTurnPayloadField ||
             Boolean(opts.announce) ||
-            typeof opts.deliver === "boolean" ||
+            opts.deliver === true ||
             hasDeliveryTarget ||
             hasDeliveryAccount ||
             (hasBestEffort && !hasWebhookDelivery);
