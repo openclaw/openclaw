@@ -1,3 +1,4 @@
+import { parseFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -33,6 +34,24 @@ type SnapshotUrlEntry = {
   text: string;
   url: string;
 };
+
+function resolveBoundedTimeoutMs(
+  timeoutMs: number | undefined,
+  fallbackMs: number,
+  minMs: number,
+  maxMs: number,
+): number {
+  const parsed = parseFiniteNumber(timeoutMs);
+  return Math.max(minMs, Math.min(maxMs, Math.floor(parsed ?? fallbackMs)));
+}
+
+function resolveSnapshotTimeoutMs(timeoutMs: number | undefined): number {
+  return resolveBoundedTimeoutMs(timeoutMs, 5_000, 500, 60_000);
+}
+
+function resolveNavigationTimeoutMs(timeoutMs: number | undefined): number {
+  return resolveBoundedTimeoutMs(timeoutMs, 20_000, 1000, 120_000);
+}
 
 async function collectSnapshotUrls(page: Page): Promise<SnapshotUrlEntry[]> {
   const urls = await page
@@ -227,7 +246,7 @@ export async function snapshotAiViaPlaywright(opts: {
 
   let snapshot = await page.ariaSnapshot({
     mode: "ai",
-    timeout: Math.max(500, Math.min(60_000, Math.floor(opts.timeoutMs ?? 5000))),
+    timeout: resolveSnapshotTimeoutMs(opts.timeoutMs),
   });
   if (opts.urls) {
     snapshot = appendSnapshotUrls(snapshot, await collectSnapshotUrls(page));
@@ -284,7 +303,7 @@ export async function snapshotRoleViaPlaywright(opts: {
     });
   }
 
-  const ariaSnapshotTimeout = Math.max(500, Math.min(60_000, Math.floor(opts.timeoutMs ?? 5000)));
+  const ariaSnapshotTimeout = resolveSnapshotTimeoutMs(opts.timeoutMs);
 
   if (opts.refsMode === "aria") {
     if (normalizeOptionalString(opts.selector) || normalizeOptionalString(opts.frameSelector)) {
@@ -373,7 +392,7 @@ export async function navigateViaPlaywright(opts: {
       browserProxyMode: opts.browserProxyMode,
     }),
   });
-  const timeout = Math.max(1000, Math.min(120_000, opts.timeoutMs ?? 20_000));
+  const timeout = resolveNavigationTimeoutMs(opts.timeoutMs);
   let page = await getPageForTargetId(opts);
   ensurePageState(page);
   const navigate = async () =>

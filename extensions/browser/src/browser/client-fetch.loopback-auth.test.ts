@@ -543,6 +543,23 @@ describe("fetchBrowserJson loopback auth", () => {
     );
   });
 
+  it("uses the default timeout for non-finite absolute HTTP timeout failures", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("timed out");
+      }),
+    );
+
+    await expectThrownBrowserFetchError(
+      () => fetchBrowserJson<{ ok: boolean }>("http://example.com/", { timeoutMs: Number.NaN }),
+      {
+        contains: ["timed out after 5000ms"],
+        omits: ["NaNms", "Do NOT retry the browser tool"],
+      },
+    );
+  });
+
   it("omits no-retry hint for absolute HTTP abort failures", async () => {
     vi.stubGlobal(
       "fetch",

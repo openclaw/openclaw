@@ -28,6 +28,7 @@ import {
   canConnectToLoopbackPort,
   buildDiscordSmokeGuildsConfig,
   buildRealUpdateEnv,
+  CROSS_OS_FETCH_BODY_MAX_CHARS,
   CROSS_OS_GATEWAY_READY_TIMEOUT_MS,
   CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS,
   CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS,
@@ -51,6 +52,7 @@ import {
   parseArgs,
   packageHasScript,
   readInstalledVersion,
+  readBoundedCrossOsResponseText,
   readRunnerOverrideEnv,
   resolveCrossOsAgentTurnOptional,
   runCommand,
@@ -85,6 +87,17 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
   it("keeps dashboard smoke patient enough for cold packaged gateway startup", () => {
     expect(CROSS_OS_DASHBOARD_SMOKE_TIMEOUT_MS).toBeGreaterThanOrEqual(120_000);
     expect(CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS).toBeGreaterThanOrEqual(10_000);
+  });
+
+  it("bounds cross-OS fetched response bodies", async () => {
+    const tail = "tail-sentinel-should-not-appear";
+    const response = new Response(`${"x".repeat(5000)}${tail}`);
+
+    const text = await readBoundedCrossOsResponseText(response, 128);
+
+    expect(text).toContain("[truncated]");
+    expect(text).not.toContain(tail);
+    expect(CROSS_OS_FETCH_BODY_MAX_CHARS).toBeGreaterThan(1024);
   });
 
   it("keeps gateway RPC status probes patient enough for live release startup", () => {
@@ -524,7 +537,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       display_name: "macOS",
       lane: "fresh",
       os_id: "macos",
-      runner: "blacksmith-6vcpu-macos-latest",
+      runner: "blacksmith-6vcpu-macos-15",
       suite: "packaged-fresh",
       suite_label: "packaged fresh",
     });
@@ -909,6 +922,37 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         stderr: "",
       });
       expect(readFileSync(logPath, "utf8")).toContain("start command=");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("bounds retained command output while preserving full command logs", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-run-command-output-"));
+    try {
+      const logPath = join(dir, "command.log");
+      const result = await runCommand(
+        process.execPath,
+        [
+          "-e",
+          [
+            "process.stdout.write('old-middle-recent');",
+            "process.stderr.write('err-old-err-recent');",
+          ].join(""),
+        ],
+        {
+          cwd: dir,
+          env: process.env,
+          logPath,
+          maxOutputBytes: 12,
+        },
+      );
+
+      expect(result.stdout).toBe("iddle-recent");
+      expect(result.stderr).toBe("d-err-recent");
+      const log = readFileSync(logPath, "utf8");
+      expect(log).toContain("old-middle-recent");
+      expect(log).toContain("err-old-err-recent");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

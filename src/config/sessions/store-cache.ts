@@ -1,4 +1,6 @@
+import { parseStrictNonNegativeInteger } from "../../infra/parse-finite-number.js";
 import { createExpiringMapCache, isCacheEnabled, resolveCacheTtlMs } from "../cache-utils.js";
+import { clearSessionSkillPromptRefCache } from "./skill-prompt-blobs.js";
 import type { SessionEntry } from "./types.js";
 
 export type DeepReadonly<T> = T extends (...args: never[]) => unknown
@@ -64,8 +66,7 @@ function parseNonNegativeInteger(value: string | undefined): number | null {
   if (!trimmed) {
     return null;
   }
-  const parsed = Number.parseInt(trimmed, 10);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+  return parseStrictNonNegativeInteger(trimmed) ?? null;
 }
 
 function getSerializedSessionStoreCacheMaxBytes(): number {
@@ -242,6 +243,10 @@ export function cloneSessionStoreSnapshot(
   return deepFreeze(cloned);
 }
 
+export function cloneSessionStoreSnapshotEntry(entry: SessionEntry): SessionStoreSnapshotEntry {
+  return deepFreeze(cloneSessionStoreRecord({ entry }).entry);
+}
+
 export function getSessionStoreTtl(): number {
   return resolveCacheTtlMs({
     envValue: process.env.OPENCLAW_SESSION_CACHE_TTL_MS,
@@ -259,6 +264,7 @@ export function clearSessionStoreCaches(): void {
   SESSION_STORE_SERIALIZED_CACHE.clear();
   sessionStoreSerializedCacheBytes = 0;
   SESSION_STORE_STRING_INTERN_POOL.clear();
+  clearSessionSkillPromptRefCache();
   resetSessionStoreStringInternStats();
 }
 

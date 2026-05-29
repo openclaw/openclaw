@@ -37,6 +37,7 @@ let createMockFollowupRun: typeof import("./test-helpers.js").createMockFollowup
 let createMockTypingController: typeof import("./test-helpers.js").createMockTypingController;
 let createReplyOperationForTest: typeof import("./reply-run-registry.js").createReplyOperation;
 let replyRunTestingForTest: typeof import("./reply-run-registry.js").testing;
+let cliBackendsTestingForTest: typeof import("../../agents/cli-backends.js").testing;
 const FOLLOWUP_DEBUG = process.env.OPENCLAW_DEBUG_FOLLOWUP_RUNNER_TEST === "1";
 const FOLLOWUP_TEST_QUEUES = new Map<
   string,
@@ -442,6 +443,8 @@ async function loadFreshFollowupRunnerModuleForTest() {
       };
     },
   }));
+  ({ testing: cliBackendsTestingForTest } = await import("../../agents/cli-backends.js"));
+  setFastFollowupCliBackendDeps();
   ({ createFollowupRunner } = await import("./followup-runner.js"));
   ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
     await import("../../config/config.js"));
@@ -452,6 +455,27 @@ async function loadFreshFollowupRunnerModuleForTest() {
   ({ createMockFollowupRun, createMockTypingController } = await import("./test-helpers.js"));
   ({ createReplyOperation: createReplyOperationForTest, testing: replyRunTestingForTest } =
     await import("./reply-run-registry.js"));
+}
+
+function setFastFollowupCliBackendDeps(): void {
+  cliBackendsTestingForTest.setDepsForTest({
+    resolvePluginSetupRegistry: () => ({
+      providers: [],
+      cliBackends: [],
+      configMigrations: [],
+      autoEnableProbes: [],
+      diagnostics: [],
+    }),
+    resolveRuntimeCliBackends: () => [
+      {
+        id: "claude-cli",
+        pluginId: "claude-cli",
+        modelProvider: "anthropic",
+        config: { command: "claude" },
+        bundleMcp: false,
+      },
+    ],
+  });
 }
 
 const ROUTABLE_TEST_CHANNELS = new Set([
@@ -469,6 +493,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  setFastFollowupCliBackendDeps();
   replyRunTestingForTest?.resetReplyRunRegistry();
   clearRuntimeConfigSnapshot?.();
   runEmbeddedAgentMock.mockReset();
@@ -524,6 +549,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  cliBackendsTestingForTest?.resetDepsForTest();
   replyRunTestingForTest?.resetReplyRunRegistry();
   clearRuntimeConfigSnapshot?.();
   clearFollowupQueue("main");

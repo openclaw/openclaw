@@ -15,6 +15,7 @@ import * as bundledLlm from "openclaw/plugin-sdk/llm";
 // The virtualModules option then makes them available to extensions.
 import * as bundledTypebox from "typebox";
 import * as bundledTypeboxCompile from "typebox/compile";
+import * as bundledTypeboxFormat from "typebox/format";
 import * as bundledTypeboxValue from "typebox/value";
 import {
   buildPluginLoaderAliasMap,
@@ -44,9 +45,11 @@ import type {
 const VIRTUAL_MODULES: Record<string, unknown> = {
   typebox: bundledTypebox,
   "typebox/compile": bundledTypeboxCompile,
+  "typebox/format": bundledTypeboxFormat,
   "typebox/value": bundledTypeboxValue,
   "@sinclair/typebox": bundledTypebox,
   "@sinclair/typebox/compile": bundledTypeboxCompile,
+  "@sinclair/typebox/format": bundledTypeboxFormat,
   "@sinclair/typebox/value": bundledTypeboxValue,
   "openclaw/plugin-sdk/agent-core": bundledAgentCore,
   "@openclaw/plugin-sdk/agent-core": bundledAgentCore,
@@ -74,6 +77,7 @@ function getExtensionLoaderAliases(): Record<string, string> {
   const agentSessionsEntry = resolveExtensionSafeAgentSessionsEntry();
   const typeboxEntry = require.resolve("typebox");
   const typeboxCompileEntry = require.resolve("typebox/compile");
+  const typeboxFormatEntry = require.resolve("typebox/format");
   const typeboxValueEntry = require.resolve("typebox/value");
   const loaderModulePath = fileURLToPath(import.meta.url);
 
@@ -85,9 +89,11 @@ function getExtensionLoaderAliases(): Record<string, string> {
     "@openclaw/plugin-sdk/agent-sessions": agentSessionsEntry,
     typebox: typeboxEntry,
     "typebox/compile": typeboxCompileEntry,
+    "typebox/format": typeboxFormatEntry,
     "typebox/value": typeboxValueEntry,
     "@sinclair/typebox": typeboxEntry,
     "@sinclair/typebox/compile": typeboxCompileEntry,
+    "@sinclair/typebox/format": typeboxFormatEntry,
     "@sinclair/typebox/value": typeboxValueEntry,
   };
 

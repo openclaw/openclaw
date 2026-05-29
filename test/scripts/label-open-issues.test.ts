@@ -72,6 +72,30 @@ describe("label-open-issues helpers", () => {
     );
   });
 
+  it("bounds OpenAI error response bodies", async () => {
+    const tail = "tail-sentinel-should-not-appear";
+    const response = new Response(`${"x".repeat(5000)}${tail}`, {
+      status: 500,
+    });
+    let message = "";
+
+    try {
+      await testing.classifyItem(labelItem, "issue", {
+        apiKey: "test-key",
+        model: "test-model",
+        timeoutMs: 50,
+        fetchImpl: (() => Promise.resolve(response)) as typeof fetch,
+      });
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toContain("OpenAI request failed (500):");
+    expect(message).toContain("[truncated]");
+    expect(message).not.toContain(tail);
+    expect(message.length).toBeLessThan(4300);
+  });
+
   it("rejects invalid OpenAI classification timeout values", () => {
     expect(testing.resolveOpenAITimeoutMs("250")).toBe(250);
     expect(() => testing.resolveOpenAITimeoutMs("slow")).toThrow(

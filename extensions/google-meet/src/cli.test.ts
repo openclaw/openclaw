@@ -954,6 +954,27 @@ describe("google-meet CLI", () => {
     }
   });
 
+  it.each(["0x10", "1e3"])("rejects non-decimal listen timeouts: %s", async (timeoutMs) => {
+    const testListen = vi.fn();
+
+    await expect(
+      setupCli({
+        runtime: { testListen },
+      }).parseAsync(
+        [
+          "googlemeet",
+          "test-listen",
+          "https://meet.google.com/abc-defg-hij",
+          "--timeout-ms",
+          timeoutMs,
+        ],
+        { from: "user" },
+      ),
+    ).rejects.toThrow("timeout-ms must be a positive number");
+
+    expect(testListen).not.toHaveBeenCalled();
+  });
+
   it("prints a dry-run export manifest without writing files", async () => {
     stubMeetArtifactsApi();
     const stdout = captureStdout();

@@ -54,8 +54,8 @@ vi.mock("../../agents/auth-profiles.runtime.js", () => ({
 
 afterEach(() => {
   MODEL_CONTEXT_TOKEN_CACHE.clear();
+  vi.mocked(loadManifestModelCatalog).mockReset();
   vi.mocked(loadManifestModelCatalog).mockReturnValue([]);
-  vi.mocked(loadManifestModelCatalog).mockClear();
   authProfileStoreMock.reset();
 });
 
@@ -1524,6 +1524,30 @@ describe("createModelSelectionState auto-failover overrides", () => {
 });
 
 describe("createModelSelectionState resolveDefaultReasoningLevel", () => {
+  it("uses manifest metadata before hydrating the runtime reasoning catalog", async () => {
+    vi.mocked(loadModelCatalog).mockClear();
+    vi.mocked(loadManifestModelCatalog).mockClear();
+    vi.mocked(loadManifestModelCatalog).mockReturnValueOnce([
+      { provider: "local", id: "fast-reasoner", name: "Fast Reasoner", reasoning: true },
+    ]);
+    const state = await createModelSelectionState({
+      cfg: {} as OpenClawConfig,
+      agentCfg: undefined,
+      defaultProvider: "local",
+      defaultModel: "fast-reasoner",
+      provider: "local",
+      model: "fast-reasoner",
+      hasModelDirective: false,
+    });
+
+    await expect(state.resolveDefaultReasoningLevel()).resolves.toBe("on");
+    expect(loadManifestModelCatalog).toHaveBeenCalledWith({
+      config: {},
+      fallbackToMetadataScan: false,
+    });
+    expect(loadModelCatalog).not.toHaveBeenCalled();
+  });
+
   it("returns on when catalog model has reasoning true", async () => {
     const { loadModelCatalog } = await import("../../agents/model-catalog.runtime.js");
     vi.mocked(loadModelCatalog).mockResolvedValueOnce([

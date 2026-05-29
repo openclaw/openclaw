@@ -79,6 +79,22 @@ describe("msteams attachment allowlists", () => {
     });
   });
 
+  it("allows Azure China Bot Framework attachment URLs with auth by default", () => {
+    const policy = resolveAttachmentFetchPolicy();
+    const url = "https://msteams.botframework.azure.cn/teams/v3/attachments/att-1/views/original";
+    const headers = new Headers();
+
+    expect(isUrlAllowed(url, policy.allowHosts)).toBe(true);
+    applyAuthorizationHeaderForUrl({
+      headers,
+      url,
+      authAllowHosts: policy.authAllowHosts,
+      bearerToken: "token-1",
+    });
+
+    expect(headers.get("Authorization")).toBe("Bearer token-1");
+  });
+
   it("requires https and host suffix match", () => {
     const allowHosts = resolveAllowedHosts(["sharepoint.com"]);
     expect(isUrlAllowed("https://contoso.sharepoint.com/file.png", allowHosts)).toBe(true);
@@ -391,7 +407,7 @@ describe("safeFetch", () => {
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       const auth = new Headers(init?.headers).get("authorization") ?? "";
       seenAuth.push(`${url}|${auth}`);
-      if (url === "https://teams.sharepoint.com/file.pdf") {
+      if (url === "https://graph.microsoft.com/v1.0/me/photo") {
         return new Response(null, {
           status: 302,
           headers: { location: "https://cdn.sharepoint.com/storage/file.pdf" },
@@ -402,8 +418,8 @@ describe("safeFetch", () => {
 
     const headers = new Headers({ Authorization: "Bearer secret" });
     const res = await safeFetch({
-      url: "https://teams.sharepoint.com/file.pdf",
-      allowHosts: ["sharepoint.com"],
+      url: "https://graph.microsoft.com/v1.0/me/photo",
+      allowHosts: ["graph.microsoft.com", "sharepoint.com"],
       authorizationAllowHosts: ["graph.microsoft.com"],
       fetchFn: fetchMock as unknown as typeof fetch,
       requestInit: { headers },
@@ -471,6 +487,27 @@ describe("safeFetch", () => {
     await res.body?.cancel();
     expect(seenAuth[0]).toContain("Bearer secret");
     expect(seenAuth[1]).toContain("Bearer secret");
+  });
+
+  it("strips authorization from the initial fetch outside auth allowlist", async () => {
+    const seenAuth: string[] = [];
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      seenAuth.push(new Headers(init?.headers).get("authorization") ?? "");
+      expect(url).toBe("https://attacker.trafficmanager.net/v3/attachments/att-1");
+      return new Response("ok", { status: 200 });
+    });
+
+    const res = await safeFetch({
+      url: "https://attacker.trafficmanager.net/v3/attachments/att-1",
+      allowHosts: ["trafficmanager.net"],
+      authorizationAllowHosts: ["smba.trafficmanager.net"],
+      fetchFn: fetchMock as unknown as typeof fetch,
+      requestInit: { headers: { Authorization: "Bearer secret" } },
+      resolveFn: publicResolve,
+    });
+
+    expect(res.status).toBe(200);
+    expect(seenAuth).toEqual([""]);
   });
 });
 

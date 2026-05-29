@@ -21,6 +21,7 @@ const PAGE_SIZE = 50;
 const WORK_BATCH_SIZE = 500;
 const STATE_VERSION = 1;
 const DEFAULT_OPENAI_TIMEOUT_MS = 60_000;
+const OPENAI_ERROR_BODY_MAX_CHARS = 4096;
 const STATE_FILE_NAME = "issue-labeler-state.json";
 const CONFIG_BASE_DIR = process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config");
 const STATE_FILE_PATH = join(CONFIG_BASE_DIR, "openclaw", STATE_FILE_NAME);
@@ -280,6 +281,45 @@ async function withOpenAITimeout<T>(
       clearTimeout(timeout);
     }
   }
+}
+
+async function readBoundedResponseText(
+  response: Response,
+  maxChars = OPENAI_ERROR_BODY_MAX_CHARS,
+): Promise<string> {
+  if (!response.body) {
+    return "";
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  let truncated = false;
+
+  try {
+    while (text.length <= maxChars) {
+      const { done, value } = await reader.read();
+      if (done) {
+        text += decoder.decode();
+        break;
+      }
+
+      text += decoder.decode(value, { stream: true });
+      if (text.length > maxChars) {
+        text = text.slice(0, maxChars);
+        truncated = true;
+        break;
+      }
+    }
+  } finally {
+    if (truncated) {
+      await reader.cancel().catch(() => undefined);
+    } else {
+      reader.releaseLock();
+    }
+  }
+
+  return truncated ? `${text}\n[truncated]` : text;
 }
 
 function logHeader(title: string) {
@@ -685,7 +725,7 @@ async function classifyItem(
       });
 
       if (!response.ok) {
-        const text = await response.text();
+        const text = await readBoundedResponseText(response);
         throw new Error(`OpenAI request failed (${response.status}): ${text}`);
       }
 
@@ -953,6 +993,7 @@ async function main() {
 export const testing = {
   classifyItem,
   normalizeClassification,
+  readBoundedResponseText,
   resolveOpenAITimeoutMs,
 };
 
