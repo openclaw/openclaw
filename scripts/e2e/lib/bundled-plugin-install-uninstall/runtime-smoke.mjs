@@ -42,7 +42,11 @@ const READY_OFFSET_LOG_NEEDLES = [
 const FORBIDDEN_POST_READY_DEPS_WORK = [/\b(?:npm|pnpm|yarn|corepack) install\b/iu];
 
 function readPositiveInt(raw, fallback) {
-  const parsed = Number.parseInt(String(raw || ""), 10);
+  const text = String(raw ?? "").trim();
+  if (!/^\d+$/u.test(text)) {
+    return fallback;
+  }
+  const parsed = Number(text);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 

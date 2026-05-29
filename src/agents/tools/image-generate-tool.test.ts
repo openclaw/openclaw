@@ -1300,6 +1300,40 @@ describe("createImageGenerateTool", () => {
     expect(details.outputFormat).toBe("jpeg");
   });
 
+  it.each([60.5, "60px", null])("rejects malformed OpenAI output compression %s", async (value) => {
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+      provider: "openai",
+      model: "gpt-image-2",
+      attempts: [],
+      ignoredOverrides: [],
+      images: [
+        {
+          buffer: Buffer.from("jpg-out"),
+          mimeType: "image/jpeg",
+          fileName: "preview.jpg",
+        },
+      ],
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
+      path: "/tmp/generated.jpg",
+      id: "generated.jpg",
+      size: 5,
+      contentType: "image/jpeg",
+    });
+
+    const tool = createToolWithPrimaryImageModel("openai/gpt-image-2");
+    await expect(
+      tool.execute("call-openai-malformed-hints", {
+        prompt: "Cheap preview",
+        outputFormat: "jpeg",
+        openai: {
+          outputCompression: value,
+        },
+      }),
+    ).rejects.toThrow("openai.outputCompression must be between 0 and 100");
+    expect(generateImage).not.toHaveBeenCalled();
+  });
+
   it("forwards transparent OpenAI background requests with a PNG output format", async () => {
     const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
       provider: "openai",
@@ -1465,6 +1499,37 @@ describe("createImageGenerateTool", () => {
     await expect(tool.execute("call-2", { prompt: "too many cats", count: 5 })).rejects.toThrow(
       "count must be between 1 and 4",
     );
+  });
+
+  it.each([2.5, "2cats", null])("rejects malformed image count %s", async (count) => {
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+      provider: "google",
+      model: "gemini-3.1-flash-image-preview",
+      attempts: [],
+      ignoredOverrides: [],
+      images: [
+        {
+          buffer: Buffer.from("png-out"),
+          mimeType: "image/png",
+          fileName: "cat.png",
+        },
+      ],
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
+      path: "/tmp/generated.png",
+      id: "generated.png",
+      size: 7,
+      contentType: "image/png",
+    });
+
+    const tool = createToolWithPrimaryImageModel("google/gemini-3.1-flash-image-preview");
+    await expect(
+      tool.execute("call-fractional-count", {
+        prompt: "A cat wearing sunglasses",
+        count,
+      }),
+    ).rejects.toThrow("count must be between 1 and 4");
+    expect(generateImage).not.toHaveBeenCalled();
   });
 
   it("forwards reference images and inferred resolution for edit mode", async () => {

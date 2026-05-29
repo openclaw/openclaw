@@ -700,6 +700,26 @@ describe("cron tool", () => {
     expect(text).toContain("Message 12");
   });
 
+  it.each([1.5, -1, "2messages"])(
+    "rejects invalid contextMessages value %s",
+    async (contextMessages) => {
+      const tool = createTestCronTool({ agentSessionKey: "main" });
+
+      await expect(
+        tool.execute("call-invalid-context", {
+          action: "add",
+          contextMessages,
+          job: {
+            name: "reminder",
+            schedule: { at: new Date(123).toISOString() },
+            payload: { kind: "systemEvent", text: "Reminder: the thing." },
+          },
+        }),
+      ).rejects.toThrow("contextMessages must be a non-negative integer");
+      expect(callGatewayMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("does not add context when contextMessages is 0 (default)", async () => {
     callGatewayMock.mockResolvedValueOnce({ ok: true });
 

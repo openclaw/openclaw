@@ -1,5 +1,6 @@
 import { parseStrictNonNegativeInteger } from "../../infra/parse-finite-number.js";
 import { createExpiringMapCache, isCacheEnabled, resolveCacheTtlMs } from "../cache-utils.js";
+import { clearSessionSkillPromptRefCache } from "./skill-prompt-blobs.js";
 import type { SessionEntry } from "./types.js";
 
 export type DeepReadonly<T> = T extends (...args: never[]) => unknown
@@ -259,6 +260,7 @@ export function clearSessionStoreCaches(): void {
   SESSION_STORE_SERIALIZED_CACHE.clear();
   sessionStoreSerializedCacheBytes = 0;
   SESSION_STORE_STRING_INTERN_POOL.clear();
+  clearSessionSkillPromptRefCache();
   resetSessionStoreStringInternStats();
 }
 

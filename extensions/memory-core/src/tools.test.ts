@@ -58,6 +58,19 @@ describe("memory_search unavailable payloads", () => {
     resetMemoryToolMockState({ searchImpl: async () => [] });
   });
 
+  it("rejects fractional maxResults before searching", async () => {
+    const tool = createMemorySearchToolOrThrow();
+
+    await expect(
+      tool.execute("fractional-max-results", {
+        query: "hello",
+        maxResults: 1.5,
+      }),
+    ).rejects.toThrow("maxResults must be a positive integer");
+
+    expect(getMemorySearchManagerMockCalls()).toBe(0);
+  });
+
   it("returns explicit unavailable metadata for quota failures", async () => {
     setMemorySearchImpl(async () => {
       throw new Error("openai embeddings failed: 429 insufficient_quota");

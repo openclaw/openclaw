@@ -94,6 +94,16 @@ describe("gateway handshake timeouts", () => {
         VITEST: "1",
       }),
     ).toBe(DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS);
+    expect(
+      getPreauthHandshakeTimeoutMsFromEnv({
+        OPENCLAW_HANDSHAKE_TIMEOUT_MS: "1e3",
+      }),
+    ).toBe(DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS);
+    expect(
+      getPreauthHandshakeTimeoutMsFromEnv({
+        OPENCLAW_HANDSHAKE_TIMEOUT_MS: "0x10",
+      }),
+    ).toBe(DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS);
   });
 
   test("getConnectChallengeTimeoutMsFromEnv reads OPENCLAW_CONNECT_CHALLENGE_TIMEOUT_MS", () => {
@@ -103,6 +113,12 @@ describe("gateway handshake timeouts", () => {
     ).toBe(15_000);
     expect(
       getConnectChallengeTimeoutMsFromEnv({ OPENCLAW_CONNECT_CHALLENGE_TIMEOUT_MS: "garbage" }),
+    ).toBeUndefined();
+    expect(
+      getConnectChallengeTimeoutMsFromEnv({ OPENCLAW_CONNECT_CHALLENGE_TIMEOUT_MS: "1e3" }),
+    ).toBeUndefined();
+    expect(
+      getConnectChallengeTimeoutMsFromEnv({ OPENCLAW_CONNECT_CHALLENGE_TIMEOUT_MS: "0x10" }),
     ).toBeUndefined();
   });
 

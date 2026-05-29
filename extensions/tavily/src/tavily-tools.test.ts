@@ -297,6 +297,41 @@ describe("tavily tools", () => {
     expect(runTavilyExtract).not.toHaveBeenCalled();
   });
 
+  it("rejects fractional and out-of-range integer options before Tavily calls", async () => {
+    const searchTool = createTavilySearchTool(fakeApi());
+    await expect(
+      searchTool.execute("search-call", {
+        query: "openclaw",
+        max_results: 5.5,
+      }),
+    ).rejects.toThrow("max_results must be an integer from 1 to 20.");
+    await expect(
+      searchTool.execute("search-call", {
+        query: "openclaw",
+        max_results: 21,
+      }),
+    ).rejects.toThrow("max_results must be an integer from 1 to 20.");
+
+    const extractTool = createTavilyExtractTool(fakeApi());
+    await expect(
+      extractTool.execute("extract-call", {
+        urls: ["https://example.com"],
+        query: "pricing",
+        chunks_per_source: 2.5,
+      }),
+    ).rejects.toThrow("chunks_per_source must be an integer from 1 to 5.");
+    await expect(
+      extractTool.execute("extract-call", {
+        urls: ["https://example.com"],
+        query: "pricing",
+        chunks_per_source: 6,
+      }),
+    ).rejects.toThrow("chunks_per_source must be an integer from 1 to 5.");
+
+    expect(runTavilySearch).not.toHaveBeenCalled();
+    expect(runTavilyExtract).not.toHaveBeenCalled();
+  });
+
   it("reads plugin web search config and prefers it over env defaults", () => {
     vi.stubEnv("TAVILY_API_KEY", "env-key");
     vi.stubEnv("TAVILY_BASE_URL", "https://env.tavily.test");

@@ -8,7 +8,13 @@ import { resolveNodePairApprovalScopes } from "../../infra/node-pairing-authz.js
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
-import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
+import {
+  optionalFiniteNumberSchema,
+  optionalNonNegativeIntegerSchema,
+  optionalPositiveIntegerSchema,
+  optionalStringEnum,
+  stringEnum,
+} from "../schema/typebox.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
 import { executeNodeCommandAction, type NodeCommandAction } from "./nodes-tool-commands.js";
@@ -91,21 +97,21 @@ const NodesToolSchema = Type.Object({
   facing: optionalStringEnum(CAMERA_FACING, {
     description: "camera_snap: front/back/both; camera_clip: front/back only.",
   }),
-  maxWidth: Type.Optional(Type.Number()),
-  quality: Type.Optional(Type.Number()),
-  delayMs: Type.Optional(Type.Number()),
+  maxWidth: optionalPositiveIntegerSchema(),
+  quality: optionalFiniteNumberSchema({ minimum: 0, maximum: 1 }),
+  delayMs: optionalNonNegativeIntegerSchema(),
   deviceId: Type.Optional(Type.String()),
-  limit: Type.Optional(Type.Number()),
+  limit: optionalPositiveIntegerSchema({ maximum: 20 }),
   duration: Type.Optional(Type.String()),
-  durationMs: Type.Optional(Type.Number({ maximum: 300_000 })),
+  durationMs: optionalPositiveIntegerSchema({ maximum: 300_000 }),
   includeAudio: Type.Optional(Type.Boolean()),
   // screen_record
-  fps: Type.Optional(Type.Number()),
-  screenIndex: Type.Optional(Type.Number()),
+  fps: optionalFiniteNumberSchema({ exclusiveMinimum: 0 }),
+  screenIndex: optionalNonNegativeIntegerSchema(),
   outPath: Type.Optional(Type.String()),
   // location_get
-  maxAgeMs: Type.Optional(Type.Number()),
-  locationTimeoutMs: Type.Optional(Type.Number()),
+  maxAgeMs: optionalNonNegativeIntegerSchema(),
+  locationTimeoutMs: optionalPositiveIntegerSchema(),
   desiredAccuracy: optionalStringEnum(LOCATION_ACCURACY),
   // notifications_action
   notificationAction: optionalStringEnum(NOTIFICATIONS_ACTIONS),
@@ -114,7 +120,7 @@ const NodesToolSchema = Type.Object({
   // invoke
   invokeCommand: Type.Optional(Type.String()),
   invokeParamsJson: Type.Optional(Type.String()),
-  invokeTimeoutMs: Type.Optional(Type.Number()),
+  invokeTimeoutMs: optionalPositiveIntegerSchema(),
 });
 
 export function createNodesTool(options?: {

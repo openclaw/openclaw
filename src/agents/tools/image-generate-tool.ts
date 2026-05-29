@@ -32,6 +32,7 @@ import {
 import { getImageMetadata } from "../../media/media-services.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { loadWebMedia } from "../../media/web-media.js";
+import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { resolveUserPath } from "../../utils.js";
 import type { DeliveryContext } from "../../utils/delivery-context.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
@@ -44,7 +45,12 @@ import {
   recordRecentMediaGenerationTaskStartForSession,
 } from "../media-generation-task-status-shared.js";
 import { optionalStringEnum } from "../schema/string-enum.js";
-import { ToolInputError, readNumberParam, readStringParam } from "./common.js";
+import {
+  ToolInputError,
+  readNonNegativeIntegerParam,
+  readPositiveIntegerParam,
+  readStringParam,
+} from "./common.js";
 import {
   completeImageGenerationTaskRun,
   createImageGenerationTaskRun,
@@ -178,7 +184,7 @@ const ImageGenerateToolSchema = Type.Object({
         description: "OpenAI moderation: low, auto.",
       }),
       outputCompression: Type.Optional(
-        Type.Number({
+        Type.Integer({
           description: "OpenAI jpeg/webp compression 0-100.",
           minimum: 0,
           maximum: 100,
@@ -192,14 +198,14 @@ const ImageGenerateToolSchema = Type.Object({
     }),
   ),
   count: Type.Optional(
-    Type.Number({
+    Type.Integer({
       description: `Image count 1-${MAX_COUNT}.`,
       minimum: 1,
       maximum: MAX_COUNT,
     }),
   ),
   timeoutMs: Type.Optional(
-    Type.Number({
+    Type.Integer({
       description: "Provider timeout ms (300000 tends to be a safe amount).",
       minimum: 1,
     }),
@@ -235,7 +241,12 @@ function resolveAction(args: Record<string, unknown>): "generate" | "list" | "st
 }
 
 function resolveRequestedCount(args: Record<string, unknown>): number {
-  const count = readNumberParam(args, "count", { integer: true });
+  if (readSnakeCaseParamRaw(args, "count") === null) {
+    throw new ToolInputError(`count must be between 1 and ${MAX_COUNT}`);
+  }
+  const count = readPositiveIntegerParam(args, "count", {
+    message: `count must be between 1 and ${MAX_COUNT}`,
+  });
   if (count === undefined) {
     return DEFAULT_COUNT;
   }
@@ -339,7 +350,12 @@ function normalizeOpenAIOptions(args: Record<string, unknown>): ImageGenerationO
   const raw = readRecordParam(args, "openai");
   const background = normalizeOpenAIBackground(readStringParam(raw, "background"));
   const moderation = normalizeOpenAIModeration(readStringParam(raw, "moderation"));
-  const outputCompression = readNumberParam(raw, "outputCompression", { integer: true });
+  if (readSnakeCaseParamRaw(raw, "outputCompression") === null) {
+    throw new ToolInputError("openai.outputCompression must be between 0 and 100");
+  }
+  const outputCompression = readNonNegativeIntegerParam(raw, "outputCompression", {
+    message: "openai.outputCompression must be between 0 and 100",
+  });
   const user = readStringParam(raw, "user");
   if (outputCompression !== undefined && (outputCompression < 0 || outputCompression > 100)) {
     throw new ToolInputError("openai.outputCompression must be between 0 and 100");

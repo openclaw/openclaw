@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import fs from "node:fs/promises";
 import path from "node:path";
+import { readBoundedResponseText } from "./lib/bounded-response-text.mjs";
 
 const groupId = process.env.OPENCLAW_QA_TELEGRAM_GROUP_ID;
 const driverToken = process.env.OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN;
@@ -18,6 +19,10 @@ const sampleTimeoutMs = Number(process.env.OPENCLAW_NPM_TELEGRAM_SAMPLE_TIMEOUT_
 const botApiTimeoutMs = readPositiveInt(
   process.env.OPENCLAW_NPM_TELEGRAM_BOT_API_TIMEOUT_MS,
   30000,
+);
+const botApiBodyMaxBytes = readPositiveInt(
+  process.env.OPENCLAW_NPM_TELEGRAM_BOT_API_BODY_MAX_BYTES,
+  1024 * 1024,
 );
 const maxWarmFailures = Number(
   process.env.OPENCLAW_NPM_TELEGRAM_MAX_FAILURES ?? String(warmSampleCount),
@@ -56,20 +61,49 @@ function readPositiveInt(raw, fallback) {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-async function fetchTelegramJson(url, init) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => {
-    controller.abort();
-  }, botApiTimeoutMs);
+function taggedError(message, code) {
+  return Object.assign(new Error(message), { code });
+}
+
+function parseJsonPayload(rawPayload, label) {
   try {
-    const response = await fetch(url, {
-      ...init,
-      signal: controller.signal,
-    });
-    const payload = await response.json();
+    return JSON.parse(rawPayload);
+  } catch (error) {
+    throw new Error(`${label} returned invalid JSON`, { cause: error });
+  }
+}
+
+async function fetchTelegramJson(url, init, label) {
+  const controller = new AbortController();
+  const timeoutError = taggedError(`${label} timed out after ${botApiTimeoutMs}ms`, "ETIMEDOUT");
+  let timeout;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeout = setTimeout(() => {
+      controller.abort(timeoutError);
+      reject(timeoutError);
+    }, botApiTimeoutMs);
+    timeout.unref?.();
+  });
+  try {
+    const response = await Promise.race([
+      fetch(url, {
+        ...init,
+        signal: controller.signal,
+      }),
+      timeoutPromise,
+    ]);
+    const rawPayload = await readBoundedResponseText(
+      response,
+      label,
+      botApiBodyMaxBytes,
+      timeoutPromise,
+    );
+    const payload = parseJsonPayload(rawPayload, label);
     return { payload, response };
   } finally {
-    clearTimeout(timer);
+    if (timeout) {
+      clearTimeout(timeout);
+    }
   }
 }
 
@@ -79,11 +113,15 @@ class TelegramBot {
   }
 
   async call(method, body) {
-    const { payload, response } = await fetchTelegramJson(`${this.baseUrl}/${method}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    });
+    const { payload, response } = await fetchTelegramJson(
+      `${this.baseUrl}/${method}`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      },
+      `Telegram Bot API ${method}`,
+    );
     if (!response.ok || payload.ok !== true) {
       throw new Error(`${method} failed: ${JSON.stringify(payload)}`);
     }

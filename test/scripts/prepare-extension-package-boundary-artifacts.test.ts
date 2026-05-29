@@ -7,6 +7,7 @@ import {
   createPrefixedOutputWriter,
   isArtifactSetFresh,
   parseMode,
+  resolveBoundaryRootShimsTimeoutMs,
   runNodeStep,
   runNodeSteps,
   runNodeStepsInParallel,
@@ -177,5 +178,19 @@ describe("prepare-extension-package-boundary-artifacts", () => {
     expect(parseMode([])).toBe("all");
     expect(parseMode(["--mode=package-boundary"])).toBe("package-boundary");
     expect(() => parseMode(["--mode=nope"])).toThrow("Unknown mode: nope");
+  });
+
+  it("gives cold root shim generation macOS runner headroom", () => {
+    expect(resolveBoundaryRootShimsTimeoutMs({})).toBe(300_000);
+    expect(
+      resolveBoundaryRootShimsTimeoutMs({
+        OPENCLAW_PLUGIN_SDK_BOUNDARY_ROOT_SHIMS_TIMEOUT_MS: "450000",
+      }),
+    ).toBe(450_000);
+    expect(
+      resolveBoundaryRootShimsTimeoutMs({
+        OPENCLAW_PLUGIN_SDK_BOUNDARY_ROOT_SHIMS_TIMEOUT_MS: "120s",
+      }),
+    ).toBe(300_000);
   });
 });

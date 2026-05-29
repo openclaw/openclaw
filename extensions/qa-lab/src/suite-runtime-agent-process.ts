@@ -122,11 +122,7 @@ async function runQaCli(
         return;
       }
       const stderrText = formatQaChildOutputTail(stderr, "qa cli stderr");
-      reject(
-        new Error(
-          `qa cli failed (${code ?? "unknown"}): ${stderrText}`,
-        ),
-      );
+      reject(new Error(`qa cli failed (${code ?? "unknown"}): ${stderrText}`));
     });
   });
   const text = readQaChildOutput(stdout).trim();

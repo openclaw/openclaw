@@ -62,6 +62,7 @@ const DEFAULT_MEDIA_HOST_ALLOWLIST = [
   "media.ams.skype.com",
   // Bot Framework attachment URLs
   "trafficmanager.net",
+  "botframework.azure.cn",
   "blob.core.windows.net",
   "azureedge.net",
   "microsoft.com",
@@ -73,6 +74,7 @@ const DEFAULT_MEDIA_AUTH_HOST_ALLOWLIST = [
   // Bot Framework Service URL (smba.trafficmanager.net) used for outbound
   // replies and inbound attachment downloads (clipboard-pasted images).
   "smba.trafficmanager.net",
+  "botframework.azure.cn",
   "graph.microsoft.com",
   "graph.microsoft.us",
   "graph.microsoft.de",

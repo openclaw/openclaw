@@ -295,4 +295,46 @@ describe("llm-task tool (json-only)", () => {
     const call = await executeEmbeddedRun({ prompt: "x" });
     expect(call.disableTools).toBe(true);
   });
+
+  it("drops malformed numeric run options before dispatch", async () => {
+    mockEmbeddedRunJson({ ok: true });
+    const tool = createLlmTaskTool(
+      fakeApi({
+        pluginConfig: {
+          maxTokens: Number.POSITIVE_INFINITY,
+          timeoutMs: 4096.5,
+        },
+      }),
+    );
+
+    await tool.execute("id", {
+      prompt: "x",
+      temperature: Number.NaN,
+      maxTokens: 0,
+      timeoutMs: -1,
+    });
+
+    const call = (runEmbeddedAgent as any).mock.calls[0]?.[0];
+    expect(call.timeoutMs).toBe(30_000);
+    expect(call.streamParams).toEqual({
+      temperature: undefined,
+      maxTokens: undefined,
+    });
+  });
+
+  it("passes valid numeric run options before dispatch", async () => {
+    mockEmbeddedRunJson({ ok: true });
+    const call = await executeEmbeddedRun({
+      prompt: "x",
+      temperature: 0.2,
+      maxTokens: 512,
+      timeoutMs: 10_000,
+    });
+
+    expect(call.timeoutMs).toBe(10_000);
+    expect(call.streamParams).toEqual({
+      temperature: 0.2,
+      maxTokens: 512,
+    });
+  });
 });

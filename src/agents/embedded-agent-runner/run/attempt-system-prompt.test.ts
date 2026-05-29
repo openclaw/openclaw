@@ -23,6 +23,41 @@ const transformProviderSystemPrompt: Parameters<
 >[0]["transformProviderSystemPrompt"] = ({ context }) => context.systemPrompt;
 
 describe("buildAttemptSystemPrompt", () => {
+  it("injects workspace identity context without a system prompt override", () => {
+    const result = buildAttemptSystemPrompt({
+      isRawModelRun: false,
+      transformProviderSystemPrompt,
+      embeddedSystemPrompt: {
+        workspaceDir: "/tmp/openclaw",
+        reasoningTagHint: false,
+        runtimeInfo: {
+          host: "test-host",
+          os: "Darwin",
+          arch: "arm64",
+          node: "v22.0.0",
+          model: "openai/gpt-5.5",
+        },
+        tools: [],
+        modelAliasLines: [],
+        userTimezone: "UTC",
+        contextFiles: [
+          { path: "/tmp/openclaw/SOUL.md", content: "SOUL_CONTEXT_MARKER" },
+          { path: "/tmp/openclaw/IDENTITY.md", content: "IDENTITY_CONTEXT_MARKER" },
+          { path: "/tmp/openclaw/USER.md", content: "USER_CONTEXT_MARKER" },
+        ],
+      },
+      providerTransform: baseProviderTransform,
+    });
+
+    expect(result.systemPrompt).toContain("# Project Context");
+    expect(result.systemPrompt).toContain("## /tmp/openclaw/SOUL.md");
+    expect(result.systemPrompt).toContain("SOUL_CONTEXT_MARKER");
+    expect(result.systemPrompt).toContain("## /tmp/openclaw/IDENTITY.md");
+    expect(result.systemPrompt).toContain("IDENTITY_CONTEXT_MARKER");
+    expect(result.systemPrompt).toContain("## /tmp/openclaw/USER.md");
+    expect(result.systemPrompt).toContain("USER_CONTEXT_MARKER");
+  });
+
   it("preserves bootstrap Project Context when a system prompt override is configured", () => {
     const result = buildAttemptSystemPrompt({
       isRawModelRun: false,

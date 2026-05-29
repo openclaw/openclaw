@@ -77,6 +77,7 @@ import {
   mergeSetupRuntimeChannelPlugin,
   resolveBundledRuntimeChannelRegistration,
   resolveSetupChannelRegistration,
+  shouldDeferConfiguredChannelFullRuntimeMerge,
   shouldLoadChannelPluginInSetupRuntime,
 } from "./loader-channel-setup.js";
 import {
@@ -2221,6 +2222,14 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           if (
             registrationPlan.loadSetupRuntimeEntry &&
             setupRegistration.usesBundledSetupContract &&
+            !shouldDeferConfiguredChannelFullRuntimeMerge({
+              manifestChannels: manifestRecord.channels,
+              startupDeferConfiguredChannelFullLoadUntilAfterListen:
+                manifestRecord.startupDeferConfiguredChannelFullLoadUntilAfterListen,
+              cfg,
+              env,
+              preferSetupRuntimeForChannelPlugins,
+            }) &&
             resolveCanonicalDistRuntimeSource(runtimeCandidateEntry.source) !== safeSource
           ) {
             const runtimeModuleSource = resolveCanonicalDistRuntimeSource(
@@ -2363,6 +2372,34 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
                 diagnosticMessagePrefix: "failed to apply setup channel runtime: ",
               });
               continue;
+            }
+          }
+          if (registrationMode === "setup-runtime") {
+            const registerSetupRuntime = mergedSetupRegistration.registerSetupRuntime;
+            if (registerSetupRuntime) {
+              const registrySnapshot = snapshotPluginRegistry(registry);
+              try {
+                runPluginRegisterSync(
+                  (registrationApi) => registerSetupRuntime(registrationApi),
+                  api,
+                );
+              } catch (err) {
+                restorePluginRegistry(registry, registrySnapshot);
+                recordPluginError({
+                  logger,
+                  registry,
+                  record,
+                  seenIds,
+                  pluginId,
+                  origin: candidate.origin,
+                  phase: "register",
+                  error: err,
+                  logPrefix: `[plugins] ${record.id} failed to register setup-runtime channel side effects from ${record.source}: `,
+                  diagnosticMessagePrefix:
+                    "failed to register setup-runtime channel side effects: ",
+                });
+                continue;
+              }
             }
           }
           api.registerChannel(mergedSetupPlugin);

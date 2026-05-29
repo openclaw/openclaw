@@ -11,7 +11,12 @@ import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
 import { CRON_TOOL_DISPLAY_SUMMARY } from "../tool-description-presets.js";
-import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
+import {
+  type AnyAgentTool,
+  jsonResult,
+  readNonNegativeIntegerParam,
+  readStringParam,
+} from "./common.js";
 import { callGatewayTool, readGatewayCallOptions, type GatewayCallOptions } from "./gateway.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
 
@@ -301,7 +306,7 @@ export const CronToolSchema = Type.Object(
     mode: optionalStringEnum(CRON_WAKE_MODES),
     runMode: optionalStringEnum(CRON_RUN_MODES),
     contextMessages: Type.Optional(
-      Type.Number({ minimum: 0, maximum: REMINDER_CONTEXT_MESSAGES_MAX }),
+      Type.Integer({ minimum: 0, maximum: REMINDER_CONTEXT_MESSAGES_MAX }),
     ),
     agentId: Type.Optional(Type.String({ description: "List filter: agent id" })),
   },
@@ -723,10 +728,7 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
             }
           }
 
-          const contextMessages =
-            typeof params.contextMessages === "number" && Number.isFinite(params.contextMessages)
-              ? params.contextMessages
-              : 0;
+          const contextMessages = readNonNegativeIntegerParam(params, "contextMessages") ?? 0;
           if (
             job &&
             typeof job === "object" &&

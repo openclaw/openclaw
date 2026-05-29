@@ -5,7 +5,11 @@ import {
   collectBundledPluginBuildEntries,
   NON_PACKAGED_BUNDLED_PLUGIN_DIRS,
 } from "./scripts/lib/bundled-plugin-build-entries.mjs";
-import { buildPluginSdkEntrySources } from "./scripts/lib/plugin-sdk-entries.mjs";
+import {
+  buildPluginSdkEntrySources,
+  pluginSdkEntrypoints,
+  publicPluginSdkEntrypoints,
+} from "./scripts/lib/plugin-sdk-entries.mjs";
 
 type InputOptionsFactory = Extract<NonNullable<UserConfig["inputOptions"]>, Function>;
 type InputOptionsArg = InputOptionsFactory extends (
@@ -140,6 +144,9 @@ function nodeBuildConfig(config: UserConfig): UserConfig {
 
 const bundledPluginBuildEntries = collectBundledPluginBuildEntries();
 const shouldBuildPrivateQaEntries = process.env.OPENCLAW_BUILD_PRIVATE_QA === "1";
+const productionPluginSdkEntrypoints = shouldBuildPrivateQaEntries
+  ? pluginSdkEntrypoints
+  : publicPluginSdkEntrypoints;
 
 function buildBundledHookEntries(): Record<string, string> {
   const hooksRoot = path.join(process.cwd(), "src", "hooks", "bundled");
@@ -357,10 +364,9 @@ function buildUnifiedDistEntries(): Record<string, string> {
     // Private bundled Codex helper for app-server user MCP config projection.
     "plugin-sdk/codex-mcp-projection": "src/plugin-sdk/codex-mcp-projection.ts",
     ...Object.fromEntries(
-      Object.entries(buildPluginSdkEntrySources()).map(([entry, source]) => [
-        `plugin-sdk/${entry}`,
-        source,
-      ]),
+      Object.entries(buildPluginSdkEntrySources(productionPluginSdkEntrypoints)).map(
+        ([entry, source]) => [`plugin-sdk/${entry}`, source],
+      ),
     ),
     ...(shouldBuildPrivateQaEntries
       ? {

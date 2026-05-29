@@ -1,4 +1,5 @@
 import path from "node:path";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "./cli-paths.js";
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
@@ -176,11 +177,11 @@ function normalizeQaSuiteConcurrency(
   scenarioCount: number,
   defaultConcurrency = DEFAULT_QA_SUITE_CONCURRENCY,
 ) {
-  const envValue = Number(process.env.OPENCLAW_QA_SUITE_CONCURRENCY);
+  const envValue = parseStrictNonNegativeInteger(process.env.OPENCLAW_QA_SUITE_CONCURRENCY);
   const raw =
     typeof value === "number" && Number.isFinite(value)
       ? value
-      : Number.isFinite(envValue)
+      : envValue !== undefined
         ? envValue
         : defaultConcurrency;
   return Math.max(1, Math.min(Math.floor(raw), Math.max(1, scenarioCount)));
@@ -197,11 +198,11 @@ function resolveQaSuiteWorkerStartStaggerMs(
   if (raw === undefined) {
     return DEFAULT_QA_SUITE_WORKER_START_STAGGER_MS;
   }
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed < 0) {
+  const parsed = parseStrictNonNegativeInteger(raw);
+  if (parsed === undefined) {
     return DEFAULT_QA_SUITE_WORKER_START_STAGGER_MS;
   }
-  return Math.floor(parsed);
+  return parsed;
 }
 
 async function mapQaSuiteWithConcurrency<T, U>(

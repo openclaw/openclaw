@@ -32,7 +32,8 @@
           "type": "string"
         },
         "delayMs": {
-          "type": "number"
+          "minimum": 0,
+          "type": "integer"
         },
         "delivery": {
           "enum": ["system", "overlay", "auto"],
@@ -50,7 +51,8 @@
         },
         "durationMs": {
           "maximum": 300000,
-          "type": "number"
+          "minimum": 1,
+          "type": "integer"
         },
         "facing": {
           "description": "camera_snap: front/back/both; camera_clip: front/back only.",
@@ -58,6 +60,7 @@
           "type": "string"
         },
         "fps": {
+          "exclusiveMinimum": 0,
           "type": "number"
         },
         "gatewayToken": {
@@ -76,19 +79,25 @@
           "type": "string"
         },
         "invokeTimeoutMs": {
-          "type": "number"
+          "minimum": 1,
+          "type": "integer"
         },
         "limit": {
-          "type": "number"
+          "maximum": 20,
+          "minimum": 1,
+          "type": "integer"
         },
         "locationTimeoutMs": {
-          "type": "number"
+          "minimum": 1,
+          "type": "integer"
         },
         "maxAgeMs": {
-          "type": "number"
+          "minimum": 0,
+          "type": "integer"
         },
         "maxWidth": {
-          "type": "number"
+          "minimum": 1,
+          "type": "integer"
         },
         "node": {
           "type": "string"
@@ -111,13 +120,16 @@
           "type": "string"
         },
         "quality": {
+          "maximum": 1,
+          "minimum": 0,
           "type": "number"
         },
         "requestId": {
           "type": "string"
         },
         "screenIndex": {
-          "type": "number"
+          "minimum": 0,
+          "type": "integer"
         },
         "sound": {
           "type": "string"
@@ -773,7 +785,7 @@
         "timeoutMs": {
           "description": "Provider timeout ms.",
           "minimum": 1,
-          "type": "number"
+          "type": "integer"
         }
       },
       "required": ["text"],
@@ -1185,7 +1197,7 @@
         "maxChars": {
           "description": "Max chars returned; truncates.",
           "minimum": 100,
-          "type": "number"
+          "type": "integer"
         },
         "url": {
           "description": "HTTP(S) URL.",

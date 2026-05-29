@@ -466,6 +466,10 @@ describe("scoped vitest configs", () => {
     expectThreadedNonIsolatedRunner(defaultExtensionsConfig);
   });
 
+  it("serializes Slack extension files that share process globals", () => {
+    expect(requireTestConfig(defaultExtensionSlackConfig).fileParallelism).toBe(false);
+  });
+
   it("normalizes split extension channel include patterns relative to the scoped dir", () => {
     for (const [config, include] of [
       [defaultExtensionDiscordConfig, "discord/**/*.test.ts"],

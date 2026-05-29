@@ -207,7 +207,9 @@ describe("web media loading", () => {
       ok: true,
       body: true,
       arrayBuffer: async () => Buffer.alloc(2048).buffer,
-      headers: { get: () => "image/png" },
+      headers: {
+        get: (name: string) => (name === "content-type" ? "image/png" : null),
+      },
       status: 200,
     } as unknown as Response);
 
@@ -270,7 +272,9 @@ describe("web media loading", () => {
       body: true,
       arrayBuffer: async () =>
         gifBytes.buffer.slice(gifBytes.byteOffset, gifBytes.byteOffset + gifBytes.byteLength),
-      headers: { get: () => "image/gif" },
+      headers: {
+        get: (name: string) => (name === "content-type" ? "image/gif" : null),
+      },
       status: 200,
     } as unknown as Response);
 

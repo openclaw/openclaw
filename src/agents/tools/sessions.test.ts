@@ -724,6 +724,19 @@ describe("sessions_send gating", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
+  it.each([1.5, -1, "1sec"])("rejects invalid timeoutSeconds value %s", async (timeoutSeconds) => {
+    const tool = createMainSessionsSendTool();
+
+    await expect(
+      tool.execute("call-invalid-timeout", {
+        sessionKey: MAIN_AGENT_SESSION_KEY,
+        message: "hi",
+        timeoutSeconds,
+      }),
+    ).rejects.toThrow("timeoutSeconds must be a non-negative integer");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
   it("returns an error when label resolution fails", async () => {
     callGatewayMock.mockRejectedValueOnce(new Error("No session found with label: nope"));
     const tool = createMainSessionsSendTool();

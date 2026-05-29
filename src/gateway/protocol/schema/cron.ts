@@ -40,6 +40,19 @@ const CronJobsEnabledFilterSchema = Type.Union([
   Type.Literal("enabled"),
   Type.Literal("disabled"),
 ]);
+const CronJobsScheduleKindFilterSchema = Type.Union([
+  Type.Literal("all"),
+  Type.Literal("at"),
+  Type.Literal("every"),
+  Type.Literal("cron"),
+]);
+const CronJobsLastRunStatusFilterSchema = Type.Union([
+  Type.Literal("all"),
+  Type.Literal("ok"),
+  Type.Literal("error"),
+  Type.Literal("skipped"),
+  Type.Literal("unknown"),
+]);
 const CronJobsSortBySchema = Type.Union([
   Type.Literal("nextRunAtMs"),
   Type.Literal("updatedAtMs"),
@@ -360,6 +373,8 @@ export const CronListParamsSchema = Type.Object(
     offset: Type.Optional(Type.Integer({ minimum: 0 })),
     query: Type.Optional(Type.String()),
     enabled: Type.Optional(CronJobsEnabledFilterSchema),
+    scheduleKind: Type.Optional(CronJobsScheduleKindFilterSchema),
+    lastRunStatus: Type.Optional(CronJobsLastRunStatusFilterSchema),
     sortBy: Type.Optional(CronJobsSortBySchema),
     sortDir: Type.Optional(CronSortDirSchema),
     agentId: Type.Optional(NonEmptyString),

@@ -339,6 +339,8 @@ type PluginSideEffectGuard = {
 type PluginRegistrationCapabilities = {
   /** Broad registry writes that discovery and live activation both need. */
   capabilityHandlers: boolean;
+  /** Setup-runtime may publish pre-listen gateway surfaces without full activation. */
+  setupRuntimeHandlers: boolean;
   /** Runtime channel registration is suppressed for setup-only and tool discovery loads. */
   runtimeChannel: boolean;
 };
@@ -354,6 +356,7 @@ function resolvePluginRegistrationCapabilities(
   const capabilityHandlers = mode === "full" || mode === "discovery" || mode === "tool-discovery";
   return {
     capabilityHandlers,
+    setupRuntimeHandlers: mode === "setup-runtime",
     runtimeChannel: mode !== "setup-only" && mode !== "tool-discovery",
   };
 }
@@ -3080,6 +3083,13 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               },
               on: (hookName, handler, opts) =>
                 registerTypedHook(record, hookName, handler, opts, params.hookPolicy),
+            }
+          : {}),
+        ...(registrationCapabilities.setupRuntimeHandlers
+          ? {
+              registerHttpRoute: (routeParams) => registerHttpRoute(record, routeParams),
+              registerGatewayMethod: (method, handler, opts) =>
+                registerGatewayMethod(record, method, handler, opts),
             }
           : {}),
         // Allow setup-only/setup-runtime paths to surface parse-time CLI metadata

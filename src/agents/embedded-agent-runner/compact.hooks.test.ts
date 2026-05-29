@@ -464,9 +464,9 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     });
 
     const sessionOptions = expectRecordFields(mockCallArg(createAgentSessionMock), {});
-    expect((sessionOptions.customTools as Array<{ name: string }>).map((tool) => tool.name)).toEqual(
-      ["healthy_lookup"],
-    );
+    expect(
+      (sessionOptions.customTools as Array<{ name: string }>).map((tool) => tool.name),
+    ).toEqual(["healthy_lookup"]);
     expect(sessionOptions.tools).toEqual(["healthy_lookup"]);
   });
 

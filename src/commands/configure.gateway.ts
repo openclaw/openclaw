@@ -1,4 +1,5 @@
 import { formatPortRangeHint } from "../cli/error-format.js";
+import { parsePort } from "../cli/shared/parse-port.js";
 import { resolveGatewayPort } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isValidEnvSecretRefId, type SecretInput } from "../config/types.secrets.js";
@@ -8,7 +9,6 @@ import {
   TAILSCALE_EXPOSURE_OPTIONS,
   TAILSCALE_MISSING_BIN_NOTE_LINES,
 } from "../gateway/gateway-config-prompts.shared.js";
-import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { findTailscaleBinary } from "../infra/tailscale.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
@@ -29,8 +29,7 @@ type GatewayAuthChoice = "token" | "password" | "trusted-proxy";
 type GatewayTokenInputMode = "plaintext" | "ref";
 
 function validateGatewayPortInput(value: unknown): string | undefined {
-  const port = Number(typeof value === "string" ? value.trim() : value);
-  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+  if (parsePort(value) === null) {
     return formatPortRangeHint();
   }
   return undefined;
@@ -52,7 +51,7 @@ export async function promptGatewayConfig(
     }),
     runtime,
   );
-  const port = parseStrictPositiveInteger(portRaw) ?? resolveGatewayPort(cfg);
+  const port = parsePort(portRaw) ?? resolveGatewayPort(cfg);
 
   let bind = guardCancel(
     await select({

@@ -70,6 +70,7 @@ type DefineBundledChannelSetupEntryOptions = {
   runtime?: BundledEntryModuleRef;
   legacyStateMigrations?: BundledEntryModuleRef;
   legacySessionSurface?: BundledEntryModuleRef;
+  registerSetupRuntime?: (api: OpenClawPluginApi) => void;
   features?: BundledChannelSetupEntryFeatures;
 };
 
@@ -135,6 +136,7 @@ export type BundledChannelSetupEntryContract<TPlugin = ChannelPlugin> = {
     options?: BundledEntryModuleLoadOptions,
   ) => BundledChannelLegacySessionSurface;
   setChannelRuntime?: (runtime: PluginRuntime) => void;
+  registerSetupRuntime?: (api: OpenClawPluginApi) => void;
   features?: BundledChannelSetupEntryFeatures;
 };
 
@@ -577,6 +579,7 @@ export function defineBundledChannelSetupEntry<TPlugin = ChannelPlugin>({
   runtime,
   legacyStateMigrations,
   legacySessionSurface,
+  registerSetupRuntime,
   features,
 }: DefineBundledChannelSetupEntryOptions): BundledChannelSetupEntryContract<TPlugin> {
   // Bundled setup entries stay on a light path during setup-only/setup-runtime loads.
@@ -624,6 +627,7 @@ export function defineBundledChannelSetupEntry<TPlugin = ChannelPlugin>({
     ...(loadLegacyStateMigrationDetector ? { loadLegacyStateMigrationDetector } : {}),
     ...(loadLegacySessionSurface ? { loadLegacySessionSurface } : {}),
     ...(setChannelRuntime ? { setChannelRuntime } : {}),
+    ...(registerSetupRuntime ? { registerSetupRuntime } : {}),
     ...(features ? { features } : {}),
   };
 }

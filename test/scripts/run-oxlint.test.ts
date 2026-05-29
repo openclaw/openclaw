@@ -78,7 +78,7 @@ describe("run-oxlint", () => {
     ).toBe(true);
   });
 
-  it("keeps oxlint shards parallel for CI and explicit full-speed runs", () => {
+  it("serializes broad oxlint shards on constrained CI hosts", () => {
     const constrainedHost = { totalMemoryBytes: 8 * 1024 ** 3, logicalCpuCount: 4 };
 
     expect(
@@ -87,7 +87,7 @@ describe("run-oxlint", () => {
         platform: "linux",
         hostResources: constrainedHost,
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       shouldRunOxlintShardsSerial({
         env: { CI: "true", OPENCLAW_LOCAL_CHECK_MODE: "throttled" },
@@ -95,6 +95,19 @@ describe("run-oxlint", () => {
         hostResources: constrainedHost,
       }),
     ).toBe(true);
+  });
+
+  it("keeps oxlint shards parallel for roomy CI and explicit full-speed runs", () => {
+    const constrainedHost = { totalMemoryBytes: 8 * 1024 ** 3, logicalCpuCount: 4 };
+    const roomyHost = { totalMemoryBytes: 64 * 1024 ** 3, logicalCpuCount: 16 };
+
+    expect(
+      shouldRunOxlintShardsSerial({
+        env: { CI: "true" },
+        platform: "linux",
+        hostResources: roomyHost,
+      }),
+    ).toBe(false);
     expect(
       shouldRunOxlintShardsSerial({
         env: { OPENCLAW_LOCAL_CHECK_MODE: "full" },
