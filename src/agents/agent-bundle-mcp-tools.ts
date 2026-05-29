@@ -3,6 +3,7 @@ export type {
   McpCatalogTool,
   McpServerCatalog,
   McpToolCatalog,
+  McpToolCatalogDiagnostic,
   SessionMcpRuntime,
   SessionMcpRuntimeManager,
 } from "./agent-bundle-mcp-types.js";

@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import type {
   OpenClawPluginNodeInvokePolicy,
   OpenClawPluginNodeInvokePolicyContext,
@@ -43,16 +44,26 @@ function readMaxBytes(input: {
   hardMax: number;
   policyMax?: number;
 }): number {
-  const requested =
-    typeof input.value === "number" && Number.isFinite(input.value)
-      ? Math.floor(input.value)
-      : input.defaultValue;
+  const parsed =
+    input.value === undefined
+      ? input.defaultValue
+      : readPositiveIntegerParam({ maxBytes: input.value }, "maxBytes");
+  const requested = parsed ?? input.defaultValue;
   const clamped = Math.max(1, Math.min(requested, input.hardMax));
   return input.policyMax ? Math.min(clamped, input.policyMax) : clamped;
 }
 
 function commandKind(command: FileTransferCommand): FilePolicyKind {
   return command === "file.write" ? "write" : "read";
+}
+
+function validateFetchMaxBytesParam(command: FileTransferCommand, params: Record<string, unknown>) {
+  if (command !== "file.fetch" && command !== "dir.fetch") {
+    return;
+  }
+  if (params.maxBytes !== undefined) {
+    readPositiveIntegerParam(params, "maxBytes");
+  }
 }
 
 function promptVerb(command: FileTransferCommand): string {
@@ -738,6 +749,15 @@ async function handleFileTransferInvoke(
   if (!requestedPath) {
     return { ok: false, code: "INVALID_PARAMS", message: `${op} path required` };
   }
+  try {
+    validateFetchMaxBytesParam(command, params);
+  } catch (error) {
+    return {
+      ok: false,
+      code: "INVALID_PARAMS",
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
 
   const gate = await requestApproval({
     ctx,
@@ -750,12 +770,21 @@ async function handleFileTransferInvoke(
     return { ok: false, code: gate.code, message: gate.message };
   }
 
-  const forwardedParams = prepareParams({
-    command,
-    params,
-    followSymlinks: gate.followSymlinks,
-    maxBytes: gate.maxBytes,
-  });
+  let forwardedParams: Record<string, unknown>;
+  try {
+    forwardedParams = prepareParams({
+      command,
+      params,
+      followSymlinks: gate.followSymlinks,
+      maxBytes: gate.maxBytes,
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      code: "INVALID_PARAMS",
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
   if (command === "file.fetch") {
     const preflightDeny = await runPathPreflight({
       ctx,

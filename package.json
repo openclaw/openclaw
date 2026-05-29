@@ -47,6 +47,8 @@
     "!dist/plugin-sdk/plugin-test-api.d.ts",
     "!dist/plugin-sdk/plugin-test-contracts.js",
     "!dist/plugin-sdk/plugin-test-contracts.d.ts",
+    "!dist/plugin-sdk/plugin-state-test-runtime.js",
+    "!dist/plugin-sdk/plugin-state-test-runtime.d.ts",
     "!dist/plugin-sdk/plugin-test-runtime.js",
     "!dist/plugin-sdk/plugin-test-runtime.d.ts",
     "!dist/plugin-sdk/provider-http-test-mocks.js",
@@ -79,6 +81,7 @@
     "!dist/extensions/*/node_modules/**",
     "!dist/extensions/brave/**",
     "!dist/extensions/codex/**",
+    "!dist/extensions/copilot/**",
     "!dist/extensions/diagnostics-otel/**",
     "!dist/extensions/diagnostics-prometheus/**",
     "!dist/extensions/diffs/**",
@@ -102,6 +105,7 @@
     "!dist/extensions/openshell/**",
     "!dist/extensions/slack/**",
     "!dist/extensions/synology-chat/**",
+    "!dist/extensions/tokenjuice/**",
     "!dist/extensions/tlon/**",
     "!dist/extensions/twitch/**",
     "!dist/extensions/voice-call/**",
@@ -425,6 +429,10 @@
       "types": "./dist/plugin-sdk/transport-ready-runtime.d.ts",
       "default": "./dist/plugin-sdk/transport-ready-runtime.js"
     },
+    "./plugin-sdk/exec-approvals-runtime": {
+      "types": "./dist/plugin-sdk/exec-approvals-runtime.d.ts",
+      "default": "./dist/plugin-sdk/exec-approvals-runtime.js"
+    },
     "./plugin-sdk/infra-runtime": {
       "types": "./dist/plugin-sdk/infra-runtime.d.ts",
       "default": "./dist/plugin-sdk/infra-runtime.js"
@@ -537,6 +545,10 @@
       "types": "./dist/plugin-sdk/secret-ref-runtime.d.ts",
       "default": "./dist/plugin-sdk/secret-ref-runtime.js"
     },
+    "./plugin-sdk/secret-provider-integration": {
+      "types": "./dist/plugin-sdk/secret-provider-integration.d.ts",
+      "default": "./dist/plugin-sdk/secret-provider-integration.js"
+    },
     "./plugin-sdk/secret-file-runtime": {
       "types": "./dist/plugin-sdk/secret-file-runtime.d.ts",
       "default": "./dist/plugin-sdk/secret-file-runtime.js"
@@ -636,6 +648,10 @@
     "./plugin-sdk/migration-runtime": {
       "types": "./dist/plugin-sdk/migration-runtime.d.ts",
       "default": "./dist/plugin-sdk/migration-runtime.js"
+    },
+    "./plugin-sdk/plugin-state-runtime": {
+      "types": "./dist/plugin-sdk/plugin-state-runtime.d.ts",
+      "default": "./dist/plugin-sdk/plugin-state-runtime.js"
     },
     "./plugin-sdk/markdown-table-runtime": {
       "types": "./dist/plugin-sdk/markdown-table-runtime.d.ts",
@@ -1053,6 +1069,10 @@
       "types": "./dist/plugin-sdk/qa-runner-runtime.d.ts",
       "default": "./dist/plugin-sdk/qa-runner-runtime.js"
     },
+    "./plugin-sdk/qa-live-transport-scenarios": {
+      "types": "./dist/plugin-sdk/qa-live-transport-scenarios.d.ts",
+      "default": "./dist/plugin-sdk/qa-live-transport-scenarios.js"
+    },
     "./plugin-sdk/memory-core": {
       "types": "./dist/plugin-sdk/memory-core.d.ts",
       "default": "./dist/plugin-sdk/memory-core.js"
@@ -1152,6 +1172,10 @@
     "./plugin-sdk/provider-auth": {
       "types": "./dist/plugin-sdk/provider-auth.d.ts",
       "default": "./dist/plugin-sdk/provider-auth.js"
+    },
+    "./plugin-sdk/provider-oauth-runtime": {
+      "types": "./dist/plugin-sdk/provider-oauth-runtime.d.ts",
+      "default": "./dist/plugin-sdk/provider-oauth-runtime.js"
     },
     "./plugin-sdk/provider-auth-runtime": {
       "types": "./dist/plugin-sdk/provider-auth-runtime.d.ts",
@@ -1404,7 +1428,7 @@
     "canvas:a2ui:bundle": "node scripts/bundle-a2ui.mjs",
     "changed:lanes": "node scripts/changed-lanes.mjs",
     "check": "node scripts/check.mjs",
-    "check:architecture": "pnpm check:import-cycles && pnpm check:madge-import-cycles && pnpm check:deprecated-api-usage && pnpm check:deprecated-jsdoc",
+    "check:architecture": "pnpm check:import-cycles && pnpm check:madge-import-cycles && pnpm check:deprecated-api-usage && pnpm check:deprecated-jsdoc && pnpm db:kysely:check && pnpm lint:kysely",
     "check:base-config-schema": "node --import tsx scripts/generate-base-config-schema.ts --check",
     "check:bundled-channel-config-metadata": "node --import tsx scripts/generate-bundled-channel-config-metadata.ts --check",
     "check:changed": "node scripts/check-changed.mjs",
@@ -1434,6 +1458,7 @@
     "clean:dist": "node -e \"require('fs').rmSync('dist', {recursive: true, force: true})\"",
     "codex-app-server:protocol:check": "node --import tsx scripts/check-codex-app-server-protocol.ts",
     "codex-app-server:protocol:sync": "node --import tsx scripts/sync-codex-app-server-protocol.ts",
+    "codex-supervisor:mcp": "node --import tsx extensions/codex-supervisor/src/mcp-serve.ts",
     "config:channels:check": "node --import tsx scripts/generate-bundled-channel-config-metadata.ts --check",
     "config:channels:gen": "node --import tsx scripts/generate-bundled-channel-config-metadata.ts --write",
     "config:docs:check": "node --import tsx scripts/generate-config-doc-baseline.ts --check",
@@ -1469,6 +1494,8 @@
     "deps:ownership-surface:report": "node scripts/dependency-ownership-surface-report.mjs",
     "deps:transitive-risk:report": "node scripts/transitive-manifest-risk-report.mjs",
     "deps:vuln:gate": "node scripts/dependency-vulnerability-gate.mjs",
+    "db:kysely:check": "node scripts/generate-kysely-types.mjs --verify",
+    "db:kysely:gen": "node scripts/generate-kysely-types.mjs",
     "dev": "node scripts/run-node.mjs",
     "dev:ui:mock": "node --import tsx scripts/control-ui-mock-dev.ts",
     "docs:bin": "node scripts/build-docs-list.mjs",
@@ -1517,6 +1544,7 @@
     "lint:auth:pairing-account-scope": "node scripts/check-pairing-account-scope.mjs",
     "lint:core": "node scripts/run-oxlint-shards.mjs --only=core --split-core",
     "lint:docker-e2e": "node scripts/check-docker-e2e-boundaries.mjs",
+    "lint:kysely": "node scripts/check-kysely-guardrails.mjs",
     "lint:docs": "pnpm dlx --config.resolution-mode=highest markdownlint-cli2 --config config/markdownlint-cli2.jsonc",
     "lint:docs:fix": "pnpm dlx --config.resolution-mode=highest markdownlint-cli2 --config config/markdownlint-cli2.jsonc --fix",
     "lint:extensions:no-deprecated-channel-access": "node --import tsx scripts/check-no-deprecated-channel-access.ts",
@@ -1623,7 +1651,7 @@
     "start": "node openclaw.mjs",
     "test": "node scripts/test-projects.mjs",
     "test:all": "pnpm lint && pnpm build && pnpm test && pnpm test:e2e && pnpm test:live && pnpm test:docker:all",
-    "test:auth:compat": "node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts src/gateway/server.auth.compat-baseline.test.ts src/gateway/client.test.ts src/gateway/reconnect-gating.test.ts src/gateway/protocol/connect-error-details.test.ts",
+    "test:auth:compat": "node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts src/gateway/server.auth.compat-baseline.test.ts src/gateway/client.test.ts src/gateway/reconnect-gating.test.ts && node scripts/run-vitest.mjs run packages/gateway-protocol/src/connect-error-details.test.ts",
     "test:build:singleton": "node scripts/test-built-plugin-singleton.mjs",
     "test:build:status-message-runtime": "node scripts/test-built-status-message-runtime.mjs",
     "test:bundled": "node scripts/run-vitest.mjs run --config test/vitest/vitest.bundled.config.ts",
@@ -1848,7 +1876,6 @@
     "highlight.js": "11.11.1",
     "hosted-git-info": "9.0.3",
     "ignore": "7.0.5",
-    "ipaddr.js": "2.4.0",
     "jiti": "2.7.0",
     "json5": "2.2.3",
     "jszip": "3.10.1",
@@ -1865,7 +1892,6 @@
     "quickjs-wasi": "3.0.0",
     "rastermill": "0.3.0",
     "tar": "7.5.15",
-    "tokenjuice": "0.8.0",
     "tree-sitter-bash": "0.25.1",
     "tslog": "4.10.2",
     "typebox": "1.1.38",

@@ -12,6 +12,7 @@ import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { getProviderEnvVars as getDefaultProviderEnvVars } from "../secrets/provider-env-vars.js";
+import { clampTimerTimeoutMs } from "../shared/number-coercion.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveCapabilityModelRefForProviders } from "./capability-model-ref.js";
 import type {
@@ -65,7 +66,7 @@ export function resolveMediaProviderDefaultTimeoutMs(
   timeoutMs: number | undefined,
 ): number | undefined {
   return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
-    ? Math.floor(timeoutMs)
+    ? clampTimerTimeoutMs(timeoutMs)
     : undefined;
 }
 
@@ -73,7 +74,10 @@ export function resolveMediaProviderRequestTimeoutMs(params: {
   timeoutMs?: number;
   providerDefaultTimeoutMs?: number;
 }): number | undefined {
-  return params.timeoutMs ?? resolveMediaProviderDefaultTimeoutMs(params.providerDefaultTimeoutMs);
+  return (
+    resolveMediaProviderDefaultTimeoutMs(params.timeoutMs) ??
+    resolveMediaProviderDefaultTimeoutMs(params.providerDefaultTimeoutMs)
+  );
 }
 
 type CapabilityProviderCandidate = {

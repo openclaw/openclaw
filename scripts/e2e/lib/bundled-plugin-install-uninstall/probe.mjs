@@ -13,13 +13,28 @@ const bundledRuntimeRootFragments = ["/dist/extensions/", "/dist-runtime/extensi
 const DEFAULT_PLUGIN_LIST_TIMEOUT_MS = 30_000;
 const DEFAULT_PLUGIN_LIST_MAX_BUFFER_BYTES = 4 * 1024 * 1024;
 
-function positiveEnvInt(name, fallback) {
+function readIntegerEnv(name, fallback, minimum) {
   const raw = process.env[name];
-  if (raw === undefined || raw === "") {
+  if (raw == null || raw === "") {
     return fallback;
   }
-  const value = Number.parseInt(raw, 10);
-  return Number.isSafeInteger(value) && value > 0 ? value : fallback;
+  const text = raw.trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`invalid ${name}: ${text}`);
+  }
+  const value = Number(text);
+  if (!Number.isSafeInteger(value) || value < minimum) {
+    throw new Error(`invalid ${name}: ${text}`);
+  }
+  return value;
+}
+
+function readPositiveIntEnv(name, fallback) {
+  return readIntegerEnv(name, fallback, 1);
+}
+
+function readNonNegativeIntEnv(name, fallback) {
+  return readIntegerEnv(name, fallback, 0);
 }
 
 function resolveStateDir() {
@@ -53,7 +68,7 @@ function resolveOpenClawEntry() {
 
 function readPluginsList() {
   const entry = resolveOpenClawEntry();
-  const timeoutMs = positiveEnvInt(
+  const timeoutMs = readPositiveIntEnv(
     "OPENCLAW_BUNDLED_PLUGIN_LIST_TIMEOUT_MS",
     DEFAULT_PLUGIN_LIST_TIMEOUT_MS,
   );
@@ -61,7 +76,7 @@ function readPluginsList() {
     cwd: process.cwd(),
     encoding: "utf8",
     env: process.env,
-    maxBuffer: positiveEnvInt(
+    maxBuffer: readPositiveIntEnv(
       "OPENCLAW_BUNDLED_PLUGIN_LIST_MAX_BUFFER_BYTES",
       DEFAULT_PLUGIN_LIST_MAX_BUFFER_BYTES,
     ),
@@ -141,14 +156,9 @@ async function loadManifestEntries() {
 
 async function selectedManifestEntries() {
   const allEntries = await loadManifestEntries();
-  const total = Number.parseInt(process.env.OPENCLAW_BUNDLED_PLUGIN_SWEEP_TOTAL || "1", 10);
-  const index = Number.parseInt(process.env.OPENCLAW_BUNDLED_PLUGIN_SWEEP_INDEX || "0", 10);
-  if (!Number.isInteger(total) || total < 1) {
-    throw new Error(
-      `OPENCLAW_BUNDLED_PLUGIN_SWEEP_TOTAL must be >= 1, got ${process.env.OPENCLAW_BUNDLED_PLUGIN_SWEEP_TOTAL}`,
-    );
-  }
-  if (!Number.isInteger(index) || index < 0 || index >= total) {
+  const total = readPositiveIntEnv("OPENCLAW_BUNDLED_PLUGIN_SWEEP_TOTAL", 1);
+  const index = readNonNegativeIntEnv("OPENCLAW_BUNDLED_PLUGIN_SWEEP_INDEX", 0);
+  if (index >= total) {
     throw new Error(
       `OPENCLAW_BUNDLED_PLUGIN_SWEEP_INDEX must be in [0, ${total - 1}], got ${process.env.OPENCLAW_BUNDLED_PLUGIN_SWEEP_INDEX}`,
     );

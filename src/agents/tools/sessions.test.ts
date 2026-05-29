@@ -112,6 +112,30 @@ const installRegistry = async () => {
         },
       },
       {
+        pluginId: "feishu",
+        source: "test",
+        plugin: {
+          id: "feishu",
+          meta: {
+            id: "feishu",
+            label: "Feishu",
+            selectionLabel: "Feishu",
+            docsPath: "/channels/feishu",
+            blurb: "Feishu test stub.",
+            preferSessionLookupForAnnounceTarget: true,
+          },
+          capabilities: { chatTypes: ["direct", "group"] },
+          messaging: {
+            resolveSessionConversation: resolveSessionConversationStub,
+            resolveSessionTarget: resolveSessionTargetStub,
+          },
+          config: {
+            listAccountIds: () => ["default"],
+            resolveAccount: () => ({}),
+          },
+        },
+      },
+      {
         pluginId: "whatsapp",
         source: "test",
         plugin: {
@@ -403,6 +427,43 @@ describe("resolveAnnounceTarget", () => {
     expect(target).toEqual({
       channel: "whatsapp",
       to: "123@g.us",
+      accountId: "work",
+      threadId: "thread-77",
+    });
+  });
+
+  it("hydrates announce delivery from explicit external context over stale webchat session fields", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      sessions: [
+        {
+          key: "agent:main:feishu:direct:ou_user",
+          channel: "webchat",
+          lastChannel: "webchat",
+          lastTo: "session:dashboard",
+          route: {
+            channel: "webchat",
+            target: { to: "session:dashboard" },
+          },
+          deliveryContext: {
+            channel: "feishu",
+            to: "user:ou_user",
+          },
+          origin: {
+            provider: "feishu",
+            accountId: "work",
+            threadId: "thread-77",
+          },
+        },
+      ],
+    });
+
+    const target = await resolveAnnounceTarget({
+      sessionKey: "agent:main:feishu:direct:ou_user",
+      displayKey: "agent:main:feishu:direct:ou_user",
+    });
+    expect(target).toEqual({
+      channel: "feishu",
+      to: "user:ou_user",
       accountId: "work",
       threadId: "thread-77",
     });

@@ -3070,6 +3070,59 @@ describe("persistSessionUsageUpdate", () => {
     expect(stored[sessionKey].outputTokens).toBe(10_000);
   });
 
+  it("accounts goal usage when fresh token snapshots are persisted", async () => {
+    const storePath = await createStorePath("openclaw-usage-goal-");
+    const sessionKey = "main";
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "s1",
+        updatedAt: 1,
+        goal: {
+          schemaVersion: 1,
+          id: "goal-1",
+          objective: "ship",
+          status: "active",
+          createdAt: 1,
+          updatedAt: 1,
+          tokenStart: 0,
+          tokenStartFresh: false,
+          tokensUsed: 0,
+          tokenBudget: 20,
+          continuationTurns: 0,
+        },
+      },
+    });
+
+    await persistSessionUsageUpdate({
+      storePath,
+      sessionKey,
+      usage: { input: 100, output: 5, total: 105 },
+      lastCallUsage: { input: 100, output: 5, total: 105 },
+      contextTokensUsed: 200_000,
+    });
+
+    const stored1 = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored1[sessionKey].goal.tokenStart).toBe(100);
+    expect(stored1[sessionKey].goal.tokenStartFresh).toBe(true);
+    expect(stored1[sessionKey].goal.tokensUsed).toBe(0);
+    expect(stored1[sessionKey].goal.status).toBe("active");
+
+    await persistSessionUsageUpdate({
+      storePath,
+      sessionKey,
+      usage: { input: 125, output: 5, total: 130 },
+      lastCallUsage: { input: 125, output: 5, total: 130 },
+      contextTokensUsed: 200_000,
+    });
+
+    const stored2 = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored2[sessionKey].goal.tokenStart).toBe(100);
+    expect(stored2[sessionKey].goal.tokensUsed).toBe(25);
+    expect(stored2[sessionKey].goal.status).toBe("budget_limited");
+  });
+
   it("uses lastCallUsage cache counters when available", async () => {
     const storePath = await createStorePath("openclaw-usage-cache-");
     const sessionKey = "main";

@@ -12,6 +12,7 @@ import {
   type RuntimeConfigSnapshotRefreshHandler,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import type { SecretResolverWarning } from "./runtime-shared.js";
 import {
@@ -34,6 +35,7 @@ export type SecretsRuntimeRefreshContext = {
   includeAuthStoreRefs: boolean;
   loadAuthStore?: (agentDir?: string) => AuthProfileStore;
   loadablePluginOrigins: ReadonlyMap<string, PluginOrigin>;
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
 };
 
 let activeSnapshot: PreparedSecretsRuntimeSnapshot | null = null;
@@ -52,6 +54,9 @@ export function cloneSecretsRuntimeRefreshContext(
     explicitAgentDirs: context.explicitAgentDirs ? [...context.explicitAgentDirs] : null,
     includeAuthStoreRefs: context.includeAuthStoreRefs,
     loadablePluginOrigins: new Map(context.loadablePluginOrigins),
+    ...(context.manifestRegistry
+      ? { manifestRegistry: structuredClone(context.manifestRegistry) }
+      : {}),
   };
   if (context.loadAuthStore) {
     cloned.loadAuthStore = context.loadAuthStore;

@@ -274,6 +274,7 @@ export type ChannelProgressDraftLine = {
   detail?: string;
   status?: string;
   toolName?: string;
+  prefix?: boolean;
 };
 
 function compactStrings(values: readonly (string | undefined | null)[]): string[] {
@@ -644,6 +645,18 @@ export function resolveChannelStreamingPreviewToolProgress(
   return asBoolean(config?.preview?.toolProgress) ?? defaultValue;
 }
 
+export function resolveChannelStreamingProgressCommentary(
+  entry: StreamingCompatEntry | null | undefined,
+  defaultValue = false,
+): boolean {
+  const config = getChannelStreamingConfigObject(entry);
+  if (resolveChannelPreviewStreamMode(entry, "partial") !== "progress") {
+    return false;
+  }
+  const progress = asObjectRecord(config?.progress);
+  return asBoolean(progress?.commentary) ?? defaultValue;
+}
+
 export function resolveChannelStreamingPreviewCommandText(
   entry: StreamingCompatEntry | null | undefined,
   defaultValue: ChannelStreamingCommandTextMode = "raw",
@@ -968,20 +981,27 @@ export function formatChannelProgressDraftText(params: {
   const lines = rawLines
     .map((line) => {
       const isLabelLine = typeof line === "object" && line !== null && "draftLabel" in line;
+      const prefix =
+        !isLabelLine && typeof line === "object" && line !== null ? line.prefix !== false : true;
       const rawText = isLabelLine
         ? line.draftLabel
         : typeof line === "string"
           ? line
           : getProgressDraftLineText(line);
       const text = compactChannelProgressDraftLine(rawText, maxLineChars);
-      return text ? { text, isLabelLine } : undefined;
+      return text ? { text, isLabelLine, prefix } : undefined;
     })
-    .filter((line): line is { text: string; isLabelLine: boolean } => Boolean(line))
+    .filter((line): line is { text: string; isLabelLine: boolean; prefix: boolean } =>
+      Boolean(line),
+    )
     .slice(-maxLines)
-    .map(({ text, isLabelLine }) => {
+    .map(({ text, isLabelLine, prefix }) => {
       const formatted = isLabelLine ? text : formatLine(text);
       return {
-        text: !isLabelLine && shouldPrefixProgressLine(text) ? `${bullet} ${formatted}` : formatted,
+        text:
+          !isLabelLine && prefix && shouldPrefixProgressLine(text)
+            ? `${bullet} ${formatted}`
+            : formatted,
         isLabelLine,
       };
     });

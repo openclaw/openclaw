@@ -381,6 +381,7 @@ export function buildElevenLabsSpeechProvider(): SpeechProviderPlugin {
     id: "elevenlabs",
     label: "ElevenLabs",
     autoSelectOrder: 20,
+    defaultModel: DEFAULT_ELEVENLABS_MODEL_ID,
     models: ELEVENLABS_TTS_MODELS,
     resolveConfig: ({ rawConfig }) => normalizeElevenLabsProviderConfig(rawConfig),
     parseDirectiveToken,

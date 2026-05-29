@@ -108,7 +108,7 @@ import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
 import { resolveHarnessSourceVisibleRepliesDefault } from "./harness-source-visible-replies.js";
 import { claimInboundDedupe, commitInboundDedupe, releaseInboundDedupe } from "./inbound-dedupe.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
-import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
+import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
 import { replyRunRegistry, type ReplyOperation } from "./reply-run-registry.js";
 import { isReplyProfilerEnabled } from "./reply-timing-tracker.js";
 import { admitReplyTurn, resolveReplyTurnKind } from "./reply-turn-admission.js";
@@ -120,6 +120,10 @@ import {
 } from "./source-reply-delivery-mode.js";
 import { resolveSourceReplyMessageToolAvailable } from "./source-reply-message-tool-availability.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
+
+type SourceReplyTranscriptMirror = NonNullable<
+  NonNullable<ReturnType<typeof getReplyPayloadMetadata>>["sourceReplyTranscriptMirror"]
+>;
 
 class DispatchReplyOperationAbortedError extends Error {
   constructor() {
@@ -316,7 +320,7 @@ const resolveSessionStoreLookup = (
   if (!sessionKey) {
     return {};
   }
-  const agentId = resolveSessionAgentId({ sessionKey, config: cfg });
+  const agentId = resolveSessionAgentId({ sessionKey, config: cfg, agentId: ctx.AgentId });
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
   try {
     const store = loadSessionStore(storePath);
@@ -484,7 +488,7 @@ async function clearPendingFinalDeliveryAfterSuccess(params: {
 }
 
 async function mirrorInternalSourceReplyToTranscript(params: {
-  metadata: NonNullable<ReturnType<typeof getReplyPayloadMetadata>>["sourceReplyTranscriptMirror"];
+  metadata?: SourceReplyTranscriptMirror;
   cfg: OpenClawConfig;
 }): Promise<void> {
   const mirror = params.metadata;
@@ -503,6 +507,77 @@ async function mirrorInternalSourceReplyToTranscript(params: {
   if (!result.ok) {
     logVerbose(`dispatch-from-config: internal source reply mirror skipped: ${result.reason}`);
   }
+}
+
+function getDispatcherFinalOutcomeCounts(dispatcher: ReplyDispatcher): {
+  cancelled: number;
+  failed: number;
+} {
+  return {
+    cancelled: dispatcher.getCancelledCounts?.().final ?? 0,
+    failed: dispatcher.getFailedCounts().final,
+  };
+}
+
+function sourceReplyTranscriptMirrorForDeliveredPayload(
+  metadata: SourceReplyTranscriptMirror,
+  payload: ReplyPayload,
+): SourceReplyTranscriptMirror {
+  const sendable = resolveSendableOutboundReplyParts(payload);
+  return {
+    ...metadata,
+    text: sendable.text,
+    mediaUrls: sendable.mediaUrls.length > 0 ? sendable.mediaUrls : undefined,
+  };
+}
+
+function captureDeliveredSourceReplyTranscriptMirror(params: {
+  dispatcher: ReplyDispatcher;
+  metadata?: SourceReplyTranscriptMirror;
+}): () => SourceReplyTranscriptMirror | undefined {
+  if (!params.metadata || !params.dispatcher.appendBeforeDeliver) {
+    return () => params.metadata;
+  }
+  let deliveredMetadata: SourceReplyTranscriptMirror | undefined;
+  const { idempotencyKey, sessionKey } = params.metadata;
+  params.dispatcher.appendBeforeDeliver((payload, info) => {
+    if (info.kind !== "final") {
+      return payload;
+    }
+    const payloadMetadata = getReplyPayloadMetadata(payload)?.sourceReplyTranscriptMirror;
+    if (!payloadMetadata) {
+      return payload;
+    }
+    if (
+      payloadMetadata.idempotencyKey === idempotencyKey &&
+      payloadMetadata.sessionKey === sessionKey
+    ) {
+      deliveredMetadata = sourceReplyTranscriptMirrorForDeliveredPayload(payloadMetadata, payload);
+    }
+    return payload;
+  });
+  return () => deliveredMetadata;
+}
+
+async function mirrorInternalSourceReplyAfterDispatcherDelivery(params: {
+  dispatcher: ReplyDispatcher;
+  before: { cancelled: number; failed: number };
+  metadata: () => SourceReplyTranscriptMirror | undefined;
+  cfg: OpenClawConfig;
+}): Promise<void> {
+  await params.dispatcher.waitForIdle();
+  const after = getDispatcherFinalOutcomeCounts(params.dispatcher);
+  if (after.cancelled > params.before.cancelled || after.failed > params.before.failed) {
+    return;
+  }
+  const metadata = params.metadata();
+  if (!metadata) {
+    return;
+  }
+  await mirrorInternalSourceReplyToTranscript({
+    metadata,
+    cfg: params.cfg,
+  });
 }
 
 function runWithDispatchAbortSignal<T>(
@@ -820,7 +895,11 @@ export async function dispatchReplyFromConfig(
   const sessionStoreEntry = boundAcpDispatchSessionKey
     ? resolveSessionStoreLookup({ ...ctx, SessionKey: boundAcpDispatchSessionKey }, cfg)
     : initialSessionStoreEntry;
-  const sessionAgentId = resolveSessionAgentId({ sessionKey: acpDispatchSessionKey, config: cfg });
+  const sessionAgentId = resolveSessionAgentId({
+    sessionKey: acpDispatchSessionKey,
+    config: cfg,
+    agentId: ctx.AgentId,
+  });
   const sessionAgentCfg = resolveAgentConfig(cfg, sessionAgentId);
   const verboseProgress = createShouldEmitVerboseProgress({
     sessionKey: acpDispatchSessionKey,
@@ -1079,7 +1158,7 @@ export async function dispatchReplyFromConfig(
 
   const routeReplyToOriginating = async (
     payload: ReplyPayload,
-    options?: { abortSignal?: AbortSignal; mirror?: boolean },
+    options?: { abortSignal?: AbortSignal; mirror?: boolean; kind?: ReplyDispatchKind },
   ) => {
     if (!shouldRouteToOriginating || !routeReplyChannel || !routeReplyTo || !routeReplyRuntime) {
       return null;
@@ -1110,8 +1189,13 @@ export async function dispatchReplyFromConfig(
       mirror: options?.mirror,
       isGroup,
       groupId,
+      replyKind: options?.kind ?? "final",
+      runId: params.replyOptions?.runId,
     });
   };
+
+  const isRoutedReplyDelivered = (result: { ok: boolean; suppressed?: boolean }) =>
+    result.ok && result.suppressed !== true;
 
   /**
    * Helper to send a payload via route-reply (async).
@@ -1123,6 +1207,7 @@ export async function dispatchReplyFromConfig(
     payload: ReplyPayload,
     abortSignal?: AbortSignal,
     mirror?: boolean,
+    kind: ReplyDispatchKind = "tool",
   ): Promise<void> => {
     // Keep the runtime guard explicit because this helper is called from nested
     // reply callbacks where TypeScript cannot narrow shouldRouteToOriginating.
@@ -1136,6 +1221,7 @@ export async function dispatchReplyFromConfig(
     const result = await routeReplyToOriginating(payload, {
       abortSignal: effectiveAbortSignal,
       mirror,
+      kind,
     });
     if (result && !result.ok) {
       logVerbose(`dispatch-from-config: route-reply failed: ${result.error ?? "unknown error"}`);
@@ -1149,7 +1235,9 @@ export async function dispatchReplyFromConfig(
     if (suppressAutomaticSourceDelivery) {
       return false;
     }
-    const result = await routeReplyToOriginating(payload);
+    const result = await routeReplyToOriginating(payload, {
+      kind: mode === "terminal" ? "final" : "tool",
+    });
     if (result) {
       if (!result.ok) {
         logVerbose(
@@ -1461,7 +1549,7 @@ export async function dispatchReplyFromConfig(
         const result = await routeReplyToOriginating(payload);
         if (result) {
           queuedFinal = result.ok;
-          if (result.ok) {
+          if (isRoutedReplyDelivered(result)) {
             routedFinalCount += 1;
           }
           if (!result.ok) {
@@ -1564,6 +1652,7 @@ export async function dispatchReplyFromConfig(
       throwIfFinalDeliveryAborted();
       const result = await routeReplyToOriginating(normalizedPayload, {
         abortSignal,
+        kind: "final",
       });
       if (result) {
         if (!result.ok) {
@@ -1571,7 +1660,7 @@ export async function dispatchReplyFromConfig(
             `dispatch-from-config: route-reply (final) failed: ${result.error ?? "unknown error"}`,
           );
         }
-        if (result.ok) {
+        if (isRoutedReplyDelivered(result)) {
           await mirrorInternalSourceReplyToTranscript({
             metadata: sourceReplyTranscriptMirror,
             cfg,
@@ -1579,15 +1668,22 @@ export async function dispatchReplyFromConfig(
         }
         return {
           queuedFinal: result.ok,
-          routedFinalCount: result.ok ? 1 : 0,
+          routedFinalCount: isRoutedReplyDelivered(result) ? 1 : 0,
         };
       }
       throwIfFinalDeliveryAborted();
       markInboundDedupeReplayUnsafe();
+      const finalOutcomeBefore = getDispatcherFinalOutcomeCounts(dispatcher);
+      const deliveredSourceReplyTranscriptMirror = captureDeliveredSourceReplyTranscriptMirror({
+        dispatcher,
+        metadata: sourceReplyTranscriptMirror,
+      });
       const queuedFinal = dispatcher.sendFinalReply(normalizedPayload);
       if (queuedFinal) {
-        await mirrorInternalSourceReplyToTranscript({
-          metadata: sourceReplyTranscriptMirror,
+        await mirrorInternalSourceReplyAfterDispatcherDelivery({
+          dispatcher,
+          before: finalOutcomeBefore,
+          metadata: deliveredSourceReplyTranscriptMirror,
           cfg,
         });
       }
@@ -1894,12 +1990,11 @@ export async function dispatchReplyFromConfig(
     const onPatchSummaryFromReplyOptions = params.replyOptions?.onPatchSummary;
     const allowSuppressedSourceProgressCallbacks =
       params.replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed === true;
-    const shouldAllowQuietDirectNativeProgressCallbacks = (options?: {
+    const shouldAllowQuietChannelOwnedProgressCallbacks = (options?: {
       requiresToolSummaryVisibility?: boolean;
     }) =>
       options?.requiresToolSummaryVisibility === true &&
-      params.replyOptions?.suppressDefaultToolProgressMessages === true &&
-      chatType === "direct";
+      params.replyOptions?.suppressDefaultToolProgressMessages === true;
     let hasPendingDirectBlockReplyDelivery = false;
     const waitForPendingDirectBlockReplyDelivery = async (abortSignal?: AbortSignal) => {
       if (!hasPendingDirectBlockReplyDelivery) {
@@ -1918,13 +2013,14 @@ export async function dispatchReplyFromConfig(
       if (
         options?.requiresToolSummaryVisibility === true &&
         !shouldSendToolSummaries() &&
-        !shouldAllowQuietDirectNativeProgressCallbacks(options)
+        !shouldAllowQuietChannelOwnedProgressCallbacks(options)
       ) {
         return false;
       }
       return (
         !suppressAutomaticSourceDelivery ||
         (allowSuppressedSourceProgressCallbacks &&
+          ctx.InboundEventKind !== "room_event" &&
           !sendPolicyDenied &&
           options?.forwardWhenSourceDeliverySuppressed === true)
       );
@@ -2256,7 +2352,7 @@ export async function dispatchReplyFromConfig(
                   return;
                 }
                 if (shouldRouteToOriginating) {
-                  await sendPayloadAsync(normalizedPayload, context?.abortSignal, false);
+                  await sendPayloadAsync(normalizedPayload, context?.abortSignal, false, "block");
                 } else {
                   markInboundDedupeReplayUnsafe();
                   const delivered = dispatcher.sendBlockReply(normalizedPayload);
@@ -2331,11 +2427,18 @@ export async function dispatchReplyFromConfig(
     let routedFinalCount = 0;
     let attemptedFinalDelivery = false;
     let finalDeliveryFailed = false;
+    // Explicit command turns (native or authorized text-slash like /compact) are
+    // user-initiated, so a marked terminal reply for the command bypasses
+    // room_event suppression. Ambient marked notices (no CommandTurn) stay
+    // suppressed in room_event. sendPolicy: deny still suppresses everything.
+    // Uses the same helper as the source-reply visibility policy so the bypass
+    // and the policy stay aligned.
+    const explicitCommandTurnCtx = isExplicitSourceReplyCommand(ctx, cfg);
     const shouldDeliverDespiteSourceReplySuppression = (reply: ReplyPayload) =>
       suppressAutomaticSourceDelivery &&
-      ctx.InboundEventKind !== "room_event" &&
       !sendPolicyDenied &&
-      getReplyPayloadMetadata(reply)?.deliverDespiteSourceReplySuppression === true;
+      getReplyPayloadMetadata(reply)?.deliverDespiteSourceReplySuppression === true &&
+      (ctx.InboundEventKind !== "room_event" || explicitCommandTurnCtx);
     for (const reply of replies) {
       throwIfDispatchOperationAborted();
       // Suppress reasoning payloads from channel delivery — channels using this
@@ -2424,10 +2527,11 @@ export async function dispatchReplyFromConfig(
             throwIfDispatchOperationAborted();
             const result = await routeReplyToOriginating(normalizedTtsOnlyPayload, {
               abortSignal: getDispatchAbortSignal(),
+              kind: "final",
             });
             if (result) {
               queuedFinal = result.ok || queuedFinal;
-              if (result.ok) {
+              if (isRoutedReplyDelivered(result)) {
                 routedFinalCount += 1;
               }
               if (!result.ok) {

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS,
+  CODEX_POST_TOOL_RAW_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS,
   CODEX_TURN_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS,
   CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS,
   CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS,
@@ -23,9 +24,24 @@ describe("Codex app-server attempt timeouts", () => {
     );
     expect(resolveCodexStartupTimeoutMs({ timeoutMs: 500 })).toBe(500);
     expect(resolveCodexStartupTimeoutMs({ timeoutMs: 5, timeoutFloorMs: 250 })).toBe(250);
+    expect(resolveCodexStartupTimeoutMs({ timeoutMs: Number.NaN })).toBe(
+      CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS,
+    );
+    expect(resolveCodexStartupTimeoutMs({ timeoutMs: 500, timeoutFloorMs: Number.NaN })).toBe(500);
+    expect(
+      resolveCodexStartupTimeoutMs({
+        timeoutMs: Number.NaN,
+        timeoutFloorMs: Number.NaN,
+      }),
+    ).toBe(CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS);
   });
 
   it("normalizes turn idle timeout overrides", () => {
+    expect(CODEX_POST_TOOL_RAW_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS).toBe(5 * 60_000);
+    expect(CODEX_POST_TOOL_RAW_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS).toBeGreaterThan(
+      CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS,
+    );
+
     expect(resolveCodexTurnCompletionIdleTimeoutMs(undefined)).toBe(
       CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS,
     );
@@ -44,8 +60,21 @@ describe("Codex app-server attempt timeouts", () => {
     expect(resolveCodexTurnAssistantCompletionIdleTimeoutMs(9.8)).toBe(9);
     expect(resolveCodexTurnAssistantCompletionIdleTimeoutMs(-10)).toBe(1);
 
-    expect(resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs(undefined, 123)).toBe(123);
-    expect(resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs(Number.NaN, 123)).toBe(123);
+    expect(resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs(undefined, 123)).toBe(
+      CODEX_POST_TOOL_RAW_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS,
+    );
+    expect(resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs(Number.NaN, 123)).toBe(
+      CODEX_POST_TOOL_RAW_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS,
+    );
+    expect(resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs(undefined, 120_000)).toBe(
+      CODEX_POST_TOOL_RAW_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS,
+    );
+    expect(resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs(undefined, 6 * 60_000)).toBe(
+      6 * 60_000,
+    );
+    expect(resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs(undefined, Number.NaN)).toBe(
+      CODEX_POST_TOOL_RAW_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS,
+    );
     expect(resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs(7.9, 123)).toBe(7);
     expect(resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs(0, 123)).toBe(1);
 

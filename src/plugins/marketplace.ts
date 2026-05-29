@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { resolveArchiveKind } from "../infra/archive.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { pathExists } from "../infra/fs-safe.js";
@@ -9,7 +10,6 @@ import { tryReadJson } from "../infra/json-files.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { redactSensitiveUrlLikeString } from "../shared/net/redact-sensitive-url.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import { resolveUserPath } from "../utils.js";

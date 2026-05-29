@@ -15,7 +15,7 @@ import {
   measureGatewayRestartTrace,
   recordGatewayRestartTrace,
 } from "./restart-trace.js";
-import type { ChatRunState } from "./server-chat-state.js";
+import type { ChatRunEntry, ChatRunState } from "./server-chat-state.js";
 import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach.js";
 
 const shutdownLog = createSubsystemLogger("gateway/shutdown");
@@ -169,7 +169,7 @@ function abortActiveRunsForRestart(params: {
     sessionId: string,
     clientRunId: string,
     sessionKey?: string,
-  ) => { sessionKey: string; clientRunId: string } | undefined;
+  ) => ChatRunEntry | undefined;
   agentRunSeq: Map<string, number>;
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
@@ -180,12 +180,8 @@ function abortActiveRunsForRestart(params: {
       {
         chatAbortControllers: params.chatAbortControllers,
         chatRunBuffers: params.chatRunState.buffers,
-        chatDeltaSentAt: params.chatRunState.deltaSentAt,
-        chatDeltaLastBroadcastLen: params.chatRunState.deltaLastBroadcastLen,
-        chatDeltaLastBroadcastText: params.chatRunState.deltaLastBroadcastText,
-        agentDeltaSentAt: params.chatRunState.agentDeltaSentAt,
-        bufferedAgentEvents: params.chatRunState.bufferedAgentEvents,
         chatAbortedRuns: params.chatRunState.abortedRuns,
+        clearChatRunState: params.chatRunState.clearRun,
         removeChatRun: params.removeChatRun,
         agentRunSeq: params.agentRunSeq,
         broadcast: params.broadcast,
@@ -212,7 +208,7 @@ async function drainRestartPendingRepliesForShutdown(params: {
     sessionId: string,
     clientRunId: string,
     sessionKey?: string,
-  ) => { sessionKey: string; clientRunId: string } | undefined;
+  ) => ChatRunEntry | undefined;
   agentRunSeq: Map<string, number>;
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
@@ -391,7 +387,7 @@ export function createGatewayCloseHandler(params: {
     sessionId: string,
     clientRunId: string,
     sessionKey?: string,
-  ) => { sessionKey: string; clientRunId: string } | undefined;
+  ) => ChatRunEntry | undefined;
   agentRunSeq: Map<string, number>;
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
   getPendingReplyCount?: () => number;

@@ -138,10 +138,10 @@ describe("package-openclaw-for-docker", () => {
 
       const runPromise = runCommandForTest(process.execPath, ["-e", parentScript], process.cwd(), {
         env: { ...process.env, OPENCLAW_TEST_CHILD_PID: childPidPath },
-        killAfterMs: 50,
-        timeoutMs: 1500,
+        killAfterMs: 25,
+        timeoutMs: 1000,
       });
-      const timeoutAssertion = expect(runPromise).rejects.toThrow(/timed out after 1500ms/u);
+      const timeoutAssertion = expect(runPromise).rejects.toThrow(/timed out after 1000ms/u);
       await waitForFile(childPidPath, 2000);
       childPid = Number(fs.readFileSync(childPidPath, "utf8"));
       await timeoutAssertion;
@@ -177,10 +177,10 @@ describe("package-openclaw-for-docker", () => {
       await expect(
         runCommandForTest(process.execPath, ["-e", parentScript], process.cwd(), {
           env: { ...process.env, OPENCLAW_TEST_CHILD_PID: childPidPath },
-          killAfterMs: 50,
-          timeoutMs: 2000,
+          killAfterMs: 25,
+          timeoutMs: 1000,
         }),
-      ).rejects.toThrow(/timed out after 2000ms/u);
+      ).rejects.toThrow(/timed out after 1000ms/u);
 
       await waitForFile(childPidPath, 2000);
       childPid = Number(fs.readFileSync(childPidPath, "utf8"));

@@ -34,7 +34,15 @@ import {
 } from "../routing/session-key.js";
 import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { expandHomePrefix } from "./home-dir.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "./kysely-sync.js";
+import { requireNodeSqlite } from "./node-sqlite.js";
 import { isWithinDir } from "./path-safety.js";
 import {
   ensureDir,
@@ -69,6 +77,10 @@ export type LegacyStateDetection = {
     hasLegacy: boolean;
     plans: ChannelLegacyStateMigrationPlan[];
   };
+  pluginStateSidecar: {
+    sourcePath: string;
+    hasLegacy: boolean;
+  };
   preview: string[];
 };
 
@@ -88,6 +100,25 @@ type LegacySessionSurface = {
     agentId: string;
   }) => string | null | undefined;
 };
+
+type LegacyPluginStateSidecarRow = {
+  plugin_id: string;
+  namespace: string;
+  entry_key: string;
+  value_json: string;
+  created_at: number | bigint;
+  expires_at: number | bigint | null;
+};
+
+type LegacyPluginStateImportDatabase = Pick<OpenClawStateKyselyDatabase, "plugin_state_entries">;
+
+const PLUGIN_STATE_SQLITE_SIDECAR_SUFFIXES = ["", "-shm", "-wal"] as const;
+
+class LegacyPluginStateSidecarConflictError extends Error {
+  constructor(readonly conflictedKeys: string[]) {
+    super("legacy plugin-state sidecar conflicts with shared state");
+  }
+}
 
 function getLegacySessionSurfaces(): LegacySessionSurface[] {
   // Legacy migrations run on cold doctor/startup paths. Prefer the narrower
@@ -123,6 +154,185 @@ function buildLegacyMigrationPreview(plan: ChannelLegacyStateMigrationPlan): str
     return plan.preview ?? `- ${plan.label}: ${plan.sourcePath}`;
   }
   return `- ${plan.label}: ${plan.sourcePath} → ${plan.targetPath}`;
+}
+
+function resolveLegacyPluginStateSidecarPath(stateDir: string): string {
+  return path.join(stateDir, "plugin-state", "state.sqlite");
+}
+
+function readLegacyPluginStateSidecarRows(sourcePath: string): LegacyPluginStateSidecarRow[] {
+  const sqlite = requireNodeSqlite();
+  const db = new sqlite.DatabaseSync(sourcePath, { readOnly: true });
+  try {
+    return db
+      .prepare(
+        `
+          SELECT plugin_id, namespace, entry_key, value_json, created_at, expires_at
+          FROM plugin_state_entries
+          ORDER BY plugin_id ASC, namespace ASC, entry_key ASC
+        `,
+      )
+      .all() as LegacyPluginStateSidecarRow[];
+  } finally {
+    db.close();
+  }
+}
+
+function normalizeLegacySqliteInteger(value: number | bigint | null): number | null {
+  if (typeof value === "bigint") {
+    return Number(value);
+  }
+  return value;
+}
+
+function legacyPluginStateRowsMatch(
+  existing: { value_json: string; created_at: number | bigint; expires_at: number | bigint | null },
+  legacy: LegacyPluginStateSidecarRow,
+): boolean {
+  return (
+    existing.value_json === legacy.value_json &&
+    normalizeLegacySqliteInteger(existing.created_at) ===
+      normalizeLegacySqliteInteger(legacy.created_at) &&
+    normalizeLegacySqliteInteger(existing.expires_at) ===
+      normalizeLegacySqliteInteger(legacy.expires_at)
+  );
+}
+
+function archiveLegacyPluginStateSidecar(params: {
+  sourcePath: string;
+  changes: string[];
+  warnings: string[];
+}): void {
+  const existingSources = PLUGIN_STATE_SQLITE_SIDECAR_SUFFIXES.map(
+    (suffix) => `${params.sourcePath}${suffix}`,
+  ).filter(fileExists);
+  const existingArchives = existingSources
+    .map((sourcePath) => `${sourcePath}.migrated`)
+    .filter(fileExists);
+  if (existingArchives.length > 0) {
+    params.warnings.push(
+      `Left migrated plugin-state sidecar in place because archive already exists: ${existingArchives[0]}`,
+    );
+    return;
+  }
+
+  for (const sourcePath of existingSources) {
+    const archivedPath = `${sourcePath}.migrated`;
+    try {
+      fs.renameSync(sourcePath, archivedPath);
+    } catch (err) {
+      params.warnings.push(`Failed archiving plugin-state sidecar ${sourcePath}: ${String(err)}`);
+      return;
+    }
+  }
+  params.changes.push(
+    `Archived plugin-state sidecar legacy source → ${params.sourcePath}.migrated`,
+  );
+}
+
+async function migrateLegacyPluginStateSidecar(params: {
+  stateDir: string;
+}): Promise<{ changes: string[]; warnings: string[] }> {
+  const sourcePath = resolveLegacyPluginStateSidecarPath(params.stateDir);
+  if (!fileExists(sourcePath)) {
+    return { changes: [], warnings: [] };
+  }
+
+  const changes: string[] = [];
+  const warnings: string[] = [];
+  let rows: LegacyPluginStateSidecarRow[];
+  try {
+    rows = readLegacyPluginStateSidecarRows(sourcePath);
+  } catch (err) {
+    return {
+      changes,
+      warnings: [`Failed reading plugin-state sidecar ${sourcePath}: ${String(err)}`],
+    };
+  }
+
+  try {
+    const conflictedKeys: string[] = [];
+    const rowsToInsert: LegacyPluginStateSidecarRow[] = [];
+    let imported = 0;
+    const now = Date.now();
+    runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        const stateDb = getNodeSqliteKysely<LegacyPluginStateImportDatabase>(db);
+        for (const row of rows) {
+          executeSqliteQuerySync(
+            db,
+            stateDb
+              .deleteFrom("plugin_state_entries")
+              .where("plugin_id", "=", row.plugin_id)
+              .where("namespace", "=", row.namespace)
+              .where("entry_key", "=", row.entry_key)
+              .where("expires_at", "is not", null)
+              .where("expires_at", "<=", now),
+          );
+          const existing = executeSqliteQueryTakeFirstSync(
+            db,
+            stateDb
+              .selectFrom("plugin_state_entries")
+              .select(["value_json", "created_at", "expires_at"])
+              .where("plugin_id", "=", row.plugin_id)
+              .where("namespace", "=", row.namespace)
+              .where("entry_key", "=", row.entry_key),
+          );
+          if (existing) {
+            if (!legacyPluginStateRowsMatch(existing, row)) {
+              conflictedKeys.push(`${row.plugin_id}/${row.namespace}/${row.entry_key}`);
+            }
+            continue;
+          }
+          rowsToInsert.push(row);
+        }
+        if (conflictedKeys.length > 0) {
+          throw new LegacyPluginStateSidecarConflictError(conflictedKeys);
+        }
+        for (const row of rowsToInsert) {
+          executeSqliteQuerySync(
+            db,
+            stateDb
+              .insertInto("plugin_state_entries")
+              .values({
+                plugin_id: row.plugin_id,
+                namespace: row.namespace,
+                entry_key: row.entry_key,
+                value_json: row.value_json,
+                created_at: normalizeLegacySqliteInteger(row.created_at) ?? 0,
+                expires_at: normalizeLegacySqliteInteger(row.expires_at),
+              })
+              .onConflict((conflict) =>
+                conflict.columns(["plugin_id", "namespace", "entry_key"]).doNothing(),
+              ),
+          );
+          imported += 1;
+        }
+      },
+      { env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } },
+    );
+    if (imported > 0) {
+      changes.push(
+        `Migrated ${imported} plugin-state sidecar ${imported === 1 ? "entry" : "entries"} → shared SQLite state`,
+      );
+    }
+  } catch (err) {
+    if (err instanceof LegacyPluginStateSidecarConflictError) {
+      return {
+        changes,
+        warnings: [
+          `Left plugin-state sidecar in place because ${err.conflictedKeys.length} ${err.conflictedKeys.length === 1 ? "row" : "rows"} already existed in shared state: ${err.conflictedKeys[0]}`,
+        ],
+      };
+    }
+    return {
+      changes,
+      warnings: [`Failed migrating plugin-state sidecar ${sourcePath}: ${String(err)}`],
+    };
+  }
+
+  archiveLegacyPluginStateSidecar({ sourcePath, changes, warnings });
+  return { changes, warnings };
 }
 
 function resolvePluginStateImportTargetKey(scopeKey: string, key: string): string {
@@ -210,7 +420,11 @@ async function runLegacyMigrationPlans(
             break;
           }
           try {
-            await store.register(targetKey, entry.value);
+            await store.register(
+              targetKey,
+              entry.value,
+              entry.ttlMs != null ? { ttlMs: entry.ttlMs } : undefined,
+            );
             const nextExpectedKeys = new Set(expectedKeys);
             nextExpectedKeys.add(targetKey);
             const liveKeys = new Set((await store.entries()).map(({ key }) => key));
@@ -1085,6 +1299,8 @@ export async function detectLegacyStateMigrations(params: {
   const legacyAgentDir = path.join(stateDir, "agent");
   const targetAgentDir = path.join(stateDir, "agents", targetAgentId, "agent");
   const hasLegacyAgentDir = existsDir(legacyAgentDir);
+  const pluginStateSidecarPath = resolveLegacyPluginStateSidecarPath(stateDir);
+  const hasPluginStateSidecar = fileExists(pluginStateSidecarPath);
   const channelPlans = await collectChannelLegacyStateMigrationPlans({
     cfg: params.cfg,
     env,
@@ -1101,6 +1317,9 @@ export async function detectLegacyStateMigrations(params: {
   }
   if (hasLegacyAgentDir) {
     preview.push(`- Agent dir: ${legacyAgentDir} → ${targetAgentDir}`);
+  }
+  if (hasPluginStateSidecar) {
+    preview.push(`- Plugin state sidecar: ${pluginStateSidecarPath} → shared SQLite state`);
   }
   if (channelPlans.length > 0) {
     preview.push(...channelPlans.map(buildLegacyMigrationPreview));
@@ -1128,6 +1347,10 @@ export async function detectLegacyStateMigrations(params: {
     channelPlans: {
       hasLegacy: channelPlans.length > 0,
       plans: channelPlans,
+    },
+    pluginStateSidecar: {
+      sourcePath: pluginStateSidecarPath,
+      hasLegacy: hasPluginStateSidecar,
     },
     preview,
   };
@@ -1313,6 +1536,9 @@ export async function runLegacyStateMigrations(params: {
 }): Promise<{ changes: string[]; warnings: string[] }> {
   const now = params.now ?? (() => Date.now());
   const detected = params.detected;
+  const pluginStateSidecar = await migrateLegacyPluginStateSidecar({
+    stateDir: detected.stateDir,
+  });
   const preSessionChannelPlans = await runLegacyMigrationPlans(
     detected.channelPlans.plans.filter((plan) => plan.kind === "plugin-state-import"),
   );
@@ -1323,12 +1549,14 @@ export async function runLegacyStateMigrations(params: {
   );
   return {
     changes: [
+      ...pluginStateSidecar.changes,
       ...preSessionChannelPlans.changes,
       ...sessions.changes,
       ...agentDir.changes,
       ...channelPlans.changes,
     ],
     warnings: [
+      ...pluginStateSidecar.warnings,
       ...preSessionChannelPlans.warnings,
       ...sessions.warnings,
       ...agentDir.warnings,
@@ -1555,24 +1783,49 @@ export async function autoMigrateLegacyState(params: {
     }
   };
 
-  if (env.OPENCLAW_AGENT_DIR?.trim() || env.PI_CODING_AGENT_DIR?.trim()) {
-    const changes = [...stateDirResult.changes, ...orphanKeys.changes];
-    const warnings = [...stateDirResult.warnings, ...orphanKeys.warnings];
-    logMigrationResults(changes, warnings);
-    return {
-      migrated: stateDirResult.migrated || orphanKeys.changes.length > 0,
-      skipped: true,
-      changes,
-      warnings,
-    };
-  }
-
   const detected = await detectLegacyStateMigrations({
     cfg: params.cfg,
     env,
     homedir: params.homedir,
   });
-  if (!detected.sessions.hasLegacy && !detected.agentDir.hasLegacy) {
+  const hasCustomAgentDir = env.OPENCLAW_AGENT_DIR?.trim() || env.PI_CODING_AGENT_DIR?.trim();
+  if (hasCustomAgentDir) {
+    const pluginStateSidecar = await migrateLegacyPluginStateSidecar({
+      stateDir: detected.stateDir,
+    });
+    const preSessionChannelPlans = await runLegacyMigrationPlans(
+      detected.channelPlans.plans.filter((plan) => plan.kind === "plugin-state-import"),
+    );
+    const changes = [
+      ...stateDirResult.changes,
+      ...orphanKeys.changes,
+      ...pluginStateSidecar.changes,
+      ...preSessionChannelPlans.changes,
+    ];
+    const warnings = [
+      ...stateDirResult.warnings,
+      ...orphanKeys.warnings,
+      ...pluginStateSidecar.warnings,
+      ...preSessionChannelPlans.warnings,
+    ];
+    logMigrationResults(changes, warnings);
+    return {
+      migrated:
+        stateDirResult.migrated ||
+        orphanKeys.changes.length > 0 ||
+        pluginStateSidecar.changes.length > 0 ||
+        preSessionChannelPlans.changes.length > 0,
+      skipped: true,
+      changes,
+      warnings,
+    };
+  }
+  if (
+    !detected.sessions.hasLegacy &&
+    !detected.agentDir.hasLegacy &&
+    !detected.channelPlans.hasLegacy &&
+    !detected.pluginStateSidecar.hasLegacy
+  ) {
     const changes = [...stateDirResult.changes, ...orphanKeys.changes];
     const warnings = [...stateDirResult.warnings, ...orphanKeys.warnings];
     logMigrationResults(changes, warnings);
@@ -1585,19 +1838,34 @@ export async function autoMigrateLegacyState(params: {
   }
 
   const now = params.now ?? (() => Date.now());
+  const pluginStateSidecar = await migrateLegacyPluginStateSidecar({
+    stateDir: detected.stateDir,
+  });
+  const preSessionChannelPlans = await runLegacyMigrationPlans(
+    detected.channelPlans.plans.filter((plan) => plan.kind === "plugin-state-import"),
+  );
   const sessions = await migrateLegacySessions(detected, now);
   const agentDir = await migrateLegacyAgentDir(detected, now);
+  const channelPlans = await runLegacyMigrationPlans(
+    detected.channelPlans.plans.filter((plan) => plan.kind !== "plugin-state-import"),
+  );
   const changes = [
     ...stateDirResult.changes,
     ...orphanKeys.changes,
+    ...pluginStateSidecar.changes,
+    ...preSessionChannelPlans.changes,
     ...sessions.changes,
     ...agentDir.changes,
+    ...channelPlans.changes,
   ];
   const warnings = [
     ...stateDirResult.warnings,
     ...orphanKeys.warnings,
+    ...pluginStateSidecar.warnings,
+    ...preSessionChannelPlans.warnings,
     ...sessions.warnings,
     ...agentDir.warnings,
+    ...channelPlans.warnings,
   ];
 
   logMigrationResults(changes, warnings);

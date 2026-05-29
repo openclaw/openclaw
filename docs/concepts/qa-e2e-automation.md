@@ -266,6 +266,10 @@ The doctor checks Convex broker env, validates endpoint settings, and verifies a
 
 Live transport lanes share one contract instead of each inventing their own scenario list shape. `qa-channel` is the broad synthetic product-behavior suite and is not part of the live transport coverage matrix.
 
+Live transport runners should import the shared scenario ids, baseline
+coverage helpers, and scenario-selection helper from
+`openclaw/plugin-sdk/qa-live-transport-scenarios`.
+
 | Lane     | Canary | Mention gating | Bot-to-bot | Allowlist block | Top-level reply | Restart resume | Thread follow-up | Thread isolation | Reaction observation | Help command | Native command registration |
 | -------- | ------ | -------------- | ---------- | --------------- | --------------- | -------------- | ---------------- | ---------------- | -------------------- | ------------ | --------------------------- |
 | Matrix   | x      | x              | x          | x               | x               | x              | x                | x                | x                    |              |                             |
@@ -889,13 +893,13 @@ pnpm openclaw qa character-eval \
   --model openai/gpt-5.5,thinking=medium,fast \
   --model openai/gpt-5.2,thinking=xhigh \
   --model openai/gpt-5,thinking=xhigh \
-  --model anthropic/claude-opus-4-7,thinking=high \
+  --model anthropic/claude-opus-4-8,thinking=high \
   --model anthropic/claude-sonnet-4-6,thinking=high \
   --model zai/glm-5.1,thinking=high \
   --model moonshot/kimi-k2.5,thinking=high \
   --model google/gemini-3.1-pro-preview,thinking=high \
   --judge-model openai/gpt-5.5,thinking=xhigh,fast \
-  --judge-model anthropic/claude-opus-4-7,thinking=high \
+  --judge-model anthropic/claude-opus-4-8,thinking=high \
   --blind-judge-models \
   --concurrency 16 \
   --judge-concurrency 16
@@ -926,13 +930,13 @@ Candidate and judge model runs both default to concurrency 16. Lower
 `--concurrency` or `--judge-concurrency` when provider limits or local gateway
 pressure make a run too noisy.
 When no candidate `--model` is passed, the character eval defaults to
-`openai/gpt-5.5`, `openai/gpt-5.2`, `openai/gpt-5`, `anthropic/claude-opus-4-7`,
+`openai/gpt-5.5`, `openai/gpt-5.2`, `openai/gpt-5`, `anthropic/claude-opus-4-8`,
 `anthropic/claude-sonnet-4-6`, `zai/glm-5.1`,
 `moonshot/kimi-k2.5`, and
 `google/gemini-3.1-pro-preview` when no `--model` is passed.
 When no `--judge-model` is passed, the judges default to
 `openai/gpt-5.5,thinking=xhigh,fast` and
-`anthropic/claude-opus-4-7,thinking=high`.
+`anthropic/claude-opus-4-8,thinking=high`.
 
 ## Related docs
 

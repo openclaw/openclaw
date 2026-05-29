@@ -24,6 +24,7 @@ type IntegerSchemaOptions = {
 
 type NumberSchemaOptions = {
   description?: string;
+  deprecated?: boolean;
   minimum?: number;
   maximum?: number;
   exclusiveMinimum?: number;

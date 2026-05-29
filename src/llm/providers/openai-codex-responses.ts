@@ -20,6 +20,7 @@ if (typeof process !== "undefined" && (process.versions?.node || process.version
   });
 }
 
+import { resolveTimerTimeoutMs } from "../../shared/number-coercion.js";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { clampThinkingLevel } from "../model-utils.js";
 import { registerSessionResourceCleanup } from "../session-resources.js";
@@ -138,7 +139,7 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 function resolveRequestTimeoutMs(options?: OpenAICodexResponsesOptions): number | undefined {
   const timeoutMs = options?.timeoutMs;
   return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
-    ? Math.floor(timeoutMs)
+    ? resolveTimerTimeoutMs(timeoutMs, 1)
     : undefined;
 }
 
@@ -452,7 +453,12 @@ export const streamSimpleOpenAICodexResponses: StreamFunction<
   const clampedReasoning = options?.reasoning
     ? clampThinkingLevel(model, options.reasoning)
     : undefined;
-  const reasoningEffort = clampedReasoning === "off" ? undefined : clampedReasoning;
+  const reasoningEffort =
+    clampedReasoning === "off"
+      ? undefined
+      : clampedReasoning === "max"
+        ? "xhigh"
+        : clampedReasoning;
 
   return streamOpenAICodexResponses(model, context, {
     ...base,

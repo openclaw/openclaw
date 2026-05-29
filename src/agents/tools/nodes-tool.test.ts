@@ -178,11 +178,13 @@ describe("createNodesTool screen_record duration guardrails", () => {
     const tool = createNodesTool();
     const schema = tool.parameters as {
       properties?: {
+        timeoutMs?: { minimum?: number; type?: string };
         maxAgeMs?: { minimum?: number; type?: string };
         locationTimeoutMs?: { minimum?: number; type?: string };
         invokeTimeoutMs?: { minimum?: number; type?: string };
       };
     };
+    expect(schema.properties?.timeoutMs).toMatchObject({ type: "integer", minimum: 1 });
     expect(schema.properties?.maxAgeMs).toMatchObject({ type: "integer", minimum: 0 });
     expect(schema.properties?.locationTimeoutMs).toMatchObject({ type: "integer", minimum: 1 });
     expect(schema.properties?.invokeTimeoutMs).toMatchObject({ type: "integer", minimum: 1 });

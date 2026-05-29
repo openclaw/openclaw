@@ -162,8 +162,12 @@ export const FIELD_HELP: Record<string, string> = {
   "talk.realtime.providers.*.apiKey": "Provider API key for realtime Talk.", // pragma: allowlist secret
   "talk.realtime.model":
     "Realtime provider model id override for browser or Gateway-owned Talk sessions.",
+  "talk.realtime.speakerVoice":
+    "Realtime provider speaker voice name override for browser or Gateway-owned Talk sessions.",
+  "talk.realtime.speakerVoiceId":
+    "Realtime provider speaker voice id override for browser or Gateway-owned Talk sessions.",
   "talk.realtime.voice":
-    "Realtime provider voice id override for browser or Gateway-owned Talk sessions.",
+    "Deprecated realtime provider voice override. Use talk.realtime.speakerVoice.",
   "talk.realtime.instructions":
     "Additional system instructions appended to OpenClaw's built-in realtime Talk prompt. Use this for voice style, tone, and other provider-facing realtime behavior while keeping agent-consult guidance intact.",
   "talk.realtime.mode": "Talk execution mode: realtime, stt-tts, or transcription.",
@@ -302,9 +306,9 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.list[].heartbeat.suppressToolErrorWarnings":
     "Suppress tool error warning payloads during heartbeat runs.",
   "agents.defaults.heartbeat.timeoutSeconds":
-    "Maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to use agents.defaults.timeoutSeconds.",
+    "Maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to use agents.defaults.timeoutSeconds when set, otherwise the heartbeat cadence capped at 600 seconds.",
   "agents.list[].heartbeat.timeoutSeconds":
-    "Per-agent maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to inherit the merged heartbeat/default agent timeout.",
+    "Per-agent maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to inherit the merged heartbeat timeout, then agents.defaults.timeoutSeconds when set, otherwise the heartbeat cadence capped at 600 seconds.",
   "agents.defaults.heartbeat.skipWhenBusy":
     "When true, defer heartbeat turns on this agent's extra busy lanes: its own session-keyed subagent or nested command work. Cron lanes always defer heartbeat turns.",
   "agents.list[].heartbeat.skipWhenBusy":
@@ -409,6 +413,14 @@ export const FIELD_HELP: Record<string, string> = {
     "Exec-tool policy grouping for shell execution host, security mode, approval behavior, and runtime bindings. Keep conservative defaults in production and tighten elevated execution paths.",
   "tools.exec.host":
     'Selects execution target strategy for shell commands. Use "auto" for runtime-aware behavior (sandbox when available, otherwise gateway), or pin sandbox/gateway/node explicitly when you need a fixed surface.',
+  "tools.exec.mode":
+    'Normalized exec policy selector. Use "auto" for classifier-reviewed approval misses, "ask" for human-reviewed misses, "allowlist" for deterministic safe commands only, or "full" for trusted local operation.',
+  "tools.exec.reviewer":
+    "Model-backed exec reviewer used by auto mode before human approval fallback. Configure a narrow model override here when you want exec review isolated from the main agent model.",
+  "tools.exec.reviewer.model":
+    "Optional provider/model override for the exec reviewer agent. Omit to reuse the current agent model.",
+  "tools.exec.reviewer.timeoutMs":
+    "Exec reviewer timeout in milliseconds before falling back to human approval (default: 30000).",
   "tools.exec.security":
     "Execution security posture selector controlling sandbox/approval expectations for command execution. Keep strict security mode for untrusted prompts and relax only for trusted operator workflows.",
   "tools.exec.ask":
@@ -540,9 +552,9 @@ export const FIELD_HELP: Record<string, string> = {
   "gateway.push.apns":
     "APNs delivery settings for iOS devices paired to this gateway. Use relay settings for official/TestFlight builds that register through the external push relay.",
   "gateway.push.apns.relay":
-    "External relay settings for relay-backed APNs sends. The gateway uses this relay for push.test, wake nudges, and reconnect wakes after a paired official iOS build publishes a relay-backed registration.",
+    "External relay settings for relay-backed APNs sends. The gateway uses the hosted OpenClaw relay by default, or this custom relay for push.test, wake nudges, and reconnect wakes after a paired official iOS build publishes a relay-backed registration.",
   "gateway.push.apns.relay.baseUrl":
-    "Base HTTPS URL for the external APNs relay service used by official/TestFlight iOS builds. Keep this aligned with the relay URL baked into the iOS build so registration and send traffic hit the same deployment.",
+    "Optional custom base HTTPS URL for the external APNs relay service used by official/TestFlight iOS builds. Keep this aligned with the relay URL baked into the iOS build so registration and send traffic hit the same deployment.",
   "gateway.push.apns.relay.timeoutMs":
     "Timeout in milliseconds for relay send requests from the gateway to the APNs relay (default: 10000). Increase for slower relays or networks, or lower to fail wake attempts faster.",
   "gateway.http.endpoints.chatCompletions.enabled":
@@ -1420,6 +1432,11 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional music-generation model (provider/model) used by the shared music generation capability.",
   "agents.defaults.musicGenerationModel.fallbacks":
     "Ordered fallback music-generation models (provider/model).",
+  "agents.defaults.voiceModel.primary":
+    "Optional voice model (provider/model) used by speech, transcription, and realtime voice capabilities.",
+  "agents.defaults.voiceModel.fallbacks": "Ordered fallback voice models (provider/model).",
+  "agents.defaults.voiceModel.timeoutMs":
+    "Default provider request timeout in milliseconds for voice model operations when the caller supports timeouts.",
   "agents.defaults.mediaGenerationAutoProviderFallback":
     "When true (default), shared image, music, and video generation automatically appends other auth-backed provider defaults after explicit primary/fallback refs. Set false to disable implicit cross-provider fallback while keeping explicit fallbacks.",
   "agents.defaults.pdfModel.primary":

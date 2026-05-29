@@ -9,6 +9,7 @@ import type {
   JsonSchemaValidator,
   jsonSchemaValidator,
 } from "@modelcontextprotocol/sdk/validation/types.js";
+import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { Compile } from "typebox/compile";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
@@ -17,13 +18,13 @@ import {
   findJsonSchemaShapeError,
   normalizeJsonSchemaForTypeBox,
 } from "../shared/json-schema-defaults.js";
-import { redactSensitiveUrlLikeString } from "../shared/net/redact-sensitive-url.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { sanitizeServerName } from "./agent-bundle-mcp-names.js";
 import type {
   McpCatalogTool,
   McpServerCatalog,
   McpToolCatalog,
+  McpToolCatalogDiagnostic,
   SessionMcpRuntime,
   SessionMcpRuntimeManager,
 } from "./agent-bundle-mcp-types.js";
@@ -325,6 +326,7 @@ export function createSessionMcpRuntime(params: {
 
       const servers: Record<string, McpServerCatalog> = {};
       const tools: McpCatalogTool[] = [];
+      const diagnostics: McpToolCatalogDiagnostic[] = [];
       const usedServerNames = new Set<string>();
 
       try {
@@ -386,11 +388,18 @@ export function createSessionMcpRuntime(params: {
               });
             }
           } catch (error) {
+            const message = redactErrorUrls(error);
             if (!disposed) {
               logWarn(
-                `bundle-mcp: failed to start server "${serverName}" (${resolved.description}): ${redactErrorUrls(error)}`,
+                `bundle-mcp: failed to start server "${serverName}" (${resolved.description}): ${message}`,
               );
             }
+            diagnostics.push({
+              serverName,
+              safeServerName,
+              launchSummary: resolved.description,
+              message,
+            });
             await disposeSession(session);
             sessions.delete(serverName);
             failIfDisposed();
@@ -403,6 +412,7 @@ export function createSessionMcpRuntime(params: {
           generatedAt: Date.now(),
           servers,
           tools,
+          ...(diagnostics.length > 0 ? { diagnostics } : {}),
         };
       } catch (error) {
         await Promise.allSettled(
