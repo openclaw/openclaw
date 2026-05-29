@@ -237,18 +237,23 @@ function normalizeInstallOptions(
   return [toOption(preferred.spec, preferred.index)];
 }
 
+type BuildSkillStatusContext = {
+  config?: OpenClawConfig;
+  prefs: SkillsInstallPreferences;
+  eligibility?: SkillEligibilityContext;
+  allowBundled: string[] | undefined;
+  agentSkillFilter?: string[];
+  workspaceDir: string;
+  clawhubLockRead: ClawHubSkillsLockfileStatusRead;
+};
+
 function buildSkillStatus(
   indexed: SkillIndexEntry,
-  config?: OpenClawConfig,
-  prefs?: SkillsInstallPreferences,
-  eligibility?: SkillEligibilityContext,
-  allowBundled?: string[],
-  agentSkillFilter?: string[],
-  workspaceDir?: string,
-  clawhubLockRead?: ClawHubSkillsLockfileStatusRead,
+  context: BuildSkillStatusContext,
 ): SkillStatusEntry {
   const entry = indexed.entry;
   const skillKey = indexed.skillKey;
+  const { config, prefs, eligibility, allowBundled, agentSkillFilter, workspaceDir } = context;
   const skillConfig = resolveSkillConfig(config, skillKey);
   const disabled = skillConfig?.enabled === false;
   const blockedByAllowlist = !isBundledSkillAllowed(entry, allowBundled);
@@ -283,7 +288,7 @@ function buildSkillStatus(
           workspaceDir,
           skillDir: entry.skill.baseDir,
           skillKey,
-          lockRead: clawhubLockRead,
+          lockRead: context.clawhubLockRead,
         })
       : undefined;
   const skillCard = resolveLocalSkillCardStatusSync(entry.skill.baseDir);
@@ -310,7 +315,7 @@ function buildSkillStatus(
     requirements: required,
     missing,
     configChecks,
-    install: normalizeInstallOptions(entry, prefs ?? resolveSkillsInstallPreferences(config)),
+    install: normalizeInstallOptions(entry, prefs),
     ...(clawhub ? { clawhub } : {}),
     ...(skillCard ? { skillCard } : {}),
   };
@@ -351,16 +356,15 @@ export function buildWorkspaceSkillStatus(
     agentId: opts?.agentId,
     agentSkillFilter,
     skills: skillIndexEntries.map((entry) =>
-      buildSkillStatus(
-        entry,
-        opts?.config,
+      buildSkillStatus(entry, {
+        config: opts?.config,
         prefs,
-        opts?.eligibility,
+        eligibility: opts?.eligibility,
         allowBundled,
         agentSkillFilter,
         workspaceDir,
         clawhubLockRead,
-      ),
+      }),
     ),
   };
 }

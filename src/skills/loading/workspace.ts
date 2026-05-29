@@ -119,10 +119,12 @@ function filterSkillEntries(
     const normalized = normalizeSkillFilter(skillFilter) ?? [];
     const label = normalized.length > 0 ? normalized.join(", ") : "(none)";
     skillsLogger.debug(`Applying skill filter: ${label}`);
-    filtered =
-      normalized.length > 0
-        ? filtered.filter((entry) => normalized.includes(entry.skill.name))
-        : [];
+    if (normalized.length > 0) {
+      const allowed = new Set(normalized);
+      filtered = filtered.filter((entry) => allowed.has(entry.skill.name));
+    } else {
+      filtered = [];
+    }
     skillsLogger.debug(
       `After skill filter: ${filtered.map((entry) => entry.skill.name).join(", ") || "(none)"}`,
     );
