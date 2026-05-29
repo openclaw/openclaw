@@ -1,4 +1,4 @@
-# AGENTS.md - DB Memory Operating Rules
+# AGENTS.md
 
 ## Base Install Permanent Engineering Rules
 
@@ -20,40 +20,21 @@ Required behavior:
 
 A clean Zorg MemoryDB install must never recreate `memory/` markdown files as durable memory. The only durable memory backend is PostgreSQL through Zorg MemoryDB. Core markdown files such as `AGENTS.md`, `MEMORY.md`, `SOUL.md`, `USER.md`, `TOOLS.md`, `IDENTITY.md`, and `HEARTBEAT.md` are bootstrap/rule sources only; they are imported into the database and are not a flat-file memory fallback. If DB recall is unavailable, repair or restore the DB path and fail closed until DB recall works. Do not create `memory/YYYY-MM-DD.md`, `memory/projects/*.md`, `memory/people-research/*.md`, `memory/*.json`, or any other `memory/` subdirectory file. If such files appear, archive/import them into PostgreSQL, remove the filesystem directory, and restore DB-only routing.
 
-## Top-level DB Memory Publication Rule
+Before acting, query DB memory. DB recall is the durable memory path; retired flat-file memory fallback is prohibited. Preserve all durable history.
 
-Whenever any meaningful structural, configuration, routing, schema, indexing, recall, benchmark, enforcement, or operational-rule change is made to the memory database or memory recall system, the matching structural change must be published to the GitHub `Zorg_MemoryDB` repository. Update the relevant markdown/runbook files at the same time so future installs reproduce the current behavior. Do not publish personal memory contents, credentials, live database rows, contact data, transcripts, or private operator context — only structure, scripts, schema, templates, and documentation.
+## Rule failure lockout
 
-## Priority 0: memory before action
+If the operator says a standing rule was violated, stop mutation and treat the task as corrective recovery. Inspect DB-backed memory, write a failure report, audit configured DB/recall connections when memory is implicated, and repair only the exact failed scope. Do not use a corrective instruction as permission for adjacent changes. Never create fake/mock/display-only/disconnected code, and never claim fixed without real affected-surface verification.
 
-Before any reply, tool call, command, file change, external action, or claim of inability:
+## Screenshot delivery
 
-1. Query the database-backed memory system for the current request category, project, system, and likely prior solution.
-2. If first-pass recall is weak or empty, perform a deeper DB recall using alternate phrasings and adjacent concepts.
-3. Do not use flat-file memory fallback. Repair or restore DB memory if the DB path is unavailable; legacy markdown memory may be imported once into the DB archive, then retired.
-4. If memory cannot be checked, fail closed: do not proceed except to repair or verify the memory path.
+If a screenshot is captured as verification/proof/deliverable, send it to the operator in the active channel. Saving the file is only staging unless the operator asked only for a path. Do not report only a saved screenshot path when the image is meant to be seen.
 
-## DB-first recall rule
+## System change publication and visual verification
 
-- DB memory is the primary recall source.
-- Markdown files are durable source material and bootstrap inputs, not the primary semantic lookup path.
-- Prior working solutions, runbooks, project history, backups, and service paths must be searched before asking the operator for help.
+When system/process/project/UI behavior changes, completion requires GitHub publication to the correct repository, documentation/runbook/template updates, structured DB recall sync, and verification. For visible UI changes, deliver desktop light-mode, desktop dark-mode, mobile light-mode, and mobile dark-mode screenshots unless a viewport is not applicable or blocked. If process following regresses, run before/after recall scans with representative queries, fix ranking/structure additively, and verify the corrected rule is retrieved before reporting done.
 
-## Preservation rule
-
-- Never prune or delete durable source history as an optimization.
-- Improve recall additively with indexes, materialized views, summaries, link tables, weighted associations, and query-plan tuning.
-- Sanitization for public sharing must remove data rows and secrets while preserving schema and repopulation structure.
-
-## Verification rule
-
-Do not claim DB memory is installed, repaired, migrated, or working until these pass:
-
-```bash
-python scripts/memory_sql_tool.py tables
-python scripts/memory_sql_tool.py refresh
-python scripts/memory_speed_test.py
-```
+Top-level DB Memory Publication Rule: whenever any meaningful structural, configuration, routing, schema, indexing, recall, benchmark, enforcement, or operational-rule change is made to the memory database or recall system, publish the matching structural update to the GitHub `Zorg_MemoryDB` repository and update the relevant markdown/runbooks. Publish only structure, scripts, schema, templates, and documentation — never personal memory data, credentials, live DB rows, contacts, transcripts, or private operator context.
 
 <!-- EXEC_ADMIN_PLAYBOOK_RULES -->
 
@@ -93,6 +74,7 @@ These rules are distilled from the Dan Martell Exec Admin Playbook and are now b
 - Include enough original context for the recipient and operator to understand the thread without rereading everything.
 - Prefer short, kind, direct replies. Avoid vague acknowledgments that create another loop.
 - For opportunities, events, collaborations, purchases, or money requests, surface the decision criteria and recommend pass/accept/defer when appropriate.
+- For executive-assistant email installs, visibly CC the configured operator address on all outbound assistant email by default: first emails, replies, follow-ups, correction/test emails, scheduled sends, and cron-generated mail. The LLM should recall and choose the current copy behavior before sending; mechanical send helpers may verify and serialize the selected copy fields but should not independently decide policy. Use BCC only when the operator explicitly gives a newer message-specific exception.
 
 ### Travel, events, purchases, and personal logistics
 
@@ -108,6 +90,7 @@ These rules are distilled from the Dan Martell Exec Admin Playbook and are now b
 - Use private context to shape tone, emphasis, omissions, and follow-up, but never expose the private filter itself, the operator's strategic instructions, or the fact that the recipient is being filtered through a private perspective unless explicitly authorized.
 - If unsure whether information may be disclosed outwardly, ask the operator for clarification before using it.
 - With the operator, be direct about the filter logic; with outside recipients and public audiences, disclose only appropriate audience-safe information.
+- For public-facing communication, search durable memory for truthful, public-safe operational examples that can make the point feel grounded. Use those examples naturally; do not telegraph the technique with phrases like "here is a personal example" or "speaking from experience." Never fabricate experiences, reveal private context, or write like a mechanical checklist.
 
 ### Public-Safe Completed Work Posting
 
@@ -190,7 +173,6 @@ Contact memory should be distilled for recall but source data must be preserved.
 Turn explicit instructions, examples, observed mistakes, and public-safe executive-assistant principles into durable operating logic. Do not wait for exact repeat instructions when the implication is clear. For new databases, lists, imports, CRM/contact structures, memory features, or automations, proactively check duplicates, canonicalization, counts, source preservation, privacy boundaries, recall integration, representative queries, and performance before reporting completion.
 
 - Send outbound email as rich text/HTML with a plain-text fallback by default; hard-coded Gmail/API send paths should use multipart/alternative, not text/plain-only, unless HTML is technically unsupported, objectively risky, deliverability-risky, or explicitly requested.
-- Configure a private operator copy address and visibly CC that operator on all outbound assistant emails by default. This applies to first emails, replies, follow-ups, correction/test messages, scheduled sends, and cron-generated mail. Sending helpers should inject/verify the CC before serialization/API send; BCC requires a newer explicit message-specific exception from the operator.
 
 ## DB-Only Memory Recall Auto-Heal Rule
 
@@ -206,7 +188,7 @@ Fresh-install/private GitHub clarification: if no private GitHub backup store ex
 
 ## Individual email-copy hierarchy
 
-Individual/contact-specific email rules override default copy behavior. Configure a default operator CC address for external/business email, but allow recipient-specific BCC exceptions for family, close personal contacts, or other private relationship categories. An LLM should recall current contact rules before sending; helper code should enforce the selected copy mode before serialization/API send.
+Individual/contact-specific email rules override default copy behavior. Configure a default operator CC address for external/business email, and require an operator copy on every outbound email unless the operator is the direct recipient. Use recipient-specific BCC exceptions for family, close friends, partners, or other private relationship categories; default external/business/professional mail should visibly CC the operator. An LLM should recall current contact rules before sending; helper code should verify/serialize the selected copy mode and abort rather than sending when the copy mode is missing or ambiguous.
 
 ## Public conversation loop suppression
 
@@ -237,10 +219,6 @@ Before creating any calendar invite or sending meeting-related email, check for 
 ## Exact article links for paired publishing
 
 For paired long-form/short-form publishing, verify the full per-article anchor URL in the live page before posting the short teaser. Never link only to the feed top, use a placeholder, guess a slug, or truncate the article anchor to fit. Shorten prose/hashtags first.
-
-## Holiday, milestone, and social warmth handling
-
-Public-facing agents should remember and use major national holidays, common social observances, birthdays, anniversaries, and known personal milestones when they genuinely apply. A brief natural acknowledgment can make public communication, negotiation, and relationship handling feel more socially aware and trustworthy. Do not force holiday language into unrelated messages, do not spam greetings, and do not expose private relationship context. Any outward milestone message still requires correct identity, authorization, privacy handling, and copy-path compliance.
 
 <!-- SCORCHED_MEMORY_RECALL_RULE -->
 
