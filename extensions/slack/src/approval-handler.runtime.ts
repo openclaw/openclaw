@@ -12,7 +12,10 @@ import type {
   PluginApprovalResolvedView,
   ResolvedApprovalView,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
-import { createChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
+import {
+  createChannelApprovalNativeRuntimeAdapter,
+  listApprovalDecisionActions,
+} from "openclaw/plugin-sdk/approval-handler-runtime";
 import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
 import { buildApprovalPresentationFromActionDescriptors } from "openclaw/plugin-sdk/approval-reply-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -179,7 +182,9 @@ function buildSlackExecPendingApprovalBlocks(view: ExecApprovalPendingView): Sla
   const interactiveBlocks =
     resolveSlackReplyBlocks({
       text: "",
-      presentation: buildApprovalPresentationFromActionDescriptors(view.actions),
+      presentation: buildApprovalPresentationFromActionDescriptors(
+        listApprovalDecisionActions(view.actions),
+      ),
     }) ?? [];
   return [
     {
@@ -213,7 +218,9 @@ function buildSlackPluginPendingApprovalBlocks(view: PluginApprovalPendingView):
   const interactiveBlocks =
     resolveSlackReplyBlocks({
       text: "",
-      presentation: buildApprovalPresentationFromActionDescriptors(view.actions),
+      presentation: buildApprovalPresentationFromActionDescriptors(
+        listApprovalDecisionActions(view.actions),
+      ),
     }) ?? [];
   return [
     {

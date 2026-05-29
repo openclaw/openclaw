@@ -9,7 +9,10 @@ import type {
   PluginApprovalPendingView,
   PluginApprovalResolvedView,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
-import { createChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
+import {
+  createChannelApprovalNativeRuntimeAdapter,
+  listApprovalDecisionActions,
+} from "openclaw/plugin-sdk/approval-handler-runtime";
 import type { ExecApprovalActionDescriptor } from "openclaw/plugin-sdk/approval-reply-runtime";
 import type { ExecApprovalDecision } from "openclaw/plugin-sdk/approval-runtime";
 import type {
@@ -143,7 +146,7 @@ class ExecApprovalActionRow extends Row<Button> {
 function createApprovalActionRow(view: PendingApprovalView): Row<Button> {
   return new ExecApprovalActionRow({
     approvalId: view.approvalId,
-    actions: view.actions,
+    actions: listApprovalDecisionActions(view.actions),
   });
 }
 

@@ -4,6 +4,8 @@ export {
   createChannelApprovalHandlerFromCapability,
   createLazyChannelApprovalNativeRuntimeAdapter,
   CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
+  listApprovalDecisionActions,
+  type ApprovalDecisionActionView,
   type ApprovalActionView,
   type ApprovalMetadataView,
   type ApprovalViewModel,

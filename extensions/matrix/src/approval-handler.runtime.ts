@@ -4,7 +4,10 @@ import type {
   PendingApprovalView,
   ResolvedApprovalView,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
-import { createChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
+import {
+  createChannelApprovalNativeRuntimeAdapter,
+  listApprovalDecisionActions,
+} from "openclaw/plugin-sdk/approval-handler-runtime";
 import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
 import {
   buildExecApprovalPendingReplyPayload,
@@ -255,7 +258,7 @@ function buildMatrixApprovalMetadata(params: {
     expiresAtMs: params.view.expiresAtMs,
     metadata: params.view.metadata,
     allowedDecisions: Array.from(params.allowedDecisions),
-    actions: params.view.actions.map((action) => ({
+    actions: listApprovalDecisionActions(params.view.actions).map((action) => ({
       decision: action.decision,
       label: action.label,
       style: action.style,
@@ -294,7 +297,9 @@ function buildPendingApprovalContent(params: {
   view: PendingApprovalView;
   nowMs: number;
 }): PendingApprovalContent {
-  const allowedDecisions = params.view.actions.map((action) => action.decision);
+  const allowedDecisions = listApprovalDecisionActions(params.view.actions).map(
+    (action) => action.decision,
+  );
   const payload =
     params.view.approvalKind === "plugin"
       ? buildPluginApprovalPendingReplyPayload({

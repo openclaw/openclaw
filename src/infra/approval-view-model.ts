@@ -104,12 +104,16 @@ function buildPluginViewBase<TPhase extends ApprovalPhase>(
 export function buildPendingApprovalView(request: ApprovalRequest): PendingApprovalView {
   if (request.id.startsWith("plugin:")) {
     const pluginRequest = request as PluginApprovalRequest;
+    const actions = pluginRequest.request.actions?.slice();
     return {
       ...buildPluginViewBase(pluginRequest, "pending"),
-      actions: buildExecApprovalActionDescriptors({
-        approvalCommandId: pluginRequest.id,
-        allowedDecisions: resolvePluginApprovalRequestAllowedDecisions(pluginRequest.request),
-      }),
+      actions:
+        actions && actions.length > 0
+          ? actions
+          : buildExecApprovalActionDescriptors({
+              approvalCommandId: pluginRequest.id,
+              allowedDecisions: resolvePluginApprovalRequestAllowedDecisions(pluginRequest.request),
+            }),
       expiresAtMs: pluginRequest.expiresAtMs,
     };
   }

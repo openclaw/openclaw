@@ -10,6 +10,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
+import type { ApprovalDecisionActionView } from "./approval-actions.js";
 import { formatApprovalDisplayPath } from "./approval-display-paths.js";
 import {
   describeNativeExecApprovalClientSetup,
@@ -37,12 +38,7 @@ export type ExecApprovalReplyMetadata = {
   sessionKey?: string;
 };
 
-export type ExecApprovalActionDescriptor = {
-  decision: ExecApprovalReplyDecision;
-  label: string;
-  style: NonNullable<MessagePresentationButton["style"]>;
-  command: string;
-};
+export type ExecApprovalActionDescriptor = ApprovalDecisionActionView;
 
 export type ExecApprovalPendingReplyParams = {
   warningText?: string;

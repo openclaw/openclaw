@@ -10,7 +10,10 @@
  */
 
 import type { ChannelApprovalNativeRuntimeSpec } from "openclaw/plugin-sdk/approval-handler-runtime";
-import { createChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
+import {
+  createChannelApprovalNativeRuntimeAdapter,
+  listApprovalDecisionActions,
+} from "openclaw/plugin-sdk/approval-handler-runtime";
 import type { ChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { resolveApprovalRequestSessionConversation } from "openclaw/plugin-sdk/approval-native-runtime";
 import {
@@ -134,7 +137,7 @@ const qqbotApprovalRuntimeSpec: ChannelApprovalNativeRuntimeSpec<
       const text = isExecRequest(req) ? buildExecApprovalText(req) : buildPluginApprovalText(req);
       const keyboard = buildApprovalKeyboard(
         req.id,
-        view.actions.map((action) => action.decision),
+        listApprovalDecisionActions(view.actions).map((action) => action.decision),
       );
       getBridgeLogger().debug?.(
         `[qqbot:approval-runtime] buildPendingPayload requestId=${req.id} kind=${

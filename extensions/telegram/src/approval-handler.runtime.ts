@@ -2,7 +2,10 @@ import type {
   ChannelApprovalCapabilityHandlerContext,
   PendingApprovalView,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
-import { createChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
+import {
+  createChannelApprovalNativeRuntimeAdapter,
+  listApprovalDecisionActions,
+} from "openclaw/plugin-sdk/approval-handler-runtime";
 import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
 import { buildPluginApprovalPendingReplyPayload } from "openclaw/plugin-sdk/approval-reply-runtime";
 import {
@@ -85,14 +88,18 @@ function buildPendingPayload(params: {
             params.view.approvalKind === "exec" && params.view.host === "node" ? "node" : "gateway",
           nodeId:
             params.view.approvalKind === "exec" ? (params.view.nodeId ?? undefined) : undefined,
-          allowedDecisions: params.view.actions.map((action) => action.decision),
+          allowedDecisions: listApprovalDecisionActions(params.view.actions).map(
+            (action) => action.decision,
+          ),
           expiresAtMs: params.request.expiresAtMs,
           nowMs: params.nowMs,
         } satisfies ExecApprovalPendingReplyParams);
   return {
     text: payload.text ?? "",
     buttons: resolveTelegramInlineButtons({
-      presentation: buildApprovalPresentationFromActionDescriptors(params.view.actions),
+      presentation: buildApprovalPresentationFromActionDescriptors(
+        listApprovalDecisionActions(params.view.actions),
+      ),
     }),
   };
 }

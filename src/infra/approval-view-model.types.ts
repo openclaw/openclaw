@@ -1,4 +1,4 @@
-import type { InteractiveReplyButton } from "../interactive/payload.js";
+import type { ApprovalActionView } from "./approval-actions.js";
 import type { ChannelApprovalKind } from "./approval-types.js";
 import type { CommandExplanationSummary } from "./command-analysis/explain.js";
 import type {
@@ -10,12 +10,7 @@ import type { PluginApprovalRequest, PluginApprovalResolved } from "./plugin-app
 
 type ApprovalPhase = "pending" | "resolved" | "expired";
 
-export type ApprovalActionView = {
-  decision: ExecApprovalDecision;
-  label: string;
-  style: NonNullable<InteractiveReplyButton["style"]>;
-  command: string;
-};
+export type { ApprovalActionView, ApprovalDecisionActionView } from "./approval-actions.js";
 
 export type ApprovalMetadataView = {
   label: string;

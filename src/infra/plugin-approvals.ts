@@ -1,3 +1,4 @@
+import type { ApprovalActionView } from "./approval-actions.js";
 import type { ExecApprovalDecision } from "./exec-approvals.js";
 
 export type PluginApprovalRequestPayload = {
@@ -7,6 +8,7 @@ export type PluginApprovalRequestPayload = {
   severity?: "info" | "warning" | "critical" | null;
   toolName?: string | null;
   toolCallId?: string | null;
+  actions?: readonly ApprovalActionView[] | null;
   allowedDecisions?: readonly ExecApprovalDecision[] | null;
   agentId?: string | null;
   sessionKey?: string | null;

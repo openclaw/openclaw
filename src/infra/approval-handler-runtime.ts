@@ -36,6 +36,7 @@ import type { ExecApprovalChannelRuntime } from "./exec-approval-channel-runtime
 import type { ExecApprovalChannelRuntimeEventKind } from "./exec-approval-channel-runtime.types.js";
 
 export type {
+  ApprovalDecisionActionView,
   ApprovalActionView,
   ApprovalMetadataView,
   ApprovalViewModel,
@@ -49,6 +50,7 @@ export type {
   PluginApprovalResolvedView,
   ResolvedApprovalView,
 } from "./approval-view-model.types.js";
+export { listApprovalDecisionActions } from "./approval-actions.js";
 export {
   CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
   createLazyChannelApprovalNativeRuntimeAdapter,
