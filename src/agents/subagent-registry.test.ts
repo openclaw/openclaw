@@ -792,6 +792,89 @@ describe("subagent registry seam flow", () => {
     expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
   });
 
+  it("refreshes unpublished timeout delivery payloads after lifecycle correction", async () => {
+    const createdAt = Date.parse("2026-03-24T11:59:00Z");
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        return { status: "pending" };
+      }
+      return {};
+    });
+    mocks.runSubagentAnnounceFlow.mockResolvedValueOnce(false);
+    mod.registerSubagentRun({
+      runId: "run-refresh-pending-timeout-payload",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "pending timeout payload should refresh",
+      cleanup: "keep",
+      runTimeoutSeconds: 60,
+    });
+    const run = mod.getSubagentRunByChildSessionKey("agent:main:subagent:child");
+    expect(run).not.toBeNull();
+    Object.assign(run ?? {}, {
+      createdAt,
+      startedAt: createdAt,
+      sessionStartedAt: createdAt,
+      endedAt: createdAt + 60_000,
+      outcome: {
+        status: "timeout",
+        startedAt: createdAt,
+        endedAt: createdAt + 60_000,
+        elapsedMs: 60_000,
+      },
+      delivery: {
+        status: "pending",
+        payload: {
+          requesterSessionKey: "agent:main:main",
+          childSessionKey: "agent:main:subagent:child",
+          childRunId: "run-refresh-pending-timeout-payload",
+          task: "pending timeout payload should refresh",
+          startedAt: createdAt,
+          endedAt: createdAt + 60_000,
+          outcome: { status: "timeout" },
+        },
+      },
+    });
+
+    const lastOnAgentEventCall = mocks.onAgentEvent.mock.calls[
+      mocks.onAgentEvent.mock.calls.length - 1
+    ] as unknown as
+      | [(evt: { runId: string; stream: string; data: Record<string, unknown> }) => void]
+      | undefined;
+    const lifecycleHandler = lastOnAgentEventCall?.[0];
+    expect(lifecycleHandler).toBeTypeOf("function");
+
+    lifecycleHandler?.({
+      runId: "run-refresh-pending-timeout-payload",
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        startedAt: createdAt + 10_000,
+        endedAt: createdAt + 65_000,
+      },
+    });
+
+    await waitForFast(() => {
+      const announceParams = findRecordCallArg(
+        mocks.runSubagentAnnounceFlow,
+        0,
+        "refreshed pending delivery announce",
+        (record) => record.childRunId === "run-refresh-pending-timeout-payload",
+      );
+      expectRecordFields(
+        announceParams.outcome,
+        {
+          status: "ok",
+          startedAt: createdAt + 10_000,
+          endedAt: createdAt + 65_000,
+          elapsedMs: 55_000,
+        },
+        "refreshed pending delivery outcome",
+      );
+    });
+  });
+
   it("allows non-explicit published timeouts to be corrected by lifecycle success", async () => {
     const startedAt = Date.parse("2026-03-24T11:59:00Z");
     mod.registerSubagentRun({

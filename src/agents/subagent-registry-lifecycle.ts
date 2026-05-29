@@ -567,6 +567,26 @@ export function createSubagentRegistryLifecycleController(params: {
     delivery.payload = payload;
   };
 
+  const refreshPendingFinalDeliveryPayload = (entry: SubagentRunRecord): boolean => {
+    const delivery = entry.delivery;
+    if (
+      !delivery?.payload ||
+      delivery.status === "delivered" ||
+      typeof delivery.announcedAt === "number"
+    ) {
+      return false;
+    }
+    delivery.payload = {
+      ...delivery.payload,
+      startedAt: entry.startedAt,
+      endedAt: entry.endedAt,
+      outcome: entry.outcome,
+      frozenResultText: entry.completion?.resultText,
+      fallbackFrozenResultText: entry.completion?.fallbackResultText,
+    };
+    return true;
+  };
+
   const suspendPendingFinalDelivery = (args: {
     runId: string;
     entry: SubagentRunRecord;
@@ -1165,6 +1185,9 @@ export function createSubagentRegistryLifecycleController(params: {
     }
 
     if (await freezeRunResultAtCompletion(entry, outcome)) {
+      mutated = true;
+    }
+    if (refreshPendingFinalDeliveryPayload(entry)) {
       mutated = true;
     }
 
