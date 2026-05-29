@@ -22,6 +22,7 @@ export type EmbeddedCompactionRuntimeContext = {
   currentThreadTs?: string;
   currentMessageId?: string | number;
   authProfileId?: string;
+  agentHarnessId?: string;
   workspaceDir: string;
   cwd?: string;
   agentDir: string;
@@ -169,6 +170,7 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
     authProfileId: params.authProfileId,
     harnessRuntime: params.harnessRuntime,
   });
+  const agentHarnessId = params.harnessRuntime?.trim() || undefined;
   const processScopeKey = params.sessionKey?.trim();
   const activeProcessSessions =
     params.activeProcessSessions ??
@@ -184,6 +186,7 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
     currentThreadTs: params.currentThreadTs ?? undefined,
     currentMessageId: params.currentMessageId ?? undefined,
     authProfileId: resolved.authProfileId,
+    agentHarnessId,
     workspaceDir: params.workspaceDir,
     cwd: params.cwd ?? undefined,
     agentDir: params.agentDir,

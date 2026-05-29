@@ -264,6 +264,19 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.authProfileId).toBeUndefined();
   });
 
+  it("carries the selected harness id for delegated runtime compaction", () => {
+    const result = buildEmbeddedCompactionRuntimeContext({
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      config: {} as unknown as OpenClawConfig,
+      provider: "openai",
+      modelId: "gpt-5.5",
+      harnessRuntime: "codex",
+    });
+    expect(result.agentHarnessId).toBe("codex");
+    expect(result.runtimeProvider).toBe("openai-codex");
+  });
+
   it("preserves direct OpenAI compaction for the OpenClaw runtime", () => {
     const result = resolveEmbeddedCompactionTarget({
       config: {
