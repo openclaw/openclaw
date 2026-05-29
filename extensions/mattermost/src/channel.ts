@@ -294,7 +294,9 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
     const attachments = Array.isArray(params.attachments)
       ? params.attachments
           .map((att) => {
-            if (!att || typeof att !== "object") return undefined;
+            if (!att || typeof att !== "object") {
+              return undefined;
+            }
             const a = att as Record<string, unknown>;
             const attMedia =
               typeof a.media === "string" ? a.media.trim() || undefined : undefined;

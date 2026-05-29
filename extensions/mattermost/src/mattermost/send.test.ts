@@ -37,6 +37,7 @@ const mockState = vi.hoisted(() => ({
 type MattermostPostParams = {
   channelId?: string;
   message?: string;
+  file_ids?: string[];
   props?: {
     attachments?: Array<{
       actions?: Array<{ id?: string; name?: string }>;

@@ -540,7 +540,9 @@ export async function sendMessageMattermost(
   // Handle attachments array
   if (!uploadError && opts.attachments && opts.attachments.length > 0) {
     for (const att of opts.attachments) {
-      if (!att) continue;
+      if (!att) {
+        continue;
+      }
       try {
         if (att.buffer) {
           pendingUploads.push({
