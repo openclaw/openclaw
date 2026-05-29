@@ -546,6 +546,20 @@ describe("GatewayClient security checks", () => {
     client.stop();
   });
 
+  it("allows ws:// to IPv6 link-local addresses across fe80::/10", () => {
+    const onConnectError = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://[fe90::1]:18789",
+      onConnectError,
+    });
+
+    client.start();
+
+    expect(onConnectError).not.toHaveBeenCalled();
+    expect(wsInstances.length).toBe(1);
+    client.stop();
+  });
+
   it("allows ws:// hostnames with OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1", () => {
     process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS = "1";
     const onConnectError = vi.fn();

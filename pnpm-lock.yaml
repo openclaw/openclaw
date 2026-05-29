@@ -1748,6 +1748,9 @@ importers:
       '@openclaw/gateway-protocol':
         specifier: workspace:*
         version: link:../gateway-protocol
+      ipaddr.js:
+        specifier: 2.4.0
+        version: 2.4.0
       ws:
         specifier: 8.21.0
         version: 8.21.0

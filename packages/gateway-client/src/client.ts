@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import net from "node:net";
 import {
   type ConnectParams,
   type EventFrame,
@@ -26,6 +25,7 @@ import {
   type ConnectErrorRecoveryAdvice,
 } from "@openclaw/gateway-protocol/connect-error-details";
 import { resolveGatewayStartupRetryAfterMs } from "@openclaw/gateway-protocol/startup-unavailable";
+import ipaddr from "ipaddr.js";
 import { WebSocket, type ClientOptions, type CertMeta } from "ws";
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
 import { resolveConnectChallengeTimeoutMs } from "./timeouts.js";
@@ -134,82 +134,46 @@ function parseHostForAddressChecks(
   };
 }
 
-function parseIpv4Octets(host: string): [number, number, number, number] | null {
-  const parts = host.split(".");
-  if (parts.length !== 4) {
-    return null;
-  }
-  const octets = parts.map((part) => {
-    if (!/^(?:0|[1-9]\d{0,2})$/.test(part)) {
-      return Number.NaN;
-    }
-    return Number.parseInt(part, 10);
-  });
-  if (octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)) {
-    return null;
-  }
-  return octets as [number, number, number, number];
-}
+type ParsedIpAddress = ipaddr.IPv4 | ipaddr.IPv6;
 
-function isPrivateOrLoopbackIpv4(host: string): boolean {
-  const octets = parseIpv4Octets(host);
-  if (!octets) {
-    return false;
-  }
-  return isPrivateOrLoopbackIpv4Octets(octets);
-}
+const PRIVATE_OR_LOOPBACK_IPV4_RANGES = new Set<string>([
+  "loopback",
+  "private",
+  "linkLocal",
+  "carrierGradeNat",
+]);
 
-function isPrivateOrLoopbackIpv4Octets(octets: [number, number, number, number]): boolean {
-  const [first, second] = octets;
-  return (
-    first === 10 ||
-    first === 127 ||
-    (first === 172 && second >= 16 && second <= 31) ||
-    (first === 192 && second === 168) ||
-    (first === 169 && second === 254) ||
-    (first === 100 && second >= 64 && second <= 127)
-  );
-}
+const PRIVATE_OR_LOOPBACK_IPV6_RANGES = new Set<string>([
+  "loopback",
+  "linkLocal",
+  "uniqueLocal",
+  "deprecatedSiteLocal",
+]);
 
-function decodeIpv4MappedIpv6Octets(host: string): [number, number, number, number] | null {
+function parseGatewayIpAddress(host: string): ParsedIpAddress | null {
   const normalized = host.toLowerCase();
-  if (!normalized.startsWith("::ffff:")) {
+  if (ipaddr.IPv4.isValid(normalized) && !ipaddr.IPv4.isValidFourPartDecimal(normalized)) {
     return null;
   }
-  const suffix = normalized.slice("::ffff:".length);
+  if (!ipaddr.isValid(normalized)) {
+    return null;
+  }
+  const parsed = ipaddr.parse(normalized);
   // WHATWG URL canonicalization can turn ::ffff:127.0.0.1 into ::ffff:7f00:1.
-  // Decode both forms so loopback/private policy is stable after parsing.
-  if (suffix.includes(".")) {
-    return parseIpv4Octets(suffix);
+  // Normalize mapped forms so IPv4 loopback/private policy stays identical.
+  if (parsed.kind() === "ipv6") {
+    const ipv6 = parsed as ipaddr.IPv6;
+    if (ipv6.isIPv4MappedAddress()) {
+      return ipv6.toIPv4Address();
+    }
   }
-  const match = /^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/u.exec(suffix);
-  if (!match) {
-    return null;
-  }
-  const high = Number.parseInt(match[1], 16);
-  const low = Number.parseInt(match[2], 16);
-  if (!Number.isInteger(high) || !Number.isInteger(low)) {
-    return null;
-  }
-  return [(high >>> 8) & 0xff, high & 0xff, (low >>> 8) & 0xff, low & 0xff];
+  return parsed;
 }
 
-function isPrivateOrLoopbackIpv6(host: string): boolean {
-  const normalized = host.toLowerCase();
-  if (normalized === "::" || normalized.startsWith("ff")) {
-    return false;
-  }
-  const mappedIpv4 = decodeIpv4MappedIpv6Octets(normalized);
-  if (mappedIpv4) {
-    return isPrivateOrLoopbackIpv4Octets(mappedIpv4);
-  }
-  if (normalized === "::1" || normalized.startsWith("fe80:") || normalized.startsWith("fc")) {
-    return true;
-  }
-  if (normalized.startsWith("fd") || normalized.startsWith("fec")) {
-    return true;
-  }
-  return false;
+function isPrivateOrLoopbackIpAddress(address: ParsedIpAddress): boolean {
+  const ranges =
+    address.kind() === "ipv4" ? PRIVATE_OR_LOOPBACK_IPV4_RANGES : PRIVATE_OR_LOOPBACK_IPV6_RANGES;
+  return ranges.has(address.range());
 }
 
 function isLoopbackHost(host: string): boolean {
@@ -220,14 +184,11 @@ function isLoopbackHost(host: string): boolean {
   if (parsed.isLocalhost) {
     return true;
   }
-  if (net.isIP(parsed.unbracketedHost) === 4) {
-    return parsed.unbracketedHost.startsWith("127.");
-  }
-  if (net.isIP(parsed.unbracketedHost) !== 6) {
+  const address = parseGatewayIpAddress(parsed.unbracketedHost);
+  if (!address) {
     return false;
   }
-  const mappedIpv4 = decodeIpv4MappedIpv6Octets(parsed.unbracketedHost);
-  return parsed.unbracketedHost === "::1" || mappedIpv4?.[0] === 127;
+  return address.range() === "loopback";
 }
 
 function isPrivateOrLoopbackHost(host: string): boolean {
@@ -238,13 +199,11 @@ function isPrivateOrLoopbackHost(host: string): boolean {
   if (parsed.isLocalhost) {
     return true;
   }
-  if (net.isIP(parsed.unbracketedHost) === 4) {
-    return isPrivateOrLoopbackIpv4(parsed.unbracketedHost);
+  const address = parseGatewayIpAddress(parsed.unbracketedHost);
+  if (!address) {
+    return false;
   }
-  if (net.isIP(parsed.unbracketedHost) === 6) {
-    return isPrivateOrLoopbackIpv6(parsed.unbracketedHost);
-  }
-  return false;
+  return isPrivateOrLoopbackIpAddress(address);
 }
 
 function isTrustedPlaintextWebSocketHost(hostname: string): boolean {
@@ -276,7 +235,9 @@ function isSecureWebSocketUrl(rawUrl: string, options?: { allowPrivateWs?: boole
         url.hostname.startsWith("[") && url.hostname.endsWith("]")
           ? url.hostname.slice(1, -1)
           : url.hostname;
-      return isPrivateOrLoopbackHost(url.hostname) || net.isIP(hostForIpCheck) === 0;
+      return (
+        isPrivateOrLoopbackHost(url.hostname) || parseGatewayIpAddress(hostForIpCheck) === null
+      );
     }
     return false;
   } catch {
