@@ -183,6 +183,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   private readonlyRecoverySuccesses = 0;
   private readonlyRecoveryFailures = 0;
   private readonlyRecoveryLastError?: string;
+  private indexIdentityMismatchReason?: string;
 
   private static async loadProviderResult(params: {
     cfg: OpenClawConfig;
@@ -267,6 +268,12 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (meta?.vectorDims) {
       this.vector.dims = meta.vectorDims;
     }
+    const initialIndexIdentity = this.resolveCurrentIndexIdentityState({
+      meta,
+      providerKeyKnown: Boolean(params.providerResult),
+    });
+    this.indexIdentityMismatchReason =
+      initialIndexIdentity.status === "mismatched" ? initialIndexIdentity.reason : undefined;
     const transient = params.purpose === "status" || params.purpose === "cli";
     if (!transient) {
       this.ensureWatcher();
@@ -277,6 +284,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       hasMemorySource: this.sources.has("memory"),
       statusOnly: params.purpose === "status",
       hasIndexedMeta: Boolean(meta),
+      indexIdentityMismatched: initialIndexIdentity.status === "mismatched",
     });
     this.batch = this.resolveBatchConfig();
     if (!transient) {
@@ -377,6 +385,26 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }
   }
 
+  private refreshIndexIdentityDirty(params?: { providerKeyKnown?: boolean }) {
+    const provider = this.providerInitialized
+      ? this.provider
+        ? { id: this.provider.id, model: this.provider.model }
+        : null
+      : undefined;
+    const state = this.resolveCurrentIndexIdentityState({
+      ...(provider !== undefined ? { provider } : {}),
+      providerKeyKnown: params?.providerKeyKnown,
+    });
+    this.indexIdentityMismatchReason = state.status === "mismatched" ? state.reason : undefined;
+    if (
+      state.status === "mismatched" ||
+      (state.status === "missing" && this.sources.has("memory"))
+    ) {
+      this.dirty = true;
+    }
+    return state;
+  }
+
   async search(
     query: string,
     opts?: {
@@ -422,6 +450,26 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     });
     if (preflight.shouldInitializeProvider) {
       await this.ensureProviderInitialized();
+    }
+    const indexIdentity = this.refreshIndexIdentityDirty({
+      providerKeyKnown: this.providerInitialized,
+    });
+    if (indexIdentity.status === "mismatched" && this.provider) {
+      try {
+        await this.sync({ reason: "search", force: true });
+      } catch (err) {
+        log.warn(`memory sync failed (search-bootstrap): ${String(err)}`);
+        return [];
+      }
+      hasIndexedContent = this.hasIndexedContent();
+      if (
+        this.refreshIndexIdentityDirty({
+          providerKeyKnown: this.providerInitialized,
+        }).status !== "valid" ||
+        !hasIndexedContent
+      ) {
+        return [];
+      }
     }
     const minScore = opts?.minScore ?? this.settings.query.minScore;
     const maxResults = opts?.maxResults ?? this.settings.query.maxResults;
@@ -856,6 +904,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   }
 
   status(): MemoryProviderStatus {
+    this.refreshIndexIdentityDirty({
+      providerKeyKnown: this.providerInitialized,
+    });
     const sourceFilter = this.buildSourceFilter();
     const aggregateState = collectMemoryStatusAggregate({
       db: {
@@ -937,6 +988,12 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         searchMode: providerInfo.searchMode,
         providerState: this.providerLifecycle,
         providerUnavailableReason: this.providerUnavailableReason,
+        indexIdentity: this.indexIdentityMismatchReason
+          ? {
+              status: "mismatched",
+              reason: this.indexIdentityMismatchReason,
+            }
+          : { status: "valid" },
         readonlyRecovery: {
           attempts: this.readonlyRecoveryAttempts,
           successes: this.readonlyRecoverySuccesses,

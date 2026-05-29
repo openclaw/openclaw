@@ -389,6 +389,41 @@ describe("memory index", () => {
     }
   });
 
+  it("reindexes on search when existing metadata belongs to another provider", async () => {
+    const dbPath = path.join(workspaceDir, "index-provider-cutover.sqlite");
+    const oldCfg = createCfg({
+      storePath: dbPath,
+      model: "old-embed",
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const oldManager = await getFreshManager(oldCfg);
+    await oldManager.sync({ reason: "test", force: true });
+    await oldManager.close?.();
+
+    const nextCfg = createCfg({
+      storePath: dbPath,
+      provider: "gemini",
+      model: "new-embed",
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const nextManager = await getFreshManager(nextCfg);
+    try {
+      expect(nextManager.status().dirty).toBe(true);
+      expect(nextManager.status().custom?.indexIdentity).toEqual({
+        status: "mismatched",
+        reason: "index was built for model old-embed, expected new-embed",
+      });
+
+      const results = await nextManager.search("alpha");
+
+      expect(results[0]?.snippet).toContain("Alpha memory line");
+      expect(nextManager.status().dirty).toBe(false);
+      expect(nextManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+    } finally {
+      await nextManager.close?.();
+    }
+  });
+
   it("closes embedding providers when memory index managers close", async () => {
     const cfg = createCfg({
       storePath: indexMainPath,

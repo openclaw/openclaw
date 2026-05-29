@@ -415,6 +415,34 @@ describe("memory cli", () => {
     expect(close).toHaveBeenCalled();
   });
 
+  it("prints index identity mismatch reasons", async () => {
+    const close = vi.fn(async () => {});
+    mockManager({
+      status: () =>
+        makeMemoryStatus({
+          dirty: true,
+          provider: "ollama",
+          model: "nomic-embed-text",
+          requestedProvider: "ollama",
+          custom: {
+            indexIdentity: {
+              status: "mismatched",
+              reason: "index was built for provider openai, expected ollama",
+            },
+          },
+        }),
+      close,
+    });
+
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["status"]);
+
+    expectLogged(log, "Provider: ollama (requested: ollama)");
+    expectLogged(log, "Dirty: yes");
+    expectLogged(log, "Index identity: index was built for provider openai, expected ollama");
+    expect(close).toHaveBeenCalled();
+  });
+
   it("keeps plain status from probing vector or embeddings", async () => {
     const close = vi.fn(async () => {});
     const probeVectorAvailability = vi.fn(async () => {

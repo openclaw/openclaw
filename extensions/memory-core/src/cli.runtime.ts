@@ -868,6 +868,14 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
         lines.push(`${label("Embeddings error")} ${warn(embeddingProbe.error)}`);
       }
     }
+    const indexIdentity = asRecord(asRecord(status.custom)?.indexIdentity);
+    const indexIdentityReason =
+      indexIdentity?.status === "mismatched" && typeof indexIdentity.reason === "string"
+        ? indexIdentity.reason
+        : undefined;
+    if (indexIdentityReason) {
+      lines.push(`${label("Index identity")} ${warn(indexIdentityReason)}`);
+    }
     if (status.sourceCounts?.length) {
       lines.push(label("By source"));
       for (const entry of status.sourceCounts) {

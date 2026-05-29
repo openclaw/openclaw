@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   resolveConfiguredScopeHash,
   resolveConfiguredSourcesForMeta,
+  resolveMemoryIndexIdentityState,
   shouldRunFullMemoryReindex,
   type MemoryIndexMeta,
 } from "./manager-reindex-state.js";
@@ -59,6 +60,20 @@ describe("memory reindex state", () => {
     ).toBe(true);
   });
 
+  it("returns a mismatch reason when provider identity changes", () => {
+    expect(
+      resolveMemoryIndexIdentityState(
+        createFullReindexParams({
+          provider: { id: "ollama", model: "mock-embed-v1" },
+          providerKey: "provider-key-ollama",
+        }),
+      ),
+    ).toEqual({
+      status: "mismatched",
+      reason: "index was built for provider openai, expected ollama",
+    });
+  });
+
   it("requires a full reindex when the provider cache key changes", () => {
     expect(
       shouldRunFullMemoryReindex(
@@ -73,6 +88,17 @@ describe("memory reindex state", () => {
         }),
       ),
     ).toBe(true);
+  });
+
+  it("can defer provider key comparison until provider initialization", () => {
+    expect(
+      resolveMemoryIndexIdentityState(
+        createFullReindexParams({
+          providerKey: undefined,
+          providerKeyKnown: false,
+        }),
+      ),
+    ).toEqual({ status: "valid" });
   });
 
   it("requires a full reindex when extraPaths change", () => {
