@@ -158,9 +158,10 @@ export function createAnthropicVertexStreamFn(
       modelMaxTokens: transportModel.maxTokens,
       requestedMaxTokens: options?.maxTokens,
     });
+    const temperature = isClaudeOpus47OrNewerModel(model.id) ? undefined : options?.temperature;
     const opts: AnthropicVertexTransportOptions = {
       client,
-      temperature: options?.temperature,
+      ...(temperature !== undefined ? { temperature } : {}),
       ...(maxTokens !== undefined ? { maxTokens } : {}),
       signal: options?.signal,
       cacheRetention: options?.cacheRetention,

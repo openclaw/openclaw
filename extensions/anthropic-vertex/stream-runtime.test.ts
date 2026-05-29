@@ -170,6 +170,30 @@ describe("createAnthropicVertexStreamFn", () => {
     expect(streamTransportOptions(streamAnthropicMock).maxTokens).toBe(128000);
   });
 
+  it.each(["claude-opus-4-8", "claude-opus-4-7"])(
+    "omits unsupported temperature for %s",
+    (modelId) => {
+      const { deps, streamAnthropicMock } = createStreamDeps();
+      const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
+      const model = makeModel({ id: modelId, maxTokens: 128000 });
+
+      void streamFn(model, { messages: [] }, { temperature: 0.7 });
+
+      const transportOptions = streamTransportOptions(streamAnthropicMock);
+      expect(Object.hasOwn(transportOptions, "temperature")).toBe(false);
+    },
+  );
+
+  it("preserves temperature for Vertex models that support custom sampling", () => {
+    const { deps, streamAnthropicMock } = createStreamDeps();
+    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
+    const model = makeModel({ id: "claude-sonnet-4-6", maxTokens: 128000 });
+
+    void streamFn(model, { messages: [] }, { temperature: 0.7 });
+
+    expect(streamTransportOptions(streamAnthropicMock).temperature).toBe(0.7);
+  });
+
   it("maps xhigh reasoning to max effort for adaptive Opus models", () => {
     const { deps, streamAnthropicMock } = createStreamDeps();
     const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
