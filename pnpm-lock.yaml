@@ -798,6 +798,12 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/gmi:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/google:
     dependencies:
       '@google/genai':
@@ -1176,6 +1182,12 @@ importers:
       openclaw:
         specifier: workspace:*
         version: link:../..
+
+  extensions/novita:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
 
   extensions/nvidia:
     devDependencies:
