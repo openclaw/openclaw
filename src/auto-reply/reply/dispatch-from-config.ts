@@ -1447,7 +1447,10 @@ export async function dispatchReplyFromConfig(
     payload: ReplyPayload,
     mode: "additive" | "terminal",
   ): Promise<boolean> => {
-    if (suppressAutomaticSourceDelivery) {
+    // Plugin-owned conversation bindings deliver replies from the owning
+    // plugin's inbound_claim result, not from a normal model final. They
+    // must not be suppressed by visibleReplies="message_tool" guards.
+    if (suppressAutomaticSourceDelivery && !pluginOwnedBinding) {
       return false;
     }
     const result = await routeReplyToOriginating(payload, {
