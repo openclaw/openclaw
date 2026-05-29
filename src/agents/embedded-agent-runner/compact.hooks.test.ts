@@ -327,7 +327,9 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       };
     };
 
-    expect(createdSession.session.agent.state.systemPrompt).toBe("compaction system prompt");
+    expect(createdSession.session.setBaseSystemPrompt).toHaveBeenCalledWith(
+      "compaction system prompt",
+    );
     expect(createdSession.session.setActiveToolsByName.mock.invocationCallOrder[0]).toBeLessThan(
       createdSession.session.setBaseSystemPrompt.mock.invocationCallOrder[0],
     );
