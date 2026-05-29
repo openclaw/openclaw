@@ -502,6 +502,7 @@ describe("withReplyDispatcher", () => {
     const customBeforeDeliver = vi.fn(async (payload: { text?: string }) => ({
       text: `${payload.text ?? ""} [custom]`,
     }));
+    const runMessageSending = vi.fn(async () => ({ content: "message hook" }));
     const runReplyPayloadSending = vi.fn(async ({ payload }: { payload: { text?: string } }) => ({
       payload: {
         ...payload,
@@ -509,8 +510,11 @@ describe("withReplyDispatcher", () => {
       },
     }));
     hoisted.getGlobalHookRunnerMock.mockReturnValue({
-      hasHooks: vi.fn((hookName?: string) => hookName === "reply_payload_sending"),
-      runMessageSending: vi.fn(async () => undefined),
+      hasHooks: vi.fn(
+        (hookName?: string) =>
+          hookName === "message_sending" || hookName === "reply_payload_sending",
+      ),
+      runMessageSending,
       runReplyPayloadSending,
     });
     hoisted.createReplyDispatcherMock.mockReturnValueOnce(createDispatcher([]));
@@ -535,6 +539,7 @@ describe("withReplyDispatcher", () => {
 
     expect(customBeforeDeliver).toHaveBeenCalledTimes(1);
     expect(customBeforeDeliver).toHaveBeenCalledWith({ text: "original" }, { kind: "final" });
+    expect(runMessageSending).not.toHaveBeenCalled();
     expect(runReplyPayloadSending).toHaveBeenCalledTimes(1);
     expect(runReplyPayloadSending).toHaveBeenCalledWith(
       {
