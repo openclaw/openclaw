@@ -209,18 +209,21 @@ describe("Session Store Cache", () => {
     clearSessionStoreCacheForTest();
 
     const readSpy = vi.spyOn(fs, "readFileSync");
+    try {
+      const loaded1 = loadSessionStore(storePath);
+      const loaded2 = loadSessionStore(storePath);
 
-    const loaded1 = loadSessionStore(storePath);
-    const loaded2 = loadSessionStore(storePath);
+      expect(loaded1).toEqual(testStore);
+      expect(loaded2).toEqual(testStore);
+      expect(loaded1).not.toBe(loaded2);
 
-    expect(loaded1).toEqual(testStore);
-    expect(loaded2).toEqual(testStore);
-    expect(loaded1).not.toBe(loaded2);
-    expect(readSpy).toHaveBeenCalledTimes(2);
-    expect(getSerializedSessionStoreCacheStatsForTest().entries).toBe(0);
-    expect(getSessionStoreSnapshotCacheStatsForTest().entries).toBe(0);
-
-    readSpy.mockRestore();
+      const storeReads = readSpy.mock.calls.filter(([file]) => file === storePath);
+      expect(storeReads).toHaveLength(2);
+      expect(getSerializedSessionStoreCacheStatsForTest().entries).toBe(0);
+      expect(getSessionStoreSnapshotCacheStatsForTest().entries).toBe(0);
+    } finally {
+      readSpy.mockRestore();
+    }
   });
 
   it("should not allow cached session mutations to leak across loads", async () => {
@@ -657,10 +660,12 @@ describe("Session Store Cache", () => {
       return result;
     });
 
-    const first = readSessionStoreSnapshot(storePath);
-    expect(first["session:1"].displayName).toBe("Before race");
-
-    readSpy.mockRestore();
+    try {
+      const first = readSessionStoreSnapshot(storePath);
+      expect(first["session:1"].displayName).toBe("Before race");
+    } finally {
+      readSpy.mockRestore();
+    }
 
     const second = readSessionStoreSnapshot(storePath);
     expect(second["session:1"].displayName).toBe("After cross-process race");
