@@ -22,6 +22,12 @@ export const doctorHealthConversionRules = [
     rule: "Keep as a pure config finding; doctor presentation should render the finding instead of calling note().",
   },
   {
+    contributionId: "doctor:session-store-size",
+    conversion: "detect-only",
+    target: ["core/doctor/session-store-size"],
+    rule: "Pre-flight size check; emits a warning health note when the session store is near the configured maxEntries or the transcripts directory crosses the floor. No repair, no config mutation.",
+  },
+  {
     contributionId: "doctor:auth-profiles",
     conversion: "split-detect-repair",
     target: [
