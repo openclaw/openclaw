@@ -740,7 +740,7 @@ describe("Session Store Cache", () => {
     await updateSessionStoreEntry({
       storePath,
       sessionKey: "session:1",
-      update: () => ({ displayName: "After", updatedAt: 123 }),
+      update: async () => ({ displayName: "After", updatedAt: 123 }),
       takeCacheOwnership: true,
     });
 
@@ -769,7 +769,7 @@ describe("Session Store Cache", () => {
     await updateSessionStoreEntry({
       storePath,
       sessionKey: "session:1",
-      update: () => ({ displayName: "After" }),
+      update: async () => ({ displayName: "After" }),
       takeCacheOwnership: true,
     });
 
@@ -788,12 +788,28 @@ describe("Session Store Cache", () => {
     await updateSessionStoreEntry({
       storePath,
       sessionKey: "session:1",
-      update: () => ({
+      update: async () => ({
         displayName: "After",
         skillsSnapshot: {
           prompt: "short prompt",
           skills: [{ name: "alpha" }],
-          resolvedSkills: [{ name: "alpha", body: "transient" }],
+          resolvedSkills: [
+            {
+              name: "alpha",
+              description: "test skill",
+              filePath: path.join(testDir, "alpha", "SKILL.md"),
+              baseDir: path.join(testDir, "alpha"),
+              source: "test",
+              sourceInfo: {
+                path: path.join(testDir, "alpha", "SKILL.md"),
+                source: "test",
+                scope: "temporary",
+                origin: "top-level",
+                baseDir: path.join(testDir, "alpha"),
+              },
+              disableModelInvocation: false,
+            },
+          ],
         } as SessionEntry["skillsSnapshot"],
       }),
       takeCacheOwnership: true,
