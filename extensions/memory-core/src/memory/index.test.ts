@@ -451,6 +451,65 @@ describe("memory index", () => {
     }
   });
 
+  it("clears dirty after sessions-only identity reindex", async () => {
+    try {
+      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state-sessions-only-reindex"));
+      const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
+      await fs.mkdir(sessionsDir, { recursive: true });
+      await fs.writeFile(
+        path.join(sessionsDir, "session-identity.jsonl"),
+        [
+          JSON.stringify({
+            type: "session",
+            id: "session-identity",
+            timestamp: "2026-04-07T15:24:04.113Z",
+          }),
+          JSON.stringify({
+            type: "message",
+            message: {
+              role: "assistant",
+              timestamp: "2026-04-07T15:25:04.113Z",
+              content: [{ type: "text", text: "Session-only identity marker." }],
+            },
+          }),
+        ].join("\n") + "\n",
+        "utf8",
+      );
+
+      const dbPath = path.join(workspaceDir, "index-sessions-only-cutover.sqlite");
+      const oldCfg = createCfg({
+        storePath: dbPath,
+        sources: ["sessions"],
+        sessionMemory: true,
+        model: "old-embed",
+      });
+      const oldManager = await getFreshManager(oldCfg);
+      await oldManager.sync({ reason: "test", force: true });
+      await oldManager.close?.();
+
+      const nextCfg = createCfg({
+        storePath: dbPath,
+        sources: ["sessions"],
+        sessionMemory: true,
+        provider: "gemini",
+        model: "new-embed",
+      });
+      const nextManager = await getFreshManager(nextCfg);
+      try {
+        expect(nextManager.status().dirty).toBe(true);
+
+        await nextManager.sync({ reason: "test", force: true });
+
+        expect(nextManager.status().dirty).toBe(false);
+        expect(nextManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+      } finally {
+        await nextManager.close?.();
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("closes embedding providers when memory index managers close", async () => {
     const cfg = createCfg({
       storePath: indexMainPath,
