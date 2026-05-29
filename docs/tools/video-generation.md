@@ -488,7 +488,7 @@ This live file uses already-exported provider env vars ahead of stored auth
 profiles by default, and runs a release-safe smoke by default:
 
 - `generate` for every non-FAL provider in the sweep.
-- One-second lobster prompt.
+- One-second blue-cube prompt.
 - Per-provider operation cap from
   `OPENCLAW_LIVE_VIDEO_GENERATION_TIMEOUT_MS` (`180000` by default).
 

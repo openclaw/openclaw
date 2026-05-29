@@ -290,12 +290,12 @@ OPENCLAW_RAW_STREAM=1
 Optional path:
 
 ```bash
-OPENCLAW_RAW_STREAM_PATH=~/.openclaw/logs/raw-openai-completions.jsonl
+OPENCLAW_RAW_STREAM_PATH=~/.openclaw/logs/raw-stream.jsonl
 ```
 
 Default file:
 
-`~/.openclaw/logs/raw-openai-completions.jsonl`
+`~/.openclaw/logs/raw-stream.jsonl`
 
 ## Safety notes
 

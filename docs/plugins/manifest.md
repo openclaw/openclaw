@@ -1308,7 +1308,7 @@ hook instead.
 
 OpenClaw discovers plugins from several roots. For the raw filesystem scan
 order, see [Plugin scan
-order](/gateway/configuration-reference#plugin-scan-order). If two discoveries
+order](/gateway/configuration-reference#plugins). If two discoveries
 share the same `id`, only the **highest-precedence** manifest is kept;
 lower-precedence duplicates are dropped instead of loading beside it.
 

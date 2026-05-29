@@ -246,33 +246,19 @@ and whether the user has set OpenClaw as the default assistant app.
 
 ## Notification forwarding
 
-Android can forward device notifications to the gateway as events. Several controls let you scope which notifications are forwarded and when.
+Android can forward device notifications to the gateway as events. Forwarding is configured **on the device** in the OpenClaw Android app settings (stored locally in the app's secure preferences). There are no gateway `openclaw.json` keys for it.
 
-| Key                              | Type           | Description                                                                                       |
-| -------------------------------- | -------------- | ------------------------------------------------------------------------------------------------- |
-| `notifications.allowPackages`    | string[]       | Only forward notifications from these package names. If set, all other packages are ignored.      |
-| `notifications.denyPackages`     | string[]       | Never forward notifications from these package names. Applied after `allowPackages`.              |
-| `notifications.quietHours.start` | string (HH:mm) | Start of quiet hours window (local device time). Notifications are suppressed during this window. |
-| `notifications.quietHours.end`   | string (HH:mm) | End of quiet hours window.                                                                        |
-| `notifications.rateLimit`        | number         | Maximum forwarded notifications per package per minute. Excess notifications are dropped.         |
+Available controls:
+
+| Setting               | Description                                                                                            |
+| --------------------- | ------------------------------------------------------------------------------------------------------ |
+| Enable forwarding     | Master toggle; off by default.                                                                         |
+| Filter mode           | `Allowlist` (forward only listed packages) or `Blocklist` (forward everything except listed packages). |
+| Packages              | A single list of app package names, interpreted according to the selected filter mode.                 |
+| Quiet hours           | Optional window (start/end in local device time, `HH:mm`) during which notifications are suppressed.   |
+| Max events per minute | Rate limit on forwarded notifications; excess events are dropped.                                      |
 
 The notification picker also uses safer behavior for forwarded notification events, preventing accidental forwarding of sensitive system notifications.
-
-Example configuration:
-
-```json5
-{
-  notifications: {
-    allowPackages: ["com.slack", "com.whatsapp"],
-    denyPackages: ["com.android.systemui"],
-    quietHours: {
-      start: "22:00",
-      end: "07:00",
-    },
-    rateLimit: 5,
-  },
-}
-```
 
 <Note>
 Notification forwarding requires the Android Notification Listener permission. The app prompts for this during setup.

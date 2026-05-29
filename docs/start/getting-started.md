@@ -103,11 +103,14 @@ Then set:
   "gateway": {
     "controlUi": {
       "enabled": true,
-      "root": "$HOME/.openclaw/control-ui-custom"
+      "root": "/home/youruser/.openclaw/control-ui-custom"
     }
   }
 }
 ```
+
+`gateway.controlUi.root` must be an absolute path. It is not shell-expanded,
+so `$HOME` and `~` are taken literally — use the resolved absolute path.
 
 Restart the gateway and reopen the dashboard:
 

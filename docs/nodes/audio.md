@@ -28,7 +28,7 @@ OpenClaw auto-detects in this order and stops at the first working option:
    - `whisper` (Python CLI; downloads models automatically)
 3. **Provider auth**
    - Configured `models.providers.*` entries that support audio are tried first
-   - Bundled fallback order: OpenAI → Groq → xAI → Deepgram → Google → SenseAudio → ElevenLabs → Mistral
+   - Bundled fallback order: OpenAI → Groq → xAI → Deepgram → OpenRouter → Google → SenseAudio → ElevenLabs → Mistral
 
 As of 2026-05-22, Gemini CLI auto-detect is no longer supported for media understanding. Google is transitioning Gemini CLI users to Antigravity CLI; audio should use local or provider transcription, while image/video CLI fallback should move to Antigravity CLI (`agy`).
 
@@ -156,7 +156,7 @@ Note: Binary detection is best-effort across macOS/Linux/Windows; ensure the CLI
 - Default size cap is 20MB (`tools.media.audio.maxBytes`). Oversize audio is skipped for that model and the next entry is tried.
 - Tiny/empty audio files below 1024 bytes are skipped before provider/CLI transcription.
 - Default `maxChars` for audio is **unset** (full transcript). Set `tools.media.audio.maxChars` or per-entry `maxChars` to trim output.
-- OpenAI auto default is `gpt-4o-mini-transcribe`; set `model: "gpt-4o-transcribe"` for higher accuracy.
+- OpenAI auto default is `gpt-4o-transcribe`; set `model: "gpt-4o-mini-transcribe"` for lower cost and latency.
 - Use `tools.media.audio.attachments` to process multiple voice notes (`mode: "all"` + `maxAttachments`).
 - Transcript is available to templates as `{{Transcript}}`.
 - `tools.media.audio.echoTranscript` is off by default; enable it to send transcript confirmation back to the originating chat before agent processing.

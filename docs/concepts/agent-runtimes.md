@@ -207,7 +207,7 @@ If `openclaw doctor` warns that the `codex` plugin is enabled while
 
 ## GitHub Copilot agent runtime
 
-The bundled `copilot` extension registers an opt-in `copilot` runtime
+The bundled `copilot` plugin registers an opt-in `copilot` runtime
 backed by the GitHub Copilot CLI (`@github/copilot-sdk`). It claims the
 canonical subscription `github-copilot` provider and is **never** selected by
 `auto`. Opt in per-model or per-provider via `agentRuntime.id`:

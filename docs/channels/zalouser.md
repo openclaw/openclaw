@@ -92,8 +92,8 @@ Approve via:
 
 ## Group access (optional)
 
-- Default: `channels.zalouser.groupPolicy = "open"` (groups allowed). Use `channels.defaults.groupPolicy` to override the default when unset.
-- Restrict to an allowlist with:
+- Default: `channels.zalouser.groupPolicy = "allowlist"` (groups are blocked unless explicitly allowlisted; fail-closed). Set `channels.zalouser.groupPolicy = "open"` to allow all groups.
+- Configure the allowlist with:
   - `channels.zalouser.groupPolicy = "allowlist"`
   - `channels.zalouser.groups` (keys should be stable group IDs; names are resolved to IDs on startup only when `channels.zalouser.dangerouslyAllowNameMatching: true` is enabled)
   - `channels.zalouser.groupAllowFrom` (controls which senders in allowed groups can trigger the bot; static sender access groups can be referenced with `accessGroup:<name>`)

@@ -112,13 +112,13 @@ Once a basic skill works, these fields help make it reliable and portable:
 
 - **Conditional activation** — use `requires.bins`, `requires.env`, or
   `requires.config` to load the skill only when required dependencies are
-  available. See [Skills reference: gating](/tools/skills#gating).
+  available. See [Skills reference: gating](/tools/skills#gating-load-time-filters).
 - **Environment and API-key wiring** — use `skills.entries.<name>.env` and
   `skills.entries.<name>.apiKey` to inject host-side environment for a skill
-  turn. See [Skills reference: config wiring](/tools/skills#config-wiring).
+  turn. See [Skills reference: config wiring](/tools/skills#environment-injection).
 - **Invocation control** — set `user-invocable: false` to hide a slash command,
   or `disable-model-invocation: true` to keep a command-style skill out of the
-  model prompt. See [Skills reference: frontmatter](/tools/skills#frontmatter).
+  model prompt. See [Skills reference: frontmatter](/tools/skills#optional-frontmatter-keys).
 - **Direct command dispatch** — use `command-dispatch: tool` with
   `command-tool` when a slash command should call a tool directly instead of
   routing through the model.

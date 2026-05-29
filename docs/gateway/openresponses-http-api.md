@@ -252,7 +252,7 @@ Defaults when omitted:
 - `maxBodyBytes`: 20MB
 - `maxUrlParts`: 8
 - `files.maxBytes`: 5MB
-- `files.maxChars`: 200k
+- `files.maxChars`: 60k
 - `files.maxRedirects`: 3
 - `files.timeoutMs`: 10s
 - `files.pdf.maxPages`: 4

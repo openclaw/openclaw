@@ -234,7 +234,7 @@ candidate contains redacted secret placeholders such as `***`.
     - Omit `agents.list[].skills` to inherit the defaults.
     - Set `agents.list[].skills: []` for no skills.
     - See [Skills](/tools/skills), [Skills config](/tools/skills-config), and
-      the [Configuration Reference](/gateway/config-agents#agents-defaults-skills).
+      the [Configuration Reference](/gateway/config-agents#agentsdefaultsskills).
 
   </Accordion>
 

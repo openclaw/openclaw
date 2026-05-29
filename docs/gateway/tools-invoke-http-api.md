@@ -118,7 +118,6 @@ Gateway HTTP also applies a hard deny list by default (even if session policy al
 - `cron` - persistent automation control plane
 - `gateway` - gateway control plane; prevents reconfiguration via HTTP
 - `nodes` - node command relay can reach system.run on paired hosts
-- `whatsapp_login` - interactive setup requiring terminal QR scan; hangs on HTTP
 
 You can customize this deny list via `gateway.tools`:
 

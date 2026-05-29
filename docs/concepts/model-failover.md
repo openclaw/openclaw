@@ -202,12 +202,11 @@ When a profile fails due to auth/rate-limit errors (or a timeout that looks like
   </Accordion>
 </AccordionGroup>
 
-Cooldowns use exponential backoff:
+Cooldowns use a stepped backoff based on consecutive error count:
 
+- 30 seconds
 - 1 minute
-- 5 minutes
-- 25 minutes
-- 1 hour (cap)
+- 5 minutes (cap)
 
 State is stored in `auth-state.json` under `usageStats`:
 

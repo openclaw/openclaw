@@ -184,7 +184,7 @@ Example (session override):
 
 How to see what profile IDs exist:
 
-- `openclaw channels list --json` (shows `auth[]`)
+- `openclaw models auth list --json`
 
 Related docs:
 
