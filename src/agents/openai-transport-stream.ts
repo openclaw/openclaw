@@ -1102,6 +1102,7 @@ function convertResponsesMessages(
       }
     } else if (msg.role === "assistant") {
       const output: ResponseInput = [];
+      let textFallbackOrdinal = 0;
       const isDifferentModel =
         msg.model !== model.id && msg.provider === model.provider && msg.api === model.api;
       for (const block of msg.content) {
@@ -1139,9 +1140,21 @@ function convertResponsesMessages(
           }
         } else if (block.type === "text") {
           const textSignature = parseTextSignature(block.textSignature);
-          let msgId = shouldReplayResponsesItemIds
-            ? (textSignature?.id ?? `msg_${msgIndex}`)
-            : undefined;
+          let msgId: string | undefined;
+          if (shouldReplayResponsesItemIds) {
+            if (textSignature?.id) {
+              msgId = textSignature.id;
+            } else {
+              // Reasoning-dropped/model-switch replay strips textSignature, which can
+              // leave several text blocks in one assistant turn without ids. msgIndex
+              // is per-message, so disambiguate fallbacks to avoid duplicate item ids.
+              msgId =
+                textFallbackOrdinal === 0
+                  ? `msg_${msgIndex}`
+                  : `msg_${msgIndex}_${textFallbackOrdinal}`;
+              textFallbackOrdinal += 1;
+            }
+          }
           msgId = normalizeResponsesReplayItemId(msgId, "msg");
           const messageItem: ReplayableResponseOutputMessage = {
             type: "message",

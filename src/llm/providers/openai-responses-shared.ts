@@ -213,6 +213,7 @@ export function convertResponsesMessages<TApi extends Api>(
       }
     } else if (msg.role === "assistant") {
       const output: ResponseInput = [];
+      let textFallbackOrdinal = 0;
       const assistantMsg = msg;
       const isDifferentModel =
         assistantMsg.model !== model.id &&
@@ -231,7 +232,15 @@ export function convertResponsesMessages<TApi extends Api>(
           // OpenAI requires id to be max 64 characters
           let msgId = parsedSignature?.id;
           if (!msgId) {
-            msgId = `msg_${msgIndex}`;
+            // Reasoning-dropped/model-switch replay strips textSignature, which can
+            // leave several text blocks in one assistant turn without ids. msgIndex
+            // is per-message, so disambiguate fallbacks to avoid duplicate item ids
+            // (issue #88019).
+            msgId =
+              textFallbackOrdinal === 0
+                ? `msg_${msgIndex}`
+                : `msg_${msgIndex}_${textFallbackOrdinal}`;
+            textFallbackOrdinal += 1;
           } else if (msgId.length > 64) {
             msgId = `msg_${shortHash(msgId)}`;
           }

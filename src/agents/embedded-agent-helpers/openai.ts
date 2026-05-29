@@ -428,6 +428,7 @@ export function downgradeOpenAIReasoningBlocks(
     }
 
     let changed = false;
+    let droppedReplayableReasoning = false;
     type AssistantContentBlock = (typeof assistantMsg.content)[number];
 
     const nextContent: AssistantContentBlock[] = [];
@@ -449,6 +450,7 @@ export function downgradeOpenAIReasoningBlocks(
       }
       if (options.dropReplayableReasoning) {
         changed = true;
+        droppedReplayableReasoning = true;
         continue;
       }
       if (hasFollowingNonThinkingBlock(assistantMsg.content, i)) {
@@ -468,7 +470,22 @@ export function downgradeOpenAIReasoningBlocks(
       continue;
     }
 
-    out.push({ ...assistantMsg, content: nextContent } as AgentMessage);
+    // When a replayable reasoning (rs_*) item is dropped after a model/fallback
+    // switch, its paired assistant message id (msg_*) must be dropped too. The
+    // Responses transport replays msg_* from a text block textSignature, so an
+    // orphaned msg_* without its rs_* makes providers like Azure reject the next
+    // turn (issue #88019). Strip the signature so the id and reasoning go together.
+    const finalContent = droppedReplayableReasoning
+      ? nextContent.map((contentBlock) => {
+          if (contentBlock.type === "text" && contentBlock.textSignature !== undefined) {
+            const { textSignature: _droppedTextSignature, ...rest } = contentBlock;
+            return rest;
+          }
+          return contentBlock;
+        })
+      : nextContent;
+
+    out.push({ ...assistantMsg, content: finalContent } as AgentMessage);
   }
 
   return anyChanged ? out : messages;

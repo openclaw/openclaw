@@ -192,6 +192,32 @@ describe("openai-responses reasoning replay", () => {
     expect(types).toContain("message");
   });
 
+  it("assigns distinct ids to multiple id-less text blocks after a reasoning drop", async () => {
+    // After a model/fallback switch the sanitizer strips textSignatures from a
+    // turn's text blocks. msgIndex is per-message, so the transport must still
+    // emit unique message-item ids per text block (issue #88019).
+    const assistantWithTwoTexts = buildAssistantMessage({
+      stopReason: "stop",
+      content: [
+        { type: "text", text: "commentary" },
+        { type: "text", text: "final" },
+      ],
+    });
+
+    const { input } = await runAbortedOpenAIResponsesStream({
+      messages: [
+        { role: "user", content: "Hi", timestamp: Date.now() },
+        assistantWithTwoTexts,
+        { role: "user", content: "Ok", timestamp: Date.now() },
+      ],
+    });
+
+    const messageIds = extractInputMessages(input).map((item) => item.id);
+    expect(messageIds).toHaveLength(2);
+    expect(messageIds.every((id) => typeof id === "string" && id.length > 0)).toBe(true);
+    expect(new Set(messageIds).size).toBe(2);
+  });
+
   it.each(["commentary", "final_answer"] as const)(
     "replays assistant message phase metadata for %s",
     async (phase) => {

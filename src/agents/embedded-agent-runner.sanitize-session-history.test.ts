@@ -1,5 +1,10 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
-import type { AssistantMessage, ThinkingContent, UserMessage, Usage } from "openclaw/plugin-sdk/llm";
+import type {
+  AssistantMessage,
+  ThinkingContent,
+  UserMessage,
+  Usage,
+} from "openclaw/plugin-sdk/llm";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   expectOpenAIResponsesStrictSanitizeCall,
@@ -967,6 +972,52 @@ describe("sanitizeSessionHistory", () => {
   it("downgrades orphaned openai reasoning when the model changes too", async () => {
     const result = await sanitizeSnapshotChangedOpenAIReasoning({
       sanitizeSessionHistory,
+    });
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "answer" }],
+        usage: makeZeroUsageSnapshot(),
+      },
+    ]);
+  });
+
+  it("drops the paired assistant message id when reasoning is dropped after a model switch", async () => {
+    // Regression for issue #88019: a fallback from azure-openai-responses to a
+    // non-Responses model and back must not leave an orphaned msg_* id (its
+    // paired rs_* reasoning is dropped), which Azure Responses would reject.
+    const sessionEntries = [
+      makeModelSnapshotEntry({
+        provider: "anthropic",
+        modelApi: "anthropic-messages",
+        modelId: "claude-3-7",
+      }),
+    ];
+    const sessionManager = makeInMemorySessionManager(sessionEntries);
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "reasoning",
+            thinkingSignature: JSON.stringify({ id: "rs_test", type: "reasoning" }),
+          },
+          {
+            type: "text",
+            text: "answer",
+            textSignature: JSON.stringify({ v: 1, id: "msg_test" }),
+          },
+        ],
+      },
+    ] as unknown as AgentMessage[];
+
+    const result = await sanitizeWithOpenAIResponses({
+      sanitizeSessionHistory,
+      messages,
+      modelId: "gpt-5.4",
+      sessionManager,
     });
 
     expect(result).toEqual([
