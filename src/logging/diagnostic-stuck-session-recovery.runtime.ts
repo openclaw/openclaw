@@ -10,6 +10,7 @@ import {
   resolveActiveEmbeddedRunHandleSessionId,
   resolveActiveEmbeddedRunHandleSessionIdBySessionFile,
 } from "../agents/embedded-agent-runner/runs.js";
+import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import {
   getCommandLaneActiveTaskIds,
   getCommandLaneSnapshot,
@@ -355,6 +356,16 @@ export async function recoverStuckDiagnosticSession(
               lane: sessionLane ?? undefined,
             };
       diag.warn(`stuck session recovery outcome: ${formatRecoveryOutcome(outcome)}`);
+      if (outcome.status === "aborted" && params.sessionKey) {
+        await triggerInternalHook(
+          createInternalHookEvent("session", "aborted", params.sessionKey, {
+            sessionId: params.sessionId ?? activeSessionId,
+            ageMs: params.ageMs,
+            lane: sessionLane ?? undefined,
+            reason: "stuck_recovery",
+          }),
+        );
+      }
       return outcome;
     }
     const outcome: StuckSessionRecoveryOutcome = {
