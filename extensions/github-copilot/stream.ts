@@ -81,6 +81,59 @@ function buildCopilotRequestHeaders(
   };
 }
 
+const COPILOT_ANTHROPIC_OMITTED_THINKING_TEXT = "[assistant reasoning omitted]";
+
+function isAnthropicThinkingBlock(value: unknown): boolean {
+  return (
+    Boolean(value) &&
+    typeof value === "object" &&
+    ((value as { type?: unknown }).type === "thinking" ||
+      (value as { type?: unknown }).type === "redacted_thinking")
+  );
+}
+
+function stripCopilotAnthropicThinkingReplay(payloadObj: Record<string, unknown>): void {
+  const messages = payloadObj.messages;
+  if (!Array.isArray(messages)) {
+    return;
+  }
+  const nextMessages: unknown[] = [];
+  let touched = false;
+  for (const message of messages) {
+    if (!message || typeof message !== "object") {
+      nextMessages.push(message);
+      continue;
+    }
+    const record = message as { role?: unknown; content?: unknown };
+    if (record.role !== "assistant" || !Array.isArray(record.content)) {
+      nextMessages.push(message);
+      continue;
+    }
+    const nextContent = record.content.filter((block) => !isAnthropicThinkingBlock(block));
+    if (nextContent.length === record.content.length) {
+      nextMessages.push(message);
+      continue;
+    }
+    touched = true;
+    if (nextContent.length === 0) {
+      nextMessages.push({
+        ...record,
+        content: [{ type: "text", text: COPILOT_ANTHROPIC_OMITTED_THINKING_TEXT }],
+      });
+      continue;
+    }
+    nextMessages.push({ ...record, content: nextContent });
+  }
+  if (touched) {
+    payloadObj.messages = nextMessages;
+  }
+}
+
+function patchCopilotAnthropicPayload(payloadObj: Record<string, unknown>): void {
+  stripCopilotAnthropicThinkingReplay(payloadObj);
+  applyAnthropicEphemeralCacheControlMarkers(payloadObj);
+}
+
 export function wrapCopilotAnthropicStream(
   baseStreamFn: StreamFn | undefined,
 ): StreamFn | undefined {
@@ -101,7 +154,7 @@ export function wrapCopilotAnthropicStream(
         ...options,
         headers: buildCopilotRequestHeaders(context, options?.headers),
       },
-      applyAnthropicEphemeralCacheControlMarkers,
+      patchCopilotAnthropicPayload,
     );
   };
 }
