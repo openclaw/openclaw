@@ -466,7 +466,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     const indexIdentity = this.refreshIndexIdentityDirty({
       providerKeyKnown: this.providerInitialized,
     });
-    if (indexIdentity.status === "mismatched") {
+    if (indexIdentity.status !== "valid") {
       try {
         await this.sync({ reason: "search", force: true });
       } catch (err) {

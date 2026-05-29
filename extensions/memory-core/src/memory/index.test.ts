@@ -425,6 +425,35 @@ describe("memory index", () => {
     }
   });
 
+  it("does not search stale rows when index metadata is missing", async () => {
+    const dbPath = path.join(workspaceDir, "index-missing-meta-cutover.sqlite");
+    const cfg = createCfg({
+      storePath: dbPath,
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const oldManager = await getFreshManager(cfg);
+    await oldManager.sync({ reason: "test", force: true });
+    await oldManager.close?.();
+    await fs.rm(path.join(memoryDir, "2026-01-12.md"));
+
+    const nextManager = await getFreshManager(cfg);
+    try {
+      (
+        nextManager as unknown as {
+          db: { exec: (sql: string) => void };
+        }
+      ).db.exec(`DELETE FROM meta WHERE key = 'memory_index_meta_v1'`);
+
+      const results = await nextManager.search("alpha");
+
+      expect(results).toStrictEqual([]);
+      expect(nextManager.status().dirty).toBe(false);
+      expect(nextManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+    } finally {
+      await nextManager.close?.();
+    }
+  });
+
   it("does not search stale provider rows after embeddings become unavailable", async () => {
     const dbPath = path.join(workspaceDir, "index-provider-unavailable-cutover.sqlite");
     const oldCfg = createCfg({
