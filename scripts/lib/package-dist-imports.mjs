@@ -68,6 +68,15 @@ function peekNextSignificant(source, start) {
   return { char: undefined, index: cursor };
 }
 
+function isStaticImportDeclarationStart(char) {
+  if (char === undefined) {
+    return false;
+  }
+  // Valid static import starts: import "./x", import { }, import * as, import foo.
+  // Reject `import:` (object key) and other non-declaration followers.
+  return char === '"' || char === "'" || char === "{" || char === "*" || /[A-Za-z_$]/u.test(char);
+}
+
 // Walks the source with a forward state machine and collects the specifier of
 // every static `import`/`export ... from` and dynamic `import(...)` statement.
 // Replaces the previous reverse-scan approach in `findStatementStart`, which
@@ -76,10 +85,11 @@ function peekNextSignificant(source, start) {
 //
 // State semantics:
 //   null                  : top-level; looking for `import` / `export` keyword.
-//   import                : just saw `import` keyword (static or dynamic); next
-//                           string literal is the specifier. `import.meta`
-//                           meta-property access is filtered out before this
-//                           state is entered.
+//   import                : inside a static import declaration; the next string
+//                           literal is the specifier. Only entered for valid
+//                           declaration shapes (not `import:` object keys).
+//                           `import.meta` and non-literal `import(...)` are
+//                           filtered before this state is entered.
 //   export                : just saw `export` keyword; waiting to see whether
 //                           this is a re-export (`*` or `{ ... }`) or a local
 //                           declaration (`const` / `function` / identifier /
@@ -219,7 +229,9 @@ function collectImportSpecifiers(source) {
           index += "import".length - 1;
           continue;
         }
-        stmtState = "import";
+        if (isStaticImportDeclarationStart(peek.char)) {
+          stmtState = "import";
+        }
         index += "import".length - 1;
         continue;
       }

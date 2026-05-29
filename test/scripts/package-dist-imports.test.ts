@@ -176,6 +176,17 @@ describe("package dist imports", () => {
     expect(errors).toEqual([]);
   });
 
+  it("does not treat object property `import` as a static import", () => {
+    const files = {
+      "dist/a.js": `const cfg = { import: "./asset.js" };\nconst list = { import, other: 1 };\n`,
+    };
+    const errors = collectPackageDistImportErrors({
+      files: ["dist/a.js"],
+      readText: makeReader(files),
+    });
+    expect(errors).toEqual([]);
+  });
+
   it("does not treat `export const X = '...'` as a specifier source", () => {
     const files = {
       "dist/a.js": `export const link = "./not-imported.js";\nexport function go() { return "./fake.js"; }\n`,
