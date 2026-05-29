@@ -1209,8 +1209,8 @@ function loadSkillEntries(
         exposure: {
           includeInRuntimeRegistry: true,
           // Freshly loaded entries preserve the documented disable-model-invocation
-          // contract, while legacy entries without exposure metadata still use the
-          // fallback in isSkillVisibleInAvailableSkillsPrompt().
+          // contract, while legacy entries without exposure metadata still use
+          // the centralized prompt visibility fallback.
           includeInAvailableSkillsPrompt: !invocation.disableModelInvocation,
           userInvocable: invocation.userInvocable ?? true,
         },
