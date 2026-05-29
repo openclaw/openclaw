@@ -2304,6 +2304,82 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(runLlmInput).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { label: "non-empty allowlist", toolsAllow: ["sessions_spawn"] },
+    { label: "empty allowlist", toolsAllow: [] },
+  ])("skips skill routing for toolsAllow restricted runs: $label", async ({ toolsAllow }) => {
+    hoisted.resolveSkillsPromptStateForRunMock.mockReturnValue({
+      prompt: "<available_skills></available_skills>",
+      resolvedSkills: [
+        {
+          name: "restricted-run-skill",
+          description: "Should not be routed",
+          filePath: "/tmp/skills/restricted-run-skill/SKILL.md",
+        },
+      ],
+    });
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        disableTools: false,
+        toolsAllow,
+        config: {
+          skills: {
+            router: { name: "test-router" },
+          },
+        },
+      },
+    });
+
+    expect(hoisted.resolveSkillsPromptStateForRunMock).toHaveBeenCalled();
+    expect(hoisted.systemPromptOverrideTexts.at(-1) ?? "").not.toContain("<available_skills>");
+    expect(hoisted.resolveSkillRouteMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps skill routing enabled for wildcard toolsAllow runs", async () => {
+    hoisted.resolveSkillsPromptStateForRunMock.mockReturnValue({
+      prompt: "<available_skills></available_skills>",
+      resolvedSkills: [
+        {
+          name: "wildcard-run-skill",
+          description: "Can be routed",
+          filePath: "/tmp/skills/wildcard-run-skill/SKILL.md",
+        },
+      ],
+    });
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        disableTools: false,
+        toolsAllow: ["*"],
+        config: {
+          skills: {
+            router: { name: "test-router" },
+          },
+        },
+      },
+    });
+
+    expect(hoisted.resolveSkillRouteMock).toHaveBeenCalledWith({
+      routerName: "test-router",
+      routerConfig: undefined,
+      resolvedSkills: [
+        {
+          name: "wildcard-run-skill",
+          description: "Can be routed",
+          filePath: "/tmp/skills/wildcard-run-skill/SKILL.md",
+        },
+      ],
+      query: "hello",
+    });
+  });
+
   it("forwards sessionKey to bootstrap, assemble, and afterTurn", async () => {
     const { bootstrap, assemble } = createContextEngineBootstrapAndAssemble();
     const afterTurn = vi.fn(async (_params: { sessionKey?: string }) => {});

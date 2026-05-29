@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   applyEmbeddedAttemptToolsAllow,
   mergeForcedEmbeddedAttemptToolsAllow,
+  isRestrictiveEmbeddedAttemptToolsAllow,
   resolveEmbeddedAttemptToolConstructionPlan,
   shouldCreateBundleLspRuntimeForAttempt,
   shouldCreateBundleMcpRuntimeForAttempt,
@@ -177,6 +178,16 @@ describe("applyEmbeddedAttemptToolsAllow", () => {
       "includeCoreTools",
       false,
     );
+  });
+});
+
+describe("isRestrictiveEmbeddedAttemptToolsAllow", () => {
+  it("matches the existing runtime allowlist wildcard semantics", () => {
+    expect(isRestrictiveEmbeddedAttemptToolsAllow(undefined)).toBe(false);
+    expect(isRestrictiveEmbeddedAttemptToolsAllow(["*"])).toBe(false);
+    expect(isRestrictiveEmbeddedAttemptToolsAllow([" * "])).toBe(false);
+    expect(isRestrictiveEmbeddedAttemptToolsAllow([])).toBe(true);
+    expect(isRestrictiveEmbeddedAttemptToolsAllow(["sessions_spawn"])).toBe(true);
   });
 });
 

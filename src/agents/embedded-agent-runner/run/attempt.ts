@@ -353,6 +353,7 @@ import {
 import { buildAttemptSystemPrompt } from "./attempt-system-prompt.js";
 import {
   applyEmbeddedAttemptToolsAllow,
+  isRestrictiveEmbeddedAttemptToolsAllow,
   mergeForcedEmbeddedAttemptToolsAllow,
   resolveEmbeddedAttemptToolConstructionPlan,
   shouldCreateBundleLspRuntimeForAttempt,
@@ -1124,11 +1125,13 @@ export async function runEmbeddedAttempt(
     });
     const skillsPrompt = skillsPromptState.prompt;
     const isRawModelRun = params.modelRun === true || params.promptMode === "none";
+    const skipSkillRouting =
+      isRawModelRun || isRestrictiveEmbeddedAttemptToolsAllow(params.toolsAllow);
 
     // Pre-filter: call configured skill router before building the system prompt.
     // When a router matches, its narrowed result replaces the full skills catalog.
     const skillRouterConfig = params.config?.skills?.router;
-    const skillRoute = isRawModelRun
+    const skillRoute = skipSkillRouting
       ? undefined
       : await resolveSkillRoute({
           routerName: skillRouterConfig?.name,
@@ -1952,15 +1955,18 @@ export async function runEmbeddedAttempt(
       (isRawModelRun ? "none" : resolvePromptModeForSession(params.sessionKey));
     const promptSurface = resolveAgentPromptSurfaceForSessionKey(params.sessionKey);
 
-    // When toolsAllow is set, use minimal prompt and strip skills catalog
-    const effectivePromptMode = params.toolsAllow?.length ? ("minimal" as const) : promptMode;
+    // Restrictive toolsAllow runs use minimal prompt and strip skills catalog.
+    const effectivePromptMode = isRestrictiveEmbeddedAttemptToolsAllow(params.toolsAllow)
+      ? ("minimal" as const)
+      : promptMode;
     // Suppress full skills catalog when:
-    // - toolsAllow is set (minimal mode)
+    // - restrictive toolsAllow is set (minimal mode)
     // - router returned a match (narrowed result goes into user prompt)
     // - router explicitly said nomatch (no skill applies)
     // Fall back to full catalog when no router is configured or router failed.
     const suppressSkillsCatalog =
-      params.toolsAllow?.length || (typeof skillRoute === "object" && !("error" in skillRoute));
+      isRestrictiveEmbeddedAttemptToolsAllow(params.toolsAllow) ||
+      (typeof skillRoute === "object" && !("error" in skillRoute));
     const effectiveSkillsPrompt = suppressSkillsCatalog ? undefined : skillsPrompt;
     const openClawReferences = await resolveOpenClawReferencePaths({
       workspaceDir: effectiveWorkspace,
