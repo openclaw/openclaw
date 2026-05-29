@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -754,6 +755,56 @@ function toJsonWrite(pathname: string, value: Record<string, unknown>): ApplyWri
   };
 }
 
+type StagedWrite = {
+  finalPath: string;
+  tempPath: string;
+  mode: number;
+};
+
+// Stage a single satellite file by writing its final content to a temp file in
+// the same directory. This is the fault-prone step (open/write surfaces almost
+// all ENOSPC / EACCES / EIO): if it throws, no live file has been touched, so
+// the caller can discard every staged temp and leave all stores un-migrated.
+function stageWrite(write: ApplyWrite): StagedWrite {
+  const tempPath = path.join(
+    path.dirname(write.path),
+    `.openclaw-secrets-${process.pid}-${randomUUID()}.tmp`,
+  );
+  // Stage through the same private-store contract as the live commit
+  // (writeTextFileAtomic). Every satellite write here is mode 0o600, so this
+  // routes the temp through fs-safe's private file store, which (re)creates the
+  // parent directory at 0o700, guards its directory identity, and writes the
+  // temp at 0o600 before Phase B renames it into place. Writing the temp with a
+  // raw fs.writeFileSync would bypass those private-store guarantees on the
+  // credential path (degraded auth-store dirs would no longer self-heal) and
+  // would also dodge the fs-safe fault seam the regression proof relies on.
+  writeTextFileAtomic(tempPath, write.content, write.mode);
+  return { finalPath: write.path, tempPath, mode: write.mode };
+}
+
+// Promote a staged temp into its final path. Rename is a same-directory
+// metadata operation, so its fault window is far smaller than the write above.
+function commitStaged(staged: StagedWrite): void {
+  fs.renameSync(staged.tempPath, staged.finalPath);
+  try {
+    fs.chmodSync(staged.finalPath, staged.mode);
+  } catch {
+    // Best-effort on platforms that do not enforce POSIX modes.
+  }
+}
+
+// Remove any staged temp files that have not been committed yet. Best-effort:
+// failure here must not mask the original staging error.
+function discardStaged(staged: StagedWrite[]): void {
+  for (const entry of staged) {
+    try {
+      fs.rmSync(entry.tempPath, { force: true });
+    } catch {
+      // Best-effort cleanup only.
+    }
+  }
+}
+
 export async function runSecretsApply(params: {
   plan: SecretsApplyPlan;
   env?: NodeJS.ProcessEnv;
@@ -832,7 +883,38 @@ export async function runSecretsApply(params: {
     });
   }
 
+  // Two-phase commit so a faulting apply never leaves config and the credential
+  // satellites half-migrated.
+  //
+  // Phase A (stage): write every satellite file's final content to a temp file
+  // in its own directory. This concentrates the fault-prone write step; if any
+  // staging throws (ENOSPC / EACCES / EIO), we discard the temps and rethrow
+  // without having touched a single live file, so all stores stay un-migrated.
+  //
+  // Phase B (commit): commit config first via replaceConfigFile, then rename the
+  // staged satellite temps into place (cheap metadata ops). Both fault-prone
+  // writes (the satellite content writes in Phase A and the config write here)
+  // now land before any live satellite file advances, so a write fault leaves
+  // every store un-migrated. replaceConfigFile is itself atomic (temp + rename),
+  // so a config fault cannot half-write config; ordering it before the renames
+  // means a config fault also leaves the satellites un-renamed. Only the residual
+  // window between individual renames (a metadata op, far less fault-prone than a
+  // write) can still diverge, and that is disclosed in "What was not tested".
+  const staged: StagedWrite[] = [];
   try {
+    for (const writeLocal of writes) {
+      staged.push(stageWrite(writeLocal));
+    }
+  } catch (err) {
+    discardStaged(staged);
+    throw new Error(`Secrets apply failed: ${String(err)}`, { cause: err });
+  }
+
+  const committed: StagedWrite[] = [];
+  try {
+    // Commit config first: its write is the last fault-prone step, and doing it
+    // before any satellite rename means a config fault leaves every store
+    // un-migrated instead of diverging migrated satellites against an old config.
     await replaceConfigFile({
       nextConfig: projected.nextConfig,
       snapshot: projected.configSnapshot,
@@ -840,10 +922,18 @@ export async function runSecretsApply(params: {
       io,
       afterWrite: { mode: "auto" },
     });
-    for (const writeLocal of writes) {
-      writeTextFileAtomic(writeLocal.path, writeLocal.content, writeLocal.mode);
+    for (const entry of staged) {
+      commitStaged(entry);
+      committed.push(entry);
     }
   } catch (err) {
+    // Phase B faults (the config commit or a rename collision) are rare, but
+    // still best-effort rolled back to the captured snapshots so we degrade to
+    // the original (un-migrated) state rather than a partial commit. A config
+    // fault here happens before any rename, so nothing has advanced; a later
+    // rename fault is rolled back to the snapshots. Any un-renamed temp is
+    // discarded.
+    discardStaged(staged.filter((entry) => !committed.includes(entry)));
     for (const [pathname, snapshot] of snapshots.entries()) {
       try {
         restoreFileSnapshot(pathname, snapshot);

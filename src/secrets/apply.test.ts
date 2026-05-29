@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -1012,5 +1013,185 @@ describe("secrets apply", () => {
       path: "/tmp/new-secrets.json",
       mode: "json",
     });
+  });
+
+  it("does not leave config and auth-store diverged when a satellite write faults mid-commit", async () => {
+    // A second agent's auth-store is migrated alongside config + the main store,
+    // so the commit touches >= 2 satellite files and opens a partial-commit window.
+    const freshFixture = await createApplyFixture();
+    await seedDefaultApplyFixture(freshFixture);
+    const secondPath = path.join(
+      freshFixture.stateDir,
+      "agents",
+      "secondary",
+      "agent",
+      "auth-profiles.json",
+    );
+    await fs.mkdir(path.dirname(secondPath), { recursive: true });
+    await writeJsonFile(secondPath, {
+      version: 1,
+      profiles: {
+        "openai:secondary": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-ope...text", // pragma: allowlist secret
+          keyRef: OPENAI_API_KEY_ENV_REF,
+        },
+      },
+    });
+
+    const plan = createPlan({
+      targets: [createOpenAiProviderTarget()],
+      options: createOneWayScrubOptions(),
+    });
+
+    const configBefore = await fs.readFile(freshFixture.configPath, "utf8");
+    const secondBefore = await fs.readFile(secondPath, "utf8");
+
+    // Inject a deterministic, sticky disk-full (ENOSPC) at the OS write
+    // primitive. A real read-only parent dir does not work here: the private
+    // file store chmods the parent back to its dirMode before every write.
+    // Spying on fs.writeFileSync models the genuine fault: the first write that
+    // targets the second auth-store's directory trips the fault, and every later
+    // write (including the catch block's best-effort restores, which atomic
+    // writes route through the same primitive) fails too. This is exactly the
+    // pre-sol proof condition -- the same fault that aborts the commit also
+    // defeats the rollback, so any partial commit becomes permanent.
+    const secondDir = path.resolve(path.dirname(secondPath));
+    const realWriteFileSync = fsSync.writeFileSync.bind(fsSync);
+    let faulting = false;
+    const writeFileSyncSpy = vi
+      .spyOn(fsSync, "writeFileSync")
+      .mockImplementation(((target: Parameters<typeof fsSync.writeFileSync>[0], ...rest) => {
+        if (typeof target === "string" && path.dirname(path.resolve(target)) === secondDir) {
+          faulting = true;
+        }
+        if (faulting) {
+          const error = new Error("INJECTED-FAULT: ENOSPC during secrets apply commit");
+          (error as NodeJS.ErrnoException).code = "ENOSPC";
+          throw error;
+        }
+        return realWriteFileSync(
+          target,
+          ...(rest as [Parameters<typeof fsSync.writeFileSync>[1]]),
+        );
+      }) as typeof fsSync.writeFileSync);
+
+    try {
+      await expect(
+        runSecretsApply({ plan, env: freshFixture.env, write: true }),
+      ).rejects.toThrow(/Secrets apply failed/);
+    } finally {
+      writeFileSyncSpy.mockRestore();
+    }
+
+    const configAfter = await fs.readFile(freshFixture.configPath, "utf8");
+
+    // All-or-nothing: if config advanced to a ref, every auth-store must have
+    // advanced too; if the faulting store still holds plaintext, config must
+    // have been rolled back. The diverged state (config=ref AND store=plaintext)
+    // must never persist.
+    const configMigrated = !configAfter.includes("sk-openai-plaintext");
+    const failedStillPlaintext =
+      (
+        JSON.parse(await fs.readFile(secondPath, "utf8")) as {
+          profiles: Record<string, { key?: string }>;
+        }
+      ).profiles["openai:secondary"]?.key === "sk-ope...text"; // pragma: allowlist secret
+
+    expect(configMigrated && failedStillPlaintext).toBe(false);
+    if (failedStillPlaintext) {
+      // Faulting store kept plaintext => nothing else may have advanced either.
+      expect(configAfter).toBe(configBefore);
+      await expect(fs.readFile(secondPath, "utf8")).resolves.toBe(secondBefore);
+    }
+
+    await fs.rm(freshFixture.rootDir, { recursive: true, force: true });
+  });
+
+  it("does not leave config and auth-store diverged when the final config write faults after staging", async () => {
+    // Satellites stage (sync private-store write) fine; the injected fault hits
+    // only the final config commit (replaceConfigFile -> replaceFileAtomic, whose
+    // temp is written via node:fs/promises.writeFile). Because config is committed
+    // before any satellite rename, a config-write fault must leave every store
+    // un-migrated rather than diverging migrated satellites against an old config.
+    const freshFixture = await createApplyFixture();
+    await seedDefaultApplyFixture(freshFixture);
+    const secondPath = path.join(
+      freshFixture.stateDir,
+      "agents",
+      "secondary",
+      "agent",
+      "auth-profiles.json",
+    );
+    await fs.mkdir(path.dirname(secondPath), { recursive: true });
+    await writeJsonFile(secondPath, {
+      version: 1,
+      profiles: {
+        "openai:secondary": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-ope...text", // pragma: allowlist secret
+          keyRef: OPENAI_API_KEY_ENV_REF,
+        },
+      },
+    });
+
+    const plan = createPlan({
+      targets: [createOpenAiProviderTarget()],
+      options: createOneWayScrubOptions(),
+    });
+
+    const configBefore = await fs.readFile(freshFixture.configPath, "utf8");
+    const secondBefore = await fs.readFile(secondPath, "utf8");
+
+    // The config temp is named from the config basename ("openclaw.json"); fault
+    // its async write only, leaving the sync satellite staging untouched.
+    const configBaseName = path.basename(freshFixture.configPath);
+    const realWriteFile = fs.writeFile.bind(fs);
+    const writeFileSpy = vi
+      .spyOn(fs, "writeFile")
+      .mockImplementation((async (
+        target: Parameters<typeof fs.writeFile>[0],
+        ...rest: unknown[]
+      ) => {
+        if (typeof target === "string" && path.basename(target).startsWith(configBaseName)) {
+          const error = new Error("INJECTED-FAULT: ENOSPC during config commit");
+          (error as NodeJS.ErrnoException).code = "ENOSPC";
+          throw error;
+        }
+        return realWriteFile(
+          target,
+          ...(rest as [Parameters<typeof fs.writeFile>[1]]),
+        );
+      }) as typeof fs.writeFile);
+
+    try {
+      await expect(
+        runSecretsApply({ plan, env: freshFixture.env, write: true }),
+      ).rejects.toThrow(/Secrets apply failed/);
+    } finally {
+      writeFileSpy.mockRestore();
+    }
+
+    const configAfter = await fs.readFile(freshFixture.configPath, "utf8");
+
+    // Config committed before any satellite rename, so a config-write fault leaves
+    // every store un-migrated: config keeps its plaintext and no satellite advances.
+    // The diverged state (config=old AND a store=migrated) must never persist.
+    const configMigrated = !configAfter.includes("sk-openai-plaintext");
+    const secondStillPlaintext =
+      (
+        JSON.parse(await fs.readFile(secondPath, "utf8")) as {
+          profiles: Record<string, { key?: string }>;
+        }
+      ).profiles["openai:secondary"]?.key === "sk-ope...text"; // pragma: allowlist secret
+
+    expect(configMigrated).toBe(false);
+    expect(configAfter).toBe(configBefore);
+    expect(secondStillPlaintext).toBe(true);
+    await expect(fs.readFile(secondPath, "utf8")).resolves.toBe(secondBefore);
+
+    await fs.rm(freshFixture.rootDir, { recursive: true, force: true });
   });
 });
