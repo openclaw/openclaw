@@ -81,7 +81,7 @@ function installRuntime(): MockRuntime {
 }
 
 function createMockFetch(entries: Array<{ match: RegExp; response: Response }>): typeof fetch {
-  return (async (input: RequestInfo | URL) => {
+  return vi.fn(async (input: RequestInfo | URL) => {
     const url =
       typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
     const entry = entries.find((e) => e.match.test(url));
@@ -175,6 +175,7 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
       tokenProvider: buildTokenProvider(),
       maxBytes: 10_000_000,
       fetchFn,
+      fetchFnSupportsDispatcher: true,
       resolveFn: resolvePublicHost,
     });
 
@@ -198,6 +199,7 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
       tokenProvider: buildTokenProvider(),
       maxBytes: 10_000_000,
       fetchFn,
+      fetchFnSupportsDispatcher: true,
       resolveFn: resolvePublicHost,
     });
 
@@ -218,6 +220,7 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
       tokenProvider: buildTokenProvider(),
       maxBytes: 10_000_000,
       fetchFn,
+      fetchFnSupportsDispatcher: true,
       resolveFn: resolvePublicHost,
     });
 
@@ -258,6 +261,7 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
       tokenProvider: buildTokenProvider(),
       maxBytes: 10_000_000,
       fetchFn,
+      fetchFnSupportsDispatcher: true,
       resolveFn: resolvePublicHost,
     });
 
@@ -325,15 +329,8 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
     expect(fetchFn).not.toHaveBeenCalled();
   });
 
-  describe("Node 24+ dispatcher bypass (issue #63396)", () => {
-    it("drives the caller's fetchFn directly without the pinned undici dispatcher", async () => {
-      // Regression: before the fix, fetchBotFrameworkAttachment* routed
-      // through `fetchWithSsrFGuard`, which installs a `createPinnedDispatcher`
-      // incompatible with Node 24+'s built-in undici v7. Downloads failed with
-      // "invalid onRequestStart method". The fix switches to
-      // `safeFetchWithPolicy`, which calls the supplied `fetchFn` directly
-      // and never attaches a pinned dispatcher. Verify the caller's `fetchFn`
-      // is invoked (no dispatcher in init).
+  describe("guarded attachment fetches", () => {
+    it("drives dispatcher-aware caller fetchFn hooks through a pinned dispatcher", async () => {
       const fileBytes = Buffer.from("BFBYTES", "utf-8");
       const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
       const fetchFn: typeof fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -365,20 +362,20 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
         tokenProvider: buildTokenProvider(),
         maxBytes: 10_000_000,
         fetchFn,
+        fetchFnSupportsDispatcher: true,
         resolveFn: resolvePublicHost,
       });
 
       expect(media?.path).toBe(runtime.savePath);
       expect(media?.contentType).toBe(runtime.savedContentType);
       // Both the attachment info call and the view call should be observed,
-      // confirming the direct fetch path was taken (no dispatcher interception).
+      // confirming the guarded fetch path still preserves caller fetch hooks.
       expect(fetchCalls).toHaveLength(2);
       expect(fetchCalls[0].url.endsWith("/v3/attachments/att-1")).toBe(true);
       expect(fetchCalls[1].url.endsWith("/v3/attachments/att-1/views/original")).toBe(true);
-      // Verify no pinned undici dispatcher is attached on either request.
       for (const call of fetchCalls) {
         const init = call.init as RequestInit & { dispatcher?: unknown };
-        expect(init?.dispatcher).toBeUndefined();
+        expect(init?.dispatcher).toBeDefined();
       }
     });
 
@@ -396,6 +393,7 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
         tokenProvider: buildTokenProvider(),
         maxBytes: 10_000_000,
         fetchFn,
+        fetchFnSupportsDispatcher: true,
         resolveFn: resolvePublicHost,
         logger,
       });
@@ -433,6 +431,7 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
         tokenProvider: buildTokenProvider(),
         maxBytes: 10_000_000,
         fetchFn,
+        fetchFnSupportsDispatcher: true,
         resolveFn: resolvePublicHost,
         logger,
       });

@@ -1,14 +1,15 @@
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard, type MSTeamsConfig } from "../runtime-api.js";
 import { GRAPH_ROOT } from "./attachments/shared.js";
-
-const GRAPH_BETA = "https://graph.microsoft.com/beta";
-const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);
-import { createMSTeamsTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
+import { resolveMSTeamsSdkCloudOptions } from "./cloud.js";
 import { createMSTeamsHttpError } from "./http-error.js";
+import { createMSTeamsTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
 import { readAccessToken } from "./token-response.js";
 import { resolveDelegatedAccessToken, resolveMSTeamsCredentials } from "./token.js";
 import { buildUserAgent } from "./user-agent.js";
+
+const GRAPH_BETA = "https://graph.microsoft.com/beta";
+const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);
 
 export type GraphUser = {
   id?: string;
@@ -212,6 +213,11 @@ export async function resolveGraphToken(
   if (!creds) {
     throw new Error("MS Teams credentials missing");
   }
+  if (msteamsCfg?.cloud === "China") {
+    throw new Error(
+      "Microsoft Teams Graph operations are not supported for channels.msteams.cloud=China until Graph requests are routed through the Azure China Graph endpoint.",
+    );
+  }
 
   // Try delegated token if requested and configured
   if (options?.preferDelegated && msteamsCfg?.delegatedAuth?.enabled && creds.type === "secret") {
@@ -226,7 +232,7 @@ export async function resolveGraphToken(
     // Fall through to app-only token
   }
 
-  const { app } = await loadMSTeamsSdkWithAuth(creds);
+  const { app } = await loadMSTeamsSdkWithAuth(creds, resolveMSTeamsSdkCloudOptions(msteamsCfg));
   const tokenProvider = createMSTeamsTokenProvider(app);
   const graphTokenValue = await tokenProvider.getAccessToken("https://graph.microsoft.com");
   const accessToken = readAccessToken(graphTokenValue);

@@ -50,6 +50,7 @@ import {
   matchesExpectedPluginId,
   resolveDefaultPluginExtensionsDir,
   resolveDefaultPluginNpmDir,
+  resolvePluginNpmProjectDir,
   safePluginInstallFileName,
   validatePluginId,
 } from "./install-paths.js";
@@ -297,17 +298,12 @@ type TrustedOfficialPrereleaseResolution =
   | { kind: "prerelease-only"; resolution: NpmSpecResolution }
   | { kind: "allow-prerelease-only" };
 
-async function resolveTrustedOfficialPrereleaseResolution(params: {
-  spec: ParsedRegistryNpmSpec;
-  resolvedPrereleaseVersion: string;
+async function loadNpmPackageVersions(params: {
+  packageName: string;
   timeoutMs: number;
-  logger: PluginInstallLogger;
-}): Promise<TrustedOfficialPrereleaseResolution | null> {
-  if (!params.spec.name.startsWith("@openclaw/")) {
-    return null;
-  }
+}): Promise<string[] | null> {
   const versions = await runCommandWithTimeout(
-    ["npm", "view", params.spec.name, "versions", "--json"],
+    ["npm", "view", params.packageName, "versions", "--json"],
     {
       timeoutMs: Math.max(params.timeoutMs, 60_000),
       env: createNpmMetadataEnv(),
@@ -323,9 +319,27 @@ async function resolveTrustedOfficialPrereleaseResolution(params: {
   } catch {
     return null;
   }
-  const semverVersions = (Array.isArray(parsed) ? parsed : [parsed]).filter(
+  return (Array.isArray(parsed) ? parsed : [parsed]).filter(
     (value): value is string => typeof value === "string" && isExactSemverVersion(value),
   );
+}
+
+async function resolveTrustedOfficialPrereleaseResolution(params: {
+  spec: ParsedRegistryNpmSpec;
+  resolvedPrereleaseVersion: string;
+  timeoutMs: number;
+  logger: PluginInstallLogger;
+}): Promise<TrustedOfficialPrereleaseResolution | null> {
+  if (!params.spec.name.startsWith("@openclaw/")) {
+    return null;
+  }
+  const semverVersions = await loadNpmPackageVersions({
+    packageName: params.spec.name,
+    timeoutMs: params.timeoutMs,
+  });
+  if (!semverVersions) {
+    return null;
+  }
   const stableVersion = semverVersions
     .filter((value) => !isPrereleaseSemverVersion(value))
     .toSorted(compareNpmSemver)
@@ -370,6 +384,91 @@ async function resolveTrustedOfficialPrereleaseResolution(params: {
     `Resolved ${params.spec.raw} to prerelease version ${params.resolvedPrereleaseVersion}; falling back to stable ${stableSpec} for this trusted official OpenClaw install.`,
   );
   return { kind: "stable", resolution: metadataResult.metadata };
+}
+
+function shouldResolveLatestCompatibleNpmVersion(spec: ParsedRegistryNpmSpec): boolean {
+  return (
+    spec.selectorKind === "none" ||
+    (spec.selectorKind === "tag" && (spec.selector ?? "").toLowerCase() === "latest")
+  );
+}
+
+function canResolveAroundCompatibilityError(error: PluginInstallFailureResult): boolean {
+  return (
+    error.code === PLUGIN_INSTALL_ERROR_CODE.INCOMPATIBLE_HOST_VERSION ||
+    error.code === PLUGIN_INSTALL_ERROR_CODE.INCOMPATIBLE_PLUGIN_API
+  );
+}
+
+function validateNpmResolutionCompatibility(params: {
+  runtime: PluginInstallRuntime;
+  parsedSpec: ParsedRegistryNpmSpec;
+  expectedPluginId?: string;
+  resolution: NpmSpecResolution;
+}): PluginInstallFailureResult | null {
+  return validateOpenClawPackageInstallCompatibility({
+    runtime: params.runtime,
+    pluginId: params.expectedPluginId ?? params.resolution.name ?? params.parsedSpec.name,
+    packageMetadata: params.resolution.packageOpenClaw as OpenClawPackageManifest | undefined,
+  });
+}
+
+async function resolveLatestCompatibleNpmResolution(params: {
+  runtime: PluginInstallRuntime;
+  parsedSpec: ParsedRegistryNpmSpec;
+  expectedPluginId?: string;
+  currentResolution: NpmSpecResolution;
+  timeoutMs: number;
+  logger: PluginInstallLogger;
+}): Promise<NpmSpecResolution | null> {
+  if (
+    !shouldResolveLatestCompatibleNpmVersion(params.parsedSpec) ||
+    !params.currentResolution.version
+  ) {
+    return null;
+  }
+
+  const versions = await loadNpmPackageVersions({
+    packageName: params.parsedSpec.name,
+    timeoutMs: params.timeoutMs,
+  });
+  if (!versions) {
+    return null;
+  }
+
+  const currentVersion = params.currentResolution.version;
+  const candidates = versions
+    .filter((version) => !isPrereleaseSemverVersion(version))
+    .filter((version) => compareNpmSemver(version, currentVersion) < 0)
+    .toSorted(compareNpmSemver)
+    .toReversed();
+  for (const version of candidates) {
+    const spec = `${params.parsedSpec.name}@${version}`;
+    const metadataResult = await resolveNpmSpecMetadata({
+      spec,
+      timeoutMs: params.timeoutMs,
+    });
+    if (!metadataResult.ok) {
+      params.logger.warn?.(
+        `Could not inspect ${spec} while looking for a compatible plugin version: ${metadataResult.error}`,
+      );
+      continue;
+    }
+    const compatibilityError = validateNpmResolutionCompatibility({
+      runtime: params.runtime,
+      parsedSpec: params.parsedSpec,
+      expectedPluginId: params.expectedPluginId,
+      resolution: metadataResult.metadata,
+    });
+    if (!compatibilityError) {
+      params.logger.warn?.(
+        `Resolved ${params.parsedSpec.raw} to ${params.currentResolution.resolvedSpec ?? currentVersion}, but that version is incompatible with this OpenClaw runtime; using newest compatible ${metadataResult.metadata.resolvedSpec ?? spec}.`,
+      );
+      return metadataResult.metadata;
+    }
+  }
+
+  return null;
 }
 
 function buildFileInstallResult(pluginId: string, targetFile: string): InstallPluginResult {
@@ -691,8 +790,12 @@ async function installPluginFromManagedNpmRoot(
     defaultLogger,
   );
   const expectedPluginId = params.expectedPluginId;
-  const npmRoot = params.npmDir ? resolveUserPath(params.npmDir) : resolveDefaultPluginNpmDir();
-  const installRoot = path.join(npmRoot, "node_modules", params.packageName);
+  const npmBaseDir = params.npmDir ? resolveUserPath(params.npmDir) : resolveDefaultPluginNpmDir();
+  const npmRoot = resolvePluginNpmProjectDir({
+    npmDir: npmBaseDir,
+    packageName: params.packageName,
+  });
+  const installRoot = resolveManagedNpmRootPackageDir(npmRoot, params.packageName);
   const effectiveMode = await resolveEffectiveInstallMode({
     runtime,
     requestedMode: mode,
@@ -1990,6 +2093,36 @@ export async function installPluginFromNpmSpec(
       };
     }
   }
+  let compatibilityError = validateNpmResolutionCompatibility({
+    runtime,
+    parsedSpec,
+    expectedPluginId,
+    resolution: npmResolution,
+  });
+  if (compatibilityError && canResolveAroundCompatibilityError(compatibilityError)) {
+    const compatibleResolution = await resolveLatestCompatibleNpmResolution({
+      runtime,
+      parsedSpec,
+      expectedPluginId,
+      currentResolution: npmResolution,
+      timeoutMs,
+      logger,
+    });
+    if (compatibleResolution) {
+      Object.assign(npmResolution, compatibleResolution, {
+        resolvedAt: npmResolution.resolvedAt,
+      });
+      compatibilityError = validateNpmResolutionCompatibility({
+        runtime,
+        parsedSpec,
+        expectedPluginId,
+        resolution: npmResolution,
+      });
+    }
+  }
+  if (compatibilityError) {
+    return compatibilityError;
+  }
   const driftResult = await resolveNpmIntegrityDriftWithDefaultMessage({
     spec,
     expectedIntegrity: params.expectedIntegrity,
@@ -1999,14 +2132,6 @@ export async function installPluginFromNpmSpec(
   });
   if (driftResult.error) {
     return { ok: false, error: driftResult.error };
-  }
-  const compatibilityError = validateOpenClawPackageCompatibility({
-    pluginId: expectedPluginId ?? npmResolution.name ?? parsedSpec.name,
-    currentHostVersion: runtime.resolveCompatibilityHostVersion(),
-    packageMetadata: npmResolution.packageOpenClaw as OpenClawPackageManifest | undefined,
-  });
-  if (compatibilityError) {
-    return compatibilityError;
   }
 
   return await installPluginFromManagedNpmRoot({
@@ -2079,7 +2204,11 @@ export async function installPluginFromNpmPackArchive(
     return packageNameResult;
   }
   const packageName = packageNameResult.packageName;
-  const npmRoot = params.npmDir ? resolveUserPath(params.npmDir) : resolveDefaultPluginNpmDir();
+  const npmBaseDir = params.npmDir ? resolveUserPath(params.npmDir) : resolveDefaultPluginNpmDir();
+  const npmRoot = resolvePluginNpmProjectDir({
+    npmDir: npmBaseDir,
+    packageName,
+  });
   let dependencySpec = "";
   if (!dryRun) {
     try {
@@ -2113,7 +2242,7 @@ export async function installPluginFromNpmPackArchive(
       requestedSpecifier: `npm-pack:${metadataResult.archivePath}`,
     },
     extensionsDir: params.extensionsDir,
-    npmDir: npmRoot,
+    npmDir: npmBaseDir,
     timeoutMs,
     logger,
     mode,

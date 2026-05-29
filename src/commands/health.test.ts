@@ -2,7 +2,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../terminal/ansi.js";
 import { formatHealthCheckFailure } from "./health-format.js";
 import type { HealthSummary } from "./health.js";
-import { formatHealthChannelLines, formatModelPricingHealthLine, healthCommand } from "./health.js";
+import {
+  formatContextEngineHealthLine,
+  formatHealthChannelLines,
+  formatModelPricingHealthLine,
+  healthCommand,
+} from "./health.js";
 
 const runtime = {
   log: vi.fn(),
@@ -337,6 +342,31 @@ describe("healthCommand", () => {
     const lines = formatHealthChannelLines(summary, { accountMode: "default" });
     expect(lines).toContain(
       "iMessage: failed (unknown) - imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
+    );
+  });
+});
+
+describe("formatContextEngineHealthLine", () => {
+  it("summarizes quarantined context engines", () => {
+    const summary = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+    summary.contextEngines = {
+      quarantined: [
+        {
+          engineId: "lossless-claw",
+          owner: "plugin:lossless-claw",
+          operation: "assemble",
+          reason: "db corrupt",
+          failedAt: 123,
+        },
+      ],
+    };
+
+    expect(formatContextEngineHealthLine(summary)).toBe(
+      "Context engine: warning (1 quarantined; downgraded to legacy: lossless-claw)",
     );
   });
 });

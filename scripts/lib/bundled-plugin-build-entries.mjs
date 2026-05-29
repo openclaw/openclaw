@@ -52,6 +52,17 @@ function shouldBuildBundledDistEntry(packageJson) {
   return packageJson?.openclaw?.build?.bundledDist !== false;
 }
 
+function isExcludedTopLevelPublicSurfaceFile(fileName) {
+  const normalizedName = fileName.toLowerCase();
+  return (
+    normalizedName.endsWith(".d.ts") ||
+    /^config-api\.(?:[cm]?[jt]s)$/u.test(normalizedName) ||
+    TOP_LEVEL_PRIVATE_TEST_SURFACE_RE.test(normalizedName) ||
+    normalizedName.includes(".fixture.") ||
+    normalizedName.includes(".snap")
+  );
+}
+
 export function collectPluginSourceEntries(packageJson) {
   let packageEntries = Array.isArray(packageJson?.openclaw?.extensions)
     ? packageJson.openclaw.extensions.filter(
@@ -86,14 +97,7 @@ export function collectTopLevelPublicSurfaceEntries(pluginDir) {
         return [];
       }
 
-      const normalizedName = dirent.name.toLowerCase();
-      if (
-        normalizedName.endsWith(".d.ts") ||
-        /^config-api\.(?:[cm]?[jt]s)$/u.test(normalizedName) ||
-        TOP_LEVEL_PRIVATE_TEST_SURFACE_RE.test(normalizedName) ||
-        normalizedName.includes(".fixture.") ||
-        normalizedName.includes(".snap")
-      ) {
+      if (isExcludedTopLevelPublicSurfaceFile(dirent.name)) {
         return [];
       }
 
@@ -114,14 +118,7 @@ function collectTopLevelPublicSurfaceEntriesFromFiles(relativeFiles) {
         return [];
       }
 
-      const normalizedName = relativeFile.toLowerCase();
-      if (
-        normalizedName.endsWith(".d.ts") ||
-        /^config-api\.(?:[cm]?[jt]s)$/u.test(normalizedName) ||
-        TOP_LEVEL_PRIVATE_TEST_SURFACE_RE.test(normalizedName) ||
-        normalizedName.includes(".fixture.") ||
-        normalizedName.includes(".snap")
-      ) {
+      if (isExcludedTopLevelPublicSurfaceFile(relativeFile)) {
         return [];
       }
 

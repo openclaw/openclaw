@@ -2293,6 +2293,65 @@ describe("openai transport stream", () => {
     expect(params.prompt_cache_key).toBeUndefined();
   });
 
+  it("adds fallback instructions for raw native Codex responses probes", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 400000,
+        maxTokens: 128000,
+      } satisfies Model<"openai-codex-responses">,
+      {
+        systemPrompt: "",
+        messages: [{ role: "user", content: "Reply OK", timestamp: 1 }],
+        tools: [],
+      } as never,
+      {
+        maxTokens: 16,
+        sessionId: "session-123",
+      },
+    ) as Record<string, unknown>;
+
+    expect(params.instructions).toBe("Follow the user request.");
+    expect(params.max_output_tokens).toBeUndefined();
+    expect(params.prompt_cache_retention).toBeUndefined();
+  });
+
+  it("does not add fallback instructions for custom Codex-compatible responses backends", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        baseUrl: "https://proxy.example.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 400000,
+        maxTokens: 128000,
+      } satisfies Model<"openai-codex-responses">,
+      {
+        systemPrompt: "",
+        messages: [{ role: "user", content: "Reply OK", timestamp: 1 }],
+        tools: [],
+      } as never,
+      {
+        maxTokens: 16,
+        sessionId: "session-123",
+      },
+    ) as Record<string, unknown>;
+
+    expect(params.instructions).toBeUndefined();
+    expect(params.max_output_tokens).toBe(16);
+  });
+
   it("uses top-level instructions for Codex responses and preserves prompt cache identity", () => {
     const params = buildOpenAIResponsesParams(
       {

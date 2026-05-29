@@ -636,10 +636,7 @@ function upgradeOldClaudeToken(
     return null;
   }
   // claude-haiku-4-5 is a current production model and must not be migrated.
-  if (
-    normalized.startsWith("claude-haiku-4-5") ||
-    normalized.startsWith("claude-haiku-4.5")
-  ) {
+  if (normalized.startsWith("claude-haiku-4-5") || normalized.startsWith("claude-haiku-4.5")) {
     return null;
   }
   if (

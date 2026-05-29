@@ -96,6 +96,12 @@ afterAll(() => {
   vi.resetModules();
 });
 
+describe("feishuPlugin metadata", () => {
+  it("opts announce delivery into persisted session lookup", () => {
+    expect(feishuPlugin.meta.preferSessionLookupForAnnounceTarget).toBe(true);
+  });
+});
+
 describe("feishuPlugin.status.probeAccount", () => {
   it("uses current account credentials for multi-account config", async () => {
     const cfg = {

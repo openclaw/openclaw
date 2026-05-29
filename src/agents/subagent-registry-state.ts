@@ -48,7 +48,7 @@ export function getSubagentRunsSnapshotForRead(
   if (shouldReadDisk) {
     try {
       // Persisted state lets other worker processes observe active runs.
-      for (const [runId, entry] of loadSubagentRegistryFromDisk().entries()) {
+      for (const [runId, entry] of loadSubagentRegistryFromDisk({ clone: false }).entries()) {
         merged.set(runId, entry);
       }
     } catch {

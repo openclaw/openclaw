@@ -193,7 +193,9 @@ function createLazySourceTransformLoader(params: {
     const jitiLoader = (params.createLoader ?? loadCreateJitiLoaderFactory())(
       params.loaderFilename,
       {
-        ...buildPluginLoaderJitiOptions(params.aliasMap),
+        ...buildPluginLoaderJitiOptions(params.aliasMap, {
+          modulePath: params.loaderFilename,
+        }),
         tryNative: params.sourceTransformTryNative,
       },
     );

@@ -3,6 +3,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { ACT_MAX_VIEWPORT_DIMENSION } from "../browser/act-policy.js";
 import { runCommandWithRuntime } from "../core-api.js";
 import { runBrowserResizeWithOutput } from "./browser-cli-resize.js";
 import { callBrowserRequest, type BrowserParentOpts } from "./browser-cli-shared.js";
@@ -19,6 +20,11 @@ function parsePositiveInteger(value: unknown, label: string): number | undefined
   const parsed = /^\d+$/.test(raw) ? Number(raw) : Number.NaN;
   if (!Number.isSafeInteger(parsed) || parsed < 1) {
     defaultRuntime.error(danger(`Invalid ${label}: must be a positive integer`));
+    defaultRuntime.exit(1);
+    return undefined;
+  }
+  if (parsed > ACT_MAX_VIEWPORT_DIMENSION) {
+    defaultRuntime.error(danger(`Invalid ${label}: maximum is ${ACT_MAX_VIEWPORT_DIMENSION}`));
     defaultRuntime.exit(1);
     return undefined;
   }

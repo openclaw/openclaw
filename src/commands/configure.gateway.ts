@@ -1,3 +1,4 @@
+import { validateIPv4AddressInput } from "@openclaw/net-policy/ipv4";
 import { formatPortRangeHint } from "../cli/error-format.js";
 import { parsePort } from "../cli/shared/parse-port.js";
 import { resolveGatewayPort } from "../config/config.js";
@@ -12,7 +13,6 @@ import {
 import { findTailscaleBinary } from "../infra/tailscale.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
-import { validateIPv4AddressInput } from "../shared/net/ipv4.js";
 import { normalizeOptionalString, readStringValue } from "../shared/string-coerce.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { note } from "../terminal/note.js";
