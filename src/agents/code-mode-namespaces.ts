@@ -1,5 +1,4 @@
 import { isRecord } from "../shared/record-coerce.js";
-import type { ToolSearchCatalogEntry, ToolSearchToolContext } from "./tool-search.js";
 
 const FORBIDDEN_NAMESPACE_PATH_SEGMENTS = new Set(["__proto__", "constructor", "prototype"]);
 const NAMESPACE_PATH_KEY_SEPARATOR = "\u0000";
@@ -26,7 +25,17 @@ const RESERVED_NAMESPACE_GLOBALS = new Set([
 ]);
 const CODE_MODE_NAMESPACE_REGISTRY_KEY = Symbol.for("openclaw.codeMode.namespaces");
 
-export type CodeModeNamespaceContext = ToolSearchToolContext;
+export type CodeModeNamespaceContext = {
+  config?: unknown;
+  runtimeConfig?: unknown;
+  agentId?: string;
+  sessionKey?: string;
+  sessionId?: string;
+  runId?: string;
+  catalogRef?: unknown;
+  abortSignal?: AbortSignal;
+  executeTool?: unknown;
+};
 
 export type CodeModeNamespaceScope = Record<string, unknown>;
 
@@ -65,7 +74,10 @@ type CodeModeNamespaceRuntimeEntry = {
   descriptor: CodeModeNamespaceDescriptor;
 };
 
-type CodeModeNamespaceCatalogEntry = Pick<ToolSearchCatalogEntry, "name" | "sourceName">;
+type CodeModeNamespaceCatalogEntry = {
+  name: string;
+  sourceName?: string;
+};
 
 export type CodeModeNamespaceRuntime = {
   descriptors: CodeModeNamespaceDescriptor[];
