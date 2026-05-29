@@ -6,7 +6,14 @@ import { isErrno } from "./errors.js";
 import { formatPortDiagnostics } from "./ports-format.js";
 import { inspectPortUsage } from "./ports-inspect.js";
 import { tryListenOnPort } from "./ports-probe.js";
-import type { PortListener, PortListenerKind, PortUsage, PortUsageStatus } from "./ports-types.js";
+import type {
+  PortConnection,
+  PortConnections,
+  PortListener,
+  PortListenerKind,
+  PortUsage,
+  PortUsageStatus,
+} from "./ports-types.js";
 
 class PortInUseError extends Error {
   port: number;
@@ -85,6 +92,20 @@ export async function handlePortError(
 }
 
 export { PortInUseError };
-export type { PortListener, PortListenerKind, PortUsage, PortUsageStatus };
-export { buildPortHints, classifyPortListener, formatPortDiagnostics } from "./ports-format.js";
-export { inspectPortUsage } from "./ports-inspect.js";
+export type {
+  PortConnection,
+  PortConnections,
+  PortListener,
+  PortListenerKind,
+  PortUsage,
+  PortUsageStatus,
+};
+export {
+  buildPortHints,
+  classifyPortListener,
+  formatPortDiagnostics,
+  isDualStackLoopbackGatewayListeners,
+  isExpectedGatewayListeners,
+  isSingleExpectedGatewayListener,
+} from "./ports-format.js";
+export { inspectPortConnections, inspectPortUsage } from "./ports-inspect.js";

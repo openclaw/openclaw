@@ -1,51 +1,47 @@
-import { setSetupChannelEnabled, type ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
-import { detectBinary, installSignalCli } from "openclaw/plugin-sdk/setup-tools";
+import {
+  createSetupTranslator,
+  createDetectedBinaryStatus,
+  setSetupChannelEnabled,
+  type ChannelSetupWizard,
+} from "openclaw/plugin-sdk/setup";
+import { detectBinary } from "openclaw/plugin-sdk/setup-tools";
 import { listSignalAccountIds, resolveSignalAccount } from "./accounts.js";
+import { installSignalCli } from "./install-signal-cli.js";
 import {
   createSignalCliPathTextInput,
-  normalizeSignalAccountInput,
-  parseSignalAllowFromEntries,
   signalCompletionNote,
   signalDmPolicy,
   signalNumberTextInput,
-  signalSetupAdapter,
 } from "./setup-core.js";
 
-const channel = "signal" as const;
+const t = createSetupTranslator();
 
+const channel = "signal" as const;
 export const signalSetupWizard: ChannelSetupWizard = {
   channel,
-  status: {
-    configuredLabel: "configured",
-    unconfiguredLabel: "needs setup",
-    configuredHint: "signal-cli found",
-    unconfiguredHint: "signal-cli missing",
+  status: createDetectedBinaryStatus({
+    channelLabel: "Signal",
+    binaryLabel: "signal-cli",
+    configuredLabel: t("wizard.channels.statusConfigured"),
+    unconfiguredLabel: t("wizard.channels.statusNeedsSetup"),
+    configuredHint: t("wizard.channels.statusSignalCliFound"),
+    unconfiguredHint: t("wizard.channels.statusSignalCliMissing"),
     configuredScore: 1,
     unconfiguredScore: 0,
-    resolveConfigured: ({ cfg }) =>
-      listSignalAccountIds(cfg).some(
-        (accountId) => resolveSignalAccount({ cfg, accountId }).configured,
-      ),
-    resolveStatusLines: async ({ cfg, configured }) => {
-      const signalCliPath = cfg.channels?.signal?.cliPath ?? "signal-cli";
-      const signalCliDetected = await detectBinary(signalCliPath);
-      return [
-        `Signal: ${configured ? "configured" : "needs setup"}`,
-        `signal-cli: ${signalCliDetected ? "found" : "missing"} (${signalCliPath})`,
-      ];
-    },
-    resolveSelectionHint: async ({ cfg }) => {
-      const signalCliPath = cfg.channels?.signal?.cliPath ?? "signal-cli";
-      return (await detectBinary(signalCliPath)) ? "signal-cli found" : "signal-cli missing";
-    },
-    resolveQuickstartScore: async ({ cfg }) => {
-      const signalCliPath = cfg.channels?.signal?.cliPath ?? "signal-cli";
-      return (await detectBinary(signalCliPath)) ? 1 : 0;
-    },
-  },
+    resolveConfigured: ({ cfg, accountId }) =>
+      accountId
+        ? resolveSignalAccount({ cfg, accountId }).configured
+        : listSignalAccountIds(cfg).some(
+            (resolvedAccountId) =>
+              resolveSignalAccount({ cfg, accountId: resolvedAccountId }).configured,
+          ),
+    resolveBinaryPath: ({ cfg, accountId }) =>
+      resolveSignalAccount({ cfg, accountId }).config.cliPath ?? "signal-cli",
+    detectBinary,
+  }),
   prepare: async ({ cfg, accountId, credentialValues, runtime, prompter, options }) => {
     if (!options?.allowSignalInstall) {
-      return;
+      return undefined;
     }
     const currentCliPath =
       (typeof credentialValues.cliPath === "string" ? credentialValues.cliPath : undefined) ??
@@ -53,13 +49,11 @@ export const signalSetupWizard: ChannelSetupWizard = {
       "signal-cli";
     const cliDetected = await detectBinary(currentCliPath);
     const wantsInstall = await prompter.confirm({
-      message: cliDetected
-        ? "signal-cli detected. Reinstall/update now?"
-        : "signal-cli not found. Install now?",
+      message: cliDetected ? t("wizard.signal.reinstallPrompt") : t("wizard.signal.installPrompt"),
       initialValue: !cliDetected,
     });
     if (!wantsInstall) {
-      return;
+      return undefined;
     }
     try {
       const result = await installSignalCli(runtime);
@@ -77,6 +71,7 @@ export const signalSetupWizard: ChannelSetupWizard = {
     } catch (error) {
       await prompter.note(`signal-cli install failed: ${String(error)}`, "Signal");
     }
+    return undefined;
   },
   credentials: [],
   textInputs: [
@@ -89,5 +84,3 @@ export const signalSetupWizard: ChannelSetupWizard = {
   dmPolicy: signalDmPolicy,
   disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),
 };
-
-export { normalizeSignalAccountInput, parseSignalAllowFromEntries, signalSetupAdapter };

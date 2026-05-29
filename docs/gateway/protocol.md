@@ -4,10 +4,8 @@ read_when:
   - Implementing or updating gateway WS clients
   - Debugging protocol mismatches or connect failures
   - Regenerating protocol schema/models
-title: "Gateway Protocol"
+title: "Gateway protocol"
 ---
-
-# Gateway protocol (WebSocket)
 
 The Gateway WS protocol is the **single control plane + node transport** for
 OpenClaw. All clients (CLI, web UI, macOS app, iOS/Android nodes, headless
@@ -18,6 +16,13 @@ handshake time.
 
 - WebSocket, text frames with JSON payloads.
 - First frame **must** be a `connect` request.
+- Pre-connect frames are capped at 64 KiB. After a successful handshake, clients
+  should follow the `hello-ok.policy.maxPayload` and
+  `hello-ok.policy.maxBufferedBytes` limits. With diagnostics enabled,
+  oversized inbound frames and slow outbound buffers emit `payload.large` events
+  before the gateway closes or drops the affected frame. These events keep
+  sizes, limits, surfaces, and safe reason codes. They do not keep the message
+  body, attachment contents, raw frame body, tokens, cookies, or secret values.
 
 ## Handshake (connect)
 
@@ -40,7 +45,7 @@ Client → Gateway:
   "method": "connect",
   "params": {
     "minProtocol": 3,
-    "maxProtocol": 3,
+    "maxProtocol": 4,
     "client": {
       "id": "cli",
       "version": "1.2.3",
@@ -73,9 +78,62 @@ Gateway → Client:
   "type": "res",
   "id": "…",
   "ok": true,
-  "payload": { "type": "hello-ok", "protocol": 3, "policy": { "tickIntervalMs": 15000 } }
+  "payload": {
+    "type": "hello-ok",
+    "protocol": 4,
+    "server": { "version": "…", "connId": "…" },
+    "features": { "methods": ["…"], "events": ["…"] },
+    "snapshot": { "…": "…" },
+    "auth": {
+      "role": "operator",
+      "scopes": ["operator.read", "operator.write"]
+    },
+    "policy": {
+      "maxPayload": 26214400,
+      "maxBufferedBytes": 52428800,
+      "tickIntervalMs": 15000
+    }
+  }
 }
 ```
+
+While the Gateway is still finishing startup sidecars, the `connect` request can
+return a retryable `UNAVAILABLE` error with `details.reason` set to
+`"startup-sidecars"` and `retryAfterMs`. Clients should retry that response
+within their overall connection budget instead of surfacing it as a terminal
+handshake failure.
+
+`server`, `features`, `snapshot`, and `policy` are all required by the schema
+(`packages/gateway-protocol/src/schema/frames.ts`). `auth` is also required and reports
+the negotiated role/scopes. `pluginSurfaceUrls` is optional and maps plugin
+surface names, such as `canvas`, to scoped hosted URLs.
+
+Scoped plugin surface URLs may expire. Nodes can call
+`node.pluginSurface.refresh` with `{ "surface": "canvas" }` to receive a fresh
+entry in `pluginSurfaceUrls`. The experimental Canvas plugin refactor does not
+support the deprecated `canvasHostUrl`, `canvasCapability`, or
+`node.canvas.capability.refresh` compatibility path; current native clients and
+gateways must use plugin surfaces.
+
+When no device token is issued, `hello-ok.auth` reports the negotiated
+permissions without token fields:
+
+```json
+{
+  "auth": {
+    "role": "operator",
+    "scopes": ["operator.read", "operator.write"]
+  }
+}
+```
+
+Trusted same-process backend clients (`client.id: "gateway-client"`,
+`client.mode: "backend"`) may omit `device` on direct loopback connections when
+they authenticate with the shared gateway token/password. This path is reserved
+for internal control-plane RPCs and keeps stale CLI/device pairing baselines from
+blocking local backend work such as subagent session updates. Remote clients,
+browser-origin clients, node clients, and explicit device-token/device-identity
+clients still use the normal pairing and scope-upgrade checks.
 
 When a device token is issued, `hello-ok` also includes:
 
@@ -89,6 +147,36 @@ When a device token is issued, `hello-ok` also includes:
 }
 ```
 
+Built-in QR/setup-code bootstrap is a fresh mobile handoff path. A successful
+baseline setup-code connect returns a primary node token plus one bounded
+operator token:
+
+```json
+{
+  "auth": {
+    "deviceToken": "…",
+    "role": "node",
+    "scopes": [],
+    "deviceTokens": [
+      {
+        "deviceToken": "…",
+        "role": "operator",
+        "scopes": ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"]
+      }
+    ]
+  }
+}
+```
+
+The operator handoff is intentionally bounded so QR onboarding can start the
+mobile operator loop without granting `operator.admin` or `operator.pairing`.
+It does include `operator.talk.secrets` so the native client can read the Talk
+configuration it needs after bootstrap. Broader admin and pairing scopes require
+a separate approved operator pairing or token flow. Clients should persist
+`hello-ok.auth.deviceTokens` only
+when the connect used bootstrap auth on trusted transport such as `wss://` or
+loopback/local pairing.
+
 ### Node example
 
 ```json
@@ -98,7 +186,7 @@ When a device token is issued, `hello-ok` also includes:
   "method": "connect",
   "params": {
     "minProtocol": 3,
-    "maxProtocol": 3,
+    "maxProtocol": 4,
     "client": {
       "id": "ios-node",
       "version": "1.2.3",
@@ -134,6 +222,9 @@ Side-effecting methods require **idempotency keys** (see schema).
 
 ## Roles + scopes
 
+For the full operator scope model, approval-time checks, and shared-secret
+semantics, see [Operator scopes](/gateway/operator-scopes).
+
 ### Roles
 
 - `operator` = control plane client (CLI/UI/automation).
@@ -148,16 +239,33 @@ Common scopes:
 - `operator.admin`
 - `operator.approvals`
 - `operator.pairing`
+- `operator.talk.secrets`
+
+`talk.config` with `includeSecrets: true` requires `operator.talk.secrets`
+(or `operator.admin`).
+
+Plugin-registered gateway RPC methods may request their own operator scope, but
+reserved core admin prefixes (`config.*`, `exec.approvals.*`, `wizard.*`,
+`update.*`) always resolve to `operator.admin`.
 
 Method scope is only the first gate. Some slash commands reached through
 `chat.send` apply stricter command-level checks on top. For example, persistent
 `/config set` and `/config unset` writes require `operator.admin`.
 
+`node.pair.approve` also has an extra approval-time scope check on top of the
+base method scope:
+
+- commandless requests: `operator.pairing`
+- requests with non-exec node commands: `operator.pairing` + `operator.write`
+- requests that include `system.run`, `system.run.prepare`, or `system.which`:
+  `operator.pairing` + `operator.admin`
+
 ### Caps/commands/permissions (node)
 
 Nodes declare capability claims at connect time:
 
-- `caps`: high-level capability categories.
+- `caps`: high-level capability categories such as `camera`, `canvas`, `screen`,
+  `location`, `voice`, and `talk`.
 - `commands`: command allowlist for invoke.
 - `permissions`: granular toggles (e.g. `screen.record`, `camera.capture`).
 
@@ -168,50 +276,482 @@ The Gateway treats these as **claims** and enforces server-side allowlists.
 - `system-presence` returns entries keyed by device identity.
 - Presence entries include `deviceId`, `roles`, and `scopes` so UIs can show a single row per device
   even when it connects as both **operator** and **node**.
+- `node.list` includes optional `lastSeenAtMs` and `lastSeenReason` fields. Connected nodes report
+  their current connection time as `lastSeenAtMs` with reason `connect`; paired nodes can also report
+  durable background presence when a trusted node event updates their pairing metadata.
+
+### Node background alive event
+
+Nodes may call `node.event` with `event: "node.presence.alive"` to record that a paired node was
+alive during a background wake without marking it connected.
+
+```json
+{
+  "event": "node.presence.alive",
+  "payloadJSON": "{\"trigger\":\"silent_push\",\"sentAtMs\":1737264000000,\"displayName\":\"Peter's iPhone\",\"version\":\"2026.4.28\",\"platform\":\"iOS 18.4.0\",\"deviceFamily\":\"iPhone\",\"modelIdentifier\":\"iPhone17,1\",\"pushTransport\":\"relay\"}"
+}
+```
+
+`trigger` is a closed enum: `background`, `silent_push`, `bg_app_refresh`,
+`significant_location`, `manual`, or `connect`. Unknown trigger strings are normalized to
+`background` by the gateway before persistence. The event is durable only for authenticated node
+device sessions; device-less or unpaired sessions return `handled: false`.
+
+Successful gateways return a structured result:
+
+```json
+{
+  "ok": true,
+  "event": "node.presence.alive",
+  "handled": true,
+  "reason": "persisted"
+}
+```
+
+Older gateways may still return `{ "ok": true }` for `node.event`; clients should treat that as an
+acknowledged RPC, not as durable presence persistence.
+
+## Broadcast event scoping
+
+Server-pushed WebSocket broadcast events are scope-gated so that pairing-scoped or node-only sessions do not passively receive session content.
+
+- **Chat, agent, and tool-result frames** (including streamed `agent` events and tool call results) require at least `operator.read`. Sessions without `operator.read` skip these frames entirely.
+- **Plugin-defined `plugin.*` broadcasts** are gated to `operator.write` or `operator.admin`, depending on how the plugin registered them.
+- **Status and transport events** (`heartbeat`, `presence`, `tick`, connect/disconnect lifecycle, etc.) remain unrestricted so transport health stays observable to every authenticated session.
+- **Unknown broadcast event families** are scope-gated by default (fail-closed) unless a registered handler explicitly relaxes them.
+
+Each client connection keeps its own per-client sequence number so broadcasts preserve monotonic ordering on that socket even when different clients see different scope-filtered subsets of the event stream.
+
+## Common RPC method families
+
+The public WS surface is broader than the handshake/auth examples above. This
+is not a generated dump — `hello-ok.features.methods` is a conservative
+discovery list built from `src/gateway/server-methods-list.ts` plus loaded
+plugin/channel method exports. Treat it as feature discovery, not a full
+enumeration of `src/gateway/server-methods/*.ts`.
+
+<AccordionGroup>
+  <Accordion title="System and identity">
+    - `health` returns the cached or freshly probed gateway health snapshot.
+    - `diagnostics.stability` returns the recent bounded diagnostic stability recorder. It keeps operational metadata such as event names, counts, byte sizes, memory readings, queue/session state, channel/plugin names, and session ids. It does not keep chat text, webhook bodies, tool outputs, raw request or response bodies, tokens, cookies, or secret values. Operator read scope is required.
+    - `status` returns the `/status`-style gateway summary; sensitive fields are included only for admin-scoped operator clients.
+    - `gateway.identity.get` returns the gateway device identity used by relay and pairing flows.
+    - `system-presence` returns the current presence snapshot for connected operator/node devices.
+    - `system-event` appends a system event and can update/broadcast presence context.
+    - `last-heartbeat` returns the latest persisted heartbeat event.
+    - `set-heartbeats` toggles heartbeat processing on the gateway.
+
+  </Accordion>
+
+  <Accordion title="Models and usage">
+    - `models.list` returns the runtime-allowed model catalog. Pass `{ "view": "configured" }` for picker-sized configured models (`agents.defaults.models` first, then `models.providers.*.models`), or `{ "view": "all" }` for the full catalog.
+    - `usage.status` returns provider usage windows/remaining quota summaries.
+    - `usage.cost` returns aggregated cost usage summaries for a date range.
+      Pass `agentId` for one agent, or `agentScope: "all"` to aggregate configured agents.
+    - `doctor.memory.status` returns vector-memory / cached embedding readiness for the active default agent workspace. Pass `{ "probe": true }` or `{ "deep": true }` only when the caller explicitly wants a live embedding provider ping.
+    - `doctor.memory.remHarness` returns a bounded, read-only REM harness preview for remote control-plane clients. It can include workspace paths, memory snippets, rendered grounded markdown, and deep promotion candidates, so callers need `operator.read`.
+    - `sessions.usage` returns per-session usage summaries. Pass `agentId` for one
+      agent, or `agentScope: "all"` to list configured agents together.
+    - `sessions.usage.timeseries` returns timeseries usage for one session.
+    - `sessions.usage.logs` returns usage log entries for one session.
+
+  </Accordion>
+
+  <Accordion title="Channels and login helpers">
+    - `channels.status` returns built-in + bundled channel/plugin status summaries.
+    - `channels.logout` logs out a specific channel/account where the channel supports logout.
+    - `web.login.start` starts a QR/web login flow for the current QR-capable web channel provider.
+    - `web.login.wait` waits for that QR/web login flow to complete and starts the channel on success.
+    - `push.test` sends a test APNs push to a registered iOS node.
+    - `voicewake.get` returns the stored wake-word triggers.
+    - `voicewake.set` updates wake-word triggers and broadcasts the change.
+
+  </Accordion>
+
+  <Accordion title="Messaging and logs">
+    - `send` is the direct outbound-delivery RPC for channel/account/thread-targeted sends outside the chat runner.
+    - `logs.tail` returns the configured gateway file-log tail with cursor/limit and max-byte controls.
+
+  </Accordion>
+
+  <Accordion title="Talk and TTS">
+    - `talk.catalog` returns the read-only Talk provider catalog for speech, streaming transcription, and realtime voice. It includes provider ids, labels, configured state, exposed model/voice ids, canonical modes, transports, brain strategies, and realtime audio/capability flags without returning provider secrets or mutating global config.
+    - `talk.config` returns the effective Talk config payload; `includeSecrets` requires `operator.talk.secrets` (or `operator.admin`).
+    - `talk.session.create` creates a Gateway-owned Talk session for `realtime/gateway-relay`, `transcription/gateway-relay`, or `stt-tts/managed-room`. For `stt-tts/managed-room`, `operator.write` callers that pass `sessionKey` must also pass `spawnedBy` for scoped session-key visibility; unscoped `sessionKey` creation and `brain: "direct-tools"` require `operator.admin`.
+    - `talk.session.join` validates a managed-room session token, emits `session.ready` or `session.replaced` events as needed, and returns room/session metadata plus recent Talk events without the plaintext token or stored token hash.
+    - `talk.session.appendAudio` appends base64 PCM input audio to Gateway-owned realtime relay and transcription sessions.
+    - `talk.session.startTurn`, `talk.session.endTurn`, and `talk.session.cancelTurn` drive managed-room turn lifecycle with stale-turn rejection before state is cleared.
+    - `talk.session.cancelOutput` stops assistant audio output, primarily for VAD-gated barge-in in Gateway relay sessions.
+    - `talk.session.submitToolResult` completes a provider tool call emitted by a Gateway-owned realtime relay session. Pass `options: { willContinue: true }` for interim tool output when a final result will follow, or `options: { suppressResponse: true }` when the tool result should satisfy the provider call without starting another realtime assistant response.
+    - `talk.session.steer` sends active-run voice control into a Gateway-owned agent-backed Talk session. It accepts `{ sessionId, text, mode? }`, where `mode` is `status`, `steer`, `cancel`, or `followup`; omitted mode is classified from the spoken text.
+    - `talk.session.close` closes a Gateway-owned relay, transcription, or managed-room session and emits terminal Talk events.
+    - `talk.mode` sets/broadcasts the current Talk mode state for WebChat/Control UI clients.
+    - `talk.client.create` creates a client-owned realtime provider session using `webrtc` or `provider-websocket` while the Gateway owns config, credentials, instructions, and tool policy.
+    - `talk.client.toolCall` lets client-owned realtime transports forward provider tool calls to Gateway policy. The first supported tool is `openclaw_agent_consult`; clients receive a run id and wait for normal chat lifecycle events before submitting the provider-specific tool result.
+    - `talk.client.steer` sends active-run voice control for client-owned realtime transports. The Gateway resolves the active embedded run from `sessionKey` and returns a structured accepted/rejected result instead of silently dropping steering.
+    - `talk.event` is the single Talk event channel for realtime, transcription, STT/TTS, managed-room, telephony, and meeting adapters.
+    - `talk.speak` synthesizes speech through the active Talk speech provider.
+    - `tts.status` returns TTS enabled state, active provider, fallback providers, and provider config state.
+    - `tts.providers` returns the visible TTS provider inventory.
+    - `tts.enable` and `tts.disable` toggle TTS prefs state.
+    - `tts.setProvider` updates the preferred TTS provider.
+    - `tts.convert` runs one-shot text-to-speech conversion.
+
+  </Accordion>
+
+  <Accordion title="Secrets, config, update, and wizard">
+    - `secrets.reload` re-resolves active SecretRefs and swaps runtime secret state only on full success.
+    - `secrets.resolve` resolves command-target secret assignments for a specific command/target set.
+    - `config.get` returns the current config snapshot and hash.
+    - `config.set` writes a validated config payload.
+    - `config.patch` merges a partial config update.
+    - `config.apply` validates + replaces the full config payload.
+    - `config.schema` returns the live config schema payload used by Control UI and CLI tooling: schema, `uiHints`, version, and generation metadata, including plugin + channel schema metadata when the runtime can load it. The schema includes field `title` / `description` metadata derived from the same labels and help text used by the UI, including nested object, wildcard, array-item, and `anyOf` / `oneOf` / `allOf` composition branches when matching field documentation exists.
+    - `config.schema.lookup` returns a path-scoped lookup payload for one config path: normalized path, a shallow schema node, matched hint + `hintPath`, optional `reloadKind`, and immediate child summaries for UI/CLI drill-down. `reloadKind` is one of `restart`, `hot`, or `none` and mirrors the Gateway config reload planner for the requested path. Lookup schema nodes keep the user-facing docs and common validation fields (`title`, `description`, `type`, `enum`, `const`, `format`, `pattern`, numeric/string/array/object bounds, and flags like `additionalProperties`, `deprecated`, `readOnly`, `writeOnly`). Child summaries expose `key`, normalized `path`, `type`, `required`, `hasChildren`, optional `reloadKind`, plus the matched `hint` / `hintPath`.
+    - `update.run` runs the gateway update flow and schedules a restart only when the update itself succeeded; callers with a session can include `continuationMessage` so startup resumes one follow-up agent turn through the restart continuation queue. Package-manager updates from the control plane use a detached managed-service handoff instead of replacing the package tree inside the live Gateway. A started handoff returns `ok: true` with `result.reason: "managed-service-handoff-started"` and `handoff.status: "started"`; unavailable or failed handoffs return `ok: false` with `managed-service-handoff-unavailable` or `managed-service-handoff-failed`, plus `handoff.command` when a manual shell update is required. During a started handoff, the restart sentinel may briefly report `stats.reason: "restart-health-pending"`; the continuation is delayed until the CLI verifies the restarted Gateway and writes the final `ok` sentinel.
+    - `update.status` returns the latest cached update restart sentinel, including the post-restart running version when available.
+    - `wizard.start`, `wizard.next`, `wizard.status`, and `wizard.cancel` expose the onboarding wizard over WS RPC.
+
+  </Accordion>
+
+  <Accordion title="Agent and workspace helpers">
+    - `agents.list` returns configured agent entries, including effective model and runtime metadata.
+    - `agents.create`, `agents.update`, and `agents.delete` manage agent records and workspace wiring.
+    - `agents.files.list`, `agents.files.get`, and `agents.files.set` manage the bootstrap workspace files exposed for an agent.
+    - `tasks.list`, `tasks.get`, and `tasks.cancel` expose the Gateway task ledger to SDK and operator clients.
+    - `artifacts.list`, `artifacts.get`, and `artifacts.download` expose transcript-derived artifact summaries and downloads for an explicit `sessionKey`, `runId`, or `taskId` scope. Run and task queries resolve the owning session server-side and only return transcript media with matching provenance; unsafe or local URL sources return unsupported downloads instead of fetching server-side.
+    - `environments.list` and `environments.status` expose read-only Gateway-local and node environment discovery for SDK clients.
+    - `agent.identity.get` returns the effective assistant identity for an agent or session.
+    - `agent.wait` waits for a run to finish and returns the terminal snapshot when available.
+
+  </Accordion>
+
+  <Accordion title="Session control">
+    - `sessions.list` returns the current session index, including per-row `agentRuntime` metadata when an agent runtime backend is configured.
+    - `sessions.subscribe` and `sessions.unsubscribe` toggle session change event subscriptions for the current WS client.
+    - `sessions.messages.subscribe` and `sessions.messages.unsubscribe` toggle transcript/message event subscriptions for one session.
+    - `sessions.preview` returns bounded transcript previews for specific session keys.
+    - `sessions.describe` returns one Gateway session row for an exact session key.
+    - `sessions.resolve` resolves or canonicalizes a session target.
+    - `sessions.create` creates a new session entry.
+    - `sessions.send` sends a message into an existing session.
+    - `sessions.steer` is the interrupt-and-steer variant for an active session.
+    - `sessions.abort` aborts active work for a session. A caller may pass `key` plus optional `runId`, or pass `runId` alone for active runs the Gateway can resolve to a session.
+    - `sessions.patch` updates session metadata/overrides and reports the resolved canonical model plus effective `agentRuntime`.
+    - `sessions.reset`, `sessions.delete`, and `sessions.compact` perform session maintenance.
+    - `sessions.get` returns the full stored session row.
+    - Chat execution still uses `chat.history`, `chat.send`, `chat.abort`, and `chat.inject`. `chat.history` is display-normalized for UI clients: inline directive tags are stripped from visible text, plain-text tool-call XML payloads (including `<tool_call>...</tool_call>`, `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`, `<function_calls>...</function_calls>`, and truncated tool-call blocks) and leaked ASCII/full-width model control tokens are stripped, pure silent-token assistant rows such as exact `NO_REPLY` / `no_reply` are omitted, and oversized rows can be replaced with placeholders.
+
+  </Accordion>
+
+  <Accordion title="Device pairing and device tokens">
+    - `device.pair.list` returns pending and approved paired devices.
+    - `device.pair.approve`, `device.pair.reject`, and `device.pair.remove` manage device-pairing records.
+    - `device.token.rotate` rotates a paired device token within its approved role and caller scope bounds.
+    - `device.token.revoke` revokes a paired device token within its approved role and caller scope bounds.
+
+  </Accordion>
+
+  <Accordion title="Node pairing, invoke, and pending work">
+    - `node.pair.request`, `node.pair.list`, `node.pair.approve`, `node.pair.reject`, `node.pair.remove`, and `node.pair.verify` cover node pairing and bootstrap verification.
+    - `node.list` and `node.describe` return known/connected node state.
+    - `node.rename` updates a paired node label.
+    - `node.invoke` forwards a command to a connected node.
+    - `node.invoke.result` returns the result for an invoke request.
+    - `node.event` carries node-originated events back into the gateway.
+    - `node.pending.pull` and `node.pending.ack` are the connected-node queue APIs.
+    - `node.pending.enqueue` and `node.pending.drain` manage durable pending work for offline/disconnected nodes.
+
+  </Accordion>
+
+  <Accordion title="Approval families">
+    - `exec.approval.request`, `exec.approval.get`, `exec.approval.list`, and `exec.approval.resolve` cover one-shot exec approval requests plus pending approval lookup/replay.
+    - `exec.approval.waitDecision` waits on one pending exec approval and returns the final decision (or `null` on timeout).
+    - `exec.approvals.get` and `exec.approvals.set` manage gateway exec approval policy snapshots.
+    - `exec.approvals.node.get` and `exec.approvals.node.set` manage node-local exec approval policy via node relay commands.
+    - `plugin.approval.request`, `plugin.approval.list`, `plugin.approval.waitDecision`, and `plugin.approval.resolve` cover plugin-defined approval flows.
+
+  </Accordion>
+
+  <Accordion title="Automation, skills, and tools">
+    - Automation: `wake` schedules an immediate or next-heartbeat wake text injection; `cron.get`, `cron.list`, `cron.status`, `cron.add`, `cron.update`, `cron.remove`, `cron.run`, `cron.runs` manage scheduled work.
+    - `cron.run` remains an enqueue-style RPC for manual runs. Clients that need completion semantics should read the returned `runId` and poll `cron.runs`.
+    - `cron.runs` accepts an optional non-empty `runId` filter so clients can follow one queued manual run without racing against other history entries for the same job.
+    - Skills and tools: `commands.list`, `skills.*`, `tools.catalog`, `tools.effective`, `tools.invoke`.
+
+  </Accordion>
+</AccordionGroup>
+
+### Common event families
+
+- `chat`: UI chat updates such as `chat.inject` and other transcript-only chat
+  events. In protocol v4, delta payloads carry `deltaText`; `message` remains
+  the cumulative assistant snapshot. Non-prefix replacements set `replace=true`
+  and use `deltaText` as the replacement text.
+- `session.message`, `session.operation`, and `session.tool`: transcript,
+  in-flight session operation, and event-stream updates for a subscribed
+  session.
+- `sessions.changed`: session index or metadata changed.
+- `presence`: system presence snapshot updates.
+- `tick`: periodic keepalive / liveness event.
+- `health`: gateway health snapshot update.
+- `heartbeat`: heartbeat event stream update.
+- `cron`: cron run/job change event.
+- `shutdown`: gateway shutdown notification.
+- `node.pair.requested` / `node.pair.resolved`: node pairing lifecycle.
+- `node.invoke.request`: node invoke request broadcast.
+- `device.pair.requested` / `device.pair.resolved`: paired-device lifecycle.
+- `voicewake.changed`: wake-word trigger config changed.
+- `exec.approval.requested` / `exec.approval.resolved`: exec approval
+  lifecycle.
+- `plugin.approval.requested` / `plugin.approval.resolved`: plugin approval
+  lifecycle.
 
 ### Node helper methods
 
 - Nodes may call `skills.bins` to fetch the current list of skill executables
   for auto-allow checks.
 
+### Task ledger RPCs
+
+Operator clients may inspect and cancel Gateway background task records through
+the task ledger RPCs. These methods return sanitized task summaries, not raw
+runtime state.
+
+- `tasks.list` requires `operator.read`.
+  - Params: optional `status` (`"queued"`, `"running"`, `"completed"`,
+    `"failed"`, `"cancelled"`, or `"timed_out"`) or an array of those statuses,
+    optional `agentId`, optional `sessionKey`, optional `limit` from `1` to
+    `500`, and optional string `cursor`.
+  - Result: `{ "tasks": TaskSummary[], "nextCursor"?: string }`.
+- `tasks.get` requires `operator.read`.
+  - Params: `{ "taskId": string }`.
+  - Result: `{ "task": TaskSummary }`.
+  - Missing task ids return the Gateway not-found error shape.
+- `tasks.cancel` requires `operator.write`.
+  - Params: `{ "taskId": string, "reason"?: string }`.
+  - Result:
+    `{ "found": boolean, "cancelled": boolean, "reason"?: string, "task"?: TaskSummary }`.
+  - `found` reports whether the ledger had a matching task. `cancelled`
+    reports whether the runtime accepted or recorded cancellation.
+
+`TaskSummary` includes `id`, `status`, and optional metadata such as `kind`,
+`runtime`, `title`, `agentId`, `sessionKey`, `childSessionKey`, `ownerKey`,
+`runId`, `taskId`, `flowId`, `parentTaskId`, `sourceId`, timestamps, progress,
+terminal summary, and sanitized error text.
+
 ### Operator helper methods
 
+- Operators may call `commands.list` (`operator.read`) to fetch the runtime
+  command inventory for an agent.
+  - `agentId` is optional; omit it to read the default agent workspace.
+  - `scope` controls which surface the primary `name` targets:
+    - `text` returns the primary text command token without the leading `/`
+    - `native` and the default `both` path return provider-aware native names
+      when available
+  - `textAliases` carries exact slash aliases such as `/model` and `/m`.
+  - `nativeName` carries the provider-aware native command name when one exists.
+  - `provider` is optional and only affects native naming plus native plugin
+    command availability.
+  - `includeArgs=false` omits serialized argument metadata from the response.
 - Operators may call `tools.catalog` (`operator.read`) to fetch the runtime tool catalog for an
   agent. The response includes grouped tools and provenance metadata:
   - `source`: `core` or `plugin`
   - `pluginId`: plugin owner when `source="plugin"`
   - `optional`: whether a plugin tool is optional
+- Operators may call `tools.effective` (`operator.read`) to fetch the runtime-effective tool
+  inventory for a session.
+  - `sessionKey` is required.
+  - The gateway derives trusted runtime context from the session server-side instead of accepting
+    caller-supplied auth or delivery context.
+  - The response is a session-scoped server-derived projection of the active inventory,
+    including core, plugin, channel, and already-discovered MCP server tools.
+  - `tools.effective` is read-only for MCP: it may project a warm session MCP catalog through the
+    final tool policy, but it does not create MCP runtimes, connect transports, or issue
+    `tools/list`. If no matching warm catalog exists, the response may include a notice such as
+    `mcp-not-yet-connected`, `mcp-not-yet-listed`, or `mcp-stale-catalog`.
+  - Effective tool entries use `source="core"`, `source="plugin"`, `source="channel"`, or
+    `source="mcp"`.
+- Operators may call `tools.invoke` (`operator.write`) to invoke one available tool through the
+  same gateway policy path as `/tools/invoke`.
+  - `name` is required. `args`, `sessionKey`, `agentId`, `confirm`, and
+    `idempotencyKey` are optional.
+  - If both `sessionKey` and `agentId` are present, the resolved session agent must match
+    `agentId`.
+  - The response is an SDK-facing envelope with `ok`, `toolName`, optional `output`, and typed
+    `error` fields. Approval or policy refusals return `ok:false` in the payload rather than
+    bypassing the gateway tool policy pipeline.
+- Operators may call `skills.status` (`operator.read`) to fetch the visible
+  skill inventory for an agent.
+  - `agentId` is optional; omit it to read the default agent workspace.
+  - The response includes eligibility, missing requirements, config checks, and
+    sanitized install options without exposing raw secret values.
+- Operators may call `skills.search` and `skills.detail` (`operator.read`) for
+  ClawHub discovery metadata.
+- Operators may call `skills.upload.begin`, `skills.upload.chunk`, and
+  `skills.upload.commit` (`operator.admin`) to stage a private skill archive
+  before installing it. This is a separate admin upload path for trusted clients,
+  not the normal ClawHub skill install flow, and is disabled by default unless
+  `skills.install.allowUploadedArchives` is enabled.
+  - `skills.upload.begin({ kind: "skill-archive", slug, sizeBytes, sha256?, force?, idempotencyKey? })`
+    creates an upload bound to that slug and force value.
+  - `skills.upload.chunk({ uploadId, offset, dataBase64 })` appends bytes at
+    the exact decoded offset.
+  - `skills.upload.commit({ uploadId, sha256? })` verifies the final size and
+    SHA-256. Commit only finalizes the upload; it does not install the skill.
+  - Uploaded skill archives are zip archives containing a `SKILL.md` root. The
+    archive's internal directory name never selects the install target.
+- Operators may call `skills.install` (`operator.admin`) in three modes:
+  - ClawHub mode: `{ source: "clawhub", slug, version?, force? }` installs a
+    skill folder into the default agent workspace `skills/` directory.
+  - Upload mode: `{ source: "upload", uploadId, slug, force?, sha256?, timeoutMs? }`
+    installs a committed upload into the default agent workspace `skills/<slug>`
+    directory. The slug and force value must match the original
+    `skills.upload.begin` request. This mode is rejected unless
+    `skills.install.allowUploadedArchives` is enabled. The setting does not
+    affect ClawHub installs.
+  - Gateway installer mode: `{ name, installId, dangerouslyForceUnsafeInstall?, timeoutMs? }`
+    runs a declared `metadata.openclaw.install` action on the gateway host.
+- Operators may call `skills.update` (`operator.admin`) in two modes:
+  - ClawHub mode updates one tracked slug or all tracked ClawHub installs in
+    the default agent workspace.
+  - Config mode patches `skills.entries.<skillKey>` values such as `enabled`,
+    `apiKey`, and `env`.
+
+### `models.list` views
+
+`models.list` accepts an optional `view` parameter:
+
+- Omitted or `"default"`: current runtime behavior. If `agents.defaults.models` is configured, the response is the allowed catalog, including dynamically discovered models for `provider/*` entries. Otherwise the response is the full Gateway catalog.
+- `"configured"`: picker-sized behavior. If `agents.defaults.models` is configured, it still wins, including provider-scoped discovery for `provider/*` entries. Without an allowlist, the response uses explicit `models.providers.*.models` entries, falling back to the full catalog only when no configured model rows exist.
+- `"all"`: full Gateway catalog, bypassing `agents.defaults.models`. Use this for diagnostics and discovery UIs, not normal model pickers.
 
 ## Exec approvals
 
 - When an exec request needs approval, the gateway broadcasts `exec.approval.requested`.
 - Operator clients resolve by calling `exec.approval.resolve` (requires `operator.approvals` scope).
 - For `host=node`, `exec.approval.request` must include `systemRunPlan` (canonical `argv`/`cwd`/`rawCommand`/session metadata). Requests missing `systemRunPlan` are rejected.
+- After approval, forwarded `node.invoke system.run` calls reuse that canonical
+  `systemRunPlan` as the authoritative command/cwd/session context.
+- If a caller mutates `command`, `rawCommand`, `cwd`, `agentId`, or
+  `sessionKey` between prepare and the final approved `system.run` forward, the
+  gateway rejects the run instead of trusting the mutated payload.
+
+## Agent delivery fallback
+
+- `agent` requests can include `deliver=true` to request outbound delivery.
+- `bestEffortDeliver=false` keeps strict behavior: unresolved or internal-only delivery targets return `INVALID_REQUEST`.
+- `bestEffortDeliver=true` allows fallback to session-only execution when no external deliverable route can be resolved (for example internal/webchat sessions or ambiguous multi-channel configs).
+- Final `agent` results may include `result.deliveryStatus` when delivery was
+  requested, using the same `sent`, `suppressed`, `partial_failed`, and `failed`
+  statuses documented for [`openclaw agent --json --deliver`](/cli/agent#json-delivery-status).
 
 ## Versioning
 
-- `PROTOCOL_VERSION` lives in `src/gateway/protocol/schema.ts`.
-- Clients send `minProtocol` + `maxProtocol`; the server rejects mismatches.
+- `PROTOCOL_VERSION` lives in `packages/gateway-protocol/src/version.ts`.
+- Clients send `minProtocol` + `maxProtocol`; the server rejects ranges that
+  do not include its current protocol. Current clients and servers require
+  protocol v4.
 - Schemas + models are generated from TypeBox definitions:
   - `pnpm protocol:gen`
   - `pnpm protocol:gen:swift`
   - `pnpm protocol:check`
 
+### Client constants
+
+The reference client in `src/gateway/client.ts` uses these defaults. Values are
+stable across protocol v4 and are the expected baseline for third-party clients.
+
+| Constant                                  | Default                                               | Source                                                                                     |
+| ----------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `PROTOCOL_VERSION`                        | `4`                                                   | `packages/gateway-protocol/src/version.ts`                                                 |
+| `MIN_CLIENT_PROTOCOL_VERSION`             | `4`                                                   | `packages/gateway-protocol/src/version.ts`                                                 |
+| Request timeout (per RPC)                 | `30_000` ms                                           | `src/gateway/client.ts` (`requestTimeoutMs`)                                               |
+| Preauth / connect-challenge timeout       | `15_000` ms                                           | `src/gateway/handshake-timeouts.ts` (config/env can raise the paired server/client budget) |
+| Initial reconnect backoff                 | `1_000` ms                                            | `src/gateway/client.ts` (`backoffMs`)                                                      |
+| Max reconnect backoff                     | `30_000` ms                                           | `src/gateway/client.ts` (`scheduleReconnect`)                                              |
+| Fast-retry clamp after device-token close | `250` ms                                              | `src/gateway/client.ts`                                                                    |
+| Force-stop grace before `terminate()`     | `250` ms                                              | `FORCE_STOP_TERMINATE_GRACE_MS`                                                            |
+| `stopAndWait()` default timeout           | `1_000` ms                                            | `STOP_AND_WAIT_TIMEOUT_MS`                                                                 |
+| Default tick interval (pre `hello-ok`)    | `30_000` ms                                           | `src/gateway/client.ts`                                                                    |
+| Tick-timeout close                        | code `4000` when silence exceeds `tickIntervalMs * 2` | `src/gateway/client.ts`                                                                    |
+| `MAX_PAYLOAD_BYTES`                       | `25 * 1024 * 1024` (25 MB)                            | `src/gateway/server-constants.ts`                                                          |
+
+The server advertises the effective `policy.tickIntervalMs`, `policy.maxPayload`,
+and `policy.maxBufferedBytes` in `hello-ok`; clients should honor those values
+rather than the pre-handshake defaults.
+
 ## Auth
 
-- If `OPENCLAW_GATEWAY_TOKEN` (or `--token`) is set, `connect.params.auth.token`
-  must match or the socket is closed.
+- Shared-secret gateway auth uses `connect.params.auth.token` or
+  `connect.params.auth.password`, depending on the configured auth mode.
+- Identity-bearing modes such as Tailscale Serve
+  (`gateway.auth.allowTailscale: true`) or non-loopback
+  `gateway.auth.mode: "trusted-proxy"` satisfy the connect auth check from
+  request headers instead of `connect.params.auth.*`.
+- Private-ingress `gateway.auth.mode: "none"` skips shared-secret connect auth
+  entirely; do not expose that mode on public/untrusted ingress.
 - After pairing, the Gateway issues a **device token** scoped to the connection
   role + scopes. It is returned in `hello-ok.auth.deviceToken` and should be
   persisted by the client for future connects.
+- Clients should persist the primary `hello-ok.auth.deviceToken` after any
+  successful connect.
+- Reconnecting with that **stored** device token should also reuse the stored
+  approved scope set for that token. This preserves read/probe/status access
+  that was already granted and avoids silently collapsing reconnects to a
+  narrower implicit admin-only scope.
+- Client-side connect auth assembly (`selectConnectAuth` in
+  `src/gateway/client.ts`):
+  - `auth.password` is orthogonal and is always forwarded when set.
+  - `auth.token` is populated in priority order: explicit shared token first,
+    then an explicit `deviceToken`, then a stored per-device token (keyed by
+    `deviceId` + `role`).
+  - `auth.bootstrapToken` is sent only when none of the above resolved an
+    `auth.token`. A shared token or any resolved device token suppresses it.
+  - Auto-promotion of a stored device token on the one-shot
+    `AUTH_TOKEN_MISMATCH` retry is gated to **trusted endpoints only** —
+    loopback, or `wss://` with a pinned `tlsFingerprint`. Public `wss://`
+    without pinning does not qualify.
+- Built-in setup-code bootstrap returns the primary node
+  `hello-ok.auth.deviceToken` plus a bounded operator token in
+  `hello-ok.auth.deviceTokens` for trusted mobile handoff. The operator token
+  includes `operator.talk.secrets` for native Talk configuration reads and
+  excludes `operator.admin` and `operator.pairing`.
+- While a non-baseline setup-code bootstrap is waiting for approval, `PAIRING_REQUIRED`
+  details include `recommendedNextStep: "wait_then_retry"`, `retryable: true`,
+  and `pauseReconnect: false`. Clients should keep reconnecting with the same
+  bootstrap token until the request is approved or the token becomes invalid.
+- Persist `hello-ok.auth.deviceTokens` only when the connect used bootstrap auth
+  on a trusted transport such as `wss://` or loopback/local pairing.
+- If a client supplies an **explicit** `deviceToken` or explicit `scopes`, that
+  caller-requested scope set remains authoritative; cached scopes are only
+  reused when the client is reusing the stored per-device token.
 - Device tokens can be rotated/revoked via `device.token.rotate` and
-  `device.token.revoke` (requires `operator.pairing` scope).
+  `device.token.revoke` (requires `operator.pairing` scope). Rotating or
+  revoking a node or other non-operator role also requires `operator.admin`.
+- `device.token.rotate` returns rotation metadata. It echoes the replacement
+  bearer token only for same-device calls that are already authenticated with
+  that device token, so token-only clients can persist their replacement before
+  reconnecting. Shared/admin rotations do not echo the bearer token.
+- Token issuance, rotation, and revocation stay bounded to the approved role set
+  recorded in that device's pairing entry; token mutation cannot expand or
+  target a device role that pairing approval never granted.
+- For paired-device token sessions, device management is self-scoped unless the
+  caller also has `operator.admin`: non-admin callers can manage only the
+  operator token for their **own** device entry. Node and other non-operator
+  token management is admin-only, even for the caller's own device.
+- `device.token.rotate` and `device.token.revoke` also check the target operator
+  token scope set against the caller's current session scopes. Non-admin callers
+  cannot rotate or revoke a broader operator token than they already hold.
 - Auth failures include `error.details.code` plus recovery hints:
   - `error.details.canRetryWithDeviceToken` (boolean)
   - `error.details.recommendedNextStep` (`retry_with_device_token`, `update_auth_configuration`, `update_auth_credentials`, `wait_then_retry`, `review_auth_configuration`)
 - Client behavior for `AUTH_TOKEN_MISMATCH`:
   - Trusted clients may attempt one bounded retry with a cached per-device token.
   - If that retry fails, clients should stop automatic reconnect loops and surface operator action guidance.
+- `AUTH_SCOPE_MISMATCH` means the device token was recognized but does not cover
+  the requested role/scopes. Clients should not present this as a bad token;
+  prompt the operator to re-pair or approve the narrower/broader scope contract.
 
 ## Device identity + pairing
 
@@ -220,12 +760,26 @@ The Gateway treats these as **claims** and enforces server-side allowlists.
 - Gateways issue tokens per device + role.
 - Pairing approvals are required for new device IDs unless local auto-approval
   is enabled.
-- **Local** connects include loopback and the gateway host’s own tailnet address
-  (so same‑host tailnet binds can still auto‑approve).
-- All WS clients must include `device` identity during `connect` (operator + node).
-  Control UI can omit it only in these modes:
+- Pairing auto-approval is centered on direct local loopback connects.
+- OpenClaw also has a narrow backend/container-local self-connect path for
+  trusted shared-secret helper flows.
+- Same-host tailnet or LAN connects are still treated as remote for pairing and
+  require approval.
+- WS clients normally include `device` identity during `connect` (operator +
+  node). The only device-less operator exceptions are explicit trust paths:
   - `gateway.controlUi.allowInsecureAuth=true` for localhost-only insecure HTTP compatibility.
+  - successful `gateway.auth.mode: "trusted-proxy"` operator Control UI auth.
   - `gateway.controlUi.dangerouslyDisableDeviceAuth=true` (break-glass, severe security downgrade).
+  - direct-loopback `gateway-client` backend RPCs authenticated with the shared
+    gateway token/password.
+- Omitting device identity has scope consequences. When a Control UI connection
+  lacks device identity, `shouldClearUnboundScopesForMissingDeviceIdentity`
+  clears self-declared scopes to an empty set for token, password, and
+  trusted-proxy auth. The connection is allowed on explicit trust paths, but
+  scope-gated methods fail. The exception is local Control UI token/password
+  sessions with `allowInsecureAuth`, which preserve scopes. For other cases,
+  set `gateway.controlUi.dangerouslyDisableDeviceAuth=true` only as a
+  break-glass scope-preservation path.
 - All connections must sign the server-provided `connect.challenge` nonce.
 
 ### Device auth migration diagnostics
@@ -264,4 +818,9 @@ Migration target:
 
 This protocol exposes the **full gateway API** (status, channels, models, chat,
 agent, sessions, nodes, approvals, etc.). The exact surface is defined by the
-TypeBox schemas in `src/gateway/protocol/schema.ts`.
+TypeBox schemas in `packages/gateway-protocol/src/schema.ts`.
+
+## Related
+
+- [Bridge protocol](/gateway/bridge-protocol)
+- [Gateway runbook](/gateway)

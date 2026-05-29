@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { parseBooleanValue } from "./boolean.js";
-import { isReasoningTagProvider } from "./provider-utils.js";
+import { asBoolean, parseBooleanValue } from "./boolean.js";
 import { splitShellArgs } from "./shell-argv.js";
+
+describe("asBoolean", () => {
+  it("accepts booleans only", () => {
+    expect(asBoolean(true)).toBe(true);
+    expect(asBoolean(false)).toBe(false);
+    expect(asBoolean("true")).toBeUndefined();
+    expect(asBoolean(1)).toBeUndefined();
+  });
+});
 
 describe("parseBooleanValue", () => {
   it("handles boolean inputs", () => {
@@ -40,55 +48,6 @@ describe("parseBooleanValue", () => {
     expect(parseBooleanValue("maybe")).toBeUndefined();
     expect(parseBooleanValue(1)).toBeUndefined();
   });
-});
-
-describe("isReasoningTagProvider", () => {
-  const cases: Array<{
-    name: string;
-    value: string | null | undefined;
-    expected: boolean;
-  }> = [
-    {
-      name: "returns false for ollama - native reasoning field, no tags needed (#2279)",
-      value: "ollama",
-      expected: false,
-    },
-    {
-      name: "returns false for case-insensitive ollama",
-      value: "Ollama",
-      expected: false,
-    },
-    {
-      name: "returns true for google (gemini-api-key auth provider)",
-      value: "google",
-      expected: true,
-    },
-    {
-      name: "returns true for Google (case-insensitive)",
-      value: "Google",
-      expected: true,
-    },
-    { name: "returns true for google-gemini-cli", value: "google-gemini-cli", expected: true },
-    {
-      name: "returns true for google-generative-ai",
-      value: "google-generative-ai",
-      expected: true,
-    },
-    { name: "returns true for minimax", value: "minimax", expected: true },
-    { name: "returns true for minimax-cn", value: "minimax-cn", expected: true },
-    { name: "returns false for null", value: null, expected: false },
-    { name: "returns false for undefined", value: undefined, expected: false },
-    { name: "returns false for empty", value: "", expected: false },
-    { name: "returns false for anthropic", value: "anthropic", expected: false },
-    { name: "returns false for openai", value: "openai", expected: false },
-    { name: "returns false for openrouter", value: "openrouter", expected: false },
-  ];
-
-  for (const testCase of cases) {
-    it(testCase.name, () => {
-      expect(isReasoningTagProvider(testCase.value)).toBe(testCase.expected);
-    });
-  }
 });
 
 describe("splitShellArgs", () => {

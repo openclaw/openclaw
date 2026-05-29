@@ -1,99 +1,93 @@
-import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { getMatrixRuntime } from "../../runtime.js";
+import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { CoreConfig } from "../../types.js";
-import { getActiveMatrixClient, getAnyActiveMatrixClient } from "../active-client.js";
-import { createPreparedMatrixClient } from "../client-bootstrap.js";
-import { isBunRuntime, resolveMatrixAuth, resolveSharedMatrixClient } from "../client.js";
+import { resolveMatrixAccountConfig } from "../account-config.js";
+import type { MatrixClient } from "../sdk.js";
 
-const getCore = () => getMatrixRuntime();
+type MatrixSendClientRuntime = Pick<
+  typeof import("../client-bootstrap.js"),
+  "withResolvedRuntimeMatrixClient"
+>;
 
-export function ensureNodeRuntime() {
-  if (isBunRuntime()) {
-    throw new Error("Matrix support requires Node (bun runtime not supported)");
-  }
+let matrixSendClientRuntimePromise: Promise<MatrixSendClientRuntime> | null = null;
+
+async function loadMatrixSendClientRuntime(): Promise<MatrixSendClientRuntime> {
+  matrixSendClientRuntimePromise ??= import("../client-bootstrap.js");
+  return await matrixSendClientRuntimePromise;
 }
 
-/** Look up account config with case-insensitive key fallback. */
-function findAccountConfig(
-  accounts: Record<string, unknown> | undefined,
-  accountId: string,
-): Record<string, unknown> | undefined {
-  if (!accounts) return undefined;
-  const normalized = normalizeAccountId(accountId);
-  // Direct lookup first
-  if (accounts[normalized]) return accounts[normalized] as Record<string, unknown>;
-  // Case-insensitive fallback
-  for (const key of Object.keys(accounts)) {
-    if (normalizeAccountId(key) === normalized) {
-      return accounts[key] as Record<string, unknown>;
-    }
+export function resolveMediaMaxBytes(
+  accountId?: string | null,
+  cfg?: CoreConfig,
+): number | undefined {
+  if (!cfg) {
+    throw new Error(
+      "Matrix media limits requires a resolved runtime config. Load and resolve config at the command or gateway boundary, then pass cfg through the runtime path.",
+    );
+  }
+  const resolvedCfg = requireRuntimeConfig(cfg, "Matrix media limits") as CoreConfig;
+  const matrixCfg = resolveMatrixAccountConfig({ cfg: resolvedCfg, accountId });
+  const mediaMaxMb = typeof matrixCfg.mediaMaxMb === "number" ? matrixCfg.mediaMaxMb : undefined;
+  if (typeof mediaMaxMb === "number") {
+    return mediaMaxMb * 1024 * 1024;
   }
   return undefined;
 }
 
-export function resolveMediaMaxBytes(accountId?: string, cfg?: CoreConfig): number | undefined {
-  const resolvedCfg = cfg ?? (getCore().config.loadConfig() as CoreConfig);
-  // Check account-specific config first (case-insensitive key matching)
-  const accountConfig = findAccountConfig(
-    resolvedCfg.channels?.matrix?.accounts as Record<string, unknown> | undefined,
-    accountId ?? "",
+export async function withResolvedMatrixSendClient<T>(
+  opts: {
+    client?: MatrixClient;
+    cfg?: CoreConfig;
+    timeoutMs?: number;
+    accountId?: string | null;
+  },
+  run: (client: MatrixClient) => Promise<T>,
+): Promise<T> {
+  return await withResolvedMatrixClient(
+    {
+      ...opts,
+      // One-off outbound sends still need a started client so room encryption
+      // state and live crypto sessions are available before sendMessage/sendEvent.
+      readiness: "started",
+    },
+    run,
+    // Started one-off send clients should flush sync/crypto state before CLI
+    // shutdown paths can tear down the process.
+    "persist",
   );
-  if (typeof accountConfig?.mediaMaxMb === "number") {
-    return (accountConfig.mediaMaxMb as number) * 1024 * 1024;
-  }
-  // Fall back to top-level config
-  if (typeof resolvedCfg.channels?.matrix?.mediaMaxMb === "number") {
-    return resolvedCfg.channels.matrix.mediaMaxMb * 1024 * 1024;
-  }
-  return undefined;
 }
 
-export async function resolveMatrixClient(opts: {
-  client?: MatrixClient;
-  timeoutMs?: number;
-  accountId?: string;
-  cfg?: CoreConfig;
-}): Promise<{ client: MatrixClient; stopOnDone: boolean }> {
-  ensureNodeRuntime();
+export async function withResolvedMatrixControlClient<T>(
+  opts: {
+    client?: MatrixClient;
+    cfg?: CoreConfig;
+    timeoutMs?: number;
+    accountId?: string | null;
+  },
+  run: (client: MatrixClient) => Promise<T>,
+): Promise<T> {
+  return await withResolvedMatrixClient(
+    {
+      ...opts,
+      readiness: "none",
+    },
+    run,
+  );
+}
+
+async function withResolvedMatrixClient<T>(
+  opts: {
+    client?: MatrixClient;
+    cfg?: CoreConfig;
+    timeoutMs?: number;
+    accountId?: string | null;
+    readiness: "started" | "none";
+  },
+  run: (client: MatrixClient) => Promise<T>,
+  shutdownBehavior?: "persist",
+): Promise<T> {
   if (opts.client) {
-    return { client: opts.client, stopOnDone: false };
+    return await run(opts.client);
   }
-  const accountId =
-    typeof opts.accountId === "string" && opts.accountId.trim().length > 0
-      ? normalizeAccountId(opts.accountId)
-      : undefined;
-  // Try to get the client for the specific account
-  const active = getActiveMatrixClient(accountId);
-  if (active) {
-    return { client: active, stopOnDone: false };
-  }
-  // When no account is specified, try the default account first; only fall back to
-  // any active client as a last resort (prevents sending from an arbitrary account).
-  if (!accountId) {
-    const defaultClient = getActiveMatrixClient(DEFAULT_ACCOUNT_ID);
-    if (defaultClient) {
-      return { client: defaultClient, stopOnDone: false };
-    }
-    const anyActive = getAnyActiveMatrixClient();
-    if (anyActive) {
-      return { client: anyActive, stopOnDone: false };
-    }
-  }
-  const shouldShareClient = Boolean(process.env.OPENCLAW_GATEWAY_PORT);
-  if (shouldShareClient) {
-    const client = await resolveSharedMatrixClient({
-      timeoutMs: opts.timeoutMs,
-      accountId,
-      cfg: opts.cfg,
-    });
-    return { client, stopOnDone: false };
-  }
-  const auth = await resolveMatrixAuth({ accountId, cfg: opts.cfg });
-  const client = await createPreparedMatrixClient({
-    auth,
-    timeoutMs: opts.timeoutMs,
-    accountId,
-  });
-  return { client, stopOnDone: true };
+  const { withResolvedRuntimeMatrixClient } = await loadMatrixSendClientRuntime();
+  return await withResolvedRuntimeMatrixClient(opts, run, shutdownBehavior);
 }

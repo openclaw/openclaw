@@ -8,7 +8,15 @@ import {
 } from "../nodes-screen.js";
 import { parseDurationMs } from "../parse-duration.js";
 import { runNodesCommand } from "./cli-utils.js";
-import { buildNodeInvokeParams, callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
+import {
+  buildNodeInvokeParams,
+  callGatewayCli,
+  nodesCallOpts,
+  parseOptionalNodeFiniteNumber,
+  parseOptionalNodeNonNegativeInteger,
+  parseOptionalNodePositiveInteger,
+  resolveNodeId,
+} from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
 
 export function registerNodesScreenCommands(nodes: Command) {
@@ -29,13 +37,16 @@ export function registerNodesScreenCommands(nodes: Command) {
       .option("--invoke-timeout <ms>", "Node invoke timeout in ms (default 120000)", "120000")
       .action(async (opts: NodesRpcOpts & { out?: string }) => {
         await runNodesCommand("screen record", async () => {
-          const nodeId = await resolveNodeId(opts, String(opts.node ?? ""));
+          const nodeId = await resolveNodeId(opts, opts.node ?? "");
           const durationMs = parseDurationMs(opts.duration ?? "");
-          const screenIndex = Number.parseInt(String(opts.screen ?? "0"), 10);
-          const fps = Number.parseFloat(String(opts.fps ?? "10"));
-          const timeoutMs = opts.invokeTimeout
-            ? Number.parseInt(String(opts.invokeTimeout), 10)
-            : undefined;
+          const screenIndex = parseOptionalNodeNonNegativeInteger(opts.screen ?? "0", "--screen");
+          const fps = parseOptionalNodeFiniteNumber(opts.fps ?? "10", "--fps", {
+            minExclusive: 0,
+          });
+          const timeoutMs = parseOptionalNodePositiveInteger(
+            opts.invokeTimeout,
+            "--invoke-timeout",
+          );
 
           const invokeParams = buildNodeInvokeParams({
             nodeId,
@@ -57,21 +68,15 @@ export function registerNodesScreenCommands(nodes: Command) {
           const written = await writeScreenRecordToFile(filePath, parsed.base64);
 
           if (opts.json) {
-            defaultRuntime.log(
-              JSON.stringify(
-                {
-                  file: {
-                    path: written.path,
-                    durationMs: parsed.durationMs,
-                    fps: parsed.fps,
-                    screenIndex: parsed.screenIndex,
-                    hasAudio: parsed.hasAudio,
-                  },
-                },
-                null,
-                2,
-              ),
-            );
+            defaultRuntime.writeJson({
+              file: {
+                path: written.path,
+                durationMs: parsed.durationMs,
+                fps: parsed.fps,
+                screenIndex: parsed.screenIndex,
+                hasAudio: parsed.hasAudio,
+              },
+            });
             return;
           }
           defaultRuntime.log(`MEDIA:${shortenHomePath(written.path)}`);

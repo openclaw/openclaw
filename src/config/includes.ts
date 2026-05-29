@@ -12,15 +12,18 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import JSON5 from "json5";
-import { canUseBoundaryFileOpen, openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { canUseRootFileOpen, openRootFileSync } from "../infra/boundary-file-read.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { isPlainObject } from "../utils.js";
+import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
 
 export const INCLUDE_KEY = "$include";
 export const MAX_INCLUDE_DEPTH = 10;
 export const MAX_INCLUDE_FILE_BYTES = 2 * 1024 * 1024;
+
+/** Maximum length for $include path and resolved path (CWE-22 hardening). */
+export const MAX_INCLUDE_PATH_LENGTH = 4096;
 
 // ============================================================================
 // Types
@@ -32,12 +35,27 @@ export type IncludeResolver = {
   parseJson: (raw: string) => unknown;
 };
 
-export type IncludeFileReadParams = {
+type IncludeFileReadParams = {
   includePath: string;
   resolvedPath: string;
   rootRealDir: string;
   ioFs?: typeof fs;
   maxBytes?: number;
+};
+
+type ResolveConfigIncludesOptions = {
+  /**
+   * Additional directories outside the config directory that `$include` paths
+   * may resolve into. Typically populated from `OPENCLAW_INCLUDE_ROOTS`.
+   * Each entry must be an absolute path; symlinks are resolved before the
+   * containment check, consistent with the config-directory boundary check.
+   */
+  allowedRoots?: ReadonlyArray<string>;
+};
+
+type IncludeRoot = {
+  rootDir: string;
+  rootRealDir: string;
 };
 
 // ============================================================================
@@ -48,7 +66,7 @@ export class ConfigIncludeError extends Error {
   constructor(
     message: string,
     public readonly includePath: string,
-    public readonly cause?: Error,
+    public override readonly cause?: Error,
   ) {
     super(message);
     this.name = "ConfigIncludeError";
@@ -91,17 +109,26 @@ export function deepMerge(target: unknown, source: unknown): unknown {
 class IncludeProcessor {
   private visited = new Set<string>();
   private depth = 0;
-  private readonly rootDir: string;
-  private readonly rootRealDir: string;
+  private readonly configRoot: IncludeRoot;
+  private readonly allowedRoots: ReadonlyArray<IncludeRoot>;
 
   constructor(
     private basePath: string,
     private resolver: IncludeResolver,
     rootDir?: string,
+    allowedRoots?: ReadonlyArray<IncludeRoot>,
   ) {
     this.visited.add(path.normalize(basePath));
-    this.rootDir = path.normalize(rootDir ?? path.dirname(basePath));
-    this.rootRealDir = path.normalize(safeRealpath(this.rootDir));
+    const configRootDir = path.normalize(rootDir ?? path.dirname(basePath));
+    this.configRoot = {
+      rootDir: configRootDir,
+      rootRealDir: path.normalize(safeRealpath(configRootDir)),
+    };
+    this.allowedRoots = allowedRoots ?? [];
+  }
+
+  private get rootDir(): string {
+    return this.configRoot.rootDir;
   }
 
   process(obj: unknown): unknown {
@@ -176,49 +203,96 @@ class IncludeProcessor {
   }
 
   private loadFile(includePath: string): unknown {
-    const resolvedPath = this.resolvePath(includePath);
+    const { resolvedPath, root } = this.resolvePath(includePath);
 
     this.checkCircular(resolvedPath);
     this.checkDepth(includePath);
 
-    const raw = this.readFile(includePath, resolvedPath);
+    const raw = this.readFile(includePath, resolvedPath, root);
     const parsed = this.parseFile(includePath, resolvedPath, raw);
 
     return this.processNested(resolvedPath, parsed);
   }
 
-  private resolvePath(includePath: string): string {
+  private resolvePath(includePath: string): { resolvedPath: string; root: IncludeRoot } {
+    if (includePath.includes("\0")) {
+      throw new ConfigIncludeError("Include path must not contain null bytes", includePath);
+    }
+    if (includePath.length >= MAX_INCLUDE_PATH_LENGTH) {
+      throw new ConfigIncludeError(
+        `Include path exceeds maximum length (${MAX_INCLUDE_PATH_LENGTH} characters)`,
+        includePath,
+      );
+    }
+
     const configDir = path.dirname(this.basePath);
     const resolved = path.isAbsolute(includePath)
       ? includePath
       : path.resolve(configDir, includePath);
     const normalized = path.normalize(resolved);
 
-    // SECURITY: Reject paths outside top-level config directory (CWE-22: Path Traversal)
-    if (!isPathInside(this.rootDir, normalized)) {
+    if (normalized.length >= MAX_INCLUDE_PATH_LENGTH) {
+      throw new ConfigIncludeError(
+        `Resolved include path exceeds maximum length (${MAX_INCLUDE_PATH_LENGTH} characters)`,
+        includePath,
+      );
+    }
+
+    // SECURITY: Reject paths outside the config directory and any caller-allowed
+    // roots (CWE-22: Path Traversal). Allowed roots come from
+    // OPENCLAW_INCLUDE_ROOTS and let operators opt into shared include trees
+    // without weakening the default lock-down.
+    const lexicalMatch = this.findContainingRoot(normalized, "rootDir");
+    if (!lexicalMatch) {
       throw new ConfigIncludeError(
         `Include path escapes config directory: ${includePath} (root: ${this.rootDir})`,
         includePath,
       );
     }
 
-    // SECURITY: Resolve symlinks and re-validate to prevent symlink bypass
+    // SECURITY: Resolve symlinks and re-validate to prevent symlink bypass.
+    // The realpath may legitimately land in a different allowed root than the
+    // lexical path (e.g. config dir contains a symlink into an allowed root),
+    // so we recheck across all roots rather than pinning to the lexical match.
     try {
       const real = fs.realpathSync(normalized);
-      if (!isPathInside(this.rootRealDir, real)) {
+      const realMatch = this.findContainingRoot(real, "rootRealDir");
+      if (!realMatch) {
         throw new ConfigIncludeError(
           `Include path resolves outside config directory (symlink): ${includePath} (root: ${this.rootDir})`,
           includePath,
         );
       }
+      return { resolvedPath: normalized, root: realMatch };
     } catch (err) {
       if (err instanceof ConfigIncludeError) {
         throw err;
       }
-      // File doesn't exist yet - normalized path check above is sufficient
+      if (isNotFoundError(err)) {
+        // File doesn't exist yet - lexical containment check above is sufficient.
+        return { resolvedPath: normalized, root: lexicalMatch };
+      }
+      throw new ConfigIncludeError(
+        `Failed to resolve include file realpath: ${includePath} (resolved: ${normalized})`,
+        includePath,
+        err instanceof Error ? err : undefined,
+      );
     }
+  }
 
-    return normalized;
+  private findContainingRoot(
+    candidate: string,
+    field: "rootDir" | "rootRealDir",
+  ): IncludeRoot | null {
+    if (isPathInside(this.configRoot[field], candidate)) {
+      return this.configRoot;
+    }
+    for (const root of this.allowedRoots) {
+      if (isPathInside(root[field], candidate)) {
+        return root;
+      }
+    }
+    return null;
   }
 
   private checkCircular(resolvedPath: string): void {
@@ -236,13 +310,15 @@ class IncludeProcessor {
     }
   }
 
-  private readFile(includePath: string, resolvedPath: string): string {
+  private readFile(includePath: string, resolvedPath: string, root: IncludeRoot): string {
     try {
       if (this.resolver.readFileWithGuards) {
+        // This guard revalidates the opened file against root.rootRealDir, so
+        // symlink swaps between resolvePath() and read are rejected at open time.
         return this.resolver.readFileWithGuards({
           includePath,
           resolvedPath,
-          rootRealDir: this.rootRealDir,
+          rootRealDir: root.rootRealDir,
         });
       }
       return this.resolver.readFile(resolvedPath);
@@ -271,7 +347,12 @@ class IncludeProcessor {
   }
 
   private processNested(resolvedPath: string, parsed: unknown): unknown {
-    const nested = new IncludeProcessor(resolvedPath, this.resolver, this.rootDir);
+    const nested = new IncludeProcessor(
+      resolvedPath,
+      this.resolver,
+      this.rootDir,
+      this.allowedRoots,
+    );
     nested.visited = new Set([...this.visited, resolvedPath]);
     nested.depth = this.depth + 1;
     return nested.process(parsed);
@@ -286,14 +367,23 @@ function safeRealpath(target: string): string {
   }
 }
 
+function isNotFoundError(error: unknown): boolean {
+  return Boolean(
+    error &&
+    typeof error === "object" &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "ENOENT",
+  );
+}
+
 export function readConfigIncludeFileWithGuards(params: IncludeFileReadParams): string {
   const ioFs = params.ioFs ?? fs;
   const maxBytes = params.maxBytes ?? MAX_INCLUDE_FILE_BYTES;
-  if (!canUseBoundaryFileOpen(ioFs)) {
+  if (!canUseRootFileOpen(ioFs)) {
     return ioFs.readFileSync(params.resolvedPath, "utf-8");
   }
 
-  const opened = openBoundaryFileSync({
+  const opened = openRootFileSync({
     absolutePath: params.resolvedPath,
     rootPath: params.rootRealDir,
     rootRealPath: params.rootRealDir,
@@ -331,7 +421,7 @@ const defaultResolver: IncludeResolver = {
   readFile: (p) => fs.readFileSync(p, "utf-8"),
   readFileWithGuards: ({ includePath, resolvedPath, rootRealDir }) =>
     readConfigIncludeFileWithGuards({ includePath, resolvedPath, rootRealDir }),
-  parseJson: (raw) => JSON5.parse(raw),
+  parseJson: parseJsonWithJson5Fallback,
 };
 
 /**
@@ -341,6 +431,13 @@ export function resolveConfigIncludes(
   obj: unknown,
   configPath: string,
   resolver: IncludeResolver = defaultResolver,
+  options: ResolveConfigIncludesOptions = {},
 ): unknown {
-  return new IncludeProcessor(configPath, resolver).process(obj);
+  const allowedRoots = (options.allowedRoots ?? [])
+    .filter((entry) => typeof entry === "string" && entry.length > 0 && path.isAbsolute(entry))
+    .map<IncludeRoot>((entry) => {
+      const rootDir = path.normalize(entry);
+      return { rootDir, rootRealDir: path.normalize(safeRealpath(rootDir)) };
+    });
+  return new IncludeProcessor(configPath, resolver, undefined, allowedRoots).process(obj);
 }

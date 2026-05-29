@@ -1,3 +1,5 @@
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+
 type RuntimeStatusFormatInput = {
   status?: string;
   pid?: number;
@@ -17,7 +19,11 @@ export function formatRuntimeStatusWithDetails({
     fullDetails.push(`pid ${pid}`);
   }
   const normalizedState = state?.trim();
-  if (normalizedState && normalizedState.toLowerCase() !== runtimeStatus.toLowerCase()) {
+  if (
+    normalizedState &&
+    normalizeLowercaseStringOrEmpty(normalizedState) !==
+      normalizeLowercaseStringOrEmpty(runtimeStatus)
+  ) {
     fullDetails.push(`state ${normalizedState}`);
   }
   for (const detail of details) {

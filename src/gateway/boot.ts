@@ -2,9 +2,8 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import type { CliDeps } from "../cli/deps.js";
+import type { CliDeps } from "../cli/deps.types.js";
 import { agentCommand } from "../commands/agent.js";
-import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveAgentIdFromSessionKey,
   resolveAgentMainSessionKey,
@@ -13,6 +12,8 @@ import {
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionStore, updateSessionStore } from "../config/sessions/store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { type RuntimeEnv, defaultRuntime } from "../runtime.js";
 
@@ -53,6 +54,11 @@ function buildBootPrompt(content: string) {
   ].join("\n");
 }
 
+function resolveBootSessionKey(sessionKey: string): string {
+  const agentId = resolveAgentIdFromSessionKey(sessionKey);
+  return `agent:${agentId}:boot`;
+}
+
 async function loadBootFile(
   workspaceDir: string,
 ): Promise<{ content?: string; status: "ok" | "missing" | "empty" }> {
@@ -73,7 +79,7 @@ async function loadBootFile(
   }
 }
 
-function snapshotMainSessionMapping(params: {
+function snapshotSessionMapping(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
 }): SessionMappingSnapshot {
@@ -98,7 +104,7 @@ function snapshotMainSessionMapping(params: {
       entry: structuredClone(entry),
     };
   } catch (err) {
-    log.debug("boot: could not snapshot main session mapping", {
+    log.debug("boot: could not snapshot session mapping", {
       sessionKey: params.sessionKey,
       error: String(err),
     });
@@ -111,7 +117,7 @@ function snapshotMainSessionMapping(params: {
   }
 }
 
-async function restoreMainSessionMapping(
+async function restoreSessionMapping(
   snapshot: SessionMappingSnapshot,
 ): Promise<string | undefined> {
   if (!snapshot.canRestore) {
@@ -131,7 +137,7 @@ async function restoreMainSessionMapping(
     );
     return undefined;
   } catch (err) {
-    return err instanceof Error ? err.message : String(err);
+    return formatErrorMessage(err);
   }
 }
 
@@ -150,7 +156,7 @@ export async function runBootOnce(params: {
   try {
     result = await loadBootFile(params.workspaceDir);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = formatErrorMessage(err);
     log.error(`boot: failed to read ${BOOT_FILENAME}: ${message}`);
     return { status: "failed", reason: message };
   }
@@ -159,12 +165,13 @@ export async function runBootOnce(params: {
     return { status: "skipped", reason: result.status };
   }
 
-  const sessionKey = params.agentId
+  const mainSessionKey = params.agentId
     ? resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.agentId })
     : resolveMainSessionKey(params.cfg);
+  const sessionKey = resolveBootSessionKey(mainSessionKey);
   const message = buildBootPrompt(result.content ?? "");
   const sessionId = generateBootSessionId();
-  const mappingSnapshot = snapshotMainSessionMapping({
+  const mappingSnapshot = snapshotSessionMapping({
     cfg: params.cfg,
     sessionKey,
   });
@@ -177,19 +184,19 @@ export async function runBootOnce(params: {
         sessionKey,
         sessionId,
         deliver: false,
-        senderIsOwner: true,
+        suppressPromptPersistence: true,
       },
       bootRuntime,
       params.deps,
     );
   } catch (err) {
-    agentFailure = err instanceof Error ? err.message : String(err);
+    agentFailure = formatErrorMessage(err);
     log.error(`boot: agent run failed: ${agentFailure}`);
   }
 
-  const mappingRestoreFailure = await restoreMainSessionMapping(mappingSnapshot);
+  const mappingRestoreFailure = await restoreSessionMapping(mappingSnapshot);
   if (mappingRestoreFailure) {
-    log.error(`boot: failed to restore main session mapping: ${mappingRestoreFailure}`);
+    log.error(`boot: failed to restore session mapping: ${mappingRestoreFailure}`);
   }
 
   if (!agentFailure && !mappingRestoreFailure) {

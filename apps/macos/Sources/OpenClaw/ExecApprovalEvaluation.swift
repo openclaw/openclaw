@@ -9,6 +9,7 @@ struct ExecApprovalEvaluation {
     let env: [String: String]
     let resolution: ExecCommandResolution?
     let allowlistResolutions: [ExecCommandResolution]
+    let allowAlwaysPatterns: [String]
     let allowlistMatches: [ExecAllowlistEntry]
     let allowlistSatisfied: Bool
     let allowlistMatch: ExecAllowlistEntry?
@@ -31,11 +32,19 @@ enum ExecApprovalEvaluator {
         let shellWrapper = ExecShellWrapperParser.extract(command: command, rawCommand: rawCommand).isWrapper
         let env = HostEnvSanitizer.sanitize(overrides: envOverrides, shellWrapper: shellWrapper)
         let displayCommand = ExecCommandFormatter.displayString(for: command, rawCommand: rawCommand)
+        let allowlistRawCommand = ExecSystemRunCommandValidator.allowlistEvaluationRawCommand(
+            command: command,
+            rawCommand: rawCommand)
         let allowlistResolutions = ExecCommandResolution.resolveForAllowlist(
             command: command,
-            rawCommand: rawCommand,
+            rawCommand: allowlistRawCommand,
             cwd: cwd,
             env: env)
+        let allowAlwaysPatterns = ExecCommandResolution.resolveAllowAlwaysPatterns(
+            command: command,
+            cwd: cwd,
+            env: env,
+            rawCommand: allowlistRawCommand)
         let allowlistMatches = security == .allowlist
             ? ExecAllowlistMatcher.matchAll(entries: approvals.allowlist, resolutions: allowlistResolutions)
             : []
@@ -60,6 +69,7 @@ enum ExecApprovalEvaluator {
             env: env,
             resolution: allowlistResolutions.first,
             allowlistResolutions: allowlistResolutions,
+            allowAlwaysPatterns: allowAlwaysPatterns,
             allowlistMatches: allowlistMatches,
             allowlistSatisfied: allowlistSatisfied,
             allowlistMatch: allowlistSatisfied ? allowlistMatches.first : nil,

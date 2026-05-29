@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { SUBAGENT_ENDED_REASON_COMPLETE } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -8,11 +8,8 @@ const lifecycleMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../plugins/hook-runner-global.js", () => ({
-  getGlobalHookRunner: () => lifecycleMocks.getGlobalHookRunner(),
+  getGlobalHookRunner: lifecycleMocks.getGlobalHookRunner,
 }));
-
-import { emitSubagentEndedHookOnce } from "./subagent-registry-completion.js";
-
 function createRunEntry(): SubagentRunRecord {
   return {
     runId: "run-1",
@@ -26,8 +23,10 @@ function createRunEntry(): SubagentRunRecord {
 }
 
 describe("emitSubagentEndedHookOnce", () => {
+  let mod: typeof import("./subagent-registry-completion.js");
+
   const createEmitParams = (
-    overrides?: Partial<Parameters<typeof emitSubagentEndedHookOnce>[0]>,
+    overrides?: Partial<Parameters<typeof mod.emitSubagentEndedHookOnce>[0]>,
   ) => {
     const entry = overrides?.entry ?? createRunEntry();
     return {
@@ -41,9 +40,46 @@ describe("emitSubagentEndedHookOnce", () => {
     };
   };
 
+  beforeAll(async () => {
+    mod = await import("./subagent-registry-completion.js");
+  });
+
   beforeEach(() => {
     lifecycleMocks.getGlobalHookRunner.mockClear();
     lifecycleMocks.runSubagentEnded.mockClear();
+  });
+
+  it("treats timing differences as different only after both outcomes have timing", () => {
+    expect(
+      mod.runOutcomesEqual(
+        { status: "timeout", startedAt: 1_000, endedAt: 2_000, elapsedMs: 1_000 },
+        { status: "timeout", startedAt: 1_000, endedAt: 2_500, elapsedMs: 1_500 },
+      ),
+    ).toBe(false);
+    expect(
+      mod.runOutcomesEqual(
+        { status: "error", error: "boom", startedAt: 1_000, endedAt: 2_000, elapsedMs: 1_000 },
+        { status: "error", error: "boom", startedAt: 1_000, endedAt: 2_000, elapsedMs: 1_000 },
+      ),
+    ).toBe(true);
+    expect(
+      mod.runOutcomesEqual(
+        { status: "ok", startedAt: 1_000, endedAt: 2_000, elapsedMs: 1_000 },
+        { status: "ok" },
+      ),
+    ).toBe(true);
+    expect(
+      mod.shouldUpdateRunOutcome(
+        { status: "ok" },
+        { status: "ok", startedAt: 1_000, endedAt: 2_000, elapsedMs: 1_000 },
+      ),
+    ).toBe(true);
+    expect(
+      mod.shouldUpdateRunOutcome(
+        { status: "ok", startedAt: 1_000, endedAt: 2_000, elapsedMs: 1_000 },
+        { status: "ok" },
+      ),
+    ).toBe(false);
   });
 
   it("records ended hook marker even when no subagent_ended hooks are registered", async () => {
@@ -53,7 +89,7 @@ describe("emitSubagentEndedHookOnce", () => {
     });
 
     const params = createEmitParams();
-    const emitted = await emitSubagentEndedHookOnce(params);
+    const emitted = await mod.emitSubagentEndedHookOnce(params);
 
     expect(emitted).toBe(true);
     expect(lifecycleMocks.runSubagentEnded).not.toHaveBeenCalled();
@@ -68,7 +104,7 @@ describe("emitSubagentEndedHookOnce", () => {
     });
 
     const params = createEmitParams();
-    const emitted = await emitSubagentEndedHookOnce(params);
+    const emitted = await mod.emitSubagentEndedHookOnce(params);
 
     expect(emitted).toBe(true);
     expect(lifecycleMocks.runSubagentEnded).toHaveBeenCalledTimes(1);
@@ -76,11 +112,23 @@ describe("emitSubagentEndedHookOnce", () => {
     expect(params.persist).toHaveBeenCalledTimes(1);
   });
 
+  it("returns false when the global hook runner is not initialized yet", async () => {
+    lifecycleMocks.getGlobalHookRunner.mockReturnValue(null);
+
+    const params = createEmitParams();
+    const emitted = await mod.emitSubagentEndedHookOnce(params);
+
+    expect(emitted).toBe(false);
+    expect(lifecycleMocks.runSubagentEnded).not.toHaveBeenCalled();
+    expect(params.persist).not.toHaveBeenCalled();
+    expect(params.entry.endedHookEmittedAt).toBeUndefined();
+  });
+
   it("returns false when runId is blank", async () => {
     const params = createEmitParams({
       entry: { ...createRunEntry(), runId: "   " },
     });
-    const emitted = await emitSubagentEndedHookOnce(params);
+    const emitted = await mod.emitSubagentEndedHookOnce(params);
     expect(emitted).toBe(false);
     expect(params.persist).not.toHaveBeenCalled();
     expect(lifecycleMocks.runSubagentEnded).not.toHaveBeenCalled();
@@ -90,7 +138,7 @@ describe("emitSubagentEndedHookOnce", () => {
     const params = createEmitParams({
       entry: { ...createRunEntry(), endedHookEmittedAt: Date.now() },
     });
-    const emitted = await emitSubagentEndedHookOnce(params);
+    const emitted = await mod.emitSubagentEndedHookOnce(params);
     expect(emitted).toBe(false);
     expect(params.persist).not.toHaveBeenCalled();
     expect(lifecycleMocks.runSubagentEnded).not.toHaveBeenCalled();
@@ -100,7 +148,7 @@ describe("emitSubagentEndedHookOnce", () => {
     const entry = createRunEntry();
     const inFlightRunIds = new Set<string>([entry.runId]);
     const params = createEmitParams({ entry, inFlightRunIds });
-    const emitted = await emitSubagentEndedHookOnce(params);
+    const emitted = await mod.emitSubagentEndedHookOnce(params);
     expect(emitted).toBe(false);
     expect(params.persist).not.toHaveBeenCalled();
     expect(lifecycleMocks.runSubagentEnded).not.toHaveBeenCalled();
@@ -116,7 +164,7 @@ describe("emitSubagentEndedHookOnce", () => {
     const entry = createRunEntry();
     const inFlightRunIds = new Set<string>();
     const params = createEmitParams({ entry, inFlightRunIds });
-    const emitted = await emitSubagentEndedHookOnce(params);
+    const emitted = await mod.emitSubagentEndedHookOnce(params);
 
     expect(emitted).toBe(false);
     expect(params.persist).not.toHaveBeenCalled();

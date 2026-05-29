@@ -1,8 +1,11 @@
 import { spawn } from "node:child_process";
+import os from "node:os";
+import path from "node:path";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 
-export type SignalDaemonOpts = {
+type SignalDaemonOpts = {
   cliPath: string;
+  configPath?: string;
   account?: string;
   httpHost: string;
   httpPort: number;
@@ -27,7 +30,11 @@ export type SignalDaemonExitEvent = {
 };
 
 export function formatSignalDaemonExit(exit: SignalDaemonExitEvent): string {
-  return `signal daemon exited (source=${exit.source} code=${String(exit.code ?? "null")} signal=${String(exit.signal ?? "null")})`;
+  return `signal daemon exited (source=${exit.source} code=${exit.code ?? "null"} signal=${exit.signal ?? "null"})`;
+}
+
+function isRecoverableSignalCliReceiveException(line: string): boolean {
+  return /\breceive exception:\s+.*\binvalid PreKey message:\s+decryption failed\b/i.test(line);
 }
 
 export function classifySignalCliLogLine(line: string): "log" | "error" | null {
@@ -35,11 +42,15 @@ export function classifySignalCliLogLine(line: string): "log" | "error" | null {
   if (!trimmed) {
     return null;
   }
-  // signal-cli commonly writes all logs to stderr; treat severity explicitly.
-  if (/\b(ERROR|WARN|WARNING)\b/.test(trimmed)) {
+  // signal-cli commonly writes routine logs and warnings to stderr; only error-like lines should
+  // update channel failure state. Recoverable receive decrypt failures are noisy but non-fatal.
+  if (/\bERROR\b/.test(trimmed)) {
     return "error";
   }
-  // Some signal-cli failures are not tagged with WARN/ERROR but should still be surfaced loudly.
+  if (isRecoverableSignalCliReceiveException(trimmed)) {
+    return "log";
+  }
+  // Some signal-cli failures are not tagged with ERROR but should still be surfaced loudly.
   if (/\b(FAILED|SEVERE|EXCEPTION)\b/i.test(trimmed)) {
     return "error";
   }
@@ -63,8 +74,22 @@ function bindSignalCliOutput(params: {
   });
 }
 
+function resolveSignalCliConfigPath(raw: string): string {
+  const value = raw.trim();
+  if (value === "~") {
+    return os.homedir();
+  }
+  if (value.startsWith("~/") || value.startsWith("~\\")) {
+    return path.join(os.homedir(), value.slice(2));
+  }
+  return value;
+}
+
 function buildDaemonArgs(opts: SignalDaemonOpts): string[] {
   const args: string[] = [];
+  if (opts.configPath?.trim()) {
+    args.push("--config", resolveSignalCliConfigPath(opts.configPath));
+  }
   if (opts.account) {
     args.push("-a", opts.account);
   }
@@ -145,3 +170,9 @@ export function spawnSignalDaemon(opts: SignalDaemonOpts): SignalDaemonHandle {
     },
   };
 }
+
+export const testApi = {
+  buildDaemonArgs,
+  classifySignalCliLogLine,
+  resolveSignalCliConfigPath,
+} as const;

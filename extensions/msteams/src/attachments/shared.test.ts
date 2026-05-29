@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   applyAuthorizationHeaderForUrl,
+  encodeGraphShareId,
+  extractInlineImageCandidates,
+  isGraphSharedLinkUrl,
   isPrivateOrReservedIP,
   isUrlAllowed,
   resolveAndValidateIP,
@@ -10,6 +13,7 @@ import {
   resolveMediaSsrfPolicy,
   safeFetch,
   safeFetchWithPolicy,
+  tryBuildGraphSharesUrlForSharedLink,
 } from "./shared.js";
 
 const publicResolve = async () => ({ address: "13.107.136.10" });
@@ -31,6 +35,14 @@ function mockFetchWithRedirect(redirectMap: Record<string, string>, finalBody = 
   });
 }
 
+function fetchInitAt(fetchMock: ReturnType<typeof vi.fn>, index: number): unknown {
+  const call = fetchMock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected fetch call ${index}`);
+  }
+  return call[1];
+}
+
 async function expectSafeFetchStatus(params: {
   fetchMock: ReturnType<typeof vi.fn>;
   url: string;
@@ -45,6 +57,7 @@ async function expectSafeFetchStatus(params: {
     resolveFn: params.resolveFn ?? publicResolve,
   });
   expect(res.status).toBe(params.expectedStatus);
+  await res.body?.cancel();
   return res;
 }
 
@@ -64,6 +77,22 @@ describe("msteams attachment allowlists", () => {
       allowHosts: ["sharepoint.com"],
       authAllowHosts: ["graph.microsoft.com"],
     });
+  });
+
+  it("allows Azure China Bot Framework attachment URLs with auth by default", () => {
+    const policy = resolveAttachmentFetchPolicy();
+    const url = "https://msteams.botframework.azure.cn/teams/v3/attachments/att-1/views/original";
+    const headers = new Headers();
+
+    expect(isUrlAllowed(url, policy.allowHosts)).toBe(true);
+    applyAuthorizationHeaderForUrl({
+      headers,
+      url,
+      authAllowHosts: policy.authAllowHosts,
+      bearerToken: "token-1",
+    });
+
+    expect(headers.get("Authorization")).toBe("Bearer token-1");
   });
 
   it("requires https and host suffix match", () => {
@@ -146,7 +175,22 @@ describe("safeFetch", () => {
     });
     expect(fetchMock).toHaveBeenCalledOnce();
     // Should have used redirect: "manual"
-    expect(fetchMock.mock.calls[0][1]).toHaveProperty("redirect", "manual");
+    expect(fetchInitAt(fetchMock, 0)).toHaveProperty("redirect", "manual");
+  });
+
+  it("pins the validated DNS result into the request dispatcher", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => {
+      return new Response("ok", { status: 200 });
+    });
+
+    await expectSafeFetchStatus({
+      fetchMock,
+      url: "https://teams.sharepoint.com/file.pdf",
+      allowHosts: ["sharepoint.com"],
+      expectedStatus: 200,
+    });
+
+    expect(fetchInitAt(fetchMock, 0)).toHaveProperty("dispatcher");
   });
 
   it("follows a redirect to an allowlisted host with public IP", async () => {
@@ -160,6 +204,24 @@ describe("safeFetch", () => {
       expectedStatus: 200,
     });
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails explicitly for custom fetch functions that cannot receive the pinned dispatcher", async () => {
+    let called = false;
+    const customFetch = async () => {
+      called = true;
+      return new Response("ok", { status: 200 });
+    };
+
+    await expect(
+      safeFetch({
+        url: "https://teams.sharepoint.com/file.pdf",
+        allowHosts: ["sharepoint.com"],
+        fetchFn: customFetch as typeof fetch,
+        resolveFn: publicResolve,
+      }),
+    ).rejects.toThrow("fetchFnSupportsDispatcher");
+    expect(called).toBe(false);
   });
 
   it("returns the redirect response when dispatcher is provided by an outer guard", async () => {
@@ -206,7 +268,7 @@ describe("safeFetch", () => {
         fetchFn: fetchMock as unknown as typeof fetch,
         resolveFn: publicResolve,
       }),
-    ).rejects.toThrow("blocked by allowlist");
+    ).rejects.toThrow("allowlist");
     // Should not have fetched the evil URL
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
@@ -216,7 +278,9 @@ describe("safeFetch", () => {
     const rebindingResolve = async () => {
       callCount++;
       // First call (initial URL) resolves to public IP
-      if (callCount === 1) return { address: "13.107.136.10" };
+      if (callCount === 1) {
+        return { address: "13.107.136.10" };
+      }
       // Second call (redirect target) resolves to private IP
       return { address: "169.254.169.254" };
     };
@@ -231,7 +295,7 @@ describe("safeFetch", () => {
         fetchFn: fetchMock as unknown as typeof fetch,
         resolveFn: rebindingResolve,
       }),
-    ).rejects.toThrow("private/reserved IP");
+    ).rejects.toThrow("private/internal");
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -244,7 +308,19 @@ describe("safeFetch", () => {
         fetchFn: fetchMock as unknown as typeof fetch,
         resolveFn: privateResolve("10.0.0.1"),
       }),
-    ).rejects.toThrow("Initial download URL blocked");
+    ).rejects.toThrow("private/internal");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks private hosts with the default resolver", async () => {
+    const fetchMock = vi.fn();
+    await expect(
+      safeFetch({
+        url: "https://localhost/file.pdf",
+        allowHosts: ["localhost"],
+        fetchFn: fetchMock as unknown as typeof fetch,
+      }),
+    ).rejects.toThrow("private/internal");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -257,7 +333,7 @@ describe("safeFetch", () => {
         fetchFn: fetchMock as unknown as typeof fetch,
         resolveFn: failingResolve,
       }),
-    ).rejects.toThrow("Initial download URL blocked");
+    ).rejects.toThrow("DNS failure");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -285,6 +361,7 @@ describe("safeFetch", () => {
       resolveFn: publicResolve,
     });
     expect(res.status).toBe(200);
+    await res.body?.cancel();
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
@@ -322,7 +399,7 @@ describe("safeFetch", () => {
         fetchFn: fetchMock as unknown as typeof fetch,
         resolveFn: publicResolve,
       }),
-    ).rejects.toThrow("blocked by allowlist");
+    ).rejects.toThrow("https");
   });
 
   it("strips authorization across redirects outside auth allowlist", async () => {
@@ -330,7 +407,7 @@ describe("safeFetch", () => {
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       const auth = new Headers(init?.headers).get("authorization") ?? "";
       seenAuth.push(`${url}|${auth}`);
-      if (url === "https://teams.sharepoint.com/file.pdf") {
+      if (url === "https://graph.microsoft.com/v1.0/me/photo") {
         return new Response(null, {
           status: 302,
           headers: { location: "https://cdn.sharepoint.com/storage/file.pdf" },
@@ -341,16 +418,96 @@ describe("safeFetch", () => {
 
     const headers = new Headers({ Authorization: "Bearer secret" });
     const res = await safeFetch({
-      url: "https://teams.sharepoint.com/file.pdf",
-      allowHosts: ["sharepoint.com"],
+      url: "https://graph.microsoft.com/v1.0/me/photo",
+      allowHosts: ["graph.microsoft.com", "sharepoint.com"],
       authorizationAllowHosts: ["graph.microsoft.com"],
       fetchFn: fetchMock as unknown as typeof fetch,
       requestInit: { headers },
       resolveFn: publicResolve,
     });
     expect(res.status).toBe(200);
+    await res.body?.cancel();
     expect(seenAuth[0]).toContain("Bearer secret");
     expect(seenAuth[1]).toMatch(/\|$/);
+  });
+
+  it("keeps authorization across redirects inside auth allowlist", async () => {
+    const seenAuth: string[] = [];
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      const auth = new Headers(init?.headers).get("authorization") ?? "";
+      seenAuth.push(`${url}|${auth}`);
+      if (url === "https://graph.microsoft.com/file.pdf") {
+        return new Response(null, {
+          status: 302,
+          headers: { location: "https://cdn.sharepoint.com/storage/file.pdf" },
+        });
+      }
+      return new Response("ok", { status: 200 });
+    });
+
+    const headers = new Headers({ Authorization: "Bearer secret" });
+    const res = await safeFetch({
+      url: "https://graph.microsoft.com/file.pdf",
+      allowHosts: ["graph.microsoft.com", "sharepoint.com"],
+      authorizationAllowHosts: ["graph.microsoft.com", "sharepoint.com"],
+      fetchFn: fetchMock as unknown as typeof fetch,
+      requestInit: { headers },
+      resolveFn: publicResolve,
+    });
+    expect(res.status).toBe(200);
+    await res.body?.cancel();
+    expect(seenAuth[0]).toContain("Bearer secret");
+    expect(seenAuth[1]).toContain("Bearer secret");
+  });
+
+  it("keeps authorization across HTTPS redirects when auth allowlist is wildcard", async () => {
+    const seenAuth: string[] = [];
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      const auth = new Headers(init?.headers).get("authorization") ?? "";
+      seenAuth.push(`${url}|${auth}`);
+      if (url === "https://graph.microsoft.com/file.pdf") {
+        return new Response(null, {
+          status: 302,
+          headers: { location: "https://cdn.example.com/storage/file.pdf" },
+        });
+      }
+      return new Response("ok", { status: 200 });
+    });
+
+    const headers = new Headers({ Authorization: "Bearer secret" });
+    const res = await safeFetch({
+      url: "https://graph.microsoft.com/file.pdf",
+      allowHosts: ["*"],
+      authorizationAllowHosts: ["*"],
+      fetchFn: fetchMock as unknown as typeof fetch,
+      requestInit: { headers },
+      resolveFn: publicResolve,
+    });
+    expect(res.status).toBe(200);
+    await res.body?.cancel();
+    expect(seenAuth[0]).toContain("Bearer secret");
+    expect(seenAuth[1]).toContain("Bearer secret");
+  });
+
+  it("strips authorization from the initial fetch outside auth allowlist", async () => {
+    const seenAuth: string[] = [];
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      seenAuth.push(new Headers(init?.headers).get("authorization") ?? "");
+      expect(url).toBe("https://attacker.trafficmanager.net/v3/attachments/att-1");
+      return new Response("ok", { status: 200 });
+    });
+
+    const res = await safeFetch({
+      url: "https://attacker.trafficmanager.net/v3/attachments/att-1",
+      allowHosts: ["trafficmanager.net"],
+      authorizationAllowHosts: ["smba.trafficmanager.net"],
+      fetchFn: fetchMock as unknown as typeof fetch,
+      requestInit: { headers: { Authorization: "Bearer secret" } },
+      resolveFn: publicResolve,
+    });
+
+    expect(res.status).toBe(200);
+    expect(seenAuth).toEqual([""]);
   });
 });
 
@@ -388,6 +545,135 @@ describe("attachment fetch auth helpers", () => {
       resolveFn: publicResolve,
     });
     expect(res.status).toBe(200);
+    await res.body?.cancel();
     expect(fetchMock).toHaveBeenCalledOnce();
+  });
+});
+
+describe("Graph shared-link helpers", () => {
+  it.each([
+    ["https://contoso.sharepoint.com/personal/user/Documents/report.pdf", true],
+    ["https://contoso.sharepoint.us/sites/team/file.docx", true],
+    ["https://contoso.sharepoint.cn/file", true],
+    ["https://tenant-my.sharepoint.com/:b:/g/personal/file", true],
+    ["https://1drv.ms/b/s!AkxYabc", true],
+    ["https://onedrive.live.com/view.aspx?resid=ABC", true],
+    ["https://onedrive.com/share/abc", true],
+    ["https://graph.microsoft.com/v1.0/me", false],
+    ["https://smba.trafficmanager.net/amer/v3", false],
+    ["https://example.com/file.pdf", false],
+    ["not-a-url", false],
+  ])("isGraphSharedLinkUrl(%s) === %s", (url, expected) => {
+    expect(isGraphSharedLinkUrl(url)).toBe(expected);
+  });
+
+  it("encodeGraphShareId uses u! + base64url without padding", () => {
+    // Graph docs example: encoding "https://onedrive.live.com/redir?resid=..."
+    // should yield u!aHR0cHM6... (base64url, no '+', '/', or trailing '=').
+    const url = "https://contoso.sharepoint.com/sites/a/Shared Documents/file.pdf";
+    const shareId = encodeGraphShareId(url);
+    expect(shareId.startsWith("u!")).toBe(true);
+    const encoded = shareId.slice(2);
+    // base64url alphabet is A-Z, a-z, 0-9, '-', '_' (no padding).
+    expect(encoded).toMatch(/^[A-Za-z0-9_-]+$/);
+    // Round-trip check: decoding yields the original URL.
+    const decoded = Buffer.from(encoded, "base64url").toString("utf8");
+    expect(decoded).toBe(url);
+  });
+
+  it("encodeGraphShareId swaps '+' and '/' for '-' and '_'", () => {
+    // A URL whose standard base64 contains '+' and '/' chars.
+    // Choose an input that base64 encodes with those characters.
+    const url = "https://host.sharepoint.com/sites/path?x=???";
+    const shareId = encodeGraphShareId(url);
+    const encoded = shareId.slice(2);
+    expect(encoded).not.toContain("+");
+    expect(encoded).not.toContain("/");
+    expect(encoded).not.toContain("=");
+  });
+
+  it("tryBuildGraphSharesUrlForSharedLink rewrites SharePoint URLs", () => {
+    const url = "https://contoso.sharepoint.com/personal/user/Documents/report.pdf";
+    const result = tryBuildGraphSharesUrlForSharedLink(url);
+    expect(result).toBe(
+      `https://graph.microsoft.com/v1.0/shares/${encodeGraphShareId(url)}/driveItem/content`,
+    );
+  });
+
+  it("tryBuildGraphSharesUrlForSharedLink rewrites OneDrive URLs", () => {
+    const url = "https://1drv.ms/b/s!AkxYabcdefg";
+    const result = tryBuildGraphSharesUrlForSharedLink(url);
+    expect(result).toBe(
+      `https://graph.microsoft.com/v1.0/shares/${encodeGraphShareId(url)}/driveItem/content`,
+    );
+  });
+
+  it("tryBuildGraphSharesUrlForSharedLink returns undefined for non-shared URLs", () => {
+    expect(
+      tryBuildGraphSharesUrlForSharedLink("https://graph.microsoft.com/v1.0/me"),
+    ).toBeUndefined();
+    expect(tryBuildGraphSharesUrlForSharedLink("https://example.com/file.pdf")).toBeUndefined();
+    expect(tryBuildGraphSharesUrlForSharedLink("not-a-url")).toBeUndefined();
+  });
+});
+
+describe("msteams inline image limits", () => {
+  const smallPngDataUrl = "data:image/png;base64,aGVsbG8="; // "hello" (5 bytes)
+
+  it("rejects inline data images above per-image limit", () => {
+    const attachments = [
+      {
+        contentType: "text/html",
+        content: `<img src="${smallPngDataUrl}" />`,
+      },
+    ];
+    const out = extractInlineImageCandidates(attachments, { maxInlineBytes: 4 });
+    expect(out).toStrictEqual([]);
+  });
+
+  it("accepts inline data images within limit", () => {
+    const attachments = [
+      {
+        contentType: "text/html",
+        content: `<img src="${smallPngDataUrl}" />`,
+      },
+    ];
+    const out = extractInlineImageCandidates(attachments, { maxInlineBytes: 10 });
+    expect(out.length).toBe(1);
+    expect(out[0]?.kind).toBe("data");
+    if (out[0]?.kind === "data") {
+      expect(out[0].data.byteLength).toBeGreaterThan(0);
+      expect(out[0].contentType).toBe("image/png");
+    }
+  });
+
+  it("rejects inline data images with malformed base64 padding", () => {
+    const attachments = [
+      {
+        contentType: "text/html",
+        content: `<img src="data:image/png;base64,aGV=sbG8=" />`,
+      },
+    ];
+    const out = extractInlineImageCandidates(attachments, { maxInlineBytes: 10 });
+    expect(out).toStrictEqual([]);
+  });
+
+  it("enforces cumulative inline size limit across attachments", () => {
+    const attachments = [
+      {
+        contentType: "text/html",
+        content: `<img src="${smallPngDataUrl}" />`,
+      },
+      {
+        contentType: "text/html",
+        content: `<img src="${smallPngDataUrl}" />`,
+      },
+    ];
+    const out = extractInlineImageCandidates(attachments, {
+      maxInlineBytes: 10,
+      maxInlineTotalBytes: 6,
+    });
+    expect(out.length).toBe(1);
+    expect(out[0]?.kind).toBe("data");
   });
 });

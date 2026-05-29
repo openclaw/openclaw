@@ -1,25 +1,62 @@
 import {
-  CHANNEL_MESSAGE_ACTION_NAMES,
-  type ChannelMessageActionName,
-} from "../channels/plugins/types.js";
-import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../packages/gateway-protocol/src/client-info.js";
+import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { CHANNEL_MESSAGE_ACTION_NAMES } from "../channels/plugins/message-action-names.js";
+import type { ChannelMessageActionName } from "../channels/plugins/types.public.js";
+import { resolveCommandConfigWithSecrets } from "../cli/command-config-resolution.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import { getScopedChannelsCommandSecretTargets } from "../cli/command-secret-targets.js";
 import { resolveMessageSecretScope } from "../cli/message-secret-scope.js";
 import { createOutboundSendDeps, type CliDeps } from "../cli/outbound-send-deps.js";
 import { withProgress } from "../cli/progress.js";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import type { OutboundSendDeps } from "../infra/outbound/deliver.js";
 import { runMessageAction } from "../infra/outbound/message-action-runner.js";
-import type { RuntimeEnv } from "../runtime.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { buildMessageCliJson, formatMessageCliText } from "./message-format.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
+
+function extractMessageId(payload: unknown): string | undefined {
+  if (!payload || typeof payload !== "object") {
+    return undefined;
+  }
+  const record = payload as Record<string, unknown>;
+  const direct = normalizeOptionalString(record.messageId);
+  if (direct) {
+    return direct;
+  }
+  const result = record.result;
+  if (result && typeof result === "object") {
+    const nested = normalizeOptionalString((result as Record<string, unknown>).messageId);
+    if (nested) {
+      return nested;
+    }
+  }
+  return undefined;
+}
+
+function buildMessageCliJson(result: Awaited<ReturnType<typeof runMessageAction>>) {
+  const messageId = extractMessageId(result.payload);
+  return {
+    action: result.action,
+    channel: result.channel,
+    dryRun: result.dryRun,
+    handledBy: result.handledBy,
+    ...(messageId ? { messageId } : {}),
+    payload: result.payload,
+  };
+}
 
 export async function messageCommand(
   opts: Record<string, unknown>,
   deps: CliDeps,
   runtime: RuntimeEnv,
 ) {
-  const loadedRaw = loadConfig();
+  const loadedRaw = getRuntimeConfig();
   const scope = resolveMessageSecretScope({
     channel: opts.channel,
     target: opts.target,
@@ -31,22 +68,26 @@ export async function messageCommand(
     channel: scope.channel,
     accountId: scope.accountId,
   });
-  const { resolvedConfig: cfg, diagnostics } = await resolveCommandSecretRefsViaGateway({
+  const { effectiveConfig: cfg } = await resolveCommandConfigWithSecrets({
     config: loadedRaw,
     commandName: "message",
     targetIds: scopedTargets.targetIds,
     ...(scopedTargets.allowedPaths ? { allowedPaths: scopedTargets.allowedPaths } : {}),
+    runtime,
+    autoEnable: true,
   });
-  for (const entry of diagnostics) {
-    runtime.log(`[secrets] ${entry}`);
-  }
-  const rawAction = typeof opts.action === "string" ? opts.action.trim() : "";
+  const rawAction = normalizeOptionalString(opts.action) ?? "";
   const actionInput = rawAction || "send";
+  const normalizedActionInput = normalizeLowercaseStringOrEmpty(actionInput);
   const actionMatch = (CHANNEL_MESSAGE_ACTION_NAMES as readonly string[]).find(
-    (name) => name.toLowerCase() === actionInput.toLowerCase(),
+    (name) => normalizeLowercaseStringOrEmpty(name) === normalizedActionInput,
   );
   if (!actionMatch) {
-    throw new Error(`Unknown message action: ${actionInput}`);
+    throw new Error(
+      `Unknown message action "${actionInput}". Use one of ${CHANNEL_MESSAGE_ACTION_NAMES.join(
+        ", ",
+      )}. Example: ${formatCliCommand("openclaw message send --channel <channel> --target <id> --text <message>")}.`,
+    );
   }
   const action = actionMatch as ChannelMessageActionName;
 
@@ -58,6 +99,8 @@ export async function messageCommand(
       action,
       params: opts,
       deps: outboundDeps,
+      agentId: resolveDefaultAgentId(cfg),
+      senderIsOwner: opts.senderIsOwner !== false,
       gateway: {
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,
@@ -80,10 +123,11 @@ export async function messageCommand(
     : await run();
 
   if (json) {
-    runtime.log(JSON.stringify(buildMessageCliJson(result), null, 2));
+    writeRuntimeJson(runtime, buildMessageCliJson(result));
     return;
   }
 
+  const { formatMessageCliText } = await import("./message-format.js");
   for (const line of formatMessageCliText(result)) {
     runtime.log(line);
   }

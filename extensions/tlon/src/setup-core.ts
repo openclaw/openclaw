@@ -4,37 +4,42 @@ import {
   normalizeAccountId,
   patchScopedAccountConfig,
   prepareScopedSetupConfig,
+  createSetupTranslator,
+  createSetupInputPresenceValidator,
   type ChannelSetupAdapter,
   type ChannelSetupInput,
   type ChannelSetupWizard,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/setup";
-import { buildTlonAccountFields } from "./account-fields.js";
+import {
+  normalizeOptionalString,
+  normalizeStringifiedOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { buildTlonAccountFields, type TlonAccountFieldsInput } from "./account-fields.js";
 import { normalizeShip } from "./targets.js";
 import { listTlonAccountIds, resolveTlonAccount, type TlonResolvedAccount } from "./types.js";
 import { validateUrbitBaseUrl } from "./urbit/base-url.js";
 
-const channel = "tlon" as const;
+const t = createSetupTranslator();
 
-export type TlonSetupInput = ChannelSetupInput & {
-  ship?: string;
-  url?: string;
-  code?: string;
-  allowPrivateNetwork?: boolean;
-  groupChannels?: string[];
-  dmAllowlist?: string[];
-  autoDiscoverChannels?: boolean;
-  ownerShip?: string;
-};
+function tlonChannelId() {
+  return "tlon" as const;
+}
+
+type TlonSetupInput = ChannelSetupInput & TlonAccountFieldsInput;
 
 function isConfigured(account: TlonResolvedAccount): boolean {
   return Boolean(account.ship && account.url && account.code);
 }
 
 type TlonSetupWizardBaseParams = {
-  resolveConfigured: (params: { cfg: OpenClawConfig }) => boolean | Promise<boolean>;
+  resolveConfigured: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string;
+  }) => boolean | Promise<boolean>;
   resolveStatusLines?: (params: {
     cfg: OpenClawConfig;
+    accountId?: string;
     configured: boolean;
   }) => string[] | Promise<string[]>;
   finalize: NonNullable<ChannelSetupWizard["finalize"]>;
@@ -42,25 +47,25 @@ type TlonSetupWizardBaseParams = {
 
 export function createTlonSetupWizardBase(params: TlonSetupWizardBaseParams): ChannelSetupWizard {
   return {
-    channel,
+    channel: tlonChannelId(),
     status: {
-      configuredLabel: "configured",
-      unconfiguredLabel: "needs setup",
-      configuredHint: "configured",
-      unconfiguredHint: "urbit messenger",
+      configuredLabel: t("wizard.channels.statusConfigured"),
+      unconfiguredLabel: t("wizard.channels.statusNeedsSetup"),
+      configuredHint: t("wizard.channels.statusConfigured"),
+      unconfiguredHint: t("wizard.channels.statusUrbitMessenger"),
       configuredScore: 1,
       unconfiguredScore: 4,
-      resolveConfigured: ({ cfg }) => params.resolveConfigured({ cfg }),
-      resolveStatusLines: ({ cfg, configured }) =>
-        params.resolveStatusLines?.({ cfg, configured }) ?? [],
+      resolveConfigured: ({ cfg, accountId }) => params.resolveConfigured({ cfg, accountId }),
+      resolveStatusLines: ({ cfg, accountId, configured }) =>
+        params.resolveStatusLines?.({ cfg, accountId, configured }) ?? [],
     },
     introNote: {
-      title: "Tlon setup",
+      title: t("wizard.tlon.setupTitle"),
       lines: [
-        "You need your Urbit ship URL and login code.",
-        "Example URL: https://your-ship-host",
-        "Example ship: ~sampel-palnet",
-        "If your ship URL is on a private network (LAN/localhost), you must explicitly allow it during setup.",
+        t("wizard.tlon.helpNeedsUrlCode"),
+        t("wizard.tlon.helpExampleUrl"),
+        t("wizard.tlon.helpExampleShip"),
+        t("wizard.tlon.helpPrivateNetwork"),
         `Docs: ${formatDocsLink("/channels/tlon", "channels/tlon")}`,
       ],
     },
@@ -68,11 +73,13 @@ export function createTlonSetupWizardBase(params: TlonSetupWizardBaseParams): Ch
     textInputs: [
       {
         inputKey: "ship",
-        message: "Ship name",
+        message: t("wizard.tlon.shipPrompt"),
         placeholder: "~sampel-palnet",
         currentValue: ({ cfg, accountId }) => resolveTlonAccount(cfg, accountId).ship ?? undefined,
-        validate: ({ value }) => (String(value ?? "").trim() ? undefined : "Required"),
-        normalizeValue: ({ value }) => normalizeShip(String(value).trim()),
+        validate: ({ value }) =>
+          normalizeStringifiedOptionalString(value) ? undefined : "Required",
+        normalizeValue: ({ value }) =>
+          normalizeShip(normalizeStringifiedOptionalString(value) ?? ""),
         applySet: async ({ cfg, accountId, value }) =>
           applyTlonSetupConfig({
             cfg,
@@ -82,17 +89,17 @@ export function createTlonSetupWizardBase(params: TlonSetupWizardBaseParams): Ch
       },
       {
         inputKey: "url",
-        message: "Ship URL",
+        message: t("wizard.tlon.shipUrlPrompt"),
         placeholder: "https://your-ship-host",
         currentValue: ({ cfg, accountId }) => resolveTlonAccount(cfg, accountId).url ?? undefined,
         validate: ({ value }) => {
-          const next = validateUrbitBaseUrl(String(value ?? ""));
+          const next = validateUrbitBaseUrl(value ?? "");
           if (!next.ok) {
             return next.error;
           }
           return undefined;
         },
-        normalizeValue: ({ value }) => String(value).trim(),
+        normalizeValue: ({ value }) => normalizeStringifiedOptionalString(value) ?? "",
         applySet: async ({ cfg, accountId, value }) =>
           applyTlonSetupConfig({
             cfg,
@@ -102,11 +109,12 @@ export function createTlonSetupWizardBase(params: TlonSetupWizardBaseParams): Ch
       },
       {
         inputKey: "code",
-        message: "Login code",
+        message: t("wizard.tlon.loginCodePrompt"),
         placeholder: "lidlut-tabwed-pillex-ridrup",
         currentValue: ({ cfg, accountId }) => resolveTlonAccount(cfg, accountId).code ?? undefined,
-        validate: ({ value }) => (String(value ?? "").trim() ? undefined : "Required"),
-        normalizeValue: ({ value }) => String(value).trim(),
+        validate: ({ value }) =>
+          normalizeStringifiedOptionalString(value) ? undefined : "Required",
+        normalizeValue: ({ value }) => normalizeStringifiedOptionalString(value) ?? "",
         applySet: async ({ cfg, accountId, value }) =>
           applyTlonSetupConfig({
             cfg,
@@ -119,16 +127,28 @@ export function createTlonSetupWizardBase(params: TlonSetupWizardBaseParams): Ch
   };
 }
 
-export async function resolveTlonSetupConfigured(cfg: OpenClawConfig): Promise<boolean> {
+export async function resolveTlonSetupConfigured(
+  cfg: OpenClawConfig,
+  accountId?: string,
+): Promise<boolean> {
+  if (accountId) {
+    return isConfigured(resolveTlonAccount(cfg, accountId));
+  }
   const accountIds = listTlonAccountIds(cfg);
   return accountIds.length > 0
-    ? accountIds.some((accountId) => isConfigured(resolveTlonAccount(cfg, accountId)))
+    ? accountIds.some((resolvedAccountId) =>
+        isConfigured(resolveTlonAccount(cfg, resolvedAccountId)),
+      )
     : isConfigured(resolveTlonAccount(cfg, DEFAULT_ACCOUNT_ID));
 }
 
-export async function resolveTlonSetupStatusLines(cfg: OpenClawConfig): Promise<string[]> {
-  const configured = await resolveTlonSetupConfigured(cfg);
-  return [`Tlon: ${configured ? "configured" : "needs setup"}`];
+export async function resolveTlonSetupStatusLines(
+  cfg: OpenClawConfig,
+  accountId?: string,
+): Promise<string[]> {
+  const configured = await resolveTlonSetupConfigured(cfg, accountId);
+  const label = accountId && accountId !== DEFAULT_ACCOUNT_ID ? `Tlon (${accountId})` : "Tlon";
+  return [`${label}: ${configured ? "configured" : "needs setup"}`];
 }
 
 export function applyTlonSetupConfig(params: {
@@ -140,7 +160,7 @@ export function applyTlonSetupConfig(params: {
   const useDefault = accountId === DEFAULT_ACCOUNT_ID;
   const namedConfig = prepareScopedSetupConfig({
     cfg,
-    channelKey: channel,
+    channelKey: tlonChannelId(),
     accountId,
     name: input.name,
   });
@@ -163,7 +183,7 @@ export function applyTlonSetupConfig(params: {
 
   return patchScopedAccountConfig({
     cfg: namedConfig,
-    channelKey: channel,
+    channelKey: tlonChannelId(),
     accountId,
     patch: { enabled: base.enabled ?? true },
     accountPatch: {
@@ -180,27 +200,28 @@ export const tlonSetupAdapter: ChannelSetupAdapter = {
   applyAccountName: ({ cfg, accountId, name }) =>
     prepareScopedSetupConfig({
       cfg,
-      channelKey: channel,
+      channelKey: tlonChannelId(),
       accountId,
       name,
     }),
-  validateInput: ({ cfg, accountId, input }) => {
-    const setupInput = input as TlonSetupInput;
-    const resolved = resolveTlonAccount(cfg, accountId ?? undefined);
-    const ship = setupInput.ship?.trim() || resolved.ship;
-    const url = setupInput.url?.trim() || resolved.url;
-    const code = setupInput.code?.trim() || resolved.code;
-    if (!ship) {
-      return "Tlon requires --ship.";
-    }
-    if (!url) {
-      return "Tlon requires --url.";
-    }
-    if (!code) {
-      return "Tlon requires --code.";
-    }
-    return null;
-  },
+  validateInput: createSetupInputPresenceValidator({
+    validate: ({ cfg, accountId, input }) => {
+      const resolved = resolveTlonAccount(cfg, accountId ?? undefined);
+      const ship = normalizeOptionalString(input.ship) || resolved.ship;
+      const url = normalizeOptionalString(input.url) || resolved.url;
+      const code = normalizeOptionalString(input.code) || resolved.code;
+      if (!ship) {
+        return "Tlon requires --ship.";
+      }
+      if (!url) {
+        return "Tlon requires --url.";
+      }
+      if (!code) {
+        return "Tlon requires --code.";
+      }
+      return null;
+    },
+  }),
   applyAccountConfig: ({ cfg, accountId, input }) =>
     applyTlonSetupConfig({
       cfg,

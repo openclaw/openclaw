@@ -85,6 +85,7 @@ export function applyQueueDropPolicy<T>(params: {
   queue: QueueState<T>;
   summarize: (item: T) => string;
   summaryLimit?: number;
+  onDrop?: (items: T[]) => void;
 }): boolean {
   const cap = params.queue.cap;
   if (cap <= 0 || params.queue.items.length < cap) {
@@ -95,6 +96,7 @@ export function applyQueueDropPolicy<T>(params: {
   }
   const dropCount = params.queue.items.length - cap + 1;
   const dropped = params.queue.items.splice(0, dropCount);
+  params.onDrop?.(dropped);
   if (params.queue.dropPolicy === "summarize") {
     for (const item of dropped) {
       params.queue.droppedCount += 1;
@@ -235,7 +237,6 @@ export function hasCrossChannelItems<T>(
   resolveKey: (item: T) => { key?: string; cross?: boolean },
 ): boolean {
   const keys = new Set<string>();
-  let hasUnkeyed = false;
 
   for (const item of items) {
     const resolved = resolveKey(item);
@@ -243,17 +244,10 @@ export function hasCrossChannelItems<T>(
       return true;
     }
     if (!resolved.key) {
-      hasUnkeyed = true;
       continue;
     }
     keys.add(resolved.key);
   }
 
-  if (keys.size === 0) {
-    return false;
-  }
-  if (hasUnkeyed) {
-    return true;
-  }
   return keys.size > 1;
 }

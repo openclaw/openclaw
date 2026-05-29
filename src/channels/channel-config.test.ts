@@ -81,17 +81,15 @@ describe("resolveChannelEntryMatchWithFallback", () => {
     },
   ]);
 
-  for (const testCase of fallbackCases) {
-    it(testCase.name, () => {
-      const match = resolveChannelEntryMatchWithFallback({
-        entries: testCase.entries,
-        ...testCase.args,
-      });
-      expect(match.entry).toBe(testCase.entries[testCase.expectedEntryKey]);
-      expect(match.matchSource).toBe(testCase.expectedSource);
-      expect(match.matchKey).toBe(testCase.expectedMatchKey);
+  it.each(fallbackCases)("$name", (testCase) => {
+    const match = resolveChannelEntryMatchWithFallback({
+      entries: testCase.entries,
+      ...testCase.args,
     });
-  }
+    expect(match.entry).toBe(testCase.entries[testCase.expectedEntryKey]);
+    expect(match.matchSource).toBe(testCase.expectedSource);
+    expect(match.matchKey).toBe(testCase.expectedMatchKey);
+  });
 
   it("matches normalized keys when normalizeKey is provided", () => {
     const entries = { "My Team": { allow: true } };
@@ -140,7 +138,7 @@ describe("resolveChannelMatchConfig", () => {
 describe("validateSenderIdentity", () => {
   it("allows direct messages without sender fields", () => {
     const ctx: MsgContext = { ChatType: "direct" };
-    expect(validateSenderIdentity(ctx)).toEqual([]);
+    expect(validateSenderIdentity(ctx)).toStrictEqual([]);
   });
 
   it("requires some sender identity for non-direct chats", () => {
@@ -208,9 +206,7 @@ describe("resolveNestedAllowlistDecision", () => {
     },
   ] as const;
 
-  for (const testCase of cases) {
-    it(testCase.name, () => {
-      expect(resolveNestedAllowlistDecision(testCase.value)).toBe(testCase.expected);
-    });
-  }
+  it.each(cases)("$name", ({ value, expected }) => {
+    expect(resolveNestedAllowlistDecision(value)).toBe(expected);
+  });
 });

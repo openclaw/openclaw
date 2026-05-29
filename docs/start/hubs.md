@@ -2,22 +2,19 @@
 summary: "Hubs that link to every OpenClaw doc"
 read_when:
   - You want a complete map of the documentation
-title: "Docs Hubs"
+title: "Docs hubs"
 ---
-
-# Docs hubs
 
 <Note>
 If you are new to OpenClaw, start with [Getting Started](/start/getting-started).
 </Note>
 
-Use these hubs to discover every page, including deep dives and reference docs that don’t appear in the left nav.
+Use these hubs to discover every page, including deep dives and reference docs that don't appear in the left nav.
 
 ## Start here
 
 - [Index](/)
 - [Getting Started](/start/getting-started)
-- [Quick start](/start/quickstart)
 - [Onboarding](/start/onboarding)
 - [Onboarding (CLI)](/start/wizard)
 - [Setup](/start/setup)
@@ -74,19 +71,19 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Telegram](/channels/telegram)
 - [Slack](/channels/slack)
 - [Discord](/channels/discord)
-- [Mattermost](/channels/mattermost) (plugin)
+- [Mattermost](/channels/mattermost)
 - [Signal](/channels/signal)
-- [BlueBubbles (iMessage)](/channels/bluebubbles)
-- [iMessage (legacy)](/channels/imessage)
+- [QQ Bot](/channels/qqbot)
+- [iMessage](/channels/imessage)
 - [Location parsing](/channels/location)
 - [WebChat](/web/webchat)
-- [Webhooks](/automation/webhook)
-- [Gmail Pub/Sub](/automation/gmail-pubsub)
+- [Webhooks](/automation/cron-jobs#webhooks)
+- [Gmail Pub/Sub](/automation/cron-jobs#gmail-pubsub-integration)
 
 ## Gateway + operations
 
 - [Gateway runbook](/gateway)
-- [Network model](/gateway/network-model)
+- [Network model](/network#core-model)
 - [Gateway pairing](/gateway/pairing)
 - [Gateway lock](/gateway/gateway-lock)
 - [Background process](/gateway/background-process)
@@ -112,7 +109,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [PDF tool](/tools/pdf)
 - [Elevated mode](/tools/elevated)
 - [Cron jobs](/automation/cron-jobs)
-- [Cron vs Heartbeat](/automation/cron-vs-heartbeat)
+- [Automation](/automation)
 - [Thinking + verbose](/tools/thinking)
 - [Models](/concepts/models)
 - [Sub-agents](/tools/subagents)
@@ -120,7 +117,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Terminal UI](/web/tui)
 - [Browser control](/tools/browser)
 - [Browser (Linux troubleshooting)](/tools/browser-linux-troubleshooting)
-- [Polls](/automation/poll)
+- [Polls](/cli/message)
 
 ## Nodes, media, voice
 
@@ -162,10 +159,23 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [macOS skills](/platforms/mac/skills)
 - [macOS Peekaboo](/platforms/mac/peekaboo)
 
+## Plugins
+
+- [Plugins overview](/tools/plugin)
+- [Building plugins](/plugins/building-plugins)
+- [Plugin hooks](/plugins/hooks)
+- [Plugin manifest](/plugins/manifest)
+- [Agent tools](/plugins/building-plugins#registering-agent-tools)
+- [Plugin bundles](/plugins/bundles)
+- [ClawHub](/clawhub)
+- [Capability cookbook](/tools/capability-cookbook)
+- [Voice call plugin](/plugins/voice-call)
+- [Zalo user plugin](/plugins/zalouser)
+
 ## Workspace + templates
 
 - [Skills](/tools/skills)
-- [ClawHub](/tools/clawhub)
+- [ClawHub](/clawhub)
 - [Skills config](/tools/skills-config)
 - [Default AGENTS](/reference/AGENTS.default)
 - [Templates: AGENTS](/reference/templates/AGENTS)
@@ -176,12 +186,6 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Templates: TOOLS](/reference/templates/TOOLS)
 - [Templates: USER](/reference/templates/USER)
 
-## Experiments (exploratory)
-
-- [Onboarding config protocol](/experiments/onboarding-config-protocol)
-- [Research: memory](/experiments/research/memory)
-- [Model config exploration](/experiments/proposals/model-config)
-
 ## Project
 
 - [Credits](/reference/credits)
@@ -191,3 +195,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Testing](/reference/test)
 - [Release policy](/reference/RELEASING)
 - [Device models](/reference/device-models)
+
+## Related
+
+- [Getting started](/start/getting-started)

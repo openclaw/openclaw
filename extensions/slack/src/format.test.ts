@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { markdownToSlackMrkdwn, normalizeSlackOutboundText } from "./format.js";
+import {
+  markdownToSlackMrkdwn,
+  markdownToSlackMrkdwnChunks,
+  normalizeSlackOutboundText,
+} from "./format.js";
 import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
 
 describe("markdownToSlackMrkdwn", () => {
@@ -58,8 +62,19 @@ describe("markdownToSlackMrkdwn", () => {
     );
   });
 
-  it("does not throw when input is undefined at runtime", () => {
+  it("returns empty text when input is undefined at runtime", () => {
     expect(markdownToSlackMrkdwn(undefined as unknown as string)).toBe("");
+  });
+
+  it("re-chunks on rendered length and still prefers word boundaries", () => {
+    const chunks = markdownToSlackMrkdwnChunks("alpha <<", 8);
+
+    expect(chunks).toEqual(["alpha ", "&lt;&lt;"]);
+    expect(
+      chunks
+        .map((chunk, index) => ({ index, length: chunk.length }))
+        .filter((chunk) => chunk.length > 8),
+    ).toStrictEqual([]);
   });
 });
 

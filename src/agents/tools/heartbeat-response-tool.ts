@@ -1,0 +1,65 @@
+import { Type } from "typebox";
+import {
+  HEARTBEAT_RESPONSE_TOOL_NAME,
+  HEARTBEAT_TOOL_OUTCOMES,
+  HEARTBEAT_TOOL_PRIORITIES,
+  normalizeHeartbeatToolResponse,
+} from "../../auto-reply/heartbeat-tool-response.js";
+import { readSnakeCaseParamRaw } from "../../param-key.js";
+import { isRecord } from "../../shared/record-coerce.js";
+import { optionalStringEnum, stringEnum } from "../schema/string-enum.js";
+import type { AnyAgentTool } from "./common.js";
+import { jsonResult, ToolInputError } from "./common.js";
+
+const HeartbeatResponseToolSchema = Type.Object(
+  {
+    outcome: stringEnum(HEARTBEAT_TOOL_OUTCOMES),
+    notify: Type.Boolean(),
+    summary: Type.String(),
+    notificationText: Type.Optional(Type.String()),
+    reason: Type.Optional(Type.String()),
+    priority: optionalStringEnum(HEARTBEAT_TOOL_PRIORITIES),
+    nextCheck: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+function readRequiredBoolean(params: Record<string, unknown>, key: string): boolean {
+  const raw = readSnakeCaseParamRaw(params, key);
+  if (typeof raw !== "boolean") {
+    throw new ToolInputError(`${key} required`);
+  }
+  return raw;
+}
+
+export function createHeartbeatResponseTool(): AnyAgentTool {
+  let recorded = false;
+  return {
+    label: "Heartbeat",
+    name: HEARTBEAT_RESPONSE_TOOL_NAME,
+    displaySummary: "Record heartbeat outcome/notify choice.",
+    description:
+      "Record heartbeat result. `notify=false` no visible send. `notify=true` needs concise notificationText.",
+    parameters: HeartbeatResponseToolSchema,
+    execute: async (_toolCallId, args) => {
+      if (!isRecord(args)) {
+        throw new ToolInputError("Heartbeat response arguments required");
+      }
+      readRequiredBoolean(args, "notify");
+      const response = normalizeHeartbeatToolResponse(args);
+      if (!response) {
+        throw new ToolInputError(
+          "Invalid heartbeat response. Provide outcome, notify, and non-empty summary.",
+        );
+      }
+      if (recorded) {
+        throw new ToolInputError("heartbeat_respond already recorded for this turn");
+      }
+      recorded = true;
+      return jsonResult({
+        status: "recorded",
+        ...response,
+      });
+    },
+  };
+}

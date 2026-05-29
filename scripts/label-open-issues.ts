@@ -2,6 +2,13 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
+import { isRecord } from "../src/utils.js";
+import { parseStrictIntegerOption } from "./lib/dev-tooling-safety.ts";
+
+function writeStdoutLine(message = ""): void {
+  process.stdout.write(`${message}\n`);
+}
 
 const BUG_LABEL = "bug";
 const ENHANCEMENT_LABEL = "enhancement";
@@ -13,6 +20,8 @@ const GH_MAX_BUFFER = 50 * 1024 * 1024;
 const PAGE_SIZE = 50;
 const WORK_BATCH_SIZE = 500;
 const STATE_VERSION = 1;
+const DEFAULT_OPENAI_TIMEOUT_MS = 60_000;
+const OPENAI_ERROR_BODY_MAX_CHARS = 4096;
 const STATE_FILE_NAME = "issue-labeler-state.json";
 const CONFIG_BASE_DIR = process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config");
 const STATE_FILE_PATH = join(CONFIG_BASE_DIR, "openclaw", STATE_FILE_NAME);
@@ -88,6 +97,13 @@ type ScriptOptions = {
   limit: number;
   dryRun: boolean;
   model: string;
+};
+
+type ClassifyOptions = {
+  apiKey: string;
+  model: string;
+  fetchImpl?: typeof fetch;
+  timeoutMs?: number;
 };
 
 type OpenAIResponse = {
@@ -230,26 +246,97 @@ function parseArgs(argv: string[]): ScriptOptions {
   return { limit, dryRun, model };
 }
 
+function isMainModule() {
+  const entry = process.argv[1];
+  return entry ? import.meta.url === pathToFileURL(entry).href : false;
+}
+
+function resolveOpenAITimeoutMs(raw = process.env.OPENCLAW_LABEL_OPEN_ISSUES_OPENAI_TIMEOUT_MS) {
+  return parseStrictIntegerOption({
+    fallback: DEFAULT_OPENAI_TIMEOUT_MS,
+    label: "OPENCLAW_LABEL_OPEN_ISSUES_OPENAI_TIMEOUT_MS",
+    min: 1,
+    raw,
+  });
+}
+
+async function withOpenAITimeout<T>(
+  label: string,
+  timeoutMs: number,
+  run: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const controller = new AbortController();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<T>((_resolve, reject) => {
+    timeout = setTimeout(() => {
+      const error = new Error(`${label} exceeded timeout of ${timeoutMs}ms`);
+      reject(error);
+      controller.abort(error);
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([run(controller.signal), timeoutPromise]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+async function readBoundedResponseText(
+  response: Response,
+  maxChars = OPENAI_ERROR_BODY_MAX_CHARS,
+): Promise<string> {
+  if (!response.body) {
+    return "";
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  let truncated = false;
+
+  try {
+    while (text.length <= maxChars) {
+      const { done, value } = await reader.read();
+      if (done) {
+        text += decoder.decode();
+        break;
+      }
+
+      text += decoder.decode(value, { stream: true });
+      if (text.length > maxChars) {
+        text = text.slice(0, maxChars);
+        truncated = true;
+        break;
+      }
+    }
+  } finally {
+    if (truncated) {
+      await reader.cancel().catch(() => undefined);
+    } else {
+      reader.releaseLock();
+    }
+  }
+
+  return truncated ? `${text}\n[truncated]` : text;
+}
+
 function logHeader(title: string) {
-  // eslint-disable-next-line no-console
-  console.log(`\n${title}`);
-  // eslint-disable-next-line no-console
-  console.log("=".repeat(title.length));
+  writeStdoutLine(`\n${title}`);
+  writeStdoutLine("=".repeat(title.length));
 }
 
 function logStep(message: string) {
-  // eslint-disable-next-line no-console
-  console.log(`• ${message}`);
+  writeStdoutLine(`• ${message}`);
 }
 
 function logSuccess(message: string) {
-  // eslint-disable-next-line no-console
-  console.log(`✓ ${message}`);
+  writeStdoutLine(`✓ ${message}`);
 }
 
 function logInfo(message: string) {
-  // eslint-disable-next-line no-console
-  console.log(`  ${message}`);
+  writeStdoutLine(`  ${message}`);
 }
 
 function createEmptyState(): LoadedState {
@@ -459,7 +546,7 @@ function* fetchOpenLabelItemBatches(params: {
       if (results.length >= WORK_BATCH_SIZE) {
         yield {
           batchIndex,
-          items: results.splice(0, results.length),
+          items: results.splice(0),
           totalCount,
           fetchedCount,
         };
@@ -547,10 +634,6 @@ function extractResponseText(payload: OpenAIResponse): string {
   return chunks.join("\n").trim();
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
 function fallbackCategory(issueText: string): "bug" | "enhancement" {
   const lower = issueText.toLowerCase();
   const bugSignals = [
@@ -585,61 +668,70 @@ function normalizeClassification(raw: unknown, issueText: string): Classificatio
 async function classifyItem(
   item: LabelItem,
   kind: "issue" | "pull request",
-  options: { apiKey: string; model: string },
+  options: ClassifyOptions,
 ): Promise<Classification> {
   const itemText = buildItemPrompt(item, kind);
-  const response = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${options.apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: options.model,
-      max_output_tokens: 200,
-      text: {
-        format: {
-          type: "json_schema",
-          name: "issue_classification",
-          schema: {
-            type: "object",
-            additionalProperties: false,
-            properties: {
-              category: { type: "string", enum: ["bug", "enhancement"] },
-              isSupport: { type: "boolean" },
-              isSkillOnly: { type: "boolean" },
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const timeoutMs = options.timeoutMs ?? resolveOpenAITimeoutMs();
+  const payload = await withOpenAITimeout(
+    "OpenAI issue label classification request",
+    timeoutMs,
+    async (signal) => {
+      const response = await fetchImpl("https://api.openai.com/v1/responses", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${options.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: options.model,
+          max_output_tokens: 200,
+          text: {
+            format: {
+              type: "json_schema",
+              name: "issue_classification",
+              schema: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  category: { type: "string", enum: ["bug", "enhancement"] },
+                  isSupport: { type: "boolean" },
+                  isSkillOnly: { type: "boolean" },
+                },
+                required: ["category", "isSupport", "isSkillOnly"],
+              },
             },
-            required: ["category", "isSupport", "isSkillOnly"],
           },
-        },
-      },
-      input: [
-        {
-          role: "system",
-          content:
-            "You classify GitHub issues and pull requests for OpenClaw. Respond with JSON only, no extra text.",
-        },
-        {
-          role: "user",
-          content: [
-            "Determine classification:\n",
-            "- category: 'bug' if the item reports incorrect behavior, errors, crashes, or regressions; otherwise 'enhancement'.\n",
-            "- isSupport: true if the item is primarily a support request or troubleshooting/how-to question, not a change request.\n",
-            "- isSkillOnly: true if the item solely requests or delivers adding/updating skills (no other feature/bug work).\n\n",
-            itemText,
-            "\n\nReturn JSON with keys: category, isSupport, isSkillOnly.",
-          ].join(""),
-        },
-      ],
-    }),
-  });
+          input: [
+            {
+              role: "system",
+              content:
+                "You classify GitHub issues and pull requests for OpenClaw. Respond with JSON only, no extra text.",
+            },
+            {
+              role: "user",
+              content: [
+                "Determine classification:\n",
+                "- category: 'bug' if the item reports incorrect behavior, errors, crashes, or regressions; otherwise 'enhancement'.\n",
+                "- isSupport: true if the item is primarily a support request or troubleshooting/how-to question, not a change request.\n",
+                "- isSkillOnly: true if the item solely requests or delivers adding/updating skills (no other feature/bug work).\n\n",
+                itemText,
+                "\n\nReturn JSON with keys: category, isSupport, isSkillOnly.",
+              ].join(""),
+            },
+          ],
+        }),
+        signal,
+      });
 
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`OpenAI request failed (${response.status}): ${text}`);
-  }
+      if (!response.ok) {
+        const text = await readBoundedResponseText(response);
+        throw new Error(`OpenAI request failed (${response.status}): ${text}`);
+      }
 
-  const payload = (await response.json()) as OpenAIResponse;
+      return (await response.json()) as OpenAIResponse;
+    },
+  );
   const rawText = extractResponseText(payload);
   let parsed: unknown = undefined;
 
@@ -695,10 +787,12 @@ async function main() {
   if (!apiKey) {
     throw new Error("OPENAI_API_KEY is required to classify issues and pull requests.");
   }
+  const openAITimeoutMs = resolveOpenAITimeoutMs();
 
   logHeader("OpenClaw Issue Label Audit");
   logStep(`Mode: ${dryRun ? "dry-run" : "apply labels"}`);
   logStep(`Model: ${model}`);
+  logStep(`OpenAI timeout: ${openAITimeoutMs}ms`);
   logStep(`Issue limit: ${Number.isFinite(limit) ? limit : "unlimited"}`);
   logStep(`PR limit: ${Number.isFinite(limit) ? limit : "unlimited"}`);
   logStep(`Batch size: ${WORK_BATCH_SIZE}`);
@@ -748,13 +842,16 @@ async function main() {
     logInfo(`Processing ${pendingIssues.length} issues (scanned so far: ${scannedCount}).`);
 
     for (const issue of pendingIssues) {
-      // eslint-disable-next-line no-console
-      console.log(`\n#${issue.number} — ${issue.title}`);
+      writeStdoutLine(`\n#${issue.number} — ${issue.title}`);
 
       const labels = new Set(issue.labels.map((label) => label.name));
       logInfo(`Existing labels: ${Array.from(labels).toSorted().join(", ") || "none"}`);
 
-      const classification = await classifyItem(issue, "issue", { apiKey, model });
+      const classification = await classifyItem(issue, "issue", {
+        apiKey,
+        model,
+        timeoutMs: openAITimeoutMs,
+      });
       logInfo(
         `Classification: category=${classification.category}, support=${classification.isSupport ? "yes" : "no"}, skill-only=${classification.isSkillOnly ? "yes" : "no"}.`,
       );
@@ -824,8 +921,7 @@ async function main() {
     );
 
     for (const pullRequest of pendingPullRequests) {
-      // eslint-disable-next-line no-console
-      console.log(`\n#${pullRequest.number} — ${pullRequest.title}`);
+      writeStdoutLine(`\n#${pullRequest.number} — ${pullRequest.title}`);
 
       const labels = new Set(pullRequest.labels.map((label) => label.name));
       logInfo(`Existing labels: ${Array.from(labels).toSorted().join(", ") || "none"}`);
@@ -837,7 +933,11 @@ async function main() {
         continue;
       }
 
-      const classification = await classifyItem(pullRequest, "pull request", { apiKey, model });
+      const classification = await classifyItem(pullRequest, "pull request", {
+        apiKey,
+        model,
+        timeoutMs: openAITimeoutMs,
+      });
       logInfo(
         `Classification: category=${classification.category}, support=${classification.isSupport ? "yes" : "no"}, skill-only=${classification.isSkillOnly ? "yes" : "no"}.`,
       );
@@ -890,4 +990,13 @@ async function main() {
   logInfo(`Added r: skill labels (PRs): ${prSkillCount}`);
 }
 
-await main();
+export const testing = {
+  classifyItem,
+  normalizeClassification,
+  readBoundedResponseText,
+  resolveOpenAITimeoutMs,
+};
+
+if (isMainModule()) {
+  await main();
+}

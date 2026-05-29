@@ -11,6 +11,7 @@ export function createProcessSessionFixture(params: {
   backgrounded?: boolean;
   pid?: number;
   child?: ChildProcessWithoutNullStreams;
+  cursorKeyMode?: ProcessSession["cursorKeyMode"];
 }): ProcessSession {
   const session: ProcessSession = {
     id: params.id,
@@ -31,6 +32,7 @@ export function createProcessSessionFixture(params: {
     exitSignal: undefined,
     truncated: false,
     backgrounded: params.backgrounded ?? false,
+    cursorKeyMode: params.cursorKeyMode ?? "normal",
   };
   if (params.pid !== undefined) {
     session.pid = params.pid;

@@ -1,94 +1,63 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { withBundledPluginAllowlistCompat } from "../bundled-compat.js";
-import { loadPluginManifestRegistry } from "../manifest-registry.js";
-import { __testing as providerTesting } from "../providers.js";
-import { resolvePluginWebSearchProviders } from "../web-search-providers.js";
-import { providerContractCompatPluginIds, webSearchProviderContractRegistry } from "./registry.js";
-import { uniqueSortedStrings } from "./testkit.js";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { uniqueSortedStrings } from "../../plugin-sdk/test-helpers/string-utils.js";
+import { resolveManifestContractPluginIds } from "../plugin-registry.js";
+import { testing as providerTesting } from "../providers.js";
+import { resolveBundledContractSnapshotPluginIds } from "./inventory/bundled-capability-metadata.js";
+import { providerContractCompatPluginIds } from "./registry.js";
 
 function resolveBundledManifestProviderPluginIds() {
-  return uniqueSortedStrings(
-    loadPluginManifestRegistry({})
-      .plugins.filter((plugin) => plugin.origin === "bundled" && plugin.providers.length > 0)
-      .map((plugin) => plugin.id),
-  );
+  return uniqueSortedStrings(resolveBundledContractSnapshotPluginIds("providerIds"));
+}
+
+function expectPluginAllowlistEquals(
+  allow: string[] | undefined,
+  pluginIds: string[],
+  expectedExtraEntry?: string,
+) {
+  expect(allow).toEqual(expectedExtraEntry ? [expectedExtraEntry, ...pluginIds] : pluginIds);
 }
 
 describe("plugin loader contract", () => {
-  beforeEach(() => {
-    vi.restoreAllMocks();
-  });
+  let providerPluginIds: string[] = [];
+  let manifestProviderPluginIds: string[] = [];
+  let vitestCompatConfig: ReturnType<typeof providerTesting.withBundledProviderVitestCompat>;
+  let webSearchPluginIds: string[] = [];
+  let bundledWebSearchPluginIds: string[] = [];
 
-  it("keeps bundled provider compatibility wired to the provider registry", () => {
-    const providerPluginIds = uniqueSortedStrings(providerContractCompatPluginIds);
-    const manifestProviderPluginIds = resolveBundledManifestProviderPluginIds();
-    const compatPluginIds = providerTesting.resolveBundledProviderCompatPluginIds({
-      config: {
-        plugins: {
-          allow: ["openrouter"],
-        },
-      },
-    });
-
-    const compatConfig = withBundledPluginAllowlistCompat({
-      config: {
-        plugins: {
-          allow: ["openrouter"],
-        },
-      },
-      pluginIds: compatPluginIds,
-    });
-
-    expect(providerPluginIds).toEqual(manifestProviderPluginIds);
-    expect(uniqueSortedStrings(compatPluginIds)).toEqual(manifestProviderPluginIds);
-    expect(uniqueSortedStrings(compatPluginIds)).toEqual(expect.arrayContaining(providerPluginIds));
-    expect(compatConfig?.plugins?.allow).toEqual(expect.arrayContaining(providerPluginIds));
-  });
-
-  it("keeps vitest bundled provider enablement wired to the provider registry", () => {
-    const providerPluginIds = uniqueSortedStrings(providerContractCompatPluginIds);
-    const manifestProviderPluginIds = resolveBundledManifestProviderPluginIds();
-    const compatConfig = providerTesting.withBundledProviderVitestCompat({
+  beforeAll(() => {
+    providerPluginIds = uniqueSortedStrings(providerContractCompatPluginIds);
+    manifestProviderPluginIds = resolveBundledManifestProviderPluginIds();
+    vitestCompatConfig = providerTesting.withBundledProviderVitestCompat({
       config: undefined,
       pluginIds: providerPluginIds,
       env: { VITEST: "1" } as NodeJS.ProcessEnv,
     });
+    webSearchPluginIds = uniqueSortedStrings(
+      resolveBundledContractSnapshotPluginIds("webSearchProviderIds"),
+    );
+    bundledWebSearchPluginIds = uniqueSortedStrings(
+      resolveManifestContractPluginIds({
+        contract: "webSearchProviders",
+        origin: "bundled",
+      }),
+    );
+  });
 
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("keeps bundled provider registry wired to the manifest inventory", () => {
     expect(providerPluginIds).toEqual(manifestProviderPluginIds);
-    expect(compatConfig?.plugins).toMatchObject({
-      enabled: true,
-      allow: expect.arrayContaining(providerPluginIds),
-    });
+  });
+
+  it("keeps vitest bundled provider enablement wired to the provider registry", () => {
+    expect(providerPluginIds).toEqual(manifestProviderPluginIds);
+    expect(vitestCompatConfig?.plugins?.enabled).toBe(true);
+    expectPluginAllowlistEquals(vitestCompatConfig?.plugins?.allow, providerPluginIds);
   });
 
   it("keeps bundled web search loading scoped to the web search registry", () => {
-    const webSearchPluginIds = uniqueSortedStrings(
-      webSearchProviderContractRegistry.map((entry) => entry.pluginId),
-    );
-
-    const providers = resolvePluginWebSearchProviders({});
-
-    expect(uniqueSortedStrings(providers.map((provider) => provider.pluginId))).toEqual(
-      webSearchPluginIds,
-    );
-  });
-
-  it("keeps bundled web search allowlist compatibility wired to the web search registry", () => {
-    const webSearchPluginIds = uniqueSortedStrings(
-      webSearchProviderContractRegistry.map((entry) => entry.pluginId),
-    );
-
-    const providers = resolvePluginWebSearchProviders({
-      bundledAllowlistCompat: true,
-      config: {
-        plugins: {
-          allow: ["openrouter"],
-        },
-      },
-    });
-
-    expect(uniqueSortedStrings(providers.map((provider) => provider.pluginId))).toEqual(
-      webSearchPluginIds,
-    );
+    expect(bundledWebSearchPluginIds).toEqual(webSearchPluginIds);
   });
 });

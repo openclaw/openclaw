@@ -1,31 +1,29 @@
 import { resolveConfigWriteTargetFromPath } from "../../channels/plugins/config-writes.js";
 import { normalizeChannelId } from "../../channels/registry.js";
-import {
-  getConfigValueAtPath,
-  parseConfigPath,
-  setConfigValueAtPath,
-  unsetConfigValueAtPath,
-} from "../../config/config-paths.js";
-import {
-  readConfigFileSnapshot,
-  validateConfigObjectWithPlugins,
-  writeConfigFile,
-} from "../../config/config.js";
+import { getConfigValueAtPath, parseConfigPath } from "../../config/config-paths.js";
+import { readConfigFileSnapshot } from "../../config/config.js";
 import {
   getConfigOverrides,
   resetConfigOverrides,
   setConfigOverride,
   unsetConfigOverride,
 } from "../../config/runtime-overrides.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import { resolveChannelAccountId } from "./channel-context.js";
 import {
   rejectNonOwnerCommand,
   rejectUnauthorizedCommand,
   requireCommandFlagEnabled,
-  requireGatewayClientScopeForInternalChannel,
+  requireGatewayClientScope,
 } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
 import { parseConfigCommand } from "./config-commands.js";
+import {
+  formatAutoReplyConfigMutationError,
+  setConfigPath,
+  unsetConfigPath,
+} from "./config-mutations.js";
 import { resolveConfigWriteDeniedText } from "./config-write-authorization.js";
 import { parseDebugCommand } from "./debug-commands.js";
 
@@ -63,7 +61,7 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
 
   let parsedWritePath: string[] | undefined;
   if (configCommand.action === "set" || configCommand.action === "unset") {
-    const missingAdminScope = requireGatewayClientScopeForInternalChannel(params, {
+    const missingAdminScope = requireGatewayClientScope(params, {
       label: "/config write",
       allowedScopes: ["operator.admin"],
       missingText: "❌ /config set|unset requires operator.admin for gateway clients.",
@@ -83,8 +81,12 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
     const deniedText = resolveConfigWriteDeniedText({
       cfg: params.cfg,
       channel: params.command.channel,
-      channelId,
-      accountId: params.ctx.AccountId,
+      originChannelId: channelId,
+      originAccountId: resolveChannelAccountId({
+        cfg: params.cfg,
+        ctx: params.ctx,
+        command: params.command,
+      }),
       gatewayClientScopes: params.ctx.GatewayClientScopes,
       target: resolveConfigWriteTargetFromPath(parsedWritePath),
     });
@@ -110,7 +112,7 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
   const parsedBase = structuredClone(snapshot.parsed as Record<string, unknown>);
 
   if (configCommand.action === "show") {
-    const pathRaw = configCommand.path?.trim();
+    const pathRaw = normalizeOptionalString(configCommand.path);
     if (pathRaw) {
       const parsedPath = parseConfigPath(pathRaw);
       if (!parsedPath.ok || !parsedPath.path) {
@@ -136,24 +138,22 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
   }
 
   if (configCommand.action === "unset") {
-    const removed = unsetConfigValueAtPath(parsedBase, parsedWritePath ?? []);
-    if (!removed) {
-      return {
-        shouldContinue: false,
-        reply: { text: `⚙️ No config value found for ${configCommand.path}.` },
-      };
+    const path = parsedWritePath ?? [];
+    try {
+      const removed = await unsetConfigPath(path);
+      if (!removed) {
+        return {
+          shouldContinue: false,
+          reply: { text: `⚙️ No config value found for ${configCommand.path}.` },
+        };
+      }
+    } catch (error) {
+      const message = formatAutoReplyConfigMutationError(error);
+      if (message) {
+        return { shouldContinue: false, reply: { text: `⚠️ ${message}` } };
+      }
+      throw error;
     }
-    const validated = validateConfigObjectWithPlugins(parsedBase);
-    if (!validated.ok) {
-      const issue = validated.issues[0];
-      return {
-        shouldContinue: false,
-        reply: {
-          text: `⚠️ Config invalid after unset (${issue.path}: ${issue.message}).`,
-        },
-      };
-    }
-    await writeConfigFile(validated.config);
     return {
       shouldContinue: false,
       reply: { text: `⚙️ Config updated: ${configCommand.path} removed.` },
@@ -161,18 +161,16 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
   }
 
   if (configCommand.action === "set") {
-    setConfigValueAtPath(parsedBase, parsedWritePath ?? [], configCommand.value);
-    const validated = validateConfigObjectWithPlugins(parsedBase);
-    if (!validated.ok) {
-      const issue = validated.issues[0];
-      return {
-        shouldContinue: false,
-        reply: {
-          text: `⚠️ Config invalid after set (${issue.path}: ${issue.message}).`,
-        },
-      };
+    const path = parsedWritePath ?? [];
+    try {
+      await setConfigPath(path, configCommand.value);
+    } catch (error) {
+      const message = formatAutoReplyConfigMutationError(error);
+      if (message) {
+        return { shouldContinue: false, reply: { text: `⚠️ ${message}` } };
+      }
+      throw error;
     }
-    await writeConfigFile(validated.config);
     const valueLabel =
       typeof configCommand.value === "string"
         ? `"${configCommand.value}"`

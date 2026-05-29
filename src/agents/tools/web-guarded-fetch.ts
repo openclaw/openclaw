@@ -5,11 +5,16 @@ import {
   withStrictGuardedFetchMode,
   withTrustedEnvProxyGuardedFetchMode,
 } from "../../infra/net/fetch-guard.js";
-import type { SsrFPolicy } from "../../infra/net/ssrf.js";
+import {
+  ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist,
+  type SsrFPolicy,
+} from "../../infra/net/ssrf.js";
+import { readPositiveIntegerParam } from "./common.js";
 
-const WEB_TOOLS_TRUSTED_NETWORK_SSRF_POLICY: SsrFPolicy = {
+const WEB_TOOLS_SELF_HOSTED_NETWORK_SSRF_POLICY: SsrFPolicy = {
   dangerouslyAllowPrivateNetwork: true,
   allowRfc2544BenchmarkRange: true,
+  allowIpv6UniqueLocalRange: true,
 };
 
 type WebToolGuardedFetchOptions = Omit<
@@ -25,11 +30,16 @@ function resolveTimeoutMs(params: {
   timeoutMs?: number;
   timeoutSeconds?: number;
 }): number | undefined {
-  if (typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)) {
-    return params.timeoutMs;
+  const timeoutMs = readPositiveIntegerParam(params as Record<string, unknown>, "timeoutMs");
+  if (timeoutMs !== undefined) {
+    return timeoutMs;
   }
-  if (typeof params.timeoutSeconds === "number" && Number.isFinite(params.timeoutSeconds)) {
-    return params.timeoutSeconds * 1000;
+  const timeoutSeconds = readPositiveIntegerParam(
+    params as Record<string, unknown>,
+    "timeoutSeconds",
+  );
+  if (timeoutSeconds !== undefined) {
+    return timeoutSeconds * 1000;
   }
   return undefined;
 }
@@ -65,10 +75,25 @@ export async function withTrustedWebToolsEndpoint<T>(
   params: WebToolEndpointFetchOptions,
   run: (result: { response: Response; finalUrl: string }) => Promise<T>,
 ): Promise<T> {
+  const trustedPolicy = ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist(params.url) ?? {};
   return await withWebToolsNetworkGuard(
     {
       ...params,
-      policy: WEB_TOOLS_TRUSTED_NETWORK_SSRF_POLICY,
+      policy: trustedPolicy,
+      useEnvProxy: true,
+    },
+    run,
+  );
+}
+
+export async function withSelfHostedWebToolsEndpoint<T>(
+  params: WebToolEndpointFetchOptions,
+  run: (result: { response: Response; finalUrl: string }) => Promise<T>,
+): Promise<T> {
+  return await withWebToolsNetworkGuard(
+    {
+      ...params,
+      policy: WEB_TOOLS_SELF_HOSTED_NETWORK_SSRF_POLICY,
       useEnvProxy: true,
     },
     run,

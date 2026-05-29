@@ -1,5 +1,10 @@
-import sharp from "sharp";
 import { describe, expect, it } from "vitest";
+import {
+  createNoisyPngBuffer,
+  createSolidPngBuffer,
+  createTinyJpegBuffer,
+} from "../../test/helpers/image-fixtures.js";
+import { getImageMetadata } from "../media/image-ops.js";
 import { sanitizeContentBlocksImages, sanitizeImageBlocks } from "./tool-images.js";
 
 describe("tool image sanitizing", () => {
@@ -14,26 +19,15 @@ describe("tool image sanitizing", () => {
   };
 
   const createWidePng = async () => {
-    const width = 2600;
-    const height = 400;
-    const raw = Buffer.alloc(width * height * 3, 0x7f);
-    return sharp(raw, {
-      raw: { width, height, channels: 3 },
-    })
-      .png({ compressionLevel: 9 })
-      .toBuffer();
+    return createSolidPngBuffer(420, 120, { r: 0x7f, g: 0x7f, b: 0x7f });
   };
 
-  it("shrinks oversized images to <=5MB", async () => {
-    const width = 2800;
-    const height = 2800;
-    const raw = Buffer.alloc(width * height * 3, 0xff);
-    const bigPng = await sharp(raw, {
-      raw: { width, height, channels: 3 },
-    })
-      .png({ compressionLevel: 0 })
-      .toBuffer();
-    expect(bigPng.byteLength).toBeGreaterThan(5 * 1024 * 1024);
+  it("shrinks oversized images to the configured byte limit", async () => {
+    const maxBytes = 64 * 1024;
+    const width = 300;
+    const height = 300;
+    const bigPng = createNoisyPngBuffer(width, height);
+    expect(bigPng.byteLength).toBeGreaterThan(maxBytes);
 
     const blocks = [
       {
@@ -43,10 +37,10 @@ describe("tool image sanitizing", () => {
       },
     ];
 
-    const out = await sanitizeContentBlocksImages(blocks, "test");
+    const out = await sanitizeContentBlocksImages(blocks, "test", { maxBytes });
     const image = getImageBlock(out);
     const size = Buffer.from(image.data, "base64").byteLength;
-    expect(size).toBeLessThanOrEqual(5 * 1024 * 1024);
+    expect(size).toBeLessThanOrEqual(maxBytes);
     expect(image.mimeType).toBe("image/jpeg");
   }, 20_000);
 
@@ -56,12 +50,14 @@ describe("tool image sanitizing", () => {
     const images = [
       { type: "image" as const, data: png.toString("base64"), mimeType: "image/png" },
     ];
-    const { images: out, dropped } = await sanitizeImageBlocks(images, "test");
+    const { images: out, dropped } = await sanitizeImageBlocks(images, "test", {
+      maxDimensionPx: 120,
+    });
     expect(dropped).toBe(0);
     expect(out.length).toBe(1);
-    const meta = await sharp(Buffer.from(out[0].data, "base64")).metadata();
-    expect(meta.width).toBeLessThanOrEqual(1200);
-    expect(meta.height).toBeLessThanOrEqual(1200);
+    const meta = await getImageMetadata(Buffer.from(out[0].data, "base64"));
+    expect(meta?.width).toBeLessThanOrEqual(120);
+    expect(meta?.height).toBeLessThanOrEqual(120);
   }, 20_000);
 
   it("shrinks images that exceed max dimension even if size is small", async () => {
@@ -75,25 +71,16 @@ describe("tool image sanitizing", () => {
       },
     ];
 
-    const out = await sanitizeContentBlocksImages(blocks, "test");
+    const out = await sanitizeContentBlocksImages(blocks, "test", { maxDimensionPx: 120 });
     const image = getImageBlock(out);
-    const meta = await sharp(Buffer.from(image.data, "base64")).metadata();
-    expect(meta.width).toBeLessThanOrEqual(1200);
-    expect(meta.height).toBeLessThanOrEqual(1200);
+    const meta = await getImageMetadata(Buffer.from(image.data, "base64"));
+    expect(meta?.width).toBeLessThanOrEqual(120);
+    expect(meta?.height).toBeLessThanOrEqual(120);
     expect(image.mimeType).toBe("image/jpeg");
   }, 20_000);
 
   it("corrects mismatched jpeg mimeType", async () => {
-    const jpeg = await sharp({
-      create: {
-        width: 10,
-        height: 10,
-        channels: 3,
-        background: { r: 255, g: 0, b: 0 },
-      },
-    })
-      .jpeg()
-      .toBuffer();
+    const jpeg = createTinyJpegBuffer();
 
     const blocks = [
       {
@@ -106,6 +93,26 @@ describe("tool image sanitizing", () => {
     const out = await sanitizeContentBlocksImages(blocks, "test");
     const image = getImageBlock(out);
     expect(image.mimeType).toBe("image/jpeg");
+  });
+
+  it("uses default image limits for non-finite options", async () => {
+    const jpeg = createTinyJpegBuffer();
+
+    const out = await sanitizeContentBlocksImages(
+      [
+        {
+          type: "image" as const,
+          data: jpeg.toString("base64"),
+          mimeType: "image/jpeg",
+        },
+      ],
+      "test",
+      { maxDimensionPx: Number.NaN, maxBytes: Number.NaN },
+    );
+
+    const image = getImageBlock(out);
+    expect(image.mimeType).toBe("image/jpeg");
+    expect(image.data).toBe(jpeg.toString("base64"));
   });
 
   it("drops malformed image base64 payloads", async () => {

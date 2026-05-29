@@ -1,12 +1,12 @@
-import type { AssistantMessage, Model, ToolResultMessage } from "@mariozechner/pi-ai";
-import { streamOpenAIResponses } from "@mariozechner/pi-ai";
-import { Type } from "@sinclair/typebox";
+import type { AssistantMessage, Model, ToolResultMessage } from "openclaw/plugin-sdk/llm";
+import { stream } from "openclaw/plugin-sdk/llm";
+import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 
 function buildModel(): Model<"openai-responses"> {
   return {
-    id: "gpt-5.2",
-    name: "gpt-5.2",
+    id: "gpt-5.4",
+    name: "gpt-5.4",
     api: "openai-responses",
     provider: "openai",
     baseUrl: "https://api.openai.com/v1",
@@ -66,7 +66,7 @@ function buildAssistantMessage(params: {
     role: "assistant",
     api: "openai-responses",
     provider: "openai",
-    model: "gpt-5.2",
+    model: "gpt-5.4",
     usage: ZERO_USAGE,
     stopReason: params.stopReason,
     timestamp: Date.now(),
@@ -88,7 +88,7 @@ async function runAbortedOpenAIResponsesStream(params: {
   controller.abort();
   let payload: Record<string, unknown> | undefined;
 
-  const stream = streamOpenAIResponses(
+  const responseStream = stream(
     buildModel(),
     {
       systemPrompt: "system",
@@ -104,7 +104,7 @@ async function runAbortedOpenAIResponsesStream(params: {
     },
   );
 
-  await stream.result();
+  await responseStream.result();
   const input = extractInput(payload);
   return {
     input,

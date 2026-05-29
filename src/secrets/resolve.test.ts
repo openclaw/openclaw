@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { INVALID_EXEC_SECRET_REF_IDS } from "../test-utils/secret-ref-test-vectors.js";
+import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import {
   resolveSecretRefString,
   resolveSecretRefValue,
@@ -12,18 +13,23 @@ import {
 
 async function writeSecureFile(filePath: string, content: string, mode = 0o600): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, content, "utf8");
-  await fs.chmod(filePath, mode);
+  const tempPath = `${filePath}.tmp-${process.pid}-${Date.now()}-${Math.random()
+    .toString(16)
+    .slice(2)}`;
+  try {
+    await fs.writeFile(tempPath, content, "utf8");
+    await fs.chmod(tempPath, mode);
+    await fs.rename(tempPath, filePath);
+  } catch (err) {
+    await fs.rm(tempPath, { force: true }).catch(() => {});
+    throw err;
+  }
 }
 
 describe("secret ref resolver", () => {
   const isWindows = process.platform === "win32";
   function itPosix(name: string, fn: () => Promise<void> | void) {
-    if (isWindows) {
-      it.skip(name, fn);
-      return;
-    }
-    it(name, fn);
+    it.skipIf(isWindows)(name, fn);
   }
   let fixtureRoot = "";
   let caseId = 0;
@@ -54,6 +60,7 @@ describe("secret ref resolver", () => {
     path: string;
     mode: "json" | "singleValue";
     timeoutMs?: number;
+    allowInsecurePath?: boolean;
   };
 
   function createExecProviderConfig(
@@ -390,16 +397,14 @@ describe("secret ref resolver", () => {
       }),
     );
 
-    const originalReadFile = fs.readFile.bind(fs);
-    const readFileSpy = vi.spyOn(fs, "readFile").mockImplementation(((
-      targetPath: Parameters<typeof fs.readFile>[0],
-      options?: Parameters<typeof fs.readFile>[1],
-    ) => {
-      if (typeof targetPath === "string" && targetPath === filePath) {
-        return new Promise<Buffer>(() => {});
-      }
-      return originalReadFile(targetPath, options);
-    }) as typeof fs.readFile);
+    const sampleHandle = await fs.open(filePath, "r");
+    const fileHandlePrototype = Object.getPrototypeOf(sampleHandle) as {
+      readFile: typeof sampleHandle.readFile;
+    };
+    await sampleHandle.close();
+    const readFileSpy = vi
+      .spyOn(fileHandlePrototype, "readFile")
+      .mockImplementation(() => new Promise<Buffer>(() => {}) as never);
 
     try {
       await expect(
@@ -453,5 +458,101 @@ describe("secret ref resolver", () => {
         ),
       ).rejects.toThrow(/Exec secret reference id must match|Secret reference id is empty/);
     }
+  });
+
+  it("strips UTF-8 BOM from file provider payload before JSON parse", async () => {
+    const dir = await createCaseDir("bom-file");
+    const filePath = path.join(dir, "secrets-with-bom.json");
+    // Write JSON with UTF-8 BOM prefix (EF BB BF)
+    const bom = "\uFEFF";
+    await writeSecureFile(filePath, `${bom}{"apiKey":"sk-test-123"}`);
+
+    const value = await resolveSecretRefString(
+      { source: "file", provider: "filemain", id: "/apiKey" },
+      {
+        config: {
+          secrets: {
+            providers: {
+              filemain: createFileProviderConfig(filePath),
+            },
+          },
+        },
+      },
+    );
+    expect(value).toBe("sk-test-123");
+  });
+
+  it("strips UTF-8 BOM from file provider singleValue mode", async () => {
+    const dir = await createCaseDir("bom-single");
+    const filePath = path.join(dir, "secret-with-bom.txt");
+    const bom = "\uFEFF";
+    await writeSecureFile(filePath, `${bom}my-secret-value\n`);
+
+    const value = await resolveSecretRefString(
+      { source: "file", provider: "filemain", id: "value" },
+      {
+        config: {
+          secrets: {
+            providers: {
+              filemain: createFileProviderConfig(filePath, { mode: "singleValue" }),
+            },
+          },
+        },
+      },
+    );
+    expect(value).toBe("my-secret-value");
+  });
+
+  it("fails closed on Windows when file provider ACL source is unknown", async () => {
+    await withMockedWindowsPlatform(async () => {
+      const dir = await createCaseDir("win-acl");
+      const filePath = path.join(dir, "secrets.json");
+      await writeSecureFile(filePath, '{"token":"abc123"}');
+
+      await expect(
+        resolveSecretRefString(
+          { source: "file", provider: "filemain", id: "/token" },
+          {
+            config: {
+              secrets: {
+                providers: {
+                  filemain: createFileProviderConfig(filePath),
+                },
+              },
+            },
+          },
+        ),
+      ).rejects.toThrow(/ACL verification unavailable on Windows/);
+    });
+  });
+
+  it("allows trusted file provider opt-out when Windows ACL source is unknown", async () => {
+    await withMockedWindowsPlatform(async () => {
+      const dir = await createCaseDir("win-acl-opt-out");
+      const filePath = path.join(dir, "secrets.json");
+      await writeSecureFile(filePath, '{"token":"abc123"}');
+
+      const value = await resolveSecretRefString(
+        { source: "file", provider: "filemain", id: "/token" },
+        {
+          config: {
+            secrets: {
+              providers: {
+                filemain: createFileProviderConfig(filePath, { allowInsecurePath: true }),
+              },
+            },
+          },
+        },
+      );
+      expect(value).toBe("abc123");
+    });
+  });
+
+  it("fails closed on Windows when exec provider ACL source is unknown", async () => {
+    await withMockedWindowsPlatform(async () => {
+      await expect(resolveExecSecret(execProtocolV1ScriptPath)).rejects.toThrow(
+        /ACL verification unavailable on Windows/,
+      );
+    });
   });
 });

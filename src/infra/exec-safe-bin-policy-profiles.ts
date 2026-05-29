@@ -1,3 +1,6 @@
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { sortUniqueStrings } from "../shared/string-normalization.js";
+
 export type SafeBinProfile = {
   minPositional?: number;
   maxPositional?: number;
@@ -19,6 +22,8 @@ export type SafeBinProfileFixture = {
 export type SafeBinProfileFixtures = Readonly<Record<string, SafeBinProfileFixture>>;
 
 const NO_FLAGS: ReadonlySet<string> = new Set();
+
+export const DEFAULT_SAFE_BINS = ["cut", "uniq", "head", "tail", "tr", "wc"] as const;
 
 const toFlagSet = (flags?: readonly string[]): ReadonlySet<string> => {
   if (!flags || flags.length === 0) {
@@ -220,7 +225,7 @@ export const SAFE_BIN_PROFILES: Record<string, SafeBinProfile> =
   compileSafeBinProfiles(SAFE_BIN_PROFILE_FIXTURES);
 
 function normalizeSafeBinProfileName(raw: string): string | null {
-  const name = raw.trim().toLowerCase();
+  const name = normalizeLowercaseStringOrEmpty(raw);
   return name.length > 0 ? name : null;
 }
 
@@ -291,12 +296,12 @@ export function resolveSafeBinProfiles(
   };
 }
 
-export function resolveSafeBinDeniedFlags(
+function resolveSafeBinDeniedFlags(
   fixtures: Readonly<Record<string, SafeBinProfileFixture>> = SAFE_BIN_PROFILE_FIXTURES,
 ): Record<string, string[]> {
   const out: Record<string, string[]> = {};
   for (const [name, fixture] of Object.entries(fixtures)) {
-    const denied = Array.from(new Set(fixture.deniedFlags ?? [])).toSorted();
+    const denied = sortUniqueStrings(fixture.deniedFlags ?? []);
     if (denied.length > 0) {
       out[name] = denied;
     }
@@ -312,4 +317,10 @@ export function renderSafeBinDeniedFlagsDocBullets(
   return bins
     .map((bin) => `- \`${bin}\`: ${deniedByBin[bin].map((flag) => `\`${flag}\``).join(", ")}`)
     .join("\n");
+}
+
+export function renderDefaultSafeBinsDocText(
+  defaults: readonly string[] = DEFAULT_SAFE_BINS,
+): string {
+  return defaults.map((bin) => `\`${bin}\``).join(", ");
 }

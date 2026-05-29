@@ -1,16 +1,26 @@
-import type { RequestClient } from "@buape/carbon";
-import { Routes } from "discord-api-types/v10";
-import { createFinalizableDraftLifecycle } from "openclaw/plugin-sdk/channel-runtime";
+import { createFinalizableDraftLifecycle } from "openclaw/plugin-sdk/channel-outbound";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  createChannelMessage,
+  deleteChannelMessage,
+  editChannelMessage,
+  type RequestClient,
+} from "./internal/discord.js";
+import { resolveDiscordMessageFlags } from "./send.shared.js";
 
 /** Discord messages cap at 2000 characters. */
 const DISCORD_STREAM_MAX_CHARS = 2000;
 const DEFAULT_THROTTLE_MS = 1200;
+const DISCORD_PREVIEW_ALLOWED_MENTIONS = { parse: [] };
 
-export type DiscordDraftStream = {
+type DiscordDraftStream = {
   update: (text: string) => void;
   flush: () => Promise<void>;
   messageId: () => string | undefined;
   clear: () => Promise<void>;
+  deleteCurrentMessage: () => Promise<void>;
+  discardPending: () => Promise<void>;
+  seal: () => Promise<void>;
   stop: () => Promise<void>;
   /** Reset internal state so the next update creates a new message instead of editing. */
   forceNewMessage: () => void;
@@ -24,6 +34,7 @@ export function createDiscordDraftStream(params: {
   throttleMs?: number;
   /** Minimum chars before sending first message (debounce for push notifications) */
   minInitialChars?: number;
+  suppressEmbeds?: boolean;
   log?: (message: string) => void;
   warn?: (message: string) => void;
 }): DiscordDraftStream {
@@ -32,6 +43,7 @@ export function createDiscordDraftStream(params: {
   const minInitialChars = params.minInitialChars;
   const channelId = params.channelId;
   const rest = params.rest;
+  const flags = resolveDiscordMessageFlags({ suppressEmbeds: params.suppressEmbeds });
   const resolveReplyToMessageId = () =>
     typeof params.replyToMessageId === "function"
       ? params.replyToMessageId()
@@ -72,8 +84,12 @@ export function createDiscordDraftStream(params: {
     try {
       if (streamMessageId !== undefined) {
         // Edit existing message
-        await rest.patch(Routes.channelMessage(channelId, streamMessageId), {
-          body: { content: trimmed },
+        await editChannelMessage(rest, channelId, streamMessageId, {
+          body: {
+            content: trimmed,
+            allowed_mentions: DISCORD_PREVIEW_ALLOWED_MENTIONS,
+            ...(flags ? { flags } : {}),
+          },
         });
         return true;
       }
@@ -82,12 +98,14 @@ export function createDiscordDraftStream(params: {
       const messageReference = replyToMessageId
         ? { message_id: replyToMessageId, fail_if_not_exists: false }
         : undefined;
-      const sent = (await rest.post(Routes.channelMessages(channelId), {
+      const sent = await createChannelMessage<{ id?: string }>(rest, channelId, {
         body: {
           content: trimmed,
+          allowed_mentions: DISCORD_PREVIEW_ALLOWED_MENTIONS,
+          ...(flags ? { flags } : {}),
           ...(messageReference ? { message_reference: messageReference } : {}),
         },
-      })) as { id?: string } | undefined;
+      });
       const sentMessageId = sent?.id;
       if (typeof sentMessageId !== "string" || !sentMessageId) {
         streamState.stopped = true;
@@ -98,9 +116,7 @@ export function createDiscordDraftStream(params: {
       return true;
     } catch (err) {
       streamState.stopped = true;
-      params.warn?.(
-        `discord stream preview failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      params.warn?.(`discord stream preview failed: ${formatErrorMessage(err)}`);
       return false;
     }
   };
@@ -111,10 +127,10 @@ export function createDiscordDraftStream(params: {
   };
   const isValidStreamMessageId = (value: unknown): value is string => typeof value === "string";
   const deleteStreamMessage = async (messageId: string) => {
-    await rest.delete(Routes.channelMessage(channelId, messageId));
+    await deleteChannelMessage(rest, channelId, messageId);
   };
 
-  const { loop, update, stop, clear } = createFinalizableDraftLifecycle({
+  const { loop, update, stop, clear, discardPending, seal } = createFinalizableDraftLifecycle({
     throttleMs,
     state: streamState,
     sendOrEditStreamMessage,
@@ -131,6 +147,22 @@ export function createDiscordDraftStream(params: {
     lastSentText = "";
     loop.resetPending();
   };
+  const deleteCurrentMessage = async () => {
+    loop.resetPending();
+    await loop.waitForInFlight();
+    const messageId = streamMessageId;
+    streamMessageId = undefined;
+    lastSentText = "";
+    loop.resetThrottleWindow();
+    if (!isValidStreamMessageId(messageId)) {
+      return;
+    }
+    try {
+      await deleteStreamMessage(messageId);
+    } catch (err) {
+      params.warn?.(`discord stream preview cleanup failed: ${formatErrorMessage(err)}`);
+    }
+  };
 
   params.log?.(`discord stream preview ready (maxChars=${maxChars}, throttleMs=${throttleMs})`);
 
@@ -139,6 +171,9 @@ export function createDiscordDraftStream(params: {
     flush: loop.flush,
     messageId: () => streamMessageId,
     clear,
+    deleteCurrentMessage,
+    discardPending,
+    seal,
     stop,
     forceNewMessage,
   };

@@ -15,6 +15,7 @@ Status: **extremely alpha**. The app is actively being rebuilt from the ground u
 - [x] Request camera/location and other permissions in onboarding/settings flow
 - [x] Push notifications for gateway/chat status updates
 - [x] Security hardening (biometric lock, token handling, safer defaults)
+- [x] Authenticated background presence beacons
 - [x] Voice tab full functionality
 - [x] Screen tab full functionality
 - [ ] Full end-to-end QA and release hardening
@@ -27,14 +28,34 @@ Status: **extremely alpha**. The app is actively being rebuilt from the ground u
 
 ```bash
 cd apps/android
-./gradlew :app:assembleDebug
-./gradlew :app:installDebug
-./gradlew :app:testDebugUnitTest
+./gradlew :app:assemblePlayDebug
+./gradlew :app:installPlayDebug
+./gradlew :app:testPlayDebugUnitTest
 cd ../..
 bun run android:bundle:release
 ```
 
-`bun run android:bundle:release` auto-bumps Android `versionName`/`versionCode` in `apps/android/app/build.gradle.kts`, then builds a signed release `.aab`.
+Third-party debug flavor:
+
+```bash
+cd apps/android
+./gradlew :app:assembleThirdPartyDebug
+./gradlew :app:installThirdPartyDebug
+./gradlew :app:testThirdPartyDebugUnitTest
+```
+
+`bun run android:bundle:release` auto-bumps Android `versionName`/`versionCode` in `apps/android/app/build.gradle.kts`, then builds two signed release bundles:
+
+- Play build: `apps/android/build/release-bundles/openclaw-<version>-play-release.aab`
+- Third-party build: `apps/android/build/release-bundles/openclaw-<version>-third-party-release.aab`
+
+Flavor-specific direct Gradle tasks:
+
+```bash
+cd apps/android
+./gradlew :app:bundlePlayRelease
+./gradlew :app:bundleThirdPartyRelease
+```
 
 ## Kotlin Lint + Format
 
@@ -176,6 +197,49 @@ More details: `docs/platforms/android.md`.
   - `CAMERA` for `camera.snap` and `camera.clip`
   - `RECORD_AUDIO` for `camera.clip` when `includeAudio=true`
 
+## Google Play Restricted Permissions
+
+As of March 19, 2026, these manifest permissions are the main Google Play policy risk for this app:
+
+- `READ_SMS`
+- `SEND_SMS`
+- `READ_CALL_LOG`
+
+Why these matter:
+
+- Google Play treats SMS and Call Log access as highly restricted. In most cases, Play only allows them for the default SMS app, default Phone app, default Assistant, or a narrow policy exception.
+- Review usually involves a `Permissions Declaration Form`, policy justification, and demo video evidence in Play Console.
+- The Play build removes these behind the `play` flavor.
+- Photo library access is also removed from the Play build. Use third-party builds for `photos.latest`.
+
+Current OpenClaw Android implication:
+
+- APK / sideload build can keep SMS, Call Log, and recent-photo features.
+- Google Play build excludes SMS send/search, Call Log search, and recent-photo access unless the product is intentionally positioned and approved under the relevant policy exception.
+- The repo now ships this split as Android product flavors:
+  - `play`: removes `READ_SMS`, `SEND_SMS`, `READ_CALL_LOG`, `READ_MEDIA_IMAGES`, `READ_MEDIA_VISUAL_USER_SELECTED`, and `READ_EXTERNAL_STORAGE`; hides SMS, Call Log, and Photos surfaces in onboarding, settings, and advertised node capabilities.
+  - `thirdParty`: keeps the full permission set and the existing SMS / Call Log / Photos functionality.
+
+Policy links:
+
+- [Google Play SMS and Call Log policy](https://support.google.com/googleplay/android-developer/answer/10208820?hl=en)
+- [Google Play sensitive permissions policy hub](https://support.google.com/googleplay/android-developer/answer/16558241)
+- [Android default handlers guide](https://developer.android.com/guide/topics/permissions/default-handlers)
+
+Other Play-restricted surfaces to watch if added later:
+
+- `ACCESS_BACKGROUND_LOCATION`
+- `MANAGE_EXTERNAL_STORAGE`
+- `QUERY_ALL_PACKAGES`
+- `REQUEST_INSTALL_PACKAGES`
+- `AccessibilityService`
+
+Reference links:
+
+- [Background location policy](https://support.google.com/googleplay/android-developer/answer/9799150)
+- [AccessibilityService policy](https://support.google.com/googleplay/android-developer/answer/10964491?hl=en-GB)
+- [Photo and Video Permissions policy](https://support.google.com/googleplay/android-developer/answer/14594990)
+
 ## Integration Capability Test (Preconditioned)
 
 This suite assumes setup is already done manually. It does **not** install/run/pair automatically.
@@ -189,12 +253,13 @@ Pre-req checklist:
 5) Grant runtime permissions for capabilities you expect to pass (camera/mic/location/notification listener/location, etc.).
 6) No interactive system dialogs should be pending before test start.
 7) Canvas host is enabled and reachable from the device (do not run gateway with `OPENCLAW_SKIP_CANVAS_HOST=1`; startup logs should include `canvas host mounted at .../__openclaw__/`).
-8) Local operator test client pairing is approved. If first run fails with `pairing required`, approve latest pending device pairing request, then rerun:
+8) Local operator test client pairing is approved. If first run fails with `pairing required`, preview the latest pending request, approve the printed request ID, then rerun:
 9) For A2UI checks, keep the app on **Screen** tab; the node now auto-refreshes canvas capability once on first A2UI reachability failure (TTL-safe retry).
 
 ```bash
 openclaw devices list
-openclaw devices approve --latest
+openclaw devices approve --latest   # preview only; copy the requestId from output
+openclaw devices approve <requestId>
 ```
 
 Run:
@@ -220,9 +285,9 @@ What it does:
 Common failure quick-fixes:
 
 - `pairing required` before tests start:
-  - approve pending device pairing (`openclaw devices approve --latest`) and rerun.
+  - list pending requests (`openclaw devices list`), then approve with the exact ID (`openclaw devices approve <requestId>`) and rerun.
 - `A2UI host not reachable` / `A2UI_HOST_NOT_CONFIGURED`:
-  - ensure gateway canvas host is running and reachable, keep the app on the **Screen** tab. The app will auto-refresh canvas capability once; if it still fails, reconnect app and rerun.
+  - ensure the Canvas plugin host is running and reachable, keep the app on the **Screen** tab. The app refreshes the Canvas plugin surface URL once before failing; if it still fails, reconnect app and rerun.
 - `NODE_BACKGROUND_UNAVAILABLE: canvas unavailable`:
   - app is not effectively ready for canvas commands; keep app foregrounded and **Screen** tab active.
 

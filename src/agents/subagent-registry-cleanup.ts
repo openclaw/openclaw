@@ -1,10 +1,11 @@
+import { getDeliveryAttemptCount } from "./subagent-delivery-state.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-export type DeferredCleanupDecision =
+type DeferredCleanupDecision =
   | {
       kind: "defer-descendants";
       delayMs: number;
@@ -51,7 +52,7 @@ export function resolveDeferredCleanupDecision(params: {
     return { kind: "defer-descendants", delayMs: params.deferDescendantDelayMs };
   }
 
-  const retryCount = (params.entry.announceRetryCount ?? 0) + 1;
+  const retryCount = getDeliveryAttemptCount(params.entry) + 1;
   const expiryExceeded = isCompletionMessageFlow
     ? completionHardExpiryExceeded
     : endedAgo > params.announceExpiryMs;
@@ -66,9 +67,6 @@ export function resolveDeferredCleanupDecision(params: {
   return {
     kind: "retry",
     retryCount,
-    resumeDelayMs:
-      params.entry.expectsCompletionMessage === true
-        ? params.resolveAnnounceRetryDelayMs(retryCount)
-        : undefined,
+    resumeDelayMs: params.resolveAnnounceRetryDelayMs(retryCount),
   };
 }

@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { isSilentReplyPrefixText, isSilentReplyText, stripSilentToken } from "./tokens.js";
+import {
+  isSilentReplyPrefixText,
+  isSilentReplyPayloadText,
+  isSilentReplyText,
+  startsWithSilentToken,
+  stripLeadingSilentToken,
+  stripSilentToken,
+} from "./tokens.js";
 
 describe("isSilentReplyText", () => {
   it("returns true for exact token", () => {
@@ -9,6 +16,16 @@ describe("isSilentReplyText", () => {
   it("returns true for token with surrounding whitespace", () => {
     expect(isSilentReplyText("  NO_REPLY  ")).toBe(true);
     expect(isSilentReplyText("\nNO_REPLY\n")).toBe(true);
+  });
+
+  it("returns true for mixed-case token", () => {
+    expect(isSilentReplyText("no_reply")).toBe(true);
+    expect(isSilentReplyText("  No_RePlY  ")).toBe(true);
+  });
+
+  it("returns true for repeated token-only text separated by whitespace", () => {
+    expect(isSilentReplyText("NO_REPLY\n\nNO_REPLY")).toBe(true);
+    expect(isSilentReplyText("  no_reply \t No_RePlY  ")).toBe(true);
   });
 
   it("returns false for undefined/empty", () => {
@@ -29,10 +46,58 @@ describe("isSilentReplyText", () => {
   it("returns false for token embedded in text", () => {
     expect(isSilentReplyText("Please NO_REPLY to this")).toBe(false);
   });
+});
 
-  it("works with custom token", () => {
-    expect(isSilentReplyText("HEARTBEAT_OK", "HEARTBEAT_OK")).toBe(true);
-    expect(isSilentReplyText("Checked inbox. HEARTBEAT_OK", "HEARTBEAT_OK")).toBe(false);
+describe("isSilentReplyPayloadText", () => {
+  it("returns true when leaked reasoning text ends in NO_REPLY", () => {
+    expect(
+      isSilentReplyPayloadText(
+        "think\nCav is talking about a follow-up conversation.\nI will stay quiet here.NO_REPLY",
+      ),
+    ).toBe(true);
+    expect(isSilentReplyPayloadText("think\ninternal reasoning\nNO_REPLY")).toBe(true);
+    expect(isSilentReplyPayloadText("<think>internal reasoning</think>\nNO_REPLY")).toBe(true);
+    expect(
+      isSilentReplyPayloadText(
+        "<think>internal reasoning</think>\nI will stay quiet here.NO_REPLY",
+      ),
+    ).toBe(true);
+    expect(isSilentReplyPayloadText("<think>I will stay quiet here.NO_REPLY")).toBe(true);
+  });
+
+  it("keeps substantive replies that also contain a trailing NO_REPLY token", () => {
+    expect(isSilentReplyPayloadText("Here is a helpful response.\n\nNO_REPLY")).toBe(false);
+    expect(
+      isSilentReplyPayloadText(
+        "think\nHere is the actual answer.\nI will stay quiet here.NO_REPLY",
+      ),
+    ).toBe(false);
+    expect(
+      isSilentReplyPayloadText("think\nCav is talking about a follow-up conversation.\nNO_REPLY"),
+    ).toBe(false);
+    expect(isSilentReplyPayloadText("analysis\nMeeting moved to 3 pm.\nNO_REPLY")).toBe(false);
+    expect(
+      isSilentReplyPayloadText(
+        "think\nThe user is asking whether the outage is resolved. Tell them the service is back up and they should retry.\nNO_REPLY",
+      ),
+    ).toBe(false);
+    expect(
+      isSilentReplyPayloadText("<think>internal reasoning</think>\nHere is the answer.\nNO_REPLY"),
+    ).toBe(false);
+    expect(isSilentReplyPayloadText("think\nHere is the actual answer.\nNO_REPLY")).toBe(false);
+    expect(
+      isSilentReplyPayloadText(
+        "<think>internal reasoning</think>\nYou should not reply to that email.\nNO_REPLY",
+      ),
+    ).toBe(false);
+    expect(
+      isSilentReplyPayloadText("<think>internal notes\nHere is the actual answer.\nNO_REPLY"),
+    ).toBe(false);
+    expect(
+      isSilentReplyPayloadText(
+        "<think>internal reasoning</think>\nHere is the answer: I will stay quiet in the meeting, but you should still send the agenda.NO_REPLY",
+      ),
+    ).toBe(false);
   });
 });
 
@@ -67,9 +132,54 @@ describe("stripSilentToken", () => {
     expect(stripSilentToken("some text **NO_REPLY")).toBe("some text");
     expect(stripSilentToken("reasoning**NO_REPLY")).toBe("reasoning");
   });
+});
 
-  it("works with custom token", () => {
-    expect(stripSilentToken("done HEARTBEAT_OK", "HEARTBEAT_OK")).toBe("done");
+describe("custom silent tokens", () => {
+  it.each([
+    {
+      name: "exact-token detection",
+      check: () => isSilentReplyText("HEARTBEAT_OK", "HEARTBEAT_OK"),
+      expected: true,
+    },
+    {
+      name: "substantive text detection",
+      check: () => isSilentReplyText("Checked inbox. HEARTBEAT_OK", "HEARTBEAT_OK"),
+      expected: false,
+    },
+    {
+      name: "repeated-token detection",
+      check: () => isSilentReplyText("HEARTBEAT_OK\nHEARTBEAT_OK", "HEARTBEAT_OK"),
+      expected: true,
+    },
+    {
+      name: "trailing token stripping",
+      check: () => stripSilentToken("done HEARTBEAT_OK", "HEARTBEAT_OK"),
+      expected: "done",
+    },
+  ])("handles custom token for $name", ({ check, expected }) => {
+    expect(check()).toBe(expected);
+  });
+});
+
+describe("stripLeadingSilentToken", () => {
+  it("strips glued leading token text", () => {
+    expect(stripLeadingSilentToken("NO_REPLYThe user is saying")).toBe("The user is saying");
+  });
+});
+
+describe("startsWithSilentToken", () => {
+  it("matches leading glued silent tokens case-insensitively", () => {
+    expect(startsWithSilentToken("NO_REPLYThe user is saying")).toBe(true);
+    expect(startsWithSilentToken("No_RePlYThe user is saying")).toBe(true);
+    expect(startsWithSilentToken("no_replyThe user is saying")).toBe(true);
+  });
+
+  it("rejects separated substantive prefixes and exact-token-only text", () => {
+    expect(startsWithSilentToken("NO_REPLY -- nope")).toBe(false);
+    expect(startsWithSilentToken("NO_REPLY: explanation")).toBe(false);
+    expect(startsWithSilentToken("NO_REPLY—note")).toBe(false);
+    expect(startsWithSilentToken("NO_REPLY")).toBe(false);
+    expect(startsWithSilentToken("  NO_REPLY  ")).toBe(false);
   });
 });
 

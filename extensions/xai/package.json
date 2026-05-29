@@ -1,9 +1,16 @@
 {
   "name": "@openclaw/xai-plugin",
-  "version": "2026.3.14",
+  "version": "2026.5.28",
   "private": true,
   "description": "OpenClaw xAI plugin",
   "type": "module",
+  "dependencies": {
+    "typebox": "1.1.38"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "ws": "8.21.0"
+  },
   "openclaw": {
     "extensions": [
       "./index.ts"

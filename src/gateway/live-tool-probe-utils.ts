@@ -1,3 +1,5 @@
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+
 export function hasExpectedToolNonce(text: string, nonceA: string, nonceB: string): boolean {
   return text.includes(nonceA) && text.includes(nonceB);
 }
@@ -20,6 +22,13 @@ const NONCE_REFUSAL_MARKERS = [
   "can't comply",
   "can’t comply",
   "cannot comply",
+  "no `read`",
+  "no read tool",
+  "no `read`/`read` tool",
+  "no read/read tool",
+  "no read tool available",
+  "won't output",
+  "won’t output",
   "isn't a real openclaw probe",
   "is not a real openclaw probe",
   "not a real openclaw probe",
@@ -31,10 +40,12 @@ const PROBE_REFUSAL_MARKERS = [
   "not a legitimate self-test",
   "not legitimate self-test",
   "authorized integration probe",
+  "authorizing me to execute",
+  "authorizing me to run",
 ];
 
 export function isLikelyToolNonceRefusal(text: string): boolean {
-  const lower = text.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(text);
   if (PROBE_REFUSAL_MARKERS.some((marker) => lower.includes(marker))) {
     return true;
   }
@@ -49,8 +60,21 @@ function hasMalformedToolOutput(text: string): boolean {
   if (!trimmed) {
     return true;
   }
-  const lower = trimmed.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(trimmed);
   if (trimmed.includes("[object Object]")) {
+    return true;
+  }
+  if (
+    lower.includes("try reading the file again") ||
+    lower.includes("try again with a slightly different approach") ||
+    lower.includes("trying to read the file again") ||
+    lower.includes("try the read tool again") ||
+    lower.includes("file wasn't found immediately after") ||
+    lower.includes("file wasn't found immediately") ||
+    lower.includes("verify the file exists and read it again") ||
+    lower.includes("file read failed because the file was not found") ||
+    lower.includes("verify the file creation and read it again")
+  ) {
     return true;
   }
   if (/\bread\s*\[/.test(lower) || /\btool\b/.test(lower) || /\bfunction\b/.test(lower)) {
@@ -79,7 +103,7 @@ export function shouldRetryToolReadProbe(params: {
   if (params.provider === "anthropic" && isLikelyToolNonceRefusal(params.text)) {
     return true;
   }
-  const lower = params.text.trim().toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(params.text);
   if (params.provider === "mistral" && (lower.includes("noncea=") || lower.includes("nonceb="))) {
     return true;
   }

@@ -21,11 +21,17 @@ export function createActiveRun(
   };
 }
 
-export type ChatAbortTestContext = Record<string, unknown> & {
+type ChatAbortTestContext = Record<string, unknown> & {
   chatAbortControllers: Map<string, ReturnType<typeof createActiveRun>>;
   chatRunBuffers: Map<string, string>;
   chatDeltaSentAt: Map<string, number>;
+  chatDeltaLastBroadcastLen: Map<string, number>;
+  chatDeltaLastBroadcastText: Map<string, string>;
+  dedupe: Map<string, unknown>;
+  agentDeltaSentAt: Map<string, number>;
+  bufferedAgentEvents: Map<string, unknown>;
   chatAbortedRuns: Map<string, number>;
+  clearChatRunState: (runId: string) => void;
   removeChatRun: (...args: unknown[]) => { sessionKey: string; clientRunId: string } | undefined;
   agentRunSeq: Map<string, number>;
   broadcast: (...args: unknown[]) => void;
@@ -33,25 +39,44 @@ export type ChatAbortTestContext = Record<string, unknown> & {
   logGateway: { warn: (...args: unknown[]) => void };
 };
 
-export type ChatAbortRespondMock = Mock<RespondFn>;
+type ChatAbortRespondMock = Mock<RespondFn>;
 
 export function createChatAbortContext(
   overrides: Record<string, unknown> = {},
 ): ChatAbortTestContext {
-  return {
+  const context = {
     chatAbortControllers: new Map(),
     chatRunBuffers: new Map(),
     chatDeltaSentAt: new Map(),
+    chatDeltaLastBroadcastLen: new Map(),
+    chatDeltaLastBroadcastText: new Map(),
+    dedupe: new Map(),
+    agentDeltaSentAt: new Map(),
+    bufferedAgentEvents: new Map(),
     chatAbortedRuns: new Map<string, number>(),
     removeChatRun: vi
       .fn()
       .mockImplementation((run: string) => ({ sessionKey: "main", clientRunId: run })),
+    clearChatRunState: (_runId: string) => {},
     agentRunSeq: new Map<string, number>(),
     broadcast: vi.fn(),
     nodeSendToSession: vi.fn(),
     logGateway: { warn: vi.fn() },
     ...overrides,
-  };
+  } as ChatAbortTestContext;
+  if (overrides.clearChatRunState === undefined) {
+    context.clearChatRunState = (runId: string) => {
+      context.chatRunBuffers.delete(runId);
+      context.chatDeltaSentAt.delete(runId);
+      context.chatDeltaLastBroadcastLen.delete(runId);
+      context.chatDeltaLastBroadcastText.delete(runId);
+      for (const key of [runId, `${runId}:assistant`, `${runId}:thinking`]) {
+        context.agentDeltaSentAt.delete(key);
+        context.bufferedAgentEvents.delete(key);
+      }
+    };
+  }
+  return context;
 }
 
 export async function invokeChatAbortHandler(params: {

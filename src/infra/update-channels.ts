@@ -1,15 +1,23 @@
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { parseComparableSemver } from "./semver-compare.js";
+
 export type UpdateChannel = "stable" | "beta" | "dev";
-export type UpdateChannelSource = "config" | "git-tag" | "git-branch" | "default";
+export type UpdateChannelSource =
+  | "config"
+  | "git-tag"
+  | "git-branch"
+  | "installed-version"
+  | "default";
 
 export const DEFAULT_PACKAGE_CHANNEL: UpdateChannel = "stable";
 export const DEFAULT_GIT_CHANNEL: UpdateChannel = "dev";
 export const DEV_BRANCH = "main";
 
 export function normalizeUpdateChannel(value?: string | null): UpdateChannel | null {
-  if (!value) {
+  const normalized = normalizeOptionalLowercaseString(value);
+  if (!normalized) {
     return null;
   }
-  const normalized = value.trim().toLowerCase();
   if (normalized === "stable" || normalized === "beta" || normalized === "dev") {
     return normalized;
   }
@@ -30,15 +38,50 @@ export function isBetaTag(tag: string): boolean {
   return /(?:^|[.-])beta(?:[.-]|$)/i.test(tag);
 }
 
+export function isPrereleaseTag(tag: string): boolean {
+  const parsed = parseComparableSemver(tag, { normalizeLegacyDotBeta: true });
+  if (parsed) {
+    return Boolean(parsed.prerelease?.some((part) => !/^[0-9]+$/.test(part)));
+  }
+  return /(?:^|[.-])(alpha|beta|rc|pre|preview|canary|dev|next|nightly|experimental)(?:[.-]|$)/i.test(
+    tag,
+  );
+}
+
 export function isStableTag(tag: string): boolean {
-  return !isBetaTag(tag);
+  return !isPrereleaseTag(tag);
+}
+
+export function resolveRegistryUpdateChannel(params: {
+  configChannel?: UpdateChannel | null;
+  currentVersion?: string | null;
+}): UpdateChannel {
+  if (
+    params.currentVersion &&
+    isBetaTag(params.currentVersion) &&
+    params.configChannel !== "beta" &&
+    params.configChannel !== "dev"
+  ) {
+    return "beta";
+  }
+  return params.configChannel ?? DEFAULT_PACKAGE_CHANNEL;
 }
 
 export function resolveEffectiveUpdateChannel(params: {
   configChannel?: UpdateChannel | null;
+  currentVersion?: string | null;
   installKind: "git" | "package" | "unknown";
   git?: { tag?: string | null; branch?: string | null };
 }): { channel: UpdateChannel; source: UpdateChannelSource } {
+  if (
+    params.currentVersion &&
+    isBetaTag(params.currentVersion) &&
+    params.configChannel !== "beta" &&
+    params.configChannel !== "dev"
+  ) {
+    return { channel: "beta", source: "installed-version" };
+  }
+
   if (params.configChannel) {
     return { channel: params.configChannel, source: "config" };
   }
@@ -46,7 +89,10 @@ export function resolveEffectiveUpdateChannel(params: {
   if (params.installKind === "git") {
     const tag = params.git?.tag;
     if (tag) {
-      return { channel: isBetaTag(tag) ? "beta" : "stable", source: "git-tag" };
+      return {
+        channel: isBetaTag(tag) ? "beta" : isStableTag(tag) ? "stable" : "dev",
+        source: "git-tag",
+      };
     }
     const branch = params.git?.branch;
     if (branch && branch !== "HEAD") {
@@ -79,17 +125,22 @@ export function formatUpdateChannelLabel(params: {
       ? `${params.channel} (${params.gitBranch})`
       : `${params.channel} (branch)`;
   }
+  if (params.source === "installed-version") {
+    return "beta (installed version)";
+  }
   return `${params.channel} (default)`;
 }
 
 export function resolveUpdateChannelDisplay(params: {
   configChannel?: UpdateChannel | null;
+  currentVersion?: string | null;
   installKind: "git" | "package" | "unknown";
   gitTag?: string | null;
   gitBranch?: string | null;
 }): { channel: UpdateChannel; source: UpdateChannelSource; label: string } {
   const channelInfo = resolveEffectiveUpdateChannel({
     configChannel: params.configChannel,
+    currentVersion: params.currentVersion,
     installKind: params.installKind,
     git:
       params.gitTag || params.gitBranch

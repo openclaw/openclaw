@@ -1,9 +1,11 @@
 import fs from "node:fs";
-import JSON5 from "json5";
-import type { OpenClawConfig } from "../config/config.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { getSubagentDepth, parseAgentSessionKey } from "../sessions/session-key-utils.js";
+import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { resolveDefaultAgentId } from "./agent-scope.js";
+import { normalizeSubagentSessionKey } from "./subagent-session-key.js";
 
 type SessionDepthEntry = {
   sessionId?: unknown;
@@ -16,28 +18,15 @@ function normalizeSpawnDepth(value: unknown): number | undefined {
     return Number.isInteger(value) && value >= 0 ? value : undefined;
   }
   if (typeof value === "string") {
-    const trimmed = value.trim();
-    if (!trimmed) {
-      return undefined;
-    }
-    const numeric = Number(trimmed);
-    return Number.isInteger(numeric) && numeric >= 0 ? numeric : undefined;
+    return parseStrictNonNegativeInteger(value);
   }
   return undefined;
-}
-
-function normalizeSessionKey(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
 }
 
 function readSessionStore(storePath: string): Record<string, SessionDepthEntry> {
   try {
     const raw = fs.readFileSync(storePath, "utf-8");
-    const parsed = JSON5.parse(raw);
+    const parsed = parseJsonWithJson5Fallback(raw);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       return parsed as Record<string, SessionDepthEntry>;
     }
@@ -66,12 +55,12 @@ function findEntryBySessionId(
   store: Record<string, SessionDepthEntry>,
   sessionId: string,
 ): SessionDepthEntry | undefined {
-  const normalizedSessionId = normalizeSessionKey(sessionId);
+  const normalizedSessionId = normalizeSubagentSessionKey(sessionId);
   if (!normalizedSessionId) {
     return undefined;
   }
   for (const entry of Object.values(store)) {
-    const candidateSessionId = normalizeSessionKey(entry?.sessionId);
+    const candidateSessionId = normalizeSubagentSessionKey(entry?.sessionId);
     if (candidateSessionId && candidateSessionId === normalizedSessionId) {
       return entry;
     }
@@ -138,7 +127,7 @@ export function getSubagentDepthFromSessionStore(
   const visited = new Set<string>();
 
   const depthFromStore = (key: string): number | undefined => {
-    const normalizedKey = normalizeSessionKey(key);
+    const normalizedKey = normalizeSubagentSessionKey(key);
     if (!normalizedKey) {
       return undefined;
     }
@@ -159,7 +148,7 @@ export function getSubagentDepthFromSessionStore(
       return storedDepth;
     }
 
-    const spawnedBy = normalizeSessionKey(entry?.spawnedBy);
+    const spawnedBy = normalizeSubagentSessionKey(entry?.spawnedBy);
     if (!spawnedBy) {
       return undefined;
     }

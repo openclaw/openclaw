@@ -1,50 +1,66 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-let injectedSleepError: Error | null = null;
+const transportReadyMocks = vi.hoisted(() => ({
+  injectedSleepError: null as Error | null,
+}));
+
 type TransportReadyModule = typeof import("./transport-ready.js");
 let waitForTransportReady: TransportReadyModule["waitForTransportReady"];
+
+vi.mock("./backoff.js", () => ({
+  sleepWithAbort: async (ms: number, signal?: AbortSignal) => {
+    if (transportReadyMocks.injectedSleepError) {
+      throw transportReadyMocks.injectedSleepError;
+    }
+    if (signal?.aborted) {
+      throw new Error("aborted");
+    }
+    if (ms <= 0) {
+      return;
+    }
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        signal?.removeEventListener("abort", onAbort);
+        resolve();
+      }, ms);
+      const onAbort = () => {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
+        reject(new Error("aborted"));
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+    });
+  },
+}));
 
 function createRuntime() {
   return { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 }
 
+function runtimeErrorMessageAt(runtime: ReturnType<typeof createRuntime>, index: number): string {
+  const call = runtime.error.mock.calls[index];
+  if (!call || typeof call[0] !== "string") {
+    throw new Error(`expected runtime error call ${index + 1}`);
+  }
+  return call[0];
+}
+
+function latestRuntimeErrorMessage(runtime: ReturnType<typeof createRuntime>): string {
+  return runtimeErrorMessageAt(runtime, runtime.error.mock.calls.length - 1);
+}
+
 describe("waitForTransportReady", () => {
-  beforeEach(async () => {
-    vi.useFakeTimers();
-    vi.resetModules();
-    // Perf: `sleepWithAbort` uses `node:timers/promises` which isn't controlled by fake timers.
-    // Route sleeps through global `setTimeout` so tests can advance time deterministically.
-    vi.doMock("./backoff.js", () => ({
-      sleepWithAbort: async (ms: number, signal?: AbortSignal) => {
-        if (injectedSleepError) {
-          throw injectedSleepError;
-        }
-        if (signal?.aborted) {
-          throw new Error("aborted");
-        }
-        if (ms <= 0) {
-          return;
-        }
-        await new Promise<void>((resolve, reject) => {
-          const timer = setTimeout(() => {
-            signal?.removeEventListener("abort", onAbort);
-            resolve();
-          }, ms);
-          const onAbort = () => {
-            clearTimeout(timer);
-            signal?.removeEventListener("abort", onAbort);
-            reject(new Error("aborted"));
-          };
-          signal?.addEventListener("abort", onAbort, { once: true });
-        });
-      },
-    }));
+  beforeAll(async () => {
     ({ waitForTransportReady } = await import("./transport-ready.js"));
+  });
+
+  beforeEach(() => {
+    vi.useFakeTimers();
   });
 
   afterEach(() => {
     vi.useRealTimers();
-    injectedSleepError = null;
+    transportReadyMocks.injectedSleepError = null;
   });
 
   it("returns when the check succeeds and logs after the delay", async () => {
@@ -148,13 +164,13 @@ describe("waitForTransportReady", () => {
     await asserted;
 
     expect(runtime.error).toHaveBeenCalledTimes(2);
-    expect(runtime.error.mock.calls.at(0)?.[0]).toContain("unknown error");
-    expect(runtime.error.mock.calls.at(-1)?.[0]).toContain("not ready after 120ms");
+    expect(runtimeErrorMessageAt(runtime, 0)).toContain("unknown error");
+    expect(latestRuntimeErrorMessage(runtime)).toContain("not ready after 120ms");
   });
 
   it("rethrows non-abort sleep failures", async () => {
     const runtime = createRuntime();
-    injectedSleepError = new Error("sleep exploded");
+    transportReadyMocks.injectedSleepError = new Error("sleep exploded");
 
     await expect(
       waitForTransportReady({

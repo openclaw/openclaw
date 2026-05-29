@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { AGENT_RUN_ABORTED_ERROR } from "../../agents/run-termination.js";
 import type { DedupeEntry } from "../server-shared.js";
 import {
-  __testing,
+  testing,
   readTerminalSnapshotFromGatewayDedupe,
   setGatewayDedupeEntry,
   waitForTerminalGatewayDedupe,
@@ -28,12 +29,12 @@ describe("agent wait dedupe helper", () => {
   }
 
   beforeEach(() => {
-    __testing.resetWaiters();
+    testing.resetWaiters();
     vi.useFakeTimers();
   });
 
   afterEach(() => {
-    __testing.resetWaiters();
+    testing.resetWaiters();
     vi.useRealTimers();
   });
 
@@ -47,7 +48,7 @@ describe("agent wait dedupe helper", () => {
     });
 
     await Promise.resolve();
-    expect(__testing.getWaiterCount(runId)).toBe(1);
+    expect(testing.getWaiterCount(runId)).toBe(1);
 
     setRunEntry({
       dedupe,
@@ -67,7 +68,187 @@ describe("agent wait dedupe helper", () => {
       endedAt: 200,
       error: undefined,
     });
-    expect(__testing.getWaiterCount(runId)).toBe(0);
+    expect(testing.getWaiterCount(runId)).toBe(0);
+  });
+
+  it("preserves structured yield metadata from terminal agent results", () => {
+    const dedupe = new Map();
+    const runId = "run-yielded";
+
+    setRunEntry({
+      dedupe,
+      kind: "agent",
+      runId,
+      payload: {
+        runId,
+        status: "ok",
+        startedAt: 100,
+        endedAt: 200,
+        result: {
+          meta: {
+            stopReason: "end_turn",
+            livenessState: "paused",
+            yielded: true,
+          },
+        },
+      },
+    });
+
+    expect(
+      readTerminalSnapshotFromGatewayDedupe({
+        dedupe,
+        runId,
+      }),
+    ).toEqual({
+      status: "ok",
+      startedAt: 100,
+      endedAt: 200,
+      error: undefined,
+      stopReason: "end_turn",
+      livenessState: "paused",
+      yielded: true,
+    });
+  });
+
+  it("preserves timeout attribution from terminal agent result metadata", () => {
+    const dedupe = new Map();
+    const runId = "run-provider-timeout";
+
+    setRunEntry({
+      dedupe,
+      kind: "agent",
+      runId,
+      payload: {
+        runId,
+        status: "timeout",
+        startedAt: 100,
+        endedAt: 200,
+        result: {
+          meta: {
+            timeoutPhase: "provider",
+            providerStarted: true,
+          },
+        },
+      },
+    });
+
+    expect(
+      readTerminalSnapshotFromGatewayDedupe({
+        dedupe,
+        runId,
+      }),
+    ).toEqual({
+      status: "timeout",
+      startedAt: 100,
+      endedAt: 200,
+      error: undefined,
+      timeoutPhase: "provider",
+      providerStarted: true,
+    });
+  });
+
+  it("normalizes blocked ok agent snapshots to errors", () => {
+    const dedupe = new Map();
+    const runId = "run-blocked-agent";
+
+    setRunEntry({
+      dedupe,
+      kind: "agent",
+      runId,
+      payload: {
+        runId,
+        status: "ok",
+        startedAt: 100,
+        endedAt: 200,
+        error: "Context overflow: prompt too large for the model.",
+        result: {
+          meta: {
+            livenessState: "blocked",
+          },
+        },
+      },
+    });
+
+    expect(
+      readTerminalSnapshotFromGatewayDedupe({
+        dedupe,
+        runId,
+      }),
+    ).toEqual({
+      status: "error",
+      startedAt: 100,
+      endedAt: 200,
+      error: "Context overflow: prompt too large for the model.",
+      livenessState: "blocked",
+    });
+  });
+
+  it("normalizes aborted ok agent snapshots to errors", () => {
+    const dedupe = new Map();
+    const runId = "run-aborted-agent";
+
+    setRunEntry({
+      dedupe,
+      kind: "agent",
+      runId,
+      payload: {
+        runId,
+        status: "ok",
+        startedAt: 100,
+        endedAt: 200,
+        result: {
+          meta: {
+            stopReason: "aborted",
+          },
+        },
+      },
+    });
+
+    expect(
+      readTerminalSnapshotFromGatewayDedupe({
+        dedupe,
+        runId,
+      }),
+    ).toEqual({
+      status: "error",
+      startedAt: 100,
+      endedAt: 200,
+      error: AGENT_RUN_ABORTED_ERROR,
+      stopReason: "aborted",
+    });
+  });
+
+  it("unblocks waiters with normalized aborted snapshots", async () => {
+    const dedupe = new Map();
+    const runId = "run-wait-aborted";
+    const waiter = waitForTerminalGatewayDedupe({
+      dedupe,
+      runId,
+      timeoutMs: 1_000,
+    });
+
+    await Promise.resolve();
+    expect(testing.getWaiterCount(runId)).toBe(1);
+
+    setRunEntry({
+      dedupe,
+      kind: "agent",
+      runId,
+      payload: {
+        runId,
+        status: "ok",
+        stopReason: "aborted",
+        endedAt: 300,
+      },
+    });
+
+    await expect(waiter).resolves.toEqual({
+      status: "error",
+      endedAt: 300,
+      error: AGENT_RUN_ABORTED_ERROR,
+      stopReason: "aborted",
+    });
+    expect(testing.getWaiterCount(runId)).toBe(0);
   });
 
   it("keeps stale chat dedupe blocked while agent dedupe is in-flight", async () => {
@@ -105,7 +286,7 @@ describe("agent wait dedupe helper", () => {
     });
     await vi.advanceTimersByTimeAsync(30);
     await expect(blockedWait).resolves.toBeNull();
-    expect(__testing.getWaiterCount(runId)).toBe(0);
+    expect(testing.getWaiterCount(runId)).toBe(0);
   });
 
   it("uses newer terminal chat snapshot when agent entry is non-terminal", () => {
@@ -175,7 +356,7 @@ describe("agent wait dedupe helper", () => {
       ignoreAgentTerminalSnapshot: true,
     });
     await Promise.resolve();
-    expect(__testing.getWaiterCount(runId)).toBe(1);
+    expect(testing.getWaiterCount(runId)).toBe(1);
 
     setRunEntry({
       dedupe,
@@ -258,6 +439,71 @@ describe("agent wait dedupe helper", () => {
     });
   });
 
+  it("preserves an RPC cancel snapshot when late completion writes the same key", () => {
+    const dedupe = new Map();
+    const runId = "run-cancel-wins";
+
+    setRunEntry({
+      dedupe,
+      kind: "agent",
+      runId,
+      ts: 100,
+      payload: { runId, status: "timeout", stopReason: "rpc", endedAt: 100 },
+    });
+    setRunEntry({
+      dedupe,
+      kind: "agent",
+      runId,
+      ts: 200,
+      payload: { runId, status: "ok", endedAt: 200 },
+    });
+
+    expect(
+      readTerminalSnapshotFromGatewayDedupe({
+        dedupe,
+        runId,
+      }),
+    ).toEqual({
+      status: "timeout",
+      endedAt: 100,
+      error: undefined,
+      stopReason: "rpc",
+    });
+  });
+
+  it("preserves an RPC cancel snapshot when late rejection writes the same chat key", () => {
+    const dedupe = new Map();
+    const runId = "run-cancel-chat-error";
+
+    setRunEntry({
+      dedupe,
+      kind: "chat",
+      runId,
+      ts: 100,
+      payload: { runId, status: "timeout", stopReason: "rpc", endedAt: 100 },
+    });
+    setRunEntry({
+      dedupe,
+      kind: "chat",
+      runId,
+      ts: 200,
+      ok: false,
+      payload: { runId, status: "error", summary: "late failure", endedAt: 200 },
+    });
+
+    expect(
+      readTerminalSnapshotFromGatewayDedupe({
+        dedupe,
+        runId,
+      }),
+    ).toEqual({
+      status: "timeout",
+      endedAt: 100,
+      error: undefined,
+      stopReason: "rpc",
+    });
+  });
+
   it("resolves multiple waiters for the same run id", async () => {
     const dedupe = new Map();
     const runId = "run-multi";
@@ -273,7 +519,7 @@ describe("agent wait dedupe helper", () => {
     });
 
     await Promise.resolve();
-    expect(__testing.getWaiterCount(runId)).toBe(2);
+    expect(testing.getWaiterCount(runId)).toBe(2);
 
     setRunEntry({
       dedupe,
@@ -282,17 +528,16 @@ describe("agent wait dedupe helper", () => {
       payload: { runId, status: "ok" },
     });
 
-    await expect(first).resolves.toEqual(
-      expect.objectContaining({
-        status: "ok",
-      }),
-    );
-    await expect(second).resolves.toEqual(
-      expect.objectContaining({
-        status: "ok",
-      }),
-    );
-    expect(__testing.getWaiterCount(runId)).toBe(0);
+    const firstResult = await first;
+    const secondResult = await second;
+    if (!firstResult || !secondResult) {
+      throw new Error("expected waiters to resolve");
+    }
+    expect(firstResult.status).toBe("ok");
+    expect(firstResult.error).toBeUndefined();
+    expect(secondResult.status).toBe("ok");
+    expect(secondResult.error).toBeUndefined();
+    expect(testing.getWaiterCount(runId)).toBe(0);
   });
 
   it("cleans up waiter registration on timeout", async () => {
@@ -305,10 +550,10 @@ describe("agent wait dedupe helper", () => {
     });
 
     await Promise.resolve();
-    expect(__testing.getWaiterCount(runId)).toBe(1);
+    expect(testing.getWaiterCount(runId)).toBe(1);
 
     await vi.advanceTimersByTimeAsync(25);
     await expect(wait).resolves.toBeNull();
-    expect(__testing.getWaiterCount(runId)).toBe(0);
+    expect(testing.getWaiterCount(runId)).toBe(0);
   });
 });

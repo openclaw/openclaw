@@ -1,6 +1,6 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/zalouser";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../runtime-api.js";
 import {
   getZcaUserInfo,
   listEnabledZalouserAccounts,
@@ -18,6 +18,8 @@ vi.mock("./zalo-js.js", () => ({
 
 const mockCheckAuthenticated = vi.mocked(checkZaloAuthenticated);
 const mockGetUserInfo = vi.mocked(getZaloUserInfo);
+const originalZalouserProfile = process.env.ZALOUSER_PROFILE;
+const originalZcaProfile = process.env.ZCA_PROFILE;
 
 function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
@@ -29,6 +31,19 @@ describe("zalouser account resolution", () => {
     mockGetUserInfo.mockReset();
     delete process.env.ZALOUSER_PROFILE;
     delete process.env.ZCA_PROFILE;
+  });
+
+  afterEach(() => {
+    if (originalZalouserProfile === undefined) {
+      delete process.env.ZALOUSER_PROFILE;
+    } else {
+      process.env.ZALOUSER_PROFILE = originalZalouserProfile;
+    }
+    if (originalZcaProfile === undefined) {
+      delete process.env.ZCA_PROFILE;
+    } else {
+      process.env.ZCA_PROFILE = originalZcaProfile;
+    }
   });
 
   it("returns default account id when no accounts are configured", () => {
@@ -49,6 +64,23 @@ describe("zalouser account resolution", () => {
     });
 
     expect(listZalouserAccountIds(cfg)).toEqual(["default", "personal", "work"]);
+  });
+
+  it("preserves top-level default account when named accounts are configured", () => {
+    const cfg = asConfig({
+      channels: {
+        zalouser: {
+          profile: "personal",
+          accounts: {
+            work: { enabled: false },
+          },
+        },
+      },
+    });
+
+    expect(listZalouserAccountIds(cfg)).toEqual(["default", "work"]);
+    expect(resolveDefaultZalouserAccountId(cfg)).toBe("default");
+    expect(resolveZalouserAccountSync({ cfg }).profile).toBe("personal");
   });
 
   it("uses configured defaultAccount when present", () => {
@@ -122,6 +154,58 @@ describe("zalouser account resolution", () => {
     expect(resolved.name).toBe("Work");
     expect(resolved.config.dmPolicy).toBe("allowlist");
     expect(resolved.config.allowFrom).toEqual(["123"]);
+  });
+
+  it("uses configured defaultAccount when accountId is omitted", () => {
+    const cfg = asConfig({
+      channels: {
+        zalouser: {
+          defaultAccount: "work",
+          accounts: {
+            work: {
+              name: "Work",
+              profile: "work-profile",
+            },
+          },
+        },
+      },
+    });
+
+    const resolved = resolveZalouserAccountSync({ cfg });
+    expect(resolved.accountId).toBe("work");
+    expect(resolved.name).toBe("Work");
+    expect(resolved.profile).toBe("work-profile");
+  });
+
+  it("resolves account config when account key casing differs from normalized id", () => {
+    const cfg = asConfig({
+      channels: {
+        zalouser: {
+          accounts: {
+            Work: {
+              name: "Work",
+            },
+          },
+        },
+      },
+    });
+
+    const resolved = resolveZalouserAccountSync({ cfg, accountId: "work" });
+    expect(resolved.accountId).toBe("work");
+    expect(resolved.name).toBe("Work");
+  });
+
+  it("defaults group policy to allowlist when unset", () => {
+    const cfg = asConfig({
+      channels: {
+        zalouser: {
+          enabled: true,
+        },
+      },
+    });
+
+    const resolved = resolveZalouserAccountSync({ cfg, accountId: "default" });
+    expect(resolved.config.groupPolicy).toBe("allowlist");
   });
 
   it("resolves profile precedence correctly", () => {

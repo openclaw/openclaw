@@ -1,17 +1,14 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 
-// Module under test imports these at module scope.
-vi.mock("../agents/skills-status.js", () => ({
+const mocks = vi.hoisted(() => ({
   buildWorkspaceSkillStatus: vi.fn(),
-}));
-vi.mock("../agents/skills-install.js", () => ({
   installSkill: vi.fn(),
-}));
-vi.mock("./onboard-helpers.js", () => ({
   detectBinary: vi.fn(),
+  isContainerEnvironment: vi.fn(),
+  resolveBrewExecutable: vi.fn(),
   resolveNodeManagerOptions: vi.fn(() => [
     { value: "npm", label: "npm" },
     { value: "pnpm", label: "pnpm" },
@@ -19,9 +16,24 @@ vi.mock("./onboard-helpers.js", () => ({
   ]),
 }));
 
-import { installSkill } from "../agents/skills-install.js";
-import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
-import { detectBinary } from "./onboard-helpers.js";
+// Module under test imports these at module scope.
+vi.mock("../agents/skills-status.js", () => ({
+  buildWorkspaceSkillStatus: mocks.buildWorkspaceSkillStatus,
+}));
+vi.mock("../agents/skills-install.js", () => ({
+  installSkill: mocks.installSkill,
+}));
+vi.mock("../infra/container-environment.js", () => ({
+  isContainerEnvironment: mocks.isContainerEnvironment,
+}));
+vi.mock("../infra/brew.js", () => ({
+  resolveBrewExecutable: mocks.resolveBrewExecutable,
+}));
+vi.mock("./onboard-helpers.js", () => ({
+  detectBinary: mocks.detectBinary,
+  resolveNodeManagerOptions: mocks.resolveNodeManagerOptions,
+}));
+
 import { setupSkills } from "./onboard-skills.js";
 
 function createBundledSkill(params: {
@@ -73,15 +85,16 @@ function createBundledSkill(params: {
 }
 
 function mockMissingBrewStatus(skills: Array<ReturnType<typeof createBundledSkill>>): void {
-  vi.mocked(detectBinary).mockResolvedValue(false);
-  vi.mocked(installSkill).mockResolvedValue({
+  mocks.detectBinary.mockResolvedValue(false);
+  mocks.resolveBrewExecutable.mockReturnValue(undefined);
+  mocks.installSkill.mockResolvedValue({
     ok: true,
     message: "Installed",
     stdout: "",
     stderr: "",
     code: 0,
   });
-  vi.mocked(buildWorkspaceSkillStatus).mockReturnValue({
+  mocks.buildWorkspaceSkillStatus.mockReturnValue({
     workspaceDir: "/tmp/ws",
     managedSkillsDir: "/tmp/managed",
     skills,
@@ -130,6 +143,69 @@ const runtime: RuntimeEnv = {
 };
 
 describe("setupSkills", () => {
+  afterEach(() => {
+    mocks.isContainerEnvironment.mockReset();
+    mocks.resolveBrewExecutable.mockReset();
+  });
+
+  it("hides brew-only installs in Linux containers when brew is missing", async () => {
+    const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    try {
+      mockMissingBrewStatus([
+        createBundledSkill({
+          name: "video-frames",
+          description: "ffmpeg",
+          bins: ["ffmpeg"],
+          installLabel: "Install ffmpeg (brew)",
+        }),
+      ]);
+      mocks.isContainerEnvironment.mockReturnValue(true);
+
+      const { prompter, notes } = createPrompter({});
+      await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
+
+      expect(prompter.multiselect).not.toHaveBeenCalled();
+      expect(mocks.installSkill).not.toHaveBeenCalled();
+      expect(notes.find((n) => n.title === "Container skill installs")).toBeDefined();
+      expect(notes.find((n) => n.title === "Homebrew recommended")).toBeUndefined();
+      expect(
+        notes.find((n) => n.message.includes("No missing skill dependencies to install")),
+      ).toBeUndefined();
+    } finally {
+      Object.defineProperty(process, "platform", originalPlatformDescriptor);
+    }
+  });
+
+  it("keeps brew-only installs visible when Linuxbrew is resolved off PATH", async () => {
+    const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    try {
+      mockMissingBrewStatus([
+        createBundledSkill({
+          name: "video-frames",
+          description: "ffmpeg",
+          bins: ["ffmpeg"],
+          installLabel: "Install ffmpeg (brew)",
+        }),
+      ]);
+      mocks.isContainerEnvironment.mockReturnValue(true);
+      mocks.resolveBrewExecutable.mockReturnValue("/home/linuxbrew/.linuxbrew/bin/brew");
+
+      const { prompter, notes } = createPrompter({ multiselect: ["video-frames"] });
+      await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
+
+      expect(prompter.multiselect).toHaveBeenCalled();
+      expect(mocks.installSkill).toHaveBeenCalledWith(
+        expect.objectContaining({ skillName: "video-frames", installId: "brew" }),
+      );
+      expect(notes.find((n) => n.title === "Container skill installs")).toBeUndefined();
+      expect(notes.find((n) => n.title === "Homebrew recommended")).toBeUndefined();
+    } finally {
+      Object.defineProperty(process, "platform", originalPlatformDescriptor);
+    }
+  });
+
   it("does not recommend Homebrew when user skips installing brew-backed deps", async () => {
     if (process.platform === "win32") {
       return;
@@ -155,8 +231,15 @@ describe("setupSkills", () => {
     await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
 
     // OS-mismatched skill should be counted as unsupported, not installable/missing.
-    const status = notes.find((n) => n.title === "Skills status")?.message ?? "";
-    expect(status).toContain("Unsupported on this OS: 1");
+    expect(notes.find((n) => n.title === "Skills status")).toStrictEqual({
+      title: "Skills status",
+      message: [
+        "Eligible: 0",
+        "Missing requirements: 1",
+        "Unsupported on this OS: 1",
+        "Blocked by allowlist: 0",
+      ].join("\n"),
+    });
 
     const brewNote = notes.find((n) => n.title === "Homebrew recommended");
     expect(brewNote).toBeUndefined();
@@ -180,6 +263,19 @@ describe("setupSkills", () => {
     await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
 
     const brewNote = notes.find((n) => n.title === "Homebrew recommended");
-    expect(brewNote).toBeDefined();
+    expect(brewNote?.title).toBe("Homebrew recommended");
+  });
+
+  it("displays a clear empty state note when all skill dependencies are ready", async () => {
+    mockMissingBrewStatus([]);
+
+    const { prompter, notes } = createPrompter({});
+    await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
+
+    expect(prompter.multiselect).not.toHaveBeenCalled();
+    const emptyStateNote = notes.find((n) => n.title === "All skills ready");
+    expect(emptyStateNote?.message).toContain("No missing skill dependencies to install");
+    expect(emptyStateNote?.message).toContain("openclaw skills list --verbose");
+    expect(emptyStateNote?.message).toContain("openclaw skills check");
   });
 });

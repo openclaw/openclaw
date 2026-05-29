@@ -4,12 +4,12 @@ import { expect } from "vitest";
 import type { CommandOptions, SpawnResult } from "../process/exec.js";
 import { expectSingleNpmInstallIgnoreScriptsCall } from "./exec-assertions.js";
 
-export type InstallResultLike = {
+type InstallResultLike = {
   ok: boolean;
   error?: string;
 };
 
-export type NpmPackMetadata = {
+type NpmPackMetadata = {
   id: string;
   name: string;
   version: string;
@@ -18,7 +18,14 @@ export type NpmPackMetadata = {
   shasum: string;
 };
 
-export function createSuccessfulSpawnResult(stdout = ""): SpawnResult {
+type NpmViewMetadata = {
+  name: string;
+  version: string;
+  integrity?: string;
+  shasum?: string;
+};
+
+function createSuccessfulSpawnResult(stdout = ""): SpawnResult {
   return {
     code: 0,
     stdout,
@@ -27,6 +34,35 @@ export function createSuccessfulSpawnResult(stdout = ""): SpawnResult {
     killed: false,
     termination: "exit",
   };
+}
+
+export function mockNpmViewMetadataResult(
+  run: {
+    mockImplementation: (
+      implementation: (
+        argv: string[],
+        optionsOrTimeout: number | CommandOptions,
+      ) => Promise<SpawnResult>,
+    ) => unknown;
+  },
+  metadata: NpmViewMetadata,
+) {
+  run.mockImplementation(async (argv) => {
+    if (argv[0] !== "npm" || argv[1] !== "view") {
+      throw new Error(`unexpected command: ${argv.join(" ")}`);
+    }
+
+    return createSuccessfulSpawnResult(
+      JSON.stringify({
+        name: metadata.name,
+        version: metadata.version,
+        dist: {
+          integrity: metadata.integrity,
+          shasum: metadata.shasum,
+        },
+      }),
+    );
+  });
 }
 
 export async function expectUnsupportedNpmSpec(

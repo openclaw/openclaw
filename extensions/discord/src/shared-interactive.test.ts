@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { buildDiscordInteractiveComponents } from "./shared-interactive.js";
+import {
+  buildDiscordInteractiveComponents,
+  buildDiscordPresentationComponents,
+} from "./shared-interactive.js";
 
 describe("buildDiscordInteractiveComponents", () => {
   it("maps shared buttons and selects into Discord component blocks", () => {
@@ -65,6 +68,26 @@ describe("buildDiscordInteractiveComponents", () => {
     });
   });
 
+  it("preserves URL-only buttons as Discord link buttons", () => {
+    expect(
+      buildDiscordInteractiveComponents({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [{ label: "Docs", url: "https://example.com/docs" }],
+          },
+        ],
+      }),
+    ).toEqual({
+      blocks: [
+        {
+          type: "actions",
+          buttons: [{ label: "Docs", style: "link", url: "https://example.com/docs" }],
+        },
+      ],
+    });
+  });
+
   it("splits long shared button rows to stay within Discord action limits", () => {
     expect(
       buildDiscordInteractiveComponents({
@@ -97,6 +120,90 @@ describe("buildDiscordInteractiveComponents", () => {
         {
           type: "actions",
           buttons: [{ label: "Six", style: "secondary", callbackData: "6" }],
+        },
+      ],
+    });
+  });
+
+  it("does not duplicate presentation text when appending controls", () => {
+    expect(
+      buildDiscordPresentationComponents({
+        title: "Status",
+        blocks: [
+          { type: "text", text: "Build completed" },
+          { type: "context", text: "main branch" },
+          {
+            type: "buttons",
+            buttons: [{ label: "Open", value: "open" }],
+          },
+        ],
+      }),
+    ).toEqual({
+      blocks: [
+        { type: "text", text: "Status" },
+        { type: "text", text: "Build completed" },
+        { type: "text", text: "-# main branch" },
+        {
+          type: "actions",
+          buttons: [{ label: "Open", style: "secondary", callbackData: "open" }],
+        },
+      ],
+    });
+  });
+
+  it("preserves disabled presentation buttons for Discord components", () => {
+    expect(
+      buildDiscordPresentationComponents({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              { label: "Already handled", value: "done", disabled: true },
+              { label: "Open docs", url: "https://example.com/docs", disabled: true },
+            ],
+          },
+        ],
+      }),
+    ).toEqual({
+      blocks: [
+        {
+          type: "actions",
+          buttons: [
+            {
+              label: "Already handled",
+              style: "secondary",
+              callbackData: "done",
+              disabled: true,
+            },
+            {
+              label: "Open docs",
+              style: "link",
+              url: "https://example.com/docs",
+              disabled: true,
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("preserves reusable presentation buttons for Discord action entries", () => {
+    expect(
+      buildDiscordPresentationComponents({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [{ label: "Refresh", value: "refresh", reusable: true }],
+          },
+        ],
+      }),
+    ).toEqual({
+      blocks: [
+        {
+          type: "actions",
+          buttons: [
+            { label: "Refresh", style: "secondary", callbackData: "refresh", reusable: true },
+          ],
         },
       ],
     });

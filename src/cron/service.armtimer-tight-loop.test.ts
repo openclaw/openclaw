@@ -46,6 +46,14 @@ describe("CronService - armTimer tight loop prevention", () => {
       .filter((d: unknown): d is number => typeof d === "number");
   }
 
+  function latestTimeoutHandle(timeoutSpy: ReturnType<typeof vi.spyOn>) {
+    const result = timeoutSpy.mock.results.at(-1);
+    if (!result || result.type !== "return") {
+      throw new Error("Expected setTimeout to return a timer handle");
+    }
+    return result.value;
+  }
+
   function createTimerState(params: {
     storePath: string;
     now: number;
@@ -57,7 +65,7 @@ describe("CronService - armTimer tight loop prevention", () => {
       log: noopLogger,
       nowMs: () => params.now,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeatNow: vi.fn(),
+      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob:
         params.runIsolatedAgentJob ?? vi.fn().mockResolvedValue({ status: "ok" }),
     });
@@ -90,7 +98,7 @@ describe("CronService - armTimer tight loop prevention", () => {
 
     armTimer(state);
 
-    expect(state.timer).not.toBeNull();
+    expect(state.timer).toBe(latestTimeoutHandle(timeoutSpy));
     const delays = extractTimeoutDelays(timeoutSpy);
 
     // Before the fix, delay would be 0 (tight loop).
@@ -141,6 +149,43 @@ describe("CronService - armTimer tight loop prevention", () => {
     timeoutSpy.mockRestore();
   });
 
+  it("keeps a maintenance wake armed when enabled jobs have no nextRunAtMs", () => {
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const now = Date.parse("2026-02-28T12:32:00.000Z");
+
+    const state = createTimerState({
+      storePath: "/tmp/test-cron/jobs.json",
+      now,
+    });
+    state.store = {
+      version: 1,
+      jobs: [
+        {
+          id: "missing-next-run",
+          name: "missing-next-run",
+          enabled: true,
+          deleteAfterRun: false,
+          createdAtMs: now - 60_000,
+          updatedAtMs: now - 60_000,
+          schedule: { kind: "cron", expr: "*/15 * * * *" },
+          sessionTarget: "isolated" as const,
+          wakeMode: "next-heartbeat" as const,
+          payload: { kind: "agentTurn" as const, message: "test" },
+          delivery: { mode: "none" as const },
+          state: {},
+        },
+      ],
+    };
+
+    armTimer(state);
+
+    expect(state.timer).toBe(latestTimeoutHandle(timeoutSpy));
+    const delays = extractTimeoutDelays(timeoutSpy);
+    expect(delays).toContain(60_000);
+
+    timeoutSpy.mockRestore();
+  });
+
   it("breaks the onTimer→armTimer hot-loop with stuck runningAtMs", async () => {
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const store = await makeStorePath();
@@ -171,7 +216,7 @@ describe("CronService - armTimer tight loop prevention", () => {
     await onTimer(state);
 
     expect(state.running).toBe(false);
-    expect(state.timer).not.toBeNull();
+    expect(state.timer).toBe(latestTimeoutHandle(timeoutSpy));
 
     // The re-armed timer must NOT use delay=0. It should use at least
     // MIN_REFIRE_GAP_MS to prevent the hot-loop.

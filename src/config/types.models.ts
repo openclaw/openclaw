@@ -1,3 +1,11 @@
+import type {
+  AnthropicMessagesCompat,
+  OpenAICompletionsCompat,
+  OpenAIResponsesCompat,
+  ThinkingLevelMap,
+} from "../llm/types.js";
+import type { AgentRuntimePolicyConfig } from "./types.agents-shared.js";
+import type { ConfiguredModelProviderRequest } from "./types.provider-request.js";
 import type { SecretInput } from "./types.secrets.js";
 
 export const MODEL_APIS = [
@@ -6,47 +14,155 @@ export const MODEL_APIS = [
   "openai-codex-responses",
   "anthropic-messages",
   "google-generative-ai",
+  "google-vertex",
   "github-copilot",
   "bedrock-converse-stream",
   "ollama",
+  "azure-openai-responses",
 ] as const;
 
 export type ModelApi = (typeof MODEL_APIS)[number];
 
-export type ModelCompatConfig = {
-  supportsStore?: boolean;
-  supportsDeveloperRole?: boolean;
-  supportsReasoningEffort?: boolean;
-  supportsUsageInStreaming?: boolean;
-  supportsTools?: boolean;
-  supportsStrictMode?: boolean;
-  maxTokensField?: "max_completion_tokens" | "max_tokens";
-  thinkingFormat?: "openai" | "zai" | "qwen";
-  requiresToolResultName?: boolean;
-  requiresAssistantAfterToolResult?: boolean;
-  requiresThinkingAsText?: boolean;
-  requiresMistralToolIds?: boolean;
-  requiresOpenAiAnthropicToolPayload?: boolean;
+type SupportedOpenAICompatFields = Pick<
+  OpenAICompletionsCompat,
+  | "supportsStore"
+  | "supportsDeveloperRole"
+  | "supportsReasoningEffort"
+  | "supportsUsageInStreaming"
+  | "supportsStrictMode"
+  | "maxTokensField"
+  | "requiresToolResultName"
+  | "requiresAssistantAfterToolResult"
+  | "requiresThinkingAsText"
+  | "openRouterRouting"
+  | "vercelGatewayRouting"
+  | "zaiToolStream"
+  | "cacheControlFormat"
+  | "sendSessionAffinityHeaders"
+  | "supportsLongCacheRetention"
+>;
+
+type SupportedOpenAIResponsesCompatFields = Pick<
+  OpenAIResponsesCompat,
+  "sendSessionIdHeader" | "supportsLongCacheRetention"
+>;
+
+type SupportedAnthropicMessagesCompatFields = Pick<
+  AnthropicMessagesCompat,
+  "supportsEagerToolInputStreaming" | "supportsLongCacheRetention"
+>;
+
+export type SupportedThinkingFormat =
+  | NonNullable<OpenAICompletionsCompat["thinkingFormat"]>
+  | "deepseek"
+  | "openrouter"
+  | "together";
+
+export const MODEL_THINKING_FORMATS = [
+  "openai",
+  "openrouter",
+  "deepseek",
+  "together",
+  "qwen",
+  "qwen-chat-template",
+  "zai",
+] as const satisfies readonly SupportedThinkingFormat[];
+
+export function isModelThinkingFormat(value: string): value is SupportedThinkingFormat {
+  return (MODEL_THINKING_FORMATS as readonly string[]).includes(value);
+}
+
+export type ModelCompatConfig = SupportedOpenAICompatFields &
+  SupportedOpenAIResponsesCompatFields &
+  SupportedAnthropicMessagesCompatFields & {
+    thinkingFormat?: SupportedThinkingFormat;
+    supportedReasoningEfforts?: string[];
+    reasoningEffortMap?: Record<string, string>;
+    visibleReasoningDetailTypes?: string[];
+    supportsTools?: boolean;
+    supportsPromptCacheKey?: boolean;
+    requiresStringContent?: boolean;
+    strictMessageKeys?: boolean;
+    toolSchemaProfile?: string;
+    unsupportedToolSchemaKeywords?: string[];
+    nativeWebSearchTool?: boolean;
+    toolCallArgumentsEncoding?: string;
+    requiresMistralToolIds?: boolean;
+    requiresOpenAiAnthropicToolPayload?: boolean;
+  };
+
+export type ModelImageInputConfig = {
+  /** Provider-documented maximum encoded image payload size. */
+  maxBytes?: number;
+  /** Provider-documented maximum accepted input pixels. */
+  maxPixels?: number;
+  /** Provider-documented maximum accepted width/height in pixels. */
+  maxSidePx?: number;
+  /** Preferred resize side for the default balanced compression policy. */
+  preferredSidePx?: number;
+  /** Token accounting style, used as documentation for provider-owned policy. */
+  tokenMode?: "tile" | "detail" | "provider";
+};
+
+export type ModelMediaInputConfig = {
+  image?: ModelImageInputConfig;
 };
 
 export type ModelProviderAuthMode = "api-key" | "aws-sdk" | "oauth" | "token";
+
+export type ModelProviderLocalServiceConfig = {
+  command: string;
+  args?: string[];
+  cwd?: string;
+  env?: Record<string, string>;
+  healthUrl?: string;
+  readyTimeoutMs?: number;
+  idleStopMs?: number;
+};
 
 export type ModelDefinitionConfig = {
   id: string;
   name: string;
   api?: ModelApi;
+  baseUrl?: string;
   reasoning: boolean;
-  input: Array<"text" | "image">;
+  input: Array<"text" | "image" | "video" | "audio">;
   cost: {
     input: number;
     output: number;
     cacheRead: number;
     cacheWrite: number;
+    /** Optional tiered pricing.  When present, cost calculation uses
+     *  per-tier rates instead of the flat rates above.  Prices are
+     *  USD / million tokens; ranges are half-open `[start, end)` on the
+     *  input-token axis. */
+    tieredPricing?: Array<{
+      input: number;
+      output: number;
+      cacheRead: number;
+      cacheWrite: number;
+      /** Bounded tier: `[start, end)`. Open-ended top tier: `[start]` (normalized to `[start, Infinity]` at load time). */
+      range: [number, number] | [number];
+    }>;
   };
   contextWindow: number;
+  /**
+   * Optional effective runtime cap used for compaction/session budgeting.
+   * Keeps provider/native contextWindow metadata intact while letting configs
+   * prefer a smaller practical window.
+   */
+  contextTokens?: number;
   maxTokens: number;
+  /** Maps OpenClaw thinking levels to provider/model-specific values. */
+  thinkingLevelMap?: ThinkingLevelMap;
+  /** Provider-specific request/runtime parameters passed through to provider plugins. */
+  params?: Record<string, unknown>;
+  /** Optional agent execution runtime override for this provider/model pair. */
+  agentRuntime?: AgentRuntimePolicyConfig;
   headers?: Record<string, string>;
   compat?: ModelCompatConfig;
+  mediaInput?: ModelMediaInputConfig;
+  metadataSource?: "models-add";
 };
 
 export type ModelProviderConfig = {
@@ -54,10 +170,29 @@ export type ModelProviderConfig = {
   apiKey?: SecretInput;
   auth?: ModelProviderAuthMode;
   api?: ModelApi;
+  contextWindow?: number;
+  contextTokens?: number;
+  maxTokens?: number;
+  timeoutSeconds?: number;
+  /** Optional provider deployment/API region used by provider plugins that expose regional endpoints. */
+  region?: string;
   injectNumCtxForOpenAICompat?: boolean;
+  /** Provider-specific runtime parameters interpreted by provider plugins. */
+  params?: Record<string, unknown>;
+  /** Optional default agent execution runtime for models under this provider. */
+  agentRuntime?: AgentRuntimePolicyConfig;
+  /** Optional local service to start before calling this provider. */
+  localService?: ModelProviderLocalServiceConfig;
   headers?: Record<string, SecretInput>;
   authHeader?: boolean;
+  request?: ConfiguredModelProviderRequest;
   models: ModelDefinitionConfig[];
+};
+
+export type ModelProviderDeclarationConfig = ModelProviderConfig;
+
+export type ModelProviderConfigInput = Omit<Partial<ModelProviderConfig>, "models"> & {
+  models?: ModelDefinitionConfig[];
 };
 
 export type BedrockDiscoveryConfig = {
@@ -69,8 +204,20 @@ export type BedrockDiscoveryConfig = {
   defaultMaxTokens?: number;
 };
 
+export type DiscoveryToggleConfig = {
+  enabled?: boolean;
+};
+
+export type ModelPricingConfig = {
+  enabled?: boolean;
+};
+
 export type ModelsConfig = {
   mode?: "merge" | "replace";
   providers?: Record<string, ModelProviderConfig>;
-  bedrockDiscovery?: BedrockDiscoveryConfig;
+  pricing?: ModelPricingConfig;
+};
+
+export type ModelsConfigInput = Omit<ModelsConfig, "providers"> & {
+  providers?: Record<string, ModelProviderConfigInput>;
 };

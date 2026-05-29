@@ -1,65 +1,87 @@
-import { loginOpenAICodex, type OAuthCredentials } from "@mariozechner/pi-ai/oauth";
+import type { OAuthCredentials } from "../llm/oauth.js";
+import { loadActivatedBundledPluginPublicSurfaceModuleSync } from "../plugin-sdk/facade-runtime.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
+import { resolveProviderRuntimePlugin } from "./provider-hook-runtime.js";
 import { createVpsAwareOAuthHandlers } from "./provider-oauth-flow.js";
-import {
-  formatOpenAIOAuthTlsPreflightFix,
-  runOpenAIOAuthTlsPreflight,
-} from "./provider-openai-codex-oauth-tls.js";
+import type { ProviderAuthContext } from "./types.js";
 
-export async function loginOpenAICodexOAuth(params: {
+const OPENAI_CODEX_PROVIDER_ID = "openai-codex";
+const OPENAI_CODEX_OAUTH_METHOD_ID = "oauth";
+
+type OpenAICodexOAuthBridgeContext = ProviderAuthContext & {
+  signal?: AbortSignal;
+  onManualCodeInput?: () => Promise<string>;
+};
+
+type OpenAICodexOAuthLoginParams = {
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
   isRemote: boolean;
   openUrl: (url: string) => Promise<void>;
+  signal?: AbortSignal;
+  onManualCodeInput?: () => Promise<string>;
   localBrowserMessage?: string;
-}): Promise<OAuthCredentials | null> {
-  const { prompter, runtime, isRemote, openUrl, localBrowserMessage } = params;
-  const preflight = await runOpenAIOAuthTlsPreflight();
-  if (!preflight.ok && preflight.kind === "tls-cert") {
-    const hint = formatOpenAIOAuthTlsPreflightFix(preflight);
-    runtime.error(hint);
-    await prompter.note(hint, "OAuth prerequisites");
-    throw new Error(preflight.message);
-  }
+};
 
-  await prompter.note(
-    isRemote
-      ? [
-          "You are running in a remote/VPS environment.",
-          "A URL will be shown for you to open in your LOCAL browser.",
-          "After signing in, paste the redirect URL back here.",
-        ].join("\n")
-      : [
-          "Browser will open for OpenAI authentication.",
-          "If the callback doesn't auto-complete, paste the redirect URL.",
-          "OpenAI OAuth uses localhost:1455 for the callback.",
-        ].join("\n"),
-    "OpenAI Codex OAuth",
+type OpenAICodexOAuthFacade = {
+  loginOpenAICodexOAuth: (
+    params: OpenAICodexOAuthLoginParams & Pick<ProviderAuthContext, "oauth">,
+  ) => Promise<OAuthCredentials | null>;
+};
+
+function loadOpenAICodexOAuthFacade(): OpenAICodexOAuthFacade {
+  return loadActivatedBundledPluginPublicSurfaceModuleSync<OpenAICodexOAuthFacade>({
+    dirName: "openai",
+    artifactBasename: "api.js",
+  });
+}
+
+function isOAuthCredential(value: unknown): value is OAuthCredentials {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return (
+    record.type === "oauth" &&
+    record.provider === OPENAI_CODEX_PROVIDER_ID &&
+    typeof record.access === "string" &&
+    typeof record.refresh === "string" &&
+    typeof record.expires === "number"
   );
+}
 
-  const spin = prompter.progress("Starting OAuth flow…");
-  try {
-    const { onAuth: baseOnAuth, onPrompt } = createVpsAwareOAuthHandlers({
-      isRemote,
-      prompter,
-      runtime,
-      spin,
-      openUrl,
-      localBrowserMessage: localBrowserMessage ?? "Complete sign-in in browser…",
+/** @deprecated OpenAI Codex OAuth is owned by the OpenAI plugin auth hook. */
+export async function loginOpenAICodexOAuth(
+  params: OpenAICodexOAuthLoginParams,
+): Promise<OAuthCredentials | null> {
+  const oauthHandlers = {
+    createVpsAwareHandlers: createVpsAwareOAuthHandlers,
+  };
+  const provider = resolveProviderRuntimePlugin({
+    provider: OPENAI_CODEX_PROVIDER_ID,
+    config: {},
+    bundledProviderVitestCompat: true,
+  });
+  const oauth = provider?.auth?.find((method) => method.id === OPENAI_CODEX_OAUTH_METHOD_ID);
+  if (!oauth) {
+    return await loadOpenAICodexOAuthFacade().loginOpenAICodexOAuth({
+      ...params,
+      oauth: oauthHandlers,
     });
-
-    const creds = await loginOpenAICodex({
-      onAuth: baseOnAuth,
-      onPrompt,
-      onProgress: (msg: string) => spin.update(msg),
-    });
-    spin.stop("OpenAI OAuth complete");
-    return creds ?? null;
-  } catch (err) {
-    spin.stop("OpenAI OAuth failed");
-    runtime.error(String(err));
-    await prompter.note("Trouble with OAuth? See https://docs.openclaw.ai/start/faq", "OAuth help");
-    throw err;
   }
+
+  const context: OpenAICodexOAuthBridgeContext = {
+    config: {},
+    prompter: params.prompter,
+    runtime: params.runtime,
+    isRemote: params.isRemote,
+    openUrl: params.openUrl,
+    signal: params.signal,
+    onManualCodeInput: params.onManualCodeInput,
+    oauth: oauthHandlers,
+  };
+  const result = await oauth.run(context);
+  const credential = result.profiles[0]?.credential;
+  return isOAuthCredential(credential) ? credential : null;
 }

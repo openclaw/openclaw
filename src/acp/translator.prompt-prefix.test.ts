@@ -24,11 +24,22 @@ describe("acp prompt cwd prefix", () => {
       return {};
     });
 
+  function chatSendPayload(requestSpy: { mock: { calls: unknown[][] } }, index = 0) {
+    const call = requestSpy.mock.calls[index];
+    expect(call?.[0]).toBe("chat.send");
+    expect(call?.[2]).toEqual({ timeoutMs: null });
+    if (!call?.[1] || typeof call[1] !== "object") {
+      throw new Error(`expected chat.send payload ${index}`);
+    }
+    return call?.[1] as Record<string, unknown>;
+  }
+
   async function runPromptAndCaptureRequest(
     options: {
       cwd?: string;
       prefixCwd?: boolean;
       provenanceMode?: "meta" | "meta+receipt";
+      meta?: Record<string, unknown>;
     } = {},
   ) {
     const sessionStore = createInMemorySessionStore();
@@ -49,7 +60,12 @@ describe("acp prompt cwd prefix", () => {
       },
     );
 
-    await expect(agent.prompt(TEST_PROMPT)).rejects.toThrow("stop-after-send");
+    await expect(
+      agent.prompt({
+        ...TEST_PROMPT,
+        _meta: options.meta ?? {},
+      } as unknown as PromptRequest),
+    ).rejects.toThrow("stop-after-send");
     return requestSpy;
   }
 
@@ -78,78 +94,92 @@ describe("acp prompt cwd prefix", () => {
 
   it("redacts home directory in prompt prefix", async () => {
     const requestSpy = await runPromptWithCwd(path.join(os.homedir(), "openclaw-test"));
-    expect(requestSpy).toHaveBeenCalledWith(
-      "chat.send",
-      expect.objectContaining({
-        message: expect.stringMatching(/\[Working directory: ~[\\/]openclaw-test\]/),
-      }),
-      { expectFinal: true },
-    );
+    const payload = chatSendPayload(requestSpy);
+    expect(typeof payload.message).toBe("string");
+    expect(payload.message).toMatch(/\[Working directory: ~[\\/]openclaw-test\]/);
   });
 
   it("keeps backslash separators when cwd uses them", async () => {
     const requestSpy = await runPromptWithCwd(`${os.homedir()}\\openclaw-test`);
-    expect(requestSpy).toHaveBeenCalledWith(
-      "chat.send",
-      expect.objectContaining({
-        message: expect.stringContaining("[Working directory: ~\\openclaw-test]"),
-      }),
-      { expectFinal: true },
-    );
+    const payload = chatSendPayload(requestSpy);
+    expect(payload.message).toContain("[Working directory: ~\\openclaw-test]");
   });
 
   it("injects system provenance metadata when enabled", async () => {
     const requestSpy = await runPromptAndCaptureRequest({ provenanceMode: "meta" });
-    expect(requestSpy).toHaveBeenCalledWith(
-      "chat.send",
-      expect.objectContaining({
-        systemInputProvenance: {
-          kind: "external_user",
-          originSessionId: TEST_SESSION_ID,
-          sourceChannel: "acp",
-          sourceTool: "openclaw_acp",
-        },
-        systemProvenanceReceipt: undefined,
-      }),
-      { expectFinal: true },
-    );
+    const payload = chatSendPayload(requestSpy);
+    expect(payload.systemInputProvenance).toEqual({
+      kind: "external_user",
+      originSessionId: TEST_SESSION_ID,
+      sourceChannel: "acp",
+      sourceTool: "openclaw_acp",
+    });
+    expect(payload.systemProvenanceReceipt).toBeUndefined();
   });
 
   it("injects a system provenance receipt when requested", async () => {
     const requestSpy = await runPromptAndCaptureRequest({ provenanceMode: "meta+receipt" });
-    expect(requestSpy).toHaveBeenCalledWith(
-      "chat.send",
-      expect.objectContaining({
-        systemInputProvenance: {
-          kind: "external_user",
-          originSessionId: TEST_SESSION_ID,
-          sourceChannel: "acp",
-          sourceTool: "openclaw_acp",
-        },
-        systemProvenanceReceipt: expect.stringContaining("[Source Receipt]"),
-      }),
-      { expectFinal: true },
+    const payload = chatSendPayload(requestSpy);
+    expect(payload.systemInputProvenance).toEqual({
+      kind: "external_user",
+      originSessionId: TEST_SESSION_ID,
+      sourceChannel: "acp",
+      sourceTool: "openclaw_acp",
+    });
+    expect(typeof payload.systemProvenanceReceipt).toBe("string");
+    const receipt = payload.systemProvenanceReceipt as string;
+    expect(receipt).toContain("[Source Receipt]");
+    expect(receipt).toContain("bridge=openclaw-acp");
+    expect(receipt).toContain(`originSessionId=${TEST_SESSION_ID}`);
+    expect(receipt).toContain(`targetSession=${TEST_SESSION_KEY}`);
+  });
+
+  it("does not forward malformed prompt timeout metadata", async () => {
+    for (const timeoutMs of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      const requestSpy = await runPromptAndCaptureRequest({ meta: { timeoutMs } });
+      const payload = chatSendPayload(requestSpy);
+      expect(payload.timeoutMs).toBeUndefined();
+    }
+  });
+
+  it("retries without provenance when the gateway rejects admin-only provenance fields", async () => {
+    const requestSpy = vi
+      .fn()
+      .mockRejectedValueOnce(
+        Object.assign(new Error("system provenance fields require admin scope"), {
+          name: "GatewayClientRequestError",
+          gatewayCode: "INVALID_REQUEST",
+        }),
+      )
+      .mockRejectedValueOnce(new Error("stop-after-send"));
+    const sessionStore = createInMemorySessionStore();
+    sessionStore.createSession({
+      sessionId: TEST_SESSION_ID,
+      sessionKey: TEST_SESSION_KEY,
+      cwd: path.join(os.homedir(), "openclaw-test"),
+    });
+    const agent = new AcpGatewayAgent(
+      createAcpConnection(),
+      createAcpGateway(requestSpy as unknown as GatewayClient["request"]),
+      {
+        sessionStore,
+        provenanceMode: "meta+receipt",
+      },
     );
-    expect(requestSpy).toHaveBeenCalledWith(
-      "chat.send",
-      expect.objectContaining({
-        systemProvenanceReceipt: expect.stringContaining("bridge=openclaw-acp"),
-      }),
-      { expectFinal: true },
-    );
-    expect(requestSpy).toHaveBeenCalledWith(
-      "chat.send",
-      expect.objectContaining({
-        systemProvenanceReceipt: expect.stringContaining(`originSessionId=${TEST_SESSION_ID}`),
-      }),
-      { expectFinal: true },
-    );
-    expect(requestSpy).toHaveBeenCalledWith(
-      "chat.send",
-      expect.objectContaining({
-        systemProvenanceReceipt: expect.stringContaining(`targetSession=${TEST_SESSION_KEY}`),
-      }),
-      { expectFinal: true },
-    );
+
+    await expect(agent.prompt(TEST_PROMPT)).rejects.toThrow("stop-after-send");
+    expect(requestSpy).toHaveBeenCalledTimes(2);
+    const firstPayload = chatSendPayload(requestSpy, 0);
+    expect(firstPayload.systemInputProvenance).toEqual({
+      kind: "external_user",
+      originSessionId: TEST_SESSION_ID,
+      sourceChannel: "acp",
+      sourceTool: "openclaw_acp",
+    });
+    expect(firstPayload.systemProvenanceReceipt).toContain("[Source Receipt]");
+
+    const retryPayload = chatSendPayload(requestSpy, 1);
+    expect(retryPayload.systemInputProvenance).toBeUndefined();
+    expect(retryPayload.systemProvenanceReceipt).toBeUndefined();
   });
 });

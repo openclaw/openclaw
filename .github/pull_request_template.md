@@ -1,115 +1,132 @@
 ## Summary
 
-Describe the problem and fix in 2–5 bullets:
+What problem does this PR solve?
 
-- Problem:
-- Why it matters:
-- What changed:
-- What did NOT change (scope boundary):
 
-## Change Type (select all)
+Why does this matter now?
 
-- [ ] Bug fix
-- [ ] Feature
-- [ ] Refactor
-- [ ] Docs
-- [ ] Security hardening
-- [ ] Chore/infra
 
-## Scope (select all touched areas)
+What is the intended outcome?
 
-- [ ] Gateway / orchestration
-- [ ] Skills / tool execution
-- [ ] Auth / tokens
-- [ ] Memory / storage
-- [ ] Integrations
-- [ ] API / contracts
-- [ ] UI / DX
-- [ ] CI/CD / infra
 
-## Linked Issue/PR
+What is intentionally out of scope?
 
-- Closes #
-- Related #
 
-## User-visible / Behavior Changes
+What does success look like?
 
-List user-visible changes (including defaults/config).  
-If none, write `None`.
 
-## Security Impact (required)
+What should reviewers focus on?
 
-- New permissions/capabilities? (`Yes/No`)
-- Secrets/tokens handling changed? (`Yes/No`)
-- New/changed network calls? (`Yes/No`)
-- Command/tool execution surface changed? (`Yes/No`)
-- Data access scope changed? (`Yes/No`)
-- If any `Yes`, explain risk + mitigation:
+<details>
+<summary>Summary guidance</summary>
 
-## Repro + Verification
+This PR description is the contributor's durable explanation of the change. Write it for human maintainers first; ClawSweeper and Barnacle use the same text to understand intent, proof, risk, and current review state.
 
-### Environment
+Describe the intent and outcome in 2-5 bullets. Avoid restating the diff; reviewers and bots can read the changed files.
 
-- OS:
-- Runtime/container:
-- Model/provider:
-- Integration/channel (if any):
-- Relevant config (redacted):
+If this PR fixes a plugin beta-release blocker, title it `fix(<plugin-id>): beta blocker - <summary>` and link the matching `Beta blocker: <plugin-name> - <summary>` issue labeled `beta-blocker`. Contributors cannot label PRs, so the title is the PR-side signal for maintainers and automation.
 
-### Steps
+</details>
 
-1.
-2.
-3.
+## Linked context
 
-### Expected
+Which issue does this close?
 
--
+Closes #
 
-### Actual
+Which issues, PRs, or discussions are related?
 
--
+Related #
 
-## Evidence
+Was this requested by a maintainer or owner?
 
-Attach at least one:
+<details>
+<summary>Linked context guidance</summary>
 
-- [ ] Failing test/log before + passing after
-- [ ] Trace/log snippets
-- [ ] Screenshot/recording
-- [ ] Perf numbers (if relevant)
+Link the issue, PR, discussion, maintainer request, or owner request that explains why this PR should exist. Maintainer context helps reviewers and automation distinguish intended work from drive-by churn.
 
-## Human Verification (required)
+</details>
 
-What you personally verified (not just CI), and how:
+## Real behavior proof (required for external PRs)
 
-- Verified scenarios:
-- Edge cases checked:
-- What you did **not** verify:
+- Behavior or issue addressed:
+- Real environment tested:
+- Exact steps or command run after this patch:
+- Evidence after fix (screenshot, recording, terminal capture, console output, redacted runtime log, linked artifact, or copied live output):
+- Observed result after fix:
+- What was not tested:
+- Proof limitations or environment constraints:
+- Before evidence (optional but encouraged):
 
-## Review Conversations
+<details>
+<summary>Real behavior proof guidance</summary>
 
-- [ ] I replied to or resolved every bot review conversation I addressed in this PR.
-- [ ] I left unresolved only the conversations that still need reviewer or maintainer judgment.
+External contributors must show after-fix evidence from a real OpenClaw setup. Unit tests, mocks, lint, typechecks, snapshots, and CI are supplemental only.
 
-If a bot review conversation is addressed by this PR, resolve that conversation yourself. Do not leave bot review conversation cleanup for maintainers.
+Screenshots are encouraged even for CLI, console, text, or log changes. Terminal screenshots, copied live output, redacted runtime logs, recordings, and linked artifacts count.
 
-## Compatibility / Migration
+If your environment cannot produce the ideal proof, explain that under `Proof limitations or environment constraints` so reviewers and ClawSweeper can direct the next step properly.
 
-- Backward compatible? (`Yes/No`)
-- Config/env changes? (`Yes/No`)
-- Migration needed? (`Yes/No`)
-- If yes, exact upgrade steps:
+Be mindful of private information like IP addresses, API keys, phone numbers, non-public endpoints, or other private details when providing evidence.
 
-## Failure Recovery (if this breaks)
+</details>
 
-- How to disable/revert this change quickly:
-- Files/config to restore:
-- Known bad symptoms reviewers should watch for:
+## Tests and validation
 
-## Risks and Mitigations
+Which commands did you run?
 
-List only real risks for this PR. Add/remove entries as needed. If none, write `None`.
 
-- Risk:
-  - Mitigation:
+What regression coverage was added or updated?
+
+
+What failed before this fix, if known?
+
+
+If no test was added, why not?
+
+<details>
+<summary>Testing guidance</summary>
+
+List focused commands, not every incidental check. CI is useful support, but external PRs still need real behavior proof above when behavior changes.
+
+</details>
+
+## Risk checklist
+
+Did user-visible behavior change? (`Yes/No`)
+
+
+Did config, environment, or migration behavior change? (`Yes/No`)
+
+
+Did security, auth, secrets, network, or tool execution behavior change? (`Yes/No`)
+
+
+What is the highest-risk area?
+
+
+How is that risk mitigated?
+
+<details>
+<summary>Risk guidance</summary>
+
+Use this for author judgment that is not obvious from the diff. ClawSweeper can see touched files, but it cannot know which behavior you think is risky, why the risk is acceptable, or what mitigation reviewers should verify.
+
+</details>
+
+## Current review state
+
+What is the next action?
+
+
+What is still waiting on author, maintainer, CI, or external proof?
+
+
+Which bot or reviewer comments were addressed?
+
+<details>
+<summary>Review state guidance</summary>
+
+Keep this as the durable state for review progress. If useful information appears in comments, fold the current next action or blocker back here so maintainers and ClawSweeper do not need to reconstruct state from comment history.
+
+</details>

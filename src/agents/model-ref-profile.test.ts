@@ -53,4 +53,55 @@ describe("splitTrailingAuthProfile", () => {
       profile: "google-gemini-cli:test@gmail.com",
     });
   });
+
+  it("keeps @YYYYMMDD version suffixes in model ids", () => {
+    expect(splitTrailingAuthProfile("custom/vertex-ai_claude-haiku-4-5@20251001")).toEqual({
+      model: "custom/vertex-ai_claude-haiku-4-5@20251001",
+    });
+  });
+
+  it("supports auth profiles after @YYYYMMDD version suffixes", () => {
+    expect(splitTrailingAuthProfile("custom/vertex-ai_claude-haiku-4-5@20251001@work")).toEqual({
+      model: "custom/vertex-ai_claude-haiku-4-5@20251001",
+      profile: "work",
+    });
+  });
+
+  it("keeps @q* quant suffixes in model ids", () => {
+    expect(splitTrailingAuthProfile("lmstudio-mb-pro/gemma-4-31b-it@q8_0")).toEqual({
+      model: "lmstudio-mb-pro/gemma-4-31b-it@q8_0",
+    });
+  });
+
+  it("supports auth profiles after @q* quant suffixes", () => {
+    expect(splitTrailingAuthProfile("lmstudio-mb-pro/gemma-4-31b-it@q8_0@work")).toEqual({
+      model: "lmstudio-mb-pro/gemma-4-31b-it@q8_0",
+      profile: "work",
+    });
+  });
+
+  it("keeps @iq* importance-quantization suffixes in model ids", () => {
+    expect(splitTrailingAuthProfile("lmstudio/qwen3.6-27b@iq3_xxs")).toEqual({
+      model: "lmstudio/qwen3.6-27b@iq3_xxs",
+    });
+    expect(splitTrailingAuthProfile("lmstudio/qwen3.6-27b@iq4_xs")).toEqual({
+      model: "lmstudio/qwen3.6-27b@iq4_xs",
+    });
+  });
+
+  it("supports auth profiles after @iq* quant suffixes", () => {
+    expect(splitTrailingAuthProfile("lmstudio/qwen3.6-27b@iq3_xxs@work")).toEqual({
+      model: "lmstudio/qwen3.6-27b@iq3_xxs",
+      profile: "work",
+    });
+  });
+
+  it("keeps @4bit/@8bit quant suffixes in model ids", () => {
+    expect(splitTrailingAuthProfile("lmstudio-mb-pro/gemma-4-31b@4bit")).toEqual({
+      model: "lmstudio-mb-pro/gemma-4-31b@4bit",
+    });
+    expect(splitTrailingAuthProfile("lmstudio-mb-pro/gemma-4-31b@8bit")).toEqual({
+      model: "lmstudio-mb-pro/gemma-4-31b@8bit",
+    });
+  });
 });

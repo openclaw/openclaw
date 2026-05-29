@@ -1,5 +1,7 @@
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveConversationLabel } from "../../channels/conversation-label.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { resolveCommandTurnContext } from "../command-turn-context.js";
 import type { FinalizedMsgContext, MsgContext } from "../templating.js";
 import { normalizeInboundTextNewlines, sanitizeInboundSystemTags } from "./inbound-text.js";
 
@@ -19,6 +21,13 @@ function normalizeTextField(value: unknown): string | undefined {
   return sanitizeInboundSystemTags(normalizeInboundTextNewlines(value));
 }
 
+function normalizeTrustedTextField(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  return normalizeInboundTextNewlines(value);
+}
+
 function normalizeMediaType(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -34,11 +43,41 @@ function countMediaEntries(ctx: MsgContext): number {
   return Math.max(pathCount, urlCount, single);
 }
 
+function applySupplementalContext(ctx: MsgContext): void {
+  const supplemental = ctx.SupplementalContext;
+  if (!supplemental) {
+    return;
+  }
+  const fields = {
+    ReplyToId: supplemental.quote?.id,
+    ReplyToIdFull: supplemental.quote?.fullId,
+    ReplyToBody: supplemental.quote?.body,
+    ReplyToSender: supplemental.quote?.sender,
+    ReplyToIsQuote: supplemental.quote?.isQuote,
+    ForwardedFrom: supplemental.forwarded?.from,
+    ForwardedFromType: supplemental.forwarded?.fromType,
+    ForwardedFromId: supplemental.forwarded?.fromId,
+    ForwardedDate: supplemental.forwarded?.date,
+    ThreadStarterBody: supplemental.thread?.starterBody,
+    ThreadHistoryBody: supplemental.thread?.historyBody,
+    ThreadLabel: supplemental.thread?.label,
+    GroupSystemPrompt: supplemental.groupSystemPrompt,
+    UntrustedStructuredContext: supplemental.untrustedContext,
+  };
+  for (const [key, value] of Object.entries(fields)) {
+    if (value !== undefined && ctx[key as keyof MsgContext] === undefined) {
+      ctx[key as keyof MsgContext] = value as never;
+    }
+  }
+  delete ctx.SupplementalContext;
+}
+
 export function finalizeInboundContext<T extends Record<string, unknown>>(
   ctx: T,
   opts: FinalizeInboundContextOptions = {},
 ): T & FinalizedMsgContext {
   const normalized = ctx as T & MsgContext;
+  applySupplementalContext(normalized);
 
   normalized.Body = sanitizeInboundSystemTags(
     normalizeInboundTextNewlines(typeof normalized.Body === "string" ? normalized.Body : ""),
@@ -48,6 +87,7 @@ export function finalizeInboundContext<T extends Record<string, unknown>>(
   normalized.Transcript = normalizeTextField(normalized.Transcript);
   normalized.ThreadStarterBody = normalizeTextField(normalized.ThreadStarterBody);
   normalized.ThreadHistoryBody = normalizeTextField(normalized.ThreadHistoryBody);
+  normalized.GroupSystemPrompt = normalizeTrustedTextField(normalized.GroupSystemPrompt);
   if (Array.isArray(normalized.UntrustedContext)) {
     const normalizedUntrusted = normalized.UntrustedContext.map((entry) =>
       sanitizeInboundSystemTags(normalizeInboundTextNewlines(entry)),
@@ -81,9 +121,9 @@ export function finalizeInboundContext<T extends Record<string, unknown>>(
     normalizeInboundTextNewlines(bodyForCommandsSource),
   );
 
-  const explicitLabel = normalized.ConversationLabel?.trim();
+  const explicitLabel = normalizeOptionalString(normalized.ConversationLabel);
   if (opts.forceConversationLabel || !explicitLabel) {
-    const resolved = resolveConversationLabel(normalized)?.trim();
+    const resolved = normalizeOptionalString(resolveConversationLabel(normalized));
     if (resolved) {
       normalized.ConversationLabel = resolved;
     }
@@ -93,6 +133,13 @@ export function finalizeInboundContext<T extends Record<string, unknown>>(
 
   // Always set. Default-deny when upstream forgets to populate it.
   normalized.CommandAuthorized = normalized.CommandAuthorized === true;
+  normalized.CommandTurn = resolveCommandTurnContext(normalized);
+  if (normalized.CommandTurn.source === "native" || normalized.CommandTurn.source === "text") {
+    normalized.CommandSource = normalized.CommandTurn.source;
+    normalized.CommandAuthorized = normalized.CommandTurn.authorized;
+  } else {
+    normalized.CommandSource = undefined;
+  }
 
   // MediaType/MediaTypes alignment:
   // - No media: do not inject defaults.

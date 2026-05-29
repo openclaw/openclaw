@@ -4,11 +4,17 @@ public enum OpenClawChatTransportEvent: Sendable {
     case health(ok: Bool)
     case tick
     case chat(OpenClawChatEventPayload)
+    case sessionMessage(OpenClawSessionMessageEventPayload)
     case agent(OpenClawAgentEventPayload)
     case seqGap
 }
 
 public protocol OpenClawChatTransport: Sendable {
+    func createSession(
+        key: String,
+        label: String?,
+        parentSessionKey: String?) async throws -> OpenClawChatCreateSessionResponse
+
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload
     func listModels() async throws -> [OpenClawChatModelChoice]
     func sendMessage(
@@ -24,20 +30,44 @@ public protocol OpenClawChatTransport: Sendable {
     func setSessionThinking(sessionKey: String, thinkingLevel: String) async throws
 
     func requestHealth(timeoutMs: Int) async throws -> Bool
+    func waitForRunCompletion(runId: String, timeoutMs: Int) async -> Bool
     func events() -> AsyncStream<OpenClawChatTransportEvent>
 
     func setActiveSessionKey(_ sessionKey: String) async throws
     func resetSession(sessionKey: String) async throws
+    func compactSession(sessionKey: String) async throws
 }
 
 extension OpenClawChatTransport {
+    public func createSession(
+        key _: String,
+        label _: String?,
+        parentSessionKey _: String?) async throws -> OpenClawChatCreateSessionResponse
+    {
+        throw NSError(
+            domain: "OpenClawChatTransport",
+            code: 0,
+            userInfo: [NSLocalizedDescriptionKey: "sessions.create not supported by this transport"])
+    }
+
     public func setActiveSessionKey(_: String) async throws {}
+
+    public func waitForRunCompletion(runId _: String, timeoutMs _: Int) async -> Bool {
+        false
+    }
 
     public func resetSession(sessionKey _: String) async throws {
         throw NSError(
             domain: "OpenClawChatTransport",
             code: 0,
             userInfo: [NSLocalizedDescriptionKey: "sessions.reset not supported by this transport"])
+    }
+
+    public func compactSession(sessionKey _: String) async throws {
+        throw NSError(
+            domain: "OpenClawChatTransport",
+            code: 0,
+            userInfo: [NSLocalizedDescriptionKey: "sessions.compact not supported by this transport"])
     }
 
     public func abortRun(sessionKey _: String, runId _: String) async throws {

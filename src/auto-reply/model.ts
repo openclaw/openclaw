@@ -1,4 +1,5 @@
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { escapeRegExp } from "../utils.js";
 
 export function extractModelDirective(
@@ -8,6 +9,7 @@ export function extractModelDirective(
   cleaned: string;
   rawModel?: string;
   rawProfile?: string;
+  rawRuntime?: string;
   hasDirective: boolean;
 } {
   if (!body) {
@@ -15,10 +17,10 @@ export function extractModelDirective(
   }
 
   const modelMatch = body.match(
-    /(?:^|\s)\/model(?=$|\s|:)\s*:?\s*([A-Za-z0-9_.:@-]+(?:\/[A-Za-z0-9_.:@-]+)*)?/i,
+    /(?:^|\s)\/model(?=$|\s|:)\s*:?\s*([A-Za-z0-9_.:@-]+(?:\/[A-Za-z0-9_.:@-]+)*)?(?:\s+(?:--runtime|runtime=|harness=)\s*([A-Za-z0-9_.:-]+))?/i,
   );
 
-  const aliases = (options?.aliases ?? []).map((alias) => alias.trim()).filter(Boolean);
+  const aliases = normalizeStringEntries(options?.aliases);
   const aliasMatch =
     modelMatch || aliases.length === 0
       ? null
@@ -31,6 +33,7 @@ export function extractModelDirective(
 
   const match = modelMatch ?? aliasMatch;
   const raw = modelMatch ? modelMatch?.[1]?.trim() : aliasMatch?.[1]?.trim();
+  const rawRuntime = modelMatch?.[2]?.trim();
 
   let rawModel = raw;
   let rawProfile: string | undefined;
@@ -46,6 +49,7 @@ export function extractModelDirective(
     cleaned,
     rawModel,
     rawProfile,
+    rawRuntime,
     hasDirective: !!match,
   };
 }

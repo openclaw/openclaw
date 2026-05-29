@@ -4,10 +4,8 @@ read_when:
   - Learning how to configure OpenClaw
   - Looking for configuration examples
   - Setting up OpenClaw for the first time
-title: "Configuration Examples"
+title: "Configuration examples"
 ---
-
-# Configuration Examples
 
 Examples below are aligned with the current config schema. For the exhaustive reference and per-field notes, see [Configuration](/gateway/configuration).
 
@@ -17,7 +15,7 @@ Examples below are aligned with the current config schema. For the exhaustive re
 
 ```json5
 {
-  agent: { workspace: "~/.openclaw/workspace" },
+  agents: { defaults: { workspace: "~/.openclaw/workspace" } },
   channels: { whatsapp: { allowFrom: ["+15555550123"] } },
 }
 ```
@@ -28,19 +26,33 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
 
 ```json5
 {
-  identity: {
-    name: "Clawd",
-    theme: "helpful assistant",
-    emoji: "🦞",
-  },
-  agent: {
-    workspace: "~/.openclaw/workspace",
-    model: { primary: "anthropic/claude-sonnet-4-5" },
+  agents: {
+    defaults: {
+      workspace: "~/.openclaw/workspace",
+      model: { primary: "anthropic/claude-sonnet-4-6" },
+    },
+    list: [
+      {
+        id: "main",
+        identity: {
+          name: "Clawd",
+          theme: "helpful assistant",
+          emoji: "🦞",
+        },
+      },
+    ],
   },
   channels: {
     whatsapp: {
       allowFrom: ["+15555550123"],
       groups: { "*": { requireMention: true } },
+    },
+  },
+  messages: {
+    visibleReplies: "automatic",
+    groupChat: {
+      visibleReplies: "message_tool", // opt-in; visible output requires message(action=send)
+      unmentionedInbound: "room_event",
     },
   },
 }
@@ -67,28 +79,19 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
   // Auth profile metadata (secrets live in auth-profiles.json)
   auth: {
     profiles: {
-      "anthropic:me@example.com": {
-        provider: "anthropic",
-        mode: "oauth",
-        email: "me@example.com",
-      },
+      "anthropic:default": { provider: "anthropic", mode: "api_key" },
       "anthropic:work": { provider: "anthropic", mode: "api_key" },
       "openai:default": { provider: "openai", mode: "api_key" },
-      "openai-codex:default": { provider: "openai-codex", mode: "oauth" },
+      "openai-codex:personal": { provider: "openai-codex", mode: "oauth" },
     },
     order: {
-      anthropic: ["anthropic:me@example.com", "anthropic:work"],
+      anthropic: ["anthropic:default", "anthropic:work"],
       openai: ["openai:default"],
-      "openai-codex": ["openai-codex:default"],
+      "openai-codex": ["openai-codex:personal"],
     },
   },
 
-  // Identity
-  identity: {
-    name: "Samantha",
-    theme: "helpful sloth",
-    emoji: "🦥",
-  },
+  // Identity is per agent — set it on agents.list[].identity below.
 
   // Logging
   logging: {
@@ -102,30 +105,28 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
   // Message formatting
   messages: {
     messagePrefix: "[openclaw]",
+    visibleReplies: "automatic",
     responsePrefix: ">",
     ackReaction: "👀",
     ackReactionScope: "group-mentions",
-  },
-
-  // Routing + queue
-  routing: {
     groupChat: {
-      mentionPatterns: ["@openclaw", "openclaw"],
       historyLimit: 50,
+      visibleReplies: "message_tool", // opt in for shared rooms with tool-reliable models
+      unmentionedInbound: "room_event",
     },
     queue: {
-      mode: "collect",
-      debounceMs: 1000,
+      mode: "followup",
+      debounceMs: 500,
       cap: 20,
       drop: "summarize",
       byChannel: {
-        whatsapp: "collect",
-        telegram: "collect",
+        whatsapp: "followup",
+        telegram: "followup",
         discord: "collect",
         slack: "collect",
-        signal: "collect",
-        imessage: "collect",
-        webchat: "collect",
+        signal: "followup",
+        imessage: "followup",
+        webchat: "followup",
       },
     },
   },
@@ -154,6 +155,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
   // Session behavior
   session: {
     scope: "per-sender",
+    dmScope: "per-channel-peer", // recommended for multi-user inboxes
     reset: {
       mode: "daily",
       atHour: 4,
@@ -168,7 +170,6 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
       mode: "warn",
       pruneAfter: "30d",
       maxEntries: 500,
-      rotateBytes: "10mb",
       resetArchiveRetention: "30d", // duration or false
       maxDiskBytes: "500mb", // optional
       highWaterBytes: "400mb", // optional (defaults to 80% of maxDiskBytes)
@@ -238,19 +239,22 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
       workspace: "~/.openclaw/workspace",
       userTimezone: "America/Chicago",
       model: {
-        primary: "anthropic/claude-sonnet-4-5",
-        fallbacks: ["anthropic/claude-opus-4-6", "openai/gpt-5.2"],
+        primary: "anthropic/claude-sonnet-4-6",
+        fallbacks: ["anthropic/claude-opus-4-6", "openai/gpt-5.4"],
       },
       imageModel: {
-        primary: "openrouter/anthropic/claude-sonnet-4-5",
+        primary: "openrouter/anthropic/claude-sonnet-4-6",
       },
       models: {
         "anthropic/claude-opus-4-6": { alias: "opus" },
-        "anthropic/claude-sonnet-4-5": { alias: "sonnet" },
-        "openai/gpt-5.2": { alias: "gpt" },
+        "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
+        "openai/gpt-5.4": { alias: "gpt" },
       },
+      skills: ["github", "weather"], // inherited by agents that omit list[].skills
       thinkingDefault: "low",
       verboseDefault: "off",
+      toolProgressDetail: "explain",
+      reasoningDefault: "off",
       elevatedDefault: "on",
       blockStreamingDefault: "off",
       blockStreamingBreak: "text_end",
@@ -271,7 +275,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
       maxConcurrent: 3,
       heartbeat: {
         every: "30m",
-        model: "anthropic/claude-sonnet-4-5",
+        model: "anthropic/claude-sonnet-4-6",
         target: "last",
         directPolicy: "allow", // allow (default) | block
         to: "+15555550123",
@@ -288,7 +292,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
       },
       sandbox: {
         mode: "non-main",
-        perSession: true,
+        scope: "session", // preferred over legacy perSession: true
         workspaceRoot: "~/.openclaw/sandboxes",
         docker: {
           image: "openclaw-sandbox:bookworm-slim",
@@ -303,6 +307,30 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
         },
       },
     },
+    list: [
+      {
+        id: "main",
+        default: true,
+        identity: {
+          name: "Samantha",
+          theme: "helpful sloth",
+          emoji: "🦥",
+        },
+        // inherits defaults.skills -> github, weather
+        groupChat: {
+          mentionPatterns: ["@openclaw", "openclaw"],
+        },
+        thinkingDefault: "high", // per-agent thinking override
+        reasoningDefault: "on", // per-agent reasoning visibility
+        fastModeDefault: false, // per-agent fast mode
+      },
+      {
+        id: "quick",
+        skills: [], // no skills for this agent
+        fastModeDefault: true, // this agent always runs fast
+        thinkingDefault: "off",
+      },
+    ],
   },
 
   tools: {
@@ -357,7 +385,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
   cron: {
     enabled: true,
     store: "~/.openclaw/cron/cron.json",
-    maxConcurrentRuns: 2,
+    maxConcurrentRuns: 8, // default; cron dispatch + isolated cron agent-turn execution
     sessionRetention: "24h",
     runLog: {
       maxBytes: "2mb",
@@ -428,10 +456,12 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
     allowBundled: ["gemini", "peekaboo"],
     load: {
       extraDirs: ["~/Projects/agent-scripts/skills"],
+      allowSymlinkTargets: ["~/Projects/agent-scripts/skills"],
     },
     install: {
       preferBrew: true,
-      nodeManager: "npm",
+      nodeManager: "npm", // npm | pnpm | yarn | bun
+      allowUploadedArchives: false,
     },
     entries: {
       "image-lab": {
@@ -445,13 +475,54 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
 }
 ```
 
+### Symlinked sibling skill repo
+
+Use this when a built-in skill root contains a symlink into a sibling repo, for
+example `~/.agents/skills/manager -> ~/Projects/manager/skills`.
+
+```json5
+{
+  skills: {
+    load: {
+      extraDirs: ["~/Projects/manager/skills"],
+      allowSymlinkTargets: ["~/Projects/manager/skills"],
+    },
+  },
+}
+```
+
+- `extraDirs` scans the sibling repo as an explicit skill root.
+- `allowSymlinkTargets` lets symlinked skill folders resolve into that trusted
+  real target root without allowing arbitrary symlink escapes.
+
 ## Common patterns
+
+### Shared skill baseline with one override
+
+```json5
+{
+  agents: {
+    defaults: {
+      workspace: "~/.openclaw/workspace",
+      skills: ["github", "weather"],
+    },
+    list: [
+      { id: "main", default: true },
+      { id: "docs", workspace: "~/.openclaw/workspace-docs", skills: ["docs-search"] },
+    ],
+  },
+}
+```
+
+- `agents.defaults.skills` is the shared baseline.
+- `agents.list[].skills` replaces that baseline for one agent.
+- Use `skills: []` when an agent should see no skills.
 
 ### Multi-platform setup
 
 ```json5
 {
-  agent: { workspace: "~/.openclaw/workspace" },
+  agents: { defaults: { workspace: "~/.openclaw/workspace" } },
   channels: {
     whatsapp: { allowFrom: ["+15555550123"] },
     telegram: {
@@ -468,9 +539,31 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
 }
 ```
 
+### Trusted node network auto-approval
+
+Keep device pairing manual unless you control the network path. For a dedicated
+lab or tailnet subnet, you can opt in to first-time node device auto-approval
+with exact CIDRs or IPs:
+
+```json5
+{
+  gateway: {
+    nodes: {
+      pairing: {
+        autoApproveCidrs: ["192.168.1.0/24", "fd00:1234:5678::/64"],
+      },
+    },
+  },
+}
+```
+
+This remains off when unset. It only applies to fresh `role: node` pairing with
+no requested scopes. Operator/browser clients and role, scope, metadata, or
+public-key upgrades still require manual approval.
+
 ### Secure DM mode (shared inbox / multi-user DMs)
 
-If more than one person can DM your bot (multiple entries in `allowFrom`, pairing approvals for multiple people, or `dmPolicy: "open"`), enable **secure DM mode** so DMs from different senders don’t share one context by default:
+If more than one person can DM your bot (multiple entries in `allowFrom`, pairing approvals for multiple people, or `dmPolicy: "open"`), enable **secure DM mode** so DMs from different senders don't share one context by default:
 
 ```json5
 {
@@ -494,63 +587,22 @@ If more than one person can DM your bot (multiple entries in `allowFrom`, pairin
 }
 ```
 
-For Discord/Slack/Google Chat/MS Teams/Mattermost/IRC, sender authorization is ID-first by default.
+For Discord/Slack/Google Chat/Microsoft Teams/Mattermost/IRC, sender authorization is ID-first by default.
 Only enable direct mutable name/email/nick matching with each channel's `dangerouslyAllowNameMatching: true` if you explicitly accept that risk.
 
-### OAuth with API key failover
+### Anthropic API key + MiniMax fallback
 
 ```json5
 {
   auth: {
     profiles: {
-      "anthropic:subscription": {
-        provider: "anthropic",
-        mode: "oauth",
-        email: "me@example.com",
-      },
       "anthropic:api": {
         provider: "anthropic",
         mode: "api_key",
       },
     },
     order: {
-      anthropic: ["anthropic:subscription", "anthropic:api"],
-    },
-  },
-  agent: {
-    workspace: "~/.openclaw/workspace",
-    model: {
-      primary: "anthropic/claude-sonnet-4-5",
-      fallbacks: ["anthropic/claude-opus-4-6"],
-    },
-  },
-}
-```
-
-### Anthropic setup-token + API key, MiniMax fallback
-
-<Warning>
-Anthropic setup-token usage outside Claude Code has been restricted for some
-users in the past. Treat this as user-choice risk and verify current Anthropic
-terms before depending on subscription auth.
-</Warning>
-
-```json5
-{
-  auth: {
-    profiles: {
-      "anthropic:subscription": {
-        provider: "anthropic",
-        mode: "oauth",
-        email: "user@example.com",
-      },
-      "anthropic:api": {
-        provider: "anthropic",
-        mode: "api_key",
-      },
-    },
-    order: {
-      anthropic: ["anthropic:subscription", "anthropic:api"],
+      anthropic: ["anthropic:api"],
     },
   },
   models: {
@@ -562,11 +614,13 @@ terms before depending on subscription auth.
       },
     },
   },
-  agent: {
-    workspace: "~/.openclaw/workspace",
-    model: {
-      primary: "anthropic/claude-opus-4-6",
-      fallbacks: ["minimax/MiniMax-M2.5"],
+  agents: {
+    defaults: {
+      workspace: "~/.openclaw/workspace",
+      model: {
+        primary: "anthropic/claude-opus-4-6",
+        fallbacks: ["minimax/MiniMax-M2.7"],
+      },
     },
   },
 }
@@ -576,13 +630,20 @@ terms before depending on subscription auth.
 
 ```json5
 {
-  identity: {
-    name: "WorkBot",
-    theme: "professional assistant",
-  },
-  agent: {
-    workspace: "~/work-openclaw",
-    elevated: { enabled: false },
+  agents: {
+    defaults: {
+      workspace: "~/work-openclaw",
+      elevatedDefault: "off",
+    },
+    list: [
+      {
+        id: "main",
+        identity: {
+          name: "WorkBot",
+          theme: "professional assistant",
+        },
+      },
+    ],
   },
   channels: {
     slack: {
@@ -601,9 +662,11 @@ terms before depending on subscription auth.
 
 ```json5
 {
-  agent: {
-    workspace: "~/.openclaw/workspace",
-    model: { primary: "lmstudio/minimax-m2.5-gs32" },
+  agents: {
+    defaults: {
+      workspace: "~/.openclaw/workspace",
+      model: { primary: "lmstudio/my-local-model" },
+    },
   },
   models: {
     mode: "merge",
@@ -614,8 +677,8 @@ terms before depending on subscription auth.
         api: "openai-responses",
         models: [
           {
-            id: "minimax-m2.5-gs32",
-            name: "MiniMax M2.5 GS32",
+            id: "my-local-model",
+            name: "Local Model",
             reasoning: false,
             input: ["text"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -633,5 +696,10 @@ terms before depending on subscription auth.
 
 - If you set `dmPolicy: "open"`, the matching `allowFrom` list must include `"*"`.
 - Provider IDs differ (phone numbers, user IDs, channel IDs). Use the provider docs to confirm the format.
-- Optional sections to add later: `web`, `browser`, `ui`, `discovery`, `canvasHost`, `talk`, `signal`, `imessage`.
+- Optional sections to add later: `web`, `browser`, `ui`, `discovery`, `plugins`, `talk`, `signal`, `imessage`.
 - See [Providers](/providers) and [Troubleshooting](/gateway/troubleshooting) for deeper setup notes.
+
+## Related
+
+- [Configuration reference](/gateway/configuration-reference)
+- [Configuration](/gateway/configuration)

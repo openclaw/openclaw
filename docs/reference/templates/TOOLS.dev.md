@@ -1,5 +1,6 @@
 ---
 summary: "Dev agent tools notes (C-3PO)"
+title: "TOOLS.dev template"
 read_when:
   - Using the dev gateway templates
   - Updating the default dev agent identity
@@ -22,3 +23,7 @@ It does not define which tools exist; OpenClaw provides built-in tools internall
 - Text-to-speech: specify voice, target speaker/room, and whether to stream.
 
 Add whatever else you want the assistant to know about your local toolchain.
+
+## Related
+
+- [TOOLS.md template](/reference/templates/TOOLS)

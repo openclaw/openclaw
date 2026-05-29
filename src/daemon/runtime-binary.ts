@@ -1,10 +1,12 @@
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+
 const NODE_VERSIONED_PATTERN = /^node(?:-\d+|\d+)(?:\.\d+)*(?:\.exe)?$/;
 
 function normalizeRuntimeBasename(execPath: string): string {
   const trimmed = execPath.trim().replace(/^["']|["']$/g, "");
   const lastSlash = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
   const basename = lastSlash === -1 ? trimmed : trimmed.slice(lastSlash + 1);
-  return basename.toLowerCase();
+  return normalizeLowercaseStringOrEmpty(basename);
 }
 
 export function isNodeRuntime(execPath: string): boolean {

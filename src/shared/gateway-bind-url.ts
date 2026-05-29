@@ -1,3 +1,5 @@
+import { normalizeOptionalString } from "./string-coerce.js";
+
 export type GatewayBindUrlResult =
   | {
       url: string;
@@ -18,7 +20,7 @@ export function resolveGatewayBindUrl(params: {
 }): GatewayBindUrlResult {
   const bind = params.bind ?? "loopback";
   if (bind === "custom") {
-    const host = params.customBindHost?.trim();
+    const host = normalizeOptionalString(params.customBindHost);
     if (host) {
       return { url: `${params.scheme}://${host}:${params.port}`, source: "gateway.bind=custom" };
     }

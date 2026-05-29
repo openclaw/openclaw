@@ -2,15 +2,15 @@
 // unintentionally breaking on newlines. Using [\s\S] keeps newlines inside
 // the chunk so messages are only split when they truly exceed the limit.
 
-import type { ChannelId } from "../channels/plugins/types.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ChannelId } from "../channels/plugins/types.core.js";
+import { resolveChannelStreamingChunkMode } from "../channels/streaming.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { findFenceSpanAt, isSafeFenceBreak, parseFenceSpans } from "../markdown/fences.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import { chunkTextByBreakResolver } from "../shared/text-chunking.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 
-export type TextChunkProvider = ChannelId | typeof INTERNAL_MESSAGE_CHANNEL;
+export type TextChunkProvider = ChannelId;
 
 /**
  * Chunking mode for outbound messages:
@@ -27,7 +27,11 @@ const DEFAULT_CHUNK_MODE: ChunkMode = "length";
 type ProviderChunkConfig = {
   textChunkLimit?: number;
   chunkMode?: ChunkMode;
-  accounts?: Record<string, { textChunkLimit?: number; chunkMode?: ChunkMode }>;
+  streaming?: unknown;
+  accounts?: Record<
+    string,
+    { textChunkLimit?: number; chunkMode?: ChunkMode; streaming?: unknown }
+  >;
 };
 
 function resolveChunkLimitForProvider(
@@ -59,7 +63,7 @@ export function resolveTextChunkLimit(
       ? opts.fallbackLimit
       : DEFAULT_CHUNK_LIMIT;
   const providerOverride = (() => {
-    if (!provider || provider === INTERNAL_MESSAGE_CHANNEL) {
+    if (!provider) {
       return undefined;
     }
     const channelsConfig = cfg?.channels as Record<string, unknown> | undefined;
@@ -84,11 +88,12 @@ function resolveChunkModeForProvider(
   const accounts = cfgSection.accounts;
   if (accounts && typeof accounts === "object") {
     const direct = resolveAccountEntry(accounts, normalizedAccountId);
-    if (direct?.chunkMode) {
-      return direct.chunkMode;
+    const directMode = resolveChannelStreamingChunkMode(direct);
+    if (directMode) {
+      return directMode;
     }
   }
-  return cfgSection.chunkMode;
+  return resolveChannelStreamingChunkMode(cfgSection) ?? cfgSection.chunkMode;
 }
 
 export function resolveChunkMode(
@@ -96,7 +101,7 @@ export function resolveChunkMode(
   provider?: TextChunkProvider,
   accountId?: string | null,
 ): ChunkMode {
-  if (!provider || provider === INTERNAL_MESSAGE_CHANNEL) {
+  if (!provider) {
     return DEFAULT_CHUNK_MODE;
   }
   const channelsConfig = cfg?.channels as Record<string, unknown> | undefined;

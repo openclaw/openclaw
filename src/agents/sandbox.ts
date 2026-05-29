@@ -18,7 +18,7 @@ export {
   requireSandboxBackendFactory,
 } from "./sandbox/backend.js";
 
-export { buildSandboxCreateArgs } from "./sandbox/docker.js";
+export { buildSandboxCreateArgs, isDockerDaemonUnavailable } from "./sandbox/docker.js";
 export {
   listSandboxBrowsers,
   listSandboxContainers,
@@ -32,12 +32,13 @@ export {
   resolveSandboxRuntimeStatus,
 } from "./sandbox/runtime-status.js";
 
-export { resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
+export { isToolAllowed, resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
 export type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "./sandbox/fs-bridge.js";
 export {
   buildExecRemoteCommand,
   buildRemoteCommand,
   buildSshSandboxArgv,
+  buildValidatedExecRemoteCommand,
   createSshSandboxSessionFromConfigText,
   createSshSandboxSessionFromSettings,
   disposeSshSandboxSession,
@@ -45,7 +46,11 @@ export {
   shellEscape,
   uploadDirectoryToSshTarget,
 } from "./sandbox/ssh.js";
+export { sanitizeEnvVars } from "./sandbox/sanitize-env-vars.js";
 export { createRemoteShellSandboxFsBridge } from "./sandbox/remote-fs-bridge.js";
+export { createWritableRenameTargetResolver } from "./sandbox/fs-bridge-rename-targets.js";
+export { resolveWritableRenameTargets } from "./sandbox/fs-bridge-rename-targets.js";
+export { resolveWritableRenameTargetsForBridge } from "./sandbox/fs-bridge-rename-targets.js";
 
 export type {
   CreateSandboxBackendParams,

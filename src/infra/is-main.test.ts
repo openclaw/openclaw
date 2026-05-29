@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { isMainModule } from "./is-main.js";
 
 describe("isMainModule", () => {
@@ -11,6 +11,23 @@ describe("isMainModule", () => {
         env: {},
       }),
     ).toBe(true);
+  });
+
+  it("falls back to the current file directory when process.cwd is unavailable", () => {
+    const cwdSpy = vi.spyOn(process, "cwd").mockImplementation(() => {
+      throw Object.assign(new Error("uv_cwd"), { code: "ENOENT", syscall: "uv_cwd" });
+    });
+    try {
+      expect(
+        isMainModule({
+          currentFile: "/repo/dist/index.js",
+          argv: ["node", "/repo/dist/index.js"],
+          env: {},
+        }),
+      ).toBe(true);
+    } finally {
+      cwdSpy.mockRestore();
+    }
   });
 
   it("returns true under PM2 when pm_exec_path matches current file", () => {
@@ -78,15 +95,15 @@ describe("isMainModule", () => {
     ).toBe(false);
   });
 
-  it("falls back to basename matching for relative or symlinked entrypoints", () => {
+  it("returns false for another entrypoint with the same basename", () => {
     expect(
       isMainModule({
-        currentFile: "/repo/dist/index.js",
-        argv: ["node", "../other/index.js"],
-        cwd: "/repo/dist",
+        currentFile: "/repo/node_modules/openclaw/dist/index.js",
+        argv: ["node", "/repo/dist/index.js"],
+        cwd: "/repo",
         env: {},
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("returns false when no entrypoint candidate exists", () => {

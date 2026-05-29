@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { formatErrorMessage } from "../infra/errors.js";
 import {
   isRequestBodyLimitError,
   readJsonBodyWithLimit,
@@ -6,9 +7,19 @@ import {
   requestBodyErrorToText,
 } from "../infra/http-body.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import type { FixedWindowRateLimiter } from "./webhook-memory-guards.js";
+import { resolveWebhookIntegerOption } from "./webhook-numeric-options.js";
 
 export type WebhookBodyReadProfile = "pre-auth" | "post-auth";
+
+export {
+  installRequestBodyLimitGuard,
+  isRequestBodyLimitError,
+  readJsonBodyWithLimit,
+  readRequestBodyWithLimit,
+  requestBodyErrorToText,
+} from "../infra/http-body.js";
 
 export const WEBHOOK_BODY_READ_DEFAULTS = Object.freeze({
   preAuth: {
@@ -86,13 +97,15 @@ export function createWebhookInFlightLimiter(options?: {
   maxInFlightPerKey?: number;
   maxTrackedKeys?: number;
 }): WebhookInFlightLimiter {
-  const maxInFlightPerKey = Math.max(
-    1,
-    Math.floor(options?.maxInFlightPerKey ?? WEBHOOK_IN_FLIGHT_DEFAULTS.maxInFlightPerKey),
+  const maxInFlightPerKey = resolveWebhookIntegerOption(
+    options?.maxInFlightPerKey,
+    WEBHOOK_IN_FLIGHT_DEFAULTS.maxInFlightPerKey,
+    { min: 1 },
   );
-  const maxTrackedKeys = Math.max(
-    1,
-    Math.floor(options?.maxTrackedKeys ?? WEBHOOK_IN_FLIGHT_DEFAULTS.maxTrackedKeys),
+  const maxTrackedKeys = resolveWebhookIntegerOption(
+    options?.maxTrackedKeys,
+    WEBHOOK_IN_FLIGHT_DEFAULTS.maxTrackedKeys,
+    { min: 1 },
   );
   const active = new Map<string, number>();
 
@@ -134,7 +147,7 @@ export function isJsonContentType(value: string | string[] | undefined): boolean
   if (!first) {
     return false;
   }
-  const mediaType = first.split(";", 1)[0]?.trim().toLowerCase();
+  const mediaType = normalizeOptionalLowercaseString(first.split(";", 1)[0]);
   return mediaType === "application/json" || Boolean(mediaType?.endsWith("+json"));
 }
 
@@ -259,8 +272,7 @@ export async function readWebhookBodyOrReject(params: {
     return respondWebhookBodyReadError({
       res: params.res,
       code: "INVALID_BODY",
-      invalidMessage:
-        params.invalidBodyMessage ?? (error instanceof Error ? error.message : String(error)),
+      invalidMessage: params.invalidBodyMessage ?? formatErrorMessage(error),
     });
   }
 }

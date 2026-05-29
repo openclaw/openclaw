@@ -1,4 +1,4 @@
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 
 export function makeDirectPlugin(params: {
   id: string;
@@ -18,7 +18,7 @@ export function makeDirectPlugin(params: {
     capabilities: { chatTypes: ["direct"] },
     config: params.config,
     actions: {
-      listActions: () => ["send"],
+      describeMessageTool: () => ({ actions: ["send"] }),
     },
   };
 }

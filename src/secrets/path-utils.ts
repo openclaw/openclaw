@@ -1,13 +1,25 @@
 import { isDeepStrictEqual } from "node:util";
-import type { OpenClawConfig } from "../config/config.js";
+import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { isRecord } from "./shared.js";
 
-function isArrayIndexSegment(segment: string): boolean {
+function looksLikeArrayIndexSegment(segment: string): boolean {
   return /^\d+$/.test(segment);
 }
 
+function parseArrayIndexSegment(segment: string): number | undefined {
+  return parseConfigPathArrayIndex(segment);
+}
+
+function requireArrayIndexSegment(segment: string, pathLabel: string): number {
+  const index = parseArrayIndexSegment(segment);
+  if (index === undefined) {
+    throw new Error(`Invalid array index segment "${segment}" at ${pathLabel}.`);
+  }
+  return index;
+}
+
 function expectedContainer(nextSegment: string): "array" | "object" {
-  return isArrayIndexSegment(nextSegment) ? "array" : "object";
+  return looksLikeArrayIndexSegment(nextSegment) ? "array" : "object";
 }
 
 function parseArrayLeafTarget(
@@ -18,10 +30,7 @@ function parseArrayLeafTarget(
   if (!Array.isArray(cursor)) {
     return null;
   }
-  if (!isArrayIndexSegment(leaf)) {
-    throw new Error(`Invalid array index segment "${leaf}" at ${segments.join(".")}.`);
-  }
-  return { array: cursor, index: Number.parseInt(leaf, 10) };
+  return { array: cursor, index: requireArrayIndexSegment(leaf, segments.join(".")) };
 }
 
 function traverseToLeafParent(params: {
@@ -37,12 +46,7 @@ function traverseToLeafParent(params: {
   for (let index = 0; index < params.segments.length - 1; index += 1) {
     const segment = params.segments[index] ?? "";
     if (Array.isArray(cursor)) {
-      if (!isArrayIndexSegment(segment)) {
-        throw new Error(
-          `Invalid array index segment "${segment}" at ${params.segments.join(".")}.`,
-        );
-      }
-      const arrayIndex = Number.parseInt(segment, 10);
+      const arrayIndex = requireArrayIndexSegment(segment, params.segments.join("."));
       if (params.requireExistingSegment && (arrayIndex < 0 || arrayIndex >= cursor.length)) {
         throw new Error(
           `Path segment does not exist at ${params.segments.slice(0, index + 1).join(".")}.`,
@@ -74,10 +78,11 @@ export function getPath(root: unknown, segments: string[]): unknown {
   let cursor: unknown = root;
   for (const segment of segments) {
     if (Array.isArray(cursor)) {
-      if (!isArrayIndexSegment(segment)) {
+      const arrayIndex = parseArrayIndexSegment(segment);
+      if (arrayIndex === undefined) {
         return undefined;
       }
-      cursor = cursor[Number.parseInt(segment, 10)];
+      cursor = cursor[arrayIndex];
       continue;
     }
     if (!isRecord(cursor)) {
@@ -89,7 +94,7 @@ export function getPath(root: unknown, segments: string[]): unknown {
 }
 
 export function setPathCreateStrict(
-  root: OpenClawConfig,
+  root: Record<string, unknown>,
   segments: string[],
   value: unknown,
 ): boolean {
@@ -105,10 +110,7 @@ export function setPathCreateStrict(
     const needs = expectedContainer(nextSegment);
 
     if (Array.isArray(cursor)) {
-      if (!isArrayIndexSegment(segment)) {
-        throw new Error(`Invalid array index segment "${segment}" at ${segments.join(".")}.`);
-      }
-      const arrayIndex = Number.parseInt(segment, 10);
+      const arrayIndex = requireArrayIndexSegment(segment, segments.join("."));
       const existing = cursor[arrayIndex];
       if (existing === undefined || existing === null) {
         cursor[arrayIndex] = needs === "array" ? [] : {};
@@ -153,7 +155,7 @@ export function setPathCreateStrict(
 }
 
 export function setPathExistingStrict(
-  root: OpenClawConfig,
+  root: Record<string, unknown>,
   segments: string[],
   value: unknown,
 ): boolean {
@@ -184,7 +186,7 @@ export function setPathExistingStrict(
   return false;
 }
 
-export function deletePathStrict(root: OpenClawConfig, segments: string[]): boolean {
+export function deletePathStrict(root: Record<string, unknown>, segments: string[]): boolean {
   const cursor = traverseToLeafParent({ root, segments, requireExistingSegment: false });
 
   const leaf = segments[segments.length - 1] ?? "";

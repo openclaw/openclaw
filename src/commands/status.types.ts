@@ -1,15 +1,22 @@
-import type { ChannelId } from "../channels/plugins/types.js";
+import type { ChannelId } from "../channels/plugins/types.public.js";
+import type { SessionKind } from "../sessions/classify-session-kind.js";
+import type {
+  RetainedLostTaskAuditSummary,
+  TaskAuditSummary,
+} from "../tasks/task-registry.audit.js";
+import type { TaskRegistrySummary } from "../tasks/task-registry.types.js";
 
 export type SessionStatus = {
   agentId?: string;
   key: string;
-  kind: "direct" | "group" | "global" | "unknown";
+  kind: SessionKind;
   sessionId?: string;
   updatedAt: number | null;
   age: number | null;
   thinkingLevel?: string;
   fastMode?: boolean;
   verboseLevel?: string;
+  traceLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;
   systemSent?: boolean;
@@ -23,6 +30,10 @@ export type SessionStatus = {
   remainingTokens: number | null;
   percentUsed: number | null;
   model: string | null;
+  configuredModel: string | null;
+  selectedModel: string | null;
+  modelSelectionReason: string | null;
+  runtime?: string | null;
   contextTokens: number | null;
   flags: string[];
 };
@@ -36,6 +47,7 @@ export type HeartbeatStatus = {
 
 export type StatusSummary = {
   runtimeVersion?: string | null;
+  eventLoop?: import("../gateway/server/event-loop-health.js").GatewayEventLoopHealth;
   linkChannel?: {
     id: ChannelId;
     label: string;
@@ -48,6 +60,9 @@ export type StatusSummary = {
   };
   channelSummary: string[];
   queuedSystemEvents: string[];
+  tasks: TaskRegistrySummary;
+  taskAudit: TaskAuditSummary;
+  taskAuditRetainedLost?: RetainedLostTaskAuditSummary;
   sessions: {
     paths: string[];
     count: number;

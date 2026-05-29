@@ -4,10 +4,22 @@ import {
   FLAG_TERMINATOR,
   isValueToken,
 } from "../infra/cli-root-options.js";
+import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
+import { CORE_CLI_COMMAND_DESCRIPTORS } from "./program/core-command-descriptors.js";
+import { SUB_CLI_DESCRIPTORS } from "./program/subcli-descriptors.js";
 
 const HELP_FLAGS = new Set(["-h", "--help"]);
 const VERSION_FLAGS = new Set(["-V", "--version"]);
 const ROOT_VERSION_ALIAS_FLAG = "-v";
+const ROOT_COMMAND_DESCRIPTORS = [...CORE_CLI_COMMAND_DESCRIPTORS, ...SUB_CLI_DESCRIPTORS];
+const KNOWN_ROOT_COMMANDS: ReadonlySet<string> = new Set(
+  ROOT_COMMAND_DESCRIPTORS.map((descriptor) => descriptor.name),
+);
+const ROOT_COMMANDS_WITH_SUBCOMMANDS: ReadonlySet<string> = new Set(
+  ROOT_COMMAND_DESCRIPTORS.filter((descriptor) => descriptor.hasSubcommands).map(
+    (descriptor) => descriptor.name,
+  ),
+);
 
 export function hasHelpOrVersion(argv: string[]): boolean {
   return (
@@ -15,12 +27,57 @@ export function hasHelpOrVersion(argv: string[]): boolean {
   );
 }
 
-function parsePositiveInt(value: string): number | undefined {
-  const parsed = Number.parseInt(value, 10);
-  if (Number.isNaN(parsed) || parsed <= 0) {
-    return undefined;
+export function isHelpOrVersionInvocation(argv: string[]): boolean {
+  if (hasRootVersionAlias(argv)) {
+    return true;
   }
-  return parsed;
+
+  const args = argv.slice(2);
+  let sawCommandOption = false;
+  const positionals: string[] = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (!arg || arg === FLAG_TERMINATOR) {
+      break;
+    }
+    const rootConsumed = consumeRootOptionToken(args, i);
+    if (rootConsumed > 0) {
+      i += rootConsumed - 1;
+      continue;
+    }
+    if (HELP_FLAGS.has(arg) || VERSION_FLAGS.has(arg)) {
+      return true;
+    }
+    if (arg.startsWith("-")) {
+      sawCommandOption = true;
+      continue;
+    }
+    positionals.push(arg);
+    if (arg !== "help") {
+      continue;
+    }
+    if (sawCommandOption) {
+      return false;
+    }
+    if (positionals.length === 1) {
+      return true;
+    }
+    const [primary] = positionals;
+    // Positional `help` may be a command argument for known leaf commands.
+    // Unknown roots are treated as plugin command namespaces.
+    if (!primary || !KNOWN_ROOT_COMMANDS.has(primary)) {
+      return true;
+    }
+    if (positionals.length === 2 && ROOT_COMMANDS_WITH_SUBCOMMANDS.has(primary)) {
+      return true;
+    }
+    return false;
+  }
+  return false;
+}
+
+function parsePositiveInt(value: string): number | undefined {
+  return parseStrictPositiveInteger(value);
 }
 
 export function hasFlag(argv: string[], name: string): boolean {
@@ -57,7 +114,7 @@ export function hasRootVersionAlias(argv: string[]): boolean {
       continue;
     }
     if (arg.startsWith("-")) {
-      continue;
+      return false;
     }
     return false;
   }
@@ -103,6 +160,95 @@ function isRootInvocationForFlags(
 
 export function isRootHelpInvocation(argv: string[]): boolean {
   return isRootInvocationForFlags(argv, HELP_FLAGS);
+}
+
+export function normalizeGeneratedHelpCommandArgv(argv: string[]): string[] {
+  const positionals: Array<{ value: string; index: number }> = [];
+  const rootOptions: string[] = [];
+  let helpFlagIndex: number | null = null;
+
+  for (let index = 2; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (!arg || arg === FLAG_TERMINATOR) {
+      break;
+    }
+    const consumed = consumeRootOptionToken(argv, index);
+    if (consumed > 0) {
+      rootOptions.push(...argv.slice(index, index + consumed));
+      index += consumed - 1;
+      continue;
+    }
+    if (HELP_FLAGS.has(arg)) {
+      helpFlagIndex = index;
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      return argv;
+    }
+    positionals.push({ value: arg, index });
+  }
+
+  const [primary, secondary, target] = positionals;
+  if (
+    !primary ||
+    secondary?.value !== "help" ||
+    (KNOWN_ROOT_COMMANDS.has(primary.value) && !ROOT_COMMANDS_WITH_SUBCOMMANDS.has(primary.value))
+  ) {
+    return argv;
+  }
+
+  if (positionals.length === 2 && helpFlagIndex === secondary.index + 1) {
+    return argv.toSpliced(helpFlagIndex, 1);
+  }
+
+  if (
+    !target ||
+    positionals.length !== 3 ||
+    (helpFlagIndex !== null && helpFlagIndex !== target.index + 1)
+  ) {
+    return argv;
+  }
+
+  return [argv[0], argv[1], ...rootOptions, primary.value, target.value, "--help"];
+}
+
+export function normalizeRootHelpTargetArgv(argv: string[]): string[] {
+  const positionals: Array<{ value: string; index: number }> = [];
+  const rootOptions: string[] = [];
+  let helpFlagIndex: number | null = null;
+
+  for (let index = 2; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (!arg || arg === FLAG_TERMINATOR) {
+      break;
+    }
+    const consumed = consumeRootOptionToken(argv, index);
+    if (consumed > 0) {
+      rootOptions.push(...argv.slice(index, index + consumed));
+      index += consumed - 1;
+      continue;
+    }
+    if (HELP_FLAGS.has(arg)) {
+      helpFlagIndex = index;
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      return argv;
+    }
+    positionals.push({ value: arg, index });
+  }
+
+  const [help, target] = positionals;
+  if (
+    help?.value !== "help" ||
+    !target ||
+    (helpFlagIndex !== null && helpFlagIndex !== positionals.at(-1)!.index + 1)
+  ) {
+    return argv;
+  }
+
+  const targetPath = positionals.slice(1).map((positional) => positional.value);
+  return [argv[0], argv[1], ...rootOptions, ...targetPath, "--help"];
 }
 
 export function getFlagValue(argv: string[], name: string): string | null | undefined {
@@ -308,13 +454,13 @@ export function shouldMigrateStateFromPath(path: string[]): boolean {
   if (primary === "health" || primary === "status" || primary === "sessions") {
     return false;
   }
+  if (primary === "update" && secondary === "status") {
+    return false;
+  }
   if (primary === "config" && (secondary === "get" || secondary === "unset")) {
     return false;
   }
   if (primary === "models" && (secondary === "list" || secondary === "status")) {
-    return false;
-  }
-  if (primary === "memory" && secondary === "status") {
     return false;
   }
   if (primary === "agent") {
@@ -324,5 +470,5 @@ export function shouldMigrateStateFromPath(path: string[]): boolean {
 }
 
 export function shouldMigrateState(argv: string[]): boolean {
-  return shouldMigrateStateFromPath(getCommandPath(argv, 2));
+  return shouldMigrateStateFromPath(getCommandPathWithRootOptions(argv, 2));
 }

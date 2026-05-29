@@ -76,6 +76,22 @@ describe("runDaemonStatus", () => {
     expect(printDaemonStatus).toHaveBeenCalledTimes(1);
   });
 
+  it("forwards require-rpc to daemon status gathering", async () => {
+    await runDaemonStatus({
+      rpc: {},
+      probe: true,
+      requireRpc: true,
+      json: false,
+    });
+
+    expect(gatherDaemonStatus).toHaveBeenCalledWith({
+      rpc: {},
+      probe: true,
+      requireRpc: true,
+      deep: false,
+    });
+  });
+
   it("rejects require-rpc when probing is disabled", async () => {
     await expect(
       runDaemonStatus({
@@ -87,6 +103,8 @@ describe("runDaemonStatus", () => {
     ).rejects.toThrow("__exit__:1");
 
     expect(gatherDaemonStatus).not.toHaveBeenCalled();
-    expect(runtimeErrors.join("\n")).toContain("--require-rpc cannot be used with --no-probe");
+    expect(runtimeErrors[0]).toBe(
+      "Gateway status failed: --require-rpc needs probing enabled. Remove --no-probe or drop --require-rpc.",
+    );
   });
 });

@@ -1,9 +1,9 @@
 import { execFileSync } from "node:child_process";
 import { chmodSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
 const SCRIPT = path.join(process.cwd(), "scripts", "ios-team-id.sh");
 const BASH_BIN = process.platform === "win32" ? "bash" : "/bin/bash";
@@ -15,6 +15,7 @@ let sharedBinDir = "";
 let sharedHomeDir = "";
 let sharedHomeBinDir = "";
 let sharedFakePythonPath = "";
+const tempDirs: string[] = [];
 const runScriptCache = new Map<string, { ok: boolean; stdout: string; stderr: string }>();
 type TeamCandidate = {
   teamId: string;
@@ -23,18 +24,27 @@ type TeamCandidate = {
 };
 
 function parseTeamCandidateRows(raw: string): TeamCandidate[] {
-  return raw
-    .split("\n")
-    .map((line) => line.replace(/\r/g, "").trim())
-    .filter(Boolean)
-    .map((line) => line.split("\t"))
-    .filter((parts) => parts.length >= 3)
-    .map((parts) => ({
-      teamId: parts[0] ?? "",
+  const candidates: TeamCandidate[] = [];
+  for (const rawLine of raw.split("\n")) {
+    const line = rawLine.replace(/\r/g, "").trim();
+    if (!line) {
+      continue;
+    }
+    const parts = line.split("\t");
+    if (parts.length < 3) {
+      continue;
+    }
+    const teamId = parts[0] ?? "";
+    if (!teamId) {
+      continue;
+    }
+    candidates.push({
+      teamId,
       isFree: (parts[1] ?? "0") === "1",
       teamName: parts[2] ?? "",
-    }))
-    .filter((candidate) => candidate.teamId.length > 0);
+    });
+  }
+  return candidates;
 }
 
 function pickTeamIdFromCandidates(params: {
@@ -110,12 +120,19 @@ function runScript(
     runScriptCache.set(cacheKey, result);
     return result;
   } catch (error) {
-    const e = error as {
-      stdout?: string | Buffer;
-      stderr?: string | Buffer;
-    };
-    const stdout = typeof e.stdout === "string" ? e.stdout : (e.stdout?.toString("utf8") ?? "");
-    const stderr = typeof e.stderr === "string" ? e.stderr : (e.stderr?.toString("utf8") ?? "");
+    const e = error as { stdout?: unknown; stderr?: unknown };
+    const stdout =
+      typeof e.stdout === "string"
+        ? e.stdout
+        : Buffer.isBuffer(e.stdout)
+          ? e.stdout.toString("utf8")
+          : "";
+    const stderr =
+      typeof e.stderr === "string"
+        ? e.stderr
+        : Buffer.isBuffer(e.stderr)
+          ? e.stderr.toString("utf8")
+          : "";
     const result = { ok: false, stdout: stdout.trim(), stderr: stderr.trim() };
     runScriptCache.set(cacheKey, result);
     return result;
@@ -124,7 +141,7 @@ function runScript(
 
 describe("scripts/ios-team-id.sh", () => {
   beforeAll(async () => {
-    fixtureRoot = await mkdtemp(path.join(os.tmpdir(), "openclaw-ios-team-id-"));
+    fixtureRoot = makeTempDir(tempDirs, "openclaw-ios-team-id-");
     sharedBinDir = path.join(fixtureRoot, "shared-bin");
     await mkdir(sharedBinDir, { recursive: true });
     sharedHomeDir = path.join(fixtureRoot, "home");
@@ -182,10 +199,7 @@ printf 'BBBBB22222\\t0\\tBeta Team\\r\\n'`,
   });
 
   afterAll(async () => {
-    if (!fixtureRoot) {
-      return;
-    }
-    await rm(fixtureRoot, { recursive: true, force: true });
+    cleanupTempDirs(tempDirs);
   });
 
   it("parses team listings and prioritizes preferred IDs without shelling out", () => {
@@ -210,13 +224,13 @@ printf 'BBBBB22222\\t0\\tBeta Team\\r\\n'`,
     expect(fallback).toBe("BBBBB22222");
   });
 
-  it("resolves a fallback team ID from Xcode team listings (smoke)", async () => {
+  it("resolves a fallback team ID from Xcode team listings (smoke)", () => {
     const fallbackResult = runScript(sharedHomeDir, { IOS_PYTHON_BIN: sharedFakePythonPath });
     expect(fallbackResult.ok).toBe(true);
     expect(fallbackResult.stdout).toBe("AAAAA11111");
   });
 
-  it("prints actionable guidance when Xcode account exists but no Team ID is resolvable", async () => {
+  it("prints actionable guidance when Xcode account exists but no Team ID is resolvable", () => {
     const result = runScript(sharedHomeDir);
     expect(result.ok).toBe(false);
     expect(

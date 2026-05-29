@@ -5,48 +5,71 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { isWindowsDrivePath } from "../infra/archive-path.js";
-import { writeFileFromPathWithinRoot } from "../infra/fs-safe.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { root as fsRoot } from "../infra/fs-safe.js";
 import { assertCanonicalPathWithinBase } from "../infra/install-safe-path.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { isWithinDir } from "../infra/path-safety.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { ensureDir, resolveUserPath } from "../utils.js";
-import { extractArchive } from "./skills-install-extract.js";
 import { formatInstallFailureMessage } from "./skills-install-output.js";
-import type { SkillInstallResult } from "./skills-install.js";
+import type { SkillInstallResult } from "./skills-install.types.js";
 import type { SkillEntry, SkillInstallSpec } from "./skills.js";
 import { resolveSkillToolsRootDir } from "./skills/tools-dir.js";
+
+const extractModuleLoader = createLazyImportLoader(() => import("./skills-install-extract.js"));
+
+async function loadExtractModule() {
+  return await extractModuleLoader.load();
+}
 
 function isNodeReadableStream(value: unknown): value is NodeJS.ReadableStream {
   return Boolean(value && typeof (value as NodeJS.ReadableStream).pipe === "function");
 }
 
+async function cancelIgnoredResponseBody(response: Response): Promise<void> {
+  const body = response.body as unknown;
+  const cancel =
+    body && typeof (body as { cancel?: unknown }).cancel === "function"
+      ? (body as { cancel: () => Promise<void> | void }).cancel
+      : undefined;
+  if (!cancel) {
+    return;
+  }
+  await Promise.resolve(cancel.call(body)).catch(() => undefined);
+}
+
 function resolveDownloadTargetDir(entry: SkillEntry, spec: SkillInstallSpec): string {
-  const safeRoot = resolveSkillToolsRootDir(entry);
+  const root = resolveSkillToolsRootDir(entry);
   const raw = spec.targetDir?.trim();
   if (!raw) {
-    return safeRoot;
+    return root;
   }
 
   // Treat non-absolute paths as relative to the per-skill tools root.
   const resolved =
     raw.startsWith("~") || path.isAbsolute(raw) || isWindowsDrivePath(raw)
       ? resolveUserPath(raw)
-      : path.resolve(safeRoot, raw);
+      : path.resolve(root, raw);
 
-  if (!isWithinDir(safeRoot, resolved)) {
+  if (!isWithinDir(root, resolved)) {
     throw new Error(
-      `Refusing to install outside the skill tools directory. targetDir="${raw}" resolves to "${resolved}". Allowed root: "${safeRoot}".`,
+      `Refusing to install outside the skill tools directory. targetDir="${raw}" resolves to "${resolved}". Allowed root: "${root}".`,
     );
   }
   return resolved;
 }
 
 function resolveArchiveType(spec: SkillInstallSpec, filename: string): string | undefined {
-  const explicit = spec.archive?.trim().toLowerCase();
+  const explicit = normalizeOptionalLowercaseString(spec.archive);
   if (explicit) {
     return explicit;
   }
-  const lower = filename.toLowerCase();
+  const lower = normalizeOptionalLowercaseString(filename);
+  if (!lower) {
+    return undefined;
+  }
   if (lower.endsWith(".tar.gz") || lower.endsWith(".tgz")) {
     return "tar.gz";
   }
@@ -80,6 +103,7 @@ async function downloadFile(params: {
   });
   try {
     if (!response.ok || !response.body) {
+      await cancelIgnoredResponseBody(response);
       throw new Error(`Download failed (${response.status} ${response.statusText})`);
     }
     const file = fs.createWriteStream(tempPath);
@@ -88,11 +112,8 @@ async function downloadFile(params: {
       ? body
       : Readable.fromWeb(body as NodeReadableStream);
     await pipeline(readable, file);
-    await writeFileFromPathWithinRoot({
-      rootDir: params.rootDir,
-      relativePath: params.relativePath,
-      sourcePath: tempPath,
-    });
+    const root = await fsRoot(params.rootDir);
+    await root.copyIn(params.relativePath, tempPath);
     const stat = await fs.promises.stat(destPath);
     return { bytes: stat.size };
   } finally {
@@ -107,7 +128,7 @@ export async function installDownloadSpec(params: {
   timeoutMs: number;
 }): Promise<SkillInstallResult> {
   const { entry, spec, timeoutMs } = params;
-  const safeRoot = resolveSkillToolsRootDir(entry);
+  const root = resolveSkillToolsRootDir(entry);
   const url = spec.url?.trim();
   if (!url) {
     return {
@@ -130,33 +151,33 @@ export async function installDownloadSpec(params: {
     filename = "download";
   }
 
-  let canonicalSafeRoot = "";
+  let canonicalRoot = "";
   let targetDir = "";
   try {
-    await ensureDir(safeRoot);
+    await ensureDir(root);
     await assertCanonicalPathWithinBase({
-      baseDir: safeRoot,
-      candidatePath: safeRoot,
+      baseDir: root,
+      candidatePath: root,
       boundaryLabel: "skill tools directory",
     });
-    canonicalSafeRoot = await fs.promises.realpath(safeRoot);
+    canonicalRoot = await fs.promises.realpath(root);
 
     const requestedTargetDir = resolveDownloadTargetDir(entry, spec);
     await ensureDir(requestedTargetDir);
     await assertCanonicalPathWithinBase({
-      baseDir: safeRoot,
+      baseDir: root,
       candidatePath: requestedTargetDir,
       boundaryLabel: "skill tools directory",
     });
-    const targetRelativePath = path.relative(safeRoot, requestedTargetDir);
-    targetDir = path.join(canonicalSafeRoot, targetRelativePath);
+    const targetRelativePath = path.relative(root, requestedTargetDir);
+    targetDir = path.join(canonicalRoot, targetRelativePath);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = formatErrorMessage(err);
     return { ok: false, message, stdout: "", stderr: message, code: null };
   }
 
   const archivePath = path.join(targetDir, filename);
-  const archiveRelativePath = path.relative(canonicalSafeRoot, archivePath);
+  const archiveRelativePath = path.relative(canonicalRoot, archivePath);
   if (
     !archiveRelativePath ||
     archiveRelativePath === ".." ||
@@ -175,13 +196,13 @@ export async function installDownloadSpec(params: {
   try {
     const result = await downloadFile({
       url,
-      rootDir: canonicalSafeRoot,
+      rootDir: canonicalRoot,
       relativePath: archiveRelativePath,
       timeoutMs,
     });
     downloaded = result.bytes;
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = formatErrorMessage(err);
     return { ok: false, message, stdout: "", stderr: message, code: null };
   }
 
@@ -209,15 +230,16 @@ export async function installDownloadSpec(params: {
 
   try {
     await assertCanonicalPathWithinBase({
-      baseDir: canonicalSafeRoot,
+      baseDir: canonicalRoot,
       candidatePath: targetDir,
       boundaryLabel: "skill tools directory",
     });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = formatErrorMessage(err);
     return { ok: false, message, stdout: "", stderr: message, code: null };
   }
 
+  const { extractArchive } = await loadExtractModule();
   const extractResult = await extractArchive({
     archivePath,
     archiveType,

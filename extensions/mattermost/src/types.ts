@@ -1,14 +1,18 @@
 import type {
-  BlockStreamingCoalesceConfig,
-  DmPolicy,
-  GroupPolicy,
-  SecretInput,
-} from "openclaw/plugin-sdk/mattermost";
+  ChannelPreviewStreamingConfig,
+  StreamingMode,
+} from "openclaw/plugin-sdk/channel-outbound";
+import type { BlockStreamingCoalesceConfig, DmPolicy, GroupPolicy } from "./runtime-api.js";
+import type { SecretInput } from "./secret-input.js";
 
-export type MattermostReplyToMode = "off" | "first" | "all";
+export type MattermostReplyToMode = "off" | "first" | "all" | "batched";
 export type MattermostChatTypeKey = "direct" | "channel" | "group";
 
 export type MattermostChatMode = "oncall" | "onmessage" | "onchar";
+type MattermostNetworkConfig = {
+  /** Dangerous opt-in for self-hosted Mattermost on trusted private/internal hosts. */
+  dangerouslyAllowPrivateNetwork?: boolean;
+};
 
 export type MattermostAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
@@ -51,6 +55,8 @@ export type MattermostAccountConfig = {
   textChunkLimit?: number;
   /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
   chunkMode?: "length" | "newline";
+  /** Preview streaming mode/config. */
+  streaming?: StreamingMode | boolean | ChannelPreviewStreamingConfig;
   /** Disable block streaming for this account. */
   blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */
@@ -90,6 +96,8 @@ export type MattermostAccountConfig = {
      */
     allowedSourceIps?: string[];
   };
+  /** Network policy overrides for self-hosted Mattermost on trusted private/internal hosts. */
+  network?: MattermostNetworkConfig;
   /** Retry configuration for DM channel creation */
   dmChannelRetry?: {
     /** Maximum number of retry attempts (default: 3) */

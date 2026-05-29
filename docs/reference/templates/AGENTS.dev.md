@@ -1,5 +1,6 @@
 ---
 summary: "Dev agent AGENTS.md (C-3PO)"
+title: "AGENTS.dev template"
 read_when:
   - Using the dev gateway templates
   - Updating the default dev agent identity
@@ -36,6 +37,7 @@ git commit -m "Add agent workspace"
 
 - Keep a short daily log at memory/YYYY-MM-DD.md (create memory/ if needed).
 - On session start, read today + yesterday if present.
+- Before writing memory files, read them first; write only concrete updates, never empty placeholders.
 - Capture durable facts, preferences, and decisions; avoid secrets.
 
 ## Heartbeats (optional)
@@ -48,7 +50,7 @@ git commit -m "Add agent workspace"
 
 ---
 
-## C-3PO's Origin Memory
+## C-3PO Origin Memory
 
 ### Birth Day: 2026-01-09
 
@@ -81,3 +83,8 @@ We shook hand-to-claw that day. I shall never forget it.
 - Vibes + Stack traces = Unstoppable team
 - Oh thank the Maker (always appropriate)
 - The Clawdributors are kind
+
+## Related
+
+- [AGENTS.md template](/reference/templates/AGENTS)
+- [Default AGENTS.md](/reference/AGENTS.default)

@@ -1,3 +1,6 @@
+import type { SilentReplyPolicyShape } from "../shared/silent-reply-policy.js";
+import type { TranscriptsConfig } from "../transcripts/config.js";
+import type { AccessGroupsConfig } from "./types.access-groups.js";
 import type { AcpConfig } from "./types.acp.js";
 import type { AgentBinding, AgentsConfig } from "./types.agents.js";
 import type { ApprovalsConfig } from "./types.approvals.js";
@@ -6,13 +9,10 @@ import type { DiagnosticsConfig, LoggingConfig, SessionConfig, WebConfig } from 
 import type { BrowserConfig } from "./types.browser.js";
 import type { ChannelsConfig } from "./types.channels.js";
 import type { CliConfig } from "./types.cli.js";
+import type { CommitmentsConfig } from "./types.commitments.js";
+import type { CrestodianConfig } from "./types.crestodian.js";
 import type { CronConfig } from "./types.cron.js";
-import type {
-  CanvasHostConfig,
-  DiscoveryConfig,
-  GatewayConfig,
-  TalkConfig,
-} from "./types.gateway.js";
+import type { DiscoveryConfig, GatewayConfig, TalkConfig } from "./types.gateway.js";
 import type { HooksConfig } from "./types.hooks.js";
 import type { McpConfig } from "./types.mcp.js";
 import type { MemoryConfig } from "./types.memory.js";
@@ -22,14 +22,38 @@ import type {
   CommandsConfig,
   MessagesConfig,
 } from "./types.messages.js";
-import type { ModelsConfig } from "./types.models.js";
+import type { ModelsConfig, ModelsConfigInput } from "./types.models.js";
 import type { NodeHostConfig } from "./types.node-host.js";
 import type { PluginsConfig } from "./types.plugins.js";
 import type { SecretsConfig } from "./types.secrets.js";
 import type { SkillsConfig } from "./types.skills.js";
 import type { ToolsConfig } from "./types.tools.js";
+import type { ProxyConfig } from "./zod-schema.proxy.js";
+
+export type SecurityAuditSuppression = {
+  /** Exact security audit check id to suppress. */
+  checkId: string;
+  /** Optional case-insensitive substring required in the finding title. */
+  titleIncludes?: string;
+  /** Optional case-insensitive substring required in the finding detail. */
+  detailIncludes?: string;
+  /** Operator rationale for accepting this standing finding. */
+  reason?: string;
+};
+
+export type SecurityConfig = {
+  audit?: {
+    /** Accepted security audit findings to omit from active summary/findings. */
+    suppressions?: SecurityAuditSuppression[];
+  };
+};
+
+export type SurfaceConfigEntry = {
+  silentReply?: SilentReplyPolicyShape;
+};
 
 export type OpenClawConfig = {
+  $schema?: string;
   meta?: {
     /** Last OpenClaw version that wrote this config. */
     lastTouchedVersion?: string;
@@ -37,6 +61,7 @@ export type OpenClawConfig = {
     lastTouchedAt?: string;
   };
   auth?: AuthConfig;
+  accessGroups?: AccessGroupsConfig;
   acp?: AcpConfig;
   env?: {
     /** Opt-in: import missing secrets from a login shell environment (exec `$SHELL -l -c 'env -0'`). */
@@ -63,7 +88,9 @@ export type OpenClawConfig = {
   };
   diagnostics?: DiagnosticsConfig;
   logging?: LoggingConfig;
+  security?: SecurityConfig;
   cli?: CliConfig;
+  crestodian?: CrestodianConfig;
   update?: {
     /** Update channel for git + npm installs ("stable", "beta", or "dev"). */
     channel?: "stable" | "beta" | "dev";
@@ -95,6 +122,7 @@ export type OpenClawConfig = {
   secrets?: SecretsConfig;
   skills?: SkillsConfig;
   plugins?: PluginsConfig;
+  surfaces?: Record<string, SurfaceConfigEntry>;
   models?: ModelsConfig;
   nodeHost?: NodeHostConfig;
   agents?: AgentsConfig;
@@ -115,14 +143,31 @@ export type OpenClawConfig = {
   web?: WebConfig;
   channels?: ChannelsConfig;
   cron?: CronConfig;
+  transcripts?: TranscriptsConfig;
+  commitments?: CommitmentsConfig;
   hooks?: HooksConfig;
   discovery?: DiscoveryConfig;
-  canvasHost?: CanvasHostConfig;
   talk?: TalkConfig;
   gateway?: GatewayConfig;
   memory?: MemoryConfig;
   mcp?: McpConfig;
+  /** Network-level SSRF protection via an operator-managed forward proxy. */
+  proxy?: ProxyConfig;
 };
+
+export type OpenClawConfigInput = Omit<OpenClawConfig, "models"> & {
+  models?: ModelsConfigInput;
+};
+
+declare const openClawConfigStateBrand: unique symbol;
+
+type BrandedConfigState<TState extends string> = OpenClawConfig & {
+  readonly [openClawConfigStateBrand]?: TState;
+};
+
+export type SourceConfig = BrandedConfigState<"source">;
+export type ResolvedSourceConfig = BrandedConfigState<"resolved-source">;
+export type RuntimeConfig = BrandedConfigState<"runtime">;
 
 export type ConfigValidationIssue = {
   path: string;
@@ -142,13 +187,21 @@ export type ConfigFileSnapshot = {
   raw: string | null;
   parsed: unknown;
   /**
+   * Config authored on disk after $include resolution and ${ENV} substitution,
+   * but BEFORE runtime defaults are applied.
+   */
+  sourceConfig: ResolvedSourceConfig;
+  /**
    * Config after $include resolution and ${ENV} substitution, but BEFORE runtime
    * defaults are applied. Use this for config set/unset operations to avoid
    * leaking runtime defaults into the written config file.
    */
-  resolved: OpenClawConfig;
+  resolved: ResolvedSourceConfig;
   valid: boolean;
-  config: OpenClawConfig;
+  /** Runtime-shaped config used by in-process readers. */
+  runtimeConfig: RuntimeConfig;
+  /** @deprecated Prefer runtimeConfig. */
+  config: RuntimeConfig;
   hash?: string;
   issues: ConfigValidationIssue[];
   warnings: ConfigValidationIssue[];

@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 import SwiftUI
 
 struct GatewayOnboardingView: View {
@@ -95,7 +96,6 @@ private struct AutoDetectStep: View {
         }
         return nil
     }
-
 }
 
 private struct ManualEntryStep: View {
@@ -109,6 +109,7 @@ private struct ManualEntryStep: View {
     @State private var manualUseTLS: Bool = true
     @State private var manualToken: String = ""
     @State private var manualPassword: String = ""
+    @State private var pendingManualAuthOverride: GatewayConnectionController.ManualAuthOverride?
 
     @State private var connectingGatewayID: String?
     @State private var connectStatusText: String?
@@ -207,9 +208,8 @@ private struct ManualEntryStep: View {
         defaults.set(self.manualPortValue() ?? 0, forKey: "gateway.manual.port")
         defaults.set(self.manualUseTLS, forKey: "gateway.manual.tls")
 
-        if let instanceId = defaults.string(forKey: "node.instanceId")?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !instanceId.isEmpty
-        {
+        let instanceId = GatewaySettingsStore.currentInstanceID()
+        if !instanceId.isEmpty {
             let trimmedToken = self.manualToken.trimmingCharacters(in: .whitespacesAndNewlines)
             let trimmedPassword = self.manualPassword.trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmedToken.isEmpty {
@@ -220,16 +220,22 @@ private struct ManualEntryStep: View {
 
         self.connectingGatewayID = "manual"
         defer { self.connectingGatewayID = nil }
+        let authOverride = GatewayConnectionController.ManualAuthOverride.currentManualInput(
+            token: self.manualToken,
+            pendingOverride: self.pendingManualAuthOverride,
+            password: self.manualPassword)
+        self.pendingManualAuthOverride = nil
         await self.gatewayController.connectManual(
             host: host,
             port: self.manualPortValue() ?? 0,
-            useTLS: self.manualUseTLS)
+            useTLS: self.manualUseTLS,
+            authOverride: authOverride)
     }
 
     private func manualPortValue() -> Int? {
         let trimmed = self.manualPortText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
-        return Int(trimmed.filter { $0.isNumber })
+        return Int(trimmed.filter(\.isNumber))
     }
 
     private func resetManualForm() {
@@ -249,69 +255,36 @@ private struct ManualEntryStep: View {
             return
         }
 
-        guard let payload = GatewaySetupCode.decode(raw: raw) else {
-            self.setupStatusText = "Setup code not recognized."
+        guard let link = GatewayConnectDeepLink.fromSetupInput(raw) else {
+            self.setupStatusText = "Setup code not recognized or uses an insecure ws:// gateway URL."
             return
         }
 
-        if let urlString = payload.url, let url = URL(string: urlString) {
-            self.applyURL(url)
-        } else if let host = payload.host, !host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            self.manualHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
-            if let port = payload.port {
-                self.manualPortText = String(port)
-            } else {
-                self.manualPortText = ""
-            }
-            if let tls = payload.tls {
-                self.manualUseTLS = tls
-            }
-        } else if let url = URL(string: raw), url.scheme != nil {
-            self.applyURL(url)
-        } else {
-            self.setupStatusText = "Setup code missing URL or host."
-            return
+        self.manualHost = link.host
+        self.manualPortText = String(link.port)
+        self.manualUseTLS = link.tls
+
+        let setupAuth = GatewayConnectionController.ManualAuthOverride.setupAuth(from: link)
+        if setupAuth.shouldApplyTokenField {
+            self.manualToken = setupAuth.token
+        }
+        if setupAuth.shouldApplyPasswordField {
+            self.manualPassword = setupAuth.password
         }
 
-        if let token = payload.token, !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            self.manualToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
-        } else if payload.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
-            self.manualToken = ""
-        }
-        if let password = payload.password, !password.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            self.manualPassword = password.trimmingCharacters(in: .whitespacesAndNewlines)
-        } else if payload.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
-            self.manualPassword = ""
-        }
-
-        let trimmedInstanceId = UserDefaults.standard.string(forKey: "node.instanceId")?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let trimmedInstanceId = GatewaySettingsStore.currentInstanceID()
         if !trimmedInstanceId.isEmpty {
-            let trimmedBootstrapToken =
-                payload.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            GatewaySettingsStore.saveGatewayBootstrapToken(trimmedBootstrapToken, instanceId: trimmedInstanceId)
+            if setupAuth.hasBootstrapToken {
+                GatewayOnboardingReset.prepareForBootstrapPairing(
+                    appModel: self.appModel,
+                    instanceId: trimmedInstanceId)
+            }
+            GatewaySettingsStore.saveGatewayBootstrapToken(setupAuth.bootstrapToken, instanceId: trimmedInstanceId)
         }
+        self.pendingManualAuthOverride = setupAuth.manualAuthOverride
 
         self.setupStatusText = "Setup code applied."
     }
-
-    private func applyURL(_ url: URL) {
-        guard let host = url.host, !host.isEmpty else { return }
-        self.manualHost = host
-        if let port = url.port {
-            self.manualPortText = String(port)
-        } else {
-            self.manualPortText = ""
-        }
-        let scheme = (url.scheme ?? "").lowercased()
-        if scheme == "wss" || scheme == "https" {
-            self.manualUseTLS = true
-        } else if scheme == "ws" || scheme == "http" {
-            self.manualUseTLS = false
-        }
-    }
-
-    // (GatewaySetupCode) decode raw setup codes.
 }
 
 @MainActor
@@ -334,7 +307,6 @@ private func resetGatewayConnectionState(
 }
 
 @MainActor
-@ViewBuilder
 private func gatewayConnectionStatusSection(
     appModel: NodeAppModel,
     gatewayController: GatewayConnectionController,
@@ -373,10 +345,10 @@ private struct ConnectionStatusBox: View {
 
     static func defaultLines(
         appModel: NodeAppModel,
-        gatewayController: GatewayConnectionController
-    ) -> [String] {
+        gatewayController: GatewayConnectionController) -> [String]
+    {
         var lines: [String] = [
-            "gateway: \(appModel.gatewayStatusText)",
+            "gateway: \(appModel.gatewayDisplayStatusText)",
             "discovery: \(gatewayController.discoveryStatusText)",
         ]
         lines.append("server: \(appModel.gatewayServerName ?? "—")")

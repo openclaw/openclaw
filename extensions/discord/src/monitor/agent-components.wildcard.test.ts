@@ -1,14 +1,27 @@
-import { describe, expect, it } from "vitest";
-import { buildDiscordComponentCustomId, buildDiscordModalCustomId } from "../components.js";
-import {
-  createDiscordComponentButton,
-  createDiscordComponentChannelSelect,
-  createDiscordComponentMentionableSelect,
-  createDiscordComponentModal,
-  createDiscordComponentRoleSelect,
-  createDiscordComponentStringSelect,
-  createDiscordComponentUserSelect,
-} from "./agent-components.js";
+import { beforeAll, describe, expect, it } from "vitest";
+
+let buildDiscordComponentCustomId: typeof import("../components.js").buildDiscordComponentCustomId;
+let buildDiscordModalCustomId: typeof import("../components.js").buildDiscordModalCustomId;
+let createDiscordComponentButton: typeof import("./agent-components.js").createDiscordComponentButton;
+let createDiscordComponentChannelSelect: typeof import("./agent-components.js").createDiscordComponentChannelSelect;
+let createDiscordComponentMentionableSelect: typeof import("./agent-components.js").createDiscordComponentMentionableSelect;
+let createDiscordComponentModal: typeof import("./agent-components.js").createDiscordComponentModal;
+let createDiscordComponentRoleSelect: typeof import("./agent-components.js").createDiscordComponentRoleSelect;
+let createDiscordComponentStringSelect: typeof import("./agent-components.js").createDiscordComponentStringSelect;
+let createDiscordComponentUserSelect: typeof import("./agent-components.js").createDiscordComponentUserSelect;
+
+beforeAll(async () => {
+  ({ buildDiscordComponentCustomId, buildDiscordModalCustomId } = await import("../components.js"));
+  ({
+    createDiscordComponentButton,
+    createDiscordComponentChannelSelect,
+    createDiscordComponentMentionableSelect,
+    createDiscordComponentModal,
+    createDiscordComponentRoleSelect,
+    createDiscordComponentStringSelect,
+    createDiscordComponentUserSelect,
+  } = await import("./agent-components.js"));
+});
 
 type WildcardComponent = {
   customId: string;
@@ -37,7 +50,7 @@ describe("discord wildcard component registration ids", () => {
     const components = createWildcardComponents();
     const customIds = components.map((component) => component.customId);
 
-    expect(customIds.every((id) => id !== "*")).toBe(true);
+    expect(customIds.some((id) => id === "*")).toBe(false);
     expect(new Set(customIds).size).toBe(customIds.length);
   });
 

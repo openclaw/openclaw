@@ -33,6 +33,19 @@ extension NodeAppModel {
         return base.appendingPathComponent("__openclaw__/a2ui/").absoluteString + "?platform=ios"
     }
 
+    /// Normalize a URL string for trust comparison: lowercase scheme/host and strip fragment.
+    /// This matches the normalization applied by ScreenController.isTrustedCanvasUIURL so that
+    /// SPA hash-routing fragments and scheme/host casing do not silently prevent trust being set.
+    static func normalizeURLForTrustComparison(_ raw: String) -> String {
+        guard let url = URL(string: raw),
+              var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        else { return raw }
+        components.fragment = nil
+        components.scheme = components.scheme?.lowercased()
+        components.host = components.host?.lowercased()
+        return components.url?.absoluteString ?? raw
+    }
+
     func showA2UIOnConnectIfNeeded() async {
         await MainActor.run {
             // Keep the bundled home canvas as the default connected view.
@@ -46,15 +59,14 @@ extension NodeAppModel {
         guard let initialUrl = await self.resolveA2UIHostURLWithCapabilityRefresh() else {
             return .hostNotConfigured
         }
-        self.screen.navigate(to: initialUrl)
+        self.screen.navigate(to: initialUrl, trustA2UIActions: true)
         if await self.screen.waitForA2UIReady(timeoutMs: timeoutMs) {
             return .ready(initialUrl)
         }
-
-        // First render can fail when scoped capability rotates between reconnects.
-        guard await self.gatewaySession.refreshNodeCanvasCapability() else { return .hostUnavailable }
-        guard let refreshedUrl = await self.resolveA2UIHostURL() else { return .hostUnavailable }
-        self.screen.navigate(to: refreshedUrl)
+        guard let refreshedUrl = await self.resolveA2UIHostURLWithCapabilityRefresh(forceRefresh: true) else {
+            return .hostUnavailable
+        }
+        self.screen.navigate(to: refreshedUrl, trustA2UIActions: true)
         if await self.screen.waitForA2UIReady(timeoutMs: timeoutMs) {
             return .ready(refreshedUrl)
         }
@@ -66,19 +78,19 @@ extension NodeAppModel {
         self.screen.showDefaultCanvas()
     }
 
-    private func resolveA2UIHostURLWithCapabilityRefresh() async -> String? {
-        if let url = await self.resolveA2UIHostURL() {
-            return url
+    private func resolveA2UIHostURLWithCapabilityRefresh(forceRefresh: Bool = false) async -> String? {
+        if !forceRefresh, let current = await self.resolveA2UIHostURL() {
+            return current
         }
-        guard await self.gatewaySession.refreshNodeCanvasCapability() else { return nil }
+        _ = await self.gatewaySession.refreshCanvasHostUrl()
         return await self.resolveA2UIHostURL()
     }
 
-    private func resolveCanvasHostURLWithCapabilityRefresh() async -> String? {
-        if let url = await self.resolveCanvasHostURL() {
-            return url
+    private func resolveCanvasHostURLWithCapabilityRefresh(forceRefresh: Bool = false) async -> String? {
+        if !forceRefresh, let current = await self.resolveCanvasHostURL() {
+            return current
         }
-        guard await self.gatewaySession.refreshNodeCanvasCapability() else { return nil }
+        _ = await self.gatewaySession.refreshCanvasHostUrl()
         return await self.resolveCanvasHostURL()
     }
 

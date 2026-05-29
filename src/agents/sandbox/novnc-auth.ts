@@ -1,4 +1,6 @@
 import crypto from "node:crypto";
+import { parseFiniteNumber } from "../../shared/number-coercion.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 export const NOVNC_PASSWORD_ENV_KEY = "OPENCLAW_BROWSER_NOVNC_PASSWORD"; // pragma: allowlist secret
 const NOVNC_TOKEN_TTL_MS = 60 * 1000;
@@ -63,10 +65,11 @@ export function issueNoVncObserverToken(params: {
   const now = params.nowMs ?? Date.now();
   pruneExpiredNoVncObserverTokens(now);
   const token = crypto.randomBytes(24).toString("hex");
+  const ttlMs = Math.max(1, parseFiniteNumber(params.ttlMs) ?? NOVNC_TOKEN_TTL_MS);
   NO_VNC_OBSERVER_TOKENS.set(token, {
     noVncPort: params.noVncPort,
-    password: params.password?.trim() || undefined,
-    expiresAt: now + Math.max(1, params.ttlMs ?? NOVNC_TOKEN_TTL_MS),
+    password: normalizeOptionalString(params.password),
+    expiresAt: now + ttlMs,
   });
   return token;
 }

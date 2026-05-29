@@ -1,8 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import {
-  generatePkceVerifierChallenge,
-  toFormUrlEncoded,
-} from "openclaw/plugin-sdk/minimax-portal-auth";
+import { generatePkceVerifierChallenge, toFormUrlEncoded } from "openclaw/plugin-sdk/provider-auth";
+import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
 
 export type MiniMaxRegion = "cn" | "global";
 
@@ -19,6 +17,8 @@ const MINIMAX_OAUTH_CONFIG = {
 
 const MINIMAX_OAUTH_SCOPE = "group_id profile model.completion";
 const MINIMAX_OAUTH_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:user_code";
+const MINIMAX_RELATIVE_EXPIRY_SECONDS_THRESHOLD = 1_000_000_000;
+const MINIMAX_ABSOLUTE_EXPIRY_MS_THRESHOLD = 1_000_000_000_000;
 
 function getOAuthEndpoints(region: MiniMaxRegion) {
   const config = MINIMAX_OAUTH_CONFIG[region];
@@ -30,7 +30,7 @@ function getOAuthEndpoints(region: MiniMaxRegion) {
   };
 }
 
-export type MiniMaxOAuthAuthorization = {
+type MiniMaxOAuthAuthorization = {
   user_code: string;
   verification_uri: string;
   expired_in: number;
@@ -38,7 +38,7 @@ export type MiniMaxOAuthAuthorization = {
   state: string;
 };
 
-export type MiniMaxOAuthToken = {
+type MiniMaxOAuthToken = {
   access: string;
   refresh: string;
   expires: number;
@@ -52,6 +52,20 @@ type TokenResult =
   | { status: "success"; token: MiniMaxOAuthToken }
   | TokenPending
   | { status: "error"; message: string };
+
+/**
+ * Normalize MiniMax token endpoint `expired_in` values to the auth-profile
+ * contract: absolute Unix milliseconds.
+ */
+export function normalizeOAuthExpires(expiredIn: number, now = Date.now()): number {
+  if (expiredIn < MINIMAX_RELATIVE_EXPIRY_SECONDS_THRESHOLD) {
+    return now + expiredIn * 1000;
+  }
+  if (expiredIn < MINIMAX_ABSOLUTE_EXPIRY_MS_THRESHOLD) {
+    return expiredIn * 1000;
+  }
+  return expiredIn;
+}
 
 function generatePkce(): { verifier: string; challenge: string; state: string } {
   const { verifier, challenge } = generatePkceVerifierChallenge();
@@ -174,7 +188,7 @@ async function pollOAuthToken(params: {
     token: {
       access: tokenPayload.access_token,
       refresh: tokenPayload.refresh_token,
-      expires: tokenPayload.expired_in,
+      expires: normalizeOAuthExpires(tokenPayload.expired_in),
       resourceUrl: tokenPayload.resource_url,
       notification_message: tokenPayload.notification_message,
     },
@@ -187,6 +201,9 @@ export async function loginMiniMaxPortalOAuth(params: {
   progress: { update: (message: string) => void; stop: (message?: string) => void };
   region?: MiniMaxRegion;
 }): Promise<MiniMaxOAuthToken> {
+  // Ensure env-based proxy dispatcher is active before any outbound fetch calls.
+  // Without this, HTTP_PROXY/HTTPS_PROXY env vars are silently ignored (#51619).
+  ensureGlobalUndiciEnvProxyDispatcher();
   const region = params.region ?? "global";
   const { verifier, challenge, state } = generatePkce();
   const oauth = await requestOAuthCode({ challenge, state, region });
@@ -195,7 +212,7 @@ export async function loginMiniMaxPortalOAuth(params: {
   const noteLines = [
     `Open ${verificationUrl} to approve access.`,
     `If prompted, enter the code ${oauth.user_code}.`,
-    `Interval: ${oauth.interval ?? "default (2000ms)"}, Expires at: ${oauth.expired_in} unix timestamp`,
+    `Interval: ${oauth.interval ?? "default (2000ms)"}, Expires at: ${new Date(oauth.expired_in).toISOString()}`,
   ];
   await params.note(noteLines.join("\n"), "MiniMax OAuth");
 
@@ -206,6 +223,7 @@ export async function loginMiniMaxPortalOAuth(params: {
   }
 
   let pollIntervalMs = oauth.interval ? oauth.interval : 2000;
+  // The authorization endpoint returns an absolute millisecond deadline.
   const expireTimeMs = oauth.expired_in;
 
   while (Date.now() < expireTimeMs) {

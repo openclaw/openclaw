@@ -11,28 +11,86 @@ describe("exec allowlist matching", () => {
   it("handles wildcard and path matching semantics", () => {
     const cases: Array<{ entries: ExecAllowlistEntry[]; expectedPattern: string | null }> = [
       { entries: [{ pattern: "RG" }], expectedPattern: null },
+      { entries: [{ pattern: "not-rg" }], expectedPattern: null },
       { entries: [{ pattern: "/opt/**/rg" }], expectedPattern: "/opt/**/rg" },
       { entries: [{ pattern: "/opt/*/rg" }], expectedPattern: null },
     ];
-    for (const testCase of cases) {
-      const match = matchAllowlist(testCase.entries, baseResolution);
-      expect(match?.pattern ?? null).toBe(testCase.expectedPattern);
+    for (const { entries, expectedPattern } of cases) {
+      const match = matchAllowlist(entries, baseResolution);
+      expect(match?.pattern ?? null).toBe(expectedPattern);
     }
   });
 
+  it("matches bare command-name patterns against PATH-resolved executable basenames", () => {
+    expect(matchAllowlist([{ pattern: "rg" }], baseResolution)?.pattern).toBe("rg");
+    expect(matchAllowlist([{ pattern: "r?" }], baseResolution)?.pattern).toBe("r?");
+    expect(matchAllowlist([{ pattern: "homebrew" }], baseResolution)).toBeNull();
+  });
+
+  it("does not let bare command-name patterns match path-selected executables", () => {
+    const relativeResolution = {
+      rawExecutable: "./rg",
+      resolvedPath: "/tmp/openclaw-workspace/rg",
+      executableName: "rg",
+    };
+    const absoluteResolution = {
+      rawExecutable: "/tmp/openclaw-workspace/rg",
+      resolvedPath: "/tmp/openclaw-workspace/rg",
+      executableName: "rg",
+    };
+
+    expect(matchAllowlist([{ pattern: "rg" }], relativeResolution)).toBeNull();
+    expect(matchAllowlist([{ pattern: "rg" }], absoluteResolution)).toBeNull();
+  });
+
+  it.each(["linux", "darwin", "win32"])(
+    "honors argPattern checks for bare command-name matches on %s",
+    (platform) => {
+      const entries = [{ pattern: "rg", argPattern: "^--json$" }];
+
+      expect(matchAllowlist(entries, baseResolution, ["rg", "--json"], platform)?.pattern).toBe(
+        "rg",
+      );
+      expect(matchAllowlist(entries, baseResolution, ["rg", "--files"], platform)).toBeNull();
+    },
+  );
+
   it("matches bare wildcard patterns against arbitrary resolved executables", () => {
-    expect(matchAllowlist([{ pattern: "*" }], baseResolution)?.pattern).toBe("*");
-    expect(
-      matchAllowlist([{ pattern: "*" }], {
+    const cases = [
+      baseResolution,
+      {
         rawExecutable: "python3",
         resolvedPath: "/usr/bin/python3",
         executableName: "python3",
-      })?.pattern,
-    ).toBe("*");
+      },
+    ] as const;
+    for (const resolution of cases) {
+      expect(matchAllowlist([{ pattern: "*" }], resolution)?.pattern).toBe("*");
+    }
   });
 
+  it.runIf(process.platform !== "win32")(
+    "rejects wildcard path matches that escape through dot segments",
+    () => {
+      expect(
+        matchAllowlist([{ pattern: "/usr/bin/**" }], {
+          rawExecutable: "/usr/bin/../../bin/sh",
+          resolvedPath: "/usr/bin/../../bin/sh",
+          executableName: "sh",
+        }),
+      ).toBeNull();
+      expect(
+        matchAllowlist([{ pattern: "/usr/bin/**" }], {
+          rawExecutable: "/usr/bin/sub/../env",
+          resolvedPath: "/usr/bin/sub/../env",
+          executableName: "env",
+        })?.pattern,
+      ).toBe("/usr/bin/**");
+    },
+  );
+
   it("matches absolute paths containing regex metacharacters literally", () => {
-    const plusPathCases = ["/usr/bin/g++", "/usr/bin/clang++"];
+    const plusPathCases = ["/usr/bin/g++", "/usr/bin/clang++"] as const;
     for (const candidatePath of plusPathCases) {
       const match = matchAllowlist([{ pattern: candidatePath }], {
         rawExecutable: candidatePath,
@@ -42,19 +100,52 @@ describe("exec allowlist matching", () => {
       expect(match?.pattern).toBe(candidatePath);
     }
 
+    const literalCases = [
+      {
+        pattern: "/usr/bin/*++",
+        resolution: {
+          rawExecutable: "/usr/bin/g++",
+          resolvedPath: "/usr/bin/g++",
+          executableName: "g++",
+        },
+      },
+      {
+        pattern: "/opt/builds/tool[1](stable)",
+        resolution: {
+          rawExecutable: "/opt/builds/tool[1](stable)",
+          resolvedPath: "/opt/builds/tool[1](stable)",
+          executableName: "tool[1](stable)",
+        },
+      },
+    ] as const;
+    for (const { pattern, resolution } of literalCases) {
+      expect(matchAllowlist([{ pattern }], resolution)?.pattern).toBe(pattern);
+    }
+  });
+
+  it("matches path-shaped allowlist entries against the executable trust realpath", () => {
+    const resolution = {
+      rawExecutable: "rg",
+      resolvedPath: "/opt/homebrew/bin/rg",
+      resolvedRealPath: "/opt/homebrew/Cellar/ripgrep/14.1.1/bin/rg",
+      executableName: "rg",
+    };
+
     expect(
-      matchAllowlist([{ pattern: "/usr/bin/*++" }], {
-        rawExecutable: "/usr/bin/g++",
-        resolvedPath: "/usr/bin/g++",
-        executableName: "g++",
-      })?.pattern,
-    ).toBe("/usr/bin/*++");
-    expect(
-      matchAllowlist([{ pattern: "/opt/builds/tool[1](stable)" }], {
-        rawExecutable: "/opt/builds/tool[1](stable)",
-        resolvedPath: "/opt/builds/tool[1](stable)",
-        executableName: "tool[1](stable)",
-      })?.pattern,
-    ).toBe("/opt/builds/tool[1](stable)");
+      matchAllowlist([{ pattern: "/opt/homebrew/Cellar/ripgrep/14.1.1/bin/rg" }], resolution)
+        ?.pattern,
+    ).toBe("/opt/homebrew/Cellar/ripgrep/14.1.1/bin/rg");
+    expect(matchAllowlist([{ pattern: "/opt/homebrew/bin/rg" }], resolution)).toBeNull();
+  });
+
+  it("keeps basename allowlist entries on the PATH-resolved executable name", () => {
+    const resolution = {
+      rawExecutable: "rg",
+      resolvedPath: "/opt/homebrew/bin/rg",
+      resolvedRealPath: "/opt/homebrew/Cellar/ripgrep/14.1.1/bin/rg",
+      executableName: "rg",
+    };
+
+    expect(matchAllowlist([{ pattern: "rg" }], resolution)?.pattern).toBe("rg");
   });
 });

@@ -1,6 +1,6 @@
 import YAML from "yaml";
 
-export type ParsedFrontmatter = Record<string, string>;
+type ParsedFrontmatter = Record<string, string>;
 
 type ParsedFrontmatterLineEntry = {
   value: string;
@@ -181,7 +181,10 @@ function shouldPreferInlineLineValue(params: {
 }
 
 function extractFrontmatterBlock(content: string): string | undefined {
-  const normalized = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const normalized = content
+    .replace(/^\uFEFF/, "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n");
   if (!normalized.startsWith("---")) {
     return undefined;
   }

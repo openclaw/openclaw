@@ -2,20 +2,32 @@ import * as fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
-import { describe, expect, it, test, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, test, vi } from "vitest";
+import type { RequestFrame } from "../../packages/gateway-protocol/src/index.js";
+import {
+  onDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  type DiagnosticEventPayload,
+} from "../infra/diagnostic-events.js";
+import {
+  resetActiveManagedProxyStateForTests,
+  registerActiveManagedProxyUrl,
+  stopActiveManagedProxyRegistration,
+} from "../infra/net/proxy/active-proxy-state.js";
 import { defaultVoiceWakeTriggers } from "../infra/voicewake.js";
-import { GatewayClient } from "./client.js";
 import { handleControlUiHttpRequest } from "./control-ui.js";
 import {
   DEFAULT_DANGEROUS_NODE_COMMANDS,
   resolveNodeCommandAllowlist,
 } from "./node-command-policy.js";
-import type { RequestFrame } from "./protocol/index.js";
+import type { SerializedEventPayload } from "./node-registry.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { createChatRunRegistry } from "./server-chat.js";
+import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import { handleNodeInvokeResult } from "./server-methods/nodes.handlers.invoke-result.js";
 import type { GatewayClient as GatewayMethodClient } from "./server-methods/types.js";
 import type { GatewayRequestContext, RespondFn } from "./server-methods/types.js";
+import { createGatewayNodeSessionRuntime } from "./server-node-session-runtime.js";
 import { createNodeSubscriptionManager } from "./server-node-subscriptions.js";
 import { formatError, normalizeVoiceWakeTriggers } from "./server-utils.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
@@ -30,7 +42,13 @@ function makeControlUiResponse() {
 }
 
 const wsMockState = vi.hoisted(() => ({
-  last: null as { url: unknown; opts: unknown } | null,
+  last: null as {
+    url: unknown;
+    opts: unknown;
+    noProxyDuringConstruction: unknown;
+    httpProxyDuringConstruction: unknown;
+    httpsProxyDuringConstruction: unknown;
+  } | null,
 }));
 
 vi.mock("ws", () => ({
@@ -40,12 +58,33 @@ vi.mock("ws", () => ({
     send = vi.fn();
 
     constructor(url: unknown, opts: unknown) {
-      wsMockState.last = { url, opts };
+      wsMockState.last = {
+        url,
+        opts,
+        noProxyDuringConstruction: process.env["NO_PROXY"],
+        httpProxyDuringConstruction: process.env["HTTP_PROXY"],
+        httpsProxyDuringConstruction: process.env["HTTPS_PROXY"],
+      };
     }
   },
 }));
 
+let GatewayClient: typeof import("./client.js").GatewayClient;
+
 describe("GatewayClient", () => {
+  beforeAll(async () => {
+    ({ GatewayClient } = await import("./client.js"));
+  });
+
+  beforeEach(() => {
+    wsMockState.last = null;
+    resetActiveManagedProxyStateForTests();
+    delete process.env["NO_PROXY"];
+    delete process.env["no_proxy"];
+    delete process.env["HTTP_PROXY"];
+    delete process.env["HTTPS_PROXY"];
+  });
+
   async function withControlUiRoot(
     params: { faviconSvg?: string; indexHtml?: string },
     run: (tmp: string) => Promise<void>,
@@ -63,19 +102,106 @@ describe("GatewayClient", () => {
   }
 
   test("uses a large maxPayload for node snapshots", () => {
-    wsMockState.last = null;
     const client = new GatewayClient({ url: "ws://127.0.0.1:1" });
     client.start();
     const last = wsMockState.last as { url: unknown; opts: unknown } | null;
+    const opts = last?.opts as { maxPayload?: number } | undefined;
 
     expect(last?.url).toBe("ws://127.0.0.1:1");
-    expect(last?.opts).toEqual(expect.objectContaining({ maxPayload: 25 * 1024 * 1024 }));
+    expect(opts?.maxPayload).toBe(25 * 1024 * 1024);
+  });
+
+  test("does not pass an explicit direct agent for loopback control-plane WebSocket connections", () => {
+    const client = new GatewayClient({ url: "ws://127.0.0.1:1" });
+    client.start();
+    const last = wsMockState.last as { opts: { agent?: unknown } } | null;
+
+    expect(last?.opts.agent).toBeUndefined();
+  });
+
+  test("does not pass an explicit direct agent for IPv6 loopback control-plane WebSocket connections", () => {
+    const client = new GatewayClient({ url: "ws://[::1]:1" });
+    client.start();
+    const last = wsMockState.last as { opts: { agent?: unknown } } | null;
+
+    expect(last?.opts.agent).toBeUndefined();
+  });
+
+  test("does not pass an explicit direct agent for localhost hostnames", () => {
+    const client = new GatewayClient({ url: "ws://localhost:1" });
+    client.start();
+    const last = wsMockState.last as { opts: { agent?: unknown } } | null;
+
+    expect(last?.opts.agent).toBeUndefined();
+  });
+
+  test("does not force a direct agent for remote Gateway WebSocket connections", () => {
+    const client = new GatewayClient({
+      url: "wss://gateway.example.com",
+      tlsFingerprint: "SHA256:AA:BB",
+    });
+    client.start();
+    const last = wsMockState.last as { opts: { agent?: unknown } } | null;
+
+    expect(last?.opts.agent).toBeUndefined();
+  });
+
+  test("scopes Gateway loopback bypass to WebSocket connection setup without mutating NO_PROXY", () => {
+    process.env["NO_PROXY"] = "corp.example.com";
+    process.env["no_proxy"] = "corp.example.com";
+    const registration = registerActiveManagedProxyUrl(
+      new URL("http://127.0.0.1:3128"),
+      "gateway-only",
+    );
+
+    try {
+      const client = new GatewayClient({ url: "ws://127.0.0.1:18789" });
+      client.start();
+      const last = wsMockState.last as { noProxyDuringConstruction: unknown } | null;
+
+      expect(last?.noProxyDuringConstruction).toBe("corp.example.com");
+      expect(process.env["NO_PROXY"]).toBe("corp.example.com");
+      expect(process.env["no_proxy"]).toBe("corp.example.com");
+    } finally {
+      stopActiveManagedProxyRegistration(registration);
+    }
+  });
+
+  test("scopes IPv6 loopback bypass during Gateway-only proxy mode connection setup", () => {
+    process.env["NO_PROXY"] = "corp.example.com";
+    process.env["no_proxy"] = "corp.example.com";
+    process.env["HTTP_PROXY"] = "http://127.0.0.1:3128";
+    process.env["HTTPS_PROXY"] = "http://127.0.0.1:3128";
+    const registration = registerActiveManagedProxyUrl(
+      new URL("http://127.0.0.1:3128"),
+      "gateway-only",
+    );
+
+    try {
+      const client = new GatewayClient({ url: "ws://[::1]:18789" });
+      client.start();
+      const last = wsMockState.last as {
+        noProxyDuringConstruction: unknown;
+        httpProxyDuringConstruction: unknown;
+        httpsProxyDuringConstruction: unknown;
+      } | null;
+
+      expect(last?.noProxyDuringConstruction).toBe("corp.example.com");
+      expect(last?.httpProxyDuringConstruction).toBe("http://127.0.0.1:3128");
+      expect(last?.httpsProxyDuringConstruction).toBe("http://127.0.0.1:3128");
+      expect(process.env["NO_PROXY"]).toBe("corp.example.com");
+      expect(process.env["no_proxy"]).toBe("corp.example.com");
+      expect(process.env["HTTP_PROXY"]).toBe("http://127.0.0.1:3128");
+      expect(process.env["HTTPS_PROXY"]).toBe("http://127.0.0.1:3128");
+    } finally {
+      stopActiveManagedProxyRegistration(registration);
+    }
   });
 
   it("returns 404 for missing static asset paths instead of SPA fallback", async () => {
     await withControlUiRoot({ faviconSvg: "<svg/>" }, async (tmp) => {
       const { res } = makeControlUiResponse();
-      const handled = handleControlUiHttpRequest(
+      const handled = await handleControlUiHttpRequest(
         { url: "/webchat/favicon.svg", method: "GET" } as IncomingMessage,
         res,
         { root: { kind: "resolved", path: tmp } },
@@ -88,7 +214,7 @@ describe("GatewayClient", () => {
   it("returns 404 for missing static assets with query strings", async () => {
     await withControlUiRoot({}, async (tmp) => {
       const { res } = makeControlUiResponse();
-      const handled = handleControlUiHttpRequest(
+      const handled = await handleControlUiHttpRequest(
         { url: "/webchat/favicon.svg?v=1", method: "GET" } as IncomingMessage,
         res,
         { root: { kind: "resolved", path: tmp } },
@@ -101,7 +227,7 @@ describe("GatewayClient", () => {
   it("still serves SPA fallback for extensionless paths", async () => {
     await withControlUiRoot({}, async (tmp) => {
       const { res } = makeControlUiResponse();
-      const handled = handleControlUiHttpRequest(
+      const handled = await handleControlUiHttpRequest(
         { url: "/webchat/chat", method: "GET" } as IncomingMessage,
         res,
         { root: { kind: "resolved", path: tmp } },
@@ -114,7 +240,7 @@ describe("GatewayClient", () => {
   it("HEAD returns 404 for missing static assets consistent with GET", async () => {
     await withControlUiRoot({}, async (tmp) => {
       const { res } = makeControlUiResponse();
-      const handled = handleControlUiHttpRequest(
+      const handled = await handleControlUiHttpRequest(
         { url: "/webchat/favicon.svg", method: "HEAD" } as IncomingMessage,
         res,
         { root: { kind: "resolved", path: tmp } },
@@ -128,7 +254,7 @@ describe("GatewayClient", () => {
     await withControlUiRoot({}, async (tmp) => {
       for (const route of ["/webchat/user/jane.doe", "/webchat/v2.0", "/settings/v1.2"]) {
         const { res } = makeControlUiResponse();
-        const handled = handleControlUiHttpRequest(
+        const handled = await handleControlUiHttpRequest(
           { url: route, method: "GET" } as IncomingMessage,
           res,
           { root: { kind: "resolved", path: tmp } },
@@ -142,7 +268,7 @@ describe("GatewayClient", () => {
   it("serves SPA fallback for .html paths that do not exist on disk", async () => {
     await withControlUiRoot({}, async (tmp) => {
       const { res } = makeControlUiResponse();
-      const handled = handleControlUiHttpRequest(
+      const handled = await handleControlUiHttpRequest(
         { url: "/webchat/foo.html", method: "GET" } as IncomingMessage,
         res,
         { root: { kind: "resolved", path: tmp } },
@@ -158,6 +284,74 @@ type TestSocket = {
   send: (payload: string) => void;
   close: (code: number, reason: string) => void;
 };
+
+type EventFrame = {
+  type: "event";
+  event: string;
+  payload?: unknown;
+  seq?: number;
+};
+
+type RecordingSocket = TestSocket & {
+  sent: EventFrame[];
+};
+
+function makeRecordingSocket(): RecordingSocket {
+  const sent: EventFrame[] = [];
+  return {
+    bufferedAmount: 0,
+    send: vi.fn((payload: string) => {
+      sent.push(JSON.parse(payload) as EventFrame);
+    }),
+    close: vi.fn(),
+    sent,
+  };
+}
+
+function makeGatewayWsClient(
+  connId: string,
+  socket: TestSocket,
+  connect: GatewayWsClient["connect"],
+): GatewayWsClient {
+  return {
+    socket: socket as unknown as GatewayWsClient["socket"],
+    connect,
+    connId,
+    usesSharedGatewayAuth: false,
+  };
+}
+
+function makeScopedBroadcastClients() {
+  const pairingSocket = makeRecordingSocket();
+  const nodeSocket = makeRecordingSocket();
+  const readSocket = makeRecordingSocket();
+  const writeSocket = makeRecordingSocket();
+  const adminSocket = makeRecordingSocket();
+  const clients = new Set<GatewayWsClient>([
+    makeGatewayWsClient("c-pairing", pairingSocket, {
+      role: "operator",
+      scopes: ["operator.pairing"],
+    } as GatewayWsClient["connect"]),
+    makeGatewayWsClient("c-node", nodeSocket, {
+      role: "node",
+      scopes: ["operator.read"],
+    } as GatewayWsClient["connect"]),
+    makeGatewayWsClient("c-read", readSocket, {
+      role: "operator",
+      scopes: ["operator.read"],
+    } as GatewayWsClient["connect"]),
+    makeGatewayWsClient("c-write", writeSocket, {
+      role: "operator",
+      scopes: ["operator.write"],
+    } as GatewayWsClient["connect"]),
+    makeGatewayWsClient("c-admin", adminSocket, {
+      role: "operator",
+      scopes: ["operator.admin"],
+    } as GatewayWsClient["connect"]),
+  ]);
+
+  return { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, clients };
+}
 
 describe("gateway broadcaster", () => {
   it("filters approval and pairing events by scope", () => {
@@ -178,21 +372,18 @@ describe("gateway broadcaster", () => {
     };
 
     const clients = new Set<GatewayWsClient>([
-      {
-        socket: approvalsSocket as unknown as GatewayWsClient["socket"],
-        connect: { role: "operator", scopes: ["operator.approvals"] } as GatewayWsClient["connect"],
-        connId: "c-approvals",
-      },
-      {
-        socket: pairingSocket as unknown as GatewayWsClient["socket"],
-        connect: { role: "operator", scopes: ["operator.pairing"] } as GatewayWsClient["connect"],
-        connId: "c-pairing",
-      },
-      {
-        socket: readSocket as unknown as GatewayWsClient["socket"],
-        connect: { role: "operator", scopes: ["operator.read"] } as GatewayWsClient["connect"],
-        connId: "c-read",
-      },
+      makeGatewayWsClient("c-approvals", approvalsSocket, {
+        role: "operator",
+        scopes: ["operator.approvals"],
+      } as GatewayWsClient["connect"]),
+      makeGatewayWsClient("c-pairing", pairingSocket, {
+        role: "operator",
+        scopes: ["operator.pairing"],
+      } as GatewayWsClient["connect"]),
+      makeGatewayWsClient("c-read", readSocket, {
+        role: "operator",
+        scopes: ["operator.read"],
+      } as GatewayWsClient["connect"]),
     ]);
 
     const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({ clients });
@@ -205,9 +396,280 @@ describe("gateway broadcaster", () => {
     expect(readSocket.send).toHaveBeenCalledTimes(0);
 
     broadcastToConnIds("tick", { ts: 1 }, new Set(["c-read"]));
-    expect(readSocket.send).toHaveBeenCalledTimes(1);
+    broadcastToConnIds("talk.event", { type: "session.ready" }, new Set(["c-read"]));
+    expect(readSocket.send).toHaveBeenCalledTimes(2);
     expect(approvalsSocket.send).toHaveBeenCalledTimes(1);
     expect(pairingSocket.send).toHaveBeenCalledTimes(1);
+  });
+
+  it("requires operator.read for chat-class broadcast events", () => {
+    const { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, clients } =
+      makeScopedBroadcastClients();
+
+    const { broadcast } = createGatewayBroadcaster({ clients });
+
+    broadcast("chat", { sessionKey: "agent:main:main", message: "secret" });
+    broadcast("agent", { type: "status", sessionKey: "agent:main:main" });
+    broadcast("chat.side_result", { sessionKey: "agent:main:main", text: "tool output" });
+
+    expect(pairingSocket.send).not.toHaveBeenCalled();
+    expect(nodeSocket.send).not.toHaveBeenCalled();
+    expect(readSocket.send).toHaveBeenCalledTimes(3);
+    expect(writeSocket.send).toHaveBeenCalledTimes(3);
+    expect(adminSocket.send).toHaveBeenCalledTimes(3);
+    expect(readSocket.sent.map((frame) => frame.event)).toEqual([
+      "chat",
+      "agent",
+      "chat.side_result",
+    ]);
+    expect(writeSocket.sent.map((frame) => frame.event)).toEqual([
+      "chat",
+      "agent",
+      "chat.side_result",
+    ]);
+    expect(adminSocket.sent.map((frame) => frame.event)).toEqual([
+      "chat",
+      "agent",
+      "chat.side_result",
+    ]);
+  });
+
+  it("allows plugin.* broadcast events for operator.write and operator.admin", () => {
+    const { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, clients } =
+      makeScopedBroadcastClients();
+
+    const { broadcast } = createGatewayBroadcaster({ clients });
+
+    broadcast("plugin.myplugin.custom", { data: "test" });
+    broadcast("plugin.otherplugin.state", { state: "updated" });
+
+    expect(pairingSocket.send).not.toHaveBeenCalled();
+    expect(nodeSocket.send).not.toHaveBeenCalled();
+    expect(readSocket.send).not.toHaveBeenCalled();
+    expect(writeSocket.send).toHaveBeenCalledTimes(2);
+    expect(adminSocket.send).toHaveBeenCalledTimes(2);
+    expect(writeSocket.sent.map((frame) => frame.event)).toEqual([
+      "plugin.myplugin.custom",
+      "plugin.otherplugin.state",
+    ]);
+    expect(adminSocket.sent.map((frame) => frame.event)).toEqual([
+      "plugin.myplugin.custom",
+      "plugin.otherplugin.state",
+    ]);
+  });
+
+  it("defaults unknown events to deny and classifies remaining gateway broadcast events", () => {
+    const { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, clients } =
+      makeScopedBroadcastClients();
+
+    const { broadcast } = createGatewayBroadcaster({ clients });
+
+    broadcast("cron", { jobId: "job-1" });
+    broadcast("talk.mode", { enabled: true });
+    broadcast("voicewake.changed", { triggers: ["hello"] });
+    broadcast("voicewake.routing.changed", { config: { routes: [] } });
+    broadcast("heartbeat", { ts: 1 });
+    broadcast("presence", { presence: [] });
+    broadcast("health", { ok: true });
+    broadcast("tick", { ts: 2 });
+    broadcast("shutdown", { reason: "restart" });
+    broadcast("update.available", { updateAvailable: { version: "2026.4.20" } });
+    broadcast("unknown.future.event", { hidden: true });
+
+    expect(pairingSocket.sent.map((frame) => frame.event)).toEqual([
+      "heartbeat",
+      "presence",
+      "health",
+      "tick",
+      "shutdown",
+      "update.available",
+    ]);
+    expect(nodeSocket.sent.map((frame) => frame.event)).toEqual([
+      "voicewake.changed",
+      "voicewake.routing.changed",
+      "heartbeat",
+      "presence",
+      "health",
+      "tick",
+      "shutdown",
+      "update.available",
+    ]);
+    expect(readSocket.sent.map((frame) => frame.event)).toEqual([
+      "cron",
+      "voicewake.changed",
+      "voicewake.routing.changed",
+      "heartbeat",
+      "presence",
+      "health",
+      "tick",
+      "shutdown",
+      "update.available",
+    ]);
+    expect(writeSocket.sent.map((frame) => frame.event)).toEqual([
+      "cron",
+      "talk.mode",
+      "voicewake.changed",
+      "voicewake.routing.changed",
+      "heartbeat",
+      "presence",
+      "health",
+      "tick",
+      "shutdown",
+      "update.available",
+    ]);
+    expect(adminSocket.sent.map((frame) => frame.event)).toEqual([
+      "cron",
+      "talk.mode",
+      "voicewake.changed",
+      "voicewake.routing.changed",
+      "heartbeat",
+      "presence",
+      "health",
+      "tick",
+      "shutdown",
+      "update.available",
+    ]);
+  });
+
+  it("keeps event seq contiguous per receiving client when scoped events are filtered", () => {
+    const pairingSocket = makeRecordingSocket();
+    const readSocket = makeRecordingSocket();
+
+    const clients = new Set<GatewayWsClient>([
+      makeGatewayWsClient("c-pairing", pairingSocket, {
+        role: "operator",
+        scopes: ["operator.pairing"],
+      } as GatewayWsClient["connect"]),
+      makeGatewayWsClient("c-read", readSocket, {
+        role: "operator",
+        scopes: ["operator.read"],
+      } as GatewayWsClient["connect"]),
+    ]);
+
+    const { broadcast } = createGatewayBroadcaster({ clients });
+
+    broadcast("chat", { sessionKey: "agent:main:main", message: "secret" });
+    broadcast("heartbeat", { ts: 1 });
+    broadcast("chat.side_result", { sessionKey: "agent:main:main", text: "tool output" });
+    broadcast("tick", { ts: 2 });
+
+    expect(pairingSocket.sent.map((frame) => [frame.event, frame.seq])).toEqual([
+      ["heartbeat", 1],
+      ["tick", 2],
+    ]);
+    expect(readSocket.sent.map((frame) => [frame.event, frame.seq])).toEqual([
+      ["chat", 1],
+      ["heartbeat", 2],
+      ["chat.side_result", 3],
+      ["tick", 4],
+    ]);
+  });
+
+  it("reuses the same payload shape while assigning per-client seq values", () => {
+    const firstSocket = makeRecordingSocket();
+    const secondSocket = makeRecordingSocket();
+    const thirdSocket = makeRecordingSocket();
+    const clients = new Set<GatewayWsClient>([
+      makeGatewayWsClient("c-1", firstSocket, {
+        role: "operator",
+        scopes: ["operator.read"],
+      } as GatewayWsClient["connect"]),
+      makeGatewayWsClient("c-2", secondSocket, {
+        role: "operator",
+        scopes: ["operator.write"],
+      } as GatewayWsClient["connect"]),
+      makeGatewayWsClient("c-3", thirdSocket, {
+        role: "operator",
+        scopes: ["operator.admin"],
+      } as GatewayWsClient["connect"]),
+    ]);
+    const payloadKeys: string[] = [];
+    const payload = {
+      toJSON(key: string) {
+        payloadKeys.push(key);
+        return { foo: key };
+      },
+    };
+
+    const { broadcast } = createGatewayBroadcaster({ clients });
+    broadcast("talk.mode", { enabled: true });
+    broadcast("chat", payload);
+
+    expect(payloadKeys).toEqual(["payload"]);
+    expect(firstSocket.sent.at(-1)?.payload).toEqual({ foo: "payload" });
+    expect(secondSocket.sent.at(-1)?.payload).toEqual({ foo: "payload" });
+    expect(thirdSocket.sent.at(-1)?.payload).toEqual({ foo: "payload" });
+    expect([
+      firstSocket.sent.at(-1)?.seq,
+      secondSocket.sent.at(-1)?.seq,
+      thirdSocket.sent.at(-1)?.seq,
+    ]).toEqual([1, 2, 2]);
+  });
+
+  it("preserves seq gaps when dropIfSlow skips an eligible broadcast", () => {
+    const slowReadSocket = makeRecordingSocket();
+    slowReadSocket.bufferedAmount = Number.MAX_SAFE_INTEGER;
+    const readSocket = makeRecordingSocket();
+
+    const clients = new Set<GatewayWsClient>([
+      makeGatewayWsClient("c-slow-read", slowReadSocket, {
+        role: "operator",
+        scopes: ["operator.read"],
+      } as GatewayWsClient["connect"]),
+      makeGatewayWsClient("c-read", readSocket, {
+        role: "operator",
+        scopes: ["operator.read"],
+      } as GatewayWsClient["connect"]),
+    ]);
+
+    const { broadcast } = createGatewayBroadcaster({ clients });
+
+    broadcast("chat", { sessionKey: "agent:main:main", message: "secret" }, { dropIfSlow: true });
+    slowReadSocket.bufferedAmount = 0;
+    broadcast("heartbeat", { ts: 1 });
+
+    expect(slowReadSocket.sent.map((frame) => [frame.event, frame.seq])).toEqual([
+      ["heartbeat", 2],
+    ]);
+    expect(readSocket.sent.map((frame) => [frame.event, frame.seq])).toEqual([
+      ["chat", 1],
+      ["heartbeat", 2],
+    ]);
+  });
+
+  it("records a payload diagnostic when the outbound websocket buffer exceeds the limit", () => {
+    resetDiagnosticEventsForTest();
+    const events: DiagnosticEventPayload[] = [];
+    const stop = onDiagnosticEvent((event) => events.push(event));
+    try {
+      const slowReadSocket = makeRecordingSocket();
+      slowReadSocket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
+      const clients = new Set<GatewayWsClient>([
+        makeGatewayWsClient("c-slow-read", slowReadSocket, {
+          role: "operator",
+          scopes: ["operator.read"],
+        } as GatewayWsClient["connect"]),
+      ]);
+
+      const { broadcast } = createGatewayBroadcaster({ clients });
+
+      broadcast("chat", { sessionKey: "agent:main:main", message: "secret" }, { dropIfSlow: true });
+      broadcast("heartbeat", { ts: 1 });
+
+      const payloadEvent = events.find((event) => event.type === "payload.large");
+      expect(payloadEvent?.type).toBe("payload.large");
+      expect(payloadEvent?.surface).toBe("gateway.ws.outbound_buffer");
+      expect(payloadEvent?.action).toBe("rejected");
+      expect(payloadEvent?.bytes).toBe(MAX_BUFFERED_BYTES + 1);
+      expect(payloadEvent?.limitBytes).toBe(MAX_BUFFERED_BYTES);
+      expect(payloadEvent?.reason).toBe("ws_send_buffer_drop");
+      expect(
+        events.reduce((count, event) => count + (event.type === "payload.large" ? 1 : 0), 0),
+      ).toBe(1);
+    } finally {
+      stop();
+      resetDiagnosticEventsForTest();
+    }
   });
 });
 
@@ -280,10 +742,13 @@ describe("node subscription manager", () => {
     const sent: Array<{
       nodeId: string;
       event: string;
-      payloadJSON?: string | null;
+      payloadJSON?: SerializedEventPayload | null;
     }> = [];
-    const sendEvent = (evt: { nodeId: string; event: string; payloadJSON?: string | null }) =>
-      sent.push(evt);
+    const sendEvent = (evt: {
+      nodeId: string;
+      event: string;
+      payloadJSON?: SerializedEventPayload | null;
+    }) => sent.push(evt);
 
     manager.subscribe("node-a", "main");
     manager.subscribe("node-b", "main");
@@ -292,6 +757,45 @@ describe("node subscription manager", () => {
     expect(sent).toHaveLength(2);
     expect(sent.map((s) => s.nodeId).toSorted()).toEqual(["node-a", "node-b"]);
     expect(sent[0].event).toBe("chat");
+  });
+
+  test("runtime forwards subscribed node payload json without parsing it again", () => {
+    const frames: string[] = [];
+    const socket: TestSocket = {
+      bufferedAmount: 0,
+      send: vi.fn((payload: string) => frames.push(payload)),
+      close: vi.fn(),
+    };
+    const parseSpy = vi.spyOn(JSON, "parse");
+    try {
+      const runtime = createGatewayNodeSessionRuntime({ broadcast: vi.fn() });
+      runtime.nodeRegistry.register(
+        makeGatewayWsClient("conn-node-a", socket, {
+          role: "node",
+          scopes: [],
+          client: {
+            id: "node-client",
+            version: "1.0.0",
+            platform: "macos",
+            mode: "node",
+          },
+          device: { id: "node-a" },
+        } as unknown as GatewayWsClient["connect"]),
+        {},
+      );
+      runtime.nodeSubscribe("node-a", "main");
+
+      runtime.nodeSendToSession("main", "chat", { ok: true });
+
+      expect(parseSpy).not.toHaveBeenCalled();
+    } finally {
+      parseSpy.mockRestore();
+    }
+    expect(JSON.parse(frames[0] ?? "{}")).toEqual({
+      type: "event",
+      event: "chat",
+      payload: { ok: true },
+    });
   });
 
   test("unsubscribeAll clears session mappings", () => {
@@ -306,7 +810,7 @@ describe("node subscription manager", () => {
     manager.sendToSession("main", "tick", {}, sendEvent);
     manager.sendToSession("secondary", "tick", {}, sendEvent);
 
-    expect(sent).toEqual([]);
+    expect(sent).toStrictEqual([]);
   });
 });
 
@@ -315,7 +819,7 @@ describe("resolveNodeCommandAllowlist", () => {
     const allow = resolveNodeCommandAllowlist(
       {},
       {
-        platform: "ios 26.0",
+        platform: "iOS 26.0",
         deviceFamily: "iPhone",
       },
     );
@@ -338,7 +842,7 @@ describe("resolveNodeCommandAllowlist", () => {
     const allow = resolveNodeCommandAllowlist(
       {},
       {
-        platform: "android 16",
+        platform: "Android 16",
         deviceFamily: "Android",
       },
     );
@@ -349,6 +853,53 @@ describe("resolveNodeCommandAllowlist", () => {
     expect(allow.has("device.health")).toBe(true);
     expect(allow.has("callLog.search")).toBe(true);
     expect(allow.has("system.notify")).toBe(true);
+    expect(allow.has("sms.search")).toBe(false);
+  });
+
+  it("treats sms.search as dangerous by default", () => {
+    expect(DEFAULT_DANGEROUS_NODE_COMMANDS).toContain("sms.search");
+  });
+
+  it("allows macOS screen.snapshot by default but keeps screen.record gated", () => {
+    const allow = resolveNodeCommandAllowlist(
+      {},
+      {
+        platform: "macOS 26.3.1",
+        deviceFamily: "Mac",
+        approvedCommands: ["screen.snapshot"],
+      },
+    );
+
+    expect(DEFAULT_DANGEROUS_NODE_COMMANDS).not.toContain("screen.snapshot");
+    expect(DEFAULT_DANGEROUS_NODE_COMMANDS).toContain("screen.record");
+    expect(allow.has("screen.snapshot")).toBe(true);
+    expect(allow.has("screen.record")).toBe(false);
+  });
+
+  it("allows safe Windows companion commands by default but keeps dangerous media gated", () => {
+    const allow = resolveNodeCommandAllowlist(
+      {},
+      {
+        platform: "windows",
+        deviceFamily: "Windows",
+        approvedCommands: ["screen.snapshot", "system.run", "system.which"],
+      },
+    );
+
+    expect(allow.has("canvas.present")).toBe(false);
+    expect(allow.has("canvas.a2ui.pushJSONL")).toBe(false);
+    expect(allow.has("camera.list")).toBe(true);
+    expect(allow.has("location.get")).toBe(true);
+    expect(allow.has("device.info")).toBe(true);
+    expect(allow.has("device.status")).toBe(true);
+    expect(allow.has("screen.snapshot")).toBe(true);
+    expect(allow.has("system.run")).toBe(true);
+    expect(allow.has("system.which")).toBe(true);
+    expect(allow.has("system.notify")).toBe(true);
+
+    for (const cmd of DEFAULT_DANGEROUS_NODE_COMMANDS) {
+      expect(allow.has(cmd)).toBe(false);
+    }
   });
 
   it("can explicitly allow dangerous commands via allowCommands", () => {

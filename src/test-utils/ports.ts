@@ -48,14 +48,15 @@ export async function getDeterministicFreePortBlock(params?: {
 
   const workerIdRaw = process.env.VITEST_WORKER_ID ?? process.env.VITEST_POOL_ID ?? "";
   const workerId = Number.parseInt(workerIdRaw, 10);
+  const processShard = Math.abs(process.pid);
   const shard = Number.isFinite(workerId)
-    ? Math.max(0, workerId)
+    ? Math.max(0, workerId) + processShard
     : isMainThread
-      ? Math.abs(process.pid)
-      : Math.abs(threadId);
+      ? processShard
+      : processShard + Math.abs(threadId);
 
   const rangeSize = 1000;
-  const shardCount = 30;
+  const shardCount = 35;
   const base = 30_000 + (Math.abs(shard) % shardCount) * rangeSize; // <= 59_999
   const usable = rangeSize - maxOffset;
 
@@ -66,7 +67,6 @@ export async function getDeterministicFreePortBlock(params?: {
   // so probing every single offset is wasted work and slows large suites.
   for (let attempt = 0; attempt < usable; attempt += blockSize) {
     const start = base + ((nextTestPortOffset + attempt) % usable);
-    // eslint-disable-next-line no-await-in-loop
     const ok = (await Promise.all(offsets.map((offset) => isPortFree(start + offset)))).every(
       Boolean,
     );
@@ -79,9 +79,7 @@ export async function getDeterministicFreePortBlock(params?: {
 
   // Fallback: let the OS pick a port block (best effort).
   for (let attempt = 0; attempt < 25; attempt += 1) {
-    // eslint-disable-next-line no-await-in-loop
     const port = await getOsFreePort();
-    // eslint-disable-next-line no-await-in-loop
     const ok = (await Promise.all(offsets.map((offset) => isPortFree(port + offset)))).every(
       Boolean,
     );

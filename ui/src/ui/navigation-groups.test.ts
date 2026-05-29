@@ -1,65 +1,52 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-type NavigationModule = typeof import("./navigation.ts");
-
-function createStorageMock(): Storage {
-  const store = new Map<string, string>();
-  return {
-    get length() {
-      return store.size;
-    },
-    clear() {
-      store.clear();
-    },
-    getItem(key: string) {
-      return store.get(key) ?? null;
-    },
-    key(index: number) {
-      return Array.from(store.keys())[index] ?? null;
-    },
-    removeItem(key: string) {
-      store.delete(key);
-    },
-    setItem(key: string, value: string) {
-      store.set(key, String(value));
-    },
-  };
-}
+import { describe, expect, it } from "vitest";
+import {
+  SETTINGS_TABS,
+  TAB_GROUPS,
+  isSettingsTab,
+  isTabInGroup,
+  tabFromPath,
+} from "./navigation.ts";
 
 describe("TAB_GROUPS", () => {
-  let navigation: NavigationModule;
-
-  beforeEach(async () => {
-    vi.resetModules();
-    vi.stubGlobal("localStorage", createStorageMock());
-    vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
-    navigation = await import("./navigation.ts");
+  it("collapses detailed settings slices into one sidebar entry", () => {
+    const settings = TAB_GROUPS.find((group) => group.label === "settings");
+    expect(settings?.tabs).toEqual(["config"]);
+    expect(SETTINGS_TABS.every((tab) => isSettingsTab(tab))).toBe(true);
   });
 
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
-  it("does not expose unfinished settings slices in the sidebar", () => {
-    const settings = navigation.TAB_GROUPS.find((group) => group.label === "settings");
-    expect(settings?.tabs).toEqual([
-      "config",
-      "communications",
-      "appearance",
-      "automation",
-      "infrastructure",
-      "aiAgents",
-      "debug",
-      "logs",
+  it("keeps channel management out of the primary control sidebar", () => {
+    const control = TAB_GROUPS.find((group) => group.label === "control");
+    expect(control?.tabs).toEqual([
+      "overview",
+      "activity",
+      "workboard",
+      "instances",
+      "sessions",
+      "usage",
+      "cron",
     ]);
+    expect(SETTINGS_TABS).toContain("channels");
+  });
+
+  it("keeps the settings group active for nested settings routes", () => {
+    const settings = TAB_GROUPS.find((group) => group.label === "settings");
+    if (!settings) {
+      throw new Error("Expected settings group");
+    }
+
+    expect(isTabInGroup(settings, "appearance")).toBe(true);
+    expect(isTabInGroup(settings, "channels")).toBe(true);
+    expect(isTabInGroup(settings, "debug")).toBe(true);
+    expect(isTabInGroup(settings, "chat")).toBe(false);
   });
 
   it("routes every published settings slice", () => {
-    expect(navigation.tabFromPath("/communications")).toBe("communications");
-    expect(navigation.tabFromPath("/appearance")).toBe("appearance");
-    expect(navigation.tabFromPath("/automation")).toBe("automation");
-    expect(navigation.tabFromPath("/infrastructure")).toBe("infrastructure");
-    expect(navigation.tabFromPath("/ai-agents")).toBe("aiAgents");
-    expect(navigation.tabFromPath("/config")).toBe("config");
+    expect(tabFromPath("/communications")).toBe("communications");
+    expect(tabFromPath("/appearance")).toBe("appearance");
+    expect(tabFromPath("/automation")).toBe("automation");
+    expect(tabFromPath("/infrastructure")).toBe("infrastructure");
+    expect(tabFromPath("/ai-agents")).toBe("aiAgents");
+    expect(tabFromPath("/config")).toBe("config");
+    expect(tabFromPath("/channels")).toBe("channels");
   });
 });

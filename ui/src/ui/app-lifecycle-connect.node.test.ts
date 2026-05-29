@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { applySettingsFromUrlMock, connectGatewayMock, loadBootstrapMock } = vi.hoisted(() => ({
@@ -38,7 +39,23 @@ vi.mock("./app-scroll.ts", () => ({
   scheduleLogsScroll: vi.fn(),
 }));
 
-import { handleConnected } from "./app-lifecycle.ts";
+import { handleConnected, handleUpdated } from "./app-lifecycle.ts";
+import { startNodesPolling } from "./app-polling.ts";
+import { scheduleChatScroll } from "./app-scroll.ts";
+
+const startNodesPollingMock = vi.mocked(startNodesPolling);
+const scheduleChatScrollMock = vi.mocked(scheduleChatScroll);
+
+function createDeferred() {
+  let resolve: (() => void) | undefined;
+  const promise = new Promise<void>((res) => {
+    resolve = res;
+  });
+  if (!resolve) {
+    throw new Error("Expected bootstrap deferred resolver to be initialized");
+  }
+  return { promise, resolve };
+}
 
 function createHost() {
   return {
@@ -56,7 +73,7 @@ function createHost() {
     chatLoading: false,
     chatMessages: [],
     chatToolMessages: [],
-    chatStream: "",
+    chatStream: "" as string | null,
     logsAutoFollow: false,
     logsAtBottom: true,
     logsEntries: [],
@@ -70,33 +87,30 @@ describe("handleConnected", () => {
     applySettingsFromUrlMock.mockReset();
     connectGatewayMock.mockReset();
     loadBootstrapMock.mockReset();
+    startNodesPollingMock.mockReset();
+    scheduleChatScrollMock.mockReset();
+    vi.stubGlobal("window", {
+      addEventListener: vi.fn(),
+    });
   });
 
   it("waits for bootstrap load before first gateway connect", async () => {
-    let resolveBootstrap!: () => void;
-    loadBootstrapMock.mockReturnValueOnce(
-      new Promise<void>((resolve) => {
-        resolveBootstrap = resolve;
-      }),
-    );
+    const bootstrap = createDeferred();
+    loadBootstrapMock.mockReturnValueOnce(bootstrap.promise);
     connectGatewayMock.mockReset();
     const host = createHost();
 
     handleConnected(host as never);
     expect(connectGatewayMock).not.toHaveBeenCalled();
 
-    resolveBootstrap();
+    bootstrap.resolve();
     await Promise.resolve();
     expect(connectGatewayMock).toHaveBeenCalledTimes(1);
   });
 
   it("skips deferred connect when disconnected before bootstrap resolves", async () => {
-    let resolveBootstrap!: () => void;
-    loadBootstrapMock.mockReturnValueOnce(
-      new Promise<void>((resolve) => {
-        resolveBootstrap = resolve;
-      }),
-    );
+    const bootstrap = createDeferred();
+    loadBootstrapMock.mockReturnValueOnce(bootstrap.promise);
     connectGatewayMock.mockReset();
     const host = createHost();
 
@@ -104,7 +118,7 @@ describe("handleConnected", () => {
     expect(connectGatewayMock).not.toHaveBeenCalled();
 
     host.connectGeneration += 1;
-    resolveBootstrap();
+    bootstrap.resolve();
     await Promise.resolve();
 
     expect(connectGatewayMock).not.toHaveBeenCalled();
@@ -121,5 +135,30 @@ describe("handleConnected", () => {
     expect(applySettingsFromUrlMock.mock.invocationCallOrder[0]).toBeLessThan(
       loadBootstrapMock.mock.invocationCallOrder[0],
     );
+  });
+
+  it("starts Nodes polling only when the Nodes tab is active on connect", () => {
+    loadBootstrapMock.mockResolvedValue(undefined);
+    const chatHost = createHost();
+
+    handleConnected(chatHost as never);
+    expect(startNodesPollingMock).not.toHaveBeenCalled();
+
+    const nodesHost = createHost();
+    nodesHost.tab = "nodes";
+    handleConnected(nodesHost as never);
+    expect(startNodesPollingMock).toHaveBeenCalledWith(nodesHost);
+  });
+
+  it("keeps realtime Talk turns pinned in the chat flow", () => {
+    const host = createHost();
+    host.chatStream = null;
+
+    handleUpdated(
+      host as unknown as Parameters<typeof handleUpdated>[0],
+      new Map<PropertyKey, unknown>([["realtimeTalkConversation", []]]),
+    );
+
+    expect(scheduleChatScrollMock).toHaveBeenCalledWith(host, true);
   });
 });

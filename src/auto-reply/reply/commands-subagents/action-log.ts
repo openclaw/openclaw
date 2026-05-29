@@ -1,4 +1,6 @@
 import { callGateway } from "../../../gateway/call.js";
+import { parseStrictNonNegativeInteger } from "../../../shared/number-coercion.js";
+import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 import type { CommandHandlerResult } from "../commands-types.js";
 import { formatRunLabel } from "../subagents-utils.js";
 import {
@@ -19,9 +21,14 @@ export async function handleSubagentsLogAction(
     return stopWithText("📜 Usage: /subagents log <id|#> [limit]");
   }
 
-  const includeTools = restTokens.some((token) => token.toLowerCase() === "tools");
-  const limitToken = restTokens.find((token) => /^\d+$/.test(token));
-  const limit = limitToken ? Math.min(200, Math.max(1, Number.parseInt(limitToken, 10))) : 20;
+  const includeTools = restTokens.some(
+    (token) => normalizeLowercaseStringOrEmpty(token) === "tools",
+  );
+  const limitToken = restTokens
+    .slice(1)
+    .find((token) => parseStrictNonNegativeInteger(token) !== undefined);
+  const parsedLimit = parseStrictNonNegativeInteger(limitToken);
+  const limit = parsedLimit === undefined ? 20 : Math.min(200, Math.max(1, parsedLimit));
 
   const targetResolution = resolveSubagentEntryForToken(runs, target);
   if ("reply" in targetResolution) {

@@ -22,17 +22,11 @@ export type HookMappingConfig = {
   deliver?: boolean;
   /** DANGEROUS: Disable external content safety wrapping for this hook. */
   allowUnsafeExternalContent?: boolean;
-  channel?:
-    | "last"
-    | "whatsapp"
-    | "telegram"
-    | "discord"
-    | "irc"
-    | "googlechat"
-    | "slack"
-    | "signal"
-    | "imessage"
-    | "msteams";
+  /**
+   * "last" or any runtime channel id (including plugin channels).
+   * Validation against configured/registered channels happens in gateway hooks runtime.
+   */
+  channel?: "last" | (string & {});
   to?: string;
   /** Override model for this hook (provider/model or alias). */
   model?: string;
@@ -72,15 +66,6 @@ export type HooksGmailConfig = {
   thinking?: "off" | "minimal" | "low" | "medium" | "high";
 };
 
-export type InternalHookHandlerConfig = {
-  /** Event key to listen for (e.g., 'command:new', 'message:received', 'message:transcribed', 'session:start') */
-  event: string;
-  /** Path to handler module (workspace-relative) */
-  module: string;
-  /** Export name from module (default: 'default') */
-  export?: string;
-};
-
 export type HookConfig = {
   enabled?: boolean;
   env?: Record<string, string>;
@@ -94,8 +79,6 @@ export type HookInstallRecord = InstallRecordBase & {
 export type InternalHooksConfig = {
   /** Enable hooks system */
   enabled?: boolean;
-  /** Legacy: List of internal hook handlers to register (still supported) */
-  handlers?: InternalHookHandlerConfig[];
   /** Per-hook configuration overrides */
   entries?: Record<string, HookConfig>;
   /** Load configuration */
@@ -127,8 +110,9 @@ export type HooksConfig = {
    */
   allowedSessionKeyPrefixes?: string[];
   /**
-   * Restrict explicit hook `agentId` routing to these agent ids.
-   * Omit or include `*` to allow any agent. Set `[]` to deny all explicit `agentId` routing.
+   * Restrict hook execution to these effective agent ids, including
+   * default-agent routing when `agentId` is omitted. Omit or include `*` to
+   * allow any agent. Set `[]` to deny all agent routing.
    */
   allowedAgentIds?: string[];
   maxBodyBytes?: number;

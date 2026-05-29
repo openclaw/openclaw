@@ -1,25 +1,59 @@
-import type { ExecAsk, ExecHost, ExecSecurity } from "../infra/exec-approvals.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
+import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
+import type {
+  ExecAsk,
+  ExecHost,
+  ExecMode,
+  ExecSecurity,
+  ExecTarget,
+} from "../infra/exec-approvals.js";
+import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
+import type { EmbeddedFullAccessBlockedReason } from "./embedded-agent-runner/types.js";
+import type { ExecReviewerConfig } from "./exec-auto-reviewer.js";
 
 export type ExecToolDefaults = {
-  host?: ExecHost;
+  hasCronTool?: boolean;
+  host?: ExecTarget;
+  mode?: ExecMode;
   security?: ExecSecurity;
   ask?: ExecAsk;
+  trigger?: string;
   node?: string;
   pathPrepend?: string[];
   safeBins?: string[];
+  strictInlineEval?: boolean;
+  commandHighlighting?: boolean;
   safeBinTrustedDirs?: string[];
   safeBinProfiles?: Record<string, SafeBinProfileFixture>;
+  reviewer?: ExecReviewerConfig;
+  config?: OpenClawConfig;
+  autoReviewer?: ExecAutoReviewer;
   agentId?: string;
   backgroundMs?: number;
   timeoutSec?: number;
+  approvalWarningText?: string;
+  approvalFollowupText?: string;
+  approvalFollowup?: ExecApprovalFollowupFactory;
+  approvalFollowupMode?: "agent" | "direct";
   approvalRunningNoticeMs?: number;
   sandbox?: BashSandboxConfig;
   elevated?: ExecElevatedDefaults;
   allowBackground?: boolean;
   scopeKey?: string;
   sessionKey?: string;
+  /** `session.mainKey` from the runtime config; passed through into
+   *  runExecProcess so background-exit notifications can remap cron-run
+   *  session keys to the agent's main queue without an ambient config load. */
+  mainKey?: string;
+  /** `session.scope` from the runtime config; passed alongside `mainKey`
+   *  so the cron-run remap can route global-scope agents to the "global"
+   *  queue instead of agent-main. */
+  sessionScope?: "per-sender" | "global";
+  /** Start-time routing policy for detached exec system events. */
+  eventRouting?: EventSessionRoutingPolicy;
   messageProvider?: string;
   currentChannelId?: string;
   currentThreadTs?: string;
@@ -29,10 +63,31 @@ export type ExecToolDefaults = {
   cwd?: string;
 };
 
+export type ExecApprovalFollowupOutcome = {
+  status: "completed" | "failed";
+  exitCode: number | null;
+  timedOut: boolean;
+  aggregated: string;
+  reason?: string;
+};
+
+type ExecApprovalFollowupContext = {
+  approvalId: string;
+  sessionId: string;
+  trigger?: string;
+  outcome: ExecApprovalFollowupOutcome;
+};
+
+export type ExecApprovalFollowupFactory = (
+  context: ExecApprovalFollowupContext,
+) => string | undefined | Promise<string | undefined>;
+
 export type ExecElevatedDefaults = {
   enabled: boolean;
   allowed: boolean;
   defaultLevel: "on" | "off" | "ask" | "full";
+  fullAccessAvailable?: boolean;
+  fullAccessBlockedReason?: EmbeddedFullAccessBlockedReason;
 };
 
 export type ExecToolDetails =
@@ -49,6 +104,7 @@ export type ExecToolDetails =
       exitCode: number | null;
       durationMs: number;
       aggregated: string;
+      timedOut?: boolean;
       cwd?: string;
     }
   | {
@@ -56,6 +112,7 @@ export type ExecToolDetails =
       approvalId: string;
       approvalSlug: string;
       expiresAtMs: number;
+      allowedDecisions?: readonly ExecApprovalDecision[];
       host: ExecHost;
       command: string;
       cwd?: string;
@@ -68,7 +125,9 @@ export type ExecToolDetails =
         | "initiating-platform-disabled"
         | "initiating-platform-unsupported"
         | "no-approval-route";
+      channel?: string;
       channelLabel?: string;
+      accountId?: string;
       sentApproverDms?: boolean;
       host: ExecHost;
       command: string;

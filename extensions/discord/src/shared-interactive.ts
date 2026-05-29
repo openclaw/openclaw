@@ -1,6 +1,15 @@
-import { reduceInteractiveReply } from "openclaw/plugin-sdk/channel-runtime";
-import type { InteractiveButtonStyle, InteractiveReply } from "openclaw/plugin-sdk/channel-runtime";
-import type { DiscordComponentButtonStyle, DiscordComponentMessageSpec } from "./components.js";
+import { reduceInteractiveReply } from "openclaw/plugin-sdk/interactive-runtime";
+import type {
+  InteractiveButtonStyle,
+  InteractiveReply,
+  MessagePresentation,
+  MessagePresentationButton,
+} from "openclaw/plugin-sdk/interactive-runtime";
+import type {
+  DiscordComponentButtonSpec,
+  DiscordComponentButtonStyle,
+  DiscordComponentMessageSpec,
+} from "./components.types.js";
 
 function resolveDiscordInteractiveButtonStyle(
   style?: InteractiveButtonStyle,
@@ -10,6 +19,9 @@ function resolveDiscordInteractiveButtonStyle(
 
 const DISCORD_INTERACTIVE_BUTTON_ROW_SIZE = 5;
 
+/**
+ * @deprecated Use buildDiscordPresentationComponents with MessagePresentation.
+ */
 export function buildDiscordInteractiveComponents(
   interactive?: InteractiveReply,
 ): DiscordComponentMessageSpec | undefined {
@@ -37,11 +49,25 @@ export function buildDiscordInteractiveComponents(
             type: "actions",
             buttons: block.buttons
               .slice(index, index + DISCORD_INTERACTIVE_BUTTON_ROW_SIZE)
-              .map((button) => ({
-                label: button.label,
-                style: resolveDiscordInteractiveButtonStyle(button.style),
-                callbackData: button.value,
-              })),
+              .map((button) => {
+                const spec: DiscordComponentButtonSpec = {
+                  label: button.label,
+                  style: button.url ? "link" : resolveDiscordInteractiveButtonStyle(button.style),
+                };
+                if (button.value) {
+                  spec.callbackData = button.value;
+                }
+                if (button.url) {
+                  spec.url = button.url;
+                }
+                if (button.disabled === true) {
+                  spec.disabled = true;
+                }
+                if (button.reusable === true) {
+                  spec.reusable = true;
+                }
+                return spec;
+              }),
           });
         }
         return state;
@@ -63,4 +89,85 @@ export function buildDiscordInteractiveComponents(
     },
   );
   return blocks.length > 0 ? { blocks } : undefined;
+}
+
+export function buildDiscordPresentationComponents(
+  presentation?: MessagePresentation,
+): DiscordComponentMessageSpec | undefined {
+  if (!presentation) {
+    return undefined;
+  }
+  const spec: DiscordComponentMessageSpec = { blocks: [] };
+  if (presentation.title) {
+    spec.blocks?.push({ type: "text", text: presentation.title });
+  }
+  for (const block of presentation.blocks) {
+    if (block.type === "text" || block.type === "context") {
+      const text = block.text.trim();
+      if (text) {
+        spec.blocks?.push({
+          type: "text",
+          text: block.type === "context" ? `-# ${text}` : text,
+        });
+      }
+      continue;
+    }
+    if (block.type === "divider") {
+      spec.blocks?.push({ type: "separator" });
+      continue;
+    }
+  }
+  for (const block of presentation.blocks) {
+    if (block.type === "buttons") {
+      appendDiscordPresentationButtonBlocks(spec, block.buttons);
+      continue;
+    }
+    if (block.type === "select" && block.options.length > 0) {
+      spec.blocks?.push({
+        type: "actions",
+        select: {
+          type: "string",
+          placeholder: block.placeholder,
+          options: block.options.map((option) => ({
+            label: option.label,
+            value: option.value,
+          })),
+        },
+      });
+    }
+  }
+  return spec.blocks?.length ? spec : undefined;
+}
+
+function appendDiscordPresentationButtonBlocks(
+  spec: DiscordComponentMessageSpec,
+  buttons: readonly MessagePresentationButton[],
+) {
+  if (buttons.length === 0) {
+    return;
+  }
+  for (let index = 0; index < buttons.length; index += DISCORD_INTERACTIVE_BUTTON_ROW_SIZE) {
+    spec.blocks?.push({
+      type: "actions",
+      buttons: buttons.slice(index, index + DISCORD_INTERACTIVE_BUTTON_ROW_SIZE).map((button) => {
+        const component: DiscordComponentButtonSpec = {
+          label: button.label,
+          style: button.url ? "link" : resolveDiscordInteractiveButtonStyle(button.style),
+        };
+        if (button.value) {
+          component.callbackData = button.value;
+        }
+        if (button.url) {
+          component.url = button.url;
+        }
+        if (button.disabled === true) {
+          component.disabled = true;
+        }
+        if (button.reusable === true) {
+          component.reusable = true;
+        }
+        return component;
+      }),
+    });
+  }
 }

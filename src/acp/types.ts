@@ -1,17 +1,18 @@
 import type { SessionId } from "@agentclientprotocol/sdk";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { VERSION } from "../version.js";
 
-export const ACP_PROVENANCE_MODE_VALUES = ["off", "meta", "meta+receipt"] as const;
+const ACP_PROVENANCE_MODE_VALUES = ["off", "meta", "meta+receipt"] as const;
 
-export type AcpProvenanceMode = (typeof ACP_PROVENANCE_MODE_VALUES)[number];
+type AcpProvenanceMode = (typeof ACP_PROVENANCE_MODE_VALUES)[number];
 
 export function normalizeAcpProvenanceMode(
   value: string | undefined,
 ): AcpProvenanceMode | undefined {
-  if (!value) {
+  const normalized = normalizeOptionalLowercaseString(value);
+  if (!normalized) {
     return undefined;
   }
-  const normalized = value.trim().toLowerCase();
   return (ACP_PROVENANCE_MODE_VALUES as readonly string[]).includes(normalized)
     ? (normalized as AcpProvenanceMode)
     : undefined;
@@ -20,6 +21,7 @@ export function normalizeAcpProvenanceMode(
 export type AcpSession = {
   sessionId: SessionId;
   sessionKey: string;
+  ledgerSessionId?: string;
   cwd: string;
   createdAt: number;
   lastTouchedAt: number;

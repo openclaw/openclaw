@@ -1,9 +1,11 @@
-import { readConfigFileSnapshot } from "../../config/config.js";
+import { readConfigFileSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { withSuppressedNotes } from "../../terminal/note.js";
 import { shouldMigrateStateFromPath } from "../argv.js";
 
 const ALLOWED_INVALID_COMMANDS = new Set(["doctor", "logs", "health", "help", "status"]);
 const ALLOWED_INVALID_GATEWAY_SUBCOMMANDS = new Set([
+  "run",
   "status",
   "probe",
   "health",
@@ -29,7 +31,15 @@ async function getConfigSnapshot() {
   if (process.env.VITEST === "true") {
     return readConfigFileSnapshot();
   }
-  configSnapshotPromise ??= readConfigFileSnapshot();
+  if (!configSnapshotPromise) {
+    const pendingSnapshot = readConfigFileSnapshot();
+    configSnapshotPromise = pendingSnapshot;
+    pendingSnapshot.catch(() => {
+      if (configSnapshotPromise === pendingSnapshot) {
+        configSnapshotPromise = null;
+      }
+    });
+  }
   return configSnapshotPromise;
 }
 
@@ -37,40 +47,35 @@ export async function ensureConfigReady(params: {
   runtime: RuntimeEnv;
   commandPath?: string[];
   suppressDoctorStdout?: boolean;
+  allowInvalid?: boolean;
 }): Promise<void> {
   const commandPath = params.commandPath ?? [];
+  let preflightSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>> | null = null;
   if (!didRunDoctorConfigFlow && shouldMigrateStateFromPath(commandPath)) {
     didRunDoctorConfigFlow = true;
-    const runDoctorConfigFlow = async () =>
-      (await import("../../commands/doctor-config-flow.js")).loadAndMaybeMigrateDoctorConfig({
-        options: { nonInteractive: true },
-        confirm: async () => false,
+    const runDoctorConfigPreflight = async () =>
+      (await import("../../commands/doctor-config-preflight.js")).runDoctorConfigPreflight({
+        // Keep ordinary CLI startup on the lightweight validation path.
+        migrateState: false,
+        migrateLegacyConfig: false,
+        invalidConfigNote: false,
       });
     if (!params.suppressDoctorStdout) {
-      await runDoctorConfigFlow();
+      preflightSnapshot = (await runDoctorConfigPreflight()).snapshot;
     } else {
-      const originalStdoutWrite = process.stdout.write.bind(process.stdout);
-      const originalSuppressNotes = process.env.OPENCLAW_SUPPRESS_NOTES;
-      process.stdout.write = (() => true) as unknown as typeof process.stdout.write;
-      process.env.OPENCLAW_SUPPRESS_NOTES = "1";
-      try {
-        await runDoctorConfigFlow();
-      } finally {
-        process.stdout.write = originalStdoutWrite;
-        if (originalSuppressNotes === undefined) {
-          delete process.env.OPENCLAW_SUPPRESS_NOTES;
-        } else {
-          process.env.OPENCLAW_SUPPRESS_NOTES = originalSuppressNotes;
-        }
-      }
+      preflightSnapshot = (await withSuppressedNotes(runDoctorConfigPreflight)).snapshot;
     }
   }
 
-  const snapshot = await getConfigSnapshot();
+  const snapshot = preflightSnapshot ?? (await getConfigSnapshot());
   const commandName = commandPath[0];
   const subcommandName = commandPath[1];
+  const isBareGatewayForegroundRun =
+    commandName === "gateway" && (subcommandName === undefined || subcommandName.trim() === "");
   const allowInvalid = commandName
-    ? ALLOWED_INVALID_COMMANDS.has(commandName) ||
+    ? params.allowInvalid === true ||
+      ALLOWED_INVALID_COMMANDS.has(commandName) ||
+      isBareGatewayForegroundRun ||
       (commandName === "gateway" &&
         subcommandName &&
         ALLOWED_INVALID_GATEWAY_SUBCOMMANDS.has(subcommandName))
@@ -85,22 +90,32 @@ export async function ensureConfigReady(params: {
 
   const invalid = snapshot.exists && !snapshot.valid;
   if (!invalid) {
+    setRuntimeConfigSnapshot(snapshot.runtimeConfig ?? snapshot.config, snapshot.sourceConfig);
+  }
+  if (!invalid) {
     return;
   }
 
-  const [{ colorize, isRich, theme }, { shortenHomePath }, { formatCliCommand }] =
-    await Promise.all([
-      import("../../terminal/theme.js"),
-      import("../../utils.js"),
-      import("../command-format.js"),
-    ]);
+  const [
+    { colorize, isRich, theme },
+    { shortenHomePath },
+    { formatCliCommand },
+    { isPluginPackagingRuntimeOutputInvalidConfigSnapshot },
+    { formatPluginPackagingRuntimeOutputRecoveryHint },
+  ] = await Promise.all([
+    import("../../terminal/theme.js"),
+    import("../../utils.js"),
+    import("../command-format.js"),
+    import("../../config/recovery-policy.js"),
+    import("../config-recovery-hints.js"),
+  ]);
   const rich = isRich();
   const muted = (value: string) => colorize(rich, theme.muted, value);
   const error = (value: string) => colorize(rich, theme.error, value);
   const heading = (value: string) => colorize(rich, theme.heading, value);
   const commandText = (value: string) => colorize(rich, theme.command, value);
 
-  params.runtime.error(heading("Config invalid"));
+  params.runtime.error(heading("OpenClaw config is invalid"));
   params.runtime.error(`${muted("File:")} ${muted(shortenHomePath(snapshot.path))}`);
   if (issues.length > 0) {
     params.runtime.error(muted("Problem:"));
@@ -111,14 +126,22 @@ export async function ensureConfigReady(params: {
     params.runtime.error(legacyIssues.map((issue) => `  ${error(issue)}`).join("\n"));
   }
   params.runtime.error("");
+  const fixHint = isPluginPackagingRuntimeOutputInvalidConfigSnapshot(snapshot)
+    ? formatPluginPackagingRuntimeOutputRecoveryHint()
+    : commandText(formatCliCommand("openclaw doctor --fix"));
+  params.runtime.error(`${muted("Fix:")} ${fixHint}`);
   params.runtime.error(
-    `${muted("Run:")} ${commandText(formatCliCommand("openclaw doctor --fix"))}`,
+    `${muted("Inspect:")} ${commandText(formatCliCommand("openclaw config validate"))}`,
+  );
+  params.runtime.error(
+    muted("Status, health, logs, and doctor commands still run with invalid config."),
   );
   if (!allowInvalid) {
     params.runtime.exit(1);
   }
 }
 
-export const __test__ = {
+export const testApi = {
   resetConfigGuardStateForTests,
 };
+export { testApi as __test__ };

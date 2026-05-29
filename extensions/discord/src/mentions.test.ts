@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
-  __resetDiscordDirectoryCacheForTest,
+  resetDiscordDirectoryCacheForTest,
   rememberDiscordDirectoryUser,
 } from "./directory-cache.js";
 import { formatMention, rewriteDiscordKnownMentions } from "./mentions.js";
@@ -29,7 +29,7 @@ describe("formatMention", () => {
 
 describe("rewriteDiscordKnownMentions", () => {
   beforeEach(() => {
-    __resetDiscordDirectoryCacheForTest();
+    resetDiscordDirectoryCacheForTest();
   });
 
   it("rewrites @name mentions when a cached user id exists", () => {
@@ -42,6 +42,32 @@ describe("rewriteDiscordKnownMentions", () => {
       accountId: "default",
     });
     expect(rewritten).toBe("ping <@123456789> and <@123456789>");
+  });
+
+  it("rewrites configured mention aliases before the cache", () => {
+    rememberDiscordDirectoryUser({
+      accountId: "default",
+      userId: "111111111",
+      handles: ["vladislava"],
+    });
+    const rewritten = rewriteDiscordKnownMentions("ping @Vladislava and @BuildBot#1234", {
+      accountId: "default",
+      mentionAliases: {
+        BuildBot: "222222222",
+        Vladislava: "333333333",
+      },
+    });
+    expect(rewritten).toBe("ping <@333333333> and <@222222222>");
+  });
+
+  it("supports configured aliases with a leading @ key", () => {
+    const rewritten = rewriteDiscordKnownMentions("ping @OpsLead", {
+      accountId: "default",
+      mentionAliases: {
+        "@opslead": "444444444",
+      },
+    });
+    expect(rewritten).toBe("ping <@444444444>");
   });
 
   it("preserves unknown mentions and reserved mentions", () => {

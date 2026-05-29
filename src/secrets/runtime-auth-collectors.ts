@@ -1,4 +1,5 @@
-import type { AuthProfileCredential, AuthProfileStore } from "../agents/auth-profiles.js";
+import { assertNoOAuthSecretRefPolicyViolations } from "../agents/auth-profiles/policy.js";
+import type { AuthProfileCredential, AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import {
   pushAssignment,
@@ -103,6 +104,12 @@ export function collectAuthStoreAssignments(params: {
   context: ResolverContext;
   agentDir: string;
 }): void {
+  assertNoOAuthSecretRefPolicyViolations({
+    store: params.store,
+    cfg: params.context.sourceConfig,
+    context: `auth-profiles ${params.agentDir}`,
+  });
+
   const defaults = params.context.sourceConfig.secrets?.defaults;
   for (const [profileId, profile] of Object.entries(params.store.profiles)) {
     if (profile.type === "api_key") {

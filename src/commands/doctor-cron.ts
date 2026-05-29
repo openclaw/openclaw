@@ -1,16 +1,40 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { formatCliCommand } from "../cli/command-format.js";
-import type { OpenClawConfig } from "../config/config.js";
-import { normalizeStoredCronJobs } from "../cron/store-migration.js";
-import { resolveCronStorePath, loadCronStore, saveCronStore } from "../cron/store.js";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  loadCronQuarantineFile,
+  resolveCronQuarantinePath,
+  resolveCronStorePath,
+  loadCronStore,
+  saveCronStore,
+} from "../cron/store.js";
 import type { CronJob } from "../cron/types.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
+import {
+  countStaleDreamingJobs,
+  migrateLegacyDreamingPayloadShape,
+} from "./doctor-cron-dreaming-payload-migration.js";
+import { normalizeStoredCronJobs } from "./doctor-cron-store-migration.js";
 import type { DoctorPrompter, DoctorOptions } from "./doctor-prompter.js";
 
 type CronDoctorOutcome = {
   changed: boolean;
   warnings: string[];
 };
+
+type CrontabReader = () => Promise<{ stdout?: unknown; stderr?: unknown }>;
+
+const execFileAsync = promisify(execFile);
+const LEGACY_WHATSAPP_HEALTH_SCRIPT_RE =
+  /(?:^|\s)(?:"[^"]*ensure-whatsapp\.sh"|'[^']*ensure-whatsapp\.sh'|[^\s#;|&]*ensure-whatsapp\.sh)\b/u;
+const CRON_MODEL_OVERRIDE_EXAMPLE_LIMIT = 3;
 
 function pluralize(count: number, noun: string) {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
@@ -20,6 +44,12 @@ function formatLegacyIssuePreview(issues: Partial<Record<string, number>>): stri
   const lines: string[] = [];
   if (issues.jobId) {
     lines.push(`- ${pluralize(issues.jobId, "job")} still uses legacy \`jobId\``);
+  }
+  if (issues.missingId) {
+    lines.push(`- ${pluralize(issues.missingId, "job")} is missing a canonical string \`id\``);
+  }
+  if (issues.nonStringId) {
+    lines.push(`- ${pluralize(issues.nonStringId, "job")} stores \`id\` as a non-string value`);
   }
   if (issues.legacyScheduleString) {
     lines.push(
@@ -31,6 +61,11 @@ function formatLegacyIssuePreview(issues: Partial<Record<string, number>>): stri
   }
   if (issues.legacyPayloadKind) {
     lines.push(`- ${pluralize(issues.legacyPayloadKind, "job")} needs payload kind normalization`);
+  }
+  if (issues.legacyPayloadCodexModel) {
+    lines.push(
+      `- ${pluralize(issues.legacyPayloadCodexModel, "job")} still uses legacy \`openai-codex/*\` cron model refs`,
+    );
   }
   if (issues.legacyPayloadProvider) {
     lines.push(
@@ -52,11 +87,118 @@ function formatLegacyIssuePreview(issues: Partial<Record<string, number>>): stri
       `- ${pluralize(issues.legacyDeliveryMode, "job")} still uses delivery mode \`deliver\``,
     );
   }
+  if (issues.invalidSchedule) {
+    lines.push(
+      `- ${pluralize(issues.invalidSchedule, "job")} has an invalid persisted schedule and will be removed`,
+    );
+  }
+  if (issues.invalidPayload) {
+    lines.push(
+      `- ${pluralize(issues.invalidPayload, "job")} has an invalid persisted payload and will be removed`,
+    );
+  }
   return lines;
 }
 
-function trimString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+function normalizeModelProvider(value: unknown): string | undefined {
+  const raw = normalizeOptionalString(value);
+  if (!raw) {
+    return undefined;
+  }
+  const slash = raw.indexOf("/");
+  if (slash <= 0 || slash >= raw.length - 1) {
+    return undefined;
+  }
+  return raw.slice(0, slash).trim().toLowerCase() || undefined;
+}
+
+function normalizeModelRef(value: unknown): string | undefined {
+  const raw = normalizeOptionalString(value);
+  if (!raw) {
+    return undefined;
+  }
+  const slash = raw.indexOf("/");
+  if (slash <= 0 || slash >= raw.length - 1) {
+    return undefined;
+  }
+  const provider = raw.slice(0, slash).trim().toLowerCase();
+  const model = raw.slice(slash + 1).trim();
+  return provider && model ? `${provider}/${model}` : undefined;
+}
+
+function normalizeModelMismatchKey(value: unknown): string | undefined {
+  return normalizeModelRef(value) ?? normalizeOptionalString(value)?.toLowerCase();
+}
+
+function getRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function formatProviderCounts(counts: Map<string, number>): string {
+  return [...counts.entries()]
+    .toSorted(([left], [right]) => left.localeCompare(right))
+    .map(([provider, count]) => `${provider}=${count}`)
+    .join(", ");
+}
+
+function noteCronModelOverrides(params: {
+  cfg: OpenClawConfig;
+  jobs: Array<Record<string, unknown>>;
+  storePath: string;
+}) {
+  const defaultModel = resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model);
+  const defaultKey = normalizeModelMismatchKey(defaultModel);
+  const providerCounts = new Map<string, number>();
+  const mismatchExamples: string[] = [];
+  let overrideCount = 0;
+  let mismatchCount = 0;
+
+  for (const rawJob of params.jobs) {
+    const payload = getRecord(rawJob.payload);
+    const kind = normalizeOptionalString(payload?.kind)?.toLowerCase();
+    if (kind && kind !== "agentturn") {
+      continue;
+    }
+    const model = normalizeOptionalString(payload?.model);
+    if (!model) {
+      continue;
+    }
+    overrideCount += 1;
+    const provider = normalizeModelProvider(model) ?? "bare/alias";
+    providerCounts.set(provider, (providerCounts.get(provider) ?? 0) + 1);
+    const modelKey = normalizeModelMismatchKey(model);
+    if (defaultKey && modelKey && modelKey !== defaultKey) {
+      mismatchCount += 1;
+      if (mismatchExamples.length < CRON_MODEL_OVERRIDE_EXAMPLE_LIMIT) {
+        const id = normalizeOptionalString(rawJob.id) ?? normalizeOptionalString(rawJob.jobId);
+        const name = normalizeOptionalString(rawJob.name);
+        mismatchExamples.push(`${id ?? name ?? "<unnamed>"} -> ${model}`);
+      }
+    }
+  }
+
+  if (overrideCount === 0) {
+    return;
+  }
+
+  const lines = [
+    `Cron model overrides detected at ${shortenHomePath(params.storePath)}.`,
+    `- ${pluralize(overrideCount, "job")} set \`payload.model\` and will not inherit \`agents.defaults.model\`${defaultModel ? ` (${defaultModel})` : ""}`,
+    `- Provider namespaces: ${formatProviderCounts(providerCounts)}`,
+  ];
+  if (mismatchCount > 0) {
+    lines.push(
+      `- ${pluralize(mismatchCount, "job")} ${mismatchCount === 1 ? "uses" : "use"} a different model than \`agents.defaults.model\`${defaultModel ? ` (${defaultModel})` : ""}`,
+    );
+    lines.push(`- Examples: ${mismatchExamples.join(", ")}`);
+  }
+  lines.push(
+    `Review with ${formatCliCommand("openclaw cron list")} and ${formatCliCommand("openclaw cron show <job-id>")}; remove \`payload.model\` from jobs that should inherit the default.`,
+  );
+
+  note(lines.join("\n"), "Cron");
 }
 
 function migrateLegacyNotifyFallback(params: {
@@ -71,7 +213,8 @@ function migrateLegacyNotifyFallback(params: {
       continue;
     }
 
-    const jobName = trimString(raw.name) ?? trimString(raw.id) ?? "<unnamed>";
+    const jobName =
+      normalizeOptionalString(raw.name) ?? normalizeOptionalString(raw.id) ?? "<unnamed>";
     const notify = raw.notify === true;
     if (!notify) {
       delete raw.notify;
@@ -83,8 +226,8 @@ function migrateLegacyNotifyFallback(params: {
       raw.delivery && typeof raw.delivery === "object" && !Array.isArray(raw.delivery)
         ? (raw.delivery as Record<string, unknown>)
         : null;
-    const mode = trimString(delivery?.mode)?.toLowerCase();
-    const to = trimString(delivery?.to);
+    const mode = normalizeOptionalLowercaseString(delivery?.mode);
+    const to = normalizeOptionalString(delivery?.to);
 
     if (mode === "webhook" && to) {
       delete raw.notify;
@@ -118,25 +261,143 @@ function migrateLegacyNotifyFallback(params: {
   return { changed, warnings };
 }
 
+async function readUserCrontab(): Promise<{ stdout: string; stderr?: string }> {
+  const result = await execFileAsync("crontab", ["-l"], {
+    encoding: "utf8",
+    windowsHide: true,
+  });
+  return {
+    stdout: result.stdout,
+    stderr: result.stderr,
+  };
+}
+
+function coerceCrontabText(crontab: unknown): string {
+  if (typeof crontab === "string") {
+    return crontab;
+  }
+  if (crontab == null) {
+    return "";
+  }
+  if (typeof crontab === "number" || typeof crontab === "boolean" || typeof crontab === "bigint") {
+    return String(crontab);
+  }
+  return "";
+}
+
+function findLegacyWhatsAppHealthCrontabLines(crontab: unknown): string[] {
+  return coerceCrontabText(crontab)
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith("#"))
+    .filter((line) => LEGACY_WHATSAPP_HEALTH_SCRIPT_RE.test(line));
+}
+
+export async function collectLegacyWhatsAppCrontabHealthWarning(
+  params: {
+    platform?: NodeJS.Platform;
+    readCrontab?: CrontabReader;
+  } = {},
+): Promise<string | null> {
+  if ((params.platform ?? process.platform) !== "linux") {
+    return null;
+  }
+
+  let crontab: unknown;
+  try {
+    crontab = (await (params.readCrontab ?? readUserCrontab)()).stdout;
+  } catch {
+    return null;
+  }
+
+  const legacyLines = findLegacyWhatsAppHealthCrontabLines(crontab);
+  if (legacyLines.length === 0) {
+    return null;
+  }
+
+  return [
+    "Legacy WhatsApp crontab health check detected.",
+    "`~/.openclaw/bin/ensure-whatsapp.sh` is not maintained by current OpenClaw and can misreport `Gateway inactive` from cron when the systemd user bus environment is missing.",
+    `Remove the stale crontab entry with ${formatCliCommand("crontab -e")}; use ${formatCliCommand("openclaw channels status --probe")}, ${formatCliCommand("openclaw doctor")}, and ${formatCliCommand("openclaw gateway status")} for current health checks.`,
+    `Matched ${pluralize(legacyLines.length, "entry")}.`,
+  ].join("\n");
+}
+
+export async function noteLegacyWhatsAppCrontabHealthCheck(
+  params: {
+    platform?: NodeJS.Platform;
+    readCrontab?: CrontabReader;
+  } = {},
+): Promise<void> {
+  const warning = await collectLegacyWhatsAppCrontabHealthWarning(params);
+  if (warning) {
+    note(warning, "Cron");
+  }
+}
+
 export async function maybeRepairLegacyCronStore(params: {
   cfg: OpenClawConfig;
   options: DoctorOptions;
   prompter: Pick<DoctorPrompter, "confirm">;
 }) {
   const storePath = resolveCronStorePath(params.cfg.cron?.store);
-  const store = await loadCronStore(storePath);
+  const quarantinePath = resolveCronQuarantinePath(storePath);
+  let store: Awaited<ReturnType<typeof loadCronStore>>;
+  try {
+    store = await loadCronStore(storePath);
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    note(
+      [
+        `Unable to read cron job store at ${shortenHomePath(storePath)}.`,
+        `- ${reason}`,
+        `Fix the file's permissions or contents and re-run ${formatCliCommand("openclaw doctor")}; later health checks will continue.`,
+      ].join("\n"),
+      "Cron",
+    );
+    return;
+  }
+  try {
+    const quarantine = await loadCronQuarantineFile(quarantinePath);
+    if (quarantine.jobs.length > 0) {
+      note(
+        [
+          `Quarantined cron job rows found at ${shortenHomePath(quarantinePath)}.`,
+          `- ${pluralize(quarantine.jobs.length, "row")} was removed from the active cron store after runtime validation failed.`,
+          `- Review or repair the quarantined rows manually before copying any job back into ${shortenHomePath(storePath)}.`,
+        ].join("\n"),
+        "Cron",
+      );
+    }
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    note(
+      [
+        `Unable to read quarantined cron rows at ${shortenHomePath(quarantinePath)}.`,
+        `- ${reason}`,
+      ].join("\n"),
+      "Cron",
+    );
+  }
   const rawJobs = (store.jobs ?? []) as unknown as Array<Record<string, unknown>>;
   if (rawJobs.length === 0) {
     return;
   }
+  noteCronModelOverrides({ cfg: params.cfg, jobs: rawJobs, storePath });
 
   const normalized = normalizeStoredCronJobs(rawJobs);
-  const legacyWebhook = trimString(params.cfg.cron?.webhook);
+  const legacyWebhook = normalizeOptionalString(params.cfg.cron?.webhook);
   const notifyCount = rawJobs.filter((job) => job.notify === true).length;
+  const dreamingStaleCount = countStaleDreamingJobs(rawJobs);
   const previewLines = formatLegacyIssuePreview(normalized.issues);
   if (notifyCount > 0) {
     previewLines.push(
       `- ${pluralize(notifyCount, "job")} still uses legacy \`notify: true\` webhook fallback`,
+    );
+  }
+  if (dreamingStaleCount > 0) {
+    previewLines.push(
+      `- ${pluralize(dreamingStaleCount, "managed dreaming job")} still has the legacy heartbeat-coupled shape`,
     );
   }
   if (previewLines.length === 0) {
@@ -164,7 +425,8 @@ export async function maybeRepairLegacyCronStore(params: {
     jobs: rawJobs,
     legacyWebhook,
   });
-  const changed = normalized.mutated || notifyMigration.changed;
+  const dreamingMigration = migrateLegacyDreamingPayloadShape(rawJobs);
+  const changed = normalized.mutated || notifyMigration.changed || dreamingMigration.changed;
   if (!changed && notifyMigration.warnings.length === 0) {
     return;
   }
@@ -175,6 +437,12 @@ export async function maybeRepairLegacyCronStore(params: {
       jobs: rawJobs as unknown as CronJob[],
     });
     note(`Cron store normalized at ${shortenHomePath(storePath)}.`, "Doctor changes");
+    if (dreamingMigration.rewrittenCount > 0) {
+      note(
+        `Rewrote ${pluralize(dreamingMigration.rewrittenCount, "managed dreaming job")} to run as an isolated agent turn so dreaming no longer requires heartbeat.`,
+        "Doctor changes",
+      );
+    }
   }
 
   if (notifyMigration.warnings.length > 0) {

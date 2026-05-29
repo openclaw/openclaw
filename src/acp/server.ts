@@ -2,37 +2,34 @@
 import { Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { AgentSideConnection, ndJsonStream } from "@agentclientprotocol/sdk";
-import { loadConfig } from "../config/config.js";
-import { buildGatewayConnectionDetails } from "../gateway/call.js";
+import {
+  GATEWAY_CLIENT_CAPS,
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../packages/gateway-protocol/src/client-info.js";
+import { getRuntimeConfig } from "../config/config.js";
+import { resolveGatewayClientBootstrap } from "../gateway/client-bootstrap.js";
+import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-readiness.js";
 import { GatewayClient } from "../gateway/client.js";
-import { resolveGatewayConnectionAuth } from "../gateway/connection-auth.js";
 import { isMainModule } from "../infra/is-main.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { routeLogsToStderr } from "../logging/console.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { createFileAcpEventLedger, resolveDefaultAcpEventLedgerPath } from "./event-ledger.js";
 import { readSecretFromFile } from "./secret-file.js";
 import { AcpGatewayAgent } from "./translator.js";
 import { normalizeAcpProvenanceMode, type AcpServerOptions } from "./types.js";
 
 export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void> {
-  const cfg = loadConfig();
-  const connection = buildGatewayConnectionDetails({
+  routeLogsToStderr();
+  const cfg = getRuntimeConfig();
+  const bootstrap = await resolveGatewayClientBootstrap({
     config: cfg,
-    url: opts.gatewayUrl,
-  });
-  const gatewayUrlOverrideSource =
-    connection.urlSource === "cli --url"
-      ? "cli"
-      : connection.urlSource === "env OPENCLAW_GATEWAY_URL"
-        ? "env"
-        : undefined;
-  const creds = await resolveGatewayConnectionAuth({
-    config: cfg,
+    gatewayUrl: opts.gatewayUrl,
     explicitAuth: {
       token: opts.gatewayToken,
       password: opts.gatewayPassword,
     },
     env: process.env,
-    urlOverride: gatewayUrlOverrideSource ? connection.url : undefined,
-    urlOverrideSource: gatewayUrlOverrideSource,
   });
 
   let agent: AcpGatewayAgent | null = null;
@@ -64,13 +61,15 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
   };
 
   const gateway = new GatewayClient({
-    url: connection.url,
-    token: creds.token,
-    password: creds.password,
+    url: bootstrap.url,
+    token: bootstrap.auth.token,
+    password: bootstrap.auth.password,
+    preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs,
     clientName: GATEWAY_CLIENT_NAMES.CLI,
     clientDisplayName: "ACP",
     clientVersion: "acp",
     mode: GATEWAY_CLIENT_MODES.CLI,
+    caps: [GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
     onEvent: (evt) => {
       void agent?.handleGatewayEvent(evt);
     },
@@ -111,7 +110,12 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
   process.once("SIGTERM", shutdown);
 
   // Start gateway first and wait for hello before accepting ACP requests.
-  gateway.start();
+  const readiness = await startGatewayClientWhenEventLoopReady(gateway, {
+    clientOptions: { preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs },
+  });
+  if (!readiness.ready) {
+    rejectGatewayReady(new Error("gateway event loop readiness timeout"));
+  }
   await gatewayReady.catch((err) => {
     shutdown();
     throw err;
@@ -123,9 +127,12 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
   const input = Writable.toWeb(process.stdout);
   const output = Readable.toWeb(process.stdin) as unknown as ReadableStream<Uint8Array>;
   const stream = ndJsonStream(input, output);
+  const eventLedger = createFileAcpEventLedger({
+    filePath: resolveDefaultAcpEventLedgerPath(process.env),
+  });
 
-  new AgentSideConnection((conn: AgentSideConnection) => {
-    agent = new AcpGatewayAgent(conn, gateway, opts);
+  void new AgentSideConnection((conn: AgentSideConnection) => {
+    agent = new AcpGatewayAgent(conn, gateway, { ...opts, eventLedger });
     agent.start();
     return agent;
   }, stream);
@@ -204,17 +211,21 @@ function parseArgs(args: string[]): AcpServerOptions {
       process.exit(0);
     }
   }
-  if (opts.gatewayToken?.trim() && tokenFile?.trim()) {
+  const gatewayToken = normalizeOptionalString(opts.gatewayToken);
+  const gatewayPassword = normalizeOptionalString(opts.gatewayPassword);
+  const normalizedTokenFile = normalizeOptionalString(tokenFile);
+  const normalizedPasswordFile = normalizeOptionalString(passwordFile);
+  if (gatewayToken && normalizedTokenFile) {
     throw new Error("Use either --token or --token-file.");
   }
-  if (opts.gatewayPassword?.trim() && passwordFile?.trim()) {
+  if (gatewayPassword && normalizedPasswordFile) {
     throw new Error("Use either --password or --password-file.");
   }
-  if (tokenFile?.trim()) {
-    opts.gatewayToken = readSecretFromFile(tokenFile, "Gateway token");
+  if (normalizedTokenFile) {
+    opts.gatewayToken = readSecretFromFile(normalizedTokenFile, "Gateway token");
   }
-  if (passwordFile?.trim()) {
-    opts.gatewayPassword = readSecretFromFile(passwordFile, "Gateway password");
+  if (normalizedPasswordFile) {
+    opts.gatewayPassword = readSecretFromFile(normalizedPasswordFile, "Gateway password");
   }
   return opts;
 }

@@ -14,6 +14,79 @@ struct ExecApprovalPromptRequest: Codable {
     var agentId: String?
     var resolvedPath: String?
     var sessionKey: String?
+    var allowedDecisions: [ExecApprovalDecision]?
+
+    init(
+        command: String,
+        cwd: String? = nil,
+        host: String? = nil,
+        security: String? = nil,
+        ask: String? = nil,
+        agentId: String? = nil,
+        resolvedPath: String? = nil,
+        sessionKey: String? = nil,
+        allowedDecisions: [ExecApprovalDecision]? = nil)
+    {
+        self.command = command
+        self.cwd = cwd
+        self.host = host
+        self.security = security
+        self.ask = ask
+        self.agentId = agentId
+        self.resolvedPath = resolvedPath
+        self.sessionKey = sessionKey
+        self.allowedDecisions = allowedDecisions
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case command
+        case cwd
+        case host
+        case security
+        case ask
+        case agentId
+        case resolvedPath
+        case sessionKey
+        case allowedDecisions
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.command = try container.decode(String.self, forKey: .command)
+        self.cwd = try container.decodeIfPresent(String.self, forKey: .cwd)
+        self.host = try container.decodeIfPresent(String.self, forKey: .host)
+        self.security = try container.decodeIfPresent(String.self, forKey: .security)
+        self.ask = try container.decodeIfPresent(String.self, forKey: .ask)
+        self.agentId = try container.decodeIfPresent(String.self, forKey: .agentId)
+        self.resolvedPath = try container.decodeIfPresent(String.self, forKey: .resolvedPath)
+        self.sessionKey = try container.decodeIfPresent(String.self, forKey: .sessionKey)
+        let decodedDecisions = (try? container.decodeIfPresent(
+            [DecodedExecApprovalDecision].self,
+            forKey: .allowedDecisions)) ?? []
+        self.allowedDecisions = decodedDecisions.compactMap(\.decision)
+    }
+
+    static func allowedDecisions(forAsk ask: String?) -> [ExecApprovalDecision] {
+        // Older payloads did not carry ask/allowedDecisions. Preserve their durable
+        // approval option; explicit ask=always and allowedDecisions payloads are the
+        // policy-carrying shapes that remove it.
+        ask == ExecAsk.always.rawValue
+            ? [.allowOnce, .deny]
+            : [.allowOnce, .allowAlways, .deny]
+    }
+}
+
+private struct DecodedExecApprovalDecision: Decodable {
+    var decision: ExecApprovalDecision?
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        guard let raw = try? container.decode(String.self) else {
+            self.decision = nil
+            return
+        }
+        self.decision = ExecApprovalDecision(rawValue: raw)
+    }
 }
 
 private struct ExecApprovalSocketRequest: Codable {
@@ -227,7 +300,7 @@ final class ExecApprovalsPromptServer {
 
 enum ExecApprovalsPromptPresenter {
     @MainActor
-    static func prompt(_ request: ExecApprovalPromptRequest) -> ExecApprovalDecision {
+    static func prompt(_ request: ExecApprovalPromptRequest) -> ExecApprovalDecision? {
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.alertStyle = .warning
@@ -235,30 +308,56 @@ enum ExecApprovalsPromptPresenter {
         alert.informativeText = "Review the command details before allowing."
         alert.accessoryView = self.buildAccessoryView(request)
 
-        alert.addButton(withTitle: "Allow Once")
-        alert.addButton(withTitle: "Always Allow")
-        alert.addButton(withTitle: "Don't Allow")
-        if #available(macOS 11.0, *), alert.buttons.indices.contains(2) {
-            alert.buttons[2].hasDestructiveAction = true
+        let decisions = self.allowedPromptDecisions(request)
+        for decision in decisions {
+            alert.addButton(withTitle: self.buttonTitle(for: decision))
+        }
+        if #available(macOS 11.0, *),
+           let denyIndex = decisions.firstIndex(of: .deny),
+           alert.buttons.indices.contains(denyIndex)
+        {
+            alert.buttons[denyIndex].hasDestructiveAction = true
         }
 
-        switch alert.runModal() {
-        case .alertFirstButtonReturn:
-            return .allowOnce
-        case .alertSecondButtonReturn:
-            return .allowAlways
-        default:
-            return .deny
+        return self.decision(forModalResponse: alert.runModal(), decisions: decisions)
+    }
+
+    static func decision(
+        forModalResponse response: NSApplication.ModalResponse,
+        decisions: [ExecApprovalDecision]) -> ExecApprovalDecision?
+    {
+        let selectedIndex = response.rawValue
+            - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
+        if decisions.indices.contains(selectedIndex) {
+            return decisions[selectedIndex]
+        }
+        return decisions.contains(.deny) ? .deny : nil
+    }
+
+    static func allowedPromptDecisions(_ request: ExecApprovalPromptRequest) -> [ExecApprovalDecision] {
+        if let allowedDecisions = request.allowedDecisions, !allowedDecisions.isEmpty {
+            return allowedDecisions
+        }
+        return ExecApprovalPromptRequest.allowedDecisions(forAsk: request.ask)
+    }
+
+    private static func buttonTitle(for decision: ExecApprovalDecision) -> String {
+        switch decision {
+        case .allowOnce:
+            "Allow Once"
+        case .allowAlways:
+            "Always Allow"
+        case .deny:
+            "Don't Allow"
         }
     }
 
     @MainActor
-    private static func buildAccessoryView(_ request: ExecApprovalPromptRequest) -> NSView {
+    static func buildAccessoryView(_ request: ExecApprovalPromptRequest) -> NSView {
         let stack = NSStackView()
         stack.orientation = .vertical
         stack.spacing = 8
         stack.alignment = .leading
-        stack.translatesAutoresizingMaskIntoConstraints = false
         stack.widthAnchor.constraint(greaterThanOrEqualToConstant: 380).isActive = true
 
         let commandTitle = NSTextField(labelWithString: "Command")
@@ -271,7 +370,7 @@ enum ExecApprovalsPromptPresenter {
         commandText.drawsBackground = true
         commandText.backgroundColor = NSColor.textBackgroundColor
         commandText.font = NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
-        commandText.string = request.command
+        commandText.string = ExecApprovalCommandDisplaySanitizer.sanitize(request.command)
         commandText.textContainerInset = NSSize(width: 6, height: 6)
         commandText.textContainer?.lineFragmentPadding = 0
         commandText.textContainer?.widthTracksTextView = true
@@ -337,6 +436,10 @@ enum ExecApprovalsPromptPresenter {
         footer.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
         stack.addArrangedSubview(footer)
 
+        // NSAlert reserves accessory space from the view frame, not from Auto Layout constraints.
+        // Give the top-level accessory an explicit frame so its subviews do not paint over the
+        // alert title, message, and buttons while the frame remains zero-sized.
+        stack.frame = NSRect(origin: .zero, size: stack.fittingSize)
         return stack
     }
 
@@ -378,7 +481,7 @@ private enum ExecHostExecutor {
         let context = await self.buildContext(
             request: request,
             command: validatedRequest.command,
-            rawCommand: validatedRequest.displayCommand)
+            rawCommand: validatedRequest.evaluationRawCommand)
 
         switch ExecHostRequestEvaluator.evaluate(
             context: context,
@@ -389,7 +492,7 @@ private enum ExecHostExecutor {
         case .allow:
             break
         case .requiresPrompt:
-            let decision = ExecApprovalsPromptPresenter.prompt(
+            guard let decision = ExecApprovalsPromptPresenter.prompt(
                 ExecApprovalPromptRequest(
                     command: context.displayCommand,
                     cwd: request.cwd,
@@ -398,7 +501,15 @@ private enum ExecHostExecutor {
                     ask: context.ask.rawValue,
                     agentId: context.agentId,
                     resolvedPath: context.resolution?.resolvedPath,
-                    sessionKey: request.sessionKey))
+                    sessionKey: request.sessionKey,
+                    allowedDecisions: ExecApprovalPromptRequest.allowedDecisions(
+                        forAsk: context.ask.rawValue)))
+            else {
+                return self.errorResponse(
+                    code: "UNAVAILABLE",
+                    message: "SYSTEM_RUN_DENIED: approval prompt closed without decision",
+                    reason: "approval-cancelled")
+            }
 
             let followupDecision: ExecApprovalDecision
             switch decision {
@@ -476,16 +587,8 @@ private enum ExecHostExecutor {
     {
         guard decision == .allowAlways, context.security == .allowlist else { return }
         var seenPatterns = Set<String>()
-        for candidate in context.allowlistResolutions {
-            guard let pattern = ExecApprovalHelpers.allowlistPattern(
-                command: context.command,
-                resolution: candidate)
-            else {
-                continue
-            }
-            if seenPatterns.insert(pattern).inserted {
-                ExecApprovalsStore.addAllowlistEntry(agentId: context.agentId, pattern: pattern)
-            }
+        for pattern in context.allowAlwaysPatterns where seenPatterns.insert(pattern).inserted {
+            ExecApprovalsStore.addAllowlistEntry(agentId: context.agentId, pattern: pattern)
         }
     }
 
@@ -662,7 +765,7 @@ private final class ExecApprovalsSocketServer: @unchecked Sendable {
     private let logger = Logger(subsystem: "ai.openclaw", category: "exec-approvals.socket")
     private let socketPath: String
     private let token: String
-    private let onPrompt: @Sendable (ExecApprovalPromptRequest) async -> ExecApprovalDecision
+    private let onPrompt: @Sendable (ExecApprovalPromptRequest) async -> ExecApprovalDecision?
     private let onExec: @Sendable (ExecHostRequest) async -> ExecHostResponse
     private var socketFD: Int32 = -1
     private var acceptTask: Task<Void, Never>?
@@ -671,7 +774,7 @@ private final class ExecApprovalsSocketServer: @unchecked Sendable {
     init(
         socketPath: String,
         token: String,
-        onPrompt: @escaping @Sendable (ExecApprovalPromptRequest) async -> ExecApprovalDecision,
+        onPrompt: @escaping @Sendable (ExecApprovalPromptRequest) async -> ExecApprovalDecision?,
         onExec: @escaping @Sendable (ExecHostRequest) async -> ExecHostResponse)
     {
         self.socketPath = socketPath
@@ -813,7 +916,7 @@ private final class ExecApprovalsSocketServer: @unchecked Sendable {
                     try self.sendApprovalResponse(handle: handle, id: request.id, decision: .deny)
                     return
                 }
-                let decision = await self.onPrompt(request.request)
+                guard let decision = await self.onPrompt(request.request) else { return }
                 try self.sendApprovalResponse(handle: handle, id: request.id, decision: decision)
                 return
             }

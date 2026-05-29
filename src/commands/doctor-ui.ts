@@ -24,7 +24,7 @@ export async function maybeRepairUiProtocolFreshness(
     return;
   }
 
-  const schemaPath = path.join(root, "src/gateway/protocol/schema.ts");
+  const schemaPath = path.join(root, "packages/gateway-protocol/src/schema.ts");
   const uiHealth = await resolveControlUiDistIndexHealth({
     root,
     argv1: process.argv[1],
@@ -49,7 +49,7 @@ export async function maybeRepairUiProtocolFreshness(
         return;
       }
 
-      const shouldRepair = await prompter.confirmRepair({
+      const shouldRepair = await prompter.confirmAutoFix({
         message: "Build Control UI assets now?",
         initialValue: true,
       });
@@ -92,7 +92,7 @@ export async function maybeRepairUiProtocolFreshness(
           "log",
           `--since=${uiMtimeIso}`,
           "--format=%h %s",
-          "src/gateway/protocol/schema.ts",
+          "packages/gateway-protocol/src/schema.ts",
         ],
         { timeoutMs: 5000 },
       ).catch(() => null);
@@ -107,7 +107,7 @@ export async function maybeRepairUiProtocolFreshness(
           "UI Freshness",
         );
 
-        const shouldRepair = await prompter.confirmAggressive({
+        const shouldRepair = await prompter.confirmAggressiveAutoFix({
           message: "Rebuild UI now? (Detected protocol mismatch requiring update)",
           initialValue: true,
         });

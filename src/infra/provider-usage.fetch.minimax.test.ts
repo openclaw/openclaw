@@ -24,6 +24,42 @@ async function expectMinimaxUsageResult(params: {
 describe("fetchMinimaxUsage", () => {
   it.each([
     {
+      name: "uses the CN usage endpoint by default",
+      baseUrl: undefined,
+      expectedUrl: "https://api.minimaxi.com/v1/token_plan/remains",
+    },
+    {
+      name: "derives the global usage endpoint from an Anthropic-compatible base URL",
+      baseUrl: "https://api.minimax.io/anthropic",
+      expectedUrl: "https://api.minimax.io/v1/token_plan/remains",
+    },
+    {
+      name: "derives the usage endpoint from a configured origin",
+      baseUrl: "https://api.minimaxi.com",
+      expectedUrl: "https://api.minimaxi.com/v1/token_plan/remains",
+    },
+    {
+      name: "falls back to CN when the configured base URL is malformed",
+      baseUrl: "not a url",
+      expectedUrl: "https://api.minimaxi.com/v1/token_plan/remains",
+    },
+  ])("$name", async ({ baseUrl, expectedUrl }) => {
+    const mockFetch = createProviderUsageFetch(async (url) => {
+      expect(url).toBe(expectedUrl);
+      return makeResponse(200, {
+        data: {
+          current_interval_total_count: 100,
+          current_interval_usage_count: 98,
+        },
+      });
+    });
+
+    const result = await fetchMinimaxUsage("key", 5000, mockFetch, { baseUrl });
+    expect(result.windows).toEqual([{ label: "5h", usedPercent: 2, resetAt: undefined }]);
+  });
+
+  it.each([
+    {
       name: "returns HTTP errors for failed requests",
       response: () => makeResponse(502, "bad gateway"),
       expectedError: "HTTP 502",
@@ -117,6 +153,33 @@ describe("fetchMinimaxUsage", () => {
       },
     },
     {
+      name: "treats MiniMax current_interval_usage_count as remaining quota (not consumed)",
+      payload: {
+        data: {
+          current_interval_total_count: 100,
+          current_interval_usage_count: 98,
+          plan_name: "Coding Plan",
+        },
+      },
+      expected: {
+        plan: "Coding Plan",
+        windows: [{ label: "5h", usedPercent: 2, resetAt: undefined }],
+      },
+    },
+    {
+      name: "inverts usage_percent when no count fields are present (remaining to used)",
+      payload: {
+        data: {
+          usage_percent: 98,
+          plan_name: "Coding Plan",
+        },
+      },
+      expected: {
+        plan: "Coding Plan",
+        windows: [{ label: "5h", usedPercent: 2, resetAt: undefined }],
+      },
+    },
+    {
       name: "falls back to payload-level reset and plan when nested usage records omit them",
       payload: {
         data: {
@@ -128,6 +191,65 @@ describe("fetchMinimaxUsage", () => {
       expected: {
         plan: "Payload Plan",
         windows: [{ label: "2h", usedPercent: 40, resetAt: 1_700_000_100_000 }],
+      },
+    },
+    {
+      name: "prefers chat model entries from model_remains and derives window labels from timestamps",
+      payload: {
+        data: {
+          model_remains: [
+            {
+              model_name: "speech-hd",
+              current_interval_total_count: 0,
+              current_interval_usage_count: 0,
+              start_time: 1_774_180_800_000,
+              end_time: 1_774_195_200_000,
+            },
+            {
+              model_name: "MiniMax-M*",
+              current_interval_total_count: 600,
+              current_interval_usage_count: 595,
+              start_time: 1_774_180_800_000,
+              end_time: 1_774_195_200_000,
+            },
+            {
+              model_name: "image-01",
+              current_interval_total_count: 0,
+              current_interval_usage_count: 0,
+              start_time: 1_774_180_800_000,
+              end_time: 1_774_195_200_000,
+            },
+          ],
+        },
+      },
+      expected: {
+        plan: "Coding Plan · MiniMax-M*",
+        windows: [{ label: "4h", usedPercent: 0.8333333333333334, resetAt: 1_774_195_200_000 }],
+      },
+    },
+    {
+      name: "falls back to the first non-zero model_remains record when no MiniMax chat entry exists",
+      payload: {
+        data: {
+          model_remains: [
+            {
+              model_name: "speech-hd",
+              current_interval_total_count: 0,
+              current_interval_usage_count: 0,
+            },
+            {
+              model_name: "video-01",
+              current_interval_total_count: 200,
+              current_interval_usage_count: 150,
+              start_time: 1_774_180_800_000,
+              end_time: 1_774_195_200_000,
+            },
+          ],
+        },
+      },
+      expected: {
+        plan: "Coding Plan · video-01",
+        windows: [{ label: "4h", usedPercent: 25, resetAt: 1_774_195_200_000 }],
       },
     },
   ])("$name", async ({ payload, expected }) => {
