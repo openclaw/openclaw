@@ -477,24 +477,21 @@ export const OpenClawSchema = z
           .strict()
           .refine(
             (thresholds) =>
-              thresholds.rssWarningBytes === undefined ||
-              thresholds.rssCriticalBytes === undefined ||
-              thresholds.rssWarningBytes <= thresholds.rssCriticalBytes,
-            "diagnostics.memoryPressureThresholds.rssWarningBytes must be less than or equal to rssCriticalBytes",
+              (thresholds.rssWarningBytes ?? 1536 * 1024 * 1024) <=
+              (thresholds.rssCriticalBytes ?? 3072 * 1024 * 1024),
+            "diagnostics.memoryPressureThresholds.rssWarningBytes must be less than or equal to rssCriticalBytes after applying defaults",
           )
           .refine(
             (thresholds) =>
-              thresholds.heapUsedWarningBytes === undefined ||
-              thresholds.heapUsedCriticalBytes === undefined ||
-              thresholds.heapUsedWarningBytes <= thresholds.heapUsedCriticalBytes,
-            "diagnostics.memoryPressureThresholds.heapUsedWarningBytes must be less than or equal to heapUsedCriticalBytes",
+              (thresholds.heapUsedWarningBytes ?? 1024 * 1024 * 1024) <=
+              (thresholds.heapUsedCriticalBytes ?? 2048 * 1024 * 1024),
+            "diagnostics.memoryPressureThresholds.heapUsedWarningBytes must be less than or equal to heapUsedCriticalBytes after applying defaults",
           )
           .refine(
             (thresholds) =>
-              thresholds.rssGrowthWarningBytes === undefined ||
-              thresholds.rssGrowthCriticalBytes === undefined ||
-              thresholds.rssGrowthWarningBytes <= thresholds.rssGrowthCriticalBytes,
-            "diagnostics.memoryPressureThresholds.rssGrowthWarningBytes must be less than or equal to rssGrowthCriticalBytes",
+              (thresholds.rssGrowthWarningBytes ?? 512 * 1024 * 1024) <=
+              (thresholds.rssGrowthCriticalBytes ?? 1024 * 1024 * 1024),
+            "diagnostics.memoryPressureThresholds.rssGrowthWarningBytes must be less than or equal to rssGrowthCriticalBytes after applying defaults",
           )
           .optional(),
         otel: z

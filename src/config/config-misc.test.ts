@@ -90,6 +90,39 @@ describe("diagnostics memory pressure threshold config", () => {
 
     expect(result.success).toBe(false);
   });
+
+  it.each([
+    {
+      name: "rss",
+      memoryPressureThresholds: { rssWarningBytes: 4_000 * 1024 * 1024 },
+      message:
+        "rssWarningBytes must be less than or equal to rssCriticalBytes after applying defaults",
+    },
+    {
+      name: "heap-used",
+      memoryPressureThresholds: { heapUsedWarningBytes: 3_000 * 1024 * 1024 },
+      message:
+        "heapUsedWarningBytes must be less than or equal to heapUsedCriticalBytes after applying defaults",
+    },
+    {
+      name: "rss-growth",
+      memoryPressureThresholds: { rssGrowthWarningBytes: 2_000 * 1024 * 1024 },
+      message:
+        "rssGrowthWarningBytes must be less than or equal to rssGrowthCriticalBytes after applying defaults",
+    },
+  ])(
+    "rejects partial $name thresholds inverted against defaults",
+    ({ memoryPressureThresholds, message }) => {
+      const result = OpenClawSchema.safeParse({
+        diagnostics: { memoryPressureThresholds },
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expectSomeIssueMessageContains(result.error.issues, message);
+      }
+    },
+  );
 });
 
 describe("model provider localService config", () => {

@@ -326,7 +326,14 @@ export type DiagnosticsConfig = {
   stuckSessionAbortMs?: number;
   /** Capture a redacted stability snapshot when memory pressure reaches critical. Default: false. */
   memoryPressureSnapshot?: boolean;
-  /** Optional memory pressure thresholds. Unset fields use built-in defaults. */
+  /**
+   * Optional memory pressure thresholds. Unset fields use built-in defaults:
+   * RSS warning 1536 MiB, RSS critical 3072 MiB, heap-used warning 1024 MiB,
+   * heap-used critical 2048 MiB, RSS-growth warning 512 MiB, RSS-growth critical
+   * 1024 MiB, growth window 10 minutes, and repeat interval 5 minutes. Warning
+   * thresholds must be less than or equal to the matching critical threshold after
+   * defaults are applied, so partial configs are validated against these defaults.
+   */
   memoryPressureThresholds?: DiagnosticsMemoryPressureThresholdsConfig;
   otel?: DiagnosticsOtelConfig;
   cacheTrace?: DiagnosticsCacheTraceConfig;
