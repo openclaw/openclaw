@@ -890,11 +890,7 @@ export async function sendMessageIMessage(
       }
       const captionResult = await sendMessageIMessage(to, text, {
         ...opts,
-        client:
-          opts.client ??
-          (opts.createClient
-            ? await opts.createClient({ cliPath, dbPath })
-            : await createIMessageRpcClient({ cliPath, dbPath })),
+        ...(opts.client ? { client: opts.client } : {}),
         mediaUrl: undefined,
       });
       return {

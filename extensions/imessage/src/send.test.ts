@@ -327,6 +327,33 @@ describe("sendMessageIMessage receipts", () => {
     expect(result.receipt.parts.map((part) => part.kind)).toEqual(["media", "text"]);
   });
 
+  it("closes created caption follow-up clients when no caller client is supplied", async () => {
+    const createdClient = createClient({ guid: "p:0/caption-guid" });
+    const createClientImpl = vi.fn(async () => createdClient);
+    const runCliJson = vi.fn().mockResolvedValueOnce({ messageId: "p:0/dm-media-guid" });
+
+    const result = await sendMessageIMessage("+155****4567", "caption", {
+      config: IMESSAGE_TEST_CFG,
+      createClient: createClientImpl,
+      mediaUrl: "/tmp/image.png",
+      resolveAttachmentImpl: async () => ({ path: "/tmp/image.png", contentType: "image/png" }),
+      runCliJson,
+    });
+
+    expect(createClientImpl).toHaveBeenCalledTimes(1);
+    expect(createdClient.request).toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({
+        to: "+155****4567",
+        text: "caption",
+      }),
+      expect.any(Object),
+    );
+    expect(createdClient.stop).toHaveBeenCalledOnce();
+    expect(result.receipt.platformMessageIds).toEqual(["p:0/dm-media-guid", "p:0/caption-guid"]);
+    expect(result.receipt.parts.map((part) => part.kind)).toEqual(["media", "text"]);
+  });
+
   it("preserves literal media placeholder text when no attachment is sent", async () => {
     const client = createClient({ guid: "p:0/imsg-text" });
 
