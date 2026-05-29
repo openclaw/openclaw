@@ -834,18 +834,43 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     );
   });
 
-  it("refreshes history after a non-local chat final", () => {
-    const { state, loadHistory, handleChatEvent } = createHandlersHarness({
+  it("does not reload history on final with displayable text for external runs (#87922)", () => {
+    const { state, chatLog, loadHistory, handleChatEvent } = createHandlersHarness({
       state: { activeChatRunId: null },
     });
 
+    // Simulate an external (non-local) run delivering a final event with text.
+    // loadHistory() must NOT be called because it does clearAll() + rebuild
+    // from server data, and the server may not have persisted this message
+    // yet, causing the just-rendered message to vanish.
     handleChatEvent({
-      runId: "external-run",
+      runId: "run-external",
       sessionKey: state.currentSessionKey,
       state: "final",
-      message: { content: [{ type: "text", text: "done" }] },
+      message: { content: [{ type: "text", text: "assistant reply" }] },
     });
 
+    expect(chatLog.finalizeAssistant).toHaveBeenCalledWith(
+      expect.stringContaining("assistant reply"),
+      "run-external",
+    );
+    expect(loadHistory).not.toHaveBeenCalled();
+  });
+
+  it("reloads history on final when external run has no message", () => {
+    const { state, chatLog, loadHistory, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: null },
+    });
+
+    // When the final event has no message, the reload is needed to sync
+    // with server state since there is no local content to preserve.
+    handleChatEvent({
+      runId: "run-external-empty",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+    });
+
+    expect(chatLog.dropAssistant).toHaveBeenCalledWith("run-external-empty");
     expect(loadHistory).toHaveBeenCalledTimes(1);
   });
 

@@ -408,7 +408,7 @@ export function createEventHandlers(context: EventHandlerContext) {
 
   const maybeRefreshHistoryForRun = (
     runId: string,
-    opts?: { allowLocalWithoutDisplayableFinal?: boolean },
+    opts?: { allowLocalWithoutDisplayableFinal?: boolean; hasDisplayableFinal?: boolean },
   ) => {
     const isLocalRun = isLocalRunId?.(runId) ?? false;
     if (isLocalRun) {
@@ -423,6 +423,13 @@ export function createEventHandlers(context: EventHandlerContext) {
         pendingHistoryRefresh = true;
         return;
       }
+    }
+    // When the final event already produced displayable output, skip the
+    // reload. loadHistory() does clearAll() + rebuild from server, but the
+    // server may not have persisted this message yet, causing the
+    // just-rendered final message to vanish (#87922).
+    if (opts?.hasDisplayableFinal) {
+      return;
     }
     if (hasConcurrentActiveRun(runId)) {
       return;
@@ -597,7 +604,6 @@ export function createEventHandlers(context: EventHandlerContext) {
         tui.requestRender(true);
         return;
       }
-      maybeRefreshHistoryForRun(evt.runId);
       const stopReason =
         evt.message && typeof evt.message === "object" && !Array.isArray(evt.message)
           ? typeof (evt.message as Record<string, unknown>).stopReason === "string"
@@ -613,6 +619,13 @@ export function createEventHandlers(context: EventHandlerContext) {
       );
       const suppressEmptyExternalPlaceholder =
         finalText === "(no output)" && !isLocalRunId?.(evt.runId);
+      // Skip the history reload when the final event produced displayable
+      // output. loadHistory() does clearAll() + rebuild from server data,
+      // but the server may not have persisted this message yet — causing
+      // the just-rendered final message to vanish (#87922).
+      maybeRefreshHistoryForRun(evt.runId, {
+        hasDisplayableFinal: !suppressEmptyExternalPlaceholder,
+      });
       if (suppressEmptyExternalPlaceholder) {
         chatLog.dropAssistant(evt.runId);
       } else {
