@@ -1,8 +1,15 @@
 import { classifyFailoverReason, isAuthErrorMessage } from "../agents/embedded-agent-helpers.js";
+import { readVisibleMessageToolReplyFromArgs } from "../gateway/chat-display-projection.js";
+import { projectLiveAssistantBufferedText } from "../gateway/live-chat-projector.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
+import {
+  asString,
+  extractTextFromMessage,
+  isCommandMessage,
+  isControlAcknowledgementMessage,
+} from "./tui-formatters.js";
 import { TuiStreamAssembler } from "./tui-stream-assembler.js";
 import type { AgentEvent, BtwEvent, ChatEvent, TuiStateAccess } from "./tui-types.js";
 
@@ -76,6 +83,10 @@ export function createEventHandlers(context: EventHandlerContext) {
   const finalizedRuns = new Map<string, number>();
   const finalizedRunsWithDisplay = new Map<string, number>();
   const postFinalizingRuns = new Map<string, number>();
+  const pendingVisibleMessageRepliesByRun = new Map<
+    string,
+    Array<{ toolCallId: string; text: string; succeeded: boolean }>
+  >();
   let streamAssembler = new TuiStreamAssembler();
   let lastSessionKey = state.currentSessionKey;
   let pendingHistoryRefresh = false;
@@ -175,6 +186,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     finalizedRunsWithDisplay.clear();
     sessionRuns.clear();
     postFinalizingRuns.clear();
+    pendingVisibleMessageRepliesByRun.clear();
     streamAssembler = new TuiStreamAssembler();
     pendingHistoryRefresh = false;
     state.pendingOptimisticUserMessage = false;
@@ -244,6 +256,7 @@ export function createEventHandlers(context: EventHandlerContext) {
       finalizedRunsWithDisplay.set(runId, Date.now());
     }
     sessionRuns.delete(runId);
+    pendingVisibleMessageRepliesByRun.delete(runId);
     streamAssembler.drop(runId);
     pruneRunMap(finalizedRuns);
     pruneRunMap(finalizedRunsWithDisplay);
@@ -323,6 +336,7 @@ export function createEventHandlers(context: EventHandlerContext) {
   }) => {
     streamAssembler.drop(params.runId);
     sessionRuns.delete(params.runId);
+    pendingVisibleMessageRepliesByRun.delete(params.runId);
     clearActiveRunIfMatch(params.runId);
     flushPendingHistoryRefreshIfIdle();
     if (params.wasActiveRun) {
@@ -369,6 +383,48 @@ export function createEventHandlers(context: EventHandlerContext) {
     void loadHistory?.();
   };
 
+  const rememberVisibleMessageToolReply = (runId: string, toolCallId: string, args: unknown) => {
+    const text = readVisibleMessageToolReplyFromArgs(args);
+    if (!text?.trim()) {
+      return;
+    }
+    const items = pendingVisibleMessageRepliesByRun.get(runId) ?? [];
+    items.push({ toolCallId, text, succeeded: false });
+    pendingVisibleMessageRepliesByRun.set(runId, items);
+  };
+
+  const markVisibleMessageToolReplyResult = (
+    runId: string,
+    toolCallId: string,
+    isError: boolean,
+  ) => {
+    const items = pendingVisibleMessageRepliesByRun.get(runId);
+    if (!items) {
+      return;
+    }
+    for (const item of items) {
+      if (item.toolCallId === toolCallId) {
+        item.succeeded = !isError;
+        break;
+      }
+    }
+  };
+
+  const takeSucceededVisibleMessageToolReply = (runId: string): string => {
+    const items = pendingVisibleMessageRepliesByRun.get(runId);
+    if (!items) {
+      return "";
+    }
+    const item = items.find((candidate) => candidate.succeeded && candidate.text.trim());
+    pendingVisibleMessageRepliesByRun.delete(runId);
+    return item?.text ?? "";
+  };
+
+  const hasSucceededVisibleMessageToolReply = (runId: string): boolean => {
+    const items = pendingVisibleMessageRepliesByRun.get(runId);
+    return Boolean(items?.some((candidate) => candidate.succeeded && candidate.text.trim()));
+  };
+
   const messageHasDisplayableNonTextContent = (message: unknown): boolean => {
     if (!message || typeof message !== "object") {
       return false;
@@ -400,6 +456,9 @@ export function createEventHandlers(context: EventHandlerContext) {
       return true;
     }
     if (!evt.message) {
+      return false;
+    }
+    if (isControlAcknowledgementMessage(evt.message)) {
       return false;
     }
     if (extractTextFromMessage(evt.message, { includeThinking: state.showThinking }).trim()) {
@@ -499,11 +558,38 @@ export function createEventHandlers(context: EventHandlerContext) {
       if (!displayText) {
         return;
       }
-      chatLog.updateAssistant(displayText, evt.runId);
+      // A delivered message-tool reply owns the final render; drop the model's
+      // own streaming text so the visible reply isn't duplicated.
+      if (hasSucceededVisibleMessageToolReply(evt.runId)) {
+        chatLog.dropAssistant(evt.runId);
+        return;
+      }
+      const projected = projectLiveAssistantBufferedText(displayText, {
+        suppressLeadFragments: true,
+      });
+      if (projected.suppress) {
+        chatLog.dropAssistant(evt.runId);
+        return;
+      }
+      chatLog.updateAssistant(projected.text, evt.runId);
     }
     if (evt.state === "final") {
       const isLocalBtwRun = isLocalBtwRunId?.(evt.runId) ?? false;
       const wasActiveRun = state.activeChatRunId === evt.runId;
+      // A delivered routeless message-tool reply is the chat-visible answer; render
+      // it verbatim and finalize, ignoring any trailing control acknowledgement.
+      const visibleMessageToolReplyText = takeSucceededVisibleMessageToolReply(evt.runId);
+      if (visibleMessageToolReplyText.trim()) {
+        chatLog.finalizeAssistant(visibleMessageToolReplyText, evt.runId);
+        finalizeRun({
+          runId: evt.runId,
+          wasActiveRun,
+          status: "idle",
+          displayedFinal: true,
+        });
+        tui.requestRender();
+        return;
+      }
       if (!evt.message && isLocalBtwRun) {
         forgetLocalBtwRunId?.(evt.runId);
         noteFinalizedRun(evt.runId);
@@ -604,16 +690,25 @@ export function createEventHandlers(context: EventHandlerContext) {
       if (isActiveRun) {
         armStreamingWatchdog(evt.runId);
       }
+      const data = evt.data ?? {};
+      const phase = asString(data.phase, "");
+      const toolCallId = asString(data.toolCallId, "");
+      const toolName = asString(data.name, "tool");
+      // Track message-tool replies regardless of verbose level so a delivered
+      // visible reply can drive the final render even when tool output is hidden.
+      if (toolCallId && toolName.toLowerCase() === "message") {
+        if (phase === "start") {
+          rememberVisibleMessageToolReply(evt.runId, toolCallId, data.args);
+        } else if (phase === "result") {
+          markVisibleMessageToolReplyResult(evt.runId, toolCallId, Boolean(data.isError));
+        }
+      }
       const verbose = state.sessionInfo.verboseLevel ?? "off";
       const allowToolEvents = verbose !== "off";
       const allowToolOutput = verbose === "full";
       if (!allowToolEvents) {
         return;
       }
-      const data = evt.data ?? {};
-      const phase = asString(data.phase, "");
-      const toolCallId = asString(data.toolCallId, "");
-      const toolName = asString(data.name, "tool");
       if (!toolCallId) {
         return;
       }

@@ -6,6 +6,10 @@ const SUPPRESSED_CONTROL_REPLY_TOKENS = [
   "REPLY_SKIP",
 ] as const;
 
+// Whole-phrase control acknowledgements the message tool emits when a visible
+// reply was already delivered; they must never leak into chat as assistant text.
+const SUPPRESSED_CONTROL_REPLY_PHRASES = ["Visible reply sent.", "Visible reply sent"] as const;
+
 const MIN_BARE_PREFIX_LENGTH_BY_TOKEN: Readonly<
   Record<(typeof SUPPRESSED_CONTROL_REPLY_TOKENS)[number], number>
 > = {
@@ -13,6 +17,21 @@ const MIN_BARE_PREFIX_LENGTH_BY_TOKEN: Readonly<
   ANNOUNCE_SKIP: 3,
   REPLY_SKIP: 3,
 };
+
+function isSuppressedControlReplyPhrase(text: string): boolean {
+  const normalized = text.trim().toLowerCase();
+  return SUPPRESSED_CONTROL_REPLY_PHRASES.some((phrase) => normalized === phrase.toLowerCase());
+}
+
+function isSuppressedControlReplyPhraseLeadFragment(text: string): boolean {
+  const normalized = text.trim().toLowerCase();
+  if (normalized.length < 3) {
+    return false;
+  }
+  return SUPPRESSED_CONTROL_REPLY_PHRASES.some((phrase) =>
+    phrase.toLowerCase().startsWith(normalized),
+  );
+}
 
 function normalizeSuppressedControlReplyFragment(text: string): string {
   const trimmed = text.trim();
@@ -31,7 +50,10 @@ function normalizeSuppressedControlReplyFragment(text: string): string {
  */
 export function isSuppressedControlReplyText(text: string): boolean {
   const normalized = text.trim();
-  return SUPPRESSED_CONTROL_REPLY_TOKENS.some((token) => isSilentReplyText(normalized, token));
+  return (
+    isSuppressedControlReplyPhrase(normalized) ||
+    SUPPRESSED_CONTROL_REPLY_TOKENS.some((token) => isSilentReplyText(normalized, token))
+  );
 }
 
 /**
@@ -39,6 +61,9 @@ export function isSuppressedControlReplyText(text: string): boolean {
  */
 export function isSuppressedControlReplyLeadFragment(text: string): boolean {
   const trimmed = text.trim();
+  if (isSuppressedControlReplyPhraseLeadFragment(trimmed)) {
+    return true;
+  }
   const normalized = normalizeSuppressedControlReplyFragment(text);
   if (!normalized) {
     return false;

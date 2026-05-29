@@ -427,6 +427,46 @@ export function isCommandMessage(message: unknown): boolean {
   return (message as Record<string, unknown>).command === true;
 }
 
+// Narrow control acknowledgements the message tool emits after a visible reply was
+// delivered ("Visible reply sent.") or when the model declined to reply (NO_REPLY).
+function isVisibleReplyControlAcknowledgementText(text: string): boolean {
+  return /^\s*(?:NO_REPLY|Visible reply sent\.?)\s*$/i.test(text);
+}
+
+/**
+ * Return true when an assistant message carries only a control acknowledgement and
+ * no renderable media or non-text content, so the TUI can drop it from final display.
+ */
+export function isControlAcknowledgementMessage(message: unknown): boolean {
+  const record = asMessageRecord(message);
+  if (!record || record.role !== "assistant") {
+    return false;
+  }
+  const text = extractTextFromMessage(record).trim();
+  if (!isVisibleReplyControlAcknowledgementText(text)) {
+    return false;
+  }
+  if (typeof record.mediaUrl === "string" && record.mediaUrl.trim()) {
+    return false;
+  }
+  if (
+    Array.isArray(record.mediaUrls) &&
+    record.mediaUrls.some((media) => typeof media === "string" && media.trim())
+  ) {
+    return false;
+  }
+  if (!Array.isArray(record.content)) {
+    return true;
+  }
+  return record.content.every((block) => {
+    if (!block || typeof block !== "object") {
+      return true;
+    }
+    const type = (block as Record<string, unknown>).type;
+    return type === "text" || type === "thinking";
+  });
+}
+
 export function formatTokens(total?: number | null, context?: number | null) {
   if (total == null && context == null) {
     return "tokens ?";

@@ -567,6 +567,28 @@ function isDryRunMessageToolRecord(record: Record<string, unknown>): boolean {
   return deliveryStatus?.toLowerCase() === "dry_run";
 }
 
+/**
+ * Given raw `message` tool-call args, return the chat-visible reply text when the
+ * call is a routeless `send` (no explicit target, not a dry run); otherwise undefined.
+ * Shared with the live TUI so on-chat detection stays identical to history projection.
+ */
+export function readVisibleMessageToolReplyFromArgs(args: unknown): string | undefined {
+  const record = readRecord(args);
+  if (!record) {
+    return undefined;
+  }
+  if (normalizeOptionalString(record.action)?.toLowerCase() !== "send") {
+    return undefined;
+  }
+  if (isDryRunMessageToolRecord(record)) {
+    return undefined;
+  }
+  if (hasExplicitMessageToolRoute(record)) {
+    return undefined;
+  }
+  return readMessageToolVisibleText(record);
+}
+
 function extractMessageToolVisibleReplies(
   message: Record<string, unknown>,
 ): Array<Omit<PendingMessageToolVisibleReply, "anchor" | "succeeded">> {
@@ -784,6 +806,8 @@ function mirrorMessageToolVisibleReplies(messages: unknown[]): unknown[] {
     clearPending();
   };
 
+  const hasSucceededPendingMirror = () => pending.some((item) => item.succeeded);
+
   for (let i = 0; i < messages.length; i++) {
     const message = messages[i];
     const record = readRecord(message);
@@ -807,8 +831,6 @@ function mirrorMessageToolVisibleReplies(messages: unknown[]): unknown[] {
           succeeded: false,
         });
       }
-    } else if (isRenderableAssistantDisplayMessage(record)) {
-      clearPending();
     }
 
     if (pending.length > 0) {
@@ -820,6 +842,15 @@ function mirrorMessageToolVisibleReplies(messages: unknown[]): unknown[] {
       }
       if (isAssistantSilentControlReplyOnly(record)) {
         flushSucceededMirrors();
+      } else if (isRenderableAssistantDisplayMessage(record)) {
+        // A renderable assistant turn after a delivered message-tool reply is the
+        // model's final summary; surface the actual visible reply and drop the summary.
+        if (hasSucceededPendingMirror()) {
+          flushSucceededMirrors();
+          changed = true;
+          continue;
+        }
+        clearPending();
       }
     }
 
