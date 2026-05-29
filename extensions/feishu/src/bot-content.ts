@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { buildFeishuConversationId } from "./conversation-id.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
@@ -40,6 +41,85 @@ type FeishuMessageLike = {
 type GroupSessionScope = "group" | "group_sender" | "group_topic" | "group_topic_sender";
 
 type FeishuLogger = (...args: unknown[]) => void;
+
+const REPLACEMENT_CHAR = "\uFFFD";
+const LATIN1_MOJIBAKE_MARKER_RE = /[\u0080-\u00FF]/u;
+const NON_LATIN_SCRIPT_RE = /[\u0100-\uFFFF]/u;
+const WINDOWS_1252_BYTES = new Map<number, number>([
+  [0x20ac, 0x80],
+  [0x201a, 0x82],
+  [0x0192, 0x83],
+  [0x201e, 0x84],
+  [0x2026, 0x85],
+  [0x2020, 0x86],
+  [0x2021, 0x87],
+  [0x02c6, 0x88],
+  [0x2030, 0x89],
+  [0x0160, 0x8a],
+  [0x2039, 0x8b],
+  [0x0152, 0x8c],
+  [0x017d, 0x8e],
+  [0x2018, 0x91],
+  [0x2019, 0x92],
+  [0x201c, 0x93],
+  [0x201d, 0x94],
+  [0x2022, 0x95],
+  [0x2013, 0x96],
+  [0x2014, 0x97],
+  [0x02dc, 0x98],
+  [0x2122, 0x99],
+  [0x0161, 0x9a],
+  [0x203a, 0x9b],
+  [0x0153, 0x9c],
+  [0x017e, 0x9e],
+  [0x0178, 0x9f],
+]);
+
+function basenameFromUntrustedFeishuFilename(value: string): string | undefined {
+  let base = path.posix.basename(value.trim());
+  base = path.win32.basename(base);
+  let cleaned = "";
+  for (const char of base) {
+    const code = char.charCodeAt(0);
+    if ((code >= 0x00 && code <= 0x1f) || code === 0x7f) {
+      continue;
+    }
+    cleaned += char;
+  }
+  cleaned = cleaned.trim();
+  return cleaned && cleaned !== "." && cleaned !== ".." ? cleaned : undefined;
+}
+
+function recoverLatin1Utf8Mojibake(value: string): string {
+  if (!LATIN1_MOJIBAKE_MARKER_RE.test(value)) {
+    return value;
+  }
+  const bytes: number[] = [];
+  for (const char of value) {
+    const code = char.charCodeAt(0);
+    const windows1252Byte = WINDOWS_1252_BYTES.get(code);
+    if (windows1252Byte !== undefined) {
+      bytes.push(windows1252Byte);
+    } else if (code <= 0xff) {
+      bytes.push(code);
+    } else {
+      return value;
+    }
+  }
+  const decoded = Buffer.from(bytes).toString("utf8");
+  if (decoded.includes(REPLACEMENT_CHAR) || !NON_LATIN_SCRIPT_RE.test(decoded)) {
+    return value;
+  }
+  return decoded;
+}
+
+function normalizeFeishuFileName(fileName: unknown): string | undefined {
+  if (typeof fileName !== "string") {
+    return undefined;
+  }
+  const base = basenameFromUntrustedFeishuFilename(fileName);
+  return base ? recoverLatin1Utf8Mojibake(base) : undefined;
+}
 
 type ResolvedFeishuGroupSession = {
   peerId: string;
@@ -309,14 +389,14 @@ function parseMediaKeys(
     const fileKey = normalizeFeishuExternalKey(parsed.file_key);
     switch (messageType) {
       case "image":
-        return { imageKey, fileName: parsed.file_name };
+        return { imageKey, fileName: normalizeFeishuFileName(parsed.file_name) };
       case "file":
       case "audio":
       case "sticker":
-        return { fileKey, fileName: parsed.file_name };
+        return { fileKey, fileName: normalizeFeishuFileName(parsed.file_name) };
       case "video":
       case "media":
-        return { fileKey, imageKey, fileName: parsed.file_name };
+        return { fileKey, imageKey, fileName: normalizeFeishuFileName(parsed.file_name) };
       default:
         return {};
     }
@@ -347,7 +427,7 @@ async function resolveSavedFeishuMedia(params: {
     contentType,
     "inbound",
     params.maxBytes,
-    params.result.fileName ?? params.originalFilename,
+    normalizeFeishuFileName(params.result.fileName) ?? params.originalFilename,
   );
 }
 
