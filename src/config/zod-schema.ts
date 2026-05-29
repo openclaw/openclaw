@@ -1295,6 +1295,13 @@ export const OpenClawSchema = z
           .strict()
           .optional(),
         entries: z.record(z.string(), SkillEntrySchema).optional(),
+        router: z
+          .object({
+            name: z.string(),
+            config: z.record(z.string(), z.unknown()).optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),
