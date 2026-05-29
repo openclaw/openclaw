@@ -30,7 +30,7 @@ export type ImageGenerationOpenAIOptions = {
   user?: string;
 };
 
-export type ImageGenerationProviderOptions = {
+export type ImageGenerationProviderOptions = Record<string, unknown> & {
   openai?: ImageGenerationOpenAIOptions;
 };
 
