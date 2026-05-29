@@ -15,8 +15,11 @@ import {
   setActiveEmbeddedRun,
   type EmbeddedAgentQueueMessageOptions,
 } from "../agents/embedded-agent-runner/runs.js";
+import type { SandboxFsBridge } from "../agents/sandbox/fs-bridge.js";
 import { formatToolDetail, resolveToolDisplay } from "../agents/tool-display.js";
+import type { ImageContent } from "../llm/types.js";
 import { redactToolDetail } from "../logging/redact.js";
+import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import { truncateUtf16Safe } from "../utils.js";
 
 export const TOOL_PROGRESS_OUTPUT_MAX_CHARS = 8_000;
@@ -130,6 +133,7 @@ export {
 } from "../agents/agent-scope.js";
 export { resolveModelAuthMode } from "../agents/model-auth.js";
 export { supportsModelTools } from "../agents/model-tool-support.js";
+export { resolveAttemptFsWorkspaceOnly } from "../agents/embedded-agent-runner/run/attempt.prompt-helpers.js";
 export { resolveAttemptSpawnWorkspaceDir } from "../agents/embedded-agent-runner/run/attempt.thread-helpers.js";
 export { buildEmbeddedAttemptToolRunContext } from "../agents/embedded-agent-runner/run/attempt.tool-run-context.js";
 export {
@@ -174,6 +178,43 @@ export type {
   LoadCodexBundleMcpThreadConfigParams,
 } from "../agents/codex-mcp-config.types.js";
 export { normalizeProviderToolSchemas } from "../agents/embedded-agent-runner/tool-schema-runtime.js";
+
+export async function detectAndLoadAgentHarnessPromptImages(params: {
+  prompt: string;
+  workspaceDir: string;
+  model: { input?: string[] };
+  existingImages?: ImageContent[];
+  imageOrder?: PromptImageOrderEntry[];
+  config?: import("../config/types.openclaw.js").OpenClawConfig;
+  workspaceOnly?: boolean;
+  localRoots?: readonly string[];
+  sandbox?: { root: string; bridge: SandboxFsBridge };
+}): Promise<{
+  images: ImageContent[];
+  detectedRefs: Array<{ raw: string; resolved: string; type: "path" | "media-uri" }>;
+  loadedCount: number;
+  skippedCount: number;
+}> {
+  const [{ resolveImageSanitizationLimits }, { detectAndLoadPromptImages }, { MAX_IMAGE_BYTES }] =
+    await Promise.all([
+      import("../agents/image-sanitization.js"),
+      import("../agents/embedded-agent-runner/run/images.js"),
+      import("../media/constants.js"),
+    ]);
+
+  return detectAndLoadPromptImages({
+    prompt: params.prompt,
+    workspaceDir: params.workspaceDir,
+    model: params.model,
+    existingImages: params.existingImages,
+    imageOrder: params.imageOrder,
+    maxBytes: MAX_IMAGE_BYTES,
+    maxDimensionPx: resolveImageSanitizationLimits(params.config).maxDimensionPx,
+    workspaceOnly: params.workspaceOnly,
+    localRoots: params.localRoots,
+    sandbox: params.sandbox,
+  });
+}
 
 export async function loadCodexBundleMcpThreadConfig(
   params: LoadCodexBundleMcpThreadConfigParams,

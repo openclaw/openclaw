@@ -11,6 +11,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runCopilotAttempt } from "./attempt.js";
 import type { CopilotClientPool } from "./runtime.js";
 
+const TINY_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==";
+
 // Mock the dual-write transcript mirror so attempt tests do not touch the
 // real filesystem. The mirror call site is exercised separately in
 // dual-write-transcripts.test.ts and by the dedicated attempt
@@ -272,6 +275,194 @@ describe("runCopilotAttempt", () => {
     expect(getSdkSessionId(result)).toBe("sess-1");
   });
 
+  it("forwards prompt images as SDK blob attachments", async () => {
+    const sdk = makeFakeSdk();
+    const pool = makeFakePool(sdk);
+
+    await runCopilotAttempt(
+      makeParams({
+        images: [{ type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" }],
+      } as never),
+      { pool },
+    );
+
+    const sendOptions = sdk.sessions[0]?.sendAndWait.mock.calls[0]?.[0] as
+      | { attachments?: unknown[]; prompt?: string }
+      | undefined;
+    expect(sendOptions?.prompt).toBe("hello");
+    expect(sendOptions?.attachments).toEqual([
+      {
+        type: "blob",
+        data: TINY_PNG_BASE64,
+        mimeType: "image/png",
+        displayName: "prompt-image-1",
+      },
+    ]);
+  });
+
+  it("hydrates offloaded prompt images before creating SDK blob attachments", async () => {
+    const stateDir = await fsp.mkdtemp(path.join(tmpdir(), "copilot-offloaded-image-"));
+    const inboundDir = path.join(stateDir, "media", "inbound");
+    const mediaId = "telegram-photo.png";
+    await fsp.mkdir(inboundDir, { recursive: true });
+    await fsp.writeFile(path.join(inboundDir, mediaId), Buffer.from(TINY_PNG_BASE64, "base64"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const sdk = makeFakeSdk();
+    const pool = makeFakePool(sdk);
+
+    try {
+      await runCopilotAttempt(
+        makeParams({
+          imageOrder: ["offloaded"],
+          images: [],
+          model: {
+            api: "openai-responses",
+            id: "gpt-4o",
+            input: ["text", "image"],
+            provider: "github-copilot",
+          },
+          prompt: `describe this\n[media attached: media://inbound/${mediaId}]`,
+        } as never),
+        { pool },
+      );
+
+      const sendOptions = sdk.sessions[0]?.sendAndWait.mock.calls[0]?.[0] as
+        | { attachments?: unknown[] }
+        | undefined;
+      expect(sendOptions?.attachments).toEqual([
+        {
+          type: "blob",
+          data: TINY_PNG_BASE64,
+          mimeType: "image/png",
+          displayName: "prompt-image-1",
+        },
+      ]);
+    } finally {
+      vi.unstubAllEnvs();
+      await fsp.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not hydrate prompt image paths outside workspace-only policy", async () => {
+    const stateDir = await fsp.mkdtemp(path.join(tmpdir(), "copilot-image-policy-"));
+    const workspaceDir = path.join(stateDir, "workspace");
+    const outsideDir = path.join(stateDir, "outside");
+    const outsideImage = path.join(outsideDir, "secret.png");
+    await fsp.mkdir(workspaceDir, { recursive: true });
+    await fsp.mkdir(outsideDir, { recursive: true });
+    await fsp.writeFile(outsideImage, Buffer.from(TINY_PNG_BASE64, "base64"));
+    const sdk = makeFakeSdk();
+    const pool = makeFakePool(sdk);
+
+    try {
+      await runCopilotAttempt(
+        makeParams({
+          config: { tools: { fs: { workspaceOnly: true } } },
+          model: {
+            api: "openai-responses",
+            id: "gpt-4o",
+            input: ["text", "image"],
+            provider: "github-copilot",
+          },
+          prompt: `inspect ${outsideImage}`,
+          workspaceDir,
+        } as never),
+        { pool },
+      );
+
+      const sendOptions = sdk.sessions[0]?.sendAndWait.mock.calls[0]?.[0] as
+        | { attachments?: unknown[] }
+        | undefined;
+      expect(sendOptions?.attachments).toBeUndefined();
+    } finally {
+      await fsp.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("hydrates quoted prompt image paths through the shared detector", async () => {
+    const stateDir = await fsp.mkdtemp(path.join(tmpdir(), "copilot-quoted-image-"));
+    const workspaceDir = path.join(stateDir, "workspace");
+    const imagePath = path.join(workspaceDir, "quoted.png");
+    await fsp.mkdir(workspaceDir, { recursive: true });
+    await fsp.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+    const sdk = makeFakeSdk();
+    const pool = makeFakePool(sdk);
+
+    try {
+      await runCopilotAttempt(
+        makeParams({
+          config: { tools: { fs: { workspaceOnly: true } } },
+          model: {
+            api: "openai-responses",
+            id: "gpt-4o",
+            input: ["text", "image"],
+            provider: "github-copilot",
+          },
+          prompt: `inspect "${imagePath}"`,
+          workspaceDir,
+        } as never),
+        { pool },
+      );
+
+      const sendOptions = sdk.sessions[0]?.sendAndWait.mock.calls[0]?.[0] as
+        | { attachments?: unknown[] }
+        | undefined;
+      expect(sendOptions?.attachments).toEqual([
+        {
+          type: "blob",
+          data: TINY_PNG_BASE64,
+          mimeType: "image/png",
+          displayName: "prompt-image-1",
+        },
+      ]);
+    } finally {
+      await fsp.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves relative prompt image paths from task cwd", async () => {
+    const stateDir = await fsp.mkdtemp(path.join(tmpdir(), "copilot-cwd-image-"));
+    const workspaceDir = path.join(stateDir, "workspace");
+    const cwd = path.join(workspaceDir, "task-repo");
+    const imagePath = path.join(cwd, "relative.png");
+    await fsp.mkdir(cwd, { recursive: true });
+    await fsp.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+    const sdk = makeFakeSdk();
+    const pool = makeFakePool(sdk);
+
+    try {
+      await runCopilotAttempt(
+        makeParams({
+          config: { tools: { fs: { workspaceOnly: true } } },
+          cwd,
+          model: {
+            api: "openai-responses",
+            id: "gpt-4o",
+            input: ["text", "image"],
+            provider: "github-copilot",
+          },
+          prompt: "inspect ./relative.png",
+          workspaceDir,
+        } as never),
+        { pool },
+      );
+
+      const sendOptions = sdk.sessions[0]?.sendAndWait.mock.calls[0]?.[0] as
+        | { attachments?: unknown[] }
+        | undefined;
+      expect(sendOptions?.attachments).toEqual([
+        {
+          type: "blob",
+          data: TINY_PNG_BASE64,
+          mimeType: "image/png",
+          displayName: "prompt-image-1",
+        },
+      ]);
+    } finally {
+      await fsp.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("subscribe-before-send", async () => {
     const sdk = makeFakeSdk();
     const pool = makeFakePool(sdk);
@@ -491,12 +682,14 @@ describe("runCopilotAttempt", () => {
   it("abort path (mid-stream)", async () => {
     const controller = new AbortController();
     const sendDeferred = createDeferred<SessionEventShape | undefined>();
+    const sessionCreated = createDeferred<FakeSession>();
     const sdk = makeFakeSdk({
       onCreateSession: (session) => {
         session.sendAndWait.mockReturnValue(sendDeferred.promise);
         session.abort.mockImplementationOnce(async () => {
           sendDeferred.resolve(undefined);
         });
+        sessionCreated.resolve(session);
       },
     });
     const pool = makeFakePool(sdk);
@@ -506,12 +699,16 @@ describe("runCopilotAttempt", () => {
       createToolBridge,
       pool,
     });
-    await flushAsync();
+    const session = await sessionCreated.promise;
+    for (let i = 0; i < 100 && session.sendAndWait.mock.calls.length === 0; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    expect(session.sendAndWait).toHaveBeenCalledTimes(1);
 
     controller.abort();
     const result = await runPromise;
 
-    expect(sdk.sessions[0]?.abort).toHaveBeenCalledTimes(1);
+    expect(session.abort).toHaveBeenCalledTimes(1);
     expect(result.aborted).toBe(true);
     expect(result.externalAbort).toBe(true);
   });
@@ -882,6 +1079,67 @@ describe("runCopilotAttempt", () => {
       // in createSessionConfig (hooks, infiniteSessions,
       // enableSessionTelemetry).
       expect("systemMessage" in cfg).toBe(false);
+    });
+
+    it("forwards extraSystemPrompt into SDK SessionConfig.systemMessage", async () => {
+      const sdk = makeFakeSdk();
+      const pool = makeFakePool(sdk);
+
+      await runCopilotAttempt(
+        makeParams({
+          extraSystemPrompt: "Tool and file actions are disabled for this sender.",
+        }),
+        { pool },
+      );
+
+      const cfg = sdk.createSession.mock.calls[0]?.[0] as {
+        systemMessage?: { mode?: string; content?: string };
+      };
+      expect(cfg.systemMessage?.mode).toBe("append");
+      expect(cfg.systemMessage?.content).toBe(
+        "## Group Chat Context\nTool and file actions are disabled for this sender.",
+      );
+    });
+
+    it("omits extraSystemPrompt for raw model runs", async () => {
+      const sdk = makeFakeSdk();
+      const pool = makeFakePool(sdk);
+
+      await runCopilotAttempt(
+        makeParams({
+          extraSystemPrompt: "Do not leak into raw model probes.",
+          modelRun: true,
+        } as never),
+        { pool },
+      );
+
+      const cfg = sdk.createSession.mock.calls[0]?.[0];
+      expect("systemMessage" in cfg).toBe(false);
+    });
+
+    it("appends extraSystemPrompt after rendered bootstrap instructions", async () => {
+      const rendered = "# Project Context\n## /ws/SOUL.md\n\nSoul voice goes here.";
+      workspaceBootstrapMock.resolveCopilotWorkspaceBootstrapContext.mockResolvedValueOnce({
+        bootstrapFiles: [],
+        contextFiles: [],
+        instructions: rendered,
+      });
+      const sdk = makeFakeSdk();
+      const pool = makeFakePool(sdk);
+
+      await runCopilotAttempt(
+        makeParams({
+          extraSystemPrompt: "Only answer in the current group thread.",
+        }),
+        { pool },
+      );
+
+      const cfg = sdk.createSession.mock.calls[0]?.[0] as {
+        systemMessage?: { mode?: string; content?: string };
+      };
+      expect(cfg.systemMessage?.content).toBe(
+        `${rendered}\n\n## Group Chat Context\nOnly answer in the current group thread.`,
+      );
     });
 
     it("forwards rendered bootstrap instructions to resumeSession on the resume path", async () => {
@@ -1719,6 +1977,88 @@ describe("runCopilotAttempt", () => {
       expect(sessionConfig?.workingDirectory).toBe("C:\\workspace");
     });
 
+    it("uses task cwd for SDK workingDirectory and bridged tools when unsandboxed", async () => {
+      const sdk = makeFakeSdk({
+        onCreateSession: (session) => {
+          session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
+        },
+      });
+      const pool = makeFakePool(sdk);
+      const createToolBridge = vi.fn(async () => ({ sdkTools: [], sourceTools: [] }));
+      const resolveSandboxContextOverride = vi.fn(async () => null);
+
+      await runCopilotAttempt(
+        makeParams({
+          cwd: "C:\\workspace\\task-repo",
+          workspaceDir: "C:\\workspace",
+        } as never),
+        {
+          createToolBridge,
+          pool,
+          resolveSandboxContextOverride,
+        },
+      );
+
+      const bridgeArgs = (createToolBridge.mock.calls[0] as unknown[] | undefined)?.[0] as {
+        cwd?: unknown;
+        workspaceDir?: unknown;
+      };
+      expect(bridgeArgs?.workspaceDir).toBe("C:\\workspace");
+      expect(bridgeArgs?.cwd).toBe("C:\\workspace\\task-repo");
+
+      const sessionConfig = (sdk.createSession.mock.calls[0] as unknown[] | undefined)?.[0] as {
+        instructionDirectories?: unknown;
+        workingDirectory?: unknown;
+      };
+      expect(sessionConfig?.workingDirectory).toBe("C:\\workspace\\task-repo");
+      expect(sessionConfig?.instructionDirectories).toEqual(["C:\\workspace"]);
+    });
+
+    it("normalizes task cwd before wiring SDK and bridged tools", async () => {
+      const stateDir = await fsp.mkdtemp(path.join(tmpdir(), "copilot-cwd-normalize-"));
+      const workspaceDir = path.join(stateDir, "workspace");
+      const taskDir = path.join(workspaceDir, "task-repo");
+      await fsp.mkdir(taskDir, { recursive: true });
+      const sdk = makeFakeSdk({
+        onCreateSession: (session) => {
+          session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
+        },
+      });
+      const pool = makeFakePool(sdk);
+      const createToolBridge = vi.fn(async () => ({ sdkTools: [], sourceTools: [] }));
+      const resolveSandboxContextOverride = vi.fn(async () => null);
+
+      try {
+        await runCopilotAttempt(
+          makeParams({
+            cwd: path.join(taskDir, "."),
+            workspaceDir: path.join(workspaceDir, "."),
+          } as never),
+          {
+            createToolBridge,
+            pool,
+            resolveSandboxContextOverride,
+          },
+        );
+
+        const bridgeArgs = (createToolBridge.mock.calls[0] as unknown[] | undefined)?.[0] as {
+          cwd?: unknown;
+          workspaceDir?: unknown;
+        };
+        expect(bridgeArgs?.workspaceDir).toBe(workspaceDir);
+        expect(bridgeArgs?.cwd).toBe(taskDir);
+
+        const sessionConfig = (sdk.createSession.mock.calls[0] as unknown[] | undefined)?.[0] as {
+          instructionDirectories?: unknown;
+          workingDirectory?: unknown;
+        };
+        expect(sessionConfig?.workingDirectory).toBe(taskDir);
+        expect(sessionConfig?.instructionDirectories).toEqual([workspaceDir]);
+      } finally {
+        await fsp.rm(stateDir, { recursive: true, force: true });
+      }
+    });
+
     it("forwards rw sandbox: bridge sees original workspace and no spawn override", async () => {
       const sandbox = makeSandboxStub({ workspaceAccess: "rw" });
       const sdk = makeFakeSdk({
@@ -1810,6 +2150,92 @@ describe("runCopilotAttempt", () => {
         await fsp.rm(sandboxDir, { recursive: true, force: true });
         await fsp.rm(workspaceDir, { recursive: true, force: true });
       }
+    });
+
+    it("applies sandbox workspace-only guards when hydrating prompt image refs", async () => {
+      const stateDir = await fsp.mkdtemp(path.join(tmpdir(), "copilot-sandbox-image-policy-"));
+      const sandboxDir = path.join(stateDir, "sandbox");
+      const outsideDir = path.join(stateDir, "agent");
+      const outsideImage = path.join(outsideDir, "secret.png");
+      await fsp.mkdir(sandboxDir, { recursive: true });
+      await fsp.mkdir(outsideDir, { recursive: true });
+      await fsp.writeFile(outsideImage, Buffer.from(TINY_PNG_BASE64, "base64"));
+      const fsBridge = {
+        mkdirp: vi.fn(async () => undefined),
+        readFile: vi.fn(async () => Buffer.from(TINY_PNG_BASE64, "base64")),
+        remove: vi.fn(async () => undefined),
+        rename: vi.fn(async () => undefined),
+        resolvePath: vi.fn(() => ({
+          containerPath: "/agent/secret.png",
+          hostPath: outsideImage,
+          relativePath: "../agent/secret.png",
+        })),
+        stat: vi.fn(async () => ({ mtimeMs: 1, size: 1, type: "file" as const })),
+        writeFile: vi.fn(async () => undefined),
+      };
+      const sandbox = makeSandboxStub({
+        fsBridge,
+        workspaceAccess: "ro",
+        workspaceDir: sandboxDir,
+      } as never);
+      const sdk = makeFakeSdk();
+      const pool = makeFakePool(sdk);
+      const createToolBridge = vi.fn(async () => ({ sdkTools: [], sourceTools: [] }));
+      const resolveSandboxContextOverride = vi.fn(async () => sandbox);
+
+      try {
+        await runCopilotAttempt(
+          makeParams({
+            config: { tools: { fs: { workspaceOnly: true } } },
+            model: {
+              api: "openai-responses",
+              id: "gpt-4o",
+              input: ["text", "image"],
+              provider: "github-copilot",
+            },
+            prompt: "inspect /agent/secret.png",
+            workspaceDir: path.join(stateDir, "workspace"),
+          } as never),
+          {
+            createToolBridge,
+            pool,
+            resolveSandboxContextOverride,
+          },
+        );
+
+        const sendOptions = sdk.sessions[0]?.sendAndWait.mock.calls[0]?.[0] as
+          | { attachments?: unknown[] }
+          | undefined;
+        expect(sendOptions?.attachments).toBeUndefined();
+        expect(fsBridge.resolvePath).toHaveBeenCalled();
+        expect(fsBridge.readFile).not.toHaveBeenCalled();
+      } finally {
+        await fsp.rm(stateDir, { recursive: true, force: true });
+      }
+    });
+
+    it("fails closed when sandbox is enabled with a cwd override", async () => {
+      const sandbox = makeSandboxStub({ workspaceAccess: "rw" });
+      const sdk = makeFakeSdk();
+      const pool = makeFakePool(sdk);
+      const createToolBridge = vi.fn(async () => ({ sdkTools: [], sourceTools: [] }));
+      const resolveSandboxContextOverride = vi.fn(async () => sandbox);
+
+      const result = await runCopilotAttempt(
+        makeParams({
+          cwd: "C:\\workspace\\task-repo",
+          workspaceDir: "C:\\workspace",
+        } as never),
+        {
+          createToolBridge,
+          pool,
+          resolveSandboxContextOverride,
+        },
+      );
+
+      expect(getPromptErrorCode(result)).toBe("sandbox_cwd_override_unsupported");
+      expect(createToolBridge).not.toHaveBeenCalled();
+      expect(sdk.createSession).not.toHaveBeenCalled();
     });
 
     it("fails closed when sandbox resolution fails", async () => {

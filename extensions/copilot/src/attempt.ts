@@ -1,5 +1,5 @@
 import fsp from "node:fs/promises";
-import type { SessionConfig, Tool as SdkTool } from "@github/copilot-sdk";
+import type { MessageOptions, SessionConfig, Tool as SdkTool } from "@github/copilot-sdk";
 import type {
   AgentHarnessAttemptParams,
   AgentHarnessAttemptResult,
@@ -7,8 +7,12 @@ import type {
   SandboxContext,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
+  detectAndLoadAgentHarnessPromptImages,
+  resolveAttemptFsWorkspaceOnly,
   resolveAttemptSpawnWorkspaceDir,
   resolveSandboxContext as defaultResolveSandboxContext,
+  resolveSessionAgentIds,
+  resolveUserPath,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveCopilotAuth } from "./auth-bridge.js";
 import {
@@ -60,7 +64,7 @@ type AttemptParamsLike = AgentHarnessAttemptParams & {
   infiniteSessionConfig?: CopilotInfiniteSessionOptions;
   initialReplayState?: AgentHarnessAttemptParams["initialReplayState"] & { sdkSessionId?: string };
   messages?: AgentMessage[];
-  model?: string | { api?: string; id?: string; provider?: string };
+  model?: string | { api?: string; id?: string; input?: string[]; provider?: string };
   onAssistantDelta?: (payload: OnAssistantDeltaPayload) => void | Promise<void>;
   permissionPolicy?: CopilotPermissionPolicy;
   profileVersion?: string;
@@ -179,7 +183,8 @@ export async function runCopilotAttempt(
   // spawned subagents should inherit. When sandbox is disabled (the default),
   // `resolveSandboxContext` returns `null` and behavior is unchanged from the
   // pre-fix path.
-  const resolvedWorkspaceForSandbox = readString(input.workspaceDir) ?? readString(input.cwd);
+  const resolvedWorkspaceForSandbox =
+    readResolvedAttemptPath(input.workspaceDir) ?? readResolvedAttemptPath(input.cwd);
   const sandboxSessionKey =
     readString((input as { sandboxSessionKey?: unknown }).sandboxSessionKey) ??
     readString((input as { sessionKey?: unknown }).sessionKey) ??
@@ -238,6 +243,33 @@ export async function runCopilotAttempt(
       });
     }
   }
+  const requestedCwd = readResolvedAttemptPath(input.cwd);
+  if (sandbox?.enabled && requestedCwd && requestedCwd !== resolvedWorkspaceForSandbox) {
+    settled = true;
+    params.abortSignal?.removeEventListener("abort", onAbort);
+    return createResult(input, {
+      messagesSnapshot: messages,
+      now,
+      promptError: createPromptError(
+        "sandbox_cwd_override_unsupported",
+        "[copilot-attempt] cwd override is not supported for sandboxed Copilot runs; omit cwd or use the agent workspace as cwd",
+      ),
+      sdkSessionId: undefined,
+      sessionIdUsed: input.sessionId,
+    });
+  }
+  const effectiveCwd = sandbox?.enabled
+    ? effectiveWorkspaceDir
+    : (requestedCwd ?? effectiveWorkspaceDir);
+  const { sessionAgentId } = resolveSessionAgentIds({
+    sessionKey: readString((input as { sessionKey?: unknown }).sessionKey),
+    config: input.config,
+    agentId: readString(params.agentId),
+  });
+  const effectiveFsWorkspaceOnly = resolveAttemptFsWorkspaceOnly({
+    config: input.config,
+    sessionAgentId,
+  });
   const sandboxAwareSpawnWorkspaceDir = resolvedWorkspaceForSandbox
     ? resolveAttemptSpawnWorkspaceDir({
         sandbox,
@@ -269,6 +301,7 @@ export async function runCopilotAttempt(
         // bridged tools see the *effective* workspace (sandbox copy when not `rw`),
         // while spawned subagents inherit the *original* workspace.
         workspaceDir: effectiveWorkspaceDir,
+        cwd: effectiveCwd,
         sandbox,
         spawnWorkspaceDir: sandboxAwareSpawnWorkspaceDir,
         abortSignal: params.abortSignal,
@@ -329,6 +362,7 @@ export async function runCopilotAttempt(
       poolAcquire.auth,
       workspaceBootstrap.instructions,
       effectiveWorkspaceDir,
+      effectiveCwd,
     );
     const replayDecision = decideReplayAction({
       sdkSessionId: input.initialReplayState?.sdkSessionId,
@@ -387,12 +421,18 @@ export async function runCopilotAttempt(
       isAborted: () => aborted,
     });
 
+    const messageOptions = await createMessageOptions(input, {
+      effectiveCwd,
+      effectiveWorkspaceDir,
+      sandbox,
+      workspaceOnly: effectiveFsWorkspaceOnly,
+    });
     if (abortRequested || params.abortSignal?.aborted) {
       aborted = true;
       externalAbort = true;
     } else {
       sentTurnStarted = true;
-      const result = await session.sendAndWait({ prompt: input.prompt }, input.timeoutMs);
+      const result = await session.sendAndWait(messageOptions, input.timeoutMs);
       await bridge.awaitDeltaChain();
       if (!bridge.recordSendResult(result) && !aborted) {
         // SDK sendAndWait returning undefined is treated as a timeout by the
@@ -666,12 +706,14 @@ function createSessionConfig(
   resolvedAuth: ReturnType<typeof resolveCopilotAuth>,
   workspaceBootstrapInstructions: string | undefined,
   effectiveWorkspaceDir: string | undefined,
+  effectiveCwd: string | undefined,
 ): Pick<
   SessionConfig,
   | "availableTools"
   | "enableSessionTelemetry"
   | "gitHubToken"
   | "hooks"
+  | "instructionDirectories"
   | "infiniteSessions"
   | "model"
   | "onPermissionRequest"
@@ -683,6 +725,7 @@ function createSessionConfig(
   const permissionPolicy = params.permissionPolicy ?? rejectAllPolicy;
   const hooks = createHooksBridge(params.hooksConfig);
   const infiniteSessions = createInfiniteSessionConfig(params.infiniteSessionConfig);
+  const systemMessageContent = createSystemMessageContent(params, workspaceBootstrapInstructions);
   return {
     model: sdkModelId,
     // Permission decisions for SDK built-in tool kinds (shell, write,
@@ -753,7 +796,14 @@ function createSessionConfig(
     // the resume path too).
     availableTools: sdkTools.map((tool) => tool.name),
     workingDirectory:
-      effectiveWorkspaceDir ?? readString(params.workspaceDir) ?? readString(params.cwd),
+      effectiveCwd ?? effectiveWorkspaceDir ?? readResolvedAttemptPath(params.workspaceDir),
+    // When a task runs from a sub-cwd, keep SDK-native project docs
+    // (AGENTS.md, .github/copilot-instructions.md) visible from the
+    // canonical workspace too; workspace-bootstrap filters AGENTS.md
+    // because the SDK owns those instruction files.
+    ...(effectiveWorkspaceDir && effectiveCwd && effectiveCwd !== effectiveWorkspaceDir
+      ? { instructionDirectories: [effectiveWorkspaceDir] }
+      : {}),
     // Session-level GitHub token. INDEPENDENT of the client-level
     // token in `CopilotClientOptions.gitHubToken` (set in
     // `resolvePoolAcquire().options`). Per the SDK contract
@@ -769,28 +819,132 @@ function createSessionConfig(
     ...(resolvedAuth.authMode === "gitHubToken" && resolvedAuth.gitHubToken
       ? { gitHubToken: resolvedAuth.gitHubToken }
       : {}),
-    // OpenClaw workspace bootstrap (SOUL.md, IDENTITY.md, HEARTBEAT.md,
-    // USER.md, TOOLS.md, BOOTSTRAP.md, MEMORY.md) injected via the
-    // SDK's `systemMessage` field in "append" mode: SDK foundation +
-    // OpenClaw context. Append keeps every SDK guardrail (identity,
-    // safety, tool instructions) intact while ensuring the model
-    // receives persona/identity/heartbeat without needing to read the
-    // files via its read tool. AGENTS.md and .github/copilot-
-    // instructions.md are intentionally filtered by
+    // OpenClaw workspace bootstrap plus per-turn runtime guidance
+    // injected via the SDK's `systemMessage` field in append mode:
+    // SDK foundation + OpenClaw context. Append keeps every SDK
+    // guardrail intact while ensuring persona/identity/heartbeat and
+    // channel policy guidance reach the model without native reads.
+    // AGENTS.md and .github/copilot-instructions.md are filtered by
     // workspace-bootstrap.ts because the SDK auto-loads them from
     // `workingDirectory` (see `@github/copilot-sdk/dist/types.d.ts`
-    // L1036). Omitted entirely when no relevant files exist so the
-    // SDK default (foundation only) applies. Mirrors codex's
-    // `developerInstructions` plumbing in run-attempt.ts L2905.
-    ...(workspaceBootstrapInstructions
+    // L1036). Omitted when there is no OpenClaw-owned context so the
+    // SDK default foundation applies.
+    ...(systemMessageContent
       ? {
           systemMessage: {
             mode: "append" as const,
-            content: workspaceBootstrapInstructions,
+            content: systemMessageContent,
           },
         }
       : {}),
   };
+}
+
+async function createMessageOptions(
+  params: AttemptParamsLike,
+  context: {
+    effectiveCwd: string | undefined;
+    effectiveWorkspaceDir: string | undefined;
+    sandbox: SandboxContext | null;
+    workspaceOnly: boolean;
+  },
+): Promise<MessageOptions> {
+  const attachments = createPromptImageAttachments(await resolvePromptImages(params, context));
+  return attachments.length > 0
+    ? { prompt: params.prompt, attachments }
+    : { prompt: params.prompt };
+}
+
+function createPromptImageAttachments(
+  images: unknown[],
+): NonNullable<MessageOptions["attachments"]> {
+  return images.flatMap((image, index) => {
+    if (
+      !image ||
+      typeof image !== "object" ||
+      (image as { type?: unknown }).type !== "image" ||
+      typeof (image as { data?: unknown }).data !== "string" ||
+      typeof (image as { mimeType?: unknown }).mimeType !== "string"
+    ) {
+      return [];
+    }
+    return [
+      {
+        type: "blob" as const,
+        data: (image as { data: string }).data,
+        mimeType: (image as { mimeType: string }).mimeType,
+        displayName: `prompt-image-${index + 1}`,
+      },
+    ];
+  });
+}
+
+async function resolvePromptImages(
+  params: AttemptParamsLike,
+  context: {
+    effectiveCwd: string | undefined;
+    effectiveWorkspaceDir: string | undefined;
+    sandbox: SandboxContext | null;
+    workspaceOnly: boolean;
+  },
+): Promise<unknown[]> {
+  const workspaceDir =
+    context.effectiveCwd ??
+    context.effectiveWorkspaceDir ??
+    readResolvedAttemptPath(params.cwd) ??
+    readResolvedAttemptPath(params.workspaceDir);
+  if (!workspaceDir) {
+    return [];
+  }
+  const localRoots =
+    context.workspaceOnly && context.effectiveWorkspaceDir
+      ? [context.effectiveWorkspaceDir]
+      : undefined;
+  const result = await detectAndLoadAgentHarnessPromptImages({
+    prompt: params.prompt,
+    workspaceDir,
+    model: resolveImageCapabilityModel(params),
+    existingImages: Array.isArray(params.images) ? params.images : undefined,
+    imageOrder: Array.isArray(params.imageOrder) ? params.imageOrder : undefined,
+    config: params.config,
+    workspaceOnly: context.workspaceOnly,
+    localRoots,
+    sandbox:
+      context.sandbox?.enabled && context.sandbox.fsBridge
+        ? { root: context.sandbox.workspaceDir, bridge: context.sandbox.fsBridge }
+        : undefined,
+  });
+  return result.images;
+}
+
+function resolveImageCapabilityModel(params: AttemptParamsLike): { input?: string[] } {
+  const model = params.model;
+  if (model && typeof model === "object" && Array.isArray((model as { input?: unknown }).input)) {
+    return { input: (model as { input: string[] }).input };
+  }
+  return { input: ["image"] };
+}
+
+function createSystemMessageContent(
+  params: AttemptParamsLike,
+  workspaceBootstrapInstructions: string | undefined,
+): string | undefined {
+  const sections: string[] = [];
+  const bootstrap = workspaceBootstrapInstructions?.trim();
+  if (bootstrap) {
+    sections.push(bootstrap);
+  }
+  const extraSystemPrompt = readString(params.extraSystemPrompt)?.trim();
+  if (extraSystemPrompt && !isRawCopilotModelRun(params)) {
+    const contextHeader =
+      params.promptMode === "minimal" ? "## Subagent Context" : "## Group Chat Context";
+    sections.push(`${contextHeader}\n${extraSystemPrompt}`);
+  }
+  return sections.length > 0 ? sections.join("\n\n") : undefined;
+}
+
+function isRawCopilotModelRun(params: AttemptParamsLike): boolean {
+  return params.modelRun === true || params.promptMode === "none";
 }
 
 function getMessagesSnapshotInput(params: AttemptParamsLike): AgentMessage[] {
@@ -851,6 +1005,17 @@ function readSessionId(session: SessionLike | undefined): string | undefined {
 
 export function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function readResolvedAttemptPath(value: unknown): string | undefined {
+  const raw = readString(value)?.trim();
+  if (!raw) {
+    return undefined;
+  }
+  if (process.platform !== "win32" && /^[A-Za-z]:[\\/]/.test(raw)) {
+    return raw;
+  }
+  return resolveUserPath(raw);
 }
 
 export function resolveModelRef(params: AttemptParamsLike): ModelRef {

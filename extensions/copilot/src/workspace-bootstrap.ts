@@ -3,10 +3,14 @@ import type {
   AgentHarnessAttemptParams,
   EmbeddedContextFile,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { resolveBootstrapContextForRun } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  resolveBootstrapContextForRun,
+  resolveUserPath,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 
 // Filenames the Copilot SDK already loads natively from the working
-// directory (per `@github/copilot-sdk/dist/types.d.ts:1036` —
+// directory / instructionDirectories (per
+// `@github/copilot-sdk/dist/types.d.ts:1036,1155` —
 // "custom instruction files (.github/copilot-instructions.md,
 // AGENTS.md, etc.) are always loaded from the working directory").
 // Filtering them out of the OpenClaw bootstrap injection avoids
@@ -74,7 +78,7 @@ export async function resolveCopilotWorkspaceBootstrapContext(params: {
   warn?: (message: string) => void;
 }): Promise<CopilotWorkspaceBootstrapResult> {
   const { attempt } = params;
-  const workspaceDir = readNonEmptyString(attempt.workspaceDir);
+  const workspaceDir = readResolvedWorkspacePath(attempt.workspaceDir);
   if (!workspaceDir) {
     return { bootstrapFiles: [], contextFiles: [] };
   }
@@ -101,7 +105,7 @@ export async function resolveCopilotWorkspaceBootstrapContext(params: {
     const contextFiles = remapCopilotBootstrapContextFiles({
       files: bootstrapContext.contextFiles,
       sourceWorkspaceDir: workspaceDir,
-      targetWorkspaceDir: readNonEmptyString(params.effectiveWorkspaceDir) ?? workspaceDir,
+      targetWorkspaceDir: readResolvedWorkspacePath(params.effectiveWorkspaceDir) ?? workspaceDir,
     });
     return {
       bootstrapFiles: bootstrapContext.bootstrapFiles,
@@ -185,7 +189,7 @@ export function renderCopilotWorkspaceBootstrapInstructions(
   }
   const hasSoulFile = files.some((file) => getCopilotContextFileBasename(file.path) === "soul.md");
   const lines: string[] = [
-    "OpenClaw loaded these user-editable workspace files. Treat them as project/user context. The Copilot SDK loads AGENTS.md natively, so AGENTS.md is not repeated here.",
+    "OpenClaw loaded these user-editable workspace files. Treat them as project/user context. The Copilot SDK loads AGENTS.md natively from its instruction directories, so AGENTS.md is not repeated here.",
     "",
     "# Project Context",
     "",
@@ -230,6 +234,17 @@ function getCopilotContextFileBasename(filePath: string): string {
 
 function readNonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}
+
+function readResolvedWorkspacePath(value: unknown): string | undefined {
+  const raw = readNonEmptyString(value);
+  if (!raw) {
+    return undefined;
+  }
+  if (process.platform !== "win32" && /^[A-Za-z]:[\\/]/.test(raw)) {
+    return raw.trim();
+  }
+  return resolveUserPath(raw);
 }
 
 export const TESTING_EXPORTS = {

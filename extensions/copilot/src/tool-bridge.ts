@@ -58,6 +58,7 @@ export interface CopilotToolBridgeInput {
   sessionKey?: string;
   agentDir?: string;
   workspaceDir?: string;
+  cwd?: string;
   /**
    * Sandbox context resolved by the caller (typically `attempt.ts` via
    * `resolveSandboxContext` from the plugin-sdk). When provided, wrapped
@@ -253,6 +254,7 @@ function buildOpenClawCodingToolsOptions(
     liveSessionKey && liveSessionKey !== sandboxSessionKey ? liveSessionKey : undefined;
 
   const workspaceDir = input.workspaceDir ?? a.workspaceDir;
+  const cwd = input.cwd ?? a.cwd;
   const agentDir = input.agentDir ?? a.agentDir;
   // Sandbox forwarded from the caller (attempt.ts derives it via
   // `resolveSandboxContext`). Wrapped tools that opt into sandbox-aware
@@ -314,6 +316,7 @@ function buildOpenClawCodingToolsOptions(
     runId: a.runId,
     agentDir,
     workspaceDir,
+    cwd,
     // Sandbox parity with PI
     // (`src/agents/pi-embedded-runner/run/attempt.ts:1238-1262`):
     // forwarded from the caller (attempt.ts derives it via

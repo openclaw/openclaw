@@ -1,4 +1,4 @@
-import type { SessionEvent, SessionEventType } from "@github/copilot-sdk";
+import type { MessageOptions, SessionEvent, SessionEventType } from "@github/copilot-sdk";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   buildCopilotAssistantUsage,
@@ -29,7 +29,7 @@ export interface SessionLike {
     ): (() => void) | void;
     (eventType: string, handler: (event: SessionEvent) => void): (() => void) | void;
   };
-  sendAndWait(options: { prompt: string }, timeout?: number): Promise<SessionEvent | undefined>;
+  sendAndWait(options: MessageOptions, timeout?: number): Promise<SessionEvent | undefined>;
   sessionId?: string;
 }
 
