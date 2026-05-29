@@ -7,6 +7,7 @@
  */
 
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { EngineLogger } from "../types.js";
 import { formatErrorMessage } from "../utils/format.js";
 
@@ -220,15 +221,22 @@ export class TokenManager {
     this.logger?.debug?.(`[qqbot:token:${appId}] >>> POST ${TOKEN_URL}`);
 
     let response: Response;
+    let releaseGuardedFetch: (() => Promise<void>) | undefined;
     try {
-      response = await fetch(TOKEN_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "User-Agent": this.resolveUserAgent(),
+      const guarded = await fetchWithSsrFGuard({
+        url: TOKEN_URL,
+        auditContext: "qqbot-token-fetch",
+        init: {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "User-Agent": this.resolveUserAgent(),
+          },
+          body: JSON.stringify({ appId, clientSecret }),
         },
-        body: JSON.stringify({ appId, clientSecret }),
       });
+      response = guarded.response;
+      releaseGuardedFetch = guarded.release;
     } catch (err) {
       this.logger?.error?.(`[qqbot:token:${appId}] Network error: ${formatErrorMessage(err)}`);
       throw new Error(`Network error getting access_token: ${formatErrorMessage(err)}`, {
@@ -248,6 +256,8 @@ export class TokenManager {
       throw new Error(`Failed to read access_token response: ${formatErrorMessage(err)}`, {
         cause: err,
       });
+    } finally {
+      await releaseGuardedFetch?.();
     }
     const logBody = rawBody.replace(/"access_token"\s*:\s*"[^"]+"/g, '"access_token": "***"');
     this.logger?.debug?.(`[qqbot:token:${appId}] <<< Body: ${logBody}`);

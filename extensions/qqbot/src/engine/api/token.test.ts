@@ -1,8 +1,25 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TokenManager } from "./token.js";
 
+const ssrfMocks = vi.hoisted(() => {
+  const release = vi.fn();
+  const fetchWithSsrFGuard = vi.fn(
+    async (params: { url: string; init?: RequestInit }) => ({
+      response: await globalThis.fetch(params.url, params.init),
+      release,
+    }),
+  );
+  return { fetchWithSsrFGuard, release };
+});
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+  fetchWithSsrFGuard: ssrfMocks.fetchWithSsrFGuard,
+}));
+
 describe("QQBot token manager", () => {
   afterEach(() => {
+    ssrfMocks.fetchWithSsrFGuard.mockClear();
+    ssrfMocks.release.mockClear();
     vi.unstubAllGlobals();
     vi.useRealTimers();
   });
@@ -21,6 +38,19 @@ describe("QQBot token manager", () => {
     await expect(new TokenManager().getAccessToken("app-id", "secret")).rejects.toThrow(
       "QQBot access_token response was malformed JSON",
     );
+    expect(ssrfMocks.fetchWithSsrFGuard).toHaveBeenCalledWith({
+      url: "https://bots.qq.com/app/getAppAccessToken",
+      auditContext: "qqbot-token-fetch",
+      init: {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "User-Agent": "QQBotPlugin/unknown",
+        },
+        body: JSON.stringify({ appId: "app-id", clientSecret: "secret" }),
+      },
+    });
+    expect(ssrfMocks.release).toHaveBeenCalledTimes(1);
   });
 
   it("does not cache access tokens forever when expires_in is unsafe", async () => {
