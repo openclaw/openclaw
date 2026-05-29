@@ -37,6 +37,7 @@ import {
 } from "../shared/gateway-tailscale-auth-policy.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { isRecord, resolveUserPath } from "../utils.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-dirs.js";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "./allowed-values.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
@@ -136,7 +137,11 @@ const bundledChannelIds = Object.freeze(
     .map((entry) => normalizeLowercaseStringOrEmpty(entry.channelId))
     .filter((channelId) => channelId.length > 0),
 );
-const internalChannelConfigIds = Object.freeze(["webchat"]);
+const coreChannelConfigIds = Object.freeze([
+  "defaults",
+  "modelByChannel",
+  INTERNAL_MESSAGE_CHANNEL,
+]);
 const bundledChannelIdSet = new Set(bundledChannelIds);
 const bundledChannelAliases = new Map<string, string>(
   GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.filter((entry) => entry.configurable !== false).flatMap(
@@ -1488,12 +1493,7 @@ function validateConfigObjectWithPluginsBase(
     };
   };
 
-  const allowedChannels = new Set<string>([
-    "defaults",
-    "modelByChannel",
-    ...internalChannelConfigIds,
-    ...bundledChannelIds,
-  ]);
+  const allowedChannels = new Set<string>([...coreChannelConfigIds, ...bundledChannelIds]);
 
   if (config.channels && isRecord(config.channels)) {
     for (const key of Object.keys(config.channels)) {
@@ -1525,6 +1525,9 @@ function validateConfigObjectWithPluginsBase(
         continue;
       }
 
+      if ((coreChannelConfigIds as readonly string[]).includes(trimmed)) {
+        continue;
+      }
       const channelSchema = ensureChannelSchemas().get(trimmed)?.schema;
       if (!channelSchema) {
         continue;

@@ -1,21 +1,24 @@
 import { z } from "zod";
 import type { ChannelsConfig } from "./types.channels.js";
 import { ChannelHeartbeatVisibilitySchema } from "./zod-schema.channels.js";
-import { ContextVisibilityModeSchema, GroupPolicySchema } from "./zod-schema.core.js";
+import {
+  ContextVisibilityModeSchema,
+  GroupPolicySchema,
+  ReplyRuntimeConfigSchemaShape,
+} from "./zod-schema.core.js";
 
 const ChannelModelByChannelSchema = z
   .record(z.string(), z.record(z.string(), z.string()))
   .optional();
-const WebchatChunkModeSchema = z.enum(["length", "newline"]);
 const WebchatStreamingSchema = z
   .object({
-    chunkMode: WebchatChunkModeSchema.optional(),
+    chunkMode: ReplyRuntimeConfigSchemaShape.chunkMode,
   })
   .strict();
 const WebchatAccountConfigSchema = z
   .object({
-    textChunkLimit: z.number().int().positive().optional(),
-    chunkMode: WebchatChunkModeSchema.optional(),
+    textChunkLimit: ReplyRuntimeConfigSchemaShape.textChunkLimit,
+    chunkMode: ReplyRuntimeConfigSchemaShape.chunkMode,
     streaming: WebchatStreamingSchema.optional(),
   })
   .strict();
