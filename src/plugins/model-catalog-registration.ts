@@ -1,4 +1,9 @@
 import {
+  synthesizeVoiceModelCatalogEntries,
+  type VoiceModelCapabilities,
+  type VoiceModelProvider,
+} from "../../packages/speech-core/voice-models.js";
+import {
   synthesizeMediaGenerationCatalogEntries,
   type MediaGenerationCatalogKind,
   type MediaGenerationCatalogProvider,
@@ -9,11 +14,6 @@ import type {
 } from "../model-catalog/types.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { uniqueValues } from "../shared/string-normalization.js";
-import {
-  synthesizeVoiceModelCatalogEntries,
-  type VoiceModelCapabilities,
-  type VoiceModelCatalogProvider,
-} from "../voice-models/catalog.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
 import type {
@@ -214,7 +214,7 @@ export function createModelCatalogRegistrationHandlers(params: {
 
   const registerSynthesizedVoiceModelCatalogProvider = (registration: {
     record: PluginRecord;
-    provider: VoiceModelCatalogProvider;
+    provider: VoiceModelProvider;
     capabilities: VoiceModelCapabilities;
     modes?: readonly string[];
   }) => {

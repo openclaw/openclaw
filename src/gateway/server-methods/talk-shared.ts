@@ -1,4 +1,10 @@
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  getVoiceProviderConfig,
+  providerMatchesId,
+  resolveSupportedVoiceModelRefs,
+  type VoiceModelProvider,
+} from "../../../packages/speech-core/voice-models.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { listRealtimeTranscriptionProviders } from "../../realtime-transcription/provider-registry.js";
 import type { RealtimeTranscriptionProviderConfig } from "../../realtime-transcription/provider-types.js";
@@ -116,171 +122,45 @@ export function getVoiceCallStreamingConfig(config: OpenClawConfig): {
   };
 }
 
-function parseVoiceModelRef(value: unknown): { provider: string; model: string } | undefined {
-  const ref = normalizeOptionalString(value);
-  if (!ref) {
-    return undefined;
-  }
-  const slashIndex = ref.indexOf("/");
-  if (slashIndex <= 0 || slashIndex === ref.length - 1) {
-    return undefined;
-  }
-  const provider = normalizeOptionalLowercaseString(ref.slice(0, slashIndex));
-  const model = normalizeOptionalString(ref.slice(slashIndex + 1));
-  return provider && model ? { provider, model } : undefined;
-}
+type RealtimeProviderWithConfig<TConfig extends Record<string, unknown>> = VoiceModelProvider & {
+  resolveConfig?: (ctx: { cfg: OpenClawConfig; rawConfig: TConfig }) => TConfig;
+  isConfigured: (ctx: { cfg: OpenClawConfig; providerConfig: TConfig }) => boolean;
+};
 
-function realtimeVoiceProviderMatchesId(
-  provider: { id: string; aliases?: readonly string[] },
-  providerId: string,
-): boolean {
-  const normalizedProviderId = normalizeOptionalLowercaseString(providerId);
-  return (
-    normalizeOptionalLowercaseString(provider.id) === normalizedProviderId ||
-    (provider.aliases ?? []).some(
-      (alias) => normalizeOptionalLowercaseString(alias) === normalizedProviderId,
-    )
-  );
-}
-
-function realtimeVoiceProviderHasModel(
-  provider: { defaultModel?: string; models?: readonly string[] },
-  model: string,
-): boolean {
-  const normalizedModel = normalizeOptionalString(model);
-  return [provider.defaultModel, ...(provider.models ?? [])].some(
-    (candidate) => normalizeOptionalString(candidate) === normalizedModel,
-  );
-}
-
-function getRealtimeVoiceProviderConfig(params: {
-  providerConfigs: Record<string, RealtimeVoiceProviderConfig>;
-  provider: { id: string; aliases?: readonly string[] };
-  configuredProviderId?: string;
-}): RealtimeVoiceProviderConfig {
-  const candidates = [
-    normalizeOptionalString(params.configuredProviderId),
-    params.provider.id,
-    ...(params.provider.aliases ?? []),
-  ].filter((key): key is string => Boolean(key));
-  const configuredKeys = Object.keys(params.providerConfigs);
-  for (const candidate of candidates) {
-    if (Object.hasOwn(params.providerConfigs, candidate)) {
-      return params.providerConfigs[candidate] ?? {};
-    }
-    const normalizedCandidate = normalizeOptionalLowercaseString(candidate);
-    const matchingKey = configuredKeys.find(
-      (key) => normalizeOptionalLowercaseString(key) === normalizedCandidate,
-    );
-    if (matchingKey) {
-      return params.providerConfigs[matchingKey] ?? {};
-    }
-  }
-  return {};
-}
-
-function resolveRealtimeVoiceModelDefaultRef(
-  config: OpenClawConfig,
-  provider: string | undefined,
-  providerConfigs: Record<string, RealtimeVoiceProviderConfig>,
-): { provider: string; model: string } | undefined {
-  const configured = config.agents?.defaults?.voiceModel;
-  const refs =
-    typeof configured === "string"
-      ? [configured]
-      : configured && typeof configured === "object" && !Array.isArray(configured)
-        ? [configured.primary, ...(Array.isArray(configured.fallbacks) ? configured.fallbacks : [])]
-        : [];
-  const normalizedProvider = normalizeOptionalLowercaseString(provider);
-  const realtimeVoiceProviders = listRealtimeVoiceProviders(config);
+function resolveConfiguredVoiceModelDefaultRef<TConfig extends Record<string, unknown>>(params: {
+  config: OpenClawConfig;
+  provider: string | undefined;
+  providerConfigs: Record<string, TConfig>;
+  providers: readonly RealtimeProviderWithConfig<TConfig>[];
+}): { provider: string; model: string } | undefined {
+  const configuredProvider = normalizeOptionalString(params.provider);
+  const refs = resolveSupportedVoiceModelRefs({
+    config: params.config.agents?.defaults?.voiceModel,
+    providers: params.providers,
+    providerId: configuredProvider,
+  });
   for (const ref of refs) {
-    const parsed = parseVoiceModelRef(ref);
-    if (!parsed) {
+    const provider = params.providers.find((entry) => providerMatchesId(entry, ref.provider));
+    if (!provider) {
       continue;
     }
-    const realtimeProvider = realtimeVoiceProviders.find((entry) =>
-      realtimeVoiceProviderMatchesId(entry, parsed.provider),
-    );
-    if (
-      !realtimeProvider ||
-      (normalizedProvider && !realtimeVoiceProviderMatchesId(realtimeProvider, normalizedProvider))
-    ) {
-      continue;
-    }
-    if (!realtimeVoiceProviderHasModel(realtimeProvider, parsed.model)) {
-      continue;
-    }
-    if (!normalizedProvider) {
-      const rawConfig = getRealtimeVoiceProviderConfig({
-        providerConfigs,
-        provider: realtimeProvider,
+    if (!configuredProvider) {
+      const rawConfig = getVoiceProviderConfig({
+        providerConfigs: params.providerConfigs,
+        provider,
       });
       const rawConfigWithModel =
-        rawConfig.model === undefined ? { ...rawConfig, model: parsed.model } : rawConfig;
+        rawConfig.model === undefined ? { ...rawConfig, model: ref.model } : rawConfig;
       const providerConfig =
-        realtimeProvider.resolveConfig?.({ cfg: config, rawConfig: rawConfigWithModel }) ??
-        rawConfigWithModel;
-      if (
-        !configuredOrFalse(() => realtimeProvider.isConfigured({ cfg: config, providerConfig }))
-      ) {
+        provider.resolveConfig?.({
+          cfg: params.config,
+          rawConfig: rawConfigWithModel as TConfig,
+        }) ?? (rawConfigWithModel as TConfig);
+      if (!configuredOrFalse(() => provider.isConfigured({ cfg: params.config, providerConfig }))) {
         continue;
       }
     }
-    return { provider: realtimeProvider.id, model: parsed.model };
-  }
-  return undefined;
-}
-
-function resolveRealtimeTranscriptionModelDefaultRef(
-  config: OpenClawConfig,
-  provider: string | undefined,
-  providerConfigs: Record<string, RealtimeTranscriptionProviderConfig>,
-): { provider: string; model: string } | undefined {
-  const configured = config.agents?.defaults?.voiceModel;
-  const refs =
-    typeof configured === "string"
-      ? [configured]
-      : configured && typeof configured === "object" && !Array.isArray(configured)
-        ? [configured.primary, ...(Array.isArray(configured.fallbacks) ? configured.fallbacks : [])]
-        : [];
-  const normalizedProvider = normalizeOptionalLowercaseString(provider);
-  const transcriptionProviders = listRealtimeTranscriptionProviders(config);
-  for (const ref of refs) {
-    const parsed = parseVoiceModelRef(ref);
-    if (!parsed) {
-      continue;
-    }
-    const transcriptionProvider = transcriptionProviders.find((entry) =>
-      realtimeVoiceProviderMatchesId(entry, parsed.provider),
-    );
-    if (
-      !transcriptionProvider ||
-      (normalizedProvider &&
-        !realtimeVoiceProviderMatchesId(transcriptionProvider, normalizedProvider))
-    ) {
-      continue;
-    }
-    if (realtimeVoiceProviderHasModel(transcriptionProvider, parsed.model)) {
-      if (!normalizedProvider) {
-        const rawConfig = getRealtimeTranscriptionProviderConfig({
-          providerConfigs,
-          provider: transcriptionProvider,
-        });
-        const rawConfigWithModel =
-          rawConfig.model === undefined ? { ...rawConfig, model: parsed.model } : rawConfig;
-        const providerConfig =
-          transcriptionProvider.resolveConfig?.({ cfg: config, rawConfig: rawConfigWithModel }) ??
-          rawConfigWithModel;
-        if (
-          !configuredOrFalse(() =>
-            transcriptionProvider.isConfigured({ cfg: config, providerConfig }),
-          )
-        ) {
-          continue;
-        }
-      }
-      return { provider: transcriptionProvider.id, model: parsed.model };
-    }
+    return { provider: provider.id, model: ref.model };
   }
   return undefined;
 }
@@ -303,11 +183,12 @@ export function buildTalkRealtimeConfig(config: OpenClawConfig, requestedProvide
     ...voiceCallRealtime.providers,
     ...talkRealtimeProviderConfigs,
   };
-  const voiceModelDefault = resolveRealtimeVoiceModelDefaultRef(
+  const voiceModelDefault = resolveConfiguredVoiceModelDefaultRef({
     config,
-    selectedProvider,
+    provider: selectedProvider,
     providerConfigs,
-  );
+    providers: listRealtimeVoiceProviders(config),
+  });
   const provider = selectedProvider ?? voiceModelDefault?.provider;
   const model = normalizeOptionalString(talkRealtime?.model) ?? voiceModelDefault?.model;
   return {
@@ -330,42 +211,17 @@ export function buildTalkTranscriptionConfig(config: OpenClawConfig, requestedPr
   const streamingConfig = getVoiceCallStreamingConfig(config);
   const provider = normalizeOptionalString(requestedProvider) ?? streamingConfig.provider;
   const providerConfigs = streamingConfig.providers ?? {};
-  const voiceModelDefault = resolveRealtimeTranscriptionModelDefaultRef(
+  const voiceModelDefault = resolveConfiguredVoiceModelDefaultRef({
     config,
     provider,
     providerConfigs,
-  );
+    providers: listRealtimeTranscriptionProviders(config),
+  });
   return {
     provider: provider ?? voiceModelDefault?.provider,
     providers: providerConfigs,
     model: voiceModelDefault?.model,
   };
-}
-
-function getRealtimeTranscriptionProviderConfig(params: {
-  providerConfigs: Record<string, RealtimeTranscriptionProviderConfig>;
-  provider: { id: string; aliases?: readonly string[] };
-  configuredProviderId?: string;
-}): RealtimeTranscriptionProviderConfig {
-  const candidates = [
-    normalizeOptionalString(params.configuredProviderId),
-    params.provider.id,
-    ...(params.provider.aliases ?? []),
-  ].filter((key): key is string => Boolean(key));
-  const configuredKeys = Object.keys(params.providerConfigs);
-  for (const candidate of candidates) {
-    if (Object.hasOwn(params.providerConfigs, candidate)) {
-      return params.providerConfigs[candidate] ?? {};
-    }
-    const normalizedCandidate = normalizeOptionalLowercaseString(candidate);
-    const matchingKey = configuredKeys.find(
-      (key) => normalizeOptionalLowercaseString(key) === normalizedCandidate,
-    );
-    if (matchingKey) {
-      return params.providerConfigs[matchingKey] ?? {};
-    }
-  }
-  return {};
 }
 
 export function configuredOrFalse(callback: () => boolean): boolean {
@@ -394,7 +250,7 @@ export function resolveConfiguredRealtimeTranscriptionProvider(params: {
       )
     : providers.toSorted((a, b) => (a.autoSelectOrder ?? 1000) - (b.autoSelectOrder ?? 1000));
   for (const provider of orderedProviders) {
-    const rawConfig = getRealtimeTranscriptionProviderConfig({
+    const rawConfig = getVoiceProviderConfig({
       providerConfigs: params.providerConfigs,
       provider,
       configuredProviderId: params.configuredProviderId,

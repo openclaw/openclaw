@@ -1,3 +1,4 @@
+import { resolveVoiceModelRefs } from "../../packages/speech-core/voice-models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sortUniqueStrings } from "../shared/string-normalization.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
@@ -301,18 +302,16 @@ function addStringValue(target: Set<string>, value: unknown): void {
   }
 }
 
-function addModelRefProviderId(target: Set<string>, value: unknown): void {
-  if (typeof value !== "string") {
-    return;
+function addModelConfigProviderIds(target: Set<string>, value: unknown): void {
+  for (const ref of resolveVoiceModelRefs(value)) {
+    addStringValue(target, ref.provider);
   }
-  const slashIndex = value.indexOf("/");
-  if (slashIndex <= 0) {
-    return;
-  }
-  addStringValue(target, value.slice(0, slashIndex));
 }
 
-function collectRequestedSpeechProviderIds(cfg: OpenClawConfig | undefined): Set<string> {
+function collectRequestedSpeechProviderIds(
+  cfg: OpenClawConfig | undefined,
+  options: { includeVoiceModel: boolean },
+): Set<string> {
   const requested = new Set<string>();
   const tts =
     typeof cfg?.messages?.tts === "object" && cfg.messages.tts !== null
@@ -320,7 +319,16 @@ function collectRequestedSpeechProviderIds(cfg: OpenClawConfig | undefined): Set
       : undefined;
   addStringValue(requested, tts?.provider);
   addObjectKeys(requested, tts?.providers);
+  if (options.includeVoiceModel) {
+    addModelConfigProviderIds(requested, cfg?.agents?.defaults?.voiceModel);
+  }
   addObjectKeys(requested, cfg?.models?.providers);
+  return requested;
+}
+
+function collectRequestedVoiceModelProviderIds(cfg: OpenClawConfig | undefined): Set<string> {
+  const requested = new Set<string>();
+  addModelConfigProviderIds(requested, cfg?.agents?.defaults?.voiceModel);
   return requested;
 }
 
@@ -350,10 +358,18 @@ function collectRequestedMediaUnderstandingProviderIds(
 function collectRequestedCapabilityProviderIds(params: {
   key: CapabilityProviderRegistryKey;
   cfg?: OpenClawConfig;
+  includeVoiceModel?: boolean;
 }): Set<string> | undefined {
   switch (params.key) {
     case "speechProviders":
-      return collectRequestedSpeechProviderIds(params.cfg);
+      return collectRequestedSpeechProviderIds(params.cfg, {
+        includeVoiceModel: params.includeVoiceModel ?? false,
+      });
+    case "realtimeTranscriptionProviders":
+    case "realtimeVoiceProviders":
+      return params.includeVoiceModel
+        ? collectRequestedVoiceModelProviderIds(params.cfg)
+        : undefined;
     case "mediaUnderstandingProviders":
       return collectRequestedMediaUnderstandingProviderIds(params.cfg);
     default:
@@ -579,7 +595,11 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
   const missingRequestedProviders =
     activeProviders.length > 0
       ? nonEmptyRequestedProviders(
-          collectRequestedCapabilityProviderIds({ key: params.key, cfg: params.cfg }),
+          collectRequestedCapabilityProviderIds({
+            key: params.key,
+            cfg: params.cfg,
+            includeVoiceModel: true,
+          }),
         )
       : undefined;
   if (activeProviders.length > 0 && params.key !== "memoryEmbeddingProviders") {

@@ -308,6 +308,18 @@ describe("talk.speak handler", () => {
 
   it("uses the active runtime config snapshot instead of the raw config snapshot", async () => {
     const runtimeConfig = createTalkConfig("env-acme-key");
+    runtimeConfig.talk = {
+      provider: "acme",
+      providers: {
+        acme: {
+          apiKey: "env-acme-key",
+          speakerVoice: "talk-speaker",
+          speakerVoiceId: "talk-speaker-id",
+          voice: "explicit-talk-voice",
+          voiceId: "explicit-talk-voice-id",
+        },
+      },
+    };
     runtimeConfig.messages = {
       tts: {
         providers: {
@@ -341,6 +353,13 @@ describe("talk.speak handler", () => {
         baseTtsConfig: Record<string, unknown>;
         talkProviderConfig: Record<string, unknown>;
       }) => {
+        expectRecordFields(talkProviderConfig, {
+          speakerVoice: "talk-speaker",
+          voice: "explicit-talk-voice",
+          voiceName: "talk-speaker",
+          speakerVoiceId: "talk-speaker-id",
+          voiceId: "explicit-talk-voice-id",
+        });
         expectRecordFields(expectRecordFields(baseTtsConfig.providers, {}).acme, {
           speakerVoice: "marin",
           voice: "marin",
@@ -403,7 +422,10 @@ describe("talk.config handler", () => {
         provider: "acme",
         providers: {
           acme: {
-            voiceId: "voice-from-talk-config",
+            speakerVoice: "talk-speaker",
+            speakerVoiceId: "talk-speaker-id",
+            voice: "explicit-talk-voice",
+            voiceId: "explicit-talk-voice-id",
           },
         },
       },
@@ -460,6 +482,13 @@ describe("talk.config handler", () => {
         });
         expect(apiKey).toBe("env-acme-key");
         expect(timeoutMs).toBe(54_321);
+        expectRecordFields(talkProviderConfig, {
+          speakerVoice: "talk-speaker",
+          voice: "explicit-talk-voice",
+          voiceName: "talk-speaker",
+          speakerVoiceId: "talk-speaker-id",
+          voiceId: "explicit-talk-voice-id",
+        });
         return {
           ...talkProviderConfig,
           ...(apiKey === undefined ? {} : { apiKey }),

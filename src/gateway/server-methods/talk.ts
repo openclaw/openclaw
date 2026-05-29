@@ -8,6 +8,10 @@ import {
   validateTalkModeParams,
   validateTalkSpeakParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  withSpeakerSelectionCompat,
+  withSpeakerSelectionFallbackCompat,
+} from "../../../packages/speech-core/speaker.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { redactConfigObject } from "../../config/redact-snapshot.js";
 import {
@@ -104,34 +108,16 @@ function resolveTalkVoiceId(
   return requested;
 }
 
-function withTalkSpeakerSelectionCompat(
-  config: Record<string, unknown> | undefined,
-): Record<string, unknown> {
-  const next = config ? { ...config } : {};
-  const speakerVoice = normalizeOptionalString(next.speakerVoice);
-  const speakerVoiceId = normalizeOptionalString(next.speakerVoiceId);
-  if (speakerVoice && !normalizeOptionalString(next.voice)) {
-    next.voice = speakerVoice;
-  }
-  if (speakerVoice && !normalizeOptionalString(next.voiceName)) {
-    next.voiceName = speakerVoice;
-  }
-  if (speakerVoiceId && !normalizeOptionalString(next.voiceId)) {
-    next.voiceId = speakerVoiceId;
-  }
-  return next;
-}
-
 function withTalkBaseTtsSpeakerSelectionCompat(
   baseTts: Record<string, unknown>,
 ): Record<string, unknown> {
-  const next = withTalkSpeakerSelectionCompat(baseTts);
+  const next = withSpeakerSelectionCompat(baseTts);
   const providers = asRecord(baseTts.providers);
   if (providers) {
     next.providers = Object.fromEntries(
       Object.entries(providers).map(([providerId, providerConfig]) => [
         providerId,
-        withTalkSpeakerSelectionCompat(asRecord(providerConfig) ?? {}),
+        withSpeakerSelectionCompat(asRecord(providerConfig) ?? {}),
       ]),
     );
   }
@@ -141,7 +127,7 @@ function withTalkBaseTtsSpeakerSelectionCompat(
     }
     const record = asRecord(value);
     if (record) {
-      next[key] = withTalkSpeakerSelectionCompat(record);
+      next[key] = withSpeakerSelectionCompat(record);
     }
   }
   return next;
@@ -172,7 +158,7 @@ function buildTalkTtsConfig(
   const baseTts = withTalkBaseTtsSpeakerSelectionCompat(
     asRecord(config.messages?.tts) ?? {},
   ) as TtsConfig;
-  const providerConfig = withTalkSpeakerSelectionCompat(resolved.config);
+  const providerConfig = withSpeakerSelectionFallbackCompat(resolved.config);
   const resolvedProviderConfig =
     speechProvider.resolveTalkConfig?.({
       cfg: config,
@@ -443,8 +429,8 @@ function resolveTalkResponseFromConfig(params: {
   const runtimeBaseTts = withTalkBaseTtsSpeakerSelectionCompat(
     asRecord(params.runtimeConfig.messages?.tts) ?? {},
   );
-  const sourceProviderConfig = withTalkSpeakerSelectionCompat(sourceResolved?.config);
-  const runtimeProviderConfig = withTalkSpeakerSelectionCompat(runtimeResolved?.config);
+  const sourceProviderConfig = withSpeakerSelectionFallbackCompat(sourceResolved?.config);
+  const runtimeProviderConfig = withSpeakerSelectionFallbackCompat(runtimeResolved?.config);
   const selectedBaseTts =
     Object.keys(runtimeBaseTts).length > 0
       ? runtimeBaseTts
