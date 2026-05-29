@@ -2203,6 +2203,7 @@ export async function dispatchReplyFromConfig(
       return (
         !suppressAutomaticSourceDelivery ||
         (allowSuppressedSourceProgressCallbacks &&
+          ctx.InboundEventKind !== "room_event" &&
           !sendPolicyDenied &&
           options?.forwardWhenSourceDeliverySuppressed === true)
       );

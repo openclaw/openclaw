@@ -2057,6 +2057,58 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
+  it("suppresses channel-owned room-event progress callbacks while source delivery is suppressed", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      verboseLevel: "off",
+    };
+    const cfg = automaticGroupReplyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "group",
+      InboundEventKind: "room_event",
+      From: "telegram:group:-100123",
+      SessionKey: "agent:main:telegram:group:-100123",
+    });
+    const onToolStart = vi.fn();
+    const onItemEvent = vi.fn();
+    const onCommandOutput = vi.fn();
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onToolStart?.({ name: "exec", phase: "start" });
+      await opts?.onItemEvent?.({ itemId: "1", kind: "tool", progressText: "running exec" });
+      await opts?.onCommandOutput?.({ phase: "end", name: "exec", status: "ok", exitCode: 0 });
+      return { text: "done" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+        suppressDefaultToolProgressMessages: true,
+        allowProgressCallbacksWhenSourceDeliverySuppressed: true,
+        onToolStart,
+        onItemEvent,
+        onCommandOutput,
+      },
+    });
+
+    expect(onToolStart).not.toHaveBeenCalled();
+    expect(onItemEvent).not.toHaveBeenCalled();
+    expect(onCommandOutput).not.toHaveBeenCalled();
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
   it("exposes live tool-summary state to reply_dispatch hooks", () => {
     let shouldSendToolSummaries = false;
     const event = dispatchFromConfigTesting.createReplyDispatchEvent({
