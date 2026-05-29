@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const fsMocks = vi.hoisted(() => ({
   access: vi.fn(),
+  readdir: vi.fn(),
   realpath: vi.fn(),
 }));
 
@@ -12,9 +13,11 @@ vi.mock("node:fs/promises", async () => {
     default: {
       ...actual,
       access: fsMocks.access,
+      readdir: fsMocks.readdir,
       realpath: fsMocks.realpath,
     },
     access: fsMocks.access,
+    readdir: fsMocks.readdir,
     realpath: fsMocks.realpath,
   };
 });
@@ -50,8 +53,55 @@ describe("resolvePreferredNodePath", () => {
   const linuxSystemNode = "/usr/bin/node";
   const nvmNode = "/home/test/.nvm/versions/node/v24.14.1/bin/node";
 
+  it("prefers an installed bundled state-dir node over the current PATH node", async () => {
+    const bundledNode = "/Users/test/.openclaw/tools/node-v22.22.0/bin/node";
+    const pathNode = "/Users/test/.local/bin/node";
+    mockNodePathPresent(bundledNode, darwinNode);
+    fsMocks.readdir.mockResolvedValue(["node-v22.22.0"]);
+
+    const execFile = vi.fn().mockResolvedValueOnce({ stdout: "22.22.0\n", stderr: "" });
+
+    const result = await resolvePreferredNodePath({
+      env: { HOME: "/Users/test" },
+      runtime: "node",
+      platform: "darwin",
+      execFile,
+      execPath: pathNode,
+    });
+
+    expect(result).toBe(bundledNode);
+    expect(execFile).toHaveBeenCalledTimes(1);
+    expect(execFile).toHaveBeenCalledWith(bundledNode, ["-p", "process.versions.node"], {
+      encoding: "utf8",
+    });
+  });
+
+  it("prefers a Windows bundled node.exe at the archive root", async () => {
+    const bundledNode = "C:/Users/test/.openclaw/tools/node-v22.22.0-win-x64/node.exe";
+    const pathNode = "C:/Users/test/AppData/Local/fnm_multishells/123/node.exe";
+    mockNodePathPresent(bundledNode);
+    fsMocks.readdir.mockResolvedValue(["node-v22.22.0-win-x64"]);
+
+    const execFile = vi.fn().mockResolvedValueOnce({ stdout: "22.22.0\n", stderr: "" });
+
+    const result = await resolvePreferredNodePath({
+      env: { OPENCLAW_STATE_DIR: "C:/Users/test/.openclaw" },
+      runtime: "node",
+      platform: "win32",
+      execFile,
+      execPath: pathNode,
+    });
+
+    expect(result).toBe(bundledNode);
+    expect(execFile).toHaveBeenCalledTimes(1);
+    expect(execFile).toHaveBeenCalledWith(bundledNode, ["-p", "process.versions.node"], {
+      encoding: "utf8",
+    });
+  });
+
   it("prefers supported system node over version-manager execPath", async () => {
     mockNodePathPresent(darwinNode);
+    fsMocks.readdir.mockRejectedValue(new Error("missing"));
 
     const execFile = vi
       .fn()
