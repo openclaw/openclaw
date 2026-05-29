@@ -6,6 +6,8 @@ import {
 } from "./cli-runner.js";
 
 describe("isCliBindingFlushed", () => {
+  const workspaceDir = "/tmp/openclaw-workspace";
+
   beforeEach(() => {
     restoreCliRunnerTestDeps();
   });
@@ -26,16 +28,16 @@ describe("isCliBindingFlushed", () => {
     const probe = vi.fn(async () => true);
     setCliRunnerTestDeps({ claudeCliSessionTranscriptHasContent: probe });
 
-    expect(await isCliBindingFlushed("sid-fresh", "claude-cli")).toBe(true);
+    expect(await isCliBindingFlushed("sid-fresh", "claude-cli", workspaceDir)).toBe(true);
     expect(probe).toHaveBeenCalledTimes(1);
-    expect(probe).toHaveBeenCalledWith({ sessionId: "sid-fresh" });
+    expect(probe).toHaveBeenCalledWith({ sessionId: "sid-fresh", workspaceDir });
   });
 
   it("retries up to three times before giving up", async () => {
     const probe = vi.fn(async () => false);
     setCliRunnerTestDeps({ claudeCliSessionTranscriptHasContent: probe });
 
-    expect(await isCliBindingFlushed("sid-cold", "claude-cli")).toBe(false);
+    expect(await isCliBindingFlushed("sid-cold", "claude-cli", workspaceDir)).toBe(false);
     expect(probe).toHaveBeenCalledTimes(3);
   });
 
@@ -47,7 +49,7 @@ describe("isCliBindingFlushed", () => {
     });
     setCliRunnerTestDeps({ claudeCliSessionTranscriptHasContent: probe });
 
-    expect(await isCliBindingFlushed("sid-late", "claude-cli")).toBe(true);
+    expect(await isCliBindingFlushed("sid-late", "claude-cli", workspaceDir)).toBe(true);
     expect(probe).toHaveBeenCalledTimes(2);
   });
 
@@ -59,7 +61,7 @@ describe("isCliBindingFlushed", () => {
 
       const settled = vi.fn();
       const errored = vi.fn();
-      isCliBindingFlushed("sid-bounded", "claude-cli").then(settled, errored);
+      isCliBindingFlushed("sid-bounded", "claude-cli", workspaceDir).then(settled, errored);
 
       await vi.advanceTimersByTimeAsync(0);
       await vi.advanceTimersByTimeAsync(50);

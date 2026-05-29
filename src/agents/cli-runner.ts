@@ -49,6 +49,7 @@ export function restoreCliRunnerTestDeps(): void {
 export async function isCliBindingFlushed(
   sessionId: string | undefined,
   provider: string | undefined,
+  workspaceDir?: string,
 ): Promise<boolean> {
   if (!provider || !isClaudeCliProvider(provider)) {
     return true;
@@ -60,7 +61,7 @@ export async function isCliBindingFlushed(
     if (delayMs > 0) {
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
-    if (await cliRunnerDeps.claudeCliSessionTranscriptHasContent({ sessionId })) {
+    if (await cliRunnerDeps.claudeCliSessionTranscriptHasContent({ sessionId, workspaceDir })) {
       return true;
     }
   }
@@ -719,7 +720,11 @@ export async function runPreparedCliAgent(
         assistantText,
         output,
       });
-      const bindingFlushOk = await isCliBindingFlushed(effectiveCliSessionId, params.provider);
+      const bindingFlushOk = await isCliBindingFlushed(
+        effectiveCliSessionId,
+        params.provider,
+        context.cwd ?? context.workspaceDir,
+      );
       await runCliAgentEndHook(params, {
         event: {
           messages: buildAgentEndMessages(lastAssistant),
@@ -755,6 +760,7 @@ export async function runPreparedCliAgent(
             const bindingFlushOk = await isCliBindingFlushed(
               effectiveCliSessionId,
               params.provider,
+              context.cwd ?? context.workspaceDir,
             );
             await runCliAgentEndHook(params, {
               event: {
