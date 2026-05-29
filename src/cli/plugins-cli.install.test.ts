@@ -1897,9 +1897,13 @@ describe("plugins cli install", () => {
     await runPluginsCommand(["plugins", "install", "@acme/demo-hooks"]);
 
     expect(hookNpmInstallCall().spec).toBe("@acme/demo-hooks");
-    expect(recordHookInstallCall().hookId).toBe("demo-hooks");
-    expect(recordHookInstallCall().spec).toBe("@acme/demo-hooks");
-    expect(recordHookInstallCall().hooks).toEqual(["command-audit"]);
+    const record = recordHookInstallCall();
+    expect(record.hookId).toBe("demo-hooks");
+    expect(record.spec).toBe("@acme/demo-hooks");
+    expect(record.resolvedVersion).toBe("1.2.3");
+    expect(record.resolvedSpec).toBe("@acme/demo-hooks@1.2.3");
+    expect(record.integrity).toBe("sha256-demo");
+    expect(record.hooks).toEqual(["command-audit"]);
     expect(writeConfigFile).toHaveBeenCalledWith(installedCfg);
     expect(runtimeLogsContain("Installed hook pack: demo-hooks")).toBe(true);
   });
