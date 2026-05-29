@@ -306,6 +306,7 @@ export async function handleDirectiveOnly(
     cfg: params.cfg,
     channel: provider,
     sessionEntry,
+    sessionKey,
   });
   if (queueAck) {
     return queueAck;

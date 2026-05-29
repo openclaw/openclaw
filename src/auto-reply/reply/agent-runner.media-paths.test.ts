@@ -419,7 +419,7 @@ describe("runReplyAgent media path normalization", () => {
       gatewayHealth: "live",
     }));
 
-    await runReplyAgent(
+    const silent = await runReplyAgent(
       makeRunReplyAgentParams({
         resolvedQueue: { mode: "steer" } as QueueSettings,
         shouldSteer: true,
@@ -428,6 +428,7 @@ describe("runReplyAgent media path normalization", () => {
       }),
     );
 
+    expect(silent).toBeUndefined();
     expect(queueEmbeddedAgentMessageWithOutcomeAsyncMock).toHaveBeenLastCalledWith(
       "session",
       "generate chart",
@@ -442,6 +443,18 @@ describe("runReplyAgent media path normalization", () => {
       queueMode: "steer",
       source: "inbound",
     });
+
+    const verbose = await runReplyAgent(
+      makeRunReplyAgentParams({
+        resolvedQueue: { mode: "steer" } as QueueSettings,
+        shouldSteer: true,
+        shouldFollowup: true,
+        isStreaming: true,
+        resolvedVerboseLevel: "on",
+      }),
+    );
+
+    expect(verbose).toEqual({ text: "Steered current run." });
   });
 
   it("queues active prompts in followup mode without steering", async () => {
@@ -476,7 +489,7 @@ describe("runReplyAgent media path normalization", () => {
       errorMessage: "cannot steer a compact turn",
     }));
 
-    await runReplyAgent(
+    const silent = await runReplyAgent(
       makeRunReplyAgentParams({
         resolvedQueue: { mode: "steer" } as QueueSettings,
         shouldSteer: true,
@@ -487,6 +500,7 @@ describe("runReplyAgent media path normalization", () => {
       }),
     );
 
+    expect(silent).toBeUndefined();
     expect(enqueueFollowupRunMock).toHaveBeenCalledOnce();
     expect(enqueueFollowupRunMock.mock.calls[0]?.[1].prompt).toBe("generate chart");
     expect(getLastBusyMessageOutcome("main")).toMatchObject({
@@ -494,6 +508,22 @@ describe("runReplyAgent media path normalization", () => {
       sessionId: "session",
       queueMode: "steer",
       source: "inbound",
+    });
+
+    const verbose = await runReplyAgent(
+      makeRunReplyAgentParams({
+        resolvedQueue: { mode: "steer" } as QueueSettings,
+        shouldSteer: true,
+        shouldFollowup: true,
+        isActive: true,
+        isRunActive: () => true,
+        isStreaming: true,
+        resolvedVerboseLevel: "on",
+      }),
+    );
+
+    expect(verbose).toEqual({
+      text: "Queued after current run: steering unavailable while runtime_rejected.",
     });
   });
 
