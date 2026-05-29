@@ -1,6 +1,10 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { generatePkceVerifierChallenge, toFormUrlEncoded } from "openclaw/plugin-sdk/provider-auth";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
+import {
+  fetchWithSsrFGuard,
+  ssrfPolicyFromHttpBaseUrlAllowedHostname,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 
 export type MiniMaxRegion = "cn" | "global";
 
@@ -73,45 +77,69 @@ function generatePkce(): { verifier: string; challenge: string; state: string } 
   return { verifier, challenge, state };
 }
 
+async function fetchMiniMaxOAuth(params: {
+  url: string;
+  baseUrl: string;
+  init: RequestInit;
+  auditContext: string;
+}): Promise<{ response: Response; release: () => Promise<void> }> {
+  return fetchWithSsrFGuard({
+    url: params.url,
+    init: params.init,
+    policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(params.baseUrl),
+    auditContext: params.auditContext,
+    capture: false,
+  });
+}
+
 async function requestOAuthCode(params: {
   challenge: string;
   state: string;
   region: MiniMaxRegion;
 }): Promise<MiniMaxOAuthAuthorization> {
   const endpoints = getOAuthEndpoints(params.region);
-  const response = await fetch(endpoints.codeEndpoint, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-      Accept: "application/json",
-      "x-request-id": randomUUID(),
+  const { response, release } = await fetchMiniMaxOAuth({
+    url: endpoints.codeEndpoint,
+    baseUrl: endpoints.baseUrl,
+    auditContext: "minimax-oauth-code",
+    init: {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Accept: "application/json",
+        "x-request-id": randomUUID(),
+      },
+      body: toFormUrlEncoded({
+        response_type: "code",
+        client_id: endpoints.clientId,
+        scope: MINIMAX_OAUTH_SCOPE,
+        code_challenge: params.challenge,
+        code_challenge_method: "S256",
+        state: params.state,
+      }),
     },
-    body: toFormUrlEncoded({
-      response_type: "code",
-      client_id: endpoints.clientId,
-      scope: MINIMAX_OAUTH_SCOPE,
-      code_challenge: params.challenge,
-      code_challenge_method: "S256",
-      state: params.state,
-    }),
   });
 
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`MiniMax OAuth authorization failed: ${text || response.statusText}`);
-  }
+  try {
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`MiniMax OAuth authorization failed: ${text || response.statusText}`);
+    }
 
-  const payload = (await response.json()) as MiniMaxOAuthAuthorization & { error?: string };
-  if (!payload.user_code || !payload.verification_uri) {
-    throw new Error(
-      payload.error ??
-        "MiniMax OAuth authorization returned an incomplete payload (missing user_code or verification_uri).",
-    );
+    const payload = (await response.json()) as MiniMaxOAuthAuthorization & { error?: string };
+    if (!payload.user_code || !payload.verification_uri) {
+      throw new Error(
+        payload.error ??
+          "MiniMax OAuth authorization returned an incomplete payload (missing user_code or verification_uri).",
+      );
+    }
+    if (payload.state !== params.state) {
+      throw new Error("MiniMax OAuth state mismatch: possible CSRF attack or session corruption.");
+    }
+    return payload;
+  } finally {
+    await release();
   }
-  if (payload.state !== params.state) {
-    throw new Error("MiniMax OAuth state mismatch: possible CSRF attack or session corruption.");
-  }
-  return payload;
 }
 
 async function pollOAuthToken(params: {
@@ -120,79 +148,88 @@ async function pollOAuthToken(params: {
   region: MiniMaxRegion;
 }): Promise<TokenResult> {
   const endpoints = getOAuthEndpoints(params.region);
-  const response = await fetch(endpoints.tokenEndpoint, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-      Accept: "application/json",
+  const { response, release } = await fetchMiniMaxOAuth({
+    url: endpoints.tokenEndpoint,
+    baseUrl: endpoints.baseUrl,
+    auditContext: "minimax-oauth-token",
+    init: {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Accept: "application/json",
+      },
+      body: toFormUrlEncoded({
+        grant_type: MINIMAX_OAUTH_GRANT_TYPE,
+        client_id: endpoints.clientId,
+        user_code: params.userCode,
+        code_verifier: params.verifier,
+      }),
     },
-    body: toFormUrlEncoded({
-      grant_type: MINIMAX_OAUTH_GRANT_TYPE,
-      client_id: endpoints.clientId,
-      user_code: params.userCode,
-      code_verifier: params.verifier,
-    }),
   });
 
-  const text = await response.text();
-  let payload:
-    | {
-        status?: string;
-        base_resp?: { status_code?: number; status_msg?: string };
+  try {
+    const text = await response.text();
+    let payload:
+      | {
+          status?: string;
+          base_resp?: { status_code?: number; status_msg?: string };
+        }
+      | undefined;
+    if (text) {
+      try {
+        payload = JSON.parse(text) as typeof payload;
+      } catch {
+        payload = undefined;
       }
-    | undefined;
-  if (text) {
-    try {
-      payload = JSON.parse(text) as typeof payload;
-    } catch {
-      payload = undefined;
     }
-  }
 
-  if (!response.ok) {
-    return {
-      status: "error",
-      message:
-        (payload?.base_resp?.status_msg ?? text) || "MiniMax OAuth failed to parse response.",
+    if (!response.ok) {
+      return {
+        status: "error",
+        message:
+          (payload?.base_resp?.status_msg ?? text) || "MiniMax OAuth failed to parse response.",
+      };
+    }
+
+    if (!payload) {
+      return { status: "error", message: "MiniMax OAuth failed to parse response." };
+    }
+
+    const tokenPayload = payload as {
+      status: string;
+      access_token?: string | null;
+      refresh_token?: string | null;
+      expired_in?: number | null;
+      token_type?: string;
+      resource_url?: string;
+      notification_message?: string;
     };
+
+    if (tokenPayload.status === "error") {
+      return { status: "error", message: "An error occurred. Please try again later" };
+    }
+
+    if (tokenPayload.status !== "success") {
+      return { status: "pending", message: "current user code is not authorized" };
+    }
+
+    if (!tokenPayload.access_token || !tokenPayload.refresh_token || !tokenPayload.expired_in) {
+      return { status: "error", message: "MiniMax OAuth returned incomplete token payload." };
+    }
+
+    return {
+      status: "success",
+      token: {
+        access: tokenPayload.access_token,
+        refresh: tokenPayload.refresh_token,
+        expires: normalizeOAuthExpires(tokenPayload.expired_in),
+        resourceUrl: tokenPayload.resource_url,
+        notification_message: tokenPayload.notification_message,
+      },
+    };
+  } finally {
+    await release();
   }
-
-  if (!payload) {
-    return { status: "error", message: "MiniMax OAuth failed to parse response." };
-  }
-
-  const tokenPayload = payload as {
-    status: string;
-    access_token?: string | null;
-    refresh_token?: string | null;
-    expired_in?: number | null;
-    token_type?: string;
-    resource_url?: string;
-    notification_message?: string;
-  };
-
-  if (tokenPayload.status === "error") {
-    return { status: "error", message: "An error occurred. Please try again later" };
-  }
-
-  if (tokenPayload.status !== "success") {
-    return { status: "pending", message: "current user code is not authorized" };
-  }
-
-  if (!tokenPayload.access_token || !tokenPayload.refresh_token || !tokenPayload.expired_in) {
-    return { status: "error", message: "MiniMax OAuth returned incomplete token payload." };
-  }
-
-  return {
-    status: "success",
-    token: {
-      access: tokenPayload.access_token,
-      refresh: tokenPayload.refresh_token,
-      expires: normalizeOAuthExpires(tokenPayload.expired_in),
-      resourceUrl: tokenPayload.resource_url,
-      notification_message: tokenPayload.notification_message,
-    },
-  };
 }
 
 export async function loginMiniMaxPortalOAuth(params: {
