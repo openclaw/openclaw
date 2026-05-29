@@ -120,10 +120,11 @@ private fun ChatMessageBody(
           val text = part.text ?: continue
           ChatMarkdown(text = text, textColor = textColor)
         }
-        else -> {
+        "image" -> {
           val b64 = part.base64 ?: continue
           ChatBase64Image(base64 = b64, mimeType = part.mimeType)
         }
+        else -> continue
       }
     }
   }

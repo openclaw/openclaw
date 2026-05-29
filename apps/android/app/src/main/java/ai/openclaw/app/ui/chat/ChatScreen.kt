@@ -502,10 +502,10 @@ private fun ChatBubble(
           color = ClawTheme.colors.text,
         )
         displayableContent.forEach { part ->
-          if (part.type == "text") {
-            ChatText(text = part.text.orEmpty(), textColor = ClawTheme.colors.text)
-          } else {
-            Text(text = part.fileName ?: "Attachment", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+          when (part.type) {
+            "text" -> ChatText(text = part.text.orEmpty(), textColor = ClawTheme.colors.text)
+            "image" -> Text(text = part.fileName ?: "Attachment", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+            else -> { /* skip non-displayable types */ }
           }
         }
         timestampMs?.let {

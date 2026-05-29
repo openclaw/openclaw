@@ -654,6 +654,8 @@ internal fun parseChatMessageContent(el: JsonElement): ChatMessageContent? {
         base64 = obj["content"].asStringOrNull()?.takeIf { it.isNotBlank() },
       )
 
+    "thinking", "reasoning", "redacted_thinking" -> null
+
     else -> null
   }
 }
