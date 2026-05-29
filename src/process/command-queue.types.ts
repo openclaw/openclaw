@@ -3,6 +3,7 @@ export type CommandQueueEnqueueOptions = {
   onWait?: (waitMs: number, queuedAhead: number) => void;
   taskTimeoutMs?: number;
   taskTimeoutProgressAtMs?: () => number | undefined;
+  priority?: "foreground" | "normal" | "background";
 };
 
 export type CommandQueueEnqueueFn = <T>(

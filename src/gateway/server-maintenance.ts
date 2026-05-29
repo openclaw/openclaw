@@ -72,27 +72,60 @@ export function startGatewayMaintenanceTimers(params: {
     params.nodeSendToAllSubscribed("tick", payload);
   }, TICK_INTERVAL_MS);
 
-  // periodic health refresh to keep cached snapshot warm
+  // Keep cached health warm without request-time live channel probes. Explicit
+  // status/doctor probe paths still pass probe=true when the operator asks.
   const healthInterval = setInterval(() => {
     void params
-      .refreshGatewayHealthSnapshot({ probe: true })
+      .refreshGatewayHealthSnapshot({ probe: false })
       .catch((err) => params.logHealth.error(`refresh failed: ${formatError(err)}`));
   }, HEALTH_REFRESH_INTERVAL_MS);
 
   // Prime cache so first client gets a snapshot without waiting.
   void params
-    .refreshGatewayHealthSnapshot({ probe: true })
+    .refreshGatewayHealthSnapshot({ probe: false })
     .catch((err) => params.logHealth.error(`initial refresh failed: ${formatError(err)}`));
 
   // dedupe cache cleanup
   const dedupeCleanup = setInterval(() => {
     const AGENT_RUN_SEQ_MAX = 10_000;
     const now = Date.now();
-    const isActiveRunDedupeKey = (key: string) => {
+    const resolveDedupeRunId = (key: string, entry: DedupeEntry) => {
+      if (!key.startsWith("agent:") && !key.startsWith("chat:")) {
+        return undefined;
+      }
+      const keyRunId = key.slice(key.indexOf(":") + 1);
+      if (keyRunId) {
+        const directEntry = params.chatAbortControllers.get(keyRunId);
+        if (directEntry) {
+          return keyRunId;
+        }
+      }
+      const payload = entry.payload;
+      return payload && typeof payload === "object" && !Array.isArray(payload)
+        ? typeof (payload as { runId?: unknown }).runId === "string"
+          ? (payload as { runId: string }).runId.trim() || undefined
+          : undefined
+        : undefined;
+    };
+    const isPendingAcceptedAgentDedupeKey = (key: string, dedupeEntry: DedupeEntry) => {
+      if (!key.startsWith("agent:")) {
+        return false;
+      }
+      const payload = dedupeEntry.payload;
+      if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+        return false;
+      }
+      if ((payload as { status?: unknown }).status !== "accepted") {
+        return false;
+      }
+      const expiresAtMs = (payload as { expiresAtMs?: unknown }).expiresAtMs;
+      return typeof expiresAtMs === "number" && Number.isFinite(expiresAtMs) && expiresAtMs > now;
+    };
+    const isActiveRunDedupeKey = (key: string, dedupeEntry: DedupeEntry) => {
       if (!key.startsWith("agent:") && !key.startsWith("chat:")) {
         return false;
       }
-      const runId = key.slice(key.indexOf(":") + 1);
+      const runId = resolveDedupeRunId(key, dedupeEntry);
       const entry = runId ? params.chatAbortControllers.get(runId) : undefined;
       if (!entry) {
         return false;
@@ -100,7 +133,7 @@ export function startGatewayMaintenanceTimers(params: {
       return key.startsWith("agent:") ? entry.kind === "agent" : entry.kind !== "agent";
     };
     for (const [k, v] of params.dedupe) {
-      if (isActiveRunDedupeKey(k)) {
+      if (isActiveRunDedupeKey(k, v) || isPendingAcceptedAgentDedupeKey(k, v)) {
         continue;
       }
       if (now - v.ts > DEDUPE_TTL_MS) {
@@ -110,7 +143,10 @@ export function startGatewayMaintenanceTimers(params: {
     if (params.dedupe.size > DEDUPE_MAX) {
       const excess = params.dedupe.size - DEDUPE_MAX;
       const oldestKeys = [...params.dedupe.entries()]
-        .filter(([key]) => !isActiveRunDedupeKey(key))
+        .filter(
+          ([key, entry]) =>
+            !isActiveRunDedupeKey(key, entry) && !isPendingAcceptedAgentDedupeKey(key, entry),
+        )
         .toSorted(([, left], [, right]) => left.ts - right.ts)
         .slice(0, excess)
         .map(([key]) => key);

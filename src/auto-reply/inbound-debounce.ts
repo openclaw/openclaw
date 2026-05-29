@@ -53,6 +53,7 @@ export type InboundDebounceCreateParams<T> = {
   serializeImmediate?: boolean;
   onFlush: (items: T[]) => Promise<void>;
   onError?: (err: unknown, items: T[]) => void;
+  onCancel?: (items: T[]) => void;
 };
 
 export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>) {
@@ -170,6 +171,30 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     await flushBuffer(key, buffer);
   };
 
+  const cancelKey = (key: string): boolean => {
+    const buffer = buffers.get(key);
+    if (!buffer) {
+      return false;
+    }
+    if (buffers.get(key) === buffer) {
+      buffers.delete(key);
+    }
+    if (buffer.timeout) {
+      clearTimeout(buffer.timeout);
+      buffer.timeout = null;
+    }
+    const canceledItems = buffer.items;
+    buffer.items = [];
+    try {
+      params.onCancel?.(canceledItems);
+    } catch {
+      // Cancellation observers release caller-owned resources; debounce state
+      // must still drain even if an observer fails.
+    }
+    releaseBuffer(buffer);
+    return true;
+  };
+
   const scheduleFlush = (key: string, buffer: DebounceBuffer<T>) => {
     if (buffer.timeout) {
       clearTimeout(buffer.timeout);
@@ -262,5 +287,5 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     scheduleFlush(key, buffer);
   };
 
-  return { enqueue, flushKey };
+  return { enqueue, flushKey, cancelKey };
 }

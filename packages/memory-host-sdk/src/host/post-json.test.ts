@@ -9,21 +9,28 @@ vi.mock("./remote-http.js", () => ({
 const remoteHttpMock = vi.mocked(withRemoteHttpResponse);
 
 function jsonResponse(payload: unknown, status = 200): Response {
-  return {
-    ok: status >= 200 && status < 300,
-    status,
-    json: async () => payload,
-    text: async () => JSON.stringify(payload),
-  } as Response;
+  return new Response(JSON.stringify(payload), { status });
 }
 
 function textResponse(body: string, status: number): Response {
-  return {
-    ok: status >= 200 && status < 300,
-    status,
-    json: async () => JSON.parse(body) as unknown,
-    text: async () => body,
-  } as Response;
+  return new Response(body, { status });
+}
+
+function streamingTextResponse(params: {
+  body: string;
+  status: number;
+  onCancel: () => void;
+}): Response {
+  const encoded = new TextEncoder().encode(params.body);
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoded);
+    },
+    cancel() {
+      params.onCancel();
+    },
+  });
+  return new Response(stream, { status: params.status });
 }
 
 describe("postJson", () => {
@@ -45,6 +52,23 @@ describe("postJson", () => {
     });
 
     expect(result).toEqual({ data: [{ embedding: [1, 2] }] });
+  });
+
+  it("forwards abort signals to the remote HTTP request", async () => {
+    const controller = new AbortController();
+    remoteHttpMock.mockImplementationOnce(async (params) => {
+      expect(params.signal).toBe(controller.signal);
+      return await params.onResponse(jsonResponse({ ok: true }));
+    });
+
+    await postJson({
+      url: "https://memory.example/v1/post",
+      headers: {},
+      body: {},
+      signal: controller.signal,
+      errorPrefix: "post failed",
+      parse: (payload) => payload,
+    });
   });
 
   it("attaches status to thrown error when requested", async () => {
@@ -69,6 +93,32 @@ describe("postJson", () => {
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toBe("post failed: 502 bad gateway");
     expect((error as { status?: unknown }).status).toBe(502);
+  });
+
+  it("bounds non-ok response bodies before formatting the error", async () => {
+    let canceled = false;
+    remoteHttpMock.mockImplementationOnce(async (params) => {
+      return await params.onResponse(
+        streamingTextResponse({
+          body: "x".repeat(12_000),
+          status: 502,
+          onCancel: () => {
+            canceled = true;
+          },
+        }),
+      );
+    });
+
+    await expect(
+      postJson({
+        url: "https://memory.example/v1/post",
+        headers: {},
+        body: {},
+        errorPrefix: "post failed",
+        parse: () => ({}),
+      }),
+    ).rejects.toThrow(`post failed: 502 ${"x".repeat(1_000)}... [truncated]`);
+    expect(canceled).toBe(true);
   });
 
   it("wraps malformed success JSON with the request error prefix", async () => {

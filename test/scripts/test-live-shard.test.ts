@@ -1,26 +1,25 @@
+import { spawnSync } from "node:child_process";
 import fs, { readFileSync } from "node:fs";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   LIVE_TEST_SHARDS,
   RELEASE_LIVE_TEST_SHARDS,
   collectAllLiveTestFiles,
+  parseLiveShardArgs,
   selectLiveShardFiles,
 } from "../../scripts/test-live-shard.mjs";
+import { expectNoReaddirSyncDuring } from "../../src/test-utils/fs-scan-assertions.js";
 
 describe("scripts/test-live-shard", () => {
   const allFiles = collectAllLiveTestFiles();
 
   it("discovers live tests without scanning source roots in-process", () => {
-    const readDir = vi.spyOn(fs, "readdirSync");
-    try {
+    expectNoReaddirSyncDuring(() => {
       const files = collectAllLiveTestFiles();
 
       expect(files.length).toBeGreaterThan(0);
       expect(files.every((file) => file.endsWith(".live.test.ts"))).toBe(true);
-      expect(readDir).not.toHaveBeenCalled();
-    } finally {
-      readDir.mockRestore();
-    }
+    });
   });
 
   it("covers every native live test and tracks provider-filtered release fanout", () => {
@@ -121,5 +120,36 @@ describe("scripts/test-live-shard", () => {
 
   it("rejects unknown shard names", () => {
     expect(() => selectLiveShardFiles("native-live-missing")).toThrow(/Unknown live test shard/u);
+  });
+
+  it("parses list mode and rejects unknown live shard options", () => {
+    expect(parseLiveShardArgs(["native-live-src-agents", "--list"])).toEqual({
+      shard: "native-live-src-agents",
+      listOnly: true,
+      passthroughArgs: [],
+    });
+
+    expect(() => parseLiveShardArgs(["--lisst", "native-live-src-agents"])).toThrow(
+      /Unknown option: --lisst/u,
+    );
+  });
+
+  it("prints CLI help before validating shard options", () => {
+    const result = spawnSync(process.execPath, ["scripts/test-live-shard.mjs", "--help"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Usage: node scripts/test-live-shard.mjs");
+  });
+
+  it("preserves Vitest passthrough args after the live shard separator", () => {
+    expect(parseLiveShardArgs(["native-live-test", "--", "-t", "smoke"])).toEqual({
+      shard: "native-live-test",
+      listOnly: false,
+      passthroughArgs: ["-t", "smoke"],
+    });
   });
 });

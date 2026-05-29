@@ -1,7 +1,9 @@
 export {
-  createLaneTextDeliverer,
   isPotentialTruncatedFinal,
   selectLongerFinalText,
+} from "openclaw/plugin-sdk/channel-outbound";
+export {
+  createLaneTextDeliverer,
   type DraftLaneState,
   type LaneDeliveryResult,
   type LaneName,

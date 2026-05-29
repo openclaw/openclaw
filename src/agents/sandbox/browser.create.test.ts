@@ -1,6 +1,16 @@
-import { readFileSync } from "node:fs";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { SANDBOX_BROWSER_IMAGE_CONTRACT_EPOCH } from "./constants.js";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  computeSandboxBrowserConfigHash,
+  SANDBOX_DOCKER_EXPLICIT_ENV_POLICY_EPOCH,
+} from "./config-hash.js";
+import { resolveSandboxBrowserDockerCreateConfig } from "./config.js";
+import {
+  SANDBOX_BROWSER_IMAGE_CONTRACT_EPOCH,
+  SANDBOX_BROWSER_SECURITY_HASH_EPOCH,
+} from "./constants.js";
 import { collectDockerFlagValues, findDockerArgsCall } from "./test-args.js";
 import type { SandboxConfig } from "./types.js";
 import { SANDBOX_MOUNT_FORMAT_VERSION } from "./workspace-mounts.js";
@@ -28,6 +38,14 @@ const bridgeMocks = vi.hoisted(() => ({
   startBrowserBridgeServer: vi.fn(),
   stopBrowserBridgeServer: vi.fn(),
 }));
+
+const tmpDirs: string[] = [];
+
+function makeTempDir(): string {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "openclaw-browser-mounts-"));
+  tmpDirs.push(dir);
+  return dir;
+}
 
 vi.mock("./docker.js", async () => {
   const actual = await vi.importActual<typeof import("./docker.js")>("./docker.js");
@@ -179,6 +197,12 @@ describe("ensureSandboxBrowser create args", () => {
     await loadFreshBrowserModulesForTest();
   });
 
+  afterEach(() => {
+    for (const dir of tmpDirs.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   beforeEach(() => {
     vi.restoreAllMocks();
     BROWSER_BRIDGES.clear();
@@ -300,6 +324,80 @@ describe("ensureSandboxBrowser create args", () => {
       envEntries.filter((entry) => entry.startsWith("OPENCLAW_BROWSER_NOVNC_PASSWORD=")),
     ).toStrictEqual([]);
     expect(result?.noVncUrl).toBeUndefined();
+  });
+
+  it("applies read-only skill overlays after browser custom binds", async () => {
+    const workspaceDir = makeTempDir();
+    const customRoot = makeTempDir();
+    mkdirSync(path.join(workspaceDir, "skills", "demo"), { recursive: true });
+    const cfg = buildConfig(false);
+    cfg.workspaceAccess = "rw";
+    cfg.docker.dangerouslyAllowExternalBindSources = true;
+    cfg.docker.dangerouslyAllowReservedContainerTargets = true;
+    cfg.browser.binds = [`${customRoot}:/workspace/skills:rw`];
+
+    await ensureTestSandboxBrowser({
+      scopeKey: "session:test",
+      workspaceDir,
+      agentWorkspaceDir: workspaceDir,
+      cfg,
+    });
+
+    const bindArgs = collectDockerFlagValues(requireDockerCreateArgs(), "-v");
+    const workspaceMountIdx = bindArgs.indexOf(`${workspaceDir}:/workspace:z`);
+    const customMountIdx = bindArgs.indexOf(`${customRoot}:/workspace/skills:rw`);
+    const protectedMountIdx = bindArgs.indexOf(
+      `${path.join(workspaceDir, "skills")}:/workspace/skills:ro,z`,
+    );
+
+    expect(workspaceMountIdx).toBeGreaterThanOrEqual(0);
+    expect(customMountIdx).toBeGreaterThan(workspaceMountIdx);
+    expect(protectedMountIdx).toBeGreaterThan(customMountIdx);
+  });
+
+  it("includes the explicit env policy epoch in the browser config hash when needed", async () => {
+    const cfg = buildConfig(false);
+    cfg.docker.env = {
+      LANG: "C.UTF-8",
+      GEMINI_API_KEY: "dummy-gemini",
+    };
+    const scopeKey = "session-1";
+    const workspaceDir = "/tmp/workspace";
+    const agentWorkspaceDir = "/tmp/workspace";
+    const browserDockerCfg = resolveSandboxBrowserDockerCreateConfig({
+      docker: cfg.docker,
+      browser: cfg.browser,
+    });
+    const expectedHash = computeSandboxBrowserConfigHash({
+      docker: browserDockerCfg,
+      dockerEnvPolicyEpoch: SANDBOX_DOCKER_EXPLICIT_ENV_POLICY_EPOCH,
+      browser: {
+        cdpPort: cfg.browser.cdpPort,
+        vncPort: cfg.browser.vncPort,
+        noVncPort: cfg.browser.noVncPort,
+        headless: cfg.browser.headless,
+        enableNoVnc: cfg.browser.enableNoVnc,
+        autoStartTimeoutMs: cfg.browser.autoStartTimeoutMs,
+        cdpSourceRange: undefined,
+      },
+      securityEpoch: SANDBOX_BROWSER_SECURITY_HASH_EPOCH,
+      workspaceAccess: cfg.workspaceAccess,
+      workspaceDir,
+      agentWorkspaceDir,
+      mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
+      readOnlyWorkspaceSkillMounts: [],
+    });
+
+    await ensureTestSandboxBrowser({
+      scopeKey,
+      workspaceDir,
+      agentWorkspaceDir,
+      cfg,
+    });
+
+    const createArgs = requireDockerCreateArgs();
+    expect(createArgs).toContain(`openclaw.configHash=${expectedHash}`);
+    expect(collectDockerFlagValues(createArgs, "--env")).toContain("GEMINI_API_KEY=dummy-gemini");
   });
 
   it("fails before creating a browser container when Docker daemon is unavailable", async () => {

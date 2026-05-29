@@ -137,6 +137,32 @@ Each `models[]` entry can be **provider** or **CLI**:
   </Tab>
 </Tabs>
 
+### Provider credentials (`apiKey`)
+
+Provider media understanding uses the same provider auth resolution as normal
+model calls: auth profiles, environment variables, then
+`models.providers.<providerId>.apiKey`.
+
+`tools.media.*.models[]` entries do not accept an inline `apiKey` field. The
+`provider` value in a media model entry, such as `openai` or `moonshot`, must
+have credentials available through one of the standard provider auth sources.
+
+Minimal example:
+
+```json5
+{
+  models: {
+    providers: {
+      openai: { apiKey: "<OPENAI_API_KEY>" },
+      moonshot: { apiKey: "<MOONSHOT_API_KEY>" },
+    },
+  },
+}
+```
+
+For the full provider auth reference, including profiles, environment
+variables, and custom base URLs, see [Tools and custom providers](/gateway/config-tools).
+
 ## Defaults and limits
 
 Recommended defaults:
@@ -260,8 +286,8 @@ For CLI entries, **set `capabilities` explicitly** to avoid surprising matches. 
 <Note>
 **MiniMax note**
 
-- `minimax` and `minimax-portal` image understanding comes from the plugin-owned `MiniMax-VL-01` media provider.
-- The bundled MiniMax text catalog still starts text-only; explicit `models.providers.minimax` entries materialize image-capable M2.7 chat refs.
+- `minimax`, `minimax-cn`, `minimax-portal`, and `minimax-portal-cn` image understanding comes from the plugin-owned `MiniMax-VL-01` media provider.
+- Automatic image routing keeps using `MiniMax-VL-01` even if legacy MiniMax M2.x chat metadata claims image input.
 
 </Note>
 

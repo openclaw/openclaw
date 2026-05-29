@@ -14,13 +14,27 @@ vi.mock("node:child_process", async () => {
   };
 });
 
-import { checkQmdBinaryAvailability, resolveCliSpawnInvocation } from "./qmd-process.js";
+import {
+  checkQmdBinaryAvailability,
+  resolveCliSpawnInvocation,
+  resolveQmdBinaryUnavailableReason,
+  runCliCommand,
+  type QmdBinaryAvailability,
+} from "./qmd-process.js";
 
 function createMockChild() {
   const child = new EventEmitter() as EventEmitter & {
+    stdout: EventEmitter;
+    stderr: EventEmitter;
     kill: ReturnType<typeof vi.fn>;
+    closeWith: (code?: number | null, signal?: NodeJS.Signals | null) => void;
   };
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
   child.kill = vi.fn();
+  child.closeWith = (code: number | null = 0, signal: NodeJS.Signals | null = null) => {
+    child.emit("close", code, signal);
+  };
   return child;
 }
 
@@ -123,6 +137,15 @@ describe("resolveCliSpawnInvocation", () => {
 });
 
 describe("checkQmdBinaryAvailability", () => {
+  it("keeps legacy unavailable probe results source-compatible", () => {
+    const legacyUnavailable: QmdBinaryAvailability = {
+      available: false,
+      error: "spawn qmd ENOENT",
+    };
+
+    expect(resolveQmdBinaryUnavailableReason(legacyUnavailable)).toBe("binary");
+  });
+
   it("returns available when the qmd process spawns successfully", async () => {
     const child = createMockChild();
     spawnMock.mockImplementationOnce(() => {
@@ -147,7 +170,20 @@ describe("checkQmdBinaryAvailability", () => {
 
     await expect(
       checkQmdBinaryAvailability({ command: "qmd", env: process.env, cwd: tempDir }),
-    ).resolves.toEqual({ available: false, error: "spawn qmd ENOENT" });
+    ).resolves.toEqual({ available: false, reason: "binary", error: "spawn qmd ENOENT" });
+  });
+
+  it("returns an explicit workspace error when cwd is missing", async () => {
+    const missingDir = path.join(tempDir, "missing-workspace");
+
+    await expect(
+      checkQmdBinaryAvailability({ command: "qmd", env: process.env, cwd: missingDir }),
+    ).resolves.toEqual({
+      available: false,
+      reason: "workspace-cwd",
+      error: `workspace directory missing: ${missingDir}`,
+    });
+    expect(spawnMock).not.toHaveBeenCalled();
   });
 
   it("does not treat close-before-spawn as a successful availability probe", async () => {
@@ -161,6 +197,111 @@ describe("checkQmdBinaryAvailability", () => {
 
     await expect(
       checkQmdBinaryAvailability({ command: "qmd", env: process.env, cwd: tempDir }),
-    ).resolves.toEqual({ available: false, error: "spawn qmd ENOENT" });
+    ).resolves.toEqual({ available: false, reason: "binary", error: "spawn qmd ENOENT" });
+  });
+});
+
+describe("runCliCommand", () => {
+  it("keeps stdout and stderr on non-zero exits", async () => {
+    const child = createMockChild();
+    spawnMock.mockImplementationOnce(() => {
+      queueMicrotask(() => {
+        child.stdout.emit("data", '[{"docid":"abc","score":0.93}]');
+        child.stderr.emit("data", "ggml-metal-device.m:612");
+        child.closeWith(134);
+      });
+      return child;
+    });
+
+    try {
+      await runCliCommand({
+        commandSummary: "qmd query test",
+        spawnInvocation: { command: "qmd", argv: ["query", "test", "--json"] },
+        env: process.env,
+        cwd: tempDir,
+        maxOutputChars: 10_000,
+      });
+      throw new Error("expected runCliCommand to reject");
+    } catch (err) {
+      expect(err).toBeInstanceOf(Error);
+      if (!(err instanceof Error)) {
+        throw err;
+      }
+      expect(err.name).toBe("CliCommandError");
+      expect(err).toMatchObject({
+        code: 134,
+        signal: null,
+        stdout: '[{"docid":"abc","score":0.93}]',
+        stderr: "ggml-metal-device.m:612",
+      });
+      expect(err.message).toContain("qmd query test failed (code 134)");
+    }
+  });
+
+  it("records signal-only command failures", async () => {
+    const child = createMockChild();
+    spawnMock.mockImplementationOnce(() => {
+      queueMicrotask(() => {
+        child.stdout.emit("data", "[]");
+        child.closeWith(null, "SIGABRT");
+      });
+      return child;
+    });
+
+    await expect(
+      runCliCommand({
+        commandSummary: "qmd query test",
+        spawnInvocation: { command: "qmd", argv: ["query", "test", "--json"] },
+        env: process.env,
+        cwd: tempDir,
+        maxOutputChars: 10_000,
+      }),
+    ).rejects.toMatchObject({
+      code: null,
+      signal: "SIGABRT",
+      stdout: "[]",
+    });
+  });
+
+  it("does not expose truncated output as a recoverable command failure", async () => {
+    const child = createMockChild();
+    spawnMock.mockImplementationOnce(() => {
+      queueMicrotask(() => {
+        child.stdout.emit("data", "too much output");
+        child.closeWith(1);
+      });
+      return child;
+    });
+
+    await expect(
+      runCliCommand({
+        commandSummary: "qmd query test",
+        spawnInvocation: { command: "qmd", argv: ["query", "test", "--json"] },
+        env: process.env,
+        cwd: tempDir,
+        maxOutputChars: 4,
+      }),
+    ).rejects.toThrow(/produced too much output/);
+  });
+
+  it("counts surrogate pairs as one character when capping failed command output", async () => {
+    const child = createMockChild();
+    spawnMock.mockImplementationOnce(() => {
+      queueMicrotask(() => {
+        child.stderr.emit("data", "a🙂");
+        child.closeWith(1);
+      });
+      return child;
+    });
+
+    await expect(
+      runCliCommand({
+        commandSummary: "qmd query test",
+        spawnInvocation: { command: "qmd", argv: ["query", "test", "--json"] },
+        env: process.env,
+        cwd: tempDir,
+        maxOutputChars: 2,
+      }),
+    ).rejects.toThrow(/🙂/);
   });
 });

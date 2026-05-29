@@ -1,8 +1,10 @@
 import path from "node:path";
+import { sanitizeForPlainText } from "openclaw/plugin-sdk/channel-outbound";
 import { MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS, runFfmpeg } from "openclaw/plugin-sdk/media-runtime";
-import { sanitizeForPlainText } from "openclaw/plugin-sdk/outbound-runtime";
 import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
+import { resolveWhatsAppDocumentFileName } from "./document-filename.js";
 import { formatError } from "./session-errors.js";
 import {
   sanitizeAssistantVisibleText,
@@ -89,7 +91,7 @@ export function resolveWhatsAppOutboundMediaUrls(
   const orderedMediaUrls = [primaryMediaUrl, ...mediaUrls].filter((entry): entry is string =>
     Boolean(entry),
   );
-  return Array.from(new Set(orderedMediaUrls));
+  return uniqueStrings(orderedMediaUrls);
 }
 
 // Keep new WhatsApp outbound-media behavior in this helper so payload, gateway, and auto-reply paths stay aligned.
@@ -109,22 +111,46 @@ export function normalizeWhatsAppOutboundPayload<T extends WhatsAppOutboundPaylo
   };
 }
 
+function inferWhatsAppMediaKind(
+  media: WhatsAppLoadedMediaLike,
+): "image" | "audio" | "video" | "document" {
+  if (
+    media.kind === "image" ||
+    media.kind === "audio" ||
+    media.kind === "video" ||
+    media.kind === "document"
+  ) {
+    return media.kind;
+  }
+  const contentType = normalizeContentType(media.contentType);
+  if (contentType.startsWith("image/")) {
+    return "image";
+  }
+  if (contentType.startsWith("audio/")) {
+    return "audio";
+  }
+  if (contentType.startsWith("video/")) {
+    return "video";
+  }
+  return "document";
+}
+
 function normalizeWhatsAppLoadedMedia(
   media: WhatsAppLoadedMediaLike,
   mediaUrl?: string,
 ): CanonicalWhatsAppLoadedMedia {
-  const kind =
-    media.kind === "image" || media.kind === "audio" || media.kind === "video"
-      ? media.kind
-      : "document";
+  const kind = inferWhatsAppMediaKind(media);
   const mimetype =
     kind === "audio" && isWhatsAppNativeVoiceAudio({ contentType: media.contentType, mediaUrl })
       ? WHATSAPP_VOICE_MIMETYPE
       : (media.contentType ?? "application/octet-stream");
   const fileName =
     kind === "document"
-      ? (media.fileName ?? deriveWhatsAppDocumentFileName(mediaUrl) ?? "file")
-      : undefined;
+      ? resolveWhatsAppDocumentFileName({
+          fileName: media.fileName ?? deriveWhatsAppDocumentFileName(mediaUrl),
+          mimetype,
+        })
+      : media.fileName;
   return {
     buffer: media.buffer,
     kind,

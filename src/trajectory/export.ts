@@ -1,8 +1,8 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { FileEntry, SessionEntry, SessionHeader } from "@earendil-works/pi-coding-agent";
 import { sanitizeDiagnosticPayload } from "../agents/payload-redaction.js";
+import type { AgentMessage } from "../agents/runtime/index.js";
+import type { FileEntry, SessionEntry, SessionHeader } from "../agents/sessions/session-manager.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
   jsonSupportBundleFile,
@@ -17,6 +17,7 @@ import {
   redactSupportString,
   type SupportRedactionContext,
 } from "../logging/diagnostic-support-redaction.js";
+import { isRecord } from "../shared/record-coerce.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
 import {
   TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
@@ -64,10 +65,6 @@ const MAX_TRAJECTORY_WARNING_ROWS = 20;
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function isSessionFileEntry(value: unknown): value is FileEntry {
@@ -866,6 +863,10 @@ function buildArtifactsCapture(params: {
     promptError:
       runtimeArtifacts?.promptError ?? runtimeEnd?.promptError ?? runtimeCompletion?.promptError,
     promptErrorSource: runtimeArtifacts?.promptErrorSource ?? runtimeCompletion?.promptErrorSource,
+    terminalError:
+      runtimeArtifacts?.terminalError ??
+      runtimeEnd?.terminalError ??
+      runtimeCompletion?.terminalError,
     usage: runtimeArtifacts?.usage ?? runtimeCompletion?.usage,
     promptCache: runtimeArtifacts?.promptCache ?? runtimeCompletion?.promptCache,
     compactionCount: runtimeArtifacts?.compactionCount ?? runtimeCompletion?.compactionCount,

@@ -1,4 +1,5 @@
 import type { SilentReplyPolicyShape } from "../shared/silent-reply-policy.js";
+import type { TranscriptsConfig } from "../transcripts/config.js";
 import type { AccessGroupsConfig } from "./types.access-groups.js";
 import type { AcpConfig } from "./types.acp.js";
 import type { AgentBinding, AgentsConfig } from "./types.agents.js";
@@ -21,13 +22,31 @@ import type {
   CommandsConfig,
   MessagesConfig,
 } from "./types.messages.js";
-import type { ModelsConfig } from "./types.models.js";
+import type { ModelsConfig, ModelsConfigInput } from "./types.models.js";
 import type { NodeHostConfig } from "./types.node-host.js";
 import type { PluginsConfig } from "./types.plugins.js";
 import type { SecretsConfig } from "./types.secrets.js";
 import type { SkillsConfig } from "./types.skills.js";
 import type { ToolsConfig } from "./types.tools.js";
 import type { ProxyConfig } from "./zod-schema.proxy.js";
+
+export type SecurityAuditSuppression = {
+  /** Exact security audit check id to suppress. */
+  checkId: string;
+  /** Optional case-insensitive substring required in the finding title. */
+  titleIncludes?: string;
+  /** Optional case-insensitive substring required in the finding detail. */
+  detailIncludes?: string;
+  /** Operator rationale for accepting this standing finding. */
+  reason?: string;
+};
+
+export type SecurityConfig = {
+  audit?: {
+    /** Accepted security audit findings to omit from active summary/findings. */
+    suppressions?: SecurityAuditSuppression[];
+  };
+};
 
 export type SurfaceConfigEntry = {
   silentReply?: SilentReplyPolicyShape;
@@ -69,6 +88,7 @@ export type OpenClawConfig = {
   };
   diagnostics?: DiagnosticsConfig;
   logging?: LoggingConfig;
+  security?: SecurityConfig;
   cli?: CliConfig;
   crestodian?: CrestodianConfig;
   update?: {
@@ -123,6 +143,7 @@ export type OpenClawConfig = {
   web?: WebConfig;
   channels?: ChannelsConfig;
   cron?: CronConfig;
+  transcripts?: TranscriptsConfig;
   commitments?: CommitmentsConfig;
   hooks?: HooksConfig;
   discovery?: DiscoveryConfig;
@@ -132,6 +153,10 @@ export type OpenClawConfig = {
   mcp?: McpConfig;
   /** Network-level SSRF protection via an operator-managed forward proxy. */
   proxy?: ProxyConfig;
+};
+
+export type OpenClawConfigInput = Omit<OpenClawConfig, "models"> & {
+  models?: ModelsConfigInput;
 };
 
 declare const openClawConfigStateBrand: unique symbol;

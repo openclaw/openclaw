@@ -153,9 +153,17 @@ export const slackChannelConfigUiHints = {
     label: "Slack Progress Max Lines",
     help: "Maximum number of compact progress lines to keep below the draft label (default: 8).",
   },
+  "streaming.progress.maxLineChars": {
+    label: "Slack Progress Max Line Chars",
+    help: "Maximum characters per compact progress line before truncation (default: 120). Prose cuts at word boundaries; commands and paths keep useful suffixes.",
+  },
   "streaming.progress.render": {
     label: "Slack Progress Renderer",
     help: 'Progress draft renderer: "text" uses one portable text body; "rich" renders structured Slack Block Kit fields with the same text fallback.',
+  },
+  "streaming.progress.nativeTaskCards": {
+    label: "Slack Native Progress Task Cards",
+    help: 'Opt in to Slack native task-card progress updates when channels.slack.streaming.mode="progress" and streaming.nativeTransport is enabled. Default: false.',
   },
   "streaming.progress.toolProgress": {
     label: "Slack Progress Tool Lines",

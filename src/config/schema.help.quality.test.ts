@@ -28,6 +28,7 @@ const ROOT_SECTIONS = [
   "approvals",
   "session",
   "cron",
+  "transcripts",
   "hooks",
   "web",
   "channels",
@@ -251,7 +252,7 @@ const TARGET_KEYS = [
   "messages.groupChat",
   "messages.groupChat.mentionPatterns",
   "messages.groupChat.historyLimit",
-  "messages.groupChat.ambientTurns",
+  "messages.groupChat.unmentionedInbound",
   "messages.groupChat.visibleReplies",
   "messages.queue",
   "messages.queue.mode",
@@ -393,6 +394,7 @@ const TARGET_KEYS = [
   "models.providers.*.contextWindow",
   "models.providers.*.contextTokens",
   "models.providers.*.maxTokens",
+  "models.providers.*.region",
   "models.providers.*.headers",
   "models.providers.*.models",
   "agents",
@@ -708,10 +710,18 @@ describe("config help copy quality", () => {
     expect(/raw|unnormalized/i.test(rawKeyPrefix)).toBe(true);
   });
 
-  it("documents session write-lock acquire timeout defaults", () => {
+  it("documents session write-lock policy defaults", () => {
     const acquireTimeout = FIELD_HELP["session.writeLock.acquireTimeoutMs"];
     expect(acquireTimeout.includes("60000")).toBe(true);
     expect(/transcript|lock/i.test(acquireTimeout)).toBe(true);
+
+    const stale = FIELD_HELP["session.writeLock.staleMs"];
+    expect(stale.includes("1800000")).toBe(true);
+    expect(stale.includes("OPENCLAW_SESSION_WRITE_LOCK_STALE_MS")).toBe(true);
+
+    const maxHold = FIELD_HELP["session.writeLock.maxHoldMs"];
+    expect(maxHold.includes("300000")).toBe(true);
+    expect(maxHold.includes("OPENCLAW_SESSION_WRITE_LOCK_MAX_HOLD_MS")).toBe(true);
   });
 
   it("documents session maintenance duration/size examples and deprecations", () => {
@@ -862,9 +872,11 @@ describe("config help copy quality", () => {
     expect(/mid-turn|tool loop|default:\s*false/i.test(midTurnPrecheck)).toBe(true);
 
     const postCompactionSections = FIELD_HELP["agents.defaults.compaction.postCompactionSections"];
+    expect(/opt-in|Leave unset/i.test(postCompactionSections)).toBe(true);
     expect(/Session Startup|Red Lines/i.test(postCompactionSections)).toBe(true);
     expect(/Every Session|Safety/i.test(postCompactionSections)).toBe(true);
     expect(/\[\]|disable/i.test(postCompactionSections)).toBe(true);
+    expect(/duplicate project context/i.test(postCompactionSections)).toBe(true);
 
     const compactionModel = FIELD_HELP["agents.defaults.compaction.model"];
     expect(/provider\/model|different model|primary agent model/i.test(compactionModel)).toBe(true);

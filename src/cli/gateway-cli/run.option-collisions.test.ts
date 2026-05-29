@@ -1,6 +1,7 @@
 import path from "node:path";
 import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../../daemon/constants.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../../infra/supervisor-markers.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withTempSecretFiles } from "../../test-utils/secret-file-fixture.js";
@@ -17,12 +18,15 @@ const forceFreePortAndWait = vi.fn(async (_port: number, _opts: unknown) => ({
   waitedMs: 0,
   escalatedToSigkill: false,
 }));
+const cleanStaleGatewayProcessesSync = vi.fn((_port?: number) => []);
 const waitForPortBindable = vi.fn(async (_port: number, _opts?: unknown) => 0);
 const ensureDevGatewayConfig = vi.fn(async (_opts?: unknown) => {});
 type GatewayLoopStart = (params?: { startupStartedAt?: number }) => Promise<unknown>;
 const runGatewayLoop = vi.fn(async ({ start }: { start: GatewayLoopStart }) => {
   await start();
 });
+const normalizeStateDirEnv = vi.fn((_env?: NodeJS.ProcessEnv) => undefined);
+const callOrder = vi.hoisted(() => [] as string[]);
 const gatewayLogMessages = vi.hoisted(() => [] as string[]);
 const configState = vi.hoisted(() => ({
   cfg: {} as Record<string, unknown>,
@@ -40,9 +44,17 @@ const writeDiagnosticStabilityBundleForFailureSync = vi.fn((_reason: string, _er
 const controlUiState = vi.hoisted(() => ({
   root: "/tmp/openclaw-control-ui" as string | null,
 }));
+const netState = vi.hoisted(() => ({
+  autoBindHost: "127.0.0.1",
+  container: false,
+}));
 const withoutSupervisorEnv = Object.fromEntries(
   SUPERVISOR_HINT_ENV_VARS.map((key) => [key, undefined]),
 ) as Record<string, string | undefined>;
+const withoutGatewayAuthEnv = {
+  OPENCLAW_GATEWAY_TOKEN: undefined,
+  OPENCLAW_GATEWAY_PASSWORD: undefined,
+};
 
 const { runtimeErrors, defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
 
@@ -55,6 +67,7 @@ vi.mock("../../config/config.js", () => ({
 
 vi.mock("../../config/paths.js", () => ({
   CONFIG_PATH: "/tmp/openclaw-test-missing-config.json",
+  normalizeStateDirEnv: (env?: NodeJS.ProcessEnv) => normalizeStateDirEnv(env),
   resolveStateDir: () => "/tmp",
   resolveGatewayPort: (cfg?: { gateway?: { port?: number } }) => cfg?.gateway?.port ?? 18789,
 }));
@@ -83,6 +96,39 @@ vi.mock("../../gateway/auth.js", () => ({
       allowTailscale: false,
     };
   },
+}));
+
+vi.mock("../../gateway/net.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../gateway/net.js")>();
+  return {
+    ...actual,
+    defaultGatewayBindMode: (tailscaleMode?: string) => {
+      if (tailscaleMode && tailscaleMode !== "off") {
+        return "loopback";
+      }
+      return netState.container ? "auto" : "loopback";
+    },
+    isContainerEnvironment: () => netState.container,
+    resolveGatewayBindHost: async (bind?: string, customHost?: string) => {
+      if (bind === "auto") {
+        return netState.autoBindHost;
+      }
+      if (bind === "lan") {
+        return "0.0.0.0";
+      }
+      if (bind === "custom") {
+        return customHost?.trim() || "0.0.0.0";
+      }
+      if (bind === "tailnet") {
+        return "100.64.0.1";
+      }
+      return "127.0.0.1";
+    },
+  };
+});
+
+vi.mock("../../infra/restart-stale-pids.js", () => ({
+  cleanStaleGatewayProcessesSync: (port?: number) => cleanStaleGatewayProcessesSync(port),
 }));
 
 vi.mock("../../gateway/server.js", () => ({
@@ -162,11 +208,11 @@ vi.mock("./run-loop.js", () => ({
 }));
 
 describe("gateway run option collisions", () => {
-  let addGatewayRunCommand: typeof import("./run.js").addGatewayRunCommand;
+  let addGatewayRunCommand: typeof import("./run-command.js").addGatewayRunCommand;
   let sharedProgram: Command;
 
   beforeAll(async () => {
-    ({ addGatewayRunCommand } = await import("./run.js"));
+    ({ addGatewayRunCommand } = await import("./run-command.js"));
     sharedProgram = new Command();
     sharedProgram.exitOverride();
     const gateway = addGatewayRunCommand(sharedProgram.command("gateway"));
@@ -177,6 +223,8 @@ describe("gateway run option collisions", () => {
     resetRuntimeCapture();
     configState.cfg = {};
     configState.snapshot = { exists: false };
+    netState.autoBindHost = "127.0.0.1";
+    netState.container = false;
     readBestEffortConfig.mockClear();
     readConfigFileSnapshotWithPluginMetadata.mockClear();
     controlUiState.root = "/tmp/openclaw-control-ui";
@@ -187,9 +235,12 @@ describe("gateway run option collisions", () => {
     setVerbose.mockClear();
     setConsoleSubsystemFilter.mockClear();
     forceFreePortAndWait.mockClear();
+    cleanStaleGatewayProcessesSync.mockClear();
     waitForPortBindable.mockClear();
     ensureDevGatewayConfig.mockClear();
     runGatewayLoop.mockClear();
+    normalizeStateDirEnv.mockReset();
+    callOrder.length = 0;
   });
 
   async function runGatewayCli(argv: string[]) {
@@ -219,6 +270,14 @@ describe("gateway run option collisions", () => {
   }
 
   it("forwards parent-captured options to `gateway run` subcommand", async () => {
+    normalizeStateDirEnv.mockImplementation((_env?: NodeJS.ProcessEnv) => {
+      callOrder.push("normalize");
+    });
+    startGatewayServer.mockImplementationOnce(async (_port: number, _opts?: unknown) => {
+      callOrder.push("start");
+      return { close: vi.fn(async () => {}) };
+    });
+
     await runGatewayCli([
       "gateway",
       "run",
@@ -237,6 +296,23 @@ describe("gateway run option collisions", () => {
     ).toEqual({ intervalMs: 150, timeoutMs: 3000 });
     expect(setGatewayWsLogStyle).toHaveBeenCalledWith("full");
     expect(gatewayStartOptions().auth?.token).toBe("tok_run");
+    expect(normalizeStateDirEnv).toHaveBeenCalledWith(process.env);
+    expect(callOrder).toEqual(["normalize", "start"]);
+  });
+
+  it("marks service-mode gateway descendants with the live gateway pid", async () => {
+    await withEnvAsync(
+      {
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        [GATEWAY_SERVICE_RUNTIME_PID_ENV]: undefined,
+      },
+      async () => {
+        await runGatewayCli(["gateway", "run", "--allow-unconfigured"]);
+
+        expect(process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV]).toBe(String(process.pid));
+      },
+    );
+    expect(normalizeStateDirEnv).toHaveBeenCalledWith(process.env);
   });
 
   it("blocks --force port cleanup from an older binary with newer config", async () => {
@@ -295,13 +371,65 @@ describe("gateway run option collisions", () => {
   });
 
   it("starts gateway when token mode has no configured token (startup bootstrap path)", async () => {
-    await runGatewayCli(["gateway", "run", "--allow-unconfigured"]);
+    await withEnvAsync(withoutGatewayAuthEnv, async () => {
+      await runGatewayCli(["gateway", "run", "--allow-unconfigured"]);
+    });
 
     expect(readConfigFileSnapshotWithPluginMetadata).toHaveBeenCalledTimes(1);
     expect(readBestEffortConfig).not.toHaveBeenCalled();
     const options = gatewayStartOptions();
     expect(options.bind).toBe("loopback");
     expect(options.startupConfigSnapshotRead).toEqual({ snapshot: configState.snapshot });
+  });
+
+  it("allows authless auto startup when it resolves to loopback", async () => {
+    await withEnvAsync(withoutGatewayAuthEnv, async () => {
+      await runGatewayCli(["gateway", "run", "--bind", "auto", "--allow-unconfigured"]);
+    });
+
+    const options = gatewayStartOptions();
+    expect(options.bind).toBe("auto");
+  });
+
+  it("blocks container auto startup without explicit gateway auth", async () => {
+    netState.autoBindHost = "0.0.0.0";
+    netState.container = true;
+
+    await withEnvAsync(withoutGatewayAuthEnv, async () => {
+      await expect(runGatewayCli(["gateway", "run", "--allow-unconfigured"])).rejects.toThrow(
+        "__exit__:78",
+      );
+    });
+
+    expect(runtimeErrors.join("\n")).toContain("Refusing to bind gateway to auto without auth.");
+    expect(startGatewayServer).not.toHaveBeenCalled();
+  });
+
+  it("blocks non-loopback startup without explicit gateway auth", async () => {
+    await withEnvAsync(withoutGatewayAuthEnv, async () => {
+      await expect(
+        runGatewayCli(["gateway", "run", "--bind", "lan", "--allow-unconfigured"]),
+      ).rejects.toThrow("__exit__:78");
+    });
+
+    expect(runtimeErrors.join("\n")).toContain("Refusing to bind gateway to lan without auth.");
+    expect(startGatewayServer).not.toHaveBeenCalled();
+  });
+
+  it("allows non-loopback startup when token auth is explicit", async () => {
+    await runGatewayCli([
+      "gateway",
+      "run",
+      "--bind",
+      "lan",
+      "--token",
+      "tok_run",
+      "--allow-unconfigured",
+    ]);
+
+    const options = gatewayStartOptions();
+    expect(options.bind).toBe("lan");
+    expect(options.auth?.token).toBe("tok_run");
   });
 
   it("uses the startup snapshot only for the first in-process gateway start", async () => {

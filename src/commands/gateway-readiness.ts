@@ -96,7 +96,9 @@ function gatewayProbeSawGateway(status: DaemonStatus): boolean {
   if (rpc.server?.version || rpc.server?.connId) {
     return true;
   }
-  return /\bgateway closed \(\d+\):|\bpairing required\b/i.test(rpc.error ?? "");
+  return /\bgateway closed \(\d+\):|\bpairing required\b|\bdevice identity required\b/i.test(
+    rpc.error ?? "",
+  );
 }
 
 function gatewayLooksReachable(status: DaemonStatus): boolean {

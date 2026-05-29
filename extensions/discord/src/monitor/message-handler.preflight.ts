@@ -2,14 +2,17 @@ import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import {
   buildMentionRegexes,
+  classifyChannelInboundEvent,
   logInboundDrop,
   resolveInboundMentionDecision,
+  resolveUnmentionedGroupInboundPolicy,
+  recordDroppedChannelInboundHistory,
   toInboundMediaFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
+import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
 import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-surface";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
-import { recordDroppedChannelTurnHistory } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { logDebug } from "openclaw/plugin-sdk/logging-core";
 import { mimeTypeFromFilePath } from "openclaw/plugin-sdk/media-mime";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
@@ -165,7 +168,7 @@ async function recordDiscordPendingHistoryEntry(params: {
   if (params.preflight.historyLimit <= 0) {
     return;
   }
-  await recordDroppedChannelTurnHistory({
+  await recordDroppedChannelInboundHistory({
     input: {
       id: params.message.id,
       timestamp: params.entry?.timestamp,
@@ -596,6 +599,7 @@ export async function preflightDiscordMessage(
     surface: "discord",
   });
   const hasControlCommandInMessage = hasControlCommand(baseText, params.cfg);
+  const hasAbortRequest = isAbortRequestText(baseText);
 
   if (!isDirectMessage) {
     const commandAccess = await resolveDiscordTextCommandAccess({
@@ -643,6 +647,16 @@ export async function preflightDiscordMessage(
     },
   });
   const effectiveWasMentioned = mentionDecision.effectiveWasMentioned;
+  const inboundEventKind = classifyChannelInboundEvent({
+    conversation: { kind: isDirectMessage ? "direct" : isGroupDm ? "group" : "channel" },
+    unmentionedGroupPolicy: resolveUnmentionedGroupInboundPolicy({
+      cfg: params.cfg,
+      agentId: effectiveRoute.agentId,
+    }),
+    wasMentioned: effectiveWasMentioned,
+    hasControlCommand: hasControlCommandInMessage,
+    hasAbortRequest,
+  });
   logDebug(
     `[discord-preflight] shouldRequireMention=${shouldRequireMention} baseRequireMention=${shouldRequireMentionByConfig} boundThreadSession=${isBoundThreadSession} mentionDecision.shouldSkip=${mentionDecision.shouldSkip} wasMentioned=${wasMentioned}`,
   );
@@ -710,8 +724,6 @@ export async function preflightDiscordMessage(
     enqueueSystemEvent(systemText, {
       sessionKey: effectiveRoute.sessionKey,
       contextKey: `discord:system:${messageChannelId}:${message.id}`,
-      forceSenderIsOwnerFalse: true,
-      trusted: false,
     });
     return null;
   }
@@ -796,9 +808,11 @@ export async function preflightDiscordMessage(
     channelAllowed,
     shouldRequireMention,
     hasAnyMention,
+    hasControlCommand: hasControlCommandInMessage,
     allowTextCommands,
     shouldBypassMention: mentionDecision.shouldBypassMention,
     effectiveWasMentioned,
+    inboundEventKind,
     canDetectMention,
     historyEntry,
     botLoopProtection,

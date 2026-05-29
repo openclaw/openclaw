@@ -1,5 +1,6 @@
 import process from "node:process";
 import type { PluginConversationBinding } from "openclaw/plugin-sdk/plugin-entry";
+import { asOptionalRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const BINDING_DATA_VERSION = 1;
 
@@ -8,6 +9,7 @@ export type CodexAppServerConversationBindingData = {
   version: 1;
   sessionFile: string;
   workspaceDir: string;
+  agentDir?: string;
 };
 
 export type CodexCliNodeConversationBindingData = {
@@ -25,12 +27,15 @@ export type CodexConversationBindingData =
 export function createCodexConversationBindingData(params: {
   sessionFile: string;
   workspaceDir: string;
+  agentDir?: string;
 }): CodexAppServerConversationBindingData {
+  const agentDir = params.agentDir?.trim();
   return {
     kind: "codex-app-server-session",
     version: BINDING_DATA_VERSION,
     sessionFile: params.sessionFile,
     workspaceDir: params.workspaceDir,
+    ...(agentDir ? { agentDir } : {}),
   };
 }
 
@@ -98,6 +103,7 @@ export function readCodexConversationBindingDataRecord(
       typeof data.workspaceDir === "string" && data.workspaceDir.trim()
         ? data.workspaceDir
         : process.cwd(),
+    agentDir: typeof data.agentDir === "string" && data.agentDir.trim() ? data.agentDir : undefined,
   };
 }
 
@@ -105,12 +111,6 @@ export function resolveCodexDefaultWorkspaceDir(pluginConfig: unknown): string {
   const appServer = readRecord(readRecord(pluginConfig)?.appServer);
   const configured = readString(appServer, "defaultWorkspaceDir");
   return configured ?? process.cwd();
-}
-
-function readRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
 }
 
 function readString(record: Record<string, unknown> | undefined, key: string) {

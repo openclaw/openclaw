@@ -2,10 +2,20 @@
 
 import path from "node:path";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
+import { externalCliDiscoveryForProviderAuth } from "../agents/auth-profiles/external-cli-discovery.js";
 import { resolveApiKeyForProfile } from "../agents/auth-profiles/oauth.js";
 import { resolveAuthProfileOrder } from "../agents/auth-profiles/order.js";
 import { listProfilesForProvider } from "../agents/auth-profiles/profiles.js";
-import { ensureAuthProfileStore } from "../agents/auth-profiles/store.js";
+import {
+  ensureAuthProfileStore,
+  loadAuthProfileStoreForSecretsRuntime,
+  loadAuthProfileStoreWithoutExternalProfiles,
+} from "../agents/auth-profiles/store.js";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import {
+  COPILOT_INTEGRATION_ID,
+  buildCopilotIdeHeaders,
+} from "../agents/copilot-dynamic-headers.js";
 import { resolveEnvApiKey } from "../agents/model-auth-env.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -33,7 +43,10 @@ export {
   upsertAuthProfileWithLock,
 } from "../agents/auth-profiles/profiles.js";
 export { resolveEnvApiKey } from "../agents/model-auth-env.js";
-export { readClaudeCliCredentialsCached } from "../agents/cli-credentials.js";
+export {
+  readClaudeCliCredentialsCached,
+  readCodexCliCredentialsCached,
+} from "../agents/cli-credentials.js";
 export { suggestOAuthProfileIdForLegacyDefault } from "../agents/auth-profiles/repair.js";
 export {
   CUSTOM_LOCAL_AUTH_MARKER,
@@ -91,19 +104,17 @@ export {
   DEFAULT_OAUTH_REFRESH_MARGIN_MS,
   hasUsableOAuthCredential,
 } from "../agents/auth-profiles/credential-state.js";
+export {
+  COPILOT_EDITOR_PLUGIN_VERSION,
+  COPILOT_EDITOR_VERSION,
+  COPILOT_GITHUB_API_VERSION,
+  COPILOT_INTEGRATION_ID,
+  COPILOT_USER_AGENT,
+  buildCopilotIdeHeaders,
+} from "../agents/copilot-dynamic-headers.js";
 
 const COPILOT_TOKEN_URL = "https://api.github.com/copilot_internal/v2/token";
 
-/** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
-export const COPILOT_EDITOR_VERSION = "vscode/1.107.0";
-/** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
-export const COPILOT_USER_AGENT = "GitHubCopilotChat/0.35.0";
-/** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
-export const COPILOT_EDITOR_PLUGIN_VERSION = "copilot-chat/0.35.0";
-/** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
-export const COPILOT_GITHUB_API_VERSION = "2025-04-01";
-/** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
-export const COPILOT_INTEGRATION_ID = "vscode-chat";
 /** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
 export const DEFAULT_COPILOT_API_BASE_URL = "https://api.individual.githubcopilot.com";
 
@@ -114,20 +125,6 @@ export type CachedCopilotToken = {
   updatedAt: number;
   integrationId?: string;
 };
-
-/** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
-export function buildCopilotIdeHeaders(
-  params: {
-    includeApiVersion?: boolean;
-  } = {},
-): Record<string, string> {
-  return {
-    "Editor-Version": COPILOT_EDITOR_VERSION,
-    "Editor-Plugin-Version": COPILOT_EDITOR_PLUGIN_VERSION,
-    "User-Agent": COPILOT_USER_AGENT,
-    ...(params.includeApiVersion ? { "X-Github-Api-Version": COPILOT_GITHUB_API_VERSION } : {}),
-  };
-}
 
 function resolveCopilotTokenCachePath(env: NodeJS.ProcessEnv = process.env) {
   return path.join(resolveStateDir(env), "credentials", "github-copilot.token.json");
@@ -155,8 +152,9 @@ function parseCopilotTokenResponse(value: unknown): {
   if (typeof expiresAt === "number" && Number.isFinite(expiresAt)) {
     expiresAtMs = expiresAt < 100_000_000_000 ? expiresAt * 1000 : expiresAt;
   } else if (typeof expiresAt === "string" && expiresAt.trim().length > 0) {
-    const parsed = Number.parseInt(expiresAt, 10);
-    if (!Number.isFinite(parsed)) {
+    const trimmed = expiresAt.trim();
+    const parsed = /^\d+$/.test(trimmed) ? Number(trimmed) : Number.NaN;
+    if (!Number.isSafeInteger(parsed)) {
       throw new Error("Copilot token response has invalid expires_at");
     }
     expiresAtMs = parsed < 100_000_000_000 ? parsed * 1000 : parsed;
@@ -291,20 +289,12 @@ export function listUsableProviderAuthProfileIds(params: {
   provider: string;
   cfg?: OpenClawConfig;
   agentDir?: string;
+  allowKeychainPrompt?: boolean;
+  includeExternalCliAuth?: boolean;
 }): { agentDir: string; profileIds: string[] } {
   try {
-    const agentDir = params.agentDir?.trim() || resolveDefaultAgentDir(params.cfg ?? {});
-    const store = ensureAuthProfileStore(agentDir, {
-      allowKeychainPrompt: false,
-    });
-    return {
-      agentDir,
-      profileIds: resolveAuthProfileOrder({
-        cfg: params.cfg,
-        store,
-        provider: params.provider,
-      }),
-    };
+    const { agentDir, profileIds } = resolveUsableProviderAuthProfiles(params);
+    return { agentDir, profileIds };
   } catch {
     return { agentDir: "", profileIds: [] };
   }
@@ -314,6 +304,8 @@ export function isProviderAuthProfileConfigured(params: {
   provider: string;
   cfg?: OpenClawConfig;
   agentDir?: string;
+  allowKeychainPrompt?: boolean;
+  includeExternalCliAuth?: boolean;
 }): boolean {
   return listUsableProviderAuthProfileIds(params).profileIds.length > 0;
 }
@@ -322,14 +314,13 @@ export async function resolveProviderAuthProfileApiKey(params: {
   provider: string;
   cfg?: OpenClawConfig;
   agentDir?: string;
+  allowKeychainPrompt?: boolean;
+  includeExternalCliAuth?: boolean;
 }): Promise<string | undefined> {
-  const { agentDir, profileIds } = listUsableProviderAuthProfileIds(params);
+  const { agentDir, profileIds, store } = resolveUsableProviderAuthProfiles(params);
   if (!agentDir || profileIds.length === 0) {
     return undefined;
   }
-  const store = ensureAuthProfileStore(agentDir, {
-    allowKeychainPrompt: false,
-  });
   for (const profileId of profileIds) {
     const resolved = await resolveApiKeyForProfile({
       cfg: params.cfg,
@@ -342,4 +333,46 @@ export async function resolveProviderAuthProfileApiKey(params: {
     }
   }
   return undefined;
+}
+
+function resolveUsableProviderAuthProfiles(params: {
+  provider: string;
+  cfg?: OpenClawConfig;
+  agentDir?: string;
+  allowKeychainPrompt?: boolean;
+  includeExternalCliAuth?: boolean;
+}): { agentDir: string; profileIds: string[]; store: AuthProfileStore } {
+  const agentDir = params.agentDir?.trim() || resolveDefaultAgentDir(params.cfg ?? {});
+  const externalCli = params.includeExternalCliAuth
+    ? externalCliDiscoveryForProviderAuth({
+        cfg: params.cfg,
+        provider: params.provider,
+        allowKeychainPrompt: params.allowKeychainPrompt,
+      })
+    : undefined;
+  const store = externalCli
+    ? loadAuthProfileStoreForSecretsRuntime(agentDir, { externalCli })
+    : loadAuthProfileStoreForSecretsRuntime(agentDir);
+  const profileIds = resolveAuthProfileOrder({
+    cfg: params.cfg,
+    store,
+    provider: params.provider,
+  });
+  if (profileIds.length > 0) {
+    return { agentDir, profileIds, store };
+  }
+
+  const fallbackStore = loadAuthProfileStoreWithoutExternalProfiles(agentDir, {
+    allowKeychainPrompt: params.allowKeychainPrompt ?? false,
+    resolveLegacyOAuthSidecars: true,
+  });
+  return {
+    agentDir,
+    profileIds: resolveAuthProfileOrder({
+      cfg: params.cfg,
+      store: fallbackStore,
+      provider: params.provider,
+    }),
+    store: fallbackStore,
+  };
 }

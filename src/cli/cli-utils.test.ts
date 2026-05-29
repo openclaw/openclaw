@@ -10,7 +10,7 @@ import {
 import { waitForever } from "./wait.js";
 
 describe("waitForever", () => {
-  it("creates an unref'ed interval and returns a pending promise", () => {
+  it("keeps the event loop alive (ref'd interval) and returns a pending promise", () => {
     const unref = vi.fn();
     const interval = { unref } as unknown as ReturnType<typeof setInterval>;
     const setIntervalSpy = vi.spyOn(global, "setInterval").mockReturnValue(interval);
@@ -20,7 +20,11 @@ describe("waitForever", () => {
       const [callback, delay] = setIntervalSpy.mock.calls[0] ?? [];
       expect(typeof callback).toBe("function");
       expect(delay).toBe(1_000_000);
-      expect(unref).toHaveBeenCalledTimes(1);
+      // Regression guard for the previous `.unref()` bug: an unref'd interval
+      // does NOT keep the event loop alive, so `await waitForever()` would
+      // exit immediately with code 13 ("unsettled top-level await"). The
+      // function must NOT unref the interval.
+      expect(unref).not.toHaveBeenCalled();
       expect(promise).toBeInstanceOf(Promise);
     } finally {
       setIntervalSpy.mockRestore();
@@ -87,6 +91,25 @@ describe("dns cli", () => {
       log.mockRestore();
     }
   });
+
+  it.each(["foo/bar", "../../x", "evil\nrecords"])(
+    "rejects invalid --domain %j with explicit DNS-name diagnostic",
+    async (domain) => {
+      const log = vi.spyOn(console, "log").mockImplementation(() => {});
+      try {
+        const program = new Command();
+        registerDnsCli(program);
+        await expect(
+          program.parseAsync(["dns", "setup", "--domain", domain], { from: "user" }),
+        ).rejects.toThrow("wide-area discovery domain must be a valid DNS name");
+        const output = log.mock.calls.map((call) => call.join(" ")).join("\\n");
+        expect(output).not.toContain("No wide-area domain configured");
+        expect(output).not.toContain("DNS setup");
+      } finally {
+        log.mockRestore();
+      }
+    },
+  );
 });
 
 describe("parseByteSize", () => {

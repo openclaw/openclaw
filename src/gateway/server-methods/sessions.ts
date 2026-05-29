@@ -1,19 +1,39 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
+import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
+import {
+  ErrorCodes,
+  errorShape,
+  type SessionOperationEvent,
+  validateSessionsAbortParams,
+  validateSessionsCleanupParams,
+  validateSessionsCompactParams,
+  validateSessionsCompactionBranchParams,
+  validateSessionsCompactionGetParams,
+  validateSessionsCompactionListParams,
+  validateSessionsCompactionRestoreParams,
+  validateSessionsCreateParams,
+  validateSessionsDeleteParams,
+  validateSessionsDescribeParams,
+  validateSessionsListParams,
+  validateSessionsMessagesSubscribeParams,
+  validateSessionsMessagesUnsubscribeParams,
+  validateSessionsPatchParams,
+  validateSessionsPluginPatchParams,
+  validateSessionsPreviewParams,
+  validateSessionsResetParams,
+  validateSessionsResolveParams,
+  validateSessionsSendParams,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { resolveModelAgentRuntimeMetadata } from "../../agents/agent-runtime-metadata.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
-  listAgentIds,
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-} from "../../agents/agent-scope.js";
-import {
-  abortEmbeddedPiRun,
-  isEmbeddedPiRunActive,
-  waitForEmbeddedPiRunEnd,
-} from "../../agents/pi-embedded-runner/runs.js";
-import { compactEmbeddedPiSession } from "../../agents/pi-embedded.js";
+  abortEmbeddedAgentRun,
+  isEmbeddedAgentRunActive,
+  waitForEmbeddedAgentRunEnd,
+} from "../../agents/embedded-agent-runner/runs.js";
+import { compactEmbeddedAgentSession } from "../../agents/embedded-agent.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import { normalizeReasoningLevel, normalizeThinkLevel } from "../../auto-reply/thinking.js";
 import {
@@ -23,10 +43,12 @@ import {
   resolveMainSessionKey,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
+  listConfiguredSessionStoreAgentIds,
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
+import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   createInternalHookEvent,
@@ -52,31 +74,6 @@ import {
   readStringValue,
 } from "../../shared/string-coerce.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
-import { GATEWAY_CLIENT_IDS } from "../protocol/client-info.js";
-import {
-  ErrorCodes,
-  errorShape,
-  type SessionOperationEvent,
-  validateSessionsAbortParams,
-  validateSessionsCleanupParams,
-  validateSessionsCompactParams,
-  validateSessionsCompactionBranchParams,
-  validateSessionsCompactionGetParams,
-  validateSessionsCompactionListParams,
-  validateSessionsCompactionRestoreParams,
-  validateSessionsCreateParams,
-  validateSessionsDeleteParams,
-  validateSessionsDescribeParams,
-  validateSessionsListParams,
-  validateSessionsMessagesSubscribeParams,
-  validateSessionsMessagesUnsubscribeParams,
-  validateSessionsPatchParams,
-  validateSessionsPluginPatchParams,
-  validateSessionsPreviewParams,
-  validateSessionsResetParams,
-  validateSessionsResolveParams,
-  validateSessionsSendParams,
-} from "../protocol/index.js";
 import { resolveSessionKeyForRun } from "../server-session-key.js";
 import {
   forkCompactionCheckpointTranscriptAsync,
@@ -84,6 +81,12 @@ import {
   listSessionCompactionCheckpoints,
 } from "../session-compaction-checkpoints.js";
 import { triggerSessionPatchHook } from "../session-patch-hooks.js";
+import {
+  resolveSessionStoreAgentId,
+  resolveSessionStoreKey,
+  resolveStoredSessionKeyForAgentStore,
+  resolveStoredSessionOwnerAgentId,
+} from "../session-store-key.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import {
   archiveFileOnDisk,
@@ -124,16 +127,64 @@ function filterSessionStoreToConfiguredAgents(
   cfg: OpenClawConfig,
   store: Record<string, SessionEntry>,
 ): Record<string, SessionEntry> {
-  const configuredAgentIds = new Set(listAgentIds(cfg).map((agentId) => normalizeAgentId(agentId)));
+  const configuredAgentIds = new Set(listConfiguredSessionStoreAgentIds(cfg));
+  const isConfiguredSessionKey = (key: string | undefined) => {
+    const normalizedKey = normalizeOptionalString(key);
+    if (!normalizedKey) {
+      return false;
+    }
+    const canonicalKey = resolveSessionStoreKey({ cfg, sessionKey: normalizedKey });
+    const agentId = resolveSessionStoreAgentId(cfg, canonicalKey);
+    return configuredAgentIds.has(normalizeAgentId(agentId));
+  };
   return Object.fromEntries(
-    Object.entries(store).filter(([key]) => {
+    Object.entries(store).filter(([key, entry]) => {
       if (key === "global" || key === "unknown") {
         return true;
       }
-      const parsed = parseAgentSessionKey(key);
-      return parsed ? configuredAgentIds.has(normalizeAgentId(parsed.agentId)) : false;
+      if (isConfiguredSessionKey(key)) {
+        return true;
+      }
+      return (
+        isConfiguredSessionKey(entry?.spawnedBy) || isConfiguredSessionKey(entry?.parentSessionKey)
+      );
     }),
   );
+}
+
+function inheritSessionRuntimeSelection(
+  parentEntry: SessionEntry | undefined,
+): Partial<SessionEntry> {
+  if (!parentEntry) {
+    return {};
+  }
+  return {
+    ...(parentEntry.providerOverride ? { providerOverride: parentEntry.providerOverride } : {}),
+    ...(parentEntry.modelOverride ? { modelOverride: parentEntry.modelOverride } : {}),
+    ...(parentEntry.modelOverrideSource
+      ? { modelOverrideSource: parentEntry.modelOverrideSource }
+      : {}),
+    ...(parentEntry.agentRuntimeOverride
+      ? { agentRuntimeOverride: parentEntry.agentRuntimeOverride }
+      : {}),
+    ...(parentEntry.modelProvider ? { modelProvider: parentEntry.modelProvider } : {}),
+    ...(parentEntry.model ? { model: parentEntry.model } : {}),
+    ...(typeof parentEntry.contextTokens === "number"
+      ? { contextTokens: parentEntry.contextTokens }
+      : {}),
+    ...(parentEntry.thinkingLevel ? { thinkingLevel: parentEntry.thinkingLevel } : {}),
+    ...(typeof parentEntry.fastMode === "boolean" ? { fastMode: parentEntry.fastMode } : {}),
+    ...(parentEntry.verboseLevel ? { verboseLevel: parentEntry.verboseLevel } : {}),
+    ...(parentEntry.traceLevel ? { traceLevel: parentEntry.traceLevel } : {}),
+    ...(parentEntry.reasoningLevel ? { reasoningLevel: parentEntry.reasoningLevel } : {}),
+    ...(parentEntry.elevatedLevel ? { elevatedLevel: parentEntry.elevatedLevel } : {}),
+    ...(parentEntry.authProfileOverride
+      ? { authProfileOverride: parentEntry.authProfileOverride }
+      : {}),
+    ...(parentEntry.authProfileOverrideSource
+      ? { authProfileOverrideSource: parentEntry.authProfileOverrideSource }
+      : {}),
+  };
 }
 
 type SessionsRuntimeModule = typeof import("./sessions.runtime.js");
@@ -279,6 +330,7 @@ function emitSessionsChanged(
             origin: sessionRow.origin,
             spawnedBy: sessionRow.spawnedBy,
             spawnedWorkspaceDir: sessionRow.spawnedWorkspaceDir,
+            spawnedCwd: sessionRow.spawnedCwd,
             forkedFromParent: sessionRow.forkedFromParent,
             spawnDepth: sessionRow.spawnDepth,
             subagentRole: sessionRow.subagentRole,
@@ -417,6 +469,33 @@ function cloneCheckpointSessionEntry(params: {
   };
 }
 
+function resolveCheckpointForkSource(
+  checkpoint: NonNullable<ReturnType<typeof getSessionCompactionCheckpoint>>,
+): { sourceFile: string; sourceLeafId?: string; totalTokens?: number } | null {
+  const preCompactionFile = checkpoint.preCompaction.sessionFile?.trim();
+  if (preCompactionFile) {
+    return {
+      sourceFile: preCompactionFile,
+      sourceLeafId: checkpoint.preCompaction.leafId,
+      totalTokens: checkpoint.tokensBefore,
+    };
+  }
+  const postCompactionFile = checkpoint.postCompaction.sessionFile?.trim();
+  if (!postCompactionFile) {
+    return null;
+  }
+  const postCompactionLeafId =
+    checkpoint.postCompaction.leafId ?? checkpoint.postCompaction.entryId;
+  if (!postCompactionLeafId) {
+    return null;
+  }
+  return {
+    sourceFile: postCompactionFile,
+    sourceLeafId: postCompactionLeafId,
+    totalTokens: checkpoint.tokensAfter,
+  };
+}
+
 function isAgentMainSessionKey(cfg: OpenClawConfig, sessionKey: string): boolean {
   const parsed = parseAgentSessionKey(sessionKey);
   if (!parsed) {
@@ -540,24 +619,78 @@ function resolveAbortSessionKey(params: {
   context: Pick<GatewayRequestContext, "chatAbortControllers">;
   requestedKey: string;
   canonicalKey: string;
-  runId?: string;
+  activeRunSessionKey?: string;
+  aliasKeys?: string[];
 }): string {
-  const activeRunKey =
-    typeof params.runId === "string"
-      ? params.context.chatAbortControllers.get(params.runId)?.sessionKey
-      : undefined;
-  if (activeRunKey) {
-    return activeRunKey;
+  if (params.activeRunSessionKey) {
+    return params.activeRunSessionKey;
   }
+  const candidates = [params.canonicalKey, params.requestedKey, ...(params.aliasKeys ?? [])];
   for (const active of params.context.chatAbortControllers.values()) {
-    if (active.sessionKey === params.canonicalKey) {
-      return params.canonicalKey;
-    }
-    if (active.sessionKey === params.requestedKey) {
-      return params.requestedKey;
+    for (const candidate of candidates) {
+      if (active.sessionKey === candidate) {
+        return candidate;
+      }
     }
   }
   return params.requestedKey;
+}
+
+function resolveSessionKeyAgentId(
+  sessionKey: string | undefined,
+  cfg: OpenClawConfig,
+): string | undefined {
+  const key = normalizeOptionalString(sessionKey);
+  if (!key) {
+    return undefined;
+  }
+  if (!parseAgentSessionKey(key) && key.toLowerCase().startsWith("agent:")) {
+    return undefined;
+  }
+  const canonicalKey = resolveSessionStoreKey({ cfg, sessionKey: key });
+  return resolveSessionStoreAgentId(cfg, canonicalKey);
+}
+
+function sessionKeyBelongsToAgent(
+  sessionKey: string | undefined,
+  agentId: string,
+  cfg: OpenClawConfig,
+): boolean {
+  const key = normalizeOptionalString(sessionKey);
+  if (cfg.session?.scope === "global" && key?.toLowerCase() === "global") {
+    return true;
+  }
+  const sessionAgentId = resolveSessionKeyAgentId(sessionKey, cfg);
+  return Boolean(sessionAgentId && sessionAgentId === normalizeAgentId(agentId));
+}
+
+function resolveScopedAbortKey(params: {
+  cfg: OpenClawConfig;
+  key: string | undefined;
+  agentId: string | undefined;
+}): string | undefined {
+  const key = normalizeOptionalString(params.key);
+  if (!key) {
+    return undefined;
+  }
+  const requestedAgentId = normalizeOptionalString(params.agentId);
+  if (!requestedAgentId) {
+    return key;
+  }
+  const scopedAgentId = normalizeAgentId(requestedAgentId);
+  const ownerAgentId = resolveStoredSessionOwnerAgentId({
+    cfg: params.cfg,
+    agentId: scopedAgentId,
+    sessionKey: key,
+  });
+  if (ownerAgentId && ownerAgentId !== scopedAgentId) {
+    return undefined;
+  }
+  return resolveStoredSessionKeyForAgentStore({
+    cfg: params.cfg,
+    agentId: scopedAgentId,
+    sessionKey: key,
+  });
 }
 
 function collectTrackedActiveSessionRunKeys(
@@ -568,7 +701,11 @@ function collectTrackedActiveSessionRunKeys(
     return keys;
   }
   for (const active of context.chatAbortControllers.values()) {
-    if (typeof active.sessionKey === "string" && active.sessionKey.trim()) {
+    if (
+      active.projectSessionActive !== false &&
+      typeof active.sessionKey === "string" &&
+      active.sessionKey.trim()
+    ) {
       keys.add(active.sessionKey);
     }
   }
@@ -600,7 +737,7 @@ async function interruptSessionRunIfActive(params: {
   });
   const hasEmbeddedRun =
     typeof params.sessionId === "string" && params.sessionId
-      ? isEmbeddedPiRunActive(params.sessionId)
+      ? isEmbeddedAgentRunActive(params.sessionId)
       : false;
 
   if (!hasTrackedRun && !hasEmbeddedRun) {
@@ -640,13 +777,13 @@ async function interruptSessionRunIfActive(params: {
   }
 
   if (hasEmbeddedRun && params.sessionId) {
-    abortEmbeddedPiRun(params.sessionId);
+    abortEmbeddedAgentRun(params.sessionId);
   }
 
   clearSessionQueues([params.requestedKey, params.canonicalKey, params.sessionId]);
 
   if (hasEmbeddedRun && params.sessionId) {
-    const ended = await waitForEmbeddedPiRunEnd(params.sessionId, 15_000);
+    const ended = await waitForEmbeddedAgentRunEnd(params.sessionId, 15_000);
     if (!ended) {
       return {
         interrupted: true,
@@ -829,7 +966,6 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           () =>
             loadCombinedSessionStoreForGateway(cfg, {
               agentId: p.agentId,
-              configuredAgentsOnly,
             }),
           {
             config: cfg,
@@ -1197,6 +1333,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
     const parentSessionKey = normalizeOptionalString(p.parentSessionKey);
     let canonicalParentSessionKey: string | undefined;
+    let parentSessionEntry: SessionEntry | undefined;
     if (parentSessionKey) {
       const parent = loadSessionEntry(parentSessionKey);
       if (!parent.entry?.sessionId) {
@@ -1208,6 +1345,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         return;
       }
       canonicalParentSessionKey = parent.canonicalKey;
+      parentSessionEntry = parent.entry;
     }
     if (
       canonicalParentSessionKey &&
@@ -1306,8 +1444,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       if (!patched.ok || !canonicalParentSessionKey) {
         return patched;
       }
+      const inheritedSelection = normalizeOptionalString(p.model)
+        ? {}
+        : inheritSessionRuntimeSelection(parentSessionEntry);
       const nextEntry: SessionEntry = {
         ...patched.entry,
+        ...inheritedSelection,
         parentSessionKey: canonicalParentSessionKey,
       };
       store[target.canonicalKey] = nextEntry;
@@ -1486,7 +1628,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const checkpoint = getSessionCompactionCheckpoint({ entry, checkpointId });
-    if (!checkpoint?.preCompaction.sessionFile) {
+    const forkSource = checkpoint ? resolveCheckpointForkSource(checkpoint) : null;
+    if (!checkpoint || !forkSource) {
       respond(
         false,
         undefined,
@@ -1495,8 +1638,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const branchedSession = await forkCompactionCheckpointTranscriptAsync({
-      sourceFile: checkpoint.preCompaction.sessionFile,
-      sessionDir: path.dirname(checkpoint.preCompaction.sessionFile),
+      sourceFile: forkSource.sourceFile,
+      sourceLeafId: forkSource.sourceLeafId,
+      sessionDir: path.dirname(forkSource.sourceFile),
     });
     if (!branchedSession?.sessionFile) {
       respond(
@@ -1514,7 +1658,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       nextSessionFile: branchedSession.sessionFile,
       label,
       parentSessionKey: canonicalKey,
-      totalTokens: checkpoint.tokensBefore,
+      totalTokens: forkSource.totalTokens,
     });
 
     await updateSessionStore(target.storePath, (store) => {
@@ -1585,7 +1729,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const checkpoint = getSessionCompactionCheckpoint({ entry, checkpointId });
-    if (!checkpoint?.preCompaction.sessionFile) {
+    const forkSource = checkpoint ? resolveCheckpointForkSource(checkpoint) : null;
+    if (!checkpoint || !forkSource) {
       respond(
         false,
         undefined,
@@ -1608,8 +1753,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
 
     const restoredSession = await forkCompactionCheckpointTranscriptAsync({
-      sourceFile: checkpoint.preCompaction.sessionFile,
-      sessionDir: path.dirname(checkpoint.preCompaction.sessionFile),
+      sourceFile: forkSource.sourceFile,
+      sourceLeafId: forkSource.sourceLeafId,
+      sessionDir: path.dirname(forkSource.sourceFile),
     });
     if (!restoredSession?.sessionFile) {
       respond(
@@ -1623,7 +1769,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       currentEntry: entry,
       nextSessionId: restoredSession.sessionId,
       nextSessionFile: restoredSession.sessionFile,
-      totalTokens: checkpoint.tokensBefore,
+      totalTokens: forkSource.totalTokens,
       preserveCompactionCheckpoints: true,
     });
 
@@ -1676,11 +1822,53 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const p = params;
+    const cfg = context.getRuntimeConfig();
     const requestedRunId = readStringValue(p.runId);
+    const requestedKey = normalizeOptionalString(p.key);
+    const requestedParamAgentId = normalizeOptionalString(p.agentId);
+    const scopedRequestedKey = resolveScopedAbortKey({
+      cfg,
+      key: requestedKey,
+      agentId: requestedParamAgentId,
+    });
+    if (requestedKey && requestedParamAgentId && !scopedRequestedKey) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "session key agent does not match agentId"),
+      );
+      return;
+    }
+    const requestedKeyAgentId = scopedRequestedKey
+      ? resolveSessionKeyAgentId(scopedRequestedKey, cfg)
+      : undefined;
+    const activeRunSessionKey = requestedRunId
+      ? context.chatAbortControllers.get(requestedRunId)?.sessionKey
+      : undefined;
+    const inferredRunAgentId =
+      requestedParamAgentId ??
+      requestedKeyAgentId ??
+      (requestedRunId && !activeRunSessionKey ? resolveDefaultAgentId(cfg) : undefined);
+    const requestedRunAgentId = requestedRunId
+      ? inferredRunAgentId
+        ? normalizeAgentId(inferredRunAgentId)
+        : undefined
+      : undefined;
+    const scopedActiveRunSessionKey = activeRunSessionKey
+      ? requestedRunAgentId
+        ? sessionKeyBelongsToAgent(activeRunSessionKey, requestedRunAgentId, cfg)
+          ? activeRunSessionKey
+          : undefined
+        : activeRunSessionKey
+      : undefined;
     const keyCandidate =
-      p.key ??
-      (requestedRunId ? context.chatAbortControllers.get(requestedRunId)?.sessionKey : undefined) ??
-      (requestedRunId ? resolveSessionKeyForRun(requestedRunId) : undefined);
+      scopedRequestedKey ??
+      scopedActiveRunSessionKey ??
+      (requestedRunId
+        ? resolveSessionKeyForRun(requestedRunId, {
+            agentId: requestedRunAgentId ?? resolveDefaultAgentId(cfg),
+          })
+        : undefined);
     if (!keyCandidate && requestedRunId) {
       respond(true, { ok: true, abortedRunId: null, status: "no-active-run" });
       return;
@@ -1690,11 +1878,18 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const { canonicalKey } = loadSessionEntry(key);
+    const requestedKeyAliases =
+      requestedKey &&
+      requestedKey !== key &&
+      (!requestedParamAgentId || sessionKeyBelongsToAgent(requestedKey, requestedParamAgentId, cfg))
+        ? [requestedKey]
+        : undefined;
     const abortSessionKey = resolveAbortSessionKey({
       context,
       requestedKey: key,
       canonicalKey,
-      runId: requestedRunId,
+      activeRunSessionKey: scopedActiveRunSessionKey,
+      aliasKeys: requestedKeyAliases,
     });
     // Capture run kinds before the abort because abortChatRunById deletes entries
     // from chatAbortControllers synchronously. We use this snapshot to choose the
@@ -2162,6 +2357,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       const workspaceDir =
         normalizeOptionalString(entry?.spawnedWorkspaceDir) ||
         resolveAgentWorkspaceDir(cfg, target.agentId);
+      const cwd = normalizeOptionalString(entry?.spawnedCwd);
       const operationId = randomUUID();
       emitSessionOperation(context, {
         operationId,
@@ -2169,14 +2365,15 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         phase: "start",
         sessionKey: target.canonicalKey,
       });
-      let result: Awaited<ReturnType<typeof compactEmbeddedPiSession>>;
+      let result: Awaited<ReturnType<typeof compactEmbeddedAgentSession>>;
       try {
-        result = await compactEmbeddedPiSession({
+        result = await compactEmbeddedAgentSession({
           sessionId,
           sessionKey: target.canonicalKey,
           allowGatewaySubagentBinding: true,
           sessionFile: filePath,
           workspaceDir,
+          cwd,
           config: cfg,
           provider: resolvedModel.provider,
           model: resolvedModel.model,
@@ -2227,6 +2424,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           }
           delete entryToUpdate.inputTokens;
           delete entryToUpdate.outputTokens;
+          delete entryToUpdate.contextBudgetStatus;
           if (
             typeof result.result?.tokensAfter === "number" &&
             Number.isFinite(result.result.tokensAfter)
@@ -2297,6 +2495,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       delete entryToUpdate.outputTokens;
       delete entryToUpdate.totalTokens;
       delete entryToUpdate.totalTokensFresh;
+      delete entryToUpdate.contextBudgetStatus;
       entryToUpdate.updatedAt = Date.now();
     });
 

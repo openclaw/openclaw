@@ -8,6 +8,7 @@ import {
   type ToolContentBlock,
 } from "../chat/tool-content.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { asFiniteNumber } from "../shared/number-coercion.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { attachOpenClawTranscriptMeta } from "./session-utils.fs.js";
 
@@ -63,10 +64,6 @@ export function resolveClaudeCliBindingSessionId(
   return legacyClaudeSessionId || undefined;
 }
 
-function resolveFiniteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
 function resolveTimestampMs(value: unknown): number | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -79,10 +76,10 @@ function resolveClaudeCliUsage(raw: ClaudeCliUsage) {
   if (!raw || typeof raw !== "object") {
     return undefined;
   }
-  const input = resolveFiniteNumber(raw.input_tokens);
-  const output = resolveFiniteNumber(raw.output_tokens);
-  const cacheRead = resolveFiniteNumber(raw.cache_read_input_tokens);
-  const cacheWrite = resolveFiniteNumber(raw.cache_creation_input_tokens);
+  const input = asFiniteNumber(raw.input_tokens);
+  const output = asFiniteNumber(raw.output_tokens);
+  const cacheRead = asFiniteNumber(raw.cache_read_input_tokens);
+  const cacheWrite = asFiniteNumber(raw.cache_creation_input_tokens);
   if (
     input === undefined &&
     output === undefined &&
@@ -279,6 +276,17 @@ export function resolveClaudeCliSessionFilePath(params: {
   cliSessionId: string;
   homeDir?: string;
 }): string | undefined {
+  const sessionId = params.cliSessionId.trim();
+  if (
+    !sessionId ||
+    sessionId === "." ||
+    sessionId === ".." ||
+    path.isAbsolute(sessionId) ||
+    sessionId.includes("/") ||
+    sessionId.includes("\\")
+  ) {
+    return undefined;
+  }
   const projectsDir = resolveClaudeProjectsDir(params.homeDir);
   let projectEntries: fs.Dirent[];
   try {
@@ -291,7 +299,12 @@ export function resolveClaudeCliSessionFilePath(params: {
     if (!entry.isDirectory()) {
       continue;
     }
-    const candidate = path.join(projectsDir, entry.name, `${params.cliSessionId}.jsonl`);
+    const projectDir = path.join(projectsDir, entry.name);
+    const candidate = path.resolve(projectDir, `${sessionId}.jsonl`);
+    const resolvedProjectDir = path.resolve(projectDir);
+    if (!candidate.startsWith(`${resolvedProjectDir}${path.sep}`)) {
+      continue;
+    }
     if (fs.existsSync(candidate)) {
       return candidate;
     }

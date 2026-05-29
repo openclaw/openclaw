@@ -5,6 +5,10 @@ import {
   resolveAgentEffectiveModelPrimary,
   resolveDefaultModelForAgent,
 } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  isRecord,
+  normalizeOptionalString as readString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawPluginApi } from "../api.js";
 import type { SkillWorkshopConfig } from "./config.js";
 import { normalizeSkillName } from "./skills.js";
@@ -52,14 +56,6 @@ function resolveReviewerFallbackModel(params: { api: OpenClawPluginApi; agentId:
     provider: params.api.runtime.agent.defaults.provider,
     model: params.api.runtime.agent.defaults.model,
   };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function parseReviewerJson(raw: string): ReviewerJson | undefined {
@@ -248,7 +244,7 @@ export async function reviewTranscriptForProposal(params: {
     api: params.api,
     agentId: params.ctx.agentId,
   });
-  const result = await params.api.runtime.agent.runEmbeddedPiAgent({
+  const result = await params.api.runtime.agent.runEmbeddedAgent({
     sessionId,
     sessionKey: params.ctx.sessionKey,
     agentId: params.ctx.agentId,

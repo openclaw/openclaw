@@ -23,6 +23,7 @@ vi.mock("../../plugins/manifest-registry.js", () => ({
 }));
 
 vi.mock("./external-auth.js", () => ({
+  listRuntimeExternalAuthProfiles: () => [],
   overlayExternalAuthProfiles: <T>(store: T) => store,
   shouldPersistExternalAuthProfile: () => true,
 }));
@@ -276,7 +277,7 @@ describe("resolveAuthProfileOrder", () => {
     expect(order).toEqual(["openai-codex:personal", "openai:backup"]);
   });
 
-  it("lets Codex auth discover oauthRef-backed OAuth profiles", async () => {
+  it("does not discover OAuth profiles without inline credential material", async () => {
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
@@ -286,11 +287,6 @@ describe("resolveAuthProfileOrder", () => {
           access: "",
           refresh: "",
           expires: Date.now() + 60_000,
-          oauthRef: {
-            source: "openclaw-credentials",
-            provider: "openai-codex",
-            id: "0123456789abcdef0123456789abcdef",
-          },
         },
       },
     };
@@ -300,7 +296,7 @@ describe("resolveAuthProfileOrder", () => {
       provider: "openai-codex",
     });
 
-    expect(order).toEqual(["openai-codex:personal"]);
+    expect(order).toEqual([]);
   });
 
   it("preserves native Codex profiles before OpenAI alias API-key order", async () => {

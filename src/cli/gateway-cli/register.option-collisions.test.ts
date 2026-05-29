@@ -55,7 +55,7 @@ vi.mock("./call.js", () => ({
     mocks.callGatewayCli(method, opts, params),
 }));
 
-vi.mock("./run.js", () => ({
+vi.mock("./run-command.js", () => ({
   addGatewayRunCommand: (cmd: Command) =>
     cmd
       .option("--token <token>", "Gateway token")
@@ -168,6 +168,26 @@ describe("gateway register option collisions", () => {
         const [opts, runtime] = firstGatewayStatusCall();
         expect((opts as { token?: string } | undefined)?.token).toBe("tok_probe");
         expect(runtime).toBe(defaultRuntime);
+      },
+    },
+    {
+      name: "passes decimal usage-cost --days values",
+      argv: ["gateway", "usage-cost", "--days", "7", "--json"],
+      assert: () => {
+        expect(callGatewayCli).toHaveBeenCalledTimes(1);
+        const [method, _opts, params] = firstGatewayCall();
+        expect(method).toBe("usage.cost");
+        expect(params).toEqual({ days: 7 });
+      },
+    },
+    {
+      name: "falls back for non-decimal usage-cost --days values",
+      argv: ["gateway", "usage-cost", "--days", "1e3", "--json"],
+      assert: () => {
+        expect(callGatewayCli).toHaveBeenCalledTimes(1);
+        const [method, _opts, params] = firstGatewayCall();
+        expect(method).toBe("usage.cost");
+        expect(params).toEqual({ days: 30 });
       },
     },
   ])("$name", async ({ argv, assert }) => {

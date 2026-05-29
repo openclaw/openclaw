@@ -93,7 +93,7 @@ openclaw_live_should_include_auth_file_for_provider() {
   local provider
   provider="$(openclaw_live_trim "${1:-}")"
   case "$provider" in
-    codex-cli | openai-codex)
+    codex-cli | openai | openai-codex)
       printf '%s\n' ".codex/auth.json"
       printf '%s\n' ".codex/config.toml"
       ;;
@@ -199,11 +199,70 @@ openclaw_live_append_array() {
   local source_array="${2:?source array required}"
   local count
 
-  eval "count=\${#$source_array[@]}"
+  eval "count=\${#${source_array}[@]}"
   if ((count == 0)); then
     return 0
   fi
-  eval "$target_array+=(\"\${$source_array[@]}\")"
+  eval "${target_array}+=(\"\${${source_array}[@]}\")"
+}
+
+openclaw_live_timeout_bin() {
+  if command -v timeout >/dev/null 2>&1; then
+    printf '%s\n' timeout
+  elif command -v gtimeout >/dev/null 2>&1; then
+    printf '%s\n' gtimeout
+  else
+    return 1
+  fi
+}
+
+openclaw_live_timeout_supports_kill_after() {
+  local timeout_bin="${1:?timeout binary required}"
+  "$timeout_bin" --kill-after=1s 1s true >/dev/null 2>&1
+}
+
+openclaw_live_init_docker_run_args() {
+  local target_array="${1:?target array required}"
+  local timeout_value="${2:-${OPENCLAW_LIVE_DOCKER_RUN_TIMEOUT:-2700s}}"
+  local timeout_bin
+  local quoted_timeout
+
+  if ! timeout_bin="$(openclaw_live_timeout_bin)"; then
+    echo "timeout command not found; cannot bound live Docker run after ${timeout_value}" >&2
+    return 127
+  fi
+  quoted_timeout="$(printf '%q' "$timeout_value")"
+  if openclaw_live_timeout_supports_kill_after "$timeout_bin"; then
+    eval "${target_array}=(${timeout_bin} --kill-after=30s ${quoted_timeout} docker run)"
+  else
+    eval "${target_array}=(${timeout_bin} ${quoted_timeout} docker run)"
+  fi
+}
+
+openclaw_live_container_node_options() {
+  local value
+  value="$(openclaw_live_trim "${OPENCLAW_DOCKER_NODE_OPTIONS:-${NODE_OPTIONS:-}}")"
+  if [[ -z "$value" ]]; then
+    value="--max-old-space-size=4096"
+  fi
+
+  case " $value " in
+    *" --dns-result-order="*)
+      ;;
+    *)
+      value="$value --dns-result-order=ipv4first"
+      ;;
+  esac
+
+  case " $value " in
+    *" --disable-warning=ExperimentalWarning "*)
+      ;;
+    *)
+      value="$value --disable-warning=ExperimentalWarning"
+      ;;
+  esac
+
+  printf '%s\n' "$value"
 }
 
 openclaw_live_stage_auth_into_home() {

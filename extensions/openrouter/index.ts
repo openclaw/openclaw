@@ -1,5 +1,7 @@
 import {
   definePluginEntry,
+  type ProviderReplayPolicy,
+  type ProviderReplayPolicyContext,
   type ProviderResolveDynamicModelContext,
   type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
@@ -14,6 +16,8 @@ import {
 } from "openclaw/plugin-sdk/provider-stream-family";
 import { buildOpenRouterImageGenerationProvider } from "./image-generation-provider.js";
 import { openrouterMediaUnderstandingProvider } from "./media-understanding-provider.js";
+import { isOpenRouterMistralModelId } from "./models.js";
+import { buildOpenRouterMusicGenerationProvider } from "./music-generation-provider.js";
 import { applyOpenrouterConfig, OPENROUTER_DEFAULT_MODEL_REF } from "./onboard.js";
 import {
   buildOpenrouterProvider,
@@ -21,6 +25,7 @@ import {
   normalizeOpenRouterBaseUrl,
   OPENROUTER_BASE_URL,
 } from "./provider-catalog.js";
+import { resolveOpenRouterExtraParamsForTransport } from "./provider-routing.js";
 import { buildOpenRouterSpeechProvider } from "./speech-provider.js";
 import { wrapOpenRouterProviderStream } from "./stream.js";
 import {
@@ -90,6 +95,23 @@ export default definePluginEntry({
       return OPENROUTER_CACHE_TTL_MODEL_PREFIXES.some((prefix) => modelId.startsWith(prefix));
     }
 
+    const passthroughReplayHook = PASSTHROUGH_GEMINI_REPLAY_HOOKS.buildReplayPolicy;
+    function buildOpenRouterReplayPolicy(ctx: ProviderReplayPolicyContext): ProviderReplayPolicy {
+      const base = passthroughReplayHook?.(ctx) ?? {};
+      // OpenRouter proxies Mistral, which uses non-base62 tool_call_ids and
+      // requires the 9-char id contract that direct `mistral` provider already
+      // applies. Without strict9, replayed assistant turns fail with HTTP 400
+      // `invalid_function_call` 3280 (#58012).
+      if (isOpenRouterMistralModelId(ctx.modelId)) {
+        return {
+          ...base,
+          sanitizeToolCallIds: true,
+          toolCallIdMode: "strict9",
+        };
+      }
+      return base;
+    }
+
     api.registerProvider({
       id: PROVIDER_ID,
       label: "OpenRouter",
@@ -114,6 +136,7 @@ export default definePluginEntry({
             groupId: "openrouter",
             groupLabel: "OpenRouter",
             groupHint: "API key",
+            onboardingScopes: ["text-inference", "music-generation"],
           },
         }),
       ],
@@ -159,15 +182,18 @@ export default definePluginEntry({
           : undefined;
       },
       ...PASSTHROUGH_GEMINI_REPLAY_HOOKS,
+      buildReplayPolicy: buildOpenRouterReplayPolicy,
       resolveReasoningOutputMode: () => "native",
       supportsXHighThinking: ({ modelId }) => supportsOpenRouterXHighThinking(modelId),
       resolveThinkingProfile: ({ modelId }) => resolveOpenRouterThinkingProfile(modelId),
       isModernModelRef: () => true,
+      extraParamsForTransport: resolveOpenRouterExtraParamsForTransport,
       wrapStreamFn: wrapOpenRouterProviderStream,
       isCacheTtlEligible: (ctx) => isOpenRouterCacheTtlModel(ctx.modelId),
     });
     api.registerMediaUnderstandingProvider(openrouterMediaUnderstandingProvider);
     api.registerImageGenerationProvider(buildOpenRouterImageGenerationProvider());
+    api.registerMusicGenerationProvider(buildOpenRouterMusicGenerationProvider());
     api.registerVideoGenerationProvider(buildOpenRouterVideoGenerationProvider());
     api.registerModelCatalogProvider({
       provider: PROVIDER_ID,

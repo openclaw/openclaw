@@ -4,8 +4,8 @@ import {
   listOpenAIAuthProfileProvidersForAgentRuntime,
   modelSelectionShouldEnsureCodexPlugin,
   openAIProviderUsesCodexRuntimeByDefault,
-  resolveOpenAIRuntimeProviderForPi,
-  resolveSelectedOpenAIPiRuntimeProvider,
+  resolveOpenAIRuntimeProvider,
+  resolveSelectedOpenAIRuntimeProvider,
 } from "./openai-codex-routing.js";
 
 describe("OpenAI Codex routing policy", () => {
@@ -35,24 +35,24 @@ describe("OpenAI Codex routing policy", () => {
     expect(modelSelectionShouldEnsureCodexPlugin({ model: "openai/gpt-5.5", config })).toBe(false);
   });
 
-  it("maps explicit PI plus Codex auth profile to the legacy PI Codex-auth transport", () => {
+  it("maps explicit OpenClaw plus Codex auth profile to the OpenClaw Codex-auth transport", () => {
     expect(
       listOpenAIAuthProfileProvidersForAgentRuntime({
         provider: "openai",
-        harnessRuntime: "pi",
+        harnessRuntime: "openclaw",
       }),
     ).toEqual(["openai", "openai-codex"]);
     expect(
-      resolveOpenAIRuntimeProviderForPi({
+      resolveOpenAIRuntimeProvider({
         provider: "openai",
-        harnessRuntime: "pi",
+        harnessRuntime: "openclaw",
         authProfileProvider: "openai-codex",
         authProfileId: "openai-codex:work",
       }),
     ).toBe("openai-codex");
   });
 
-  it("keeps explicit OpenAI PI Codex auth order ahead of API-key backups", () => {
+  it("keeps explicit OpenAI OpenClaw Codex auth order ahead of API-key backups", () => {
     const config = {
       auth: {
         order: {
@@ -64,27 +64,27 @@ describe("OpenAI Codex routing policy", () => {
     expect(
       listOpenAIAuthProfileProvidersForAgentRuntime({
         provider: "openai",
-        harnessRuntime: "pi",
+        harnessRuntime: "openclaw",
         config,
       }),
     ).toEqual(["openai-codex", "openai"]);
     expect(
-      resolveSelectedOpenAIPiRuntimeProvider({
+      resolveSelectedOpenAIRuntimeProvider({
         provider: "openai",
-        harnessRuntime: "pi",
+        harnessRuntime: "openclaw",
         config,
       }),
     ).toBe("openai-codex");
     expect(
-      resolveOpenAIRuntimeProviderForPi({
+      resolveOpenAIRuntimeProvider({
         provider: "openai",
-        harnessRuntime: "pi",
+        harnessRuntime: "openclaw",
         config,
       }),
     ).toBe("openai");
   });
 
-  it("keeps explicit OpenAI PI API-key auth order ahead of Codex backups", () => {
+  it("keeps explicit OpenAI OpenClaw API-key auth order ahead of Codex backups", () => {
     const config = {
       auth: {
         order: {
@@ -96,20 +96,20 @@ describe("OpenAI Codex routing policy", () => {
     expect(
       listOpenAIAuthProfileProvidersForAgentRuntime({
         provider: "openai",
-        harnessRuntime: "pi",
+        harnessRuntime: "openclaw",
         config,
       }),
     ).toEqual(["openai", "openai-codex"]);
     expect(
-      resolveSelectedOpenAIPiRuntimeProvider({
+      resolveSelectedOpenAIRuntimeProvider({
         provider: "openai",
-        harnessRuntime: "pi",
+        harnessRuntime: "openclaw",
         config,
       }),
     ).toBe("openai");
   });
 
-  it("does not route custom OpenAI-compatible PI configs through Codex auth order", () => {
+  it("does not route custom OpenAI-compatible OpenClaw configs through Codex auth order", () => {
     const config = {
       models: {
         providers: {
@@ -129,14 +129,14 @@ describe("OpenAI Codex routing policy", () => {
     expect(
       listOpenAIAuthProfileProvidersForAgentRuntime({
         provider: "openai",
-        harnessRuntime: "pi",
+        harnessRuntime: "openclaw",
         config,
       }),
     ).toEqual(["openai", "openai-codex"]);
     expect(
-      resolveSelectedOpenAIPiRuntimeProvider({
+      resolveSelectedOpenAIRuntimeProvider({
         provider: "openai",
-        harnessRuntime: "pi",
+        harnessRuntime: "openclaw",
         config,
       }),
     ).toBe("openai");
@@ -149,5 +149,23 @@ describe("OpenAI Codex routing policy", () => {
         harnessRuntime: "codex",
       }),
     ).toEqual(["openai-codex"]);
+  });
+
+  it("routes openai provider to openai-codex when harness runtime is codex", () => {
+    expect(
+      resolveSelectedOpenAIRuntimeProvider({
+        provider: "openai",
+        harnessRuntime: "codex",
+      }),
+    ).toBe("openai-codex");
+  });
+
+  it("does not route non-OpenAI providers when runtime is codex", () => {
+    expect(
+      resolveSelectedOpenAIRuntimeProvider({
+        provider: "anthropic",
+        harnessRuntime: "codex",
+      }),
+    ).toBe("anthropic");
   });
 });

@@ -73,6 +73,17 @@ describe("agent defaults schema", () => {
     );
   });
 
+  it("accepts voiceModel", () => {
+    expectSchemaSuccess(
+      AgentDefaultsSchema.safeParse({
+        voiceModel: {
+          primary: "openai/gpt-4o-mini-tts",
+          fallbacks: ["elevenlabs/eleven_multilingual_v2"],
+        },
+      }),
+    );
+  });
+
   it("accepts imageGenerationModel timeoutMs", () => {
     const defaults = AgentDefaultsSchema.parse({
       imageGenerationModel: {
@@ -93,6 +104,48 @@ describe("agent defaults schema", () => {
         },
       }),
       "imageGenerationModel.timeoutMs",
+    );
+  });
+
+  it("keeps subagent model config to model selection only", () => {
+    const defaults = AgentDefaultsSchema.parse({
+      subagents: {
+        model: {
+          primary: "openai/gpt-5.5",
+          fallbacks: ["anthropic/claude-sonnet-4-6"],
+        },
+      },
+    });
+    const agent = AgentEntrySchema.parse({
+      id: "worker",
+      subagents: {
+        model: {
+          primary: "openai/gpt-5.5",
+          fallbacks: ["anthropic/claude-sonnet-4-6"],
+        },
+      },
+    });
+
+    expect(defaults?.subagents?.model).toEqual({
+      primary: "openai/gpt-5.5",
+      fallbacks: ["anthropic/claude-sonnet-4-6"],
+    });
+    expect(agent.subagents?.model).toEqual({
+      primary: "openai/gpt-5.5",
+      fallbacks: ["anthropic/claude-sonnet-4-6"],
+    });
+    expectSchemaFailurePath(
+      AgentDefaultsSchema.safeParse({
+        subagents: { model: { primary: "openai/gpt-5.5", timeoutMs: 30_000 } },
+      }),
+      "subagents.model",
+    );
+    expectSchemaFailurePath(
+      AgentEntrySchema.safeParse({
+        id: "worker",
+        subagents: { model: { primary: "openai/gpt-5.5", timeoutMs: 30_000 } },
+      }),
+      "subagents.model",
     );
   });
 
@@ -186,13 +239,37 @@ describe("agent defaults schema", () => {
     );
   });
 
-  it("accepts embeddedPi.executionContract", () => {
+  it("accepts embeddedAgent.executionContract", () => {
     const result = AgentDefaultsSchema.parse({
-      embeddedPi: {
+      embeddedAgent: {
         executionContract: "strict-agentic",
       },
     })!;
-    expect(result.embeddedPi?.executionContract).toBe("strict-agentic");
+    expect(result.embeddedAgent?.executionContract).toBe("strict-agentic");
+  });
+
+  it("rejects legacy whole-agent runtime pins outside doctor migration", () => {
+    expect(AgentDefaultsSchema.safeParse({ agentRuntime: { id: "codex" } }).success).toBe(false);
+    expect(AgentDefaultsSchema.safeParse({ embeddedHarness: { runtime: "codex" } }).success).toBe(
+      false,
+    );
+    expect(
+      AgentEntrySchema.safeParse({ id: "legacy", agentRuntime: { id: "codex" } }).success,
+    ).toBe(false);
+    expect(
+      AgentEntrySchema.safeParse({ id: "legacy", embeddedHarness: { runtime: "codex" } }).success,
+    ).toBe(false);
+  });
+
+  it("accepts embeddedAgent project settings policy", () => {
+    const result = AgentDefaultsSchema.parse({
+      embeddedAgent: {
+        executionContract: "strict-agentic",
+        projectSettingsPolicy: "sanitize",
+      },
+    })!;
+    expect(result.embeddedAgent?.executionContract).toBe("strict-agentic");
+    expect(result.embeddedAgent?.projectSettingsPolicy).toBe("sanitize");
   });
 
   it("accepts runRetries configuration on defaults and agent entries", () => {
@@ -340,6 +417,41 @@ describe("agent defaults schema", () => {
     }
     const config = result.config as { agents?: { list?: Array<{ contextTokens?: number }> } };
     expect(config.agents?.list?.[0]?.contextTokens).toBe(1_048_576);
+  });
+
+  it("accepts per-agent tools.codeMode config", () => {
+    expectSchemaSuccess(
+      AgentEntrySchema.safeParse({
+        id: "ops",
+        tools: { codeMode: { enabled: true } },
+      }),
+    );
+    expectSchemaSuccess(
+      AgentEntrySchema.safeParse({
+        id: "ops",
+        tools: { codeMode: true },
+      }),
+    );
+    expectSchemaSuccess(
+      AgentEntrySchema.safeParse({
+        id: "ops",
+        tools: {
+          codeMode: {
+            enabled: true,
+            runtime: "quickjs-wasi",
+            timeoutMs: 5000,
+            languages: ["javascript"],
+          },
+        },
+      }),
+    );
+    expectSchemaFailurePath(
+      AgentEntrySchema.safeParse({
+        id: "ops",
+        tools: { codeMode: { unknownKey: 1 } },
+      }),
+      "tools.codeMode",
+    );
   });
 
   it("rejects non-positive contextTokens on agent entries and defaults", () => {

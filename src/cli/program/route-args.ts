@@ -6,6 +6,7 @@ import {
   getVerboseFlag,
   hasFlag,
 } from "../argv.js";
+import { parseStrictPositiveIntOrUndefined } from "./helpers.js";
 
 type OptionalFlagParse = {
   ok: boolean;
@@ -182,11 +183,19 @@ export function parseConfigGetRouteArgs(argv: string[]) {
 export function parseConfigUnsetRouteArgs(argv: string[]) {
   const path = parseSinglePositional(argv, {
     commandPath: ["config", "unset"],
+    booleanFlags: ["--dry-run", "--allow-exec", "--json"],
   });
   if (!path) {
     return null;
   }
-  return { path };
+  return {
+    path,
+    cliOptions: {
+      dryRun: hasFlag(argv, "--dry-run"),
+      allowExec: hasFlag(argv, "--allow-exec"),
+      json: hasFlag(argv, "--json"),
+    },
+  };
 }
 
 export function parseModelsListRouteArgs(argv: string[]) {
@@ -344,8 +353,12 @@ export function parseTasksAuditRouteArgs(argv: string[]) {
   if (!code.ok) {
     return null;
   }
-  const limit = getPositiveIntFlagValue(argv, "--limit");
-  if (limit === null) {
+  const rawLimit = getFlagValue(argv, "--limit");
+  if (rawLimit === null) {
+    return null;
+  }
+  const limit = rawLimit === undefined ? undefined : parseStrictPositiveIntOrUndefined(rawLimit);
+  if (rawLimit !== undefined && limit === undefined) {
     return null;
   }
   return {

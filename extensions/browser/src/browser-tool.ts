@@ -33,9 +33,11 @@ import {
   listNodes,
   normalizeOptionalString,
   persistBrowserProxyFiles,
+  readPositiveIntegerParam,
   readStringParam,
   readStringValue,
   resolveBrowserConfig,
+  resolveRuntimeImageSanitization,
   resolveExistingPathsWithinRoot,
   resolveNodeIdFromList,
   resolveProfile,
@@ -70,7 +72,7 @@ const browserToolDeps = {
   untrackSessionBrowserTab,
 };
 
-export const __testing = {
+export const testing = {
   setDepsForTest(
     overrides: Partial<{
       browserAct: typeof browserAct;
@@ -127,10 +129,9 @@ export const __testing = {
 
 function readOptionalTargetAndTimeout(params: Record<string, unknown>) {
   const targetId = normalizeOptionalString(params.targetId);
-  const timeoutMs =
-    typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
-      ? params.timeoutMs
-      : undefined;
+  const timeoutMs = readPositiveIntegerParam(params, "timeoutMs", {
+    message: "timeoutMs must be a positive integer.",
+  });
   return { targetId, timeoutMs };
 }
 
@@ -421,9 +422,9 @@ function usesExistingSessionManageFlow(params: { action: string; profileName?: s
 }
 
 function readToolTimeoutMs(params: Record<string, unknown>) {
-  return typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
-    ? Math.max(1, Math.floor(params.timeoutMs))
-    : undefined;
+  return readPositiveIntegerParam(params, "timeoutMs", {
+    message: "timeoutMs must be a positive integer.",
+  });
 }
 
 export function createBrowserTool(opts?: {
@@ -734,11 +735,7 @@ export function createBrowserTool(opts?: {
           const element = readStringParam(params, "element");
           const labels = typeof params.labels === "boolean" ? params.labels : undefined;
           const type = params.type === "jpeg" ? "jpeg" : "png";
-          const timeoutMs =
-            typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
-              ? Math.max(1, Math.floor(params.timeoutMs))
-              : undefined;
-          const effectiveTimeoutMs = timeoutMs ?? DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS;
+          const effectiveTimeoutMs = requestedTimeoutMs ?? DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS;
           const result = proxyRequest
             ? ((await proxyRequest({
                 method: "POST",
@@ -770,6 +767,7 @@ export function createBrowserTool(opts?: {
             label: "browser:screenshot",
             path: result.path,
             details: result,
+            imageSanitization: resolveRuntimeImageSanitization(),
           });
         }
         case "navigate": {
@@ -867,6 +865,7 @@ export function createBrowserTool(opts?: {
         case "dialog": {
           const accept = Boolean(params.accept);
           const promptText = readStringValue(params.promptText);
+          const dialogId = readStringValue(params.dialogId);
           const { targetId, timeoutMs } = readOptionalTargetAndTimeout(params);
           if (proxyRequest) {
             const result = await proxyRequest({
@@ -876,6 +875,7 @@ export function createBrowserTool(opts?: {
               body: {
                 accept,
                 promptText,
+                dialogId,
                 targetId,
                 timeoutMs,
               },
@@ -885,6 +885,7 @@ export function createBrowserTool(opts?: {
           const result = await browserToolDeps.browserArmDialog(baseUrl, {
             accept,
             promptText,
+            dialogId,
             targetId,
             timeoutMs,
             profile,
@@ -911,3 +912,4 @@ export function createBrowserTool(opts?: {
     },
   };
 }
+export { testing as __testing };
