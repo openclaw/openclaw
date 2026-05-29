@@ -888,6 +888,50 @@ describe("runWithModelFallback", () => {
     expect(run).not.toHaveBeenCalled();
   });
 
+  it("skips auth cooldown gate for CLI providers with all profiles in cooldown", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-sonnet-4-6",
+            fallbacks: ["openai/gpt-4.1-mini"],
+          },
+          cliBackends: {
+            anthropic: { command: "claude" },
+          },
+        },
+      },
+    });
+    const tempDir = await makeAuthTempDir();
+    setAuthRuntimeStore(tempDir, {
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        "anthropic:default": { type: "api_key", provider: "anthropic", key: "test-key" },
+        "openai:default": { type: "api_key", provider: "openai", key: "test-key" },
+      },
+      usageStats: {
+        "anthropic:default": {
+          cooldownUntil: Date.now() + 60_000,
+          cooldownReason: "billing",
+          failureCounts: { billing: 1 },
+        },
+      },
+    });
+    const run = vi.fn().mockResolvedValueOnce("cli ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      agentDir: tempDir,
+      run,
+    });
+
+    expect(result.result).toBe("cli ok");
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run.mock.calls[0]).toEqual(["anthropic", "claude-sonnet-4-6"]);
+  });
+
   it("lets configured CLI runtimes reach the run callback", async () => {
     const cfg = makeCfg({
       agents: {

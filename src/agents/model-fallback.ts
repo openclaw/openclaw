@@ -1206,7 +1206,7 @@ export async function runWithModelFallback<T>(
     let runOptions: ModelFallbackRunOptions | undefined;
     let attemptedDuringCooldown = false;
     let transientProbeProviderForAttempt: string | null = null;
-    if (authRuntime && authStore) {
+    if (authRuntime && authStore && !isCliProvider(candidate.provider, params.cfg)) {
       const profileIds = authRuntime.resolveAuthProfileOrder({
         cfg: params.cfg,
         store: authStore,
