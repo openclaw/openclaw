@@ -1620,7 +1620,27 @@ jobs:
           git init "$GITHUB_WORKSPACE"
           git -C "$GITHUB_WORKSPACE" config gc.auto 0
           git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
-          git -C "$GITHUB_WORKSPACE" fetch --no-tags --depth=1 origin "+${CHECKOUT_SHA}:refs/remotes/origin/checkout"
+          fetch_checkout_ref() {
+            git -C "$GITHUB_WORKSPACE" \
+              -c protocol.version=2 \
+              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
+              "+${CHECKOUT_SHA}:refs/remotes/origin/checkout" &
+            local fetch_pid="$!"
+            local elapsed=0
+            while kill -0 "$fetch_pid" 2>/dev/null; do
+              if [ "$elapsed" -ge 30 ]; then
+                kill -TERM "$fetch_pid" 2>/dev/null || true
+                sleep 10
+                kill -KILL "$fetch_pid" 2>/dev/null || true
+                wait "$fetch_pid" || true
+                return 124
+              fi
+              sleep 1
+              elapsed=$((elapsed + 1))
+            done
+            wait "$fetch_pid"
+          }
+          fetch_checkout_ref
           git -C "$GITHUB_WORKSPACE" checkout --detach refs/remotes/origin/checkout
 
       - name: Try to exclude workspace from Windows Defender (best-effort)
@@ -1720,7 +1740,27 @@ jobs:
           git init "$GITHUB_WORKSPACE"
           git -C "$GITHUB_WORKSPACE" config gc.auto 0
           git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
-          git -C "$GITHUB_WORKSPACE" fetch --no-tags --depth=1 origin "+${CHECKOUT_SHA}:refs/remotes/origin/checkout"
+          fetch_checkout_ref() {
+            git -C "$GITHUB_WORKSPACE" \
+              -c protocol.version=2 \
+              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
+              "+${CHECKOUT_SHA}:refs/remotes/origin/checkout" &
+            local fetch_pid="$!"
+            local elapsed=0
+            while kill -0 "$fetch_pid" 2>/dev/null; do
+              if [ "$elapsed" -ge 30 ]; then
+                kill -TERM "$fetch_pid" 2>/dev/null || true
+                sleep 10
+                kill -KILL "$fetch_pid" 2>/dev/null || true
+                wait "$fetch_pid" || true
+                return 124
+              fi
+              sleep 1
+              elapsed=$((elapsed + 1))
+            done
+            wait "$fetch_pid"
+          }
+          fetch_checkout_ref
           git -C "$GITHUB_WORKSPACE" checkout --detach refs/remotes/origin/checkout
 
       - name: Setup Node environment
@@ -1766,7 +1806,27 @@ jobs:
           git init "$GITHUB_WORKSPACE"
           git -C "$GITHUB_WORKSPACE" config gc.auto 0
           git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
-          git -C "$GITHUB_WORKSPACE" fetch --no-tags --depth=1 origin "+${CHECKOUT_SHA}:refs/remotes/origin/checkout"
+          fetch_checkout_ref() {
+            git -C "$GITHUB_WORKSPACE" \
+              -c protocol.version=2 \
+              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
+              "+${CHECKOUT_SHA}:refs/remotes/origin/checkout" &
+            local fetch_pid="$!"
+            local elapsed=0
+            while kill -0 "$fetch_pid" 2>/dev/null; do
+              if [ "$elapsed" -ge 30 ]; then
+                kill -TERM "$fetch_pid" 2>/dev/null || true
+                sleep 10
+                kill -KILL "$fetch_pid" 2>/dev/null || true
+                wait "$fetch_pid" || true
+                return 124
+              fi
+              sleep 1
+              elapsed=$((elapsed + 1))
+            done
+            wait "$fetch_pid"
+          }
+          fetch_checkout_ref
           git -C "$GITHUB_WORKSPACE" checkout --detach refs/remotes/origin/checkout
 
       - name: Install XcodeGen / SwiftLint / SwiftFormat

@@ -44,7 +44,7 @@ describe("ci workflow guards", () => {
   it("bounds early unauthenticated checkout fetches", () => {
     const workflow = readCiWorkflow();
 
-    for (const jobName of ["preflight", "security-fast"]) {
+    for (const jobName of ["preflight", "security-fast", "skills-python"]) {
       const checkoutStep = workflow.jobs[jobName].steps.find((step) => step.name === "Checkout");
 
       expect(checkoutStep.run, jobName).toContain(
@@ -58,6 +58,38 @@ describe("ci workflow guards", () => {
         'git -C "$GITHUB_WORKSPACE" fetch --no-tags --depth=1',
       );
     }
+  });
+
+  it("bounds platform checkout fetches without GNU timeout", () => {
+    const workflow = readCiWorkflow();
+
+    for (const jobName of ["checks-windows", "macos-node", "macos-swift"]) {
+      const checkoutStep = workflow.jobs[jobName].steps.find((step) => step.name === "Checkout");
+
+      expect(checkoutStep.run, jobName).toContain("fetch_checkout_ref()");
+      expect(checkoutStep.run, jobName).toContain("-c protocol.version=2");
+      expect(checkoutStep.run, jobName).toContain(
+        "fetch --no-tags --prune --no-recurse-submodules --depth=1 origin",
+      );
+      expect(checkoutStep.run, jobName).toContain('kill -TERM "$fetch_pid"');
+      expect(checkoutStep.run, jobName).toContain('kill -KILL "$fetch_pid"');
+      expect(checkoutStep.run, jobName).not.toContain(
+        'git -C "$GITHUB_WORKSPACE" fetch --no-tags --depth=1',
+      );
+    }
+  });
+
+  it("bounds the Windows Crabbox hydrate main fetch", () => {
+    const workflow = readFileSync(".github/workflows/crabbox-hydrate.yml", "utf8");
+
+    expect(workflow).toContain("$fetch = Start-Process git");
+    expect(workflow).toContain('"protocol.version=2"');
+    expect(workflow).toContain('"--no-recurse-submodules"');
+    expect(workflow).toContain("$fetch.WaitForExit(30000)");
+    expect(workflow).toContain('throw "git fetch timed out after 30 seconds"');
+    expect(workflow).not.toContain(
+      'git fetch --no-tags --depth=50 origin "+refs/heads/main:refs/remotes/origin/main"',
+    );
   });
 
   it("runs dependency policy guards in PR CI preflight", () => {
