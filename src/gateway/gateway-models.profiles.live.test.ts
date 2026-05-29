@@ -90,6 +90,7 @@ const GATEWAY_LIVE_SETUP_TIMEOUT_MS = Math.max(
   toInt(process.env.OPENCLAW_LIVE_GATEWAY_SETUP_TIMEOUT_MS, 60_000),
 );
 const GATEWAY_LIVE_MODEL_TIMEOUT_MS = resolveGatewayLiveModelTimeoutMs();
+const GATEWAY_LIVE_SESSION_CONTROL_TIMEOUT_MS = resolveGatewayLiveSessionControlTimeoutMs();
 const GATEWAY_LIVE_TRANSCRIPT_TIMEOUT_MS = resolveGatewayLiveTranscriptTimeoutMs();
 const GATEWAY_LIVE_AGENT_RUN_TIMEOUT_MS = resolveGatewayLiveAgentRunTimeoutMs();
 const GATEWAY_LIVE_AGENT_WAIT_TIMEOUT_MS = resolveGatewayLiveAgentWaitTimeoutMs();
@@ -251,6 +252,13 @@ function resolveGatewayLiveModelTimeoutMs(
   return Math.max(stepTimeoutMs, requested);
 }
 
+function resolveGatewayLiveSessionControlTimeoutMs(
+  stepTimeoutMs = GATEWAY_LIVE_PROBE_TIMEOUT_MS,
+  modelTimeoutMs = GATEWAY_LIVE_MODEL_TIMEOUT_MS,
+): number {
+  return Math.max(stepTimeoutMs, Math.min(modelTimeoutMs, 180_000));
+}
+
 function resolveGatewayLiveTranscriptTimeoutMs(
   stepTimeoutMs = GATEWAY_LIVE_PROBE_TIMEOUT_MS,
   modelTimeoutMs = GATEWAY_LIVE_MODEL_TIMEOUT_MS,
@@ -401,6 +409,18 @@ async function withGatewayLiveProbeTimeout<T>(operation: Promise<T>, context: st
   return await withGatewayLiveTimeout({
     operation,
     timeoutMs: GATEWAY_LIVE_PROBE_TIMEOUT_MS,
+    timeoutLabel: "probe",
+    context,
+  });
+}
+
+async function withGatewayLiveSessionControlTimeout<T>(
+  operation: Promise<T>,
+  context: string,
+): Promise<T> {
+  return await withGatewayLiveTimeout({
+    operation,
+    timeoutMs: GATEWAY_LIVE_SESSION_CONTROL_TIMEOUT_MS,
     timeoutLabel: "probe",
     context,
   });
@@ -739,6 +759,16 @@ describe("resolveGatewayLiveTranscriptTimeoutMs", () => {
 
   it("never goes below the probe timeout", () => {
     expect(resolveGatewayLiveTranscriptTimeoutMs(240_000, 180_000)).toBe(240_000);
+  });
+});
+
+describe("resolveGatewayLiveSessionControlTimeoutMs", () => {
+  it("allows slow gateway session-control calls without using the full model budget", () => {
+    expect(resolveGatewayLiveSessionControlTimeoutMs(90_000, 300_000)).toBe(180_000);
+  });
+
+  it("keeps explicit longer probe budgets intact", () => {
+    expect(resolveGatewayLiveSessionControlTimeoutMs(240_000, 300_000)).toBe(240_000);
   });
 });
 
@@ -2594,13 +2624,13 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
               // Ensure session exists + override model for this run.
               // Reset between models: avoids cross-provider transcript incompatibilities
               // (notably OpenAI Responses requiring reasoning replay for function_call items).
-              await withGatewayLiveProbeTimeout(
+              await withGatewayLiveSessionControlTimeout(
                 client.request("sessions.reset", {
                   key: sessionKey,
                 }),
                 `${progressLabel}: sessions-reset`,
               );
-              await withGatewayLiveProbeTimeout(
+              await withGatewayLiveSessionControlTimeout(
                 client.request("sessions.patch", {
                   key: sessionKey,
                   model: modelKey,
@@ -3517,14 +3547,14 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     try {
       const sessionKey = `agent:${agentId}:live-zai-fallback`;
 
-      await withGatewayLiveProbeTimeout(
+      await withGatewayLiveSessionControlTimeout(
         client.request("sessions.patch", {
           key: sessionKey,
           model: "anthropic/claude-opus-4-6",
         }),
         "zai-fallback: sessions-patch-anthropic",
       );
-      await withGatewayLiveProbeTimeout(
+      await withGatewayLiveSessionControlTimeout(
         client.request("sessions.reset", {
           key: sessionKey,
         }),
@@ -3552,7 +3582,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         throw new Error(`anthropic tool probe missing nonce: ${toolText}`);
       }
 
-      await withGatewayLiveProbeTimeout(
+      await withGatewayLiveSessionControlTimeout(
         client.request("sessions.patch", {
           key: sessionKey,
           model: "zai/glm-5.1",
