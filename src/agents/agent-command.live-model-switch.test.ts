@@ -40,6 +40,7 @@ const state = vi.hoisted(() => ({
   persistSessionEntryMock: vi.fn(async (..._args: unknown[]): Promise<unknown> => undefined),
   clearSessionAuthProfileOverrideMock: vi.fn(),
   isThinkingLevelSupportedMock: vi.fn((_args: unknown) => true),
+  resolveSupportedThinkingLevelMock: vi.fn((args: { level?: string }) => args.level),
   resolveThinkingDefaultMock: vi.fn((_args: unknown) => "low"),
   loadManifestModelCatalogMock: vi.fn(() => []),
   buildWorkspaceSkillSnapshotMock: vi.fn((..._args: unknown[]): unknown => ({
@@ -54,6 +55,7 @@ const state = vi.hoisted(() => ({
   sessionEntryMock: undefined as unknown,
   sessionStoreMock: undefined as unknown,
   storePathMock: undefined as string | undefined,
+  persistedThinkingMock: undefined as string | undefined,
 }));
 
 vi.mock("./model-fallback.js", () => ({
@@ -120,7 +122,7 @@ vi.mock("./command/session.js", () => ({
     sessionStore: state.sessionStoreMock,
     storePath: state.storePathMock,
     isNewSession: false,
-    persistedThinking: undefined,
+    persistedThinking: state.persistedThinkingMock,
     persistedVerbose: undefined,
   }),
 }));
@@ -154,7 +156,8 @@ vi.mock("../auto-reply/thinking.js", () => ({
   normalizeThinkLevel: (v?: string) => v || undefined,
   normalizeVerboseLevel: (v?: string) => v || undefined,
   isThinkingLevelSupported: (args: unknown) => state.isThinkingLevelSupportedMock(args),
-  resolveSupportedThinkingLevel: ({ level }: { level?: string }) => level,
+  resolveSupportedThinkingLevel: (args: { level?: string }) =>
+    state.resolveSupportedThinkingLevelMock(args),
   supportsXHighThinking: () => false,
 }));
 
@@ -801,6 +804,8 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.resolveAcpExplicitTurnPolicyErrorMock.mockReturnValue(null);
     state.runtimeConfigMock = undefined;
     state.isThinkingLevelSupportedMock.mockReturnValue(true);
+    state.resolveSupportedThinkingLevelMock.mockImplementation((args) => args.level);
+    state.persistedThinkingMock = undefined;
     state.resolveThinkingDefaultMock.mockReturnValue("low");
     state.resolveAgentSkillsFilterMock.mockReturnValue(undefined);
     state.loadManifestModelCatalogMock.mockReturnValue([]);
@@ -970,6 +975,37 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(touchWrite.entry?.thinkingLevel).toBe("medium");
     expect(touchWrite.entry?.lastInteractionAt).toBeDefined();
     expect(state.updateSessionStoreAfterAgentRunMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves an explicit session thinkingLevel override when the level is unsupported", async () => {
+    setupSingleAttemptFallback();
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-1",
+      updatedAt: 1,
+      thinkingLevel: "high",
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
+    };
+    state.sessionEntryMock = sessionEntry;
+    state.sessionStoreMock = { "agent:main:main": sessionEntry };
+    state.storePathMock = "/tmp/openclaw-sessions.json";
+    state.persistedThinkingMock = "high";
+    // The model rejects the stored level, so the turn downgrades at runtime.
+    state.isThinkingLevelSupportedMock.mockReturnValue(false);
+    state.resolveSupportedThinkingLevelMock.mockReturnValue("off");
+
+    await agentCommand({
+      message: "hello",
+      to: "+1234567890",
+    });
+
+    // Runtime downgrade is per-turn; it must not persist the fallback level back
+    // onto the user's explicit stored override.
+    const downgradeWrite = state.persistSessionEntryMock.mock.calls.find((call) => {
+      const entry = (call[0] as { entry?: { thinkingLevel?: string } } | undefined)?.entry;
+      return entry?.thinkingLevel === "off";
+    });
+    expect(downgradeWrite).toBeUndefined();
   });
 
   it("clears stale flag-only pending final delivery when there is no final payload", async () => {

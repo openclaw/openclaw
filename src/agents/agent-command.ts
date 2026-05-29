@@ -1150,27 +1150,10 @@ async function agentCommandInternal(
         level: resolvedThinkLevel,
         catalog: thinkingCatalog,
       });
-      if (fallbackThinkLevel !== resolvedThinkLevel) {
-        const previousThinkLevel = resolvedThinkLevel;
-        resolvedThinkLevel = fallbackThinkLevel;
-        if (
-          sessionEntry &&
-          sessionStore &&
-          sessionKey &&
-          sessionEntry.thinkingLevel === previousThinkLevel &&
-          !suppressVisibleSessionEffects
-        ) {
-          const entry = sessionEntry;
-          entry.thinkingLevel = fallbackThinkLevel;
-          entry.updatedAt = Date.now();
-          await persistSessionEntry({
-            sessionStore,
-            sessionKey,
-            storePath,
-            entry,
-          });
-        }
-      }
+      // Downgrade only the level used for this turn. The explicit session
+      // override is the user's stored intent; persisting the fallback here would
+      // permanently reset it to the supported level on every turn (#87740).
+      resolvedThinkLevel = fallbackThinkLevel;
     }
     const { resolveSessionTranscriptFile } = await loadTranscriptResolveRuntime();
     let sessionFile: string | undefined;
