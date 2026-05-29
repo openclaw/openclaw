@@ -176,7 +176,9 @@ export function auditToolPolicyFilter(params: {
       tools: matchedRuleSourceTools,
     });
     const matchedRuleSuffix = matchedRules.length > 0 ? `; matched ${matchedRules.join(", ")}` : "";
-    toolPolicyAuditLogger.info(
+    const isProfileFilter = params.stepLabel.startsWith("tools.profile");
+    const logLevel = isProfileFilter ? "debug" : "info";
+    toolPolicyAuditLogger[logLevel](
       `tool policy removed ${removed.length} tool(s) via ${rule}: ${toolNames.join(", ")}${matchedRuleSuffix}`,
       {
         rule,
