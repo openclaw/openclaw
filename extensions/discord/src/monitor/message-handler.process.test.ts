@@ -27,6 +27,9 @@ function createMockDraftStream() {
     clear: vi.fn(async () => {
       messageId = undefined;
     }),
+    deleteCurrentMessage: vi.fn(async () => {
+      messageId = undefined;
+    }),
     discardPending: vi.fn(async () => {}),
     seal: vi.fn(async () => {}),
     stop: vi.fn(async () => {}),
@@ -2607,6 +2610,43 @@ describe("processDiscordMessage draft streaming", () => {
     expect(updates).not.toContain("curl weather api");
     expect(updates).not.toContain("reply_to_current");
     expect(updates).not.toContain("NO_REPLY");
+  });
+
+  it("keeps Discord progress drafts usable after the last commentary line becomes silent", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onItemEvent?.({
+        itemId: "preamble-1",
+        kind: "preamble",
+        progressText: "Temporary note.",
+      });
+      await params?.replyOptions?.onItemEvent?.({
+        itemId: "preamble-1",
+        kind: "preamble",
+        progressText: "NO_REPLY",
+      });
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            label: false,
+            commentary: true,
+          },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.deleteCurrentMessage).toHaveBeenCalledTimes(1);
+    expect(draftStream.clear).not.toHaveBeenCalled();
+    expect(draftStream.update).toHaveBeenLastCalledWith("🛠️ Exec");
   });
 
   it("does not update Discord commentary progress after final answer delivery starts", async () => {

@@ -146,7 +146,7 @@ export function createDiscordDraftPreviewController(params: {
     draftText = "";
     hasStreamedMessage = false;
     if (draftStream?.messageId()) {
-      await draftStream.clear();
+      await draftStream.deleteCurrentMessage();
     }
   };
 
