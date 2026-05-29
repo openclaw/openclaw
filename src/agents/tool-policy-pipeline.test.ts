@@ -6,12 +6,14 @@ import {
 } from "./tool-policy-pipeline.js";
 import { resolveToolProfilePolicy } from "./tool-policy.js";
 
-const { toolPolicyAuditInfo } = vi.hoisted(() => ({
+const { toolPolicyAuditDebug, toolPolicyAuditInfo } = vi.hoisted(() => ({
+  toolPolicyAuditDebug: vi.fn(),
   toolPolicyAuditInfo: vi.fn(),
 }));
 
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({
+    debug: toolPolicyAuditDebug,
     info: toolPolicyAuditInfo,
   }),
 }));
@@ -49,6 +51,7 @@ function runAllowlistWarningStep(params: {
 describe("tool-policy-pipeline", () => {
   beforeEach(() => {
     resetToolPolicyWarningCacheForTest();
+    toolPolicyAuditDebug.mockClear();
     toolPolicyAuditInfo.mockClear();
   });
 
@@ -308,7 +311,7 @@ describe("tool-policy-pipeline", () => {
       ],
     });
 
-    expect(toolPolicyAuditInfo).toHaveBeenCalledWith(
+    expect(toolPolicyAuditDebug).toHaveBeenCalledWith(
       "tool policy removed 2 tool(s) via agent tools.allow: browser, write",
       {
         rule: "agent tools.allow",
@@ -318,6 +321,7 @@ describe("tool-policy-pipeline", () => {
         removedToolsTruncated: false,
       },
     );
+    expect(toolPolicyAuditInfo).not.toHaveBeenCalled();
   });
 
   test("audits deny removals with the deny config key", () => {
@@ -335,7 +339,7 @@ describe("tool-policy-pipeline", () => {
       ],
     });
 
-    expect(toolPolicyAuditInfo).toHaveBeenCalledWith(
+    expect(toolPolicyAuditDebug).toHaveBeenCalledWith(
       "tool policy removed 1 tool(s) via tools.deny: browser; matched browser",
       {
         rule: "tools.deny",
@@ -346,6 +350,7 @@ describe("tool-policy-pipeline", () => {
         removedToolsTruncated: false,
       },
     );
+    expect(toolPolicyAuditInfo).not.toHaveBeenCalled();
   });
 
   test("splits mixed allow and deny policy audit entries by cause", () => {
@@ -367,7 +372,7 @@ describe("tool-policy-pipeline", () => {
       ],
     });
 
-    expect(toolPolicyAuditInfo).toHaveBeenCalledWith(
+    expect(toolPolicyAuditDebug).toHaveBeenCalledWith(
       "tool policy removed 1 tool(s) via agents.worker.tools.deny: browser; matched browser",
       {
         rule: "agents.worker.tools.deny",
@@ -378,7 +383,7 @@ describe("tool-policy-pipeline", () => {
         removedToolsTruncated: false,
       },
     );
-    expect(toolPolicyAuditInfo).toHaveBeenCalledWith(
+    expect(toolPolicyAuditDebug).toHaveBeenCalledWith(
       "tool policy removed 1 tool(s) via agents.worker.tools.allow: write",
       {
         rule: "agents.worker.tools.allow",
@@ -388,6 +393,7 @@ describe("tool-policy-pipeline", () => {
         removedToolsTruncated: false,
       },
     );
+    expect(toolPolicyAuditInfo).not.toHaveBeenCalled();
   });
 
   test("does not audit policy steps that leave the tool surface unchanged", () => {
@@ -405,6 +411,7 @@ describe("tool-policy-pipeline", () => {
       ],
     });
 
+    expect(toolPolicyAuditDebug).not.toHaveBeenCalled();
     expect(toolPolicyAuditInfo).not.toHaveBeenCalled();
   });
 
@@ -423,7 +430,7 @@ describe("tool-policy-pipeline", () => {
       ],
     });
 
-    expect(toolPolicyAuditInfo).toHaveBeenCalledWith(
+    expect(toolPolicyAuditDebug).toHaveBeenCalledWith(
       "tool policy removed 1 tool(s) via agents.worker\\nbad.tools.allow: exec\\nbad",
       {
         rule: "agents.worker\\nbad.tools.allow",
@@ -433,5 +440,6 @@ describe("tool-policy-pipeline", () => {
         removedToolsTruncated: false,
       },
     );
+    expect(toolPolicyAuditInfo).not.toHaveBeenCalled();
   });
 });
