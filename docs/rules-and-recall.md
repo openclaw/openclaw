@@ -30,6 +30,8 @@ When an operator reports that the assistant violated a standing rule, the assist
 
 For implementation changes, no mutation may occur before the assistant summarizes the exact intended change and receives operator authorization, unless the operator is explicitly ordering correction/restoration of the assistant's own prior failed work. That exception is narrow and covers only the failed scope. Fake, placeholder, mock, display-only, or disconnected UI/code is prohibited; unavailable real sources must be shown as unavailable/degraded rather than simulated.
 
+Self-healing repair is not an approval loop. If a previously working assistant-managed process, cron job, recall route, communication route, contact/CRM process, API integration, helper path, or other owned workflow stops working, the assistant must repair the exact failed scope without asking the operator for `GO`. The repair path is: check DB memory, prior run history, scripts, docs, credentials paths, and live configuration; restore the prior working behavior; verify the real affected surface; then report the correction. Ask only when the repair would require an unrelated new change, destructive action outside the failed scope, external/private disclosure beyond the existing grant, or a genuinely unresolved decision.
+
 ## Screenshot delivery rule
 
 When a screenshot is captured as verification, proof, or a deliverable for the operator, saving the file is only a staging step. The screenshot must be delivered in the active channel unless the operator explicitly asked only for a local path or artifact.
@@ -118,13 +120,11 @@ Zorg MemoryDB is designed to support more than exact lookup. When a task fails, 
 
 This rule should remain public-safe in documentation: publish the reasoning pattern and schema support, never private contacts, live email contents, credentials, or operator-specific strategy.
 
-
 ## Contact Deduplication Rule
 
 Contacts should be deduplicated/distilled for recall while preserving raw provider data. Never merge or delete raw contacts by name alone. Use strong evidence such as matching email, phone, or provider resource identifiers for automatic canonical grouping. Name-only collisions should become review flags so the assistant can inspect carefully without destroying source data.
 
 CRM recall should prefer canonical contacts from `zorg_contact_canonical_crm`; raw `zorg_contacts_crm` rows remain the recovery/source-of-truth layer.
-
 
 ## Recursive Logic and Deduced Rule Formation
 
@@ -183,6 +183,7 @@ Meeting scheduling should check existing calendar events and relevant email thre
 When a public short post points to a long-form news/feed article, it should link to the exact verified article anchor. The model should verify the full per-article anchor in the live page HTML before posting. If character limits are tight, shorten prose or hashtags; do not truncate, guess, or replace the article anchor with a feed-top URL.
 
 <!-- SCORCHED_MEMORY_RECALL_RULE -->
+
 ## Absolute Priority 0: Exhaustive Memory Before Response
 
 The operator does not ask for work in context unless the needed information, access path, rule, contact, precedent, or working solution likely already exists somewhere in durable memory, project history, live configuration, runbooks, prompts, cron jobs, or related system state. A fast or shallow miss is never evidence of absence.
@@ -192,14 +193,15 @@ Before replying, asking a question, claiming uncertainty, or reporting a blocker
 If deep scouring finds information that the first query missed, treat that as a recall-structure failure and immediately add additive retrieval support: aliases, recall hints, semantic/relationship edges, query observations, indexes, materialized/search support, or rule surfaces so the same phrasing is fast and reliable next time. Preserve all source data; improve recall additively only.
 
 Failure reports must not excuse the miss as “not enough information” when the information existed in memory. The correct diagnosis is inadequate recall behavior or structure, and the corrective action is deeper recall plus indexing/hinting/relationship repair.
-<!-- /SCORCHED_MEMORY_RECALL_RULE -->
 
+<!-- /SCORCHED_MEMORY_RECALL_RULE -->
 
 ## Scorched-memory recall implementation note
 
 The canonical recall surface must include explicit recall hints and query observations alongside core rules, contacts, relationships, projects, hosts, runbooks, and operational facts. Query ranking should prefer critical/high-priority recall material and semantically useful hints before arbitrary source ordering. When an operator correction proves a known memory existed but was missed, treat it as a production recall failure: add aliases, hints, relationship edges, query observations, indexes, or materialized-search support so the same phrasing is not missed again.
 
 <!-- LLM_GOVERNED_PERFORMANCE_TUNING_RULE -->
+
 ## LLM-Governed Performance Tuning Rule
 
 Database and memory performance tuning must be governed by live LLM judgment, not hidden script policy. Tuning work starts with a natural-language hypothesis formed from current system evidence and internet/authoritative research. If research gives a credible reason to believe a database design, recall-path, materialized-view, vector/neural association, or query-structure change will improve performance, the LLM must run side-by-side before/after measurements on representative queries before claiming success.
@@ -207,8 +209,8 @@ Database and memory performance tuning must be governed by live LLM judgment, no
 If research does not support a design change, move to raw additive performance work: indexes, query-path improvements, materialized/search-support views, relationships, recall hints, semantic edges, weighted connections, token/FTS/trigram support, and other non-destructive logic that brings query times down while preserving all source memory. No original memory data may be pruned, deleted, truncated, compacted away, or aged out for speed.
 
 Every meaningful tuning change must record the research basis, before/after benchmark results, changed structures, rollback path, and follow-up indexing/hinting implications in durable memory and public-safe docs when structural behavior changes.
-<!-- /LLM_GOVERNED_PERFORMANCE_TUNING_RULE -->
 
+<!-- /LLM_GOVERNED_PERFORMANCE_TUNING_RULE -->
 
 ## LLM-governed performance tuning
 
@@ -217,19 +219,21 @@ Performance tuning should be directed by a live LLM using current metrics, curre
 If research does not support a schema/design change, shift to additive raw-performance work: indexes, materialized/search-support views, relationships, recall hints, semantic edges, weighted connections, token fallback, FTS, trigram support, and query-path improvements. Preserve all original memory rows and source data.
 
 <!-- GO_ONLY_APPROVAL_RULE -->
+
 ## GO-Only Approval Rule
 
 When Stefan gives a command that requires confirmation before execution, ask only for `GO`. Do not invent longer approval phrases, magic words, task-specific confirmations, or exact response strings such as `GO REIP ...`, `GO SCORCHED ...`, or any other expanded form. Stefan decides how to respond; the assistant may request only the simple approval token `GO`.
 
 If the requested action is unsafe, ambiguous, destructive, externally risky, or missing a necessary decision, explain the blocker or the exact intended change briefly, then end with only `GO` as the approval request when approval is the only thing needed. Never require Stefan to repeat the task, include extra words, or match an assistant-authored phrase.
-<!-- /GO_ONLY_APPROVAL_RULE -->
 
+<!-- /GO_ONLY_APPROVAL_RULE -->
 
 ## Operator approval wording
 
 Approval prompts should not create unnecessary friction. If approval is the only missing input, request only `GO`; do not invent task-specific magic phrases.
 
 <!-- SAME_DAY_NEWS_FRESHNESS_RULE -->
+
 ## Same-Day News Freshness Rule
 
 When writing multiple news articles or public reports on the same day, do not repeat the same information from article to article. Adjacent or continuing stories may reference earlier context only briefly when necessary, but each article must add fresh facts, new framing, new implications, new examples, or a clearly advanced continuation that was not already covered in earlier same-day articles.
@@ -237,8 +241,8 @@ When writing multiple news articles or public reports on the same day, do not re
 Before drafting or publishing a new article, review the same-day feed/archive and compare titles, summaries, body claims, examples, and links. If information has already been used that day, either omit it, compress it to a short bridge, or explicitly advance it with new developments. Maintain editorial continuity without recycling paragraphs, talking points, examples, or conclusions.
 
 The assistant owns the full article set and must keep the day’s coverage fresh, non-repetitive, and additive.
-<!-- /SAME_DAY_NEWS_FRESHNESS_RULE -->
 
+<!-- /SAME_DAY_NEWS_FRESHNESS_RULE -->
 
 ## Same-day article recall before publishing
 
@@ -247,6 +251,7 @@ Before writing a new article or public report, recall/read same-day feed entries
 ## Permanent engineering rules
 
 System changes, code writing, and software changes are governed by permanent base-install rules, not personal preferences. See [`base-install-permanent-engineering-rules.md`](base-install-permanent-engineering-rules.md). Zorg MemoryDB must be installed/upgraded as an additive OpenClaw overlay that preserves existing OpenClaw behavior and user data unless an explicit migration says otherwise.
+
 ## Dynamic Trigger Backpressure Rule
 
 Database triggers and recall-adjacent hooks must not perform heavy immediate work. They enqueue tiny bounded work with statistically derived `due_at` delays based on at least a 90-day rolling activity window when available, observed request timestamps/durations, idle gaps, queue wait, worker runtime, backlog, CPU/load, and recall/query timing. Workers use dynamic batch limits and record timing observations after each batch. Deeper indexing, trigger, and recall tuning should be delayed into statistically idle/off-hours windows; during historically active periods, only short bounded tuning bursts may run when latency/load permits. Under high CPU/load/latency, delays increase and batch sizes shrink. Rule-following and recall correctness outrank speed, and source memory must never be deleted/pruned/compacted for performance.
