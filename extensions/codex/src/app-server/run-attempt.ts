@@ -1612,7 +1612,7 @@ export async function runCodexAppServerAttempt(
   } catch (error) {
     let turnStartError = error;
     if (
-      shouldRetryContextEngineTurnOnFreshCodexThread({
+      shouldUseFreshCodexThreadAfterContextEngineOverflow({
         error: turnStartError,
         contextEngineActive: Boolean(activeContextEngine),
         thread,
@@ -1914,6 +1914,27 @@ export async function runCodexAppServerAttempt(
         error: finalPromptErrorMessage,
       });
     }
+    if (
+      shouldUseFreshCodexThreadAfterContextEngineOverflow({
+        error: finalPromptError,
+        contextEngineActive: Boolean(activeContextEngine),
+        thread,
+      })
+    ) {
+      embeddedAgentLog.warn(
+        "codex app-server context-engine turn overflowed after resume; clearing thread binding for recovery",
+        {
+          threadId: thread.threadId,
+          turnId: activeTurnId,
+          error: finalPromptErrorMessage,
+        },
+      );
+      const preClearSessionFile = activeSessionFile;
+      await clearCodexAppServerBinding(preClearSessionFile);
+      if (activeSessionFile !== preClearSessionFile) {
+        await clearCodexAppServerBinding(activeSessionFile);
+      }
+    }
     const refreshedUsageLimitPromptError = await refreshCodexUsageLimitPromptError({
       client,
       message: finalPromptErrorMessage,
@@ -2189,7 +2210,7 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
-function shouldRetryContextEngineTurnOnFreshCodexThread(params: {
+function shouldUseFreshCodexThreadAfterContextEngineOverflow(params: {
   error: unknown;
   contextEngineActive: boolean;
   thread: CodexAppServerThreadLifecycleBinding;

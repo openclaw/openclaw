@@ -1174,6 +1174,82 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(savedBinding?.contextEngine?.projection?.epoch).toBe("epoch-before");
   });
 
+  it("clears a resumed context-engine binding when a turn terminally overflows", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    SessionManager.open(sessionFile).appendMessage(
+      assistantMessage("pre-compaction context", Date.now()) as never,
+    );
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-old",
+      cwd: workspaceDir,
+      dynamicToolsFingerprint: "[]",
+      contextEngine: {
+        schemaVersion: 1,
+        engineId: "lossless-claw",
+        policyFingerprint:
+          '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"contextTokenBudget":400000,"projectionMaxChars":1000000}',
+        projection: {
+          schemaVersion: 1,
+          mode: "thread_bootstrap",
+          epoch: "epoch-before",
+        },
+      },
+    });
+    const compact = vi.fn<ContextEngine["compact"]>(async () => ({
+      ok: true,
+      compacted: true,
+      result: { summary: "summary", firstKeptEntryId: "entry-1", tokensBefore: 100_000 },
+    }));
+    const assemble = vi.fn(
+      async ({ messages, prompt }: Parameters<ContextEngine["assemble"]>[0]) => ({
+        messages: [...messages, userMessage(prompt ?? "", 11)],
+        estimatedTokens: 42,
+        systemPromptAddition: "context-engine system",
+        contextProjection: { mode: "thread_bootstrap" as const, epoch: "epoch-before" },
+      }),
+    );
+    const contextEngine = createContextEngine({ assemble, compact });
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "thread/resume") {
+        return threadStartResult("thread-old");
+      }
+      if (method === "turn/start") {
+        return turnStartResult("turn-old");
+      }
+      return undefined;
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.contextEngine = contextEngine;
+    params.contextTokenBudget = 400_000;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-old",
+        turnId: "turn-old",
+        turn: {
+          id: "turn-old",
+          status: "failed",
+          error: { message: "Codex ran out of room in the model's context window" },
+          items: [],
+        },
+      },
+    });
+    const result = await run;
+
+    expect(result.promptError).toBe("Codex ran out of room in the model's context window");
+    expect(compact).not.toHaveBeenCalled();
+    expect(harness.requests.map((request) => request.method)).toEqual([
+      "thread/resume",
+      "turn/start",
+      "thread/unsubscribe",
+    ]);
+    expect(await readCodexAppServerBinding(sessionFile)).toBeUndefined();
+  });
+
   it("does not pre-compact over-budget rendered context-engine prompts before Codex turn/start", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
