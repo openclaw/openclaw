@@ -427,6 +427,47 @@ describe("createMSTeamsReplyDispatcher", () => {
     expect(getStreamMock().update).toHaveBeenCalled();
   });
 
+  it("replaces reasoning progress snapshots in progress mode", async () => {
+    const dispatcher = createDispatcher("personal", {
+      streaming: {
+        mode: "progress",
+        progress: {
+          label: "Working",
+        },
+      },
+    });
+
+    await dispatcher.replyOptions.onReasoningStream?.({
+      text: "Checking",
+      isReasoningSnapshot: true,
+    });
+    await dispatcher.replyOptions.onReasoningStream?.({
+      text: "Checking files",
+      isReasoningSnapshot: true,
+    });
+
+    const stream = getStreamMock();
+    expect(stream.update).toHaveBeenLastCalledWith("Working\n\n- Checking files");
+    const updates = stream.update.mock.calls.map((call) => call[0]).join("\n");
+    expect(updates).not.toContain("- Checking\n- Checking files");
+  });
+
+  it("keeps appending delta reasoning progress in progress mode", async () => {
+    const dispatcher = createDispatcher("personal", {
+      streaming: {
+        mode: "progress",
+        progress: {
+          label: "Working",
+        },
+      },
+    });
+
+    await dispatcher.replyOptions.onReasoningStream?.({ text: "Checking" });
+    await dispatcher.replyOptions.onReasoningStream?.({ text: "files" });
+
+    expect(getStreamMock().update).toHaveBeenLastCalledWith("Working\n\n- Checking\n- files");
+  });
+
   it("does not suppress default tool progress messages in partial stream mode", () => {
     const dispatcher = createDispatcher("personal", {
       streaming: {

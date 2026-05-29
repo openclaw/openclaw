@@ -55,6 +55,8 @@ export type CronState = {
   cronQuickCreateStep: import("../views/cron-quick-create.ts").CronQuickCreateStep;
   cronQuickCreateDraft: import("../views/cron-quick-create.ts").CronQuickCreateDraft | null;
   cronJobsLoadingMore: boolean;
+  cronJobsReloadPending: boolean;
+  cronJobsReloadPendingTableFilters: boolean;
   cronJobs: CronJob[];
   cronJobsTotal: number;
   cronJobsHasMore: boolean;
@@ -276,6 +278,16 @@ function normalizeCronPageMeta(params: {
   return { total, hasMore, nextOffset };
 }
 
+async function drainPendingCronJobsReload(state: CronState) {
+  if (!state.cronJobsReloadPending) {
+    return;
+  }
+  const tableFilters = state.cronJobsReloadPendingTableFilters;
+  state.cronJobsReloadPending = false;
+  state.cronJobsReloadPendingTableFilters = false;
+  await loadCronJobsPage(state, { tableFilters });
+}
+
 export async function loadCronJobsPage(
   state: CronState,
   opts?: { append?: boolean; tableFilters?: boolean },
@@ -283,10 +295,14 @@ export async function loadCronJobsPage(
   if (!state.client || !state.connected) {
     return;
   }
+  const append = opts?.append === true;
   if (state.cronLoading || state.cronJobsLoadingMore) {
+    if (!append) {
+      state.cronJobsReloadPending = true;
+      state.cronJobsReloadPendingTableFilters = opts?.tableFilters === true;
+    }
     return;
   }
-  const append = opts?.append === true;
   if (append && !state.cronJobsHasMore) {
     return;
   }
@@ -340,6 +356,7 @@ export async function loadCronJobsPage(
     } else {
       state.cronLoading = false;
     }
+    await drainPendingCronJobsReload(state);
   }
 }
 

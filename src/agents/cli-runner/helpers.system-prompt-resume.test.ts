@@ -4,8 +4,8 @@
  * Unit-level regression tests for issue #80374 — three of the four code paths
  * fixed in `fix(anthropic): pass system prompt on every turn for claude-cli
  * backend`. These tests assert the argv-level behavior directly, which is the
- * authoritative before/after proof (model context retention can mask the bug
- * at the response level in live smoke coverage).
+ * authoritative before/after proof; model context retention can mask this bug
+ * at the live response level.
  *
  * Two scenarios are exercised for each function:
  *

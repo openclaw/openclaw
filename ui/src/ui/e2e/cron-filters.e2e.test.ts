@@ -71,8 +71,41 @@ async function waitForCronListRequest(
   throw new Error(`No matching cron.list request found: ${JSON.stringify(requests)}`);
 }
 
+type PageDiagnostics = {
+  consoleMessages: string[];
+  pageErrors: string[];
+};
+
 function jobTitle(page: Page, name: string) {
   return page.locator(".cron-job .list-title", { hasText: new RegExp(`^${name}$`, "u") });
+}
+
+async function waitForJobTitle(
+  page: Page,
+  gateway: MockGatewayControls,
+  diagnostics: PageDiagnostics,
+  name: string,
+) {
+  try {
+    await jobTitle(page, name).waitFor({ timeout: 10_000 });
+  } catch (err) {
+    const requests = await gateway.getRequests();
+    const bodyText = await page.locator("body").textContent({ timeout: 1_000 }).catch(String);
+    const content = await page.content().catch(String);
+    throw new Error(
+      [
+        `Timed out waiting for cron job title: ${name}`,
+        `URL: ${page.url()}`,
+        `Gateway requests: ${JSON.stringify(requests)}`,
+        `Page errors: ${JSON.stringify(diagnostics.pageErrors)}`,
+        `Console: ${JSON.stringify(diagnostics.consoleMessages)}`,
+        `Page text: ${bodyText}`,
+        `Page content: ${content.slice(0, 1000)}`,
+        `Original error: ${String(err)}`,
+      ].join("\n"),
+      { cause: err },
+    );
+  }
 }
 
 describeControlUiE2e("Control UI cron mocked Gateway E2E", () => {
@@ -111,6 +144,10 @@ describeControlUiE2e("Control UI cron mocked Gateway E2E", () => {
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
+    const pageErrors: string[] = [];
+    const consoleMessages: string[] = [];
+    page.on("pageerror", (err) => pageErrors.push(String(err)));
+    page.on("console", (msg) => consoleMessages.push(`${msg.type()}: ${msg.text()}`));
     const gateway = await installMockGateway(page, {
       methodResponses: {
         "cron.list": {
@@ -143,9 +180,10 @@ describeControlUiE2e("Control UI cron mocked Gateway E2E", () => {
     });
 
     try {
-      await page.goto(`${server.baseUrl}cron`);
-      await jobTitle(page, "Digest every minute").waitFor({ timeout: 10_000 });
-      await jobTitle(page, "Nightly cron pending").waitFor({ timeout: 10_000 });
+      const response = await page.goto(`${server.baseUrl}cron`);
+      expect(response?.status()).toBe(200);
+      await waitForJobTitle(page, gateway, { consoleMessages, pageErrors }, "Digest every minute");
+      await waitForJobTitle(page, gateway, { consoleMessages, pageErrors }, "Nightly cron pending");
 
       const initialRequest = await waitForCronListRequest(
         gateway,
@@ -180,7 +218,7 @@ describeControlUiE2e("Control UI cron mocked Gateway E2E", () => {
         sortBy: "nextRunAtMs",
         sortDir: "asc",
       });
-      await jobTitle(page, "Nightly cron pending").waitFor({ timeout: 10_000 });
+      await waitForJobTitle(page, gateway, { consoleMessages, pageErrors }, "Nightly cron pending");
       await expect.poll(async () => jobTitle(page, "Digest every minute").count()).toBe(0);
     } finally {
       await context.close();

@@ -522,6 +522,8 @@ export class OpenClawApp extends LitElement {
     | import("./views/cron-quick-create.ts").CronQuickCreateDraft
     | null = null;
   @state() cronJobsLoadingMore = false;
+  cronJobsReloadPending = false;
+  cronJobsReloadPendingTableFilters = false;
   @state() cronJobs: CronJob[] = [];
   @state() cronJobsTotal = 0;
   @state() cronJobsHasMore = false;

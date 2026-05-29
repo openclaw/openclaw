@@ -9,8 +9,10 @@
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import type * as LanceDB from "@lancedb/lancedb";
+import { optionalPositiveIntegerSchema } from "openclaw/plugin-sdk/channel-actions";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { MemoryEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -712,10 +714,12 @@ export default definePluginEntry({
           "Search through long-term memories. Use when you need context about user preferences, past decisions, or previously discussed topics.",
         parameters: Type.Object({
           query: Type.String({ description: "Search query" }),
-          limit: Type.Optional(Type.Number({ description: "Max results (default: 5)" })),
+          limit: optionalPositiveIntegerSchema({ description: "Max results (default: 5)" }),
         }),
         async execute(_toolCallId, params) {
-          const { query, limit = 5 } = params as { query: string; limit?: number };
+          const rawParams = params as Record<string, unknown>;
+          const query = rawParams.query as string;
+          const limit = readPositiveIntegerParam(rawParams, "limit") ?? 5;
 
           const currentCfg = resolveCurrentHookConfig();
           const vector = await embeddings.embed(

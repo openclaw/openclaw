@@ -358,6 +358,8 @@ export type AppViewState = {
   | "cronQuickCreateStep"
   | "cronQuickCreateDraft"
   | "cronJobsLoadingMore"
+  | "cronJobsReloadPending"
+  | "cronJobsReloadPendingTableFilters"
   | "cronJobs"
   | "cronJobsTotal"
   | "cronJobsHasMore"
