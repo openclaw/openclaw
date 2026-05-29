@@ -50,6 +50,7 @@ type PluginStateStatements = {
   countLiveNamespace: StatementSync;
   countLivePlugin: StatementSync;
   deleteOldestNamespace: StatementSync;
+  deleteOldestPlugin: StatementSync;
   sweepExpired: StatementSync;
 };
 
@@ -275,6 +276,18 @@ function createStatements(db: DatabaseSync): PluginStateStatements {
         LIMIT ?
       )
     `),
+    deleteOldestPlugin: db.prepare(`
+      DELETE FROM plugin_state_entries
+      WHERE rowid IN (
+        SELECT rowid
+        FROM plugin_state_entries
+        WHERE plugin_id = ?
+          AND entry_key <> ?
+          AND (expires_at IS NULL OR expires_at > ?)
+        ORDER BY created_at ASC, namespace ASC, entry_key ASC
+        LIMIT ?
+      )
+    `),
     sweepExpired: db.prepare(`
       DELETE FROM plugin_state_entries
       WHERE expires_at IS NOT NULL AND expires_at <= ?
@@ -431,7 +444,7 @@ function enforcePostRegisterLimits(params: {
     return;
   }
 
-  // Shed rows from the namespace that grew before failing the plugin write.
+  // Prefer shedding rows from the namespace that grew so sibling caches survive normal pressure.
   params.store.statements.deleteOldestNamespace.run(
     params.pluginId,
     params.namespace,
@@ -444,7 +457,24 @@ function enforcePostRegisterLimits(params: {
       | CountRow
       | undefined,
   );
-  if (remainingPluginCount > MAX_ENTRIES_PER_PLUGIN) {
+  if (remainingPluginCount <= MAX_ENTRIES_PER_PLUGIN) {
+    return;
+  }
+
+  // If the current namespace cannot shed enough rows, keep the fresh write alive by
+  // evicting the oldest live row for this plugin while still protecting the new key.
+  params.store.statements.deleteOldestPlugin.run(
+    params.pluginId,
+    params.protectedKey,
+    params.now,
+    remainingPluginCount - MAX_ENTRIES_PER_PLUGIN,
+  );
+  const finalPluginCount = countRow(
+    params.store.statements.countLivePlugin.get(params.pluginId, params.now) as
+      | CountRow
+      | undefined,
+  );
+  if (finalPluginCount > MAX_ENTRIES_PER_PLUGIN) {
     throw createPluginStateError({
       code: "PLUGIN_STATE_LIMIT_EXCEEDED",
       operation: "register",
