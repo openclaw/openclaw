@@ -532,12 +532,19 @@ function collectExitSummary(samples: Sample[]): string {
 }
 
 function buildConfigFixture(commandCase: CommandCase): Record<string, unknown> | null {
-  if (commandCase.id !== "configGetGatewayPort") {
+  if (commandCase.id !== "configGetGatewayPort" && commandCase.id !== "gatewayHealthJson") {
     return null;
   }
   const envPort = Number.parseInt(process.env.OPENCLAW_GATEWAY_PORT ?? "", 10);
   const port = Number.isFinite(envPort) && envPort > 0 ? envPort : 32123;
-  return { gateway: { port } };
+  return {
+    gateway: {
+      auth: { mode: "none" },
+      bind: "loopback",
+      mode: "local",
+      port,
+    },
+  };
 }
 
 function buildRssHook(tmpDir: string): string {

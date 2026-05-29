@@ -233,14 +233,16 @@ export function createDiscordDraftPreviewController(params: {
         await renderProgressDraft();
       }
     },
-    async pushReasoningProgress(text?: string) {
+    async pushReasoningProgress(text?: string, options?: { snapshot?: boolean }) {
       if (!draftStream || discordStreamMode !== "progress" || !text) {
         return;
       }
       if (finalReplyDelivered) {
         return;
       }
-      reasoningProgressRawText = mergeReasoningProgressText(reasoningProgressRawText, text);
+      reasoningProgressRawText = mergeReasoningProgressText(reasoningProgressRawText, text, {
+        snapshot: options?.snapshot === true,
+      });
       const normalized = normalizeReasoningProgressLine(reasoningProgressRawText);
       if (!normalized) {
         return;
@@ -403,7 +405,11 @@ function normalizeReasoningProgressLine(text: string): string {
     .trim();
 }
 
-function mergeReasoningProgressText(current: string, incoming: string): string {
+function mergeReasoningProgressText(
+  current: string,
+  incoming: string,
+  options?: { snapshot?: boolean },
+): string {
   if (!current) {
     return incoming;
   }
@@ -412,7 +418,11 @@ function mergeReasoningProgressText(current: string, incoming: string): string {
   if (!normalizedIncoming || normalizedIncoming === normalizedCurrent) {
     return current;
   }
-  if (isReasoningSnapshotText(incoming) || normalizedIncoming.startsWith(normalizedCurrent)) {
+  if (
+    options?.snapshot === true ||
+    isReasoningSnapshotText(incoming) ||
+    normalizedIncoming.startsWith(normalizedCurrent)
+  ) {
     return incoming;
   }
   return `${current}${incoming}`;

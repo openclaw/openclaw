@@ -115,7 +115,10 @@ type DispatchInboundParams = {
     waitForIdle: () => Promise<void>;
   };
   replyOptions?: {
-    onReasoningStream?: (payload?: { text?: string }) => Promise<void> | void;
+    onReasoningStream?: (payload?: {
+      text?: string;
+      isReasoningSnapshot?: boolean;
+    }) => Promise<void> | void;
     onReasoningEnd?: () => Promise<void> | void;
     onToolStart?: (payload: {
       name?: string;
@@ -2738,9 +2741,13 @@ describe("processDiscordMessage draft streaming", () => {
 
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
-      await params?.replyOptions?.onReasoningStream?.({ text: "Checking files" });
       await params?.replyOptions?.onReasoningStream?.({
-        text: "Checking files and tests",
+        text: "Checking ",
+        isReasoningSnapshot: true,
+      });
+      await params?.replyOptions?.onReasoningStream?.({
+        text: "Reading \n\nChecking ",
+        isReasoningSnapshot: true,
       });
       return createNoQueuedDispatchResult();
     });
@@ -2759,11 +2766,10 @@ describe("processDiscordMessage draft streaming", () => {
     await runProcessDiscordMessage(ctx);
 
     expect(draftStream.update).toHaveBeenCalledWith(
-      "Clawing...\n\n🛠️ Exec\n• _Checking files and tests_",
+      "Clawing...\n\n🛠️ Exec\n• _Reading _ _Checking_",
     );
     const updates = draftStream.update.mock.calls.map((call) => call[0]);
-    expect(updates.join("\n")).not.toContain("_Checking files_Reasoning:");
-    expect(updates.join("\n")).not.toContain("_Checking files_Thinking");
+    expect(updates.join("\n")).not.toContain("_Checking Reading");
   });
 
   it("keeps Discord progress lines across assistant boundaries", async () => {

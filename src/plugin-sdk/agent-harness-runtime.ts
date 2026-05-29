@@ -201,10 +201,12 @@ export {
   getBeforeToolCallPolicyDiagnosticState,
   hasBeforeToolCallPolicy,
   isToolWrappedWithBeforeToolCallHook,
+  requestDeferredPluginToolApproval,
   runBeforeToolCallHook,
   setBeforeToolCallDiagnosticsEnabled,
   wrapToolWithBeforeToolCallHook,
   type BeforeToolCallPolicyDiagnosticState,
+  type DeferredPluginToolApproval,
 } from "../agents/agent-tools.before-tool-call.js";
 export {
   resolveAgentHarnessBeforePromptBuildResult,
@@ -260,6 +262,7 @@ export {
   buildNativeHookRelayCommand,
   hasNativeHookRelayInvocation,
   invokeNativeHookRelay,
+  resolveNativeHookRelayDeferredToolApproval,
   testing as nativeHookRelayTesting,
   registerNativeHookRelay,
 } from "../agents/harness/native-hook-relay.js";

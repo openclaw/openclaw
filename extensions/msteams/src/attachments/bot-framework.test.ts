@@ -205,6 +205,66 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
     expect(runtime.saveCalls).toHaveLength(0);
   });
 
+  it("does not send Bot Framework service tokens to non-auth-allowlisted media hosts", async () => {
+    const seenAuth: Array<string | null> = [];
+    const fetchFn: typeof fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      seenAuth.push(new Headers(init?.headers).get("authorization"));
+      return new Response("unauthorized", { status: 401 });
+    }) as typeof fetch;
+
+    const media = await downloadMSTeamsBotFrameworkAttachment({
+      serviceUrl: "https://attacker.trafficmanager.net",
+      attachmentId: "att-1",
+      tokenProvider: buildTokenProvider(),
+      maxBytes: 10_000_000,
+      fetchFn,
+      resolveFn: resolvePublicHost,
+    });
+
+    expect(media).toBeUndefined();
+    expect(seenAuth).toEqual([null]);
+    expect(runtime.saveCalls).toHaveLength(0);
+  });
+
+  it("sends Bot Framework service tokens to auth-allowlisted service hosts", async () => {
+    const seenAuth: Array<string | null> = [];
+    const fileBytes = Buffer.from("BFBYTES", "utf-8");
+    const fetchFn: typeof fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url =
+        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      seenAuth.push(new Headers(init?.headers).get("authorization"));
+      if (url.endsWith("/v3/attachments/att-1")) {
+        return new Response(
+          JSON.stringify({
+            name: "doc.pdf",
+            type: "application/pdf",
+            views: [{ viewId: "original", size: fileBytes.byteLength }],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (url.endsWith("/v3/attachments/att-1/views/original")) {
+        return new Response(fileBytes, {
+          status: 200,
+          headers: { "content-length": String(fileBytes.byteLength) },
+        });
+      }
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
+
+    const media = await downloadMSTeamsBotFrameworkAttachment({
+      serviceUrl: "https://smba.trafficmanager.net/amer",
+      attachmentId: "att-1",
+      tokenProvider: buildTokenProvider(),
+      maxBytes: 10_000_000,
+      fetchFn,
+      resolveFn: resolvePublicHost,
+    });
+
+    expect(media?.path).toBe(runtime.savePath);
+    expect(seenAuth).toEqual(["Bearer bf-token", "Bearer bf-token"]);
+  });
+
   it("skips when attachment view size exceeds maxBytes", async () => {
     const info = {
       name: "huge.bin",

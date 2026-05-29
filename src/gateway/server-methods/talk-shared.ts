@@ -1,3 +1,4 @@
+import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { listRealtimeTranscriptionProviders } from "../../realtime-transcription/provider-registry.js";
 import type { RealtimeTranscriptionProviderConfig } from "../../realtime-transcription/provider-types.js";
@@ -14,7 +15,6 @@ import type {
 } from "../../talk/provider-types.js";
 import type { TalkEvent } from "../../talk/talk-events.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
-import { ErrorCodes } from "../protocol/index.js";
 import type { TalkHandoffTurnResult } from "../talk-handoff.js";
 import { asRecord } from "./record-shared.js";
 

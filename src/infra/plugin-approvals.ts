@@ -1,6 +1,8 @@
 import type { ApprovalActionView } from "./approval-actions.js";
 import type { ExecApprovalDecision } from "./exec-approvals.js";
 
+export type PluginApprovalActionView = ApprovalActionView;
+
 export type PluginApprovalRequestPayload = {
   pluginId?: string | null;
   title: string;
@@ -8,8 +10,8 @@ export type PluginApprovalRequestPayload = {
   severity?: "info" | "warning" | "critical" | null;
   toolName?: string | null;
   toolCallId?: string | null;
-  actions?: readonly ApprovalActionView[] | null;
   allowedDecisions?: readonly ExecApprovalDecision[] | null;
+  actions?: readonly PluginApprovalActionView[] | null;
   agentId?: string | null;
   sessionKey?: string | null;
   turnSourceChannel?: string | null;

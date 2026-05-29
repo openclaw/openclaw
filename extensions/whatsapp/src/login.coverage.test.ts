@@ -159,8 +159,8 @@ describe("loginWeb coverage", () => {
     );
     expect(runtime.log).toHaveBeenCalledWith("terminal:initial-qr");
     expect(runtime.log).toHaveBeenCalledWith("terminal:restart-qr");
-    expect(renderQrTerminalMock).toHaveBeenCalledWith("initial-qr");
-    expect(renderQrTerminalMock).toHaveBeenCalledWith("restart-qr");
+    expect(renderQrTerminalMock).toHaveBeenCalledWith("initial-qr", { small: true });
+    expect(renderQrTerminalMock).toHaveBeenCalledWith("restart-qr", { small: true });
   });
 
   it("clears creds and throws when logged out", async () => {

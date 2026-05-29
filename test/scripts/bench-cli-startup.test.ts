@@ -171,7 +171,14 @@ describe("bench-cli-startup", () => {
         args: ["config", "get", "gateway.port"],
         presets: ["real"],
       }),
-    ).toEqual({ gateway: { port: 32123 } });
+    ).toEqual({
+      gateway: {
+        auth: { mode: "none" },
+        bind: "loopback",
+        mode: "local",
+        port: 32123,
+      },
+    });
     expect(
       testing.buildConfigFixture({
         id: "gatewayHealthJson",
@@ -179,6 +186,13 @@ describe("bench-cli-startup", () => {
         args: ["gateway", "health", "--json"],
         presets: ["real"],
       }),
-    ).toBeNull();
+    ).toEqual({
+      gateway: {
+        auth: { mode: "none" },
+        bind: "loopback",
+        mode: "local",
+        port: 32123,
+      },
+    });
   });
 });

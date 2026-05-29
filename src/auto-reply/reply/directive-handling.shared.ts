@@ -1,6 +1,7 @@
 import { formatCliCommand } from "../../cli/command-format.js";
 import { SYSTEM_MARK, prefixSystemMessage } from "../../infra/system-message.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { ElevatedLevel, ReasoningLevel } from "./directives.js";
 
 export const formatDirectiveAck = (text: string): string => {
@@ -32,18 +33,17 @@ export function canPersistSessionDirectiveDefaults(params: {
 }): boolean {
   const messageProvider = normalizeOptionalString(params.messageProvider);
   const surface = normalizeOptionalString(params.surface);
-  const hasChannelContext = messageProvider !== undefined || surface !== undefined;
-  const isInternalGatewayCaller = messageProvider === "webchat" || surface === "webchat";
+  const authoritativeChannel = messageProvider ?? surface;
 
-  if (isInternalGatewayCaller) {
+  if (!authoritativeChannel) {
+    return true;
+  }
+
+  if (isInternalMessageChannel(authoritativeChannel)) {
     return params.gatewayClientScopes?.includes("operator.admin") === true;
   }
 
-  if (hasChannelContext) {
-    return params.commandAuthorized === true || params.senderIsOwner === true;
-  }
-
-  return true;
+  return params.commandAuthorized === true || params.senderIsOwner === true;
 }
 
 const formatElevatedEvent = (level: ElevatedLevel) => {

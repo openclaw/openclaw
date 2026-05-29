@@ -14,6 +14,33 @@ function parseOnOff(raw: string): boolean | null {
   return parsed === undefined ? null : parsed;
 }
 
+function parsePositiveInteger(value: unknown, label: string): number | undefined {
+  const raw = typeof value === "string" ? value.trim() : String(value);
+  const parsed = /^\d+$/.test(raw) ? Number(raw) : Number.NaN;
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+    defaultRuntime.error(danger(`Invalid ${label}: must be a positive integer`));
+    defaultRuntime.exit(1);
+    return undefined;
+  }
+  return parsed;
+}
+
+function parseFiniteNumberOption(value: string | undefined, label: string): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const raw = value.trim();
+  const parsed = /^[+-]?(?:(?:\d+\.?\d*)|(?:\.\d+))(?:e[+-]?\d+)?$/i.test(raw)
+    ? Number(raw)
+    : Number.NaN;
+  if (!Number.isFinite(parsed)) {
+    defaultRuntime.error(danger(`Invalid ${label}: must be a finite number`));
+    defaultRuntime.exit(1);
+    return undefined;
+  }
+  return parsed;
+}
+
 function runBrowserCommand(action: () => Promise<void>) {
   return runCommandWithRuntime(defaultRuntime, action, (err) => {
     defaultRuntime.error(danger(String(err)));
@@ -58,10 +85,15 @@ export function registerBrowserStateCommands(
   set
     .command("viewport")
     .description("Set viewport size (alias for resize)")
-    .argument("<width>", "Viewport width", (v: string) => Number(v))
-    .argument("<height>", "Viewport height", (v: string) => Number(v))
+    .argument("<width>", "Viewport width")
+    .argument("<height>", "Viewport height")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
-    .action(async (width: number, height: number, opts, cmd) => {
+    .action(async (widthRaw: string, heightRaw: string, opts, cmd) => {
+      const width = parsePositiveInteger(widthRaw, "width");
+      const height = parsePositiveInteger(heightRaw, "height");
+      if (width === undefined || height === undefined) {
+        return;
+      }
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
       await runBrowserCommand(async () => {
@@ -173,27 +205,39 @@ export function registerBrowserStateCommands(
     .command("geo")
     .description("Set geolocation (and grant permission)")
     .option("--clear", "Clear geolocation + permissions", false)
-    .argument("[latitude]", "Latitude", (v: string) => Number(v))
-    .argument("[longitude]", "Longitude", (v: string) => Number(v))
-    .option("--accuracy <m>", "Accuracy in meters", (v: string) => Number(v))
+    .argument("[latitude]", "Latitude")
+    .argument("[longitude]", "Longitude")
+    .option("--accuracy <m>", "Accuracy in meters")
     .option("--origin <origin>", "Origin to grant permissions for")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
-    .action(async (latitude: number | undefined, longitude: number | undefined, opts, cmd) => {
-      const parent = parentOpts(cmd);
-      await runBrowserSetRequest({
-        parent,
-        path: "/set/geolocation",
-        body: {
-          latitude: Number.isFinite(latitude) ? latitude : undefined,
-          longitude: Number.isFinite(longitude) ? longitude : undefined,
-          accuracy: Number.isFinite(opts.accuracy) ? opts.accuracy : undefined,
-          origin: normalizeOptionalString(opts.origin),
-          clear: Boolean(opts.clear),
-          targetId: normalizeOptionalString(opts.targetId),
-        },
-        successMessage: opts.clear ? "geolocation cleared" : "geolocation set",
-      });
-    });
+    .action(
+      async (latitudeRaw: string | undefined, longitudeRaw: string | undefined, opts, cmd) => {
+        const parent = parentOpts(cmd);
+        const latitude = parseFiniteNumberOption(latitudeRaw, "latitude");
+        const longitude = parseFiniteNumberOption(longitudeRaw, "longitude");
+        const accuracy = parseFiniteNumberOption(opts.accuracy, "--accuracy");
+        if (
+          (latitudeRaw !== undefined && latitude === undefined) ||
+          (longitudeRaw !== undefined && longitude === undefined) ||
+          (opts.accuracy !== undefined && accuracy === undefined)
+        ) {
+          return;
+        }
+        await runBrowserSetRequest({
+          parent,
+          path: "/set/geolocation",
+          body: {
+            latitude,
+            longitude,
+            accuracy,
+            origin: normalizeOptionalString(opts.origin),
+            clear: Boolean(opts.clear),
+            targetId: normalizeOptionalString(opts.targetId),
+          },
+          successMessage: opts.clear ? "geolocation cleared" : "geolocation set",
+        });
+      },
+    );
 
   set
     .command("media")

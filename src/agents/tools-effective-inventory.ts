@@ -67,6 +67,9 @@ function resolveEffectiveToolSource(
   const pluginMeta =
     getPluginToolMeta(tool) ?? (fallbackTool ? getPluginToolMeta(fallbackTool) : undefined);
   if (pluginMeta) {
+    if (pluginMeta.pluginId === "bundle-mcp") {
+      return { source: "mcp", pluginId: pluginMeta.pluginId };
+    }
     return { source: "plugin", pluginId: pluginMeta.pluginId };
   }
   const channelMeta =
@@ -84,6 +87,8 @@ function groupLabel(source: EffectiveToolSource): string {
       return "Connected tools";
     case "channel":
       return "Channel tools";
+    case "mcp":
+      return "MCP server tools";
     default:
       return "Built-in tools";
   }
@@ -212,6 +217,108 @@ function disambiguateLabels(entries: EffectiveToolInventoryEntry[]): EffectiveTo
     const suffix = entry.pluginId ?? entry.channelId ?? entry.id;
     return { ...entry, label: `${entry.label} (${suffix})` };
   });
+}
+
+export function buildEffectiveToolInventoryEntries(
+  tools: readonly AnyAgentTool[],
+  rawToolsByName: ReadonlyMap<string, AnyAgentTool> = new Map(),
+): EffectiveToolInventoryEntry[] {
+  // Key metadata by plugin ownership and tool name so only the owning plugin can
+  // project display/risk metadata for its own tool.
+  const pluginToolMetadata = new Map(
+    (getActivePluginRegistry()?.toolMetadata ?? []).map((entry) => [
+      buildPluginToolMetadataKey(entry.pluginId, entry.metadata.toolName),
+      entry.metadata,
+    ]),
+  );
+
+  return disambiguateLabels(
+    tools
+      .map((tool) => {
+        const source = resolveEffectiveToolSource(tool, rawToolsByName.get(tool.name));
+        const metadata = source.pluginId
+          ? pluginToolMetadata.get(buildPluginToolMetadataKey(source.pluginId, tool.name))
+          : undefined;
+        return Object.assign(
+          {
+            id: tool.name,
+            label:
+              normalizeOptionalString(metadata?.displayName) ?? resolveEffectiveToolLabel(tool),
+            description:
+              normalizeOptionalString(metadata?.description) ?? summarizeToolDescription(tool),
+            rawDescription:
+              normalizeOptionalString(metadata?.description) ??
+              resolveRawToolDescription(tool) ??
+              summarizeToolDescription(tool),
+            ...(metadata?.risk ? { risk: metadata.risk } : {}),
+            ...(metadata?.tags ? { tags: metadata.tags } : {}),
+          },
+          source,
+        ) satisfies EffectiveToolInventoryEntry;
+      })
+      .toSorted((a, b) => a.label.localeCompare(b.label)),
+  );
+}
+
+export function buildEffectiveToolInventoryGroups(
+  entries: readonly EffectiveToolInventoryEntry[],
+): EffectiveToolInventoryGroup[] {
+  const groupsBySource = new Map<EffectiveToolSource, EffectiveToolInventoryEntry[]>();
+  for (const entry of entries) {
+    const tools = groupsBySource.get(entry.source) ?? [];
+    tools.push(entry);
+    groupsBySource.set(entry.source, tools);
+  }
+
+  return (["core", "plugin", "channel", "mcp"] as const)
+    .map((source) => {
+      const tools = groupsBySource.get(source);
+      if (!tools || tools.length === 0) {
+        return null;
+      }
+      return {
+        id: source,
+        label: groupLabel(source),
+        source,
+        tools,
+      } satisfies EffectiveToolInventoryGroup;
+    })
+    .filter((group): group is EffectiveToolInventoryGroup => group !== null);
+}
+
+export function buildRuntimeCompatibleToolInventory(params: {
+  tools: readonly AnyAgentTool[];
+  cfg: OpenClawConfig;
+  workspaceDir?: string;
+  modelProvider?: string;
+  modelId?: string;
+  modelApi?: string | null;
+  runtimeModel?: ProviderRuntimeModel;
+}): {
+  entries: EffectiveToolInventoryEntry[];
+  notices: EffectiveToolInventoryNotice[];
+} {
+  const rawToolsByName = new Map(params.tools.map((tool) => [tool.name, tool]));
+  const normalizedTools = normalizeAgentRuntimeTools({
+    // Schema normalization can replace tool definitions, so hand the runtime
+    // policy a mutable copy while keeping this inventory API readonly.
+    tools: [...params.tools],
+    provider: params.modelProvider ?? "",
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+    modelId: params.modelId,
+    modelApi: params.modelApi ?? undefined,
+    model: params.runtimeModel,
+  });
+  const projection = filterRuntimeCompatibleTools(normalizedTools);
+  return {
+    entries: buildEffectiveToolInventoryEntries(projection.tools, rawToolsByName),
+    notices: buildUnsupportedToolSchemaNotices({
+      diagnostics: projection.diagnostics,
+      tools: normalizedTools,
+      rawToolsByName,
+    }),
+  };
 }
 
 function applyProviderTransportNormalization(params: {
@@ -443,17 +550,15 @@ export function resolveEffectiveToolInventory(
     requireExplicitMessageTarget: params.requireExplicitMessageTarget,
     disableMessageTool: params.disableMessageTool,
   });
-  const rawToolsByName = new Map(effectiveTools.map((tool) => [tool.name, tool]));
-  const normalizedEffectiveTools = normalizeAgentRuntimeTools({
+  const projectedInventory = buildRuntimeCompatibleToolInventory({
     tools: effectiveTools,
-    provider: params.modelProvider ?? "",
-    config: params.cfg,
+    cfg: params.cfg,
     workspaceDir,
+    modelProvider: params.modelProvider,
     modelId: params.modelId,
     modelApi: runtimeModelContext.modelApi,
-    model: runtimeModelContext.runtimeModel,
+    runtimeModel: runtimeModelContext.runtimeModel,
   });
-  const toolSchemaProjection = filterRuntimeCompatibleTools(normalizedEffectiveTools);
   const effectivePolicy = resolveEffectiveToolPolicy({
     config: params.cfg,
     agentId,
@@ -462,70 +567,12 @@ export function resolveEffectiveToolInventory(
     modelId: params.modelId,
   });
   const profile = effectivePolicy.providerProfile ?? effectivePolicy.profile ?? "full";
-  // Key metadata by plugin ownership and tool name so only the owning plugin can
-  // project display/risk metadata for its own tool.
-  const pluginToolMetadata = new Map(
-    (getActivePluginRegistry()?.toolMetadata ?? []).map((entry) => [
-      buildPluginToolMetadataKey(entry.pluginId, entry.metadata.toolName),
-      entry.metadata,
-    ]),
-  );
-
-  const entries = disambiguateLabels(
-    toolSchemaProjection.tools
-      .map((tool) => {
-        const source = resolveEffectiveToolSource(tool, rawToolsByName.get(tool.name));
-        const metadata = source.pluginId
-          ? pluginToolMetadata.get(buildPluginToolMetadataKey(source.pluginId, tool.name))
-          : undefined;
-        return Object.assign(
-          {
-            id: tool.name,
-            label:
-              normalizeOptionalString(metadata?.displayName) ?? resolveEffectiveToolLabel(tool),
-            description:
-              normalizeOptionalString(metadata?.description) ?? summarizeToolDescription(tool),
-            rawDescription:
-              normalizeOptionalString(metadata?.description) ??
-              resolveRawToolDescription(tool) ??
-              summarizeToolDescription(tool),
-            ...(metadata?.risk ? { risk: metadata.risk } : {}),
-            ...(metadata?.tags ? { tags: metadata.tags } : {}),
-          },
-          source,
-        ) satisfies EffectiveToolInventoryEntry;
-      })
-      .toSorted((a, b) => a.label.localeCompare(b.label)),
-  );
+  const entries = projectedInventory.entries;
   const notices = [
-    ...buildUnsupportedToolSchemaNotices({
-      diagnostics: toolSchemaProjection.diagnostics,
-      tools: normalizedEffectiveTools,
-      rawToolsByName,
-    }),
+    ...projectedInventory.notices,
     ...(buildToolInventoryNotices({ cfg: params.cfg, profile, entries, effectivePolicy }) ?? []),
   ];
-  const groupsBySource = new Map<EffectiveToolSource, EffectiveToolInventoryEntry[]>();
-  for (const entry of entries) {
-    const tools = groupsBySource.get(entry.source) ?? [];
-    tools.push(entry);
-    groupsBySource.set(entry.source, tools);
-  }
-
-  const groups = (["core", "plugin", "channel"] as const)
-    .map((source) => {
-      const tools = groupsBySource.get(source);
-      if (!tools || tools.length === 0) {
-        return null;
-      }
-      return {
-        id: source,
-        label: groupLabel(source),
-        source,
-        tools,
-      } satisfies EffectiveToolInventoryGroup;
-    })
-    .filter((group): group is EffectiveToolInventoryGroup => group !== null);
+  const groups = buildEffectiveToolInventoryGroups(entries);
 
   return { agentId, profile, groups, ...(notices.length > 0 ? { notices } : {}) };
 }

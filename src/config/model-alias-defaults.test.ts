@@ -165,6 +165,32 @@ describe("applyModelDefaults", () => {
     });
   });
 
+  it("normalizes the retired Together default primary and fallback refs", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "together/moonshotai/Kimi-K2.5",
+            fallbacks: ["together/moonshotai/Kimi-K2.5", "openai/gpt-5.5"],
+          },
+          models: {
+            "together/moonshotai/Kimi-K2.5": {},
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const next = applyModelDefaults(cfg);
+
+    expect(next.agents?.defaults?.model).toEqual({
+      primary: "together/moonshotai/Kimi-K2.6",
+      fallbacks: ["together/moonshotai/Kimi-K2.6", "openai/gpt-5.5"],
+    });
+    expect(next.agents?.defaults?.models).toEqual({
+      "together/moonshotai/Kimi-K2.6": {},
+    });
+  });
+
   it("normalizes retired Gemini per-agent model refs", () => {
     const cfg = {
       agents: {
