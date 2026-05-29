@@ -27,6 +27,7 @@ function createFullReindexParams(
     meta?: MemoryIndexMeta | null;
     provider?: { id: string; model: string } | null;
     providerKey?: string;
+    providerKeyKnown?: boolean;
     configuredSources?: MemorySource[];
     configuredScopeHash?: string;
     chunkTokens?: number;
