@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SkillSnapshot } from "../../agents/skills.js";
+import type { SkillSnapshot } from "../../skills/types.js";
 import { createSourceDeliveryPlan } from "../../infra/outbound/source-delivery-plan.js";
 import type { MutableCronSession } from "./run-session-state.js";
 import {
@@ -8,7 +8,7 @@ import {
   mockRunCronFallbackPassthrough,
   resetRunCronIsolatedAgentTurnHarness,
   restoreFastTestEnv,
-  runEmbeddedPiAgentMock,
+  runEmbeddedAgentMock,
 } from "./run.test-harness.js";
 
 const { createCronPromptExecutor, executeCronRun } = await import("./run-executor.js");
@@ -62,9 +62,9 @@ function makeExecutor(overrides: Partial<Parameters<typeof createCronPromptExecu
 }
 
 function getEmbeddedRunArg(): Record<string, unknown> {
-  const call = runEmbeddedPiAgentMock.mock.calls[0];
+  const call = runEmbeddedAgentMock.mock.calls[0];
   if (!call) {
-    throw new Error("expected runEmbeddedPiAgent to be called");
+    throw new Error("expected runEmbeddedAgent to be called");
   }
   return call[0] as Record<string, unknown>;
 }
@@ -94,7 +94,7 @@ describe("createCronPromptExecutor sourceDelivery guard", () => {
 
     await executor.runPrompt("run a task");
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const args = getEmbeddedRunArg();
     expect(args.sourceReplyDeliveryMode).toBeUndefined();
     expect(args.requireExplicitMessageTarget).toBe(false);
@@ -113,7 +113,7 @@ describe("createCronPromptExecutor sourceDelivery guard", () => {
 
     await executor.runPrompt("run a task");
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const args = getEmbeddedRunArg();
     expect(args.messageChannel).toBe("topicchat");
     expect(args.messageTo).toBe("room#42");
@@ -134,7 +134,7 @@ describe("createCronPromptExecutor sourceDelivery guard", () => {
 
     await executor.runPrompt("run a task");
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const args = getEmbeddedRunArg();
     expect(args.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(args.disableMessageTool).toBe(false);
@@ -156,7 +156,7 @@ describe("createCronPromptExecutor sourceDelivery guard", () => {
 
     await executor.runPrompt("run a task");
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const args = getEmbeddedRunArg();
     expect(args.sourceReplyDeliveryMode).toBeUndefined();
     expect(args.disableMessageTool).toBe(true);
@@ -178,7 +178,7 @@ describe("createCronPromptExecutor sourceDelivery guard", () => {
 
     await executor.runPrompt("run a task");
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const args = getEmbeddedRunArg();
     expect(args.requireExplicitMessageTarget).toBe(true);
   });
@@ -199,7 +199,7 @@ describe("createCronPromptExecutor sourceDelivery guard", () => {
 
     await executor.runPrompt("send a message");
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const args = getEmbeddedRunArg();
     expect(args.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(args.requireExplicitMessageTarget).toBe(false);
@@ -268,7 +268,7 @@ describe("executeCronRun sourceDelivery guard", () => {
       }),
     );
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const args = getEmbeddedRunArg();
     expect(args.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(args.disableMessageTool).toBe(false);
@@ -284,7 +284,7 @@ describe("executeCronRun sourceDelivery guard", () => {
       }),
     );
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const args = getEmbeddedRunArg();
     expect(args.sourceReplyDeliveryMode).toBeUndefined();
   });
@@ -304,7 +304,7 @@ describe("executeCronRun sourceDelivery guard", () => {
       }),
     );
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const args = getEmbeddedRunArg();
     expect(args.requireExplicitMessageTarget).toBe(true);
     expect(args.sourceReplyDeliveryMode).toBe("message_tool_only");
@@ -319,7 +319,7 @@ describe("executeCronRun sourceDelivery guard", () => {
       }),
     );
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const args = getEmbeddedRunArg();
     expect(args.requireExplicitMessageTarget).toBe(false);
   });
@@ -339,7 +339,7 @@ describe("executeCronRun sourceDelivery guard", () => {
       }),
     );
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const args = getEmbeddedRunArg();
     expect(args.sourceReplyDeliveryMode).toBeUndefined();
     expect(args.disableMessageTool).toBe(true);
