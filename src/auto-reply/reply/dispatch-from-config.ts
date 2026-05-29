@@ -723,6 +723,36 @@ async function mirrorInternalSourceReplyToTranscript(params: {
   }
 }
 
+function getDispatcherFinalOutcomeCounts(dispatcher: ReplyDispatcher): {
+  cancelled: number;
+  failed: number;
+} {
+  return {
+    cancelled: dispatcher.getCancelledCounts?.().final ?? 0,
+    failed: dispatcher.getFailedCounts().final,
+  };
+}
+
+async function mirrorInternalSourceReplyAfterDispatcherDelivery(params: {
+  dispatcher: ReplyDispatcher;
+  before: { cancelled: number; failed: number };
+  metadata: NonNullable<ReturnType<typeof getReplyPayloadMetadata>>["sourceReplyTranscriptMirror"];
+  cfg: OpenClawConfig;
+}): Promise<void> {
+  if (!params.metadata) {
+    return;
+  }
+  await params.dispatcher.waitForIdle();
+  const after = getDispatcherFinalOutcomeCounts(params.dispatcher);
+  if (after.cancelled > params.before.cancelled || after.failed > params.before.failed) {
+    return;
+  }
+  await mirrorInternalSourceReplyToTranscript({
+    metadata: params.metadata,
+    cfg: params.cfg,
+  });
+}
+
 function runWithDispatchAbortSignal<T>(
   signal: AbortSignal | undefined,
   run: () => Promise<T> | T,
@@ -1872,9 +1902,12 @@ export async function dispatchReplyFromConfig(
       }
       throwIfFinalDeliveryAborted();
       markInboundDedupeReplayUnsafe();
+      const finalOutcomeBefore = getDispatcherFinalOutcomeCounts(dispatcher);
       const queuedFinal = dispatcher.sendFinalReply(normalizedPayload);
       if (queuedFinal) {
-        await mirrorInternalSourceReplyToTranscript({
+        await mirrorInternalSourceReplyAfterDispatcherDelivery({
+          dispatcher,
+          before: finalOutcomeBefore,
           metadata: sourceReplyTranscriptMirror,
           cfg,
         });
