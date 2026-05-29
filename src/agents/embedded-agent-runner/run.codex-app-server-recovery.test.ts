@@ -172,12 +172,7 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
 
   it("returns a timeout payload after a replay-safe turn/completed idle timeout retry is exhausted", async () => {
     mockedRunEmbeddedAttempt
-      .mockResolvedValueOnce(
-        codexTurnCompletionIdleTimeoutAttempt({
-          aborted: true,
-          timedOut: true,
-        }),
-      )
+      .mockResolvedValueOnce(codexTurnCompletionIdleTimeoutAttempt())
       .mockResolvedValueOnce(
         codexTurnCompletionIdleTimeoutAttempt({
           aborted: true,

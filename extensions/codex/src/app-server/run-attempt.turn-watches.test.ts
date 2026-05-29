@@ -1530,8 +1530,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
         delta: '{"cmd":"apply_patch","patch":"other turn"}',
       },
     });
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(settled).toBe(true);
+    await vi.waitFor(() => expect(settled).toBe(true), fastWait);
 
     const result = await run;
     expect(result.aborted).toBe(true);
