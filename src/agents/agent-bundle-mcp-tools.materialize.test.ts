@@ -159,6 +159,82 @@ describe("createBundleMcpToolRuntime", () => {
     expect(runtime.diagnostics).toEqual(diagnostics);
   });
 
+  it("skips unreadable catalog tool fields while preserving healthy siblings", async () => {
+    const inputSchema = { type: "object", properties: {} };
+    const calls: Array<{ serverName: string; toolName: string }> = [];
+    const unreadableName = Object.defineProperties(
+      {},
+      {
+        serverName: { value: "fuzzplugin" },
+        safeServerName: { value: "fuzzplugin" },
+        toolName: {
+          get() {
+            throw new Error("mockplugin catalog name failed");
+          },
+        },
+        inputSchema: { value: inputSchema },
+        fallbackDescription: { value: "bad name" },
+      },
+    );
+    const unreadableSchema = Object.defineProperties(
+      {},
+      {
+        serverName: { value: "fuzzplugin" },
+        safeServerName: { value: "fuzzplugin" },
+        toolName: { value: "mockplugin_schema" },
+        inputSchema: {
+          get() {
+            throw new Error("mockplugin catalog schema failed");
+          },
+        },
+        fallbackDescription: { value: "bad schema" },
+      },
+    );
+    const healthyTool = Object.defineProperties(
+      {},
+      {
+        serverName: { value: " fuzzplugin " },
+        safeServerName: { value: "fuzzplugin" },
+        toolName: { value: "mockplugin_status" },
+        title: { value: "Status" },
+        description: {
+          get() {
+            throw new Error("mockplugin catalog description failed");
+          },
+        },
+        inputSchema: { value: inputSchema },
+        fallbackDescription: { value: "fallback status" },
+      },
+    );
+
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: {
+        ...makeToolRuntime({
+          serverName: "fuzzplugin",
+          tools: [unreadableName, unreadableSchema, healthyTool] as never,
+        }),
+        callTool: async (serverName, toolName) => {
+          calls.push({ serverName, toolName });
+          return {
+            content: [{ type: "text", text: "FROM-CATALOG" }],
+            isError: false,
+          };
+        },
+      },
+    });
+
+    expect(runtime.tools.map((tool) => tool.name)).toEqual(["fuzzplugin__mockplugin_status"]);
+    expect(runtime.tools[0]?.label).toBe("Status");
+    expect(runtime.tools[0]?.description).toBe("fallback status");
+    await runtime.tools[0]?.execute("call-catalog", {}, undefined, undefined);
+    expect(calls).toEqual([{ serverName: " fuzzplugin ", toolName: "mockplugin_status" }]);
+    expect(runtime.diagnostics?.map((diagnostic) => diagnostic.message)).toEqual([
+      "tools[0].toolName is unreadable: Error: mockplugin catalog name failed",
+      "tools[1].inputSchema is unreadable: Error: mockplugin catalog schema failed",
+      "tools[2].description is unreadable: Error: mockplugin catalog description failed",
+    ]);
+  });
+
   it("materializes configured MCP tools through the session runtime boundary", async () => {
     const created: Parameters<
       NonNullable<Parameters<typeof createBundleMcpToolRuntime>[0]["createRuntime"]>
