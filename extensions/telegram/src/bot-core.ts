@@ -219,29 +219,22 @@ export function createTelegramBotCore(
     }
   });
 
-  const resolveFinalButtonAckText = (data?: string | null) => {
+  const isFastFinalButtonAckCandidate = (data?: string | null) => {
     const value = data?.trim();
-    if (value === "Proceed" || value === "action:proceed") {
-      return "Proceeding...";
-    }
-    if (value === "Status, including recommended next steps?" || value === "action:status") {
-      return "Checking status...";
-    }
-    if (
-      value === "Provide recommendation" ||
-      value === "action:recommend" ||
-      value === "action:recommendation"
-    ) {
-      return "Preparing recommendation...";
-    }
-    return null;
+    return (
+      value === "Proceed" ||
+      value === "Status, including recommended next steps?" ||
+      value === "Provide recommendation"
+    );
   };
 
   bot.use(async (ctx, next) => {
     const callback = ctx.update?.callback_query;
-    const ackText = resolveFinalButtonAckText(callback?.data);
-    if (callback?.id && ackText) {
-      await Promise.allSettled([bot.api.answerCallbackQuery(callback.id, { text: ackText })]);
+    if (callback?.id && isFastFinalButtonAckCandidate(callback.data)) {
+      const [result] = await Promise.allSettled([bot.api.answerCallbackQuery(callback.id)]);
+      if (result?.status === "fulfilled") {
+        (ctx as { openclawFastCallbackAcked?: boolean }).openclawFastCallbackAcked = true;
+      }
     }
     await next();
   });

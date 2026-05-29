@@ -1974,23 +1974,20 @@ export const registerTelegramHandlers = ({
       }
       return null;
     };
-    const callbackAckText = resolveFinalButtonAckText(callback.data);
+    const fastCallbackAcked =
+      (ctx as { openclawFastCallbackAcked?: boolean }).openclawFastCallbackAcked === true;
     const answerCallbackQuery =
       typeof (ctx as { answerCallbackQuery?: unknown }).answerCallbackQuery === "function"
-        ? () =>
-            callbackAckText == null
-              ? ctx.answerCallbackQuery()
-              : ctx.answerCallbackQuery({ text: callbackAckText })
-        : () =>
-            callbackAckText == null
-              ? bot.api.answerCallbackQuery(callback.id)
-              : bot.api.answerCallbackQuery(callback.id, { text: callbackAckText });
+        ? () => ctx.answerCallbackQuery()
+        : () => bot.api.answerCallbackQuery(callback.id);
     // Answer immediately to prevent Telegram from retrying while we process
-    await withTelegramApiErrorLogging({
-      operation: "answerCallbackQuery",
-      runtime,
-      fn: answerCallbackQuery,
-    }).catch(() => {});
+    if (!fastCallbackAcked) {
+      await withTelegramApiErrorLogging({
+        operation: "answerCallbackQuery",
+        runtime,
+        fn: answerCallbackQuery,
+      }).catch(() => {});
+    }
     try {
       const data = (callback.data ?? "").trim();
       const callbackMessage = callback.message;
@@ -2148,22 +2145,6 @@ export const registerTelegramHandlers = ({
         return;
       }
 
-      const finalButtonAckText = resolveFinalButtonAckText(data);
-      if (finalButtonAckText != null) {
-        try {
-          await replyToCallbackChat(
-            finalButtonAckText,
-            callbackMessage.message_thread_id != null
-              ? { message_thread_id: callbackMessage.message_thread_id }
-              : undefined,
-          );
-        } catch (ackErr) {
-          logVerbose(
-            "telegram: failed to send visible final-button acknowledgment: " + String(ackErr),
-          );
-        }
-      }
-
       const callbackThreadId = resolvedThreadId ?? dmThreadId;
       const callbackConversationId =
         callbackThreadId != null ? `${chatId}:topic:${callbackThreadId}` : String(chatId);
@@ -2239,6 +2220,22 @@ export const registerTelegramHandlers = ({
       });
       if (pluginCallback.handled) {
         return;
+      }
+
+      const finalButtonAckText = resolveFinalButtonAckText(data);
+      if (finalButtonAckText != null) {
+        try {
+          await replyToCallbackChat(
+            finalButtonAckText,
+            callbackMessage.message_thread_id != null
+              ? { message_thread_id: callbackMessage.message_thread_id }
+              : undefined,
+          );
+        } catch (ackErr) {
+          logVerbose(
+            "telegram: failed to send visible final-button acknowledgment: " + String(ackErr),
+          );
+        }
       }
 
       const managedSelectCallback = parseTelegramManagedSelectCallback(data);

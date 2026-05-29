@@ -1080,10 +1080,49 @@ describe("createTelegramBot", () => {
     });
 
     await flushTelegramTestMicrotasks();
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-final-fastlane-1", {
-      text: "Proceeding...",
-    });
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-final-fastlane-1");
     expect(sendMessageSpy).not.toHaveBeenCalled();
+
+    requireValue(releaseSequentializer, "sequentializer release")();
+    await runPromise;
+  });
+
+  it("does not fast-lane plugin namespace-style final-button callbacks", async () => {
+    let releaseSequentializer: (() => void) | undefined;
+    const sequentializerBlocked = new Promise<void>((resolve) => {
+      releaseSequentializer = resolve;
+    });
+    sequentializeSpy.mockImplementationOnce(
+      () => async (_ctx: unknown, next?: () => Promise<void>) => {
+        await sequentializerBlocked;
+        if (typeof next === "function") {
+          await next();
+        }
+      },
+    );
+
+    createTelegramBot({ token: "tok" });
+    const runPromise = runTelegramMiddlewareChain({
+      ctx: {
+        update: {
+          update_id: 109,
+          callback_query: {
+            id: "cbq-plugin-namespace-1",
+            data: "action:status",
+            message: {
+              chat: { id: -1007, type: "supergroup", title: "OpenClaw Ops" },
+              date: 1736380800,
+              message_id: 109,
+              message_thread_id: 5531,
+            },
+          },
+        },
+      },
+      finalHandler: async () => undefined,
+    });
+
+    await flushTelegramTestMicrotasks();
+    expect(answerCallbackQuerySpy).not.toHaveBeenCalledWith("cbq-plugin-namespace-1");
 
     requireValue(releaseSequentializer, "sequentializer release")();
     await runPromise;
@@ -1130,6 +1169,9 @@ describe("createTelegramBot", () => {
       (call) => call[0] === -1007 && call[1] === "Checking status...",
     );
     expect(visibleAckCalls).toHaveLength(1);
+    expect(
+      answerCallbackQuerySpy.mock.calls.filter((call) => call[0] === "cbq-final-fastlane-2"),
+    ).toHaveLength(1);
   });
 
   it("does not send a visible final-button acknowledgment for unauthorized callbacks", async () => {
@@ -1178,9 +1220,7 @@ describe("createTelegramBot", () => {
       finalHandler: callbackHandler,
     });
 
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-final-unauthorized-1", {
-      text: "Proceeding...",
-    });
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-final-unauthorized-1");
     expect(sendMessageSpy).not.toHaveBeenCalled();
   });
 
@@ -1211,9 +1251,7 @@ describe("createTelegramBot", () => {
       }),
     ).resolves.toBeUndefined();
 
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-final-stale-1", {
-      text: "Preparing recommendation...",
-    });
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-final-stale-1");
     expect(
       sendMessageSpy.mock.calls.some(
         (call) =>
