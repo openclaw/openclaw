@@ -37,6 +37,7 @@ import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isAbortError } from "../../infra/unhandled-rejections.js";
 import { resolveMemoryFlushPlan } from "../../plugins/memory-state.js";
+import { resolveTokenThreshold } from "../../config/token-threshold.js";
 import { CommandLane } from "../../process/lanes.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
@@ -734,26 +735,16 @@ export async function runPreflightCompactionIfNeeded(params: {
     agentCfgContextTokens: params.agentCfgContextTokens,
   });
   const memoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg });
-  const resolveToken = (
-    threshold: number | string | undefined,
-    pct: number,
-    fallback: number,
-  ): number => {
-    if (typeof threshold === "number" && Number.isFinite(threshold)) return threshold;
-    if (typeof threshold === "string") {
-      const match = threshold.match(/^(\d+)%$/);
-      if (match) return Math.floor((contextWindowTokens * parseInt(match[1], 10)) / 100);
-    }
-    return pct > 0 ? Math.floor((contextWindowTokens * pct) / 100) : fallback;
-  };
-  const reserveTokensFloor = resolveToken(
+  const reserveTokensFloor = resolveTokenThreshold(
     memoryFlushPlan?.reserveTokensFloor ??
       params.cfg.agents?.defaults?.compaction?.reserveTokensFloor,
+    contextWindowTokens,
     3,
     20_000,
   );
-  const softThresholdTokens = resolveToken(
+  const softThresholdTokens = resolveTokenThreshold(
     memoryFlushPlan?.softThresholdTokens,
+    contextWindowTokens,
     40,
     4_000,
   );
@@ -1038,8 +1029,8 @@ export async function runMemoryFlushIfNeeded(params: {
   const hasFreshPersistedPromptTokens =
     typeof persistedPromptTokens === "number" && entry?.totalTokensFresh === true;
 
-  const flushReserveTokensFloor = resolveToken(memoryFlushPlan.reserveTokensFloor, 3, 20_000);
-  const flushSoftThresholdTokens = resolveToken(memoryFlushPlan.softThresholdTokens, 40, 4_000);
+  const flushReserveTokensFloor = resolveTokenThreshold(memoryFlushPlan.reserveTokensFloor, contextWindowTokens, 3, 20_000);
+  const flushSoftThresholdTokens = resolveTokenThreshold(memoryFlushPlan.softThresholdTokens, contextWindowTokens, 40, 4_000);
   const flushThreshold =
     contextWindowTokens - flushReserveTokensFloor - flushSoftThresholdTokens;
 
