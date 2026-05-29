@@ -618,14 +618,6 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
 
     expect(result.ok).toBe(true);
     expect(result.result?.summary).toBe("oauth fallback summary");
-    findMockCall(resolveAgentHarnessPolicyMock, ([arg]) => {
-      const policyArg = arg as Record<string, unknown>;
-      return policyArg.provider === "openai" && policyArg.modelId === "gpt-primary";
-    });
-    findMockCall(resolveAgentHarnessPolicyMock, ([arg]) => {
-      const policyArg = arg as Record<string, unknown>;
-      return policyArg.provider === "openai" && policyArg.modelId === "gpt-fallback";
-    });
     findMockCall(
       resolveModelMock,
       ([provider, modelId]) => provider === "openai-codex" && modelId === "gpt-primary",
@@ -655,6 +647,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       workspaceDir: "/tmp/workspace",
       provider: "openai",
       model: "gpt-5.5",
+      agentHarnessId: "codex",
       config: {
         models: {
           providers: {
@@ -727,6 +720,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       workspaceDir: "/tmp/workspace",
       provider: "openai",
       model: "gpt-5.5",
+      agentHarnessId: "codex",
       config: {
         models: {
           providers: {
@@ -1765,7 +1759,43 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     });
   });
 
-  it("passes implicit Codex runtime to queued context-engine runtime context", async () => {
+  it("passes selected Codex runtime to queued context-engine runtime context", async () => {
+    resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "codex" });
+    maybeCompactAgentHarnessSessionMock.mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      result: {
+        summary: "harness",
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 100,
+      },
+    });
+
+    const result = await compactEmbeddedAgentSession(
+      wrappedCompactionArgs({
+        provider: "openai",
+        model: "gpt-5.5",
+        agentHarnessId: "codex",
+        config: {
+          models: {
+            providers: {
+              "openai-codex": { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
+            },
+          },
+        },
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    const harnessArg = mockCallArg(maybeCompactAgentHarnessSessionMock) as Record<string, unknown>;
+    expectRecordFields(harnessArg.contextEngineRuntimeContext, {
+      provider: "openai",
+      runtimeProvider: "openai-codex",
+      model: "gpt-5.5",
+    });
+  });
+
+  it("does not route queued compaction through implicit Codex policy alone", async () => {
     resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "codex" });
     maybeCompactAgentHarnessSessionMock.mockResolvedValueOnce({
       ok: true,
@@ -1784,6 +1814,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         config: {
           models: {
             providers: {
+              openai: { models: [{ id: "gpt-5.5", contextWindow: 1_000_000 }] },
               "openai-codex": { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
             },
           },
@@ -1795,7 +1826,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     const harnessArg = mockCallArg(maybeCompactAgentHarnessSessionMock) as Record<string, unknown>;
     expectRecordFields(harnessArg.contextEngineRuntimeContext, {
       provider: "openai",
-      runtimeProvider: "openai-codex",
+      runtimeProvider: undefined,
       model: "gpt-5.5",
     });
   });

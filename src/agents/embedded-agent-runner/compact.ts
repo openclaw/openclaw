@@ -75,7 +75,6 @@ import { ensureSessionHeader } from "../embedded-agent-helpers.js";
 import { pickFallbackThinkingLevel } from "../embedded-agent-helpers.js";
 import { coerceToFailoverError, describeFailoverError } from "../failover-error.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
-import { resolveAgentHarnessPolicy } from "../harness/selection.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
 import {
   applyAuthHeaderOverride,
@@ -496,29 +495,13 @@ async function compactEmbeddedAgentSessionDirectOnce(
   });
   const agentDir =
     params.agentDir ?? resolveAgentDir(params.config ?? {}, earlyAgentIds.sessionAgentId);
-  const preliminaryCompactionTarget = resolveEmbeddedCompactionTarget({
-    config: params.config,
-    provider: params.provider,
-    modelId: params.model,
-    authProfileId: params.authProfileId,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
-  });
-  const preliminaryProvider = preliminaryCompactionTarget.provider ?? DEFAULT_PROVIDER;
-  const preliminaryModelId = preliminaryCompactionTarget.model ?? DEFAULT_MODEL;
-  const runtimeHarnessPolicy = resolveAgentHarnessPolicy({
-    provider: preliminaryProvider,
-    modelId: preliminaryModelId,
-    config: params.config,
-    agentId: earlyAgentIds.sessionAgentId,
-    sessionKey: params.sessionKey,
-  });
+  const selectedHarnessRuntime = params.agentHarnessId;
   const resolvedCompactionTarget = resolveEmbeddedCompactionTarget({
     config: params.config,
     provider: params.provider,
     modelId: params.model,
     authProfileId: params.authProfileId,
-    harnessRuntime: params.agentHarnessId ?? runtimeHarnessPolicy.runtime,
+    harnessRuntime: selectedHarnessRuntime,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
@@ -701,7 +684,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
       cfg: params.config,
       provider: resolveContextConfigProviderForRuntime({
         provider,
-        runtimeId: params.agentHarnessId ?? runtimeHarnessPolicy.runtime,
+        runtimeId: selectedHarnessRuntime,
       }),
       modelId,
       modelContextTokens: readAgentModelContextTokens(runtimeModel),
@@ -738,7 +721,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
         model: effectiveModel,
         modelApi: effectiveModel.api,
         harnessId: params.agentHarnessId,
-        harnessRuntime: runtimeHarnessPolicy.runtime,
+        harnessRuntime: selectedHarnessRuntime,
         authProfileProvider: authProfileId?.split(":", 1)[0],
         sessionAuthProfileId: authProfileId,
         config: params.config,

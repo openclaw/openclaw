@@ -21,10 +21,7 @@ import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { isRecoverableNativeHarnessBindingFailure } from "../harness/compaction-recovery.js";
-import {
-  maybeCompactAgentHarnessSession,
-  resolveAgentHarnessPolicy,
-} from "../harness/selection.js";
+import { maybeCompactAgentHarnessSession } from "../harness/selection.js";
 import { resolveContextConfigProviderForRuntime } from "../openai-codex-routing.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import { DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON } from "./compact-reasons.js";
@@ -169,29 +166,13 @@ export async function compactEmbeddedAgentSession(
     agentDir,
     workspaceDir: resolvedWorkspaceDir,
   });
-  const preliminaryCompactionTarget = resolveEmbeddedCompactionTarget({
-    config: params.config,
-    provider: params.provider,
-    modelId: params.model,
-    authProfileId: params.authProfileId,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
-  });
-  const preliminaryProvider = preliminaryCompactionTarget.provider ?? DEFAULT_PROVIDER;
-  const preliminaryModelId = preliminaryCompactionTarget.model ?? DEFAULT_MODEL;
-  const ceHarnessPolicy = resolveAgentHarnessPolicy({
-    provider: preliminaryProvider,
-    modelId: preliminaryModelId,
-    config: params.config,
-    agentId: agentIds.sessionAgentId,
-    sessionKey: params.sessionKey,
-  });
+  const selectedHarnessRuntime = params.agentHarnessId;
   const resolvedCompactionTarget = resolveEmbeddedCompactionTarget({
     config: params.config,
     provider: params.provider,
     modelId: params.model,
     authProfileId: params.authProfileId,
-    harnessRuntime: params.agentHarnessId ?? ceHarnessPolicy.runtime,
+    harnessRuntime: selectedHarnessRuntime,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
@@ -211,7 +192,7 @@ export async function compactEmbeddedAgentSession(
         cfg: params.config,
         provider: resolveContextConfigProviderForRuntime({
           provider: ceProvider,
-          runtimeId: params.agentHarnessId ?? ceHarnessPolicy.runtime,
+          runtimeId: selectedHarnessRuntime,
         }),
         modelId: ceModelId,
         modelContextTokens: readAgentModelContextTokens(ceModel),
@@ -227,7 +208,7 @@ export async function compactEmbeddedAgentSession(
   const contextEngineRuntimeContext = buildCompactionContextEngineRuntimeContext({
     params,
     agentDir,
-    harnessRuntime: params.agentHarnessId ?? ceHarnessPolicy.runtime,
+    harnessRuntime: selectedHarnessRuntime,
     contextTokenBudget,
     contextEnginePluginId: resolveContextEngineOwnerPluginId(contextEngine),
   });
