@@ -1705,6 +1705,7 @@
     "test:docker:live-codex-harness": "bash scripts/test-live-codex-harness-docker.sh",
     "test:docker:live-codex-media-path": "OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key OPENCLAW_LIVE_CODEX_HARNESS_CHAT_IMAGE_PROBE=1 OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE=0 OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE=0 OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_PROBE=0 OPENCLAW_LIVE_CODEX_HARNESS_GUARDIAN_PROBE=0 bash scripts/test-live-codex-harness-docker.sh",
     "test:docker:live-codex-npm-plugin": "bash scripts/e2e/codex-npm-plugin-live-docker.sh",
+    "test:docker:live-code-mode": "bash scripts/repro/code-mode-namespace-live-docker.sh",
     "test:docker:live-plugin-tool": "bash scripts/e2e/live-plugin-tool-docker.sh",
     "test:docker:live-subagent-announce": "bash scripts/test-live-subagent-announce-docker.sh",
     "test:docker:live-gateway": "bash scripts/test-live-gateway-models-docker.sh",

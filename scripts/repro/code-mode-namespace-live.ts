@@ -325,12 +325,13 @@ function registerFictionNamespace(service: FictionService): void {
 }
 
 function createModel(modelId: string): Model<"openai-responses"> {
+  const baseUrl = process.env.OPENAI_BASE_URL?.trim() || "https://api.openai.com/v1";
   return {
     id: modelId,
     name: modelId,
     api: "openai-responses",
     provider: "openai",
-    baseUrl: "https://api.openai.com/v1",
+    baseUrl,
     reasoning: modelId.startsWith("gpt-5"),
     input: ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
