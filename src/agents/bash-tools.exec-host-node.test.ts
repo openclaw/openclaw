@@ -118,6 +118,7 @@ const detectInterpreterInlineEvalArgvMock = vi.hoisted(() =>
     } | null => null,
   ),
 );
+const logWarnMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../infra/exec-approvals.js", () => ({
   evaluateShellAllowlist: evaluateShellAllowlistMock,
@@ -179,6 +180,7 @@ vi.mock("./tools/nodes-utils.js", () => ({
 
 vi.mock("../logger.js", () => ({
   logInfo: vi.fn(),
+  logWarn: logWarnMock,
 }));
 
 let executeNodeHostCommand: typeof import("./bash-tools.exec-host-node.js").executeNodeHostCommand;
@@ -374,6 +376,7 @@ describe("executeNodeHostCommand", () => {
     detectInterpreterInlineEvalArgvMock.mockReset();
     detectInterpreterInlineEvalArgvMock.mockReturnValue(null);
     registerExecApprovalRequestForHostOrThrowMock.mockReset();
+    logWarnMock.mockReset();
   });
 
   it("forwards prepared systemRunPlan on async node invoke after approval", async () => {
@@ -1963,6 +1966,10 @@ describe("executeNodeHostCommand", () => {
       host: "node",
       nodeId: "node-1",
     });
+    expect(logWarnMock).toHaveBeenCalledWith(
+      expect.stringContaining("exec denylist: denied command"),
+    );
+    expect(logWarnMock).toHaveBeenCalledWith(expect.stringContaining("host=node"));
     expect(registerExecApprovalRequestForHostOrThrowMock).not.toHaveBeenCalled();
     expect(requireGatewayCommand("system.run.prepare")).toBeDefined();
     expect(
@@ -2012,6 +2019,10 @@ describe("executeNodeHostCommand", () => {
       host: "node",
       nodeId: "node-1",
     });
+    expect(logWarnMock).toHaveBeenCalledWith(
+      expect.stringContaining("exec denylist: denied command"),
+    );
+    expect(logWarnMock).toHaveBeenCalledWith(expect.stringContaining("host=node"));
     expect(callGatewayToolMock).not.toHaveBeenCalled();
     expect(registerExecApprovalRequestForHostOrThrowMock).not.toHaveBeenCalled();
   });
