@@ -17,6 +17,7 @@ const FILE_TOKEN = "proof-file-token";
 const MANUAL_EXEC_TOKEN = "proof-manual-exec-token";
 const PLUGIN_EXEC_TOKEN = "proof-plugin-exec-token";
 const OPENAI_PROFILE = "openai:secretref-proof";
+const OPENAI_LIVE_PROOF_MODEL = "openai/gpt-5.5";
 const COMMAND_TIMEOUT_MS = readPositiveInt(process.env.OPENCLAW_SECRET_PROOF_COMMAND_MS, 120000);
 const READY_TIMEOUT_MS = readPositiveInt(process.env.OPENCLAW_SECRET_PROOF_READY_MS, 120000);
 const RPC_TIMEOUT_MS = readPositiveInt(process.env.OPENCLAW_SECRET_PROOF_RPC_MS, 15000);
@@ -1179,7 +1180,10 @@ async function p12OpenAiLiveProof() {
     "p12",
     async (envCtx, _plugin, storePath) => {
       const port = await allocatePort();
-      writeJson(envCtx.env.OPENCLAW_CONFIG_PATH, baseConfig(port));
+      writeJson(
+        envCtx.env.OPENCLAW_CONFIG_PATH,
+        baseConfig(port, { agents: { defaults: { model: OPENAI_LIVE_PROOF_MODEL } } }),
+      );
       const authPath = path.join(envCtx.stateDir, "agents", "main", "agent", "auth-profiles.json");
       writeJson(authPath, {
         version: 1,
