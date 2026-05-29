@@ -201,6 +201,63 @@ describe("comfy image-generation provider", () => {
     });
   });
 
+  it("rejects generated image downloads that exceed the configured media cap", async () => {
+    setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce({
+        response: new Response(JSON.stringify({ prompt_id: "local-prompt-1" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+        release: vi.fn(async () => {}),
+      })
+      .mockResolvedValueOnce({
+        response: new Response(
+          JSON.stringify({
+            "local-prompt-1": {
+              outputs: {
+                "9": {
+                  images: [{ filename: "generated.png", subfolder: "", type: "output" }],
+                },
+              },
+            },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+        release: vi.fn(async () => {}),
+      })
+      .mockResolvedValueOnce({
+        response: new Response(Buffer.from("too-large"), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+        release: vi.fn(async () => {}),
+      });
+
+    const provider = buildComfyImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "comfy",
+        model: "workflow",
+        prompt: "draw a lobster",
+        cfg: {
+          ...buildComfyConfig({
+            workflow: {
+              "6": { inputs: { text: "" } },
+              "9": { inputs: {} },
+            },
+            promptNodeId: "6",
+            outputNodeId: "9",
+          }),
+          agents: { defaults: { mediaMaxMb: 0.000001 } },
+        } as never,
+      }),
+    ).rejects.toThrow("Comfy image output download exceeds 1 bytes");
+  });
+
   it("reports malformed local workflow submit JSON as a provider error", async () => {
     setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
     const release = vi.fn(async () => {});

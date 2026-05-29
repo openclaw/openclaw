@@ -95,12 +95,46 @@ describe("GitHub Copilot OAuth model policy", () => {
     );
   });
 
+  it("rejects unsafe device code lifetimes", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            '{"device_code":"device-code","user_code":"ABCD-1234","verification_uri":"https://github.com/login/device","interval":0,"expires_in":1e309}',
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+      ),
+    );
+
+    await expect(testing.startDeviceFlow("github.com")).rejects.toThrow(
+      "Invalid device code response fields",
+    );
+  });
+
   it("times out token refresh requests", async () => {
     stubHangingFetch(5);
 
     await expect(
       refreshGitHubCopilotToken("refresh-token", undefined, { timeoutMs: 5 }),
     ).rejects.toThrow("GitHub Copilot token refresh request timed out after 5ms");
+  });
+
+  it("rejects unsafe Copilot token expiry values", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response('{"token":"copilot-token","expires_at":1e309}', {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+      ),
+    );
+
+    await expect(refreshGitHubCopilotToken("refresh-token")).rejects.toThrow(
+      "Invalid Copilot token response fields",
+    );
   });
 
   it("treats timed out model listing as optional policy setup", async () => {

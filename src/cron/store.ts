@@ -84,6 +84,27 @@ type CronStateFile = {
   jobs: Record<string, CronStateFileEntry>;
 };
 
+function parseCronStateFile(raw: string): CronStateFile | null {
+  try {
+    const parsed = parseJsonWithJson5Fallback(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return null;
+    }
+    const record = parsed as Record<string, unknown>;
+    if (
+      record.version !== 1 ||
+      typeof record.jobs !== "object" ||
+      record.jobs === null ||
+      Array.isArray(record.jobs)
+    ) {
+      return null;
+    }
+    return { version: 1, jobs: record.jobs as Record<string, CronStateFileEntry> };
+  } catch {
+    return null;
+  }
+}
+
 function normalizeCronStoreFile(parsed: unknown): CronStoreFile {
   const rawJobs = getRawCronJobs(parsed);
   return {
@@ -153,25 +174,7 @@ async function loadStateFile(statePath: string): Promise<CronStateFile | null> {
     });
   }
 
-  try {
-    const parsed = parseJsonWithJson5Fallback(raw);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return null;
-    }
-    const record = parsed as Record<string, unknown>;
-    if (
-      record.version !== 1 ||
-      typeof record.jobs !== "object" ||
-      record.jobs === null ||
-      Array.isArray(record.jobs)
-    ) {
-      return null;
-    }
-    return { version: 1, jobs: record.jobs as Record<string, CronStateFileEntry> };
-  } catch {
-    // Best-effort: if state file is corrupt, treat as absent.
-    return null;
-  }
+  return parseCronStateFile(raw);
 }
 
 function loadStateFileSync(statePath: string): CronStateFile | null {
@@ -187,24 +190,7 @@ function loadStateFileSync(statePath: string): CronStateFile | null {
     });
   }
 
-  try {
-    const parsed = parseJsonWithJson5Fallback(raw);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return null;
-    }
-    const record = parsed as Record<string, unknown>;
-    if (
-      record.version !== 1 ||
-      typeof record.jobs !== "object" ||
-      record.jobs === null ||
-      Array.isArray(record.jobs)
-    ) {
-      return null;
-    }
-    return { version: 1, jobs: record.jobs as Record<string, CronStateFileEntry> };
-  } catch {
-    return null;
-  }
+  return parseCronStateFile(raw);
 }
 
 function hasInlineState(jobs: Array<Record<string, unknown> | null | undefined>): boolean {

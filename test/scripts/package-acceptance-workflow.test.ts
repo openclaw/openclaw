@@ -1386,6 +1386,16 @@ describe("package artifact reuse", () => {
     expect(pluginNpmWorkflow).toContain("Validate release publish approval run");
     expect(clawHubWorkflow).toContain("Validate release publish approval run");
     expect(openclawNpmWorkflow).toContain("Validate release publish approval run");
+    expect(pluginNpmWorkflow).toContain("Check npm package version");
+    expect(pluginNpmWorkflow).toContain("already_published=true");
+    expect(pluginNpmWorkflow).toContain(
+      "steps.npm_package_version.outputs.already_published != 'true'",
+    );
+    expect(clawHubWorkflow).toContain("Check ClawHub package version");
+    expect(clawHubWorkflow).toContain("already_published=true");
+    expect(clawHubWorkflow).toContain(
+      "steps.clawhub_package_version.outputs.already_published != 'true'",
+    );
     expect(pluginNpmWorkflow).toContain("Direct Plugin NPM Release dispatch");
     expect(clawHubWorkflow).toContain("Direct Plugin ClawHub Release dispatch");
     expect(openclawNpmWorkflow).toContain("Direct OpenClaw npm publish");

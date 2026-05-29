@@ -39,15 +39,15 @@ import {
   resolveApnsRelayConfigFromEnv,
 } from "../../infra/push-apns.js";
 import {
-  recordRemoteNodeInfo,
-  refreshRemoteNodeBins,
-  removeRemoteNodeInfo,
-} from "../../infra/skills-remote.js";
-import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
 import { normalizeUniqueTrimmedStringList } from "../../shared/string-normalization.js";
+import {
+  recordRemoteNodeInfo,
+  refreshRemoteNodeBins,
+  removeRemoteNodeInfo,
+} from "../../skills/runtime/remote.js";
 import { createKnownNodeCatalog, getKnownNode, listKnownNodes } from "../node-catalog.js";
 import {
   isForegroundRestrictedPluginNodeCommand,

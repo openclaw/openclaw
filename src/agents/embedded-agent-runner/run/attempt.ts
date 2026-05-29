@@ -52,6 +52,12 @@ import { getPluginToolMeta } from "../../../plugins/tools.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../../sessions/input-provenance.js";
 import { normalizeOptionalString } from "../../../shared/string-coerce.js";
+import { resolveSkillsPromptForRun } from "../../../skills/loading/workspace.js";
+import { resolveEmbeddedRunSkillEntries } from "../../../skills/runtime/embedded-run-entries.js";
+import {
+  applySkillEnvOverrides,
+  applySkillEnvOverridesFromSnapshot,
+} from "../../../skills/runtime/env-overrides.js";
 import {
   buildTrajectoryArtifacts,
   buildTrajectoryRunMetadata,
@@ -160,11 +166,6 @@ import { sanitizeToolUseResultPairing } from "../../session-transcript-repair.js
 import { acquireSessionWriteLock } from "../../session-write-lock.js";
 import { createAgentSession, SessionManager } from "../../sessions/index.js";
 import { detectRuntimeShell } from "../../shell-utils.js";
-import {
-  applySkillEnvOverrides,
-  applySkillEnvOverridesFromSnapshot,
-  resolveSkillsPromptForRun,
-} from "../../skills.js";
 import { buildActiveSubagentSystemPromptAddition } from "../../subagent-active-context.js";
 import {
   isSubagentEnvelopeSession,
@@ -237,7 +238,6 @@ import {
 import { buildEmbeddedSandboxInfo, resolveEmbeddedSandboxInfoExecPolicy } from "../sandbox-info.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "../session-manager-cache.js";
 import { prepareSessionManagerForRun } from "../session-manager-init.js";
-import { resolveEmbeddedRunSkillEntries } from "../skills-runtime.js";
 import {
   describeEmbeddedAgentStreamStrategy,
   resetEmbeddedAgentBaseStreamFnCacheForTest,

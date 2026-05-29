@@ -234,10 +234,6 @@ vi.mock("../infra/outbound/session-context.js", () => ({
   buildOutboundSessionContext: () => ({}),
 }));
 
-vi.mock("../infra/skills-remote.js", () => ({
-  getRemoteSkillEligibility: () => ({ eligible: false }),
-}));
-
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => {
     const logger = {
@@ -596,18 +592,52 @@ vi.mock("./provider-auth-aliases.js", () => ({
     provider.trim().toLowerCase() === "codex-cli" ? "openai-codex" : provider.trim().toLowerCase(),
 }));
 
-vi.mock("./skills.js", () => ({
-  buildWorkspaceSkillSnapshot: (workspaceDir: string, opts: unknown) =>
-    state.buildWorkspaceSkillSnapshotMock(workspaceDir, opts),
+vi.mock("../skills/discovery/agent-filter.js", () => ({
+  resolveEffectiveAgentSkillFilter: (_cfg: unknown, agentId: string) =>
+    state.resolveAgentSkillsFilterMock(_cfg, agentId),
 }));
 
-vi.mock("./skills/filter.js", () => ({
-  matchesSkillFilter: () => true,
+vi.mock("../skills/runtime/remote.js", () => ({
+  getRemoteSkillEligibility: () => ({ eligible: false }),
 }));
 
-vi.mock("./skills/refresh-state.js", () => ({
-  getSkillsSnapshotVersion: () => 0,
-  shouldRefreshSnapshotForVersion: () => false,
+vi.mock("../skills/runtime/session-snapshot.js", () => ({
+  resolveReusableWorkspaceSkillSnapshot: (params: {
+    workspaceDir: string;
+    existingSnapshot?: { resolvedSkills?: unknown };
+    skillFilter?: string[];
+  }) => {
+    if (params.skillFilter !== undefined && params.skillFilter.length === 0) {
+      return {
+        snapshot: {
+          prompt: "",
+          skills: [],
+          resolvedSkills: [],
+          skillFilter: params.skillFilter,
+          version: 0,
+        },
+        shouldRefresh: !params.existingSnapshot,
+        snapshotVersion: 0,
+      };
+    }
+    if (params.existingSnapshot?.resolvedSkills !== undefined) {
+      return {
+        snapshot: params.existingSnapshot,
+        shouldRefresh: false,
+        snapshotVersion: 0,
+      };
+    }
+    const rebuilt = state.buildWorkspaceSkillSnapshotMock(params.workspaceDir, params) as {
+      resolvedSkills?: unknown;
+    };
+    return {
+      snapshot: params.existingSnapshot
+        ? { ...params.existingSnapshot, resolvedSkills: rebuilt?.resolvedSkills }
+        : rebuilt,
+      shouldRefresh: !params.existingSnapshot,
+      snapshotVersion: 0,
+    };
+  },
 }));
 
 vi.mock("./spawned-context.js", () => ({

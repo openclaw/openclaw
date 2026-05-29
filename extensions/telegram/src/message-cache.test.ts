@@ -445,6 +445,46 @@ describe("telegram message cache", () => {
     expect(recent).toEqual([]);
   });
 
+  it("drops unsafe Telegram thread ids from live messages", async () => {
+    const { bucketKey, entries, store } = createMemoryPersistentStore();
+    const cache = createTelegramMessageCache({ bucketKey, persistentStore: store });
+    await cache.record({
+      accountId: "default",
+      chatId: 7,
+      msg: {
+        chat: { id: 7, type: "supergroup", title: "Ops" },
+        message_id: 9127,
+        message_thread_id: Number.MAX_SAFE_INTEGER + 1,
+        date: 1736389127,
+        text: "Unsafe topic message",
+        from: { id: 1, is_bot: false, first_name: "Nora" },
+      } as Message,
+    });
+
+    const persistedValue = entries.values().next().value;
+    if (persistedValue === undefined) {
+      throw new Error("expected persisted Telegram message cache value");
+    }
+    expect(persistedValue.threadId).toBeUndefined();
+
+    const topicRecent = await cache.recentBefore({
+      accountId: "default",
+      chatId: 7,
+      threadId: Number.MAX_SAFE_INTEGER + 1,
+      messageId: "9128",
+      limit: 10,
+    });
+    const unscopedRecent = await cache.recentBefore({
+      accountId: "default",
+      chatId: 7,
+      messageId: "9128",
+      limit: 10,
+    });
+
+    expect(topicRecent).toEqual([]);
+    expect(unscopedRecent.map((entry) => entry.messageId)).toEqual(["9127"]);
+  });
+
   it("does not use unsafe message ids as recent-before cutoffs", async () => {
     const cache = createTelegramMessageCache();
     await cache.record({

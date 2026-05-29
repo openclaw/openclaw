@@ -3,8 +3,12 @@ import {
   asFiniteNumber,
   asFiniteNumberInRange,
   asSafeIntegerInRange,
+  nonNegativeSecondsToSafeMilliseconds,
   parseFiniteNumber,
+  positiveSecondsToSafeMilliseconds,
   resolveIntegerOption,
+  resolveExpiresAtMsFromDurationSeconds,
+  resolveExpiresAtMsFromEpochSeconds,
   resolveNonNegativeIntegerOption,
   resolveOptionalIntegerOption,
   parseStrictFiniteNumber,
@@ -67,6 +71,33 @@ describe("number-coercion", () => {
     expect(parseStrictPositiveInteger("0")).toBeUndefined();
     expect(parseStrictNonNegativeInteger("0")).toBe(0);
     expect(parseStrictNonNegativeInteger("-1")).toBeUndefined();
+  });
+
+  test("seconds helpers reject unsafe millisecond values", () => {
+    expect(positiveSecondsToSafeMilliseconds("10")).toBe(10_000);
+    expect(positiveSecondsToSafeMilliseconds("0")).toBeUndefined();
+    expect(positiveSecondsToSafeMilliseconds("1e309")).toBeUndefined();
+    expect(nonNegativeSecondsToSafeMilliseconds("0")).toBe(0);
+    expect(nonNegativeSecondsToSafeMilliseconds("-1")).toBeUndefined();
+  });
+
+  test("expiry helpers resolve safe absolute timestamps", () => {
+    expect(
+      resolveExpiresAtMsFromDurationSeconds("3600", {
+        nowMs: 1_000,
+        bufferMs: 300,
+      }),
+    ).toBe(3_600_700);
+    expect(
+      resolveExpiresAtMsFromDurationSeconds("10", {
+        nowMs: 1_000,
+        bufferMs: 20_000,
+        minRemainingMs: 30_000,
+      }),
+    ).toBe(31_000);
+    expect(resolveExpiresAtMsFromDurationSeconds("1e309", { nowMs: 1_000 })).toBeUndefined();
+    expect(resolveExpiresAtMsFromEpochSeconds("3600", { bufferMs: 300 })).toBe(3_599_700);
+    expect(resolveExpiresAtMsFromEpochSeconds("1e309")).toBeUndefined();
   });
 
   test("integer option helpers floor finite values and fall back for non-finite values", () => {

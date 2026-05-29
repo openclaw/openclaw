@@ -2,10 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import type { Message } from "grammy/types";
 import { formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
-import {
-  parseStrictNonNegativeInteger,
-  parseStrictPositiveInteger,
-} from "openclaw/plugin-sdk/number-runtime";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { appendRegularFileSync, replaceFileAtomicSync } from "openclaw/plugin-sdk/security-runtime";
@@ -17,6 +14,7 @@ import {
   getTelegramTextParts,
   normalizeForwardedContext,
 } from "./bot/helpers.js";
+import { parseTelegramMessageThreadId } from "./outbound-params.js";
 import { getOptionalTelegramRuntime } from "./runtime.js";
 
 export type TelegramReplyChainEntry = NonNullable<MsgContext["ReplyChain"]>[number];
@@ -166,6 +164,7 @@ function normalizeMessageNode(
   const forwardedFrom = normalizeForwardedContext(msg);
   const replyMessage = resolveReplyMessage(msg);
   const body = resolveMessageBody(msg);
+  const threadId = normalizeTelegramCacheThreadId(params.threadId);
   return {
     sourceMessage: msg,
     messageId: String(msg.message_id),
@@ -181,7 +180,7 @@ function normalizeMessageNode(
     ...(forwardedFrom?.fromId ? { forwardedFromId: forwardedFrom.fromId } : {}),
     ...(forwardedFrom?.fromUsername ? { forwardedFromUsername: forwardedFrom.fromUsername } : {}),
     ...(forwardedFrom?.date ? { forwardedDate: forwardedFrom.date * 1000 } : {}),
-    ...(params.threadId != null ? { threadId: String(params.threadId) } : {}),
+    ...(threadId !== undefined ? { threadId: String(threadId) } : {}),
   };
 }
 
@@ -198,9 +197,7 @@ function normalizeRequiredMessageNode(
 
 function resolveMessageThreadId(msg: Message): number | undefined {
   const threadId = (msg as { message_thread_id?: unknown }).message_thread_id;
-  return typeof threadId === "number" && Number.isFinite(threadId)
-    ? Math.trunc(threadId)
-    : undefined;
+  return normalizeTelegramCacheThreadId(threadId);
 }
 
 function normalizeMessageNodes(
@@ -246,7 +243,11 @@ function parseSafeMessageId(value: string | undefined): number | undefined {
 }
 
 function parseCachedThreadId(value: unknown): number | undefined {
-  return parseStrictNonNegativeInteger(value);
+  return normalizeTelegramCacheThreadId(value);
+}
+
+function normalizeTelegramCacheThreadId(value: unknown): number | undefined {
+  return parseTelegramMessageThreadId(value);
 }
 
 function isTelegramSourceMessage(value: unknown): value is Message {
@@ -754,7 +755,11 @@ export function createTelegramMessageCache(params?: {
   }) => {
     await hydrateMessageCacheBucket(bucket, maxMessages, scopeKey);
     const prefix = telegramMessageCacheKeyPrefix({ scopeKey, ...params });
-    const threadId = params.threadId != null ? String(params.threadId) : undefined;
+    const normalizedThreadId = normalizeTelegramCacheThreadId(params.threadId);
+    if (params.threadId != null && normalizedThreadId === undefined) {
+      return [];
+    }
+    const threadId = normalizedThreadId !== undefined ? String(normalizedThreadId) : undefined;
     return Array.from(messages, ([key, node]) => ({ key, node }))
       .filter(({ key, node }) => {
         if (!key.startsWith(prefix)) {

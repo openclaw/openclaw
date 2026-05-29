@@ -379,13 +379,16 @@ vi.mock("../../bootstrap-files.js", async () => {
   };
 });
 
-vi.mock("../../skills.js", () => ({
+vi.mock("../../../skills/runtime/env-overrides.js", () => ({
   applySkillEnvOverrides: () => () => {},
   applySkillEnvOverridesFromSnapshot: () => () => {},
+}));
+
+vi.mock("../../../skills/loading/workspace.js", () => ({
   resolveSkillsPromptForRun: (...args: unknown[]) => hoisted.resolveSkillsPromptForRunMock(...args),
 }));
 
-vi.mock("../skills-runtime.js", () => ({
+vi.mock("../../../skills/runtime/embedded-run-entries.js", () => ({
   resolveEmbeddedRunSkillEntries: (...args: unknown[]) =>
     hoisted.resolveEmbeddedRunSkillEntriesMock(...args),
 }));

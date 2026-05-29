@@ -1,9 +1,9 @@
 import crypto from "node:crypto";
-import type { Skill } from "../../agents/skills/skill-contract.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import type { Skill } from "../../skills/loading/skill-contract.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { TtsAutoMode } from "../types.tts.js";
 
@@ -628,7 +628,7 @@ export type SessionSkillSnapshot = {
    * each SKILL.md body) so the embedded runner can skip a workspace skill
    * scan within a turn. Stripped from sessions.json on every read and write
    * via normalizeSessionStore — see store-load.ts. On a cold session resume
-   * this is undefined and src/agents/embedded-agent-runner/skills-runtime.ts
+   * this is undefined and src/skills/runtime/embedded-run-entries.ts
    * rebuilds it by reloading skill entries from disk.
    */
   resolvedSkills?: Skill[];

@@ -11,11 +11,12 @@ import type {
   SpeechProviderOverrides,
   SpeechProviderPlugin,
 } from "openclaw/plugin-sdk/speech-core";
-import { asObject, trimToUndefined } from "openclaw/plugin-sdk/speech-core";
 import {
-  asFiniteNumberInRange,
-  parseStrictFiniteNumber,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+  asObject,
+  parseSpeechDirectiveNumberOverride,
+  trimToUndefined,
+} from "openclaw/plugin-sdk/speech-core";
+import { asFiniteNumberInRange } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   DEFAULT_MINIMAX_TTS_BASE_URL,
   MINIMAX_TTS_MODELS,
@@ -131,10 +132,6 @@ function normalizeMinimaxPitch(value: unknown): number | undefined {
   return pitch !== undefined ? Math.trunc(pitch) : undefined;
 }
 
-function parseDirectiveFiniteNumber(value: string): number | undefined {
-  return parseStrictFiniteNumber(value);
-}
-
 function readMinimaxProviderConfig(
   config: SpeechProviderConfig,
   cfg?: OpenClawConfig,
@@ -189,38 +186,29 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
       }
       return { handled: true, overrides: { model: ctx.value } };
     case "speed": {
-      if (!ctx.policy.allowVoiceSettings) {
-        return { handled: true };
-      }
-      const speed = parseDirectiveFiniteNumber(ctx.value);
-      if (speed === undefined || speed < 0.5 || speed > 2.0) {
-        return { handled: true, warnings: [`invalid MiniMax speed "${ctx.value}" (0.5-2.0)`] };
-      }
-      return { handled: true, overrides: { speed } };
+      return parseSpeechDirectiveNumberOverride({
+        ctx,
+        overrideKey: "speed",
+        range: { min: 0.5, max: 2 },
+        warning: (value) => `invalid MiniMax speed "${value}" (0.5-2.0)`,
+      });
     }
     case "vol":
     case "volume": {
-      if (!ctx.policy.allowVoiceSettings) {
-        return { handled: true };
-      }
-      const vol = parseDirectiveFiniteNumber(ctx.value);
-      if (vol === undefined || vol <= 0 || vol > 10) {
-        return {
-          handled: true,
-          warnings: [`invalid MiniMax volume "${ctx.value}" (0-10, exclusive)`],
-        };
-      }
-      return { handled: true, overrides: { vol } };
+      return parseSpeechDirectiveNumberOverride({
+        ctx,
+        overrideKey: "vol",
+        range: { min: 0, minExclusive: true, max: 10 },
+        warning: (value) => `invalid MiniMax volume "${value}" (0-10, exclusive)`,
+      });
     }
     case "pitch": {
-      if (!ctx.policy.allowVoiceSettings) {
-        return { handled: true };
-      }
-      const pitch = parseDirectiveFiniteNumber(ctx.value);
-      if (pitch === undefined || pitch < -12 || pitch > 12) {
-        return { handled: true, warnings: [`invalid MiniMax pitch "${ctx.value}" (-12 to 12)`] };
-      }
-      return { handled: true, overrides: { pitch } };
+      return parseSpeechDirectiveNumberOverride({
+        ctx,
+        overrideKey: "pitch",
+        range: { min: -12, max: 12 },
+        warning: (value) => `invalid MiniMax pitch "${value}" (-12 to 12)`,
+      });
     }
     default:
       return { handled: false };

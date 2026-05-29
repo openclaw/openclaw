@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../utils/timer-delay.js";
 
 type StrictInlineEvalBoundary =
   typeof import("./bash-tools.exec-host-shared.js").enforceStrictInlineEvalApprovalBoundary;
@@ -1212,6 +1213,45 @@ describe("executeNodeHostCommand", () => {
     });
 
     expectSystemRunInvoke({ invokeTimeoutMs: 17_000, runTimeoutMs: 12_000 });
+  });
+
+  it("normalizes unsafe explicit timeouts before invoking node system.run", async () => {
+    await executeNodeHostCommand({
+      command: "bun ./script.ts",
+      workdir: "/tmp/work",
+      env: {},
+      security: "full",
+      ask: "off",
+      timeoutSec: Number.POSITIVE_INFINITY,
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+      agentId: "requested-agent",
+      sessionKey: "requested-session",
+    });
+
+    expectSystemRunInvoke({ invokeTimeoutMs: 35_000, runTimeoutMs: 30_000 });
+
+    callGatewayToolMock.mockClear();
+
+    await executeNodeHostCommand({
+      command: "bun ./script.ts",
+      workdir: "/tmp/work",
+      env: {},
+      security: "full",
+      ask: "off",
+      timeoutSec: 3_000_000,
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+      agentId: "requested-agent",
+      sessionKey: "requested-session",
+    });
+
+    expectSystemRunInvoke({
+      invokeTimeoutMs: MAX_SAFE_TIMEOUT_DELAY_MS,
+      runTimeoutMs: MAX_SAFE_TIMEOUT_DELAY_MS,
+    });
   });
 
   it("forwards timeout zero to node system.run and keeps the invoke wait bounded", async () => {

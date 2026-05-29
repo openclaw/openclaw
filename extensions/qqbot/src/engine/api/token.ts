@@ -6,14 +6,13 @@
  * globals, fully supporting multi-account concurrent operation.
  */
 
-import {
-  fetchWithSsrFGuard,
-  ssrfPolicyFromHttpBaseUrlAllowedHostname,
-} from "openclaw/plugin-sdk/ssrf-runtime";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { EngineLogger } from "../types.js";
 import { formatErrorMessage } from "../utils/format.js";
 
 const TOKEN_URL = "https://bots.qq.com/app/getAppAccessToken";
+const DEFAULT_TOKEN_EXPIRES_IN_SECONDS = 7200;
 
 interface CachedToken {
   token: string;
@@ -26,6 +25,17 @@ interface BackgroundRefreshOptions {
   randomOffsetMs?: number;
   minRefreshIntervalMs?: number;
   retryDelayMs?: number;
+}
+
+function resolveTokenExpiresInSeconds(value: unknown): number {
+  const parsed = parseStrictPositiveInteger(value);
+  if (parsed !== undefined) {
+    return parsed;
+  }
+  if (value == null || (typeof value === "number" && !Number.isFinite(value))) {
+    return DEFAULT_TOKEN_EXPIRES_IN_SECONDS;
+  }
+  return 0;
 }
 
 /**
@@ -210,10 +220,13 @@ export class TokenManager {
   private async doFetchToken(appId: string, clientSecret: string): Promise<string> {
     this.logger?.debug?.(`[qqbot:token:${appId}] >>> POST ${TOKEN_URL}`);
 
-    let guardedFetchResult: Awaited<ReturnType<typeof fetchWithSsrFGuard>>;
+    let response: Response;
+    let release: (() => Promise<void>) | undefined;
     try {
-      guardedFetchResult = await fetchWithSsrFGuard({
+      const guarded = await fetchWithSsrFGuard({
         url: TOKEN_URL,
+        auditContext: "qqbot-token",
+        capture: false,
         init: {
           method: "POST",
           headers: {
@@ -222,9 +235,9 @@ export class TokenManager {
           },
           body: JSON.stringify({ appId, clientSecret }),
         },
-        policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(TOKEN_URL),
-        auditContext: "qqbot.token",
       });
+      response = guarded.response;
+      release = guarded.release;
     } catch (err) {
       this.logger?.error?.(`[qqbot:token:${appId}] Network error: ${formatErrorMessage(err)}`);
       throw new Error(`Network error getting access_token: ${formatErrorMessage(err)}`, {
@@ -232,43 +245,44 @@ export class TokenManager {
       });
     }
 
-    const { response, release } = guardedFetchResult;
-    let rawBody: string;
     try {
       const traceId = response.headers.get("x-tps-trace-id") ?? "";
       this.logger?.debug?.(
         `[qqbot:token:${appId}] <<< ${response.status}${traceId ? ` | TraceId: ${traceId}` : ""}`,
       );
 
-      rawBody = await response.text();
-    } catch (err) {
-      throw new Error(`Failed to read access_token response: ${formatErrorMessage(err)}`, {
-        cause: err,
-      });
+      let rawBody: string;
+      try {
+        rawBody = await response.text();
+      } catch (err) {
+        throw new Error(`Failed to read access_token response: ${formatErrorMessage(err)}`, {
+          cause: err,
+        });
+      }
+      const logBody = rawBody.replace(/"access_token"\s*:\s*"[^"]+"/g, '"access_token": "***"');
+      this.logger?.debug?.(`[qqbot:token:${appId}] <<< Body: ${logBody}`);
+
+      let data: { access_token?: string; expires_in?: unknown };
+      try {
+        data = JSON.parse(rawBody);
+      } catch {
+        throw new Error("QQBot access_token response was malformed JSON");
+      }
+
+      if (!data.access_token) {
+        throw new Error(`Failed to get access_token: ${JSON.stringify(data)}`);
+      }
+
+      const expiresAt = Date.now() + resolveTokenExpiresInSeconds(data.expires_in) * 1000;
+      this.cache.set(appId, { token: data.access_token, expiresAt, appId });
+      this.logger?.debug?.(
+        `[qqbot:token:${appId}] Cached, expires at: ${new Date(expiresAt).toISOString()}`,
+      );
+
+      return data.access_token;
     } finally {
-      await release();
+      await release?.();
     }
-    const logBody = rawBody.replace(/"access_token"\s*:\s*"[^"]+"/g, '"access_token": "***"');
-    this.logger?.debug?.(`[qqbot:token:${appId}] <<< Body: ${logBody}`);
-
-    let data: { access_token?: string; expires_in?: number };
-    try {
-      data = JSON.parse(rawBody);
-    } catch {
-      throw new Error("QQBot access_token response was malformed JSON");
-    }
-
-    if (!data.access_token) {
-      throw new Error(`Failed to get access_token: ${JSON.stringify(data)}`);
-    }
-
-    const expiresAt = Date.now() + (data.expires_in ?? 7200) * 1000;
-    this.cache.set(appId, { token: data.access_token, expiresAt, appId });
-    this.logger?.debug?.(
-      `[qqbot:token:${appId}] Cached, expires at: ${new Date(expiresAt).toISOString()}`,
-    );
-
-    return data.access_token;
   }
 
   private abortableSleep(ms: number, signal: AbortSignal): Promise<void> {

@@ -21,6 +21,7 @@ import {
 } from "../infra/system-run-approval-context.js";
 import { formatExecCommand, resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
 import { normalizeNullableString } from "../shared/string-coerce.js";
+import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
 import { renderExecOutputText } from "./bash-tools.exec-output.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
@@ -59,6 +60,30 @@ type NodeApprovalAnalysis = {
   requiresSecurityAuditSuppressionApproval: boolean;
   autoReviewArgv?: string[];
 };
+
+function resolveNodeRunTimeoutSec(
+  timeoutSec: number | null | undefined,
+  defaultTimeoutSec: number,
+): number {
+  return typeof timeoutSec === "number" && Number.isFinite(timeoutSec)
+    ? timeoutSec
+    : defaultTimeoutSec;
+}
+
+function resolveNodeInvokeTimeoutMs(runTimeoutSec: number, defaultTimeoutSec: number): number {
+  const baseTimeoutSec =
+    Number.isFinite(runTimeoutSec) && runTimeoutSec > 0 ? runTimeoutSec : defaultTimeoutSec;
+  if (!Number.isFinite(baseTimeoutSec) || baseTimeoutSec <= 0) {
+    return 10_000;
+  }
+  return Math.max(10_000, resolveSafeTimeoutDelayMs(baseTimeoutSec * 1000 + 5_000));
+}
+
+function resolveNodeRunTimeoutMs(runTimeoutSec: number): number {
+  return Number.isFinite(runTimeoutSec) && runTimeoutSec > 0
+    ? resolveSafeTimeoutDelayMs(runTimeoutSec * 1000, { minMs: 0 })
+    : 0;
+}
 
 export function shouldSkipNodeApprovalPrepare(params: {
   hostSecurity: ExecSecurity;
@@ -142,15 +167,13 @@ export async function resolveNodeExecutionTarget(
     );
   }
 
-  const runTimeoutSec =
-    typeof params.timeoutSec === "number" ? params.timeoutSec : params.defaultTimeoutSec;
-  const invokeBaseTimeoutSec = runTimeoutSec > 0 ? runTimeoutSec : params.defaultTimeoutSec;
+  const runTimeoutSec = resolveNodeRunTimeoutSec(params.timeoutSec, params.defaultTimeoutSec);
   return {
     nodeId,
     platform: nodeInfo?.platform,
     argv: buildNodeShellCommand(params.command, nodeInfo?.platform),
     env: params.requestedEnv ? { ...params.requestedEnv } : undefined,
-    invokeTimeoutMs: Math.max(10_000, invokeBaseTimeoutSec * 1000 + 5_000),
+    invokeTimeoutMs: resolveNodeInvokeTimeoutMs(runTimeoutSec, params.defaultTimeoutSec),
     runTimeoutSec,
     supportsSystemRunPrepare: declaredCommands.includes("system.run.prepare"),
   };
@@ -174,8 +197,7 @@ export function buildNodeSystemRunInvoke(params: {
   notifyOnExit?: boolean;
   systemRunPlan?: SystemRunApprovalPlan;
 }): Record<string, unknown> {
-  const timeoutMs =
-    params.target.runTimeoutSec > 0 ? Math.floor(params.target.runTimeoutSec * 1000) : 0;
+  const timeoutMs = resolveNodeRunTimeoutMs(params.target.runTimeoutSec);
   const runId = params.runId ?? crypto.randomUUID();
   return {
     nodeId: params.target.nodeId,

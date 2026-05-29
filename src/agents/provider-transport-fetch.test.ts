@@ -1040,6 +1040,23 @@ describe("buildGuardedModelFetch", () => {
       expect(response.headers.get("x-should-retry")).toBeNull();
     });
 
+    it("bypasses unsafe retry-after-ms numeric headers", async () => {
+      fetchWithSsrFGuardMock.mockResolvedValue({
+        response: new Response(null, {
+          status: 503,
+          headers: { "retry-after-ms": "9007199254740993" },
+        }),
+        finalUrl: "https://api.openai.com/v1/responses",
+        release: vi.fn(async () => undefined),
+      });
+      const response = await buildGuardedModelFetch(openaiModel)(
+        "https://api.openai.com/v1/responses",
+        { method: "POST" },
+      );
+
+      expect(response.headers.get("x-should-retry")).toBe("false");
+    });
+
     it("falls back to retry-after when retry-after-ms is blank", async () => {
       fetchWithSsrFGuardMock.mockResolvedValue({
         response: new Response(null, {
@@ -1193,6 +1210,24 @@ describe("buildGuardedModelFetch", () => {
       },
     );
 
+    it("ignores unsafe OPENCLAW_SDK_RETRY_MAX_WAIT_SECONDS values", async () => {
+      process.env.OPENCLAW_SDK_RETRY_MAX_WAIT_SECONDS = "9007199254740993";
+      fetchWithSsrFGuardMock.mockResolvedValue({
+        response: new Response(null, {
+          status: 429,
+          headers: { "retry-after": "30" },
+        }),
+        finalUrl: "https://api.anthropic.com/v1/messages",
+        release: vi.fn(async () => undefined),
+      });
+      const response = await buildGuardedModelFetch(anthropicModel)(
+        "https://api.anthropic.com/v1/messages",
+        { method: "POST" },
+      );
+
+      expect(response.headers.get("x-should-retry")).toBeNull();
+    });
+
     it("injects x-should-retry:false for terminal 429 responses without retry-after", async () => {
       fetchWithSsrFGuardMock.mockResolvedValue({
         response: new Response("Sorry, you've exceeded your weekly rate limit.", {
@@ -1264,7 +1299,7 @@ describe("buildGuardedModelFetch", () => {
       expect(response.headers.get("x-should-retry")).toBeNull();
     });
 
-    it.each(["soon", "1.5", "0x10"])(
+    it.each(["soon", "1.5", "0x10", "9007199254740993"])(
       "treats malformed 429 retry-after values as terminal: %s",
       async (retryAfter) => {
         fetchWithSsrFGuardMock.mockResolvedValue({

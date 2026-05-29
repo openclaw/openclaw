@@ -24,6 +24,7 @@ type FetchOptions = {
 };
 
 const DEFAULT_FETCH_TIMEOUT_MS = 30_000;
+const FETCH_RESPONSE_MAX_BYTES = 256 * 1024;
 
 const mask = (value: string) => {
   return maskIdentifier(
@@ -124,6 +125,93 @@ const withFetchTimeout = async <T>(
   }
 };
 
+const responseBodyTooLargeError = (label: string, maxBytes: number): Error =>
+  new Error(`${label} response body exceeded ${maxBytes} bytes`);
+
+const readResponseChunk = async (
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  label: string,
+  signal: AbortSignal,
+  markCanceled: () => void,
+): Promise<ReadableStreamReadResult<Uint8Array>> => {
+  if (signal.aborted) {
+    markCanceled();
+    await reader.cancel().catch(() => undefined);
+    throw signal.reason instanceof Error ? signal.reason : new Error(`${label} request aborted`);
+  }
+
+  let removeAbortListener: (() => void) | undefined;
+  const abortPromise = new Promise<ReadableStreamReadResult<Uint8Array>>((_resolve, reject) => {
+    const onAbort = () => {
+      markCanceled();
+      void reader.cancel().catch(() => undefined);
+      reject(
+        signal.reason instanceof Error ? signal.reason : new Error(`${label} request aborted`),
+      );
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    removeAbortListener = () => signal.removeEventListener("abort", onAbort);
+  });
+
+  try {
+    return await Promise.race([reader.read(), abortPromise]);
+  } finally {
+    removeAbortListener?.();
+  }
+};
+
+const readBoundedResponseText = async (
+  response: Response,
+  label: string,
+  signal: AbortSignal,
+  maxBytes = FETCH_RESPONSE_MAX_BYTES,
+): Promise<string> => {
+  const contentLength = Number(response.headers.get("content-length") ?? "");
+  if (Number.isSafeInteger(contentLength) && contentLength > maxBytes) {
+    await response.body?.cancel().catch(() => undefined);
+    throw responseBodyTooLargeError(label, maxBytes);
+  }
+
+  if (!response.body) {
+    return "";
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const chunks: string[] = [];
+  let totalBytes = 0;
+  let canceled = false;
+
+  try {
+    for (;;) {
+      const { done, value } = await readResponseChunk(reader, label, signal, () => {
+        canceled = true;
+      });
+      if (done) {
+        const tail = decoder.decode();
+        if (tail) {
+          chunks.push(tail);
+        }
+        break;
+      }
+
+      totalBytes += value.byteLength;
+      if (totalBytes > maxBytes) {
+        canceled = true;
+        await reader.cancel().catch(() => undefined);
+        throw responseBodyTooLargeError(label, maxBytes);
+      }
+      chunks.push(decoder.decode(value, { stream: true }));
+    }
+  } finally {
+    if (!canceled) {
+      reader.releaseLock();
+    }
+  }
+
+  return chunks.join("");
+};
+
 const fetchText = async (
   label: string,
   url: string,
@@ -134,7 +222,7 @@ const fetchText = async (
   const timeoutMs = options.timeoutMs ?? resolveFetchTimeoutMs();
   return await withFetchTimeout(label, timeoutMs, async (signal) => {
     const res = await fetchImpl(url, { ...init, signal });
-    const text = await res.text();
+    const text = await readBoundedResponseText(res, label, signal);
     return { res, text };
   });
 };
@@ -467,9 +555,11 @@ const main = async () => {
 export const testing = {
   CLAUDE_COOKIE_HOST_SQL,
   CLAUDE_FIREFOX_COOKIE_HOST_SQL,
+  FETCH_RESPONSE_MAX_BYTES,
   browserRootLabel,
   fetchAnthropicOAuthUsage,
   mask,
+  readBoundedResponseText,
   resolveFetchTimeoutMs,
 };
 
