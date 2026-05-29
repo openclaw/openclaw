@@ -544,6 +544,20 @@ const STATIC_TOOLS = [
       additionalProperties: false,
     },
   },
+  {
+    name: "lab_charter_save",
+    description:
+      "Persist the lab's LAB.md charter (Aims · Background · Approach · Resources · Methodology). Called by the onboard skill at end-condition, after the user confirms the compiled corpus. content is the full charter markdown; notebook_id defaults to PLATFORM_LAB_ID. Upserts: re-calling with the same notebook_id replaces the existing charter.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        notebook_id: { type: "string" },
+        content: { type: "string", minLength: 1 },
+      },
+      required: ["content"],
+      additionalProperties: false,
+    },
+  },
 ];
 
 function authHeaders() {
