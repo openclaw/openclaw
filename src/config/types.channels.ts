@@ -1,4 +1,4 @@
-import type { ContextVisibilityMode, GroupPolicy } from "./types.base.js";
+import type { ContextVisibilityMode, GroupPolicy, TextChunkMode } from "./types.base.js";
 import type { ChannelBotLoopProtectionConfig } from "./types.bot-loop-protection.js";
 import type {
   ChannelHealthMonitorConfig,
@@ -35,6 +35,18 @@ export type ExtensionNestedPolicyConfig = {
   policy?: string;
   allowFrom?: Array<string | number> | ReadonlyArray<string | number>;
   [key: string]: unknown;
+};
+
+export type WebchatChannelAccountConfig = {
+  textChunkLimit?: number;
+  chunkMode?: TextChunkMode;
+  streaming?: {
+    chunkMode?: TextChunkMode;
+  };
+};
+
+export type WebchatChannelConfig = WebchatChannelAccountConfig & {
+  accounts?: Record<string, WebchatChannelAccountConfig | undefined>;
 };
 
 /**
@@ -88,6 +100,7 @@ export interface ChannelsConfig {
   signal?: SignalConfig;
   slack?: SlackConfig;
   telegram?: TelegramConfig;
+  webchat?: WebchatChannelConfig;
   whatsapp?: WhatsAppConfig;
   /**
    * Channel sections are plugin-owned and keyed by arbitrary channel ids.

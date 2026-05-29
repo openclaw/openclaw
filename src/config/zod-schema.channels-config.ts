@@ -6,6 +6,22 @@ import { ContextVisibilityModeSchema, GroupPolicySchema } from "./zod-schema.cor
 const ChannelModelByChannelSchema = z
   .record(z.string(), z.record(z.string(), z.string()))
   .optional();
+const WebchatChunkModeSchema = z.enum(["length", "newline"]);
+const WebchatStreamingSchema = z
+  .object({
+    chunkMode: WebchatChunkModeSchema.optional(),
+  })
+  .strict();
+const WebchatAccountConfigSchema = z
+  .object({
+    textChunkLimit: z.number().int().positive().optional(),
+    chunkMode: WebchatChunkModeSchema.optional(),
+    streaming: WebchatStreamingSchema.optional(),
+  })
+  .strict();
+const WebchatChannelConfigSchema = WebchatAccountConfigSchema.extend({
+  accounts: z.record(z.string(), WebchatAccountConfigSchema.optional()).optional(),
+}).strict();
 
 export const ChannelBotLoopProtectionSchema = z
   .object({
@@ -60,6 +76,7 @@ export const ChannelsSchema: z.ZodType<ChannelsConfig | undefined> = z
       .strict()
       .optional(),
     modelByChannel: ChannelModelByChannelSchema,
+    webchat: WebchatChannelConfigSchema.optional(),
   })
   .passthrough() // Allow extension channel configs (nostr, matrix, zalo, etc.)
   .superRefine((value, ctx) => {

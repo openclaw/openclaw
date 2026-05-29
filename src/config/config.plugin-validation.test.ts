@@ -775,6 +775,20 @@ describe("config plugin validation", () => {
     });
   });
 
+  it("accepts WebChat text chunk config", () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "openclaw" }] },
+      channels: {
+        webchat: {
+          textChunkLimit: 16000,
+          chunkMode: "newline",
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
   it("keeps unknown channel typos fatal when there is no stale plugin evidence", () => {
     const res = validateInSuite({
       agents: { list: [{ id: "openclaw" }] },

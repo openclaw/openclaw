@@ -136,6 +136,7 @@ const bundledChannelIds = Object.freeze(
     .map((entry) => normalizeLowercaseStringOrEmpty(entry.channelId))
     .filter((channelId) => channelId.length > 0),
 );
+const internalChannelConfigIds = Object.freeze(["webchat"]);
 const bundledChannelIdSet = new Set(bundledChannelIds);
 const bundledChannelAliases = new Map<string, string>(
   GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.filter((entry) => entry.configurable !== false).flatMap(
@@ -1487,7 +1488,12 @@ function validateConfigObjectWithPluginsBase(
     };
   };
 
-  const allowedChannels = new Set<string>(["defaults", "modelByChannel", ...bundledChannelIds]);
+  const allowedChannels = new Set<string>([
+    "defaults",
+    "modelByChannel",
+    ...internalChannelConfigIds,
+    ...bundledChannelIds,
+  ]);
 
   if (config.channels && isRecord(config.channels)) {
     for (const key of Object.keys(config.channels)) {
