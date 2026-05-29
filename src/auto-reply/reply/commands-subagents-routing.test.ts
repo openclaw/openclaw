@@ -64,6 +64,7 @@ function registerOwnerEnforcingTelegramPlugin() {
 function buildParams(
   commandBody: string,
   ctxOverrides?: Record<string, unknown>,
+  cfg: HandleCommandsParams["cfg"] = {},
 ): HandleCommandsParams {
   const normalized = commandBody.trim();
   const ctx = {
@@ -78,7 +79,7 @@ function buildParams(
   const provider = ctx.Provider ?? "whatsapp";
 
   return {
-    cfg: {},
+    cfg,
     ctx,
     command: {
       commandBodyNormalized: normalized,
@@ -128,6 +129,32 @@ describe("subagents command dispatch", () => {
       CommandTargetSessionKey: "agent:main:main",
       SessionKey: "agent:main:slack:slash:u1",
     });
+    expect(resolveRequesterSessionKey(params)).toBe("agent:main:main");
+  });
+
+  it("canonicalizes native command target main aliases", () => {
+    const params = buildParams(
+      "/subagents list",
+      {
+        CommandSource: "native",
+        CommandTargetSessionKey: "main",
+        SessionKey: "agent:main:telegram:slash:u1",
+      },
+      { session: { mainKey: "main", scope: "per-sender" } },
+    );
+    expect(resolveRequesterSessionKey(params)).toBe("agent:main:main");
+  });
+
+  it("canonicalizes text command main session aliases", () => {
+    const params = buildParams(
+      "/subagents list",
+      {
+        CommandSource: "text",
+        SessionKey: "main",
+        CommandTargetSessionKey: "agent:main:main",
+      },
+      { session: { mainKey: "main", scope: "per-sender" } },
+    );
     expect(resolveRequesterSessionKey(params)).toBe("agent:main:main");
   });
 
