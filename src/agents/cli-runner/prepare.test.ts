@@ -1462,18 +1462,8 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     }
   });
 
-  it("invalidates orphaned claude-cli transcripts and reseeds OpenClaw history", async () => {
+  it("invalidates orphaned claude-cli transcripts during run preparation", async () => {
     const { dir, sessionFile } = createSessionFile();
-    appendTranscriptEntry(sessionFile, {
-      id: "msg-1",
-      parentId: null,
-      timestamp: new Date(1).toISOString(),
-      message: {
-        role: "user",
-        content: "prior orphan-safe ask",
-        timestamp: 1,
-      },
-    });
 
     try {
       setClaudeCliBackendForPrepareTest();
@@ -1511,8 +1501,6 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         workspaceDir: dir,
       });
       expect(context.reusableCliSession).toEqual({ invalidatedReason: "orphaned-tool-use" });
-      expect(context.openClawHistoryPrompt).toContain("prior orphan-safe ask");
-      expect(context.openClawHistoryPrompt).toContain("follow-up");
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

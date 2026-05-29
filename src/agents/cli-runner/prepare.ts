@@ -86,8 +86,6 @@ const prepareDeps = {
     params: Parameters<typeof import("../docs-path.js").resolveOpenClawReferencePaths>[0],
   ) => (await import("../docs-path.js")).resolveOpenClawReferencePaths(params),
   prepareClaudeCliSkillsPlugin,
-  // Surfaced as a dep so tests can stub the on-disk Claude CLI transcript probe
-  // without touching ~/.claude/projects.
   claudeCliSessionTranscriptHasContent,
   claudeCliSessionTranscriptHasOrphanedToolUse,
 };

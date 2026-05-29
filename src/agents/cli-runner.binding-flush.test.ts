@@ -52,10 +52,6 @@ describe("isCliBindingFlushed", () => {
   });
 
   it("schedules at most 0 + 50 + 150ms of delay across the bounded retry", async () => {
-    // 0 + 50 + 150 = 200ms of scheduled delay if all three probes return false.
-    // Using fake timers so the assertion measures *scheduled* delay rather
-    // than wall-clock elapsed time (the latter is flaky under CI threadpool
-    // load — the probe itself can spend tens of ms before the first sleep).
     vi.useFakeTimers();
     try {
       const probe = vi.fn(async () => false);
@@ -65,7 +61,6 @@ describe("isCliBindingFlushed", () => {
       const errored = vi.fn();
       isCliBindingFlushed("sid-bounded", "claude-cli").then(settled, errored);
 
-      // Drain any synchronous probe calls and the queued setTimeouts.
       await vi.advanceTimersByTimeAsync(0);
       await vi.advanceTimersByTimeAsync(50);
       await vi.advanceTimersByTimeAsync(150);
@@ -80,10 +75,6 @@ describe("isCliBindingFlushed", () => {
   });
 
   it("returns true without probing for non-claude-cli providers", async () => {
-    // The transcript probe walks `~/.claude/projects` and only knows about
-    // claude-cli sessions. For codex / openai / anthropic-api / etc., probing
-    // would always return false and incorrectly strip valid binding metadata,
-    // so we must skip the probe entirely.
     const probe = vi.fn(async () => false);
     setCliRunnerTestDeps({ claudeCliSessionTranscriptHasContent: probe });
 

@@ -784,8 +784,6 @@ describe("claudeCliSessionTranscriptHasOrphanedToolUse", () => {
   });
 
   it("returns true when the last assistant message has a trailing tool_use without tool_result", async () => {
-    // Reproduces the 3d-engineer stuck-resume scenario: gateway died after
-    // claude emitted tool_use(Bash) but before the tool_result was flushed.
     await writeJsonlSession("orphan", [
       {
         type: "assistant",
@@ -838,9 +836,6 @@ describe("claudeCliSessionTranscriptHasOrphanedToolUse", () => {
   });
 
   it("returns false when an earlier assistant tool_use is unanswered but the last assistant message resolved cleanly", async () => {
-    // Edge case: an unanswered tool_use deep in history is INERT — it
-    // can't block forward progress because a later assistant message
-    // already moved past it. Only TRAILING orphans matter.
     await writeJsonlSession("buried", [
       {
         type: "assistant",
@@ -875,19 +870,11 @@ describe("claudeCliSessionTranscriptHasOrphanedToolUse", () => {
   });
 
   it("ignores sidechain entries when deciding orphans (matches main-history importer's skip rule)", async () => {
-    // A trailing sidechain (Task-tool / subagent) `tool_use` without a
-    // matching `tool_result` is NOT a forward-progress blocker for the
-    // main conversation. The existing history importer at
-    // gateway/cli-session-history.claude.ts skips `isSidechain === true`
-    // entries; this probe must do the same or it will falsely invalidate
-    // healthy main-conversation resumes that happen to have a sidechain
-    // unanswered tool_use near the tail.
     await writeJsonlSession("sidechain-trailing", [
       {
         type: "assistant",
         message: { role: "assistant", content: [{ type: "text", text: "ok" }] },
       },
-      // Sidechain assistant with unanswered tool_use — should be ignored.
       {
         isSidechain: true,
         type: "assistant",
@@ -908,7 +895,6 @@ describe("claudeCliSessionTranscriptHasOrphanedToolUse", () => {
 
   it("still flags a main-conversation orphan even when sidechain entries exist alongside", async () => {
     await writeJsonlSession("main-orphan-with-sidechain", [
-      // Main assistant orphan
       {
         type: "assistant",
         message: {
@@ -916,7 +902,6 @@ describe("claudeCliSessionTranscriptHasOrphanedToolUse", () => {
           content: [{ type: "tool_use", id: "toolu_main_orphan", name: "Bash", input: {} }],
         },
       },
-      // Sidechain entries after that don't help the orphan get answered.
       {
         isSidechain: true,
         type: "user",
@@ -938,9 +923,6 @@ describe("claudeCliSessionTranscriptHasOrphanedToolUse", () => {
   });
 
   it("inspects the transcript tail past 500 records (does not inherit the content-probe cap)", async () => {
-    // 600 user-pings + 1 healthy-and-resolved tool turn + 1 trailing
-    // orphan tool_use. A capped walk that stops at record 500 would
-    // never see the orphan and incorrectly return false (resume hangs).
     const lines: object[] = [];
     for (let i = 0; i < 600; i++) {
       lines.push({
@@ -980,9 +962,6 @@ describe("claudeCliSessionTranscriptHasOrphanedToolUse", () => {
   });
 
   it("does not falsely flag a long transcript whose orphan was resolved past record 500", async () => {
-    // 600 user-pings + early tool_use + 100 user-pings + late tool_result
-    // resolving it. A capped walk would stop before reaching the
-    // tool_result and return true (false positive → unnecessary reset).
     const lines: object[] = [];
     lines.push({
       type: "assistant",
