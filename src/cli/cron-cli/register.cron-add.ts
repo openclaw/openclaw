@@ -10,7 +10,7 @@ import { theme } from "../../terminal/theme.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { parsePositiveIntOrUndefined } from "../program/helpers.js";
-import { resolveCronCreateSchedule } from "./schedule-options.js";
+import { resolveCronCreateScheduleFromArgs } from "./schedule-options.js";
 import {
   getCronChannelOptions,
   coerceCronDeliveryPreviews,
@@ -78,7 +78,8 @@ export function registerCronAddCommand(cron: Command) {
       .command("add")
       .alias("create")
       .description("Add a cron job")
-      .argument("[name]", "Job name")
+      .argument("[scheduleOrName]", "Schedule string, or job name when using --at/--every/--cron")
+      .argument("[message]", "Agent message when using a positional schedule")
       .option("--name <name>", "Job name")
       .option("--description <text>", "Optional description")
       .option("--disabled", "Create job disabled", false)
@@ -127,15 +128,22 @@ export function registerCronAddCommand(cron: Command) {
       .action(
         async (
           nameArg: string | undefined,
+          messageArg: string | undefined,
           opts: GatewayRpcOpts & Record<string, unknown>,
           cmd?: Command,
         ) => {
           try {
-            const schedule = resolveCronCreateSchedule({
+            const hasScheduleFlag =
+              typeof opts.at === "string" ||
+              typeof opts.cron === "string" ||
+              typeof opts.every === "string";
+            const positionalSchedule = hasScheduleFlag ? undefined : nameArg;
+            const schedule = resolveCronCreateScheduleFromArgs({
               at: opts.at,
               cron: opts.cron,
               every: opts.every,
               exact: opts.exact,
+              positionalSchedule,
               stagger: opts.stagger,
               tz: opts.tz,
             });
@@ -166,7 +174,14 @@ export function registerCronAddCommand(cron: Command) {
 
             const payload = (() => {
               const systemEvent = normalizeOptionalString(opts.systemEvent) ?? "";
-              const message = normalizeOptionalString(opts.message) ?? "";
+              const optionMessage = normalizeOptionalString(opts.message);
+              const positionalMessage = normalizeOptionalString(messageArg);
+              if (optionMessage && positionalMessage && optionMessage !== positionalMessage) {
+                throw new Error(
+                  "Pass the cron job message either positionally or with --message, not both.",
+                );
+              }
+              const message = optionMessage ?? positionalMessage ?? "";
               const chosen = [Boolean(systemEvent), Boolean(message)].filter(Boolean).length;
               if (chosen !== 1) {
                 throw new Error("Choose exactly one payload: --system-event or --message");
@@ -256,7 +271,7 @@ export function registerCronAddCommand(cron: Command) {
                 : undefined;
 
             const optionName = normalizeOptionalString(opts.name);
-            const positionalName = normalizeOptionalString(nameArg);
+            const positionalName = hasScheduleFlag ? normalizeOptionalString(nameArg) : undefined;
             if (optionName && positionalName && optionName !== positionalName) {
               throw new Error(
                 "Pass the cron job name either positionally or with --name, not both.",

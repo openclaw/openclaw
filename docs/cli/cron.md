@@ -16,21 +16,21 @@ Run `openclaw cron --help` for the full command surface. See [Cron jobs](/automa
 
 ## Create jobs quickly
 
-`openclaw cron create` is an alias for `openclaw cron add`. New jobs accept the name positionally or with `--name`:
+`openclaw cron create` is an alias for `openclaw cron add`. For new jobs, put the schedule first and the prompt second:
 
 ```bash
-openclaw cron create "Morning brief" \
-  --cron "0 7 * * *" \
-  --message "Summarize overnight updates." \
+openclaw cron create "0 7 * * *" \
+  "Summarize overnight updates." \
+  --name "Morning brief" \
   --agent ops
 ```
 
 Use `--webhook <url>` when the job should POST the finished payload instead of delivering to a chat target:
 
 ```bash
-openclaw cron create "Deploy digest" \
-  --cron "0 18 * * 1-5" \
-  --message "Summarize today's deploys as JSON." \
+openclaw cron create "0 18 * * 1-5" \
+  "Summarize today's deploys as JSON." \
+  --name "Deploy digest" \
   --webhook "https://example.invalid/openclaw/cron"
 ```
 
@@ -241,10 +241,10 @@ openclaw cron edit <job-id> --announce --channel telegram --to "-1001234567890" 
 Create an isolated job with lightweight bootstrap context:
 
 ```bash
-openclaw cron create "Lightweight morning brief" \
-  --cron "0 7 * * *" \
+openclaw cron create "0 7 * * *" \
+  "Summarize overnight updates." \
+  --name "Lightweight morning brief" \
   --session isolated \
-  --message "Summarize overnight updates." \
   --light-context \
   --no-deliver
 ```

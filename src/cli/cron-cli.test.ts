@@ -80,8 +80,10 @@ type CronUpdatePatch = {
 
 type CronAddParams = {
   name?: string;
-  schedule?: { kind?: string; at?: string; staggerMs?: number };
+  schedule?: { kind?: string; at?: string; expr?: string; everyMs?: number; staggerMs?: number };
   payload?: {
+    kind?: string;
+    message?: string;
     model?: string;
     thinking?: string;
     lightContext?: boolean;
@@ -420,6 +422,54 @@ describe("cron cli", () => {
       accountId: undefined,
       bestEffort: undefined,
     });
+  });
+
+  it("accepts Hermes-style positional cron schedule and message on cron create", async () => {
+    const params = await runCronAddAndGetParams([
+      "0 2 * * *",
+      "Pull the top bug from the issue tracker, attempt a fix, and open a draft PR.",
+      "--name",
+      "Nightly bug fix",
+      "--agent",
+      "ops",
+    ]);
+
+    expect(params?.name).toBe("Nightly bug fix");
+    expect(params?.schedule).toMatchObject({ kind: "cron", expr: "0 2 * * *" });
+    expect(params?.sessionTarget).toBe("isolated");
+    expect(params?.payload?.kind).toBe("agentTurn");
+    expect(params?.payload?.message).toBe(
+      "Pull the top bug from the issue tracker, attempt a fix, and open a draft PR.",
+    );
+  });
+
+  it("accepts Hermes-style every interval schedule on cron create", async () => {
+    const params = await runCronAddAndGetParams([
+      "every 1h",
+      "Summarize what changed.",
+      "--name",
+      "Pricing monitor",
+      "--no-deliver",
+    ]);
+
+    expect(params?.schedule).toEqual({ kind: "every", everyMs: 3_600_000 });
+    expect(params?.payload?.message).toBe("Summarize what changed.");
+    expect(params?.delivery?.mode).toBe("none");
+  });
+
+  it("rejects conflicting positional and option messages on cron create", async () => {
+    await expectCronCommandExit([
+      "cron",
+      "create",
+      "0 2 * * *",
+      "Positional prompt",
+      "--name",
+      "Mixed prompt",
+      "--message",
+      "Option prompt",
+    ]);
+
+    expectRuntimeErrorContaining("Pass the cron job message either positionally or with --message");
   });
 
   it("rejects ambiguous cron add names", async () => {
