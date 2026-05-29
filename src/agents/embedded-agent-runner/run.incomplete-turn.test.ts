@@ -2685,6 +2685,56 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
     expect(retryInstruction).toBeNull();
   });
+
+  it("synthesizes ordinary web search results after terminal search-loop block", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        terminalToolLoopBlock: {
+          message: "CRITICAL: Web search tools have been called 6 consecutive times.",
+          toolName: "web_search",
+        },
+        messagesSnapshot: [
+          {
+            message: {
+              role: "toolResult",
+              toolName: "web_search",
+              details: {
+                summary: {
+                  kind: "search_results",
+                  query: "funny cats",
+                  topResults: [
+                    {
+                      title: "Funny Cat Videos",
+                      url: "https://example.test/cats",
+                      snippet: "A collection of funny cat clips.",
+                    },
+                    {
+                      title: "Cat Memes",
+                      url: "https://example.test/memes",
+                      snippet: "Popular cat meme formats.",
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        ],
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      runId: "run-terminal-search-loop-generic-summary",
+    });
+
+    expect(result.payloads[0]?.isError).toBe(false);
+    expect(result.payloads[0]?.text).toContain('latest returned search results for "funny cats"');
+    expect(result.payloads[0]?.text).toContain("Funny Cat Videos: https://example.test/cats");
+    expect(result.payloads[0]?.text).toContain("Cat Memes: https://example.test/memes");
+    expect(result.meta?.error?.kind).toBe("tool_loop");
+    expect(result.meta?.livenessState).toBe("blocked");
+  });
 });
 
 describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
@@ -2733,6 +2783,30 @@ describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
       aborted: false,
       timedOut: false,
       attempt: makeAttemptWithTools(["read"], "I'll analyze the structure next."),
+    });
+
+    expect(result).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
+  });
+
+  it("retries when exactly 1 web_search call is followed by lookup preamble prose", () => {
+    const result = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      prompt: "web search for gold spot price today",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptWithTools(["web_search"], "Hold on — let me look that up."),
+    });
+
+    expect(result).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
+  });
+
+  it("retries when exactly 1 legacy searxng search call is followed by lookup preamble prose", () => {
+    const result = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      prompt: "search searxng for gold spot price today",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptWithTools(["searxng_search"], "Let me search that for you."),
     });
 
     expect(result).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);

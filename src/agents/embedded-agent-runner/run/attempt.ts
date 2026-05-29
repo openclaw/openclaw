@@ -833,6 +833,14 @@ export async function runEmbeddedAttempt(
   let timedOutDuringCompaction = false;
   let timedOutDuringToolExecution = false;
   let promptError: unknown = null;
+  let terminalToolLoopBlock:
+    | {
+        message: string;
+        toolName?: string;
+        detector?: string;
+        count?: number;
+      }
+    | undefined;
   let emitDiagnosticRunCompleted:
     | ((
         outcome: "completed" | "aborted" | "blocked" | "error",
@@ -869,6 +877,31 @@ export async function runEmbeddedAttempt(
     const err = new Error("request timed out");
     err.name = "TimeoutError";
     return err;
+  };
+  const abortForCriticalToolLoop = (event: {
+    toolName: string;
+    message: string;
+    detector?: string;
+    count?: number;
+  }) => {
+    terminalToolLoopBlock ??= {
+      message: event.message,
+      toolName: event.toolName,
+      detector: event.detector,
+      count: event.count,
+    };
+    const err = new Error(event.message);
+    err.name = "ToolLoopCriticalAbortError";
+    if (abortRunForExternalSignal) {
+      abortRunForExternalSignal(false, err);
+      return;
+    }
+    aborted = true;
+    promptError = err;
+    if (!runAbortController.signal.aborted) {
+      runAbortController.abort(err);
+    }
+    void abortActiveSessionForExternalSignal?.();
   };
   const cleanupEmbeddedPrepResourcesAfterEarlyExit = async () => {
     if (toolSearchCatalogApplied) {
@@ -1174,6 +1207,9 @@ export async function runEmbeddedAttempt(
             authProfileStore: params.authProfileStore,
             recordToolPrepStage: (name) => corePluginToolStages.mark(name),
             onToolOutcome: params.onToolOutcome,
+            beforeToolCallHookContext: {
+              onCriticalToolLoop: abortForCriticalToolLoop,
+            },
             skillsSnapshot: skillsSnapshotForRun,
             onYield: (message) => {
               yieldDetected = true;
@@ -1465,6 +1501,7 @@ export async function runEmbeddedAttempt(
         agentId: sessionAgentId,
       }),
       onToolOutcome: params.onToolOutcome,
+      onCriticalToolLoop: abortForCriticalToolLoop,
     };
     const codeModeTools = codeModeControlsEnabledForRun
       ? createCodeModeTools({
@@ -2088,6 +2125,7 @@ export async function runEmbeddedAttempt(
               runId: params.runId,
               loopDetection: clientToolLoopDetection,
               onToolOutcome: params.onToolOutcome,
+              onCriticalToolLoop: abortForCriticalToolLoop,
             },
           )
         : [];
@@ -4730,6 +4768,7 @@ export async function runEmbeddedAttempt(
         timedOutDuringToolExecution,
         promptError,
         promptErrorSource,
+        terminalToolLoopBlock,
         preflightRecovery,
         sessionIdUsed,
         sessionFileUsed,

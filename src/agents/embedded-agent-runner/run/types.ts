@@ -123,6 +123,12 @@ export type EmbeddedRunAttemptResult = {
     timeoutPhase?: AgentRunTimeoutPhase;
     providerStarted?: boolean;
   };
+  terminalToolLoopBlock?: {
+    message: string;
+    toolName?: string;
+    detector?: string;
+    count?: number;
+  };
   codexAppServerFailure?: {
     kind: "client_closed_before_turn_completed" | "turn_completion_idle_timeout";
     turnWatchTimeoutKind?: "progress" | "completion" | "terminal";

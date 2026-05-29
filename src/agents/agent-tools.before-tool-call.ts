@@ -84,6 +84,12 @@ export type HookContext = {
   channelId?: string;
   loopDetection?: ToolLoopDetectionConfig;
   onToolOutcome?: ToolOutcomeObserver;
+  onCriticalToolLoop?: (event: {
+    toolName: string;
+    message: string;
+    detector?: string;
+    count?: number;
+  }) => void;
   skillsSnapshot?: SkillSnapshot;
   skillCommand?: {
     commandName: string;
@@ -179,6 +185,13 @@ export class BeforeToolCallBlockedError extends Error {
   constructor(readonly reason: string) {
     super(reason);
     this.name = "BeforeToolCallBlockedError";
+  }
+}
+
+export class CriticalToolLoopBlockedError extends Error {
+  constructor(readonly reason: string) {
+    super(reason);
+    this.name = "CriticalToolLoopBlockedError";
   }
 }
 
@@ -584,6 +597,7 @@ export function buildBlockedToolResult(params: {
   reason: string;
   deniedReason?: HookBlockedReason;
 }) {
+  const terminal = params.deniedReason === "tool-loop";
   return {
     content: [{ type: "text" as const, text: params.reason }],
     details: {
@@ -591,6 +605,7 @@ export function buildBlockedToolResult(params: {
       deniedReason: params.deniedReason ?? "plugin-before-tool-call",
       reason: params.reason,
     },
+    ...(terminal ? { isError: true, terminate: true } : {}),
   };
 }
 
@@ -723,6 +738,12 @@ export async function runBeforeToolCallHook(args: {
           count: loopResult.count,
           message: loopResult.message,
           pairedToolName: loopResult.pairedToolName,
+        });
+        args.ctx.onCriticalToolLoop?.({
+          toolName,
+          message: loopResult.message,
+          detector: loopResult.detector,
+          count: loopResult.count,
         });
         return {
           blocked: true,

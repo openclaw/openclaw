@@ -116,6 +116,8 @@ const SINGLE_ACTION_EXPLICIT_CONTINUATION_RE =
   /\b(?:going to|first[, ]+i(?:'ll| will)|next[, ]+i(?:'ll| will)|then[, ]+i(?:'ll| will)|i can do that next|let me (?!know\b)\w+(?:\s+\w+){0,3}\s+(?:next|then|first)\b)/i;
 const SINGLE_ACTION_MULTI_STEP_PROMISE_RE =
   /\bi(?:'ll| will)\b(?=[^.!?]{0,160}\b(?:next|then|after(?:wards)?|once)\b)/i;
+const SINGLE_ACTION_LOOKUP_PREAMBLE_RE =
+  /^(?:hold on\b[\s,.:;!—-]*)?(?:let me|i(?:'ll| will))\s+(?:look\s+(?:that|this|it)?\s*up|check(?:\s+(?:that|this|it))?|search(?:\s+(?:for\s+)?(?:that|this|it))?|find(?:\s+(?:that|this|it))?)(?:\s+for\s+you)?[.!]*$/i;
 const SINGLE_ACTION_RESULT_STYLE_RE =
   /\b(?:i(?:'ll| will)\s+(?:summarize|explain|share|show|report|describe|clarify|answer|recap)(?:\s+\w+){0,4}\s*:|(?:here(?:'s| is)|summary|result|answer|findings?|root cause)\s*:)/i;
 const SINGLE_ACTION_RETRY_SAFE_TOOL_NAMES = new Set([
@@ -125,6 +127,9 @@ const SINGLE_ACTION_RETRY_SAFE_TOOL_NAMES = new Set([
   "grep",
   "glob",
   "ls",
+  "web_fetch",
+  "web_search",
+  "searxng_search",
 ]);
 const GEMINI_INCOMPLETE_TURN_PROVIDER_IDS = new Set([
   "google",
@@ -870,7 +875,8 @@ function isSingleActionThenNarrativePattern(params: {
   }
   return (
     SINGLE_ACTION_EXPLICIT_CONTINUATION_RE.test(text) ||
-    SINGLE_ACTION_MULTI_STEP_PROMISE_RE.test(text)
+    SINGLE_ACTION_MULTI_STEP_PROMISE_RE.test(text) ||
+    SINGLE_ACTION_LOOKUP_PREAMBLE_RE.test(text)
   );
 }
 

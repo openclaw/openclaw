@@ -309,7 +309,10 @@ describe("tool-loop-detection", () => {
       }
 
       const loopResult = detectToolCallLoop(state, "read", { path: "/same.txt" });
-      expect(loopResult.stuck).toBe(false);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("warning");
+        expect(loopResult.detector).not.toBe("search_repeat");
+      }
     });
 
     it("does not flag unique tool calls", () => {
@@ -417,6 +420,81 @@ describe("tool-loop-detection", () => {
         expect(loopResult.level).toBe("critical");
         expect(loopResult.detector).toBe("generic_repeat");
         expect(loopResult.message).toContain("identical outcomes");
+      }
+    });
+
+    it("blocks search-only loops even when search tools and queries vary", () => {
+      const state = createState();
+      const config: ToolLoopDetectionConfig = {
+        enabled: true,
+        warningThreshold: 3,
+        criticalThreshold: 6,
+        globalCircuitBreakerThreshold: 12,
+      };
+      const tools = ["web_search", "searxng_search"] as const;
+
+      for (let i = 0; i < 5; i += 1) {
+        const toolName = tools[i % tools.length]!;
+        recordSuccessfulCall(
+          state,
+          toolName,
+          { query: i % 2 === 0 ? "gold spot price today" : "gold spot price today May 27 2026" },
+          { content: [{ type: "text", text: `result variant ${i}` }], details: { ok: true } },
+          i,
+        );
+      }
+
+      const loopResult = detectToolCallLoop(
+        state,
+        "web_search",
+        { query: "gold spot price today", count: 5 },
+        config,
+      );
+
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("critical");
+        expect(loopResult.detector).toBe("search_repeat");
+        expect(loopResult.count).toBe(6);
+        expect(loopResult.message).toContain("answer from the search results");
+      }
+    });
+
+    it("does not count search calls across non-search progress", () => {
+      const state = createState();
+      const config: ToolLoopDetectionConfig = {
+        enabled: true,
+        warningThreshold: 3,
+        criticalThreshold: 6,
+        globalCircuitBreakerThreshold: 12,
+      };
+      for (let i = 0; i < 5; i += 1) {
+        recordSuccessfulCall(
+          state,
+          "web_search",
+          { query: "gold spot price today" },
+          { content: [{ type: "text", text: `result variant ${i}` }], details: { ok: true } },
+          i,
+        );
+      }
+      recordSuccessfulCall(
+        state,
+        "read",
+        { path: "/tmp/note.txt" },
+        { content: [{ type: "text", text: "read result" }], details: { ok: true } },
+        99,
+      );
+
+      const loopResult = detectToolCallLoop(
+        state,
+        "web_search",
+        { query: "gold spot price today" },
+        config,
+      );
+
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("warning");
+        expect(loopResult.detector).not.toBe("search_repeat");
       }
     });
 

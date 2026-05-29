@@ -16,7 +16,8 @@ type LoopDetectorKind =
   | "unknown_tool_repeat"
   | "known_poll_no_progress"
   | "global_circuit_breaker"
-  | "ping_pong";
+  | "ping_pong"
+  | "search_repeat";
 
 type LoopDetectionResult =
   | { stuck: false }
@@ -48,6 +49,7 @@ const DEFAULT_LOOP_DETECTION_CONFIG = {
     pingPong: true,
   },
 };
+const SEARCH_TOOL_NAMES = new Set(["web_search", "searxng_search"]);
 
 type ResolvedLoopDetectionConfig = {
   enabled: boolean;
@@ -447,6 +449,24 @@ function getPingPongStreak(
   };
 }
 
+function getSearchOnlyTailCount(
+  history: Array<{ toolName: string }>,
+  currentToolName: string,
+): number {
+  if (!SEARCH_TOOL_NAMES.has(currentToolName)) {
+    return 0;
+  }
+  let count = 1;
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const record = history[i];
+    if (!record || !SEARCH_TOOL_NAMES.has(record.toolName)) {
+      break;
+    }
+    count += 1;
+  }
+  return count;
+}
+
 function canonicalPairKey(signatureA: string, signatureB: string): string {
   return [signatureA, signatureB].toSorted().join("|");
 }
@@ -473,6 +493,7 @@ export function detectToolCallLoop(
   const noProgressStreak = noProgress.count;
   const knownPollTool = isKnownPollToolCall(toolName, params);
   const pingPong = getPingPongStreak(history, currentHash);
+  const searchOnlyTailCount = getSearchOnlyTailCount(history, toolName);
 
   if (unknownToolStreak.count >= resolvedConfig.unknownToolThreshold) {
     return {
@@ -551,6 +572,20 @@ export function detectToolCallLoop(
       message: `CRITICAL: You are alternating between repeated tool-call patterns (${pingPong.count} consecutive calls) with no progress. This appears to be a stuck ping-pong loop. Session execution blocked to prevent resource waste.`,
       pairedToolName: pingPong.pairedToolName,
       warningKey: pingPongWarningKey,
+    };
+  }
+
+  if (searchOnlyTailCount >= resolvedConfig.criticalThreshold) {
+    log.error(
+      `Critical search loop detected: search-only tool tail count=${searchOnlyTailCount} currentTool=${toolName}`,
+    );
+    return {
+      stuck: true,
+      level: "critical",
+      detector: "search_repeat",
+      count: searchOnlyTailCount,
+      message: `CRITICAL: Web search tools have been called ${searchOnlyTailCount} consecutive times in this run. Stop searching now and answer from the search results already returned; if the results disagree, summarize the disagreement and give a cautious estimate.`,
+      warningKey: `search:${toolName}`,
     };
   }
 

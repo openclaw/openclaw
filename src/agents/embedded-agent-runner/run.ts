@@ -211,6 +211,155 @@ const COMPACTION_CONTINUATION_RETRY_INSTRUCTION =
 const NO_REAL_CONVERSATION_MESSAGES_REASON = "no real conversation messages";
 type EmbeddedRunAttemptForRunner = Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
 
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function formatSearchSourceList(entries: Record<string, unknown>[]): string | undefined {
+  const sources = entries.slice(0, 3).map((entry, sourceIndex) => {
+    const title = typeof entry.title === "string" ? entry.title : `Source ${sourceIndex + 1}`;
+    const url = typeof entry.url === "string" ? entry.url : undefined;
+    const snippet =
+      typeof entry.snippet === "string"
+        ? entry.snippet
+        : typeof entry.content === "string"
+          ? entry.content
+          : undefined;
+    const compactSnippet = snippet?.replace(/\s+/g, " ").trim().slice(0, 220);
+    const firstLine = url ? `${sourceIndex + 1}. ${title}: ${url}` : `${sourceIndex + 1}. ${title}`;
+    return compactSnippet ? `${firstLine}\n   ${compactSnippet}` : firstLine;
+  });
+  return sources.length > 0 ? sources.join("\n") : undefined;
+}
+
+function extractGenericSearchSummary(details: Record<string, unknown>): string | undefined {
+  const summary = asRecord(details.summary);
+  const topResults = Array.isArray(summary?.topResults)
+    ? summary.topResults
+        .map((entry) => asRecord(entry))
+        .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    : [];
+  const fallbackResults = Array.isArray(details.results)
+    ? details.results
+        .map((entry) => asRecord(entry))
+        .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    : [];
+  const sources = formatSearchSourceList(topResults.length > 0 ? topResults : fallbackResults);
+  if (!sources) {
+    return undefined;
+  }
+  const query = typeof summary?.query === "string" ? summary.query : undefined;
+  const header = query
+    ? `Here are the latest returned search results for "${query}":`
+    : "Here are the latest returned search results:";
+  return `${header}\n\n${sources}`;
+}
+
+function extractLatestStructuredSearchResponse(messages: unknown[]): string | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const outer = asRecord(messages[index]);
+    const message = asRecord(outer?.message) ?? outer;
+    if (message?.role !== "toolResult") {
+      continue;
+    }
+    const toolName = typeof message.toolName === "string" ? message.toolName : undefined;
+    if (toolName !== "web_search" && toolName !== "searxng_search") {
+      continue;
+    }
+    const details = asRecord(message.details);
+    if (!details) {
+      continue;
+    }
+    const answer = asRecord(details?.answer);
+    const estimate = asRecord(answer?.estimate);
+    if (!estimate || typeof estimate.value !== "string") {
+      const genericSummary = extractGenericSearchSummary(details);
+      if (genericSummary) {
+        return genericSummary;
+      }
+      continue;
+    }
+    const value = estimate.value;
+
+    const parts = [
+      `Search was stopped after repeated tool calls. The latest structured search answer estimated ${value}.`,
+    ];
+    const min = typeof estimate.min === "number" ? estimate.min : undefined;
+    const max = typeof estimate.max === "number" ? estimate.max : undefined;
+    const sampleSize = typeof estimate.sampleSize === "number" ? estimate.sampleSize : undefined;
+    const confidence = typeof estimate.confidence === "string" ? estimate.confidence : undefined;
+    const stats: string[] = [];
+    if (min !== undefined && max !== undefined) {
+      stats.push(`range ${min}-${max}`);
+    }
+    if (sampleSize !== undefined) {
+      stats.push(`${sampleSize} snippet data points`);
+    }
+    if (confidence) {
+      stats.push(`${confidence} confidence`);
+    }
+    if (stats.length > 0) {
+      parts.push(`Stats: ${stats.join(", ")}.`);
+    }
+
+    const warnings = Array.isArray(answer?.warnings) ? answer.warnings : [];
+    const firstWarning = warnings.find((warning): warning is string => typeof warning === "string");
+    if (firstWarning) {
+      parts.push(`Caution: ${firstWarning}`);
+    }
+
+    const evidence = Array.isArray(answer?.evidence) ? answer.evidence : [];
+    const sources = evidence
+      .map((entry) => asRecord(entry))
+      .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+      .filter((entry) => entry.signal === "candidate" || entry.signal === "live_price_page")
+      .slice(0, 3)
+      .map((entry, sourceIndex) => {
+        const title = typeof entry.title === "string" ? entry.title : `Source ${sourceIndex + 1}`;
+        const url = typeof entry.url === "string" ? entry.url : undefined;
+        return url ? `${sourceIndex + 1}. ${title}: ${url}` : `${sourceIndex + 1}. ${title}`;
+      });
+    if (sources.length > 0) {
+      parts.push(`Sources:\n${sources.join("\n")}`);
+    }
+    return parts.join("\n\n");
+  }
+  return undefined;
+}
+
+function extractTerminalToolLoopBlock(messages: unknown[]):
+  | {
+      message: string;
+      toolName?: string;
+    }
+  | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const outer = asRecord(messages[index]);
+    const message = asRecord(outer?.message) ?? outer;
+    if (message?.role !== "toolResult") {
+      continue;
+    }
+    const details = asRecord(message.details);
+    const content = Array.isArray(message.content) ? message.content : [];
+    const firstText = content
+      .map((entry) => asRecord(entry))
+      .map((entry) => (typeof entry?.text === "string" ? entry.text : undefined))
+      .find((text): text is string => Boolean(text));
+    const reason = typeof details?.reason === "string" ? details.reason : firstText;
+    if (details?.deniedReason !== "tool-loop" && !reason?.startsWith("CRITICAL:")) {
+      continue;
+    }
+    const toolName = typeof message.toolName === "string" ? message.toolName : undefined;
+    return {
+      message: reason ?? "Critical tool loop blocked.",
+      ...(toolName ? { toolName } : {}),
+    };
+  }
+  return undefined;
+}
+
 function isNoRealConversationCompactionNoop(params: {
   ok?: boolean;
   compacted?: boolean;
@@ -768,7 +917,6 @@ export async function runEmbeddedAgent(
         contextConfigProvider: resolveContextConfigProviderForRuntime({
           provider: modelConfigProvider,
           runtimeId: agentHarness.id,
-          config: params.config,
         }),
         modelId,
         runtimeModel,
@@ -1684,6 +1832,9 @@ export async function runEmbeddedAgent(
             throw postCompactionAbortError;
           }
           const attempt = normalizeEmbeddedRunAttemptResult(rawAttempt);
+          attempt.terminalToolLoopBlock ??= extractTerminalToolLoopBlock(
+            attempt.messagesSnapshot as unknown[],
+          );
 
           const {
             aborted,
@@ -1906,7 +2057,6 @@ export async function runEmbeddedAgent(
                     senderId: params.senderId,
                     provider,
                     modelId,
-                    harnessRuntime: agentHarness.id,
                     modelFallbacksOverride: params.modelFallbacksOverride,
                     thinkLevel,
                     reasoningLevel: params.reasoningLevel,
@@ -2098,7 +2248,6 @@ export async function runEmbeddedAgent(
                     senderId: params.senderId,
                     provider,
                     modelId,
-                    harnessRuntime: agentHarness.id,
                     thinkLevel,
                     reasoningLevel: params.reasoningLevel,
                     bashElevated: params.bashElevated,
@@ -2896,6 +3045,44 @@ export async function runEmbeddedAgent(
           };
           const finalAssistantVisibleText = resolveFinalAssistantVisibleText(sessionLastAssistant);
           const finalAssistantRawText = resolveFinalAssistantRawText(sessionLastAssistant);
+
+          if (attempt.terminalToolLoopBlock) {
+            const synthesizedSearchAnswer = extractLatestStructuredSearchResponse(
+              attempt.messagesSnapshot as unknown[],
+            );
+            const terminalText =
+              synthesizedSearchAnswer ??
+              `Stopped repeated ${attempt.terminalToolLoopBlock.toolName ?? "tool"} calls after the tool-loop guard fired: ${attempt.terminalToolLoopBlock.message}`;
+            const replayInvalid = resolveReplayInvalidForAttempt(terminalText);
+            const livenessState: EmbeddedRunLivenessState = "blocked";
+            attempt.setTerminalLifecycleMeta?.({
+              replayInvalid,
+              livenessState,
+            });
+            return {
+              payloads: [
+                {
+                  text: terminalText,
+                  isError: !synthesizedSearchAnswer,
+                },
+              ],
+              meta: {
+                durationMs: Date.now() - started,
+                agentMeta,
+                aborted,
+                systemPromptReport: attempt.systemPromptReport,
+                finalPromptText: attempt.finalPromptText,
+                finalAssistantVisibleText,
+                finalAssistantRawText,
+                replayInvalid,
+                livenessState,
+                error: {
+                  kind: "tool_loop",
+                  message: attempt.terminalToolLoopBlock.message,
+                },
+              },
+            };
+          }
 
           const payloads = buildEmbeddedRunPayloads({
             assistantTexts: attempt.assistantTexts,

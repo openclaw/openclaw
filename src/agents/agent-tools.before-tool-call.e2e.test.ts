@@ -202,7 +202,8 @@ describe("before_tool_call loop detection behavior", () => {
     expect(loopEvent?.toolName).toBe(params.toolName);
   }
 
-  function expectToolLoopBlockedResult(result: unknown, expectedReason: string) {
+  async function expectToolLoopBlockedExecution(promise: Promise<unknown>, expectedReason: string) {
+    const result = await promise;
     const record = requireRecord(result, "tool result");
     const content = requireArray(record.content, "tool result content");
     const textContent = requireRecord(content[0], "tool result content item");
@@ -212,6 +213,8 @@ describe("before_tool_call loop detection behavior", () => {
     expect(details.status).toBe("blocked");
     expect(details.deniedReason).toBe("tool-loop");
     expect(String(details.reason)).toContain(expectedReason);
+    expect(record.isError).toBe(true);
+    expect(record.terminate).toBe(true);
   }
 
   async function expectUnblockedToolExecution(
@@ -259,8 +262,10 @@ describe("before_tool_call loop detection behavior", () => {
       await expectUnblockedToolExecution(tool, `poll-${i}`, params);
     }
 
-    const result = await tool.execute(`poll-${CRITICAL_THRESHOLD}`, params, undefined, undefined);
-    expectToolLoopBlockedResult(result, "CRITICAL");
+    await expectToolLoopBlockedExecution(
+      tool.execute(`poll-${CRITICAL_THRESHOLD}`, params, undefined, undefined),
+      "CRITICAL",
+    );
   });
 
   it("does nothing when loopDetection.enabled is false", async () => {
@@ -308,8 +313,45 @@ describe("before_tool_call loop detection behavior", () => {
       await expectUnblockedToolExecution(tool, `read-${i}`, params);
     }
 
-    const result = await tool.execute(`read-${CRITICAL_THRESHOLD}`, params, undefined, undefined);
-    expectToolLoopBlockedResult(result, "identical outcomes");
+    await expectToolLoopBlockedExecution(
+      tool.execute(`read-${CRITICAL_THRESHOLD}`, params, undefined, undefined),
+      "identical outcomes",
+    );
+  });
+
+  it("blocks search-only loops before provider timeout", async () => {
+    const searchContext = {
+      ...enabledLoopDetectionContext,
+      loopDetection: {
+        enabled: true,
+        warningThreshold: 3,
+        criticalThreshold: 6,
+        globalCircuitBreakerThreshold: 12,
+      },
+    };
+    const execute = vi.fn().mockImplementation(async (_toolCallId: string, params: unknown) => ({
+      content: [{ type: "text", text: `search result ${JSON.stringify(params)}` }],
+      details: { ok: true },
+    }));
+    const webSearch = createWrappedTool("web_search", execute, searchContext);
+    const searxngSearch = createWrappedTool("searxng_search", execute, searchContext);
+
+    for (let i = 0; i < 5; i += 1) {
+      const tool = i % 2 === 0 ? webSearch : searxngSearch;
+      await expectUnblockedToolExecution(tool, `search-${i}`, {
+        query: i % 2 === 0 ? "gold spot price today" : "gold spot price today May 27 2026",
+      });
+    }
+
+    await expectToolLoopBlockedExecution(
+      webSearch.execute(
+        "search-blocked",
+        { query: "gold spot price today", count: 5 },
+        undefined,
+        undefined,
+      ),
+      "Web search tools have been called 6 consecutive times",
+    );
   });
 
   it("does not carry loop history across run ids", async () => {
@@ -338,9 +380,13 @@ describe("before_tool_call loop detection behavior", () => {
     await withToolLoopEvents(async (emitted) => {
       const { tool, params } = createGenericReadRepeatFixture();
 
-      for (let i = 0; i < 21; i += 1) {
+      for (let i = 0; i < 20; i += 1) {
         await tool.execute(`read-bucket-${i}`, params, undefined, undefined);
       }
+      await expectToolLoopBlockedExecution(
+        tool.execute("read-bucket-20", params, undefined, undefined),
+        "CRITICAL",
+      );
 
       const genericEvents = emitted.filter((evt) => evt.detector === "generic_repeat");
       expect(genericEvents.map((evt) => [evt.level, evt.count])).toEqual([
@@ -378,13 +424,15 @@ describe("before_tool_call loop detection behavior", () => {
       const { readTool, listTool } = createPingPongTools();
       await runPingPongSequence(readTool, listTool, CRITICAL_THRESHOLD - 1);
 
-      const result = await listTool.execute(
-        `list-${CRITICAL_THRESHOLD - 1}`,
-        { dir: "/workspace" },
-        undefined,
-        undefined,
+      await expectToolLoopBlockedExecution(
+        listTool.execute(
+          `list-${CRITICAL_THRESHOLD - 1}`,
+          { dir: "/workspace" },
+          undefined,
+          undefined,
+        ),
+        "CRITICAL",
       );
-      expectToolLoopBlockedResult(result, "CRITICAL");
 
       const loopEvent = emitted.at(-1);
       expectCriticalLoopEvent(loopEvent, {
@@ -427,8 +475,10 @@ describe("before_tool_call loop detection behavior", () => {
         await tool.execute(`poll-${i}`, params, undefined, undefined);
       }
 
-      const result = await tool.execute(`poll-${CRITICAL_THRESHOLD}`, params, undefined, undefined);
-      expectToolLoopBlockedResult(result, "CRITICAL");
+      await expectToolLoopBlockedExecution(
+        tool.execute(`poll-${CRITICAL_THRESHOLD}`, params, undefined, undefined),
+        "CRITICAL",
+      );
 
       const loopEvent = emitted.at(-1);
       expectCriticalLoopEvent(loopEvent, {
