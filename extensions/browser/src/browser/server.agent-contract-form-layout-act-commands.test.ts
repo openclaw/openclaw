@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import "../test-support/browser-security.mock.js";
 import { BROWSER_NAVIGATION_BLOCKED_MESSAGE } from "./errors.js";
 import { DEFAULT_DOWNLOAD_DIR, DEFAULT_TRACE_DIR, DEFAULT_UPLOAD_DIR } from "./paths.js";
@@ -21,6 +21,10 @@ import { getBrowserTestFetch, type BrowserTestFetch } from "./test-support/fetch
 const state = getBrowserControlServerTestState();
 const pwMocks = getPwMocks();
 const realFetch: BrowserTestFetch = (input, init) => getBrowserTestFetch()(input, init);
+
+beforeAll(async () => {
+  await import("../server.js");
+});
 
 type GuardedCurrentTabRouteCase = {
   method: "GET" | "POST";
@@ -272,6 +276,15 @@ describe("browser control server", () => {
       });
       expect(resizeNegative.code).toBe("ACT_INVALID_REQUEST");
       expect(resizeNegative.error).toContain("resize requires positive width and height");
+      expect(pwMocks.resizeViewportViaPlaywright).toHaveBeenCalledTimes(1);
+
+      const resizeTooLarge = await postJson<{ error?: string; code?: string }>(`${base}/act`, {
+        kind: "resize",
+        width: 8193,
+        height: 600,
+      });
+      expect(resizeTooLarge.code).toBe("ACT_INVALID_REQUEST");
+      expect(resizeTooLarge.error).toContain("resize width and height must not exceed 8192");
       expect(pwMocks.resizeViewportViaPlaywright).toHaveBeenCalledTimes(1);
 
       const wait = await postJson<{ ok: boolean }>(`${base}/act`, {

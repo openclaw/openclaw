@@ -1,10 +1,27 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import { createProviderAuthChecker } from "./model-provider-auth.js";
-import { buildConfiguredModelCatalog, modelKey } from "./model-selection.js";
-import { createModelVisibilityPolicy } from "./model-visibility-policy.js";
+import { modelKey } from "./model-selection-normalize.js";
+import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
+import {
+  RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
+  createModelVisibilityPolicy,
+} from "./model-visibility-policy.js";
 
 type ModelCatalogVisibilityView = "default" | "configured" | "all";
+type ProviderAuthChecker = (provider: string) => boolean | Promise<boolean>;
+
+function isPromiseLike(value: boolean | Promise<boolean>): value is Promise<boolean> {
+  return typeof value === "object" && value !== null && typeof value.then === "function";
+}
+
+async function providerHasAuth(
+  providerAuthChecker: ProviderAuthChecker,
+  provider: string,
+): Promise<boolean> {
+  const result = providerAuthChecker(provider);
+  return isPromiseLike(result) ? await result : result;
+}
 
 function sortModelCatalogEntries(entries: ModelCatalogEntry[]): ModelCatalogEntry[] {
   return entries.toSorted(
@@ -31,12 +48,13 @@ export async function resolveVisibleModelCatalog(params: {
   catalog: ModelCatalogEntry[];
   defaultProvider: string;
   defaultModel?: string;
+  agentDir?: string;
   agentId?: string;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   view?: ModelCatalogVisibilityView;
   runtimeAuthDiscovery?: boolean;
-  providerAuthChecker?: (provider: string) => Promise<boolean>;
+  providerAuthChecker?: ProviderAuthChecker;
 }): Promise<ModelCatalogEntry[]> {
   if (params.view === "all") {
     return params.catalog;
@@ -51,6 +69,7 @@ export async function resolveVisibleModelCatalog(params: {
       createProviderAuthChecker({
         cfg: params.cfg,
         workspaceDir: params.workspaceDir,
+        agentDir: params.agentDir,
         agentId: params.agentId,
         env: params.env,
         allowPluginSyntheticAuth: params.runtimeAuthDiscovery,
@@ -58,7 +77,7 @@ export async function resolveVisibleModelCatalog(params: {
       });
     const authBackedCatalog: ModelCatalogEntry[] = [];
     for (const entry of params.catalog) {
-      if (await hasAuth(entry.provider)) {
+      if (await providerHasAuth(hasAuth, entry.provider)) {
         authBackedCatalog.push(entry);
       }
     }
@@ -73,6 +92,7 @@ export async function resolveVisibleModelCatalog(params: {
     defaultProvider: params.defaultProvider,
     defaultModel: params.defaultModel,
     agentId: params.agentId,
+    ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
   });
   const defaultVisibleCatalog =
     policy.allowAny || policy.hasProviderWildcards ? await buildDefaultVisibleCatalog() : [];

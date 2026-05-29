@@ -13,7 +13,11 @@ import {
   waitProviderOperationPollInterval,
   type ProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asSafeIntegerInRange,
+  isRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   GeneratedVideoAsset,
   VideoGenerationProvider,
@@ -25,6 +29,9 @@ const DEFAULT_BYTEPLUS_VIDEO_MODEL = "seedance-1-0-lite-t2v-250428";
 const DEFAULT_TIMEOUT_MS = 120_000;
 const POLL_INTERVAL_MS = 5_000;
 const MAX_POLL_ATTEMPTS = 120;
+const BYTEPLUS_SEED_MAX = 2_147_483_647;
+const BYTEPLUS_MIN_DURATION_SECONDS = 2;
+const BYTEPLUS_MAX_DURATION_SECONDS = 12;
 
 type BytePlusTaskCreateResponse = {
   id?: unknown;
@@ -42,10 +49,6 @@ type BytePlusTaskResponse = {
 };
 
 type BytePlusTaskStatus = "running" | "failed" | "queued" | "succeeded" | "cancelled";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 async function readBytePlusJsonResponse<T>(
   response: Pick<Response, "json">,
@@ -118,6 +121,27 @@ function resolveBytePlusImageUrl(req: VideoGenerationRequest): string | undefine
     throw new Error("BytePlus reference image is missing image data.");
   }
   return toDataUrl(input.buffer, normalizeOptionalString(input.mimeType) ?? "image/png");
+}
+
+function resolveBytePlusSeed(value: unknown): number | undefined {
+  return asSafeIntegerInRange(value, { min: -1, max: BYTEPLUS_SEED_MAX });
+}
+
+function resolveBytePlusDurationSeconds(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  return asSafeIntegerInRange(Math.round(value), {
+    min: BYTEPLUS_MIN_DURATION_SECONDS,
+    max: BYTEPLUS_MAX_DURATION_SECONDS,
+  });
+}
+
+function readBytePlusDurationSeconds(value: unknown): number | undefined {
+  return asSafeIntegerInRange(value, {
+    min: BYTEPLUS_MIN_DURATION_SECONDS,
+    max: BYTEPLUS_MAX_DURATION_SECONDS,
+  });
 }
 
 async function pollBytePlusTask(params: {
@@ -301,8 +325,9 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
       if (resolution) {
         body.resolution = resolution;
       }
-      if (typeof req.durationSeconds === "number" && Number.isFinite(req.durationSeconds)) {
-        body.duration = Math.max(1, Math.round(req.durationSeconds));
+      const duration = resolveBytePlusDurationSeconds(req.durationSeconds);
+      if (duration !== undefined) {
+        body.duration = duration;
       }
       if (typeof req.audio === "boolean") {
         body.generate_audio = req.audio;
@@ -314,7 +339,7 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
       // Forward declared providerOptions: seed, draft, camerafixed.
       // draft=true forces 480p resolution for faster generation.
       const opts = req.providerOptions ?? {};
-      const seed = typeof opts.seed === "number" ? opts.seed : undefined;
+      const seed = resolveBytePlusSeed(opts.seed);
       const draft = opts.draft === true;
       // Official JSON body field is camera_fixed (with underscore).
       const cameraFixed = typeof opts.camera_fixed === "boolean" ? opts.camera_fixed : undefined;
@@ -378,7 +403,7 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
             videoUrl,
             ratio: normalizeOptionalString(completed.ratio),
             resolution: normalizeOptionalString(completed.resolution),
-            duration: typeof completed.duration === "number" ? completed.duration : undefined,
+            duration: readBytePlusDurationSeconds(completed.duration),
           },
         };
       } finally {

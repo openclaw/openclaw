@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import type { HealthSummary } from "../../commands/health.js";
+import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import type { CostUsageSummary } from "../../infra/session-cost-usage.js";
 import type {
   DiagnosticStabilityBundle,
@@ -129,9 +130,9 @@ function parseDaysOption(raw: unknown, fallback = 30): number {
     return Math.max(1, Math.floor(raw));
   }
   if (typeof raw === "string" && raw.trim() !== "") {
-    const parsed = Number(raw);
-    if (Number.isFinite(parsed)) {
-      return Math.max(1, Math.floor(parsed));
+    const parsed = parseStrictPositiveInteger(raw);
+    if (parsed !== undefined) {
+      return parsed;
     }
   }
   return fallback;
@@ -211,6 +212,9 @@ function formatStabilityEvent(record: DiagnosticStabilityEventRecord): string {
     record.bytes !== undefined ? `bytes=${formatBytes(record.bytes)}` : "",
     record.limitBytes !== undefined ? `limit=${formatBytes(record.limitBytes)}` : "",
     record.queueDepth !== undefined ? `queueDepth=${record.queueDepth}` : "",
+    record.queueLength !== undefined ? `queueLength=${record.queueLength}` : "",
+    record.droppedEvents !== undefined ? `dropped=${record.droppedEvents}` : "",
+    record.maxQueueLength !== undefined ? `maxQueue=${record.maxQueueLength}` : "",
     record.queued !== undefined ? `queued=${record.queued}` : "",
     record.memory ? `rss=${formatBytes(record.memory.rssBytes)}` : "",
     record.memory ? `heap=${formatBytes(record.memory.heapUsedBytes)}` : "",
@@ -400,6 +404,17 @@ function resolveSupportExportRpcOptions(
   };
 }
 
+function parseOptionalPositiveIntegerOption(raw: unknown, label: string): number | undefined {
+  if (raw === undefined || raw === null || raw === "") {
+    return undefined;
+  }
+  const parsed = parseStrictPositiveInteger(raw);
+  if (parsed === undefined) {
+    throw new Error(`${label} must be a positive integer.`);
+  }
+  return parsed;
+}
+
 async function writeSupportExportFromCli(opts: {
   json?: boolean;
   output?: string;
@@ -412,8 +427,8 @@ async function writeSupportExportFromCli(opts: {
   const rpc = resolveSupportExportRpcOptions(opts.rpc);
   const result = await writeDiagnosticSupportExport({
     outputPath: opts.output,
-    logLimit: opts.logLines ? Number(opts.logLines) : undefined,
-    logMaxBytes: opts.logBytes ? Number(opts.logBytes) : undefined,
+    logLimit: parseOptionalPositiveIntegerOption(opts.logLines, "--log-lines"),
+    logMaxBytes: parseOptionalPositiveIntegerOption(opts.logBytes, "--log-bytes"),
     stabilityBundle: opts.stabilityBundle,
     readStatusSnapshot: async () => {
       const { gatherDaemonStatus } = await loadDaemonStatusGatherModule();

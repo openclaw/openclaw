@@ -96,6 +96,7 @@ describe("Code Mode", () => {
   afterEach(() => {
     testing.activeRuns.clear();
     testing.resumingRunIds.clear();
+    testing.setTypescriptRuntimeForTest(null);
   });
 
   it("resolves object config defaults", () => {
@@ -440,7 +441,7 @@ describe("Code Mode", () => {
       tools: {
         codeMode: {
           enabled: true,
-          timeoutMs: 100,
+          timeoutMs: 1_000,
         },
       },
     } as never;
@@ -662,6 +663,17 @@ describe("Code Mode", () => {
   });
 
   it("supports TypeScript source transform", async () => {
+    testing.setTypescriptRuntimeForTest({
+      transpileModule: vi.fn((code: string) => ({
+        outputText: code.replace(": number", ""),
+        diagnostics: [],
+      })),
+      ScriptTarget: { ES2022: 9 },
+      ModuleKind: { ESNext: 99 },
+      ImportsNotUsedAsValues: { Remove: 0 },
+      DiagnosticCategory: { Error: 1 },
+      flattenDiagnosticMessageText: (message: unknown) => String(message),
+    } as never);
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     applyCodeModeCatalog({
       tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
@@ -748,6 +760,7 @@ describe("Code Mode", () => {
 
     expect(details.status).toBe("failed");
     expect(String(details.error)).toContain("output limit exceeded");
+    expect(details.code).toBe("output_limit_exceeded");
   });
 
   it("enforces output limits before suspending runs", async () => {
@@ -787,7 +800,52 @@ describe("Code Mode", () => {
 
     expect(details.status).toBe("failed");
     expect(String(details.error)).toContain("output limit exceeded");
+    expect(details.code).toBe("output_limit_exceeded");
     expect(testing.activeRuns.size).toBe(beforeRunCount);
+  });
+
+  it("preserves guest output when a run fails", async () => {
+    const { config, catalogRef, tools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...tools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = resultDetails(
+      await tools[0].execute("code-call-output-before-error", {
+        code: 'text("before"); throw new Error("boom");',
+      }),
+    );
+
+    expect(details.status).toBe("failed");
+    expect(details.error).toBe("boom");
+    expect(details.output).toEqual([{ type: "text", text: "before" }]);
+  });
+
+  it("classifies snapshot limit failures", async () => {
+    const config = resolveCodeModeConfig({
+      tools: { codeMode: { enabled: true, maxSnapshotBytes: 1024 } },
+    } as never);
+
+    const result = await testing.runCodeModeWorker(
+      {
+        kind: "exec",
+        source: 'const value = "x".repeat(100000); await yield_control("pause"); return value;',
+        config,
+        catalog: [],
+      },
+      1000,
+    );
+
+    expect(result.status).toBe("failed");
+    expect(result).toMatchObject({
+      code: "snapshot_limit_exceeded",
+      error: "code mode snapshot limit exceeded",
+    });
   });
 
   it("terminates hostile infinite loops outside the main event loop", async () => {
@@ -829,6 +887,32 @@ describe("Code Mode", () => {
     expect(details.status).toBe("failed");
     expect(String(details.error)).toContain("timeout exceeded");
     expect(details.code).toBe("timeout");
+  });
+
+  it("normalizes QuickJS interrupt timeout errors", () => {
+    expect(
+      testing.normalizeCodeModeWorkerResult({
+        status: "failed",
+        code: "timeout",
+        error: "interrupted",
+        output: [],
+      }),
+    ).toMatchObject({
+      code: "timeout",
+      error: "code mode timeout exceeded",
+    });
+
+    expect(
+      testing.normalizeCodeModeWorkerResult({
+        status: "failed",
+        code: "internal_error",
+        error: "interrupted",
+        output: [],
+      }),
+    ).toMatchObject({
+      code: "internal_error",
+      error: "interrupted",
+    });
   });
 
   it("classifies missing worker runtime as unavailable", async () => {
@@ -883,7 +967,7 @@ describe("Code Mode", () => {
         config,
         catalog: [],
       },
-      500,
+      10_000,
     );
 
     expect(result.status).toBe("failed");

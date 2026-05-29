@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
 import { resetAgentEventsForTest } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -20,7 +20,6 @@ import {
   type CodexAppServerEventProjectorOptions,
   type CodexAppServerToolTelemetry,
 } from "./event-projector.js";
-import { CodexNativeSubagentTaskMirror } from "./native-subagent-task-mirror.js";
 import { rememberCodexRateLimits, resetCodexRateLimitCacheForTests } from "./rate-limit-cache.js";
 import { createCodexTestModel } from "./test-support.js";
 
@@ -719,7 +718,7 @@ describe("CodexAppServerEventProjector", () => {
 
     expect(result.promptError).toContain("You've reached your Codex subscription usage limit.");
     expect(result.promptError).toContain("Next reset in");
-    expect(result.promptError).toContain("Run /codex account");
+    expect(result.promptError).toContain("Wait until the reset time");
     expect(result.promptErrorSource).toBe("prompt");
   });
 
@@ -996,36 +995,6 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.assistantTexts).toStrictEqual([]);
   });
 
-  it("mirrors native subagent notifications before current-turn filtering", async () => {
-    const projector = await createProjector({
-      ...(await createParams()),
-      sessionKey: "agent:main:main",
-    } as EmbeddedRunAttemptParams);
-    const mirrorSpy = vi.spyOn(CodexNativeSubagentTaskMirror.prototype, "handleNotification");
-    const notification = {
-      method: "item/completed",
-      params: {
-        threadId: THREAD_ID,
-        turnId: "child-turn",
-        item: {
-          type: "collabAgentToolCall",
-          tool: "spawnAgent",
-          senderThreadId: THREAD_ID,
-          receiverThreadIds: ["child-thread"],
-          agentsStates: {
-            "child-thread": { status: "completed", message: "done" },
-          },
-        },
-      },
-    } as ProjectorNotification;
-
-    await projector.handleNotification(notification);
-
-    expect(mirrorSpy).toHaveBeenCalledWith(notification);
-    const result = projector.buildResult(buildEmptyToolTelemetry());
-    expect(result.assistantTexts).toEqual([]);
-  });
-
   it("ignores notifications that omit top-level thread and turn ids", async () => {
     const projector = await createProjector();
 
@@ -1181,7 +1150,10 @@ describe("CodexAppServerEventProjector", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    expect(onReasoningStream).toHaveBeenCalledWith({ text: "thinking" });
+    expect(onReasoningStream).toHaveBeenCalledWith({
+      text: "thinking",
+      isReasoningSnapshot: true,
+    });
     expect(onReasoningEnd).toHaveBeenCalledTimes(1);
     expect(findPlanEventWithSteps(onAgentEvent, ["patch (in_progress)"]).steps).toEqual([
       "patch (in_progress)",
@@ -1204,6 +1176,94 @@ describe("CodexAppServerEventProjector", () => {
     expect(JSON.stringify(result.messagesSnapshot[1])).toContain("Codex reasoning");
     expect(JSON.stringify(result.messagesSnapshot[2])).toContain("Codex plan");
     expect(requireRecord(result.itemLifecycle, "item lifecycle").compactionCount).toBe(1);
+  });
+
+  it("streams accumulated reasoning snapshots grouped by Codex reasoning indexes", async () => {
+    const onReasoningStream = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      onReasoningStream,
+    });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/reasoning/textDelta", {
+        itemId: "reason-1",
+        contentIndex: 1,
+        delta: "Checking ",
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/reasoning/textDelta", {
+        itemId: "reason-1",
+        contentIndex: 0,
+        delta: "Reading ",
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/reasoning/textDelta", {
+        itemId: "reason-1",
+        contentIndex: 0,
+        delta: "files",
+      }),
+    );
+
+    expect(onReasoningStream).toHaveBeenCalledTimes(3);
+    expect(onReasoningStream).toHaveBeenNthCalledWith(1, {
+      text: "Checking ",
+      isReasoningSnapshot: true,
+    });
+    expect(onReasoningStream).toHaveBeenNthCalledWith(2, {
+      text: "Reading \n\nChecking ",
+      isReasoningSnapshot: true,
+    });
+    expect(onReasoningStream).toHaveBeenNthCalledWith(3, {
+      text: "Reading files\n\nChecking ",
+      isReasoningSnapshot: true,
+    });
+  });
+
+  it("streams accumulated reasoning summaries grouped by summary section", async () => {
+    const onReasoningStream = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      onReasoningStream,
+    });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/reasoning/summaryTextDelta", {
+        itemId: "reason-1",
+        summaryIndex: 1,
+        delta: "Second",
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/reasoning/summaryTextDelta", {
+        itemId: "reason-1",
+        summaryIndex: 0,
+        delta: "First ",
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/reasoning/summaryTextDelta", {
+        itemId: "reason-1",
+        summaryIndex: 0,
+        delta: "section",
+      }),
+    );
+
+    expect(onReasoningStream).toHaveBeenCalledTimes(3);
+    expect(onReasoningStream).toHaveBeenNthCalledWith(1, {
+      text: "Second",
+      isReasoningSnapshot: true,
+    });
+    expect(onReasoningStream).toHaveBeenNthCalledWith(2, {
+      text: "First \n\nSecond",
+      isReasoningSnapshot: true,
+    });
+    expect(onReasoningStream).toHaveBeenNthCalledWith(3, {
+      text: "First section\n\nSecond",
+      isReasoningSnapshot: true,
+    });
   });
 
   it("synthesizes normalized tool progress for Codex-native tool items", async () => {
@@ -1978,7 +2038,88 @@ describe("CodexAppServerEventProjector", () => {
     expect(event.params).toEqual({ query: "native tool observability" });
     expect(event.runId).toBe("run-1");
     expect(event.toolCallId).toBe("search-observed");
-    expect(event.result).toEqual({ status: "completed" });
+    expect(event.result).toEqual({
+      status: "completed",
+      durationMs: 5,
+      query: "native tool observability",
+    });
+  });
+
+  it("uses Codex web search action metadata when the top-level query is empty", async () => {
+    const afterToolCall = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "after_tool_call", handler: afterToolCall }]),
+    );
+    const projector = await createProjector();
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "webSearch",
+          id: "search-observed",
+          query: "",
+          action: {
+            type: "search",
+            query: "native action query",
+            queries: ["native action query", "secondary query"],
+          },
+          status: "completed",
+          durationMs: 5,
+        },
+      }),
+    );
+
+    await vi.waitFor(() => expect(afterToolCall).toHaveBeenCalledTimes(1));
+    const event = requireRecord(
+      mockCallArg(afterToolCall, 0, 0, "after_tool_call event"),
+      "after_tool_call event",
+    );
+    expect(event.toolName).toBe("web_search");
+    expect(event.params).toEqual({
+      query: "native action query",
+      queries: ["native action query", "secondary query"],
+    });
+    expect(event.result).toEqual({
+      status: "completed",
+      durationMs: 5,
+      query: "native action query",
+      queries: ["native action query", "secondary query"],
+    });
+  });
+
+  it("marks unavailable Codex web search queries explicitly", async () => {
+    const afterToolCall = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "after_tool_call", handler: afterToolCall }]),
+    );
+    const projector = await createProjector();
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "webSearch",
+          id: "search-observed",
+          query: "",
+          action: { type: "other" },
+          status: "completed",
+        },
+      }),
+    );
+
+    await vi.waitFor(() => expect(afterToolCall).toHaveBeenCalledTimes(1));
+    const event = requireRecord(
+      mockCallArg(afterToolCall, 0, 0, "after_tool_call event"),
+      "after_tool_call event",
+    );
+    expect(event.params).toEqual({
+      action: "other",
+      queryUnavailable: true,
+    });
+    expect(event.result).toEqual({
+      status: "completed",
+      action: "other",
+      queryUnavailable: true,
+    });
   });
 
   it("records dynamic OpenClaw tool calls in mirrored transcript snapshots", async () => {
@@ -2029,6 +2170,87 @@ describe("CodexAppServerEventProjector", () => {
     expect(toolResultContent.toolName).toBe("browser");
     expect(toolResultContent.toolCallId).toBe("call-browser-1");
     expect(toolResultContent.content).toBe("opened");
+  });
+
+  it("does not mirror Codex-native web searches into transcript snapshots", async () => {
+    const projector = await createProjector();
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "webSearch",
+          id: "search-observed",
+          status: "completed",
+          durationMs: 5,
+        },
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(
+      result.messagesSnapshot.some((message) => {
+        const record = message as unknown as Record<string, unknown>;
+        if (record.role === "toolResult") {
+          return true;
+        }
+        const content = Array.isArray(record.content) ? record.content : [];
+        return content.some((entry) => {
+          return (
+            typeof entry === "object" &&
+            entry !== null &&
+            (entry as Record<string, unknown>).type === "toolCall"
+          );
+        });
+      }),
+    ).toBe(false);
+  });
+
+  it("carries async-started dynamic tool metadata into attempt results", async () => {
+    const projector = await createProjector();
+
+    projector.recordDynamicToolCall({
+      callId: "call-image-1",
+      tool: "image_generate",
+      arguments: { action: "generate", prompt: "lighthouse" },
+    });
+    projector.recordDynamicToolResult({
+      callId: "call-image-1",
+      tool: "image_generate",
+      asyncStarted: true,
+      success: true,
+      sideEffectEvidence: true,
+      contentItems: [{ type: "inputText", text: "Background task started." }],
+    });
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "dynamicToolCall",
+          id: "call-image-1",
+          namespace: null,
+          tool: "image_generate",
+          arguments: { action: "generate", prompt: "lighthouse" },
+          status: "completed",
+          contentItems: [{ type: "inputText", text: "Background task started." }],
+          success: true,
+          durationMs: 10,
+        },
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.toolMetas).toEqual([
+      {
+        toolName: "image_generate",
+        meta: "lighthouse",
+        asyncStarted: true,
+      },
+    ]);
+    expect(result.replayMetadata).toEqual({
+      hadPotentialSideEffects: true,
+      replaySafe: false,
+    });
   });
 
   it("emits verbose summaries for transcript-recorded dynamic tool calls", async () => {

@@ -177,11 +177,11 @@ const VideoGenerateToolProperties = {
   resolution: Type.Optional(
     Type.String({
       description:
-        "Resolution: 480P, 720P, 768P, 1080P, 4K, or provider value; unsupported normalized/ignored.",
+        "Resolution: 360P, 480P, 540P, 720P, 768P, 1080P, 4K, or provider value; unsupported normalized/ignored.",
     }),
   ),
   durationSeconds: Type.Optional(
-    Type.Number({
+    Type.Integer({
       description: "Target seconds; may round to nearest supported duration.",
       minimum: 1,
     }),
@@ -203,7 +203,7 @@ const VideoGenerateToolProperties = {
     }),
   ),
   timeoutMs: Type.Optional(
-    Type.Number({
+    Type.Integer({
       description: "Provider timeout ms.",
       minimum: 1,
     }),
@@ -222,11 +222,13 @@ function createVideoGenerateToolSchema(params: { includeAudioReferences: boolean
 
 export function resolveVideoGenerationModelConfigForTool(params: {
   cfg?: OpenClawConfig;
+  workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
 }): ToolModelConfig | null {
   return resolveCapabilityModelConfigForTool({
     cfg: params.cfg,
+    workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     authStore: params.authStore,
     modelConfig: params.cfg?.agents?.defaults?.videoGenerationModel,
@@ -958,6 +960,7 @@ export function createVideoGenerateTool(options?: {
 
       if (action === "list") {
         return createVideoGenerateListActionResult(cfg, {
+          workspaceDir: options?.workspaceDir,
           agentDir: options?.agentDir,
           authStore: options?.authProfileStore,
         });
@@ -969,6 +972,7 @@ export function createVideoGenerateTool(options?: {
 
       const videoGenerationModelConfig = resolveVideoGenerationModelConfigForTool({
         cfg,
+        workspaceDir: options?.workspaceDir,
         agentDir: options?.agentDir,
         authStore: options?.authProfileStore,
       });
@@ -994,9 +998,15 @@ export function createVideoGenerateTool(options?: {
       const aspectRatio = normalizeAspectRatio(readStringParam(args, "aspectRatio"));
       const resolution = normalizeResolution(readStringParam(args, "resolution"));
       const durationSeconds = readNumberParam(args, "durationSeconds", {
-        integer: true,
+        positiveInteger: true,
         strict: true,
       });
+      if (
+        durationSeconds === undefined &&
+        readSnakeCaseParamRaw(args, "durationSeconds") !== undefined
+      ) {
+        throw new ToolInputError("durationSeconds must be a positive integer");
+      }
       const audio = readBooleanToolParam(args, "audio");
       const watermark = readBooleanToolParam(args, "watermark");
       const timeoutMs = readGenerationTimeoutMs(args) ?? videoGenerationModelConfig.timeoutMs;

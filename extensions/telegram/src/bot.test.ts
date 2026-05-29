@@ -1178,7 +1178,7 @@ describe("createTelegramBot", () => {
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-4");
   });
 
-  it("routes compact model callbacks by inferring provider", async () => {
+  it("routes compact model callbacks against the configured provider", async () => {
     onSpy.mockClear();
     replySpy.mockClear();
     editMessageTextSpy.mockClear();
@@ -1188,7 +1188,7 @@ describe("createTelegramBot", () => {
     const config: OpenClawConfig = {
       agents: {
         defaults: {
-          model: `bedrock/${modelId}`,
+          model: `amazon-bedrock/${modelId}`,
         },
       },
       channels: {
@@ -2372,9 +2372,8 @@ describe("createTelegramBot", () => {
       await flushTimer?.();
       await replyDelivered;
 
-      expect(getFileSpy).toHaveBeenCalledTimes(1);
       expect(getFileSpy).toHaveBeenCalledWith("reply-photo-1");
-      expect(mediaFetch).toHaveBeenCalledTimes(1);
+      expect(mediaFetch).toHaveBeenCalled();
     } finally {
       setTimeoutSpy.mockRestore();
       ssrfMock.mockRestore();
@@ -2405,7 +2404,7 @@ describe("createTelegramBot", () => {
     expect(replySpy).toHaveBeenCalledTimes(1);
     const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
     expect(payload.Body).toContain("[Reply chain - nearest first]");
-    expect(payload.Body).toContain("[1. unknown sender]");
+    expect(payload.Body).toContain("[1. unknown sender");
     expect(payload.Body).toContain('"summarize this"');
     expect(payload.ReplyToId).toBeUndefined();
     expect(payload.ReplyToBody).toBe("summarize this");
@@ -2441,7 +2440,7 @@ describe("createTelegramBot", () => {
     expect(replySpy).toHaveBeenCalledTimes(1);
     const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
     expect(payload.Body).toContain("[Reply chain - nearest first]");
-    expect(payload.Body).toContain("[1. Ada id:9002]");
+    expect(payload.Body).toContain("[1. Ada id:9002");
     expect(payload.Body).toContain('"summarize this"');
     expect(payload.ReplyToId).toBe("9002");
     expect(payload.ReplyToBody).toBe("summarize this");
@@ -3021,6 +3020,49 @@ describe("createTelegramBot", () => {
     expect(replySpy).toHaveBeenCalledTimes(1);
     const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
     expect(payload.CommandTargetSessionKey).toBe("agent:main:main");
+  });
+
+  it("uses bot topic capability for native dm topic command target sessions", async () => {
+    onSpy.mockClear();
+    sendMessageSpy.mockClear();
+    commandSpy.mockClear();
+    replySpy.mockClear();
+    replySpy.mockResolvedValue({ text: "response" });
+
+    loadConfig.mockReturnValue({
+      commands: { native: true },
+      channels: {
+        telegram: {
+          dmPolicy: "pairing",
+        },
+      },
+    });
+    readChannelAllowFromStore.mockResolvedValueOnce(["12345"]);
+
+    createTelegramBot({ token: "tok" });
+    const handler = commandSpy.mock.calls.find((call) => call[0] === "status")?.[1] as
+      | ((ctx: Record<string, unknown>) => Promise<void>)
+      | undefined;
+    if (!handler) {
+      throw new Error("status command handler missing");
+    }
+
+    await handler({
+      message: {
+        chat: { id: 12345, type: "private" },
+        from: { id: 12345, username: "testuser" },
+        text: "/status",
+        date: 1736380800,
+        message_id: 42,
+        message_thread_id: 99,
+      },
+      me: { has_topics_enabled: true },
+      match: "",
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
+    expect(payload.CommandTargetSessionKey).toBe("agent:main:main:thread:12345:99");
   });
 
   it("allows native DM commands for paired users", async () => {

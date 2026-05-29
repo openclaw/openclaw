@@ -1,13 +1,15 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { ClientToolDefinition } from "../agents/command/shared-types.js";
+import { isClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
+import type { AgentStreamParams, ClientToolDefinition } from "../agents/command/shared-types.js";
 import type { ImageContent } from "../agents/command/types.js";
-import { isClientToolNameConflictError } from "../agents/pi-tool-definition-adapter.js";
+import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import {
   hasNonzeroUsage,
   normalizeUsage,
   toOpenAiChatCompletionsUsage,
   type NormalizedUsage,
+  type OpenAiChatCompletionsUsage,
 } from "../agents/usage.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
@@ -26,6 +28,7 @@ import {
   type InputImageSource,
 } from "../media/input-files.js";
 import { defaultRuntime } from "../runtime.js";
+import { resolveIntegerOption } from "../shared/number-coercion.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -62,6 +65,7 @@ type OpenAiChatMessage = {
   name?: unknown;
   tool_call_id?: unknown;
   tool_calls?: unknown;
+  stopReason?: unknown;
 };
 
 type OpenAiChatCompletionRequest = {
@@ -78,6 +82,9 @@ type OpenAiChatCompletionRequest = {
   temperature?: unknown;
   top_p?: unknown;
   response_format?: unknown;
+  frequency_penalty?: unknown;
+  presence_penalty?: unknown;
+  seed?: unknown;
 };
 
 const DEFAULT_OPENAI_CHAT_COMPLETIONS_BODY_BYTES = 20 * 1024 * 1024;
@@ -105,14 +112,14 @@ function resolveOpenAiChatCompletionsLimits(
   const imageConfig = config?.images;
   return {
     maxBodyBytes: config?.maxBodyBytes ?? DEFAULT_OPENAI_CHAT_COMPLETIONS_BODY_BYTES,
-    maxImageParts:
-      typeof config?.maxImageParts === "number"
-        ? Math.max(0, Math.floor(config.maxImageParts))
-        : DEFAULT_OPENAI_MAX_IMAGE_PARTS,
-    maxTotalImageBytes:
-      typeof config?.maxTotalImageBytes === "number"
-        ? Math.max(1, Math.floor(config.maxTotalImageBytes))
-        : DEFAULT_OPENAI_MAX_TOTAL_IMAGE_BYTES,
+    maxImageParts: resolveIntegerOption(config?.maxImageParts, DEFAULT_OPENAI_MAX_IMAGE_PARTS, {
+      min: 0,
+    }),
+    maxTotalImageBytes: resolveIntegerOption(
+      config?.maxTotalImageBytes,
+      DEFAULT_OPENAI_MAX_TOTAL_IMAGE_BYTES,
+      { min: 1 },
+    ),
     images: {
       allowUrl: imageConfig?.allowUrl ?? DEFAULT_OPENAI_IMAGE_LIMITS.allowUrl,
       urlAllowlist: normalizeInputHostnameAllowlist(imageConfig?.urlAllowlist),
@@ -136,12 +143,7 @@ function buildAgentCommandInput(params: {
   runId: string;
   messageChannel: string;
   abortSignal?: AbortSignal;
-  streamParams?: {
-    maxTokens?: number;
-    temperature?: number;
-    topP?: number;
-    responseFormat?: Record<string, unknown>;
-  };
+  streamParams?: AgentStreamParams;
 }) {
   return {
     message: params.prompt.message,
@@ -348,7 +350,7 @@ function writeUsageChunk(
   params: {
     runId: string;
     model: string;
-    usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+    usage: OpenAiChatCompletionsUsage;
   },
 ) {
   writeSse(res, {
@@ -654,6 +656,10 @@ function buildAgentPrompt(
     conversationEntries.push({
       role: normalizedRole,
       entry: { sender, body: messageContent },
+      internalStreamError:
+        normalizedRole === "assistant" &&
+        normalizeOptionalString(msg.stopReason) === "error" &&
+        messageContent.trim() === STREAM_ERROR_FALLBACK_TEXT,
     });
   }
 
@@ -763,11 +769,7 @@ function resolveStopReasonAndPendingToolCalls(meta: unknown): {
   return { stopReason, pendingToolCalls };
 }
 
-function resolveChatCompletionUsage(result: unknown): {
-  prompt_tokens: number;
-  completion_tokens: number;
-  total_tokens: number;
-} {
+function resolveChatCompletionUsage(result: unknown): OpenAiChatCompletionsUsage {
   return toOpenAiChatCompletionsUsage(resolveAgentRunUsage(result));
 }
 
@@ -843,6 +845,11 @@ export async function handleOpenAiHttpRequest(
         : undefined;
   const temperature = typeof payload.temperature === "number" ? payload.temperature : undefined;
   const topP = typeof payload.top_p === "number" ? payload.top_p : undefined;
+  const frequencyPenalty =
+    typeof payload.frequency_penalty === "number" ? payload.frequency_penalty : undefined;
+  const presencePenalty =
+    typeof payload.presence_penalty === "number" ? payload.presence_penalty : undefined;
+  const seed = typeof payload.seed === "number" ? payload.seed : undefined;
   let responseFormat: Record<string, unknown> | undefined;
   try {
     responseFormat = resolveResponseFormat(payload.response_format);
@@ -858,6 +865,9 @@ export async function handleOpenAiHttpRequest(
   const samplingError = validateOpenAiSamplingParams({
     temperature: payload.temperature,
     topP: payload.top_p,
+    frequencyPenalty: payload.frequency_penalty,
+    presencePenalty: payload.presence_penalty,
+    seed: payload.seed,
   });
   if (samplingError) {
     sendJson(res, 400, {
@@ -869,12 +879,18 @@ export async function handleOpenAiHttpRequest(
     maxTokens !== undefined ||
     temperature !== undefined ||
     topP !== undefined ||
-    responseFormat !== undefined
+    responseFormat !== undefined ||
+    frequencyPenalty !== undefined ||
+    presencePenalty !== undefined ||
+    seed !== undefined
       ? {
           ...(maxTokens !== undefined ? { maxTokens } : {}),
           ...(temperature !== undefined ? { temperature } : {}),
           ...(topP !== undefined ? { topP } : {}),
           ...(responseFormat !== undefined ? { responseFormat } : {}),
+          ...(frequencyPenalty !== undefined ? { frequencyPenalty } : {}),
+          ...(presencePenalty !== undefined ? { presencePenalty } : {}),
+          ...(seed !== undefined ? { seed } : {}),
         }
       : undefined;
 
@@ -1048,13 +1064,7 @@ export async function handleOpenAiHttpRequest(
   let wroteRole = false;
   let wroteStopChunk = false;
   let sawAssistantDelta = false;
-  let finalUsage:
-    | {
-        prompt_tokens: number;
-        completion_tokens: number;
-        total_tokens: number;
-      }
-    | undefined;
+  let finalUsage: OpenAiChatCompletionsUsage | undefined;
   let finalizeRequested = false;
   let finalizeFinishReason: "stop" | "tool_calls" = "stop";
   let resultResolved = false;

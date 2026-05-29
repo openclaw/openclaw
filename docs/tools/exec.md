@@ -145,7 +145,7 @@ Per-agent node binding (use the agent list index in config):
 
 ```bash
 openclaw config get agents.list
-openclaw config set agents.list[0].tools.exec.node "node-id-or-name"
+openclaw config set 'agents.list[0].tools.exec.node' "node-id-or-name"
 ```
 
 Control UI: the Nodes tab includes a small "Exec node binding" panel for the same settings.
@@ -164,9 +164,10 @@ Example:
 ## Authorization model
 
 `/exec` is only honored for **authorized senders** (channel allowlists/pairing plus `commands.useAccessGroups`).
-It updates **session state only** and does not write config. To hard-disable exec, deny it via tool
-policy (`tools.deny: ["exec"]` or per-agent). Host approvals still apply unless you explicitly set
-`security=full` and `ask=off`.
+It updates **session state only** and does not write config. Authorized external channel senders may
+set these session defaults. Internal gateway/webchat clients need `operator.admin` to persist them.
+To hard-disable exec, deny it via tool policy (`tools.deny: ["exec"]` or per-agent). Host approvals
+still apply unless you explicitly set `security=full` and `ask=off`.
 
 ## Exec approvals (companion app / node host)
 

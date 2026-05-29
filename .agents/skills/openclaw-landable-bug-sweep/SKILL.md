@@ -1,12 +1,13 @@
 ---
 name: openclaw-landable-bug-sweep
-description: "Find or repair small high-confidence OpenClaw bugfix PRs until five are landable."
+description: "Find or repair small high-confidence non-SDK-boundary OpenClaw bugfix PRs until five are landable."
 ---
 
 # OpenClaw Landable Bug Sweep
 
 Autonomous maintainer workflow for producing five landable OpenClaw bugfix PR URLs.
 Use for broad issue/PR sweeps where the bar is high and the output is PRs, not notes.
+Do not use for plugin SDK/API boundary work; those need separate architecture review.
 
 ## Target
 
@@ -14,10 +15,14 @@ Return exactly five PR URLs, each with:
 
 - bug summary
 - why the fix is low-risk
-- proof: local/CI/Testbox/live commands or run IDs
+- proof: rebased-head local/Testbox/live commands or run IDs
+- autoreview: clean result on the exact head being shown
+- CI green on the exact pushed PR head
 - issue/duplicate cleanup done or still pending
 
 The five URLs may be existing PRs that were reviewed/fixed, or new PRs created from issues/clusters.
+Do not present a PR URL to the maintainer until it has been refreshed on current `main`, left-tested, autoreviewed clean, pushed, and verified green in live GitHub CI.
+If code, tests, changelog, PR body, or branch base changes after autoreview, rerun autoreview before showing the URL.
 
 ## Companion Skills
 
@@ -36,8 +41,10 @@ Accept only when all are true:
 - no new config option
 - no backward-incompatible behavior
 - no security/product/owner-boundary decision needed
+- no plugin SDK, public plugin API, or `src/plugin-sdk/**` boundary change
 - no broad refactor smell
 - focused proof is feasible
+- branch can be rebased/refreshed and pushed, or a replacement PR can be created
 
 Good examples:
 
@@ -49,8 +56,12 @@ Good examples:
 Reject:
 
 - feature requests, new knobs, migrations, release work, workflow policy, support
+- plugin SDK/API boundary changes, including compatibility shims, new SDK methods, SDK exports, or plugin-facing channel/provider seams
 - auth/security boundary changes unless explicitly assigned
 - bugs needing live credentials that are unavailable
+- PRs with red CI unless you fix, rebase, push, and recheck them green
+- PRs you only reviewed locally but did not refresh/push/check live
+- PRs whose final head has not passed `$autoreview`
 - fixes whose clean shape is a larger architecture move
 - speculative reports without reproducible/provable cause
 - UI/UX changes requiring product judgment
@@ -78,15 +89,18 @@ Reject:
    - if unwritable or wrong shape, create own PR and preserve useful contributor credit
    - if no PR exists, create one
    - add regression test when it fits
-   - changelog for user-facing fixes; thank credited human reporter/contributor
-6. Review and publish:
-   - run focused proof
-   - run `$autoreview` until no accepted/actionable findings remain
+   - release-note context for user-facing fixes in PR body or commit message; credit human reporter/contributor when known
+6. Review, refresh, and publish:
+   - rebase or otherwise refresh the PR branch on current `origin/main`
+   - resolve drift, including newly exposed CI failures, rather than counting the PR as ready
+   - do not add `CHANGELOG.md` during normal sweep PRs; release automation generates it from PRs and commits
+   - left-test the rebased head with the smallest meaningful local/Testbox/live command that proves the bug
+   - run `$autoreview` until no accepted/actionable findings remain before creating, updating, or presenting the PR URL
    - create/update PR with real body and proof fields
-   - push branch
-   - get CI green or document exact external blocker; do not count blocked PRs in the five
+   - push the exact reviewed head
+   - verify live GitHub CI is green for that pushed head; do not count pending, red, dirty, conflicting, or externally blocked PRs in the five
 7. Hygiene:
-   - close duplicates and fixed-on-main issues with proof
+   - close duplicates and fixed-on-main issues/PRs with proof as soon as you notice them during the sweep
    - never mutate more than five associated items in one cluster without explicit confirmation
    - comments must be kind, concrete, and include proof/PR/commit links
 8. Repeat until five landable PR URLs are ready.
@@ -107,10 +121,11 @@ What was not tested:
 ## Existing PR Rules
 
 - Review code path beyond the diff before trusting it.
-- If PR is good: fix small issues, run proof, push if writable, get CI green.
+- If PR is good: rebase/refresh on current `main`, fix small issues, left-test, autoreview clean, push, and get CI green before showing or counting it.
 - If PR is not good but has a useful idea: recreate locally, co-author when warranted, close original with thanks and explanation.
 - If PR is duplicate or fixed on `main`: comment proof, close.
 - If maintainer cannot push to contributor branch: create own branch/PR, preserve useful commits or credit.
+- If CI turns red after local proof, treat that as normal work: inspect the failing job, fix or reject, rerun, and only count the PR once green.
 
 ## Output Ledger
 
@@ -124,7 +139,9 @@ accepted:
   root cause:
   fix:
   risk:
-  proof:
+  rebase/head:
+  left-test:
+  autoreview:
   CI:
   credit/thanks:
   cleanup:

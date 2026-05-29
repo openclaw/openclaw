@@ -733,7 +733,15 @@ export const handleNodeEvent = async (
           : undefined;
       const timedOut = obj.timedOut === true;
       const output = sanitizeInboundSystemTags(normalizeOptionalString(obj.output) ?? "");
-      const reason = sanitizeInboundSystemTags(normalizeOptionalString(obj.reason) ?? "");
+      // Strip parens from the untrusted RAW reason before sanitizeInboundSystemTags
+      // runs: the `Exec denied (node=..., <reason>): cmd` wire format is parsed by
+      // matching the first balanced `(...)` and stray parens in user-supplied
+      // input would break the metadata/body boundary. We strip pre-sanitize so
+      // that legitimate `[System Message]` style tags can still be converted to
+      // `(System Message)` by sanitizeInboundSystemTags afterward.
+      const reason = sanitizeInboundSystemTags(
+        (normalizeOptionalString(obj.reason) ?? "").replace(/[()]/g, ""),
+      );
 
       let text = "";
       if (evt.event === "exec.started") {

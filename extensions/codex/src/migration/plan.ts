@@ -12,7 +12,9 @@ import type {
   MigrationPlan,
   MigrationProviderContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { asBoolean, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "../app-server/config.js";
+import { buildCodexAuthItems } from "./auth.js";
 import { exists, sanitizeName } from "./helpers.js";
 import {
   codexPluginMigrationSubscriptionWarning,
@@ -260,11 +262,7 @@ function readExistingAllowDestructiveActions(
     ...CODEX_PLUGIN_NATIVE_CONFIG_PATH,
     "allow_destructive_actions",
   ]);
-  return typeof value === "boolean" ? value : undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+  return asBoolean(value);
 }
 
 export function buildCodexPluginsConfigValue(
@@ -396,6 +394,7 @@ export async function buildCodexMigrationPlan(
     );
   }
   const items: MigrationItem[] = [];
+  items.push(...(await buildCodexAuthItems({ ctx, source, targets })));
   items.push(
     ...(await buildSkillItems({
       skills: source.skills,
@@ -424,6 +423,11 @@ export async function buildCodexMigrationPlan(
     );
   }
   const warnings = [
+    ...(!ctx.includeSecrets && items.some((item) => item.kind === "auth")
+      ? [
+          "Auth credentials were detected but skipped. Re-run interactively or pass --include-secrets to import supported credentials.",
+        ]
+      : []),
     ...(items.some((item) => item.status === "conflict")
       ? [
           "Conflicts were found. Re-run with --overwrite to replace conflicting migration targets after item-level backups.",

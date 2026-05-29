@@ -362,6 +362,8 @@ export const pt_BR: TranslationMap = {
     pending: "{count} pending",
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
+    allowAlwaysUnavailable:
+      "A política de aprovação efetiva exige aprovação todas as vezes, portanto Permitir sempre não está disponível.",
     deny: "Deny",
     labels: {
       host: "Host",
@@ -393,6 +395,7 @@ export const pt_BR: TranslationMap = {
   },
   tabs: {
     agents: "Agentes",
+    activity: "Atividade",
     overview: "Visão Geral",
     channels: "Canais",
     instances: "Instâncias",
@@ -414,6 +417,7 @@ export const pt_BR: TranslationMap = {
   },
   subtitles: {
     agents: "Espaços, ferramentas, identidades.",
+    activity: "Resumos de atividade de ferramentas locais do navegador.",
     overview: "Status, entrada, saúde.",
     channels: "Canais e configurações.",
     instances: "Clientes e nós conectados.",
@@ -432,6 +436,42 @@ export const pt_BR: TranslationMap = {
     debug: "Snapshots, eventos, RPC.",
     logs: "Logs ao vivo do gateway.",
     dreams: "Consolidação de memória durante o sono.",
+  },
+  activity: {
+    title: "Atividade",
+    subtitle: "Atividade efêmera de ferramentas derivada de eventos de sessão ao vivo.",
+    visibleCount: "{visible} de {total}",
+    filtersLabel: "Filtros de atividade",
+    search: "Pesquisar",
+    searchPlaceholder: "Filtrar por ferramenta, resumo, execução, sessão",
+    toolFilter: "Ferramenta",
+    allTools: "Todas as ferramentas",
+    statusFilters: "Filtros de status",
+    autoFollow: "Acompanhamento automático",
+    expandAll: "Expandir tudo",
+    collapseAll: "Recolher tudo",
+    clear: "Limpar",
+    empty: "Ainda não há atividade de ferramentas.",
+    emptyFiltered: "Nenhuma atividade corresponde a estes filtros.",
+    entrySummary: "{argumentSummary}",
+    argumentHiddenOne: "1 argumento oculto",
+    argumentsHidden: "{count} argumentos ocultos",
+    streamLabel: "Entradas de atividade de ferramentas",
+    toolCallId: "Chamada de ferramenta",
+    runId: "Executar",
+    session: "Sessão",
+    outputTruncated: "Prévia redigida e truncada.",
+    noOutputPreview: "Nenhuma prévia de saída.",
+    status: {
+      running: "Em execução",
+      done: "Concluída",
+      error: "Erro",
+    },
+    duration: {
+      ms: "{count} ms",
+      seconds: "{count} s",
+      minutes: "{minutes}m {seconds}s",
+    },
   },
   overview: {
     access: {
@@ -1086,12 +1126,19 @@ export const pt_BR: TranslationMap = {
       send: "Send",
       sendMessage: "Send message",
     },
+    queue: {
+      retry: "Tentar novamente",
+      retrySend: "Tentar enviar novamente",
+      retryQueuedMessage: "Tentar novamente a mensagem na fila",
+    },
     composer: {
       placeholder: "Message {name} (Enter to send)",
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
       startTalk: "Start Talk",
+      stillListening: "Ainda ouvindo",
+      talkTranscript: "Transcrição da fala",
       stopTalk: "Stop Talk",
     },
     selectors: {

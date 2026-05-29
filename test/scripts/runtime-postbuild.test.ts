@@ -36,9 +36,9 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 describe("runtime postbuild static assets", () => {
   it("tracks plugin-owned static assets that release packaging must ship", () => {
     expect(listStaticExtensionAssetOutputs()).toEqual([
-      "dist/extensions/acpx/error-format.mjs",
       "dist/extensions/acpx/mcp-command-line.mjs",
       "dist/extensions/acpx/mcp-proxy.mjs",
+      "dist/extensions/diffs-language-pack/assets/viewer-runtime.js",
       "dist/extensions/diffs/assets/viewer-runtime.js",
     ]);
   });
@@ -56,11 +56,14 @@ describe("runtime postbuild static assets", () => {
     `);
 
     expect(payload.outputs).toEqual([
-      "dist/extensions/acpx/error-format.mjs",
       "dist/extensions/acpx/mcp-command-line.mjs",
       "dist/extensions/acpx/mcp-proxy.mjs",
+      "dist/extensions/diffs-language-pack/assets/viewer-runtime.js",
       "dist/extensions/diffs/assets/viewer-runtime.js",
     ]);
+    expect(payload.sources).toContain(
+      "extensions/diffs-language-pack/assets/viewer-runtime.js",
+    );
     expect(payload.sources).toContain("extensions/diffs/assets/viewer-runtime.js");
   });
 
@@ -392,6 +395,37 @@ describe("runtime postbuild static assets", () => {
 
     expect(await fs.readFile(path.join(distDir, "runtime-model-auth.runtime.js"), "utf8")).toBe(
       'export * from "./runtime-model-auth.runtime-Wrap456.js";\n',
+    );
+  });
+
+  it("ignores legacy wrappers to the stable runtime alias when choosing the implementation", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-");
+    const distDir = path.join(rootDir, "dist");
+    await fs.mkdir(distDir, { recursive: true });
+    await fs.writeFile(
+      path.join(distDir, "runtime-plugins.runtime-NewHash.js"),
+      "export const ready = true;\n",
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(distDir, "runtime-plugins.runtime-OldHash.js"),
+      'export * from "./runtime-plugins.runtime.js";\n',
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(distDir, "dispatch-OldHash.js"),
+      ['const lazy = () => import("./runtime-plugins.runtime-NewHash.js");', ""].join("\n"),
+      "utf8",
+    );
+
+    rewriteRootRuntimeImportsToStableAliases({ rootDir });
+    writeStableRootRuntimeAliases({ rootDir });
+
+    expect(await fs.readFile(path.join(distDir, "dispatch-OldHash.js"), "utf8")).toBe(
+      ['const lazy = () => import("./runtime-plugins.runtime.js");', ""].join("\n"),
+    );
+    expect(await fs.readFile(path.join(distDir, "runtime-plugins.runtime.js"), "utf8")).toBe(
+      'export * from "./runtime-plugins.runtime-NewHash.js";\n',
     );
   });
 

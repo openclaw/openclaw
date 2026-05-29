@@ -11,6 +11,16 @@ import { writePackageDistInventory } from "./package-dist-inventory.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
 import { runGatewayUpdate } from "./update-runner.js";
 
+const execFileSyncMock = vi.hoisted(() => vi.fn(() => "/tmp/openclaw-test-global-npmrc\n"));
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    execFileSync: execFileSyncMock,
+  };
+});
+
 type CommandResponse = { stdout?: string; stderr?: string; code?: number | null };
 type CommandResult = { stdout: string; stderr: string; code: number | null };
 const TELEGRAM_RUNTIME_API = bundledDistPluginFile("telegram", "runtime-api.js");
@@ -48,6 +58,7 @@ describe("runGatewayUpdate", () => {
   });
 
   beforeEach(async () => {
+    execFileSyncMock.mockClear();
     tempDir = await fixtureRootTracker.make("case");
     await fs.writeFile(path.join(tempDir, "openclaw.mjs"), "export {};\n", "utf-8");
   });
@@ -286,9 +297,18 @@ describe("runGatewayUpdate", () => {
     return { nodeModules, pkgRoot };
   }
 
+  type InstallCommandExpectation = string | ((argv: string[]) => boolean);
+
   const npmFreshnessArg = "--min-release-age=0";
   const normalizeNpmFreshnessArgs = (argv: string[]) =>
     argv.map((arg) => (/^--before=\d{4}-\d{2}-\d{2}T/u.test(arg) ? npmFreshnessArg : arg));
+
+  const installCommandMatches = (expected: InstallCommandExpectation, argv: string[]) => {
+    const normalizedArgv = normalizeNpmFreshnessArgs(argv);
+    return typeof expected === "string"
+      ? normalizedArgv.join(" ") === expected
+      : expected(normalizedArgv);
+  };
 
   const npmGlobalInstallCommand = (spec: string, extraArgs: string[] = []) =>
     [
@@ -348,12 +368,36 @@ describe("runGatewayUpdate", () => {
     expect(calls.filter((call) => call.includes("rebase"))).toEqual([]);
   });
 
+  it("uses the supplied update cwd when the process cwd disappeared", async () => {
+    await setupGitCheckout();
+    const cwdSpy = vi.spyOn(process, "cwd").mockImplementation(() => {
+      throw Object.assign(new Error("ENOENT: uv_cwd"), { code: "ENOENT" });
+    });
+    const { runner, calls } = createRunner({
+      ...buildGitWorktreeProbeResponses(),
+      [`git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`]: {
+        code: 1,
+        stderr: "no upstream configured",
+      },
+    });
+
+    try {
+      const result = await runWithRunner(runner);
+
+      expect(result.status).toBe("skipped");
+      expect(result.reason).toBe("no-upstream");
+      expect(calls).toContain(`git -C ${tempDir} rev-parse --show-toplevel`);
+    } finally {
+      cwdSpy.mockRestore();
+    }
+  });
+
   it.each([
     { name: "upstream", options: {} },
     { name: "target ref", options: { devTargetRef: "main" } },
   ] as const)("stops dev update when fetch fails before resolving $name", async ({ options }) => {
     await setupGitCheckout();
-    const fetchCommand = `git -C ${tempDir} fetch --all --prune --tags`;
+    const fetchCommand = `git -C ${tempDir} fetch --all --prune --no-tags`;
     const { runner, calls } = createRunner({
       ...buildGitWorktreeProbeResponses(),
       [fetchCommand]: {
@@ -368,6 +412,102 @@ describe("runGatewayUpdate", () => {
     expect(result.reason).toBe("fetch-failed");
     expect(calls).toContain(fetchCommand);
     expect(calls.slice(calls.indexOf(fetchCommand) + 1)).toStrictEqual([]);
+  });
+
+  it("does not fetch tags for dev updates", async () => {
+    await setupGitPackageManagerFixture();
+    const upstreamSha = "upstream123";
+    const doctorNodePath = await resolveStableNodePath(process.execPath);
+    const doctorCommand = `${doctorNodePath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive --fix`;
+    const { runner, calls } = createRunner({
+      ...buildGitWorktreeProbeResponses(),
+      [`git -C ${tempDir} fetch --all --prune --no-tags`]: { stdout: "" },
+      [`git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`]: {
+        stdout: "origin/main",
+      },
+      [`git -C ${tempDir} rev-parse @{upstream}`]: { stdout: upstreamSha },
+      [`git -C ${tempDir} rev-list --max-count=10 ${upstreamSha}`]: {
+        stdout: `${upstreamSha}\n`,
+      },
+      [`git -C ${tempDir} rebase ${upstreamSha}`]: { stdout: "" },
+      "pnpm --version": { stdout: "10.0.0" },
+      "pnpm install": { stdout: "" },
+      "pnpm build": { stdout: "" },
+      "pnpm ui:build": { stdout: "" },
+      [doctorCommand]: { stdout: "" },
+    });
+
+    const result = await runWithRunner(runner, { channel: "dev" });
+
+    expect(result.status).toBe("ok");
+    expect(calls).toContain(`git -C ${tempDir} fetch --all --prune --no-tags`);
+    expect(calls).not.toContain(`git -C ${tempDir} fetch --all --prune --tags`);
+  });
+
+  it("fetches only the requested tag for explicit dev tag target refs", async () => {
+    await setupGitPackageManagerFixture();
+    const targetSha = "2222222222222222222222222222222222222222";
+    const doctorNodePath = await resolveStableNodePath(process.execPath);
+    const doctorCommand = `${doctorNodePath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive --fix`;
+    const { runner, calls } = createRunner({
+      ...buildGitWorktreeProbeResponses(),
+      [`git -C ${tempDir} fetch --all --prune --no-tags`]: { stdout: "" },
+      [`git -C ${tempDir} remote`]: { stdout: "origin\n" },
+      [`git -C ${tempDir} fetch origin +refs/tags/v2026.5.19-beta.2:refs/tags/v2026.5.19-beta.2`]: {
+        stdout: "",
+      },
+      [`git -C ${tempDir} rev-parse refs/tags/v2026.5.19-beta.2^{}`]: {
+        stdout: `${targetSha}\n`,
+      },
+      [`git -C ${tempDir} rev-list --max-count=10 ${targetSha}`]: {
+        stdout: `${targetSha}\n`,
+      },
+      [`git -C ${tempDir} checkout --detach ${targetSha}`]: { stdout: "" },
+      "pnpm --version": { stdout: "10.0.0" },
+      "pnpm install": { stdout: "" },
+      "pnpm build": { stdout: "" },
+      "pnpm ui:build": { stdout: "" },
+      [doctorCommand]: { stdout: "" },
+    });
+
+    const result = await runWithRunner(runner, {
+      channel: "dev",
+      devTargetRef: "refs/tags/v2026.5.19-beta.2",
+    });
+
+    expect(result.status).toBe("ok");
+    expect(calls).toContain(`git -C ${tempDir} fetch --all --prune --no-tags`);
+    expect(calls).not.toContain(`git -C ${tempDir} fetch --all --prune --tags`);
+    expect(calls).toContain(
+      `git -C ${tempDir} fetch origin +refs/tags/v2026.5.19-beta.2:refs/tags/v2026.5.19-beta.2`,
+    );
+    expect(calls).toContain(`git -C ${tempDir} rev-parse refs/tags/v2026.5.19-beta.2^{}`);
+  });
+
+  it("does not resolve stale local dev tag target refs after targeted tag fetch failure", async () => {
+    await setupGitCheckout();
+    const { runner, calls } = createRunner({
+      ...buildGitWorktreeProbeResponses(),
+      [`git -C ${tempDir} fetch --all --prune --no-tags`]: { stdout: "" },
+      [`git -C ${tempDir} remote`]: { stdout: "origin\n" },
+      [`git -C ${tempDir} fetch origin +refs/tags/v2026.5.19-beta.2:refs/tags/v2026.5.19-beta.2`]: {
+        code: 1,
+        stderr: "would clobber existing tag",
+      },
+    });
+
+    const result = await runWithRunner(runner, {
+      channel: "dev",
+      devTargetRef: "refs/tags/v2026.5.19-beta.2",
+    });
+
+    expect(result.status).toBe("error");
+    expect(result.reason).toBe("no-target-sha");
+    expect(calls).toContain(
+      `git -C ${tempDir} fetch origin +refs/tags/v2026.5.19-beta.2:refs/tags/v2026.5.19-beta.2`,
+    );
+    expect(calls).not.toContain(`git -C ${tempDir} rev-parse refs/tags/v2026.5.19-beta.2^{}`);
+    expect(calls).not.toContain(`git -C ${tempDir} rev-parse refs/tags/v2026.5.19-beta.2`);
   });
 
   it("aborts rebase on failure", async () => {
@@ -396,6 +536,7 @@ describe("runGatewayUpdate", () => {
     const stableTag = "v1.0.1-1";
     const { runner, calls } = createRunner({
       ...buildStableTagResponses(stableTag),
+      [`git -C ${tempDir} rev-parse --abbrev-ref HEAD`]: { stdout: "main" },
       "pnpm install": { code: 1, stderr: "ERR_PNPM_NETWORK" },
     });
 
@@ -405,6 +546,12 @@ describe("runGatewayUpdate", () => {
     expect(result.reason).toBe("deps-install-failed");
     expect(calls).not.toContain("pnpm build");
     expect(calls).not.toContain("pnpm ui:build");
+    expect(calls).toContain(`git -C ${tempDir} reset --hard`);
+    expect(calls).toContain(`git -C ${tempDir} checkout --force main`);
+    expect(calls).toContain(`git -C ${tempDir} reset --hard abc123`);
+    expect(calls.indexOf(`git -C ${tempDir} reset --hard`)).toBeLessThan(
+      calls.indexOf(`git -C ${tempDir} checkout --force main`),
+    );
   });
 
   it("uses pnpm highest resolution mode for update installs", async () => {
@@ -497,7 +644,7 @@ describe("runGatewayUpdate", () => {
       if (key === `git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`) {
         return { stdout: "origin/main", stderr: "", code: 0 };
       }
-      if (key === `git -C ${tempDir} fetch --all --prune --tags`) {
+      if (key === `git -C ${tempDir} fetch --all --prune --no-tags`) {
         return { stdout: "", stderr: "", code: 0 };
       }
       if (key === `git -C ${tempDir} rev-parse @{upstream}`) {
@@ -567,6 +714,7 @@ describe("runGatewayUpdate", () => {
     const stableTag = "v1.0.1-1";
     const { runner, calls } = createRunner({
       ...buildStableTagResponses(stableTag),
+      [`git -C ${tempDir} rev-parse --abbrev-ref HEAD`]: { stdout: "main" },
       "pnpm install": { stdout: "" },
       "pnpm build": { code: 1, stderr: "tsc: error TS2345" },
     });
@@ -577,6 +725,9 @@ describe("runGatewayUpdate", () => {
     expect(result.reason).toBe("build-failed");
     expect(calls).toContain("pnpm install");
     expect(calls).not.toContain("pnpm ui:build");
+    expect(calls).toContain(`git -C ${tempDir} reset --hard`);
+    expect(calls).toContain(`git -C ${tempDir} checkout --force main`);
+    expect(calls).toContain(`git -C ${tempDir} reset --hard abc123`);
   });
 
   it("uses stable tag when beta tag is older than release", async () => {
@@ -600,6 +751,30 @@ describe("runGatewayUpdate", () => {
     expect(result.status).toBe("ok");
     expect(calls).toContain(`git -C ${tempDir} checkout --detach ${stableTag}`);
     expect(calls).not.toContain(`git -C ${tempDir} checkout --detach ${betaTag}`);
+  });
+
+  it("uses stable tag for stable channel even when a newer alpha tag sorts first", async () => {
+    await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
+    await setupUiIndex();
+    const stableTag = "v2026.5.22";
+    const alphaTag = "v2026.5.24-alpha.1";
+    const doctorNodePath = await resolveStableNodePath(process.execPath);
+    const { runner, calls } = createRunner({
+      ...buildStableTagResponses(alphaTag, { additionalTags: [stableTag] }),
+      [`git -C ${tempDir} checkout --detach ${stableTag}`]: { stdout: "" },
+      "pnpm install": { stdout: "" },
+      "pnpm build": { stdout: "" },
+      "pnpm ui:build": { stdout: "" },
+      [`${doctorNodePath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive --fix`]: {
+        stdout: "",
+      },
+    });
+
+    const result = await runWithRunner(runner, { channel: "stable" });
+
+    expect(result.status).toBe("ok");
+    expect(calls).toContain(`git -C ${tempDir} checkout --detach ${stableTag}`);
+    expect(calls).not.toContain(`git -C ${tempDir} checkout --detach ${alphaTag}`);
   });
 
   it("bootstraps pnpm via npm when pnpm and corepack are unavailable", async () => {
@@ -714,7 +889,7 @@ describe("runGatewayUpdate", () => {
       if (key === `git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`) {
         return { stdout: "origin/main", stderr: "", code: 0 };
       }
-      if (key === `git -C ${tempDir} fetch --all --prune --tags`) {
+      if (key === `git -C ${tempDir} fetch --all --prune --no-tags`) {
         return { stdout: "", stderr: "", code: 0 };
       }
       if (key === `git -C ${tempDir} rev-parse @{upstream}`) {
@@ -829,7 +1004,7 @@ describe("runGatewayUpdate", () => {
       if (key === `git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`) {
         return { stdout: "origin/main", stderr: "", code: 0 };
       }
-      if (key === `git -C ${tempDir} fetch --all --prune --tags`) {
+      if (key === `git -C ${tempDir} fetch --all --prune --no-tags`) {
         return { stdout: "", stderr: "", code: 0 };
       }
       if (key === `git -C ${tempDir} rev-parse @{upstream}`) {
@@ -926,7 +1101,7 @@ describe("runGatewayUpdate", () => {
         if (key === `git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`) {
           return { stdout: "origin/main", stderr: "", code: 0 };
         }
-        if (key === `git -C ${tempDir} fetch --all --prune --tags`) {
+        if (key === `git -C ${tempDir} fetch --all --prune --no-tags`) {
           return { stdout: "", stderr: "", code: 0 };
         }
         if (key === `git -C ${tempDir} rev-parse @{upstream}`) {
@@ -1040,7 +1215,7 @@ describe("runGatewayUpdate", () => {
         if (key === `git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`) {
           return { stdout: "origin/main", stderr: "", code: 0 };
         }
-        if (key === `git -C ${tempDir} fetch --all --prune --tags`) {
+        if (key === `git -C ${tempDir} fetch --all --prune --no-tags`) {
           return { stdout: "", stderr: "", code: 0 };
         }
         if (key === `git -C ${tempDir} rev-parse @{upstream}`) {
@@ -1138,7 +1313,7 @@ describe("runGatewayUpdate", () => {
       if (key === `git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`) {
         return { stdout: "origin/main", stderr: "", code: 0 };
       }
-      if (key === `git -C ${tempDir} fetch --all --prune --tags`) {
+      if (key === `git -C ${tempDir} fetch --all --prune --no-tags`) {
         return { stdout: "", stderr: "", code: 0 };
       }
       if (key === `git -C ${tempDir} rev-parse @{upstream}`) {
@@ -1231,7 +1406,7 @@ describe("runGatewayUpdate", () => {
       if (key === `git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`) {
         return { stdout: "origin/main", stderr: "", code: 0 };
       }
-      if (key === `git -C ${tempDir} fetch --all --prune --tags`) {
+      if (key === `git -C ${tempDir} fetch --all --prune --no-tags`) {
         return { stdout: "", stderr: "", code: 0 };
       }
       if (key === `git -C ${tempDir} rev-parse @{upstream}`) {
@@ -1323,7 +1498,7 @@ describe("runGatewayUpdate", () => {
       if (key === `git -C ${tempDir} status --porcelain -- :!dist/control-ui/`) {
         return { stdout: "", stderr: "", code: 0 };
       }
-      if (key === `git -C ${tempDir} fetch --all --prune --tags`) {
+      if (key === `git -C ${tempDir} fetch --all --prune --no-tags`) {
         return { stdout: "", stderr: "", code: 0 };
       }
       if (key === `git -C ${tempDir} rev-parse ${targetSha}`) {
@@ -1403,7 +1578,7 @@ describe("runGatewayUpdate", () => {
       if (key === `git -C ${tempDir} status --porcelain -- :!dist/control-ui/`) {
         return { stdout: "", stderr: "", code: 0 };
       }
-      if (key === `git -C ${tempDir} fetch --all --prune --tags`) {
+      if (key === `git -C ${tempDir} fetch --all --prune --no-tags`) {
         return { stdout: "", stderr: "", code: 0 };
       }
       if (key === `git -C ${tempDir} rev-parse refs/remotes/origin/main`) {
@@ -1486,7 +1661,7 @@ describe("runGatewayUpdate", () => {
       if (key === `git -C ${gitRoot} status --porcelain -- :!dist/control-ui/`) {
         return { stdout: "", stderr: "", code: 0 };
       }
-      if (key === `git -C ${gitRoot} fetch --all --prune --tags`) {
+      if (key === `git -C ${gitRoot} fetch --all --prune --no-tags`) {
         return { stdout: "", stderr: "", code: 0 };
       }
       if (key === `git -C ${gitRoot} rev-parse refs/remotes/origin/main`) {
@@ -1562,7 +1737,7 @@ describe("runGatewayUpdate", () => {
       if (key === `git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`) {
         return { stdout: "origin/main", stderr: "", code: 0 };
       }
-      if (key === `git -C ${tempDir} fetch --all --prune --tags`) {
+      if (key === `git -C ${tempDir} fetch --all --prune --no-tags`) {
         return { stdout: "", stderr: "", code: 0 };
       }
       if (key === `git -C ${tempDir} rev-parse @{upstream}`) {
@@ -1620,7 +1795,7 @@ describe("runGatewayUpdate", () => {
   });
 
   async function runNpmGlobalUpdateCase(params: {
-    expectedInstallCommand: string;
+    expectedInstallCommand: InstallCommandExpectation;
     channel?: "stable" | "beta";
     tag?: string;
   }): Promise<{ calls: string[]; result: Awaited<ReturnType<typeof runGatewayUpdate>> }> {
@@ -1654,7 +1829,7 @@ describe("runGatewayUpdate", () => {
     pkgRoot: string;
     npmRootOutput?: string;
     pnpmRootOutput?: string;
-    installCommand: string;
+    installCommand: InstallCommandExpectation;
     gitRootMode?: "not-git" | "missing";
     onInstall?: (options?: {
       env?: NodeJS.ProcessEnv;
@@ -1684,7 +1859,19 @@ describe("runGatewayUpdate", () => {
         }
         return { stdout: "", stderr: "", code: 1 };
       }
-      if (key === params.installCommand) {
+      if (argv[0] === "npm" && argv[1] === "pack") {
+        const destination = argv[argv.indexOf("--pack-destination") + 1];
+        if (!destination) {
+          return { stdout: "", stderr: "missing pack destination", code: 1 };
+        }
+        await fs.writeFile(path.join(destination, "openclaw-2.0.0.tgz"), "packed\n", "utf-8");
+        return {
+          stdout: JSON.stringify([{ filename: "openclaw-2.0.0.tgz" }]),
+          stderr: "",
+          code: 0,
+        };
+      }
+      if (installCommandMatches(params.installCommand, argv)) {
         await params.onInstall?.(options);
         return { stdout: "ok", stderr: "", code: 0 };
       }
@@ -1694,8 +1881,8 @@ describe("runGatewayUpdate", () => {
         const normalizedInstallCommand = normalizeNpmFreshnessArgs([
           ...argv.slice(0, prefixIndex),
           ...argv.slice(prefixIndex + 2),
-        ]).join(" ");
-        if (normalizedInstallCommand === params.installCommand) {
+        ]);
+        if (installCommandMatches(params.installCommand, normalizedInstallCommand)) {
           const packageRoot =
             process.platform === "win32"
               ? path.join(installPrefix, "node_modules", "openclaw")
@@ -1742,17 +1929,27 @@ describe("runGatewayUpdate", () => {
     expect(calls).toContain(expectedInstallCommand);
   });
 
-  it("rejects global npm updates from the GitHub main package spec", async () => {
+  it("updates global npm installs from the GitHub main package spec", async () => {
+    const sourceSpec = "github:openclaw/openclaw#main";
     const { calls, result } = await runNpmGlobalUpdateCase({
-      expectedInstallCommand: npmGlobalInstallCommand("github:openclaw/openclaw#main"),
+      expectedInstallCommand: (argv) =>
+        argv[0] === "npm" &&
+        argv[1] === "i" &&
+        argv[2] === "-g" &&
+        path.basename(argv[3] ?? "") === "openclaw-2.0.0.tgz" &&
+        argv.slice(4).join(" ") === "--no-fund --no-audit --loglevel=error --min-release-age=0",
       tag: "main",
     });
 
-    expect(result.status).toBe("error");
+    expect(result.status).toBe("ok");
     expect(result.mode).toBe("npm");
-    expect(result.reason).toBe("unsupported-package-target");
-    expect(result.steps[0]?.name).toBe("package target validation");
-    expect(calls).not.toContain(npmGlobalInstallCommand("github:openclaw/openclaw#main"));
+    expect(result.steps.map((step) => step.name)).toContain("global update pack");
+    expect(
+      calls.some((call) => call.startsWith(`npm pack ${sourceSpec} --pack-destination `)),
+    ).toBe(true);
+    const installCall = calls.find((call) => call.includes("openclaw-2.0.0.tgz"));
+    expect(installCall).toContain("--no-fund --no-audit --loglevel=error --min-release-age=0");
+    expect(installCall).not.toContain(sourceSpec);
   });
 
   it("runs doctor after global npm updates before reporting success", async () => {
@@ -2151,7 +2348,8 @@ describe("runGatewayUpdate", () => {
 
     expect(result.status).toBe("error");
     expect(result.reason).toBe("doctor-entry-missing");
-    expect(result.steps.at(-1)?.name).toBe("openclaw doctor entry");
+    expect(result.steps.some((step) => step.name === "openclaw doctor entry")).toBe(true);
+    expect(result.steps.at(-1)?.name).toMatch(/^git rollback/);
   });
 
   it("repairs UI assets when doctor run removes control-ui files", async () => {
@@ -2198,5 +2396,6 @@ describe("runGatewayUpdate", () => {
 
     expect(result.status).toBe("error");
     expect(result.reason).toBe("ui-assets-missing");
+    expect(result.steps.at(-1)?.name).toMatch(/^git rollback/);
   });
 });

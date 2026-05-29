@@ -1,3 +1,4 @@
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { hasApprovalTurnSourceRoute } from "../../infra/approval-turn-source.js";
 import type { ExecApprovalDecision } from "../../infra/exec-approvals.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -7,7 +8,6 @@ import type {
   ExecApprovalRecord,
 } from "../exec-approval-manager.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../method-scopes.js";
-import { ErrorCodes, errorShape } from "../protocol/index.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 const APPROVAL_NOT_FOUND_DETAILS = {
@@ -280,6 +280,7 @@ export async function handlePendingApprovalRequest<
   requestEventName: string;
   requestEvent: RequestedApprovalEvent<TPayload>;
   twoPhase: boolean;
+  approvalKind?: "exec" | "plugin";
   deliverRequest: () => boolean | Promise<boolean>;
   afterDecision?: (
     decision: ExecApprovalDecision | null,
@@ -317,6 +318,7 @@ export async function handlePendingApprovalRequest<
     hasApprovalTurnSourceRoute({
       turnSourceChannel: params.record.request.turnSourceChannel,
       turnSourceAccountId: params.record.request.turnSourceAccountId,
+      approvalKind: params.approvalKind ?? "exec",
     });
 
   if (!hasApprovalClients && !hasTurnSourceRoute && !delivered) {

@@ -1,8 +1,8 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+import { sortUniqueStrings } from "../shared/string-normalization.js";
 import { isInstalledPluginEnabled } from "./installed-plugin-index.js";
 import type { PluginManifestContractListKey, PluginManifestRecord } from "./manifest-registry.js";
-import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import type {
   PluginMetadataManifestView,
   PluginMetadataRegistryView,
@@ -64,7 +64,7 @@ export function listAvailableManifestContractValues(params: {
       values.add(value);
     }
   }
-  return [...values].toSorted((left, right) => left.localeCompare(right));
+  return sortUniqueStrings(values);
 }
 
 export function loadManifestContractSnapshot(params: {
@@ -98,18 +98,10 @@ export function loadManifestMetadataSnapshot(params: {
 }): PluginMetadataSnapshot {
   const config = params.config ?? {};
   const env = params.env ?? process.env;
-  const current = getCurrentPluginMetadataSnapshot({
+  return resolvePluginMetadataSnapshot({
     config,
     env,
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-    ...(params.workspaceDir === undefined ? { allowWorkspaceScopedSnapshot: true } : {}),
-  });
-  if (current) {
-    return current;
-  }
-  return loadPluginMetadataSnapshot({
-    config,
-    env,
-    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    allowWorkspaceScopedCurrent: params.workspaceDir === undefined,
   });
 }

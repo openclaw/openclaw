@@ -1,9 +1,9 @@
-import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import {
   buildPairingConnectRecoveryTitle,
   describePairingConnectRequirement,
   type ConnectPairingRequiredReason,
-} from "../gateway/protocol/connect-error-details.js";
+} from "../../packages/gateway-protocol/src/connect-error-details.js";
+import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import type { Tone } from "../memory-host-sdk/status.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
@@ -64,7 +64,7 @@ export function buildStatusAgentsValue(params: {
   const pending =
     params.agentStatus.bootstrapPendingCount > 0
       ? `${params.agentStatus.bootstrapPendingCount} bootstrap file${params.agentStatus.bootstrapPendingCount === 1 ? "" : "s"} present`
-      : "no bootstrap files";
+      : "no workspaces bootstrapping";
   const def = params.agentStatus.agents.find((a) => a.id === params.agentStatus.defaultId);
   const defActive =
     def?.lastActiveAgeMs != null ? params.formatTimeAgo(def.lastActiveAgeMs) : "unknown";

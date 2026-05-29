@@ -80,6 +80,16 @@ describe("exec approval followup", () => {
     expect(prompt).not.toContain("already approved has completed");
   });
 
+  it("uses the denied followup branch for nested-parentheses denial metadata", () => {
+    const prompt = buildExecApprovalFollowupPrompt(
+      "Exec denied (gateway id=req-1, approval-timeout (allowlist-miss)): uname -a",
+    );
+
+    expect(prompt).toContain("did not run");
+    expect(prompt).toContain("Do not mention, summarize, or reuse output");
+    expect(prompt).not.toContain("already approved has completed");
+  });
+
   it("tells the agent to continue the task before replying when the command succeeds", () => {
     const prompt = buildExecApprovalFollowupPrompt("Exec finished (gateway id=req-1, code 0)\nok");
 
@@ -291,6 +301,25 @@ describe("exec approval followup", () => {
     expectDirectSend({
       content: "Command did not run: approval timed out.",
       idempotencyKey: "exec-approval-followup:req-denied-resume-failed",
+    });
+    expect(callGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("uses safe direct denied copy for nested-parentheses denial metadata without resuming the session", async () => {
+    await sendExecApprovalFollowup({
+      approvalId: "req-denied-resume-failed-nested",
+      sessionKey: "agent:main:telegram:-100123",
+      turnSourceChannel: "telegram",
+      turnSourceTo: "-100123",
+      turnSourceAccountId: "default",
+      turnSourceThreadId: "789",
+      resultText:
+        "Exec denied (gateway id=req-denied-resume-failed-nested, approval-timeout (allowlist-miss)): uname -a",
+    });
+
+    expectDirectSend({
+      content: "Command did not run: approval timed out.",
+      idempotencyKey: "exec-approval-followup:req-denied-resume-failed-nested",
     });
     expect(callGatewayTool).not.toHaveBeenCalled();
   });

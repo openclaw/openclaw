@@ -19,7 +19,9 @@
     "nav content";
   gap: 0;
   animation: dashboard-enter 0.3s var(--ease-out);
-  transition: grid-template-columns var(--shell-focus-duration) var(--shell-focus-ease);
+  transition:
+    grid-template-columns var(--shell-focus-duration) var(--shell-focus-ease),
+    grid-template-rows var(--shell-focus-duration) var(--shell-focus-ease);
   overflow: hidden;
 }
 
@@ -47,6 +49,7 @@
 
 .shell--chat-focus {
   grid-template-columns: 0px minmax(0, 1fr);
+  grid-template-rows: 0 minmax(0, 1fr);
 }
 
 .shell--onboarding {
@@ -72,6 +75,17 @@
 
 .shell--chat-focus .content > * + * {
   margin-top: 0;
+}
+
+.shell--chat-focus .topbar {
+  min-height: 0;
+  height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+  border-bottom-width: 0;
 }
 
 /* ===========================================
@@ -1383,6 +1397,10 @@
 
 .shell--chat-focus .content--chat .content-header {
   min-height: 0;
+  max-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  overflow: hidden;
 }
 
 .content--chat .page-meta {

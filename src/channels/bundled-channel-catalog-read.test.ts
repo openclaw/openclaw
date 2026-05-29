@@ -4,8 +4,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempRepoRoot, writeJsonFile } from "../../test/helpers/temp-repo.js";
 
 // Delegate to the plugin-dir resolver for candidate-order policy; mock it here
-// so these tests focus on the loader's responsibility (parse package.jsons in
-// the returned dir, fall back to dist/channel-catalog.json when empty). The
+// so these tests focus on the loader's responsibility (merge
+// dist/channel-catalog.json entries with package.json metadata from the
+// returned dir). The
 // precedence policy (source vs dist-runtime vs dist, VITEST/tsx source-first,
 // isSourceCheckoutRoot detection, etc.) is exercised in
 // src/plugins/bundled-dir.test.ts and is intentionally not re-tested here.
@@ -72,7 +73,7 @@ function seedRoot(prefix: string): string {
 
 function seedChannelPkg(
   pkgJsonPath: string,
-  opts: { id: string; docsPath: string; label?: string; blurb?: string },
+  opts: { id: string; docsPath: string; label?: string; blurb?: string; markdownCapable?: boolean },
 ): void {
   const pluginDir = path.dirname(pkgJsonPath);
   writeJsonFile(pkgJsonPath, {
@@ -83,6 +84,7 @@ function seedChannelPkg(
         label: opts.label ?? opts.id,
         docsPath: opts.docsPath,
         blurb: opts.blurb ?? "test blurb",
+        ...(opts.markdownCapable !== undefined ? { markdownCapable: opts.markdownCapable } : {}),
       },
     },
   });
@@ -123,8 +125,8 @@ describe("listBundledChannelCatalogEntries", () => {
     expect(telegram?.channel.label).toBe("Telegram");
   });
 
-  it("merges downloadable official catalog channels with bundled channels", () => {
-    const root = seedRoot("bcr-merge-official-");
+  it("merges the generated official catalog with bundled package metadata", () => {
+    const root = seedRoot("bcr-generated-official-");
     const extensionsRoot = path.join(root, "dist", "extensions");
     seedChannelPkg(path.join(extensionsRoot, "telegram", "package.json"), {
       id: "telegram",
@@ -152,6 +154,36 @@ describe("listBundledChannelCatalogEntries", () => {
     const ids = new Set(entries.map((entry) => entry.id));
     expect(ids.has("qqbot")).toBe(true);
     expect(ids.has("telegram")).toBe(true);
+  });
+
+  it("keeps bundled package metadata when generated catalog entries are stale", () => {
+    const root = seedRoot("bcr-package-wins-");
+    const extensionsRoot = path.join(root, "dist", "extensions");
+    seedChannelPkg(path.join(extensionsRoot, "matrix", "package.json"), {
+      id: "matrix",
+      docsPath: "/channels/matrix",
+      label: "Matrix",
+      markdownCapable: true,
+    });
+    writeJsonFile(path.join(root, "dist", "channel-catalog.json"), {
+      entries: [
+        {
+          name: "@openclaw/matrix",
+          openclaw: {
+            channel: {
+              id: "matrix",
+              label: "Matrix",
+              docsPath: "/channels/matrix",
+              blurb: "stale generated entry",
+            },
+          },
+        },
+      ],
+    });
+    useBundledPluginsDir(extensionsRoot);
+
+    const matrix = listBundledChannelCatalogEntries().find((entry) => entry.id === "matrix");
+    expect(matrix?.channel.markdownCapable).toBe(true);
   });
 
   it("falls back to dist/channel-catalog.json when the resolver returns undefined", () => {

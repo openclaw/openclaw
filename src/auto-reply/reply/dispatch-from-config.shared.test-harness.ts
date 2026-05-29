@@ -50,6 +50,7 @@ const hookMocks = vi.hoisted(() => ({
     runReplyDispatch: vi.fn<
       (eventValue: unknown, _ctx: unknown) => Promise<PluginHookReplyDispatchResult | undefined>
     >(async () => undefined),
+    runReplyPayloadSending: vi.fn(async () => undefined),
   },
 }));
 const internalHookMocks = vi.hoisted(() => ({
@@ -253,7 +254,7 @@ vi.mock("../../infra/agent-events.js", () => ({
   emitAgentEvent: (params: unknown) => agentEventMocks.emitAgentEvent(params),
   onAgentEvent: (listener: unknown) => agentEventMocks.onAgentEvent(listener),
 }));
-vi.mock("./runtime-plugins.runtime.js", () => ({
+vi.mock("../../plugins/runtime-plugins.runtime.js", () => ({
   ensureRuntimePluginsLoaded: runtimePluginMocks.ensureRuntimePluginsLoaded,
 }));
 vi.mock("./conversation-binding-input.js", () => {

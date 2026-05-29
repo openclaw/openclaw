@@ -6,12 +6,18 @@ import type { AppViewState } from "./app-view-state.ts";
 import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
 import {
   renderChatSessionSelect as renderChatSessionSelectBase,
+  resetChatSessionPickerState,
   resolveSessionOptionGroups,
 } from "./chat/session-controls.ts";
 import { refreshSlashCommands } from "./chat/slash-commands.ts";
 import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
-import { ChatState, loadChatHistory } from "./controllers/chat.ts";
-import { createSessionAndRefresh, loadSessions } from "./controllers/sessions.ts";
+import { loadChatHistory } from "./controllers/chat.ts";
+import type { ChatState } from "./controllers/chat.ts";
+import {
+  createSessionAndRefresh,
+  loadSessions,
+  syncSelectedSessionMessageSubscription,
+} from "./controllers/sessions.ts";
 import { icons } from "./icons.ts";
 import { iconForTab, isSettingsTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
 import { isCronSessionKey, parseSessionKey, resolveSessionDisplayName } from "./session-display.ts";
@@ -125,11 +131,17 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
   const previousSessionKey = state.sessionKey;
   saveChatQueueForSession(state, previousSessionKey);
   state.sessionKey = sessionKey;
+  if (previousSessionKey !== sessionKey) {
+    resetChatSessionPickerState(state);
+  }
   (state as unknown as { currentSessionId?: string | null }).currentSessionId = null;
   state.chatMessage = "";
   state.chatAttachments = [];
   state.chatMessages = [];
   state.chatToolMessages = [];
+  state.activityEntries = [];
+  state.activityExpandedIds = new Set();
+  state.activityAtBottom = true;
   state.chatStreamSegments = [];
   state.chatThinkingLevel = null;
   state.chatStream = null;
@@ -139,6 +151,8 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
   state.chatAvatarSource = null;
   state.chatAvatarStatus = null;
   state.chatAvatarReason = null;
+  state.realtimeTalkTranscript = null;
+  state.resetRealtimeTalkConversation?.();
   state.chatQueue = restoreChatQueueForSession(state, sessionKey);
   host.resetChatInputHistoryNavigation();
   host.chatStreamStartedAt = null;
@@ -252,7 +266,7 @@ function renderCronFilterIcon(hiddenCount: number) {
 }
 
 export function renderChatSessionSelect(state: AppViewState) {
-  return renderChatSessionSelectBase(state, switchChatSession);
+  return renderChatSessionSelectBase(state, switchChatSession, { surface: "desktop" });
 }
 
 function chatAutoScrollLabel(mode: ChatAutoScrollMode) {
@@ -556,7 +570,7 @@ export function renderChatMobileToggle(state: AppViewState) {
         }}
       >
         <div class="chat-controls">
-          ${renderChatSessionSelectBase(state, switchChatSession)}
+          ${renderChatSessionSelectBase(state, switchChatSession, { surface: "mobile" })}
           <div class="chat-controls__thinking">
             ${renderChatAutoScrollToggle(state)}
             <button
@@ -630,7 +644,9 @@ export function renderChatMobileToggle(state: AppViewState) {
 
 export function switchChatSession(state: AppViewState, nextSessionKey: string) {
   const previousSessionKey = state.sessionKey;
-  const nextSessionRow = state.sessionsResult?.sessions.find((row) => row.key === nextSessionKey);
+  const nextSessionRow =
+    state.sessionsResult?.sessions.find((row) => row.key === nextSessionKey) ??
+    state.chatSessionPickerResult?.sessions.find((row) => row.key === nextSessionKey);
   const nextSessionLabel = resolveSessionDisplayName(nextSessionKey, nextSessionRow);
   resetChatStateForSessionSwitch(state, nextSessionKey);
   if (previousSessionKey !== nextSessionKey) {
@@ -646,6 +662,9 @@ export function switchChatSession(state: AppViewState, nextSessionKey: string) {
     state as unknown as Parameters<typeof syncUrlWithSessionKey>[0],
     nextSessionKey,
     true,
+  );
+  void syncSelectedSessionMessageSubscription(
+    state as unknown as AppViewState & { chatSessionMessageSubscriptionKey?: string | null },
   );
   void loadChatHistory(state as unknown as ChatState);
   void refreshSessionOptions(state);
@@ -664,6 +683,7 @@ export function dismissChatError(state: AppViewState) {
     state.realtimeTalkStatus = "idle";
     state.realtimeTalkDetail = null;
     state.realtimeTalkTranscript = null;
+    state.resetRealtimeTalkConversation?.();
   }
 }
 

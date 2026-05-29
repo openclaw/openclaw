@@ -365,6 +365,8 @@ export const de: TranslationMap = {
     pending: "{count} pending",
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
+    allowAlwaysUnavailable:
+      "Die wirksame Genehmigungsrichtlinie erfordert jedes Mal eine Genehmigung, daher ist Immer erlauben nicht verfügbar.",
     deny: "Deny",
     labels: {
       host: "Host",
@@ -396,6 +398,7 @@ export const de: TranslationMap = {
   },
   tabs: {
     agents: "Agenten",
+    activity: "Aktivität",
     overview: "Übersicht",
     channels: "Kanäle",
     instances: "Instanzen",
@@ -417,6 +420,7 @@ export const de: TranslationMap = {
   },
   subtitles: {
     agents: "Agent-Arbeitsbereiche, Tools und Identitäten verwalten.",
+    activity: "Browser-lokale Zusammenfassungen der Tool-Aktivität.",
     overview: "Gateway-Status, Einstiegspunkte und eine schnelle Zustandsprüfung.",
     channels: "Kanäle und Einstellungen verwalten.",
     instances: "Präsenzsignale von verbundenen Clients und Geräten.",
@@ -435,6 +439,42 @@ export const de: TranslationMap = {
     debug: "Gateway-Snapshots, Ereignisse und manuelle RPC-Aufrufe.",
     logs: "Live-Verfolgung der Gateway-Protokolldateien.",
     dreams: "Speicherkonsolidierung im Schlaf.",
+  },
+  activity: {
+    title: "Aktivität",
+    subtitle: "Flüchtige Tool-Aktivität, abgeleitet aus Live-Sitzungsereignissen.",
+    visibleCount: "{visible} von {total}",
+    filtersLabel: "Aktivitätsfilter",
+    search: "Suchen",
+    searchPlaceholder: "Nach Tool, Zusammenfassung, Lauf, Sitzung filtern",
+    toolFilter: "Tool",
+    allTools: "Alle Tools",
+    statusFilters: "Statusfilter",
+    autoFollow: "Automatisch folgen",
+    expandAll: "Alle erweitern",
+    collapseAll: "Alle reduzieren",
+    clear: "Löschen",
+    empty: "Noch keine Tool-Aktivität.",
+    emptyFiltered: "Keine Aktivität entspricht diesen Filtern.",
+    entrySummary: "{argumentSummary}",
+    argumentHiddenOne: "1 Argument ausgeblendet",
+    argumentsHidden: "{count} Argumente ausgeblendet",
+    streamLabel: "Einträge zur Tool-Aktivität",
+    toolCallId: "Tool-Aufruf",
+    runId: "Ausführen",
+    session: "Sitzung",
+    outputTruncated: "Vorschau geschwärzt und gekürzt.",
+    noOutputPreview: "Keine Ausgabevorschau.",
+    status: {
+      running: "Wird ausgeführt",
+      done: "Fertig",
+      error: "Fehler",
+    },
+    duration: {
+      ms: "{count} ms",
+      seconds: "{count} s",
+      minutes: "{minutes}m {seconds}s",
+    },
   },
   overview: {
     access: {
@@ -1094,12 +1134,19 @@ export const de: TranslationMap = {
       send: "Send",
       sendMessage: "Send message",
     },
+    queue: {
+      retry: "Erneut versuchen",
+      retrySend: "Senden erneut versuchen",
+      retryQueuedMessage: "Nachricht in der Warteschlange erneut versuchen",
+    },
     composer: {
       placeholder: "Message {name} (Enter to send)",
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
       startTalk: "Start Talk",
+      stillListening: "Höre noch zu",
+      talkTranscript: "Gesprächstranskript",
       stopTalk: "Stop Talk",
     },
     selectors: {

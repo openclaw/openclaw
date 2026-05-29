@@ -49,6 +49,7 @@ function createLoadedPluginRecord(id: string): PluginRecord {
     realtimeTranscriptionProviderIds: [],
     realtimeVoiceProviderIds: [],
     mediaUnderstandingProviderIds: [],
+    transcriptSourceProviderIds: [],
     imageGenerationProviderIds: [],
     videoGenerationProviderIds: [],
     musicGenerationProviderIds: [],

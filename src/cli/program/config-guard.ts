@@ -1,5 +1,6 @@
 import { readConfigFileSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { withSuppressedNotes } from "../../terminal/note.js";
 import { shouldMigrateStateFromPath } from "../argv.js";
 
 const ALLOWED_INVALID_COMMANDS = new Set(["doctor", "logs", "health", "help", "status"]);
@@ -62,20 +63,7 @@ export async function ensureConfigReady(params: {
     if (!params.suppressDoctorStdout) {
       preflightSnapshot = (await runDoctorConfigPreflight()).snapshot;
     } else {
-      const originalStdoutWrite = process.stdout.write.bind(process.stdout);
-      const originalSuppressNotes = process.env.OPENCLAW_SUPPRESS_NOTES;
-      process.stdout.write = (() => true) as unknown as typeof process.stdout.write;
-      process.env.OPENCLAW_SUPPRESS_NOTES = "1";
-      try {
-        preflightSnapshot = (await runDoctorConfigPreflight()).snapshot;
-      } finally {
-        process.stdout.write = originalStdoutWrite;
-        if (originalSuppressNotes === undefined) {
-          delete process.env.OPENCLAW_SUPPRESS_NOTES;
-        } else {
-          process.env.OPENCLAW_SUPPRESS_NOTES = originalSuppressNotes;
-        }
-      }
+      preflightSnapshot = (await withSuppressedNotes(runDoctorConfigPreflight)).snapshot;
     }
   }
 
@@ -108,12 +96,19 @@ export async function ensureConfigReady(params: {
     return;
   }
 
-  const [{ colorize, isRich, theme }, { shortenHomePath }, { formatCliCommand }] =
-    await Promise.all([
-      import("../../terminal/theme.js"),
-      import("../../utils.js"),
-      import("../command-format.js"),
-    ]);
+  const [
+    { colorize, isRich, theme },
+    { shortenHomePath },
+    { formatCliCommand },
+    { isPluginPackagingRuntimeOutputInvalidConfigSnapshot },
+    { formatPluginPackagingRuntimeOutputRecoveryHint },
+  ] = await Promise.all([
+    import("../../terminal/theme.js"),
+    import("../../utils.js"),
+    import("../command-format.js"),
+    import("../../config/recovery-policy.js"),
+    import("../config-recovery-hints.js"),
+  ]);
   const rich = isRich();
   const muted = (value: string) => colorize(rich, theme.muted, value);
   const error = (value: string) => colorize(rich, theme.error, value);
@@ -131,9 +126,10 @@ export async function ensureConfigReady(params: {
     params.runtime.error(legacyIssues.map((issue) => `  ${error(issue)}`).join("\n"));
   }
   params.runtime.error("");
-  params.runtime.error(
-    `${muted("Fix:")} ${commandText(formatCliCommand("openclaw doctor --fix"))}`,
-  );
+  const fixHint = isPluginPackagingRuntimeOutputInvalidConfigSnapshot(snapshot)
+    ? formatPluginPackagingRuntimeOutputRecoveryHint()
+    : commandText(formatCliCommand("openclaw doctor --fix"));
+  params.runtime.error(`${muted("Fix:")} ${fixHint}`);
   params.runtime.error(
     `${muted("Inspect:")} ${commandText(formatCliCommand("openclaw config validate"))}`,
   );

@@ -35,6 +35,9 @@ export const pluginSdkDocMetadata = {
   "approval-native-runtime": {
     category: "runtime",
   },
+  "approval-reaction-runtime": {
+    category: "runtime",
+  },
   "approval-reply-runtime": {
     category: "runtime",
   },
@@ -102,6 +105,9 @@ export const pluginSdkDocMetadata = {
     category: "runtime",
   },
   "speech-core": {
+    category: "provider",
+  },
+  "realtime-voice": {
     category: "provider",
   },
   "tts-runtime": {

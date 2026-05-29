@@ -3,14 +3,17 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import { isPluginJsonValue, type PluginJsonValue } from "../../plugins/host-hook-json.js";
 import { normalizeSessionEntrySlotKey } from "../../plugins/session-entry-slot-keys.js";
+import { isRecord } from "../../shared/record-coerce.js";
 import {
   normalizeDeliveryChannelRoute,
   normalizeDeliveryContext,
   normalizeSessionDeliveryFields,
 } from "../../utils/delivery-context.shared.js";
 import { getFileStatSnapshot } from "../cache-utils.js";
+import { hydrateSessionStoreSkillPromptRefs } from "./skill-prompt-blobs.js";
 import {
   cloneSessionStoreRecord,
+  cloneSessionStoreSnapshotEntry,
   cloneSessionStoreSnapshot,
   internSessionEntryLargeStrings,
   isSessionStoreCacheEnabled,
@@ -46,11 +49,7 @@ export type LoadSessionStoreOptions = {
 const log = createSubsystemLogger("sessions/store");
 
 function isSessionStoreRecord(value: unknown): value is Record<string, SessionEntry> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
+  return isRecord(value);
 }
 
 function normalizeOptionalFiniteNumber(value: unknown): number | undefined {
@@ -312,7 +311,7 @@ function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
 
 // resolvedSkills carries the full parsed Skill[] (including each SKILL.md body)
 // and is only used as an in-turn cache by the runtime — see
-// src/agents/pi-embedded-runner/skills-runtime.ts. Persisting it bloats
+// src/agents/embedded-agent-runner/skills-runtime.ts. Persisting it bloats
 // sessions.json by orders of magnitude when many sessions are active. Strip
 // it from every entry that flows through normalize, so neither the in-memory
 // store reloaded from disk nor the JSON serialized back to disk carries it.
@@ -401,9 +400,10 @@ export function loadSessionStore(
     }
   }
 
+  const hydratedPromptRefs = hydrateSessionStoreSkillPromptRefs({ storePath, store });
   const migrated = applySessionStoreMigrations(store);
   const normalized = normalizeSessionStore(store);
-  if (migrated || normalized) {
+  if (hydratedPromptRefs || migrated || normalized) {
     serializedFromDisk = undefined;
   }
   if (opts.runMaintenance) {
@@ -451,6 +451,8 @@ export function loadSessionStore(
       mtimeMs,
       sizeBytes: fileStat?.sizeBytes,
       serialized: serializedFromDisk,
+      cloneSerialized: serializedFromDisk,
+      takeOwnership: serializedFromDisk !== undefined,
     });
   }
 
@@ -459,7 +461,8 @@ export function loadSessionStore(
 
 export function readSessionStoreSnapshot(storePath: string): SessionStoreSnapshot {
   const currentFileStat = getFileStatSnapshot(storePath);
-  if (isSessionStoreCacheEnabled()) {
+  const cacheEnabled = isSessionStoreCacheEnabled();
+  if (cacheEnabled) {
     const cached = readSessionStoreSnapshotCache({
       storePath,
       mtimeMs: currentFileStat?.mtimeMs,
@@ -470,8 +473,8 @@ export function readSessionStoreSnapshot(storePath: string): SessionStoreSnapsho
     }
   }
 
-  const store = loadSessionStore(storePath);
-  if (!isSessionStoreCacheEnabled()) {
+  const store = loadSessionStore(storePath, { clone: false });
+  if (!cacheEnabled) {
     return cloneSessionStoreSnapshot(store);
   }
   return writeSessionStoreSnapshotCache({
@@ -486,12 +489,12 @@ export function readSessionEntry(
   storePath: string,
   sessionKey: string,
 ): SessionStoreSnapshotEntry | undefined {
-  const snapshot = readSessionStoreSnapshot(storePath);
+  const store = loadSessionStore(storePath, { clone: false });
   const resolved = resolveSessionStoreEntry({
-    store: snapshot as Record<string, SessionEntry>,
+    store,
     sessionKey,
   });
-  return resolved.existing as SessionStoreSnapshotEntry | undefined;
+  return resolved.existing ? cloneSessionStoreSnapshotEntry(resolved.existing) : undefined;
 }
 
 export function readSessionEntries(storePath: string): SessionStoreSnapshotEntries {

@@ -17,9 +17,10 @@ import {
   resolveBrowserOpenCommand,
 } from "../infra/browser-open.js";
 import { detectBinary } from "../infra/detect-binary.js";
-import { runCommandWithTimeout } from "../process/exec.js";
+import { movePathToTrash } from "../infra/fs-safe.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import { visibleWidth } from "../terminal/ansi.js";
 import { decorativeEmoji, supportsDecorativeEmoji } from "../terminal/decorative-emoji.js";
 import { stylePromptTitle } from "../terminal/prompt-style.js";
@@ -199,6 +200,8 @@ export function formatControlUiSshHint(params: {
     "Then open:",
     localUrl,
     authedUrl,
+    "BYOH note: lan, tailnet, and custom bind are currently IPv4-only.",
+    "If your host is IPv6-only, use an IPv4 sidecar or proxy in front of the Gateway.",
     "Docs:",
     "https://docs.openclaw.ai/gateway/remote",
     "https://docs.openclaw.ai/web/control-ui",
@@ -255,11 +258,34 @@ export async function moveToTrash(pathname: string, runtime: RuntimeEnv): Promis
     return;
   }
   try {
-    await runCommandWithTimeout(["trash", pathname], { timeoutMs: 5000 });
+    const targetPath = path.resolve(pathname);
+    const sourcePath = await resolveMoveToTrashSourcePath(targetPath);
+    await movePathToTrash(sourcePath, {
+      allowedRoots: await resolveMoveToTrashAllowedRoots(sourcePath),
+    });
     runtime.log(`Moved to Trash: ${shortenHomePath(pathname)}`);
   } catch {
     runtime.log(`Failed to move to Trash (manual delete): ${shortenHomePath(pathname)}`);
   }
+}
+
+async function resolveMoveToTrashSourcePath(targetPath: string): Promise<string> {
+  return path.join(await fs.realpath(path.dirname(targetPath)), path.basename(targetPath));
+}
+
+async function resolveMoveToTrashAllowedRoots(targetPath: string): Promise<string[]> {
+  const allowedRoots = [path.dirname(targetPath)];
+  const stat = await fs.lstat(targetPath);
+  if (stat.isSymbolicLink()) {
+    try {
+      // fs-safe resolves valid symlinks before allow-root checks; include the
+      // resolved parent so deleting a configured symlink moves the link itself.
+      allowedRoots.push(path.dirname(await fs.realpath(targetPath)));
+    } catch {
+      // Broken symlinks are handled lexically by fs-safe.
+    }
+  }
+  return uniqueStrings(allowedRoots);
 }
 
 export async function handleReset(scope: ResetScope, workspaceDir: string, runtime: RuntimeEnv) {

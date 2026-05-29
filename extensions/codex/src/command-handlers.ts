@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { resolveAgentDir, resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-runtime";
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CODEX_CONTROL_METHODS, type CodexControlMethod } from "./app-server/capabilities.js";
 import {
   installCodexComputerUse,
@@ -11,7 +12,10 @@ import { isCodexFastServiceTier, type CodexComputerUseConfig } from "./app-serve
 import { listAllCodexAppServerModels } from "./app-server/models.js";
 import { isJsonObject, type JsonValue } from "./app-server/protocol.js";
 import { rememberCodexRateLimits } from "./app-server/rate-limit-cache.js";
-import { resolveCodexNativeSandboxBlock } from "./app-server/sandbox-guard.js";
+import {
+  resolveCodexNativeExecutionBlock,
+  resolveCodexNativeSandboxBlock,
+} from "./app-server/sandbox-guard.js";
 import {
   clearCodexAppServerBinding,
   readCodexAppServerBinding,
@@ -26,6 +30,7 @@ import {
   formatCodexStatus,
   formatList,
   formatModels,
+  formatSkills,
   formatThreads,
   readString,
 } from "./command-formatters.js";
@@ -376,9 +381,8 @@ export async function handleCodexSubcommand(
       return { text: "Usage: /codex skills" };
     }
     return {
-      text: formatList(
+      text: formatSkills(
         await deps.codexControlRequest(options.pluginConfig, CODEX_CONTROL_METHODS.listSkills, {}),
-        "Codex skills",
       ),
     };
   }
@@ -427,7 +431,15 @@ function resolveCodexNativeCommandSandboxBlock(
   if (returnsBeforeNativeCodexExecution(subcommand, args)) {
     return undefined;
   }
-  return resolveCodexNativeSandboxBlock({
+  if (isCodexCliNodeResumeBind(subcommand, args)) {
+    return resolveCodexNativeSandboxBlock({
+      config: ctx.config,
+      sessionKey: ctx.sessionKey,
+      sessionId: ctx.sessionId,
+      surface: `/${["codex", subcommand].join(" ")}`,
+    });
+  }
+  return resolveCodexNativeExecutionBlock({
     config: ctx.config,
     sessionKey: ctx.sessionKey,
     sessionId: ctx.sessionId,
@@ -458,6 +470,14 @@ function returnsBeforeNativeCodexExecution(subcommand: string, args: readonly st
     default:
       return false;
   }
+}
+
+function isCodexCliNodeResumeBind(subcommand: string, args: readonly string[]): boolean {
+  if (subcommand !== "resume") {
+    return false;
+  }
+  const parsed = parseResumeArgs([...args]);
+  return Boolean(parsed.host && parsed.threadId && parsed.bindHere === true && !parsed.help);
 }
 
 function returnsBeforeNativeCodexResume(args: readonly string[]): boolean {
@@ -1912,8 +1932,9 @@ function parseCodexCliSessionsArgs(args: string[]): ParsedCodexCliSessionsArgs {
     }
     if (arg === "--limit") {
       const value = readRequiredOptionValue(args, index);
-      const parsedLimit = value ? Number.parseInt(value, 10) : Number.NaN;
-      if (!Number.isFinite(parsedLimit) || parsedLimit <= 0) {
+      const parsedLimit =
+        value && /^\+?\d+$/.test(value.trim()) ? Number(value.trim()) : Number.NaN;
+      if (!Number.isSafeInteger(parsedLimit) || parsedLimit <= 0) {
         parsed.help = true;
         continue;
       }
@@ -2084,9 +2105,4 @@ function normalizeComputerUseStringOverrides(
     normalized.mcpServerName = mcpServerName;
   }
   return normalized;
-}
-
-function normalizeOptionalString(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed || undefined;
 }
