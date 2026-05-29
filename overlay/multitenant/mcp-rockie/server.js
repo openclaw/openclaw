@@ -533,6 +533,17 @@ const STATIC_TOOLS = [
       additionalProperties: false,
     },
   },
+  {
+    name: "connections_status",
+    description:
+      "Check which third-party providers the current tenant has connected (GitHub, Hugging Face). Use BEFORE asking the user about resources during onboarding — if a provider is already connected, ask for the specific repo/dataset for this lab instead of asking the user to sign in. Returns metadata only; never tokens.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      required: [],
+      additionalProperties: false,
+    },
+  },
 ];
 
 function authHeaders() {
