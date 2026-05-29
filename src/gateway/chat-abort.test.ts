@@ -44,6 +44,13 @@ function createOps(params: {
   broadcast: ReturnType<typeof vi.fn>;
   nodeSendToSession: ReturnType<typeof vi.fn>;
   removeChatRun: ReturnType<typeof vi.fn>;
+  clearedState: {
+    chatDeltaSentAt: Map<string, number>;
+    chatDeltaLastBroadcastLen: Map<string, number>;
+    chatDeltaLastBroadcastText: Map<string, string>;
+    agentDeltaSentAt: Map<string, number>;
+    bufferedAgentEvents: Map<string, unknown>;
+  };
 } {
   const { runId, entry, buffer } = params;
   const broadcast = vi.fn();
@@ -54,7 +61,7 @@ function createOps(params: {
   const chatDeltaLastBroadcastLen = new Map([[runId, buffer?.length ?? 0]]);
   const chatDeltaLastBroadcastText = new Map(buffer !== undefined ? [[runId, buffer]] : []);
   const agentDeltaSentAt = new Map([[`${runId}:assistant`, Date.now()]]);
-  const bufferedAgentEvents: ChatAbortOps["bufferedAgentEvents"] = new Map([
+  const bufferedAgentEvents = new Map<string, unknown>([
     [
       `${runId}:assistant`,
       {
@@ -72,11 +79,6 @@ function createOps(params: {
   return {
     chatAbortControllers: new Map([[runId, entry]]),
     chatRunBuffers,
-    chatDeltaSentAt,
-    chatDeltaLastBroadcastLen,
-    chatDeltaLastBroadcastText,
-    agentDeltaSentAt,
-    bufferedAgentEvents,
     chatAbortedRuns: new Map(),
     clearChatRunState: (id: string) => {
       chatRunBuffers.delete(id);
@@ -92,6 +94,13 @@ function createOps(params: {
     agentRunSeq: new Map(),
     broadcast,
     nodeSendToSession,
+    clearedState: {
+      chatDeltaSentAt,
+      chatDeltaLastBroadcastLen,
+      chatDeltaLastBroadcastText,
+      agentDeltaSentAt,
+      bufferedAgentEvents,
+    },
   };
 }
 
@@ -142,11 +151,11 @@ describe("abortChatRunById", () => {
     expect(entry.controller.signal.aborted).toBe(true);
     expect(ops.chatAbortControllers.has(runId)).toBe(false);
     expect(ops.chatRunBuffers.has(runId)).toBe(false);
-    expect(ops.chatDeltaSentAt.has(runId)).toBe(false);
-    expect(ops.chatDeltaLastBroadcastLen.has(runId)).toBe(false);
-    expect(ops.chatDeltaLastBroadcastText.has(runId)).toBe(false);
-    expect(ops.agentDeltaSentAt?.has(`${runId}:assistant`)).toBe(false);
-    expect(ops.bufferedAgentEvents?.has(`${runId}:assistant`)).toBe(false);
+    expect(ops.clearedState.chatDeltaSentAt.has(runId)).toBe(false);
+    expect(ops.clearedState.chatDeltaLastBroadcastLen.has(runId)).toBe(false);
+    expect(ops.clearedState.chatDeltaLastBroadcastText.has(runId)).toBe(false);
+    expect(ops.clearedState.agentDeltaSentAt.has(`${runId}:assistant`)).toBe(false);
+    expect(ops.clearedState.bufferedAgentEvents.has(`${runId}:assistant`)).toBe(false);
     expect(ops.removeChatRun).toHaveBeenCalledWith(runId, runId, sessionKey);
     expect(ops.agentRunSeq.has(runId)).toBe(false);
     expect(ops.agentRunSeq.has("client-run-1")).toBe(false);

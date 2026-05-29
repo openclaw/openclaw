@@ -1,6 +1,5 @@
 import { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
-import type { BufferedAgentEvent } from "./server-chat-state.js";
 
 const DEFAULT_CHAT_RUN_ABORT_GRACE_MS = 60_000;
 
@@ -139,11 +138,6 @@ function normalizeProviderIdForActiveRun(providerId: string | undefined): string
 export type ChatAbortOps = {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   chatRunBuffers: Map<string, string>;
-  chatDeltaSentAt: Map<string, number>;
-  chatDeltaLastBroadcastLen: Map<string, number>;
-  chatDeltaLastBroadcastText: Map<string, string>;
-  agentDeltaSentAt: Map<string, number>;
-  bufferedAgentEvents: Map<string, BufferedAgentEvent>;
   chatAbortedRuns: Map<string, number>;
   clearChatRunState: (runId: string) => void;
   removeChatRun: (

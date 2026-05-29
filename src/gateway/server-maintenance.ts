@@ -190,11 +190,6 @@ export function startGatewayMaintenanceTimers(params: {
         {
           chatAbortControllers: params.chatAbortControllers,
           chatRunBuffers: params.chatRunBuffers,
-          chatDeltaSentAt: params.chatDeltaSentAt,
-          chatDeltaLastBroadcastLen: params.chatDeltaLastBroadcastLen,
-          chatDeltaLastBroadcastText: params.chatRunState.deltaLastBroadcastText,
-          agentDeltaSentAt: params.chatRunState.agentDeltaSentAt,
-          bufferedAgentEvents: params.chatRunState.bufferedAgentEvents,
           chatAbortedRuns: params.chatRunState.abortedRuns,
           clearChatRunState: params.chatRunState.clearRun,
           removeChatRun: params.removeChatRun,
