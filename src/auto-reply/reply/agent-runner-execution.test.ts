@@ -1888,6 +1888,63 @@ describe("runAgentTurnWithFallback", () => {
       payloads: [{ text: "ambient" }],
       meta: {
         agentMeta: {
+          sessionId: "existing-cli-session",
+          cliSessionBinding: {
+            sessionId: "existing-cli-session",
+            authProfileId: "profile",
+          },
+        },
+      },
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const followupRun = createFollowupRun();
+    followupRun.currentInboundEventKind = "room_event";
+    followupRun.run.provider = "codex-cli";
+    followupRun.run.model = "gpt-5.4";
+    const sessionEntry = {
+      cliSessionBindings: {
+        "codex-cli": { sessionId: "existing-cli-session" },
+      },
+    } as unknown as SessionEntry;
+    const activeSessionStore = { main: sessionEntry };
+
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({ followupRun }),
+      activeSessionStore,
+      getActiveSessionEntry: () => sessionEntry,
+    });
+
+    expect(result.kind).toBe("success");
+    expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
+      currentInboundEventKind: "room_event",
+      cliSessionId: "existing-cli-session",
+      cliSessionBinding: {
+        sessionId: "existing-cli-session",
+      },
+    });
+    if (result.kind !== "success") {
+      throw new Error("expected success");
+    }
+    expect(result.runResult.meta?.agentMeta?.sessionId).toBe("existing-cli-session");
+    expect(result.runResult.meta?.agentMeta?.cliSessionBinding).toEqual({
+      sessionId: "existing-cli-session",
+      authProfileId: "profile",
+    });
+  });
+
+  it("keeps new room-event CLI sessions transient when reuse fails", async () => {
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("codex-cli", "gpt-5.4"),
+      provider: "codex-cli",
+      model: "gpt-5.4",
+      attempts: [],
+    }));
+    state.runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ambient" }],
+      meta: {
+        agentMeta: {
           sessionId: "transient-cli-session",
           cliSessionBinding: {
             sessionId: "transient-cli-session",
@@ -1902,15 +1959,17 @@ describe("runAgentTurnWithFallback", () => {
     followupRun.currentInboundEventKind = "room_event";
     followupRun.run.provider = "codex-cli";
     followupRun.run.model = "gpt-5.4";
+    const sessionEntry = {
+      cliSessionBindings: {
+        "codex-cli": { sessionId: "existing-cli-session" },
+      },
+    } as unknown as SessionEntry;
+    const activeSessionStore = { main: sessionEntry };
 
     const result = await runAgentTurnWithFallback({
       ...createMinimalRunAgentTurnParams({ followupRun }),
-      getActiveSessionEntry: () =>
-        ({
-          cliSessionBindings: {
-            "codex-cli": { sessionId: "existing-cli-session" },
-          },
-        }) as unknown as SessionEntry,
+      activeSessionStore,
+      getActiveSessionEntry: () => sessionEntry,
     });
 
     expect(result.kind).toBe("success");
@@ -1924,10 +1983,56 @@ describe("runAgentTurnWithFallback", () => {
     if (result.kind !== "success") {
       throw new Error("expected success");
     }
-    expect(result.runResult.meta?.agentMeta?.sessionId).toBe("transient-cli-session");
-    expect(result.runResult.meta?.agentMeta?.cliSessionBinding).toEqual({
-      sessionId: "transient-cli-session",
-      authProfileId: "profile",
+    expect(result.runResult.meta?.agentMeta?.sessionId).toBe("");
+    expect(result.runResult.meta?.agentMeta?.cliSessionBinding).toBeUndefined();
+    expect(activeSessionStore.main.cliSessionBindings?.["codex-cli"]).toBeUndefined();
+  });
+
+  it("keeps room-event CLI bindings when synthetic hooks return no CLI binding", async () => {
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("codex-cli", "gpt-5.4"),
+      provider: "codex-cli",
+      model: "gpt-5.4",
+      attempts: [],
+    }));
+    state.runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "handled" }],
+      meta: {
+        agentMeta: {
+          sessionId: "openclaw-session",
+          provider: "codex-cli",
+          model: "gpt-5.4",
+        },
+      },
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const followupRun = createFollowupRun();
+    followupRun.currentInboundEventKind = "room_event";
+    followupRun.run.provider = "codex-cli";
+    followupRun.run.model = "gpt-5.4";
+    const sessionEntry = {
+      cliSessionBindings: {
+        "codex-cli": { sessionId: "existing-cli-session" },
+      },
+    } as unknown as SessionEntry;
+    const activeSessionStore = { main: sessionEntry };
+
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({ followupRun }),
+      activeSessionStore,
+      getActiveSessionEntry: () => sessionEntry,
+    });
+
+    expect(result.kind).toBe("success");
+    if (result.kind !== "success") {
+      throw new Error("expected success");
+    }
+    expect(result.runResult.meta?.agentMeta?.sessionId).toBe("");
+    expect(result.runResult.meta?.agentMeta?.cliSessionBinding).toBeUndefined();
+    expect(activeSessionStore.main.cliSessionBindings?.["codex-cli"]).toEqual({
+      sessionId: "existing-cli-session",
     });
   });
 

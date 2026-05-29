@@ -29,7 +29,11 @@ import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../se
 import { readStringValue } from "../../shared/string-coerce.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import { runCliAgentWithLifecycle } from "./agent-runner-cli-dispatch.js";
+import {
+  clearDroppedCliSessionBinding,
+  keepCliSessionBindingOnlyWhenReused,
+  runCliAgentWithLifecycle,
+} from "./agent-runner-cli-dispatch.js";
 import {
   resolveRunAfterAutoFallbackPrimaryProbeRecheck,
   resolveSessionRuntimeOverrideForProvider,
@@ -718,6 +722,7 @@ export function createFollowupRunner(params: {
                   cliExecutionProvider,
                 );
                 const cliLifecycleStartedAt = Date.now();
+                let droppedCliSessionReplacement = false;
                 pendingDeferredCliTerminal = {
                   provider,
                   model,
@@ -741,6 +746,17 @@ export function createFollowupRunner(params: {
                       emitChannelProgress: shouldEmitToolResultProgress(),
                     });
                   },
+                  transformResult:
+                    queued.currentInboundEventKind === "room_event"
+                      ? (result) =>
+                          keepCliSessionBindingOnlyWhenReused({
+                            result,
+                            existingSessionId: cliSessionBinding?.sessionId,
+                            onDroppedReplacement: () => {
+                              droppedCliSessionReplacement = true;
+                            },
+                          })
+                      : undefined,
                   runParams: {
                     replyOperation,
                     sessionId: run.sessionId,
@@ -792,6 +808,15 @@ export function createFollowupRunner(params: {
                     abortSignal: runAbortSignal,
                   },
                 });
+                if (droppedCliSessionReplacement) {
+                  await clearDroppedCliSessionBinding({
+                    provider: cliExecutionProvider,
+                    sessionKey: replySessionKey,
+                    sessionStore,
+                    storePath,
+                    activeSessionEntry,
+                  });
+                }
                 bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
                   result.meta?.systemPromptReport,
                 );

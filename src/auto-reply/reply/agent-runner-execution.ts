@@ -86,7 +86,11 @@ import {
 } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
-import { runCliAgentWithLifecycle } from "./agent-runner-cli-dispatch.js";
+import {
+  clearDroppedCliSessionBinding,
+  keepCliSessionBindingOnlyWhenReused,
+  runCliAgentWithLifecycle,
+} from "./agent-runner-cli-dispatch.js";
 import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
@@ -2006,6 +2010,7 @@ export async function runAgentTurnWithFallback(params: {
               const authProfile = resolveRunAuthProfile(candidateRun, cliExecutionProvider, {
                 config: runtimeConfig,
               });
+              let droppedCliSessionReplacement = false;
               const hookMessageProvider = resolveOriginMessageProvider({
                 originatingChannel: params.followupRun.originatingChannel,
                 provider: params.sessionCtx.Provider,
@@ -2050,6 +2055,17 @@ export async function runAgentTurnWithFallback(params: {
                       );
                     }
                   },
+                  transformResult:
+                    params.followupRun.currentInboundEventKind === "room_event"
+                      ? (result) =>
+                          keepCliSessionBindingOnlyWhenReused({
+                            result,
+                            existingSessionId: cliSessionBinding?.sessionId,
+                            onDroppedReplacement: () => {
+                              droppedCliSessionReplacement = true;
+                            },
+                          })
+                      : undefined,
                   runParams: {
                     sessionId: params.followupRun.run.sessionId,
                     sessionKey: params.sessionKey,
@@ -2099,6 +2115,15 @@ export async function runAgentTurnWithFallback(params: {
                   },
                 }),
               );
+              if (droppedCliSessionReplacement) {
+                await clearDroppedCliSessionBinding({
+                  provider: cliExecutionProvider,
+                  sessionKey: params.sessionKey,
+                  sessionStore: params.activeSessionStore,
+                  storePath: params.storePath,
+                  activeSessionEntry: params.getActiveSessionEntry(),
+                });
+              }
               bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
                 result.meta?.systemPromptReport,
               );
