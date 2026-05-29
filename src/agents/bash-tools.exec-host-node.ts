@@ -65,6 +65,7 @@ function execSecurityFloorRank(security: ExecSecurity): number {
     case "deny":
       return 2;
   }
+  throw new Error("Unsupported exec security floor");
 }
 
 function nodePolicyBlocksAutoReview(params: {

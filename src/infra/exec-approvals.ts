@@ -133,9 +133,8 @@ export function resolveExecPolicyForMode(mode: ExecMode): {
     case "full":
       return { security: "full", ask: "off", autoReview: false };
   }
-  const _exhaustive: never = mode;
-  void _exhaustive;
-  throw new Error("Unsupported exec mode");
+  const exhaustiveMode: never = mode;
+  throw new Error(`Unsupported exec mode: ${String(exhaustiveMode)}`);
 }
 
 export function resolveExecModePolicy(params: {

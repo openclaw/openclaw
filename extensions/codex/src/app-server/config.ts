@@ -466,7 +466,7 @@ export function resolveCodexAppServerRuntimeOptions(
             ? selectForcedDangerFullAccessSandbox({
                 configuredSandbox,
                 defaultPolicy,
-                openClawSandboxActive: params.openClawSandboxActive === true,
+                openClawSandboxActive: Boolean(params.openClawSandboxActive),
               })
             : selectForcedPromptingSandbox({
                 configuredSandbox,

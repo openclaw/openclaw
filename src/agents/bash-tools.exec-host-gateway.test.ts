@@ -10,6 +10,18 @@ type ExecAutoReviewer = typeof import("../infra/exec-auto-review.js").defaultExe
 type BuildExecApprovalFollowupTargetMock = (
   value: ExecApprovalFollowupTarget,
 ) => ExecApprovalFollowupTarget | null;
+type MockAllowlistSegment = {
+  raw?: string;
+  resolution: null;
+  argv: string[];
+};
+type MockAllowlistResult = {
+  allowlistMatches: unknown[];
+  analysisOk: boolean;
+  allowlistSatisfied: boolean;
+  segments: MockAllowlistSegment[];
+  segmentAllowlistEntries: unknown[];
+};
 
 const INLINE_EVAL_HIT = {
   executable: "python3",
@@ -37,13 +49,15 @@ const createExecApprovalDecisionStateMock = vi.hoisted(() =>
   ),
 );
 const evaluateShellAllowlistMock = vi.hoisted(() =>
-  vi.fn(() => ({
-    allowlistMatches: [],
-    analysisOk: true,
-    allowlistSatisfied: true,
-    segments: [{ resolution: null, argv: ["echo", "ok"] }],
-    segmentAllowlistEntries: [{ pattern: "/usr/bin/echo", source: "allow-always" }],
-  })),
+  vi.fn(
+    (): MockAllowlistResult => ({
+      allowlistMatches: [],
+      analysisOk: true,
+      allowlistSatisfied: true,
+      segments: [{ resolution: null, argv: ["echo", "ok"] }],
+      segmentAllowlistEntries: [{ pattern: "/usr/bin/echo", source: "allow-always" }],
+    }),
+  ),
 );
 const analyzeShellCommandMock = vi.hoisted(() =>
   vi.fn((params: { command: string }) => ({

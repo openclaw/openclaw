@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { ExecApprovalsFile } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const sharedClientMocks = vi.hoisted(() => ({
@@ -8,7 +9,7 @@ const sharedClientMocks = vi.hoisted(() => ({
 }));
 
 const execApprovalsRuntimeMocks = vi.hoisted(() => ({
-  loadExecApprovals: vi.fn(() => ({ version: 1 as const, agents: {} })),
+  loadExecApprovals: vi.fn<() => ExecApprovalsFile>(() => ({ version: 1, agents: {} })),
 }));
 
 const agentRuntimeMocks = vi.hoisted(() => ({

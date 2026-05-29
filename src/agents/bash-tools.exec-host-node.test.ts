@@ -3,6 +3,18 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 type StrictInlineEvalBoundary =
   typeof import("./bash-tools.exec-host-shared.js").enforceStrictInlineEvalApprovalBoundary;
 type ExecAutoReviewer = typeof import("../infra/exec-auto-review.js").defaultExecAutoReviewer;
+type MockAllowlistSegment = {
+  raw?: string;
+  resolution: null;
+  argv: string[];
+};
+type MockAllowlistResult = {
+  allowlistMatches: unknown[];
+  analysisOk: boolean;
+  allowlistSatisfied: boolean;
+  segments: MockAllowlistSegment[];
+  segmentAllowlistEntries: unknown[];
+};
 
 const INLINE_EVAL_HIT = {
   executable: "python3",
@@ -30,13 +42,15 @@ const listNodesMock = vi.hoisted(() => vi.fn());
 const parsePreparedSystemRunPayloadMock = vi.hoisted(() => vi.fn());
 const commandRequiresSecurityAuditSuppressionApprovalMock = vi.hoisted(() => vi.fn(() => false));
 const evaluateShellAllowlistMock = vi.hoisted(() =>
-  vi.fn(() => ({
-    allowlistMatches: [],
-    analysisOk: true,
-    allowlistSatisfied: false,
-    segments: [{ resolution: null, argv: ["bun", "./script.ts"] }],
-    segmentAllowlistEntries: [],
-  })),
+  vi.fn(
+    (): MockAllowlistResult => ({
+      allowlistMatches: [],
+      analysisOk: true,
+      allowlistSatisfied: false,
+      segments: [{ resolution: null, argv: ["bun", "./script.ts"] }],
+      segmentAllowlistEntries: [],
+    }),
+  ),
 );
 const resolveExecApprovalsFromFileMock = vi.hoisted(() =>
   vi.fn(() => ({

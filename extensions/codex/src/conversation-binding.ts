@@ -127,7 +127,7 @@ async function resolveConversationAppServerRuntime(params: {
     sessionKey: params.sessionKey,
   });
   const sandboxForPolicy =
-    execPolicy?.touched === true && execPolicy.security === "full" && execPolicy.ask !== "off"
+    execPolicy.touched && execPolicy.security === "full" && execPolicy.ask !== "off"
       ? await resolveSandboxContext({
           config: params.config,
           sessionKey: params.sessionKey,
@@ -137,7 +137,7 @@ async function resolveConversationAppServerRuntime(params: {
   const runtime = resolveCodexAppServerRuntimeOptions({
     pluginConfig: params.pluginConfig,
     execPolicy,
-    openClawSandboxActive: sandboxForPolicy?.enabled === true,
+    openClawSandboxActive: Boolean(sandboxForPolicy?.enabled),
   });
   assertNativeConversationApprovalPolicySupported({ execPolicy, runtime });
   return { execPolicy, runtime };
@@ -626,7 +626,7 @@ async function runBoundTurnWithMissingThreadRecovery(params: {
       config: params.config,
       sessionKey: params.sessionKey,
     });
-    const useCurrentRuntimePolicy = execPolicy?.touched === true;
+    const useCurrentRuntimePolicy = execPolicy.touched;
     await startCodexConversationThread({
       pluginConfig: params.pluginConfig,
       sessionFile: params.data.sessionFile,
