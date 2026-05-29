@@ -211,16 +211,6 @@ export const FeishuConfigSchema = z
       }
     }
 
-    if (value.dmPolicy === "open") {
-      const allowFrom = value.allowFrom ?? [];
-      const hasWildcard = allowFrom.some((entry) => String(entry).trim() === "*");
-      if (!hasWildcard) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["allowFrom"],
-          message:
-            'channels.feishu.dmPolicy="open" requires channels.feishu.allowFrom to include "*"',
-        });
-      }
-    }
+    // dmPolicy="open" allows all senders by definition; no wildcard required in allowFrom.
+    // The wildcard is only needed for allowlist/pairing modes to explicitly grant access.
   });
