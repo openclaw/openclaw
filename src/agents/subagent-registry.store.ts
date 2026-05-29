@@ -24,6 +24,7 @@ const REGISTRY_VERSION = 2 as const;
 const MAX_SUBAGENT_REGISTRY_READ_CACHE_ENTRIES = 32;
 
 type PersistedSubagentRunRecord = SubagentRunRecord;
+type ReadonlySubagentRunRecord = Readonly<SubagentRunRecord>;
 
 type RegistryCacheEntry = {
   signature: string;
@@ -83,15 +84,15 @@ export function resolveSubagentRegistryPath(): string {
 export function loadSubagentRegistryFromDisk(): Map<string, SubagentRunRecord>;
 export function loadSubagentRegistryFromDisk(options: {
   clone: false;
-}): ReadonlyMap<string, SubagentRunRecord>;
+}): ReadonlyMap<string, ReadonlySubagentRunRecord>;
 export function loadSubagentRegistryFromDisk(options?: {
   clone?: boolean;
-}): Map<string, SubagentRunRecord> | ReadonlyMap<string, SubagentRunRecord> {
+}): Map<string, SubagentRunRecord> | ReadonlyMap<string, ReadonlySubagentRunRecord> {
   const snapshot = loadSubagentRegistrySnapshotForRead();
   return options?.clone === false ? snapshot : cloneSubagentRunMap(snapshot);
 }
 
-function loadSubagentRegistrySnapshotForRead(): ReadonlyMap<string, SubagentRunRecord> {
+function loadSubagentRegistrySnapshotForRead(): ReadonlyMap<string, ReadonlySubagentRunRecord> {
   const pathname = resolveSubagentRegistryPath();
   const signature = statRegistryFileSignature(pathname);
   if (signature === null) {
@@ -102,6 +103,8 @@ function loadSubagentRegistrySnapshotForRead(): ReadonlyMap<string, SubagentRunR
   if (cached?.signature === signature) {
     registryReadCache.delete(pathname);
     registryReadCache.set(pathname, cached);
+    // No-clone reads share cached records; only read snapshot callers may use
+    // this path. Mutation/restore callers must keep the default cloned load.
     return cached.runs;
   }
   const raw = loadJsonFile(pathname);

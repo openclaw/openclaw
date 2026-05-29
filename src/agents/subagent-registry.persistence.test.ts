@@ -12,6 +12,7 @@ import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { captureEnv, withEnv } from "../test-utils/env.js";
 import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
+import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import {
   testing,
   addSubagentRunForTests,
@@ -33,7 +34,6 @@ import {
   loadSubagentRegistryFromDisk,
   resolveSubagentRegistryPath,
 } from "./subagent-registry.store.js";
-import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const { announceSpy } = vi.hoisted(() => ({
@@ -427,7 +427,7 @@ describe("subagent registry persistence", () => {
       { seedChildSessions: false },
     );
     const previousFlag = process.env.OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_DISK;
-    let cloneSpy: ReturnType<typeof vi.spyOn> | undefined;
+    let cloneSpy: { mockRestore(): void } | undefined;
     try {
       process.env.OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_DISK = "1";
       getSubagentRunsSnapshotForRead(new Map());
