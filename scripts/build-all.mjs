@@ -53,6 +53,7 @@ export const BUILD_ALL_STEPS = [
         "src/plugin-sdk",
         "packages/llm-core/src",
         "packages/memory-host-sdk/src",
+        "packages/media-generation-core/src",
         "src/types",
         "src/video-generation/dashscope-compatible.ts",
         "src/video-generation/types.ts",

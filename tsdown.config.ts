@@ -384,6 +384,16 @@ function buildNetPolicyDistEntries(): Record<string, string> {
   };
 }
 
+function buildMediaGenerationCoreDistEntries(): Record<string, string> {
+  return {
+    index: "packages/media-generation-core/src/index.ts",
+    "capability-model-ref": "packages/media-generation-core/src/capability-model-ref.ts",
+    catalog: "packages/media-generation-core/src/catalog.ts",
+    "model-ref": "packages/media-generation-core/src/model-ref.ts",
+    normalization: "packages/media-generation-core/src/normalization.ts",
+  };
+}
+
 function buildSpeechCoreDistEntries(): Record<string, string> {
   return {
     api: "packages/speech-core/api.ts",
@@ -522,6 +532,12 @@ export default defineConfig([
     deps: {
       neverBundle: shouldExternalizeNetPolicyDependency,
     },
+  }),
+  nodeWorkspacePackageBuildConfig({
+    clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    entry: buildMediaGenerationCoreDistEntries(),
+    outDir: "packages/media-generation-core/dist",
   }),
   nodeWorkspacePackageBuildConfig({
     clean: true,
