@@ -2,7 +2,10 @@ import type { OpenClawConfig, HookConfig } from "../config/config.js";
 import { resolveHookKey } from "./frontmatter.js";
 import type { HookEntry, HookSource } from "./types.js";
 
-export type HookEnableStateReason = "disabled in config" | "workspace hook (disabled by default)";
+export type HookEnableStateReason =
+  | "disabled in config"
+  | "workspace hook (disabled by default)"
+  | "hook disabled by default (opt-in)";
 
 type HookEnableState = {
   enabled: boolean;
@@ -90,8 +93,13 @@ export function resolveHookEnableState(params: {
   }
 
   const sourcePolicy = getHookSourcePolicy(entry.hook.source);
-  if (sourcePolicy.defaultEnableMode === "explicit-opt-in" && hookConfig?.enabled !== true) {
-    return { enabled: false, reason: "workspace hook (disabled by default)" };
+  const effectiveEnableMode = entry.metadata?.defaultEnableMode ?? sourcePolicy.defaultEnableMode;
+  if (effectiveEnableMode === "explicit-opt-in" && hookConfig?.enabled !== true) {
+    const reason: HookEnableStateReason =
+      entry.hook.source === "openclaw-workspace"
+        ? "workspace hook (disabled by default)"
+        : "hook disabled by default (opt-in)";
+    return { enabled: false, reason };
   }
 
   return { enabled: true };

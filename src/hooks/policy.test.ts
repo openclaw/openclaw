@@ -55,6 +55,39 @@ describe("hook policy", () => {
       const entry = makeHookEntry("plugin-hook", "openclaw-plugin");
       expect(resolveHookEnableState({ entry })).toEqual({ enabled: true });
     });
+
+    it("keeps bundled hooks enabled by default", () => {
+      const entry = makeHookEntry("bundled-hook", "openclaw-bundled");
+      expect(resolveHookEnableState({ entry })).toEqual({ enabled: true });
+    });
+
+    it("honors a per-hook explicit-opt-in override on a bundled hook", () => {
+      const entry = makeHookEntry("opt-in-hook", "openclaw-bundled");
+      entry.metadata = { ...entry.metadata, events: ["session:aborted"] };
+      entry.metadata.defaultEnableMode = "explicit-opt-in";
+      expect(resolveHookEnableState({ entry })).toEqual({
+        enabled: false,
+        reason: "hook disabled by default (opt-in)",
+      });
+    });
+
+    it("enables an opt-in bundled hook when explicitly turned on", () => {
+      const entry = makeHookEntry("opt-in-hook", "openclaw-bundled");
+      entry.metadata = { ...entry.metadata, events: ["session:aborted"] };
+      entry.metadata.defaultEnableMode = "explicit-opt-in";
+      const config: OpenClawConfig = {
+        hooks: {
+          internal: {
+            entries: {
+              "opt-in-hook": {
+                enabled: true,
+              },
+            },
+          },
+        },
+      };
+      expect(resolveHookEnableState({ entry, config })).toEqual({ enabled: true });
+    });
   });
 
   describe("resolveHookEntries", () => {

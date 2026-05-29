@@ -56,12 +56,17 @@ export function resolveOpenClawMetadata(
   const install = resolveOpenClawManifestInstall(metadataObj, parseInstallSpec);
   const osRaw = resolveOpenClawManifestOs(metadataObj);
   const eventsRaw = normalizeStringList(metadataObj.events);
+  const defaultEnableMode = readStringValue(metadataObj.defaultEnableMode);
   return {
     always: typeof metadataObj.always === "boolean" ? metadataObj.always : undefined,
     emoji: readStringValue(metadataObj.emoji),
     homepage: readStringValue(metadataObj.homepage),
     hookKey: readStringValue(metadataObj.hookKey),
     export: readStringValue(metadataObj.export),
+    defaultEnableMode:
+      defaultEnableMode === "explicit-opt-in" || defaultEnableMode === "default-on"
+        ? defaultEnableMode
+        : undefined,
     os: osRaw.length > 0 ? osRaw : undefined,
     events: eventsRaw.length > 0 ? eventsRaw : [],
     requires: requires,
