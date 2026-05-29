@@ -1615,6 +1615,7 @@ Docs: https://docs.openclaw.ai
 - Agents/compaction: preserve scoped background exec/process session references across embedded compaction and after-turn runtime contexts without exposing sessions from unrelated scopes. Fixes #79284. (#79307) Thanks @TurboTheTurtle.
 - Agents/process: tell agents to inspect background sessions with `process log` before sending interactive input and to use `waitingForInput`/`stdinWritable` hints from `log`/`poll`.
 - CLI/onboarding: improve setup, onboarding, configure, and channel command wayfinding so terminal flows explain the next useful command instead of relying on terse setup labels.
+- Experimental flags: add `openclaw experimental` plus gated `/experimental` chat, TUI, and native-channel command support backed by the config-schema-derived experimental flag subset, so preview flags can be toggled without duplicating path lists or exposing arbitrary config writes.
 - Agents/Codex: remove the configurable Codex dynamic-tools profile so Codex app-server always owns workspace, edit, patch, exec, process, and plan tools while OpenClaw integration tools remain available.
 - macOS app: update the Peekaboo bridge dependency to Peekaboo 3.0.0.
 - Dependencies: refresh workspace pins and move the WhatsApp plugin from `@whiskeysockets/baileys` to `baileys` while keeping the `7.0.0-rc10` runtime.

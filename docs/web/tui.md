@@ -127,11 +127,18 @@ Session lifecycle:
 - `/settings`
 - `/exit`
 
+Experimental config:
+
+- `/experimental` opens an experimental flag selector in embedded mode.
+- `/experimental list`
+- `/experimental on <flag-path>`
+- `/experimental off <flag-path>`
+
 Local mode only:
 
 - `/auth [provider]` opens the provider auth/login flow inside the TUI.
 
-Other Gateway slash commands (for example, `/context`) are forwarded to the Gateway and shown as system output. See [Slash commands](/tools/slash-commands).
+Other Gateway slash commands (for example, `/context`) are forwarded to the Gateway and shown as system output. See [Slash commands](/tools/slash-commands). The TUI experimental command requires `commands.experimental: true`; when the TUI is connected to a Gateway without direct experimental methods, it forwards `/experimental` through the same owner/admin-gated chat command path.
 
 ## Local shell commands
 

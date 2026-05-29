@@ -2,6 +2,7 @@ import type { SlashCommand } from "@earendil-works/pi-tui";
 import type { CommandEntry } from "../../packages/gateway-protocol/src/index.js";
 import { listChatCommands, listChatCommandsForConfig } from "../auto-reply/commands-registry.js";
 import { formatThinkingLevels, listThinkingLevelLabels } from "../auto-reply/thinking.js";
+import { listExperimentalConfigFlags } from "../config/experimental-flags.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
@@ -12,6 +13,7 @@ const REASONING_LEVELS = ["on", "off"];
 const ELEVATED_LEVELS = ["on", "off", "ask", "full"];
 const ACTIVATION_LEVELS = ["mention", "always"];
 const USAGE_FOOTER_LEVELS = ["off", "tokens", "full"];
+const EXPERIMENTAL_ARGUMENTS = ["list", "status", "show", "on", "off", "enable", "disable", "set"];
 
 export type ParsedCommand = {
   name: string;
@@ -86,6 +88,17 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
   const usageCompletions = createLevelCompletion(USAGE_FOOTER_LEVELS);
   const elevatedCompletions = createLevelCompletion(ELEVATED_LEVELS);
   const activationCompletions = createLevelCompletion(ACTIVATION_LEVELS);
+  const experimentalCompletions: NonNullable<SlashCommand["getArgumentCompletions"]> = (prefix) => {
+    const normalized = normalizeLowercaseStringOrEmpty(prefix);
+    return [
+      ...EXPERIMENTAL_ARGUMENTS.map((value) => ({ value, label: value })),
+      ...listExperimentalConfigFlags().map((flag) => ({
+        value: flag.path,
+        label: flag.path,
+        description: flag.label,
+      })),
+    ].filter((item) => item.value.toLowerCase().startsWith(normalized));
+  };
   const commands: SlashCommand[] = [
     { name: "help", description: "Show slash command help" },
     { name: "gateway-status", description: "Show gateway status summary" },
@@ -149,6 +162,11 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
       description: "Set group activation",
       getArgumentCompletions: activationCompletions,
     },
+    {
+      name: "experimental",
+      description: "List or toggle experimental config flags",
+      getArgumentCompletions: experimentalCompletions,
+    },
     { name: "abort", description: "Abort active run" },
     { name: "new", description: "Reset the session" },
     { name: "reset", description: "Reset the session" },
@@ -199,6 +217,7 @@ export function helpText(options: SlashCommandOptions = {}): string {
     "/elevated <on|off|ask|full>",
     "/elev <on|off|ask|full>",
     "/activation <mention|always>",
+    "/experimental [list|on|off <flag>]",
     "/new or /reset",
     "/abort",
     "/settings",

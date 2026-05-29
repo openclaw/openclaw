@@ -56,6 +56,8 @@ function createHarness(params?: {
   listModels?: ReturnType<typeof vi.fn>;
   patchSession?: ReturnType<typeof vi.fn>;
   resetSession?: ReturnType<typeof vi.fn>;
+  listExperimentalFlags?: ReturnType<typeof vi.fn>;
+  setExperimentalFlag?: ReturnType<typeof vi.fn>;
   runAuthFlow?: RunAuthFlow;
   setSession?: SetSessionMock;
   loadHistory?: LoadHistoryMock;
@@ -77,6 +79,8 @@ function createHarness(params?: {
   const listModels = params?.listModels ?? vi.fn().mockResolvedValue([]);
   const patchSession = params?.patchSession ?? vi.fn().mockResolvedValue({});
   const resetSession = params?.resetSession ?? vi.fn().mockResolvedValue({ ok: true });
+  const listExperimentalFlags = params?.listExperimentalFlags;
+  const setExperimentalFlag = params?.setExperimentalFlag;
   const setSession = params?.setSession ?? (vi.fn().mockResolvedValue(undefined) as SetSessionMock);
   const addUser = vi.fn();
   const addSystem = vi.fn();
@@ -119,6 +123,8 @@ function createHarness(params?: {
       listModels,
       patchSession,
       resetSession,
+      ...(listExperimentalFlags ? { listExperimentalFlags } : {}),
+      ...(setExperimentalFlag ? { setExperimentalFlag } : {}),
     } as never,
     chatLog: { addUser, addSystem, reserveAssistantSlot } as never,
     tui: { requestRender } as never,
@@ -154,6 +160,8 @@ function createHarness(params?: {
     closeOverlay,
     patchSession,
     resetSession,
+    listExperimentalFlags,
+    setExperimentalFlag,
     setSession,
     addUser,
     addSystem,
@@ -276,6 +284,95 @@ describe("tui command handlers", () => {
       message: "/context detail",
     });
     expect(closeOverlay).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens an experimental flag selector and toggles the selected flag", async () => {
+    const listExperimentalFlags = vi.fn().mockResolvedValue([
+      {
+        path: "tools.experimental.planTool",
+        label: "Plan tool",
+        summary: "Enable the plan tool",
+        on: false,
+      },
+    ]);
+    const setExperimentalFlag = vi
+      .fn()
+      .mockResolvedValue({ path: "tools.experimental.planTool", value: true, changed: true });
+    const { handleCommand, sendChat, openOverlay, closeOverlay, addSystem } = createHarness({
+      listExperimentalFlags,
+      setExperimentalFlag,
+    });
+
+    await handleCommand("/experimental");
+    const selector = openOverlay.mock.calls[0]?.[0] as SelectableOverlay | undefined;
+    expect(selector?.items?.[0]).toMatchObject({
+      value: "tools.experimental.planTool",
+      label: "off Plan tool",
+    });
+
+    selector?.onSelect?.({ value: "tools.experimental.planTool", label: "off Plan tool" });
+    await flushAsyncSelect();
+
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(setExperimentalFlag).toHaveBeenCalledWith({
+      path: "tools.experimental.planTool",
+      value: true,
+    });
+    expect(addSystem).toHaveBeenCalledWith("experimental enabled: tools.experimental.planTool");
+    expect(closeOverlay).toHaveBeenCalledTimes(1);
+  });
+
+  it("lists experimental flags through the TUI backend", async () => {
+    const listExperimentalFlags = vi.fn().mockResolvedValue([
+      {
+        path: "tools.experimental.planTool",
+        label: "Plan tool",
+        summary: "Enable the plan tool",
+        on: true,
+      },
+    ]);
+    const { handleCommand, sendChat, addSystem } = createHarness({ listExperimentalFlags });
+
+    await handleCommand("/experimental list");
+
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(addSystem).toHaveBeenCalledWith(
+      "Experimental flags:\n- on tools.experimental.planTool - Plan tool",
+    );
+  });
+
+  it("uses the shared experimental resolver for explicit TUI toggles", async () => {
+    const setExperimentalFlag = vi.fn().mockResolvedValue({
+      path: "agents.defaults.experimental.localModelLean",
+      value: true,
+      changed: true,
+    });
+    const { handleCommand, sendChat, addSystem } = createHarness({ setExperimentalFlag });
+
+    await handleCommand("/experimental on localModelLean");
+
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(setExperimentalFlag).toHaveBeenCalledWith({
+      path: "agents.defaults.experimental.localModelLean",
+      value: true,
+    });
+    expect(addSystem).toHaveBeenCalledWith(
+      "experimental enabled: agents.defaults.experimental.localModelLean",
+    );
+  });
+
+  it("falls back to the gated chat command path when the backend has no TUI experimental methods", async () => {
+    const { handleCommand, sendChat, openOverlay } = createHarness();
+
+    await handleCommand("/experimental list");
+
+    expect(openOverlay).not.toHaveBeenCalled();
+    expect(sendChat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        message: "/experimental list",
+      }),
+    );
   });
 
   it("forwards /context list directly", async () => {

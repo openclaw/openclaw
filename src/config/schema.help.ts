@@ -1552,6 +1552,8 @@ export const FIELD_HELP: Record<string, string> = {
   "commands.bashForegroundMs":
     "How long bash waits before backgrounding (default: 2000; 0 backgrounds immediately).",
   "commands.config": "Allow /config chat command to read/write config on disk (default: false).",
+  "commands.experimental":
+    "Allow /experimental chat command to list and toggle schema-derived experimental config flags (default: false). Writes remain owner-only and honor channel configWrites policy.",
   "commands.mcp":
     "Allow /mcp chat command to manage OpenClaw MCP server config under mcp.servers (default: false).",
   "commands.plugins":

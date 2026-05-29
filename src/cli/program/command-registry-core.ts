@@ -77,6 +77,11 @@ const coreEntrySpecs: readonly CommandGroupDescriptorSpec<
         exportName: "registerConfigCli",
       },
       {
+        commandNames: ["experimental"],
+        loadModule: () => import("./register.experimental.js"),
+        exportName: "registerExperimentalCommand",
+      },
+      {
         commandNames: ["backup"],
         loadModule: () => import("./register.backup.js"),
         exportName: "registerBackupCommand",

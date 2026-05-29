@@ -20,12 +20,27 @@ describe("getSlashCommands", () => {
     const commands = getSlashCommands();
     const verbose = commands.find((command) => command.name === "verbose");
     const activation = commands.find((command) => command.name === "activation");
+    const experimental = commands.find((command) => command.name === "experimental");
     expect(verbose?.getArgumentCompletions?.("o")).toEqual([
       { value: "on", label: "on" },
       { value: "off", label: "off" },
     ]);
     expect(activation?.getArgumentCompletions?.("a")).toEqual([
       { value: "always", label: "always" },
+    ]);
+    expect(experimental?.getArgumentCompletions?.("agents.defaults.experimental")).toEqual([
+      {
+        value: "agents.defaults.experimental.localModelLean",
+        label: "agents.defaults.experimental.localModelLean",
+        description: "Enable Lean Local Model Mode (Experimental)",
+      },
+    ]);
+    expect(experimental?.getArgumentCompletions?.("agents.defaults.experimental.localM")).toEqual([
+      {
+        value: "agents.defaults.experimental.localModelLean",
+        label: "agents.defaults.experimental.localModelLean",
+        description: "Enable Lean Local Model Mode (Experimental)",
+      },
     ]);
   });
 
@@ -96,5 +111,6 @@ describe("helpText", () => {
     expect(output).toContain("/gateway-status");
     expect(output).toContain("/gwstatus");
     expect(output).toContain("/crestodian [request]");
+    expect(output).toContain("/experimental [list|on|off <flag>]");
   });
 });

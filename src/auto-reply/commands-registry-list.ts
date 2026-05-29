@@ -40,6 +40,9 @@ export function isCommandEnabled(cfg: OpenClawConfig, commandKey: string): boole
   if (commandKey === "config") {
     return isCommandFlagEnabled(cfg, "config");
   }
+  if (commandKey === "experimental") {
+    return isCommandFlagEnabled(cfg, "experimental");
+  }
   if (commandKey === "mcp") {
     return isCommandFlagEnabled(cfg, "mcp");
   }

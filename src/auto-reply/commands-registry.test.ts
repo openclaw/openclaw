@@ -247,24 +247,30 @@ describe("commands registry", () => {
 
   it("filters commands based on config flags", () => {
     const disabled = listChatCommandsForConfig({
-      commands: { config: false, plugins: false, debug: false },
+      commands: { config: false, experimental: false, plugins: false, debug: false },
     });
-    expectSetOmitsAll(commandKeySet(disabled), ["config", "plugins", "debug"]);
+    expectSetOmitsAll(commandKeySet(disabled), ["config", "experimental", "plugins", "debug"]);
 
     const enabled = listChatCommandsForConfig({
-      commands: { config: true, plugins: true, debug: true },
+      commands: { config: true, experimental: true, plugins: true, debug: true },
     });
-    expectSetContainsAll(commandKeySet(enabled), ["config", "plugins", "debug"]);
+    expectSetContainsAll(commandKeySet(enabled), ["config", "experimental", "plugins", "debug"]);
 
     const nativeDisabled = listNativeCommandSpecsForConfig({
-      commands: { config: false, plugins: false, debug: false, native: true },
+      commands: { config: false, experimental: false, plugins: false, debug: false, native: true },
     });
-    expectSetOmitsAll(nativeNameSet(nativeDisabled), ["config", "plugins", "debug"]);
+    expectSetOmitsAll(nativeNameSet(nativeDisabled), [
+      "config",
+      "experimental",
+      "plugins",
+      "debug",
+    ]);
   });
 
   it("does not enable restricted commands from inherited flags", () => {
     const inheritedCommands = Object.create({
       config: true,
+      experimental: true,
       plugins: true,
       debug: true,
       bash: true,
@@ -272,7 +278,13 @@ describe("commands registry", () => {
     const commands = listChatCommandsForConfig({
       commands: inheritedCommands as never,
     });
-    expectSetOmitsAll(commandKeySet(commands), ["config", "plugins", "debug", "bash"]);
+    expectSetOmitsAll(commandKeySet(commands), [
+      "config",
+      "experimental",
+      "plugins",
+      "debug",
+      "bash",
+    ]);
   });
 
   it("appends skill commands when provided", () => {

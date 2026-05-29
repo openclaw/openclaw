@@ -741,6 +741,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "commands.bash": "Allow Bash Chat Command",
   "commands.bashForegroundMs": "Bash Foreground Window (ms)",
   "commands.config": "Allow /config",
+  "commands.experimental": "Allow /experimental",
   "commands.mcp": "Allow /mcp",
   "commands.plugins": "Allow /plugins",
   "commands.debug": "Allow /debug",

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { parseConfigCommand } from "./config-commands.js";
 import { parseDebugCommand } from "./debug-commands.js";
+import { parseExperimentalCommand } from "./experimental-commands.js";
 
 describe("config/debug command parsing", () => {
   it("parses config/debug command actions and JSON payloads", () => {
@@ -53,5 +54,35 @@ describe("config/debug command parsing", () => {
     for (const testCase of cases) {
       expect(testCase.parse(testCase.input)).toEqual(testCase.expected);
     }
+  });
+});
+
+describe("experimental command parsing", () => {
+  it("parses list and boolean update actions", () => {
+    expect(parseExperimentalCommand("/experimental")).toEqual({ action: "list" });
+    expect(parseExperimentalCommand("/experimental list")).toEqual({ action: "list" });
+    expect(parseExperimentalCommand("/experimental on tools.experimental.planTool")).toEqual({
+      action: "set",
+      selector: "tools.experimental.planTool",
+      value: true,
+    });
+    expect(parseExperimentalCommand("/experimental disable localModelLean")).toEqual({
+      action: "set",
+      selector: "localModelLean",
+      value: false,
+    });
+    expect(parseExperimentalCommand("/experimental set tools.experimental.planTool=false")).toEqual(
+      {
+        action: "set",
+        selector: "tools.experimental.planTool",
+        value: false,
+      },
+    );
+    expect(parseExperimentalCommand("/experimental set tools.experimental.planTool=maybe")).toEqual(
+      {
+        action: "error",
+        message: "Usage: /experimental set path=true|false",
+      },
+    );
   });
 });

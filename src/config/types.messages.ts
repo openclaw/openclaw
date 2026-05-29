@@ -172,6 +172,8 @@ export type CommandsConfig = {
   bashForegroundMs?: number;
   /** Allow /config command (default: false). */
   config?: boolean;
+  /** Allow /experimental command for schema-derived experimental config flags (default: false). */
+  experimental?: boolean;
   /** Allow /mcp command for OpenClaw-managed MCP settings (default: false). */
   mcp?: boolean;
   /** Allow /plugins command for plugin listing and enablement toggles (default: false). */

@@ -212,6 +212,7 @@ export const CommandsSchema = z
     bash: z.boolean().optional(),
     bashForegroundMs: z.number().int().min(0).max(30_000).optional(),
     config: z.boolean().optional(),
+    experimental: z.boolean().optional(),
     mcp: z.boolean().optional(),
     plugins: z.boolean().optional(),
     debug: z.boolean().optional(),

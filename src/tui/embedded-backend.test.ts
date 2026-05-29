@@ -3,6 +3,8 @@ import { isEmbeddedMode, setEmbeddedMode } from "../infra/embedded-mode.js";
 import { defaultRuntime } from "../runtime.js";
 
 const agentCommandFromIngressMock = vi.fn();
+const readExperimentalConfigFlagStatesFromFileMock = vi.fn();
+const writeExperimentalConfigFlagToFileMock = vi.fn();
 const updateSessionStoreMock = vi.fn();
 const applySessionsPatchToStoreMock = vi.fn();
 const getRuntimeConfigMock = vi.fn(() => ({}));
@@ -68,6 +70,12 @@ vi.mock("../agents/model-selection.js", () => ({
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => getRuntimeConfigMock(),
   loadConfig: () => getRuntimeConfigMock(),
+}));
+
+vi.mock("../config/experimental-config-file.js", () => ({
+  readExperimentalConfigFlagStatesFromFile: () => readExperimentalConfigFlagStatesFromFileMock(),
+  writeExperimentalConfigFlagToFile: (params: unknown) =>
+    writeExperimentalConfigFlagToFileMock(params),
 }));
 
 vi.mock("../gateway/cli-session-history.js", () => ({
@@ -160,6 +168,8 @@ describe("EmbeddedTuiBackend", () => {
     vi.useFakeTimers();
     vi.setSystemTime(embeddedEventTimestamp);
     agentCommandFromIngressMock.mockReset();
+    readExperimentalConfigFlagStatesFromFileMock.mockReset();
+    writeExperimentalConfigFlagToFileMock.mockReset();
     updateSessionStoreMock.mockReset();
     updateSessionStoreMock.mockImplementation(
       async (_storePath: string, update: (store: Record<string, unknown>) => unknown) =>
@@ -1138,6 +1148,74 @@ describe("EmbeddedTuiBackend", () => {
         timestamp: embeddedEventTimestamp,
       },
     });
+  });
+
+  it("lists experimental flags through the embedded trusted local config helper", async () => {
+    getRuntimeConfigMock.mockReturnValue({ commands: { experimental: true } });
+    readExperimentalConfigFlagStatesFromFileMock.mockResolvedValueOnce([
+      {
+        path: "tools.experimental.planTool",
+        label: "Enable Structured Plan Tool",
+        summary: "Structured planning",
+        on: false,
+        authored: true,
+        segments: ["tools", "experimental", "planTool"],
+      },
+    ]);
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+
+    await expect(backend.listExperimentalFlags()).resolves.toEqual([
+      {
+        path: "tools.experimental.planTool",
+        label: "Enable Structured Plan Tool",
+        summary: "Structured planning",
+        on: false,
+      },
+    ]);
+  });
+
+  it("writes experimental flags through the embedded trusted local config helper", async () => {
+    getRuntimeConfigMock.mockReturnValue({ commands: { experimental: true } });
+    writeExperimentalConfigFlagToFileMock.mockResolvedValueOnce({
+      path: "tools.experimental.planTool",
+      value: false,
+      changed: true,
+    });
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+
+    await expect(
+      backend.setExperimentalFlag({
+        path: "tools.experimental.planTool",
+        value: false,
+      }),
+    ).resolves.toEqual({
+      path: "tools.experimental.planTool",
+      value: false,
+      changed: true,
+    });
+    expect(writeExperimentalConfigFlagToFileMock).toHaveBeenCalledWith({
+      path: "tools.experimental.planTool",
+      value: false,
+      afterWrite: { mode: "auto" },
+    });
+  });
+
+  it("keeps embedded experimental controls behind commands.experimental", async () => {
+    getRuntimeConfigMock.mockReturnValue({ commands: { experimental: false } });
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+
+    await expect(backend.listExperimentalFlags()).rejects.toThrow("/experimental is disabled");
+    await expect(
+      backend.setExperimentalFlag({
+        path: "tools.experimental.planTool",
+        value: true,
+      }),
+    ).rejects.toThrow("/experimental is disabled");
+    expect(readExperimentalConfigFlagStatesFromFileMock).not.toHaveBeenCalled();
+    expect(writeExperimentalConfigFlagToFileMock).not.toHaveBeenCalled();
   });
 
   it("marks local embedded replacement deltas", async () => {

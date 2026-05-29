@@ -548,6 +548,35 @@ export function buildBuiltinChatCommands(
       formatArgs: COMMAND_ARG_FORMATTERS.config,
     }),
     defineChatCommand({
+      key: "experimental",
+      nativeName: "experimental",
+      description: "List or toggle experimental config flags.",
+      textAlias: "/experimental",
+      category: "management",
+      tier: "power",
+      args: [
+        {
+          name: "action",
+          description: "list | on | off | set",
+          type: "string",
+          choices: ["list", "show", "status", "on", "off", "enable", "disable", "set"],
+        },
+        {
+          name: "path",
+          description: "Experimental flag path",
+          type: "string",
+        },
+        {
+          name: "value",
+          description: "Value for set",
+          type: "string",
+          captureRemaining: true,
+        },
+      ],
+      argsParsing: "none",
+      formatArgs: COMMAND_ARG_FORMATTERS.experimental,
+    }),
+    defineChatCommand({
       key: "mcp",
       nativeName: "mcp",
       description: "Show or set OpenClaw MCP servers.",

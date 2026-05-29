@@ -80,6 +80,9 @@ On Discord, native command specs may include `descriptionLocalizations`, which O
 <ParamField path="commands.config" type="boolean" default="false">
   Enables `/config` (reads/writes `openclaw.json`).
 </ParamField>
+<ParamField path="commands.experimental" type="boolean" default="false">
+  Enables `/experimental` (lists and toggles the schema-derived experimental config subset). Writes are owner-only and still honor channel `configWrites`.
+</ParamField>
 <ParamField path="commands.mcp" type="boolean" default="false">
   Enables `/mcp` (reads/writes OpenClaw-managed MCP config under `mcp.servers`).
 </ParamField>
@@ -178,6 +181,7 @@ Current source-of-truth:
   </Accordion>
   <Accordion title="Owner-only writes and admin">
     - `/config show|get|set|unset` reads or writes `openclaw.json`. Owner-only. Requires `commands.config: true`.
+    - `/experimental list|on|off|set` lists or toggles boolean config flags under experimental config groups. Owner-only. Requires `commands.experimental: true`; writes honor channel `configWrites`.
     - `/mcp show|get|set|unset` reads or writes OpenClaw-managed MCP server config under `mcp.servers`. Owner-only. Requires `commands.mcp: true`.
     - `/plugins list|inspect|show|get|install|enable|disable` inspects or mutates plugin state. `/plugin` is an alias. Owner-only for writes. Requires `commands.plugins: true`.
     - `/debug show|set|unset|reset` manages runtime-only config overrides. Owner-only. Requires `commands.debug: true`.
@@ -381,6 +385,8 @@ Notes:
 
 `/config` writes to your on-disk config (`openclaw.json`). Owner-only. Disabled by default; enable with `commands.config: true`.
 
+`/experimental` is a narrower config writer for preview flags. It derives the editable set from the config schema, only exposes boolean leaves under `experimental` config groups, and uses the same owner plus channel `configWrites` policy as other config writes. Enable it with `commands.experimental: true`.
+
 Examples:
 
 ```
@@ -389,6 +395,10 @@ Examples:
 /config get messages.responsePrefix
 /config set messages.responsePrefix="[openclaw]"
 /config unset messages.responsePrefix
+/experimental list
+/experimental on tools.experimental.planTool
+/experimental off agents.defaults.experimental.localModelLean
+/experimental set agents.defaults.memorySearch.experimental.sessionMemory=true
 ```
 
 <Note>

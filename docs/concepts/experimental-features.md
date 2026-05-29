@@ -19,6 +19,30 @@ Treat them differently from normal config:
 - If you are rolling OpenClaw out broadly, test experimental flags in a smaller
   environment before baking them into a shared baseline.
 
+## Quick toggle
+
+```bash
+openclaw experimental
+```
+
+This opens an interactive picker for the config-schema-derived experimental
+boolean flags with their current state. Space to select, Enter to confirm — the
+command writes your choices back to `openclaw.json`. Restart the gateway
+afterward.
+
+From chat, TUI, or a native channel slash command, use `/experimental` when
+`commands.experimental: true` is enabled:
+
+```text
+/experimental list
+/experimental on tools.experimental.planTool
+/experimental off agents.defaults.experimental.localModelLean
+```
+
+Both surfaces use the same config-schema-derived subset: boolean leaves under an
+`experimental` config group. Chat and native-channel writes remain owner-only and
+honor channel `configWrites`, just like other config mutations.
+
 ## Currently documented flags
 
 | Surface                  | Key                                                                                        | Use it when                                                                                                                       | More                                                                                          |

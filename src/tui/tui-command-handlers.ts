@@ -3,11 +3,16 @@ import type { Component, SelectItem, TUI } from "@earendil-works/pi-tui";
 import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import { modelKey } from "../agents/model-ref-shared.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
+import { parseExperimentalCommand } from "../auto-reply/reply/experimental-commands.js";
 import {
   formatThinkingLevels,
   normalizeUsageDisplay,
   resolveResponseUsageMode,
 } from "../auto-reply/thinking.js";
+import {
+  formatExperimentalConfigFlagStates,
+  resolveExperimentalConfigFlag,
+} from "../config/experimental-flags.js";
 import { isChatStopCommandText } from "../gateway/chat-abort.js";
 import { formatRelativeTimestamp } from "../infra/format-time/format-relative.ts";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -204,6 +209,81 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     });
   };
 
+  const formatExperimentalList = async () => {
+    if (!client.listExperimentalFlags) {
+      await sendMessage("/experimental list");
+      return;
+    }
+    try {
+      const flags = await client.listExperimentalFlags();
+      if (flags.length === 0) {
+        chatLog.addSystem("no experimental flags found");
+        return;
+      }
+      chatLog.addSystem(formatExperimentalConfigFlagStates(flags));
+    } catch (err) {
+      chatLog.addSystem(`experimental list failed: ${String(err)}`);
+    }
+  };
+
+  const setExperimentalFlag = async (selector: string, value: boolean) => {
+    if (!client.setExperimentalFlag) {
+      await sendMessage(`/experimental ${value ? "on" : "off"} ${selector}`);
+      return;
+    }
+    const flag = resolveExperimentalConfigFlag(selector);
+    if (!flag) {
+      chatLog.addSystem(`unknown experimental flag: ${selector}`);
+      return;
+    }
+    try {
+      const result = await client.setExperimentalFlag({ path: flag.path, value });
+      const state = result.value ? "enabled" : "disabled";
+      chatLog.addSystem(
+        result.changed
+          ? `experimental ${state}: ${result.path}`
+          : `experimental already ${state}: ${result.path}`,
+      );
+    } catch (err) {
+      chatLog.addSystem(`experimental update failed: ${String(err)}`);
+    }
+  };
+
+  const openExperimentalSelector = async () => {
+    if (!client.listExperimentalFlags || !client.setExperimentalFlag) {
+      await sendMessage("/experimental");
+      return;
+    }
+    try {
+      const flags = await client.listExperimentalFlags();
+      if (flags.length === 0) {
+        chatLog.addSystem("no experimental flags found");
+        tui.requestRender();
+        return;
+      }
+      const selector = createSearchableSelectList(
+        flags.map((flag) => ({
+          value: flag.path,
+          label: `${flag.on ? "on" : "off"} ${flag.label}`,
+          description: flag.path,
+          searchText: `${flag.path} ${flag.label} ${flag.summary}`,
+        })),
+        9,
+      );
+      openSelector(selector, async (value) => {
+        const flag = flags.find((candidate) => candidate.path === value);
+        if (!flag) {
+          chatLog.addSystem(`unknown experimental flag: ${value}`);
+          return;
+        }
+        await setExperimentalFlag(flag.path, !flag.on);
+      });
+    } catch (err) {
+      chatLog.addSystem(`experimental list failed: ${String(err)}`);
+      tui.requestRender();
+    }
+  };
+
   const openSessionSelector = async () => {
     try {
       const result = await client.listSessions({
@@ -381,6 +461,27 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           await sendMessage(raw);
         }
         break;
+      case "experimental": {
+        if (!args) {
+          await openExperimentalSelector();
+          break;
+        }
+        const parsedExperimental = parseExperimentalCommand(raw);
+        if (!parsedExperimental) {
+          await sendMessage(raw);
+          break;
+        }
+        if (parsedExperimental.action === "error") {
+          chatLog.addSystem(parsedExperimental.message);
+          break;
+        }
+        if (parsedExperimental.action === "list") {
+          await formatExperimentalList();
+          break;
+        }
+        await setExperimentalFlag(parsedExperimental.selector, parsedExperimental.value);
+        break;
+      }
       case "crestodian":
         chatLog.addSystem(
           args ? `returning to Crestodian with request: ${args}` : "returning to Crestodian",
