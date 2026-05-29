@@ -1119,9 +1119,9 @@ export const ko: TranslationMap = {
       sendMessage: "Send message",
     },
     queue: {
-      retry: "Retry",
-      retrySend: "Retry send",
-      retryQueuedMessage: "Retry queued message",
+      retry: "다시 시도",
+      retrySend: "전송 다시 시도",
+      retryQueuedMessage: "대기 중인 메시지 다시 시도",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",
