@@ -351,6 +351,8 @@ function extractLiveExecOutput(result: unknown): string | undefined {
 
 function readChannelToolProgress(result: unknown): ChannelToolProgress | undefined {
   const progress = readRecordField(asOptionalObjectRecord(result)?.progress);
+  // Only an explicit typed progress field crosses into channel UI. Tool output
+  // and details may contain fetched content or private args, so never infer.
   if (progress?.visibility !== "channel" || progress.privacy !== "public") {
     return undefined;
   }
@@ -1078,6 +1080,8 @@ export function handleToolExecutionUpdate(
   const isExecTool = isExecToolName(toolName);
   const liveResult = isExecTool ? capLiveExecResult(sanitized) : sanitized;
   const toolProgress = isExecTool ? undefined : readChannelToolProgress(liveResult);
+  // Typed progress already has a sanitized item update path. Suppress the raw
+  // partial-result event for those updates to avoid duplicate preview lines.
   const emitDetailedLiveUpdate =
     !toolProgress && (!isExecTool || shouldEmitLiveExecUpdate(ctx, toolCallId));
   if (emitDetailedLiveUpdate) {

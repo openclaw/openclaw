@@ -363,7 +363,7 @@ export interface AgentToolResult<T> {
   content: (TextContent | ImageContent)[];
   /** Arbitrary structured details for logs or UI rendering. */
   details: T;
-  /** Optional public progress hint for partial tool updates. */
+  /** Optional public progress hint for partial tool updates; never model content. */
   progress?: AgentToolProgress;
   /**
    * Hint that the agent should stop after the current tool batch.

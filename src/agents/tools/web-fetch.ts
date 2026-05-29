@@ -322,6 +322,8 @@ function throwIfFetchAborted(signal: AbortSignal | undefined): void {
   if (!signal?.aborted) {
     return;
   }
+  // readResponseText may finish after an abort races with body reading. Recheck
+  // before wrapping, caching, or returning content from a canceled tool call.
   throw signal.reason instanceof Error ? signal.reason : new Error("aborted");
 }
 
@@ -700,6 +702,8 @@ export function createWebFetchTool(options?: {
       const extractMode = readStringParam(params, "extractMode") === "text" ? "text" : "markdown";
       const maxChars = readPositiveIntegerParam(params, "maxChars");
       const maxCharsCap = resolveFetchMaxCharsCap(executionFetch);
+      // The progress line is emitted only if the fetch is still pending after
+      // the threshold; fast cache/network hits clear the timer before it fires.
       const clearProgressTimer = scheduleToolProgress(
         onUpdate,
         { text: WEB_FETCH_PROGRESS_TEXT, id: "web_fetch:fetching" },

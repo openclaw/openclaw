@@ -415,6 +415,8 @@ export function toolProgressResult(progress: PublicToolProgress): AgentToolResul
   };
 }
 
+// Tool progress is a UI side channel. The model-facing tool result remains in
+// `content`; progress text must already be safe to show in channel previews.
 export function emitToolProgress(
   onUpdate: AgentToolUpdateCallback | undefined,
   progress: PublicToolProgress,
@@ -430,6 +432,8 @@ export function emitToolProgress(
   }
 }
 
+// Long-running tools can arm delayed progress and cancel it on completion or
+// abort. This avoids stale "still working" lines after a fast or canceled call.
 export function scheduleToolProgress(
   onUpdate: AgentToolUpdateCallback | undefined,
   progress: PublicToolProgress,
