@@ -13,6 +13,7 @@ const {
   fetchWithSsrFGuardMock,
   runCronIsolatedAgentTurnMock,
   cleanupBrowserSessionsForLifecycleEndMock,
+  retireSessionMcpRuntimeForSessionKeyMock,
   getGlobalHookRunnerMock,
   runCronChangedMock,
 } = vi.hoisted(() => ({
@@ -25,6 +26,7 @@ const {
   fetchWithSsrFGuardMock: vi.fn(),
   runCronIsolatedAgentTurnMock: vi.fn(async () => ({ status: "ok" as const, summary: "ok" })),
   cleanupBrowserSessionsForLifecycleEndMock: vi.fn(async () => {}),
+  retireSessionMcpRuntimeForSessionKeyMock: vi.fn(async () => true),
   runCronChangedMock: vi.fn(async () => {}),
   getGlobalHookRunnerMock: vi.fn(() => ({
     hasHooks: (hookName: string) => hookName === "cron_changed",
@@ -88,6 +90,10 @@ vi.mock("../cron/isolated-agent.js", () => ({
 
 vi.mock("../browser-lifecycle-cleanup.js", () => ({
   cleanupBrowserSessionsForLifecycleEnd: cleanupBrowserSessionsForLifecycleEndMock,
+}));
+
+vi.mock("../agents/agent-bundle-mcp-tools.js", () => ({
+  retireSessionMcpRuntimeForSessionKey: retireSessionMcpRuntimeForSessionKeyMock,
 }));
 
 vi.mock("../plugins/hook-runner-global.js", () => ({
@@ -183,6 +189,17 @@ function expectCleanupForSessionKeys(sessionKeys: string[]) {
   expect(options.onWarn).toBeTypeOf("function");
 }
 
+function expectMcpCleanupForSessionKey(sessionKey: string, reason: string) {
+  expect(retireSessionMcpRuntimeForSessionKeyMock).toHaveBeenCalledTimes(1);
+  const options = requireRecord(
+    callArg(retireSessionMcpRuntimeForSessionKeyMock, 0, 0, "MCP cleanup options"),
+    "MCP cleanup options",
+  );
+  expect(options.sessionKey).toBe(sessionKey);
+  expect(options.reason).toBe(reason);
+  expect(options.onError).toBeTypeOf("function");
+}
+
 describe("buildGatewayCronService", () => {
   beforeEach(() => {
     enqueueSystemEventMock.mockClear();
@@ -192,6 +209,8 @@ describe("buildGatewayCronService", () => {
     fetchWithSsrFGuardMock.mockClear();
     runCronIsolatedAgentTurnMock.mockClear();
     cleanupBrowserSessionsForLifecycleEndMock.mockClear();
+    retireSessionMcpRuntimeForSessionKeyMock.mockClear();
+    retireSessionMcpRuntimeForSessionKeyMock.mockResolvedValue(true);
     runCronChangedMock.mockClear();
     getGlobalHookRunnerMock.mockClear();
     getGlobalHookRunnerMock.mockReturnValue({
@@ -1057,6 +1076,7 @@ describe("buildGatewayCronService", () => {
       const options = expectIsolatedRunFields({ sessionKey });
       expect(requireRecord(options.job, "isolated job").id).toBe(job.id);
       expectCleanupForSessionKeys([sessionKey]);
+      expect(retireSessionMcpRuntimeForSessionKeyMock).not.toHaveBeenCalled();
     } finally {
       state.cron.stop();
     }
@@ -1098,6 +1118,7 @@ describe("buildGatewayCronService", () => {
         }),
       ).toBe(false);
       expectCleanupForSessionKeys([`cron:${job.id}`]);
+      expectMcpCleanupForSessionKey(`cron:${job.id}`, "cron-isolated-end");
     } finally {
       state.cron.stop();
     }

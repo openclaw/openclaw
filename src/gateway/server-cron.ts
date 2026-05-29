@@ -381,6 +381,33 @@ export function buildGatewayCronService(params: {
           sessionKeys: [sessionKey],
           onWarn: (msg) => cronLogger.warn({ jobId: job.id }, msg),
         });
+        // Kill MCP stdio child processes for isolated sessions.
+        // The embedded runner does this via cleanupBundleMcpOnRunEnd,
+        // but the CLI runner path only closes the loopback HTTP server
+        // and never disposes the SessionMcpRuntime holding actual child
+        // processes. This catch-all covers both execution paths.
+        if (job.sessionTarget === "isolated") {
+          try {
+            const { retireSessionMcpRuntimeForSessionKey } = await import(
+              "../agents/agent-bundle-mcp-tools.js"
+            );
+            await retireSessionMcpRuntimeForSessionKey({
+              sessionKey,
+              reason: "cron-isolated-end",
+              onError: (error, sessionId) => {
+                cronLogger.warn(
+                  { jobId: job.id, sessionId, err: formatErrorMessage(error) },
+                  "cron: MCP runtime cleanup failed after isolated run",
+                );
+              },
+            });
+          } catch (err) {
+            cronLogger.warn(
+              { jobId: job.id, err: formatErrorMessage(err as Error) },
+              "cron: MCP runtime cleanup import/call failed",
+            );
+          }
+        }
       }
     },
     cleanupTimedOutAgentRun: async ({ job, execution }) => {
