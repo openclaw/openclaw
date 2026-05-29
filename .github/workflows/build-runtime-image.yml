@@ -76,7 +76,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, ARM64, rockie]
     timeout-minutes: 60
     permissions:
       contents: read
@@ -162,7 +162,7 @@ jobs:
 
   dispatch-deploy:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, ARM64, rockie]
     timeout-minutes: 5
     # Map the secret to a job-level env var. We can't reference `secrets.*`
     # in `if:` expressions (job- or step-level), but we CAN reference
@@ -207,7 +207,7 @@ jobs:
     # If either secret is unset on this repo OR the api host, the call
     # 401s and the rollout is skipped with a clear summary line.
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, ARM64, rockie]
     timeout-minutes: 30
     env:
       API_URL: ${{ secrets.ROCKIELAB_API_URL }}
