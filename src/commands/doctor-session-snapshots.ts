@@ -325,11 +325,15 @@ function replacePathsInSession(
     const snapshot = session.skillsSnapshot as Record<string, unknown> | undefined;
     if (snapshot && Array.isArray(snapshot.resolvedSkills)) {
       for (const entry of snapshot.resolvedSkills) {
-        if (!isRecord(entry)) continue;
+        if (!isRecord(entry)) {
+          continue;
+        }
 
         for (const field of ["filePath", "baseDir"] as const) {
-          if (typeof entry[field] !== "string") continue;
-          let value = entry[field] as string;
+          if (typeof entry[field] !== "string") {
+            continue;
+          }
+          let value = entry[field];
           const original = value;
 
           // For baseDir, also try directory form (without /SKILL.md suffix)
@@ -358,7 +362,7 @@ function replacePathsInSession(
           }
 
           if (value !== original) {
-            (entry as Record<string, unknown>)[field] = value;
+            entry[field] = value;
           }
         }
       }
@@ -367,7 +371,9 @@ function replacePathsInSession(
     const report = session.systemPromptReport as Record<string, unknown> | undefined;
     if (report && Array.isArray(report.injectedWorkspaceFiles)) {
       for (const entry of report.injectedWorkspaceFiles) {
-        if (!isRecord(entry) || typeof entry.path !== "string") continue;
+        if (!isRecord(entry) || typeof entry.path !== "string") {
+          continue;
+        }
 
         let entryPath = entry.path;
         const original = entryPath;
@@ -454,7 +460,9 @@ export async function noteSessionSnapshotHealth(params?: {
         let storeCount = 0;
         for (const finding of findings) {
           const session = sessions[finding.sessionKey];
-          if (!session) continue;
+          if (!session) {
+            continue;
+          }
           storeCount += replacePathsInSession(session, finding);
         }
 
