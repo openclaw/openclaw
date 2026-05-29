@@ -810,6 +810,7 @@ function resolveTranscriptUsageFallback(params: {
   fallbackModel?: string;
   maxTranscriptBytes?: number;
   rowContext?: SessionListRowContext;
+  agentId?: string;
 }): {
   estimatedCostUsd?: number;
   totalTokens?: number;
@@ -825,7 +826,7 @@ function resolveTranscriptUsageFallback(params: {
   const parsed = parseAgentSessionKey(params.key);
   const agentId = parsed?.agentId
     ? normalizeAgentId(parsed.agentId)
-    : resolveDefaultAgentId(params.cfg);
+    : normalizeAgentId(params.agentId ?? resolveDefaultAgentId(params.cfg));
   const snapshot = readRecentSessionUsageFromTranscript(
     entry.sessionId,
     params.storePath,
@@ -1918,6 +1919,7 @@ export function buildGatewaySessionRow(params: {
           fallbackModel: resolvedModel.model ?? DEFAULT_MODEL,
           maxTranscriptBytes: params.transcriptUsageMaxBytes,
           rowContext: params.rowContext,
+          agentId: sessionAgentId,
         })
       : null;
   const preferLiveSubagentModelIdentity =

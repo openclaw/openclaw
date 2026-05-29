@@ -590,6 +590,46 @@ describe("gateway session utils", () => {
     });
   });
 
+  test("selected global rows read transcript usage from the selected agent", async () => {
+    await withStateDirEnv("session-utils-selected-global-usage-", async ({ stateDir }) => {
+      const sessionId = "selected-global-usage";
+      for (const [agentId, input] of [
+        ["main", 10],
+        ["work", 40],
+      ] as const) {
+        const sessionsDir = path.join(stateDir, "agents", agentId, "sessions");
+        fs.mkdirSync(sessionsDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(sessionsDir, `${sessionId}.jsonl`),
+          [
+            JSON.stringify({ type: "session", version: 1, id: sessionId }),
+            JSON.stringify({
+              message: {
+                role: "assistant",
+                content: "done",
+                usage: { input, output: 2 },
+              },
+            }),
+          ].join("\n"),
+          "utf-8",
+        );
+      }
+
+      const row = buildGatewaySessionRow({
+        cfg: {
+          agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        } as OpenClawConfig,
+        storePath: "",
+        store: {},
+        key: "global",
+        agentId: "work",
+        entry: { sessionId, updatedAt: 1 },
+      });
+
+      expect(row.totalTokens).toBe(40);
+    });
+  });
+
   test("session rows use per-agent thinking default from config", () => {
     const cfg = {
       agents: {
