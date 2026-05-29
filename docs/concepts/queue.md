@@ -112,6 +112,15 @@ keys.
 - Send `/queue <steer|followup|collect|interrupt>` as a standalone command to store the queue mode for the current session.
 - Options can be combined: `/queue collect debounce:0.5s cap:25 drop:summarize`
 - `/queue default` or `/queue reset` clears the session override.
+- `/queue` with no mode or options reports current queue settings plus the last busy-message outcome for the session (`Last busy message: none.` when nothing has been recorded yet).
+
+## Operator visibility
+
+When a session already has an active run, OpenClaw records what happened to the most recent busy inbound message. Operators can inspect that outcome without enabling chat noise:
+
+- `/queue` status appends a `Last busy message:` line after the settings summary. Examples: `Last busy message: steered into active run.` or `Last busy message: queued follow-up (steering unavailable).`
+- With session verbose enabled (`/verbose on` or `/verbose full`), a concise one-line acknowledgement may be sent on the channel when steering succeeds or when steering is unavailable and the message is queued for a later turn. Examples: `Steered current run.` or `Queued after current run: steering unavailable while compacting.`
+- Default behavior stays quiet: verbose off means no busy-message acknowledgement in chat.
 
 ## Scope and guarantees
 

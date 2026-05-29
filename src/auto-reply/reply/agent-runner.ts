@@ -97,6 +97,7 @@ import {
   type QueueSettings,
 } from "./queue.js";
 import {
+  maybeBusyMessageVerboseAck,
   recordBusyMessageOutcome,
   type BusyMessageOutcomeKind,
 } from "./queue/busy-message-outcome.js";
@@ -1155,6 +1156,7 @@ export async function runReplyAgent(params: {
     resolvedVerboseLevel,
   });
   const busyOutcomeChannel = normalizeOptionalString(sessionCtx.Surface ?? sessionCtx.Provider);
+  let steerRejectedReason: EmbeddedAgentQueueFailureReason | undefined;
   const recordBusyOutcome = (params: {
     kind: BusyMessageOutcomeKind;
     sessionId: string;
@@ -1207,8 +1209,14 @@ export async function runReplyAgent(params: {
       });
       await touchActiveSessionEntry();
       typing.cleanup();
-      return undefined;
+      return (
+        maybeBusyMessageVerboseAck({
+          kind: "active_run_steer_accepted",
+          verboseLevel: resolvedVerboseLevel,
+        }) ?? undefined
+      );
     }
+    steerRejectedReason = steerOutcome.reason;
     recordBusyOutcome({
       kind: "active_run_steer_rejected",
       sessionId: steerSessionId,
@@ -1273,7 +1281,14 @@ export async function runReplyAgent(params: {
     } else {
       typing.cleanup();
     }
-    return undefined;
+    return (
+      maybeBusyMessageVerboseAck({
+        kind: "followup_enqueued",
+        verboseLevel: resolvedVerboseLevel,
+        reason: steerRejectedReason,
+        steerRejectedFallback: steerRejectedReason !== undefined,
+      }) ?? undefined
+    );
   }
 
   followupRun.run.config = await resolveQueuedReplyExecutionConfig(followupRun.run.config, {

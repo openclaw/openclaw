@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ReplyPayload } from "../types.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import { withOptions } from "./directive-handling.shared.js";
+import { formatBusyMessageOutcomeStatusLine } from "./queue/busy-message-outcome.js";
 import { resolveQueueSettings } from "./queue/settings.js";
 
 export function maybeHandleQueueDirective(params: {
@@ -10,6 +11,7 @@ export function maybeHandleQueueDirective(params: {
   cfg: OpenClawConfig;
   channel: string;
   sessionEntry?: SessionEntry;
+  sessionKey?: string;
 }): ReplyPayload | undefined {
   const { directives } = params;
   if (!directives.hasQueueDirective) {
@@ -34,9 +36,12 @@ export function maybeHandleQueueDirective(params: {
       typeof settings.debounceMs === "number" ? `${settings.debounceMs}ms` : "default";
     const capLabel = typeof settings.cap === "number" ? String(settings.cap) : "default";
     const dropLabel = settings.dropPolicy ?? "default";
+    const outcomeLine = formatBusyMessageOutcomeStatusLine(
+      params.sessionKey ?? params.sessionEntry?.sessionId,
+    );
     return {
       text: withOptions(
-        `Current queue settings: mode=${settings.mode}, debounce=${debounceLabel}, cap=${capLabel}, drop=${dropLabel}.`,
+        `Current queue settings: mode=${settings.mode}, debounce=${debounceLabel}, cap=${capLabel}, drop=${dropLabel}.\n${outcomeLine}`,
         "modes steer, followup, collect, interrupt; debounce:<ms|s|m>, cap:<n>, drop:old|new|summarize",
       ),
     };
