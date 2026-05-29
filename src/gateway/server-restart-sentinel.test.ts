@@ -133,6 +133,7 @@ const mocks = vi.hoisted(() => {
       skippedMaxRetries: 0,
       deferredBackoff: 0,
     })),
+    markSessionDeliveryPlatformOutcomeUnknown: vi.fn(async () => undefined),
     resolveAgentConfig: vi.fn(() => undefined),
     resolveAgentWorkspaceDir: vi.fn(() => "/tmp/openclaw-test-workspace"),
     resolveDefaultAgentId: vi.fn(() => "main"),
@@ -183,6 +184,7 @@ vi.mock("../infra/session-delivery-queue.js", () => ({
   loadPendingSessionDelivery: mocks.loadPendingSessionDelivery,
   drainPendingSessionDeliveries: mocks.drainPendingSessionDeliveries,
   recoverPendingSessionDeliveries: mocks.recoverPendingSessionDeliveries,
+  markSessionDeliveryPlatformOutcomeUnknown: mocks.markSessionDeliveryPlatformOutcomeUnknown,
 }));
 
 vi.mock("../config/sessions.js", () => ({
