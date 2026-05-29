@@ -1,4 +1,5 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { retireSessionMcpRuntime } from "../agents/agent-bundle-mcp-tools.js";
 import { abortAndDrainEmbeddedAgentRun } from "../agents/embedded-agent.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
 import type { CliDeps } from "../cli/deps.types.js";
@@ -400,6 +401,16 @@ export function buildGatewayCronService(params: {
         },
         "cron: cleaned up timed-out agent run",
       );
+      await retireSessionMcpRuntime({
+        sessionId: execution.sessionId,
+        reason: "cron-timeout-cleanup",
+        onError: (error, sid) => {
+          cronLogger.warn(
+            { jobId: job.id, sessionId: sid },
+            `cron: failed to retire MCP runtime for timed-out session: ${String(error)}`,
+          );
+        },
+      }).catch(() => {});
     },
     sendCronFailureAlert: async ({ job, text, channel, to, mode, accountId }) =>
       await sendGatewayCronFailureAlert({

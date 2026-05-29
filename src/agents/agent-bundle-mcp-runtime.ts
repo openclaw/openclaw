@@ -376,14 +376,26 @@ function summarizeServerCapabilities(capabilities: ServerCapabilities | undefine
       : undefined,
   };
 }
+const DISPOSE_TIMEOUT_MS = 5_000;
 
 async function disposeSession(session: BundleMcpSession) {
   session.detachStderr?.();
-  if (session.transportType === "streamable-http") {
-    await (session.transport as StreamableHTTPClientTransport).terminateSession().catch(() => {});
-  }
-  await session.transport.close().catch(() => {});
-  await session.client.close().catch(() => {});
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    (async () => {
+      if (session.transportType === "streamable-http") {
+        await (session.transport as StreamableHTTPClientTransport).terminateSession().catch(() => {});
+      }
+      await session.transport.close().catch(() => {});
+      await session.client.close().catch(() => {});
+    })(),
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, DISPOSE_TIMEOUT_MS);
+      timer.unref?.();
+    }),
+  ]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
 }
 
 function createCatalogFingerprint(servers: Record<string, unknown>): string {

@@ -1645,3 +1645,99 @@ process.on("SIGINT", shutdown);`,
     expect(disposed).toStrictEqual([]);
   });
 });
+
+describe("disposeSession timeout", () => {
+  it(
+    "completes disposal even when the MCP server process ignores shutdown",
+    { timeout: 15_000 },
+    async () => {
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-dispose-timeout-"));
+      const serverPath = path.join(tempDir, "hanging-close.mjs");
+      const logPath = path.join(tempDir, "server.log");
+
+      await writeExecutable(
+        serverPath,
+        `#!/usr/bin/env node
+import fs from "node:fs/promises";
+
+const logPath = ${JSON.stringify(logPath)};
+function log(line) {
+  void fs.appendFile(logPath, line + "\\n", "utf8").catch(() => {});
+}
+function send(message) {
+  process.stdout.write(JSON.stringify(message) + "\\n");
+}
+
+let buffer = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  buffer += chunk;
+  while (true) {
+    const newline = buffer.indexOf("\\n");
+    if (newline < 0) return;
+    const line = buffer.slice(0, newline).replace(/\\r$/, "");
+    buffer = buffer.slice(newline + 1);
+    if (line.trim()) {
+      const message = JSON.parse(line);
+      if (message.method === "initialize") {
+        send({
+          jsonrpc: "2.0",
+          id: message.id,
+          result: {
+            protocolVersion: message.params?.protocolVersion ?? "2025-03-26",
+            capabilities: { tools: {} },
+            serverInfo: { name: "hanging-close-server", version: "1.0.0" },
+          },
+        });
+      } else if (message.method === "tools/list") {
+        send({
+          jsonrpc: "2.0",
+          id: message.id,
+          result: { tools: [{ name: "probe", description: "probe", inputSchema: { type: "object" } }] },
+        });
+      }
+    }
+  }
+});
+
+// Ignore all shutdown signals — simulate a stuck process
+process.on("SIGTERM", () => { log("ignored SIGTERM"); });
+process.on("SIGINT", () => { log("ignored SIGINT"); });
+process.stdin.on("end", () => {
+  log("stdin closed but staying alive");
+  // Keep the process alive indefinitely
+  setInterval(() => {}, 60_000);
+});`,
+      );
+
+      const runtime = await getOrCreateSessionMcpRuntime({
+        sessionId: "session-dispose-timeout",
+        sessionKey: "agent:test:session-dispose-timeout",
+        workspaceDir: "/workspace",
+        cfg: {
+          mcp: {
+            servers: {
+              hangingClose: {
+                command: process.execPath,
+                args: [serverPath],
+              },
+            },
+          },
+        },
+      });
+
+      const catalog = await runtime.getCatalog();
+      expect(catalog.tools).toHaveLength(1);
+
+      const start = Date.now();
+      await runtime.dispose();
+      const elapsed = Date.now() - start;
+
+      // Dispose should complete within DISPOSE_TIMEOUT_MS (5s) + a small buffer,
+      // not hang indefinitely.
+      expect(elapsed).toBeLessThan(8_000);
+
+      await fs.rm(tempDir, { recursive: true, force: true });
+    },
+  );
+});
