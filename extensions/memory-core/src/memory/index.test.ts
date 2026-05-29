@@ -59,6 +59,14 @@ vi.mock("./embeddings.js", () => {
       providerId === "gemini" || providerId === "fallback-provider"
         ? `${providerId}-embed`
         : fallbackSourceModel,
+    resolveEmbeddingProviderAdapterId: (
+      providerId: string,
+      config?: {
+        models?: {
+          providers?: Record<string, { api?: string; baseUrl?: string; models?: unknown[] }>;
+        };
+      },
+    ) => config?.models?.providers?.[providerId]?.api ?? providerId,
     createEmbeddingProvider: async (options: {
       provider?: string;
       model?: string;
@@ -78,7 +86,9 @@ vi.mock("./embeddings.js", () => {
         };
       }
       const providerId =
-        options.provider === "gemini" || options.provider === "fallback-provider"
+        options.provider === "gemini" ||
+        options.provider === "fallback-provider" ||
+        options.provider === "ollama"
           ? options.provider
           : "mock";
       const model = options.model ?? "mock-embed";
@@ -262,8 +272,9 @@ describe("memory index", () => {
     extraPaths?: string[];
     sources?: Array<"memory" | "sessions">;
     sessionMemory?: boolean;
-    provider?: "openai" | "gemini" | "fallback-provider";
+    provider?: string;
     fallback?: "none" | "gemini" | "fallback-provider";
+    providerAliases?: NonNullable<NonNullable<TestCfg["models"]>["providers"]>;
     model?: string;
     outputDimensionality?: number;
     multimodal?: {
@@ -303,6 +314,7 @@ describe("memory index", () => {
         },
         list: [{ id: "main", default: true }],
       },
+      models: params.providerAliases ? { providers: params.providerAliases } : undefined,
     };
   }
 
@@ -324,9 +336,12 @@ describe("memory index", () => {
     return manager;
   }
 
-  async function getFreshManager(cfg: TestCfg): Promise<MemoryIndexManager> {
+  async function getFreshManager(
+    cfg: TestCfg,
+    purpose?: "default" | "status" | "cli",
+  ): Promise<MemoryIndexManager> {
     const { getRequiredMemoryIndexManager } = await import("./test-manager-helpers.js");
-    return await getRequiredMemoryIndexManager({ cfg, agentId: "main" });
+    return await getRequiredMemoryIndexManager({ cfg, agentId: "main", purpose });
   }
 
   async function expectHybridKeywordSearchFindsMemory(cfg: TestCfg) {
@@ -422,6 +437,42 @@ describe("memory index", () => {
       expect(nextManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
     } finally {
       await nextManager.close?.();
+    }
+  });
+
+  it("keeps status clean when configured provider alias resolves to indexed adapter", async () => {
+    const dbPath = path.join(workspaceDir, "index-provider-alias-status.sqlite");
+    const oldCfg = createCfg({
+      storePath: dbPath,
+      provider: "ollama",
+      model: "ollama-embed",
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const oldManager = await getFreshManager(oldCfg);
+    await oldManager.sync({ reason: "test", force: true });
+    await oldManager.close?.();
+
+    const aliasCfg = createCfg({
+      storePath: dbPath,
+      provider: "ollama-west",
+      providerAliases: {
+        "ollama-west": {
+          api: "ollama",
+          baseUrl: "http://127.0.0.1:11434",
+          models: [],
+        },
+      },
+      model: "ollama-embed",
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const statusManager = await getFreshManager(aliasCfg, "status");
+    try {
+      const status = statusManager.status();
+
+      expect(status.dirty).toBe(false);
+      expect(status.custom?.indexIdentity).toEqual({ status: "valid" });
+    } finally {
+      await statusManager.close?.();
     }
   });
 
