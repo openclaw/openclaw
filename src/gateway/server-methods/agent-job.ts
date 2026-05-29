@@ -273,6 +273,10 @@ function ensureAgentRunListener() {
       schedulePendingAgentRunTimeout(snapshot);
       return;
     }
+    const pendingTimeout = pendingAgentRunTimeouts.get(evt.runId);
+    if (pendingTimeout && shouldPreserveTerminalSnapshot(pendingTimeout.snapshot, snapshot)) {
+      return;
+    }
     clearPendingAgentRunError(evt.runId);
     clearPendingAgentRunTimeout(evt.runId);
     recordAgentRunSnapshot(snapshot);
@@ -435,6 +439,12 @@ export async function waitForAgentJob(params: {
       }
       const latest = ignoreCachedSnapshot ? undefined : getCachedAgentRun(runId);
       if (latest) {
+        if (
+          pendingTimeoutSnapshot &&
+          shouldPreserveTerminalSnapshot(pendingTimeoutSnapshot, latest)
+        ) {
+          return;
+        }
         finish(latest);
         return;
       }
@@ -449,6 +459,12 @@ export async function waitForAgentJob(params: {
       }
       if (snapshot.status === "timeout") {
         scheduleTimeoutFinish(snapshot);
+        return;
+      }
+      if (
+        pendingTimeoutSnapshot &&
+        shouldPreserveTerminalSnapshot(pendingTimeoutSnapshot, snapshot)
+      ) {
         return;
       }
       recordAgentRunSnapshot(snapshot);
