@@ -29,6 +29,7 @@ export function classifySessionAttention(params: {
   queueDepth: number;
   activity: DiagnosticSessionActivitySnapshot;
   staleMs: number;
+  stuckSessionAbortMs?: number;
 }): SessionAttentionClassification {
   if (params.activity.activeWorkKind) {
     // Idle session with queued work and stale orphaned activity (no active
@@ -70,6 +71,31 @@ export function classifySessionAttention(params: {
         eventType: "session.stalled",
         reason: "queued_behind_terminal_active_work",
         classification: "stalled_agent_run",
+        activeWorkKind: params.activity.activeWorkKind,
+        recoveryEligible: false,
+      };
+    }
+    if (
+      params.activity.activeWorkKind === "model_call" &&
+      (params.activity.lastProgressAgeMs ?? 0) > params.staleMs
+    ) {
+      if (
+        params.activity.hasActiveEmbeddedRun === true &&
+        typeof params.stuckSessionAbortMs === "number" &&
+        params.activity.lastProgressAgeMs >= params.stuckSessionAbortMs
+      ) {
+        return {
+          eventType: "session.stalled",
+          reason: "active_work_without_progress",
+          classification: "stalled_agent_run",
+          activeWorkKind: params.activity.activeWorkKind,
+          recoveryEligible: false,
+        };
+      }
+      return {
+        eventType: "session.long_running",
+        reason: "active_model_call_without_progress",
+        classification: "long_running",
         activeWorkKind: params.activity.activeWorkKind,
         recoveryEligible: false,
       };

@@ -72,11 +72,28 @@ describe("classifySessionAttention", () => {
       },
     },
     {
-      name: "active work without progress",
+      name: "active model call without progress before abort threshold",
       queueDepth: 0,
       activity: {
         activeWorkKind: "model_call" as const,
+        hasActiveEmbeddedRun: true,
         lastProgressAgeMs: 31_000,
+      },
+      expected: {
+        eventType: "session.long_running",
+        reason: "active_model_call_without_progress",
+        classification: "long_running",
+        activeWorkKind: "model_call",
+        recoveryEligible: false,
+      },
+    },
+    {
+      name: "active model call without progress after abort threshold",
+      queueDepth: 0,
+      activity: {
+        activeWorkKind: "model_call" as const,
+        hasActiveEmbeddedRun: true,
+        lastProgressAgeMs: 60_000,
       },
       expected: {
         eventType: "session.stalled",
@@ -147,9 +164,9 @@ describe("classifySessionAttention", () => {
         lastProgressAgeMs: 31_000,
       },
       expected: {
-        eventType: "session.stalled",
-        reason: "active_work_without_progress",
-        classification: "stalled_agent_run",
+        eventType: "session.long_running",
+        reason: "active_model_call_without_progress",
+        classification: "long_running",
         activeWorkKind: "model_call",
         recoveryEligible: false,
       },
@@ -161,6 +178,7 @@ describe("classifySessionAttention", () => {
         queueDepth,
         activity,
         staleMs: 30_000,
+        stuckSessionAbortMs: 60_000,
       }),
     ).toEqual(expected);
   });

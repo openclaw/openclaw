@@ -985,11 +985,14 @@ export function logSessionAttention(
     { sessionId: state.sessionId, sessionKey: state.sessionKey },
     Date.now(),
   );
+  const stuckSessionAbortMs =
+    params.abortThresholdMs ?? resolveStalledEmbeddedRunAbortMs(params.thresholdMs);
   const classification = classifySessionAttention({
     state: state.state as "idle" | "processing" | "waiting" | undefined,
     queueDepth: state.queueDepth,
     activity,
     staleMs: params.thresholdMs,
+    stuckSessionAbortMs,
   });
   const recoveryEligible =
     classification.recoveryEligible ||
@@ -997,8 +1000,7 @@ export function logSessionAttention(
       classification,
       activity,
       ageMs: params.ageMs,
-      stuckSessionAbortMs:
-        params.abortThresholdMs ?? resolveStalledEmbeddedRunAbortMs(params.thresholdMs),
+      stuckSessionAbortMs,
     });
   if (classification.eventType === "session.stuck") {
     const nextWarnAgeMs =
