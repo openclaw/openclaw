@@ -304,4 +304,89 @@ describe("volcengineTTS", () => {
     expect((error as Error).message).not.toContain("secret-token");
     expect(release).toHaveBeenCalledTimes(1);
   });
+
+  describe("allowPrivateNetwork SSRF policy", () => {
+    function makeSeedResponse() {
+      return {
+        response: new Response(
+          [
+            JSON.stringify({ code: 0, message: "" }),
+            JSON.stringify({ code: 0, data: Buffer.from("audio").toString("base64") }),
+            JSON.stringify({ code: 20000000, message: "ok", data: null }),
+          ].join("\n"),
+        ),
+        release: vi.fn(),
+      };
+    }
+
+    function makeLegacyResponse() {
+      return {
+        response: new Response(
+          JSON.stringify({ code: 3000, data: Buffer.from("audio").toString("base64") }),
+        ),
+        release: vi.fn(),
+      };
+    }
+
+    it("seed speech: omits fake-IP policy bits when allowPrivateNetwork is false (default)", async () => {
+      fetchWithSsrFGuardMock.mockResolvedValue(makeSeedResponse());
+      await volcengineTTS({
+        text: "hello",
+        apiKey: "test-api-key",
+        timeoutMs: 1000,
+        allowPrivateNetwork: false,
+      });
+      const call = requireFirstGuardedFetchCall() as { policy: Record<string, unknown> };
+      expect(call.policy).not.toHaveProperty("allowRfc2544BenchmarkRange");
+      expect(call.policy).not.toHaveProperty("allowIpv6UniqueLocalRange");
+    });
+
+    it("seed speech: adds narrow fake-IP policy bits when allowPrivateNetwork is true", async () => {
+      fetchWithSsrFGuardMock.mockResolvedValue(makeSeedResponse());
+      await volcengineTTS({
+        text: "hello",
+        apiKey: "test-api-key",
+        timeoutMs: 1000,
+        allowPrivateNetwork: true,
+      });
+      const call = requireFirstGuardedFetchCall() as { policy: Record<string, unknown> };
+      expect(call.policy).toMatchObject({
+        allowRfc2544BenchmarkRange: true,
+        allowIpv6UniqueLocalRange: true,
+      });
+      // Full RFC 1918 space must NOT be opened
+      expect(call.policy).not.toHaveProperty("allowPrivateNetwork");
+    });
+
+    it("legacy TTS: omits fake-IP policy bits when allowPrivateNetwork is false (default)", async () => {
+      fetchWithSsrFGuardMock.mockResolvedValue(makeLegacyResponse());
+      await volcengineTTS({
+        text: "hello",
+        appId: "app-id",
+        token: "test-token",
+        timeoutMs: 1000,
+        allowPrivateNetwork: false,
+      });
+      const call = requireFirstGuardedFetchCall() as { policy: Record<string, unknown> };
+      expect(call.policy).not.toHaveProperty("allowRfc2544BenchmarkRange");
+      expect(call.policy).not.toHaveProperty("allowIpv6UniqueLocalRange");
+    });
+
+    it("legacy TTS: adds narrow fake-IP policy bits when allowPrivateNetwork is true", async () => {
+      fetchWithSsrFGuardMock.mockResolvedValue(makeLegacyResponse());
+      await volcengineTTS({
+        text: "hello",
+        appId: "app-id",
+        token: "test-token",
+        timeoutMs: 1000,
+        allowPrivateNetwork: true,
+      });
+      const call = requireFirstGuardedFetchCall() as { policy: Record<string, unknown> };
+      expect(call.policy).toMatchObject({
+        allowRfc2544BenchmarkRange: true,
+        allowIpv6UniqueLocalRange: true,
+      });
+      expect(call.policy).not.toHaveProperty("allowPrivateNetwork");
+    });
+  });
 });
