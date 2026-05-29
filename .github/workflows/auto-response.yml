@@ -19,13 +19,6 @@ permissions: {}
 
 jobs:
   auto-response:
-    if: >-
-      ${{
-        !(
-          (github.event.action == 'labeled' || github.event.action == 'unlabeled') &&
-          github.event.label.name == 'dependency-guard-backfill'
-        )
-      }}
     permissions:
       contents: read
       issues: write

@@ -4,6 +4,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Page } from "playwright-core";
+import { ACT_MAX_VIEWPORT_DIMENSION } from "./act-policy.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { type AriaSnapshotNode, formatAriaSnapshot, type RawAXNode } from "./cdp.js";
 import {
@@ -51,6 +52,14 @@ function resolveSnapshotTimeoutMs(timeoutMs: number | undefined): number {
 
 function resolveNavigationTimeoutMs(timeoutMs: number | undefined): number {
   return resolveBoundedTimeoutMs(timeoutMs, 20_000, 1000, 120_000);
+}
+
+function resolveViewportDimension(value: unknown, label: "width" | "height"): number {
+  const dimension = resolveIntegerOption(value, 1, { min: 1 });
+  if (dimension > ACT_MAX_VIEWPORT_DIMENSION) {
+    throw new Error(`viewport ${label} exceeds maximum of ${ACT_MAX_VIEWPORT_DIMENSION}`);
+  }
+  return dimension;
 }
 
 async function collectSnapshotUrls(page: Page): Promise<SnapshotUrlEntry[]> {
@@ -455,8 +464,8 @@ export async function resizeViewportViaPlaywright(opts: {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
   await page.setViewportSize({
-    width: resolveIntegerOption(opts.width, 1, { min: 1 }),
-    height: resolveIntegerOption(opts.height, 1, { min: 1 }),
+    width: resolveViewportDimension(opts.width, "width"),
+    height: resolveViewportDimension(opts.height, "height"),
   });
 }
 
