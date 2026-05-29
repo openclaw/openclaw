@@ -2128,11 +2128,12 @@ async function migrateLegacySessions(
     agentId: detected.targetAgentId,
     mainKey: detected.targetMainKey,
   });
+  let migratedDirectChatKey: string | undefined;
   if (!merged[mainKey]) {
     const latest = pickLatestLegacyDirectEntry(legacyStore);
     if (latest?.sessionId) {
       merged[mainKey] = latest;
-      changes.push(`Migrated latest direct-chat session → ${mainKey}`);
+      migratedDirectChatKey = mainKey;
     }
   }
 
@@ -2142,8 +2143,7 @@ async function migrateLegacySessions(
     );
   }
 
-  const targetReadable =
-    !fileExists(detected.sessions.targetStorePath) || targetParsed.ok;
+  const targetReadable = !fileExists(detected.sessions.targetStorePath) || targetParsed.ok;
   if (!targetReadable) {
     warnings.push(
       `Target sessions store unreadable; left untouched to avoid overwriting at ${detected.sessions.targetStorePath}`,
@@ -2166,6 +2166,9 @@ async function migrateLegacySessions(
     await saveSessionStore(detected.sessions.targetStorePath, normalized, {
       skipMaintenance: true,
     });
+    if (migratedDirectChatKey) {
+      changes.push(`Migrated latest direct-chat session → ${migratedDirectChatKey}`);
+    }
     changes.push(`Merged sessions store → ${detected.sessions.targetStorePath}`);
     if (canonicalizedTarget.legacyKeys.length > 0) {
       changes.push(`Canonicalized ${canonicalizedTarget.legacyKeys.length} legacy session key(s)`);

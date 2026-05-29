@@ -283,13 +283,7 @@ describe("state migrations", () => {
   it("preserves a corrupt target session store instead of overwriting it with legacy-only data", async () => {
     const { root, stateDir, env, cfg } = await createLegacyStateFixture();
 
-    const targetStorePath = path.join(
-      stateDir,
-      "agents",
-      "worker-1",
-      "sessions",
-      "sessions.json",
-    );
+    const targetStorePath = path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json");
     // target sessions.json is corrupt (trailing garbage → JSON5.parse fails) and
     // holds a target-only key that has no legacy counterpart.
     const corruptBytes = `${JSON.stringify({
@@ -315,6 +309,13 @@ describe("state migrations", () => {
     // No "Merged sessions store" change was committed against the corrupt target.
     expect(result.changes.some((c) => c.startsWith("Merged sessions store"))).toBe(false);
 
+    // And no direct-chat migration is reported either: the legacy direct entry was
+    // not saved (the target was left untouched), so doctor/startup logs must not
+    // claim a session migration happened on this skip path.
+    expect(result.changes.some((c) => c.startsWith("Migrated latest direct-chat session"))).toBe(
+      false,
+    );
+
     // The user is warned that the target store was left untouched because it is unreadable.
     expect(result.warnings.some((w) => /unreadable|corrupt/i.test(w))).toBe(true);
 
@@ -322,8 +323,8 @@ describe("state migrations", () => {
     // sessions dir is preserved (renamed to a sessions.legacy-* backup because
     // its sessions.json was intentionally not removed), keeping the data intact.
     const backupDir = path.join(stateDir, "sessions.legacy-1234");
-    await expect(
-      fs.readFile(path.join(backupDir, "sessions.json"), "utf8"),
-    ).resolves.toContain("legacy-direct");
+    await expect(fs.readFile(path.join(backupDir, "sessions.json"), "utf8")).resolves.toContain(
+      "legacy-direct",
+    );
   });
 });
