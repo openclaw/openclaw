@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   loadRunCronIsolatedAgentTurn,
+  logWarnMock,
   makeCronSession,
   mockRunCronFallbackPassthrough,
   preflightCronModelProviderMock,
@@ -156,6 +157,10 @@ describe("runCronIsolatedAgentTurn model provider preflight", () => {
       provider: "openrouter",
       model: "nvidia/nemotron-3-super-120b-a12b:free",
     });
+    expect(String(logWarnMock.mock.calls[0]?.[0] ?? "")).toContain(
+      "continuing with fallback openrouter/nvidia/nemotron-3-super-120b-a12b:free",
+    );
+    expect(String(logWarnMock.mock.calls[0]?.[0] ?? "")).not.toContain("Skipping this cron run");
   });
 
   it("keeps explicit empty payload fallbacks strict when local primary preflight fails", async () => {

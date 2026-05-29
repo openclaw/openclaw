@@ -54,7 +54,7 @@ import {
 } from "./helpers.js";
 import { resolveCronModelSelection } from "./model-selection.js";
 import { buildCronAgentDefaultsConfig } from "./run-config.js";
-import { resolveCronPreflightFallbackCandidates } from "./run-fallback-policy.js";
+import { resolveCronPreflightCandidates } from "./run-fallback-policy.js";
 import {
   adoptCronRunSessionMetadata,
   createPersistCronSessionEntry,
@@ -640,52 +640,60 @@ async function prepareCronRunContext(params: {
   const useSubagentFallbacks = resolvedModelSelection.modelSource === "subagent";
 
   const modelPreflightRuntime = await loadCronModelPreflightRuntime();
-  const preflight = await modelPreflightRuntime.preflightCronModelProvider({
+  const preflightCandidates = resolveCronPreflightCandidates({
     cfg: cfgWithAgentDefaults,
+    job: input.job,
+    agentId,
     provider,
     model,
+    useSubagentFallbacks,
   });
-  if (preflight.status === "unavailable") {
-    const fallbackCandidates = resolveCronPreflightFallbackCandidates({
+  let selectedPreflightCandidate: { provider: string; model: string } | undefined;
+  let firstUnavailablePreflight:
+    | Awaited<ReturnType<typeof modelPreflightRuntime.preflightCronModelProvider>>
+    | undefined;
+  for (const candidate of preflightCandidates) {
+    const candidatePreflight = await modelPreflightRuntime.preflightCronModelProvider({
       cfg: cfgWithAgentDefaults,
-      job: input.job,
-      agentId,
-      provider,
-      model,
-      useSubagentFallbacks,
+      provider: candidate.provider,
+      model: candidate.model,
     });
-    let selectedFallback: { provider: string; model: string } | undefined;
-    for (const candidate of fallbackCandidates) {
-      const candidatePreflight = await modelPreflightRuntime.preflightCronModelProvider({
-        cfg: cfgWithAgentDefaults,
-        provider: candidate.provider,
-        model: candidate.model,
-      });
-      if (candidatePreflight.status === "available") {
-        selectedFallback = candidate;
-        break;
-      }
+    if (candidatePreflight.status === "available") {
+      selectedPreflightCandidate = candidate;
+      break;
     }
-    if (!selectedFallback) {
-      logWarn(`[cron:${input.job.id}] ${preflight.reason}`);
-      return {
-        ok: false,
-        result: withRunSession({
-          status: "skipped",
-          error: preflight.reason,
-          diagnostics: createCronRunDiagnosticsFromError("model-preflight", preflight.reason, {
+    firstUnavailablePreflight ??= candidatePreflight;
+  }
+  if (!selectedPreflightCandidate && firstUnavailablePreflight?.status === "unavailable") {
+    logWarn(`[cron:${input.job.id}] ${firstUnavailablePreflight.reason}`);
+    return {
+      ok: false,
+      result: withRunSession({
+        status: "skipped",
+        error: firstUnavailablePreflight.reason,
+        diagnostics: createCronRunDiagnosticsFromError(
+          "model-preflight",
+          firstUnavailablePreflight.reason,
+          {
             severity: "warn",
-          }),
-          provider,
-          model,
-        }),
-      };
+          },
+        ),
+        provider,
+        model,
+      }),
+    };
+  }
+  if (
+    selectedPreflightCandidate &&
+    (selectedPreflightCandidate.provider !== provider || selectedPreflightCandidate.model !== model)
+  ) {
+    if (firstUnavailablePreflight?.status === "unavailable") {
+      logWarn(
+        `[cron:${input.job.id}] Local provider preflight failed for ${firstUnavailablePreflight.provider}/${firstUnavailablePreflight.model} at ${firstUnavailablePreflight.baseUrl}; continuing with fallback ${selectedPreflightCandidate.provider}/${selectedPreflightCandidate.model}.`,
+      );
     }
-    logWarn(
-      `[cron:${input.job.id}] ${preflight.reason}; continuing with fallback ${selectedFallback.provider}/${selectedFallback.model}.`,
-    );
-    provider = selectedFallback.provider;
-    model = selectedFallback.model;
+    provider = selectedPreflightCandidate.provider;
+    model = selectedPreflightCandidate.model;
   }
 
   const hooksGmailThinking = isGmailHook

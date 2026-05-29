@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CronJob } from "../types.js";
 import {
   resolveCronFallbacksOverride,
-  resolveCronPreflightFallbackCandidates,
+  resolveCronPreflightCandidates,
 } from "./run-fallback-policy.js";
 
 function makeJob(payload: CronJob["payload"]): CronJob {
@@ -262,9 +262,9 @@ describe("resolveCronFallbacksOverride", () => {
     ).toBeUndefined();
   });
 
-  it("plans configured fallbacks for cron preflight even when the runtime override is omitted", () => {
+  it("plans the full configured candidate chain for cron preflight", () => {
     expect(
-      resolveCronPreflightFallbackCandidates({
+      resolveCronPreflightCandidates({
         cfg: {
           agents: {
             defaults: {
@@ -284,14 +284,15 @@ describe("resolveCronFallbacksOverride", () => {
         }),
       }),
     ).toEqual([
+      { provider: "ollama", model: "qwen3:32b" },
       { provider: "openrouter", model: "nvidia/nemotron-3-super-120b-a12b:free" },
       { provider: "openai", model: "gpt-5.4" },
     ]);
   });
 
-  it("does not plan preflight fallback candidates when payload fallbacks are explicitly empty", () => {
+  it("keeps cron preflight strict when payload fallbacks are explicitly empty", () => {
     expect(
-      resolveCronPreflightFallbackCandidates({
+      resolveCronPreflightCandidates({
         cfg: makeConfig(["openai/gpt-5.4"]),
         agentId: "main",
         provider: "ollama",
@@ -302,7 +303,7 @@ describe("resolveCronFallbacksOverride", () => {
           fallbacks: [],
         }),
       }),
-    ).toStrictEqual([]);
+    ).toStrictEqual([{ provider: "ollama", model: "qwen3:32b" }]);
   });
 
   it("documents that cron preflight walks fallbacks before skipping", () => {
