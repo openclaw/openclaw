@@ -1908,7 +1908,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
-  it("suppresses channel-owned group progress callbacks while verbose is off", async () => {
+  it("forwards channel-owned group progress callbacks while verbose is off", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
       verboseLevel: "off",
@@ -1968,14 +1968,23 @@ describe("dispatchReplyFromConfig", () => {
       },
     });
 
-    expect(onToolStart).not.toHaveBeenCalled();
-    expect(onItemEvent).not.toHaveBeenCalled();
-    expect(onPlanUpdate).not.toHaveBeenCalled();
-    expect(onApprovalEvent).not.toHaveBeenCalled();
-    expect(onCommandOutput).not.toHaveBeenCalled();
-    expect(onPatchSummary).not.toHaveBeenCalled();
-    expect(onCompactionStart).not.toHaveBeenCalled();
-    expect(onCompactionEnd).not.toHaveBeenCalled();
+    expect(onToolStart).toHaveBeenCalledWith({ name: "exec", phase: "start" });
+    expect(onItemEvent).toHaveBeenCalledWith({
+      itemId: "1",
+      kind: "tool",
+      progressText: "running exec",
+    });
+    expect(onPlanUpdate).toHaveBeenCalledWith({ phase: "update", steps: ["Run command"] });
+    expect(onApprovalEvent).toHaveBeenCalledWith({ phase: "requested", command: "pnpm test" });
+    expect(onCommandOutput).toHaveBeenCalledWith({
+      phase: "end",
+      name: "exec",
+      status: "ok",
+      exitCode: 0,
+    });
+    expect(onPatchSummary).toHaveBeenCalledWith({ phase: "end", summary: "1 modified" });
+    expect(onCompactionStart).toHaveBeenCalledTimes(1);
+    expect(onCompactionEnd).toHaveBeenCalledTimes(1);
     expect(onToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
