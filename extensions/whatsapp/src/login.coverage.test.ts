@@ -57,7 +57,6 @@ vi.mock("./session.js", async () => {
     waitForWaConnection,
     formatError,
     getStatusCode,
-    WA_WEB_AUTH_DIR: authDir,
     logoutWeb: vi.fn(async (params: { authDir?: string }) => {
       await fs.rm(params.authDir ?? authDir, {
         recursive: true,

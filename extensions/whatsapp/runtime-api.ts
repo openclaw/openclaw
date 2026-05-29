@@ -26,7 +26,6 @@ export {
   resolveWebCredsBackupPath,
   resolveWebCredsPath,
   restoreCredsFromBackupIfNeeded,
-  WA_WEB_AUTH_DIR,
   webAuthExists,
   WHATSAPP_AUTH_UNSTABLE_CODE,
   WhatsAppAuthUnstableError,

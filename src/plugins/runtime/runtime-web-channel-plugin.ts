@@ -44,7 +44,7 @@ type WebChannelLightRuntimeModule = {
   formatError: (error: unknown) => string;
   getStatusCode: (error: unknown) => number | undefined;
   pickWebChannel: (pref: string, authDir?: string) => Promise<string>;
-  WA_WEB_AUTH_DIR: string;
+  resolveDefaultWebAuthDir: () => string;
 };
 
 type WebChannelHeavyRuntimeModule = {
@@ -293,8 +293,10 @@ export function pickWebChannel(
   return getLightExport("pickWebChannel")(...args);
 }
 
-export function resolveWebChannelAuthDir(): WebChannelLightRuntimeModule["WA_WEB_AUTH_DIR"] {
-  return getLightExport("WA_WEB_AUTH_DIR");
+export function resolveWebChannelAuthDir(): ReturnType<
+  WebChannelLightRuntimeModule["resolveDefaultWebAuthDir"]
+> {
+  return getLightExport("resolveDefaultWebAuthDir")();
 }
 
 export async function handleWebChannelAction(

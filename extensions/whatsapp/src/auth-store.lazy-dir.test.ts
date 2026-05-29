@@ -26,13 +26,11 @@ describe("WhatsApp auth dir profile resolution", () => {
     }
   });
 
-  it("resolves WA_WEB_AUTH_DIR from OPENCLAW_STATE_DIR at first read, not import time", async () => {
+  it("resolves the default web auth dir from OPENCLAW_STATE_DIR at call time", async () => {
     const authStore = await import("./auth-store.js");
     process.env.OPENCLAW_STATE_DIR = tempStateDir;
 
     const expected = path.join(tempStateDir ?? "", "credentials", "whatsapp", DEFAULT_ACCOUNT_ID);
-    const exportedAuthDir: unknown = authStore.WA_WEB_AUTH_DIR;
-    expect(String(exportedAuthDir)).toBe(expected);
     expect(authStore.resolveDefaultWebAuthDir()).toBe(expected);
   });
 

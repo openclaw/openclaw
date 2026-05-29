@@ -305,10 +305,7 @@ async function channelsAddCommandImpl(
 
   const rawChannel = opts.channel ?? "";
   let channel = normalizeChannelId(rawChannel);
-  const activeRegisteredPlugin = channel ? getLoadedChannelPlugin(channel) : undefined;
-  let catalogEntry = activeRegisteredPlugin
-    ? undefined
-    : await resolveCatalogChannelEntry(rawChannel, nextConfig);
+  let catalogEntry = await resolveCatalogChannelEntry(rawChannel, nextConfig);
   const resolveWorkspaceDir = () =>
     resolveAgentWorkspaceDir(nextConfig, resolveDefaultAgentId(nextConfig));
   // May load a scoped plugin when the channel is not already registered.
@@ -341,8 +338,7 @@ async function channelsAddCommandImpl(
   if (catalogEntry) {
     const workspaceDir = resolveWorkspaceDir();
     const { isCatalogChannelInstalled } = await import("../channel-setup/discovery.js");
-    const registeredPlugin =
-      activeRegisteredPlugin ?? (channel ? getLoadedChannelPlugin(channel) : undefined);
+    const registeredPlugin = channel ? getLoadedChannelPlugin(channel) : undefined;
     const bundledSetupPlugin = channel ? getBundledChannelSetupPlugin(channel) : undefined;
     if (
       !registeredPlugin &&

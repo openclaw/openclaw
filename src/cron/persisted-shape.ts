@@ -64,7 +64,7 @@ export function getInvalidPersistedCronJobReason(
   }
   if (payloadKind === "agentTurn") {
     const message = payloadRecord.message;
-    if (typeof message !== "string") {
+    if (typeof message !== "string" || message.trim().length === 0) {
       return "invalid-payload";
     }
   }
