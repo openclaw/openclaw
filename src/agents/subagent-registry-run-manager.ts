@@ -46,7 +46,10 @@ function shouldDeleteAttachments(entry: SubagentRunRecord) {
   return entry.cleanup === "delete" || !entry.retainAttachmentsOnKeep;
 }
 
-function resolveSubagentRunDeadlineMs(entry: SubagentRunRecord): number | undefined {
+function resolveSubagentRunDeadlineMs(
+  entry: SubagentRunRecord,
+  observedStartedAt?: number,
+): number | undefined {
   const timeoutSeconds = entry.runTimeoutSeconds;
   if (
     typeof timeoutSeconds !== "number" ||
@@ -56,9 +59,11 @@ function resolveSubagentRunDeadlineMs(entry: SubagentRunRecord): number | undefi
     return undefined;
   }
   const startedAt =
-    typeof entry.startedAt === "number" && Number.isFinite(entry.startedAt)
-      ? entry.startedAt
-      : entry.createdAt;
+    typeof observedStartedAt === "number" && Number.isFinite(observedStartedAt)
+      ? observedStartedAt
+      : typeof entry.startedAt === "number" && Number.isFinite(entry.startedAt)
+        ? entry.startedAt
+        : entry.createdAt;
   if (!Number.isFinite(startedAt)) {
     return undefined;
   }
@@ -68,12 +73,30 @@ function resolveSubagentRunDeadlineMs(entry: SubagentRunRecord): number | undefi
 function resolveHardRunTimeoutEndedAt(
   entry: SubagentRunRecord,
   now: number,
+  observedStartedAt?: number,
 ): number | undefined {
-  const deadlineMs = resolveSubagentRunDeadlineMs(entry);
+  const deadlineMs = resolveSubagentRunDeadlineMs(entry, observedStartedAt);
   if (deadlineMs === undefined) {
     return undefined;
   }
   return now + WAIT_TIMEOUT_DEADLINE_SKEW_MS >= deadlineMs ? deadlineMs : undefined;
+}
+
+function resolveCompletionAfterHardRunDeadline(params: {
+  entry: SubagentRunRecord;
+  observedStartedAt?: number;
+  observedEndedAt?: number;
+  now: number;
+}): number | undefined {
+  const deadlineMs = resolveSubagentRunDeadlineMs(params.entry, params.observedStartedAt);
+  if (deadlineMs === undefined) {
+    return undefined;
+  }
+  const observedEndedAt =
+    typeof params.observedEndedAt === "number" && Number.isFinite(params.observedEndedAt)
+      ? params.observedEndedAt
+      : params.now;
+  return observedEndedAt > deadlineMs ? deadlineMs : undefined;
 }
 
 function resolveWaitTimeoutMsForRun(
@@ -203,6 +226,7 @@ export function createSubagentRunManager(params: {
     sendFarewell?: boolean;
     accountId?: string;
     triggerCleanup: boolean;
+    startedAt?: number;
   }): Promise<void>;
 }) {
   const waitForSubagentCompletion = async (
@@ -268,23 +292,72 @@ export function createSubagentRunManager(params: {
         scheduleWaitRetry(entry, "subagent wait interrupted; scheduling recovery", wait.error);
         return;
       }
+      const completeAsRunTimeout = async (endedAt?: number, startedAt?: number) => {
+        if (typeof startedAt === "number" && Number.isFinite(startedAt)) {
+          entry.startedAt = startedAt;
+          if (typeof entry.sessionStartedAt !== "number") {
+            entry.sessionStartedAt = startedAt;
+          }
+        }
+        const timeoutCompletion: Parameters<typeof params.completeSubagentRun>[0] = {
+          runId,
+          outcome: { status: "timeout" },
+          reason: SUBAGENT_ENDED_REASON_COMPLETE,
+          sendFarewell: true,
+          accountId: entry.requesterOrigin?.accountId,
+          triggerCleanup: true,
+        };
+        if (typeof endedAt === "number") {
+          timeoutCompletion.endedAt = endedAt;
+        }
+        if (typeof startedAt === "number" && Number.isFinite(startedAt)) {
+          timeoutCompletion.startedAt = startedAt;
+        }
+        completionForRetry = timeoutCompletion;
+        await params.completeSubagentRun(completionForRetry);
+      };
       if (waitStatus === "timeout") {
         const isTerminalWaitTimeout =
           typeof wait.endedAt === "number" ||
           typeof wait.stopReason === "string" ||
           typeof wait.livenessState === "string";
         const now = Date.now();
+        const observedStartedAt =
+          typeof wait.startedAt === "number" && Number.isFinite(wait.startedAt)
+            ? wait.startedAt
+            : undefined;
+        if (observedStartedAt !== undefined && entry.startedAt !== observedStartedAt) {
+          entry.startedAt = observedStartedAt;
+          if (typeof entry.sessionStartedAt !== "number") {
+            entry.sessionStartedAt = observedStartedAt;
+          }
+          params.persist();
+        }
         // A plain agent.wait timeout has no terminal snapshot. For explicit
         // subagent run timeouts, the stored run deadline is the completion
         // contract so parent sessions are woken instead of retrying forever.
-        const hardRunTimeoutEndedAt = resolveHardRunTimeoutEndedAt(entry, now);
+        const hardRunTimeoutEndedAt = resolveHardRunTimeoutEndedAt(entry, now, observedStartedAt);
         const completion = params.resolveSubagentSessionCompletion({
           childSessionKey: entry.childSessionKey,
           fallbackEndedAt:
             typeof wait.endedAt === "number" ? wait.endedAt : (hardRunTimeoutEndedAt ?? now),
-          notBeforeMs: entry.startedAt ?? entry.createdAt,
+          notBeforeMs: observedStartedAt ?? entry.startedAt ?? entry.createdAt,
         });
         if (completion) {
+          const completionStartedAt = observedStartedAt;
+          const completionAfterDeadline =
+            completionStartedAt === undefined
+              ? undefined
+              : resolveCompletionAfterHardRunDeadline({
+                  entry,
+                  observedStartedAt: completionStartedAt,
+                  observedEndedAt: completion.endedAt,
+                  now,
+                });
+          if (completionAfterDeadline !== undefined) {
+            await completeAsRunTimeout(completionAfterDeadline, completionStartedAt);
+            return;
+          }
           completionForRetry = {
             runId,
             endedAt: completion.endedAt,
@@ -293,27 +366,40 @@ export function createSubagentRunManager(params: {
             sendFarewell: true,
             accountId: entry.requesterOrigin?.accountId,
             triggerCleanup: true,
+            startedAt: completionStartedAt,
           };
           await params.completeSubagentRun(completionForRetry);
           return;
         }
         if (isTerminalWaitTimeout || hardRunTimeoutEndedAt !== undefined) {
-          completionForRetry = {
-            runId,
-            endedAt: typeof wait.endedAt === "number" ? wait.endedAt : hardRunTimeoutEndedAt,
-            outcome: { status: "timeout" },
-            reason: SUBAGENT_ENDED_REASON_COMPLETE,
-            sendFarewell: true,
-            accountId: entry.requesterOrigin?.accountId,
-            triggerCleanup: true,
-          };
-          await params.completeSubagentRun(completionForRetry);
+          let timeoutEndedAt =
+            typeof wait.endedAt === "number" ? wait.endedAt : hardRunTimeoutEndedAt;
+          const timeoutAfterDeadline = resolveCompletionAfterHardRunDeadline({
+            entry,
+            observedStartedAt: wait.startedAt,
+            observedEndedAt: timeoutEndedAt,
+            now,
+          });
+          if (timeoutAfterDeadline !== undefined) {
+            timeoutEndedAt = timeoutAfterDeadline;
+          }
+          await completeAsRunTimeout(timeoutEndedAt, wait.startedAt);
           return;
         }
         scheduleWaitRetry(
           entry,
           "subagent wait timed out; deferring terminal state until session reconciliation",
         );
+        return;
+      }
+      const completionAfterDeadline = resolveCompletionAfterHardRunDeadline({
+        entry,
+        observedStartedAt: wait.startedAt,
+        observedEndedAt: wait.endedAt,
+        now: Date.now(),
+      });
+      if (completionAfterDeadline !== undefined) {
+        await completeAsRunTimeout(completionAfterDeadline, wait.startedAt);
         return;
       }
       let mutated = false;
@@ -363,6 +449,7 @@ export function createSubagentRunManager(params: {
         sendFarewell: true,
         accountId: entry.requesterOrigin?.accountId,
         triggerCleanup: true,
+        startedAt: wait.startedAt,
       };
       await params.completeSubagentRun(completionForRetry);
     } catch (error) {
