@@ -137,6 +137,8 @@
   "logging-core",
   "migration",
   "migration-runtime",
+  "plugin-state-runtime",
+  "plugin-state-test-runtime",
   "markdown-table-runtime",
   "account-helpers",
   "account-core",
