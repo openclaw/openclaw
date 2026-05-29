@@ -840,10 +840,13 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
         skillsSnapshot: undefined,
       },
     );
-    expectFields(mockParams(hoisted.resolveSkillsPromptForRunMock, 0, "skills prompt params"), {
-      workspaceDir: sandboxWorkspace,
-      skillsSnapshot: undefined,
-    });
+    expectFields(
+      mockParams(hoisted.resolveSkillsPromptStateForRunMock, 0, "skills prompt params"),
+      {
+        workspaceDir: sandboxWorkspace,
+        skillsSnapshot: undefined,
+      },
+    );
   });
 
   it("keeps before_prompt_build context in the model prompt and out of transcript messages", async () => {
@@ -1879,6 +1882,16 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       runBeforeAgentStart: vi.fn(async () => ({ prependContext: "legacy hook context" })),
       runLlmInput,
     });
+    hoisted.resolveSkillsPromptStateForRunMock.mockReturnValue({
+      prompt: "<available_skills></available_skills>",
+      resolvedSkills: [
+        {
+          name: "raw-run-skill",
+          description: "Should not be routed",
+          filePath: "/tmp/skills/raw-run-skill/SKILL.md",
+        },
+      ],
+    });
     const seen: { prompt?: string; messages?: unknown[]; systemPrompt?: string } = {};
 
     const result = await createContextEngineAttemptRunner({
@@ -1896,6 +1909,11 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       attemptOverrides: {
         promptMode: "none",
         disableTools: true,
+        config: {
+          skills: {
+            router: { name: "test-router" },
+          },
+        },
         inputProvenance: {
           kind: "inter_session",
           sourceSessionKey: "agent:main:discord:source",
@@ -1919,6 +1937,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(seen.systemPrompt ?? "").toBe("");
     expect(result.finalPromptText).toBe("hello");
     expect(result.systemPromptReport?.systemPrompt ?? "").toBe("");
+    expect(hoisted.resolveSkillRouteMock).not.toHaveBeenCalled();
     expect(result.messagesSnapshot).toHaveLength(1);
     expectFields(requireRecord(result.messagesSnapshot[0], "gateway model snapshot"), {
       role: "assistant",

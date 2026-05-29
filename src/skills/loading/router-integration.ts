@@ -2,31 +2,19 @@ import { resolveSkillRouter } from "./router-registry.js";
 import type { SkillRouteResult } from "./router-types.js";
 import type { SkillForPrompt } from "./skill-contract.js";
 import { formatSkillsForPrompt } from "./skill-contract.js";
-import type { SkillEntry } from "./types.js";
-import { isSkillVisibleInAvailableSkillsPrompt } from "./workspace.js";
 
 /**
  * Build the candidate list for router matching.
- * Prefers resolvedSkills from snapshot (already filtered); falls back to raw entries.
+ * resolvedSkills already matches the prompt-visible filtered skill set.
  */
 function buildSkillRouteCandidates(
   resolvedSkills?: Array<{ name: string; description: string; filePath: string }>,
-  entries?: SkillEntry[],
 ): SkillForPrompt[] {
-  if (resolvedSkills) {
-    return resolvedSkills.map((s) => ({
-      name: s.name,
-      description: s.description,
-      filePath: s.filePath,
-    }));
-  }
-  return (entries ?? [])
-    .filter(isSkillVisibleInAvailableSkillsPrompt)
-    .map((e) => ({
-      name: e.skill.name,
-      description: e.skill.description,
-      filePath: e.skill.filePath,
-    }));
+  return (resolvedSkills ?? []).map((s) => ({
+    name: s.name,
+    description: s.description,
+    filePath: s.filePath,
+  }));
 }
 
 /**
@@ -43,7 +31,6 @@ export async function resolveSkillRoute(ctx: {
   routerName?: string;
   routerConfig?: Record<string, unknown>;
   resolvedSkills?: Array<{ name: string; description: string; filePath: string }>;
-  entries?: SkillEntry[];
   query?: string;
 }): Promise<
   | { xml: string; mode: "direct" | "ambiguous" }
@@ -58,8 +45,8 @@ export async function resolveSkillRoute(ctx: {
   const router = resolveSkillRouter(ctx.routerName, ctx.routerConfig);
   if (!router) return { error: true, reason: "registry_miss" };
 
-  // 3. Build candidates from resolved skills or raw entries
-  const candidates = buildSkillRouteCandidates(ctx.resolvedSkills, ctx.entries);
+  // 3. Build candidates from the same prompt-visible skills used by the catalog.
+  const candidates = buildSkillRouteCandidates(ctx.resolvedSkills);
   if (candidates.length === 0 || !ctx.query) return undefined;
 
   // 4. Call the router
