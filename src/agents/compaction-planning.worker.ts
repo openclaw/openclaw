@@ -159,6 +159,11 @@ export function runCompactionPlanningWorkerInput(input: unknown): CompactionPlan
           },
         };
     }
+
+    return {
+      status: "failed",
+      error: "unsupported compaction planning worker input",
+    };
   } catch (error) {
     return {
       status: "failed",
