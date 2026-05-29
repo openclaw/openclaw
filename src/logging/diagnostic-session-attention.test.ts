@@ -164,9 +164,9 @@ describe("classifySessionAttention", () => {
         lastProgressAgeMs: 31_000,
       },
       expected: {
-        eventType: "session.long_running",
-        reason: "active_model_call_without_progress",
-        classification: "long_running",
+        eventType: "session.stalled",
+        reason: "active_work_without_progress",
+        classification: "stalled_agent_run",
         activeWorkKind: "model_call",
         recoveryEligible: false,
       },

@@ -895,12 +895,12 @@ describe("stuck session diagnostics threshold", () => {
 
     expectRecordFields(
       requireRecord(
-        events.findLast((event) => event.type === "session.long_running"),
-        "long-running event",
+        events.findLast((event) => event.type === "session.stalled"),
+        "stalled event",
       ),
       {
-        classification: "long_running",
-        reason: "active_model_call_without_progress",
+        classification: "stalled_agent_run",
+        reason: "active_work_without_progress",
         activeWorkKind: "model_call",
         lastProgressReason: "model_call:started",
       },
