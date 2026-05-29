@@ -33,6 +33,7 @@ function createFullReindexParams(
     chunkTokens?: number;
     chunkOverlap?: number;
     vectorReady?: boolean;
+    hasIndexedChunks?: boolean;
     ftsTokenizer?: string;
   } = {},
 ) {
@@ -45,6 +46,7 @@ function createFullReindexParams(
     chunkTokens: 4000,
     chunkOverlap: 0,
     vectorReady: false,
+    hasIndexedChunks: true,
     ftsTokenizer: "unicode61",
     ...overrides,
   };
@@ -97,6 +99,18 @@ describe("memory reindex state", () => {
         createFullReindexParams({
           providerKey: undefined,
           providerKeyKnown: false,
+        }),
+      ),
+    ).toEqual({ status: "valid" });
+  });
+
+  it("does not require vector dimensions before chunks exist", () => {
+    expect(
+      resolveMemoryIndexIdentityState(
+        createFullReindexParams({
+          vectorReady: true,
+          hasIndexedChunks: false,
+          meta: createMeta({ vectorDims: undefined }),
         }),
       ),
     ).toEqual({ status: "valid" });

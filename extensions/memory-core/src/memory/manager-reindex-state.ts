@@ -96,6 +96,7 @@ export function shouldRunFullMemoryReindex(params: {
   chunkTokens: number;
   chunkOverlap: number;
   vectorReady: boolean;
+  hasIndexedChunks?: boolean;
   ftsTokenizer: string;
 }): boolean {
   return resolveMemoryIndexIdentityState(params).status !== "valid";
@@ -111,6 +112,7 @@ export function resolveMemoryIndexIdentityState(params: {
   chunkTokens: number;
   chunkOverlap: number;
   vectorReady: boolean;
+  hasIndexedChunks?: boolean;
   ftsTokenizer: string;
 }): MemoryIndexIdentityState {
   const { meta } = params;
@@ -160,7 +162,7 @@ export function resolveMemoryIndexIdentityState(params: {
       reason: "index chunking changed",
     };
   }
-  if (params.vectorReady && !meta.vectorDims) {
+  if (params.vectorReady && params.hasIndexedChunks !== false && !meta.vectorDims) {
     return {
       status: "mismatched",
       reason: "index vector dimensions are missing",

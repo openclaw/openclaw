@@ -47,6 +47,7 @@ import {
   resolveMemoryProviderState,
   type MemoryProviderLifecycleState,
 } from "./manager-provider-state.js";
+import type { MemoryIndexIdentityState } from "./manager-reindex-state.js";
 import { resolveMemorySearchPreflight } from "./manager-search-preflight.js";
 import { searchKeyword, searchVector } from "./manager-search.js";
 import {
@@ -184,7 +185,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   private readonlyRecoverySuccesses = 0;
   private readonlyRecoveryFailures = 0;
   private readonlyRecoveryLastError?: string;
-  private indexIdentityMismatchReason?: string;
+  private indexIdentityState: MemoryIndexIdentityState = {
+    status: "missing",
+    reason: "index metadata is missing",
+  };
 
   private static async loadProviderResult(params: {
     cfg: OpenClawConfig;
@@ -273,8 +277,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       meta,
       providerKeyKnown: Boolean(params.providerResult),
     });
-    this.indexIdentityMismatchReason =
-      initialIndexIdentity.status === "mismatched" ? initialIndexIdentity.reason : undefined;
+    this.indexIdentityState = initialIndexIdentity;
     this.indexIdentityDirty =
       initialIndexIdentity.status === "mismatched" ||
       (initialIndexIdentity.status === "missing" && this.sources.has("memory"));
@@ -398,7 +401,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       ...(provider !== undefined ? { provider } : {}),
       providerKeyKnown: params?.providerKeyKnown,
     });
-    this.indexIdentityMismatchReason = state.status === "mismatched" ? state.reason : undefined;
+    this.indexIdentityState = state;
     this.indexIdentityDirty =
       state.status === "mismatched" || (state.status === "missing" && this.sources.has("memory"));
     return state;
@@ -986,12 +989,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         searchMode: providerInfo.searchMode,
         providerState: this.providerLifecycle,
         providerUnavailableReason: this.providerUnavailableReason,
-        indexIdentity: this.indexIdentityMismatchReason
-          ? {
-              status: "mismatched",
-              reason: this.indexIdentityMismatchReason,
-            }
-          : { status: "valid" },
+        indexIdentity: this.indexIdentityState,
         readonlyRecovery: {
           attempts: this.readonlyRecoveryAttempts,
           successes: this.readonlyRecoverySuccesses,

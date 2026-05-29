@@ -494,6 +494,10 @@ describe("memory index", () => {
           db: { exec: (sql: string) => void };
         }
       ).db.exec(`DELETE FROM meta WHERE key = 'memory_index_meta_v1'`);
+      expect(nextManager.status().custom?.indexIdentity).toEqual({
+        status: "missing",
+        reason: "index metadata is missing",
+      });
 
       const results = await nextManager.search("alpha");
 
@@ -1061,6 +1065,36 @@ describe("memory index", () => {
         status: "mismatched",
         reason: "index vector dimensions are missing",
       });
+    } finally {
+      await manager.close?.();
+    }
+  });
+
+  it("keeps empty vector indexes clean after vector store probing", async () => {
+    await fs.rm(path.join(memoryDir, "2026-01-12.md"));
+    const dbPath = path.join(workspaceDir, "index-empty-vector.sqlite");
+    const legacyCfg = createCfg({
+      storePath: dbPath,
+      provider: "gemini",
+      vectorEnabled: false,
+    });
+    const legacyManager = await getFreshManager(legacyCfg);
+    await legacyManager.sync({ reason: "test", force: true });
+    await legacyManager.close?.();
+
+    const cfg = createCfg({
+      storePath: dbPath,
+      provider: "gemini",
+      vectorEnabled: true,
+    });
+    const manager = await getFreshManager(cfg, "status");
+    try {
+      await manager.probeVectorStoreAvailability?.();
+
+      const status = manager.status();
+
+      expect(status.dirty).toBe(false);
+      expect(status.custom?.indexIdentity).toEqual({ status: "valid" });
     } finally {
       await manager.close?.();
     }
