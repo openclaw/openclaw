@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import type { SessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import type { SessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { asPositiveSafeInteger } from "../shared/number-coercion.js";
@@ -106,7 +107,7 @@ async function handleTranscriptUpdateBroadcast(
   },
   update: SessionTranscriptUpdate,
 ): Promise<void> {
-  const sessionKey = update.sessionKey ?? resolveSessionKeyForTranscriptFile(update.sessionFile);
+  const sessionKey = update.sessionKey ?? (fs.existsSync(update.sessionFile) ? resolveSessionKeyForTranscriptFile(update.sessionFile) : undefined);
   if (!sessionKey || update.message === undefined) {
     return;
   }
