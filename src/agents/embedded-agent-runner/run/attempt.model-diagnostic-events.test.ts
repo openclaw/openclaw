@@ -447,9 +447,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     expect(chunks[1]).toEqual({ type: "text_delta", delta: "ok" });
     const completedEvent = getEvent(events, 1);
     expect(completedEvent.type).toBe("model.call.completed");
-    expect(completedEvent.responseStreamBytes).toBe(
-      Buffer.byteLength("ok", "utf8"),
-    );
+    expect(completedEvent.responseStreamBytes).toBe(Buffer.byteLength("ok", "utf8"));
   });
 
   it("captures model input, tools, and output only when content capture is enabled", async () => {
