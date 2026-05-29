@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { FeishuConfigSchema, FeishuGroupSchema } from "./config-schema.js";
 
+const intentionalInvalidVerificationTokenKey = "verificationToken";
+
 function expectSchemaIssue(
   result: ReturnType<typeof FeishuConfigSchema.safeParse>,
   issuePath: string,
@@ -58,7 +60,7 @@ describe("FeishuConfigSchema webhook validation", () => {
   it("rejects top-level webhook mode without encryptKey", () => {
     const result = FeishuConfigSchema.safeParse({
       connectionMode: "webhook",
-      verificationToken: "token_top",
+      [intentionalInvalidVerificationTokenKey]: "token_top",
       appId: "cli_top",
       appSecret: "secret_top", // pragma: allowlist secret
     });
@@ -97,7 +99,7 @@ describe("FeishuConfigSchema webhook validation", () => {
       accounts: {
         main: {
           connectionMode: "webhook",
-          verificationToken: "token_main",
+          [intentionalInvalidVerificationTokenKey]: "token_main",
           appId: "cli_main",
           appSecret: "secret_main", // pragma: allowlist secret
         },
