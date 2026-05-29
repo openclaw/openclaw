@@ -43,6 +43,7 @@ export const CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS = parsePositiveIntegerEnv(
   "OPENCLAW_CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS",
   600,
 );
+export const CROSS_OS_COMMAND_CAPTURE_TAIL_BYTES = 16 * 1024 * 1024;
 const CROSS_OS_AGENT_TURN_OPTIONAL = resolveCrossOsAgentTurnOptional();
 
 const providerConfig = {
@@ -265,7 +266,7 @@ export function resolveRunnerMatrix(params) {
     {
       os_id: "macos",
       display_name: "macOS",
-      runner: pick(params.macosRunner, params.varMacosRunner, "blacksmith-6vcpu-macos-latest"),
+      runner: pick(params.macosRunner, params.varMacosRunner, "blacksmith-6vcpu-macos-15"),
       artifact_name: "macos",
     },
   ];
@@ -3359,11 +3360,11 @@ async function runDashboardSmoke(params) {
   throw new Error(`Dashboard HTML did not become ready at ${dashboardUrl}.`);
 }
 
-export function hasChildExited(child) {
+function hasChildExited(child) {
   return child.exitCode !== null || (child.signalCode ?? null) !== null;
 }
 
-export async function stopGateway(gateway) {
+async function stopGateway(gateway) {
   try {
     if (!gateway?.child?.pid) {
       return;
@@ -3585,6 +3586,31 @@ function gitCommand() {
   return process.platform === "win32" ? "git.exe" : "git";
 }
 
+function resolveCommandCaptureLimit(options) {
+  const value = options.maxOutputBytes;
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return CROSS_OS_COMMAND_CAPTURE_TAIL_BYTES;
+  }
+  return Math.max(1, Math.floor(value));
+}
+
+function appendBoundedCommandOutput(current, chunk, maxBytes) {
+  const chunkBuffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+  if (chunkBuffer.byteLength >= maxBytes) {
+    return chunkBuffer.subarray(chunkBuffer.byteLength - maxBytes).toString("utf8");
+  }
+
+  const currentBuffer = Buffer.from(current);
+  const nextBytes = currentBuffer.byteLength + chunkBuffer.byteLength;
+  if (nextBytes <= maxBytes) {
+    return `${current}${chunkBuffer.toString("utf8")}`;
+  }
+
+  const currentTailBytes = maxBytes - chunkBuffer.byteLength;
+  const currentTail = currentBuffer.subarray(currentBuffer.byteLength - currentTailBytes);
+  return Buffer.concat([currentTail, chunkBuffer], maxBytes).toString("utf8");
+}
+
 export async function runCommand(command, args, options) {
   const invocation = resolveCommandSpawnInvocation(command, args, {
     comSpec: options.env?.ComSpec ?? options.env?.COMSPEC,
@@ -3613,6 +3639,7 @@ async function runCommandInvocation(invocation, options) {
     let killWaitTimer = null;
     let timer = null;
     let heartbeatTimer = null;
+    const maxCapturedOutputBytes = resolveCommandCaptureLimit(options);
 
     const clearTimers = () => {
       if (timer) {
@@ -3687,12 +3714,12 @@ async function runCommandInvocation(invocation, options) {
 
     child.stdout?.on("data", (chunk) => {
       const text = chunk.toString();
-      stdout += text;
+      stdout = appendBoundedCommandOutput(stdout, chunk, maxCapturedOutputBytes);
       logStream.write(text);
     });
     child.stderr?.on("data", (chunk) => {
       const text = chunk.toString();
-      stderr += text;
+      stderr = appendBoundedCommandOutput(stderr, chunk, maxCapturedOutputBytes);
       logStream.write(text);
     });
 

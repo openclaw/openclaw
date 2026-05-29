@@ -48,10 +48,11 @@ describe("provider error utils", () => {
       { status: 400 },
     );
 
-    await expect(assertOkOrThrowProviderError(response, "OAuth token exchange failed")).rejects
-      .toThrow(
-        "OAuth token exchange failed (400): AADSTS7000215: Invalid client secret provided. [code=invalid_request]",
-      );
+    await expect(
+      assertOkOrThrowProviderError(response, "OAuth token exchange failed"),
+    ).rejects.toThrow(
+      "OAuth token exchange failed (400): AADSTS7000215: Invalid client secret provided. [code=invalid_request]",
+    );
   });
 
   it("keeps HTTP status metadata when error body reads fail", async () => {
@@ -69,13 +70,14 @@ describe("provider error utils", () => {
       },
     } as unknown as Response;
 
-    await expect(assertOkOrThrowProviderError(response, "Provider API error")).rejects
-      .toMatchObject({
-        name: "ProviderHttpError",
-        status: 503,
-        statusCode: 503,
-        message: "Provider API error (503)",
-      } satisfies Partial<ProviderHttpError>);
+    await expect(
+      assertOkOrThrowProviderError(response, "Provider API error"),
+    ).rejects.toMatchObject({
+      name: "ProviderHttpError",
+      status: 503,
+      statusCode: 503,
+      message: "Provider API error (503)",
+    } satisfies Partial<ProviderHttpError>);
   });
 
   it("attaches structured provider error metadata", async () => {

@@ -11,7 +11,7 @@ import { createConnection as createNetConnection, createServer as createNetServe
 import { tmpdir } from "node:os";
 import { join, win32 } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mjs";
 import {
   agentOutputHasExpectedOkMarker,
@@ -40,7 +40,6 @@ import {
   CROSS_OS_DASHBOARD_SMOKE_TIMEOUT_MS,
   CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS,
   CROSS_OS_COMMAND_HEARTBEAT_SECONDS,
-  hasChildExited,
   isImmutableReleaseRef,
   isRecoverableWindowsPackagedUpgradeSwapCleanupFailure,
   isRecoverableWindowsPackagedUpgradeTimeoutError,
@@ -79,7 +78,6 @@ import {
   shouldSkipOptionalCrossOsAgentTurnError,
   shouldUseManagedGatewayForInstallerRuntime,
   shouldUseManagedGatewayService,
-  stopGateway,
   verifyDevUpdateStatus,
   verifyPackagedUpgradeUpdateResult,
   writePackageDistInventoryForCandidate,
@@ -539,7 +537,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       display_name: "macOS",
       lane: "fresh",
       os_id: "macos",
-      runner: "blacksmith-6vcpu-macos-latest",
+      runner: "blacksmith-6vcpu-macos-15",
       suite: "packaged-fresh",
       suite_label: "packaged fresh",
     });
@@ -929,20 +927,35 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     }
   });
 
-  it("treats signaled managed gateway children as exited", async () => {
-    const child = {
-      exitCode: null,
-      kill: vi.fn(),
-      pid: 1234,
-      signalCode: "SIGTERM",
-    };
-    const closeLog = vi.fn();
+  it("bounds retained command output while preserving full command logs", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-run-command-output-"));
+    try {
+      const logPath = join(dir, "command.log");
+      const result = await runCommand(
+        process.execPath,
+        [
+          "-e",
+          [
+            "process.stdout.write('old-middle-recent');",
+            "process.stderr.write('err-old-err-recent');",
+          ].join(""),
+        ],
+        {
+          cwd: dir,
+          env: process.env,
+          logPath,
+          maxOutputBytes: 12,
+        },
+      );
 
-    expect(hasChildExited(child)).toBe(true);
-    await stopGateway({ child, closeLog });
-
-    expect(child.kill).not.toHaveBeenCalled();
-    expect(closeLog).toHaveBeenCalledTimes(1);
+      expect(result.stdout).toBe("iddle-recent");
+      expect(result.stderr).toBe("d-err-recent");
+      const log = readFileSync(logPath, "utf8");
+      expect(log).toContain("old-middle-recent");
+      expect(log).toContain("err-old-err-recent");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("derives the installed prefix from resolved CLI paths", () => {

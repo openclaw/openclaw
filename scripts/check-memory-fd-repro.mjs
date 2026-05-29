@@ -374,7 +374,7 @@ export async function stopGateway({ child, port }) {
     child,
     port,
     findGatewayPidFn: findGatewayPid,
-    killProcess: process.kill,
+    killProcess: (pid, signal) => process.kill(pid, signal),
   });
 }
 

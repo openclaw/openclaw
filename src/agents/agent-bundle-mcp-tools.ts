@@ -14,10 +14,14 @@ export {
   disposeSessionMcpRuntime,
   getOrCreateSessionMcpRuntime,
   getSessionMcpRuntimeManager,
+  peekSessionMcpRuntime,
+  resolveSessionMcpConfigFingerprint,
+  resolveSessionMcpConfigSummary,
   retireSessionMcpRuntime,
   retireSessionMcpRuntimeForSessionKey,
 } from "./agent-bundle-mcp-runtime.js";
 export {
+  buildBundleMcpToolsFromCatalog,
   createBundleMcpToolRuntime,
   materializeBundleMcpToolsForRun,
 } from "./agent-bundle-mcp-materialize.js";

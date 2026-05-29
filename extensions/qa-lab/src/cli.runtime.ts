@@ -158,10 +158,10 @@ function parseQaPositiveIntegerOption(label: string, value: number | undefined) 
   if (value === undefined) {
     return undefined;
   }
-  if (!Number.isFinite(value) || value < 1) {
+  if (!Number.isSafeInteger(value) || value < 1) {
     throw new Error(`${label} must be a positive integer`);
   }
-  return Math.floor(value);
+  return value;
 }
 
 function normalizeQaOptionalModelRef(input: string | undefined) {
@@ -170,8 +170,11 @@ function normalizeQaOptionalModelRef(input: string | undefined) {
 }
 
 function normalizeQaRuntimeId(value: string): RuntimeId | undefined {
-  if (value === "openclaw" || value === "codex") {
-    return value;
+  if (value === "openclaw" || value === "pi") {
+    return "openclaw";
+  }
+  if (value === "codex") {
+    return "codex";
   }
   return undefined;
 }

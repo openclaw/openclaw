@@ -211,6 +211,8 @@ Hook guard behavior for typed lifecycle hooks:
 - `params` rewrites the tool parameters for execution.
 - `requireApproval` pauses the agent run and asks the user through plugin
   approvals. The `/approve` command can approve both exec and plugin approvals.
+  In Codex app-server report-mode native `PreToolUse` relays, this is deferred
+  to the matching app-server approval request; see [Codex harness runtime](/plugins/codex-harness-runtime#hook-boundaries).
 - A lower-priority `block: true` can still block after a higher-priority hook
   requested approval.
 - `onResolution` receives the resolved approval decision - `allow-once`,

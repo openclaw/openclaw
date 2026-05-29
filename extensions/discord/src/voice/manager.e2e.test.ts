@@ -5505,7 +5505,7 @@ describe("DiscordVoiceManager", () => {
     await vi.waitFor(() => expect(release).toHaveBeenCalledTimes(1));
   });
 
-  it("passes per-channel system prompt overrides to voice agent runs", async () => {
+  it("passes per-channel system prompt context to voice agent runs", async () => {
     const client = createClient();
     client.fetchMember.mockResolvedValue({
       nickname: "Guest Nick",

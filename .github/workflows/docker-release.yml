@@ -108,13 +108,6 @@ jobs:
           if grep -q '^ARG OPENCLAW_INSTALL_BROWSER' Dockerfile; then
             browser_supported=1
           fi
-          if [[ "${SOURCE_REF}" == "refs/heads/main" ]]; then
-            tags+=("${IMAGE}:main-amd64")
-            slim_tags+=("${IMAGE}:main-slim-amd64")
-            if [[ "${browser_supported}" == "1" ]]; then
-              browser_tags+=("${IMAGE}:main-browser-amd64")
-            fi
-          fi
           if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
             version="${SOURCE_REF#refs/tags/v}"
             tags+=("${IMAGE}:${version}-amd64")
@@ -306,13 +299,6 @@ jobs:
           if grep -q '^ARG OPENCLAW_INSTALL_BROWSER' Dockerfile; then
             browser_supported=1
           fi
-          if [[ "${SOURCE_REF}" == "refs/heads/main" ]]; then
-            tags+=("${IMAGE}:main-arm64")
-            slim_tags+=("${IMAGE}:main-slim-arm64")
-            if [[ "${browser_supported}" == "1" ]]; then
-              browser_tags+=("${IMAGE}:main-browser-arm64")
-            fi
-          fi
           if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
             version="${SOURCE_REF#refs/tags/v}"
             tags+=("${IMAGE}:${version}-arm64")
@@ -499,13 +485,6 @@ jobs:
           if grep -q '^ARG OPENCLAW_INSTALL_BROWSER' Dockerfile; then
             browser_supported=1
           fi
-          if [[ "${SOURCE_REF}" == "refs/heads/main" ]]; then
-            tags+=("${IMAGE}:main")
-            slim_tags+=("${IMAGE}:main-slim")
-            if [[ "${browser_supported}" == "1" ]]; then
-              browser_tags+=("${IMAGE}:main-browser")
-            fi
-          fi
           if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
             version="${SOURCE_REF#refs/tags/v}"
             tags+=("${IMAGE}:${version}")
@@ -515,10 +494,10 @@ jobs:
             fi
             # Manual backfills should only republish the requested version tags.
             if [[ "${IS_MANUAL_BACKFILL}" != "1" && "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]]; then
-              tags+=("${IMAGE}:latest")
-              slim_tags+=("${IMAGE}:slim")
+              tags+=("${IMAGE}:latest" "${IMAGE}:main")
+              slim_tags+=("${IMAGE}:slim" "${IMAGE}:main-slim")
               if [[ "${browser_supported}" == "1" ]]; then
-                browser_tags+=("${IMAGE}:latest-browser")
+                browser_tags+=("${IMAGE}:latest-browser" "${IMAGE}:main-browser")
               fi
             fi
           fi
@@ -610,17 +589,6 @@ jobs:
           elif grep -q '^ARG OPENCLAW_INSTALL_BROWSER' Dockerfile; then
             browser_supported=1
           fi
-          if [[ "${SOURCE_REF}" == "refs/heads/main" ]]; then
-            multi_refs+=("${IMAGE}:main")
-            slim_multi_refs+=("${IMAGE}:main-slim")
-            amd64_refs+=("${IMAGE}:main-amd64" "${IMAGE}:main-slim-amd64")
-            arm64_refs+=("${IMAGE}:main-arm64" "${IMAGE}:main-slim-arm64")
-            if [[ "${browser_supported}" == "1" ]]; then
-              multi_refs+=("${IMAGE}:main-browser")
-              amd64_refs+=("${IMAGE}:main-browser-amd64")
-              arm64_refs+=("${IMAGE}:main-browser-arm64")
-            fi
-          fi
           if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
             version="${SOURCE_REF#refs/tags/v}"
             multi_refs+=("${IMAGE}:${version}")
@@ -639,10 +607,10 @@ jobs:
               arm64_refs+=("${IMAGE}:${version}-browser-arm64")
             fi
             if [[ "${IS_MANUAL_BACKFILL}" != "1" && "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]]; then
-              multi_refs+=("${IMAGE}:latest")
-              slim_multi_refs+=("${IMAGE}:slim")
+              multi_refs+=("${IMAGE}:latest" "${IMAGE}:main")
+              slim_multi_refs+=("${IMAGE}:slim" "${IMAGE}:main-slim")
               if [[ "${browser_supported}" == "1" ]]; then
-                multi_refs+=("${IMAGE}:latest-browser")
+                multi_refs+=("${IMAGE}:latest-browser" "${IMAGE}:main-browser")
               fi
             fi
           fi

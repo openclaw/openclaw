@@ -12,7 +12,10 @@ import {
   resolveProviderHttpRequestConfig,
   type ProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asSafeIntegerInRange,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   GeneratedVideoAsset,
   VideoGenerationProvider,
@@ -21,10 +24,13 @@ import type {
 import { TOGETHER_BASE_URL } from "./models.js";
 
 const DEFAULT_TOGETHER_VIDEO_MODEL = "Wan-AI/Wan2.2-T2V-A14B";
+const TOGETHER_IMAGE_TO_VIDEO_MODELS = new Set(["Wan-AI/Wan2.2-I2V-A14B"]);
 const TOGETHER_VIDEO_BASE_URL = "https://api.together.xyz/v2";
 const DEFAULT_TIMEOUT_MS = 120_000;
 const POLL_INTERVAL_MS = 5_000;
 const MAX_POLL_ATTEMPTS = 120;
+const TOGETHER_MIN_DURATION_SECONDS = 1;
+const TOGETHER_MAX_DURATION_SECONDS = 10;
 
 type TogetherVideoResponse = {
   id?: string;
@@ -78,6 +84,17 @@ function extractTogetherVideoUrl(payload: TogetherVideoResponse): string | undef
     normalizeOptionalString(payload.outputs?.video_url) ??
     normalizeOptionalString(payload.outputs?.url)
   );
+}
+
+function resolveTogetherDurationSeconds(value: unknown): string | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  const duration = asSafeIntegerInRange(Math.round(value), {
+    min: TOGETHER_MIN_DURATION_SECONDS,
+    max: TOGETHER_MAX_DURATION_SECONDS,
+  });
+  return duration === undefined ? undefined : String(duration);
 }
 
 async function pollTogetherVideo(params: {
@@ -150,14 +167,15 @@ export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider 
     capabilities: {
       generate: {
         maxVideos: 1,
-        maxDurationSeconds: 12,
+        maxDurationSeconds: TOGETHER_MAX_DURATION_SECONDS,
         supportsSize: true,
       },
       imageToVideo: {
         enabled: true,
-        maxVideos: 1,
-        maxInputImages: 1,
-        maxDurationSeconds: 12,
+        maxInputImagesByModel: {
+          "Wan-AI/Wan2.2-I2V-A14B": 1,
+        },
+        maxDurationSeconds: TOGETHER_MAX_DURATION_SECONDS,
         supportsSize: true,
       },
       videoToVideo: {
@@ -200,8 +218,10 @@ export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider 
         model: normalizeOptionalString(req.model) ?? DEFAULT_TOGETHER_VIDEO_MODEL,
         prompt: req.prompt,
       };
-      if (typeof req.durationSeconds === "number" && Number.isFinite(req.durationSeconds)) {
-        body.seconds = String(Math.max(1, Math.round(req.durationSeconds)));
+      const model = String(body.model);
+      const duration = resolveTogetherDurationSeconds(req.durationSeconds);
+      if (duration !== undefined) {
+        body.seconds = duration;
       }
       const size = normalizeOptionalString(req.size);
       if (size) {
@@ -212,6 +232,11 @@ export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider 
         }
       }
       if (req.inputImages?.[0]) {
+        if (!TOGETHER_IMAGE_TO_VIDEO_MODELS.has(model)) {
+          throw new Error(
+            `Together video model ${model} does not support image reference inputs. Use Wan-AI/Wan2.2-I2V-A14B or omit input images.`,
+          );
+        }
         const input = req.inputImages[0];
         const value = normalizeOptionalString(input.url)
           ? normalizeOptionalString(input.url)

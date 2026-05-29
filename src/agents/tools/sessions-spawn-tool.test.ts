@@ -446,6 +446,24 @@ describe("sessions_spawn tool", () => {
     expect(spawnArgs.runTimeoutSeconds).toBe(2);
   });
 
+  it.each([
+    [{ runTimeoutSeconds: 1.5 }, "runTimeoutSeconds must be a non-negative integer"],
+    [{ runTimeoutSeconds: -1 }, "runTimeoutSeconds must be a non-negative integer"],
+    [{ timeoutSeconds: "1sec" }, "timeoutSeconds must be a non-negative integer"],
+  ])("rejects invalid timeout override %o", async (params, message) => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    await expect(
+      tool.execute("call-invalid-timeout", {
+        task: "do thing",
+        ...params,
+      }),
+    ).rejects.toThrow(message);
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
+
   it("passes inherited workspaceDir from tool context, not from tool args", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",

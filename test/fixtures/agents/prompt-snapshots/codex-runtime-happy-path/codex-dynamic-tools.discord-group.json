@@ -32,7 +32,8 @@
           "type": "string"
         },
         "delayMs": {
-          "type": "number"
+          "minimum": 0,
+          "type": "integer"
         },
         "delivery": {
           "enum": ["system", "overlay", "auto"],
@@ -50,7 +51,8 @@
         },
         "durationMs": {
           "maximum": 300000,
-          "type": "number"
+          "minimum": 1,
+          "type": "integer"
         },
         "facing": {
           "description": "camera_snap: front/back/both; camera_clip: front/back only.",
@@ -58,6 +60,7 @@
           "type": "string"
         },
         "fps": {
+          "exclusiveMinimum": 0,
           "type": "number"
         },
         "gatewayToken": {
@@ -76,19 +79,25 @@
           "type": "string"
         },
         "invokeTimeoutMs": {
-          "type": "number"
+          "minimum": 1,
+          "type": "integer"
         },
         "limit": {
-          "type": "number"
+          "maximum": 20,
+          "minimum": 1,
+          "type": "integer"
         },
         "locationTimeoutMs": {
-          "type": "number"
+          "minimum": 1,
+          "type": "integer"
         },
         "maxAgeMs": {
-          "type": "number"
+          "minimum": 0,
+          "type": "integer"
         },
         "maxWidth": {
-          "type": "number"
+          "minimum": 1,
+          "type": "integer"
         },
         "node": {
           "type": "string"
@@ -111,19 +120,23 @@
           "type": "string"
         },
         "quality": {
+          "maximum": 1,
+          "minimum": 0,
           "type": "number"
         },
         "requestId": {
           "type": "string"
         },
         "screenIndex": {
-          "type": "number"
+          "minimum": 0,
+          "type": "integer"
         },
         "sound": {
           "type": "string"
         },
         "timeoutMs": {
-          "type": "number"
+          "minimum": 1,
+          "type": "integer"
         },
         "title": {
           "type": "string"
@@ -152,7 +165,7 @@
         "contextMessages": {
           "maximum": 10,
           "minimum": 0,
-          "type": "number"
+          "type": "integer"
         },
         "gatewayToken": {
           "type": "string"
@@ -604,7 +617,8 @@
           "type": "string"
         },
         "timeoutMs": {
-          "type": "number"
+          "minimum": 1,
+          "type": "integer"
         }
       },
       "required": ["action"],
@@ -749,7 +763,8 @@
           "type": "string"
         },
         "timeoutMs": {
-          "type": "number"
+          "minimum": 1,
+          "type": "integer"
         }
       },
       "required": ["action"],
@@ -773,7 +788,7 @@
         "timeoutMs": {
           "description": "Provider timeout ms.",
           "minimum": 1,
-          "type": "number"
+          "type": "integer"
         }
       },
       "required": ["text"],
@@ -805,7 +820,8 @@
           "type": "string"
         },
         "delayMs": {
-          "type": "number"
+          "minimum": 0,
+          "type": "integer"
         },
         "gatewayToken": {
           "type": "string"
@@ -826,13 +842,15 @@
           "type": "string"
         },
         "restartDelayMs": {
-          "type": "number"
+          "minimum": 0,
+          "type": "integer"
         },
         "sessionKey": {
           "type": "string"
         },
         "timeoutMs": {
-          "type": "number"
+          "minimum": 1,
+          "type": "integer"
         }
       },
       "required": ["action"],
@@ -858,7 +876,7 @@
       "properties": {
         "activeMinutes": {
           "minimum": 1,
-          "type": "number"
+          "type": "integer"
         },
         "agentId": {
           "maxLength": 64,
@@ -883,11 +901,11 @@
         },
         "limit": {
           "minimum": 1,
-          "type": "number"
+          "type": "integer"
         },
         "messageLimit": {
           "minimum": 0,
-          "type": "number"
+          "type": "integer"
         },
         "search": {
           "minLength": 1,
@@ -909,7 +927,7 @@
         },
         "limit": {
           "minimum": 1,
-          "type": "number"
+          "type": "integer"
         },
         "sessionKey": {
           "type": "string"
@@ -944,7 +962,7 @@
         },
         "timeoutSeconds": {
           "minimum": 0,
-          "type": "number"
+          "type": "integer"
         }
       },
       "required": ["message"],
@@ -1024,7 +1042,7 @@
         },
         "runTimeoutSeconds": {
           "minimum": 0,
-          "type": "number"
+          "type": "integer"
         },
         "sandbox": {
           "enum": ["inherit", "require"],
@@ -1046,7 +1064,7 @@
         },
         "timeoutSeconds": {
           "minimum": 0,
-          "type": "number"
+          "type": "integer"
         }
       },
       "required": ["task"],
@@ -1078,7 +1096,7 @@
         },
         "recentMinutes": {
           "minimum": 1,
-          "type": "number"
+          "type": "integer"
         }
       },
       "type": "object"
@@ -1185,7 +1203,7 @@
         "maxChars": {
           "description": "Max chars returned; truncates.",
           "minimum": 100,
-          "type": "number"
+          "type": "integer"
         },
         "url": {
           "description": "HTTP(S) URL.",

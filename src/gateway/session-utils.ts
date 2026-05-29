@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import {
   listAgentIds,
@@ -2101,7 +2102,7 @@ function compareSessionEntryPairsByUpdatedAt(a: SessionEntryPair, b: SessionEntr
 }
 
 function resolveSessionsListLimit(
-  opts: import("./protocol/index.js").SessionsListParams,
+  opts: SessionsListParams,
   defaultLimit?: number,
 ): number | undefined {
   if (typeof opts.limit !== "number" || !Number.isFinite(opts.limit)) {
@@ -2110,7 +2111,7 @@ function resolveSessionsListLimit(
   return Math.max(1, Math.floor(opts.limit));
 }
 
-function resolveSessionsListOffset(opts: import("./protocol/index.js").SessionsListParams): number {
+function resolveSessionsListOffset(opts: SessionsListParams): number {
   if (typeof opts.offset !== "number" || !Number.isFinite(opts.offset)) {
     return 0;
   }
@@ -2160,7 +2161,7 @@ function sortAndLimitSessionEntries(
 function filterSessionEntries(params: {
   cfg: OpenClawConfig;
   store: Record<string, SessionEntry>;
-  opts: import("./protocol/index.js").SessionsListParams;
+  opts: SessionsListParams;
   now: number;
   rowContext?: SessionListRowContext;
 }): SessionEntryPair[] {
@@ -2268,7 +2269,7 @@ function filterSessionEntries(params: {
 function selectSessionEntries(params: {
   cfg: OpenClawConfig;
   store: Record<string, SessionEntry>;
-  opts: import("./protocol/index.js").SessionsListParams;
+  opts: SessionsListParams;
   now: number;
   rowContext?: SessionListRowContext;
   defaultLimit?: number;
@@ -2295,7 +2296,7 @@ function selectSessionEntries(params: {
 export function filterAndSortSessionEntries(params: {
   cfg: OpenClawConfig;
   store: Record<string, SessionEntry>;
-  opts: import("./protocol/index.js").SessionsListParams;
+  opts: SessionsListParams;
   now: number;
   rowContext?: SessionListRowContext;
 }): [string, SessionEntry][] {
@@ -2307,7 +2308,7 @@ export function listSessionsFromStore(params: {
   storePath: string;
   store: Record<string, SessionEntry>;
   modelCatalog?: ModelCatalogEntry[];
-  opts: import("./protocol/index.js").SessionsListParams;
+  opts: SessionsListParams;
 }): SessionsListResult {
   const { cfg, storePath, store, opts } = params;
   const now = Date.now();
@@ -2382,7 +2383,7 @@ export async function listSessionsFromStoreAsync(params: {
   storePath: string;
   store: Record<string, SessionEntry>;
   modelCatalog?: ModelCatalogEntry[];
-  opts: import("./protocol/index.js").SessionsListParams;
+  opts: SessionsListParams;
 }): Promise<SessionsListResult> {
   const { cfg, storePath, store, opts } = params;
   const now = Date.now();

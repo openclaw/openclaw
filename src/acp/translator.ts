@@ -33,9 +33,9 @@ import type {
   ToolCallLocation,
   ToolKind,
 } from "@agentclientprotocol/sdk";
+import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import { BASE_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
 import type { GatewayClient } from "../gateway/client.js";
-import type { EventFrame } from "../gateway/protocol/index.js";
 import type { GatewaySessionRow, SessionsListResult } from "../gateway/session-utils.js";
 import {
   createFixedWindowRateLimiter,
@@ -56,7 +56,7 @@ import {
   formatToolTitle,
   inferToolKind,
 } from "./event-mapper.js";
-import { readBool, readNumber, readString } from "./meta.js";
+import { readBool, readNonNegativeInteger, readNumber, readString } from "./meta.js";
 import {
   buildAcpPermissionRequest,
   parseGatewayExecApprovalEventData,
@@ -1023,7 +1023,7 @@ export class AcpGatewayAgent implements Agent {
       idempotencyKey: runId,
       thinking: readString(params["_meta"], ["thinking", "thinkingLevel"]),
       deliver: readBool(params["_meta"], ["deliver"]),
-      timeoutMs: readNumber(params["_meta"], ["timeoutMs"]),
+      timeoutMs: readNonNegativeInteger(params["_meta"], ["timeoutMs"]),
     };
 
     return new Promise<PromptResponse>((resolve, reject) => {

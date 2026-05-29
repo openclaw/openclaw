@@ -50,7 +50,7 @@ const bundledPluginIgnoredRuntimeDependencies = [
   "lit",
   "linkedom",
   "openclaw",
-  "pdfjs-dist",
+  "clawpdf",
 ] as const;
 
 const rootBundledPluginRuntimeDependencies = [
@@ -70,7 +70,7 @@ const rootBundledPluginRuntimeDependencies = [
   "minimatch",
   "node-edge-tts",
   "openshell",
-  "pdfjs-dist",
+  "clawpdf",
   "tokenjuice",
 ] as const;
 
@@ -166,6 +166,14 @@ const config = {
     },
     "packages/agent-core": {
       entry: ["src/index.ts!", "src/*.ts!", "src/harness/**/*.ts!"],
+      project: ["src/**/*.ts!"],
+    },
+    "packages/gateway-client": {
+      entry: ["src/index.ts!"],
+      project: ["src/**/*.ts!"],
+    },
+    "packages/gateway-protocol": {
+      entry: ["src/index.ts!", "src/schema.ts!"],
       project: ["src/**/*.ts!"],
     },
     "packages/*": {

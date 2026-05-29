@@ -987,6 +987,7 @@ export function createFollowupRunner(params: {
           cfg: runtimeConfig,
           usage,
           lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
+          compactionTokensAfter: runResult.meta?.agentMeta?.compactionTokensAfter,
           promptTokens,
           isHeartbeat: opts?.isHeartbeat === true,
           preserveUserFacingSessionModelState: preserveUserFacingSessionState,

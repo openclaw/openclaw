@@ -271,8 +271,8 @@ describe("normalizeClaudeBackendConfig", () => {
   });
 
   it("passes system prompt on every turn (issue #80374 — systemPromptWhen must be 'always')", () => {
-    // Before fix this was hardcoded to "first", which silently dropped
-    // systemPromptOverride on every resumed / compacted claude-cli session.
+    // Before fix this was hardcoded to "first", which silently dropped updated
+    // OpenClaw system prompt context on resumed / compacted claude-cli sessions.
     const backend = buildAnthropicCliBackend();
     expect(backend.config.systemPromptWhen).toBe("always");
   });

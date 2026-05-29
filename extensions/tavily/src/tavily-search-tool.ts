@@ -3,7 +3,7 @@ import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   jsonResult,
-  readNumberParam,
+  readPositiveIntegerParam,
   readStringParam,
 } from "openclaw/plugin-sdk/provider-web-search";
 import { Type } from "typebox";
@@ -32,7 +32,7 @@ const TavilySearchToolSchema = Type.Object(
       description: 'Search topic: "general" (default), "news", or "finance".',
     }),
     max_results: Type.Optional(
-      Type.Number({
+      Type.Integer({
         description: "Number of results to return (1-20).",
         minimum: 1,
         maximum: 20,
@@ -71,7 +71,10 @@ export function createTavilySearchTool(api: OpenClawPluginApi, ctx?: TavilyToolC
       const query = readStringParam(rawParams, "query", { required: true });
       const searchDepth = readStringParam(rawParams, "search_depth") || undefined;
       const topic = readStringParam(rawParams, "topic") || undefined;
-      const maxResults = readNumberParam(rawParams, "max_results", { integer: true });
+      const maxResults = readPositiveIntegerParam(rawParams, "max_results", {
+        max: 20,
+        message: "max_results must be an integer from 1 to 20.",
+      });
       const includeAnswer = rawParams.include_answer === true;
       const timeRange = readStringParam(rawParams, "time_range") || undefined;
       const includeDomains = Array.isArray(rawParams.include_domains)

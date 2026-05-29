@@ -18,6 +18,7 @@ import {
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
+import { ensureAuthProfileStoreWithoutExternalProfiles } from "./auth-profiles.js";
 import { modelSupportsInput as modelCatalogEntrySupportsInput } from "./model-catalog-lookup.js";
 import type { ModelCatalogEntry, ModelInputType } from "./model-catalog.types.js";
 import {
@@ -68,6 +69,9 @@ let importAgentDiscovery = defaultImportAgentDiscovery;
 const modelSuppressionLoader = createLazyImportLoader(
   () => import("./model-suppression.runtime.js"),
 );
+const providerApiKeyResolverLoader = createLazyImportLoader(
+  () => import("./models-config.providers.secrets.js"),
+);
 
 function shouldLogModelCatalogTiming(): boolean {
   return process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
@@ -75,6 +79,10 @@ function shouldLogModelCatalogTiming(): boolean {
 
 function loadModelSuppression() {
   return modelSuppressionLoader.load();
+}
+
+function loadProviderApiKeyResolver() {
+  return providerApiKeyResolverLoader.load();
 }
 
 export function resetModelCatalogCache() {
@@ -540,6 +548,20 @@ export async function loadModelCatalog(params?: {
       );
       logStage("manifest-models-merged", `entries=${models.length}`);
       if (!readOnly) {
+        const { createProviderApiKeyResolver } = await loadProviderApiKeyResolver();
+        let authStore: ReturnType<typeof ensureAuthProfileStoreWithoutExternalProfiles> | undefined;
+        const resolveProviderApiKeyForProvider = createProviderApiKeyResolver(
+          process.env,
+          () =>
+            (authStore ??= ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+              allowKeychainPrompt: false,
+            })),
+          cfg,
+        );
+        const resolveProviderApiKey = (providerId?: string) =>
+          providerId?.trim()
+            ? resolveProviderApiKeyForProvider(providerId)
+            : { apiKey: undefined, discoveryApiKey: undefined };
         const supplemental = await augmentModelCatalogWithProviderPlugins({
           config: cfg,
           env: process.env,
@@ -547,6 +569,7 @@ export async function loadModelCatalog(params?: {
             config: cfg,
             agentDir,
             env: process.env,
+            resolveProviderApiKey,
             entries: [...models],
           },
         });

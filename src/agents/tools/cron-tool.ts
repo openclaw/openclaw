@@ -11,7 +11,13 @@ import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
 import { CRON_TOOL_DISPLAY_SUMMARY } from "../tool-description-presets.js";
-import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
+import {
+  type AnyAgentTool,
+  jsonResult,
+  readNonNegativeIntegerParam,
+  readStringParam,
+} from "./common.js";
+import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
 import { callGatewayTool, readGatewayCallOptions, type GatewayCallOptions } from "./gateway.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
 
@@ -289,9 +295,7 @@ const CronPatchObjectSchema = Type.Optional(
 export const CronToolSchema = Type.Object(
   {
     action: stringEnum(CRON_ACTIONS),
-    gatewayUrl: Type.Optional(Type.String()),
-    gatewayToken: Type.Optional(Type.String()),
-    timeoutMs: Type.Optional(Type.Number()),
+    ...gatewayCallOptionSchemaProperties(),
     includeDisabled: Type.Optional(Type.Boolean()),
     job: CronJobObjectSchema,
     jobId: Type.Optional(Type.String()),
@@ -301,7 +305,7 @@ export const CronToolSchema = Type.Object(
     mode: optionalStringEnum(CRON_WAKE_MODES),
     runMode: optionalStringEnum(CRON_RUN_MODES),
     contextMessages: Type.Optional(
-      Type.Number({ minimum: 0, maximum: REMINDER_CONTEXT_MESSAGES_MAX }),
+      Type.Integer({ minimum: 0, maximum: REMINDER_CONTEXT_MESSAGES_MAX }),
     ),
     agentId: Type.Optional(Type.String({ description: "List filter: agent id" })),
   },
@@ -574,12 +578,10 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
       assertCronSelfRemoveScope(opts, action, params);
+      const parsedGatewayOpts = readGatewayCallOptions(params);
       const gatewayOpts: GatewayCallOptions = {
-        ...readGatewayCallOptions(params),
-        timeoutMs:
-          typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
-            ? params.timeoutMs
-            : 60_000,
+        ...parsedGatewayOpts,
+        timeoutMs: parsedGatewayOpts.timeoutMs ?? 60_000,
       };
 
       switch (action) {
@@ -723,10 +725,7 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
             }
           }
 
-          const contextMessages =
-            typeof params.contextMessages === "number" && Number.isFinite(params.contextMessages)
-              ? params.contextMessages
-              : 0;
+          const contextMessages = readNonNegativeIntegerParam(params, "contextMessages") ?? 0;
           if (
             job &&
             typeof job === "object" &&

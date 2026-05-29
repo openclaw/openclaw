@@ -562,20 +562,6 @@ Optional CLI backends for text-only fallback runs (no tool calls). Useful as a b
   first compaction summary exists. Auth profile or credential-epoch changes
   still never raw-reseed.
 
-### `agents.defaults.systemPromptOverride`
-
-Replace the entire OpenClaw-assembled system prompt with a fixed string. Set at the default level (`agents.defaults.systemPromptOverride`) or per agent (`agents.list[].systemPromptOverride`). Per-agent values take precedence; an empty or whitespace-only value is ignored. Useful for controlled prompt experiments.
-
-```json5
-{
-  agents: {
-    defaults: {
-      systemPromptOverride: "You are a helpful assistant.",
-    },
-  },
-}
-```
-
 ### `agents.defaults.promptOverlays`
 
 Provider-independent prompt overlays applied by model family on OpenClaw-assembled prompt surfaces. GPT-5-family model ids receive the shared behavior contract across OpenClaw/provider routes; `personality` controls only the friendly interaction-style layer. Native Codex app-server routes keep Codex-owned base/model instructions instead of this OpenClaw GPT-5 overlay, and OpenClaw disables Codex's built-in personality for native threads.
