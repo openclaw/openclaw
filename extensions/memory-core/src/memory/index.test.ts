@@ -594,6 +594,64 @@ describe("memory index", () => {
     }
   });
 
+  it("marks sessions-only indexes dirty when metadata is missing but chunks exist", async () => {
+    try {
+      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state-sessions-missing-meta"));
+      const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
+      await fs.mkdir(sessionsDir, { recursive: true });
+      await fs.writeFile(
+        path.join(sessionsDir, "session-missing-meta.jsonl"),
+        [
+          JSON.stringify({
+            type: "session",
+            id: "session-missing-meta",
+            timestamp: "2026-04-07T15:24:04.113Z",
+          }),
+          JSON.stringify({
+            type: "message",
+            message: {
+              role: "assistant",
+              timestamp: "2026-04-07T15:25:04.113Z",
+              content: [{ type: "text", text: "Sessions missing metadata marker." }],
+            },
+          }),
+        ].join("\n") + "\n",
+        "utf8",
+      );
+
+      const dbPath = path.join(workspaceDir, "index-sessions-missing-meta.sqlite");
+      const cfg = createCfg({
+        storePath: dbPath,
+        sources: ["sessions"],
+        sessionMemory: true,
+      });
+      const oldManager = await getFreshManager(cfg);
+      await oldManager.sync({ reason: "test", force: true });
+      await oldManager.close?.();
+
+      const nextManager = await getFreshManager(cfg);
+      try {
+        (
+          nextManager as unknown as {
+            db: { exec: (sql: string) => void };
+          }
+        ).db.exec(`DELETE FROM meta WHERE key = 'memory_index_meta_v1'`);
+
+        const status = nextManager.status();
+
+        expect(status.dirty).toBe(true);
+        expect(status.custom?.indexIdentity).toEqual({
+          status: "missing",
+          reason: "index metadata is missing",
+        });
+      } finally {
+        await nextManager.close?.();
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("runs identity reindex before targeted session sync after provider cutover", async () => {
     try {
       vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state-targeted-cutover"));

@@ -403,7 +403,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     });
     this.indexIdentityState = state;
     this.indexIdentityDirty =
-      state.status === "mismatched" || (state.status === "missing" && this.sources.has("memory"));
+      state.status === "mismatched" ||
+      (state.status === "missing" && (this.sources.has("memory") || this.hasIndexedChunks()));
     return state;
   }
 
