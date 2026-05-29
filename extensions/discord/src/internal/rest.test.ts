@@ -554,6 +554,41 @@ describe("RequestClient", () => {
     });
   });
 
+  it("ignores unsafe numeric Discord error code strings", async () => {
+    const client = new RequestClient("test-token", {
+      queueRequests: false,
+      fetch: async () =>
+        new Response(
+          JSON.stringify({
+            message: "Slow down",
+            retry_after: 1,
+            global: false,
+            code: "9007199254740993",
+          }),
+          { status: 429 },
+        ),
+    });
+
+    await expect(client.post("/applications/app/commands", { body: {} })).rejects.toMatchObject({
+      discordCode: undefined,
+    });
+  });
+
+  it("ignores unsafe numeric Discord error codes", async () => {
+    const client = new RequestClient("test-token", {
+      queueRequests: false,
+      fetch: async () =>
+        new Response(
+          '{"message":"Slow down","retry_after":1,"global":false,"code":9007199254740993}',
+          { status: 429 },
+        ),
+    });
+
+    await expect(client.post("/applications/app/commands", { body: {} })).rejects.toMatchObject({
+      discordCode: undefined,
+    });
+  });
+
   it("parses HTTP-date Retry-After headers on rate limit errors", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-01T12:00:00.000Z"));

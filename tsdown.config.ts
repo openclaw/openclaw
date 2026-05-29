@@ -371,6 +371,18 @@ function buildGatewayClientDistEntries(): Record<string, string> {
   };
 }
 
+function buildNetPolicyDistEntries(): Record<string, string> {
+  return {
+    // These subpaths are imported by root runtime code and exported by the
+    // package. Keep the build list adjacent to package.json exports.
+    index: "packages/net-policy/src/index.ts",
+    ip: "packages/net-policy/src/ip.ts",
+    ipv4: "packages/net-policy/src/ipv4.ts",
+    "redact-sensitive-url": "packages/net-policy/src/redact-sensitive-url.ts",
+    "url-userinfo": "packages/net-policy/src/url-userinfo.ts",
+  };
+}
+
 function buildSpeechCoreDistEntries(): Record<string, string> {
   return {
     api: "packages/speech-core/api.ts",
@@ -403,6 +415,10 @@ function shouldExternalizeGatewayClientDependency(id: string): boolean {
     id === "@openclaw/gateway-protocol" ||
     id.startsWith("@openclaw/gateway-protocol/")
   );
+}
+
+function shouldExternalizeNetPolicyDependency(id: string): boolean {
+  return id === "ipaddr.js" || id.startsWith("ipaddr.js/");
 }
 
 function shouldExternalizeSpeechCoreDependency(id: string): boolean {
@@ -467,6 +483,15 @@ export default defineConfig([
     outDir: "packages/gateway-client/dist",
     deps: {
       neverBundle: shouldExternalizeGatewayClientDependency,
+    },
+  }),
+  nodeWorkspacePackageBuildConfig({
+    clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    entry: buildNetPolicyDistEntries(),
+    outDir: "packages/net-policy/dist",
+    deps: {
+      neverBundle: shouldExternalizeNetPolicyDependency,
     },
   }),
   nodeWorkspacePackageBuildConfig({

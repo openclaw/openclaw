@@ -16,6 +16,16 @@ describe("getSubagentDepthFromSessionStore", () => {
     expect(depth).toBe(2);
   });
 
+  it("normalizes signed decimal stored spawnDepth strings", () => {
+    const key = "agent:main:subagent:flat";
+    const depth = getSubagentDepthFromSessionStore(key, {
+      store: {
+        [key]: { spawnDepth: "+02" },
+      },
+    });
+    expect(depth).toBe(2);
+  });
+
   it("ignores non-decimal and unsafe stored spawnDepth strings", () => {
     const key = "agent:main:subagent:flat";
     for (const spawnDepth of ["1e3", "0x10", "1.5", "9007199254740993"]) {

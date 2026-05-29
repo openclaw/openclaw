@@ -63,6 +63,22 @@ function isValidatorSchema(value: unknown): value is Tool["parameters"] {
   return isRecord(value);
 }
 
+const JSON_NUMBER_TOKEN_RE = /^[+-]?(?:(?:\d+\.?\d*)|(?:\.\d+))(?:e[+-]?\d+)?$/iu;
+
+function parseJsonNumberString(value: string): number | undefined {
+  const trimmed = value.trim();
+  if (!trimmed || !JSON_NUMBER_TOKEN_RE.test(trimmed)) {
+    return undefined;
+  }
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function parseJsonIntegerString(value: string): number | undefined {
+  const parsed = parseJsonNumberString(value);
+  return parsed !== undefined && Number.isSafeInteger(parsed) ? parsed : undefined;
+}
+
 function getSubSchemaValidator(schema: JsonSchemaObject): ReturnType<typeof Compile> | undefined {
   if (!isValidatorSchema(schema)) {
     return undefined;
@@ -81,8 +97,8 @@ function coercePrimitiveByType(value: unknown, type: string): unknown {
         return 0;
       }
       if (typeof value === "string" && value.trim() !== "") {
-        const parsed = Number(value);
-        if (Number.isFinite(parsed)) {
+        const parsed = parseJsonNumberString(value);
+        if (parsed !== undefined) {
           return parsed;
         }
       }
@@ -96,8 +112,8 @@ function coercePrimitiveByType(value: unknown, type: string): unknown {
         return 0;
       }
       if (typeof value === "string" && value.trim() !== "") {
-        const parsed = Number(value);
-        if (Number.isInteger(parsed)) {
+        const parsed = parseJsonIntegerString(value);
+        if (parsed !== undefined) {
           return parsed;
         }
       }

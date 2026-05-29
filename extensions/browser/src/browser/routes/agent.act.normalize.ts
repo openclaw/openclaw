@@ -1,9 +1,4 @@
 import {
-  parseStrictInteger,
-  parseStrictNonNegativeInteger,
-  parseStrictPositiveInteger,
-} from "openclaw/plugin-sdk/number-runtime";
-import {
   ACT_MAX_BATCH_ACTIONS,
   ACT_MAX_CLICK_DELAY_MS,
   ACT_MAX_VIEWPORT_DIMENSION,
@@ -18,6 +13,11 @@ import {
   parseClickButton,
   parseClickModifiers,
 } from "./agent.act.shared.js";
+import {
+  readRouteInteger,
+  readRouteNonNegativeInteger,
+  readRoutePositiveInteger,
+} from "./route-numeric.js";
 import { toBoolean, toNumber, toStringArray, toStringOrEmpty } from "./utils.js";
 
 function normalizeActKind(raw: unknown): ActKind {
@@ -77,22 +77,14 @@ function normalizeBatchAction(value: unknown): BrowserActRequest {
 }
 
 function readActionPositiveInteger(body: Record<string, unknown>, key: string): number | undefined {
-  const value = parseStrictPositiveInteger(body[key]);
-  if (value === undefined && body[key] != null) {
-    throw new Error(`${key} must be a positive integer.`);
-  }
-  return value;
+  return readRoutePositiveInteger(body[key], key);
 }
 
 function readActionNonNegativeInteger(
   body: Record<string, unknown>,
   key: string,
 ): number | undefined {
-  const value = parseStrictNonNegativeInteger(body[key]);
-  if (value === undefined && body[key] != null) {
-    throw new Error(`${key} must be a non-negative integer.`);
-  }
-  return value;
+  return readRouteNonNegativeInteger(body[key], key);
 }
 
 function readActionTimeoutMs(body: Record<string, unknown>): number | undefined {
@@ -113,7 +105,9 @@ function readBoundedActionDurationMs(
 }
 
 function readResizeDimension(body: Record<string, unknown>, key: "width" | "height") {
-  const value = parseStrictInteger(body[key]);
+  const value = readRouteInteger(body[key], key, {
+    invalidMessage: "resize requires positive width and height",
+  });
   if (value === undefined && Object.hasOwn(body, key)) {
     throw new Error("resize requires positive width and height");
   }

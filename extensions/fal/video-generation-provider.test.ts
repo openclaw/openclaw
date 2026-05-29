@@ -44,10 +44,10 @@ describe("fal video generation provider", () => {
 
   function releasedVideo(params: { contentType: string; bytes: string }) {
     return {
-      response: {
-        headers: new Headers({ "content-type": params.contentType }),
-        arrayBuffer: async () => Buffer.from(params.bytes),
-      },
+      response: new Response(Buffer.from(params.bytes), {
+        status: 200,
+        headers: { "content-type": params.contentType },
+      }),
       release: vi.fn(async () => {}),
     };
   }
@@ -168,6 +168,34 @@ describe("fal video generation provider", () => {
     expect(result.metadata).toEqual({
       requestId: "req-123",
     });
+  });
+
+  it("returns URL-only videos when generated video downloads exceed the configured media cap", async () => {
+    mockFalProviderRuntime();
+    mockCompletedFalVideoJob({
+      requestId: "req-123",
+      statusUrl: "https://queue.fal.run/fal-ai/minimax/requests/req-123/status",
+      responseUrl: "https://queue.fal.run/fal-ai/minimax/requests/req-123",
+      videoUrl: "https://fal.run/files/video.mp4",
+      bytes: "too-large",
+      contentType: "video/mp4",
+    });
+
+    const provider = buildFalVideoGenerationProvider();
+    const result = await provider.generateVideo({
+      provider: "fal",
+      model: "fal-ai/minimax/video-01-live",
+      prompt: "A spaceship emerges from the clouds",
+      cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
+    });
+
+    expect(result.videos).toEqual([
+      {
+        url: "https://fal.run/files/video.mp4",
+        mimeType: "video/mp4",
+        fileName: "video-1.mp4",
+      },
+    ]);
   });
 
   it("wraps malformed successful fal submit responses", async () => {

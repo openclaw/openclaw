@@ -10,7 +10,7 @@ import {
   resolveTargetIdFromQuery,
   withPlaywrightRouteContext,
 } from "./agent.shared.js";
-import { readRouteFiniteNumber } from "./route-numeric.js";
+import { readOptionalRouteFiniteNumber, readRouteFiniteNumber } from "./route-numeric.js";
 import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
 import { asyncBrowserRoute, jsonError, toBoolean, toStringOrEmpty } from "./utils.js";
 
@@ -102,13 +102,6 @@ function assertRange(
     throw new Error(`${fieldName} must be between ${min} and ${max}.`);
   }
   return value;
-}
-
-function readOptionalRouteFiniteNumber(value: unknown, fieldName: string): number | undefined {
-  if (typeof value === "string" && value.trim() === "") {
-    return undefined;
-  }
-  return readRouteFiniteNumber(value, fieldName);
 }
 
 export function parseCookieSetOptions(cookie: Record<string, unknown>): CookieSetOptions {

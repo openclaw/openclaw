@@ -29,6 +29,9 @@
       "openclaw/plugin-sdk/plugin-test-contracts": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/plugin-test-contracts.d.ts"
       ],
+      "openclaw/plugin-sdk/plugin-state-test-runtime": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/plugin-state-test-runtime.d.ts"
+      ],
       "openclaw/plugin-sdk/plugin-test-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/plugin-test-runtime.d.ts"
       ],

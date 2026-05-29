@@ -13,13 +13,10 @@ import {
   shouldPreferProviderRuntimeResolvedModel,
 } from "../../plugins/provider-runtime.js";
 import { discoverAuthStorage, discoverModels } from "../agent-model-discovery.js";
-import {
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentDir,
-  resolveDefaultAgentId,
-} from "../agent-scope.js";
+import { resolveDefaultAgentDir } from "../agent-scope.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { buildModelAliasLines } from "../model-alias-lines.js";
+import { resolveModelWorkspaceDir } from "../model-discovery-context.js";
 import { modelKey, normalizeStaticProviderModelId } from "../model-ref-shared.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
 import {
@@ -151,16 +148,6 @@ function discoverCachedAgentStoresForAgent(
     inheritedAuthDir: resolveDefaultAgentDir(cfg ?? {}),
     ...(workspaceDir ? { workspaceDir } : {}),
   });
-}
-
-function resolveModelWorkspaceDir(
-  cfg: OpenClawConfig | undefined,
-  explicitWorkspaceDir: string | undefined,
-): string | undefined {
-  if (explicitWorkspaceDir !== undefined || !cfg) {
-    return explicitWorkspaceDir;
-  }
-  return resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
 }
 
 function canonicalizeLegacyResolvedModel(params: { provider: string; model: Model }): Model {

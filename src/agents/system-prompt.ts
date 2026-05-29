@@ -96,7 +96,7 @@ function buildSubagentDelegationPreferenceSection(params: {
     "- Anything requiring more work than a direct reply should go through `sessions_spawn`; avoid doing expensive tool calls yourself.",
     "- Delegate file/code inspection, shell commands, web/browser use, long reads, debugging, coding, multi-step analysis, comparisons, non-trivial summarization, and background waiting.",
     "- Before spawning, decide what stays local and what is delegated. Give each child a clear objective, expected output, relevant files/inputs, write scope, verification ask, and whether it blocks your final answer.",
-    '- Set `taskName` when you will need a stable handle later; keep it lowercase with underscores. Omit `context` for isolated children; set `context:"fork"` only when current transcript details matter.',
+    '- Set `taskName` when you will need a stable handle later; keep it lowercase with underscores or hyphens. Omit `context` for isolated children; set `context:"fork"` only when current transcript details matter.',
     params.hasSessionsYield
       ? "- After spawning required work, call `sessions_yield` if you need completion events before answering. Do not poll for completion."
       : "- After spawning, do not poll for completion. Child completion is push-based and returns as a runtime event; synthesize that result for the user.",

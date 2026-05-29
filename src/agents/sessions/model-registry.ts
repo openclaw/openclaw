@@ -3,11 +3,10 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { dirname, join } from "node:path";
 import { type Static, Type } from "typebox";
 import { Compile } from "typebox/compile";
 import type { TLocalizedValidationError } from "typebox/error";
-import { getRuntimeConfig } from "../../config/config.js";
 import { registerApiProvider } from "../../llm/api-registry.js";
 import { resetApiProviders } from "../../llm/providers/register-builtins.js";
 import {
@@ -22,15 +21,13 @@ import {
 } from "../../llm/types.js";
 import { registerOAuthProvider, resetOAuthProviders } from "../../llm/utils/oauth/index.js";
 import type { OAuthProviderInterface } from "../../llm/utils/oauth/types.js";
-import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
-import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { getAgentDir } from "../config.js";
+import { resolveModelPluginMetadataSnapshot } from "../model-discovery-context.js";
 import {
-  decodePluginModelCatalogRelativePathPluginId,
+  filterGeneratedPluginModelCatalogProviders,
   isGeneratedPluginModelCatalog,
-  listPluginModelCatalogPaths,
+  listPluginModelCatalogFiles,
   type PluginModelCatalogMetadataSnapshot,
-  resolvePluginModelCatalogOwnerPluginId,
 } from "../plugin-model-catalog.js";
 import type { AuthStatus, AuthStorage } from "./auth-storage.js";
 import { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "./provider-display-names.js";
@@ -256,49 +253,6 @@ type ModelRegistryOptions = {
   workspaceDir?: string;
 };
 
-function resolvePluginMetadataSnapshotForModelRegistry(
-  options: Pick<ModelRegistryOptions, "workspaceDir"> = {},
-): PluginModelCatalogMetadataSnapshot | undefined {
-  try {
-    const config = getRuntimeConfig();
-    return (
-      getCurrentPluginMetadataSnapshot({
-        allowWorkspaceScopedSnapshot: true,
-        config,
-        env: process.env,
-        ...(options.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
-      }) ??
-      loadPluginMetadataSnapshot({
-        config,
-        env: process.env,
-        ...(options.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
-      })
-    );
-  } catch {
-    return undefined;
-  }
-}
-
-function filterGeneratedPluginCatalogProviders(params: {
-  catalogPluginId?: string;
-  pluginMetadataSnapshot?: PluginModelCatalogMetadataSnapshot;
-  providers: ModelsConfig["providers"];
-}): ModelsConfig["providers"] {
-  if (!params.catalogPluginId || !params.pluginMetadataSnapshot) {
-    return {};
-  }
-  return Object.fromEntries(
-    Object.entries(params.providers).filter(([providerId]) => {
-      return (
-        resolvePluginModelCatalogOwnerPluginId({
-          providerId,
-          pluginMetadataSnapshot: params.pluginMetadataSnapshot,
-        }) === params.catalogPluginId
-      );
-    }),
-  );
-}
-
 function mergeCompat(
   baseCompat: Model["compat"],
   overrideCompat: Model["compat"],
@@ -358,8 +312,14 @@ export class ModelRegistry {
   ) {
     this.authStorage = authStorage;
     this.modelsJsonPath = modelsJsonPath;
-    this.pluginMetadataSnapshot =
-      options.pluginMetadataSnapshot ?? resolvePluginMetadataSnapshotForModelRegistry(options);
+    this.pluginMetadataSnapshot = resolveModelPluginMetadataSnapshot({
+      ...(options.pluginMetadataSnapshot
+        ? { pluginMetadataSnapshot: options.pluginMetadataSnapshot }
+        : {}),
+      ...(options.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
+      allowWorkspaceScopedCurrent: true,
+      useRuntimeConfig: true,
+    });
     this.loadModels();
   }
 
@@ -461,8 +421,9 @@ export class ModelRegistry {
       const config = parsed;
       const providers =
         options.requireGeneratedCatalog === true
-          ? filterGeneratedPluginCatalogProviders({
+          ? filterGeneratedPluginModelCatalogProviders({
               catalogPluginId: options.catalogPluginId,
+              parsedCatalog: parsed,
               pluginMetadataSnapshot: this.pluginMetadataSnapshot,
               providers: config.providers,
             })
@@ -483,13 +444,9 @@ export class ModelRegistry {
 
       const models = this.parseModels(configForUse);
       if (options.includePluginCatalogs !== false) {
-        const agentDir = dirname(modelsJsonPath);
-        for (const pluginCatalogPath of listPluginModelCatalogPaths(dirname(modelsJsonPath))) {
-          const catalogPluginId = decodePluginModelCatalogRelativePathPluginId(
-            relative(agentDir, pluginCatalogPath),
-          );
-          const pluginResult = this.loadCustomModels(pluginCatalogPath, {
-            catalogPluginId,
+        for (const pluginCatalog of listPluginModelCatalogFiles(dirname(modelsJsonPath))) {
+          const pluginResult = this.loadCustomModels(pluginCatalog.path, {
+            catalogPluginId: pluginCatalog.pluginId,
             includePluginCatalogs: false,
             requireGeneratedCatalog: true,
           });

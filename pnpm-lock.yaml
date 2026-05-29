@@ -134,9 +134,6 @@ importers:
       ignore:
         specifier: 7.0.5
         version: 7.0.5
-      ipaddr.js:
-        specifier: 2.4.0
-        version: 2.4.0
       jiti:
         specifier: 2.7.0
         version: 2.7.0
@@ -1699,6 +1696,15 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/workboard:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/xai:
     dependencies:
       typebox:
@@ -1788,11 +1794,21 @@ importers:
 
   packages/memory-host-sdk: {}
 
+  packages/net-policy:
+    dependencies:
+      ipaddr.js:
+        specifier: 2.4.0
+        version: 2.4.0
+
   packages/plugin-package-contract: {}
 
   packages/plugin-sdk: {}
 
-  packages/sdk: {}
+  packages/sdk:
+    dependencies:
+      '@openclaw/gateway-client':
+        specifier: workspace:*
+        version: link:../gateway-client
 
   packages/speech-core:
     dependencies:
