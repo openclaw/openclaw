@@ -36,7 +36,12 @@ import {
   rejectAllPolicy,
   type CopilotPermissionPolicy,
 } from "./permission-bridge.js";
-import { classifyResumeFailure, computeReplayMetadata, decideReplayAction } from "./replay-shim.js";
+import {
+  classifyResumeFailure,
+  computeReplayMetadata,
+  copilotToolMetasHavePotentialSideEffects,
+  decideReplayAction,
+} from "./replay-shim.js";
 import type { ClientCreateOptions, CopilotClientPool, PoolKey, PooledClient } from "./runtime.js";
 import { createCopilotToolBridge } from "./tool-bridge.js";
 import { resolveCopilotWorkspaceBootstrapContext } from "./workspace-bootstrap.js";
@@ -651,10 +656,12 @@ function createResult(
 ): AttemptResultWithSdkSessionId {
   const promptError = state.promptError;
   const timedOut = state.timedOut === true;
+  const toolMetas = state.toolMetas ?? [];
   const replayMetadata = computeReplayMetadata({
     priorReplayInvalid: params.initialReplayState?.replayInvalid,
     priorHadPotentialSideEffects: params.initialReplayState?.hadPotentialSideEffects,
     thisAttemptTimedOut: timedOut,
+    thisAttemptHadPotentialSideEffects: copilotToolMetasHavePotentialSideEffects(toolMetas),
     thisAttemptDowngradedFromResume: state.downgradedFromResume,
     thisAttemptResumeFailureRecovered: state.resumeFailureRecovered,
   });
@@ -685,7 +692,7 @@ function createResult(
     sessionIdUsed: state.sessionIdUsed ?? readString(params.sessionId) ?? "copilot-session",
     timedOut,
     timedOutDuringCompaction: false,
-    toolMetas: state.toolMetas ?? [],
+    toolMetas,
     yieldDetected: state.yieldDetected === true,
   };
 }

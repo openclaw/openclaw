@@ -657,6 +657,37 @@ describe("runCopilotAttempt", () => {
     });
   });
 
+  it("replay-shim: mutating tool side effects make the attempt replay-unsafe", async () => {
+    const sdk = makeFakeSdk({
+      onCreateSession: (session) => {
+        session.sendAndWait.mockImplementationOnce(async () => {
+          session.emit("tool.execution_start", {
+            toolCallId: "tool-1",
+            toolName: "write",
+          });
+          session.emit("tool.execution_complete", {
+            result: { content: "wrote file" },
+            success: true,
+            toolCallId: "tool-1",
+          });
+          return makeAssistantMessageEvent("done");
+        });
+      },
+    });
+    const pool = makeFakePool(sdk);
+
+    const result = await runCopilotAttempt(makeParams(), { pool });
+
+    expect(result.toolMetas).toEqual([
+      { toolName: "write" },
+      { meta: "wrote file", toolName: "write" },
+    ]);
+    expect(result.replayMetadata).toEqual({
+      hadPotentialSideEffects: true,
+      replaySafe: false,
+    });
+  });
+
   it("replay-shim: prior replayInvalid propagates even on an early-return failure", async () => {
     const sdk = makeFakeSdk();
     const pool = makeFakePool(sdk);

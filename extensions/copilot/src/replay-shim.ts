@@ -171,6 +171,7 @@ export interface ReplayMetadataComputeInput {
   readonly priorReplayInvalid?: boolean;
   readonly priorHadPotentialSideEffects?: boolean;
   readonly thisAttemptTimedOut?: boolean;
+  readonly thisAttemptHadPotentialSideEffects?: boolean;
   readonly thisAttemptDowngradedFromResume?: boolean;
   readonly thisAttemptResumeFailureRecovered?: boolean;
 }
@@ -185,6 +186,7 @@ export interface ComputedReplayMetadata {
  * result. Worst-case-wins:
  *
  *   hadPotentialSideEffects = priorHadPotentialSideEffects OR timedOut
+ *     OR thisAttemptHadPotentialSideEffects
  *     (timeout means we cannot prove the prompt was not partially
  *     committed server-side; treat as side-effecting so the
  *     orchestrator will not blindly re-issue the same prompt).
@@ -203,9 +205,48 @@ export function computeReplayMetadata(input: ReplayMetadataComputeInput): Comput
   const priorReplayInvalid = input.priorReplayInvalid === true;
   const priorHadPotentialSideEffects = input.priorHadPotentialSideEffects === true;
   const timedOut = input.thisAttemptTimedOut === true;
+  const thisAttemptHadPotentialSideEffects = input.thisAttemptHadPotentialSideEffects === true;
   const downgraded = input.thisAttemptDowngradedFromResume === true;
   const recovered = input.thisAttemptResumeFailureRecovered === true;
-  const hadPotentialSideEffects = priorHadPotentialSideEffects || timedOut;
+  const hadPotentialSideEffects =
+    priorHadPotentialSideEffects || timedOut || thisAttemptHadPotentialSideEffects;
   const replaySafe = !(priorReplayInvalid || downgraded || recovered || hadPotentialSideEffects);
   return { hadPotentialSideEffects, replaySafe };
+}
+
+const COPILOT_REPLAY_SAFE_READ_ONLY_TOOL_NAMES = new Set([
+  "get",
+  "file_read",
+  "glob",
+  "grep",
+  "inspect",
+  "list",
+  "ls",
+  "memory_get",
+  "memory_search",
+  "probe",
+  "query",
+  "read",
+  "search",
+  "sessions_history",
+  "sessions_list",
+  "status",
+  "tool_search",
+  "update_plan",
+  "view",
+  "web_fetch",
+  "web_search",
+]);
+
+export function copilotToolMetasHavePotentialSideEffects(
+  toolMetas?: readonly { asyncStarted?: boolean; toolName: string }[],
+): boolean {
+  return (toolMetas ?? []).some(
+    (entry) => entry.asyncStarted === true || !isReplaySafeReadOnlyToolName(entry.toolName),
+  );
+}
+
+function isReplaySafeReadOnlyToolName(toolName: string): boolean {
+  const normalized = toolName.trim().toLowerCase();
+  return COPILOT_REPLAY_SAFE_READ_ONLY_TOOL_NAMES.has(normalized);
 }
