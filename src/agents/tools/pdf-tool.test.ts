@@ -511,6 +511,9 @@ describe("createPdfTool", () => {
       );
       expect(modelsAgentDir).toBe(agentDir);
       expect(modelsOptions).toEqual({ workspaceDir });
+      expect(modelDiscovery.discoverModels).toHaveBeenCalledWith(expect.anything(), agentDir, {
+        workspaceDir,
+      });
       expect(extractSpy).not.toHaveBeenCalled();
       expect(result.content).toEqual([{ type: "text", text: "native summary" }]);
       expectFields(result.details, {

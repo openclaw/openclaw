@@ -1,6 +1,4 @@
-function resolveSafeTimeoutDelayMs(value: number): number {
-  return Math.max(0, Math.min(value, 2_147_483_647));
-}
+import { resolveFiniteTimeoutDelayMs } from "./timeouts.js";
 
 export type EventLoopReadyResult = {
   ready: boolean;
@@ -30,7 +28,9 @@ function resolvePositiveInteger(value: number | undefined, fallback: number): nu
 export async function waitForEventLoopReady(
   options: EventLoopReadyOptions = {},
 ): Promise<EventLoopReadyResult> {
-  const maxWaitMs = resolveSafeTimeoutDelayMs(options.maxWaitMs ?? DEFAULT_MAX_WAIT_MS);
+  const maxWaitMs = resolveFiniteTimeoutDelayMs(options.maxWaitMs, DEFAULT_MAX_WAIT_MS, {
+    minMs: 0,
+  });
   const intervalMs = resolvePositiveInteger(options.intervalMs, DEFAULT_INTERVAL_MS);
   const driftThresholdMs = resolvePositiveInteger(
     options.driftThresholdMs,

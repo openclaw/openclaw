@@ -262,7 +262,8 @@
                 },
                 "after": {
                   "description": "Failures before alert",
-                  "type": "number"
+                  "minimum": 1,
+                  "type": "integer"
                 },
                 "channel": {
                   "description": "Alert channel",
@@ -270,7 +271,8 @@
                 },
                 "cooldownMs": {
                   "description": "Alert cooldown ms",
-                  "type": "number"
+                  "minimum": 0,
+                  "type": "integer"
                 },
                 "includeSkipped": {
                   "description": "Skipped runs count toward alert",
@@ -329,6 +331,7 @@
                   "type": "string"
                 },
                 "timeoutSeconds": {
+                  "minimum": 0,
                   "type": "number"
                 },
                 "toolsAllow": {
@@ -346,7 +349,8 @@
               "properties": {
                 "anchorMs": {
                   "description": "Start anchor ms (kind=every)",
-                  "type": "number"
+                  "minimum": 0,
+                  "type": "integer"
                 },
                 "at": {
                   "description": "ISO-8601 time (kind=at)",
@@ -354,7 +358,8 @@
                 },
                 "everyMs": {
                   "description": "Interval ms (kind=every)",
-                  "type": "number"
+                  "minimum": 1,
+                  "type": "integer"
                 },
                 "expr": {
                   "description": "Cron expr in tz wall-clock time; do not convert to UTC. Omitted tz => Gateway host local timezone. Example 6pm Shanghai daily: expr \"0 18 * * *\", tz \"Asia/Shanghai\".",
@@ -367,7 +372,8 @@
                 },
                 "staggerMs": {
                   "description": "Jitter ms (kind=cron)",
-                  "type": "number"
+                  "minimum": 0,
+                  "type": "integer"
                 },
                 "tz": {
                   "description": "IANA timezone for cron wall-clock fields, e.g. \"Asia/Shanghai\"; omitted => Gateway host local timezone.",
@@ -480,7 +486,8 @@
                 },
                 "after": {
                   "description": "Failures before alert",
-                  "type": "number"
+                  "minimum": 1,
+                  "type": "integer"
                 },
                 "channel": {
                   "description": "Alert channel",
@@ -488,7 +495,8 @@
                 },
                 "cooldownMs": {
                   "description": "Alert cooldown ms",
-                  "type": "number"
+                  "minimum": 0,
+                  "type": "integer"
                 },
                 "includeSkipped": {
                   "description": "Skipped runs count toward alert",
@@ -547,6 +555,7 @@
                   "type": "string"
                 },
                 "timeoutSeconds": {
+                  "minimum": 0,
                   "type": "number"
                 },
                 "toolsAllow": {
@@ -564,7 +573,8 @@
               "properties": {
                 "anchorMs": {
                   "description": "Start anchor ms (kind=every)",
-                  "type": "number"
+                  "minimum": 0,
+                  "type": "integer"
                 },
                 "at": {
                   "description": "ISO-8601 time (kind=at)",
@@ -572,7 +582,8 @@
                 },
                 "everyMs": {
                   "description": "Interval ms (kind=every)",
-                  "type": "number"
+                  "minimum": 1,
+                  "type": "integer"
                 },
                 "expr": {
                   "description": "Cron expr in tz wall-clock time; do not convert to UTC. Omitted tz => Gateway host local timezone. Example 6pm Shanghai daily: expr \"0 18 * * *\", tz \"Asia/Shanghai\".",
@@ -585,7 +596,8 @@
                 },
                 "staggerMs": {
                   "description": "Jitter ms (kind=cron)",
-                  "type": "number"
+                  "minimum": 0,
+                  "type": "integer"
                 },
                 "tz": {
                   "description": "IANA timezone for cron wall-clock fields, e.g. \"Asia/Shanghai\"; omitted => Gateway host local timezone.",

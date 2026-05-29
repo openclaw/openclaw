@@ -149,6 +149,13 @@ export type GatewayClientOptions = {
   onGap?: (info: { expected: number; received: number }) => void;
 };
 
+export type GatewayClientConnectionMetadata = {
+  clientName?: GatewayClientName;
+  hasDeviceIdentity: boolean;
+  mode?: GatewayClientMode;
+  preauthHandshakeTimeoutMs?: number;
+};
+
 function createOpenClawGatewayClientHostDeps(
   overrides?: GatewayClientHostDeps,
 ): GatewayClientHostDeps {
@@ -182,22 +189,8 @@ export function resolveGatewayClientConnectChallengeTimeoutMs(
 
 export class GatewayClient {
   #client: BaseGatewayClient;
-  readonly opts: Pick<GatewayClientOptions, "clientName" | "mode" | "preauthHandshakeTimeoutMs"> & {
-    deviceIdentity?: null | "configured";
-  };
 
   constructor(opts: GatewayClientOptions) {
-    this.opts = {
-      clientName: opts.clientName,
-      mode: opts.mode,
-      deviceIdentity:
-        opts.deviceIdentity === null
-          ? null
-          : opts.deviceIdentity === undefined
-            ? undefined
-            : "configured",
-      preauthHandshakeTimeoutMs: opts.preauthHandshakeTimeoutMs,
-    };
     this.#client = new BaseGatewayClient({
       ...opts,
       clientVersion: opts.clientVersion ?? VERSION,
@@ -223,6 +216,16 @@ export class GatewayClient {
     opts?: GatewayClientRequestOptions,
   ): Promise<T> {
     return this.#client.request<T>(method, params, opts);
+  }
+
+  getConnectionMetadata(): GatewayClientConnectionMetadata {
+    const opts = (this.#client as unknown as { opts: GatewayClientOptions }).opts;
+    return {
+      clientName: opts.clientName,
+      hasDeviceIdentity: Boolean(opts.deviceIdentity),
+      mode: opts.mode,
+      preauthHandshakeTimeoutMs: opts.preauthHandshakeTimeoutMs,
+    };
   }
 }
 

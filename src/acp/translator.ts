@@ -39,6 +39,7 @@ import type { GatewayClient } from "../gateway/client.js";
 import type { GatewaySessionRow, SessionsListResult } from "../gateway/session-utils.js";
 import {
   createFixedWindowRateLimiter,
+  resolveFixedWindowRateLimitInteger,
   type FixedWindowRateLimiter,
 } from "../infra/fixed-window-rate-limit.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
@@ -612,13 +613,15 @@ export class AcpGatewayAgent implements Agent {
     this.sessionStore = opts.sessionStore ?? defaultAcpSessionStore;
     this.eventLedger = opts.eventLedger ?? createInMemoryAcpEventLedger();
     this.sessionCreateRateLimiter = createFixedWindowRateLimiter({
-      maxRequests: Math.max(
-        1,
-        opts.sessionCreateRateLimit?.maxRequests ?? SESSION_CREATE_RATE_LIMIT_DEFAULT_MAX_REQUESTS,
+      maxRequests: resolveFixedWindowRateLimitInteger(
+        opts.sessionCreateRateLimit?.maxRequests,
+        SESSION_CREATE_RATE_LIMIT_DEFAULT_MAX_REQUESTS,
+        { min: 1 },
       ),
-      windowMs: Math.max(
-        1_000,
-        opts.sessionCreateRateLimit?.windowMs ?? SESSION_CREATE_RATE_LIMIT_DEFAULT_WINDOW_MS,
+      windowMs: resolveFixedWindowRateLimitInteger(
+        opts.sessionCreateRateLimit?.windowMs,
+        SESSION_CREATE_RATE_LIMIT_DEFAULT_WINDOW_MS,
+        { min: 1_000 },
       ),
     });
   }

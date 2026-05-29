@@ -161,7 +161,7 @@ async function runPdfPrompt(params: {
   const modelsOptions = params.workspaceDir ? { workspaceDir: params.workspaceDir } : undefined;
   await ensureOpenClawModelsJson(effectiveCfg, params.agentDir, modelsOptions);
   const authStorage = discoverAuthStorage(params.agentDir);
-  const modelRegistry = discoverModels(authStorage, params.agentDir);
+  const modelRegistry = discoverModels(authStorage, params.agentDir, modelsOptions);
 
   let extractionCache: PdfExtractedContent[] | null = null;
   const getExtractions = async (): Promise<PdfExtractedContent[]> => {

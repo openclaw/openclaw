@@ -545,6 +545,25 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/codex-supervisor:
+    dependencies:
+      '@modelcontextprotocol/sdk':
+        specifier: 1.29.0
+        version: 1.29.0(zod@4.4.3)
+      typebox:
+        specifier: 1.1.38
+        version: 1.1.38
+      ws:
+        specifier: 8.21.0
+        version: 8.21.0
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/comfy:
     devDependencies:
       '@openclaw/plugin-sdk':

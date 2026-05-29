@@ -13,7 +13,11 @@ import {
   shouldPreferProviderRuntimeResolvedModel,
 } from "../../plugins/provider-runtime.js";
 import { discoverAuthStorage, discoverModels } from "../agent-model-discovery.js";
-import { resolveDefaultAgentDir } from "../agent-scope.js";
+import {
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentDir,
+  resolveDefaultAgentId,
+} from "../agent-scope.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { buildModelAliasLines } from "../model-alias-lines.js";
 import { modelKey, normalizeStaticProviderModelId } from "../model-ref-shared.js";
@@ -136,14 +140,27 @@ function resolveRuntimeHooks(params?: {
 function discoverCachedAgentStoresForAgent(
   resolvedAgentDir: string,
   cfg: OpenClawConfig | undefined,
+  workspaceDir: string | undefined,
 ): {
   authStorage: AuthStorage;
   modelRegistry: ModelRegistry;
 } {
   return discoverCachedAgentStores({
     agentDir: resolvedAgentDir,
+    ...(cfg ? { config: cfg } : {}),
     inheritedAuthDir: resolveDefaultAgentDir(cfg ?? {}),
+    ...(workspaceDir ? { workspaceDir } : {}),
   });
+}
+
+function resolveModelWorkspaceDir(
+  cfg: OpenClawConfig | undefined,
+  explicitWorkspaceDir: string | undefined,
+): string | undefined {
+  if (explicitWorkspaceDir !== undefined || !cfg) {
+    return explicitWorkspaceDir;
+  }
+  return resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
 }
 
 function canonicalizeLegacyResolvedModel(params: { provider: string; model: Model }): Model {
@@ -1199,12 +1216,12 @@ export function resolveModel(
   authStorage: AuthStorage;
   modelRegistry: ModelRegistry;
 } {
-  const workspaceDir = options?.workspaceDir ?? cfg?.agents?.defaults?.workspace;
+  const workspaceDir = resolveModelWorkspaceDir(cfg, options?.workspaceDir);
   const normalizedRef = normalizeProviderModelRef({ provider, modelId, cfg, workspaceDir });
   const resolvedAgentDir = agentDir ?? resolveDefaultAgentDir(cfg ?? {});
   const cachedStores =
     !options?.authStorage && !options?.modelRegistry
-      ? discoverCachedAgentStoresForAgent(resolvedAgentDir, cfg)
+      ? discoverCachedAgentStoresForAgent(resolvedAgentDir, cfg, workspaceDir)
       : undefined;
   const authStorage =
     options?.authStorage ?? cachedStores?.authStorage ?? discoverAuthStorage(resolvedAgentDir);
@@ -1261,7 +1278,7 @@ export async function resolveModelAsync(
   authStorage: AuthStorage;
   modelRegistry: ModelRegistry;
 }> {
-  const workspaceDir = options?.workspaceDir ?? cfg?.agents?.defaults?.workspace;
+  const workspaceDir = resolveModelWorkspaceDir(cfg, options?.workspaceDir);
   const normalizedRef = normalizeProviderModelRef({ provider, modelId, cfg, workspaceDir });
   const resolvedAgentDir = agentDir ?? resolveDefaultAgentDir(cfg ?? {});
   const emptyDiscoveryStores =
@@ -1270,7 +1287,7 @@ export async function resolveModelAsync(
       : undefined;
   const cachedStores =
     !emptyDiscoveryStores && !options?.authStorage && !options?.modelRegistry
-      ? discoverCachedAgentStoresForAgent(resolvedAgentDir, cfg)
+      ? discoverCachedAgentStoresForAgent(resolvedAgentDir, cfg, workspaceDir)
       : undefined;
   const authStorage =
     options?.authStorage ??

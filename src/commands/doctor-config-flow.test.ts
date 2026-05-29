@@ -671,6 +671,10 @@ vi.mock("./doctor/shared/missing-configured-plugin-install.js", () => ({
   })),
 }));
 
+vi.mock("./doctor/shared/active-tool-schema-warnings.js", () => ({
+  collectActiveToolSchemaProjectionWarnings: vi.fn(() => []),
+}));
+
 vi.mock("./doctor/shared/plugin-dependency-cleanup.js", () => ({
   cleanupLegacyPluginDependencyState: vi.fn(async () => ({
     changes: [],

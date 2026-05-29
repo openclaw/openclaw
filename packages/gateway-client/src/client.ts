@@ -28,7 +28,7 @@ import { resolveGatewayStartupRetryAfterMs } from "@openclaw/gateway-protocol/st
 import ipaddr from "ipaddr.js";
 import { WebSocket, type ClientOptions, type CertMeta } from "ws";
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
-import { resolveConnectChallengeTimeoutMs } from "./timeouts.js";
+import { resolveConnectChallengeTimeoutMs, resolveSafeTimeoutDelayMs } from "./timeouts.js";
 
 export type DeviceIdentity = {
   deviceId: string;
@@ -82,10 +82,6 @@ function normalizeOptionalString(value: unknown): string | undefined {
 
 function normalizeLowercaseStringOrEmpty(value: unknown): string {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
-}
-
-function resolveSafeTimeoutDelayMs(value: number): number {
-  return Math.max(0, Math.min(value, 2_147_483_647));
 }
 
 function rawDataToString(data: unknown): string {
@@ -516,7 +512,7 @@ export class GatewayClient {
     };
     this.requestTimeoutMs =
       typeof opts.requestTimeoutMs === "number" && Number.isFinite(opts.requestTimeoutMs)
-        ? resolveSafeTimeoutDelayMs(opts.requestTimeoutMs)
+        ? resolveSafeTimeoutDelayMs(opts.requestTimeoutMs, { minMs: 0 })
         : 30_000;
   }
 
@@ -1468,7 +1464,7 @@ export class GatewayClient {
       opts?.timeoutMs === null
         ? null
         : typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
-          ? resolveSafeTimeoutDelayMs(opts.timeoutMs)
+          ? resolveSafeTimeoutDelayMs(opts.timeoutMs, { minMs: 0 })
           : expectFinal
             ? null
             : this.requestTimeoutMs;

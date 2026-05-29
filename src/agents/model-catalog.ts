@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -17,7 +17,11 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
-import { resolveDefaultAgentDir } from "./agent-scope.js";
+import {
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentDir,
+  resolveDefaultAgentId,
+} from "./agent-scope.js";
 import { ensureAuthProfileStoreWithoutExternalProfiles } from "./auth-profiles.js";
 import { modelSupportsInput as modelCatalogEntrySupportsInput } from "./model-catalog-lookup.js";
 import type { ModelCatalogEntry, ModelInputType } from "./model-catalog.types.js";
@@ -31,6 +35,12 @@ import {
   hasConfiguredProviderModelRows,
 } from "./model-selection-shared.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
+import {
+  decodePluginModelCatalogRelativePathPluginId,
+  isGeneratedPluginModelCatalog,
+  listPluginModelCatalogPaths,
+  resolvePluginModelCatalogOwnerPluginId,
+} from "./plugin-model-catalog.js";
 import { normalizeProviderId } from "./provider-id.js";
 
 const log = createSubsystemLogger("model-catalog");
@@ -306,31 +316,79 @@ function normalizePersistedModelCatalogEntry(
   };
 }
 
+function readProviderCatalogRows(parsed: unknown): Record<string, Record<string, unknown>> {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return {};
+  }
+  const providers = (parsed as { providers?: unknown }).providers;
+  return providers && typeof providers === "object" && !Array.isArray(providers)
+    ? (providers as Record<string, Record<string, unknown>>)
+    : {};
+}
+
+async function loadReadOnlyPersistedProviderRows(
+  agentDir: string,
+  getPluginMetadataSnapshot: () => Pick<PluginMetadataSnapshot, "owners">,
+): Promise<Record<string, Record<string, unknown>>> {
+  const raw = await readFile(join(agentDir, "models.json"), "utf8");
+  const providers = { ...readProviderCatalogRows(JSON.parse(raw) as unknown) };
+  for (const catalogPath of listPluginModelCatalogPaths(agentDir)) {
+    const catalogPluginId = decodePluginModelCatalogRelativePathPluginId(
+      relative(agentDir, catalogPath),
+    );
+    if (!catalogPluginId) {
+      continue;
+    }
+    const catalogRaw = await readFile(catalogPath, "utf8").catch(() => undefined);
+    if (!catalogRaw) {
+      continue;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(catalogRaw) as unknown;
+    } catch {
+      continue;
+    }
+    if (isGeneratedPluginModelCatalog(parsed)) {
+      for (const [providerId, provider] of Object.entries(readProviderCatalogRows(parsed))) {
+        const ownerPluginId = resolvePluginModelCatalogOwnerPluginId({
+          providerId,
+          pluginMetadataSnapshot: getPluginMetadataSnapshot(),
+        });
+        if (ownerPluginId === catalogPluginId) {
+          providers[providerId] = provider;
+        }
+      }
+    }
+  }
+  return providers;
+}
+
 async function loadReadOnlyPersistedModelCatalog(params?: {
   config?: OpenClawConfig;
   metadataSnapshot?: PluginMetadataSnapshot;
 }): Promise<ModelCatalogEntry[]> {
   const cfg = params?.config ?? getRuntimeConfig();
   const agentDir = resolveDefaultAgentDir(cfg);
-  const raw = await readFile(join(agentDir, "models.json"), "utf8");
-  const parsed = JSON.parse(raw) as Record<string, unknown>;
+  const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
   const models: ModelCatalogEntry[] = [];
   const { buildShouldSuppressBuiltInModel } = await loadModelSuppression();
   const shouldSuppressBuiltInModel = buildShouldSuppressBuiltInModel({ config: cfg });
+  let metadataSnapshot: PluginMetadataSnapshot | undefined = params?.metadataSnapshot;
+  const getMetadataSnapshot = () => {
+    metadataSnapshot ??= loadManifestMetadataSnapshot({
+      config: cfg,
+      env: process.env,
+      workspaceDir,
+    });
+    return metadataSnapshot;
+  };
   let manifestPlugins: ProviderModelIdNormalizationOptions["manifestPlugins"];
   const getManifestPlugins = () => {
-    manifestPlugins ??=
-      params?.metadataSnapshot?.plugins ??
-      loadManifestMetadataSnapshot({
-        config: cfg,
-        env: process.env,
-      }).plugins;
+    manifestPlugins ??= getMetadataSnapshot().plugins;
     return manifestPlugins;
   };
-  const providers =
-    parsed?.providers && typeof parsed.providers === "object"
-      ? (parsed.providers as Record<string, Record<string, unknown>>)
-      : {};
+  const providers = await loadReadOnlyPersistedProviderRows(agentDir, getMetadataSnapshot);
   for (const [providerRaw, providerConfig] of Object.entries(providers)) {
     if (!Array.isArray(providerConfig?.models)) {
       continue;
@@ -461,6 +519,7 @@ export async function loadModelCatalog(params?: {
     const sortModels = sortModelCatalogEntries;
     try {
       const cfg = params?.config ?? getRuntimeConfig();
+      const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
       let manifestMetadataSnapshot: PluginMetadataSnapshot | undefined;
       let manifestPlugins: ProviderModelIdNormalizationOptions["manifestPlugins"];
       const getManifestMetadataSnapshot = () => {
@@ -469,6 +528,7 @@ export async function loadModelCatalog(params?: {
           loadManifestMetadataSnapshot({
             config: cfg,
             env: process.env,
+            workspaceDir,
           });
         return manifestMetadataSnapshot;
       };
@@ -492,7 +552,10 @@ export async function loadModelCatalog(params?: {
         readOnly ? { readOnly: true } : undefined,
       );
       logStage("auth-storage-ready");
-      const registry = agentDiscovery.discoverModels(authStorage, agentDir);
+      const registry = agentDiscovery.discoverModels(authStorage, agentDir, {
+        pluginMetadataSnapshot: getManifestMetadataSnapshot(),
+        workspaceDir,
+      });
       logStage("registry-ready");
       const entries = registry.getAll() as DiscoveredModel[];
       logStage("registry-read", `entries=${entries.length}`);

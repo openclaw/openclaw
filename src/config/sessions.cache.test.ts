@@ -444,6 +444,7 @@ describe("Session Store Cache", () => {
 
     expect(readSessionUpdatedAt({ storePath, sessionKey: "agent:main:main" })).toBe(updatedAt);
     expect(parseSpy).not.toHaveBeenCalled();
+    expect(getSessionStoreSnapshotCacheStatsForTest().entries).toBe(1);
 
     parseSpy.mockRestore();
   });
@@ -505,6 +506,33 @@ describe("Session Store Cache", () => {
     mutable["session:1"].origin = { provider: "mutated" };
 
     expect(readSessionStoreSnapshot(storePath)["session:1"].origin?.provider).toBe("openai");
+  });
+
+  it("reads immutable single entries without populating whole-store snapshots", async () => {
+    await saveSessionStore(storePath, {
+      "session:1": createSessionEntry({
+        sessionId: "id-1",
+        skillsSnapshot: {
+          prompt: "single entry prompt ".repeat(200),
+          skills: [{ name: "alpha" }],
+        },
+      }),
+      "session:2": createSessionEntry({ sessionId: "id-2" }),
+    });
+    clearSessionStoreCacheForTest();
+
+    const entry = readSessionEntry(storePath, "session:1");
+
+    expect(entry?.sessionId).toBe("id-1");
+    expect(Object.isFrozen(entry)).toBe(true);
+    expect(Object.isFrozen(entry?.skillsSnapshot?.skills)).toBe(true);
+    expect(getSessionStoreSnapshotCacheStatsForTest().entries).toBe(0);
+
+    const cached = loadSessionStore(storePath, { clone: false });
+    expect(() => {
+      (entry as SessionEntry).displayName = "mutated returned entry";
+    }).toThrow(TypeError);
+    expect(cached["session:1"].displayName).toBe("Test Session 1");
   });
 
   it("does not tag snapshots with stats from writes racing after a disk read", async () => {
