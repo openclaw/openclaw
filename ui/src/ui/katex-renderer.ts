@@ -176,7 +176,6 @@ export function extractMathBlocks(markdown: string): {
         i++;
       }
       // Find closing fence: same char, length >= fenceLen, on its own line
-      let closed = false;
       while (i < len) {
         const lineStart = i;
         // Skip leading spaces (markdown-it allows up to 3 spaces before closing fence)
@@ -203,7 +202,6 @@ export function extractMathBlocks(markdown: string): {
               if (i < len) {
                 i++;
               }
-              closed = true;
               break;
             }
           }
