@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createFileLockManager } from "../infra/file-lock-manager.js";
 import { readGatewayProcessArgsSync as readProcessArgsSync } from "../infra/gateway-processes.js";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { getProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { SessionWriteLockTimeoutError } from "./session-write-lock-error.js";
 
@@ -53,7 +54,6 @@ function yieldEventLoop(): Promise<void> {
 // A payload-less lock can be left behind if shutdown lands between open("wx")
 // and the owner metadata write. Keep the grace short so 10s callers recover.
 const ORPHAN_LOCK_PAYLOAD_GRACE_MS = 5_000;
-const MAX_LOCK_HOLD_MS = 2_147_000_000;
 
 type CleanupState = {
   registered: boolean;
@@ -106,6 +106,12 @@ function readPositiveMsEnv(
   if (!raw) {
     return undefined;
   }
+  if (raw === "Infinity") {
+    return opts.allowInfinity ? Number.POSITIVE_INFINITY : undefined;
+  }
+  if (!/^\d+$/.test(raw)) {
+    return undefined;
+  }
   const value = Number(raw);
   return parsePositiveMs(value, opts);
 }
@@ -121,6 +127,9 @@ function parsePositiveMs(
     return opts.allowInfinity ? value : undefined;
   }
   if (!Number.isFinite(value)) {
+    return undefined;
+  }
+  if (!Number.isSafeInteger(value)) {
     return undefined;
   }
   return value;
@@ -244,10 +253,10 @@ export function resolveSessionLockMaxHoldFromTimeout(params: {
   const minMs = resolvePositiveMs(params.minMs, DEFAULT_SESSION_WRITE_LOCK_MAX_HOLD_MS);
   const timeoutMs = resolvePositiveMs(params.timeoutMs, minMs, { allowInfinity: true });
   if (timeoutMs === Number.POSITIVE_INFINITY) {
-    return MAX_LOCK_HOLD_MS;
+    return MAX_TIMER_TIMEOUT_MS;
   }
   const graceMs = resolvePositiveMs(params.graceMs, DEFAULT_TIMEOUT_GRACE_MS);
-  return Math.min(MAX_LOCK_HOLD_MS, Math.max(minMs, timeoutMs + graceMs));
+  return Math.min(MAX_TIMER_TIMEOUT_MS, Math.max(minMs, timeoutMs + graceMs));
 }
 
 /**

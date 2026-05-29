@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { ImageContent } from "@earendil-works/pi-ai";
+import type { ImageContent } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
@@ -14,7 +14,7 @@ import {
   writeCliImages,
   writeCliSystemPromptFile,
 } from "./cli-runner/helpers.js";
-import * as promptImageUtils from "./pi-embedded-runner/run/images.js";
+import * as promptImageUtils from "./embedded-agent-runner/run/images.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 import * as toolImages from "./tool-images.js";
@@ -31,6 +31,22 @@ describe("loadPromptRefImages", () => {
     await expect(
       loadPromptRefImages({
         prompt: "just text",
+        workspaceDir: "/workspace",
+      }),
+    ).resolves.toStrictEqual([]);
+
+    expect(loadImageFromRefSpy).not.toHaveBeenCalled();
+    expect(sanitizeImageBlocksSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not reload OpenClaw CLI image cache paths from prior prompt text", async () => {
+    const loadImageFromRefSpy = vi.spyOn(promptImageUtils, "loadImageFromRef");
+    const sanitizeImageBlocksSpy = vi.spyOn(toolImages, "sanitizeImageBlocks");
+
+    await expect(
+      loadPromptRefImages({
+        prompt:
+          'Called the Read tool with {"file_path":"/workspace/.openclaw-cli-images/stale.png"}',
         workspaceDir: "/workspace",
       }),
     ).resolves.toStrictEqual([]);

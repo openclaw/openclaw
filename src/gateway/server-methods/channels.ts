@@ -1,3 +1,12 @@
+import {
+  ErrorCodes,
+  errorShape,
+  formatValidationErrors,
+  validateChannelsStartParams,
+  validateChannelsStopParams,
+  validateChannelsLogoutParams,
+  validateChannelsStatusParams,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { buildChannelUiCatalog } from "../../channels/plugins/catalog.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import {
@@ -10,10 +19,8 @@ import { buildChannelAccountSnapshot } from "../../channels/plugins/status.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
-import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getChannelActivity } from "../../infra/channel-activity.js";
-import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -23,15 +30,7 @@ import {
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
   evaluateChannelHealth,
 } from "../channel-health-policy.js";
-import {
-  ErrorCodes,
-  errorShape,
-  formatValidationErrors,
-  validateChannelsStartParams,
-  validateChannelsStopParams,
-  validateChannelsLogoutParams,
-  validateChannelsStatusParams,
-} from "../protocol/index.js";
+import { resolveGatewayPluginConfig } from "../runtime-plugin-config.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
@@ -303,16 +302,9 @@ export const channelsHandlers: GatewayRequestHandlers = {
     const requestedChannel =
       typeof rawChannel === "string" ? normalizeChannelId(rawChannel) : undefined;
     const runtimeConfig = context.getRuntimeConfig();
-    const currentSnapshot = getCurrentPluginMetadataSnapshot({
+    const cfg = resolveGatewayPluginConfig({
       config: runtimeConfig,
-      env: process.env,
     });
-    const cfg = applyPluginAutoEnable({
-      config: runtimeConfig,
-      env: process.env,
-      manifestRegistry: currentSnapshot?.manifestRegistry,
-      discovery: currentSnapshot?.discovery,
-    }).config;
     const runtime = context.getRuntimeSnapshot();
     const plugins = listChannelPlugins();
     const selectedPlugins = requestedChannel
@@ -588,16 +580,9 @@ export const channelsHandlers: GatewayRequestHandlers = {
     }
     try {
       const runtimeConfig = context.getRuntimeConfig();
-      const currentSnapshot = getCurrentPluginMetadataSnapshot({
+      const cfg = resolveGatewayPluginConfig({
         config: runtimeConfig,
-        env: process.env,
       });
-      const cfg = applyPluginAutoEnable({
-        config: runtimeConfig,
-        env: process.env,
-        manifestRegistry: currentSnapshot?.manifestRegistry,
-        discovery: currentSnapshot?.discovery,
-      }).config;
       const payload = await startChannelAccount({
         channelId,
         accountId: (params as { accountId?: string | null }).accountId,

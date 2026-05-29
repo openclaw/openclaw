@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 
 const FAKE_STARTTIME = 12345;
 let testing: typeof import("./session-write-lock.js").testing;
@@ -477,6 +478,47 @@ describe("acquireSessionWriteLock", () => {
     });
   });
 
+  it("ignores non-decimal and unsafe session write-lock env values", () => {
+    expect(
+      resolveSessionWriteLockOptions(
+        {
+          session: {
+            writeLock: {
+              acquireTimeoutMs: 90_000,
+              staleMs: 45_000,
+              maxHoldMs: 30_000,
+            },
+          },
+        },
+        {
+          env: {
+            OPENCLAW_SESSION_WRITE_LOCK_ACQUIRE_TIMEOUT_MS: "1e3",
+            OPENCLAW_SESSION_WRITE_LOCK_STALE_MS: "0x1000",
+            OPENCLAW_SESSION_WRITE_LOCK_MAX_HOLD_MS: "9007199254740993",
+          },
+        },
+      ),
+    ).toEqual({
+      timeoutMs: 90_000,
+      staleMs: 45_000,
+      maxHoldMs: 30_000,
+    });
+  });
+
+  it("allows explicit infinite acquire timeout but not infinite stale policy", () => {
+    expect(
+      resolveSessionWriteLockOptions(undefined, {
+        env: {
+          OPENCLAW_SESSION_WRITE_LOCK_ACQUIRE_TIMEOUT_MS: "Infinity",
+          OPENCLAW_SESSION_WRITE_LOCK_STALE_MS: "Infinity",
+        },
+      }),
+    ).toMatchObject({
+      timeoutMs: Number.POSITIVE_INFINITY,
+      staleMs: 30 * 60 * 1000,
+    });
+  });
+
   it("uses resolved stale policy when cleaning stale lock files", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-policy-"));
     const sessionsDir = path.join(root, "sessions");
@@ -561,9 +603,9 @@ describe("acquireSessionWriteLock", () => {
   it("clamps max hold for effectively no-timeout runs", () => {
     expect(
       resolveSessionLockMaxHoldFromTimeout({
-        timeoutMs: 2_147_000_000,
+        timeoutMs: MAX_TIMER_TIMEOUT_MS,
       }),
-    ).toBe(2_147_000_000);
+    ).toBe(MAX_TIMER_TIMEOUT_MS);
   });
 
   it("cleans stale .jsonl lock files in sessions directories", async () => {

@@ -5,7 +5,11 @@ import {
   collectBundledPluginBuildEntries,
   NON_PACKAGED_BUNDLED_PLUGIN_DIRS,
 } from "./scripts/lib/bundled-plugin-build-entries.mjs";
-import { buildPluginSdkEntrySources } from "./scripts/lib/plugin-sdk-entries.mjs";
+import {
+  buildPluginSdkEntrySources,
+  pluginSdkEntrypoints,
+  publicPluginSdkEntrypoints,
+} from "./scripts/lib/plugin-sdk-entries.mjs";
 
 type InputOptionsFactory = Extract<NonNullable<UserConfig["inputOptions"]>, Function>;
 type InputOptionsArg = InputOptionsFactory extends (
@@ -138,8 +142,22 @@ function nodeBuildConfig(config: UserConfig): UserConfig {
   };
 }
 
+function nodeWorkspacePackageBuildConfig(config: UserConfig): UserConfig {
+  return {
+    ...config,
+    env,
+    format: "esm",
+    platform: "node",
+    sourcemap: OUTPUT_SOURCE_MAPS,
+    inputOptions: buildInputOptions,
+  };
+}
+
 const bundledPluginBuildEntries = collectBundledPluginBuildEntries();
 const shouldBuildPrivateQaEntries = process.env.OPENCLAW_BUILD_PRIVATE_QA === "1";
+const productionPluginSdkEntrypoints = shouldBuildPrivateQaEntries
+  ? pluginSdkEntrypoints
+  : publicPluginSdkEntrypoints;
 
 function buildBundledHookEntries(): Record<string, string> {
   const hooksRoot = path.join(process.cwd(), "src", "hooks", "bundled");
@@ -233,6 +251,7 @@ function buildCoreDistEntries(): Record<string, string> {
     "agents/model-catalog.runtime": "src/agents/model-catalog.runtime.ts",
     "agents/models-config.runtime": "src/agents/models-config.runtime.ts",
     "agents/code-mode.worker": "src/agents/code-mode.worker.ts",
+    "agents/model-provider-auth.worker": "src/agents/model-provider-auth.worker.ts",
     "acp/control-plane/manager": "src/acp/control-plane/manager.ts",
     "cli/gateway-lifecycle.runtime": "src/cli/gateway-cli/lifecycle.runtime.ts",
     "provider-dispatcher.runtime": "src/auto-reply/reply/provider-dispatcher.runtime.ts",
@@ -242,7 +261,6 @@ function buildCoreDistEntries(): Record<string, string> {
     "plugins/synthetic-auth.runtime": "src/plugins/synthetic-auth.runtime.ts",
     "subagent-registry.runtime": "src/agents/subagent-registry.runtime.ts",
     "task-registry-control.runtime": "src/tasks/task-registry-control.runtime.ts",
-    "agents/pi-model-discovery-runtime": "src/agents/pi-model-discovery-runtime.ts",
     "link-understanding/apply.runtime": "src/link-understanding/apply.runtime.ts",
     "media-understanding/apply.runtime": "src/media-understanding/apply.runtime.ts",
     "commands/doctor/shared/plugin-registry-migration":
@@ -275,13 +293,13 @@ function buildDockerE2eHarnessEntries(): Record<string, string> {
   return {
     // Mounted Docker harnesses run against the npm tarball image, so any
     // internal module they assert must have a stable package dist entry.
-    "agents/pi-bundle-mcp-materialize": "src/agents/pi-bundle-mcp-materialize.ts",
-    "agents/pi-bundle-mcp-runtime": "src/agents/pi-bundle-mcp-runtime.ts",
-    "agents/pi-embedded-runner/effective-tool-policy":
-      "src/agents/pi-embedded-runner/effective-tool-policy.ts",
-    "agents/pi-embedded-runner/tool-split": "src/agents/pi-embedded-runner/tool-split.ts",
-    "agents/pi-embedded-runner/run/runtime-context-prompt":
-      "src/agents/pi-embedded-runner/run/runtime-context-prompt.ts",
+    "agents/agent-bundle-mcp-materialize": "src/agents/agent-bundle-mcp-materialize.ts",
+    "agents/agent-bundle-mcp-runtime": "src/agents/agent-bundle-mcp-runtime.ts",
+    "agents/embedded-agent-runner/effective-tool-policy":
+      "src/agents/embedded-agent-runner/effective-tool-policy.ts",
+    "agents/embedded-agent-runner/tool-split": "src/agents/embedded-agent-runner/tool-split.ts",
+    "agents/embedded-agent-runner/run/runtime-context-prompt":
+      "src/agents/embedded-agent-runner/run/runtime-context-prompt.ts",
     "auto-reply/reply/commands-crestodian": "src/auto-reply/reply/commands-crestodian.ts",
     "cli/run-main": "src/cli/run-main.ts",
     "commitments/runtime": "src/commitments/runtime.ts",
@@ -289,13 +307,122 @@ function buildDockerE2eHarnessEntries(): Record<string, string> {
     "config/config": "src/config/config.ts",
     "crestodian/crestodian": "src/crestodian/crestodian.ts",
     "crestodian/rescue-message": "src/crestodian/rescue-message.ts",
-    "gateway/protocol/index": "src/gateway/protocol/index.ts",
+    "gateway/protocol/index": "packages/gateway-protocol/src/index.ts",
     "infra/errors": "src/infra/errors.ts",
     "infra/ws": "src/infra/ws.ts",
     "plugin-sdk/provider-onboard": "src/plugin-sdk/provider-onboard.ts",
     "plugins/tools": "src/plugins/tools.ts",
     "shared/string-coerce": "src/shared/string-coerce.ts",
   };
+}
+
+function buildAgentCoreDistEntries(): Record<string, string> {
+  return {
+    index: "packages/agent-core/src/index.ts",
+    agent: "packages/agent-core/src/agent.ts",
+    "agent-loop": "packages/agent-core/src/agent-loop.ts",
+    llm: "packages/agent-core/src/llm.ts",
+    node: "packages/agent-core/src/node.ts",
+    "runtime-deps": "packages/agent-core/src/runtime-deps.ts",
+    types: "packages/agent-core/src/types.ts",
+    validation: "packages/agent-core/src/validation.ts",
+    "harness/agent-harness": "packages/agent-core/src/harness/agent-harness.ts",
+    "harness/types": "packages/agent-core/src/harness/types.ts",
+    "harness/messages": "packages/agent-core/src/harness/messages.ts",
+    "harness/env/kill-tree": "packages/agent-core/src/harness/env/kill-tree.ts",
+    "harness/session": "packages/agent-core/src/harness/session/session.ts",
+    "harness/session/jsonl-repo": "packages/agent-core/src/harness/session/jsonl-repo.ts",
+    "harness/session/jsonl-storage": "packages/agent-core/src/harness/session/jsonl-storage.ts",
+    "harness/session/memory-repo": "packages/agent-core/src/harness/session/memory-repo.ts",
+    "harness/session/memory-storage": "packages/agent-core/src/harness/session/memory-storage.ts",
+    "harness/session/repo-utils": "packages/agent-core/src/harness/session/repo-utils.ts",
+    "harness/session/uuid": "packages/agent-core/src/harness/session/uuid.ts",
+    "harness/compaction": "packages/agent-core/src/harness/compaction/compaction.ts",
+    "harness/branch-summarization":
+      "packages/agent-core/src/harness/compaction/branch-summarization.ts",
+    "harness/prompt-templates": "packages/agent-core/src/harness/prompt-templates.ts",
+    "harness/skills": "packages/agent-core/src/harness/skills.ts",
+    "harness/system-prompt": "packages/agent-core/src/harness/system-prompt.ts",
+    "harness/utils/shell-output": "packages/agent-core/src/harness/utils/shell-output.ts",
+    "harness/utils/truncate": "packages/agent-core/src/harness/utils/truncate.ts",
+  };
+}
+
+function buildGatewayProtocolDistEntries(): Record<string, string> {
+  return {
+    // Package exports resolve from packages/gateway-protocol/dist, while the
+    // root build still emits dist/gateway/protocol/index for Docker harnesses.
+    index: "packages/gateway-protocol/src/index.ts",
+    "client-info": "packages/gateway-protocol/src/client-info.ts",
+    "connect-error-details": "packages/gateway-protocol/src/connect-error-details.ts",
+    schema: "packages/gateway-protocol/src/schema.ts",
+    "startup-unavailable": "packages/gateway-protocol/src/startup-unavailable.ts",
+    version: "packages/gateway-protocol/src/version.ts",
+  };
+}
+
+function buildGatewayClientDistEntries(): Record<string, string> {
+  return {
+    // Keep package entrypoints explicit so package.json exports and root build
+    // config cannot drift when client internals are split again.
+    index: "packages/gateway-client/src/index.ts",
+    readiness: "packages/gateway-client/src/readiness.ts",
+    timeouts: "packages/gateway-client/src/timeouts.ts",
+  };
+}
+
+function buildNetPolicyDistEntries(): Record<string, string> {
+  return {
+    // These subpaths are imported by root runtime code and exported by the
+    // package. Keep the build list adjacent to package.json exports.
+    index: "packages/net-policy/src/index.ts",
+    ip: "packages/net-policy/src/ip.ts",
+    ipv4: "packages/net-policy/src/ipv4.ts",
+    "redact-sensitive-url": "packages/net-policy/src/redact-sensitive-url.ts",
+    "url-userinfo": "packages/net-policy/src/url-userinfo.ts",
+  };
+}
+
+function buildSpeechCoreDistEntries(): Record<string, string> {
+  return {
+    api: "packages/speech-core/api.ts",
+    "runtime-api": "packages/speech-core/runtime-api.ts",
+    speaker: "packages/speech-core/speaker.ts",
+    "voice-models": "packages/speech-core/voice-models.ts",
+  };
+}
+
+function shouldExternalizeAgentCoreDependency(id: string): boolean {
+  return (
+    id === "ignore" ||
+    id === "openclaw" ||
+    id.startsWith("openclaw/") ||
+    id === "typebox" ||
+    id.startsWith("typebox/") ||
+    id === "yaml" ||
+    id.startsWith("yaml/")
+  );
+}
+
+function shouldExternalizeGatewayProtocolDependency(id: string): boolean {
+  return id === "typebox" || id.startsWith("typebox/");
+}
+
+function shouldExternalizeGatewayClientDependency(id: string): boolean {
+  return (
+    id === "ws" ||
+    id.startsWith("ws/") ||
+    id === "@openclaw/gateway-protocol" ||
+    id.startsWith("@openclaw/gateway-protocol/")
+  );
+}
+
+function shouldExternalizeNetPolicyDependency(id: string): boolean {
+  return id === "ipaddr.js" || id.startsWith("ipaddr.js/");
+}
+
+function shouldExternalizeSpeechCoreDependency(id: string): boolean {
+  return id === "openclaw" || id.startsWith("openclaw/");
 }
 
 const coreDistEntries = buildCoreDistEntries();
@@ -313,10 +440,9 @@ function buildUnifiedDistEntries(): Record<string, string> {
     // Private bundled Codex helper for app-server user MCP config projection.
     "plugin-sdk/codex-mcp-projection": "src/plugin-sdk/codex-mcp-projection.ts",
     ...Object.fromEntries(
-      Object.entries(buildPluginSdkEntrySources()).map(([entry, source]) => [
-        `plugin-sdk/${entry}`,
-        source,
-      ]),
+      Object.entries(buildPluginSdkEntrySources(productionPluginSdkEntrypoints)).map(
+        ([entry, source]) => [`plugin-sdk/${entry}`, source],
+      ),
     ),
     ...(shouldBuildPrivateQaEntries
       ? {
@@ -332,6 +458,51 @@ function buildUnifiedDistEntries(): Record<string, string> {
 }
 
 export default defineConfig([
+  nodeBuildConfig({
+    clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    entry: buildAgentCoreDistEntries(),
+    outDir: "packages/agent-core/dist",
+    deps: {
+      neverBundle: shouldExternalizeAgentCoreDependency,
+    },
+  }),
+  nodeWorkspacePackageBuildConfig({
+    clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    entry: buildGatewayProtocolDistEntries(),
+    outDir: "packages/gateway-protocol/dist",
+    deps: {
+      neverBundle: shouldExternalizeGatewayProtocolDependency,
+    },
+  }),
+  nodeWorkspacePackageBuildConfig({
+    clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    entry: buildGatewayClientDistEntries(),
+    outDir: "packages/gateway-client/dist",
+    deps: {
+      neverBundle: shouldExternalizeGatewayClientDependency,
+    },
+  }),
+  nodeWorkspacePackageBuildConfig({
+    clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    entry: buildNetPolicyDistEntries(),
+    outDir: "packages/net-policy/dist",
+    deps: {
+      neverBundle: shouldExternalizeNetPolicyDependency,
+    },
+  }),
+  nodeWorkspacePackageBuildConfig({
+    clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    entry: buildSpeechCoreDistEntries(),
+    outDir: "packages/speech-core/dist",
+    deps: {
+      neverBundle: shouldExternalizeSpeechCoreDependency,
+    },
+  }),
   nodeBuildConfig({
     // Build core entrypoints, plugin-sdk subpaths, bundled plugin entrypoints,
     // and bundled hooks in one graph so runtime singletons are emitted once.

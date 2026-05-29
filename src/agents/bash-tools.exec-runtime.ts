@@ -1,5 +1,4 @@
 import path from "node:path";
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
 import {
   type EventSessionRoutingPolicy,
@@ -22,6 +21,7 @@ import { normalizeStringEntries } from "../shared/string-normalization.js";
 import type { ProcessSession } from "./bash-process-registry.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
+import type { AgentToolResult } from "./runtime/index.js";
 export { applyPathPrepend, findPathKey, normalizePathPrepend } from "../infra/path-prepend.js";
 export {
   normalizeExecAsk,
@@ -37,6 +37,7 @@ import {
   normalizeDeliveryContext,
   type DeliveryContext,
 } from "../utils/delivery-context.shared.js";
+import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import {
   addSession,
   appendOutput,
@@ -58,6 +59,13 @@ export { execSchema } from "./bash-tools.schemas.js";
 
 const SMKX = "\x1b[?1h";
 const RMKX = "\x1b[?1l";
+
+function resolveExecTimeoutMs(timeoutSec: number | null | undefined): number | undefined {
+  if (typeof timeoutSec !== "number" || !Number.isFinite(timeoutSec) || timeoutSec <= 0) {
+    return undefined;
+  }
+  return resolveSafeTimeoutDelayMs(timeoutSec * 1000);
+}
 
 /**
  * Detect cursor key mode from PTY output chunk.
@@ -115,7 +123,7 @@ export function validateHostEnv(env: Record<string, string>): void {
   }
 }
 export const DEFAULT_MAX_OUTPUT = clampWithDefault(
-  readEnvInt("PI_BASH_MAX_OUTPUT_CHARS"),
+  readEnvInt("OPENCLAW_BASH_MAX_OUTPUT_CHARS", "PI_BASH_MAX_OUTPUT_CHARS"),
   200_000,
   1_000,
   200_000,
@@ -715,7 +723,7 @@ export async function runExecProcess(opts: {
       return;
     }
     const tailText = session.tail || session.aggregated;
-    // Note: opts.onUpdate() is provided by pi-agent-core's agent-loop and
+    // Note: opts.onUpdate() is provided by agent runtime's agent-loop and
     // internally pushes Promise.resolve(emit(event)) into an updateEvents
     // array.  Because emit → processEvents is async, any failure (e.g.
     // activeRun cleared) produces a *rejected Promise*, not a synchronous
@@ -763,10 +771,7 @@ export async function runExecProcess(opts: {
     }
   };
 
-  const timeoutMs =
-    typeof opts.timeoutSec === "number" && opts.timeoutSec > 0
-      ? Math.floor(opts.timeoutSec * 1000)
-      : undefined;
+  const timeoutMs = resolveExecTimeoutMs(opts.timeoutSec);
   let sandboxFinalizeToken: unknown;
 
   const spawnSpec:

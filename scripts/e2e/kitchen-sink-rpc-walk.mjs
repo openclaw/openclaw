@@ -28,6 +28,10 @@ const INSTALL_TIMEOUT_MS = readPositiveInt(
 );
 const RPC_TIMEOUT_MS = readPositiveInt(process.env.OPENCLAW_KITCHEN_SINK_RPC_CALL_MS, 60000);
 const FETCH_TIMEOUT_MS = readPositiveInt(process.env.OPENCLAW_KITCHEN_SINK_RPC_FETCH_MS, 10000);
+const FETCH_BODY_MAX_BYTES = readPositiveInt(
+  process.env.OPENCLAW_KITCHEN_SINK_RPC_FETCH_BODY_BYTES,
+  1024 * 1024,
+);
 const MAX_RSS_MIB = readPositiveInt(process.env.OPENCLAW_KITCHEN_SINK_MAX_RSS_MIB, 2048);
 const GATEWAY_TEARDOWN_GRACE_MS = 10000;
 const GATEWAY_TEARDOWN_KILL_GRACE_MS = 2000;
@@ -36,11 +40,31 @@ const OUTPUT_CAPTURE_CHARS = readPositiveInt(
   1024 * 1024,
 );
 const DEFAULT_PORT = 19000 + Math.floor(Math.random() * 1000);
+const LOG_SCAN_CHUNK_BYTES = 64 * 1024;
+const LOG_SCAN_MAX_LINE_CHARS = 16 * 1024;
+const LOG_TAIL_BYTES = 256 * 1024;
+const ERROR_LOG_DENY_PATTERNS = [
+  /\buncaught exception\b/iu,
+  /\bunhandled rejection\b/iu,
+  /\bfatal\b/iu,
+  /\bpanic\b/iu,
+  /\blevel["']?\s*:\s*["']error["']/iu,
+  /\[(?:error|ERROR)\]/u,
+];
+const ERROR_LOG_ALLOW_PATTERNS = [
+  /0 errors?/iu,
+  /expected no diagnostics errors?/iu,
+  /diagnostics errors?:\s*$/iu,
+];
 
 let callGatewayModulePromise;
 
-function readPositiveInt(raw, fallback) {
-  const parsed = Number.parseInt(String(raw || ""), 10);
+export function readPositiveInt(raw, fallback) {
+  const text = String(raw || "").trim();
+  if (!/^\d+$/u.test(text)) {
+    return fallback;
+  }
+  const parsed = Number(text);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
@@ -441,6 +465,7 @@ function isRetryableTransientNetworkError(error, seen = new Set()) {
 export async function fetchJson(url, options = {}) {
   const attempts = Math.max(1, options.attempts ?? 3);
   const timeoutMs = Math.max(1, options.timeoutMs ?? FETCH_TIMEOUT_MS);
+  const maxBodyBytes = Math.max(1, options.maxBodyBytes ?? FETCH_BODY_MAX_BYTES);
   let lastError;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     const controller = new AbortController();
@@ -460,7 +485,10 @@ export async function fetchJson(url, options = {}) {
         (options.fetchImpl ?? fetch)(url, { signal: controller.signal }),
         timeoutPromise,
       ]);
-      const text = await Promise.race([response.text(), timeoutPromise]);
+      const text = await Promise.race([
+        readBoundedResponseText(response, maxBodyBytes),
+        timeoutPromise,
+      ]);
       let body = null;
       try {
         body = text ? JSON.parse(text) : null;
@@ -481,6 +509,48 @@ export async function fetchJson(url, options = {}) {
     }
   }
   throw lastError ?? new Error(`fetch ${url} failed`);
+}
+
+export async function readBoundedResponseText(response, byteLimit = FETCH_BODY_MAX_BYTES) {
+  const contentLength = response.headers?.get?.("content-length");
+  if (contentLength) {
+    const parsedContentLength = Number(contentLength);
+    if (Number.isFinite(parsedContentLength) && parsedContentLength > byteLimit) {
+      await response.body?.cancel?.().catch(() => undefined);
+      throw createFetchBodyTooLargeError(byteLimit);
+    }
+  }
+
+  const reader = response.body?.getReader?.();
+  if (!reader) {
+    const text = await response.text();
+    if (Buffer.byteLength(text, "utf8") > byteLimit) {
+      throw createFetchBodyTooLargeError(byteLimit);
+    }
+    return text;
+  }
+  const chunks = [];
+  let totalBytes = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    const chunk = Buffer.from(value);
+    totalBytes += chunk.byteLength;
+    if (totalBytes > byteLimit) {
+      await reader.cancel().catch(() => undefined);
+      throw createFetchBodyTooLargeError(byteLimit);
+    }
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks, totalBytes).toString("utf8");
+}
+
+function createFetchBodyTooLargeError(byteLimit) {
+  return Object.assign(new Error(`fetch response body exceeded ${byteLimit} bytes`), {
+    code: "ETOOBIG",
+  });
 }
 
 function configureKitchenSink(env, port) {
@@ -561,14 +631,14 @@ async function startGateway(runner, port, env, logPath) {
 }
 
 export async function stopGateway(child, options = {}) {
-  if (!child || child.exitCode !== null || child.signalCode !== null) {
+  if (!child || hasChildExited(child)) {
     return;
   }
   const teardownGraceMs = Math.max(0, options.teardownGraceMs ?? GATEWAY_TEARDOWN_GRACE_MS);
   const killGraceMs = Math.max(0, options.killGraceMs ?? GATEWAY_TEARDOWN_KILL_GRACE_MS);
   const exited = new Promise((resolve) => child.once("exit", resolve));
   const waitForExit = async (ms) =>
-    child.exitCode !== null || child.signalCode !== null
+    hasChildExited(child)
       ? true
       : await Promise.race([exited.then(() => true), delay(ms).then(() => false)]);
 
@@ -581,6 +651,10 @@ export async function stopGateway(child, options = {}) {
     return;
   }
   releaseUnsettledGatewayChild(child);
+}
+
+export function hasChildExited(child) {
+  return child.exitCode !== null || child.signalCode !== null;
 }
 
 function releaseUnsettledGatewayChild(child) {
@@ -600,15 +674,76 @@ function signalGateway(child, signal) {
   child.kill(signal);
 }
 
-async function waitForGatewayReady(child, port, logPath) {
+export function createGatewayReadyLogScanner(logPath, marker = "[gateway] ready") {
+  let offset = 0;
+  let tail = "";
+  let found = false;
+
+  return () => {
+    if (found) {
+      return true;
+    }
+
+    let stat;
+    try {
+      stat = fs.statSync(logPath);
+    } catch {
+      offset = 0;
+      tail = "";
+      return false;
+    }
+
+    if (stat.size < offset) {
+      offset = 0;
+      tail = "";
+    }
+    if (stat.size === offset) {
+      return false;
+    }
+
+    const fd = fs.openSync(logPath, "r");
+    try {
+      const buffer = Buffer.alloc(Math.min(LOG_SCAN_CHUNK_BYTES, stat.size - offset));
+      while (offset < stat.size) {
+        const bytesToRead = Math.min(buffer.length, stat.size - offset);
+        const bytesRead = fs.readSync(fd, buffer, 0, bytesToRead, offset);
+        if (bytesRead <= 0) {
+          break;
+        }
+        offset += bytesRead;
+        const text = `${tail}${buffer.subarray(0, bytesRead).toString("utf8")}`;
+        if (text.includes(marker)) {
+          found = true;
+          return true;
+        }
+        tail = text.slice(-Math.max(0, marker.length - 1));
+      }
+      return false;
+    } finally {
+      fs.closeSync(fd);
+    }
+  };
+}
+
+export async function waitForGatewayReady(child, port, logPath, options = {}) {
   const started = Date.now();
   let lastError = "";
-  while (Date.now() - started < READY_TIMEOUT_MS) {
-    if (child.exitCode !== null) {
-      throw new Error(`gateway exited before ready\n${tailFile(logPath)}`);
+  const timeoutMs = Math.max(1, options.timeoutMs ?? READY_TIMEOUT_MS);
+  const pollDelayMs = Math.max(1, options.pollDelayMs ?? 250);
+  const logReportedReady = createGatewayReadyLogScanner(logPath);
+  const exitedBeforeReadyError = () =>
+    new Error(`gateway exited before ready\n${tailFile(logPath)}`);
+  if (hasChildExited(child)) {
+    throw exitedBeforeReadyError();
+  }
+  while (Date.now() - started < timeoutMs) {
+    if (hasChildExited(child)) {
+      throw exitedBeforeReadyError();
     }
     try {
-      const readyz = await fetchJson(`http://127.0.0.1:${port}/readyz`);
+      const readyz = await fetchJson(`http://127.0.0.1:${port}/readyz`, {
+        fetchImpl: options.fetchImpl,
+      });
       if (readyz.ok) {
         return;
       }
@@ -616,10 +751,13 @@ async function waitForGatewayReady(child, port, logPath) {
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
     }
-    if (fs.existsSync(logPath) && fs.readFileSync(logPath, "utf8").includes("[gateway] ready")) {
+    if (logReportedReady()) {
       lastError = `${lastError}; gateway log reported ready before HTTP readiness`;
     }
-    await delay(250);
+    await delay(pollDelayMs);
+  }
+  if (hasChildExited(child)) {
+    throw new Error(`gateway exited before ready\n${tailFile(logPath)}`);
   }
   throw new Error(`gateway did not become ready: ${lastError}\n${tailFile(logPath)}`);
 }
@@ -1085,37 +1223,109 @@ export function assertResourceCeiling(sample) {
   }
 }
 
+export function findErrorLogFindings(logPath) {
+  if (!fs.existsSync(logPath)) {
+    return [];
+  }
+  const scanBytes = fs.statSync(logPath).size;
+
+  const findings = [];
+  let currentLine = "";
+  let currentLineNumber = 1;
+  let currentLineHasFinding = false;
+  let currentLineTruncated = false;
+  const recordLine = (lineNumber, line) => {
+    if (currentLineHasFinding) {
+      return;
+    }
+    if (
+      ERROR_LOG_ALLOW_PATTERNS.some((pattern) => pattern.test(line)) ||
+      !ERROR_LOG_DENY_PATTERNS.some((pattern) => pattern.test(line))
+    ) {
+      return;
+    }
+    currentLineHasFinding = true;
+    findings.push({ line, lineNumber });
+    if (findings.length > 20) {
+      findings.shift();
+    }
+  };
+  const inspectCurrentLine = () => {
+    const normalizedLine = currentLine.replace(/\r$/u, "");
+    const line = currentLineTruncated ? `[truncated] ${normalizedLine}` : normalizedLine;
+    recordLine(currentLineNumber, line);
+  };
+  const appendLineFragment = (fragment) => {
+    currentLine += fragment;
+    if (currentLine.length <= LOG_SCAN_MAX_LINE_CHARS) {
+      return;
+    }
+    inspectCurrentLine();
+    currentLine = currentLine.slice(-LOG_SCAN_MAX_LINE_CHARS);
+    currentLineTruncated = true;
+  };
+  const finishLine = () => {
+    inspectCurrentLine();
+    currentLine = "";
+    currentLineNumber += 1;
+    currentLineHasFinding = false;
+    currentLineTruncated = false;
+  };
+
+  const fd = fs.openSync(logPath, "r");
+  try {
+    const buffer = Buffer.alloc(LOG_SCAN_CHUNK_BYTES);
+    let offset = 0;
+    while (offset < scanBytes) {
+      const bytesToRead = Math.min(buffer.length, scanBytes - offset);
+      const bytesRead = fs.readSync(fd, buffer, 0, bytesToRead, offset);
+      if (bytesRead <= 0) {
+        break;
+      }
+      offset += bytesRead;
+      const lines = buffer.subarray(0, bytesRead).toString("utf8").split(/\n/u);
+      for (const [index, line] of lines.entries()) {
+        appendLineFragment(line);
+        if (index < lines.length - 1) {
+          finishLine();
+        }
+      }
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+  if (currentLine) {
+    inspectCurrentLine();
+  }
+  return findings;
+}
+
 function assertNoErrorLogs(logPath) {
-  const log = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf8") : "";
-  const deny = [
-    /\buncaught exception\b/iu,
-    /\bunhandled rejection\b/iu,
-    /\bfatal\b/iu,
-    /\bpanic\b/iu,
-    /\blevel["']?\s*:\s*["']error["']/iu,
-    /\[(?:error|ERROR)\]/u,
-  ];
-  const allow = [/0 errors?/iu, /expected no diagnostics errors?/iu, /diagnostics errors?:\s*$/iu];
-  const findings = log
-    .split(/\r?\n/u)
-    .map((line, index) => ({ line, lineNumber: index + 1 }))
-    .filter(({ line }) => !allow.some((pattern) => pattern.test(line)))
-    .filter(({ line }) => deny.some((pattern) => pattern.test(line)));
+  const findings = findErrorLogFindings(logPath);
   if (findings.length > 0) {
     throw new Error(
       `unexpected error-like gateway logs:\n${findings
-        .slice(-20)
         .map(({ line, lineNumber }) => `${logPath}:${lineNumber}: ${line}`)
         .join("\n")}`,
     );
   }
 }
 
-function tailFile(file) {
+export function tailFile(file, maxBytes = LOG_TAIL_BYTES) {
   if (!fs.existsSync(file)) {
     return "";
   }
-  return tailText(fs.readFileSync(file, "utf8"));
+  const stat = fs.statSync(file);
+  const start = Math.max(0, stat.size - Math.max(1, maxBytes));
+  const length = stat.size - start;
+  const fd = fs.openSync(file, "r");
+  try {
+    const buffer = Buffer.alloc(length);
+    const bytesRead = fs.readSync(fd, buffer, 0, length, start);
+    return tailText(buffer.subarray(0, bytesRead).toString("utf8"));
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 function tailText(text) {

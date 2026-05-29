@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { satisfiesPluginApiRange } from "../infra/clawhub.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
@@ -57,6 +58,7 @@ import {
   resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginInstall,
 } from "./official-external-plugin-catalog.js";
+import { resolvePackagePluginApiRange } from "./package-compat.js";
 import { isPathInside, safeRealpathSync, safeStatSync } from "./path-safety.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
@@ -107,7 +109,7 @@ function resolveManifestPluginSourcePath(params: {
   rootDir: string;
   manifestPath: string;
   pluginId: string;
-  entryName: "providerCatalogEntry" | "providerDiscoveryEntry";
+  entryName: "providerCatalogEntry";
   entry: string;
   rejectHardlinks: boolean;
   diagnostics: PluginDiagnostic[];
@@ -472,12 +474,7 @@ function buildRecord(params: {
           entryName: "providerCatalogEntry" as const,
           entry: params.manifest.providerCatalogEntry,
         }
-      : params.manifest.providerDiscoveryEntry !== undefined
-        ? {
-            entryName: "providerDiscoveryEntry" as const,
-            entry: params.manifest.providerDiscoveryEntry,
-          }
-        : undefined;
+      : undefined;
   const manifestChannelConfigs =
     params.candidate.origin === "bundled" && params.bundledChannelConfigCollector
       ? params.bundledChannelConfigCollector({
@@ -779,14 +776,17 @@ function matchesInstalledPluginRecord(params: {
       const resolved = resolveUserPath(entry, params.env);
       return safeRealpathSync(resolved) ?? resolved;
     });
-  if (trackedPaths.length === 0 || candidatePaths.length === 0) {
+  if (candidatePaths.length === 0 || trackedPaths.length === 0) {
     return false;
   }
-  return candidatePaths.some((candidatePath) => {
-    return trackedPaths.some((trackedPath) => {
-      return candidatePath === trackedPath || isPathInside(trackedPath, candidatePath);
-    });
-  });
+  return trackedPaths.some((trackedPath) =>
+    candidatePaths.some(
+      (candidatePath) =>
+        candidatePath === trackedPath ||
+        isPathInside(trackedPath, candidatePath) ||
+        isPathInside(candidatePath, trackedPath),
+    ),
+  );
 }
 
 function npmSpecMatchesPackage(value: string | undefined, packageName: string): boolean {
@@ -1010,6 +1010,10 @@ export function loadPluginManifestRegistry(
     }
     const manifest = manifestRes.manifest;
     if (candidate.origin !== "bundled") {
+      const packageManifestSource = path.join(
+        candidate.packageDir ?? candidate.rootDir,
+        "package.json",
+      );
       const allowLegacyBareMinHostVersion =
         candidate.origin === "global" &&
         matchesInstalledPluginRecord({
@@ -1025,10 +1029,6 @@ export function loadPluginManifestRegistry(
         allowLegacyBareSemver: allowLegacyBareMinHostVersion,
       });
       if (!minHostVersionCheck.ok) {
-        const packageManifestSource = path.join(
-          candidate.packageDir ?? candidate.rootDir,
-          "package.json",
-        );
         diagnostics.push({
           level: minHostVersionCheck.kind === "invalid" ? "error" : "warn",
           pluginId: manifest.id,
@@ -1039,6 +1039,29 @@ export function loadPluginManifestRegistry(
               : minHostVersionCheck.kind === "unknown_host_version"
                 ? `plugin requires OpenClaw >=${minHostVersionCheck.requirement.minimumLabel}, but this host version could not be determined; skipping load`
                 : `plugin requires OpenClaw >=${minHostVersionCheck.requirement.minimumLabel}, but this host is ${minHostVersionCheck.currentVersion}; skipping load`,
+        });
+        continue;
+      }
+      const packagePluginApiRangeCheck = resolvePackagePluginApiRange(candidate.packageManifest);
+      if (!packagePluginApiRangeCheck.ok) {
+        diagnostics.push({
+          level: "error",
+          pluginId: manifest.id,
+          source: packageManifestSource,
+          message: `plugin manifest invalid | ${packagePluginApiRangeCheck.error}`,
+        });
+        continue;
+      }
+      const packagePluginApiRange = packagePluginApiRangeCheck.range;
+      if (
+        packagePluginApiRange &&
+        !satisfiesPluginApiRange(currentHostVersion, packagePluginApiRange)
+      ) {
+        diagnostics.push({
+          level: "warn",
+          pluginId: manifest.id,
+          source: packageManifestSource,
+          message: `plugin requires plugin API ${packagePluginApiRange}, but this host is ${currentHostVersion}; skipping load`,
         });
         continue;
       }

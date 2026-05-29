@@ -26,7 +26,7 @@ vi.mock("./outbound.js", () => ({
 function createRuntime(): PluginRuntime {
   return createPluginRuntimeMock({
     agent: {
-      runEmbeddedPiAgent: vi.fn().mockResolvedValue({
+      runEmbeddedAgent: vi.fn().mockResolvedValue({
         payloads: [{ text: "service bot online" }],
         meta: {},
       }),
@@ -176,8 +176,8 @@ describe("handleClickClackInbound", () => {
       },
     });
 
-    expect(runtime.channel.turn.runPrepared).not.toHaveBeenCalled();
-    expect(runtime.agent.runEmbeddedPiAgent).not.toHaveBeenCalled();
+    expect(runtime.channel.inbound.dispatchReply).not.toHaveBeenCalled();
+    expect(runtime.agent.runEmbeddedAgent).not.toHaveBeenCalled();
     const completionRequest = (runtime.llm.complete as LlmCompleteMock).mock.calls[0]?.[0];
     expect(completionRequest?.agentId).toBe("service-bot");
     expect(completionRequest?.model).toBe("openai/gpt-5.4-mini");
@@ -213,9 +213,9 @@ describe("handleClickClackInbound", () => {
       message: createMessage(),
     });
 
-    const runPrepared = vi.mocked(runtime.channel.turn.runPrepared);
-    expect(runPrepared).toHaveBeenCalledTimes(1);
-    expect(runPrepared.mock.calls[0]?.[0].ctxPayload.CommandAuthorized).toBe(true);
+    const dispatchReply = vi.mocked(runtime.channel.inbound.dispatchReply);
+    expect(dispatchReply).toHaveBeenCalledTimes(1);
+    expect(dispatchReply.mock.calls[0]?.[0].ctxPayload.CommandAuthorized).toBe(true);
   });
 
   it("accepts ClickClack DM target syntax in allowFrom", async () => {
@@ -242,10 +242,10 @@ describe("handleClickClackInbound", () => {
       }),
     });
 
-    const runPrepared = vi.mocked(runtime.channel.turn.runPrepared);
-    expect(runPrepared).toHaveBeenCalledTimes(1);
-    expect(runPrepared.mock.calls[0]?.[0].ctxPayload.ChatType).toBe("direct");
-    expect(runPrepared.mock.calls[0]?.[0].ctxPayload.CommandAuthorized).toBe(true);
+    const dispatchReply = vi.mocked(runtime.channel.inbound.dispatchReply);
+    expect(dispatchReply).toHaveBeenCalledTimes(1);
+    expect(dispatchReply.mock.calls[0]?.[0].ctxPayload.ChatType).toBe("direct");
+    expect(dispatchReply.mock.calls[0]?.[0].ctxPayload.CommandAuthorized).toBe(true);
   });
 
   it("does not dispatch agent turns from senders outside allowFrom", async () => {
@@ -279,7 +279,7 @@ describe("handleClickClackInbound", () => {
       }),
     });
 
-    expect(runtime.channel.turn.runPrepared).not.toHaveBeenCalled();
+    expect(runtime.channel.inbound.dispatchReply).not.toHaveBeenCalled();
     expect(runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
   });
 });

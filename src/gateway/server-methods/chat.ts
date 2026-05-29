@@ -1,18 +1,33 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
 import {
   buildTtsSupplementMediaPayload,
   getReplyPayloadTtsSupplement,
   isReplyPayloadTtsSupplement,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
+import {
+  GATEWAY_CLIENT_CAPS,
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+  hasGatewayClientCap,
+} from "../../../packages/gateway-protocol/src/client-info.js";
+import {
+  ErrorCodes,
+  errorShape,
+  formatValidationErrors,
+  validateChatAbortParams,
+  validateChatHistoryParams,
+  validateChatInjectParams,
+  validateChatSendParams,
+} from "../../../packages/gateway-protocol/src/index.js";
+import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../../../packages/gateway-protocol/src/schema.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { rewriteTranscriptEntriesInSessionFile } from "../../agents/embedded-agent-runner/transcript-rewrite.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
-import { rewriteTranscriptEntriesInSessionFile } from "../../agents/pi-embedded-runner/transcript-rewrite.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
+import type { AgentMessage } from "../../agents/runtime/index.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox/context.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
@@ -23,7 +38,7 @@ import type { MsgContext, TemplateContext } from "../../auto-reply/templating.js
 import { extractCanvasFromText } from "../../chat/canvas-render.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
-import { streamSessionTranscriptLines } from "../../config/sessions/transcript-stream.js";
+import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   measureDiagnosticsTimelineSpan,
@@ -46,7 +61,7 @@ import {
   type SavedMedia,
   saveMediaBuffer,
 } from "../../media/store.js";
-import { createChannelMessageReplyPipeline } from "../../plugin-sdk/channel-message.js";
+import { createChannelMessageReplyPipeline } from "../../plugin-sdk/channel-outbound.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-binding.js";
 import {
@@ -106,22 +121,6 @@ import {
   createManagedOutgoingImageBlocks,
 } from "../managed-image-attachments.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
-import {
-  GATEWAY_CLIENT_CAPS,
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-  hasGatewayClientCap,
-} from "../protocol/client-info.js";
-import {
-  ErrorCodes,
-  errorShape,
-  formatValidationErrors,
-  validateChatAbortParams,
-  validateChatHistoryParams,
-  validateChatInjectParams,
-  validateChatSendParams,
-} from "../protocol/index.js";
-import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../protocol/schema/primitives.js";
 import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
 import { readSessionTranscriptIndex } from "../session-transcript-index.fs.js";
 import {
@@ -1391,27 +1390,6 @@ function ensureTranscriptFile(params: { transcriptPath: string; sessionId: strin
   }
 }
 
-async function transcriptHasIdempotencyKey(
-  transcriptPath: string,
-  idempotencyKey: string,
-): Promise<boolean> {
-  try {
-    for await (const line of streamSessionTranscriptLines(transcriptPath)) {
-      try {
-        const parsed = JSON.parse(line) as { message?: { idempotencyKey?: unknown } };
-        if (parsed?.message?.idempotencyKey === idempotencyKey) {
-          return true;
-        }
-      } catch {
-        continue;
-      }
-    }
-    return false;
-  } catch {
-    return false;
-  }
-}
-
 async function findAssistantTranscriptMessageByIdempotencyKey(
   transcriptPath: string,
   idempotencyKey: string,
@@ -1423,18 +1401,13 @@ async function findAssistantTranscriptMessageByIdempotencyKey(
   const index = await readSessionTranscriptIndex(transcriptPath);
   const target = index?.entries.toReversed().find((entry) => {
     const message = entry.record.message as Record<string, unknown> | undefined;
-    return (
-      typeof entry.id === "string" &&
-      entry.id.trim().length > 0 &&
-      message?.role === "assistant" &&
-      message.idempotencyKey === trimmedIdempotencyKey
-    );
+    return message?.role === "assistant" && message.idempotencyKey === trimmedIdempotencyKey;
   });
   const message = target?.record.message as Record<string, unknown> | undefined;
-  if (!target?.id || !message) {
+  if (!target || !message) {
     return null;
   }
-  return { messageId: target.id, message };
+  return { messageId: target.id ?? trimmedIdempotencyKey, message };
 }
 
 async function findSourceReplyTranscriptMirrorByIdempotencyKey(
@@ -1550,17 +1523,14 @@ async function appendAssistantTranscriptMessage(params: {
     }
   }
 
-  if (
-    params.idempotencyKey &&
-    (await transcriptHasIdempotencyKey(transcriptPath, params.idempotencyKey))
-  ) {
+  if (params.idempotencyKey) {
     const existing = await findAssistantTranscriptMessageByIdempotencyKey(
       transcriptPath,
       params.idempotencyKey,
     );
-    return existing
-      ? { ok: true, messageId: existing.messageId, message: existing.message }
-      : { ok: true };
+    if (existing) {
+      return { ok: true, messageId: existing.messageId, message: existing.message };
+    }
   }
 
   return await appendInjectedAssistantMessageToTranscript({
@@ -1637,12 +1607,8 @@ function createChatAbortOps(context: GatewayRequestContext): ChatAbortOps {
   return {
     chatAbortControllers: context.chatAbortControllers,
     chatRunBuffers: context.chatRunBuffers,
-    chatDeltaSentAt: context.chatDeltaSentAt,
-    chatDeltaLastBroadcastLen: context.chatDeltaLastBroadcastLen,
-    chatDeltaLastBroadcastText: context.chatDeltaLastBroadcastText,
-    agentDeltaSentAt: context.agentDeltaSentAt,
-    bufferedAgentEvents: context.bufferedAgentEvents,
     chatAbortedRuns: context.chatAbortedRuns,
+    clearChatRunState: context.clearChatRunState,
     removeChatRun: context.removeChatRun,
     agentRunSeq: context.agentRunSeq,
     broadcast: context.broadcast,
@@ -3068,10 +3034,10 @@ export const chatHandlers: GatewayRequestHandlers = {
               }
               let broadcastedSourceReplyFinal = false;
               // WebChat persistence has two owners. Agent runs persist model-visible turns
-              // through Pi's SessionManager; this dispatcher only owns live delivery payloads.
+              // through OpenClaw runtime's SessionManager; this dispatcher only owns live delivery payloads.
               // Do not blindly mirror agent-run final payloads into JSONL or chat.history can
-              // duplicate normal Pi assistant turns. The non-agent branch below has no Pi
-              // assistant turn, so it appends a gateway-injected assistant entry before
+              // duplicate normal embedded-agent assistant turns. The non-agent branch below has no
+              // runtime-owned assistant turn, so it appends a gateway-injected assistant entry before
               // broadcasting the final UI event.
               if (!agentRunStarted) {
                 const btwReplies = deliveredReplies
@@ -3249,7 +3215,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                         ...(ttsSupplementMarker
                           ? { openclawTtsSupplement: ttsSupplementMarker }
                           : {}),
-                        // Keep this compatible with Pi stopReason enums even though this message isn't
+                        // Keep this compatible with runner stopReason enums even though this message isn't
                         // persisted to the transcript due to the append failure.
                         stopReason: "stop",
                         usage: { input: 0, output: 0, totalTokens: 0 },

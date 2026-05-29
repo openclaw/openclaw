@@ -341,6 +341,26 @@ describe("containerSendMessage", () => {
     ).rejects.toThrow("Signal REST send returned invalid timestamp");
   });
 
+  it.each(["0x18bcfe56800", "1700000000000.5"])(
+    "rejects non-decimal integer send timestamp %s",
+    async (timestamp) => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ timestamp }),
+      });
+
+      await expect(
+        containerSendMessage({
+          baseUrl: "http://localhost:8080",
+          account: "+14259798283",
+          recipients: ["+15550001111"],
+          message: "Hello world",
+        }),
+      ).rejects.toThrow("Signal REST send returned invalid timestamp");
+    },
+  );
+
   it("uses container styled text mode when styles are provided", async () => {
     mockFetch.mockResolvedValue({
       ok: true,
@@ -618,6 +638,24 @@ describe("containerFetchAttachment", () => {
         maxResponseBytes: 4,
       }),
     ).rejects.toThrow("Signal REST attachment exceeded size limit");
+    expect(arrayBuffer).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed content-length before reading attachments", async () => {
+    const arrayBuffer = vi.fn();
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers({ "content-length": "0x3" }),
+      arrayBuffer,
+    });
+
+    await expect(
+      containerFetchAttachment("attachment-123", {
+        baseUrl: "http://localhost:8080",
+        maxResponseBytes: 4,
+      }),
+    ).rejects.toThrow("invalid content-length header: 0x3");
     expect(arrayBuffer).not.toHaveBeenCalled();
   });
 

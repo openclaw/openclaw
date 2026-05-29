@@ -1914,6 +1914,7 @@ require_sudo() {
 
 install_git() {
     if [[ "$OS" == "macos" ]]; then
+        install_homebrew
         run_quiet_step "Installing Git" brew install git
     elif [[ "$OS" == "linux" ]]; then
         require_sudo
@@ -3100,12 +3101,11 @@ main() {
 
     ui_stage "Preparing environment"
 
-    # Step 1: Homebrew (macOS only)
-    install_homebrew
-
-    # Step 2: Node.js
+    # Step 1: Node.js. macOS package-manager branches install Homebrew lazily
+    # only when they are about to call brew.
     load_nvm_for_node_detection
     if ! check_node; then
+        install_homebrew
         install_node
     fi
     activate_supported_node_on_path || true

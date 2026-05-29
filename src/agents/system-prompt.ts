@@ -27,11 +27,11 @@ import {
   buildLimitedBootstrapPromptLines,
 } from "./bootstrap-prompt.js";
 import type { ResolvedTimeFormat } from "./date-time.js";
-import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
+import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
 import type {
   EmbeddedFullAccessBlockedReason,
   EmbeddedSandboxInfo,
-} from "./pi-embedded-runner/types.js";
+} from "./embedded-agent-runner/types.js";
 import {
   normalizePromptCapabilityIds,
   normalizeStructuredPromptSection,
@@ -96,7 +96,7 @@ function buildSubagentDelegationPreferenceSection(params: {
     "- Anything requiring more work than a direct reply should go through `sessions_spawn`; avoid doing expensive tool calls yourself.",
     "- Delegate file/code inspection, shell commands, web/browser use, long reads, debugging, coding, multi-step analysis, comparisons, non-trivial summarization, and background waiting.",
     "- Before spawning, decide what stays local and what is delegated. Give each child a clear objective, expected output, relevant files/inputs, write scope, verification ask, and whether it blocks your final answer.",
-    '- Set `taskName` when you will need a stable handle later; keep it lowercase with underscores. Omit `context` for isolated children; set `context:"fork"` only when current transcript details matter.',
+    '- Set `taskName` when you will need a stable handle later; keep it lowercase with underscores or hyphens. Omit `context` for isolated children; set `context:"fork"` only when current transcript details matter.',
     params.hasSessionsYield
       ? "- After spawning required work, call `sessions_yield` if you need completion events before answering. Do not poll for completion."
       : "- After spawning, do not poll for completion. Child completion is push-based and returns as a runtime event; synthesize that result for the user.",
@@ -176,6 +176,17 @@ function sortContextFilesForPrompt(contextFiles: EmbeddedContextFile[]): Embedde
     }
     return aPath.localeCompare(bPath);
   });
+}
+
+function prepareContextFilesForPrompt(contextFiles: EmbeddedContextFile[] = []) {
+  const ordered = sortContextFilesForPrompt(
+    contextFiles.filter((file) => typeof file.path === "string" && file.path.trim().length > 0),
+  );
+  return {
+    ordered,
+    stable: ordered.filter((file) => !isDynamicContextFile(file.path)),
+    dynamic: ordered.filter((file) => isDynamicContextFile(file.path)),
+  };
 }
 
 function buildProjectContextSection(params: {
@@ -308,25 +319,10 @@ export function buildAgentBootstrapSystemContext(params: {
   ];
 }
 
-export function buildAgentBootstrapSystemPromptSupplement(params: {
-  bootstrapMode?: BootstrapMode;
-  bootstrapTruncationNotice?: string;
-  contextFiles?: EmbeddedContextFile[];
-}): string | undefined {
-  const supplement = buildAgentBootstrapSystemPromptSections({
-    ...params,
-    includeProjectContext: true,
-  })
-    .join("\n")
-    .trim();
-  return supplement.length > 0 ? supplement : undefined;
-}
-
 export function buildAgentBootstrapSystemPromptSections(params: {
   bootstrapMode?: BootstrapMode;
   bootstrapTruncationNotice?: string;
   contextFiles?: EmbeddedContextFile[];
-  includeProjectContext?: boolean;
 }): string[] {
   const bootstrapFiles =
     params.bootstrapMode === "full"
@@ -344,29 +340,7 @@ export function buildAgentBootstrapSystemPromptSections(params: {
   if (bootstrapTruncationNotice) {
     lines.push("## Bootstrap Context Notice", bootstrapTruncationNotice, "");
   }
-  if (params.includeProjectContext === true && bootstrapFiles.length > 0) {
-    lines.push(
-      ...buildProjectContextSection({
-        files: bootstrapFiles,
-        heading: "# Project Context",
-        dynamic: false,
-      }),
-    );
-  }
   return lines;
-}
-
-export function appendAgentBootstrapSystemPromptSupplement(params: {
-  systemPrompt: string;
-  bootstrapMode?: BootstrapMode;
-  bootstrapTruncationNotice?: string;
-  contextFiles?: EmbeddedContextFile[];
-}): string {
-  const supplement = buildAgentBootstrapSystemPromptSupplement(params);
-  if (!supplement) {
-    return params.systemPrompt;
-  }
-  return `${params.systemPrompt.trimEnd()}\n\n${supplement}`;
 }
 
 function buildUserIdentitySection(ownerLine: string | undefined, isMinimal: boolean) {
@@ -706,7 +680,7 @@ export function buildAgentSystemPrompt(params: {
   subagentDelegationMode?: SubagentDelegationMode;
   /** Whether ACP-specific routing guidance should be included. Defaults to true. */
   acpEnabled?: boolean;
-  /** Prompt surface controls runtime-specific fallback fragments. Defaults to PI main. */
+  /** Prompt surface controls runtime-specific fallback fragments. Defaults to OpenClaw main. */
   promptSurface?: AgentPromptSurfaceKind;
   /** Registered runtime slash/native command names such as `codex`. */
   nativeCommandNames?: string[];
@@ -740,7 +714,7 @@ export function buildAgentSystemPrompt(params: {
   promptContribution?: ProviderSystemPromptContribution;
 }) {
   const acpEnabled = params.acpEnabled === true;
-  const promptSurface = params.promptSurface ?? "pi_main";
+  const promptSurface = params.promptSurface ?? "openclaw_main";
   const sandboxedRuntime = params.sandboxInfo?.enabled === true;
   const acpSpawnRuntimeEnabled = acpEnabled && !sandboxedRuntime;
   const coreToolSummaries: Record<string, string> = {
@@ -967,18 +941,11 @@ export function buildAgentSystemPrompt(params: {
       .join("\n");
   }
 
-  const contextFiles = params.contextFiles ?? [];
-  const validContextFiles = contextFiles.filter(
-    (file) => typeof file.path === "string" && file.path.trim().length > 0,
-  );
-  const orderedContextFiles = sortContextFilesForPrompt(validContextFiles);
-  const stableContextFiles = orderedContextFiles.filter((file) => !isDynamicContextFile(file.path));
-  const dynamicContextFiles = orderedContextFiles.filter((file) => isDynamicContextFile(file.path));
+  const contextFiles = prepareContextFilesForPrompt(params.contextFiles);
   const bootstrapSystemPromptSections = buildAgentBootstrapSystemPromptSections({
     bootstrapMode: params.bootstrapMode,
     bootstrapTruncationNotice: params.bootstrapTruncationNotice,
-    contextFiles: orderedContextFiles,
-    includeProjectContext: false,
+    contextFiles: contextFiles.ordered,
   });
   const stablePrefixCacheKey = hashStablePromptInput({
     workspaceDir: params.workspaceDir,
@@ -1019,7 +986,7 @@ export function buildAgentSystemPrompt(params: {
     memoryCitationsMode: params.memoryCitationsMode,
     memorySection,
     acpEnabled,
-    stableContextFiles,
+    stableContextFiles: contextFiles.stable,
   });
   const stablePrefix = cacheStablePromptPrefix(stablePrefixCacheKey, () => {
     const lines = [
@@ -1227,7 +1194,7 @@ export function buildAgentSystemPrompt(params: {
 
     lines.push(
       ...buildProjectContextSection({
-        files: stableContextFiles,
+        files: contextFiles.stable,
         heading: "# Project Context",
         dynamic: false,
       }),
@@ -1258,8 +1225,8 @@ export function buildAgentSystemPrompt(params: {
 
   lines.push(
     ...buildProjectContextSection({
-      files: dynamicContextFiles,
-      heading: stableContextFiles.length > 0 ? "# Dynamic Project Context" : "# Project Context",
+      files: contextFiles.dynamic,
+      heading: contextFiles.stable.length > 0 ? "# Dynamic Project Context" : "# Project Context",
       dynamic: true,
     }),
   );

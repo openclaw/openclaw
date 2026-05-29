@@ -33,7 +33,10 @@ vi.mock("../config/config.js", () => ({
 
 import "./test-helpers/fast-openclaw-tools-sessions.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { testing as embeddedRunsTesting, setActiveEmbeddedRun } from "./pi-embedded-runner/runs.js";
+import {
+  testing as embeddedRunsTesting,
+  setActiveEmbeddedRun,
+} from "./embedded-agent-runner/runs.js";
 import { testing as agentStepTesting } from "./tools/agent-step.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
@@ -244,7 +247,7 @@ describe("sessions tools", () => {
     });
   });
 
-  it("uses number (not integer) in tool schemas for Gemini compatibility", () => {
+  it("uses integer schemas for session count and window parameters", () => {
     const tools = createOpenClawTools();
     const byName = (name: string) => {
       const tool = tools.find((candidate) => candidate.name === name);
@@ -272,16 +275,16 @@ describe("sessions tools", () => {
       return value;
     };
 
-    expect(schemaProp("sessions_history", "limit").type).toBe("number");
-    expect(schemaProp("sessions_list", "limit").type).toBe("number");
-    expect(schemaProp("sessions_list", "activeMinutes").type).toBe("number");
-    expect(schemaProp("sessions_list", "messageLimit").type).toBe("number");
+    expect(schemaProp("sessions_history", "limit").type).toBe("integer");
+    expect(schemaProp("sessions_list", "limit").type).toBe("integer");
+    expect(schemaProp("sessions_list", "activeMinutes").type).toBe("integer");
+    expect(schemaProp("sessions_list", "messageLimit").type).toBe("integer");
     expect(schemaProp("sessions_list", "label").type).toBe("string");
     expect(schemaProp("sessions_list", "agentId").type).toBe("string");
     expect(schemaProp("sessions_list", "search").type).toBe("string");
     expect(schemaProp("sessions_list", "includeDerivedTitles").type).toBe("boolean");
     expect(schemaProp("sessions_list", "includeLastMessage").type).toBe("boolean");
-    expect(schemaProp("sessions_send", "timeoutSeconds").type).toBe("number");
+    expect(schemaProp("sessions_send", "timeoutSeconds").type).toBe("integer");
   });
 
   it("sessions_list forwards mailbox filters and includes messages", async () => {
@@ -1013,6 +1016,57 @@ describe("sessions tools", () => {
     expect(waitCalls).toHaveLength(6);
     expect(historyOnlyCalls).toHaveLength(7);
     expect(sendCallCount).toBe(0);
+  });
+
+  it("sessions_send returns pending agent error diagnostics on timeout", async () => {
+    const calls: Array<{ method?: string; params?: unknown }> = [];
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      calls.push(request);
+      if (request.method === "chat.history") {
+        return { messages: [] };
+      }
+      if (request.method === "agent") {
+        return {
+          runId: "run-pending-model-error",
+          status: "accepted",
+          acceptedAt: 1234,
+        };
+      }
+      if (request.method === "agent.wait") {
+        return {
+          runId: "run-pending-model-error",
+          status: "timeout",
+          error: "429 RESOURCE_EXHAUSTED",
+          pendingError: true,
+        };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "discord:group:req",
+      agentChannel: "discord",
+    }).find((candidate) => candidate.name === "sessions_send");
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("call-pending-error", {
+      sessionKey: "main",
+      message: "check status",
+      timeoutSeconds: 1,
+    });
+
+    const details = sessionsSendDetails(result.details);
+    expect(details.status).toBe("timeout");
+    expect(details.error).toBe("429 RESOURCE_EXHAUSTED");
+    expect(details.runId).toBe("run-pending-model-error");
+    expect(details.delivery?.status).toBe("pending");
+    expect(calls.filter((call) => call.method === "agent")).toHaveLength(1);
+    await vi.waitFor(() =>
+      expect(calls.filter((call) => call.method === "agent.wait").length).toBeGreaterThanOrEqual(2),
+    );
   });
 
   it("sessions_send resolves sessionId inputs", async () => {

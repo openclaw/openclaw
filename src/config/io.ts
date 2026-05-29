@@ -1043,6 +1043,12 @@ export function parseConfigJson5(
   json5: { parse: (value: string) => unknown } = JSON5,
 ): ParseConfigJson5Result {
   try {
+    return { ok: true, parsed: JSON.parse(raw) };
+  } catch {
+    // Keep JSON5 compatibility for authored config, but avoid the slower parser
+    // on the JSON files OpenClaw writes itself.
+  }
+  try {
     return { ok: true, parsed: json5.parse(raw) };
   } catch (err) {
     return { ok: false, error: String(err) };
@@ -2534,16 +2540,25 @@ export function projectConfigOntoRuntimeSourceSnapshot(config: OpenClawConfig): 
   return coerceConfig(applyMergePatch(projectedSource, runtimePatch));
 }
 
-export function loadConfig(options?: { skipPluginValidation?: boolean }): OpenClawConfig {
+export function loadConfig(options?: {
+  skipPluginValidation?: boolean;
+  pin?: boolean;
+}): OpenClawConfig {
+  const loadFresh = () =>
+    createConfigIO(options?.skipPluginValidation ? { pluginValidation: "skip" } : {}).loadConfig();
+  if (options?.pin === false) {
+    return loadFresh();
+  }
   // First successful load becomes the process snapshot. Long-lived runtimes
   // should swap this snapshot via explicit reload/watcher paths instead of
   // reparsing openclaw.json on hot code paths.
-  return loadPinnedRuntimeConfig(() =>
-    createConfigIO(options?.skipPluginValidation ? { pluginValidation: "skip" } : {}).loadConfig(),
-  );
+  return loadPinnedRuntimeConfig(loadFresh);
 }
 
-export function getRuntimeConfig(options?: { skipPluginValidation?: boolean }): OpenClawConfig {
+export function getRuntimeConfig(options?: {
+  skipPluginValidation?: boolean;
+  pin?: boolean;
+}): OpenClawConfig {
   return loadConfig(options);
 }
 

@@ -185,6 +185,7 @@ describe("buildAzureSpeechProvider", () => {
       lang: "en-US",
       outputFormat: "ogg-24khz-16bit-mono-opus",
       timeoutMs: 30_000,
+      maxBytes: 16 * 1024 * 1024,
     });
     expect(result).toEqual({
       audioBuffer: Buffer.from("audio-bytes"),
@@ -222,12 +223,41 @@ describe("buildAzureSpeechProvider", () => {
       lang: "es-US",
       outputFormat: "raw-8khz-8bit-mono-mulaw",
       timeoutMs: 30_000,
+      maxBytes: 16 * 1024 * 1024,
     });
     expect(result).toEqual({
       audioBuffer: Buffer.from("audio-bytes"),
       outputFormat: "raw-8khz-8bit-mono-mulaw",
       sampleRate: 8_000,
     });
+  });
+
+  it("applies the configured media byte cap to synthesis requests", async () => {
+    const provider = buildAzureSpeechProvider();
+
+    await provider.synthesize({
+      text: "hello",
+      cfg: {
+        agents: {
+          defaults: {
+            mediaMaxMb: 2,
+          },
+        },
+      } as never,
+      providerConfig: {
+        apiKey: "key",
+        region: "eastus",
+        voice: "en-US-JennyNeural",
+      },
+      target: "audio-file",
+      timeoutMs: 30_000,
+    });
+
+    expect(azureSpeechTTSMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        maxBytes: 2 * 1024 * 1024,
+      }),
+    );
   });
 
   it("lists voices through config or explicit request auth", async () => {

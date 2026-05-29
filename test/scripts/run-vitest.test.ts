@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   installVitestNoOutputWatchdog,
   resolveDirectNodeVitestArgs,
+  resolveExplicitTestFileNoPassArgs,
   resolveImplicitVitestArgs,
   resolveMissingVitestDependencyMessage,
   resolveMissingExplicitTestFiles,
@@ -84,6 +85,34 @@ describe("scripts/run-vitest", () => {
       "ui/src/ui/controllers/chat.test.ts",
     ];
     expect(resolveImplicitVitestArgs(argv)).toBe(argv);
+  });
+
+  it("fails explicit test-file runs when scoped configs would otherwise pass with no tests", () => {
+    expect(
+      resolveExplicitTestFileNoPassArgs([
+        "run",
+        "--config",
+        "test/vitest/vitest.tooling.config.ts",
+        "test/scripts/run-vitest.test.ts",
+      ]),
+    ).toEqual([
+      "run",
+      "--config",
+      "test/vitest/vitest.tooling.config.ts",
+      "test/scripts/run-vitest.test.ts",
+      "--passWithNoTests=false",
+    ]);
+  });
+
+  it("inserts explicit no-test failure before Vitest passthrough args", () => {
+    expect(
+      resolveExplicitTestFileNoPassArgs(["run", "test/scripts/run-vitest.test.ts", "--", "-x"]),
+    ).toEqual(["run", "test/scripts/run-vitest.test.ts", "--passWithNoTests=false", "--", "-x"]);
+  });
+
+  it("does not force no-test failure for globs or basename filters", () => {
+    const argv = ["run", "run-vitest.test.ts", "test/**/*.test.ts"];
+    expect(resolveExplicitTestFileNoPassArgs(argv)).toBe(argv);
   });
 
   it("reports missing explicit test files before Vitest can silently ignore them", () => {

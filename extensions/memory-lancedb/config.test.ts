@@ -1,5 +1,8 @@
 import fs from "node:fs";
-import { type JsonSchemaObject, validateJsonSchemaValue } from "openclaw/plugin-sdk/config-schema";
+import {
+  type JsonSchemaObject,
+  validateJsonSchemaValue,
+} from "openclaw/plugin-sdk/json-schema-runtime";
 import { describe, expect, it } from "vitest";
 import { memoryConfigSchema } from "./config.js";
 
@@ -106,6 +109,40 @@ describe("memory-lancedb config", () => {
         },
       });
     }).toThrow("embedding.provider must not be empty");
+  });
+
+  it("defaults non-finite character budgets and rejects invalid dimensions", () => {
+    const manifestResult = validateJsonSchemaValue({
+      schema: manifest.configSchema,
+      cacheKey: "memory-lancedb.manifest.invalid-dimensions",
+      value: {
+        embedding: {
+          apiKey: "sk-test",
+          dimensions: 1024.5,
+        },
+      },
+    });
+    const parsed = memoryConfigSchema.parse({
+      embedding: {
+        apiKey: "sk-test",
+      },
+      captureMaxChars: Number.NaN,
+      recallMaxChars: Number.POSITIVE_INFINITY,
+    });
+
+    expect(parsed.captureMaxChars).toBe(500);
+    expect(parsed.recallMaxChars).toBe(1000);
+    expect(manifestResult.ok).toBe(false);
+    for (const dimensions of [Number.NaN, 1024.5]) {
+      expect(() => {
+        memoryConfigSchema.parse({
+          embedding: {
+            apiKey: "sk-test",
+            dimensions,
+          },
+        });
+      }).toThrow("embedding.dimensions must be a positive integer");
+    }
   });
 
   it("still rejects unrelated unknown top-level config keys", () => {
