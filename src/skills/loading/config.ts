@@ -88,17 +88,17 @@ export function isBundledSkillAllowed(entry: SkillEntry, allowlist?: string[]): 
 export function shouldIncludeSkill(params: {
   entry: SkillEntry;
   config?: OpenClawConfig;
+  bundledAllowlist: string[] | undefined;
   eligibility?: SkillEligibilityContext;
 }): boolean {
-  const { entry, config, eligibility } = params;
+  const { entry, config, bundledAllowlist, eligibility } = params;
   const skillKey = resolveSkillKey(entry.skill, entry);
   const skillConfig = resolveSkillConfig(config, skillKey);
-  const allowBundled = normalizeAllowlist(config?.skills?.allowBundled);
 
   if (skillConfig?.enabled === false) {
     return false;
   }
-  if (!isBundledSkillAllowed(entry, allowBundled)) {
+  if (!isBundledSkillAllowed(entry, bundledAllowlist)) {
     return false;
   }
   return evaluateRuntimeEligibility({
