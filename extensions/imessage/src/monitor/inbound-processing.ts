@@ -29,7 +29,6 @@ import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { resolveIMessageAccount } from "../accounts.js";
 import { resolveIMessageConversationRoute } from "../conversation-route.js";
 import {
   isKnownFromMeIMessageMessageId,
@@ -83,19 +82,6 @@ function isIMessageConversationAllowTarget(entry: string): boolean {
   return (
     parsed.kind === "chat_id" || parsed.kind === "chat_guid" || parsed.kind === "chat_identifier"
   );
-}
-
-function resolveIMessageDirectReplyTarget(params: {
-  cfg: OpenClawConfig;
-  accountId: string;
-  sender: string;
-}): string {
-  const account = resolveIMessageAccount({
-    cfg: params.cfg,
-    accountId: params.accountId,
-  });
-  const servicePrefix = account.config.service === "sms" ? "sms" : "imessage";
-  return `${servicePrefix}:${params.sender}`;
 }
 
 function mergeIMessageGroupAllowFromWithLegacyChatTargets(params: {
@@ -916,13 +902,7 @@ export async function buildIMessageInboundContext(params: {
     });
   }
 
-  const imessageTo =
-    (decision.isGroup ? chatTarget : undefined) ||
-    resolveIMessageDirectReplyTarget({
-      cfg: params.cfg,
-      accountId: decision.route.accountId,
-      sender: decision.sender,
-    });
+  const imessageTo = (decision.isGroup ? chatTarget : undefined) || `imessage:${decision.sender}`;
   const inboundHistory =
     !decision.isGroup && params.dmHistory?.inboundHistory
       ? params.dmHistory.inboundHistory
