@@ -145,6 +145,10 @@ export function registerOnboardCommand(program: Command): void {
     )
     .option("--custom-image-input", "Mark the custom provider model as image-capable")
     .option("--custom-text-input", "Mark the custom provider model as text-only")
+    .option(
+      "--custom-context-window <tokens>",
+      "Custom provider model context window size in tokens (default: 128000 non-Azure, 400000 Azure)",
+    )
     .option("--gateway-port <port>", "Gateway port")
     .option("--gateway-bind <mode>", "Gateway bind: loopback|tailnet|lan|auto|custom")
     .option("--gateway-auth <mode>", "Gateway auth: token|password")
@@ -224,6 +228,8 @@ export function registerOnboardCommand(program: Command): void {
               : opts.customImageInput === true
                 ? true
                 : undefined,
+          customContextWindow:
+            opts.customContextWindow === undefined ? undefined : Number(opts.customContextWindow),
           gatewayPort: gatewayPort ?? undefined,
           gatewayBind: opts.gatewayBind as GatewayBind | undefined,
           gatewayAuth: opts.gatewayAuth as GatewayAuthChoice | undefined,

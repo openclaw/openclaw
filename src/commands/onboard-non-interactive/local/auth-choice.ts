@@ -181,6 +181,7 @@ export async function applyNonInteractiveAuthChoice(params: {
         apiKey: opts.customApiKey,
         providerId: opts.customProviderId,
         supportsImageInput: opts.customImageInput,
+        contextWindow: opts.customContextWindow,
       });
       const resolvedProviderId = resolveCustomProviderId({
         config: nextConfig,
@@ -218,6 +219,7 @@ export async function applyNonInteractiveAuthChoice(params: {
         apiKey: customApiKeyInput,
         providerId: customAuth.providerId,
         supportsImageInput: customAuth.supportsImageInput,
+        contextWindow: customAuth.contextWindow,
       });
       if (result.providerIdRenamedFrom && result.providerId) {
         runtime.log(
@@ -230,6 +232,7 @@ export async function applyNonInteractiveAuthChoice(params: {
         switch (err.code) {
           case "missing_required":
           case "invalid_compatibility":
+          case "invalid_context_window":
             runtime.error(err.message);
             break;
           default:
