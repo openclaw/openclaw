@@ -1099,7 +1099,7 @@ function shouldSkipExecScriptPreflight(params: {
   security: ExecSecurity;
   ask: ExecAsk;
 }): boolean {
-  return params.host === "gateway" && params.security === "full" && params.ask === "off";
+  return params.host === "gateway" && params.security === "full";
 }
 
 type ParsedExecApprovalCommand = {
@@ -1742,5 +1742,6 @@ export const execTool = createExecTool();
 export const testing = {
   parseOpenClawChannelsLoginShellCommand,
   validateScriptFileForShellBleed,
+  shouldSkipExecScriptPreflight,
 };
 export { testing as __testing };
