@@ -95,7 +95,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   agentDirs?: string[];
   includeAuthStoreRefs?: boolean;
   loadAuthStore?: (agentDir?: string) => AuthProfileStore;
-  /** Test override for discovered loadable plugins and their origins. */
+  // Test hook for discovered loadable plugin source metadata.
   loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
 }): Promise<PreparedSecretsRuntimeSnapshot> {
   const runtimeEnv = mergeSecretsRuntimeEnv(params.env);
