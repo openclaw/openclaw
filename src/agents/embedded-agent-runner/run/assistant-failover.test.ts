@@ -39,12 +39,15 @@ function makeParams(overrides: Partial<Params> = {}): Params {
     isProbeSession: false,
     overloadProfileRotations: 0,
     overloadProfileRotationLimit: 3,
+    sameProfileOverloadRetries: 0,
+    sameProfileOverloadRetryLimit: 1,
     previousRetryFailoverReason: null,
     logAssistantFailoverDecision: vi.fn(),
     warn: vi.fn(),
     maybeMarkAuthProfileFailure: vi.fn(async () => {}),
     maybeEscalateRateLimitProfileFallback: vi.fn(),
     maybeBackoffBeforeOverloadFailover: vi.fn(async () => {}),
+    backoffBeforeSameProfileOverloadRetry: vi.fn(async () => {}),
     advanceAuthProfile: vi.fn(async () => false),
   };
   return { ...defaults, ...overrides };
@@ -147,6 +150,88 @@ describe("handleAssistantFailover", () => {
         reason: "timeout",
         modelId: "claude-haiku-4-5-20251001",
       });
+    });
+
+    it("retries without profile rotation once for overloaded when no fallback is configured (#84236)", async () => {
+      const backoff = vi.fn(async () => {});
+      const warn = vi.fn();
+      const outcome = await handleAssistantFailover(
+        makeParams({
+          initialDecision: { action: "rotate_profile", reason: "overloaded" },
+          fallbackConfigured: false,
+          failoverReason: "overloaded",
+          billingFailure: false,
+          advanceAuthProfile: vi.fn(async () => false),
+          backoffBeforeSameProfileOverloadRetry: backoff,
+          warn,
+        }),
+      );
+
+      expect(outcome.action).toBe("retry");
+      if (outcome.action !== "retry") {
+        return;
+      }
+      expect(outcome.retryKind).toBe("same_profile_transient");
+      expect(outcome.sameProfileOverloadRetries).toBe(1);
+      expect(backoff).toHaveBeenCalledOnce();
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("assistant-side transient overloaded"),
+      );
+    });
+
+    it("surfaces overloaded after the same-profile retry cap is exhausted", async () => {
+      const backoff = vi.fn(async () => {});
+      const outcome = await handleAssistantFailover(
+        makeParams({
+          initialDecision: { action: "rotate_profile", reason: "overloaded" },
+          fallbackConfigured: false,
+          failoverReason: "overloaded",
+          billingFailure: false,
+          sameProfileOverloadRetries: 1,
+          sameProfileOverloadRetryLimit: 1,
+          advanceAuthProfile: vi.fn(async () => false),
+          backoffBeforeSameProfileOverloadRetry: backoff,
+        }),
+      );
+
+      const err = expectThrownFailoverError(outcome);
+      expect(err.reason).toBe("overloaded");
+      expect(backoff).not.toHaveBeenCalled();
+    });
+
+    it("does not retry same profile for rate_limit when no fallback is configured", async () => {
+      const outcome = await handleAssistantFailover(
+        makeParams({
+          initialDecision: { action: "rotate_profile", reason: "rate_limit" },
+          fallbackConfigured: false,
+          failoverReason: "rate_limit",
+          billingFailure: false,
+          rateLimitFailure: true,
+          advanceAuthProfile: vi.fn(async () => false),
+        }),
+      );
+
+      const err = expectThrownFailoverError(outcome);
+      expect(err.reason).toBe("rate_limit");
+    });
+
+    it("does not retry same profile for auth failures", async () => {
+      const outcome = await handleAssistantFailover(
+        makeParams({
+          initialDecision: { action: "rotate_profile", reason: "auth" },
+          fallbackConfigured: false,
+          failoverReason: "auth",
+          billingFailure: false,
+          authFailure: true,
+          advanceAuthProfile: vi.fn(async () => false),
+        }),
+      );
+
+      expect(outcome.action).toBe("throw");
+      if (outcome.action !== "throw") {
+        return;
+      }
+      expect(outcome.error.reason).toBe("auth");
     });
   });
 
