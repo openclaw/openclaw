@@ -85,7 +85,7 @@ export type RouteReplyResult = {
   /** True when a hook intentionally suppressed provider delivery. */
   suppressed?: boolean;
   /** Suppression reason when delivery was intentionally skipped. */
-  reason?: "cancelled_by_reply_payload_sending_hook";
+  reason?: "cancelled_by_reply_payload_sending_hook" | "empty_after_reply_payload_sending_hook";
   /** Optional message ID from the provider. */
   messageId?: string;
   /** Error message if the send failed. */
@@ -243,7 +243,11 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       },
     )
   ) {
-    return { ok: true };
+    return {
+      ok: true,
+      suppressed: true,
+      reason: "empty_after_reply_payload_sending_hook",
+    };
   }
 
   const replyTransport =

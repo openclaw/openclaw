@@ -17,6 +17,7 @@ const runWithModelFallbackMock = vi.fn();
 const compactEmbeddedAgentSessionMock = vi.fn();
 const routeReplyMock = vi.fn();
 const isRoutableChannelMock = vi.fn();
+const runReplyPayloadSendingHookMock = vi.fn();
 const runPreflightCompactionIfNeededMock = vi.fn();
 const resolveCommandSecretRefsViaGatewayMock = vi.fn();
 const resolveQueuedReplyExecutionConfigMock = vi.fn();
@@ -387,6 +388,9 @@ async function loadFreshFollowupRunnerModuleForTest() {
     isRoutableChannel: (...args: unknown[]) => isRoutableChannelMock(...args),
     routeReply: (...args: unknown[]) => routeReplyMock(...args),
   }));
+  vi.doMock("./reply-payload-sending-hook.js", () => ({
+    runReplyPayloadSendingHook: (...args: unknown[]) => runReplyPayloadSendingHookMock(...args),
+  }));
   vi.doMock("../../plugins/provider-runtime.js", async () => {
     const actual = await vi.importActual<typeof import("../../plugins/provider-runtime.js")>(
       "../../plugins/provider-runtime.js",
@@ -517,6 +521,10 @@ beforeEach(() => {
   compactEmbeddedAgentSessionMock.mockReset();
   runPreflightCompactionIfNeededMock.mockReset();
   resolveCommandSecretRefsViaGatewayMock.mockReset();
+  runReplyPayloadSendingHookMock.mockReset();
+  runReplyPayloadSendingHookMock.mockImplementation(
+    async (params: { payload: unknown }) => params.payload,
+  );
   resolveQueuedReplyExecutionConfigMock.mockReset();
   resolveProviderFollowupFallbackRouteMock.mockReset();
   resolveProviderFollowupFallbackRouteMock.mockReturnValue(undefined);
@@ -2641,6 +2649,32 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     expectNoBlockReplyTextIncludes(onBlockReply, "could not deliver it to the originating channel");
   });
 
+  it("runs reply payload hooks before same-channel route-failure fallback delivery", async () => {
+    routeReplyMock.mockResolvedValue({
+      ok: false,
+      error: "forced route failure",
+    });
+    runReplyPayloadSendingHookMock.mockImplementationOnce(
+      async (params: { payload: { text?: string } }) => ({
+        ...params.payload,
+        text: `${params.payload.text} + fallback-hooked`,
+      }),
+    );
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: { payloads: [{ text: "hello world!" }] },
+      queued: {
+        ...baseQueuedRun("discord"),
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+      } as FollowupRun,
+    });
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    expect(runReplyPayloadSendingHookMock).toHaveBeenCalledTimes(1);
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expectBlockReplyText(onBlockReply, "hello world! + fallback-hooked");
+  });
+
   it("uses dispatcher when origin routing metadata is incomplete", async () => {
     const { onBlockReply } = await runMessagingCase({
       agentResult: { payloads: [{ text: "hello world!" }] },
@@ -2654,6 +2688,50 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     expect(routeReplyMock).not.toHaveBeenCalled();
     expect(onBlockReply).toHaveBeenCalledTimes(1);
     expectBlockReplyText(onBlockReply, "hello world!");
+  });
+
+  it("runs reply payload hooks before dispatcher followup delivery", async () => {
+    runReplyPayloadSendingHookMock.mockImplementationOnce(
+      async (params: { payload: { text?: string } }) => ({
+        ...params.payload,
+        text: `${params.payload.text} + hooked`,
+      }),
+    );
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: { payloads: [{ text: "hello world!" }] },
+      queued: {
+        ...baseQueuedRun("webchat"),
+        originatingChannel: "discord",
+        originatingTo: undefined,
+      } as FollowupRun,
+    });
+
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(runReplyPayloadSendingHookMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "final",
+        channel: "webchat",
+        payload: expect.objectContaining({ text: "hello world!" }),
+        context: expect.objectContaining({ channelId: "webchat" }),
+      }),
+    );
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expectBlockReplyText(onBlockReply, "hello world! + hooked");
+  });
+
+  it("suppresses dispatcher followup delivery when reply payload hooks empty it", async () => {
+    runReplyPayloadSendingHookMock.mockResolvedValueOnce({ text: "" });
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: { payloads: [{ text: "hello world!" }] },
+      queued: {
+        ...baseQueuedRun("webchat"),
+        originatingChannel: "discord",
+        originatingTo: undefined,
+      } as FollowupRun,
+    });
+
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(onBlockReply).not.toHaveBeenCalled();
   });
 
   it("keeps message-tool-only queued followup finals private", async () => {

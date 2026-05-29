@@ -343,6 +343,29 @@ describe("routeReply", () => {
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
+  it("suppresses routed delivery when reply payload hooks empty the payload", async () => {
+    mocks.hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "reply_payload_sending"),
+      runReplyPayloadSending: vi.fn(async ({ payload }) => ({
+        payload: { ...payload, text: "" },
+      })),
+    };
+
+    const res = await routeReply({
+      payload: { text: "hello" },
+      channel: "telegram",
+      to: "chat-1",
+      cfg: {} as never,
+    });
+
+    expect(res).toEqual({
+      ok: true,
+      suppressed: true,
+      reason: "empty_after_reply_payload_sending_hook",
+    });
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
   it("passes policySessionKey through to outbound delivery targets", async () => {
     const cfg = {
       agents: {

@@ -50,6 +50,7 @@ import {
   refreshQueuedFollowupSession,
   type FollowupRun,
 } from "./queue.js";
+import { runReplyPayloadSendingHook } from "./reply-payload-sending-hook.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
@@ -266,7 +267,7 @@ export function createFollowupRunner(params: {
     payloads: ReplyPayload[],
     queued: FollowupRun,
     resolvedRun: { provider: string; modelId: string },
-    options: { mirror?: boolean } = {},
+    options: { mirror?: boolean; runId?: string } = {},
   ) => {
     // Check if we should route to originating channel.
     const { originatingChannel, originatingTo } = queued;
@@ -298,6 +299,37 @@ export function createFollowupRunner(params: {
 
     let crossChannelRouteFailureNeedsNotice = false;
     let routedAnyCrossChannelPayloadToOrigin = false;
+    const sendDispatcherPayload = async (payload: ReplyPayload) => {
+      if (!opts?.onBlockReply) {
+        return;
+      }
+      const dispatcherChannel =
+        resolveOriginMessageProvider({
+          provider: queued.run.messageProvider,
+        }) ?? "unknown";
+      const hookedPayload = await runReplyPayloadSendingHook({
+        payload,
+        kind: "final",
+        channel: dispatcherChannel,
+        sessionKey: queued.run.sessionKey,
+        runId: options.runId,
+        context: {
+          channelId: dispatcherChannel,
+          ...(queued.run.agentAccountId ? { accountId: queued.run.agentAccountId } : {}),
+          ...(queued.originatingTo ? { conversationId: queued.originatingTo } : {}),
+          ...(queued.run.sessionKey ? { sessionKey: queued.run.sessionKey } : {}),
+          ...(queued.run.senderId ? { senderId: queued.run.senderId } : {}),
+          ...(options.runId ? { runId: options.runId } : {}),
+        },
+      });
+      if (!hookedPayload || !hasOutboundReplyContent(hookedPayload)) {
+        return;
+      }
+      if (deliveryPlan.isSilentPayload(hookedPayload)) {
+        return;
+      }
+      await opts.onBlockReply(hookedPayload);
+    };
     for (const payload of sendablePayloads) {
       const providerRoute = deliveryPlan.resolveFollowupRoute({
         payload,
@@ -352,7 +384,7 @@ export function createFollowupRunner(params: {
           });
           if (opts?.onBlockReply) {
             if (origin && origin === provider) {
-              await opts.onBlockReply(payload);
+              await sendDispatcherPayload(payload);
             } else {
               crossChannelRouteFailureNeedsNotice = true;
             }
@@ -370,8 +402,8 @@ export function createFollowupRunner(params: {
             routedAnyCrossChannelPayloadToOrigin = true;
           }
         }
-      } else if (deliveryRoute === "dispatcher" && opts?.onBlockReply) {
-        await opts.onBlockReply(payload);
+      } else if (deliveryRoute === "dispatcher") {
+        await sendDispatcherPayload(payload);
       }
     }
     if (
@@ -379,7 +411,7 @@ export function createFollowupRunner(params: {
       !routedAnyCrossChannelPayloadToOrigin &&
       opts?.onBlockReply
     ) {
-      await opts.onBlockReply({
+      await sendDispatcherPayload({
         text:
           "Follow-up completed, but OpenClaw could not deliver it to the originating " +
           "channel. The reply content was not forwarded to this channel to avoid " +
@@ -881,7 +913,7 @@ export function createFollowupRunner(params: {
                         provider,
                         modelId: model,
                       },
-                      { mirror: false },
+                      { mirror: false, runId },
                     );
                     if (payload.isError === true) {
                       markVisibleToolErrorProgress();
@@ -1069,10 +1101,15 @@ export function createFollowupRunner(params: {
         return;
       }
 
-      await sendFollowupPayloads(deliveryPayloads, effectiveQueued, {
-        provider: providerUsed,
-        modelId: modelUsed,
-      });
+      await sendFollowupPayloads(
+        deliveryPayloads,
+        effectiveQueued,
+        {
+          provider: providerUsed,
+          modelId: modelUsed,
+        },
+        { runId },
+      );
     } finally {
       for (const end of endDeliveryCorrelations.toReversed()) {
         try {
