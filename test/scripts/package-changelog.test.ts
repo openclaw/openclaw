@@ -10,32 +10,27 @@ import {
 } from "../../scripts/package-changelog.mjs";
 
 function changelog(strings: TemplateStringsArray, ...values: string[]) {
-  const text = String.raw({ raw: strings }, ...values).replace(/^\n/u, "");
-  const indents = Array.from(text.matchAll(/^( +)\S/gmu), (match) => match[1].length);
-  const indent = indents.length ? Math.min(...indents) : 0;
-  const lines = text
-    .split("\n")
-    .map((line) => line.slice(indent))
-    .filter((line) => line.trim());
-  return `${lines.join("\n\n")}\n`;
+  return `${String.raw({ raw: strings }, ...values)
+    .replace(/^\n/u, "")
+    .trimEnd()}\n`;
 }
 
 const cumulativeChangelog = changelog`
-  # Changelog
-  Docs: https://docs.openclaw.ai
-  ## Unreleased
-  ### Fixes
-  - Pending note.
-  ## 2026.5.28
-  ### Highlights
-  - Current highlight.
-  ### Changes
-  - Current change.
-  ### Fixes
-  - Current fix.
-  ## 2026.5.27
-  ### Highlights
-  - Older highlight.
+# Changelog
+Docs: https://docs.openclaw.ai
+## Unreleased
+### Fixes
+- Pending note.
+## 2026.5.28
+### Highlights
+- Current highlight.
+### Changes
+- Current change.
+### Fixes
+- Current fix.
+## 2026.5.27
+### Highlights
+- Older highlight.
 `;
 
 describe("package-changelog", () => {
@@ -57,65 +52,69 @@ describe("package-changelog", () => {
   it("extracts only the package version stable release section", () => {
     expect(extractCurrentPackageChangelog(cumulativeChangelog, "2026.5.28-beta.1")).toBe(
       changelog`
-        # Changelog
-        Docs: https://docs.openclaw.ai
-        ## 2026.5.28
-        ### Highlights
-        - Current highlight.
-        ### Changes
-        - Current change.
-        ### Fixes
-        - Current fix.
-      `,
+# Changelog
+Docs: https://docs.openclaw.ai
+
+## 2026.5.28
+### Highlights
+- Current highlight.
+### Changes
+- Current change.
+### Fixes
+- Current fix.
+`,
     );
   });
 
   it("prefers an exact prerelease section when it exists", () => {
     const source = changelog`
-      # Changelog
-      ## 2026.5.28-beta.2
-      - Beta 2.
-      ## 2026.5.28
-      - Stable.
-    `;
+# Changelog
+## 2026.5.28-beta.2
+- Beta 2 package notes with enough release detail.
+## 2026.5.28
+- Stable.
+`;
 
     expect(extractCurrentPackageChangelog(source, "2026.5.28-beta.2")).toBe(changelog`
-      # Changelog
-      ## 2026.5.28-beta.2
-      - Beta 2.
-    `);
+# Changelog
+
+## 2026.5.28-beta.2
+- Beta 2 package notes with enough release detail.
+`);
   });
 
   it("uses Unreleased only as a prerelease fallback when no release heading exists", () => {
     const source = changelog`
-      # Changelog
-      ## Unreleased
-      - Pending beta.
-      ## 2026.5.27
-      - Older stable.
-    `;
+# Changelog
+## Unreleased
+- Pending beta package notes with enough release detail.
+## 2026.5.27
+- Older stable.
+`;
 
     expect(extractCurrentPackageChangelog(source, "2026.5.28-beta.1")).toBe(changelog`
-      # Changelog
-      ## Unreleased
-      - Pending beta.
-    `);
+# Changelog
+
+## Unreleased
+- Pending beta package notes with enough release detail.
+`);
   });
 
   it("extracts exact correction release sections", () => {
     const source = changelog`
-      # Changelog
-      ## 2026.5.28-1
-      - Correction.
-      ## 2026.5.28
-      - Stable.
-    `;
+# Changelog
+## 2026.5.28-1
+- Correction release notes with enough detail.
+## 2026.5.28
+- Stable.
+`;
 
     expect(extractCurrentPackageChangelog(source, "2026.5.28-1")).toBe(changelog`
-      # Changelog
-      ## 2026.5.28-1
-      - Correction.
-    `);
+# Changelog
+
+## 2026.5.28-1
+- Correction release notes with enough detail.
+`);
   });
 
   it("fails closed when package version has no matching release section", () => {
@@ -126,13 +125,28 @@ describe("package-changelog", () => {
 
   it("fails closed when the packaged changelog is unexpectedly large", () => {
     const source = changelog`
-      # Changelog
-      ## 2026.5.28
-      ${"é".repeat(260_000)}
-    `;
+# Changelog
+## 2026.5.28
+${"é".repeat(260_000)}
+`;
 
     expect(() => extractCurrentPackageChangelog(source, "2026.5.28")).toThrow(
       "exceeds the 512000 byte safety limit",
+    );
+  });
+
+  it("fails closed when the extracted release section is effectively empty", () => {
+    const source = changelog`
+# Changelog
+Docs: https://docs.openclaw.ai
+## 2026.5.28
+### Fixes
+## 2026.5.27
+- Older stable release notes with enough detail.
+`;
+
+    expect(() => extractCurrentPackageChangelog(source, "2026.5.28")).toThrow(
+      "below the 32 byte safety minimum",
     );
   });
 

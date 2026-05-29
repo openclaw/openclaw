@@ -9,6 +9,7 @@ const CHANGELOG_PATH = "CHANGELOG.md";
 const PACKAGE_JSON_PATH = "package.json";
 const BACKUP_PATH = path.join(".artifacts", "package-changelog", "CHANGELOG.md.prepack-backup");
 const MAX_PACKAGED_CHANGELOG_BYTES = 500 * 1024;
+const MIN_RELEASE_SECTION_BODY_BYTES = 32;
 const UNRELEASED_HEADING = "Unreleased";
 const RELEASE_HEADING_PATTERN =
   /^##\s+([0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(?:(?:-(?:alpha|beta)\.[1-9][0-9]*)|(?:-[1-9][0-9]*))?)(?:\s+.*)?$/u;
@@ -72,6 +73,13 @@ export function extractCurrentPackageChangelog(content, packageVersion) {
     .slice(heading.index, nextHeading?.index ?? lines.length)
     .join("\n")
     .trimEnd();
+  const releaseBody = releaseSection.split(/\r?\n/u).slice(1).join("\n").trim();
+  const releaseBodyBytes = Buffer.byteLength(releaseBody, "utf8");
+  if (releaseBodyBytes < MIN_RELEASE_SECTION_BODY_BYTES) {
+    throw new Error(
+      `Packaged changelog section for ${heading.version} is only ${releaseBodyBytes} body bytes, which is below the ${MIN_RELEASE_SECTION_BODY_BYTES} byte safety minimum.`,
+    );
+  }
   const packaged = `${preamble}\n\n${releaseSection}\n`;
   const packagedBytes = Buffer.byteLength(packaged, "utf8");
   if (packagedBytes > MAX_PACKAGED_CHANGELOG_BYTES) {
