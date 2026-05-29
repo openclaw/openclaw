@@ -13,6 +13,7 @@ import type * as ManifestRegistryModule from "../plugins/manifest-registry.js";
 import { runAgentAttempt } from "./command/attempt-execution.js";
 import type { RunEmbeddedAgentParams } from "./embedded-agent-runner/run/params.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent.js";
+import { resolveOpenAIRuntimeProvider } from "./openai-codex-routing.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 
 type LoadPluginManifestRegistry = typeof ManifestRegistryModule.loadPluginManifestRegistry;
@@ -410,7 +411,7 @@ describe("Auth profile runtime contract - embedded OpenClaw and CLI adapter", ()
     );
   });
 
-  it("routes explicit OpenAI OpenClaw runs with Codex OAuth through OpenAI Codex transport", async () => {
+  it("keeps explicit OpenAI OpenClaw runs logical while preserving Codex OAuth transport", async () => {
     await runAuthContractAttempt({
       tmpDir,
       storePath,
@@ -421,8 +422,27 @@ describe("Auth profile runtime contract - embedded OpenClaw and CLI adapter", ()
     });
 
     const params = capturedEmbeddedRunParams();
-    expect(params.provider).toBe(AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider);
+    expect(params.provider).toBe(AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider);
+    expect(params.agentHarnessId).toBe("openclaw");
     expect(params.authProfileId).toBe(AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId);
+    const provider = params.provider;
+    const authProfileId = params.authProfileId;
+    if (!provider) {
+      throw new Error("expected logical provider to be forwarded");
+    }
+    if (!authProfileId) {
+      throw new Error("expected Codex auth profile to be forwarded");
+    }
+    expect(
+      resolveOpenAIRuntimeProvider({
+        provider,
+        harnessRuntime: params.agentHarnessId,
+        authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
+        authProfileId,
+        config: providerRuntimeConfig(AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider, "openclaw"),
+        workspaceDir: tmpDir,
+      }),
+    ).toBe(AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider);
   });
 
   it("preserves OpenAI Codex auth profiles through the real codex/* harness startup path", async () => {
