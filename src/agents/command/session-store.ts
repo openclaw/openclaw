@@ -102,6 +102,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
   const modelUsed = result.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
   const providerUsed = result.meta.agentMeta?.provider ?? fallbackProvider ?? defaultProvider;
   const agentHarnessId = normalizeOptionalString(result.meta.agentMeta?.agentHarnessId);
+  const activeSessionFile = normalizeOptionalString(result.meta.agentMeta?.sessionFile);
   const runtimeContextTokens = resolvePositiveInteger(result.meta.agentMeta?.contextTokens);
   const contextBudgetStatus = result.meta.agentMeta?.contextBudgetStatus;
   const contextTokens =
@@ -136,6 +137,22 @@ export async function updateSessionStoreAfterAgentRun(params: {
           contextTokens,
         }),
   };
+  if (entry.sessionId !== sessionId) {
+    next.sessionFile =
+      activeSessionFile ??
+      resolveCompactionSessionFile({
+        entry,
+        sessionKey,
+        storePath,
+        newSessionId: sessionId,
+      });
+    next.usageFamilyKey = entry.usageFamilyKey ?? sessionKey;
+    next.usageFamilySessionIds = Array.from(
+      new Set([...(entry.usageFamilySessionIds ?? []), entry.sessionId, sessionId]),
+    );
+  } else if (activeSessionFile) {
+    next.sessionFile = activeSessionFile;
+  }
   if (preserveRuntimeModel) {
     // Keep the pre-existing runtime model and context window so a background
     // heartbeat turn using a different model does not bleed into the main

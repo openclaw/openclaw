@@ -270,6 +270,55 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
+  it("persists rotated compaction session identity and transcript file", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-rotated-session";
+      const sessionId = "test-rotated-session-old";
+      const rotatedSessionId = "test-rotated-session-new";
+      const rotatedSessionFile = path.join(path.dirname(storePath), "rotated-session.jsonl");
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          sessionFile: path.join(path.dirname(storePath), "old-session.jsonl"),
+          updatedAt: 1,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId: rotatedSessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.5",
+        result: {
+          meta: {
+            durationMs: 1,
+            agentMeta: {
+              sessionId: rotatedSessionId,
+              sessionFile: rotatedSessionFile,
+              provider: "openai",
+              model: "gpt-5.5",
+              compactionCount: 1,
+            },
+          },
+        },
+      });
+
+      expect(sessionStore[sessionKey]).toMatchObject({
+        sessionId: rotatedSessionId,
+        sessionFile: rotatedSessionFile,
+        usageFamilyKey: sessionKey,
+        usageFamilySessionIds: [sessionId, rotatedSessionId],
+        compactionCount: 1,
+      });
+      expect(sessionStore[sessionKey]?.sessionStartedAt).toBeGreaterThan(1);
+    });
+  });
+
   it("uses the runtime context budget from agent metadata instead of cold fallback", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {} as OpenClawConfig;
@@ -415,6 +464,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]).toEqual({
         sessionId: "cli-session-123",
       });
+      expect(sessionStore[sessionKey]?.sessionId).toBe(sessionId);
       expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBe("cli-session-123");
       expect(sessionStore[sessionKey]?.claudeCliSessionId).toBe("cli-session-123");
 
@@ -422,6 +472,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       expect(persisted[sessionKey]?.cliSessionBindings?.["claude-cli"]).toEqual({
         sessionId: "cli-session-123",
       });
+      expect(persisted[sessionKey]?.sessionId).toBe(sessionId);
       expect(persisted[sessionKey]?.cliSessionIds?.["claude-cli"]).toBe("cli-session-123");
       expect(persisted[sessionKey]?.claudeCliSessionId).toBe("cli-session-123");
     });
