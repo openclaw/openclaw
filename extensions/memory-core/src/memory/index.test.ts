@@ -13,6 +13,7 @@ import "./test-runtime-mocks.js";
 import type { MemoryIndexManager } from "./index.js";
 import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
 import { LOCAL_EMBEDDING_WORKER_ERROR_CODES } from "./manager-local-worker-errors.js";
+import type { MemoryIndexMeta } from "./manager-reindex-state.js";
 import { closeMemoryIndexManagersForAgent, EMBEDDING_PROBE_CACHE_TTL_MS } from "./manager.js";
 import {
   DEFAULT_LOCAL_MODEL,
@@ -729,6 +730,46 @@ describe("memory index", () => {
     expect(status.vector?.storeAvailable).toBe(available);
     expect(status.vector?.semanticAvailable).toBeUndefined();
     expect(status.vector?.available).toBeUndefined();
+  });
+
+  it("marks older vector indexes dirty after vector store probing", async () => {
+    const dbPath = path.join(workspaceDir, "index-vector-missing-dims.sqlite");
+    const legacyCfg = createCfg({
+      storePath: dbPath,
+      provider: "gemini",
+      vectorEnabled: false,
+    });
+    const legacyManager = await getFreshManager(legacyCfg);
+    await legacyManager.sync({ reason: "test", force: true });
+    await legacyManager.close?.();
+
+    const cfg = createCfg({
+      storePath: dbPath,
+      provider: "gemini",
+      vectorEnabled: true,
+    });
+    const manager = await getFreshManager(cfg);
+    try {
+      const metaAccess = manager as unknown as {
+        readMeta(): MemoryIndexMeta | null;
+      };
+      const meta = metaAccess.readMeta();
+      if (!meta) {
+        throw new Error("expected index metadata");
+      }
+      expect(meta.vectorDims).toBeUndefined();
+
+      await manager.probeVectorStoreAvailability?.();
+      const status = manager.status();
+
+      expect(status.dirty).toBe(true);
+      expect(status.custom?.indexIdentity).toEqual({
+        status: "mismatched",
+        reason: "index vector dimensions are missing",
+      });
+    } finally {
+      await manager.close?.();
+    }
   });
 
   it("caches embedding probe readiness across transient status managers", async () => {
