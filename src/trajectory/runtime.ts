@@ -56,7 +56,6 @@ type TrajectoryRuntimeRecorder = {
 
 const writers = new Map<string, TrajectoryRuntimeWriter>();
 const windowFlushes = new Map<string, Promise<void>>();
-const sourceSeqByFile = new Map<string, number>();
 const MAX_TRAJECTORY_WRITERS = 100;
 const TRAJECTORY_RUNTIME_DATA_STRING_MAX_CHARS = 32_768;
 const TRAJECTORY_RUNTIME_DATA_ARRAY_MAX_ITEMS = 64;
@@ -69,6 +68,7 @@ type TrajectoryRuntimeWriterDiagnostics = Omit<QueuedFileWriterDiagnostics, "act
 
 type TrajectoryRuntimeWriter = Omit<QueuedFileWriter, "describeQueue"> & {
   describeQueue?: () => TrajectoryRuntimeWriterDiagnostics;
+  nextSourceSeq?: () => number;
 };
 
 function writeTrajectoryPointerBestEffort(params: {
@@ -306,13 +306,6 @@ function readMaxTrajectorySourceSeq(filePath: string): number {
   );
 }
 
-function nextTrajectorySourceSeq(filePath: string): number {
-  const previous = sourceSeqByFile.get(filePath) ?? readMaxTrajectorySourceSeq(filePath);
-  const next = previous + 1;
-  sourceSeqByFile.set(filePath, next);
-  return next;
-}
-
 function readTrajectoryWindowLines(filePath: string, maxBytes: number): string[] {
   try {
     const raw = readRegularFileSync({
@@ -393,6 +386,7 @@ function createTrajectoryWindowWriter(
   let pendingWrites = 0;
   let activeOperation: TrajectoryRuntimeWriterDiagnostics["activeOperation"] = "idle";
   let queue: Promise<unknown> = Promise.resolve();
+  let sourceSeq = readMaxTrajectorySourceSeq(filePath);
 
   return {
     filePath,
@@ -439,6 +433,10 @@ function createTrajectoryWindowWriter(
       maxQueuedBytes: maxFileBytes,
       yieldBeforeWrite: false,
     }),
+    nextSourceSeq: () => {
+      sourceSeq += 1;
+      return sourceSeq;
+    },
   };
 }
 
@@ -512,7 +510,7 @@ export function createTrajectoryRuntimeRecorder(
 
   const buildEventLine = (type: string, data?: Record<string, unknown>): string | undefined => {
     const nextSeq = seq + 1;
-    const sourceSeq = nextTrajectorySourceSeq(filePath);
+    const sourceSeq = writer.nextSourceSeq?.() ?? nextSeq;
     const event: TrajectoryEvent = {
       traceSchema: "openclaw-trajectory",
       schemaVersion: 1,
@@ -555,9 +553,6 @@ export function createTrajectoryRuntimeRecorder(
     },
     flush: async () => {
       await writer.flush();
-      if (!params.writer) {
-        writers.delete(filePath);
-      }
     },
     describeFlushState: () => describeTrajectoryWriterFlushState(writer),
   };
