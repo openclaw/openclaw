@@ -530,7 +530,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
             `discord voice: ${label} autoJoin fired after ${Date.now() - startedAt}ms account=${account.accountId}`,
           );
           // autoJoin() itself guards against destroyed/disabled managers.
-          if (!voiceManager?.isEnabled()) return;
+          if (!voiceManager?.isEnabled()) {
+            return;
+          }
           void voiceManager
             .autoJoin()
             .then(() => {
