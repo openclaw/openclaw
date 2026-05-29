@@ -8,11 +8,9 @@ import {
   toImageDataUrl,
 } from "openclaw/plugin-sdk/image-generation";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
-import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
   assertOkOrThrowProviderError,
-  resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
 import {
   buildHostnameAllowlistPolicyFromSuffixAllowlist,
@@ -26,8 +24,8 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveFalHttpRequestConfig } from "./http-config.js";
 
-const DEFAULT_FAL_BASE_URL = "https://fal.run";
 const DEFAULT_FAL_IMAGE_MODEL = "fal-ai/flux/dev";
 const DEFAULT_FAL_EDIT_SUBPATH = "image-to-image";
 const FAL_KREA_2_MODEL_PREFIX = "krea/v2/";
@@ -551,15 +549,6 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
       },
     },
     async generateImage(req) {
-      const auth = await resolveApiKeyForProvider({
-        provider: "fal",
-        cfg: req.cfg,
-        agentDir: req.agentDir,
-        store: req.authStore,
-      });
-      if (!auth.apiKey) {
-        throw new Error("fal API key missing");
-      }
       const inputImageCount = req.inputImages?.length ?? 0;
       const hasInputImages = inputImageCount > 0;
       const requestedModel = req.model?.trim() || DEFAULT_FAL_IMAGE_MODEL;
@@ -588,20 +577,8 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
       if (!schema.supportsOutputFormat && req.outputFormat) {
         throw new Error(`fal ${requestedModel} does not support outputFormat overrides`);
       }
-      const explicitBaseUrl = req.cfg?.models?.providers?.fal?.baseUrl?.trim();
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        resolveProviderHttpRequestConfig({
-          baseUrl: explicitBaseUrl,
-          defaultBaseUrl: DEFAULT_FAL_BASE_URL,
-          allowPrivateNetwork: false,
-          defaultHeaders: {
-            Authorization: `Key ${auth.apiKey}`,
-            "Content-Type": "application/json",
-          },
-          provider: "fal",
-          capability: "image",
-          transport: "http",
-        });
+        await resolveFalHttpRequestConfig({ req, capability: "image" });
       const networkPolicy = resolveFalNetworkPolicy({ baseUrl, allowPrivateNetwork });
       const requestBody: Record<string, unknown> = {
         prompt: req.prompt,
