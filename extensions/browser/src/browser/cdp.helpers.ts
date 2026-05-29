@@ -16,6 +16,7 @@ import { CDP_HTTP_REQUEST_TIMEOUT_MS, CDP_WS_HANDSHAKE_TIMEOUT_MS } from "./cdp-
 import { BrowserCdpEndpointBlockedError } from "./errors.js";
 import { resolveBrowserRateLimitMessage } from "./rate-limit-message.js";
 import { withAllowedHostname } from "./ssrf-policy-helpers.js";
+import { normalizeBrowserTimerDelayMs } from "./timer-delay.js";
 
 export { isLoopbackHost };
 export { parseBrowserHttpUrl, redactCdpUrl };
@@ -196,7 +197,7 @@ function createCdpSender(ws: WebSocket, opts?: { commandTimeoutMs?: number }) {
   const pending = new Map<number, Pending>();
   const commandTimeoutMs =
     typeof opts?.commandTimeoutMs === "number" && Number.isFinite(opts.commandTimeoutMs)
-      ? Math.max(1, Math.floor(opts.commandTimeoutMs))
+      ? normalizeBrowserTimerDelayMs(opts.commandTimeoutMs)
       : undefined;
 
   const clearPendingTimer = (p: Pending) => {
@@ -306,7 +307,7 @@ export async function fetchCdpChecked(
   ssrfPolicy?: SsrFPolicy,
 ): Promise<CdpFetchResult> {
   const ctrl = new AbortController();
-  const t = setTimeout(ctrl.abort.bind(ctrl), timeoutMs);
+  const t = setTimeout(ctrl.abort.bind(ctrl), normalizeBrowserTimerDelayMs(timeoutMs));
   let guardedRelease: (() => Promise<void>) | undefined;
   let released = false;
   const release = async () => {

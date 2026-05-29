@@ -25,4 +25,13 @@ describe("parseVoiceCallIntOption", () => {
       "Invalid numeric value for --last: 1e3",
     );
   });
+
+  it("rejects unsafe integers and max-bound violations", () => {
+    expect(() => testing.parseVoiceCallIntOption("9007199254740993", "--last", { min: 1 })).toThrow(
+      "Invalid numeric value for --last: 9007199254740993",
+    );
+    expect(() =>
+      testing.parseVoiceCallIntOption("65536", "--port", { min: 1, max: 65535 }),
+    ).toThrow("Invalid numeric value for --port: 65536");
+  });
 });

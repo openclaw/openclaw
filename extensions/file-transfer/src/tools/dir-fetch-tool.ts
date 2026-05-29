@@ -2,30 +2,18 @@ import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import {
-  callGatewayTool,
-  listNodes,
-  resolveNodeIdFromList,
-  type AnyAgentTool,
-  type NodeListNode,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import { type AnyAgentTool } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import { appendFileTransferAudit } from "../shared/audit.js";
-import { throwFromNodePayload } from "../shared/errors.js";
 import { IMAGE_MIME_INLINE_SET, mimeFromExtension } from "../shared/mime.js";
-import {
-  humanSize,
-  readBoolean,
-  readClampedInt,
-  readGatewayCallOptions,
-  readTrimmedString,
-} from "../shared/params.js";
+import { humanSize, readBoolean, readClampedInt } from "../shared/params.js";
 import {
   DIR_FETCH_DEFAULT_MAX_BYTES,
   DIR_FETCH_HARD_MAX_BYTES,
   DIR_FETCH_TOOL_DESCRIPTOR,
   FILE_TRANSFER_SUBDIR,
 } from "./descriptors.js";
+import { invokeNodeToolPayload, readRequiredNodePath } from "./node-tool-invoke.js";
 
 // Cap how many local file paths we surface in details.media.mediaUrls.
 // Larger trees still land on disk but we don't spam the channel adapter
@@ -478,14 +466,7 @@ export function createDirFetchTool(): AnyAgentTool {
     ...DIR_FETCH_TOOL_DESCRIPTOR,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
-      const node = readTrimmedString(params, "node");
-      const dirPath = readTrimmedString(params, "path");
-      if (!node) {
-        throw new Error("node required");
-      }
-      if (!dirPath) {
-        throw new Error("path required");
-      }
+      const { node, requestedPath: dirPath } = readRequiredNodePath(params);
 
       const maxBytes = readClampedInt({
         input: params,
@@ -496,55 +477,17 @@ export function createDirFetchTool(): AnyAgentTool {
       });
       const includeDotfiles = readBoolean(params, "includeDotfiles", false);
 
-      const gatewayOpts = readGatewayCallOptions(params);
-      const nodes: NodeListNode[] = await listNodes(gatewayOpts);
-      const nodeId = resolveNodeIdFromList(nodes, node, false);
-      const nodeMeta = nodes.find((n) => n.nodeId === nodeId);
-      const nodeDisplayName = nodeMeta?.displayName ?? node;
-      const startedAt = Date.now();
-
-      const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", gatewayOpts, {
-        nodeId,
+      const { nodeId, nodeDisplayName, payload, startedAt } = await invokeNodeToolPayload({
+        node,
+        params,
         command: "dir.fetch",
-        params: {
+        commandParams: {
           path: dirPath,
           maxBytes,
           includeDotfiles,
         },
-        idempotencyKey: crypto.randomUUID(),
+        requestedPath: dirPath,
       });
-
-      const payload =
-        raw?.payload && typeof raw.payload === "object" && !Array.isArray(raw.payload)
-          ? (raw.payload as Record<string, unknown>)
-          : null;
-      if (!payload) {
-        await appendFileTransferAudit({
-          op: "dir.fetch",
-          nodeId,
-          nodeDisplayName,
-          requestedPath: dirPath,
-          decision: "error",
-          errorMessage: "invalid payload",
-          durationMs: Date.now() - startedAt,
-        });
-        throw new Error("invalid dir.fetch payload");
-      }
-      if (payload.ok === false) {
-        await appendFileTransferAudit({
-          op: "dir.fetch",
-          nodeId,
-          nodeDisplayName,
-          requestedPath: dirPath,
-          canonicalPath:
-            typeof payload.canonicalPath === "string" ? payload.canonicalPath : undefined,
-          decision: "error",
-          errorCode: typeof payload.code === "string" ? payload.code : undefined,
-          errorMessage: typeof payload.message === "string" ? payload.message : undefined,
-          durationMs: Date.now() - startedAt,
-        });
-        throwFromNodePayload("dir.fetch", payload);
-      }
 
       const canonicalPath = typeof payload.path === "string" ? payload.path : "";
       const tarBase64 = typeof payload.tarBase64 === "string" ? payload.tarBase64 : "";

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeEnvVarKey } from "../infra/host-env-security.js";
-import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
+import { parseTcpPort } from "../infra/tcp-port.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -249,14 +249,25 @@ function auditGatewayCommand(programArguments: string[] | undefined, issues: Ser
   }
 }
 
-function parseGatewayPortArg(value: string | undefined): number | undefined {
-  const parsed = parseStrictPositiveInteger(value ?? "");
-  return parsed !== undefined && parsed <= 65535 ? parsed : undefined;
+type GatewayServiceCommandPort =
+  | { kind: "missing" }
+  | { kind: "valid"; port: number }
+  | { kind: "invalid"; raw: string };
+
+function parseGatewayPortArg(value: string | undefined): GatewayServiceCommandPort {
+  const raw = value?.trim() ?? "";
+  const port = parseTcpPort(raw);
+  if (port !== null) {
+    return { kind: "valid", port };
+  }
+  return raw ? { kind: "invalid", raw } : { kind: "missing" };
 }
 
-export function readGatewayServiceCommandPort(programArguments?: string[]): number | undefined {
+function readGatewayServiceCommandPortState(
+  programArguments?: string[],
+): GatewayServiceCommandPort {
   if (!programArguments || programArguments.length === 0) {
-    return undefined;
+    return { kind: "missing" };
   }
   for (let index = 0; index < programArguments.length; index += 1) {
     const arg = programArguments[index];
@@ -267,7 +278,12 @@ export function readGatewayServiceCommandPort(programArguments?: string[]): numb
       return parseGatewayPortArg(arg.slice("--port=".length));
     }
   }
-  return undefined;
+  return { kind: "missing" };
+}
+
+export function readGatewayServiceCommandPort(programArguments?: string[]): number | undefined {
+  const servicePort = readGatewayServiceCommandPortState(programArguments);
+  return servicePort.kind === "valid" ? servicePort.port : undefined;
 }
 
 function auditGatewayServicePort(params: {
@@ -283,14 +299,21 @@ function auditGatewayServicePort(params: {
   ) {
     return;
   }
-  const servicePort = readGatewayServiceCommandPort(params.programArguments);
-  if (servicePort === undefined || servicePort === params.expectedPort) {
+  const servicePort = readGatewayServiceCommandPortState(params.programArguments);
+  if (servicePort.kind === "missing") {
     return;
   }
+  if (servicePort.kind === "valid" && servicePort.port === params.expectedPort) {
+    return;
+  }
+  const detail =
+    servicePort.kind === "valid"
+      ? `${servicePort.port} -> ${params.expectedPort}`
+      : `${servicePort.raw} -> ${params.expectedPort}`;
   params.issues.push({
     code: SERVICE_AUDIT_CODES.gatewayPortMismatch,
     message: "Gateway service port does not match current gateway config.",
-    detail: `${servicePort} -> ${params.expectedPort}`,
+    detail,
     level: "recommended",
   });
 }

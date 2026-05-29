@@ -6,8 +6,8 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
   buildEffectiveToolInventoryGroups,
-  buildRuntimeCompatibleToolInventory,
-} from "../../agents/tools-effective-inventory.js";
+} from "../../agents/tools-effective-inventory-groups.js";
+import { buildRuntimeCompatibleMcpToolInventory } from "../../agents/tools-effective-mcp-inventory.js";
 import type {
   EffectiveToolInventoryNotice,
   EffectiveToolInventoryResult,
@@ -251,7 +251,7 @@ function resolveRequestedAgentIdOrRespondError(params: {
 
 function appendMcpInventoryGroups(params: {
   base: EffectiveToolInventoryResult;
-  mcpInventory: ReturnType<typeof buildRuntimeCompatibleToolInventory>;
+  mcpInventory: ReturnType<typeof buildRuntimeCompatibleMcpToolInventory>;
 }): EffectiveToolInventoryResult {
   const mcpEntries = params.mcpInventory.entries.filter((entry) => entry.source === "mcp");
   const notices = [...(params.base.notices ?? []), ...params.mcpInventory.notices];
@@ -432,7 +432,7 @@ async function resolveReadOnlyToolsEffectiveInventory(
     modelProvider: context.modelProvider,
     modelId: context.modelId,
   });
-  const mcpInventory = buildRuntimeCompatibleToolInventory({
+  const mcpInventory = buildRuntimeCompatibleMcpToolInventory({
     tools: filteredMcpTools,
     cfg: context.cfg,
     workspaceDir: runtime.workspaceDir,

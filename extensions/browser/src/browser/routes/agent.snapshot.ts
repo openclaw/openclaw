@@ -26,6 +26,7 @@ import {
   normalizeBrowserScreenshot,
 } from "../screenshot.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
+import { normalizeBrowserTimerDelayMs } from "../timer-delay.js";
 import {
   getPwAiModule,
   handleRouteError,
@@ -370,7 +371,7 @@ export function registerBrowserAgentSnapshotRoutes(
       const timeoutMsRaw = toNumber(body.timeoutMs);
       const timeoutMs =
         timeoutMsRaw !== undefined
-          ? Math.max(1, Math.floor(timeoutMsRaw))
+          ? normalizeBrowserTimerDelayMs(timeoutMsRaw)
           : DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS;
 
       if (fullPage && (ref || element)) {

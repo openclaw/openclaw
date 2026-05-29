@@ -34,6 +34,11 @@ through `openclaw policy check` and `openclaw doctor --lint`. A clean policy
 check emits policy, evidence, findings, and attestation hashes that operators
 can record for audit.
 
+`openclaw policy compare --baseline <file>` compares one policy file to another
+policy file. It is config-level conformance only: it uses policy rule metadata
+to verify that the checked policy is not missing or weaker than the authored
+baseline, and it does not inspect runtime state, credentials, or secret values.
+
 Tool posture rules can require approved profiles, workspace-only filesystem
 tools, bounded exec security/ask/host settings, disabled elevated mode, exact
 `alsoAllow` entries, and required tool deny entries. The evidence records
