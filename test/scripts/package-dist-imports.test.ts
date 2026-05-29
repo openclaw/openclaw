@@ -84,6 +84,28 @@ describe("package dist imports", () => {
     expect(errors).toEqual(["dist/a.js imports missing dist/missing.js"]);
   });
 
+  it("ignores dynamic imports with non-literal first arguments", () => {
+    const files = {
+      "dist/a.js": `const mod = await import(new URL("./asset.js", import.meta.url));\n`,
+    };
+    const errors = collectPackageDistImportErrors({
+      files: ["dist/a.js"],
+      readText: makeReader(files),
+    });
+    expect(errors).toEqual([]);
+  });
+
+  it("captures dynamic imports inside template literal interpolations", () => {
+    const files = {
+      "dist/a.js": 'const path = `./bundle/${await import("./missing.js")}`;\n',
+    };
+    const errors = collectPackageDistImportErrors({
+      files: ["dist/a.js"],
+      readText: makeReader(files),
+    });
+    expect(errors).toEqual(["dist/a.js imports missing dist/missing.js"]);
+  });
+
   it("captures re-exports", () => {
     const files = {
       "dist/a.js": `export { foo } from "./missing-a.js";\nexport * from "./missing-b.js";\nexport * as ns from "./missing-c.js";\n`,

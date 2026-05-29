@@ -193,6 +193,32 @@ function collectImportSpecifiers(source) {
           index += "import".length - 1;
           continue;
         }
+        if (peek.char === "(") {
+          const argPeek = peekNextSignificant(source, peek.index + 1);
+          if (argPeek.char === '"' || argPeek.char === "'") {
+            stmtState = "import";
+            index = argPeek.index - 1;
+            continue;
+          }
+          if (argPeek.char === "`") {
+            let cursor = argPeek.index + 1;
+            while (cursor < source.length) {
+              const c = source[cursor];
+              if (c === "\\") {
+                cursor += 2;
+                continue;
+              }
+              if (c === "`") {
+                break;
+              }
+              cursor += 1;
+            }
+            index = cursor >= source.length ? source.length - 1 : cursor;
+            continue;
+          }
+          index += "import".length - 1;
+          continue;
+        }
         stmtState = "import";
         index += "import".length - 1;
         continue;
@@ -209,14 +235,28 @@ function collectImportSpecifiers(source) {
     }
 
     if (ch === "`") {
-      // Template literals can contain `${...}` interpolations. The dist files
-      // we scan never use template literals to express an import specifier,
-      // so we walk past the literal without expanding interpolations.
       let cursor = index + 1;
       while (cursor < source.length) {
         const c = source[cursor];
         if (c === "\\") {
           cursor += 2;
+          continue;
+        }
+        if (c === "$" && source[cursor + 1] === "{") {
+          const innerStart = cursor + 2;
+          let depth = 1;
+          cursor += 2;
+          while (cursor < source.length && depth > 0) {
+            if (source[cursor] === "{") {
+              depth += 1;
+            } else if (source[cursor] === "}") {
+              depth -= 1;
+            }
+            cursor += 1;
+          }
+          if (depth === 0) {
+            specifiers.push(...collectImportSpecifiers(source.slice(innerStart, cursor - 1)));
+          }
           continue;
         }
         if (c === "`") {
