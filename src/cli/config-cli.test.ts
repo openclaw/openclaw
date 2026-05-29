@@ -2255,6 +2255,109 @@ describe("config cli", () => {
       expect(resolveOptions).toBeTypeOf("object");
     });
 
+    it("dry-runs pluginIntegration provider patches against manifest integration metadata", async () => {
+      const pluginId = "secret-provider-proof";
+      const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-plugin-provider-"));
+      try {
+        fs.writeFileSync(path.join(rootDir, "index.js"), "export default {};\n", "utf8");
+        fs.writeFileSync(path.join(rootDir, "resolve.mjs"), "process.stdin.resume();\n", "utf8");
+        const resolved = {
+          secrets: {
+            providers: {},
+          },
+        } as unknown as OpenClawConfig;
+        mockLoadPluginMetadataSnapshot.mockReturnValue(
+          createPluginMetadataSnapshot({
+            diagnostics: [],
+            plugins: [
+              createPluginManifestRecord({
+                id: pluginId,
+                enabledByDefault: true,
+                origin: "bundled",
+                rootDir,
+                source: path.join(rootDir, "index.js"),
+                manifestPath: path.join(rootDir, "openclaw.plugin.json"),
+                secretProviderIntegrations: {
+                  vault: {
+                    source: "exec",
+                    command: "${node}",
+                    args: ["./resolve.mjs"],
+                  },
+                },
+              }),
+            ],
+          }),
+        );
+
+        setSnapshot(resolved, resolved);
+        const validPatch = writeTempJson5File("openclaw-config-plugin-provider-valid", {
+          secrets: {
+            providers: {
+              team: {
+                source: "exec",
+                pluginIntegration: { pluginId, integrationId: "vault" },
+              },
+            },
+          },
+        });
+        try {
+          await runConfigCommand([
+            "config",
+            "patch",
+            "--file",
+            validPatch,
+            "--dry-run",
+            "--allow-exec",
+            "--json",
+          ]);
+        } finally {
+          fs.rmSync(validPatch, { force: true });
+        }
+        expect(mockWriteConfigFile).not.toHaveBeenCalled();
+
+        setSnapshot(resolved, resolved);
+        const invalidPatch = writeTempJson5File("openclaw-config-plugin-provider-invalid", {
+          secrets: {
+            providers: {
+              team: {
+                source: "exec",
+                pluginIntegration: { pluginId, integrationId: "missing" },
+              },
+            },
+          },
+        });
+        try {
+          await expect(
+            runConfigCommand([
+              "config",
+              "patch",
+              "--file",
+              invalidPatch,
+              "--dry-run",
+              "--allow-exec",
+              "--json",
+            ]),
+          ).rejects.toThrow("__exit__:1");
+        } finally {
+          fs.rmSync(invalidPatch, { force: true });
+        }
+        const invalidPayload = lastMockArg(defaultRuntime.writeJson) as {
+          errors?: Array<{ message?: string }>;
+        };
+        const errorMessages = invalidPayload.errors?.map((error) => error.message ?? "") ?? [];
+        expect(errorMessages.some((message) => message.includes("secrets.providers.team"))).toBe(
+          true,
+        );
+        expect(
+          errorMessages.some((message) =>
+            message.includes(`does not declare secret provider integration "missing"`),
+          ),
+        ).toBe(true);
+      } finally {
+        fs.rmSync(rootDir, { recursive: true, force: true });
+      }
+    });
+
     it("schema-validates SecretRef-only config patch operations", async () => {
       const resolved = {
         secrets: {
