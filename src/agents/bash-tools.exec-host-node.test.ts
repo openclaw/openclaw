@@ -2118,12 +2118,12 @@ describe("executeNodeHostCommand", () => {
     expect(callGatewayToolMock).toHaveBeenCalledTimes(1);
   });
 
-  it("does not mark node denylist fallback prechecked without node proof", async () => {
+  it("lets node enforce denylist fallback policy after approval timeout", async () => {
     resolveApprovalDecisionOrUndefinedMock.mockResolvedValue(null);
     createExecApprovalDecisionStateMock.mockReturnValue({
       baseDecision: { timedOut: true },
-      approvedByAsk: false,
-      deniedReason: "approval-timeout (denylist-not-checked)",
+      approvedByAsk: true,
+      deniedReason: null,
     });
     resolveExecHostApprovalContextMock.mockReturnValue({
       approvals: { allowlist: [], file: { version: 1, agents: {} } },
@@ -2150,14 +2150,13 @@ describe("executeNodeHostCommand", () => {
       expect(createExecApprovalDecisionStateMock).toHaveBeenCalledWith(
         expect.objectContaining({
           askFallback: "denylist",
-          denylistFallbackPrechecked: false,
+          denylistFallbackPrechecked: true,
         }),
       );
     });
-    expect(
-      callGatewayToolMock.mock.calls.some(
-        ([, , params]) => (params as MockNodeInvokeParams | undefined)?.command === "system.run",
-      ),
-    ).toBe(false);
+    await vi.waitFor(() => {
+      const runParams = requireRunParams(requireGatewayCommand("system.run"));
+      expect(runParams).toMatchObject({ requestedSecurity: "denylist", requestedAsk: "off" });
+    });
   });
 });
