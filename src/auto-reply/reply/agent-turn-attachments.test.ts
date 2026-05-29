@@ -5,7 +5,8 @@ import { resolveInlineAgentImageAttachments } from "./agent-turn-attachments.js"
 const VALID_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
 
-const ASCII_ONLY = /^[\x00-\x7f]*$/;
+const isAsciiOnly = (value: string): boolean =>
+  [...value].every((ch) => ch.charCodeAt(0) <= 0x7f);
 
 describe("resolveInlineAgentImageAttachments base64 safety", () => {
   it("re-encodes raw latin1/binary data into ASCII base64", () => {
@@ -14,7 +15,7 @@ describe("resolveInlineAgentImageAttachments base64 safety", () => {
     // `source.base64`, which Anthropic rejects for non-ASCII content).
     const rawBytes = Buffer.from(VALID_PNG_BASE64, "base64");
     const latin1Data = rawBytes.toString("latin1");
-    expect(ASCII_ONLY.test(latin1Data)).toBe(false);
+    expect(isAsciiOnly(latin1Data)).toBe(false);
 
     const [attachment] = resolveInlineAgentImageAttachments([
       { data: latin1Data, mimeType: "image/png" },
@@ -22,7 +23,7 @@ describe("resolveInlineAgentImageAttachments base64 safety", () => {
 
     expect(attachment).toBeDefined();
     // The resulting source.base64 must be pure ASCII.
-    expect(ASCII_ONLY.test(attachment.data)).toBe(true);
+    expect(isAsciiOnly(attachment.data)).toBe(true);
     // And it must decode back to the original image bytes (no corruption).
     expect(Buffer.from(attachment.data, "base64").equals(rawBytes)).toBe(true);
   });
