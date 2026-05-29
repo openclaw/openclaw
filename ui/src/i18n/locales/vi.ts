@@ -185,6 +185,8 @@ export const vi: TranslationMap = {
     updated: "Đã cập nhật",
     tokens: "Token",
     compaction: "Nén",
+    goal: "Mục tiêu",
+    goalNote: "Ghi chú mục tiêu",
     thinking: "Suy nghĩ",
     fast: "Nhanh",
     verbose: "Chi tiết",

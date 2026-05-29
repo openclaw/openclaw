@@ -188,6 +188,8 @@ export const ja_JP: TranslationMap = {
     updated: "更新日時",
     tokens: "トークン",
     compaction: "圧縮",
+    goal: "目標",
+    goalNote: "目標メモ",
     thinking: "Thinking",
     fast: "高速",
     verbose: "詳細",

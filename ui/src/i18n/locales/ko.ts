@@ -184,6 +184,8 @@ export const ko: TranslationMap = {
     updated: "업데이트됨",
     tokens: "토큰",
     compaction: "압축",
+    goal: "목표",
+    goalNote: "목표 메모",
     thinking: "생각 수준",
     fast: "빠름",
     verbose: "상세",

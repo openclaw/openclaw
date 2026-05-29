@@ -183,6 +183,8 @@ export const th: TranslationMap = {
     updated: "อัปเดตแล้ว",
     tokens: "โทเค็น",
     compaction: "การบีบอัด",
+    goal: "เป้าหมาย",
+    goalNote: "หมายเหตุเป้าหมาย",
     thinking: "Thinking",
     fast: "เร็ว",
     verbose: "ละเอียด",

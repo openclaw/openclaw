@@ -186,6 +186,8 @@ export const pl: TranslationMap = {
     updated: "Zaktualizowano",
     tokens: "Tokeny",
     compaction: "Kompaktowanie",
+    goal: "Cel",
+    goalNote: "Notatka dotycząca celu",
     thinking: "Myślenie",
     fast: "Szybko",
     verbose: "Szczegółowo",

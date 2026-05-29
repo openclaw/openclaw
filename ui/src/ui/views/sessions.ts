@@ -434,9 +434,9 @@ function sessionDetailItems(params: {
   };
   add(t("sessionsView.status"), row.status);
   if (row.goal) {
-    details.push({ label: "Goal", value: formatGoalDetail(row.goal) });
+    details.push({ label: t("sessionsView.goal"), value: formatGoalDetail(row.goal) });
   }
-  add("Goal note", row.goal?.lastStatusNote);
+  add(t("sessionsView.goalNote"), row.goal?.lastStatusNote);
   add(t("sessionsView.model"), row.model);
   add(t("sessionsView.provider"), row.modelProvider);
   add(t("sessionsView.runtime"), formatRuntimeMs(row.runtimeMs));

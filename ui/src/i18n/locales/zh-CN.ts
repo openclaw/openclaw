@@ -183,6 +183,8 @@ export const zh_CN: TranslationMap = {
     updated: "已更新",
     tokens: "Token",
     compaction: "压缩",
+    goal: "目标",
+    goalNote: "目标备注",
     thinking: "思考",
     fast: "快速",
     verbose: "详细",
