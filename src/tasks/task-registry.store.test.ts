@@ -569,23 +569,19 @@ describe("task-registry store runtime", () => {
         const dir = path.dirname(sqlitePath);
         mkdirSync(dir, { recursive: true });
 
-        // Write garbage bytes to simulate a corrupted database
         writeFileSync(sqlitePath, Buffer.from("not a valid sqlite database file at all"));
 
         resetTaskRegistryForTests({ persist: false });
 
-        // Gateway should recover: fresh empty database created
         const snapshot = getTaskRegistrySnapshot();
         expect(snapshot.tasks.length).toBe(0);
 
-        // Verify the corrupted file was quarantined (renamed with .corrupted. prefix)
         const dirEntries = readdirSync(dir);
         const quarantineFiles = dirEntries.filter((name) =>
           name.startsWith("runs.sqlite.corrupted."),
         );
         expect(quarantineFiles.length).toBe(1);
 
-        // Verify the fresh database works for writes
         const created = createTaskRecord({
           runtime: "cron",
           ownerKey: "agent:main:main",
@@ -615,30 +611,24 @@ describe("task-registry store runtime", () => {
         const dir = path.dirname(sqlitePath);
         mkdirSync(dir, { recursive: true });
 
-        // Write garbage to main db and WAL sidecar
         writeFileSync(sqlitePath, Buffer.from("corrupted main database"));
         writeFileSync(`${sqlitePath}-wal`, Buffer.from("corrupted wal"));
         writeFileSync(`${sqlitePath}-shm`, Buffer.from("corrupted shm"));
 
         resetTaskRegistryForTests({ persist: false });
 
-        // Should recover with fresh database
         const snapshot = getTaskRegistrySnapshot();
         expect(snapshot.tasks.length).toBe(0);
 
-        // The corrupted main db should be quarantined
         const dirEntries = readdirSync(dir);
         const quarantineFiles = dirEntries.filter((name) =>
           name.startsWith("runs.sqlite.corrupted."),
         );
-        // At least the main db should be quarantined
         expect(quarantineFiles.length).toBeGreaterThanOrEqual(1);
-        // A quarantine file ending without sidecar suffix is the main db
         expect(
           quarantineFiles.some((name) => !name.endsWith("-wal") && !name.endsWith("-shm")),
         ).toBe(true);
 
-        // Fresh database should be functional
         createTaskRecord({
           runtime: "acp",
           ownerKey: "agent:main:main",

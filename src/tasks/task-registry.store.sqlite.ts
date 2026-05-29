@@ -8,6 +8,7 @@ import {
   ensureSqliteStorePermissions,
   normalizeSqliteNumber,
   parseDeliveryContextJson,
+  SQLITE_SIDECAR_SUFFIXES,
 } from "./task-registry.sqlite.shared.js";
 import type { TaskRegistryStoreSnapshot } from "./task-registry.store.types.js";
 import type { TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
@@ -74,7 +75,7 @@ let cachedDatabase: TaskRegistryDatabase | null = null;
 const TASK_REGISTRY_DIR_MODE = 0o700;
 const TASK_REGISTRY_FILE_MODE = 0o600;
 const log = createSubsystemLogger("task-registry");
-const TASK_RUN_SELECT_COLUMNS = `;
+const TASK_RUN_SELECT_COLUMNS = `
   task_id,
   runtime,
   task_kind,
@@ -448,19 +449,22 @@ function isSqliteCorruptionError(error: unknown): boolean {
 function quarantineCorruptedDatabase(pathname: string): string | null {
   const quarantinePath = `${pathname}.corrupted.${Date.now()}`;
   try {
-    // Move sidecars first so a partial failure leaves the main file in place
-    for (const suffix of ["-shm", "-wal"]) {
+    for (const suffix of SQLITE_SIDECAR_SUFFIXES) {
+      if (!suffix) {
+        continue;
+      }
       const sidecar = `${pathname}${suffix}`;
       if (existsSync(sidecar)) {
         renameSync(sidecar, `${quarantinePath}${suffix}`);
       }
     }
-    // Then move the main database
     renameSync(pathname, quarantinePath);
     return quarantinePath;
   } catch {
-    // Roll back any moved sidecars to keep state consistent
-    for (const suffix of ["-shm", "-wal"]) {
+    for (const suffix of SQLITE_SIDECAR_SUFFIXES) {
+      if (!suffix) {
+        continue;
+      }
       const movedSidecar = `${quarantinePath}${suffix}`;
       if (existsSync(movedSidecar)) {
         try {
