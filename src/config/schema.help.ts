@@ -597,6 +597,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Node command names to block even if present in node claims or default allowlist (exact command-name matching only, e.g. `system.run`; does not inspect shell text inside that command).",
   "gateway.webchat.chatHistoryMaxChars":
     "Max characters per text field in chat.history responses before truncation (default: 12000).",
+  "gateway.webchat.openResponsesProgress":
+    "WebChat-only OpenResponses progress metadata settings. Defaults to off so response.output_text.delta remains real assistant text.",
+  "gateway.webchat.openResponsesProgress.mode":
+    'Set to "event" to emit an OpenClaw-specific non-transcript progress SSE event for WebChat OpenResponses streams. Default: "off".',
   nodeHost:
     "Node host controls for features exposed from this gateway node to other nodes or clients. Keep defaults unless you intentionally proxy local capabilities across your node network.",
   "nodeHost.browserProxy":

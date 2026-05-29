@@ -444,9 +444,21 @@ export type GatewayToolsConfig = {
   allow?: string[];
 };
 
+export type GatewayWebchatOpenResponsesProgressMode = "off" | "event";
+
+export type GatewayWebchatOpenResponsesProgressConfig = {
+  /**
+   * Opt-in OpenResponses progress metadata for WebChat streams.
+   * Default: off.
+   */
+  mode?: GatewayWebchatOpenResponsesProgressMode;
+};
+
 export type GatewayWebchatConfig = {
   /** Max characters per text field in chat.history responses before truncation (default: 12000). */
   chatHistoryMaxChars?: number;
+  /** WebChat-specific OpenResponses stream progress settings. */
+  openResponsesProgress?: GatewayWebchatOpenResponsesProgressConfig;
 };
 
 export type GatewayConfig = {

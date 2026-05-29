@@ -818,6 +818,37 @@ describe("gateway.tools config", () => {
   });
 });
 
+describe("gateway.webchat config", () => {
+  it("accepts OpenResponses progress event mode", () => {
+    const res = validateConfigObject({
+      gateway: {
+        webchat: {
+          openResponsesProgress: {
+            mode: "event",
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects unknown OpenResponses progress modes", () => {
+    const res = validateConfigObject({
+      gateway: {
+        webchat: {
+          openResponsesProgress: {
+            mode: "delta_hint",
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("gateway.webchat.openResponsesProgress.mode");
+    }
+  });
+});
+
 describe("gateway.channelHealthCheckMinutes", () => {
   it("accepts preauth handshake timeout tuning", () => {
     const res = validateConfigObject({

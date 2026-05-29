@@ -382,6 +382,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "gateway.nodes.allowCommands": "Gateway Node Allowlist (Extra Commands)",
   "gateway.nodes.denyCommands": "Gateway Node Denylist",
   "gateway.webchat.chatHistoryMaxChars": "WebChat History Max Chars",
+  "gateway.webchat.openResponsesProgress": "WebChat OpenResponses Progress",
+  "gateway.webchat.openResponsesProgress.mode": "WebChat OpenResponses Progress Mode",
   nodeHost: "Node Host",
   "nodeHost.browserProxy": "Node Browser Proxy",
   "nodeHost.browserProxy.enabled": "Node Browser Proxy Enabled",
