@@ -7,9 +7,11 @@ import {
   buildPublishedInstallScenarios,
   collectInstalledBundledRuntimeSidecarPaths,
   collectInstalledContextEngineRuntimeErrors,
+  collectInstalledPluginSdkZodArtifactErrors,
   collectInstalledRootDependencyManifestErrors,
   collectInstalledPackageErrors,
   normalizeInstalledBinaryVersion,
+  resolveInstalledBinaryCommandInvocation,
   resolveInstalledBinaryPath,
 } from "../scripts/openclaw-npm-postpublish-verify.ts";
 
@@ -146,6 +148,77 @@ describe("collectInstalledContextEngineRuntimeErrors", () => {
   });
 });
 
+describe("collectInstalledPluginSdkZodArtifactErrors", () => {
+  function withInstalledPackageRoot(run: (packageRoot: string) => void): void {
+    const packageRoot = mkdtempSync(join(tmpdir(), "openclaw-postpublish-zod-sdk-"));
+    try {
+      run(packageRoot);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  }
+
+  function writeInstalledFile(packageRoot: string, relativePath: string, contents: string): void {
+    const filePath = join(packageRoot, ...relativePath.split("/"));
+    mkdirSync(dirname(filePath), { recursive: true });
+    writeFileSync(filePath, contents, "utf8");
+  }
+
+  it("requires the plugin-sdk zod artifact", () => {
+    withInstalledPackageRoot((packageRoot) => {
+      expect(collectInstalledPluginSdkZodArtifactErrors(packageRoot)).toEqual([
+        "installed package is missing required plugin SDK artifact: dist/plugin-sdk/zod.js",
+      ]);
+    });
+  });
+
+  it("rejects plugin-sdk zod artifacts with a bare zod export", () => {
+    withInstalledPackageRoot((packageRoot) => {
+      writeInstalledFile(
+        packageRoot,
+        "dist/plugin-sdk/zod.js",
+        'import "../zod-D2c0iocA.js";\nexport * from "zod";\n',
+      );
+
+      expect(collectInstalledPluginSdkZodArtifactErrors(packageRoot)).toEqual([
+        "installed package plugin SDK zod artifact must be self-contained but dist/plugin-sdk/zod.js imports zod.",
+      ]);
+    });
+  });
+
+  it("rejects plugin-sdk zod artifacts when a reachable local chunk imports zod", () => {
+    withInstalledPackageRoot((packageRoot) => {
+      writeInstalledFile(
+        packageRoot,
+        "dist/plugin-sdk/zod.js",
+        'export { z } from "../zod-D2c0iocA.js";\n',
+      );
+      writeInstalledFile(
+        packageRoot,
+        "dist/zod-D2c0iocA.js",
+        'import * as zodCore from "zod/v4/core";\nexport const z = zodCore;\n',
+      );
+
+      expect(collectInstalledPluginSdkZodArtifactErrors(packageRoot)).toEqual([
+        "installed package plugin SDK zod artifact must be self-contained but dist/zod-D2c0iocA.js imports zod/v4/core.",
+      ]);
+    });
+  });
+
+  it("accepts plugin-sdk zod artifacts that only import package-local chunks", () => {
+    withInstalledPackageRoot((packageRoot) => {
+      writeInstalledFile(
+        packageRoot,
+        "dist/plugin-sdk/zod.js",
+        'export { z } from "../zod-D2c0iocA.js";\n',
+      );
+      writeInstalledFile(packageRoot, "dist/zod-D2c0iocA.js", "export const z = {};\n");
+
+      expect(collectInstalledPluginSdkZodArtifactErrors(packageRoot)).toEqual([]);
+    });
+  });
+});
+
 describe("normalizeInstalledBinaryVersion", () => {
   it("accepts decorated CLI version output", () => {
     expect(normalizeInstalledBinaryVersion("OpenClaw 2026.4.8 (9ece252)")).toBe("2026.4.8");
@@ -167,8 +240,43 @@ describe("resolveInstalledBinaryPath", () => {
 
   it("uses the Windows npm shim path on win32", () => {
     expect(resolveInstalledBinaryPath("C:/openclaw-prefix", "win32")).toBe(
-      "C:/openclaw-prefix/openclaw.cmd",
+      "C:\\openclaw-prefix\\openclaw.cmd",
     );
+  });
+});
+
+describe("resolveInstalledBinaryCommandInvocation", () => {
+  it("runs the Unix installed binary directly", () => {
+    expect(
+      resolveInstalledBinaryCommandInvocation("/tmp/openclaw-prefix", ["--version"], {
+        platform: "linux",
+      }),
+    ).toEqual({
+      command: "/tmp/openclaw-prefix/bin/openclaw",
+      args: ["--version"],
+    });
+  });
+
+  it("wraps the Windows installed npm shim without Node shell argv", () => {
+    expect(
+      resolveInstalledBinaryCommandInvocation(
+        "C:/openclaw prefix",
+        ["agent", "--message", "hello world"],
+        {
+          comSpec: "C:\\Windows\\System32\\cmd.exe",
+          platform: "win32",
+        },
+      ),
+    ).toEqual({
+      command: "C:\\Windows\\System32\\cmd.exe",
+      args: [
+        "/d",
+        "/s",
+        "/c",
+        '""C:\\openclaw prefix\\openclaw.cmd" agent --message "hello world""',
+      ],
+      windowsVerbatimArguments: true,
+    });
   });
 });
 
@@ -244,13 +352,13 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
         "utf8",
       );
       writeFileSync(
-        join(packageRoot, "dist", "discord-voice-runtime.js"),
-        'const OpusScript = require("opusscript");\nexport { OpusScript };\n',
-        "utf8",
-      );
-      writeFileSync(
         join(packageRoot, "dist", "externalized-plugin-runtime.js"),
-        'import * as lark from "@larksuiteoapi/node-sdk";\nexport { lark };\n',
+        [
+          'import * as lark from "@larksuiteoapi/node-sdk";',
+          'import prism from "prism-media";',
+          "export { lark, prism };",
+          "",
+        ].join("\n"),
         "utf8",
       );
       mkdirSync(join(packageRoot, "dist", "plugin-sdk"), { recursive: true });

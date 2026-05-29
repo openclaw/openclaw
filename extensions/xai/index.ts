@@ -8,8 +8,6 @@ import {
   buildXaiImageGenerationProvider,
   normalizeXaiModelId,
   resolveXaiTransport,
-  resolveXaiModelCompatPatch,
-  shouldContributeXaiCompat,
 } from "./api.js";
 import { applyXaiConfig, XAI_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildXaiProvider } from "./provider-catalog.js";
@@ -31,11 +29,19 @@ import {
   buildMissingXSearchApiKeyPayload,
   createXSearchToolDefinition,
 } from "./x-search-tool-shared.js";
-import { createXaiOAuthAuthMethod, refreshXaiOAuthCredential } from "./xai-oauth.js";
+import {
+  createXaiDeviceCodeAuthMethod,
+  createXaiOAuthAuthMethod,
+  refreshXaiOAuthCredential,
+} from "./xai-oauth.js";
 
 const PROVIDER_ID = "xai";
 type CodeExecutionModule = typeof import("./code-execution.js");
 type XSearchModule = typeof import("./x-search.js");
+
+const XAI_CREDIT_OR_SPENDING_LIMIT_RE =
+  /\b(?:used all available credits|monthly spending limit|purchase more credits|raise your spending limit)\b/i;
+const XAI_RATE_LIMIT_RE = /\b(?:rate limit exceeded|too many requests)\b/i;
 
 let codeExecutionModulePromise: Promise<CodeExecutionModule> | undefined;
 let xSearchModulePromise: Promise<XSearchModule> | undefined;
@@ -48,6 +54,16 @@ function loadCodeExecutionModule(): Promise<CodeExecutionModule> {
 function loadXSearchModule(): Promise<XSearchModule> {
   xSearchModulePromise ??= import("./x-search.js");
   return xSearchModulePromise;
+}
+
+function classifyXaiFailoverReason(errorMessage: string) {
+  if (XAI_CREDIT_OR_SPENDING_LIMIT_RE.test(errorMessage)) {
+    return "billing" as const;
+  }
+  if (XAI_RATE_LIMIT_RE.test(errorMessage)) {
+    return "rate_limit" as const;
+  }
+  return undefined;
 }
 
 function hasResolvableXaiApiKey(config: unknown, auth?: XaiToolAuthContext): boolean {
@@ -125,7 +141,7 @@ function createLazyCodeExecutionTool(ctx: {
         return jsonResult({
           error: "missing_xai_api_key",
           message:
-            "code_execution needs an xAI API key. Run openclaw onboard --auth-choice xai-api-key, set XAI_API_KEY in the Gateway environment, or configure plugins.entries.xai.config.webSearch.apiKey.",
+            "code_execution needs xAI credentials. Run `openclaw onboard --auth-choice xai-oauth` to sign in with Grok, run `openclaw onboard --auth-choice xai-api-key`, set `XAI_API_KEY` in the Gateway environment, or configure `plugins.entries.xai.config.webSearch.apiKey`.",
           docs: "https://docs.openclaw.ai/tools/code-execution",
         });
       }
@@ -183,7 +199,7 @@ export default defineSingleProviderPluginEntry({
         },
       },
     ],
-    extraAuth: [createXaiOAuthAuthMethod()],
+    extraAuth: [createXaiOAuthAuthMethod(), createXaiDeviceCodeAuthMethod()],
     catalog: {
       buildProvider: buildXaiProvider,
     },
@@ -208,13 +224,12 @@ export default defineSingleProviderPluginEntry({
     normalizeResolvedModel: ({ model }) => applyXaiRuntimeModelCompat(model),
     normalizeTransport: ({ provider, api, baseUrl }) =>
       resolveXaiTransport({ provider, api, baseUrl }),
-    contributeResolvedModelCompat: ({ modelId, model }) =>
-      shouldContributeXaiCompat({ modelId, model }) ? resolveXaiModelCompatPatch() : undefined,
     normalizeModelId: ({ modelId }) => normalizeXaiModelId(modelId),
     resolveDynamicModel: (ctx) => resolveXaiForwardCompatModel({ providerId: PROVIDER_ID, ctx }),
     refreshOAuth: refreshXaiOAuthCredential,
     resolveThinkingProfile,
     isModernModelRef: ({ modelId }) => isModernXaiModel(modelId),
+    classifyFailoverReason: ({ errorMessage }) => classifyXaiFailoverReason(errorMessage),
   },
   register(api) {
     api.registerWebSearchProvider(createXaiWebSearchProvider());

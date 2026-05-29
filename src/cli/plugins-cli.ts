@@ -3,6 +3,7 @@ import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import type { PluginInspectOptions } from "./plugins-inspect-command.js";
 import type { PluginsListOptions } from "./plugins-list-command.js";
+import { parseStrictPositiveIntOption } from "./program/helpers.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
 export type PluginUpdateOptions = {
@@ -33,6 +34,23 @@ export type PluginRegistryOptions = {
   refresh?: boolean;
 };
 
+export type PluginAuthoringBuildOptions = {
+  root?: string;
+  entry?: string;
+  check?: boolean;
+};
+
+export type PluginAuthoringValidateOptions = {
+  root?: string;
+  entry?: string;
+};
+
+export type PluginAuthoringInitOptions = {
+  directory?: string;
+  force?: boolean;
+  name?: string;
+};
+
 export function registerPluginsCli(program: Command) {
   const plugins = program
     .command("plugins")
@@ -58,7 +76,7 @@ export function registerPluginsCli(program: Command) {
     .command("search")
     .description("Search ClawHub plugin packages")
     .argument("[query...]", "Search query")
-    .option("--limit <n>", "Max results", (value) => Number.parseInt(value, 10))
+    .option("--limit <n>", "Max results", (value) => parseStrictPositiveIntOption(value, "--limit"))
     .option("--json", "Print JSON", false)
     .action(async (queryParts: string[], opts: PluginSearchOptions) => {
       const { runPluginsSearchCommand } = await import("./plugins-search-command.js");
@@ -178,6 +196,39 @@ export function registerPluginsCli(program: Command) {
     .action(async () => {
       const { runPluginsDoctorCommand } = await import("./plugins-cli.runtime.js");
       await runPluginsDoctorCommand();
+    });
+
+  plugins
+    .command("build")
+    .description("Generate simple tool plugin metadata")
+    .option("--root <path>", "Plugin package root")
+    .option("--entry <path>", "Plugin entry module relative to --root")
+    .option("--check", "Fail if generated metadata is out of date", false)
+    .action(async (opts: PluginAuthoringBuildOptions) => {
+      const { runPluginsBuildCommand } = await import("./plugins-authoring-command.js");
+      await runPluginsBuildCommand(opts);
+    });
+
+  plugins
+    .command("validate")
+    .description("Validate simple tool plugin metadata")
+    .option("--root <path>", "Plugin package root")
+    .option("--entry <path>", "Plugin entry module relative to --root")
+    .action(async (opts: PluginAuthoringValidateOptions) => {
+      const { runPluginsValidateCommand } = await import("./plugins-authoring-command.js");
+      await runPluginsValidateCommand(opts);
+    });
+
+  plugins
+    .command("init")
+    .description("Create a simple tool plugin project")
+    .argument("<id>", "Plugin id")
+    .option("--directory <path>", "Output directory")
+    .option("--name <name>", "Display name")
+    .option("--force", "Overwrite an existing output directory", false)
+    .action(async (id: string, opts: PluginAuthoringInitOptions) => {
+      const { runPluginsInitCommand } = await import("./plugins-authoring-command.js");
+      await runPluginsInitCommand(id, opts);
     });
 
   const marketplace = plugins

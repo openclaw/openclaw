@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../agents/internal-runtime-context.js";
 import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import {
@@ -9,6 +10,9 @@ import {
   parseAssistantTextSignature,
   resolveAssistantMessagePhase,
 } from "../shared/chat-message-content.js";
+import { asFiniteNumber } from "../shared/number-coercion.js";
+import { asOptionalRecord as readRecord } from "../shared/record-coerce.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { stripEnvelopeFromMessages } from "./chat-sanitize.js";
 import { isSuppressedControlReplyText } from "./control-reply-text.js";
@@ -18,6 +22,14 @@ export const DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS = 8_000;
 type RoleContentMessage = {
   role: string;
   content?: unknown;
+};
+
+type PendingMessageToolVisibleReply = {
+  toolCallId?: string;
+  text: string;
+  anchor: Record<string, unknown>;
+  completionAnchor?: Record<string, unknown>;
+  succeeded: boolean;
 };
 
 export function resolveEffectiveChatHistoryMaxChars(
@@ -114,6 +126,10 @@ function sanitizeChatHistoryContentBlock(
     delete entry.thinkingSignature;
     changed = true;
   }
+  if ("openclawReasoningReplay" in entry) {
+    delete entry.openclawReasoningReplay;
+    changed = true;
+  }
   const type = typeof entry.type === "string" ? entry.type : "";
   if (type === "image" && typeof entry.data === "string") {
     const bytes = Buffer.byteLength(entry.data, "utf8");
@@ -202,7 +218,7 @@ function projectAssistantTextFromMixedToolContent(
 }
 
 function toFiniteNumber(x: unknown): number | undefined {
-  return typeof x === "number" && Number.isFinite(x) ? x : undefined;
+  return asFiniteNumber(x);
 }
 
 function sanitizeCost(raw: unknown): { total?: number } | undefined {
@@ -223,13 +239,21 @@ function sanitizeUsage(raw: unknown): Record<string, number> | undefined {
   const knownFields = [
     "input",
     "output",
+    "total",
     "totalTokens",
     "inputTokens",
     "outputTokens",
+    "promptTokens",
+    "completionTokens",
     "cacheRead",
     "cacheWrite",
     "cache_read_input_tokens",
     "cache_creation_input_tokens",
+    "input_tokens",
+    "output_tokens",
+    "prompt_tokens",
+    "completion_tokens",
+    "total_tokens",
   ];
 
   for (const k of knownFields) {
@@ -423,6 +447,386 @@ function hasAssistantMixedToolVisibleText(message: unknown): boolean {
     }
   }
   return hasToolHistoryBlock && hasText;
+}
+
+function normalizeToolHistoryType(value: unknown): string | undefined {
+  const normalized = normalizeOptionalString(value)?.toLowerCase();
+  return normalized ? normalized.replace(/_/g, "") : undefined;
+}
+
+function parseJsonRecord(value: string): Record<string, unknown> | undefined {
+  try {
+    return readRecord(JSON.parse(value));
+  } catch {
+    return undefined;
+  }
+}
+
+function readMaybeJsonRecord(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value === "string") {
+    return parseJsonRecord(value);
+  }
+  return readRecord(value);
+}
+
+function readToolBlockName(block: Record<string, unknown>): string | undefined {
+  const direct =
+    normalizeOptionalString(block.name) ??
+    normalizeOptionalString(block.toolName) ??
+    normalizeOptionalString(block.tool_name) ??
+    normalizeOptionalString(block.tool);
+  if (direct) {
+    return direct;
+  }
+  const fn = readRecord(block.function);
+  return fn ? normalizeOptionalString(fn.name) : undefined;
+}
+
+function readToolBlockCallId(block: Record<string, unknown>): string | undefined {
+  return (
+    normalizeOptionalString(block.id) ??
+    normalizeOptionalString(block.toolCallId) ??
+    normalizeOptionalString(block.tool_call_id) ??
+    normalizeOptionalString(block.callId) ??
+    normalizeOptionalString(block.call_id)
+  );
+}
+
+function readToolBlockArguments(block: Record<string, unknown>): Record<string, unknown> {
+  for (const key of ["arguments", "input", "args", "params"] as const) {
+    const args = readMaybeJsonRecord(block[key]);
+    if (args) {
+      return args;
+    }
+  }
+  const fn = readRecord(block.function);
+  if (fn) {
+    const args = readMaybeJsonRecord(fn.arguments);
+    if (args) {
+      return args;
+    }
+  }
+  return {};
+}
+
+function hasNonEmptyValue(value: unknown): boolean {
+  if (typeof value === "string") {
+    return value.trim().length > 0;
+  }
+  if (Array.isArray(value)) {
+    return value.some(hasNonEmptyValue);
+  }
+  if (!value || typeof value !== "object") {
+    return value != null;
+  }
+  return Object.values(value as Record<string, unknown>).some(hasNonEmptyValue);
+}
+
+function hasExplicitMessageToolRoute(args: Record<string, unknown>): boolean {
+  // Channel/provider select the transport; only concrete target ids move the send off-chat.
+  const routeFields = [
+    "target",
+    "targets",
+    "to",
+    "recipient",
+    "recipients",
+    "chatId",
+    "chat_id",
+    "channelId",
+    "channel_id",
+    "conversationId",
+    "conversation_id",
+    "threadId",
+    "thread_id",
+    "roomId",
+    "room_id",
+    "groupId",
+    "group_id",
+  ];
+  return routeFields.some((field) => hasNonEmptyValue(args[field]));
+}
+
+function readMessageToolVisibleText(args: Record<string, unknown>): string | undefined {
+  for (const field of ["message", "text", "content", "body", "caption"] as const) {
+    const value = args[field];
+    if (typeof value === "string" && value.trim()) {
+      return stripInlineDirectiveTagsForDisplay(value).text;
+    }
+  }
+  return undefined;
+}
+
+function isDryRunMessageToolRecord(record: Record<string, unknown>): boolean {
+  if (record.dryRun === true || record.dry_run === true) {
+    return true;
+  }
+  const deliveryStatus =
+    normalizeOptionalString(record.deliveryStatus) ??
+    normalizeOptionalString(record.delivery_status) ??
+    normalizeOptionalString(record.status);
+  return deliveryStatus?.toLowerCase() === "dry_run";
+}
+
+function extractMessageToolVisibleReplies(
+  message: Record<string, unknown>,
+): Array<Omit<PendingMessageToolVisibleReply, "anchor" | "succeeded">> {
+  if (message.role !== "assistant" || !Array.isArray(message.content)) {
+    return [];
+  }
+  const replies: Array<Omit<PendingMessageToolVisibleReply, "anchor" | "succeeded">> = [];
+  for (const block of message.content) {
+    const record = readRecord(block);
+    if (!record) {
+      continue;
+    }
+    const type = normalizeToolHistoryType(record.type);
+    if (type !== "toolcall" && type !== "tooluse") {
+      continue;
+    }
+    if (readToolBlockName(record)?.toLowerCase() !== "message") {
+      continue;
+    }
+    const args = readToolBlockArguments(record);
+    if (normalizeOptionalString(args.action)?.toLowerCase() !== "send") {
+      continue;
+    }
+    if (isDryRunMessageToolRecord(args)) {
+      continue;
+    }
+    if (hasExplicitMessageToolRoute(args)) {
+      continue;
+    }
+    const text = readMessageToolVisibleText(args);
+    if (!text?.trim()) {
+      continue;
+    }
+    const toolCallId = readToolBlockCallId(record);
+    replies.push({ ...(toolCallId ? { toolCallId } : {}), text });
+  }
+  return replies;
+}
+
+function isAssistantSilentControlReplyOnly(message: Record<string, unknown>): boolean {
+  const text = extractAssistantTextForSilentCheck(message);
+  return (
+    text !== undefined && isSuppressedControlReplyText(text) && !hasAssistantNonTextContent(message)
+  );
+}
+
+function isRenderableAssistantDisplayMessage(message: Record<string, unknown>): boolean {
+  if (message.role !== "assistant") {
+    return false;
+  }
+  const text = extractAssistantTextForSilentCheck(message);
+  return text !== undefined && !isSuppressedControlReplyText(text);
+}
+
+function readMessageToolResultName(message: Record<string, unknown>): string | undefined {
+  return (
+    normalizeOptionalString(message.toolName) ??
+    normalizeOptionalString(message.tool_name) ??
+    normalizeOptionalString(message.name) ??
+    normalizeOptionalString(message.tool)
+  );
+}
+
+function readMessageToolResultCallId(message: Record<string, unknown>): string | undefined {
+  return (
+    normalizeOptionalString(message.toolCallId) ??
+    normalizeOptionalString(message.tool_call_id) ??
+    normalizeOptionalString(message.callId) ??
+    normalizeOptionalString(message.call_id) ??
+    normalizeOptionalString(message.id)
+  );
+}
+
+function readToolResultOkValue(value: unknown): boolean | undefined {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  const record = readMaybeJsonRecord(value);
+  if (record && typeof record.ok === "boolean") {
+    return record.ok;
+  }
+  if (Array.isArray(value)) {
+    for (const block of value) {
+      const blockOk = readToolResultOkValue(block);
+      if (blockOk !== undefined) {
+        return blockOk;
+      }
+      const recordBlock = readRecord(block);
+      if (typeof recordBlock?.text === "string") {
+        const textOk = readToolResultOkValue(recordBlock.text);
+        if (textOk !== undefined) {
+          return textOk;
+        }
+      }
+      if (typeof recordBlock?.content === "string") {
+        const contentOk = readToolResultOkValue(recordBlock.content);
+        if (contentOk !== undefined) {
+          return contentOk;
+        }
+      }
+    }
+  }
+  return undefined;
+}
+
+function hasDryRunToolResultValue(value: unknown): boolean {
+  const record = readMaybeJsonRecord(value);
+  if (record && isDryRunMessageToolRecord(record)) {
+    return true;
+  }
+  if (!Array.isArray(value)) {
+    return false;
+  }
+  return value.some((block) => {
+    if (hasDryRunToolResultValue(block)) {
+      return true;
+    }
+    const recordBlock = readRecord(block);
+    if (typeof recordBlock?.text === "string" && hasDryRunToolResultValue(recordBlock.text)) {
+      return true;
+    }
+    return (
+      typeof recordBlock?.content === "string" && hasDryRunToolResultValue(recordBlock.content)
+    );
+  });
+}
+
+function isSuccessfulMessageToolResult(
+  message: Record<string, unknown>,
+  pending: PendingMessageToolVisibleReply,
+): boolean {
+  const role = typeof message.role === "string" ? message.role.toLowerCase().replace(/_/g, "") : "";
+  const toolName = readMessageToolResultName(message)?.toLowerCase();
+  if (role !== "toolresult" && role !== "tool" && role !== "function" && toolName !== "message") {
+    return false;
+  }
+  if (toolName && toolName !== "message") {
+    return false;
+  }
+  const resultCallId = readMessageToolResultCallId(message);
+  if (pending.toolCallId) {
+    return resultCallId === pending.toolCallId && isSuccessfulMessageToolResultPayload(message);
+  }
+  return isSuccessfulMessageToolResultPayload(message);
+}
+
+function isSuccessfulMessageToolResultPayload(message: Record<string, unknown>): boolean {
+  if (message.isError === true || (message.error != null && message.error !== false)) {
+    return false;
+  }
+  if (
+    hasDryRunToolResultValue(message.result) ||
+    hasDryRunToolResultValue(message.output) ||
+    hasDryRunToolResultValue(message.content) ||
+    hasDryRunToolResultValue(message.text)
+  ) {
+    return false;
+  }
+  const ok =
+    readToolResultOkValue(message.result) ??
+    readToolResultOkValue(message.output) ??
+    readToolResultOkValue(message.content) ??
+    readToolResultOkValue(message.text);
+  return ok !== false;
+}
+
+function buildMessageToolVisibleReplyMirror(
+  pending: PendingMessageToolVisibleReply,
+): Record<string, unknown> {
+  const mirror: Record<string, unknown> = {
+    role: "assistant",
+    content: [{ type: "text", text: pending.text }],
+    openclawMessageToolMirror: {
+      toolName: "message",
+      ...(pending.toolCallId ? { toolCallId: pending.toolCallId } : {}),
+    },
+  };
+  for (const field of ["timestamp", "createdAt", "agentId"] as const) {
+    if (pending.anchor[field] !== undefined) {
+      mirror[field] = pending.anchor[field];
+    }
+  }
+  const transcriptMeta = readRecord((pending.completionAnchor ?? pending.anchor)["__openclaw"]);
+  if (transcriptMeta) {
+    mirror["__openclaw"] = { ...transcriptMeta };
+  }
+  return mirror;
+}
+
+function mirrorMessageToolVisibleReplies(messages: unknown[]): unknown[] {
+  if (messages.length === 0) {
+    return messages;
+  }
+  if (!messages.some((message) => readRecord(message))) {
+    return messages;
+  }
+  let changed = false;
+  const next: unknown[] = [];
+  const pending: PendingMessageToolVisibleReply[] = [];
+
+  const clearPending = () => {
+    if (pending.length > 0) {
+      pending.length = 0;
+    }
+  };
+
+  const flushSucceededMirrors = () => {
+    for (const item of pending) {
+      if (!item.succeeded) {
+        continue;
+      }
+      next.push(buildMessageToolVisibleReplyMirror(item));
+      changed = true;
+    }
+    clearPending();
+  };
+
+  for (let i = 0; i < messages.length; i++) {
+    const message = messages[i];
+    const record = readRecord(message);
+    if (!record) {
+      next.push(message);
+      continue;
+    }
+
+    if (record.role === "user") {
+      clearPending();
+      next.push(message);
+      continue;
+    }
+
+    const visibleReplies = extractMessageToolVisibleReplies(record);
+    if (visibleReplies.length > 0) {
+      for (const reply of visibleReplies) {
+        pending.push({
+          ...reply,
+          anchor: record,
+          succeeded: false,
+        });
+      }
+    } else if (isRenderableAssistantDisplayMessage(record)) {
+      clearPending();
+    }
+
+    if (pending.length > 0) {
+      for (const item of pending) {
+        if (!item.succeeded && isSuccessfulMessageToolResult(record, item)) {
+          item.succeeded = true;
+          item.completionAnchor = record;
+        }
+      }
+      if (isAssistantSilentControlReplyOnly(record)) {
+        flushSucceededMirrors();
+      }
+    }
+
+    next.push(message);
+  }
+
+  return changed ? next : messages;
 }
 
 function shouldDropAssistantHistoryMessage(message: unknown): boolean {
@@ -680,7 +1084,17 @@ function isSubagentAnnounceInterSessionUserMessage(message: Record<string, unkno
   );
 }
 
+function isDisplayHiddenProjectedMessage(message: Record<string, unknown>): boolean {
+  if (message.display === false) {
+    return true;
+  }
+  return message.role === "custom" && message.customType === OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE;
+}
+
 function shouldHideProjectedHistoryMessage(message: Record<string, unknown>): boolean {
+  if (isDisplayHiddenProjectedMessage(message)) {
+    return true;
+  }
   const roleContent = asRoleContentMessage(message);
   if (!roleContent) {
     return false;
@@ -702,6 +1116,40 @@ function shouldHideProjectedHistoryMessage(message: Record<string, unknown>): bo
     return true;
   }
   return isHeartbeatOkResponse(roleContent);
+}
+
+function openclawAssistantModel(message: Record<string, unknown>): string | undefined {
+  return message.role === "assistant" &&
+    message.provider === "openclaw" &&
+    typeof message.model === "string"
+    ? message.model
+    : undefined;
+}
+
+function displayTextForDuplicateCheck(message: Record<string, unknown>): string | undefined {
+  const text = extractProjectedText(message.content ?? message.text).trim();
+  return text ? text : undefined;
+}
+
+function isDuplicateAcpGatewayInjectedMessage(
+  current: Record<string, unknown>,
+  previousVisible: Record<string, unknown> | undefined,
+): boolean {
+  if (!previousVisible) {
+    return false;
+  }
+  if (
+    openclawAssistantModel(previousVisible) !== "acp-runtime" ||
+    openclawAssistantModel(current) !== "gateway-injected"
+  ) {
+    return false;
+  }
+  if (hasAssistantNonTextContent(previousVisible) || hasAssistantNonTextContent(current)) {
+    return false;
+  }
+  const previousText = displayTextForDuplicateCheck(previousVisible);
+  const currentText = displayTextForDuplicateCheck(current);
+  return Boolean(previousText && currentText && previousText === currentText);
 }
 
 function toProjectedMessages(messages: unknown[]): Array<Record<string, unknown>> {
@@ -741,6 +1189,10 @@ function filterVisibleProjectedHistoryMessages(
       changed = true;
       continue;
     }
+    if (isDuplicateAcpGatewayInjectedMessage(current, visible.at(-1))) {
+      changed = true;
+      continue;
+    }
     visible.push(current);
   }
   return changed ? visible : messages;
@@ -751,9 +1203,10 @@ export function projectChatDisplayMessages(
   options?: { maxChars?: number; stripEnvelope?: boolean },
 ): Array<Record<string, unknown>> {
   const source = options?.stripEnvelope === false ? messages : stripEnvelopeFromMessages(messages);
+  const mirrored = mirrorMessageToolVisibleReplies(source);
   const merged = mergeTtsSupplementMessages(
     filterVisibleProjectedHistoryMessages(
-      toProjectedMessages(sanitizeChatHistoryMessages(source, Number.MAX_SAFE_INTEGER)),
+      toProjectedMessages(sanitizeChatHistoryMessages(mirrored, Number.MAX_SAFE_INTEGER)),
     ),
   );
   return sanitizeChatHistoryMessages(

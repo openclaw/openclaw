@@ -5,6 +5,7 @@ import tsdownConfig from "../../tsdown.config.ts";
 
 type TsdownConfigEntry = {
   deps?: {
+    alwaysBundle?: string[] | ((id: string) => boolean);
     neverBundle?: string[] | ((id: string) => boolean);
   };
   entry?: Record<string, string> | string[];
@@ -17,6 +18,7 @@ type TsdownLog = {
   message?: string;
   id?: string;
   importer?: string;
+  plugin?: string;
 };
 
 type TsdownOnLog = (
@@ -79,6 +81,13 @@ function readGatewayRunLoopSource(): string {
   return readFileSync(new URL("../cli/gateway-cli/run-loop.ts", import.meta.url), "utf8");
 }
 
+function readAgentModelDiscoveryCacheSource(): string {
+  return readFileSync(
+    new URL("../agents/embedded-agent-runner/model-discovery-cache.ts", import.meta.url),
+    "utf8",
+  );
+}
+
 describe("tsdown config", () => {
   it("keeps core, plugin runtime, plugin-sdk, bundled root plugins, and bundled hooks in one dist graph", () => {
     const distGraph = requireUnifiedDistGraph();
@@ -90,10 +99,10 @@ describe("tsdown config", () => {
       "agents/model-catalog.runtime",
       "agents/models-config.runtime",
       "cli/gateway-lifecycle.runtime",
+      "agents/model-provider-auth.worker",
       "plugins/memory-state",
       "subagent-registry.runtime",
       "task-registry-control.runtime",
-      "agents/pi-model-discovery-runtime",
       "link-understanding/apply.runtime",
       "media-understanding/apply.runtime",
       "index",
@@ -103,6 +112,7 @@ describe("tsdown config", () => {
       "plugins/provider-discovery.runtime",
       "plugins/provider-runtime.runtime",
       "plugins/runtime/index",
+      "plugins/synthetic-auth.runtime",
       "web-fetch/runtime",
       "plugin-sdk/compat",
       "plugin-sdk/index",
@@ -144,6 +154,20 @@ describe("tsdown config", () => {
 
     expect(entrySources(distGraph)["plugins/hook-runner-global"]).toBe(
       "src/plugins/hook-runner-global.ts",
+    );
+  });
+
+  it("keeps PI model discovery synthetic auth refs behind one stable runtime dist entry", () => {
+    const distGraph = requireUnifiedDistGraph();
+    const importSpecifiers = [
+      ...readAgentModelDiscoveryCacheSource().matchAll(
+        /from ["']([^"']*synthetic-auth\.runtime\.js)["']/gu,
+      ),
+    ].map((match) => match[1]);
+
+    expect(importSpecifiers).toEqual(["../../plugins/synthetic-auth.runtime.js"]);
+    expect(entrySources(distGraph)["plugins/synthetic-auth.runtime"]).toBe(
+      "src/plugins/synthetic-auth.runtime.ts",
     );
   });
 
@@ -198,7 +222,6 @@ describe("tsdown config", () => {
       expect(neverBundle("@slack/web-api")).toBe(true);
       expect(neverBundle("@vitest/expect")).toBe(true);
       expect(neverBundle("matrix-js-sdk/lib/client.js")).toBe(true);
-      expect(neverBundle("prism-media")).toBe(true);
       expect(neverBundle("qrcode-terminal/lib/main.js")).toBe(true);
       expect(neverBundle("vitest")).toBe(true);
       expect(neverBundle("not-a-runtime-dependency")).toBe(false);
@@ -212,7 +235,6 @@ describe("tsdown config", () => {
         "@slack/web-api",
         "@vitest/expect",
         "matrix-js-sdk",
-        "prism-media",
         "qrcode-terminal",
         "vitest",
       ]) {
@@ -224,6 +246,21 @@ describe("tsdown config", () => {
     }
     const externalize = external;
     expect(externalize("qrcode-terminal/lib/main.js", undefined, false)).toBe(true);
+  });
+
+  it("always bundles plugin SDK package-local runtime dependencies", () => {
+    const unifiedGraph = requireUnifiedDistGraph();
+    const alwaysBundle = unifiedGraph.deps?.alwaysBundle;
+
+    if (typeof alwaysBundle !== "function") {
+      throw new Error("expected unified graph alwaysBundle predicate");
+    }
+
+    expect(alwaysBundle("@openclaw/fs-safe")).toBe(true);
+    expect(alwaysBundle("@openclaw/fs-safe/path")).toBe(true);
+    expect(alwaysBundle("zod")).toBe(true);
+    expect(alwaysBundle("zod/v4/core")).toBe(true);
+    expect(alwaysBundle("not-a-runtime-dependency")).toBe(false);
   });
 
   it("suppresses unresolved imports from extension source", () => {
@@ -248,6 +285,38 @@ describe("tsdown config", () => {
     const log = {
       code: "UNRESOLVED_IMPORT",
       message: "Could not resolve 'missing-dependency' in src/index.ts",
+    };
+
+    configured?.("warn", log, (_level, forwardedLog) => handled.push(forwardedLog));
+
+    expect(handled).toEqual([log]);
+  });
+
+  it("suppresses rolldown-plugin-dts CommonJS dts warnings from bundled zod locales", () => {
+    const configured = unifiedDistGraph()?.inputOptions?.({})?.onLog;
+    const handled: TsdownLog[] = [];
+
+    configured?.(
+      "warn",
+      {
+        code: "PLUGIN_WARNING",
+        plugin: "rolldown-plugin-dts:fake-js",
+        message:
+          "/abs/path/node_modules/zod/v4/locales/ur.d.cts uses CommonJS dts syntax. CommonJS dts modules cannot be reliably bundled by rolldown-plugin-dts. Please mark this module as external in your Rolldown config.",
+      },
+      (_level, log) => handled.push(log),
+    );
+
+    expect(handled).toStrictEqual([]);
+  });
+
+  it("keeps other rolldown-plugin-dts warnings visible", () => {
+    const configured = unifiedDistGraph()?.inputOptions?.({})?.onLog;
+    const handled: TsdownLog[] = [];
+    const log = {
+      code: "PLUGIN_WARNING",
+      plugin: "rolldown-plugin-dts:fake-js",
+      message: "some other dts warning that should not be hidden",
     };
 
     configured?.("warn", log, (_level, forwardedLog) => handled.push(forwardedLog));

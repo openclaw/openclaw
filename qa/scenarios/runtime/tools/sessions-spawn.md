@@ -8,11 +8,12 @@ runtimeParityTier: standard
 coverage:
   primary:
     - tools.sessions-spawn
-objective: Verify sessions_spawn preserves arguments and result shape across Pi and Codex.
+objective: Verify sessions_spawn preserves arguments and result shape across OpenClaw and Codex.
 successCriteria:
   - Effective tools expose sessions_spawn.
   - The mock provider plans exactly one happy-path sessions_spawn call.
   - The mock provider plans one denied-input failure-path sessions_spawn call.
+  - Runtime parity coverage hard-fails call/result drift in the standard direct-loading gate.
 docsRefs:
   - qa/scenarios/index.md
 codeRefs:
@@ -28,15 +29,12 @@ execution:
       actualTool: sessions_spawn
       bucket: openclaw-dynamic-integration
       expectedLayer: openclaw-dynamic
+      capabilityLayer: openclaw-dynamic-direct
       required: true
-      tracking: "#80319"
       codexDefaultImpact: P4
       qaImpact: P1
-      action: teach fixture/mock planner Codex searchable OpenClaw dynamic tool behavior
-      reason: sessions_spawn is an OpenClaw integration tool; QA mock provider does not yet model Codex searchable/deferred dynamic tool declarations for this fixture.
-    knownHarnessGap:
-      issue: "#80319"
-      reason: QA mock provider does not yet model Codex searchable/deferred OpenClaw dynamic tool declarations for this fixture.
+      action: hard gate in the standard direct-loading tier
+      reason: sessions_spawn is an OpenClaw integration tool and must stay visible and callable under OpenClaw and Codex direct runtime parity.
     promptSnippet: "target=sessions_spawn"
     failurePromptSnippet: "failure target=sessions_spawn"
 ```

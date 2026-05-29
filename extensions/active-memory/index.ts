@@ -12,6 +12,8 @@ import {
   resolveDefaultModelForAgent,
 } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { closeActiveMemorySearchManager } from "openclaw/plugin-sdk/memory-host-search";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
   resolveLivePluginConfigObject,
   resolvePluginConfigObject,
@@ -20,9 +22,11 @@ import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/p
 import { parseAgentSessionKey, parseThreadSessionSuffix } from "openclaw/plugin-sdk/routing";
 import { isPathInside, replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import {
-  resolveSessionStoreEntry,
-  updateSessionStore,
-} from "openclaw/plugin-sdk/session-store-runtime";
+  asOptionalRecord as asRecord,
+  normalizeOptionalString,
+  normalizeStringEntries,
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { tempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -316,11 +320,6 @@ function withToggleStoreLock<T>(statePath: string, task: () => Promise<T>): Prom
   return withLock(task);
 }
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
 type ActiveMemoryThinkingLevel =
   | "off"
   | "minimal"
@@ -392,9 +391,9 @@ function parseOptionalPositiveInt(value: unknown, fallback: number): number {
     typeof value === "number"
       ? value
       : typeof value === "string"
-        ? Number.parseInt(value, 10)
+        ? parseStrictPositiveInteger(value)
         : Number.NaN;
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+  return parsed !== undefined && Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 function clampInt(value: number | undefined, fallback: number, min: number, max: number): number {
@@ -541,20 +540,15 @@ function resolveCanonicalSessionKeyFromSessionId(params: {
     return undefined;
   }
   try {
-    const storePath = params.api.runtime.agent.session.resolveStorePath(
-      params.api.config.session?.store,
-      {
-        agentId: params.agentId,
-      },
-    );
-    const store = params.api.runtime.agent.session.loadSessionStore(storePath, { clone: false });
     let bestMatch:
       | {
           sessionKey: string;
           updatedAt: number;
         }
       | undefined;
-    for (const [sessionKey, entry] of Object.entries(store)) {
+    for (const { sessionKey, entry } of params.api.runtime.agent.session.listSessionEntries({
+      agentId: params.agentId,
+    })) {
       if (!entry || typeof entry !== "object") {
         continue;
       }
@@ -577,10 +571,6 @@ function resolveCanonicalSessionKeyFromSessionId(params: {
   } catch {
     return undefined;
   }
-}
-
-function normalizeOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function formatRuntimeToolsAllowSource(toolsAllow: readonly string[]): string {
@@ -672,17 +662,10 @@ function resolveRecallRunChannelContext(params: {
   }
 
   try {
-    const storePath = params.api.runtime.agent.session.resolveStorePath(
-      params.api.config.session?.store,
-      {
-        agentId: params.agentId,
-      },
-    );
-    const store = params.api.runtime.agent.session.loadSessionStore(storePath, { clone: false });
-    const sessionEntry = resolveSessionStoreEntry({
-      store,
+    const sessionEntry = params.api.runtime.agent.session.getSessionEntry({
+      agentId: params.agentId,
       sessionKey: resolvedSessionKey,
-    }).existing;
+    });
     const rawStrongEntryChannel =
       normalizeOptionalString(sessionEntry?.lastChannel) ??
       normalizeOptionalString(sessionEntry?.channel);
@@ -892,9 +875,7 @@ function normalizePluginConfig(
     : [];
   return {
     enabled: raw.enabled !== false,
-    agents: Array.isArray(raw.agents)
-      ? raw.agents.map((agentId) => agentId.trim()).filter(Boolean)
-      : [],
+    agents: Array.isArray(raw.agents) ? normalizeStringEntries(raw.agents) : [],
     model: typeof raw.model === "string" && raw.model.trim() ? raw.model.trim() : undefined,
     modelFallback:
       typeof raw.modelFallback === "string" && raw.modelFallback.trim()
@@ -978,6 +959,39 @@ function applyActiveMemoryRuntimeConfigSnapshot(
       },
     },
   };
+}
+
+function resolveActiveMemoryCleanupConfig(api: OpenClawPluginApi): OpenClawConfig | undefined {
+  try {
+    return (
+      (api.runtime.config?.current?.() as OpenClawConfig | undefined) ??
+      (api.config as OpenClawConfig | undefined)
+    );
+  } catch {
+    return api.config as OpenClawConfig | undefined;
+  }
+}
+
+function scheduleMemorySearchCleanupAfterTimeout(
+  api: OpenClawPluginApi,
+  logPrefix: string,
+  agentId: string,
+): void {
+  const cfg = resolveActiveMemoryCleanupConfig(api);
+  setTimeout(() => {
+    void closeActiveMemorySearchManager({ cfg: cfg ?? api.config, agentId })
+      .then(() => {
+        api.logger.debug?.(`${logPrefix} released memory search managers after timeout`);
+      })
+      .catch((error: unknown) => {
+        const message = toSingleLineLogValue(
+          error instanceof Error ? error.message : String(error),
+        );
+        api.logger.warn?.(
+          `${logPrefix} failed to release memory search managers after timeout: ${message}`,
+        );
+      });
+  }, 0);
 }
 
 function resolveThinkingLevel(thinking: unknown): ActiveMemoryThinkingLevel {
@@ -1500,11 +1514,11 @@ function buildPluginDebugLine(params: {
     warning && action && !cleaned
       ? `${warning} ${action}`
       : [warning, action && !cleaned ? action : ""]
-          .filter((value, index, values) => Boolean(value) && values.indexOf(value) === index)
+          .filter((value): value is string => Boolean(value))
           .join(" | ");
-  const messages = [warningAction, cleaned]
-    .filter((value, index, values) => Boolean(value) && values.indexOf(value) === index)
-    .join(" | ");
+  const messages = uniqueStrings(
+    [warningAction, cleaned].filter((value): value is string => Boolean(value)),
+  ).join(" | ");
   const trailing = messages;
   if (prefix && trailing) {
     return `${ACTIVE_MEMORY_DEBUG_PREFIX} ${prefix} | ${trailing}`;
@@ -1560,13 +1574,11 @@ async function persistPluginStatusLines(params: {
     return;
   }
   try {
-    const storePath = params.api.runtime.agent.session.resolveStorePath(
-      params.api.config.session?.store,
-      agentId ? { agentId } : undefined,
-    );
     if (!params.statusLine && !debugLine) {
-      const store = params.api.runtime.agent.session.loadSessionStore(storePath, { clone: false });
-      const existingEntry = resolveSessionStoreEntry({ store, sessionKey }).existing;
+      const existingEntry = params.api.runtime.agent.session.getSessionEntry({
+        agentId,
+        sessionKey,
+      });
       const hasActiveMemoryEntry = Array.isArray(existingEntry?.pluginDebugEntries)
         ? existingEntry.pluginDebugEntries.some((entry) => entry?.pluginId === "active-memory")
         : false;
@@ -1574,39 +1586,38 @@ async function persistPluginStatusLines(params: {
         return;
       }
     }
-    await updateSessionStore(storePath, (store) => {
-      const resolved = resolveSessionStoreEntry({ store, sessionKey });
-      const existing = resolved.existing;
-      if (!existing) {
-        return;
-      }
-      const previousEntries = Array.isArray(existing.pluginDebugEntries)
-        ? existing.pluginDebugEntries
-        : [];
-      const nextEntries = previousEntries.filter(
-        (entry): entry is PluginDebugEntry =>
-          Boolean(entry) &&
-          typeof entry === "object" &&
-          typeof entry.pluginId === "string" &&
-          entry.pluginId !== "active-memory",
-      );
-      const nextLines: string[] = [];
-      if (params.statusLine) {
-        nextLines.push(params.statusLine);
-      }
-      if (debugLine) {
-        nextLines.push(debugLine);
-      }
-      if (nextLines.length > 0) {
-        nextEntries.push({
-          pluginId: "active-memory",
-          lines: nextLines,
-        });
-      }
-      store[resolved.normalizedKey] = {
-        ...existing,
-        pluginDebugEntries: nextEntries.length > 0 ? nextEntries : undefined,
-      };
+    await params.api.runtime.agent.session.patchSessionEntry({
+      agentId,
+      sessionKey,
+      preserveActivity: true,
+      update: (existing) => {
+        const previousEntries = Array.isArray(existing.pluginDebugEntries)
+          ? existing.pluginDebugEntries
+          : [];
+        const nextEntries = previousEntries.filter(
+          (entry): entry is PluginDebugEntry =>
+            Boolean(entry) &&
+            typeof entry === "object" &&
+            typeof entry.pluginId === "string" &&
+            entry.pluginId !== "active-memory",
+        );
+        const nextLines: string[] = [];
+        if (params.statusLine) {
+          nextLines.push(params.statusLine);
+        }
+        if (debugLine) {
+          nextLines.push(debugLine);
+        }
+        if (nextLines.length > 0) {
+          nextEntries.push({
+            pluginId: "active-memory",
+            lines: nextLines,
+          });
+        }
+        return {
+          pluginDebugEntries: nextEntries.length > 0 ? nextEntries : undefined,
+        };
+      },
     });
   } catch (error) {
     params.api.logger.debug?.(
@@ -2516,7 +2527,7 @@ async function runRecallSubagent(params: {
   try {
     const embeddedConfig = applyActiveMemoryRuntimeConfigSnapshot(params.api.config, params.config);
     const embeddedTimeoutMs = params.config.timeoutMs + params.config.setupGraceTimeoutMs;
-    const result = await params.api.runtime.agent.runEmbeddedPiAgent({
+    const result = await params.api.runtime.agent.runEmbeddedAgent({
       sessionId: subagentSessionId,
       sessionKey: subagentSessionKey,
       agentId: params.agentId,
@@ -2755,6 +2766,7 @@ async function maybeResolveActiveRecall(params: {
         searchDebug: result.searchDebug,
       });
       recordCircuitBreakerTimeout(cbKey);
+      scheduleMemorySearchCleanupAfterTimeout(params.api, logPrefix, params.agentId);
       return result;
     }
 
@@ -2864,6 +2876,7 @@ async function maybeResolveActiveRecall(params: {
         searchDebug: result.searchDebug,
       });
       recordCircuitBreakerTimeout(cbKey);
+      scheduleMemorySearchCleanupAfterTimeout(params.api, logPrefix, params.agentId);
       return result;
     }
     const message = toSingleLineLogValue(error instanceof Error ? error.message : String(error));
@@ -3176,4 +3189,4 @@ const testing = {
   },
 };
 
-export { testing as __testing };
+export { testing, testing as __testing };

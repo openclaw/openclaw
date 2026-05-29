@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ContextEngine } from "../context-engine/types.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
@@ -418,6 +418,48 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     await expect(runPreparedCliAgent(buildPreparedContext(contextEngine))).rejects.toThrow(
       "cli boom",
     );
+
+    expect(bootstrap).toHaveBeenCalledTimes(1);
+    expect(afterTurn).not.toHaveBeenCalled();
+    expect(ingestBatch).not.toHaveBeenCalled();
+    expect(maintain).toHaveBeenCalledTimes(1);
+    expect(dispose).not.toHaveBeenCalled();
+  });
+
+  it("does not finalize context-engine turns for empty successful CLI output", async () => {
+    executePreparedCliRunMock.mockResolvedValue({
+      text: "   ",
+      rawText: "   ",
+      sessionId: "external-cli-session-empty",
+      usage: { input: 11, output: 0, total: 11 },
+    });
+    const bootstrap = vi.fn<NonNullable<ContextEngine["bootstrap"]>>(async () => ({
+      bootstrapped: true,
+    }));
+    const afterTurn = vi.fn<NonNullable<ContextEngine["afterTurn"]>>(async () => {});
+    const ingestBatch = vi.fn<NonNullable<ContextEngine["ingestBatch"]>>(async () => ({
+      ingestedCount: 0,
+    }));
+    const maintain = vi.fn<NonNullable<ContextEngine["maintain"]>>(async () =>
+      createMaintenanceResult(),
+    );
+    const dispose = vi.fn(async () => {});
+    const contextEngine = createContextEngine({
+      bootstrap,
+      afterTurn,
+      ingestBatch,
+      maintain,
+      dispose,
+    });
+    const { runPreparedCliAgent } = await import("./cli-runner.js");
+
+    await expect(runPreparedCliAgent(buildPreparedContext(contextEngine))).rejects.toMatchObject({
+      name: "FailoverError",
+      reason: "empty_response",
+      provider: "claude-cli",
+      model: "sonnet-4.6",
+      sessionId: "openclaw-session-1",
+    });
 
     expect(bootstrap).toHaveBeenCalledTimes(1);
     expect(afterTurn).not.toHaveBeenCalled();

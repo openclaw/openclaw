@@ -78,7 +78,8 @@ const BUNDLED_LIVE_CONFIG_PROVIDER_GUARDS = {
     "resolvePluginConfigObject(",
     "const startupPluginConfig = (api.pluginConfig ?? {})",
     "const currentPluginConfig = resolveCurrentPluginConfig(ctx.config);",
-    "const currentGuardrail = resolveCurrentPluginConfig(config)?.guardrail;",
+    "const currentPluginConfig = resolveCurrentPluginConfig(config);",
+    "const currentGuardrail = currentPluginConfig?.guardrail;",
   ],
   "extensions/amazon-bedrock-mantle/register.sync.runtime.ts": [
     "resolvePluginConfigObject(",
@@ -270,7 +271,7 @@ function collectBundledExtensionImports(source: string): string[] {
   }
 
   visit(sourceFile);
-  return specifiers.filter((specifier) => specifier.includes("extensions/"));
+  return specifiers.filter((specifier) => /(?:^|\/)extensions\/[^/]+\//u.test(specifier));
 }
 
 function isBundledExtensionImportHelperCall(expression: ts.Expression): boolean {
@@ -334,7 +335,11 @@ describe("plugin contract boundary invariants", () => {
   it("keeps core tests off bundled extension deep imports", () => {
     const files = listTsFiles("src", { testOnly: true });
     const offenders = files.filter((file) => {
-      return collectBundledExtensionImports(readRepoSource(file)).some(
+      const source = readRepoSource(file);
+      if (!source.includes("extensions/")) {
+        return false;
+      }
+      return collectBundledExtensionImports(source).some(
         (specifier) => !isAllowedBundledExtensionImport(specifier),
       );
     });

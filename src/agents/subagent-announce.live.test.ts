@@ -2,12 +2,17 @@ import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { clearRuntimeConfigSnapshot, type OpenClawConfig } from "../config/config.js";
+import {
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfig,
+  type OpenClawConfig,
+} from "../config/config.js";
 import { callGateway as realCallGateway } from "../gateway/call.js";
 import { GatewayClient } from "../gateway/client.js";
 import { dispatchGatewayMethodInProcess as realDispatchGatewayMethodInProcess } from "../gateway/server-plugins.js";
 import { startGatewayServer, type GatewayServer } from "../gateway/server.js";
 import { extractPayloadText } from "../gateway/test-helpers.agent-results.js";
+import { onAgentEvent, type AgentEventPayload } from "../infra/agent-events.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { clearCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import {
@@ -16,8 +21,9 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { isLiveTestEnabled } from "./live-test-helpers.js";
-import { __testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.js";
-import { __testing as subagentAnnounceTesting } from "./subagent-announce.js";
+import { testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.js";
+import { testing as subagentAnnounceTesting } from "./subagent-announce.js";
+import { resolveSubagentController, steerControlledSubagentRun } from "./subagent-control.js";
 import { listSubagentRunsForRequester } from "./subagent-registry.js";
 
 const LIVE = isLiveTestEnabled() && isTruthyEnvValue(process.env.OPENCLAW_LIVE_SUBAGENT_E2E);
@@ -67,7 +73,10 @@ function liveSubagentConfig(
   workspace: string,
   port: number,
   token: string,
-  options?: { toolAllow?: string[] },
+  options?: {
+    queue?: NonNullable<OpenClawConfig["messages"]>["queue"];
+    toolAllow?: string[];
+  },
 ): OpenClawConfig {
   const providerConfig = resolveLiveSubagentModelConfig();
   const modelId = modelKey.replace(/^(openai|google)\//u, "");
@@ -75,7 +84,7 @@ function liveSubagentConfig(
   if (providerConfig.provider === "google") {
     providers.google = {
       api: "google-generative-ai" as const,
-      agentRuntime: { id: "pi" },
+      agentRuntime: { id: "openclaw" },
       baseUrl: "https://generativelanguage.googleapis.com/v1beta",
       apiKey: {
         source: "env" as const,
@@ -88,7 +97,7 @@ function liveSubagentConfig(
           id: modelId,
           name: modelId,
           api: "google-generative-ai" as const,
-          agentRuntime: { id: "pi" },
+          agentRuntime: { id: "openclaw" },
           input: ["text" as const],
           reasoning: true,
           contextWindow: 1_048_576,
@@ -100,7 +109,7 @@ function liveSubagentConfig(
   } else {
     providers.openai = {
       api: "openai-responses" as const,
-      agentRuntime: { id: "pi" },
+      agentRuntime: { id: "openclaw" },
       apiKey: {
         source: "env" as const,
         provider: "default" as const,
@@ -113,7 +122,7 @@ function liveSubagentConfig(
           id: modelId,
           name: modelId,
           api: "openai-responses" as const,
-          agentRuntime: { id: "pi" },
+          agentRuntime: { id: "openclaw" },
           input: ["text" as const],
           reasoning: true,
           contextWindow: 1_047_576,
@@ -132,6 +141,7 @@ function liveSubagentConfig(
     },
     plugins: { enabled: false },
     tools: { allow: options?.toolAllow ?? ["sessions_spawn", "sessions_yield", "subagents"] },
+    ...(options?.queue ? { messages: { queue: options.queue } } : {}),
     models: {
       providers,
     },
@@ -139,7 +149,7 @@ function liveSubagentConfig(
       defaults: {
         workspace,
         model: { primary: modelKey },
-        models: { [modelKey]: { agentRuntime: { id: "pi" }, params: { maxTokens: 1024 } } },
+        models: { [modelKey]: { agentRuntime: { id: "openclaw" }, params: { maxTokens: 1024 } } },
         sandbox: { mode: "off" },
         subagents: {
           allowAgents: ["*"],
@@ -155,10 +165,11 @@ function liveSubagentConfig(
 async function waitFor<T>(
   label: string,
   fn: () => T | undefined | Promise<T | undefined>,
+  timeoutMs = WAIT_TIMEOUT_MS,
 ): Promise<T> {
   const started = Date.now();
   let lastValue: T | undefined;
-  while (Date.now() - started < WAIT_TIMEOUT_MS) {
+  while (Date.now() - started < timeoutMs) {
     lastValue = await fn();
     if (lastValue !== undefined) {
       return lastValue;
@@ -166,6 +177,52 @@ async function waitFor<T>(
     await sleep(1_000);
   }
   throw new Error(`timed out waiting for ${label}`);
+}
+
+function summarizeSubagentRuns(runs: ReturnType<typeof listSubagentRunsForRequester>): string {
+  return JSON.stringify(
+    runs.map((run) => ({
+      runId: run.runId,
+      taskName: run.taskName,
+      ended: typeof run.endedAt === "number",
+      endedReason: run.endedReason,
+      pauseReason: run.pauseReason,
+      outcome: run.outcome?.status,
+      delivery: run.delivery?.status,
+      deliveryError: run.delivery?.lastError,
+      suppressAnnounceReason: run.suppressAnnounceReason,
+      resultText: run.completion?.resultText?.slice(0, 200),
+    })),
+  );
+}
+
+function summarizeAgentEvents(events: AgentEventPayload[], runId: string): string {
+  return JSON.stringify(
+    events
+      .filter((event) => event.runId === runId)
+      .slice(-20)
+      .map((event) => ({
+        stream: event.stream,
+        phase: event.data.phase,
+        name: event.data.name,
+        toolCallId: event.data.toolCallId,
+        isError: event.data.isError,
+      })),
+  );
+}
+
+function isBashToolEventName(value: unknown): boolean {
+  return value === "bash" || value === "exec";
+}
+
+function readToolResultStatus(result: unknown): string | undefined {
+  const details =
+    result && typeof result === "object" ? (result as { details?: unknown }).details : undefined;
+  if (!details || typeof details !== "object") {
+    return undefined;
+  }
+  const { status } = details as { status?: unknown };
+  return typeof status === "string" ? status : undefined;
 }
 
 function createGatewayClient(params: {
@@ -194,8 +251,11 @@ describeLive("subagent announce live", () => {
   let state: OpenClawTestState | undefined;
   let server: GatewayServer | undefined;
   let client: GatewayClient | undefined;
+  let stopAgentEventCapture: (() => void) | undefined;
 
   afterEach(async () => {
+    stopAgentEventCapture?.();
+    stopAgentEventCapture = undefined;
     subagentAnnounceTesting.setDepsForTest();
     subagentAnnounceDeliveryTesting.setDepsForTest();
     await client?.stopAndWait().catch(() => undefined);
@@ -209,7 +269,149 @@ describeLive("subagent announce live", () => {
   });
 
   it(
-    "lets a parent steer a subagent and receives completion through in-process agent dispatch",
+    "keeps issue 82913 busy-parent completion announce pending until transcript delivery",
+    async () => {
+      if (!isTruthyEnvValue(process.env.OPENCLAW_SUBAGENT_ISSUE_82913_REPRO)) {
+        console.warn(
+          "[issue-82913] skip: set OPENCLAW_SUBAGENT_ISSUE_82913_REPRO=1 to run this focused repro",
+        );
+        return;
+      }
+      const modelConfig = resolveLiveSubagentModelConfig();
+      requireLiveSubagentAuth(modelConfig);
+
+      const token = `subagent-82913-${randomUUID()}`;
+      const port = 30_000 + Math.floor(Math.random() * 10_000);
+      const modelKey = modelConfig.modelKey;
+      const nonce = randomBytes(3).toString("hex").toUpperCase();
+      const childToken = `ISSUE_82913_CHILD_${nonce}`;
+      const parentToken = `ISSUE_82913_PARENT_SAW_${nonce}`;
+      const sessionKey = `agent:main:issue-82913-${nonce.toLowerCase()}`;
+
+      state = await createOpenClawTestState({
+        label: "subagent-issue-82913-live",
+        layout: "split",
+        env: {
+          OPENCLAW_SKIP_CHANNELS: "1",
+          OPENCLAW_SKIP_CRON: "1",
+          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+          OPENCLAW_SKIP_CANVAS_HOST: "1",
+          OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+          OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY: "1",
+          OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
+          OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+          OPENCLAW_PLUGIN_CATALOG_PATHS: undefined,
+          OPENCLAW_PLUGINS_PATHS: undefined,
+        },
+      });
+      await state.writeConfig(
+        liveSubagentConfig(modelKey, state.workspaceDir, port, token, {
+          queue: { mode: "collect", debounceMs: 2_500 },
+          toolAllow: ["sessions_spawn", "bash"],
+        }),
+      );
+      clearRuntimeConfigSnapshot();
+      clearCurrentPluginMetadataSnapshot();
+
+      server = await startGatewayServer(port, {
+        bind: "loopback",
+        auth: { mode: "token", token },
+        controlUiEnabled: false,
+      });
+      client = await createGatewayClient({ port, token });
+
+      let initialError: unknown;
+      let parentObservedAt: number | undefined;
+      let parentText: string | undefined;
+      const initialRequest = client.request<AgentPayload>(
+        "agent",
+        {
+          sessionKey,
+          idempotencyKey: `issue-82913-${randomUUID()}`,
+          deliver: false,
+          timeout: 240,
+          message: [
+            "Run this exact OpenClaw busy-parent subagent scenario. Use tool calls, not prose.",
+            `Use nonce ${nonce}.`,
+            `Step 1: call sessions_spawn with exactly this JSON input: ${JSON.stringify({
+              task: `Reply exactly ${childToken} and nothing else.`,
+              taskName: "issue_82913_child",
+              cleanup: "keep",
+              context: "isolated",
+              runTimeoutSeconds: 180,
+            })}.`,
+            'Step 2: after spawn returns status="accepted", immediately call the bash tool with command exactly: sleep 35; printf ISSUE_82913_PARENT_TOOL_DONE.',
+            "Do not call sessions_yield at any point in this scenario.",
+            `Step 3: after the child completion event is visible in your conversation, reply exactly ${parentToken}.`,
+            `Do not reply with ${parentToken} before the child completion event is visible.`,
+          ].join("\n"),
+        },
+        { expectFinal: true, timeoutMs: REQUEST_TIMEOUT_MS },
+      );
+      initialRequest
+        .then((response) => {
+          parentObservedAt = Date.now();
+          parentText = extractPayloadText(response.result);
+        })
+        .catch((error: unknown) => {
+          initialError = error;
+        });
+
+      const completedRunBeforeDelivery = await waitFor("issue 82913 child completion", () => {
+        if (initialError) {
+          throw initialError;
+        }
+        return listSubagentRunsForRequester(sessionKey).find(
+          (run) =>
+            run.taskName === "issue_82913_child" &&
+            run.completion?.resultText?.includes(childToken) === true &&
+            run.outcome?.status === "ok",
+        );
+      });
+      expect(completedRunBeforeDelivery.delivery?.announcedAt).toBeUndefined();
+      expect(parentObservedAt).toBeUndefined();
+
+      const parent = await initialRequest;
+      parentObservedAt ??= Date.now();
+      parentText ??= extractPayloadText(parent.result);
+      expect(parentText).toContain(parentToken);
+
+      const completedRun = await waitFor("issue 82913 delivered completion announce", () =>
+        listSubagentRunsForRequester(sessionKey).find(
+          (run) =>
+            run.runId === completedRunBeforeDelivery.runId &&
+            typeof run.delivery?.enqueuedAt === "number" &&
+            typeof run.delivery?.deliveredAt === "number" &&
+            typeof run.delivery?.announcedAt === "number",
+        ),
+      );
+      const enqueuedAt = completedRun.delivery?.enqueuedAt ?? 0;
+      const deliveredAt = completedRun.delivery?.deliveredAt ?? 0;
+      const announcedAt = completedRun.delivery?.announcedAt ?? 0;
+      const enqueuedToDeliveredMs = deliveredAt - enqueuedAt;
+      const announcedToParentObservedMs = Math.abs(parentObservedAt - announcedAt);
+      console.log(
+        `[issue-82913] repro ${JSON.stringify({
+          runId: completedRun.runId,
+          childEndedAt: completedRun.endedAt,
+          completionEnqueuedAt: enqueuedAt,
+          completionDeliveredAt: deliveredAt,
+          completionAnnouncedAt: announcedAt,
+          parentObservedAt,
+          enqueuedToDeliveredMs,
+          announcedToParentObservedMs,
+        })}`,
+      );
+      expect(completedRun.delivery?.announcedAt).toBe(deliveredAt);
+      expect(enqueuedToDeliveredMs).toBeGreaterThan(10_000);
+      expect(announcedToParentObservedMs).toBeLessThan(20_000);
+    },
+    10 * 60_000,
+  );
+
+  it(
+    "lets a parent steer an active subagent and receives completion through in-process agent dispatch",
     async () => {
       const modelConfig = resolveLiveSubagentModelConfig();
       requireLiveSubagentAuth(modelConfig);
@@ -219,15 +421,30 @@ describeLive("subagent announce live", () => {
       const modelKey = modelConfig.modelKey;
       const nonce = randomBytes(3).toString("hex").toUpperCase();
       const childToken = `CHILD_STEERED_${nonce}`;
+      const unsteeredToken = `UNSTEERED_${nonce}`;
       const parentToken = `PARENT_SAW_${childToken}`;
+      const parentStartedToken = `PARENT_READY_${nonce}`;
       const steerToken = `STEER_${nonce}`;
+      const steerMessage = [
+        `${steerToken} has arrived.`,
+        "Stop waiting and do not call any tools.",
+        `Reply exactly ${childToken} and nothing else.`,
+      ].join(" ");
       const childTask = [
-        `Immediately call sessions_yield with message="waiting for ${steerToken}".`,
-        `After a steering message containing ${steerToken} arrives, reply exactly ${childToken}.`,
+        `Immediately call the bash tool with exactly this JSON input: ${JSON.stringify({
+          command: `sleep 60; printf ${unsteeredToken}`,
+          yieldMs: 120_000,
+        })}.`,
+        "Do not reply directly before that bash command finishes.",
         `Do not reply with ${childToken} before receiving ${steerToken}.`,
+        `After receiving ${steerToken}, reply exactly ${childToken} and nothing else.`,
       ].join(" ");
       const sessionKey = `agent:main:live-subagent-${nonce.toLowerCase()}`;
       const inProcessAgentDispatches: InProcessAgentDispatch[] = [];
+      const agentEvents: AgentEventPayload[] = [];
+      stopAgentEventCapture = onAgentEvent((event) => {
+        agentEvents.push(event);
+      });
 
       const forbiddenAgentRpc: typeof realCallGateway = async (request) => {
         if (request.method === "agent") {
@@ -283,7 +500,11 @@ describeLive("subagent announce live", () => {
           OPENCLAW_PLUGINS_PATHS: undefined,
         },
       });
-      await state.writeConfig(liveSubagentConfig(modelKey, state.workspaceDir, port, token));
+      await state.writeConfig(
+        liveSubagentConfig(modelKey, state.workspaceDir, port, token, {
+          toolAllow: ["sessions_spawn", "bash"],
+        }),
+      );
       clearRuntimeConfigSnapshot();
       clearCurrentPluginMetadataSnapshot();
 
@@ -312,16 +533,10 @@ describeLive("subagent announce live", () => {
               context: "isolated",
               runTimeoutSeconds: 300,
             })}.`,
-            `Step 2: after spawn returns status="accepted", call subagents with exactly this JSON input: ${JSON.stringify(
-              {
-                action: "steer",
-                target: "steered_child",
-                message: steerToken,
-              },
-            )}.`,
-            `Step 3: call sessions_yield with message="waiting for ${childToken}" and wait for the child completion event.`,
-            `Step 4: after the completion event arrives, reply exactly ${parentToken}.`,
-            "Do not reply with the parent token until the child completion event is visible.",
+            'Step 2: after spawn returns status="accepted", do not call the subagents tool; the test harness will steer the child.',
+            `Step 3: reply exactly ${parentStartedToken}.`,
+            `In a future continuation after the child completion event arrives, reply exactly ${parentToken}.`,
+            `Do not reply with ${parentToken} before the child completion event is visible.`,
           ].join("\n"),
         },
         { expectFinal: true, timeoutMs: REQUEST_TIMEOUT_MS },
@@ -330,19 +545,109 @@ describeLive("subagent announce live", () => {
         initialError = error;
       });
 
+      const listSteeredChildRuns = () =>
+        listSubagentRunsForRequester(sessionKey).filter((run) => run.taskName === "steered_child");
+      const spawnedRun = await waitFor("steered child spawn", () => {
+        if (initialError) {
+          throw initialError;
+        }
+        return listSteeredChildRuns()[0];
+      });
+      expect(spawnedRun.taskName).toBe("steered_child");
+      const initialResponse = await initialRequest;
+      expect(extractPayloadText(initialResponse.result)).toContain(parentStartedToken);
+      const runBeforeSteer = await waitFor("steered child bash tool start", () => {
+        if (initialError) {
+          throw initialError;
+        }
+        const currentRun =
+          listSteeredChildRuns().find((run) => run.runId === spawnedRun.runId) ?? spawnedRun;
+        const sawBashStart = agentEvents.some(
+          (event) =>
+            event.runId === currentRun.runId &&
+            event.stream === "tool" &&
+            event.data.phase === "start" &&
+            isBashToolEventName(event.data.name),
+        );
+        return sawBashStart ? currentRun : undefined;
+      }).catch((error: unknown) => {
+        throw new Error(
+          `timed out waiting for child bash start; runs=${summarizeSubagentRuns(
+            listSteeredChildRuns(),
+          )}; events=${summarizeAgentEvents(agentEvents, spawnedRun.runId)}`,
+          { cause: error },
+        );
+      });
+      const runStateBeforeSteer = summarizeSubagentRuns(listSteeredChildRuns());
+      expect(runBeforeSteer.endedAt, runStateBeforeSteer).toBeUndefined();
+      expect(runBeforeSteer.pauseReason, runStateBeforeSteer).toBeUndefined();
+      expect(runBeforeSteer.completion?.resultText, runStateBeforeSteer).toBeUndefined();
+      console.log(`[subagent-steer] steering active child run; runs=${runStateBeforeSteer}`);
+
+      const cfg = getRuntimeConfig();
+      const steerResult = await steerControlledSubagentRun({
+        cfg,
+        controller: resolveSubagentController({ cfg, agentSessionKey: sessionKey }),
+        entry: runBeforeSteer,
+        message: steerMessage,
+      });
+      expect(
+        steerResult.status,
+        `steer result ${JSON.stringify(steerResult)}; runs=${summarizeSubagentRuns(
+          listSteeredChildRuns(),
+        )}`,
+      ).toBe("accepted");
+
+      const originalBashResult = await waitFor(
+        "original active child bash abort result",
+        () => {
+          if (initialError) {
+            throw initialError;
+          }
+          return agentEvents.find(
+            (event) =>
+              event.runId === runBeforeSteer.runId &&
+              event.stream === "tool" &&
+              event.data.phase === "result" &&
+              isBashToolEventName(event.data.name),
+          );
+        },
+        30_000,
+      ).catch((error: unknown) => {
+        throw new Error(
+          `timed out waiting for original active child bash abort; events=${summarizeAgentEvents(
+            agentEvents,
+            runBeforeSteer.runId,
+          )}`,
+          { cause: error },
+        );
+      });
+      const originalBashResultText = JSON.stringify(originalBashResult.data.result ?? "");
+      expect(
+        readToolResultStatus(originalBashResult.data.result),
+        summarizeAgentEvents(agentEvents, runBeforeSteer.runId),
+      ).toBe("failed");
+      expect(originalBashResultText).not.toContain(unsteeredToken);
+
       const steeredRun = await waitFor("steered child completion", () => {
         if (initialError) {
           throw initialError;
         }
-        return listSubagentRunsForRequester(sessionKey).find(
+        return listSteeredChildRuns().find(
           (run) =>
-            run.taskName === "steered_child" &&
-            run.frozenResultText?.includes(childToken) === true &&
+            run.completion?.resultText?.includes(childToken) === true &&
             run.outcome?.status === "ok",
+        );
+      }).catch((error: unknown) => {
+        throw new Error(
+          `timed out waiting for steered child completion after steer ${JSON.stringify(
+            steerResult,
+          )}; runs=${summarizeSubagentRuns(listSteeredChildRuns())}`,
+          { cause: error },
         );
       });
       expect(steeredRun.endedReason).toBe("subagent-complete");
-      expect(steeredRun.lastAnnounceDeliveryError).toBeUndefined();
+      expect(steeredRun.delivery?.lastError).toBeUndefined();
 
       await waitFor("in-process subagent completion agent dispatch start", () => {
         if (initialError) {
@@ -353,12 +658,16 @@ describeLive("subagent announce live", () => {
           : undefined;
       });
 
-      const completedDispatch = inProcessAgentDispatches.find(
-        (entry) => entry.phase === "completed",
+      const completedDispatch = await waitFor(
+        "in-process subagent completion agent dispatch",
+        () => {
+          if (initialError) {
+            throw initialError;
+          }
+          return inProcessAgentDispatches.find((entry) => entry.phase === "completed");
+        },
       );
-      if (completedDispatch) {
-        expect(completedDispatch.resultText).toContain(childToken);
-      }
+      expect(completedDispatch.resultText).toContain(parentToken);
       expect(
         inProcessAgentDispatches.some((entry) => {
           if (initialError) {
@@ -497,7 +806,8 @@ describeLive("subagent announce live", () => {
         const completed = childTokens.every((childToken) =>
           runs.some(
             (run) =>
-              run.frozenResultText?.includes(childToken) === true && run.outcome?.status === "ok",
+              run.completion?.resultText?.includes(childToken) === true &&
+              run.outcome?.status === "ok",
           ),
         );
         return completed ? runs : undefined;
@@ -505,7 +815,9 @@ describeLive("subagent announce live", () => {
 
       expect(completedRuns).toHaveLength(3);
       for (const childToken of childTokens) {
-        expect(completedRuns.some((run) => run.frozenResultText?.includes(childToken))).toBe(true);
+        expect(completedRuns.some((run) => run.completion?.resultText?.includes(childToken))).toBe(
+          true,
+        );
       }
 
       const parent = await initialRequest;

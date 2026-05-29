@@ -76,7 +76,6 @@ function makeHandler(
       enabled: false,
       maxChars: 6000,
       includeIdentity: true,
-      includeSystemPrompt: true,
       includeWorkspaceFiles: true,
       files: ["SOUL.md", "IDENTITY.md", "USER.md"],
     },
@@ -969,9 +968,9 @@ describe("RealtimeCallHandler path routing", () => {
         const [args, callId, context] = requireFirstMockCall(consult.mock.calls, "consult");
         expect(args).toEqual({
           question: "Create a smoke test file for me.",
-          context:
-            "The realtime provider produced a final user transcript without invoking openclaw_agent_consult, so OpenClaw is forcing the consult because consultPolicy is always.",
         });
+        expect(JSON.stringify(args)).not.toContain("consultPolicy");
+        expect(JSON.stringify(args)).not.toContain("openclaw_agent_consult");
         expect(callId).toBe("call-1");
         expect(context).toEqual({});
         await waitForRealtimeTest(() => {

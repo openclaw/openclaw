@@ -1,13 +1,14 @@
 import { describe, expect, it } from "vitest";
+import { classifyFailoverSignal } from "./embedded-agent-helpers/errors.js";
 import {
   coerceToFailoverError,
   describeFailoverError,
   FailoverError,
+  isNonProviderRuntimeCoordinationError,
   isTimeoutError,
   resolveFailoverReasonFromError,
   resolveFailoverStatus,
 } from "./failover-error.js";
-import { classifyFailoverSignal } from "./pi-embedded-helpers/errors.js";
 import { SessionWriteLockTimeoutError } from "./session-write-lock-error.js";
 
 // OpenAI 429 example shape: https://help.openai.com/en/articles/5955604-how-can-i-solve-429-too-many-requests-errors
@@ -21,6 +22,9 @@ const GEMINI_RESOURCE_EXHAUSTED_MESSAGE =
   "RESOURCE_EXHAUSTED: Resource has been exhausted (e.g. check quota).";
 // OpenRouter 402 billing example: https://openrouter.ai/docs/api-reference/errors
 const OPENROUTER_CREDITS_MESSAGE = "Payment Required: insufficient credits";
+// Issue-backed Moonshot/Kimi exhausted-balance shape surfaced under HTTP 429 (#43447).
+const MOONSHOT_INSUFFICIENT_BALANCE_429_PAYLOAD =
+  '{"error":{"type":"rate_limit_reached","message":"Insufficient account balance. Please recharge your Moonshot account."}}';
 const OPENROUTER_MODEL_NOT_FOUND_PAYLOAD =
   '{"error":{"message":"Healer Alpha was a stealth model revealed on March 18th as an early testing version of MiMo-V2-Omni. Find it here: https://openrouter.ai/xiaomi/mimo-v2-omni","code":404},"user_id":"user_33GTyP8uDSYYbaeBO48AGHXyuMC"}';
 const TOGETHER_MONTHLY_SPEND_CAP_MESSAGE =
@@ -293,6 +297,46 @@ describe("failover-error", () => {
     ).toBe("overloaded");
   });
 
+  it("lets Moonshot/Kimi billing-shaped 429 payloads win over generic rate limit status", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "moonshot",
+        status: 429,
+        message: MOONSHOT_INSUFFICIENT_BALANCE_429_PAYLOAD,
+      }),
+    ).toBe("billing");
+    expect(
+      resolveFailoverReasonFromError(
+        {
+          status: 429,
+          message: MOONSHOT_INSUFFICIENT_BALANCE_429_PAYLOAD,
+        },
+        "kimi-claw",
+      ),
+    ).toBe("billing");
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "moonshot",
+        status: 429,
+        message: OPENAI_RATE_LIMIT_MESSAGE,
+      }),
+    ).toBe("rate_limit");
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "openai",
+        status: 429,
+        message: MOONSHOT_INSUFFICIENT_BALANCE_429_PAYLOAD,
+      }),
+    ).toBe("rate_limit");
+    expect(
+      classifyFailoverSignal({
+        provider: "moonshot",
+        status: 429,
+        message: MOONSHOT_INSUFFICIENT_BALANCE_429_PAYLOAD,
+      }),
+    ).toEqual({ kind: "reason", reason: "billing" });
+  });
+
   it("classifies OpenRouter no-endpoints 404s as model_not_found", () => {
     expect(
       resolveFailoverReasonFromError({
@@ -444,7 +488,7 @@ describe("failover-error", () => {
     ).toBeNull();
   });
 
-  it("classifies bare pi-ai stream wrapper as timeout regardless of provider (#71620)", () => {
+  it("classifies bare shared model runtime stream wrapper as timeout regardless of provider (#71620)", () => {
     expect(
       resolveFailoverReasonFromError({
         message: "An unknown error occurred",
@@ -498,6 +542,49 @@ describe("failover-error", () => {
       resolveFailoverReasonFromError({
         status: 400,
         message: INSUFFICIENT_QUOTA_PAYLOAD,
+      }),
+    ).toBe("billing");
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "openai",
+        status: 429,
+        message: INSUFFICIENT_QUOTA_PAYLOAD,
+      }),
+    ).toBe("billing");
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "openai",
+        status: 429,
+        message: '{"error":"insufficient_balance","message":"Your credit balance is too low."}',
+      }),
+    ).toBe("billing");
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "openai",
+        status: 429,
+        message: '{"error":"insufficient_balance","message":"Insufficient account balance"}',
+      }),
+    ).toBe("billing");
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "openai",
+        status: 429,
+        message:
+          'HTTP 429: {"error":"insufficient_balance","message":"Insufficient account balance"}',
+      }),
+    ).toBe("billing");
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "openai",
+        status: 429,
+        message: "This model requires more credits to use",
+      }),
+    ).toBe("billing");
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "openrouter",
+        status: 429,
+        message: "Key limit exceeded",
       }),
     ).toBe("billing");
   });
@@ -899,6 +986,37 @@ describe("failover-error", () => {
     );
   });
 
+  it("Codex deactivated workspace marker returns auth_permanent", () => {
+    expect(resolveFailoverReasonFromError({ message: "deactivated_workspace" })).toBe(
+      "auth_permanent",
+    );
+    expect(resolveFailoverReasonFromError({ message: "deactivated workspace" })).toBe(
+      "auth_permanent",
+    );
+    expect(resolveFailoverReasonFromError({ code: "deactivated_workspace" })).toBe(
+      "auth_permanent",
+    );
+    expect(
+      resolveFailoverReasonFromError({
+        detail: { code: "deactivated_workspace" },
+      }),
+    ).toBe("auth_permanent");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 403,
+        message: "Forbidden",
+        detail: { code: "deactivated_workspace" },
+      }),
+    ).toBe("auth_permanent");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 400,
+        message: "Bad request",
+        detail: { code: "deactivated_workspace" },
+      }),
+    ).toBe("auth_permanent");
+  });
+
   it("403 OpenRouter 'Key limit exceeded' returns billing (model fallback trigger)", () => {
     // GitHub: openclaw/openclaw#53849 — OpenRouter returns 403 with "Key limit exceeded"
     // when the monthly key spending limit is reached. This must trigger billing failover
@@ -1068,5 +1186,55 @@ describe("failover-error", () => {
     expect(err?.sessionId).toBe("session:browser-1234");
     expect(err?.lane).toBe("draft");
     expect(err?.provider).toBe("openai");
+  });
+
+  describe("isNonProviderRuntimeCoordinationError", () => {
+    const makeSessionLockError = () =>
+      new SessionWriteLockTimeoutError({
+        timeoutMs: 10_000,
+        owner: "pid=37121",
+        lockPath: "/tmp/openclaw/session.jsonl.lock",
+      });
+    const makeEmbeddedTakeoverError = () => {
+      const err = new Error(
+        "session file changed while embedded prompt lock was released: /tmp/openclaw/session.jsonl",
+      );
+      err.name = "EmbeddedAttemptSessionTakeoverError";
+      return err;
+    };
+
+    it("returns true for direct session write-lock timeout errors", () => {
+      expect(isNonProviderRuntimeCoordinationError(makeSessionLockError())).toBe(true);
+    });
+
+    it("returns true for direct embedded attempt session takeover errors", () => {
+      expect(isNonProviderRuntimeCoordinationError(makeEmbeddedTakeoverError())).toBe(true);
+    });
+
+    it("returns true when the coordination error is nested via cause", () => {
+      const wrapped = new Error("wrapper", { cause: makeSessionLockError() });
+      expect(isNonProviderRuntimeCoordinationError(wrapped)).toBe(true);
+
+      const wrappedTakeover = new Error("wrapper", { cause: makeEmbeddedTakeoverError() });
+      expect(isNonProviderRuntimeCoordinationError(wrappedTakeover)).toBe(true);
+    });
+
+    it("returns false for plain timeouts and provider errors", () => {
+      const timeoutErr = Object.assign(new Error("operation timed out"), { name: "TimeoutError" });
+      expect(isNonProviderRuntimeCoordinationError(timeoutErr)).toBe(false);
+      expect(isNonProviderRuntimeCoordinationError({ status: 429, message: "rate limit" })).toBe(
+        false,
+      );
+      expect(
+        isNonProviderRuntimeCoordinationError({
+          status: 429,
+          code: "RESOURCE_EXHAUSTED",
+          message: "upstream quota pressure",
+          cause: makeSessionLockError(),
+        }),
+      ).toBe(false);
+      expect(isNonProviderRuntimeCoordinationError(null)).toBe(false);
+      expect(isNonProviderRuntimeCoordinationError(undefined)).toBe(false);
+    });
   });
 });

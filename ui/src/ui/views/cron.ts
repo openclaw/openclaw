@@ -9,10 +9,12 @@ import type {
   CronJobsScheduleKindFilter,
 } from "../controllers/cron.ts";
 import { getCronJobPayload } from "../cron-payload.ts";
+import { resolveCronJobLastRunStatus } from "../cron-status.ts";
 import { formatRelativeTimestamp, formatMs } from "../format.ts";
 import { toSanitizedMarkdownHtml } from "../markdown.ts";
 import { pathForTab } from "../navigation.ts";
 import { formatCronSchedule, formatNextRun } from "../presenter.ts";
+import { normalizeStringEntries, uniqueStrings } from "../string-coerce.ts";
 import type { ChannelUiMetaEntry, CronJob, CronRunLogEntry, CronStatus } from "../types.ts";
 import type {
   CronDeliveryStatus,
@@ -212,7 +214,7 @@ function renderRunFilterDropdown(params: {
 }
 
 function renderSuggestionList(id: string, options: string[]) {
-  const clean = Array.from(new Set(options.map((option) => option.trim()).filter(Boolean)));
+  const clean = uniqueStrings(normalizeStringEntries(options));
   if (clean.length === 0) {
     return nothing;
   }
@@ -541,6 +543,7 @@ export function renderCron(props: CronProps) {
                   <option value="ok">${t("cron.runs.runStatusOk")}</option>
                   <option value="error">${t("cron.runs.runStatusError")}</option>
                   <option value="skipped">${t("cron.runs.runStatusSkipped")}</option>
+                  <option value="unknown">${t("cron.runs.runStatusUnknown")}</option>
                 </select>
               </label>
               <label class="field">
@@ -1749,7 +1752,7 @@ function formatRunNextLabel(nextRunAtMs: number, nowMs = Date.now()) {
 }
 
 function renderJobState(job: CronJob) {
-  const rawStatus = job.state?.lastStatus;
+  const rawStatus = resolveCronJobLastRunStatus(job);
   const statusClass =
     rawStatus === "ok"
       ? "cron-job-status-ok"
@@ -1765,7 +1768,7 @@ function renderJobState(job: CronJob) {
         ? t("cron.runs.runStatusError")
         : rawStatus === "skipped"
           ? t("cron.runs.runStatusSkipped")
-          : t("common.na");
+          : t("cron.runs.runStatusUnknown");
   const nextRunAtMs = job.state?.nextRunAtMs;
   const lastRunAtMs = job.state?.lastRunAtMs;
 

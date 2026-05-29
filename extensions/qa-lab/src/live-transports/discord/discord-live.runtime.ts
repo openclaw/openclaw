@@ -11,6 +11,7 @@ import { DEFAULT_EMOJIS } from "openclaw/plugin-sdk/channel-feedback";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { chromium } from "playwright-core";
 import { z } from "zod";
 import { startQaGatewayChild } from "../../gateway-child.js";
@@ -25,8 +26,11 @@ import {
   startQaCredentialLeaseHeartbeat,
   type QaCredentialRole,
 } from "../shared/credential-lease.runtime.js";
+import {
+  appendQaLiveLaneIssue as appendLiveLaneIssue,
+  buildQaLiveLaneArtifactsError as buildLiveLaneArtifactsError,
+} from "../shared/live-artifacts.js";
 import { startQaLiveLaneGateway } from "../shared/live-gateway.runtime.js";
-import { appendLiveLaneIssue, buildLiveLaneArtifactsError } from "../shared/live-lane-helpers.js";
 import {
   collectLiveTransportStandardScenarioCoverage,
   selectLiveTransportScenarios,
@@ -181,6 +185,15 @@ type DiscordQaScenarioResult = {
   title: string;
   status: "pass" | "fail";
   details: string;
+  requestStartedAt?: string;
+  responseObservedAt?: string;
+  rttMs?: number;
+  rttMeasurement?: {
+    finalMatchedReplyRttMs: number;
+    requestStartedAt: string;
+    responseObservedAt: string;
+    source: "request-to-observed-message";
+  };
 };
 
 type DiscordQaRunResult = {
@@ -452,7 +465,7 @@ function buildDiscordQaConfig(
     };
   } = {},
 ): OpenClawConfig {
-  const pluginAllow = [...new Set([...(baseCfg.plugins?.allow ?? []), "discord"])];
+  const pluginAllow = uniqueStrings([...(baseCfg.plugins?.allow ?? []), "discord"]);
   const pluginEntries = {
     ...baseCfg.plugins?.entries,
     discord: { enabled: true },
@@ -762,6 +775,18 @@ function normalizeDiscordReactionSnapshot(params: {
       .filter((reaction) => reaction.emoji.length > 0)
       .toSorted((a, b) => a.emoji.localeCompare(b.emoji)),
   };
+}
+
+function computeDiscordRttMs(triggerTimestamp?: string, replyTimestamp?: string) {
+  if (!triggerTimestamp || !replyTimestamp) {
+    return undefined;
+  }
+  const triggerAtMs = Date.parse(triggerTimestamp);
+  const replyAtMs = Date.parse(replyTimestamp);
+  if (!Number.isFinite(triggerAtMs) || !Number.isFinite(replyAtMs)) {
+    return undefined;
+  }
+  return Math.max(0, Math.round(replyAtMs - triggerAtMs));
 }
 
 function collectSeenReactionSequence(
@@ -1422,6 +1447,8 @@ function buildObservedMessagesArtifact(params: {
       ? {
           ...scenarioContext,
           senderIsBot: message.senderIsBot,
+          triggerTimestamp: message.triggerTimestamp,
+          timestamp: message.timestamp,
         }
       : {
           ...scenarioContext,
@@ -1764,6 +1791,9 @@ export async function runDiscordQaLive(params: {
             expectedTextIncludes: scenarioRun.expectedTextIncludes,
             message: matched.message,
           });
+          const requestStartedAt = sent.timestamp;
+          const responseObservedAt = matched.message.timestamp;
+          const rttMs = computeDiscordRttMs(requestStartedAt, responseObservedAt);
           scenarioResults.push({
             id: scenario.id,
             title: scenario.title,
@@ -1771,6 +1801,21 @@ export async function runDiscordQaLive(params: {
             details: redactPublicMetadata
               ? "reply matched"
               : `reply message ${matched.message.messageId} matched`,
+            ...(requestStartedAt === undefined ? {} : { requestStartedAt }),
+            ...(responseObservedAt === undefined ? {} : { responseObservedAt }),
+            ...(rttMs === undefined ||
+            requestStartedAt === undefined ||
+            responseObservedAt === undefined
+              ? {}
+              : {
+                  rttMs,
+                  rttMeasurement: {
+                    finalMatchedReplyRttMs: rttMs,
+                    requestStartedAt,
+                    responseObservedAt,
+                    source: "request-to-observed-message",
+                  },
+                }),
           });
         } catch (error) {
           if (scenarioRun.kind === "channel-message" && !scenarioRun.expectReply) {
@@ -1920,7 +1965,7 @@ export async function runDiscordQaLive(params: {
   };
 }
 
-export const __testing = {
+export const testing = {
   DISCORD_QA_SCENARIOS,
   DISCORD_QA_STANDARD_SCENARIO_IDS,
   collectSeenReactionSequence,
@@ -1929,6 +1974,7 @@ export const __testing = {
   buildDiscordQaConfig,
   buildDiscordWebMessageUrl,
   buildObservedMessagesArtifact,
+  computeDiscordRttMs,
   findScenario,
   getCurrentDiscordUser,
   getChannelMessage,
@@ -1944,3 +1990,4 @@ export const __testing = {
   resolveDiscordQaRuntimeEnv,
   waitForDiscordChannelRunning,
 };
+export { testing as __testing };

@@ -1,4 +1,20 @@
 import { randomUUID } from "node:crypto";
+import {
+  GATEWAY_CLIENT_CAPS,
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../packages/gateway-protocol/src/client-info.js";
+import {
+  type HelloOk,
+  MIN_CLIENT_PROTOCOL_VERSION,
+  PROTOCOL_VERSION,
+  type CommandEntry,
+  type CommandsListParams,
+  type CommandsListResult,
+  type SessionsListParams,
+  type SessionsPatchResult,
+  type SessionsPatchParams,
+} from "../../packages/gateway-protocol/src/index.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { assertExplicitGatewayAuthModeWhenBothConfigured } from "../gateway/auth-mode-policy.js";
 import { resolveGatewayInteractiveSurfaceAuth } from "../gateway/auth-surface-resolution.js";
@@ -10,19 +26,6 @@ import {
 import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-readiness.js";
 import { GatewayClient, GatewayClientRequestError } from "../gateway/client.js";
 import { isLoopbackHost } from "../gateway/net.js";
-import {
-  GATEWAY_CLIENT_CAPS,
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-} from "../gateway/protocol/client-info.js";
-import {
-  type HelloOk,
-  MIN_CLIENT_PROTOCOL_VERSION,
-  PROTOCOL_VERSION,
-  type SessionsListParams,
-  type SessionsPatchResult,
-  type SessionsPatchParams,
-} from "../gateway/protocol/index.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { VERSION } from "../version.js";
 import { TUI_SETUP_AUTH_SOURCE_CONFIG, TUI_SETUP_AUTH_SOURCE_ENV } from "./setup-launch-env.js";
@@ -250,6 +253,11 @@ export class GatewayChatClient implements TuiBackend {
   async listModels(): Promise<GatewayModelChoice[]> {
     const res = await this.client.request("models.list");
     return Array.isArray(res?.models) ? res.models : [];
+  }
+
+  async listCommands(opts?: CommandsListParams): Promise<CommandEntry[]> {
+    const res = await this.client.request<CommandsListResult>("commands.list", opts ?? {});
+    return Array.isArray(res?.commands) ? res.commands : [];
   }
 }
 

@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetFileLockStateForTest } from "../../infra/file-lock.js";
 import { captureEnv } from "../../test-utils/env.js";
-import { __testing as externalAuthTesting } from "./external-auth.js";
+import { testing as externalAuthTesting } from "./external-auth.js";
 import "./oauth-file-lock-passthrough.test-support.js";
 import { getOAuthProviderRuntimeMocks } from "./oauth-common-mocks.test-support.js";
 import {
@@ -47,7 +47,7 @@ function requireOAuthCredential(store: AuthProfileStore, profileId: string): OAu
   return profile;
 }
 
-vi.mock("@mariozechner/pi-ai/oauth", () => ({
+vi.mock("../../llm/oauth.js", () => ({
   getOAuthProviders: () => [{ id: "anthropic" }, { id: "openai-codex" }],
   getOAuthApiKey: vi.fn(async (provider: string, credentials: Record<string, OAuthCredential>) => {
     const credential = credentials[provider];

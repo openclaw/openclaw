@@ -234,9 +234,32 @@ describe("GatewayPlugin", () => {
     );
   });
 
+  it("uses the safe single identify bucket for non-finite max concurrency", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+
+    await sharedGatewayIdentifyLimiter.wait({
+      shardId: 0,
+      maxConcurrency: Number.POSITIVE_INFINITY,
+    });
+    let secondResolved = false;
+    const second = sharedGatewayIdentifyLimiter
+      .wait({ shardId: 1, maxConcurrency: Number.POSITIVE_INFINITY })
+      .then(() => {
+        secondResolved = true;
+      });
+
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(secondResolved).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await second;
+    expect(secondResolved).toBe(true);
+  });
+
   it("preserves MESSAGE_CREATE author payloads for inbound dispatch", async () => {
     const gateway = new GatewayPlugin({ autoInteractions: false });
-    const dispatchGatewayEvent = vi.fn(async (_event: string, _data: unknown) => {});
+    const dispatchGatewayEvent = vi.fn(async (eventValue: string, dataValue: unknown) => {});
     (gateway as unknown as { client: unknown }).client = {
       dispatchGatewayEvent,
     };

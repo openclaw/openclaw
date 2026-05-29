@@ -1,13 +1,15 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
+import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../../packages/gateway-protocol/src/client-info.js";
+import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/index.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
-import { resolveActivePluginHttpRouteRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import type { AuthorizedGatewayHttpRequest } from "../http-utils.js";
-import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../protocol/client-info.js";
-import { PROTOCOL_VERSION } from "../protocol/index.js";
-import type { GatewayRequestOptions } from "../server-methods/types.js";
+import type { GatewayRequestContext, GatewayRequestOptions } from "../server-methods/types.js";
 import { resolvePluginRouteRuntimeOperatorScopes } from "./plugin-route-runtime-scopes.js";
 import {
   resolvePluginRoutePathContext,
@@ -76,11 +78,14 @@ export type PluginHttpUpgradeHandler = (
 
 export function createGatewayPluginRequestHandler(params: {
   registry: PluginRegistry;
+  getRouteRegistry?: () => PluginRegistry;
   log: SubsystemLogger;
+  getGatewayRequestContext?: () => GatewayRequestContext | undefined;
 }): PluginHttpRequestHandler {
   const { log } = params;
   return async (req, res, providedPathContext, dispatchContext) => {
-    const registry = resolveActivePluginHttpRouteRegistry(params.registry);
+    const registry = params.getRouteRegistry?.() ?? params.registry;
+    const gatewayRequestContext = params.getGatewayRequestContext?.();
     const routes = registry.httpRoutes ?? [];
     if (routes.length === 0) {
       return false;
@@ -145,6 +150,7 @@ export function createGatewayPluginRequestHandler(params: {
       try {
         const handled = await withPluginRuntimeGatewayRequestScope(
           {
+            ...(gatewayRequestContext ? { context: gatewayRequestContext } : {}),
             client: runtimeClient,
             isWebchatConnect: () => false,
             ...(route.pluginId ? { pluginId: route.pluginId } : {}),
@@ -174,11 +180,14 @@ export function createGatewayPluginRequestHandler(params: {
 
 export function createGatewayPluginUpgradeHandler(params: {
   registry: PluginRegistry;
+  getRouteRegistry?: () => PluginRegistry;
   log: SubsystemLogger;
+  getGatewayRequestContext?: () => GatewayRequestContext | undefined;
 }): PluginHttpUpgradeHandler {
   const { log } = params;
   return async (req, socket, head, providedPathContext, dispatchContext) => {
-    const registry = resolveActivePluginHttpRouteRegistry(params.registry);
+    const registry = params.getRouteRegistry?.() ?? params.registry;
+    const gatewayRequestContext = params.getGatewayRequestContext?.();
     const routes = registry.httpRoutes ?? [];
     if (routes.length === 0) {
       return false;
@@ -246,6 +255,7 @@ export function createGatewayPluginUpgradeHandler(params: {
       try {
         const handled = await withPluginRuntimeGatewayRequestScope(
           {
+            ...(gatewayRequestContext ? { context: gatewayRequestContext } : {}),
             client: runtimeClient,
             isWebchatConnect: () => false,
             ...(route.pluginId ? { pluginId: route.pluginId } : {}),

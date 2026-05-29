@@ -11,6 +11,9 @@ struct GeneralSettings: View {
         case connection
     }
 
+    private static let remoteFieldWidth: CGFloat = 320
+    private static let remoteSecretFieldWidth: CGFloat = 300
+
     @Bindable var state: AppState
     @AppStorage(cameraEnabledKey) private var cameraEnabled: Bool = false
     let page: Page
@@ -43,8 +46,7 @@ struct GeneralSettings: View {
                     self.connectionPage
                 }
             }
-            .frame(maxWidth: 760, alignment: .leading)
-            .padding(.bottom, 16)
+            .settingsDetailContent()
         }
         .onAppear {
             self.updateActiveWork(active: self.isActive)
@@ -382,6 +384,7 @@ struct GeneralSettings: View {
                 self.applyDiscoveredGateway(gateway)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 14)
         .padding(.vertical, 11)
         .overlay(alignment: .bottom) {
@@ -498,7 +501,7 @@ struct GeneralSettings: View {
             SettingsCardRow(title: "SSH target", subtitle: "User and host for the remote Gateway machine.") {
                 TextField("user@host[:22]", text: self.$state.remoteTarget)
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: 420)
+                    .frame(width: Self.remoteFieldWidth)
                 self.remoteTestButton(disabled: !canTest)
             }
             if let validationMessage {
@@ -512,20 +515,20 @@ struct GeneralSettings: View {
     }
 
     private var remoteDirectRow: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            SettingsCardRow(title: "Gateway URL", subtitle: "The WebSocket URL exposed by the remote Gateway.") {
-                TextField("wss://gateway.example.ts.net", text: self.$state.remoteUrl)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 420)
-                self.remoteTestButton(
-                    disabled: self.state.remoteUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        SettingsCardRow(title: "Gateway URL", subtitle: "The WebSocket URL exposed by the remote Gateway.") {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    TextField("wss://gateway.example.ts.net", text: self.$state.remoteUrl)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: Self.remoteFieldWidth)
+                    self.remoteTestButton(
+                        disabled: self.state.remoteUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+                Text("Use wss:// for public hosts. ws:// is allowed for localhost, LAN, .local, and Tailnet hosts.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            Text(
-                "Use wss:// for public hosts. ws:// is allowed for localhost, LAN, .local, and Tailnet hosts.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 14)
-                .padding(.bottom, 10)
         }
     }
 
@@ -538,7 +541,7 @@ struct GeneralSettings: View {
             {
                 SecureField("remote gateway auth token (gateway.remote.token)", text: self.$state.remoteToken)
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: 520)
+                    .frame(width: Self.remoteSecretFieldWidth)
             }
             if self.state.remoteTokenUnsupported {
                 Text(
@@ -564,6 +567,7 @@ struct GeneralSettings: View {
             }
         }
         .buttonStyle(.borderedProminent)
+        .frame(minWidth: 116)
         .disabled(self.remoteStatus == .checking || disabled)
     }
 

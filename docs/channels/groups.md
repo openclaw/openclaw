@@ -43,28 +43,24 @@ always-on group chatter -> user request, or room event when configured
 
 ## Visible replies
 
-For group/channel rooms, OpenClaw defaults to `messages.groupChat.visibleReplies: "message_tool"`.
-`openclaw doctor --fix` writes this default into configured-channel configs that omit it.
-That means the agent still processes the turn and can update memory/session state, and it should speak visibly with `message(action=send)` when it has a room reply. If the model misses that tool and returns substantive final text, OpenClaw keeps that final text private instead of posting it to the room.
+For normal group/channel requests, OpenClaw defaults to `messages.groupChat.visibleReplies: "automatic"`. Final assistant text posts through the legacy visible reply path unless you opt the room into message-tool-only output.
 
-This default depends on a model/runtime that reliably calls tools. If logs show
-assistant text but `didSendViaMessagingTool: false`, the model answered
-privately instead of calling the message tool. The room stays silent, and the
-gateway verbose log records the suppressed final payload metadata. That is not
-a Discord/Slack/Telegram send failure, but a tool-discipline signal. Use a
-tool-call-reliable model for group/channel sessions, or set
-`messages.groupChat.visibleReplies: "automatic"` when you want all visible group
-replies to use the legacy final-reply path.
+Use `messages.groupChat.visibleReplies: "message_tool"` when a shared room should let the agent decide when to speak by calling `message(action=send)`. This works best for group rooms backed by latest-generation, tool-reliable models such as GPT 5.5. If the model misses that tool and returns substantive final text, OpenClaw keeps that final text private instead of posting it to the room.
 
 If the message tool is unavailable under the active tool policy, OpenClaw falls
 back to automatic visible replies instead of silently suppressing the response.
 `openclaw doctor` warns about this mismatch.
 
-For direct chats and any other source event, use `messages.visibleReplies: "message_tool"` to apply the same tool-only visible-reply behavior globally. Harnesses can also choose this as their unset default; the Codex harness does this for Codex-mode direct chats. `messages.groupChat.visibleReplies` remains the more specific override for group/channel rooms.
+For direct chats and any other source event, use `messages.visibleReplies: "message_tool"` to apply the same tool-only visible-reply behavior globally. Internal WebChat direct turns default to automatic final-reply delivery so Pi and Codex receive the same visible-reply contract. Set `messages.visibleReplies: "message_tool"` to intentionally require `message(action=send)` for visible output. `messages.groupChat.visibleReplies` remains the more specific override for group/channel rooms.
 
 This replaces the old pattern of forcing the model to answer `NO_REPLY` for most lurk-mode turns. In tool-only mode, doing nothing visible simply means not calling the message tool.
 
 Typing indicators are still sent for direct group requests. Ambient always-on room events, when enabled, stay strict and quiet unless the agent calls the message tool.
+
+Sessions suppress verbose tool/progress summaries by default. Use `/verbose on`
+to show those summaries for the current session while debugging, and
+`/verbose off` to return to final-reply-only behavior. The same verbose state
+applies across direct chats, groups, channels, and forum topics.
 
 To submit unmentioned always-on group chatter as quiet room context instead of user requests, use [Ambient room events](/channels/ambient-room-events):
 
@@ -82,13 +78,13 @@ The default is `unmentionedInbound: "user_request"`.
 
 Mentioned messages, commands, abort requests, and DMs stay user requests.
 
-To restore legacy automatic final replies for group/channel requests:
+To require visible output to go through the message tool for group/channel requests:
 
 ```json5
 {
   messages: {
     groupChat: {
-      visibleReplies: "automatic",
+      visibleReplies: "message_tool",
     },
   },
 }

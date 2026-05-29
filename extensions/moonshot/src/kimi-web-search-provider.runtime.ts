@@ -7,10 +7,11 @@ import {
   buildSearchCacheKey,
   buildUnsupportedSearchFilterResponse,
   DEFAULT_SEARCH_COUNT,
+  MAX_SEARCH_COUNT,
   mergeScopedSearchConfig,
   readCachedSearchPayload,
   readConfiguredSecretString,
-  readNumberParam,
+  readPositiveIntegerParam,
   readProviderEnvValue,
   readStringParam,
   resolveProviderWebSearchPluginConfig,
@@ -24,7 +25,11 @@ import {
   wrapWebContent,
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeOptionalString,
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   isNativeMoonshotBaseUrl,
   MOONSHOT_BASE_URL,
@@ -83,10 +88,6 @@ type KimiSearchResult = {
   citations: string[];
   grounded: boolean;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function throwMalformedKimiResponse(): never {
   throw new Error("Kimi API error: malformed JSON response");
@@ -186,7 +187,7 @@ function extractKimiCitations(data: KimiSearchResponse): string[] {
     }
   }
 
-  return [...new Set(citations)];
+  return uniqueStrings(citations);
 }
 
 function hasKimiSearchResults(data: KimiSearchResponse): boolean {
@@ -366,7 +367,12 @@ export async function executeKimiWebSearchProviderTool(
 
   const query = readStringParam(args, "query", { required: true });
   const count =
-    readNumberParam(args, "count", { integer: true }) ?? searchConfig?.maxResults ?? undefined;
+    readPositiveIntegerParam(args, "count", {
+      max: MAX_SEARCH_COUNT,
+      message: `count must be an integer from 1 to ${MAX_SEARCH_COUNT}.`,
+    }) ??
+    searchConfig?.maxResults ??
+    undefined;
   const model = resolveKimiModel(kimiConfig);
   const baseUrl = resolveKimiBaseUrl(kimiConfig, ctx.config);
   const cacheKey = buildSearchCacheKey([
@@ -502,7 +508,7 @@ export async function runKimiSearchProviderSetup(
   return next;
 }
 
-export const __testing = {
+export const testing = {
   resolveKimiApiKey,
   resolveKimiModel,
   resolveKimiBaseUrl,
@@ -510,3 +516,4 @@ export const __testing = {
   hasKimiSearchResults,
   extractKimiToolResultContent,
 } as const;
+export { testing as __testing };

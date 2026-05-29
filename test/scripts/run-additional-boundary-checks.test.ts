@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   BOUNDARY_CHECKS,
+  createBoundedOutputBuffer,
   formatCommand,
+  parseShardSelection,
   parseShardSpec,
   resolveConcurrency,
   runChecks,
+  runSingleCheck,
   selectChecksForShard,
 } from "../../scripts/run-additional-boundary-checks.mjs";
 
@@ -42,10 +45,25 @@ describe("run-additional-boundary-checks", () => {
     );
   });
 
+  it("keeps only a bounded tail of command output", () => {
+    const output = createBoundedOutputBuffer(12);
+    output.append("first-line\n");
+    output.append("second-line\n");
+
+    expect(output.read()).toBe("[output truncated to last 12 bytes]\nsecond-line\n");
+  });
+
   it("parses and applies CI shard specs", () => {
     expect(parseShardSpec("2/4")).toEqual({ count: 4, index: 1, label: "2/4" });
+    expect(parseShardSelection("2/4,3/4")).toEqual([
+      { count: 4, index: 1, label: "2/4" },
+      { count: 4, index: 2, label: "3/4" },
+    ]);
     expect(selectChecksForShard(BOUNDARY_CHECKS, "1/4")).toEqual(
       BOUNDARY_CHECKS.filter((_check, index) => index % 4 === 0),
+    );
+    expect(selectChecksForShard(BOUNDARY_CHECKS, "2/4,3/4")).toEqual(
+      BOUNDARY_CHECKS.filter((_check, index) => index % 4 === 1 || index % 4 === 2),
     );
     const shardedLabels = [1, 2, 3, 4].flatMap((index) =>
       selectChecksForShard(BOUNDARY_CHECKS, `${index}/4`).map((check) => check.label),
@@ -100,5 +118,25 @@ describe("run-additional-boundary-checks", () => {
     expect(text).toContain("bad-out");
     expect(text).toContain("::error title=fails failed::fails failed (exit 7)");
     expect(text).toContain("Additional boundary check timings:");
+  });
+
+  it("times out hung checks", async () => {
+    const result = await runSingleCheck(
+      {
+        label: "hangs",
+        command: process.execPath,
+        args: ["-e", "setInterval(() => {}, 1000)"],
+      },
+      {
+        checkTimeoutMs: 50,
+        cwd: process.cwd(),
+        env: process.env,
+        outputMaxBytes: 4096,
+      },
+    );
+
+    expect(result.code).toBe(1);
+    expect(result.timedOut).toBe(true);
+    expect(result.output).toContain("timed out after 50ms");
   });
 });

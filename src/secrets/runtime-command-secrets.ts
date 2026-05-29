@@ -3,6 +3,7 @@ import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { resolveManifestContractOwnerPluginId } from "../plugins/plugin-registry.js";
 import { resolveBundledExplicitWebSearchProvidersFromPublicArtifacts } from "../plugins/web-provider-public-artifacts.explicit.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import {
   analyzeCommandSecretAssignmentsFromSnapshot,
   collectCommandSecretAssignmentsFromSnapshot,
@@ -11,8 +12,8 @@ import {
 import { getPath, setPathExistingStrict } from "./path-utils.js";
 import { resolveSecretRefValue } from "./resolve.js";
 import { createResolverContext } from "./runtime-shared.js";
+import { getActiveSecretsRuntimeEnv, getActiveSecretsRuntimeSnapshot } from "./runtime-state.js";
 import { resolveRuntimeWebTools } from "./runtime-web-tools.js";
-import { getActiveSecretsRuntimeEnv, getActiveSecretsRuntimeSnapshot } from "./runtime.js";
 import { assertExpectedResolvedSecretValue } from "./secret-value.js";
 import { discoverConfigSecretTargetsByIds } from "./target-registry.js";
 
@@ -516,7 +517,7 @@ async function resolveCommandSecretsFromSnapshot(params: {
       )
       .map((entry) => entry.path);
     if (impliedInactivePaths.length > 0) {
-      inactiveRefPaths = [...new Set([...inactiveRefPaths, ...impliedInactivePaths])];
+      inactiveRefPaths = uniqueStrings([...inactiveRefPaths, ...impliedInactivePaths]);
       analyzed = analyzeCommandSecretAssignmentsFromSnapshot({
         sourceConfig,
         resolvedConfig,
@@ -530,7 +531,7 @@ async function resolveCommandSecretsFromSnapshot(params: {
     .filter((entry) => params.optionalActivePaths?.has(entry.path))
     .map((entry) => entry.path);
   if (optionalActiveUnresolvedPaths.length > 0) {
-    inactiveRefPaths = [...new Set([...inactiveRefPaths, ...optionalActiveUnresolvedPaths])];
+    inactiveRefPaths = uniqueStrings([...inactiveRefPaths, ...optionalActiveUnresolvedPaths]);
     analyzed = analyzeCommandSecretAssignmentsFromSnapshot({
       sourceConfig,
       resolvedConfig,

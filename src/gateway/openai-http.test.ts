@@ -2,13 +2,13 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { FailoverError } from "../agents/failover-error.js";
+import { createClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import {
   createStubSessionHarness,
   emitAssistantTextDelta,
-} from "../agents/pi-embedded-subscribe.e2e-harness.js";
-import { subscribeEmbeddedPiSession } from "../agents/pi-embedded-subscribe.js";
-import { createClientToolNameConflictError } from "../agents/pi-tool-definition-adapter.js";
+} from "../agents/embedded-agent-subscribe.e2e-harness.js";
+import { subscribeEmbeddedAgentSession } from "../agents/embedded-agent-subscribe.js";
+import { FailoverError } from "../agents/failover-error.js";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
@@ -110,11 +110,13 @@ type FirstAgentCommandOptions = {
   message?: string;
   messageChannel?: string;
   model?: string;
-  senderIsOwner?: boolean;
   sessionKey?: string;
   streamParams?: {
+    frequencyPenalty?: number;
     maxTokens?: number;
+    presencePenalty?: number;
     responseFormat?: Record<string, unknown>;
+    seed?: number;
     temperature?: number;
     topP?: number;
   };
@@ -178,7 +180,6 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         messages: [{ role: "user", content: message }],
       });
       expect(res.status).toBe(200);
-      expect(getFirstAgentCall()?.senderIsOwner).toBe(false);
       return (await res.json()) as Record<string, unknown>;
     };
 
@@ -1065,7 +1066,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         agentCommand.mockImplementationOnce((async (opts: unknown) => {
           const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
           const { session, emit } = createStubSessionHarness();
-          subscribeEmbeddedPiSession({ session, runId });
+          subscribeEmbeddedAgentSession({ session, runId });
           emit({ type: "message_start", message: { role: "assistant" } });
           for (const delta of ["<", "final>Title\n", "Line one\nLine two</", "final>"]) {
             emitAssistantTextDelta({ emit, delta });
@@ -1135,6 +1136,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           prompt_tokens: 30,
           completion_tokens: 5,
           total_tokens: 35,
+          prompt_tokens_details: { cached_tokens: 20 },
         });
       }
 
@@ -1201,6 +1203,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           prompt_tokens: 2,
           completion_tokens: 0,
           total_tokens: 2,
+          prompt_tokens_details: { cached_tokens: 2 },
         });
       }
 
@@ -1400,6 +1403,46 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       const json = (await res.json()) as { error?: { type?: string; message?: string } };
       expect(json.error?.type).toBe("invalid_request_error");
       expect(json.error?.message).toMatch(/top_p/);
+      expect(agentCommand).toHaveBeenCalledTimes(0);
+    }
+  });
+
+  it("forwards inbound penalty and seed params into streamParams", async () => {
+    const port = enabledPort;
+    const mockAgentOnce = (payloads: Array<{ text: string }>) => {
+      agentCommand.mockClear();
+      agentCommand.mockResolvedValueOnce({ payloads } as never);
+    };
+    const getStreamParams = () => firstAgentCommandOptions()?.streamParams;
+
+    {
+      mockAgentOnce([{ text: "hello" }]);
+      const res = await postChatCompletions(port, {
+        model: "openclaw",
+        frequency_penalty: -0.5,
+        presence_penalty: 1.25,
+        seed: 12345,
+        messages: [{ role: "user", content: "hi" }],
+      });
+      expect(res.status).toBe(200);
+      expect(getStreamParams()).toMatchObject({
+        frequencyPenalty: -0.5,
+        presencePenalty: 1.25,
+        seed: 12345,
+      });
+      await res.text();
+    }
+
+    for (const body of [{ frequency_penalty: 3 }, { presence_penalty: -3 }, { seed: 1.5 }]) {
+      agentCommand.mockClear();
+      const res = await postChatCompletions(port, {
+        model: "openclaw",
+        ...body,
+        messages: [{ role: "user", content: "hi" }],
+      });
+      expect(res.status).toBe(400);
+      const json = (await res.json()) as { error?: { type?: string; message?: string } };
+      expect(json.error?.type).toBe("invalid_request_error");
       expect(agentCommand).toHaveBeenCalledTimes(0);
     }
   });
@@ -2013,6 +2056,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       prompt_tokens: 15,
       completion_tokens: 5,
       total_tokens: 20,
+      prompt_tokens_details: { cached_tokens: 3 },
     });
     expect(usageChunk?.choices).toStrictEqual([]);
   });
@@ -2192,7 +2236,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     expect(usageChunks).toHaveLength(0);
   });
 
-  it("treats shared-secret bearer callers as owner operators", async () => {
+  it("accepts shared-secret bearer callers", async () => {
     const port = await getFreePort();
     const server = await startTokenServer(port);
     try {
@@ -2213,7 +2257,6 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       });
 
       expect(res.status).toBe(200);
-      expect(firstAgentCommandOptions()?.senderIsOwner).toBe(true);
       await res.text();
     } finally {
       await server.close({ reason: "openai token auth owner test done" });

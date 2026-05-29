@@ -19,6 +19,7 @@ import {
 import { optionalStringEnum } from "../schema/typebox.js";
 import type { SpawnedToolContext } from "../spawned-context.js";
 import { registerSubagentRun } from "../subagent-registry.js";
+import { resolveSubagentSpawnOwnership } from "../subagent-spawn-ownership.js";
 import {
   SUBAGENT_SPAWN_CONTEXT_MODES,
   SUBAGENT_SPAWN_MODES,
@@ -34,14 +35,10 @@ import type { AnyAgentTool } from "./common.js";
 import {
   jsonResult,
   normalizeToolModelOverride,
+  readNonNegativeIntegerParam,
   readStringParam,
   ToolInputError,
 } from "./common.js";
-import {
-  resolveDisplaySessionKey,
-  resolveInternalSessionKey,
-  resolveMainSessionAlias,
-} from "./sessions-helpers.js";
 
 const SESSIONS_SPAWN_RUNTIMES = ["subagent", "acp"] as const;
 const SESSIONS_SPAWN_SANDBOX_MODES = ["inherit", "require"] as const;
@@ -173,9 +170,9 @@ function createSessionsSpawnToolSchema(params: {
     model: Type.Optional(Type.String()),
     thinking: Type.Optional(Type.String()),
     cwd: Type.Optional(Type.String()),
-    runTimeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
+    runTimeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
     // Back-compat: older callers used timeoutSeconds for this tool.
-    timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
+    timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
     ...(params.threadAvailable
       ? {
           thread: Type.Optional(
@@ -200,7 +197,6 @@ function createSessionsSpawnToolSchema(params: {
     ),
 
     // Inline attachments (snapshot-by-value).
-    // NOTE: Attachment contents are redacted from transcript persistence by sanitizeToolCallInputs.
     attachments: Type.Optional(
       Type.Array(
         Type.Object({
@@ -250,6 +246,8 @@ function resolveAcpUnavailableMessage(opts?: { sandboxed?: boolean; config?: Ope
 export function createSessionsSpawnTool(
   opts?: {
     agentSessionKey?: string;
+    /** Separate key used only for completion routing (registerSubagentRun requesterSessionKey). */
+    completionOwnerKey?: string;
     agentChannel?: GatewayMessageChannel;
     agentAccountId?: string;
     agentTo?: string;
@@ -345,17 +343,10 @@ export function createSessionsSpawnTool(
       if (runtime === "acp" && context === "fork") {
         throw new Error('context="fork" is only supported for runtime="subagent".');
       }
-      // Back-compat: older callers used timeoutSeconds for this tool.
-      const timeoutSecondsCandidate =
-        typeof params.runTimeoutSeconds === "number"
-          ? params.runTimeoutSeconds
-          : typeof params.timeoutSeconds === "number"
-            ? params.timeoutSeconds
-            : undefined;
       const runTimeoutSeconds =
-        typeof timeoutSecondsCandidate === "number" && Number.isFinite(timeoutSecondsCandidate)
-          ? Math.max(0, Math.floor(timeoutSecondsCandidate))
-          : undefined;
+        readNonNegativeIntegerParam(params, "runTimeoutSeconds") ??
+        // Back-compat: older callers used timeoutSeconds for this tool.
+        readNonNegativeIntegerParam(params, "timeoutSeconds");
       const thread = params.thread === true;
       const attachments = Array.isArray(params.attachments)
         ? (params.attachments as Array<{
@@ -419,18 +410,10 @@ export function createSessionsSpawnTool(
             threadRequested: thread,
           });
           const trackedCleanup = trackedSpawnMode === "session" ? "keep" : cleanup;
-          const { mainKey, alias } = resolveMainSessionAlias(cfg);
-          const requesterInternalKey = opts?.agentSessionKey
-            ? resolveInternalSessionKey({
-                key: opts.agentSessionKey,
-                alias,
-                mainKey,
-              })
-            : alias;
-          const requesterDisplayKey = resolveDisplaySessionKey({
-            key: requesterInternalKey,
-            alias,
-            mainKey,
+          const ownership = resolveSubagentSpawnOwnership({
+            cfg,
+            agentSessionKey: opts?.agentSessionKey,
+            completionOwnerKey: opts?.completionOwnerKey,
           });
           const requesterOrigin = normalizeDeliveryContext({
             channel: opts?.agentChannel,
@@ -445,9 +428,10 @@ export function createSessionsSpawnTool(
             registerSubagentRun({
               runId: childRunId,
               childSessionKey,
-              requesterSessionKey: requesterInternalKey,
+              controllerSessionKey: ownership.controllerSessionKey,
+              requesterSessionKey: ownership.completionRequesterSessionKey,
               requesterOrigin,
-              requesterDisplayKey,
+              requesterDisplayKey: ownership.completionRequesterDisplayKey,
               task,
               taskName,
               cleanup: trackedCleanup,
@@ -497,6 +481,7 @@ export function createSessionsSpawnTool(
         },
         {
           agentSessionKey: opts?.agentSessionKey,
+          completionOwnerKey: opts?.completionOwnerKey,
           agentChannel: opts?.agentChannel,
           agentAccountId: opts?.agentAccountId,
           agentTo: opts?.agentTo,

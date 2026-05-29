@@ -8,6 +8,7 @@ export type { AnyAgentTool, NodeListNode } from "openclaw/plugin-sdk/agent-harne
 export {
   imageResultFromFile,
   jsonResult,
+  readPositiveIntegerParam,
   readStringParam,
 } from "openclaw/plugin-sdk/channel-actions";
 export { optionalStringEnum, stringEnum } from "openclaw/plugin-sdk/channel-actions";
@@ -23,6 +24,7 @@ export {
   IMAGE_REDUCE_QUALITY_STEPS,
   buildImageResizeSideGrid,
   getImageMetadata,
+  isImageProcessorUnavailableError,
   resizeToJpeg,
 } from "openclaw/plugin-sdk/media-runtime";
 export { detectMime } from "openclaw/plugin-sdk/media-mime";

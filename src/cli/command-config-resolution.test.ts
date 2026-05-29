@@ -20,7 +20,7 @@ describe("resolveCommandConfigWithSecrets", () => {
     vi.clearAllMocks();
   });
 
-  it("logs diagnostics and preserves resolved config when auto-enable is off", async () => {
+  it("emits diagnostics to stderr and preserves resolved config when auto-enable is off", async () => {
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as const;
     const config = { channels: {} };
     const resolvedConfig = { channels: { telegram: {} } };
@@ -44,7 +44,8 @@ describe("resolveCommandConfigWithSecrets", () => {
       targetIds,
       mode: "read_only_status",
     });
-    expect(runtime.log).toHaveBeenCalledWith("[secrets] resolved channels.telegram.token");
+    expect(runtime.error).toHaveBeenCalledWith("[secrets] resolved channels.telegram.token");
+    expect(runtime.log).not.toHaveBeenCalled();
     expect(mocks.applyPluginAutoEnable).not.toHaveBeenCalled();
     expect(result).toEqual({
       resolvedConfig,

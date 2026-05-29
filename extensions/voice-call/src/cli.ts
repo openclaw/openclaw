@@ -5,7 +5,10 @@ import { format } from "node:util";
 import type { Command } from "commander";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeOptionalLowercaseString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sleep } from "../api.js";
 import { validateProviderConfig, type VoiceCallConfig } from "./config.js";
 import type { VoiceCallRuntime } from "./runtime.js";
@@ -51,12 +54,13 @@ const VOICE_CALL_GATEWAY_DEFAULT_TIMEOUT_MS = 5000;
 const VOICE_CALL_GATEWAY_OPERATION_TIMEOUT_MS = 30000;
 const VOICE_CALL_GATEWAY_TRANSCRIPT_BUFFER_MS = 10000;
 const VOICE_CALL_GATEWAY_POLL_INTERVAL_MS = 1000;
+const DECIMAL_INTEGER_RE = /^\d+$/;
 
 const voiceCallCliDeps = {
   callGatewayFromCli,
 };
 
-export const __testing = {
+export const testing = {
   setCallGatewayFromCliForTests(next?: typeof callGatewayFromCli): void {
     voiceCallCliDeps.callGatewayFromCli = next ?? callGatewayFromCli;
   },
@@ -78,15 +82,12 @@ function parseVoiceCallIntOption(
   opts?: { min?: number },
 ): number {
   const min = opts?.min ?? 0;
-  const parsed = Number(raw);
+  const value = raw?.trim() ?? "";
+  const parsed = DECIMAL_INTEGER_RE.test(value) ? Number(value) : Number.NaN;
   if (!Number.isInteger(parsed) || parsed < min) {
     throw new Error(`Invalid numeric value for ${optionName}: ${raw ?? ""}`);
   }
   return parsed;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function isGatewayUnavailableForLocalFallback(err: unknown): boolean {
@@ -863,3 +864,4 @@ export function registerVoiceCallCli(params: {
       },
     );
 }
+export { testing as __testing };

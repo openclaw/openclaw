@@ -1,13 +1,13 @@
 import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import { openRootFile, type RootFileOpenResult } from "../infra/boundary-file-read.js";
 import { root as fsRoot } from "../infra/fs-safe.js";
 import { PATH_ALIAS_POLICIES, type PathAliasPolicy } from "../infra/path-alias-guards.js";
 import { applyUpdateHunk } from "./apply-patch-update.js";
 import { toRelativeSandboxPath, resolvePathFromInput } from "./path-policy.js";
+import type { AgentTool } from "./runtime/index.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 
@@ -175,9 +175,21 @@ export async function applyPatch(
       const moveTarget = await resolvePatchPath(hunk.movePath, options);
       await assertPatchParentPath(hunk.movePath, options);
       await ensureDir(moveTarget.resolved, fileOps);
-      await fileOps.writeFile(moveTarget.resolved, applied);
-      await fileOps.remove(target.resolved);
-      recordSummary(summary, seen, "modified", moveTarget.display);
+      const moveResolvesToSource =
+        path.resolve(moveTarget.resolved) === path.resolve(target.resolved);
+      await fileOps.writeFile(
+        moveResolvesToSource ? target.resolved : moveTarget.resolved,
+        applied,
+      );
+      if (!moveResolvesToSource) {
+        await fileOps.remove(target.resolved);
+      }
+      recordSummary(
+        summary,
+        seen,
+        "modified",
+        moveResolvesToSource ? target.display : moveTarget.display,
+      );
     } else {
       await fileOps.writeFile(target.resolved, applied);
       recordSummary(summary, seen, "modified", target.display);

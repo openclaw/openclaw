@@ -135,9 +135,9 @@ export type LlmCompleteResult = {
   };
 };
 
-type RuntimeRunEmbeddedPiAgent = (
-  params: import("../../agents/pi-embedded-runner/run/params.js").RunEmbeddedPiAgentParams,
-) => Promise<import("../../agents/pi-embedded-runner/types.js").EmbeddedPiRunResult>;
+type RuntimeRunEmbeddedAgent = (
+  params: import("../../agents/embedded-agent-runner/run/params.js").RunEmbeddedAgentParams,
+) => Promise<import("../../agents/embedded-agent-runner/types.js").EmbeddedAgentRunResult>;
 
 /** Core runtime helpers exposed to trusted native plugins. */
 export type PluginRuntimeCore = {
@@ -197,12 +197,22 @@ export type PluginRuntimeCore = {
     resolveThinkingPolicy: (
       params: PluginRuntimeThinkingPolicyRequest,
     ) => PluginRuntimeThinkingPolicy;
-    runEmbeddedAgent: RuntimeRunEmbeddedPiAgent;
-    runEmbeddedPiAgent: RuntimeRunEmbeddedPiAgent;
+    runEmbeddedAgent: RuntimeRunEmbeddedAgent;
+    /** @deprecated Use runEmbeddedAgent. */
+    runEmbeddedPiAgent: RuntimeRunEmbeddedAgent;
     resolveAgentTimeoutMs: typeof import("../../agents/timeout.js").resolveAgentTimeoutMs;
     ensureAgentWorkspace: typeof import("../../agents/workspace.js").ensureAgentWorkspace;
     session: {
       resolveStorePath: typeof import("../../config/sessions/paths.js").resolveStorePath;
+      getSessionEntry: typeof import("../../config/sessions/store.js").getSessionEntry;
+      listSessionEntries: typeof import("../../config/sessions/store.js").listSessionEntries;
+      patchSessionEntry: typeof import("../../config/sessions/store.js").patchSessionEntry;
+      upsertSessionEntry: typeof import("../../config/sessions/store.js").upsertSessionEntry;
+      /**
+       * @deprecated Use getSessionEntry/listSessionEntries for reads and
+       * patchSessionEntry/upsertSessionEntry for writes. This keeps the legacy
+       * mutable whole-store compatibility shape.
+       */
       loadSessionStore: typeof import("../../config/sessions/store-load.js").loadSessionStore;
       saveSessionStore: import("../../config/sessions/runtime-types.js").SaveSessionStore;
       updateSessionStore: typeof import("../../config/sessions/store.js").updateSessionStore;
@@ -233,8 +243,8 @@ export type PluginRuntimeCore = {
     detectMime: typeof import("../../media/mime.js").detectMime;
     mediaKindFromMime: typeof import("../../media/constants.js").mediaKindFromMime;
     isVoiceCompatibleAudio: typeof import("../../media/audio.js").isVoiceCompatibleAudio;
-    getImageMetadata: typeof import("../../media/image-ops.js").getImageMetadata;
-    resizeToJpeg: typeof import("../../media/image-ops.js").resizeToJpeg;
+    getImageMetadata: typeof import("../../media/media-services.js").getImageMetadata;
+    resizeToJpeg: typeof import("../../media/media-services.js").resizeToJpeg;
   };
   tts: {
     textToSpeech: TextToSpeech;
@@ -317,13 +327,13 @@ export type PluginRuntimeCore = {
   modelAuth: {
     /** Resolve auth for a model. Only provider/model, optional cfg, and workspaceDir are used. */
     getApiKeyForModel: (params: {
-      model: import("@earendil-works/pi-ai").Model<import("@earendil-works/pi-ai").Api>;
+      model: import("openclaw/plugin-sdk/llm").Model<import("openclaw/plugin-sdk/llm").Api>;
       cfg?: import("../../config/types.openclaw.js").OpenClawConfig;
       workspaceDir?: string;
     }) => Promise<import("../../agents/model-auth-runtime-shared.js").ResolvedProviderAuth>;
     /** Resolve request-ready auth for a model, including provider runtime exchanges. */
     getRuntimeAuthForModel: (params: {
-      model: import("@earendil-works/pi-ai").Model<import("@earendil-works/pi-ai").Api>;
+      model: import("openclaw/plugin-sdk/llm").Model<import("openclaw/plugin-sdk/llm").Api>;
       cfg?: import("../../config/types.openclaw.js").OpenClawConfig;
       workspaceDir?: string;
     }) => Promise<import("./model-auth-types.js").ResolvedProviderRuntimeAuth>;

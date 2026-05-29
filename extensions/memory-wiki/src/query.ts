@@ -13,7 +13,10 @@ import {
   createSessionVisibilityGuard,
   resolveEffectiveSessionToolsVisibility,
 } from "openclaw/plugin-sdk/session-visibility";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawConfig } from "../api.js";
 import { assessClaimFreshness, isClaimContestedStatus } from "./claim-health.js";
 import type { ResolvedMemoryWikiConfig, WikiSearchBackend, WikiSearchCorpus } from "./config.js";
@@ -81,6 +84,12 @@ const ROUTE_QUESTION_STOP_WORDS = new Set([
   "with",
   "would",
 ]);
+
+function normalizePositiveInteger(value: number | undefined, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(1, Math.floor(value))
+    : fallback;
+}
 
 export const WIKI_SEARCH_MODES = [
   "auto",
@@ -959,7 +968,7 @@ function normalizeLookupKey(value: string): string {
 function buildLookupCandidates(lookup: string): string[] {
   const normalized = normalizeLookupKey(lookup);
   const withExtension = normalized.endsWith(".md") ? normalized : `${normalized}.md`;
-  return [...new Set([normalized, withExtension])];
+  return uniqueStrings([normalized, withExtension]);
 }
 
 function shouldEnforceSessionVisibility(params: {
@@ -1165,8 +1174,8 @@ function buildClaimResultMetadata(claim: WikiClaim | undefined): Partial<WikiSea
     ...(claim.id ? { matchedClaimId: claim.id } : {}),
     ...(claim.status ? { matchedClaimStatus: claim.status } : {}),
     ...(typeof claim.confidence === "number" ? { matchedClaimConfidence: claim.confidence } : {}),
-    evidenceKinds: [...new Set(claim.evidence.flatMap((evidence) => evidence.kind ?? []))],
-    evidenceSourceIds: [...new Set(claim.evidence.flatMap((evidence) => evidence.sourceId ?? []))],
+    evidenceKinds: uniqueStrings(claim.evidence.flatMap((evidence) => evidence.kind ?? [])),
+    evidenceSourceIds: uniqueStrings(claim.evidence.flatMap((evidence) => evidence.sourceId ?? [])),
   };
 }
 
@@ -1291,6 +1300,7 @@ async function createSessionMemoryPathVisibilityChecker(params: {
     if (!identity) {
       return false;
     }
+    const isQmdSessionPath = relPath.replace(/\\/g, "/").startsWith("qmd/");
     const normalizedScopedAgentId = normalizeLowercaseStringOrEmpty(scopedAgentId);
     const normalizedOwnerAgentId = normalizeLowercaseStringOrEmpty(identity.ownerAgentId);
     if (
@@ -1302,18 +1312,32 @@ async function createSessionMemoryPathVisibilityChecker(params: {
     }
     const archivedOwnerMatchesScope = Boolean(
       identity.archived &&
-      identity.ownerAgentId &&
-      (!normalizedScopedAgentId || normalizedOwnerAgentId === normalizedScopedAgentId),
+      ((identity.ownerAgentId &&
+        (!normalizedScopedAgentId || normalizedOwnerAgentId === normalizedScopedAgentId)) ||
+        (isQmdSessionPath && scopedAgentId)),
     );
-    const archivedOwnerAgentId = archivedOwnerMatchesScope ? identity.ownerAgentId : undefined;
+    const archivedOwnerAgentId = archivedOwnerMatchesScope
+      ? (identity.ownerAgentId ?? scopedAgentId)
+      : undefined;
+    const liveKeys = identity.liveStem
+      ? resolveTranscriptStemToSessionKeys({
+          store: combinedSessionStore,
+          stem: identity.liveStem,
+          allowQmdSlugFallback: false,
+        })
+      : [];
     const keys = filterSessionKeysByScopedAgent({
       cfg: params.cfg,
       scopedAgentId,
-      keys: resolveTranscriptStemToSessionKeys({
-        store: combinedSessionStore,
-        stem: identity.stem,
-        ...(archivedOwnerAgentId ? { archivedOwnerAgentId } : {}),
-      }),
+      keys:
+        liveKeys.length > 0
+          ? liveKeys
+          : resolveTranscriptStemToSessionKeys({
+              store: combinedSessionStore,
+              stem: identity.stem,
+              allowQmdSlugFallback: isQmdSessionPath && !identity.archived,
+              ...(archivedOwnerAgentId ? { archivedOwnerAgentId } : {}),
+            }),
     });
     if (!guard) {
       return Boolean(scopedAgentId && keys.length > 0);
@@ -1449,7 +1473,7 @@ export async function searchMemoryWiki(params: {
     operation: "wiki_search",
   });
   await initializeMemoryWikiVault(effectiveConfig);
-  const maxResults = Math.max(1, params.maxResults ?? 10);
+  const maxResults = normalizePositiveInteger(params.maxResults, 10);
   const mode = params.mode ?? "auto";
 
   const wikiResults = shouldSearchWiki(effectiveConfig)
@@ -1516,8 +1540,8 @@ export async function getMemoryWikiPage(params: {
     operation: "wiki_get",
   });
   await initializeMemoryWikiVault(effectiveConfig);
-  const fromLine = Math.max(1, params.fromLine ?? 1);
-  const lineCount = Math.max(1, params.lineCount ?? 200);
+  const fromLine = normalizePositiveInteger(params.fromLine, 1);
+  const lineCount = normalizePositiveInteger(params.lineCount, 200);
 
   if (shouldSearchWiki(effectiveConfig)) {
     const digest = await readQueryDigestBundle(effectiveConfig.vault.path);

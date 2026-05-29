@@ -5,6 +5,8 @@ import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
+  normalizeStringEntries,
+  sortUniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   definePluginEntry,
@@ -44,7 +46,7 @@ const GROUP_COMMANDS: Record<Exclude<ArmGroup, "all">, string[]> = {
 };
 
 function uniqSorted(values: string[]): string[] {
-  return [...new Set(values.map((v) => v.trim()).filter(Boolean))].toSorted();
+  return sortUniqueStrings(normalizeStringEntries(values));
 }
 
 function resolveCommandsForGroup(group: ArmGroup): string[] {
@@ -280,14 +282,15 @@ function parseGroup(raw: string | undefined): ArmGroup | null {
   return null;
 }
 
-function requiresAdminToMutatePhoneControl(
-  channel: string,
-  gatewayClientScopes?: readonly string[],
-): boolean {
+function lacksAdminToMutatePhoneControl(params: {
+  senderIsOwner?: boolean;
+  gatewayClientScopes?: readonly string[];
+}): boolean {
+  const { senderIsOwner, gatewayClientScopes } = params;
   if (Array.isArray(gatewayClientScopes)) {
     return !gatewayClientScopes.includes(PHONE_ADMIN_SCOPE);
   }
-  return channel === "webchat";
+  return senderIsOwner !== true;
 }
 
 function formatStatus(state: ArmStateFile | null): string {
@@ -361,6 +364,7 @@ export default definePluginEntry({
       name: "phone",
       description: "Arm/disarm high-risk phone node commands (camera/screen/writes).",
       acceptsArgs: true,
+      exposeSenderIsOwner: true,
       handler: async (ctx) => {
         const args = ctx.args?.trim() ?? "";
         const tokens = args.split(/\s+/).filter(Boolean);
@@ -380,7 +384,12 @@ export default definePluginEntry({
         }
 
         if (action === "disarm") {
-          if (requiresAdminToMutatePhoneControl(ctx.channel, ctx.gatewayClientScopes)) {
+          if (
+            lacksAdminToMutatePhoneControl({
+              senderIsOwner: ctx.senderIsOwner,
+              gatewayClientScopes: ctx.gatewayClientScopes,
+            })
+          ) {
             return {
               text: "⚠️ /phone disarm requires operator.admin.",
             };
@@ -402,7 +411,12 @@ export default definePluginEntry({
         }
 
         if (action === "arm") {
-          if (requiresAdminToMutatePhoneControl(ctx.channel, ctx.gatewayClientScopes)) {
+          if (
+            lacksAdminToMutatePhoneControl({
+              senderIsOwner: ctx.senderIsOwner,
+              gatewayClientScopes: ctx.gatewayClientScopes,
+            })
+          ) {
             return {
               text: "⚠️ /phone arm requires operator.admin.",
             };

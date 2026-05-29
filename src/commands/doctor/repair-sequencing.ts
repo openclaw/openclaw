@@ -5,6 +5,7 @@ import {
   maybeRepairManagedNpmOpenClawPeerLinks,
   maybeRepairStaleManagedNpmBundledPlugins,
 } from "../doctor-plugin-registry.js";
+import { collectActiveToolSchemaProjectionWarnings } from "./shared/active-tool-schema-warnings.js";
 import { maybeRepairGroupAllowFromFallback } from "./shared/allowfrom-fallback-migration.js";
 import { maybeRepairAllowlistPolicyAllowFrom } from "./shared/allowlist-policy-repair.js";
 import { maybeRepairBundledPluginLoadPaths } from "./shared/bundled-plugin-load-paths.js";
@@ -17,6 +18,7 @@ import {
   applyDoctorConfigMutation,
   type DoctorConfigMutationState,
 } from "./shared/config-mutation-state.js";
+import { maybeRepairContextEngineHostCompatibility } from "./shared/context-engine-host-compat.js";
 import { scanEmptyAllowlistPolicyWarnings } from "./shared/empty-allowlist-scan.js";
 import { maybeRepairExecSafeBinProfiles } from "./shared/exec-safe-bins.js";
 import { maybeRepairInvalidPluginConfig } from "./shared/invalid-plugin-config.js";
@@ -26,6 +28,7 @@ import { maybeRepairOpenPolicyAllowFrom } from "./shared/open-policy-allowfrom.j
 import { cleanupLegacyPluginDependencyState } from "./shared/plugin-dependency-cleanup.js";
 import { repairStaleOAuthProfileShadows } from "./shared/stale-oauth-profile-shadows.js";
 import { maybeRepairStalePluginConfig } from "./shared/stale-plugin-config.js";
+import { maybeRepairStaleSubagentAllowlists } from "./shared/stale-subagent-allowlist.js";
 import { isUpdatePackageSwapInProgress } from "./shared/update-phase.js";
 
 export async function runDoctorRepairSequence(params: {
@@ -89,6 +92,13 @@ export async function runDoctorRepairSequence(params: {
     changes: codexRouteRepair.changes,
     warnings: codexRouteRepair.warnings,
   });
+  applyMutation(
+    await maybeRepairContextEngineHostCompatibility({
+      cfg: state.candidate,
+      doctorFixCommand: params.doctorFixCommand,
+      env,
+    }),
+  );
   const missingConfiguredPluginInstallRepair = await repairMissingConfiguredPluginInstalls({
     cfg: state.candidate,
     env,
@@ -114,6 +124,7 @@ export async function runDoctorRepairSequence(params: {
   applyMutation(await maybeRepairAllowlistPolicyAllowFrom(state.candidate));
   applyMutation(maybeRepairOpenPolicyAllowFrom(state.candidate));
   applyMutation(maybeRepairGroupAllowFromFallback(state.candidate));
+  applyMutation(maybeRepairStaleSubagentAllowlists(state.candidate));
 
   const emptyAllowlistWarnings = scanEmptyAllowlistPolicyWarnings(state.candidate, {
     doctorFixCommand: params.doctorFixCommand,
@@ -153,6 +164,14 @@ export async function runDoctorRepairSequence(params: {
   }
   if (staleOAuthShadowRepair.warnings.length > 0) {
     warningNotes.push(sanitizeLines(staleOAuthShadowRepair.warnings));
+  }
+
+  const activeToolSchemaWarnings = collectActiveToolSchemaProjectionWarnings({
+    cfg: state.candidate,
+    env,
+  });
+  if (activeToolSchemaWarnings.length > 0) {
+    warningNotes.push(sanitizeLines(activeToolSchemaWarnings));
   }
 
   return { state, changeNotes, warningNotes };

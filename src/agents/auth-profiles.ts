@@ -52,6 +52,7 @@ export {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
+  getRuntimeAuthProfileStoreSnapshot,
   hasAnyAuthProfileStoreSource,
   loadAuthProfileStoreForSecretsRuntime,
   loadAuthProfileStoreWithoutExternalProfiles,
@@ -86,4 +87,5 @@ export {
   markAuthProfileFailure,
   resolveProfilesUnavailableReason,
   resolveProfileUnusableUntilForDisplay,
+  setAuthProfileFailureHook,
 } from "./auth-profiles/usage.js";
