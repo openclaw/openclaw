@@ -1,0 +1,295 @@
+import { randomUUID } from "node:crypto";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
+import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
+import {
+  runOpenClawStateWriteTransaction,
+  type OpenClawStateDatabaseOptions,
+} from "./openclaw-state-db.js";
+
+type LockValue = {
+  owner: string;
+  expiresAt: number;
+};
+
+type LockDatabase = Pick<OpenClawStateKyselyDatabase, "state_leases">;
+
+export type OpenClawStateLockRetryOptions = {
+  retries?: number;
+  factor?: number;
+  minTimeout?: number;
+  maxTimeout?: number;
+  randomize?: boolean;
+};
+
+export type OpenClawStateLockOptions = OpenClawStateDatabaseOptions & {
+  scope?: string;
+  stale?: number;
+  retries?: OpenClawStateLockRetryOptions;
+};
+
+export const OPENCLAW_STATE_LOCK_TIMEOUT_ERROR_CODE = "OPENCLAW_STATE_LOCK_TIMEOUT";
+
+export class OpenClawStateLockTimeoutError extends Error {
+  readonly code = OPENCLAW_STATE_LOCK_TIMEOUT_ERROR_CODE;
+  readonly scope: string;
+  readonly key: string;
+
+  constructor(scope: string, key: string) {
+    super(`Timed out acquiring SQLite state lock ${scope}:${key}`);
+    this.name = "OpenClawStateLockTimeoutError";
+    this.scope = scope;
+    this.key = key;
+  }
+}
+
+const DEFAULT_LOCK_SCOPE = "runtime.lock";
+const DEFAULT_STALE_MS = 60_000;
+const DEFAULT_RETRY_OPTIONS: Required<OpenClawStateLockRetryOptions> = {
+  retries: 10,
+  factor: 1.2,
+  minTimeout: 100,
+  maxTimeout: 1000,
+  randomize: true,
+};
+
+function parseLockValue(
+  row: { owner: string; expires_at: number | null } | undefined,
+): LockValue | null {
+  if (!row) {
+    return null;
+  }
+  if (row.expires_at == null) {
+    return null;
+  }
+  return {
+    owner: row.owner,
+    expiresAt: row.expires_at,
+  };
+}
+
+function resolveRetryOptions(
+  options: OpenClawStateLockRetryOptions | undefined,
+): Required<OpenClawStateLockRetryOptions> {
+  return {
+    ...DEFAULT_RETRY_OPTIONS,
+    ...options,
+  };
+}
+
+function resolveRetryDelayMs(
+  attempt: number,
+  options: Required<OpenClawStateLockRetryOptions>,
+): number {
+  const base = Math.min(options.maxTimeout, options.minTimeout * options.factor ** attempt);
+  if (!options.randomize) {
+    return base;
+  }
+  return base / 2 + Math.random() * (base / 2);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function createLostLockError(scope: string, key: string, cause?: unknown): Error {
+  return new Error(
+    `Lost SQLite state lock ${scope}:${key}`,
+    cause === undefined ? undefined : { cause },
+  );
+}
+
+function tryAcquireOpenClawStateLock(params: {
+  key: string;
+  owner: string;
+  scope: string;
+  staleMs: number;
+  options: OpenClawStateDatabaseOptions;
+}): boolean {
+  const now = Date.now();
+  const expiresAt = now + params.staleMs;
+  return runOpenClawStateWriteTransaction((database) => {
+    const db = getNodeSqliteKysely<LockDatabase>(database.db);
+    const row = executeSqliteQueryTakeFirstSync(
+      database.db,
+      db
+        .selectFrom("state_leases")
+        .select(["owner", "expires_at"])
+        .where("scope", "=", params.scope)
+        .where("lease_key", "=", params.key),
+    );
+    const current = parseLockValue(row);
+    if (current && current.expiresAt > now && current.owner !== params.owner) {
+      return false;
+    }
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .insertInto("state_leases")
+        .values({
+          scope: params.scope,
+          lease_key: params.key,
+          owner: params.owner,
+          expires_at: expiresAt,
+          heartbeat_at: now,
+          payload_json: null,
+          created_at: now,
+          updated_at: now,
+        })
+        .onConflict((conflict) =>
+          conflict.columns(["scope", "lease_key"]).doUpdateSet({
+            owner: params.owner,
+            expires_at: expiresAt,
+            heartbeat_at: now,
+            payload_json: null,
+            updated_at: now,
+          }),
+        ),
+    );
+    return true;
+  }, params.options);
+}
+
+function releaseOpenClawStateLock(params: {
+  key: string;
+  owner: string;
+  scope: string;
+  options: OpenClawStateDatabaseOptions;
+}): void {
+  runOpenClawStateWriteTransaction((database) => {
+    const db = getNodeSqliteKysely<LockDatabase>(database.db);
+    const row = executeSqliteQueryTakeFirstSync(
+      database.db,
+      db
+        .selectFrom("state_leases")
+        .select(["owner", "expires_at"])
+        .where("scope", "=", params.scope)
+        .where("lease_key", "=", params.key),
+    );
+    const current = parseLockValue(row);
+    if (current?.owner !== params.owner) {
+      return;
+    }
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .deleteFrom("state_leases")
+        .where("scope", "=", params.scope)
+        .where("lease_key", "=", params.key),
+    );
+  }, params.options);
+}
+
+function renewOpenClawStateLock(params: {
+  key: string;
+  owner: string;
+  scope: string;
+  staleMs: number;
+  options: OpenClawStateDatabaseOptions;
+}): boolean {
+  const now = Date.now();
+  const expiresAt = now + params.staleMs;
+  return runOpenClawStateWriteTransaction((database) => {
+    const db = getNodeSqliteKysely<LockDatabase>(database.db);
+    const row = executeSqliteQueryTakeFirstSync(
+      database.db,
+      db
+        .selectFrom("state_leases")
+        .select(["owner", "expires_at"])
+        .where("scope", "=", params.scope)
+        .where("lease_key", "=", params.key),
+    );
+    const current = parseLockValue(row);
+    if (current?.owner !== params.owner) {
+      return false;
+    }
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .updateTable("state_leases")
+        .set({
+          expires_at: expiresAt,
+          heartbeat_at: now,
+          updated_at: now,
+        })
+        .where("scope", "=", params.scope)
+        .where("lease_key", "=", params.key),
+    );
+    return true;
+  }, params.options);
+}
+
+export async function withOpenClawStateLock<T>(
+  key: string,
+  options: OpenClawStateLockOptions,
+  task: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const owner = randomUUID();
+  const scope = options.scope ?? DEFAULT_LOCK_SCOPE;
+  const staleMs = Math.max(1, options.stale ?? DEFAULT_STALE_MS);
+  const retries = resolveRetryOptions(options.retries);
+  const databaseOptions: OpenClawStateDatabaseOptions = {
+    env: options.env,
+    path: options.path,
+  };
+
+  for (let attempt = 0; attempt <= retries.retries; attempt += 1) {
+    if (
+      tryAcquireOpenClawStateLock({
+        key,
+        owner,
+        scope,
+        staleMs,
+        options: databaseOptions,
+      })
+    ) {
+      const abortController = new AbortController();
+      let rejectLostLock!: (error: Error) => void;
+      const lostLock = new Promise<never>((_resolve, reject) => {
+        rejectLostLock = reject;
+      });
+      void lostLock.catch(() => {});
+      const failLostLock = (error: Error) => {
+        if (!abortController.signal.aborted) {
+          rejectLostLock(error);
+          abortController.abort(error);
+        }
+      };
+      const renewEveryMs = Math.max(1, Math.floor(staleMs / 2));
+      const renewal = setInterval(() => {
+        try {
+          const renewed = renewOpenClawStateLock({
+            key,
+            owner,
+            scope,
+            staleMs,
+            options: databaseOptions,
+          });
+          if (!renewed) {
+            failLostLock(createLostLockError(scope, key));
+          }
+        } catch (error) {
+          failLostLock(createLostLockError(scope, key, error));
+        }
+      }, renewEveryMs);
+      renewal.unref?.();
+      try {
+        const taskPromise = Promise.resolve(task(abortController.signal));
+        void taskPromise.catch(() => {});
+        return await Promise.race([taskPromise, lostLock]);
+      } finally {
+        clearInterval(renewal);
+        releaseOpenClawStateLock({ key, owner, scope, options: databaseOptions });
+      }
+    }
+    if (attempt === retries.retries) {
+      break;
+    }
+    await sleep(resolveRetryDelayMs(attempt, retries));
+  }
+
+  throw new OpenClawStateLockTimeoutError(scope, key);
+}
