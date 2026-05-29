@@ -239,6 +239,10 @@ export function getEnvApiKey(provider: string): string | undefined {
     );
     const hasCredentialsEnv = Boolean(getEnvValue("GOOGLE_APPLICATION_CREDENTIALS"));
 
+    // Intentionally permissive: any signal of GCP intent passes the gate.
+    // Actual credential resolution happens at request time in vertex-adc.ts.
+    // Invalid setups (e.g. stale GOOGLE_APPLICATION_CREDENTIALS path with
+    // project env) will fail with a GoogleAuth error, not "No API key found."
     if (hasProject || hasCredentials || hasCredentialsEnv) {
       return "<authenticated>";
     }
