@@ -204,4 +204,15 @@ describe("OpenAI Codex routing policy", () => {
       }),
     ).toBe("openai-codex");
   });
+
+  it("preserves explicit final openai-codex fallbacks from configured OpenAI routes", () => {
+    expect(
+      resolveUserFacingSessionProvider({
+        provider: "openai-codex",
+        model: "gpt-5.5",
+        configuredProvider: "openai",
+        fallbackProvider: "openai-codex",
+      }),
+    ).toBe("openai-codex");
+  });
 });

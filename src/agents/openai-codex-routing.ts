@@ -195,6 +195,9 @@ export function resolveUserFacingSessionProvider(params: {
   }
   const configuredProvider = normalizeProviderId(params.configuredProvider ?? "");
   const fallbackProvider = normalizeProviderId(params.fallbackProvider ?? "");
+  if (fallbackProvider === OPENAI_CODEX_PROVIDER_ID) {
+    return params.provider;
+  }
   if (
     configuredProvider === OPENAI_PROVIDER_ID ||
     fallbackProvider === OPENAI_PROVIDER_ID ||
