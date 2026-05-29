@@ -970,6 +970,15 @@ export function createImageGenerateTool(options?: {
       if (duplicateGuardResult) {
         return duplicateGuardResult;
       }
+      validateImageGenerationCapabilities({
+        provider: selectedProvider,
+        count,
+        inputImageCount: imageInputs.length,
+        size,
+        aspectRatio,
+        resolution: explicitResolution,
+        explicitResolution: Boolean(explicitResolution),
+      });
       const configuredMediaMaxBytes = resolveConfiguredMediaMaxBytes(effectiveCfg);
       const loadedReferenceImages = await loadReferenceImages({
         imageInputs,

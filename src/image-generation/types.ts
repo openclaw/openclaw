@@ -99,8 +99,11 @@ type ImageGenerationEditCapabilities = ImageGenerationModeCapabilities & {
 
 type ImageGenerationGeometryCapabilities = {
   sizes?: string[];
+  sizesByModel?: Record<string, string[]>;
   aspectRatios?: string[];
+  aspectRatiosByModel?: Record<string, string[]>;
   resolutions?: ImageGenerationResolution[];
+  resolutionsByModel?: Record<string, ImageGenerationResolution[]>;
 };
 
 type ImageGenerationOutputCapabilities = {

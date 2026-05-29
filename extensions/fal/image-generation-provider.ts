@@ -539,6 +539,10 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
       },
       geometry: {
         sizes: [...FAL_SUPPORTED_SIZES],
+        sizesByModel: {
+          [FAL_KREA_2_MEDIUM_MODEL]: [],
+          [FAL_KREA_2_LARGE_MODEL]: [],
+        },
         aspectRatios: [...FAL_SUPPORTED_ASPECT_RATIOS],
         resolutions: ["1K", "2K", "4K"],
       },

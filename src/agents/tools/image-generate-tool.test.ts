@@ -2172,7 +2172,7 @@ describe("createImageGenerateTool", () => {
       createFalEditProvider(),
     ]);
     const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage");
-    vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
+    const loadWebMedia = vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
       kind: "image",
       buffer: Buffer.from("input-image"),
       contentType: "image/png",
@@ -2185,9 +2185,10 @@ describe("createImageGenerateTool", () => {
     await expect(
       tool.execute("call-fal-edit", {
         prompt: "combine",
-        images: ["./fixtures/a.png", "./fixtures/b.png"],
+        images: ["https://example.test/a.png", "https://example.test/b.png"],
       }),
     ).rejects.toThrow("fal edit supports at most 1 reference image");
+    expect(loadWebMedia).not.toHaveBeenCalled();
     expect(generateImage).not.toHaveBeenCalled();
   });
 
