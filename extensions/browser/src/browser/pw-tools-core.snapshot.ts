@@ -455,8 +455,8 @@ export async function resizeViewportViaPlaywright(opts: {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
   await page.setViewportSize({
-    width: Math.max(1, Math.floor(opts.width)),
-    height: Math.max(1, Math.floor(opts.height)),
+    width: resolveIntegerOption(opts.width, 1, { min: 1 }),
+    height: resolveIntegerOption(opts.height, 1, { min: 1 }),
   });
 }
 

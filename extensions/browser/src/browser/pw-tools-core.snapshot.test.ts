@@ -203,6 +203,21 @@ describe("pw-tools-core aria snapshot storage", () => {
     );
   });
 
+  it("clamps non-finite viewport dimensions to the minimum size", async () => {
+    const page = { setViewportSize: vi.fn(async () => {}) };
+    getPageForTargetId.mockResolvedValue(page);
+
+    const mod = await import("./pw-tools-core.snapshot.js");
+    await mod.resizeViewportViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+      width: Number.NaN,
+      height: Number.POSITIVE_INFINITY,
+    });
+
+    expect(page.setViewportSize).toHaveBeenCalledWith({ width: 1, height: 1 });
+  });
+
   it("stores role fallback metadata when backend markers are unavailable", async () => {
     const page = { id: "page-1" };
     const mod = await import("./pw-tools-core.snapshot.js");
