@@ -4,8 +4,8 @@ function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-export function withSpeakerSelectionCompat<T extends SpeakerSelectionConfig | undefined>(
-  config: T,
+export function withSpeakerSelectionCompat(
+  config: SpeakerSelectionConfig | undefined,
 ): SpeakerSelectionConfig {
   const next: SpeakerSelectionConfig = config ? { ...config } : {};
   const speakerVoice = readString(next.speakerVoice);
@@ -27,8 +27,8 @@ export function withSpeakerSelectionCompat<T extends SpeakerSelectionConfig | un
   return next;
 }
 
-export function withSpeakerSelectionFallbackCompat<T extends SpeakerSelectionConfig | undefined>(
-  config: T,
+export function withSpeakerSelectionFallbackCompat(
+  config: SpeakerSelectionConfig | undefined,
 ): SpeakerSelectionConfig {
   const next: SpeakerSelectionConfig = config ? { ...config } : {};
   const speakerVoice = readString(next.speakerVoice);

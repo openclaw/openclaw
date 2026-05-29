@@ -126,9 +126,9 @@ export function resolveVoiceModelRefs(config: unknown): VoiceModelRef[] {
   return refs;
 }
 
-export function resolveSupportedVoiceModelRefs<T extends VoiceModelProvider>(params: {
+export function resolveSupportedVoiceModelRefs(params: {
   config: unknown;
-  providers: readonly T[];
+  providers: readonly VoiceModelProvider[];
   providerId?: string;
 }): VoiceModelRef[] {
   return resolveVoiceModelRefs(params.config).flatMap((ref) => {
@@ -145,9 +145,9 @@ export function resolveSupportedVoiceModelRefs<T extends VoiceModelProvider>(par
   });
 }
 
-export function resolveVoiceProviderCandidates<T extends VoiceModelProvider>(params: {
+export function resolveVoiceProviderCandidates(params: {
   primaryProvider: string;
-  providers: readonly T[];
+  providers: readonly VoiceModelProvider[];
   voiceModelConfig?: unknown;
 }): VoiceProviderCandidate[] {
   const primary =
@@ -183,9 +183,9 @@ export function resolveVoiceProviderCandidates<T extends VoiceModelProvider>(par
   return candidates;
 }
 
-export function resolvePrimaryVoiceProviderCandidate<T extends VoiceModelProvider>(params: {
+export function resolvePrimaryVoiceProviderCandidate(params: {
   primaryProvider: string;
-  providers: readonly T[];
+  providers: readonly VoiceModelProvider[];
   voiceModelConfig?: unknown;
 }): VoiceProviderCandidate {
   const provider =

@@ -154,8 +154,8 @@ function resolveConfiguredVoiceModelDefaultRef<TConfig extends Record<string, un
       const providerConfig =
         provider.resolveConfig?.({
           cfg: params.config,
-          rawConfig: rawConfigWithModel as TConfig,
-        }) ?? (rawConfigWithModel as TConfig);
+          rawConfig: rawConfigWithModel,
+        }) ?? rawConfigWithModel;
       if (!configuredOrFalse(() => provider.isConfigured({ cfg: params.config, providerConfig }))) {
         continue;
       }
