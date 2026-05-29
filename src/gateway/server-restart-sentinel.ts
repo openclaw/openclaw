@@ -29,6 +29,7 @@ import {
   drainPendingSessionDeliveries,
   enqueueSessionDelivery,
   loadPendingSessionDelivery,
+  markSessionDeliveryPlatformOutcomeUnknown,
   recoverPendingSessionDeliveries,
   type QueuedSessionDelivery,
   type QueuedSessionDeliveryPayload,
@@ -367,7 +368,18 @@ async function deliverQueuedSessionDelivery(params: {
           deps: params.deps,
           bestEffort: false,
         });
-        if (send.status === "failed" || send.status === "partial_failed") {
+        if (send.status === "partial_failed") {
+          // Some payloads were already delivered to the platform before this
+          // failure (send.sentBeforeError === true). Persist the
+          // unknown_after_send marker on the queue entry before throwing so the
+          // recovery layer refuses a blind replay of an already-sent turn
+          // instead of clearing the marker and re-running the turn / re-sending
+          // the reply. Mirrors the outbound queue, which keeps the send-attempt
+          // marker once the platform send has started.
+          await markSessionDeliveryPlatformOutcomeUnknown(params.entry.id);
+          throw send.error;
+        }
+        if (send.status === "failed") {
           throw send.error;
         }
         const results = send.status === "sent" ? send.results : [];

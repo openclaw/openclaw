@@ -6,6 +6,7 @@ import {
   failSessionDelivery,
   isSessionDeliveryEligibleForRetry,
   loadPendingSessionDeliveries,
+  markSessionDeliveryPlatformOutcomeUnknown,
   recoverPendingSessionDeliveries,
 } from "./session-delivery-queue.js";
 
@@ -197,6 +198,60 @@ describe("session-delivery queue recovery", () => {
 
       // 수정 전: deliverCount === 2 (blind replay → 턴 재실행 + 응답 중복 전송) → FAIL
       // 수정 후: deliverCount === 1 (recoveryState 마커 → reconciliation → blind replay 거부) → PASS
+      expect(deliverCount).toBe(1);
+    });
+  });
+
+  it("does not re-deliver a session entry whose delivery partially sent before throwing", async () => {
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      const id = await enqueueSessionDelivery(
+        {
+          kind: "agentTurn",
+          sessionKey: "agent:main:main",
+          message: "continue",
+          messageId: "restart-sentinel:agent:main:main:agentTurn:456",
+          route: { channel: "telegram", to: "chat-1", chatType: "direct" },
+        },
+        tempDir,
+      );
+
+      let deliverCount = 0;
+      // Model the production delivery seam on a partial_failed send: some
+      // payloads already reached the platform (sentBeforeError), so
+      // deliverQueuedSessionDelivery persists the unknown_after_send marker and
+      // then throws. Recovery must refuse a blind replay rather than clearing the
+      // marker and re-running the turn / re-sending the already-sent reply.
+      const deliver = vi.fn(async () => {
+        deliverCount += 1;
+        await markSessionDeliveryPlatformOutcomeUnknown(id, tempDir);
+        throw new Error("partial_failed: reply chunk sent before error");
+      });
+      const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+      const drainOnce = () =>
+        drainPendingSessionDeliveries({
+          drainKey: "test-sent-before-error",
+          logLabel: "test sent-before-error",
+          deliver,
+          stateDir: tempDir,
+          log,
+          // bypassBackoff so PASS 2 actually attempts the entry instead of being
+          // deferred by the retry backoff (which would hide the blind replay).
+          selectEntry: (entry) => ({ match: entry.id === id, bypassBackoff: true }),
+        });
+
+      // PASS 1: delivery partially sends, marks unknown_after_send, then throws.
+      await drainOnce();
+      // The entry must not stay replayable in the main queue: it is moved to
+      // failed/ (fail-safe), not requeued with the marker cleared.
+      expect(await loadPendingSessionDeliveries(tempDir)).toStrictEqual([]);
+
+      // PASS 2: restart recovery re-entry.
+      await drainOnce();
+
+      // Before the fix: the catch cleared the marker and requeued, so PASS 2
+      // blind-replays -> deliverCount === 2. After the fix: the marker is
+      // preserved and recovery refuses the blind replay -> deliverCount === 1.
       expect(deliverCount).toBe(1);
     });
   });

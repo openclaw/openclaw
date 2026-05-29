@@ -154,10 +154,20 @@ async function drainQueuedEntry(opts: {
     const errMsg = formatErrorMessage(err);
     opts.onFailed?.(entry, errMsg);
     try {
-      // The attempt concluded in-process with a thrown failure (not a crash):
-      // clear the send marker so the entry stays replayable. A real crash never
-      // reaches this catch, so its marker survives and the next recovery refuses
-      // a blind replay.
+      // Distinguish a pre-send failure (nothing reached the platform) from a
+      // sent-before-error failure (some payloads were already delivered). The
+      // delivery seam advances the marker to unknown_after_send when the send
+      // partially happened (sendDurableMessageBatch -> partial_failed). In that
+      // case we must not clear the marker or replay, because the turn re-run and
+      // reply may already have gone out: refuse a blind replay and fail-safe to
+      // failed/, exactly like an entry recovered with a marker (and like the
+      // outbound queue, which never clears the marker once the send has started).
+      const current = await loadPendingSessionDelivery(entry.id, opts.stateDir);
+      if (current?.recoveryState === "unknown_after_send") {
+        return await moveSessionDeliveryToFailedWithEnoent(entry.id, opts.stateDir);
+      }
+      // Pre-send failure: the attempt is over and safe to replay, so clear the
+      // send-attempt marker set before deliver and keep the entry retryable.
       await clearSessionDeliveryRecoveryState(entry.id, opts.stateDir);
       await failSessionDelivery(entry.id, errMsg, opts.stateDir);
       return "failed";
