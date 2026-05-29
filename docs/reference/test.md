@@ -8,6 +8,10 @@ title: "Tests"
 - Full testing kit (suites, live, Docker): [Testing](/help/testing)
 - Update and plugin package validation: [Testing updates and plugins](/help/testing-updates-plugins)
 
+- Routine local test order:
+  1. `pnpm test:changed` for changed-scope Vitest proof.
+  2. `pnpm test <path-or-filter>` for one file, directory, or explicit target.
+  3. `pnpm test` only when you intentionally need the full local Vitest suite.
 - `pnpm test:force`: Kills any lingering gateway process holding the default control port, then runs the full Vitest suite with an isolated gateway port so server tests don't collide with a running instance. Use this when a prior gateway run left port 18789 occupied.
 - `pnpm test:coverage`: Runs the unit suite with V8 coverage (via `vitest.unit.config.ts`). This is a default-unit-lane coverage gate, not whole-repo all-file coverage. Thresholds are 70% lines/functions/statements and 55% branches. Because `coverage.all` is false and the default lane scopes coverage includes to non-fast unit tests with sibling source files, the gate measures source owned by this lane instead of every transitive import it happens to load.
 - `pnpm test:coverage:changed`: Runs unit coverage only for files changed since `origin/main`.
@@ -17,10 +21,12 @@ title: "Tests"
 - `pnpm check:changed`: runs the smart changed check gate for the diff against `origin/main`. It runs typecheck, lint, and guard commands for the affected architectural lanes, but does not run Vitest tests. Use `pnpm test:changed` or explicit `pnpm test <target>` for test proof.
 - Codex worktrees and linked/sparse checkouts: avoid direct local `pnpm test*`, `pnpm check*`, and `pnpm crabbox:run` unless you have verified pnpm will not reconcile dependencies. For tiny explicit-file proof use `node scripts/run-vitest.mjs <path-or-filter>`; for changed gates or broad proof use `node scripts/crabbox-wrapper.mjs run --provider blacksmith-testbox ... --shell -- "pnpm check:changed"` so pnpm runs inside Testbox.
 - `OPENCLAW_HEAVY_CHECK_LOCK_SCOPE=worktree <local-heavy-check command>`: keeps heavy-check serialization inside the current worktree instead of the Git common dir for commands such as `pnpm check:changed` and targeted `pnpm test ...`. Use it only on high-capacity local hosts when you intentionally run independent checks across linked worktrees.
-- `pnpm test`: routes explicit file/directory targets through scoped Vitest lanes. Untargeted runs use fixed shard groups and expand to leaf configs for local parallel execution; the extension group always expands to the per-extension shard configs instead of one giant root-project process.
+- `pnpm test`: routes explicit file/directory targets through scoped Vitest lanes. Untargeted runs are full-suite proof: they use fixed shard groups, expand to leaf configs for local parallel execution, and print the expected local shard fanout before starting. The extension group always expands to the per-extension shard configs instead of one giant root-project process.
 - Test wrapper runs end with a short `[test] passed|failed|skipped ... in ...` summary. Vitest's own duration line stays the per-shard detail.
 - Shared OpenClaw test state: use `src/test-utils/openclaw-test-state.ts` from Vitest when a test needs an isolated `HOME`, `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, config fixture, workspace, agent dir, or auth-profile store.
+- Control UI mocked E2E: use `pnpm test:ui:e2e` for the Vitest + Playwright lane that starts the Vite Control UI and drives a real Chromium page against a mocked Gateway WebSocket. Tests live in `ui/src/**/*.e2e.test.ts`; shared mocks and controls live in `ui/src/test-helpers/control-ui-e2e.ts`. `pnpm test:e2e` includes this lane. In Codex worktrees, prefer `node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/ui/e2e/chat-flow.e2e.test.ts` for tiny targeted proof after dependencies are installed, or Testbox/Crabbox for broader GUI proof.
 - Process E2E helpers: use `test/helpers/openclaw-test-instance.ts` when a Vitest process-level E2E test needs a running Gateway, CLI env, log capture, and cleanup in one place.
+- TUI PTY tests: use `node scripts/run-vitest.mjs run --config test/vitest/vitest.tui-pty.config.ts` for the fast fake-backend PTY lane. Use `OPENCLAW_TUI_PTY_INCLUDE_LOCAL=1` or `pnpm tui:pty:test:watch --mode local` for the slower `tui --local` smoke, which mocks only the external model endpoint. Assert stable visible text or fixture calls, not raw ANSI snapshots.
 - Docker/Bash E2E helpers: lanes that source `scripts/lib/docker-e2e-image.sh` can pass `docker_e2e_test_state_shell_b64 <label> <scenario>` into the container and decode it with `scripts/lib/openclaw-e2e-instance.sh`; multi-home scripts can pass `docker_e2e_test_state_function_b64` and call `openclaw_test_state_create <label> <scenario>` in each flow. Lower-level callers can use `scripts/lib/openclaw-test-state.mjs shell --label <name> --scenario <name>` for an in-container shell snippet, or `node scripts/lib/openclaw-test-state.mjs -- create --label <name> --scenario <name> --env-file <path> --json` for a sourceable host env file. The `--` before `create` keeps newer Node runtimes from treating `--env-file` as a Node flag. Docker/Bash lanes that launch a Gateway can source `scripts/lib/openclaw-e2e-instance.sh` inside the container for entrypoint resolution, mock OpenAI startup, Gateway foreground/background launch, readiness probes, state env export, log dumps, and process cleanup.
 - Full, extension, and include-pattern shard runs update local timing data in `.artifacts/vitest-shard-timings.json`; later whole-config runs use those timings to balance slow and fast shards. Include-pattern CI shards append the shard name to the timing key, which keeps filtered shard timings visible without replacing whole-config timing data. Set `OPENCLAW_TEST_PROJECTS_TIMINGS=0` to ignore the local timing artifact.
 - Selected `plugin-sdk` and `commands` test files now route through dedicated light lanes that keep only `test/setup.ts`, leaving runtime-heavy cases on their existing lanes.
@@ -37,10 +43,12 @@ title: "Tests"
 - `pnpm test:perf:profile:runner`: writes CPU + heap profiles for the unit runner (`.artifacts/vitest-runner-profile`).
 - `pnpm test:perf:groups --full-suite --allow-failures --output .artifacts/test-perf/baseline-before.json`: runs every full-suite Vitest leaf config serially and writes grouped duration data plus per-config JSON/log artifacts. The Test Performance Agent uses this as its baseline before attempting slow-test fixes.
 - `pnpm test:perf:groups:compare .artifacts/test-perf/baseline-before.json .artifacts/test-perf/after-agent.json`: compares grouped reports after a performance-focused change.
+- `pnpm test:docker:timings <summary.json>` inspects slow Docker lanes after a Docker all run; use `pnpm test:docker:rerun <run-id|summary.json|failures.json>` to print cheap targeted rerun commands from the same artifacts.
 - Gateway integration: opt-in via `OPENCLAW_TEST_INCLUDE_GATEWAY=1 pnpm test` or `pnpm test:gateway`.
-- `pnpm test:e2e`: Runs gateway end-to-end smoke tests (multi-instance WS/HTTP/node pairing). Defaults to `threads` + `isolate: false` with adaptive workers in `vitest.e2e.config.ts`; tune with `OPENCLAW_E2E_WORKERS=<n>` and set `OPENCLAW_E2E_VERBOSE=1` for verbose logs.
+- `pnpm test:e2e`: Runs the repo E2E aggregate: gateway end-to-end smoke tests plus the Control UI mocked browser E2E lane.
+- `pnpm test:e2e:gateway`: Runs gateway end-to-end smoke tests (multi-instance WS/HTTP/node pairing). Defaults to `threads` + `isolate: false` with adaptive workers in `vitest.e2e.config.ts`; tune with `OPENCLAW_E2E_WORKERS=<n>` and set `OPENCLAW_E2E_VERBOSE=1` for verbose logs.
 - `pnpm test:live`: Runs provider live tests (minimax/zai). Requires API keys and `LIVE=1` (or provider-specific `*_LIVE_TEST=1`) to unskip.
-- `pnpm test:docker:all`: Builds the shared live-test image, packs OpenClaw once as an npm tarball, builds/reuses a bare Node/Git runner image plus a functional image that installs that tarball into `/app`, then runs Docker smoke lanes with `OPENCLAW_SKIP_DOCKER_BUILD=1` through a weighted scheduler. The bare image (`OPENCLAW_DOCKER_E2E_BARE_IMAGE`) is used for installer/update/plugin-dependency lanes; those lanes mount the prebuilt tarball instead of using copied repo sources. The functional image (`OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE`) is used for normal built-app functionality lanes. `scripts/package-openclaw-for-docker.mjs` is the single local/CI package packer and validates the tarball plus `dist/postinstall-inventory.json` before Docker consumes it. Docker lane definitions live in `scripts/lib/docker-e2e-scenarios.mjs`; planner logic lives in `scripts/lib/docker-e2e-plan.mjs`; `scripts/test-docker-all.mjs` executes the selected plan. `node scripts/test-docker-all.mjs --plan-json` emits the scheduler-owned CI plan for selected lanes, image kinds, package/live-image needs, state scenarios, and credential checks without building or running Docker. `OPENCLAW_DOCKER_ALL_PARALLELISM=<n>` controls process slots and defaults to 10; `OPENCLAW_DOCKER_ALL_TAIL_PARALLELISM=<n>` controls the provider-sensitive tail pool and defaults to 10. Heavy lane caps default to `OPENCLAW_DOCKER_ALL_LIVE_LIMIT=9`, `OPENCLAW_DOCKER_ALL_NPM_LIMIT=10`, and `OPENCLAW_DOCKER_ALL_SERVICE_LIMIT=7`; provider caps default to one heavy lane per provider via `OPENCLAW_DOCKER_ALL_LIVE_CLAUDE_LIMIT=4`, `OPENCLAW_DOCKER_ALL_LIVE_CODEX_LIMIT=4`, and `OPENCLAW_DOCKER_ALL_LIVE_GEMINI_LIMIT=4`. Use `OPENCLAW_DOCKER_ALL_WEIGHT_LIMIT` or `OPENCLAW_DOCKER_ALL_DOCKER_LIMIT` for larger hosts. If one lane exceeds the effective weight or resource cap on a low-parallelism host, it can still start from an empty pool and will run alone until it releases capacity. Lane starts are staggered by 2 seconds by default to avoid local Docker daemon create storms; override with `OPENCLAW_DOCKER_ALL_START_STAGGER_MS=<ms>`. The runner preflights Docker by default, cleans stale OpenClaw E2E containers, emits active-lane status every 30 seconds, shares provider CLI tool caches between compatible lanes, retries transient live-provider failures once by default (`OPENCLAW_DOCKER_ALL_LIVE_RETRIES=<n>`), and stores lane timings in `.artifacts/docker-tests/lane-timings.json` for longest-first ordering on later runs. Use `OPENCLAW_DOCKER_ALL_DRY_RUN=1` to print the lane manifest without running Docker, `OPENCLAW_DOCKER_ALL_STATUS_INTERVAL_MS=<ms>` to tune status output, or `OPENCLAW_DOCKER_ALL_TIMINGS=0` to disable timing reuse. Use `OPENCLAW_DOCKER_ALL_LIVE_MODE=skip` for deterministic/local lanes only or `OPENCLAW_DOCKER_ALL_LIVE_MODE=only` for live-provider lanes only; package aliases are `pnpm test:docker:local:all` and `pnpm test:docker:live:all`. Live-only mode merges main and tail live lanes into one longest-first pool so provider buckets can pack Claude, Codex, and Gemini work together. The runner stops scheduling new pooled lanes after the first failure unless `OPENCLAW_DOCKER_ALL_FAIL_FAST=0` is set, and each lane has a 120-minute fallback timeout overrideable with `OPENCLAW_DOCKER_ALL_LANE_TIMEOUT_MS`; selected live/tail lanes use tighter per-lane caps. CLI backend Docker setup commands have their own timeout via `OPENCLAW_LIVE_CLI_BACKEND_SETUP_TIMEOUT_SECONDS` (default 180). Per-lane logs, `summary.json`, `failures.json`, and phase timings are written under `.artifacts/docker-tests/<run-id>/`; use `pnpm test:docker:timings <summary.json>` to inspect slow lanes and `pnpm test:docker:rerun <run-id|summary.json|failures.json>` to print cheap targeted rerun commands.
+- `pnpm test:docker:all`: Builds the shared live-test image, packs OpenClaw once as an npm tarball, builds/reuses a bare Node/Git runner image plus a functional image that installs that tarball into `/app`, then runs Docker smoke lanes with `OPENCLAW_SKIP_DOCKER_BUILD=1` through a weighted scheduler. The bare image (`OPENCLAW_DOCKER_E2E_BARE_IMAGE`) is used for installer/update/plugin-dependency lanes; those lanes mount the prebuilt tarball instead of using copied repo sources. The functional image (`OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE`) is used for normal built-app functionality lanes. `scripts/package-openclaw-for-docker.mjs` is the single local/CI package packer and validates the tarball plus `dist/postinstall-inventory.json` before Docker consumes it. Docker lane definitions live in `scripts/lib/docker-e2e-scenarios.mjs`; planner logic lives in `scripts/lib/docker-e2e-plan.mjs`; `scripts/test-docker-all.mjs` executes the selected plan. `node scripts/test-docker-all.mjs --plan-json` emits the scheduler-owned CI plan for selected lanes, image kinds, package/live-image needs, state scenarios, and credential checks without building or running Docker. `OPENCLAW_DOCKER_ALL_PARALLELISM=<n>` controls process slots and defaults to 10; `OPENCLAW_DOCKER_ALL_TAIL_PARALLELISM=<n>` controls the provider-sensitive tail pool and defaults to 10. Heavy lane caps default to `OPENCLAW_DOCKER_ALL_LIVE_LIMIT=9`, `OPENCLAW_DOCKER_ALL_NPM_LIMIT=10`, and `OPENCLAW_DOCKER_ALL_SERVICE_LIMIT=7`; provider caps default to one heavy lane per provider via `OPENCLAW_DOCKER_ALL_LIVE_CLAUDE_LIMIT=4`, `OPENCLAW_DOCKER_ALL_LIVE_CODEX_LIMIT=4`, and `OPENCLAW_DOCKER_ALL_LIVE_GEMINI_LIMIT=4`. Use `OPENCLAW_DOCKER_ALL_WEIGHT_LIMIT` or `OPENCLAW_DOCKER_ALL_DOCKER_LIMIT` for larger hosts. If one lane exceeds the effective weight or resource cap on a low-parallelism host, it can still start from an empty pool and will run alone until it releases capacity. Lane starts are staggered by 2 seconds by default to avoid local Docker daemon create storms; override with `OPENCLAW_DOCKER_ALL_START_STAGGER_MS=<ms>`. The runner preflights Docker by default, cleans stale OpenClaw E2E containers, emits active-lane status every 30 seconds, shares provider CLI tool caches between compatible lanes, retries transient live-provider failures once by default (`OPENCLAW_DOCKER_ALL_LIVE_RETRIES=<n>`), and stores lane timings in `.artifacts/docker-tests/lane-timings.json` for longest-first ordering on later runs. Use `OPENCLAW_DOCKER_ALL_DRY_RUN=1` to print the lane manifest without running Docker, `OPENCLAW_DOCKER_ALL_STATUS_INTERVAL_MS=<ms>` to tune status output, or `OPENCLAW_DOCKER_ALL_TIMINGS=0` to disable timing reuse. Use `OPENCLAW_DOCKER_ALL_LIVE_MODE=skip` for deterministic/local lanes only or `OPENCLAW_DOCKER_ALL_LIVE_MODE=only` for live-provider lanes only; package aliases are `pnpm test:docker:local:all` and `pnpm test:docker:live:all`. Live-only mode merges main and tail live lanes into one longest-first pool so provider buckets can pack Claude, Codex, and Gemini work together. The runner stops scheduling new pooled lanes after the first failure unless `OPENCLAW_DOCKER_ALL_FAIL_FAST=0` is set, and each lane has a 120-minute fallback timeout overridable with `OPENCLAW_DOCKER_ALL_LANE_TIMEOUT_MS`; selected live/tail lanes use tighter per-lane caps. CLI backend Docker setup commands have their own timeout via `OPENCLAW_LIVE_CLI_BACKEND_SETUP_TIMEOUT_SECONDS` (default 180). Per-lane logs, `summary.json`, `failures.json`, and phase timings are written under `.artifacts/docker-tests/<run-id>/`; use `pnpm test:docker:timings <summary.json>` to inspect slow lanes and `pnpm test:docker:rerun <run-id|summary.json|failures.json>` to print cheap targeted rerun commands.
 - `pnpm test:docker:browser-cdp-snapshot`: Builds a Chromium-backed source E2E container, starts raw CDP plus an isolated Gateway, runs `browser doctor --deep`, and verifies CDP role snapshots include link URLs, cursor-promoted clickables, iframe refs, and frame metadata.
 - `pnpm test:docker:skill-install`: Installs the packed OpenClaw tarball in a bare Docker runner, disables `skills.install.allowUploadedArchives`, resolves a current skill slug from live ClawHub search, installs it through `openclaw skills install`, and verifies `SKILL.md`, `.clawhub/origin.json`, `.clawhub/lock.json`, and `skills info --json`.
 - CLI backend live Docker probes can be run as focused lanes, for example `pnpm test:docker:live-cli-backend:claude`, `pnpm test:docker:live-cli-backend:claude:resume`, or `pnpm test:docker:live-cli-backend:claude:mcp`. Gemini has matching `:resume` and `:mcp` aliases.
@@ -123,6 +131,94 @@ Checked-in fixture:
 - `test/fixtures/cli-startup-bench.json`
 - Refresh with `pnpm test:startup:bench:update`
 - Compare current results against the fixture with `pnpm test:startup:bench:check`
+
+## Gateway startup bench
+
+Script: [`scripts/bench-gateway-startup.ts`](https://github.com/openclaw/openclaw/blob/main/scripts/bench-gateway-startup.ts)
+
+The benchmark defaults to the built CLI entry at `dist/entry.js`; run
+`pnpm build` before using the package-script commands. To measure the source
+runner instead, pass `--entry scripts/run-node.mjs` and keep those results
+separate from built-entry baselines.
+
+Usage:
+
+- `pnpm test:startup:gateway -- --runs 5 --warmup 1`
+- `pnpm test:startup:gateway -- --case default --runs 10 --warmup 1`
+- `pnpm test:startup:gateway -- --case skipChannels --case fiftyPlugins --runs 5`
+- `node --import tsx scripts/bench-gateway-startup.ts --case default --runs 5 --output .artifacts/gateway-startup.json`
+- `node --import tsx scripts/bench-gateway-startup.ts --case default --runs 3 --cpu-prof-dir .artifacts/gateway-startup-cpu`
+
+Case ids:
+
+- `default`: normal Gateway startup.
+- `skipChannels`: Gateway startup with channel startup skipped.
+- `oneInternalHook`: one configured internal hook.
+- `allInternalHooks`: all internal hooks.
+- `fiftyPlugins`: 50 manifest plugins.
+- `fiftyStartupLazyPlugins`: 50 startup-lazy manifest plugins.
+
+Output includes first process output, `/healthz`, `/readyz`, HTTP listen log time,
+Gateway ready log time, CPU time, CPU core ratio, max RSS, heap, startup trace
+metrics, event-loop delay, and plugin lookup-table detail metrics. The script
+enables `OPENCLAW_GATEWAY_STARTUP_TRACE=1` in the child Gateway environment.
+
+Read `/healthz` as liveness: the HTTP server can answer. Read `/readyz` as
+usable readiness: startup plugin sidecars, channels, and ready-critical
+post-attach work have settled. Gateway startup hooks are dispatched
+asynchronously and are not part of the readiness guarantee. Ready log time is the
+Gateway's internal ready log timestamp; it is useful for process-side
+attribution but is not a substitute for the external `/readyz` probe.
+
+Use JSON output or `--output` when comparing changes. Use `--cpu-prof-dir` only
+after the trace output points at import, compile, or CPU-bound work that cannot
+be explained from phase timings alone. Do not compare source-runner results with
+built `dist/entry.js` results as the same baseline.
+
+## Gateway restart bench
+
+Script: [`scripts/bench-gateway-restart.ts`](https://github.com/openclaw/openclaw/blob/main/scripts/bench-gateway-restart.ts)
+
+The restart benchmark is supported on macOS and Linux only. It uses SIGUSR1 for
+in-process restarts and fails immediately on Windows.
+
+The benchmark defaults to the built CLI entry at `dist/entry.js`; run
+`pnpm build` before using the package-script commands. To measure the source
+runner instead, pass `--entry scripts/run-node.mjs` and keep those results
+separate from built-entry baselines.
+
+Usage:
+
+- `pnpm test:restart:gateway -- --case skipChannels --runs 1 --restarts 5`
+- `pnpm test:restart:gateway -- --case default --runs 3 --restarts 3 --warmup 1`
+- `pnpm test:restart:gateway -- --case skipChannelsAcpxProbe --case skipChannelsNoAcpxProbe --runs 1 --restarts 5`
+- `node --import tsx scripts/bench-gateway-restart.ts --case fiftyPlugins --runs 1 --restarts 5 --output .artifacts/gateway-restart.json`
+- `node --import tsx scripts/bench-gateway-restart.ts --json`
+
+Case ids:
+
+- `skipChannels`: restart with channels skipped.
+- `skipChannelsAcpxProbe`: restart with channels skipped and ACPX startup probe on.
+- `skipChannelsNoAcpxProbe`: restart with channels skipped and ACPX startup probe off.
+- `default`: normal restart.
+- `fiftyPlugins`: restart with 50 manifest plugins.
+
+Output includes next `/healthz`, next `/readyz`, downtime, restart ready timing,
+CPU, RSS, startup trace metrics for the replacement process, and restart trace
+metrics for signal handling, active-work drain, close phases, next start, ready
+timing, and memory snapshots. The script enables
+`OPENCLAW_GATEWAY_STARTUP_TRACE=1` and `OPENCLAW_GATEWAY_RESTART_TRACE=1` in the
+child Gateway environment.
+
+Use this benchmark when a change touches restart signaling, close handlers,
+startup-after-restart, sidecar shutdown, service handoff, or readiness after
+restart. Start with `skipChannels` when isolating Gateway mechanics from channel
+startup. Use `default` or plugin-heavy cases only after the narrow case explains
+the restart path.
+
+Trace metrics are attribution hints, not verdicts. A restart change should be
+judged from multiple samples, the matching owner span, `/healthz` and `/readyz`
+behavior, and the user-visible restart contract.
 
 ## Onboarding E2E (Docker)
 

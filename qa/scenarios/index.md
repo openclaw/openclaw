@@ -25,6 +25,22 @@ Coverage tracking:
 - treat the old `coverage: ["id"]` / `coverage: - id` list shape as invalid
 - keep source-path tracking in the report, not in the scenario schema
 
+Runtime parity tiers:
+
+- `standard`: required Codex-vs-OpenClaw mock gate coverage for first-hour depth and
+  default runtime-tool fixtures. OpenClaw dynamic integration tools in this
+  tier are hard-gated by `openclaw qa coverage --tools --summary`; Codex-native
+  workspace rows remain separately tracked until native/live behavior is the
+  asserted surface. Rows that explicitly target searchable/deferred OpenClaw
+  dynamic loading stay report-only unless a fixture promotes them to required. Selected with
+  `openclaw qa suite --runtime-pair openclaw,codex --runtime-parity-tier standard`
+- `optional`: profile-, plugin-, or external-service-dependent runtime-tool
+  fixtures that stay out of the default release gate
+- `live-only`: scenarios that need real provider/runtime behavior rather than
+  mock-openai fixtures
+- `soak`: long-running scheduled or Testbox lanes such as the 100-turn parity
+  soak
+
 Theme directories:
 
 - `agents/` - agent behavior, instructions, subagent flows, and persisted child-link regressions
@@ -60,7 +76,7 @@ agent:
     Style:
     - read source and docs first
     - test systematically
-    - record evidence
+    - record what happened
     - end with a concise protocol report
 kickoffTask: |-
   QA mission:
@@ -68,7 +84,7 @@ kickoffTask: |-
   The repo is available in your workspace at `./repo/`.
   Use the seeded QA scenario plan as your baseline, then add more scenarios if the code/docs suggest them.
   Run the scenarios through the real qa-channel surfaces where possible.
-  Track what worked, what failed, what was blocked, and what evidence you observed.
+  Track what worked, what failed, what was blocked, and what you observed.
   End with a concise report grouped into worked / failed / blocked / follow-up.
 
   Important expectations:

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { redactSensitiveUrlLikeString } from "../shared/net/redact-sensitive-url.js";
 
 const runCommandWithTimeoutMock = vi.fn();
@@ -77,23 +77,51 @@ describe("parseGitPluginSpec", () => {
     expect(explicitRef.label).toBe("acme/demo");
     expect(explicitRef.normalizedSpec).toBe("git:https://github.com/acme/demo.git@v1.2.3");
 
+    const slashRef = expectParsedGitSpec("git:acme/demo@feature/foo");
+    expect(slashRef.url).toBe("https://github.com/acme/demo.git");
+    expect(slashRef.ref).toBe("feature/foo");
+    expect(slashRef.label).toBe("acme/demo");
+
     const hashRef = expectParsedGitSpec("git:acme/demo#main");
     expect(hashRef.url).toBe("https://github.com/acme/demo.git");
     expect(hashRef.ref).toBe("main");
   });
 
+  it("does not treat URL credentials as ref selectors", () => {
+    const parsed = expectParsedGitSpec("git:https://token:secret@github.com/acme/demo.git");
+    expect(parsed.url).toBe("https://token:secret@github.com/acme/demo.git");
+    expect(parsed.ref).toBeUndefined();
+    expect(parsed.label).toBe("github.com/acme/demo");
+  });
+
   it("keeps scp-style clone URLs without treating git@ as a ref", () => {
-    const parsed = expectParsedGitSpec("git:git@github.com:acme/demo.git@release");
+    const parsed = expectParsedGitSpec("git:git@github.com:acme/demo.git@feature/foo");
     expect(parsed.url).toBe("git@github.com:acme/demo.git");
-    expect(parsed.ref).toBe("release");
-    expect(parsed.label).toBe("git@github.com:acme/demo.git");
+    expect(parsed.ref).toBe("feature/foo");
+    expect(parsed.label).toBe("git@github.com:acme/demo");
   });
 });
 
 describe("installPluginFromGitSpec", () => {
-  beforeEach(() => {
+  const tempDirs: string[] = [];
+
+  beforeEach(async () => {
     runCommandWithTimeoutMock.mockReset();
     installPluginFromInstalledPackageDirMock.mockReset();
+    const globalConfigRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-git-install-npmrc-"),
+    );
+    tempDirs.push(globalConfigRoot);
+    const globalConfig = path.join(globalConfigRoot, "global-npmrc");
+    await fs.writeFile(globalConfig, "", "utf8");
+    vi.stubEnv("NPM_CONFIG_GLOBALCONFIG", globalConfig);
+  });
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    await Promise.all(
+      tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
+    );
   });
 
   it("clones, checks out refs, installs from the clone, and returns commit metadata", async () => {

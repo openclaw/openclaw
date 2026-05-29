@@ -172,6 +172,72 @@ describe("memory-wiki cli", () => {
     );
   });
 
+  it("rejects apply confidence values outside the documented range", async () => {
+    const { config } = await createCliVault();
+    const program = new Command();
+    program.name("test");
+    program.exitOverride();
+    program.configureOutput({
+      writeErr: () => {},
+      writeOut: () => {},
+    });
+    registerWikiCli(program, config);
+
+    await expect(
+      program.parseAsync(
+        [
+          "wiki",
+          "apply",
+          "synthesis",
+          "CLI Alpha",
+          "--body",
+          "Alpha from CLI.",
+          "--source-id",
+          "source.alpha",
+          "--confidence",
+          "Infinity",
+        ],
+        { from: "user" },
+      ),
+    ).rejects.toThrow("--confidence must be a number between 0 and 1.");
+
+    await expect(
+      program.parseAsync(["wiki", "apply", "metadata", "entity.alpha", "--confidence", "1.5"], {
+        from: "user",
+      }),
+    ).rejects.toThrow("--confidence must be a number between 0 and 1.");
+
+    await expect(
+      program.parseAsync(["wiki", "apply", "metadata", "entity.alpha", "--confidence", "1e-1"], {
+        from: "user",
+      }),
+    ).rejects.toThrow("--confidence must be a number between 0 and 1.");
+  });
+
+  it("rejects non-decimal wiki search and get numeric options before dispatch", async () => {
+    const { config } = await createCliVault();
+    const program = new Command();
+    program.name("test");
+    program.exitOverride();
+    program.configureOutput({
+      writeErr: () => {},
+      writeOut: () => {},
+    });
+    registerWikiCli(program, config);
+
+    await expect(
+      program.parseAsync(["wiki", "search", "alpha", "--max-results", "0x10"], {
+        from: "user",
+      }),
+    ).rejects.toThrow("--max-results must be a positive integer.");
+    await expect(
+      program.parseAsync(["wiki", "get", "entity.alpha", "--from", "1e2"], { from: "user" }),
+    ).rejects.toThrow("--from must be a positive integer.");
+    await expect(
+      program.parseAsync(["wiki", "get", "entity.alpha", "--lines", "1.5"], { from: "user" }),
+    ).rejects.toThrow("--lines must be a positive integer.");
+  });
+
   it("registers apply metadata and preserves the page body", async () => {
     const { rootDir, config } = await createCliVault();
     const targetPath = path.join(rootDir, "entities", "alpha.md");

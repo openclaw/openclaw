@@ -1,7 +1,10 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
+import { createServer, type Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   appendJsonl,
@@ -14,7 +17,7 @@ import {
   safeRunLabel,
   validateOpenClawPackageSpec,
 } from "../../scripts/lib/rtt-harness.ts";
-import { __testing as cliTesting } from "../../scripts/rtt.ts";
+import { testing as cliTesting } from "../../scripts/rtt.ts";
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE_PATH = path.resolve(TEST_DIR, "../fixtures/telegram-qa-summary-rtt.json");
@@ -23,11 +26,46 @@ const CREDENTIAL_SCRIPT_PATH = path.resolve(
   TEST_DIR,
   "../../scripts/e2e/npm-telegram-rtt-credentials.mjs",
 );
+const CONFIG_SCRIPT_PATH = path.resolve(TEST_DIR, "../../scripts/e2e/npm-telegram-rtt-config.mjs");
+const execFileAsync = promisify(execFile);
 const tempDirs: string[] = [];
 
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
+
+async function listenOnLoopback(server: Server) {
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Expected TCP server address.");
+  }
+  return address;
+}
+
+function closeServer(server: Server) {
+  return new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
+}
+
+function credentialBrokerEnv(port: number) {
+  return {
+    ...process.env,
+    OPENCLAW_QA_ALLOW_INSECURE_HTTP: "1",
+    OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "test-secret",
+    OPENCLAW_QA_CONVEX_SITE_URL: `http://127.0.0.1:${port}`,
+    OPENCLAW_QA_CREDENTIAL_HTTP_TIMEOUT_MS: "1000",
+    OPENCLAW_QA_CREDENTIAL_OWNER_ID: "test-owner",
+    OPENCLAW_NPM_TELEGRAM_CREDENTIAL_ROLE: "maintainer",
+  };
+}
 
 describe("RTT harness", () => {
   it("validates OpenClaw package specs", () => {
@@ -127,6 +165,10 @@ describe("RTT harness", () => {
       "OPENCLAW_QA_CONVEX_SECRET_CI",
       installEnvSnapshotIndex,
     );
+    const bodyLimitForwardIndex = script.indexOf(
+      "OPENCLAW_QA_CREDENTIAL_HTTP_MAX_BODY_BYTES",
+      installEnvSnapshotIndex,
+    );
     const packageInstallIndex = script.indexOf("npm install -g");
     const credentialAcquireIndex = script.indexOf(
       "node /app/scripts/e2e/npm-telegram-rtt-credentials.mjs acquire",
@@ -138,7 +180,28 @@ describe("RTT harness", () => {
     expect(tokenExportIndex).toBeGreaterThan(sourceIndex);
     expect(installEnvSnapshotIndex).toBeGreaterThanOrEqual(0);
     expect(convexSecretForwardIndex).toBeGreaterThan(installEnvSnapshotIndex);
+    expect(bodyLimitForwardIndex).toBeGreaterThan(installEnvSnapshotIndex);
     expect(packageInstallIndex).toBeLessThan(credentialAcquireIndex);
+    expect(script).toContain(
+      '-e OPENCLAW_E2E_NPM_INSTALL_TIMEOUT="${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}"',
+    );
+    expect(script).toContain(
+      '"$timeout_bin" --kill-after=30s "$npm_install_timeout" npm install -g "$install_source" --no-fund --no-audit',
+    );
+    expect(script).toContain("elif command -v gtimeout >/dev/null 2>&1; then");
+    expect(script).toContain('timeout_bin="gtimeout"');
+    expect(script).toContain(
+      'echo "timeout or gtimeout is required for OPENCLAW_E2E_NPM_INSTALL_TIMEOUT=$npm_install_timeout" >&2',
+    );
+    expect(script).toContain('"$timeout_bin" --kill-after=1s 1s true >/dev/null 2>&1');
+    expect(script).toContain(
+      '"$timeout_bin" "$npm_install_timeout" npm install -g "$install_source" --no-fund --no-audit',
+    );
+    expect(script).not.toContain(
+      "running package install without OPENCLAW_E2E_NPM_INSTALL_TIMEOUT",
+    );
+    expect(script).toContain("run_logged docker_e2e_docker_run_cmd run --rm");
+    expect(script).not.toContain("run_logged docker run --rm");
     expect(heartbeatStartIndex).toBeGreaterThan(sourceIndex);
     expect(heartbeatStartIndex).toBeLessThan(driverIndex);
     expect(script).toContain("start_credential_heartbeat() {\n  (\n    set +e");
@@ -147,13 +210,105 @@ describe("RTT harness", () => {
     expect(script).not.toContain('export TELEGRAM_BOT_TOKEN="$OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN"');
   });
 
-  it("keeps broker helper heartbeat and empty-response handling aligned with QA leases", async () => {
+  it("keeps broker helper heartbeat handling aligned with QA leases", async () => {
     const script = await fs.readFile(CREDENTIAL_SCRIPT_PATH, "utf8");
 
-    expect(script).toContain("await response.text()");
-    expect(script).toContain('response.ok\n        ? { status: "ok" }');
     expect(script).toContain("leaseTtlMs: acquired.leaseTtlMs ?? config.leaseTtlMs");
     expect(script).toContain("leaseTtlMs: leaseTtlMsFromLease(config, lease)");
+  });
+
+  it("bounds Convex credential broker response bodies", async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(500, { "content-type": "application/json" });
+      response.end(JSON.stringify({ status: "error", message: "x".repeat(128) }));
+    });
+    const { port } = await listenOnLoopback(server);
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-rtt-credentials-"));
+    tempDirs.push(tempDir);
+
+    try {
+      await execFileAsync(
+        process.execPath,
+        [
+          CREDENTIAL_SCRIPT_PATH,
+          "acquire",
+          "--lease-file",
+          path.join(tempDir, "lease.json"),
+          "--credential-env-file",
+          path.join(tempDir, "credentials.env"),
+        ],
+        {
+          env: {
+            ...credentialBrokerEnv(port),
+            OPENCLAW_QA_CREDENTIAL_HTTP_MAX_BODY_BYTES: "16",
+          },
+          maxBuffer: 128 * 1024,
+        },
+      );
+      throw new Error("Expected credential acquire to fail.");
+    } catch (error) {
+      const execError = error as Error & { stderr?: string };
+      expect(execError.stderr).toContain(
+        "credential broker acquire response body exceeded 16 bytes",
+      );
+      expect(execError.stderr).not.toContain("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("preserves empty broker responses for successful lease release", async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(204);
+      response.end();
+    });
+    const { port } = await listenOnLoopback(server);
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-rtt-credentials-"));
+    tempDirs.push(tempDir);
+    const leaseFile = path.join(tempDir, "lease.json");
+    await fs.writeFile(
+      leaseFile,
+      `${JSON.stringify({
+        kind: "telegram",
+        ownerId: "test-owner",
+        actorRole: "maintainer",
+        credentialId: "credential",
+        leaseToken: "lease",
+      })}\n`,
+    );
+
+    try {
+      await execFileAsync(
+        process.execPath,
+        [CREDENTIAL_SCRIPT_PATH, "release", "--lease-file", leaseFile],
+        {
+          env: credentialBrokerEnv(port),
+        },
+      );
+      await expect(fs.stat(leaseFile)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("generates final-only Telegram RTT delivery config for release packages", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-rtt-config-test-"));
+    tempDirs.push(tempDir);
+    const configPath = path.join(tempDir, "config.json");
+
+    await execFileAsync(process.execPath, [
+      CONFIG_SCRIPT_PATH,
+      configPath,
+      "12345",
+      "-100123",
+      "111:driver-token",
+      "222:sut-token",
+      "2026.5.16-beta.6",
+    ]);
+
+    const config = JSON.parse(await fs.readFile(configPath, "utf8"));
+    expect(config.channels.telegram.streaming).toEqual({ mode: "off" });
+    expect(config.messages.groupChat.visibleReplies).toBe("automatic");
   });
 
   it("extracts RTT values from Telegram QA summaries", async () => {

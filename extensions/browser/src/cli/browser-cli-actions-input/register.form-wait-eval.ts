@@ -10,6 +10,39 @@ import {
 } from "./shared.js";
 
 const DEFAULT_WAIT_CONDITION_TIMEOUT_MS = 20000;
+type BrowserWaitLoadState = "load" | "domcontentloaded" | "networkidle";
+
+function parseNonNegativeIntegerOption(value: string, flag: string): number {
+  const trimmed = value.trim();
+  const parsed = /^\d+$/.test(trimmed) ? Number(trimmed) : Number.NaN;
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error(`${flag} must be a non-negative integer.`);
+  }
+  return parsed;
+}
+
+function parsePositiveIntegerOption(value: string, flag: string): number {
+  const trimmed = value.trim();
+  const parsed = /^\d+$/.test(trimmed) ? Number(trimmed) : Number.NaN;
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+    throw new Error(`${flag} must be a positive integer.`);
+  }
+  return parsed;
+}
+
+function parseBrowserWaitLoadState(value: unknown): BrowserWaitLoadState | undefined {
+  const load = normalizeOptionalString(value);
+  switch (load) {
+    case undefined:
+      return undefined;
+    case "load":
+    case "domcontentloaded":
+    case "networkidle":
+      return load;
+    default:
+      throw new Error(`Invalid --load value: ${load}`);
+  }
+}
 
 export function registerBrowserFormWaitEvalCommands(
   browser: Command,
@@ -48,7 +81,9 @@ export function registerBrowserFormWaitEvalCommands(
     .command("wait")
     .description("Wait for time, selector, URL, load state, or JS conditions")
     .argument("[selector]", "CSS selector to wait for (visible)")
-    .option("--time <ms>", "Wait for N milliseconds", (v: string) => Number(v))
+    .option("--time <ms>", "Wait for N milliseconds", (v: string) =>
+      parseNonNegativeIntegerOption(v, "--time"),
+    )
     .option("--text <value>", "Wait for text to appear")
     .option("--text-gone <value>", "Wait for text to disappear")
     .option("--url <pattern>", "Wait for URL (supports globs like **/dash)")
@@ -57,17 +92,14 @@ export function registerBrowserFormWaitEvalCommands(
     .option(
       "--timeout-ms <ms>",
       "How long to wait for each condition (default: 20000)",
-      (v: string) => Number(v),
+      (v: string) => parsePositiveIntegerOption(v, "--timeout-ms"),
     )
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (selector: string | undefined, opts, cmd) => {
       const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
       try {
         const sel = normalizeOptionalString(selector);
-        const load =
-          opts.load === "load" || opts.load === "domcontentloaded" || opts.load === "networkidle"
-            ? (opts.load as "load" | "domcontentloaded" | "networkidle")
-            : undefined;
+        const load = parseBrowserWaitLoadState(opts.load);
         const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined;
         const timeMs = Number.isFinite(opts.time) ? opts.time : undefined;
         const text = normalizeOptionalString(opts.text);
@@ -107,6 +139,11 @@ export function registerBrowserFormWaitEvalCommands(
     .description("Evaluate a function against the page or a ref")
     .option("--fn <code>", "Function source, e.g. (el) => el.textContent")
     .option("--ref <id>", "Ref from snapshot")
+    .option(
+      "--timeout-ms <ms>",
+      "How long to allow the evaluate function to run (default: 20000)",
+      (v: string) => parsePositiveIntegerOption(v, "--timeout-ms"),
+    )
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (opts, cmd) => {
       const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
@@ -116,6 +153,7 @@ export function registerBrowserFormWaitEvalCommands(
         return;
       }
       try {
+        const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined;
         const result = await callBrowserAct<{ result?: unknown }>({
           parent,
           profile,
@@ -124,7 +162,9 @@ export function registerBrowserFormWaitEvalCommands(
             fn: opts.fn,
             ref: normalizeOptionalString(opts.ref),
             targetId: normalizeOptionalString(opts.targetId),
+            timeoutMs,
           },
+          timeoutMs,
         });
         if (parent?.json) {
           defaultRuntime.writeJson(result);

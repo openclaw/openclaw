@@ -40,7 +40,9 @@ Before installing a plugin, make sure you have:
     ```
 
     ClawHub is the primary discovery surface for community plugins. During the
-    launch cutover, ordinary bare package specs still install from npm. Use an
+    launch cutover, ordinary bare package specs still install from npm unless
+    they match an official plugin id. Raw `@openclaw/*` package specs that match
+    bundled plugins use the bundled copy from the current OpenClaw build. Use an
     explicit prefix when you need one source.
 
   </Step>
@@ -126,10 +128,20 @@ Before installing a plugin, make sure you have:
 Bare package specs have special compatibility behavior. If the bare name matches
 a bundled plugin id, OpenClaw uses that bundled source. If it matches an
 official external plugin id, OpenClaw uses the official package catalog. Other
-ordinary bare package specs install through npm during the launch cutover. Use
-`clawhub:`, `npm:`, `git:`, or `npm-pack:` when you need deterministic source
-selection. See [`openclaw plugins`](/cli/plugins#install) for the full command
-contract.
+ordinary bare package specs install through npm during the launch cutover. Raw
+`@openclaw/*` package specs that match bundled plugins also resolve to the
+bundled copy before npm fallback. Use `npm:@openclaw/<plugin>@<version>` when
+you deliberately want the external npm package instead of the image-owned
+bundled copy. Use `clawhub:`, `npm:`, `git:`, or `npm-pack:` when you need
+deterministic source selection. See [`openclaw plugins`](/cli/plugins#install)
+for the full command contract.
+
+For npm installs, unpinned package specs and `@latest` choose the newest stable
+package that advertises compatibility with this OpenClaw build. If npm's
+current latest release declares a newer `openclaw.compat.pluginApi` or
+`openclaw.install.minHostVersion`, OpenClaw scans older stable package versions
+and installs the newest one that fits. Exact versions and explicit channel tags
+such as `@beta` stay pinned to the selected package and fail when incompatible.
 
 ### Configure plugin policy
 
@@ -194,6 +206,30 @@ Both formats appear in `openclaw plugins list`, `openclaw plugins inspect`,
 `openclaw plugins enable`, and `openclaw plugins disable`. See
 [Plugin bundles](/plugins/bundles) for the bundle compatibility boundary and
 [Building plugins](/plugins/building-plugins) for native plugin authoring.
+
+## Plugin hooks
+
+Plugins can register hooks at runtime, but there are two different APIs with
+different jobs.
+
+- Use typed hooks via `api.on(...)` for runtime lifecycle hooks. This is the
+  preferred surface for middleware, policy, message rewriting, prompt shaping,
+  and tool control.
+- Use `api.registerHook(...)` only when you want to participate in the internal
+  hook system described in [Hooks](/automation/hooks). This is mainly for coarse
+  command/lifecycle side effects and compatibility with existing HOOK-style
+  automation.
+
+Quick rule:
+
+- If the handler needs priority, merge semantics, or block/cancel behavior, use
+  typed plugin hooks.
+- If the handler just reacts to `command:new`, `command:reset`, `message:sent`,
+  or similar coarse events, `api.registerHook(...)` is fine.
+
+Plugin-managed internal hooks show up in `openclaw hooks list` with
+`plugin:<id>`. You cannot enable or disable them through `openclaw hooks`;
+enable or disable the plugin instead.
 
 ## Verify the active Gateway
 

@@ -1,11 +1,11 @@
 import {
   defineFinalizableLivePreviewAdapter,
   deliverWithFinalizableLivePreviewAdapter,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
 import {
   formatChannelProgressDraftLineForEntry,
   resolveChannelStreamingPreviewToolProgress,
-} from "openclaw/plugin-sdk/channel-streaming";
+} from "openclaw/plugin-sdk/channel-outbound";
 import { isLoopbackHost } from "openclaw/plugin-sdk/gateway-runtime";
 import { createClaimableDedupe, type ClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
 import {
@@ -13,11 +13,14 @@ import {
   getReplyPayloadTtsSupplement,
   isReasoningReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
+import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
+  normalizeTrimmedStringList,
+  uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getMattermostRuntime } from "../runtime.js";
 import {
@@ -156,9 +159,7 @@ const RECENT_MATTERMOST_MESSAGE_TTL_MS = 5 * 60_000;
 const RECENT_MATTERMOST_MESSAGE_MAX = 2000;
 
 function normalizeInteractionSourceIps(values?: string[]): string[] {
-  return (values ?? [])
-    .map((value) => normalizeOptionalString(value))
-    .filter((value): value is string => Boolean(value));
+  return normalizeTrimmedStringList(values);
 }
 
 const recentInboundMessages = createClaimableDedupe({
@@ -187,7 +188,7 @@ function buildMattermostInboundReplayKeys(params: {
   accountId: string;
   messageIds: string[];
 }): string[] {
-  return [...new Set(params.messageIds.map((id) => `${params.accountId}:${id.trim()}`))].filter(
+  return uniqueStrings(params.messageIds.map((id) => `${params.accountId}:${id.trim()}`)).filter(
     (key) => !key.endsWith(":"),
   );
 }
@@ -667,7 +668,13 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       },
       resolveSessionKey: async ({ channelId, userId, post }) => {
         const channelInfo = await resolveChannelInfo(channelId);
-        const kind = mapMattermostChannelTypeToChatType(channelInfo?.type);
+        if (!channelInfo?.type) {
+          logVerboseMessage(
+            `mattermost: drop interaction session event (cannot resolve channel type for ${channelId})`,
+          );
+          throw new Error("Mattermost channel type could not be resolved");
+        }
+        const kind = mapMattermostChannelTypeToChatType(channelInfo.type);
         const teamId = channelInfo?.team_id ?? undefined;
         const route = core.channel.routing.resolveAgentRoute({
           cfg,
@@ -690,7 +697,13 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       },
       dispatchButtonClick: async (opts) => {
         const channelInfo = await resolveChannelInfo(opts.channelId);
-        const kind = mapMattermostChannelTypeToChatType(channelInfo?.type);
+        if (!channelInfo?.type) {
+          logVerboseMessage(
+            `mattermost: drop interaction dispatch (cannot resolve channel type for ${opts.channelId})`,
+          );
+          return;
+        }
+        const kind = mapMattermostChannelTypeToChatType(channelInfo.type);
         const chatType = channelChatType(kind);
         const teamId = channelInfo?.team_id ?? undefined;
         const channelName = channelInfo?.name ?? undefined;
@@ -1284,8 +1297,15 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         }
 
         const channelInfo = await resolveChannelInfo(channelId);
+        const channelType =
+          normalizeOptionalString(channelInfo?.type) ??
+          normalizeOptionalString(payload.data?.channel_type);
+        if (!channelType) {
+          logVerboseMessage(`mattermost: drop post (cannot resolve channel type for ${channelId})`);
+          return;
+        }
         const kind = resolveMattermostTrustedChatKind({
-          channelType: channelInfo?.type,
+          channelType,
         });
         const chatType = channelChatType(kind);
 
@@ -1298,8 +1318,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           cfg,
           surface: "mattermost",
         });
-        const hasControlCommand = core.channel.text.hasControlCommand(rawText, cfg);
-        const isControlCommand = allowTextCommands && hasControlCommand;
+        const isControlCommand =
+          allowTextCommands && core.channel.commands.isControlCommandMessage(rawText, cfg);
         const accessDecision = await resolveMattermostMonitorInboundAccess({
           account,
           cfg,
@@ -1310,7 +1330,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           groupPolicy,
           readStoreAllowFrom: pairing.readAllowFromStore,
           allowTextCommands,
-          hasControlCommand,
+          hasControlCommand: isControlCommand,
           eventKind: "message",
           mayPair: true,
         });
@@ -1585,6 +1605,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           Timestamp: typeof post.create_at === "number" ? post.create_at : undefined,
           WasMentioned: kind !== "direct" ? mentionDecision.effectiveWasMentioned : undefined,
           CommandAuthorized: commandAuthorized,
+          // Tag typed text-slash control commands (e.g. ` /new`, ` /reset` sent via the regular
+          // post path rather than Mattermost's native slash UI) so the explicit-command turn
+          // exception in source-reply-delivery-mode.ts surfaces their acknowledgements under
+          // message_tool_only delivery modes (e.g. Codex harness DMs). Mirrors iMessage #82642.
+          CommandSource: commandAuthorized && isControlCommand ? ("text" as const) : undefined,
           OriginatingChannel: "mattermost" as const,
           OriginatingTo: to,
           ...mediaPayload,
@@ -1763,9 +1788,14 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             },
           });
 
+        const inboundLastRouteSessionKey = resolveInboundLastRouteSessionKey({
+          route,
+          sessionKey: route.sessionKey,
+        });
+
         let dispatchSettledBeforeStart = false;
         try {
-          await core.channel.turn.run({
+          await core.channel.inbound.run({
             channel: "mattermost",
             accountId: route.accountId,
             raw: post,
@@ -1789,27 +1819,28 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                   updateLastRoute:
                     kind === "direct"
                       ? {
-                          sessionKey: route.mainSessionKey,
+                          sessionKey: inboundLastRouteSessionKey,
                           channel: "mattermost",
                           to,
                           accountId: route.accountId,
-                          mainDmOwnerPin: pinnedMainDmOwner
-                            ? {
-                                ownerRecipient: pinnedMainDmOwner,
-                                senderRecipient: normalizeMattermostAllowEntry(senderId),
-                                onSkip: ({
-                                  ownerRecipient,
-                                  senderRecipient,
-                                }: {
-                                  ownerRecipient: string;
-                                  senderRecipient: string;
-                                }) => {
-                                  logVerboseMessage(
-                                    `mattermost: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
-                                  );
-                                },
-                              }
-                            : undefined,
+                          mainDmOwnerPin:
+                            inboundLastRouteSessionKey === route.mainSessionKey && pinnedMainDmOwner
+                              ? {
+                                  ownerRecipient: pinnedMainDmOwner,
+                                  senderRecipient: normalizeMattermostAllowEntry(senderId),
+                                  onSkip: ({
+                                    ownerRecipient,
+                                    senderRecipient,
+                                  }: {
+                                    ownerRecipient: string;
+                                    senderRecipient: string;
+                                  }) => {
+                                    logVerboseMessage(
+                                      `mattermost: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
+                                    );
+                                  },
+                                }
+                              : undefined,
                         }
                       : undefined,
                   onRecordError: (err) => {
@@ -2064,7 +2095,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       if (!text) {
         return false;
       }
-      return !core.channel.text.hasControlCommand(text, cfg);
+      return !core.channel.commands.isControlCommandMessage(text, cfg);
     },
     onFlush: async (entries) => {
       const last = entries.at(-1);

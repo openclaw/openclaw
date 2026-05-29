@@ -1,11 +1,19 @@
 import { randomUUID } from "node:crypto";
+import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import { agentCommandFromIngress } from "../agents/agent-command.js";
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
+import { ensureContextWindowCacheLoaded } from "../agents/context.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { buildAllowedModelSet, resolveThinkingDefault } from "../agents/model-selection.js";
+import {
+  buildAllowedModelSet,
+  buildConfiguredModelCatalog,
+  resolveThinkingDefault,
+} from "../agents/model-selection.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { updateSessionStore } from "../config/sessions.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isChatStopCommandText } from "../gateway/chat-abort.js";
 import {
   projectRecentChatDisplayMessages,
   resolveEffectiveChatHistoryMaxChars,
@@ -17,7 +25,6 @@ import {
   resolveMergedAssistantText,
   shouldSuppressAssistantEventForLiveChat,
 } from "../gateway/live-chat-projector.js";
-import type { SessionsPatchResult } from "../gateway/protocol/index.js";
 import { getMaxChatHistoryMessagesBytes } from "../gateway/server-constants.js";
 import {
   injectTimestamp,
@@ -47,6 +54,7 @@ import { type AgentEventPayload, onAgentEvent } from "../infra/agent-events.js";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
 import { defaultRuntime } from "../runtime.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
+import { resolveLocalRunShutdownGraceMs } from "./local-run-shutdown.js";
 import type {
   ChatSendOptions,
   TuiAgentsList,
@@ -63,8 +71,18 @@ type LocalRunState = {
   lastBroadcastText?: string;
   isBtw: boolean;
   question?: string;
+  finishing: boolean;
+  lifecycleEnded: boolean;
+  lifecycleStopReason?: string;
   finalSent: boolean;
   registered: boolean;
+  queuedRunReady: Promise<void>;
+  markQueuedRunReady: () => void;
+};
+
+type QueuedSessionRun = {
+  run: LocalRunState;
+  promise: Promise<void>;
 };
 
 const LIFECYCLE_ERROR_RETRY_GRACE_MS = 15_000;
@@ -76,6 +94,40 @@ const silentRuntime = {
     throw new Error(`embedded tui runtime exit ${String(code)}`);
   },
 };
+
+function hasProviderWildcardModelAllowlist(cfg: OpenClawConfig) {
+  const modelMaps = [
+    cfg.agents?.defaults?.models,
+    ...(cfg.agents?.list?.map((agent) => agent?.models) ?? []),
+  ];
+  return modelMaps.some((models) =>
+    Object.keys(models ?? {}).some((key) => key.trim().endsWith("/*")),
+  );
+}
+
+function resolveConfiguredReplaceModeCatalog(cfg: OpenClawConfig) {
+  if (cfg.models?.mode !== "replace") {
+    return undefined;
+  }
+  if (hasProviderWildcardModelAllowlist(cfg)) {
+    return undefined;
+  }
+  return buildConfiguredModelCatalog({ cfg });
+}
+
+function shouldLoadFullGatewayCatalogForReplaceMode(cfg: OpenClawConfig) {
+  return cfg.models?.mode === "replace" && hasProviderWildcardModelAllowlist(cfg);
+}
+
+async function loadEmbeddedTuiModelCatalog(cfg: OpenClawConfig) {
+  const configuredCatalog = resolveConfiguredReplaceModeCatalog(cfg);
+  if (configuredCatalog !== undefined) {
+    return configuredCatalog;
+  }
+  return await loadGatewayModelCatalog(
+    shouldLoadFullGatewayCatalogForReplaceMode(cfg) ? { readOnly: false } : undefined,
+  );
+}
 
 function resolveBtwQuestion(message: string): string | undefined {
   const match = /^\/(?:btw|side)(?::|\s)+(.*)$/i.exec(message.trim());
@@ -117,6 +169,87 @@ function resolveDeltaPayload(text: string, previousText: string | undefined) {
   return { deltaText: text.slice(previousText.length) };
 }
 
+function createQueuedRunReadiness() {
+  let resolve: (() => void) | undefined;
+  const promise = new Promise<void>((ready) => {
+    resolve = ready;
+  });
+  if (!resolve) {
+    throw new Error("Expected queue readiness resolver to be initialized");
+  }
+  const resolveReady = resolve;
+  let settled = false;
+  return {
+    promise,
+    markReady: () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      resolveReady();
+    },
+  };
+}
+
+async function waitForLocalRunShutdown(promises: Promise<void>[]): Promise<boolean> {
+  if (promises.length === 0) {
+    return true;
+  }
+  const timeoutMs = resolveLocalRunShutdownGraceMs();
+  if (timeoutMs <= 0) {
+    return false;
+  }
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  let completed = false;
+  await Promise.race([
+    Promise.allSettled(promises).then(() => {
+      completed = true;
+    }),
+    new Promise<void>((resolve) => {
+      timeout = setTimeout(resolve, timeoutMs);
+      timeout.unref?.();
+    }),
+  ]);
+  if (timeout) {
+    clearTimeout(timeout);
+  }
+  return completed;
+}
+
+async function waitForQueuedLocalRun(previousRun: QueuedSessionRun, runId: string): Promise<void> {
+  await previousRun.run.queuedRunReady;
+  if (!previousRun.run.finishing && !previousRun.run.lifecycleEnded) {
+    await previousRun.promise;
+    return;
+  }
+  const timeoutMs = resolveLocalRunShutdownGraceMs();
+  if (timeoutMs <= 0) {
+    throw new Error(
+      `timed out waiting for previous local run to finish post-turn maintenance for ${runId}`,
+    );
+  }
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      previousRun.promise,
+      new Promise<void>((_, reject) => {
+        timeout = setTimeout(() => {
+          reject(
+            new Error(
+              `timed out waiting for previous local run to finish post-turn maintenance for ${runId}`,
+            ),
+          );
+        }, timeoutMs);
+        timeout.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
 export class EmbeddedTuiBackend implements TuiBackend {
   readonly connection = { url: "local embedded" };
 
@@ -127,6 +260,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
   private readonly deps = createDefaultDeps();
   private readonly runs = new Map<string, LocalRunState>();
+  private readonly runPromises = new Map<string, Promise<void>>();
   private unsubscribe?: () => void;
   private previousRuntimeLog?: typeof defaultRuntime.log;
   private previousRuntimeError?: typeof defaultRuntime.error;
@@ -138,6 +272,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       return;
     }
     setEmbeddedMode(true);
+    void ensureContextWindowCacheLoaded();
     // Suppress console output from logError/logInfo that would pollute the TUI.
     // File logger (getLogger()) still captures everything via logger.ts:35.
     this.previousRuntimeLog = defaultRuntime.log;
@@ -152,14 +287,34 @@ export class EmbeddedTuiBackend implements TuiBackend {
     });
   }
 
-  stop() {
+  async stop() {
+    const maintenancePromises: Promise<void>[] = [];
+    for (const [runId, run] of this.runs) {
+      if (run.finishing || run.lifecycleEnded) {
+        const promise = this.runPromises.get(runId);
+        if (promise) {
+          maintenancePromises.push(promise);
+        }
+        continue;
+      }
+      run.controller.abort();
+    }
+    const maintenanceCompleted = await waitForLocalRunShutdown(maintenancePromises);
+    if (!maintenanceCompleted) {
+      for (const run of this.runs.values()) {
+        if (run.finishing || run.lifecycleEnded) {
+          run.controller.abort();
+        }
+      }
+    }
     this.unsubscribe?.();
     this.unsubscribe = undefined;
+    this.clearPendingLifecycleErrors();
     for (const run of this.runs.values()) {
       run.controller.abort();
     }
-    this.clearPendingLifecycleErrors();
     this.runs.clear();
+    this.runPromises.clear();
     defaultRuntime.log = this.previousRuntimeLog ?? defaultRuntime.log;
     defaultRuntime.error = this.previousRuntimeError ?? defaultRuntime.error;
     this.previousRuntimeLog = undefined;
@@ -170,21 +325,31 @@ export class EmbeddedTuiBackend implements TuiBackend {
   async sendChat(opts: ChatSendOptions): Promise<{ runId: string }> {
     const runId = opts.runId ?? randomUUID();
     const question = resolveBtwQuestion(opts.message);
-    if (!question) {
+    const abortableSessionRun = this.hasAbortableSessionRun(opts.sessionKey);
+    const stopCommand = abortableSessionRun && isChatStopCommandText(opts.message);
+    const queuedAfter =
+      question || stopCommand ? undefined : this.findQueuedSessionRunPromise(opts.sessionKey);
+    if (stopCommand) {
       this.abortSessionRuns(opts.sessionKey);
+      return { runId };
     }
     const controller = new AbortController();
+    const queuedRunReadiness = createQueuedRunReadiness();
     this.runs.set(runId, {
       sessionKey: opts.sessionKey,
       controller,
       buffer: "",
       isBtw: Boolean(question),
       question,
+      finishing: false,
+      lifecycleEnded: false,
       finalSent: false,
       registered: false,
+      queuedRunReady: queuedRunReadiness.promise,
+      markQueuedRunReady: queuedRunReadiness.markReady,
     });
 
-    void this.runTurn({
+    const runPromise = this.runTurn({
       runId,
       sessionKey: opts.sessionKey,
       message: opts.message,
@@ -192,6 +357,11 @@ export class EmbeddedTuiBackend implements TuiBackend {
       deliver: opts.deliver,
       timeoutMs: opts.timeoutMs,
       controller,
+      queuedAfter,
+    });
+    this.runPromises.set(runId, runPromise);
+    void runPromise.finally(() => {
+      this.runPromises.delete(runId);
     });
 
     return { runId };
@@ -200,6 +370,9 @@ export class EmbeddedTuiBackend implements TuiBackend {
   async abortChat(opts: { sessionKey: string; runId: string }) {
     const run = this.runs.get(opts.runId);
     if (!run || run.sessionKey !== opts.sessionKey) {
+      return { ok: true, aborted: false };
+    }
+    if (!this.isAbortableRun(opts.runId, run)) {
       return { ok: true, aborted: false };
     }
     run.controller.abort();
@@ -244,7 +417,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
     let thinkingLevel = entry?.thinkingLevel;
     if (!thinkingLevel) {
-      const catalog = await loadGatewayModelCatalog();
+      const catalog = await loadEmbeddedTuiModelCatalog(cfg);
       thinkingLevel = resolveThinkingDefault({
         cfg,
         provider: resolvedSessionModel.provider,
@@ -294,7 +467,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
         store,
         storeKey: primaryKey,
         patch: opts,
-        loadGatewayModelCatalog,
+        loadGatewayModelCatalog: () => loadEmbeddedTuiModelCatalog(cfg),
       });
     });
     if (!applied.ok) {
@@ -335,8 +508,8 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   async listModels(): Promise<TuiModelChoice[]> {
-    const catalog = await loadGatewayModelCatalog();
     const cfg = getRuntimeConfig();
+    const catalog = await loadEmbeddedTuiModelCatalog(cfg);
     const { allowedCatalog } = buildAllowedModelSet({
       cfg,
       catalog,
@@ -352,12 +525,38 @@ export class EmbeddedTuiBackend implements TuiBackend {
     }));
   }
 
-  private abortSessionRuns(sessionKey: string) {
-    for (const run of this.runs.values()) {
+  private findQueuedSessionRunPromise(sessionKey: string): QueuedSessionRun | undefined {
+    let queuedAfter: QueuedSessionRun | undefined;
+    for (const [runId, run] of this.runs) {
       if (run.sessionKey === sessionKey && !run.isBtw) {
+        const promise = this.runPromises.get(runId);
+        if (promise) {
+          queuedAfter = { run, promise };
+        }
+      }
+    }
+    return queuedAfter;
+  }
+
+  private abortSessionRuns(sessionKey: string) {
+    for (const [runId, run] of this.runs) {
+      if (run.sessionKey === sessionKey && !run.isBtw && this.isAbortableRun(runId, run)) {
         run.controller.abort();
       }
     }
+  }
+
+  private hasAbortableSessionRun(sessionKey: string): boolean {
+    for (const [runId, run] of this.runs) {
+      if (run.sessionKey === sessionKey && !run.isBtw && this.isAbortableRun(runId, run)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private isAbortableRun(runId: string, run: LocalRunState): boolean {
+    return !run.lifecycleEnded || this.runPromises.has(runId);
   }
 
   private nextSeq() {
@@ -428,10 +627,14 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
   private emitChatFinal(runId: string, run: LocalRunState, stopReason?: string) {
     this.clearPendingLifecycleError(runId);
-    if (run.finalSent) {
+    run.markQueuedRunReady();
+    const alreadyFinal = run.finalSent;
+    run.finishing = false;
+    run.lifecycleEnded = true;
+    run.finalSent = true;
+    if (alreadyFinal) {
       return;
     }
-    run.finalSent = true;
     run.registered = true;
     run.lastBroadcastText = undefined;
     const projected = projectLiveAssistantBufferedText(run.buffer.trim(), {
@@ -458,10 +661,14 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
   private emitChatAborted(runId: string, run: LocalRunState) {
     this.clearPendingLifecycleError(runId);
-    if (run.finalSent) {
+    run.markQueuedRunReady();
+    const alreadyFinal = run.finalSent;
+    run.finishing = false;
+    run.lifecycleEnded = true;
+    run.finalSent = true;
+    if (alreadyFinal) {
       return;
     }
-    run.finalSent = true;
     run.registered = true;
     run.lastBroadcastText = undefined;
     this.emit("chat", {
@@ -473,10 +680,14 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
   private emitChatError(runId: string, run: LocalRunState, errorMessage?: string) {
     this.clearPendingLifecycleError(runId);
-    if (run.finalSent) {
+    run.markQueuedRunReady();
+    const alreadyFinal = run.finalSent;
+    run.finishing = false;
+    run.lifecycleEnded = true;
+    run.finalSent = true;
+    if (alreadyFinal) {
       return;
     }
-    run.finalSent = true;
     run.registered = true;
     run.lastBroadcastText = undefined;
     this.emit("chat", {
@@ -553,20 +764,28 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
     const phase = lifecyclePhase;
     const aborted = evt.data?.aborted === true || run.controller.signal.aborted;
+    if (phase === "finishing") {
+      run.finishing = true;
+      run.markQueuedRunReady();
+      run.lifecycleStopReason =
+        typeof evt.data?.stopReason === "string" ? evt.data.stopReason : undefined;
+      return;
+    }
     if (phase === "end") {
+      run.finishing = false;
       if (aborted) {
         this.emitChatAborted(evt.runId, run);
         return;
       }
-      if (!run.isBtw) {
-        const stopReason =
-          typeof evt.data?.stopReason === "string" ? evt.data.stopReason : undefined;
-        this.emitChatFinal(evt.runId, run, stopReason);
-      }
+      run.lifecycleEnded = true;
+      run.markQueuedRunReady();
+      run.lifecycleStopReason =
+        typeof evt.data?.stopReason === "string" ? evt.data.stopReason : undefined;
       return;
     }
 
     if (phase === "error") {
+      run.finishing = false;
       if (aborted) {
         this.emitChatAborted(evt.runId, run);
         return;
@@ -585,8 +804,32 @@ export class EmbeddedTuiBackend implements TuiBackend {
     deliver?: boolean;
     timeoutMs?: number;
     controller: AbortController;
+    queuedAfter?: QueuedSessionRun;
   }) {
     try {
+      if (params.queuedAfter) {
+        try {
+          await waitForQueuedLocalRun(params.queuedAfter, params.runId);
+        } catch (error) {
+          const run = this.runs.get(params.runId);
+          if (run) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            this.emitChatError(
+              params.runId,
+              run,
+              `previous run did not finish cleanly: ${errorMessage}`,
+            );
+          }
+          return;
+        }
+        if (params.controller.signal.aborted) {
+          const run = this.runs.get(params.runId);
+          if (run) {
+            this.emitChatAborted(params.runId, run);
+          }
+          return;
+        }
+      }
       const { cfg, canonicalKey, entry } = loadSessionEntry(params.sessionKey);
       const result = await agentCommandFromIngress(
         {
@@ -602,7 +845,6 @@ export class EmbeddedTuiBackend implements TuiBackend {
           timeout: timeoutSecondsFromMs(params.timeoutMs),
           runId: params.runId,
           abortSignal: params.controller.signal,
-          senderIsOwner: true,
           allowModelOverride: false,
         },
         silentRuntime,
@@ -610,6 +852,10 @@ export class EmbeddedTuiBackend implements TuiBackend {
       );
       const run = this.runs.get(params.runId);
       if (!run) {
+        return;
+      }
+      if (params.controller.signal.aborted || result?.meta?.aborted === true) {
+        this.emitChatAborted(params.runId, run);
         return;
       }
 
@@ -633,7 +879,10 @@ export class EmbeddedTuiBackend implements TuiBackend {
         if (normalizedText && !run.buffer) {
           run.buffer = normalizedText;
         }
-        this.emitChatFinal(params.runId, run);
+        const stopReason =
+          run.lifecycleStopReason ??
+          (typeof result?.meta?.stopReason === "string" ? result.meta.stopReason : undefined);
+        this.emitChatFinal(params.runId, run, stopReason);
       }
     } catch (error) {
       const run = this.runs.get(params.runId);
@@ -647,6 +896,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.emitChatError(params.runId, run, errorMessage);
     } finally {
+      this.runs.get(params.runId)?.markQueuedRunReady();
       this.runs.delete(params.runId);
     }
   }

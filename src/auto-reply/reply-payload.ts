@@ -45,12 +45,16 @@ export type ReplyPayload = {
   /** Marks this payload as a reasoning/thinking block. Channels that do not
    *  have a dedicated reasoning lane (e.g. WhatsApp, web) should suppress it. */
   isReasoning?: boolean;
+  /** Reasoning stream text is a complete replacement snapshot, not a delta. */
+  isReasoningSnapshot?: boolean;
   /** Marks this payload as a compaction status notice (start/end).
    *  Should be excluded from TTS transcript accumulation so compaction
    *  status lines are not synthesised into the spoken assistant reply. */
   isCompactionNotice?: boolean;
   /** Marks this payload as a model-fallback transition/recovery notice. */
   isFallbackNotice?: boolean;
+  /** Marks this payload as transient status, not assistant answer content. */
+  isStatusNotice?: boolean;
   /** Channel-specific payload data (per-channel envelope). */
   channelData?: Record<string, unknown>;
 };
@@ -59,6 +63,18 @@ export type ReplyPayloadTtsSupplement = {
   spokenText: string;
   visibleTextAlreadyDelivered?: boolean;
 };
+
+export const REPLY_MEDIA_FAILURE_WARNING = "⚠️ Media failed.";
+
+export function appendReplyMediaFailureWarning(text: string | undefined): string {
+  if (!text?.trim()) {
+    return REPLY_MEDIA_FAILURE_WARNING;
+  }
+  if (text.includes(REPLY_MEDIA_FAILURE_WARNING)) {
+    return text;
+  }
+  return `${text}\n${REPLY_MEDIA_FAILURE_WARNING}`;
+}
 
 function normalizeTtsSupplementSpokenText(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
@@ -151,6 +167,8 @@ export type ReplyPayloadMetadata = {
     idempotencyKey?: string;
   };
   beforeAgentRunBlocked?: boolean;
+  /** Warning synthesized from an observed tool error after the run produced assistant output. */
+  nonTerminalToolErrorWarning?: boolean;
 };
 
 const replyPayloadMetadata = new WeakMap<object, ReplyPayloadMetadata>();
@@ -168,6 +186,10 @@ export function getReplyPayloadMetadata(payload: object): ReplyPayloadMetadata |
   return replyPayloadMetadata.get(payload);
 }
 
+export function isReplyPayloadNonTerminalToolErrorWarning(payload: object): boolean {
+  return getReplyPayloadMetadata(payload)?.nonTerminalToolErrorWarning === true;
+}
+
 export function copyReplyPayloadMetadata<T extends object>(source: object, payload: T): T {
   const metadata = getReplyPayloadMetadata(source);
   return metadata ? setReplyPayloadMetadata(payload, metadata) : payload;
@@ -177,4 +199,10 @@ export function markReplyPayloadForSourceSuppressionDelivery<T extends object>(p
   return setReplyPayloadMetadata(payload, {
     deliverDespiteSourceReplySuppression: true,
   });
+}
+
+export function isReplyPayloadStatusNotice(
+  payload: Pick<ReplyPayload, "isCompactionNotice" | "isFallbackNotice" | "isStatusNotice">,
+): boolean {
+  return Boolean(payload.isCompactionNotice || payload.isFallbackNotice || payload.isStatusNotice);
 }

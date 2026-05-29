@@ -53,7 +53,7 @@ vi.mock("../../commands/channels/status.js", () => ({
   channelsStatusCommand: channelsStatusCommandMock,
 }));
 
-vi.mock("../../commands/agents.js", () => ({
+vi.mock("../../commands/agents.commands.list.js", () => ({
   agentsListCommand: agentsListCommandMock,
 }));
 
@@ -591,6 +591,10 @@ describe("program routes", () => {
     await expectRunFalse(
       ["tasks", "audit"],
       ["node", "openclaw", "tasks", "audit", "--json", "--limit"],
+    );
+    await expectRunFalse(
+      ["tasks", "audit"],
+      ["node", "openclaw", "tasks", "audit", "--json", "--limit", "5abc"],
     );
     await expectRunFalse(
       ["tasks", "audit"],

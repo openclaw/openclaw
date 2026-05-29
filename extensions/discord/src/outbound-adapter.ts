@@ -1,10 +1,10 @@
+import type { OutboundIdentity } from "openclaw/plugin-sdk/channel-outbound";
+import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-outbound";
 import {
   type ChannelOutboundAdapter,
   createAttachedChannelResultAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { OutboundIdentity } from "openclaw/plugin-sdk/outbound-runtime";
-import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-send-deps";
 import {
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
@@ -120,11 +120,31 @@ export const discordOutbound: ChannelOutboundAdapter = {
     selects: true,
     context: true,
     divider: true,
+    limits: {
+      actions: {
+        maxActions: 25,
+        maxActionsPerRow: 5,
+        maxRows: 5,
+        maxLabelLength: 80,
+        supportsDisabled: true,
+      },
+      selects: {
+        maxOptions: 25,
+        maxLabelLength: 100,
+        maxValueBytes: 100,
+      },
+      text: {
+        maxLength: DISCORD_TEXT_CHUNK_LIMIT,
+        encoding: "characters",
+        markdownDialect: "discord-markdown",
+      },
+    },
   },
   deliveryCapabilities: {
     durableFinal: {
       text: true,
       media: true,
+      poll: true,
       payload: true,
       silent: true,
       replyTo: true,

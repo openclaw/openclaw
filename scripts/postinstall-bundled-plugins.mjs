@@ -24,8 +24,8 @@ import { basename, dirname, isAbsolute, join, relative, resolve as pathResolve }
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { expandPackageDistImportClosure } from "./lib/package-dist-imports.mjs";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const DEFAULT_PACKAGE_ROOT = join(__dirname, "..");
+const scriptDir = dirname(fileURLToPath(import.meta.url));
+const DEFAULT_PACKAGE_ROOT = join(scriptDir, "..");
 const DISABLE_POSTINSTALL_ENV = "OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL";
 const DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV = "OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION";
 const DIST_INVENTORY_PATH = "dist/postinstall-inventory.json";
@@ -651,7 +651,11 @@ export function applyBaileysEncryptedStreamFinishHotfix(params = {}) {
       ) ||
       patchedText.includes(
         "...(typeof agent?.dispatch === 'function' ? { dispatcher: agent } : {}),",
-      );
+      ) ||
+      (patchedText.includes(
+        "const dispatcher = typeof agent?.dispatch === 'function' ? agent : undefined;",
+      ) &&
+        patchedText.includes("...(dispatcher ? { dispatcher } : {}),"));
     const legacyDispatcherPatchable =
       patchedText.includes(BAILEYS_MEDIA_DISPATCHER_NEEDLE) &&
       patchedText.includes(BAILEYS_MEDIA_DISPATCHER_HEADER_NEEDLE);

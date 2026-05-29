@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
   setRuntimeConfigSnapshot: vi.fn(),
   loadAuthProfileStoreForRuntime: vi.fn(() => ({ profiles: {}, order: {} })),
   listProfilesForProvider: vi.fn(() => []),
+  resolveAgentDir: vi.fn((_cfg: unknown, agentId: string) => `/tmp/agent-${agentId}`),
   updateAuthProfileStoreWithLock: vi.fn(
     async ({ updater }: { updater: (store: any) => boolean }) => {
       const store = {
@@ -118,6 +119,9 @@ const mocks = vi.hoisted(() => ({
         : {}),
     }),
   ),
+  getProviderEnvVars: vi.fn((providerId: string) => [
+    `${providerId.toUpperCase().replaceAll("-", "_")}_API_KEY`,
+  ]),
   createEmbeddingProvider: vi.fn(async () => ({
     provider: {
       id: "openai",
@@ -130,28 +134,50 @@ const mocks = vi.hoisted(() => ({
   listMemoryEmbeddingProviders: vi.fn(() => [
     { id: "openai", defaultModel: "text-embedding-3-small", transport: "remote" },
   ]),
+  listEmbeddingProviders: vi.fn(() => []),
   registerBuiltInMemoryEmbeddingProviders: vi.fn(),
   buildMediaUnderstandingRegistry: vi.fn(() => new Map()),
   convertHeicToJpeg: vi.fn(async () => Buffer.from("jpeg-normalized")),
   isWebSearchProviderConfigured: vi.fn(() => false),
   isWebFetchProviderConfigured: vi.fn(() => false),
-  resolveCommandConfigWithSecrets: vi.fn(async ({ config }: { config: unknown }) => ({
-    resolvedConfig: config,
-    effectiveConfig: config,
-    diagnostics: [],
-  })),
-  getAgentRuntimeCommandSecretTargetIds: vi.fn(() => new Set(["agent-runtime-target"])),
-  getMemoryEmbeddingCommandSecretTargetIds: vi.fn(() => new Set(["memory-target"])),
-  getModelsCommandSecretTargetIds: vi.fn(() => new Set(["model-target"])),
-  getTtsCommandSecretTargetIds: vi.fn(() => new Set(["tts-target"])),
-  getWebFetchCommandSecretTargets: vi.fn(() => ({
-    targetIds: new Set(["web-fetch-target"]),
-    allowedPaths: new Set(["plugins.entries.firecrawl.config.webFetch.apiKey"]),
-  })),
-  getWebSearchCommandSecretTargets: vi.fn(() => ({
-    targetIds: new Set(["web-search-target"]),
-    allowedPaths: new Set(["plugins.entries.tavily.config.webSearch.apiKey"]),
-  })),
+  getModelsCommandSecretTargetIds: vi.fn(() => new Set(["models.providers.*.apiKey"])),
+  getMemoryEmbeddingCommandSecretTargetIds: vi.fn(() => new Set(["models.providers.*.apiKey"])),
+  getTtsCommandSecretTargetIds: vi.fn(() => new Set(["models.providers.*.apiKey"])),
+  getCapabilityWebSearchCommandSecretTargets: vi.fn(
+    (
+      config: { tools?: { web?: { search?: { provider?: string } } } },
+      options?: { providerId?: string },
+    ) => {
+      const providerId = options?.providerId ?? config.tools?.web?.search?.provider ?? "tavily";
+      const path = `plugins.entries.${providerId}.config.webSearch.apiKey`;
+      return {
+        targetIds: new Set([path]),
+        ...(options?.providerId ? { forcedActivePaths: new Set([path]) } : {}),
+      };
+    },
+  ),
+  getCapabilityWebFetchCommandSecretTargets: vi.fn(
+    (
+      _config: { tools?: { web?: { fetch?: { provider?: string } } } },
+      options?: { providerId?: string },
+    ) => {
+      const path =
+        options?.providerId === "firecrawl"
+          ? "plugins.entries.firecrawl.config.webSearch.apiKey"
+          : "plugins.entries.firecrawl.config.webFetch.apiKey";
+      return {
+        targetIds: new Set([path]),
+        ...(options?.providerId ? { forcedActivePaths: new Set([path]) } : {}),
+      };
+    },
+  ),
+  resolveCommandConfigWithSecrets: vi.fn(
+    async ({ config }: { config: Record<string, unknown> }) => ({
+      resolvedConfig: config,
+      effectiveConfig: config,
+      diagnostics: [],
+    }),
+  ),
   modelsStatusCommand: vi.fn(
     async (_opts: unknown, runtime: { log: (...args: unknown[]) => void }) => {
       runtime.log(JSON.stringify({ ok: true, providers: [{ id: "openai" }] }));
@@ -165,6 +191,15 @@ vi.mock("../runtime.js", () => ({
     runtime.writeJson(value),
 }));
 
+vi.mock("../secrets/provider-env-vars.js", () => ({
+  getProviderEnvVars: mocks.getProviderEnvVars,
+  resolveProviderAuthLookupMaps: () => ({
+    aliasMap: {},
+    envCandidateMap: {},
+    authEvidenceMap: {},
+  }),
+}));
+
 vi.mock("../config/config.js", () => ({
   getRuntimeConfigSourceSnapshot:
     mocks.getRuntimeConfigSourceSnapshot as typeof import("../config/config.js").getRuntimeConfigSourceSnapshot,
@@ -174,9 +209,21 @@ vi.mock("../config/config.js", () => ({
     mocks.setRuntimeConfigSnapshot as typeof import("../config/config.js").setRuntimeConfigSnapshot,
 }));
 
+vi.mock("./command-config-resolution.js", () => ({
+  resolveCommandConfigWithSecrets: mocks.resolveCommandConfigWithSecrets,
+}));
+
+vi.mock("./command-secret-targets.js", () => ({
+  getCapabilityWebFetchCommandSecretTargets: mocks.getCapabilityWebFetchCommandSecretTargets,
+  getCapabilityWebSearchCommandSecretTargets: mocks.getCapabilityWebSearchCommandSecretTargets,
+  getMemoryEmbeddingCommandSecretTargetIds: mocks.getMemoryEmbeddingCommandSecretTargetIds,
+  getModelsCommandSecretTargetIds: mocks.getModelsCommandSecretTargetIds,
+  getTtsCommandSecretTargetIds: mocks.getTtsCommandSecretTargetIds,
+}));
+
 vi.mock("../agents/agent-scope.js", () => ({
   resolveDefaultAgentId: () => "main",
-  resolveAgentDir: () => "/tmp/agent",
+  resolveAgentDir: mocks.resolveAgentDir,
   resolveAgentConfig: () => ({}),
   resolveAgentEffectiveModelPrimary: () => undefined,
   resolveAgentModelFallbacksOverride: () => [],
@@ -248,12 +295,12 @@ vi.mock("../media-understanding/provider-registry.js", () => ({
     mocks.buildMediaUnderstandingRegistry as typeof import("../media-understanding/provider-registry.js").buildMediaUnderstandingRegistry,
 }));
 
-vi.mock("../media/image-ops.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../media/image-ops.js")>();
+vi.mock("../media/media-services.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../media/media-services.js")>();
   return {
     ...actual,
     convertHeicToJpeg:
-      mocks.convertHeicToJpeg as typeof import("../media/image-ops.js").convertHeicToJpeg,
+      mocks.convertHeicToJpeg as typeof import("../media/media-services.js").convertHeicToJpeg,
   };
 });
 
@@ -262,6 +309,11 @@ vi.mock("../plugins/memory-embedding-providers.js", () => ({
     mocks.listMemoryEmbeddingProviders as unknown as typeof import("../plugins/memory-embedding-providers.js").listMemoryEmbeddingProviders,
   registerMemoryEmbeddingProvider:
     mocks.registerMemoryEmbeddingProvider as unknown as typeof import("../plugins/memory-embedding-providers.js").registerMemoryEmbeddingProvider,
+}));
+
+vi.mock("../plugins/embedding-provider-runtime.js", () => ({
+  listEmbeddingProviders:
+    mocks.listEmbeddingProviders as unknown as typeof import("../plugins/embedding-provider-runtime.js").listEmbeddingProviders,
 }));
 
 vi.mock("../plugin-sdk/memory-core-bundled-runtime.js", () => ({
@@ -315,24 +367,81 @@ vi.mock("../web-fetch/runtime.js", () => ({
   resolveWebFetchDefinition: vi.fn(),
 }));
 
-vi.mock("./command-config-resolution.js", () => ({
-  resolveCommandConfigWithSecrets:
-    mocks.resolveCommandConfigWithSecrets as typeof import("./command-config-resolution.js").resolveCommandConfigWithSecrets,
+vi.mock("../plugins/web-fetch-providers.runtime.js", () => ({
+  resolvePluginWebFetchProviders: vi.fn((params: { config?: Record<string, unknown> }) => [
+    {
+      pluginId: "firecrawl",
+      id: "firecrawl",
+      credentialPath: "plugins.entries.firecrawl.config.webFetch.apiKey",
+      getConfiguredCredentialValue: (config?: {
+        plugins?: {
+          entries?: {
+            firecrawl?: { config?: { webFetch?: { apiKey?: unknown } } };
+          };
+        };
+      }) => config?.plugins?.entries?.firecrawl?.config?.webFetch?.apiKey,
+      getConfiguredCredentialFallback: () => ({
+        path: "plugins.entries.firecrawl.config.webSearch.apiKey",
+        value: (
+          params.config as {
+            plugins?: {
+              entries?: {
+                firecrawl?: { config?: { webSearch?: { apiKey?: unknown } } };
+              };
+            };
+          }
+        )?.plugins?.entries?.firecrawl?.config?.webSearch?.apiKey,
+      }),
+      getCredentialValue: (): undefined => undefined,
+    },
+  ]),
 }));
 
-vi.mock("./command-secret-targets.js", () => ({
-  getAgentRuntimeCommandSecretTargetIds:
-    mocks.getAgentRuntimeCommandSecretTargetIds as typeof import("./command-secret-targets.js").getAgentRuntimeCommandSecretTargetIds,
-  getMemoryEmbeddingCommandSecretTargetIds:
-    mocks.getMemoryEmbeddingCommandSecretTargetIds as typeof import("./command-secret-targets.js").getMemoryEmbeddingCommandSecretTargetIds,
-  getModelsCommandSecretTargetIds:
-    mocks.getModelsCommandSecretTargetIds as typeof import("./command-secret-targets.js").getModelsCommandSecretTargetIds,
-  getTtsCommandSecretTargetIds:
-    mocks.getTtsCommandSecretTargetIds as typeof import("./command-secret-targets.js").getTtsCommandSecretTargetIds,
-  getWebFetchCommandSecretTargets:
-    mocks.getWebFetchCommandSecretTargets as typeof import("./command-secret-targets.js").getWebFetchCommandSecretTargets,
-  getWebSearchCommandSecretTargets:
-    mocks.getWebSearchCommandSecretTargets as typeof import("./command-secret-targets.js").getWebSearchCommandSecretTargets,
+vi.mock("../plugins/web-search-providers.runtime.js", () => ({
+  resolvePluginWebSearchProviders: vi.fn(() => [
+    {
+      pluginId: "tavily",
+      id: "tavily",
+      credentialPath: "plugins.entries.tavily.config.webSearch.apiKey",
+      getConfiguredCredentialValue: (config?: {
+        plugins?: {
+          entries?: {
+            tavily?: { config?: { webSearch?: { apiKey?: unknown } } };
+          };
+        };
+      }) => config?.plugins?.entries?.tavily?.config?.webSearch?.apiKey,
+      getConfiguredCredentialFallback: (): undefined => undefined,
+      getCredentialValue: (): undefined => undefined,
+    },
+    {
+      pluginId: "firecrawl",
+      id: "firecrawl",
+      credentialPath: "plugins.entries.firecrawl.config.webSearch.apiKey",
+      getConfiguredCredentialValue: (config?: {
+        plugins?: {
+          entries?: {
+            firecrawl?: { config?: { webSearch?: { apiKey?: unknown } } };
+          };
+        };
+      }) => config?.plugins?.entries?.firecrawl?.config?.webSearch?.apiKey,
+      getConfiguredCredentialFallback: (): undefined => undefined,
+      getCredentialValue: (): undefined => undefined,
+    },
+    {
+      pluginId: "exa",
+      id: "exa",
+      credentialPath: "plugins.entries.exa.config.webSearch.apiKey",
+      getConfiguredCredentialValue: (config?: {
+        plugins?: {
+          entries?: {
+            exa?: { config?: { webSearch?: { apiKey?: unknown } } };
+          };
+        };
+      }) => config?.plugins?.entries?.exa?.config?.webSearch?.apiKey,
+      getConfiguredCredentialFallback: (): undefined => undefined,
+      getCredentialValue: (): undefined => undefined,
+    },
+  ]),
 }));
 
 describe("capability cli", () => {
@@ -345,13 +454,14 @@ describe("capability cli", () => {
     mocks.runtime.log.mockClear();
     mocks.runtime.error.mockClear();
     mocks.runtime.writeJson.mockClear();
-    mocks.getRuntimeConfigSourceSnapshot.mockReset().mockReturnValue(null);
-    mocks.setRuntimeConfigSnapshot.mockClear();
     mocks.loadModelCatalog
       .mockReset()
       .mockResolvedValue([{ id: "gpt-5.4", provider: "openai", name: "GPT-5.4" }] as never);
     mocks.loadAuthProfileStoreForRuntime.mockReset().mockReturnValue({ profiles: {}, order: {} });
     mocks.listProfilesForProvider.mockReset().mockReturnValue([]);
+    mocks.resolveAgentDir.mockClear();
+    mocks.getRuntimeConfigSourceSnapshot.mockReset().mockReturnValue(null);
+    mocks.setRuntimeConfigSnapshot.mockClear();
     mocks.updateAuthProfileStoreWithLock
       .mockReset()
       .mockImplementation(async ({ updater }: { updater: (store: any) => boolean }) => {
@@ -390,36 +500,32 @@ describe("capability cli", () => {
     mocks.textToSpeech.mockClear();
     mocks.setTtsProvider.mockClear();
     mocks.resolveExplicitTtsOverrides.mockClear();
+    mocks.getProviderEnvVars.mockClear();
     mocks.buildMediaUnderstandingRegistry.mockReset().mockReturnValue(new Map());
     mocks.convertHeicToJpeg.mockClear();
     mocks.createEmbeddingProvider.mockClear();
     mocks.registerMemoryEmbeddingProvider.mockClear();
+    mocks.listMemoryEmbeddingProviders
+      .mockReset()
+      .mockReturnValue([
+        { id: "openai", defaultModel: "text-embedding-3-small", transport: "remote" },
+      ]);
+    mocks.listEmbeddingProviders.mockReset().mockReturnValue([]);
     mocks.registerBuiltInMemoryEmbeddingProviders.mockClear();
     mocks.isWebSearchProviderConfigured.mockReset().mockReturnValue(false);
     mocks.isWebFetchProviderConfigured.mockReset().mockReturnValue(false);
+    mocks.getModelsCommandSecretTargetIds.mockClear();
+    mocks.getMemoryEmbeddingCommandSecretTargetIds.mockClear();
+    mocks.getTtsCommandSecretTargetIds.mockClear();
+    mocks.getCapabilityWebSearchCommandSecretTargets.mockClear();
+    mocks.getCapabilityWebFetchCommandSecretTargets.mockClear();
     mocks.resolveCommandConfigWithSecrets
       .mockReset()
-      .mockImplementation(async ({ config }: { config: unknown }) => ({
+      .mockImplementation(async ({ config }: { config: Record<string, unknown> }) => ({
         resolvedConfig: config,
         effectiveConfig: config,
         diagnostics: [],
       }));
-    mocks.getAgentRuntimeCommandSecretTargetIds
-      .mockReset()
-      .mockReturnValue(new Set(["agent-runtime-target"]));
-    mocks.getMemoryEmbeddingCommandSecretTargetIds
-      .mockReset()
-      .mockReturnValue(new Set(["memory-target"]));
-    mocks.getModelsCommandSecretTargetIds.mockReset().mockReturnValue(new Set(["model-target"]));
-    mocks.getTtsCommandSecretTargetIds.mockReset().mockReturnValue(new Set(["tts-target"]));
-    mocks.getWebFetchCommandSecretTargets.mockReset().mockReturnValue({
-      targetIds: new Set(["web-fetch-target"]),
-      allowedPaths: new Set(["plugins.entries.firecrawl.config.webFetch.apiKey"]),
-    });
-    mocks.getWebSearchCommandSecretTargets.mockReset().mockReturnValue({
-      targetIds: new Set(["web-search-target"]),
-      allowedPaths: new Set(["plugins.entries.tavily.config.webSearch.apiKey"]),
-    });
     mocks.modelsStatusCommand.mockClear();
     mocks.callGateway.mockImplementation((async ({ method }: { method: string }) => {
       if (method === "tts.status") {
@@ -509,6 +615,13 @@ describe("capability cli", () => {
     return calls[0]?.[0];
   }
 
+  function firstCommandConfigResolutionCall() {
+    const calls = mocks.resolveCommandConfigWithSecrets.mock.calls as unknown as Array<
+      [Record<string, unknown>]
+    >;
+    return calls[0]?.[0];
+  }
+
   function firstRegisteredEmbeddingBootstrapArg() {
     const calls = mocks.registerBuiltInMemoryEmbeddingProviders.mock.calls as unknown as Array<
       [{ registerMemoryEmbeddingProvider?: unknown }]
@@ -540,7 +653,7 @@ describe("capability cli", () => {
 
   function firstAudioTranscriptionCall() {
     const calls = mocks.transcribeAudioFile.mock.calls as unknown as Array<
-      [{ filePath?: string; language?: unknown; prompt?: unknown }]
+      [{ cfg?: unknown; filePath?: string; language?: unknown; prompt?: unknown }]
     >;
     return calls[0]?.[0];
   }
@@ -552,13 +665,6 @@ describe("capability cli", () => {
 
   function firstEmbeddingProviderCall() {
     const calls = mocks.createEmbeddingProvider.mock.calls as unknown as Array<
-      [Record<string, unknown>]
-    >;
-    return calls[0]?.[0];
-  }
-
-  function firstCommandConfigResolutionCall() {
-    const calls = mocks.resolveCommandConfigWithSecrets.mock.calls as unknown as Array<
       [Record<string, unknown>]
     >;
     return calls[0]?.[0];
@@ -618,7 +724,7 @@ describe("capability cli", () => {
     const preparedParams = firstPreparedModelParams();
     expect(preparedParams?.agentId).toBe("main");
     expect(preparedParams?.allowMissingApiKeyModes).toEqual(["aws-sdk"]);
-    expect(preparedParams?.skipPiDiscovery).toBe(true);
+    expect(preparedParams?.skipAgentDiscovery).toBe(true);
     const call = firstCompletionCall();
     expect(call?.context?.messages?.[0]?.role).toBe("user");
     expect(call?.context?.messages?.[0]?.content).toBe("hello");
@@ -631,7 +737,7 @@ describe("capability cli", () => {
     const params = firstPreparedModelParams();
     expect(params?.modelRef).toBe("mistral/mistral-medium-3-5");
     expect(params?.allowBundledStaticCatalogFallback).toBe(true);
-    expect(params?.skipPiDiscovery).toBe(true);
+    expect(params?.skipAgentDiscovery).toBe(true);
   });
 
   it("does not enable bundled static catalog fallback without an explicit provider/model override", async () => {
@@ -1802,6 +1908,74 @@ describe("capability cli", () => {
     expectRuntimeErrorContains("Video asset at index 0 has neither buffer nor url");
   });
 
+  it("rejects partial image generate count before provider dispatch", async () => {
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: ["capability", "image", "generate", "--prompt", "portrait", "--count", "2x"],
+      }),
+    ).rejects.toThrow("exit 1");
+    expectRuntimeErrorContains("--count must be a positive integer");
+    expect(mocks.generateImage).not.toHaveBeenCalled();
+  });
+
+  it("rejects partial image generate timeout before provider dispatch", async () => {
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: ["capability", "image", "generate", "--prompt", "portrait", "--timeout-ms", "1000ms"],
+      }),
+    ).rejects.toThrow("exit 1");
+    expectRuntimeErrorContains("Invalid --timeout. Use a positive millisecond value");
+    expect(mocks.generateImage).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "image generate",
+      ["capability", "image", "generate", "--prompt", "portrait", "--timeout-ms", "1000ms"],
+    ],
+    [
+      "image edit",
+      [
+        "capability",
+        "image",
+        "edit",
+        "--file",
+        "photo.png",
+        "--prompt",
+        "crop it",
+        "--timeout-ms",
+        "1000ms",
+      ],
+    ],
+    [
+      "image describe",
+      ["capability", "image", "describe", "--file", "photo.png", "--timeout-ms", "1000ms"],
+    ],
+    [
+      "image describe-many",
+      ["capability", "image", "describe-many", "--file", "photo.png", "--timeout-ms", "1000ms"],
+    ],
+    [
+      "video generate",
+      ["capability", "video", "generate", "--prompt", "clip", "--timeout-ms", "1000ms"],
+    ],
+  ])("rejects malformed %s timeout before provider dispatch", async (_name, argv) => {
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv,
+      }),
+    ).rejects.toThrow("exit 1");
+
+    expectRuntimeErrorContains("Invalid --timeout. Use a positive millisecond value");
+    expect(mocks.generateImage).not.toHaveBeenCalled();
+    expect(mocks.generateVideo).not.toHaveBeenCalled();
+    expect(mocks.describeImageFile).not.toHaveBeenCalled();
+    expect(mocks.describeImageFileWithModel).not.toHaveBeenCalled();
+  });
+
   it("routes audio transcribe through transcription, not realtime", async () => {
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,
@@ -1814,6 +1988,35 @@ describe("capability cli", () => {
     expect(output?.capability).toBe("audio.transcribe");
     expect(outputs).toHaveLength(1);
     expect(outputs[0]?.kind).toBe("audio.transcription");
+  });
+
+  it("resolves command SecretRefs before local audio transcription", async () => {
+    const rawConfig = { models: { providers: { openai: { apiKey: "raw-ref" } } } };
+    const resolvedConfig = { models: { providers: { openai: { apiKey: "resolved-key" } } } };
+    mocks.loadConfig.mockReturnValue(rawConfig);
+    mocks.resolveCommandConfigWithSecrets.mockResolvedValueOnce({
+      resolvedConfig,
+      effectiveConfig: resolvedConfig,
+      diagnostics: [],
+    } as never);
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "audio", "transcribe", "--file", "memo.m4a", "--json"],
+    });
+
+    expect(firstCommandConfigResolutionCall()).toEqual(
+      expect.objectContaining({
+        config: rawConfig,
+        commandName: "infer audio transcribe",
+      }),
+    );
+    expect(
+      (firstCommandConfigResolutionCall()?.targetIds as Set<string>).has(
+        "models.providers.*.apiKey",
+      ),
+    ).toBe(true);
+    expect(firstAudioTranscriptionCall()?.cfg).toBe(resolvedConfig);
   });
 
   it("fails audio transcribe when no transcript text is returned", async () => {
@@ -2002,9 +2205,7 @@ describe("capability cli", () => {
   it("resolves command SecretRefs before local model capability execution", async () => {
     const rawConfig = { agents: { defaults: { model: "openai/gpt-5.4" } } };
     const resolvedConfig = { agents: { defaults: { model: "openai/gpt-5.4" } }, resolved: true };
-    const targetIds = new Set(["models.providers.*.apiKey"]);
     mocks.loadConfig.mockReturnValue(rawConfig);
-    mocks.getModelsCommandSecretTargetIds.mockReturnValue(targetIds);
     mocks.resolveCommandConfigWithSecrets.mockResolvedValueOnce({
       resolvedConfig,
       effectiveConfig: resolvedConfig,
@@ -2020,10 +2221,14 @@ describe("capability cli", () => {
       expect.objectContaining({
         config: rawConfig,
         commandName: "infer model run",
-        targetIds,
         runtime: mocks.runtime,
       }),
     );
+    expect(
+      (firstCommandConfigResolutionCall()?.targetIds as Set<string>).has(
+        "models.providers.*.apiKey",
+      ),
+    ).toBe(true);
     expect(firstPreparedModelParams()?.cfg).toBe(resolvedConfig);
     expect(mocks.setRuntimeConfigSnapshot).toHaveBeenCalledWith(resolvedConfig);
   });
@@ -2109,6 +2314,37 @@ describe("capability cli", () => {
     expect(mocks.runtime.writeJson).toHaveBeenCalledWith({
       provider: "openai",
       removedProfiles: ["openai:default", "openai:secondary"],
+    });
+    expect(mocks.updateAuthProfileStoreWithLock).toHaveBeenCalledWith(
+      expect.objectContaining({ agentDir: "/tmp/agent-main" }),
+    );
+  });
+
+  it("removes model auth profiles from the selected agent store", async () => {
+    mocks.listProfilesForProvider.mockReturnValue(["openai:default"] as never);
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "model",
+        "auth",
+        "logout",
+        "--provider",
+        "openai",
+        "--agent",
+        "poe",
+        "--json",
+      ],
+    });
+
+    expect(mocks.loadAuthProfileStoreForRuntime).toHaveBeenCalledWith("/tmp/agent-poe");
+    expect(mocks.updateAuthProfileStoreWithLock).toHaveBeenCalledWith(
+      expect.objectContaining({ agentDir: "/tmp/agent-poe" }),
+    );
+    expect(mocks.runtime.writeJson).toHaveBeenCalledWith({
+      provider: "openai",
+      removedProfiles: ["openai:default"],
     });
   });
 
@@ -2257,6 +2493,304 @@ describe("capability cli", () => {
     ]);
   });
 
+  it("resolves plugin web search SecretRefs before running infer web search", async () => {
+    const unresolvedConfig = {
+      tools: { web: { search: { provider: "tavily", enabled: true } } },
+      plugins: {
+        entries: {
+          tavily: {
+            config: {
+              webSearch: {
+                apiKey: { source: "env", provider: "default", id: "TAVILY_API_KEY" },
+              },
+            },
+          },
+        },
+      },
+    };
+    const resolvedConfig = {
+      ...unresolvedConfig,
+      plugins: {
+        entries: {
+          tavily: {
+            config: {
+              webSearch: {
+                apiKey: "resolved-tavily-key",
+              },
+            },
+          },
+        },
+      },
+    };
+    mocks.loadConfig.mockReturnValue(unresolvedConfig);
+    mocks.resolveCommandConfigWithSecrets.mockResolvedValueOnce({
+      resolvedConfig,
+      effectiveConfig: resolvedConfig,
+      diagnostics: [],
+    });
+    const webSearchRuntime = await import("../web-search/runtime.js");
+    vi.mocked(webSearchRuntime.runWebSearch).mockResolvedValueOnce({
+      provider: "tavily",
+      result: { results: [] },
+    } as never);
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["infer", "web", "search", "--query", "ping", "--json"],
+    });
+
+    const { getCapabilityWebSearchCommandSecretTargets } =
+      await import("./command-secret-targets.js");
+    const scopedTargets = getCapabilityWebSearchCommandSecretTargets(unresolvedConfig as never);
+    expect(mocks.resolveCommandConfigWithSecrets).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commandName: "infer web search",
+        targetIds: scopedTargets.targetIds,
+      }),
+    );
+    expect(webSearchRuntime.runWebSearch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: resolvedConfig,
+      }),
+    );
+  });
+
+  it("rejects partial web search limit before provider dispatch", async () => {
+    const webSearchRuntime = await import("../web-search/runtime.js");
+    vi.mocked(webSearchRuntime.runWebSearch).mockClear();
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: ["capability", "web", "search", "--query", "ping", "--limit", "3x"],
+      }),
+    ).rejects.toThrow("exit 1");
+    expectRuntimeErrorContains("--limit must be a positive integer");
+    expect(webSearchRuntime.runWebSearch).not.toHaveBeenCalled();
+  });
+
+  it("uses the infer web search provider override when resolving SecretRefs", async () => {
+    const unresolvedConfig = {
+      tools: { web: { search: { provider: "exa", enabled: true } } },
+      plugins: {
+        entries: {
+          firecrawl: {
+            config: {
+              webSearch: {
+                apiKey: { source: "env", provider: "default", id: "FIRECRAWL_API_KEY" },
+              },
+            },
+          },
+          exa: {
+            config: {
+              webSearch: {
+                apiKey: { source: "env", provider: "default", id: "EXA_API_KEY" },
+              },
+            },
+          },
+        },
+      },
+    };
+    const resolvedConfig = {
+      ...unresolvedConfig,
+      plugins: {
+        entries: {
+          ...unresolvedConfig.plugins.entries,
+          firecrawl: {
+            config: {
+              webSearch: {
+                apiKey: "resolved-firecrawl-key",
+              },
+            },
+          },
+        },
+      },
+    };
+    mocks.loadConfig.mockReturnValue(unresolvedConfig);
+    mocks.resolveCommandConfigWithSecrets.mockResolvedValueOnce({
+      resolvedConfig,
+      effectiveConfig: resolvedConfig,
+      diagnostics: [],
+    });
+    const webSearchRuntime = await import("../web-search/runtime.js");
+    vi.mocked(webSearchRuntime.runWebSearch).mockResolvedValueOnce({
+      provider: "firecrawl",
+      result: { results: [] },
+    } as never);
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["infer", "web", "search", "--query", "ping", "--provider", "firecrawl", "--json"],
+    });
+
+    const { getCapabilityWebSearchCommandSecretTargets } =
+      await import("./command-secret-targets.js");
+    const scopedTargets = getCapabilityWebSearchCommandSecretTargets(unresolvedConfig as never, {
+      providerId: "firecrawl",
+    });
+    const configResolutionCall = mocks.resolveCommandConfigWithSecrets.mock.calls.at(-1)?.[0];
+    expect(configResolutionCall).toEqual(
+      expect.objectContaining({
+        commandName: "infer web search",
+        targetIds: scopedTargets.targetIds,
+        forcedActivePaths: scopedTargets.forcedActivePaths,
+      }),
+    );
+    expect(configResolutionCall).not.toHaveProperty("allowedPaths");
+    expect(webSearchRuntime.runWebSearch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: resolvedConfig,
+        providerId: "firecrawl",
+      }),
+    );
+  });
+
+  it("resolves only plugin web fetch SecretRefs before running infer web fetch", async () => {
+    const unresolvedConfig = {
+      tools: { web: { fetch: { provider: "firecrawl", enabled: true } } },
+      plugins: {
+        entries: {
+          exa: {
+            config: {
+              webSearch: {
+                apiKey: { source: "env", provider: "default", id: "EXA_API_KEY" },
+              },
+            },
+          },
+          firecrawl: {
+            config: {
+              webFetch: {
+                apiKey: { source: "env", provider: "default", id: "FIRECRAWL_API_KEY" },
+              },
+            },
+          },
+        },
+      },
+    };
+    const resolvedConfig = {
+      ...unresolvedConfig,
+      plugins: {
+        entries: {
+          ...unresolvedConfig.plugins.entries,
+          firecrawl: {
+            config: {
+              webFetch: {
+                apiKey: "resolved-firecrawl-key",
+              },
+            },
+          },
+        },
+      },
+    };
+    mocks.loadConfig.mockReturnValue(unresolvedConfig);
+    mocks.resolveCommandConfigWithSecrets.mockResolvedValueOnce({
+      resolvedConfig,
+      effectiveConfig: resolvedConfig,
+      diagnostics: [],
+    });
+    const webFetchRuntime = await import("../web-fetch/runtime.js");
+    vi.mocked(webFetchRuntime.resolveWebFetchDefinition).mockReturnValueOnce({
+      provider: { id: "firecrawl" },
+      definition: { execute: vi.fn(async () => ({ content: "ok" })) },
+    } as never);
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["infer", "web", "fetch", "--url", "https://example.com", "--json"],
+    });
+
+    const { getCapabilityWebFetchCommandSecretTargets } =
+      await import("./command-secret-targets.js");
+    expect(mocks.resolveCommandConfigWithSecrets).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commandName: "infer web fetch",
+        targetIds: getCapabilityWebFetchCommandSecretTargets(unresolvedConfig as never).targetIds,
+      }),
+    );
+    expect(webFetchRuntime.resolveWebFetchDefinition).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: resolvedConfig,
+      }),
+    );
+  });
+
+  it("uses the infer web fetch provider override when resolving fallback SecretRefs", async () => {
+    const fallbackRef = { source: "env", provider: "default", id: "FIRECRAWL_API_KEY" };
+    const unresolvedConfig = {
+      tools: { web: { fetch: { enabled: true } } },
+      plugins: {
+        entries: {
+          firecrawl: {
+            config: {
+              webSearch: {
+                apiKey: fallbackRef,
+              },
+            },
+          },
+        },
+      },
+    };
+    const resolvedConfig = {
+      ...unresolvedConfig,
+      plugins: {
+        entries: {
+          firecrawl: {
+            config: {
+              webSearch: {
+                apiKey: "resolved-firecrawl-key",
+              },
+            },
+          },
+        },
+      },
+    };
+    mocks.loadConfig.mockReturnValue(unresolvedConfig);
+    mocks.resolveCommandConfigWithSecrets.mockResolvedValueOnce({
+      resolvedConfig,
+      effectiveConfig: resolvedConfig,
+      diagnostics: [],
+    });
+    const webFetchRuntime = await import("../web-fetch/runtime.js");
+    vi.mocked(webFetchRuntime.resolveWebFetchDefinition).mockReturnValueOnce({
+      provider: { id: "firecrawl" },
+      definition: { execute: vi.fn(async () => ({ content: "ok" })) },
+    } as never);
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "infer",
+        "web",
+        "fetch",
+        "--url",
+        "https://example.com",
+        "--provider",
+        "firecrawl",
+        "--json",
+      ],
+    });
+
+    const { getCapabilityWebFetchCommandSecretTargets } =
+      await import("./command-secret-targets.js");
+    const scopedTargets = getCapabilityWebFetchCommandSecretTargets(unresolvedConfig as never, {
+      providerId: "firecrawl",
+    });
+    const configResolutionCall = mocks.resolveCommandConfigWithSecrets.mock.calls.at(-1)?.[0];
+    expect(configResolutionCall).toEqual(
+      expect.objectContaining({
+        commandName: "infer web fetch",
+        targetIds: scopedTargets.targetIds,
+        forcedActivePaths: scopedTargets.forcedActivePaths,
+      }),
+    );
+    expect(configResolutionCall).not.toHaveProperty("allowedPaths");
+    expect(webFetchRuntime.resolveWebFetchDefinition).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: resolvedConfig,
+        providerId: "firecrawl",
+      }),
+    );
+  });
+
   it("surfaces available, configured, and selected for web providers", async () => {
     mocks.loadConfig.mockReturnValue({
       tools: {
@@ -2312,161 +2846,6 @@ describe("capability cli", () => {
     });
   });
 
-  it("resolves command SecretRefs before local web search execution", async () => {
-    const rawConfig = {
-      tools: { web: { search: { provider: "brave" } } },
-      plugins: {
-        entries: {
-          tavily: {
-            config: {
-              webSearch: {
-                apiKey: { source: "env", provider: "default", id: "TAVILY_API_KEY" },
-              },
-            },
-          },
-        },
-      },
-    };
-    const resolvedConfig = {
-      ...rawConfig,
-      tools: { web: { search: { provider: "tavily" } } },
-      plugins: {
-        entries: {
-          tavily: { config: { webSearch: { apiKey: "resolved-tavily-key" } } },
-        },
-      },
-    };
-    const targetIds = new Set(["plugins.entries.tavily.config.webSearch.apiKey"]);
-    const allowedPaths = new Set(["plugins.entries.tavily.config.webSearch.apiKey"]);
-    mocks.loadConfig.mockReturnValue(rawConfig);
-    mocks.getWebSearchCommandSecretTargets.mockReturnValue({
-      targetIds,
-      allowedPaths,
-    });
-    mocks.resolveCommandConfigWithSecrets.mockResolvedValueOnce({
-      resolvedConfig,
-      effectiveConfig: resolvedConfig,
-      diagnostics: [],
-    } as never);
-    const webSearchRuntime = await import("../web-search/runtime.js");
-    vi.mocked(webSearchRuntime.runWebSearch).mockResolvedValueOnce({
-      provider: "tavily",
-      result: { results: [] },
-    } as never);
-
-    await runRegisteredCli({
-      register: registerCapabilityCli as (program: Command) => void,
-      argv: ["capability", "web", "search", "--provider", "tavily", "--query", "ping", "--json"],
-    });
-
-    expect(firstCommandConfigResolutionCall()).toEqual(
-      expect.objectContaining({
-        commandName: "infer web search",
-        targetIds,
-        allowedPaths,
-        providerOverrides: { webSearch: "tavily" },
-        runtime: mocks.runtime,
-      }),
-    );
-    expect(firstCommandConfigResolutionCall()?.config).toEqual(
-      expect.objectContaining({
-        tools: { web: { search: { provider: "tavily" } } },
-      }),
-    );
-    expect(rawConfig.tools.web.search.provider).toBe("brave");
-    expect(vi.mocked(webSearchRuntime.runWebSearch).mock.calls[0]?.[0]).toEqual(
-      expect.objectContaining({
-        config: resolvedConfig,
-        preferInputConfig: true,
-        providerId: "tavily",
-      }),
-    );
-  });
-
-  it("resolves command SecretRefs before local web fetch execution", async () => {
-    const rawConfig = {
-      tools: { web: { fetch: { provider: "browser" } } },
-      plugins: {
-        entries: {
-          firecrawl: {
-            config: {
-              webFetch: {
-                apiKey: { source: "env", provider: "default", id: "FIRECRAWL_API_KEY" },
-              },
-            },
-          },
-        },
-      },
-    };
-    const resolvedConfig = {
-      ...rawConfig,
-      tools: { web: { fetch: { provider: "firecrawl" } } },
-      plugins: {
-        entries: {
-          firecrawl: { config: { webFetch: { apiKey: "resolved-firecrawl-key" } } },
-        },
-      },
-    };
-    const targetIds = new Set(["plugins.entries.firecrawl.config.webFetch.apiKey"]);
-    const allowedPaths = new Set(["plugins.entries.firecrawl.config.webFetch.apiKey"]);
-    mocks.loadConfig.mockReturnValue(rawConfig);
-    mocks.getWebFetchCommandSecretTargets.mockReturnValue({
-      targetIds,
-      allowedPaths,
-    });
-    mocks.resolveCommandConfigWithSecrets.mockResolvedValueOnce({
-      resolvedConfig,
-      effectiveConfig: resolvedConfig,
-      diagnostics: [],
-    } as never);
-    const webFetchRuntime = await import("../web-fetch/runtime.js");
-    const execute = vi.fn(async () => ({ text: "ok" }));
-    vi.mocked(webFetchRuntime.resolveWebFetchDefinition).mockReturnValueOnce({
-      provider: { id: "firecrawl" },
-      definition: { execute },
-    } as never);
-
-    await runRegisteredCli({
-      register: registerCapabilityCli as (program: Command) => void,
-      argv: [
-        "capability",
-        "web",
-        "fetch",
-        "--provider",
-        "firecrawl",
-        "--url",
-        "https://example.com",
-        "--json",
-      ],
-    });
-
-    expect(firstCommandConfigResolutionCall()).toEqual(
-      expect.objectContaining({
-        commandName: "infer web fetch",
-        targetIds,
-        allowedPaths,
-        providerOverrides: { webFetch: "firecrawl" },
-        runtime: mocks.runtime,
-      }),
-    );
-    expect(firstCommandConfigResolutionCall()?.config).toEqual(
-      expect.objectContaining({
-        tools: { web: { fetch: { provider: "firecrawl" } } },
-      }),
-    );
-    expect(rawConfig.tools.web.fetch.provider).toBe("browser");
-    expect(vi.mocked(webFetchRuntime.resolveWebFetchDefinition).mock.calls[0]?.[0]).toEqual(
-      expect.objectContaining({
-        config: resolvedConfig,
-        providerId: "firecrawl",
-      }),
-    );
-    expect(execute).toHaveBeenCalledWith({
-      url: "https://example.com",
-      format: undefined,
-    });
-  });
-
   it("surfaces selected and configured embedding provider state", async () => {
     mocks.loadConfig.mockReturnValue({});
     mocks.resolveMemorySearchConfig.mockReturnValue({
@@ -2499,6 +2878,105 @@ describe("capability cli", () => {
         selected: true,
         id: "gemini",
         defaultModel: "gemini-embedding-001",
+        transport: "remote",
+        autoSelectPriority: undefined,
+      },
+    ]);
+  });
+
+  it("includes generic embedding providers in embedding provider state", async () => {
+    mocks.loadConfig.mockReturnValue({});
+    mocks.resolveMemorySearchConfig.mockReturnValue({
+      provider: "openai-compatible",
+      model: "text-embedding-bge-m3",
+    } as never);
+    mocks.listMemoryEmbeddingProviders.mockReturnValue([
+      { id: "openai", defaultModel: "text-embedding-3-small", transport: "remote" },
+    ]);
+    mocks.listEmbeddingProviders.mockReturnValue([
+      { id: "openai-compatible", transport: "remote" },
+    ] as never);
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "embedding", "providers", "--json"],
+    });
+
+    expect(mocks.runtime.writeJson).toHaveBeenCalledWith([
+      {
+        available: true,
+        configured: false,
+        selected: false,
+        id: "openai",
+        defaultModel: "text-embedding-3-small",
+        transport: "remote",
+        autoSelectPriority: undefined,
+      },
+      {
+        available: true,
+        configured: true,
+        selected: true,
+        id: "openai-compatible",
+        defaultModel: undefined,
+        transport: "remote",
+        autoSelectPriority: undefined,
+      },
+    ]);
+  });
+
+  it("includes selected custom generic embedding provider aliases", async () => {
+    mocks.loadConfig.mockReturnValue({
+      models: {
+        providers: {
+          "tenant-embeddings": {
+            api: "openai-responses",
+            baseUrl: "http://127.0.0.1:1234/v1",
+            models: [],
+          },
+        },
+      },
+    });
+    mocks.resolveMemorySearchConfig.mockReturnValue({
+      provider: "tenant-embeddings",
+      model: "text-embedding-bge-m3",
+    } as never);
+    mocks.listMemoryEmbeddingProviders.mockReturnValue([
+      { id: "openai", defaultModel: "text-embedding-3-small", transport: "remote" },
+    ]);
+    mocks.listEmbeddingProviders.mockReturnValue([
+      { id: "openai-compatible", transport: "remote" },
+    ] as never);
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "embedding", "providers", "--json"],
+    });
+
+    expect(mocks.runtime.writeJson).toHaveBeenCalledWith([
+      {
+        available: true,
+        configured: false,
+        selected: false,
+        id: "openai",
+        defaultModel: "text-embedding-3-small",
+        transport: "remote",
+        autoSelectPriority: undefined,
+      },
+      {
+        available: true,
+        configured: false,
+        selected: false,
+        id: "openai-compatible",
+        defaultModel: undefined,
+        transport: "remote",
+        autoSelectPriority: undefined,
+      },
+      {
+        available: true,
+        configured: true,
+        selected: true,
+        id: "tenant-embeddings",
+        defaultModel: "text-embedding-bge-m3",
         transport: "remote",
         autoSelectPriority: undefined,
       },

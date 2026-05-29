@@ -1,5 +1,5 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { abortAndDrainEmbeddedPiRun } from "../agents/pi-embedded.js";
+import { abortAndDrainEmbeddedAgentRun } from "../agents/embedded-agent.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { getRuntimeConfig } from "../config/io.js";
@@ -23,6 +23,7 @@ import { resolveCronSessionTargetSessionKey } from "../cron/session-target.js";
 import { resolveCronStorePath } from "../cron/store.js";
 import type { CronJob } from "../cron/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { resolveMainScopedEventSessionKey } from "../infra/event-session-routing.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
@@ -34,7 +35,11 @@ import type {
   PluginHookGatewayCronService,
   PluginHookGatewayContext,
 } from "../plugins/hook-types.js";
-import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key.js";
+import {
+  normalizeAgentId,
+  resolveEventSessionKey,
+  toAgentStoreSessionKey,
+} from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import {
@@ -200,7 +205,13 @@ export function buildGatewayCronService(params: {
         });
       }
     }
-    return canonical;
+    return (
+      resolveMainScopedEventSessionKey({
+        cfg: params.runtimeConfig,
+        sessionKey: canonical,
+        agentId: params.agentId,
+      }) ?? canonical
+    );
   };
 
   const resolveCronTarget = (opts?: {
@@ -228,13 +239,21 @@ export function buildGatewayCronService(params: {
       requestedAgentId ?? derivedAgentId,
     );
     const agentId = resolvedAgentId || undefined;
-    const sessionKey = agentId
+    const resolvedSessionKey = agentId
       ? resolveCronSessionKey({
           runtimeConfig,
           agentId,
           requestedSessionKey,
         })
       : undefined;
+    const sessionKey =
+      resolvedSessionKey && runtimeConfig.session?.scope === "global"
+        ? resolveEventSessionKey(
+            resolvedSessionKey,
+            runtimeConfig.session?.mainKey,
+            runtimeConfig.session?.scope,
+          )
+        : resolvedSessionKey;
     return { runtimeConfig, agentId, sessionKey };
   };
 
@@ -301,8 +320,7 @@ export function buildGatewayCronService(params: {
       enqueueSystemEvent(text, {
         sessionKey,
         contextKey: opts?.contextKey,
-        forceSenderIsOwnerFalse: opts?.forceSenderIsOwnerFalse,
-        trusted: opts?.forceSenderIsOwnerFalse !== true,
+        deliveryContext: opts?.deliveryContext,
       });
     },
     requestHeartbeat: (opts) => {
@@ -369,7 +387,7 @@ export function buildGatewayCronService(params: {
       if (!execution?.sessionId) {
         return;
       }
-      const result = await abortAndDrainEmbeddedPiRun({
+      const result = await abortAndDrainEmbeddedAgentRun({
         sessionId: execution.sessionId,
         sessionKey: execution.sessionKey,
         settleMs: 15_000,

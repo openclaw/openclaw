@@ -12,7 +12,9 @@ import {
 } from "./store.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 let resolveApiKeyForProfile: typeof import("./oauth.js").resolveApiKeyForProfile;
-type GetOAuthApiKey = typeof import("@earendil-works/pi-ai/oauth").getOAuthApiKey;
+let resolveApiKeyForProvider: typeof import("../model-auth.js").resolveApiKeyForProvider;
+let markAuthProfileSuccess: typeof import("./profiles.js").markAuthProfileSuccess;
+type GetOAuthApiKey = typeof import("../../llm/oauth.js").getOAuthApiKey;
 
 const { getOAuthApiKeyMock } = vi.hoisted(() => ({
   getOAuthApiKeyMock: vi.fn<GetOAuthApiKey>(async () => {
@@ -45,7 +47,7 @@ vi.mock("../cli-credentials.js", () => ({
   resetCliCredentialCachesForTest: () => undefined,
 }));
 
-vi.mock("@earendil-works/pi-ai/oauth", () => ({
+vi.mock("../../llm/oauth.js", () => ({
   getOAuthApiKey: getOAuthApiKeyMock,
   getOAuthProviders: () => [
     { id: "openai-codex", envApiKey: "OPENAI_API_KEY", oauthTokenEnv: "OPENAI_OAUTH_TOKEN" }, // pragma: allowlist secret
@@ -60,11 +62,14 @@ vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
 }));
 
 vi.mock("../../plugins/provider-runtime.js", () => ({
+  buildProviderMissingAuthMessageWithPlugin: () => undefined,
   resolveExternalAuthProfilesWithPlugins: () => [],
+  resolveProviderSyntheticAuthWithPlugin: () => undefined,
+  shouldDeferProviderSyntheticProfileAuthWithPlugin: () => false,
 }));
 
 afterAll(() => {
-  vi.doUnmock("@earendil-works/pi-ai/oauth");
+  vi.doUnmock("../../llm/oauth.js");
   vi.doUnmock("../cli-credentials.js");
   vi.doUnmock("../../plugins/provider-runtime.runtime.js");
   vi.doUnmock("../../plugins/provider-runtime.js");
@@ -134,6 +139,8 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
   beforeAll(async () => {
     tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-refresh-fallback-"));
     ({ resolveApiKeyForProfile } = await import("./oauth.js"));
+    ({ resolveApiKeyForProvider } = await import("../model-auth.js"));
+    ({ markAuthProfileSuccess } = await import("./profiles.js"));
   });
 
   beforeEach(async () => {
@@ -156,7 +163,6 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
     await fs.mkdir(agentDir, { recursive: true });
     process.env.OPENCLAW_STATE_DIR = caseRoot;
     process.env.OPENCLAW_AGENT_DIR = agentDir;
-    process.env.PI_CODING_AGENT_DIR = agentDir;
   });
 
   afterEach(async () => {
@@ -732,6 +738,110 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
     });
 
     expect(getOAuthApiKeyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears stale lastGood before selecting an alternate Codex OAuth profile", async () => {
+    const staleProfileId = "openai-codex:default";
+    const healthyProfileId = "openai-codex:user@example.test";
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [staleProfileId]: {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "stale-access-token",
+            refresh: "stale-refresh-token",
+            expires: Date.now() - 60_000,
+          },
+          [healthyProfileId]: {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "healthy-access-token",
+            refresh: "healthy-refresh-token",
+            expires: Date.now() + 60 * 60_000,
+            email: "user@example.test",
+          },
+        },
+        lastGood: { "openai-codex": staleProfileId },
+      },
+      agentDir,
+    );
+    getOAuthApiKeyMock.mockImplementationOnce(async () => {
+      throw new Error(
+        '401 {"error":{"message":"Your refresh token has already been used to generate a new access token.","code":"refresh_token_reused"}}',
+      );
+    });
+
+    await expect(
+      resolveApiKeyForProfile({
+        store: ensureAuthProfileStore(agentDir),
+        profileId: staleProfileId,
+        agentDir,
+      }),
+    ).resolves.toEqual({
+      apiKey: "healthy-access-token",
+      provider: "openai-codex",
+      email: "user@example.test",
+    });
+
+    expect(getOAuthApiKeyMock).toHaveBeenCalledTimes(1);
+    expect((await readPersistedStore(agentDir)).lastGood).toBeUndefined();
+  });
+
+  it("reports the alternate Codex OAuth profile after stale lastGood fallback", async () => {
+    const staleProfileId = "openai-codex:default";
+    const healthyProfileId = "openai-codex:user@example.test";
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [staleProfileId]: {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "stale-access-token",
+            refresh: "stale-refresh-token",
+            expires: Date.now() - 60_000,
+          },
+          [healthyProfileId]: {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "healthy-access-token",
+            refresh: "healthy-refresh-token",
+            expires: Date.now() + 60 * 60_000,
+            email: "user@example.test",
+          },
+        },
+        lastGood: { "openai-codex": staleProfileId },
+      },
+      agentDir,
+    );
+    getOAuthApiKeyMock.mockImplementationOnce(async () => {
+      throw new Error(
+        '401 {"error":{"message":"Your refresh token has already been used to generate a new access token.","code":"refresh_token_reused"}}',
+      );
+    });
+
+    const resolved = await resolveApiKeyForProvider({
+      provider: "openai-codex",
+      store: ensureAuthProfileStore(agentDir),
+      agentDir,
+    });
+
+    expect(resolved).toMatchObject({
+      apiKey: "healthy-access-token",
+      profileId: healthyProfileId,
+      source: `profile:${healthyProfileId}`,
+      mode: "oauth",
+    });
+
+    await markAuthProfileSuccess({
+      store: ensureAuthProfileStore(agentDir),
+      provider: "openai-codex",
+      profileId: resolved.profileId ?? "",
+      agentDir,
+    });
+    expect(ensureAuthProfileStore(agentDir).lastGood?.["openai-codex"]).toBe(healthyProfileId);
   });
 
   it("retries Codex refresh once after refresh_token_reused updates only the stored refresh token", async () => {

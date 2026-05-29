@@ -12,6 +12,15 @@ import { resolveBrowserActionContext, withBrowserActionTimeoutSlack } from "./sh
 
 const DEFAULT_BROWSER_HOOK_TIMEOUT_MS = 120000;
 
+function parsePositiveIntegerOption(value: string, flag: string): number {
+  const trimmed = value.trim();
+  const parsed = /^\d+$/.test(trimmed) ? Number(trimmed) : Number.NaN;
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+    throw new Error(`${flag} must be a positive integer.`);
+  }
+  return parsed;
+}
+
 async function normalizeUploadPaths(paths: string[]): Promise<string[]> {
   const result = await resolveExistingPathsWithinRoot({
     rootDir: DEFAULT_UPLOAD_DIR,
@@ -100,27 +109,32 @@ export function registerBrowserFilesAndDownloadsCommands(
     .option(
       "--timeout-ms <ms>",
       "How long to wait for the next file chooser (default: 120000)",
-      (v: string) => Number(v),
+      (v: string) => parsePositiveIntegerOption(v, "--timeout-ms"),
     )
     .action(async (paths: string[], opts, cmd) => {
-      const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
-      const normalizedPaths = await normalizeUploadPaths(paths);
-      const { timeoutMs, targetId } = resolveTimeoutAndTarget(opts);
-      await runBrowserPostAction({
-        parent,
-        profile,
-        path: "/hooks/file-chooser",
-        body: {
-          paths: normalizedPaths,
-          ref: normalizeOptionalString(opts.ref),
-          inputRef: normalizeOptionalString(opts.inputRef),
-          element: normalizeOptionalString(opts.element),
-          targetId,
-          timeoutMs,
-        },
-        timeoutMs: timeoutMs ?? DEFAULT_BROWSER_HOOK_TIMEOUT_MS,
-        describeSuccess: () => `upload armed for ${paths.length} file(s)`,
-      });
+      try {
+        const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
+        const normalizedPaths = await normalizeUploadPaths(paths);
+        const { timeoutMs, targetId } = resolveTimeoutAndTarget(opts);
+        await runBrowserPostAction({
+          parent,
+          profile,
+          path: "/hooks/file-chooser",
+          body: {
+            paths: normalizedPaths,
+            ref: normalizeOptionalString(opts.ref),
+            inputRef: normalizeOptionalString(opts.inputRef),
+            element: normalizeOptionalString(opts.element),
+            targetId,
+            timeoutMs,
+          },
+          timeoutMs: timeoutMs ?? DEFAULT_BROWSER_HOOK_TIMEOUT_MS,
+          describeSuccess: () => `upload armed for ${paths.length} file(s)`,
+        });
+      } catch (err) {
+        defaultRuntime.error(danger(String(err)));
+        defaultRuntime.exit(1);
+      }
     });
 
   browser
@@ -134,7 +148,7 @@ export function registerBrowserFilesAndDownloadsCommands(
     .option(
       "--timeout-ms <ms>",
       "How long to wait for the next download (default: 120000)",
-      (v: string) => Number(v),
+      (v: string) => parsePositiveIntegerOption(v, "--timeout-ms"),
     )
     .action(async (outPath: string | undefined, opts, cmd) => {
       await runDownloadCommand(cmd, opts, {
@@ -157,7 +171,7 @@ export function registerBrowserFilesAndDownloadsCommands(
     .option(
       "--timeout-ms <ms>",
       "How long to wait for the download to start (default: 120000)",
-      (v: string) => Number(v),
+      (v: string) => parsePositiveIntegerOption(v, "--timeout-ms"),
     )
     .action(async (ref: string, outPath: string, opts, cmd) => {
       await runDownloadCommand(cmd, opts, {
@@ -175,11 +189,12 @@ export function registerBrowserFilesAndDownloadsCommands(
     .option("--accept", "Accept the dialog", false)
     .option("--dismiss", "Dismiss the dialog", false)
     .option("--prompt <text>", "Prompt response text")
+    .option("--dialog-id <id>", "Pending dialog id from snapshot/browser state")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .option(
       "--timeout-ms <ms>",
       "How long to wait for the next dialog (default: 120000)",
-      (v: string) => Number(v),
+      (v: string) => parsePositiveIntegerOption(v, "--timeout-ms"),
     )
     .action(async (opts, cmd) => {
       const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
@@ -202,6 +217,7 @@ export function registerBrowserFilesAndDownloadsCommands(
         body: {
           accept,
           promptText: normalizeOptionalString(opts.prompt),
+          dialogId: normalizeOptionalString(opts.dialogId),
           targetId,
           timeoutMs,
         },

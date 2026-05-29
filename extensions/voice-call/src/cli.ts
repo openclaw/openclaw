@@ -5,7 +5,11 @@ import { format } from "node:util";
 import type { Command } from "commander";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { MAX_TCP_PORT, parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
+import {
+  isRecord,
+  normalizeOptionalLowercaseString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sleep } from "../api.js";
 import { validateProviderConfig, type VoiceCallConfig } from "./config.js";
 import type { VoiceCallRuntime } from "./runtime.js";
@@ -56,7 +60,7 @@ const voiceCallCliDeps = {
   callGatewayFromCli,
 };
 
-export const __testing = {
+export const testing = {
   setCallGatewayFromCliForTests(next?: typeof callGatewayFromCli): void {
     voiceCallCliDeps.callGatewayFromCli = next ?? callGatewayFromCli;
   },
@@ -75,18 +79,15 @@ function writeStdoutJson(value: unknown): void {
 function parseVoiceCallIntOption(
   raw: string | undefined,
   optionName: string,
-  opts?: { min?: number },
+  opts?: { min?: number; max?: number },
 ): number {
   const min = opts?.min ?? 0;
-  const parsed = Number(raw);
-  if (!Number.isInteger(parsed) || parsed < min) {
+  const value = raw?.trim() ?? "";
+  const parsed = parseStrictNonNegativeInteger(value);
+  if (parsed === undefined || parsed < min || (opts?.max !== undefined && parsed > opts.max)) {
     throw new Error(`Invalid numeric value for ${optionName}: ${raw ?? ""}`);
   }
   return parsed;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function isGatewayUnavailableForLocalFallback(err: unknown): boolean {
@@ -822,7 +823,7 @@ export function registerVoiceCallCli(params: {
         const servePort = parseVoiceCallIntOption(
           options.port ?? String(config.serve.port ?? 3334),
           "--port",
-          { min: 1 },
+          { min: 1, max: MAX_TCP_PORT },
         );
         const servePath = options.servePath ?? config.serve.path ?? "/voice/webhook";
         const tsPath = options.path ?? config.tailscale?.path ?? servePath;
@@ -863,3 +864,4 @@ export function registerVoiceCallCli(params: {
       },
     );
 }
+export { testing as __testing };

@@ -2,61 +2,61 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveVisibleModelCatalog } from "./model-catalog-visibility.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
-import { createProviderAuthChecker } from "./model-provider-auth.js";
 
-vi.mock("./model-provider-auth.js", () => ({
-  createProviderAuthChecker: vi.fn(),
+const normalizeProviderModelIdWithRuntimeMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./provider-model-normalization.runtime.js", () => ({
+  normalizeProviderModelIdWithRuntime: (params: unknown) =>
+    normalizeProviderModelIdWithRuntimeMock(params),
 }));
-
-const createProviderAuthCheckerMock = vi.mocked(createProviderAuthChecker);
-
-function firstAuthCheckerOptions(): unknown {
-  const call = createProviderAuthCheckerMock.mock.calls[0];
-  if (!call) {
-    throw new Error("Expected provider auth checker to be created");
-  }
-  return call[0];
-}
 
 describe("resolveVisibleModelCatalog", () => {
   beforeEach(() => {
-    createProviderAuthCheckerMock.mockReset();
+    normalizeProviderModelIdWithRuntimeMock.mockReset();
   });
 
-  it("can use static auth checks for gateway read-only model lists", () => {
+  it("can use static auth checks for gateway read-only model lists", async () => {
     const authChecker = vi.fn((provider: string) => provider === "openai");
-    createProviderAuthCheckerMock.mockReturnValue(authChecker);
     const catalog: ModelCatalogEntry[] = [
       { provider: "anthropic", id: "claude-test", name: "Claude Test" },
       { provider: "openai", id: "gpt-test", name: "GPT Test" },
     ];
     const cfg = {} as OpenClawConfig;
 
-    const result = resolveVisibleModelCatalog({
+    const result = await resolveVisibleModelCatalog({
       cfg,
       catalog,
       defaultProvider: "openai",
       runtimeAuthDiscovery: false,
+      providerAuthChecker: authChecker,
     });
 
-    expect(createProviderAuthCheckerMock).toHaveBeenCalledTimes(1);
-    expect(firstAuthCheckerOptions()).toEqual({
-      cfg,
-      workspaceDir: undefined,
-      agentDir: undefined,
-      env: undefined,
-      allowPluginSyntheticAuth: false,
-      discoverExternalCliAuth: false,
-    });
     expect(authChecker).toHaveBeenNthCalledWith(1, "anthropic");
     expect(authChecker).toHaveBeenNthCalledWith(2, "openai");
     expect(authChecker).toHaveBeenCalledTimes(2);
     expect(result).toEqual([{ provider: "openai", id: "gpt-test", name: "GPT Test" }]);
   });
 
-  it("limits visible catalog to provider wildcard entries after default discovery", () => {
+  it("does not runtime-normalize unrestricted default browse", async () => {
+    normalizeProviderModelIdWithRuntimeMock.mockImplementation(() => "custom-modern-model");
+
+    const result = await resolveVisibleModelCatalog({
+      cfg: {} as OpenClawConfig,
+      catalog: [{ provider: "custom-provider", id: "custom-legacy-model", name: "Custom Legacy" }],
+      defaultProvider: "custom-provider",
+      defaultModel: "custom-legacy-model",
+      runtimeAuthDiscovery: false,
+      providerAuthChecker: vi.fn(() => true),
+    });
+
+    expect(result).toEqual([
+      { provider: "custom-provider", id: "custom-legacy-model", name: "Custom Legacy" },
+    ]);
+    expect(normalizeProviderModelIdWithRuntimeMock).not.toHaveBeenCalled();
+  });
+
+  it("limits visible catalog to provider wildcard entries after default discovery", async () => {
     const authChecker = vi.fn((provider: string) => provider !== "blocked");
-    createProviderAuthCheckerMock.mockReturnValue(authChecker);
     const catalog: ModelCatalogEntry[] = [
       { provider: "anthropic", id: "claude-test", name: "Claude Test" },
       { provider: "openai-codex", id: "gpt-codex-test", name: "GPT Codex Test" },
@@ -76,22 +76,14 @@ describe("resolveVisibleModelCatalog", () => {
       },
     } as OpenClawConfig;
 
-    const result = resolveVisibleModelCatalog({
+    const result = await resolveVisibleModelCatalog({
       cfg,
       catalog,
       defaultProvider: "anthropic",
       runtimeAuthDiscovery: true,
+      providerAuthChecker: authChecker,
     });
 
-    expect(createProviderAuthCheckerMock).toHaveBeenCalledTimes(1);
-    expect(firstAuthCheckerOptions()).toEqual({
-      cfg,
-      workspaceDir: undefined,
-      agentDir: undefined,
-      env: undefined,
-      allowPluginSyntheticAuth: true,
-      discoverExternalCliAuth: true,
-    });
     expect(authChecker).toHaveBeenNthCalledWith(1, "anthropic");
     expect(authChecker).toHaveBeenNthCalledWith(2, "openai-codex");
     expect(authChecker).toHaveBeenNthCalledWith(3, "vllm");
@@ -101,11 +93,46 @@ describe("resolveVisibleModelCatalog", () => {
       { provider: "openai-codex", id: "gpt-codex-test", name: "GPT Codex Test" },
       { provider: "vllm", id: "qwen-local", name: "Qwen Local" },
     ]);
+    expect(normalizeProviderModelIdWithRuntimeMock).not.toHaveBeenCalled();
   });
 
-  it("does not broaden visibility when selected providers have no catalog rows", () => {
+  it("uses runtime model normalization for exact allowlist entries", async () => {
+    normalizeProviderModelIdWithRuntimeMock.mockImplementation(({ provider, context }) => {
+      if (
+        provider === "custom-provider" &&
+        (context as { modelId?: string }).modelId === "custom-legacy-model"
+      ) {
+        return "custom-modern-model";
+      }
+      return undefined;
+    });
+
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "custom-provider/custom-legacy-model": {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await resolveVisibleModelCatalog({
+      cfg,
+      catalog: [{ provider: "custom-provider", id: "custom-modern-model", name: "Custom Modern" }],
+      defaultProvider: "anthropic",
+      runtimeAuthDiscovery: false,
+      providerAuthChecker: vi.fn(() => true),
+    });
+
+    expect(result).toEqual([
+      { provider: "custom-provider", id: "custom-modern-model", name: "Custom Modern" },
+    ]);
+    expect(normalizeProviderModelIdWithRuntimeMock).toHaveBeenCalled();
+  });
+
+  it("does not broaden visibility when selected providers have no catalog rows", async () => {
     const authChecker = vi.fn(() => true);
-    createProviderAuthCheckerMock.mockReturnValue(authChecker);
 
     const cfg = {
       agents: {
@@ -117,22 +144,14 @@ describe("resolveVisibleModelCatalog", () => {
       },
     } as OpenClawConfig;
 
-    const result = resolveVisibleModelCatalog({
+    const result = await resolveVisibleModelCatalog({
       cfg,
       catalog: [{ provider: "anthropic", id: "claude-test", name: "Claude Test" }],
       defaultProvider: "anthropic",
       runtimeAuthDiscovery: true,
+      providerAuthChecker: authChecker,
     });
 
-    expect(createProviderAuthCheckerMock).toHaveBeenCalledTimes(1);
-    expect(firstAuthCheckerOptions()).toEqual({
-      cfg,
-      workspaceDir: undefined,
-      agentDir: undefined,
-      env: undefined,
-      allowPluginSyntheticAuth: true,
-      discoverExternalCliAuth: true,
-    });
     expect(authChecker).toHaveBeenCalledWith("anthropic");
     expect(authChecker).toHaveBeenCalledTimes(1);
     expect(result).toEqual([]);

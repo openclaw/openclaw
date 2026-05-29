@@ -1,6 +1,7 @@
 import path from "node:path";
 import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../../daemon/constants.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../../infra/supervisor-markers.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withTempSecretFiles } from "../../test-utils/secret-file-fixture.js";
@@ -17,12 +18,15 @@ const forceFreePortAndWait = vi.fn(async (_port: number, _opts: unknown) => ({
   waitedMs: 0,
   escalatedToSigkill: false,
 }));
+const cleanStaleGatewayProcessesSync = vi.fn((_port?: number) => []);
 const waitForPortBindable = vi.fn(async (_port: number, _opts?: unknown) => 0);
 const ensureDevGatewayConfig = vi.fn(async (_opts?: unknown) => {});
 type GatewayLoopStart = (params?: { startupStartedAt?: number }) => Promise<unknown>;
 const runGatewayLoop = vi.fn(async ({ start }: { start: GatewayLoopStart }) => {
   await start();
 });
+const normalizeStateDirEnv = vi.fn((_env?: NodeJS.ProcessEnv) => undefined);
+const callOrder = vi.hoisted(() => [] as string[]);
 const gatewayLogMessages = vi.hoisted(() => [] as string[]);
 const configState = vi.hoisted(() => ({
   cfg: {} as Record<string, unknown>,
@@ -63,6 +67,7 @@ vi.mock("../../config/config.js", () => ({
 
 vi.mock("../../config/paths.js", () => ({
   CONFIG_PATH: "/tmp/openclaw-test-missing-config.json",
+  normalizeStateDirEnv: (env?: NodeJS.ProcessEnv) => normalizeStateDirEnv(env),
   resolveStateDir: () => "/tmp",
   resolveGatewayPort: (cfg?: { gateway?: { port?: number } }) => cfg?.gateway?.port ?? 18789,
 }));
@@ -121,6 +126,10 @@ vi.mock("../../gateway/net.js", async (importOriginal) => {
     },
   };
 });
+
+vi.mock("../../infra/restart-stale-pids.js", () => ({
+  cleanStaleGatewayProcessesSync: (port?: number) => cleanStaleGatewayProcessesSync(port),
+}));
 
 vi.mock("../../gateway/server.js", () => ({
   startGatewayServer: (port: number, opts?: unknown) => startGatewayServer(port, opts),
@@ -199,11 +208,11 @@ vi.mock("./run-loop.js", () => ({
 }));
 
 describe("gateway run option collisions", () => {
-  let addGatewayRunCommand: typeof import("./run.js").addGatewayRunCommand;
+  let addGatewayRunCommand: typeof import("./run-command.js").addGatewayRunCommand;
   let sharedProgram: Command;
 
   beforeAll(async () => {
-    ({ addGatewayRunCommand } = await import("./run.js"));
+    ({ addGatewayRunCommand } = await import("./run-command.js"));
     sharedProgram = new Command();
     sharedProgram.exitOverride();
     const gateway = addGatewayRunCommand(sharedProgram.command("gateway"));
@@ -226,9 +235,12 @@ describe("gateway run option collisions", () => {
     setVerbose.mockClear();
     setConsoleSubsystemFilter.mockClear();
     forceFreePortAndWait.mockClear();
+    cleanStaleGatewayProcessesSync.mockClear();
     waitForPortBindable.mockClear();
     ensureDevGatewayConfig.mockClear();
     runGatewayLoop.mockClear();
+    normalizeStateDirEnv.mockReset();
+    callOrder.length = 0;
   });
 
   async function runGatewayCli(argv: string[]) {
@@ -258,6 +270,14 @@ describe("gateway run option collisions", () => {
   }
 
   it("forwards parent-captured options to `gateway run` subcommand", async () => {
+    normalizeStateDirEnv.mockImplementation((_env?: NodeJS.ProcessEnv) => {
+      callOrder.push("normalize");
+    });
+    startGatewayServer.mockImplementationOnce(async (_port: number, _opts?: unknown) => {
+      callOrder.push("start");
+      return { close: vi.fn(async () => {}) };
+    });
+
     await runGatewayCli([
       "gateway",
       "run",
@@ -276,6 +296,23 @@ describe("gateway run option collisions", () => {
     ).toEqual({ intervalMs: 150, timeoutMs: 3000 });
     expect(setGatewayWsLogStyle).toHaveBeenCalledWith("full");
     expect(gatewayStartOptions().auth?.token).toBe("tok_run");
+    expect(normalizeStateDirEnv).toHaveBeenCalledWith(process.env);
+    expect(callOrder).toEqual(["normalize", "start"]);
+  });
+
+  it("marks service-mode gateway descendants with the live gateway pid", async () => {
+    await withEnvAsync(
+      {
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        [GATEWAY_SERVICE_RUNTIME_PID_ENV]: undefined,
+      },
+      async () => {
+        await runGatewayCli(["gateway", "run", "--allow-unconfigured"]);
+
+        expect(process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV]).toBe(String(process.pid));
+      },
+    );
+    expect(normalizeStateDirEnv).toHaveBeenCalledWith(process.env);
   });
 
   it("blocks --force port cleanup from an older binary with newer config", async () => {

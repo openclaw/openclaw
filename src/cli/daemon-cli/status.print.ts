@@ -220,7 +220,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     spacer();
   }
 
-  const gatewayVersion = rpc?.server?.version?.trim();
+  const gatewayVersion = rpc?.server?.version?.trim() || status.gateway?.version?.trim();
   const cliVersionLine = formatCliVersionLine(status.cli);
   if (gatewayVersion) {
     if (cliVersionLine) {
@@ -320,7 +320,9 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
   }
 
   const systemdUnavailable =
-    process.platform === "linux" && isSystemdUnavailableDetail(service.runtime?.detail);
+    process.platform === "linux" &&
+    rpc?.ok !== true &&
+    isSystemdUnavailableDetail(service.runtime?.detail);
   if (systemdUnavailable) {
     const container = Boolean(
       resolveDaemonContainerContext(service.command?.environment ?? process.env),
@@ -441,24 +443,24 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
   }
 
   if (extraServices.length > 0) {
-    defaultRuntime.error(errorText("Other gateway-like services detected (best effort):"));
+    defaultRuntime.log(warnText("Other gateway-like services detected (best effort):"));
     for (const svc of extraServices) {
-      defaultRuntime.error(`- ${errorText(svc.label)} (${svc.scope}, ${svc.detail})`);
+      defaultRuntime.log(`- ${warnText(svc.label)} (${svc.scope}, ${svc.detail})`);
     }
     for (const hint of renderGatewayServiceCleanupHints()) {
-      defaultRuntime.error(`${errorText("Cleanup hint:")} ${hint}`);
+      defaultRuntime.log(`${infoText("Cleanup hint:")} ${hint}`);
     }
     spacer();
   }
 
   if (extraServices.length > 0) {
-    defaultRuntime.error(
-      errorText(
+    defaultRuntime.log(
+      infoText(
         "Recommendation: run a single gateway per machine for most setups. One gateway supports multiple agents (see docs: /gateway#multiple-gateways-same-host).",
       ),
     );
-    defaultRuntime.error(
-      errorText(
+    defaultRuntime.log(
+      infoText(
         "If you need multiple gateways (e.g., a rescue bot on the same host), isolate ports + config/state (see docs: /gateway#multiple-gateways-same-host).",
       ),
     );

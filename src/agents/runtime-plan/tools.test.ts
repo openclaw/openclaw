@@ -1,4 +1,4 @@
-import type { AgentTool } from "@earendil-works/pi-agent-core";
+import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
 import {
   createNativeOpenAIResponsesModel,
   createParameterFreeTool,
@@ -13,7 +13,7 @@ const mocks = vi.hoisted(() => ({
   normalizeProviderToolSchemas: vi.fn(),
 }));
 
-vi.mock("../pi-embedded-runner/tool-schema-runtime.js", () => ({
+vi.mock("../embedded-agent-runner/tool-schema-runtime.js", () => ({
   logProviderToolSchemaDiagnostics: mocks.logProviderToolSchemaDiagnostics,
   normalizeProviderToolSchemas: mocks.normalizeProviderToolSchemas,
 }));
@@ -107,7 +107,26 @@ describe("AgentRuntimePlan tool policy helpers", () => {
       modelId: "gpt-5.4",
       modelApi: "openai-responses",
       model: createNativeOpenAIResponsesModel(),
+      allowRuntimePluginLoad: undefined,
     });
+  });
+
+  it("can normalize without cold-loading provider runtime plugins", () => {
+    const tools = [createParameterFreeTool()] as AgentTool[];
+
+    normalizeAgentRuntimeTools({
+      tools,
+      provider: "openai",
+      allowProviderRuntimePluginLoad: false,
+    });
+
+    expect(mocks.normalizeProviderToolSchemas).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tools,
+        provider: "openai",
+        allowRuntimePluginLoad: false,
+      }),
+    );
   });
 
   it("routes diagnostics through RuntimePlan when a plan is available", () => {

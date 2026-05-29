@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { CHANNEL_IDS } from "../channels/ids.js";
+import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
 import { computeBaseConfigSchemaResponse } from "./schema-base.js";
@@ -112,13 +113,25 @@ export type ConfigSchemaLookupChild = {
   type?: string | string[];
   required: boolean;
   hasChildren: boolean;
+  reloadKind?: ConfigSchemaReloadKind;
   hint?: ConfigUiHint;
   hintPath?: string;
 };
 
+export type ConfigSchemaReloadKind = "restart" | "hot" | "none";
+
+export type ConfigSchemaReloadMetadata = {
+  kind: ConfigSchemaReloadKind;
+};
+
+export type ConfigSchemaReloadMetadataResolver = (
+  path: string,
+) => ConfigSchemaReloadMetadata | null | undefined;
+
 export type ConfigSchemaLookupResult = {
   path: string;
   schema: JsonSchemaNode;
+  reloadKind?: ConfigSchemaReloadKind;
   hint?: ConfigUiHint;
   hintPath?: string;
   children: ConfigSchemaLookupChild[];
@@ -647,7 +660,7 @@ function resolveLookupChildSchema(
     return asJsonSchemaObject(properties[segment]);
   }
 
-  const itemIndex = /^\d+$/.test(segment) ? Number.parseInt(segment, 10) : undefined;
+  const itemIndex = parseConfigPathArrayIndex(segment);
   const items = resolveItemsSchema(schema, itemIndex);
   if ((segment === "*" || itemIndex !== undefined) && items) {
     return items;
@@ -750,6 +763,7 @@ function buildLookupChildren(
   schema: JsonSchemaObject,
   path: string,
   uiHints: ConfigUiHints,
+  resolveReloadMetadata?: ConfigSchemaReloadMetadataResolver,
 ): ConfigSchemaLookupChild[] {
   const children: ConfigSchemaLookupChild[] = [];
   const required = new Set(schema.required ?? []);
@@ -757,12 +771,14 @@ function buildLookupChildren(
   const pushChild = (key: string, childSchema: JsonSchemaObject, isRequired: boolean) => {
     const childPath = path ? `${path}.${key}` : key;
     const resolvedHint = resolveUiHintMatch(uiHints, childPath);
+    const reloadMetadata = resolveReloadMetadata?.(childPath);
     children.push({
       key,
       path: childPath,
       type: childSchema.type,
       required: isRequired,
       hasChildren: schemaHasChildren(childSchema),
+      reloadKind: reloadMetadata?.kind,
       hint: resolvedHint?.hint,
       hintPath: resolvedHint?.path,
     });
@@ -788,6 +804,7 @@ function buildLookupChildren(
 export function lookupConfigSchema(
   response: ConfigSchemaResponse,
   path: string,
+  resolveReloadMetadata?: ConfigSchemaReloadMetadataResolver,
 ): ConfigSchemaLookupResult | null {
   const wantsRoot = path.trim() === ".";
   const normalizedPath = normalizeLookupPath(path);
@@ -812,11 +829,18 @@ export function lookupConfigSchema(
   }
 
   const resolvedHint = resolveUiHintMatch(response.uiHints, normalizedPath);
+  const reloadMetadata = resolveReloadMetadata?.(normalizedPath);
   return {
     path: wantsRoot ? "." : normalizedPath,
     schema: stripSchemaForLookup(current),
+    reloadKind: reloadMetadata?.kind,
     hint: resolvedHint?.hint,
     hintPath: resolvedHint?.path,
-    children: buildLookupChildren(current, wantsRoot ? "" : normalizedPath, response.uiHints),
+    children: buildLookupChildren(
+      current,
+      wantsRoot ? "" : normalizedPath,
+      response.uiHints,
+      resolveReloadMetadata,
+    ),
   };
 }

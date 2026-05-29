@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
+import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../../../packages/gateway-protocol/src/client-info.js";
+import type { ConnectParams } from "../../../../packages/gateway-protocol/src/schema.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
-import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../protocol/client-info.js";
-import type { ConnectParams } from "../../protocol/schema/types.js";
 import {
   BROWSER_ORIGIN_RATE_LIMIT_KEY_PREFIX,
   BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP,
@@ -132,7 +135,7 @@ describe("handshake auth helpers", () => {
     ).toBe(false);
   });
 
-  it("requires explicit pairing for browser-origin clients even when locality resolves local", () => {
+  it("allows Control UI or WebChat browser-origin pairing but keeps other browser-origin clients explicit", () => {
     expect(
       shouldAllowSilentLocalPairing({
         locality: "browser_container_local",
@@ -141,13 +144,22 @@ describe("handshake auth helpers", () => {
         isWebchat: true,
         reason: "not-paired",
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       shouldAllowSilentLocalPairing({
         locality: "shared_secret_loopback_local",
         hasBrowserOriginHeader: true,
         isControlUi: false,
         isWebchat: true,
+        reason: "scope-upgrade",
+      }),
+    ).toBe(true);
+    expect(
+      shouldAllowSilentLocalPairing({
+        locality: "shared_secret_loopback_local",
+        hasBrowserOriginHeader: true,
+        isControlUi: false,
+        isWebchat: false,
         reason: "scope-upgrade",
       }),
     ).toBe(false);
@@ -165,7 +177,7 @@ describe("handshake auth helpers", () => {
     ).toBe(false);
   });
 
-  it("requires explicit pairing for browser-origin clients even when locality resolves local", () => {
+  it("allows Control UI browser-origin local pairing for fresh pairing and upgrades", () => {
     for (const locality of ["direct_local", "browser_container_local"] as const) {
       expect(
         shouldAllowSilentLocalPairing({
@@ -175,7 +187,7 @@ describe("handshake auth helpers", () => {
           isWebchat: true,
           reason: "not-paired",
         }),
-      ).toBe(false);
+      ).toBe(true);
       expect(
         shouldAllowSilentLocalPairing({
           locality,
@@ -184,7 +196,7 @@ describe("handshake auth helpers", () => {
           isWebchat: true,
           reason: "role-upgrade",
         }),
-      ).toBe(false);
+      ).toBe(true);
     }
   });
 

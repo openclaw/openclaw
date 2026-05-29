@@ -23,7 +23,9 @@ const mockWriteConfigFile = vi.fn<
 >(async () => {});
 const mockResolveSecretRefValue = vi.fn();
 const mockReadBestEffortRuntimeConfigSchema = vi.fn();
-const mockLoadPluginMetadataSnapshot = vi.fn((_config: unknown) => createPluginMetadataSnapshot());
+const mockLoadPluginMetadataSnapshot = vi.fn((configForTest: unknown) =>
+  createPluginMetadataSnapshot(),
+);
 
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
@@ -54,6 +56,8 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => {
   return {
     ...actual,
     loadPluginMetadataSnapshot: (config: unknown) => mockLoadPluginMetadataSnapshot(config),
+    resolvePluginMetadataSnapshot: (params: { config?: unknown }) =>
+      mockLoadPluginMetadataSnapshot(params.config),
   };
 });
 
@@ -179,6 +183,63 @@ function createPluginMetadataSnapshot(
   };
 }
 
+function configRecordWithRequireMentionSchema() {
+  return {
+    type: "object",
+    additionalProperties: {
+      type: "object",
+      properties: {
+        requireMention: { type: "boolean" },
+      },
+    },
+  };
+}
+
+function configChannelSchemaWithRecord(recordKey: string) {
+  return {
+    type: "object",
+    properties: {
+      [recordKey]: configRecordWithRequireMentionSchema(),
+    },
+  };
+}
+
+function setConfigMutationShapeSchema() {
+  mockReadBestEffortRuntimeConfigSchema.mockResolvedValue({
+    schema: {
+      $schema: "http://json-schema.org/draft-07/schema#",
+      type: "object",
+      properties: {
+        agents: {
+          type: "object",
+          properties: {
+            list: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  id: { type: "string" },
+                  name: { type: "string" },
+                },
+              },
+            },
+          },
+        },
+        channels: {
+          type: "object",
+          properties: {
+            discord: configChannelSchemaWithRecord("guilds"),
+            telegram: configChannelSchemaWithRecord("groups"),
+          },
+        },
+      },
+    },
+    uiHints: {},
+    version: "test",
+    generatedAt: "2026-03-25T00:00:00.000Z",
+  });
+}
+
 function setExternalFeishuSchema() {
   mockLoadPluginMetadataSnapshot.mockReturnValue(
     createPluginMetadataSnapshot({
@@ -212,6 +273,7 @@ function setExternalFeishuSchema() {
 
 function makeInvalidSnapshot(params: {
   issues: ConfigFileSnapshot["issues"];
+  warnings?: ConfigFileSnapshot["warnings"];
   path?: string;
 }): ConfigFileSnapshot {
   return {
@@ -225,7 +287,7 @@ function makeInvalidSnapshot(params: {
     runtimeConfig: {},
     config: {},
     issues: params.issues,
-    warnings: [],
+    warnings: params.warnings ?? [],
     legacyIssues: [],
   };
 }
@@ -1005,6 +1067,36 @@ describe("config cli", () => {
       expect(mockLog).not.toHaveBeenCalled();
     });
 
+    it("replaces doctor advice for plugin packaging compiled-output failures", async () => {
+      setSnapshotOnce(
+        makeInvalidSnapshot({
+          issues: [
+            {
+              path: "plugins.slots.memory",
+              message: "plugin not found: source-only-pack",
+            },
+          ],
+          warnings: [
+            {
+              path: "plugins",
+              message:
+                "plugin source-only-pack: installed plugin package requires compiled runtime output for TypeScript entry index.ts: expected ./dist/index.js. This is a plugin packaging issue, not a local config problem.",
+            },
+          ],
+        }),
+      );
+
+      await expect(runConfigCommand(["config", "validate"])).rejects.toThrow("__exit__:1");
+
+      expectErrorIncludes("plugin not found: source-only-pack");
+      expectErrorIncludes("This is a plugin packaging issue, not a local config problem.");
+      expectErrorIncludes("disable/uninstall the plugin");
+      expect(mockError.mock.calls.map((call) => String(call[0])).join("\n")).not.toContain(
+        "openclaw doctor --fix",
+      );
+      expect(mockLog).not.toHaveBeenCalled();
+    });
+
     it("returns machine-readable JSON with --json for invalid config", async () => {
       setSnapshotOnce(
         makeInvalidSnapshot({
@@ -1222,14 +1314,13 @@ describe("config cli", () => {
       expect(helpText).toContain("--batch-json");
       expect(helpText).toContain("--dry-run");
       expect(helpText).toContain("--allow-exec");
-      expect(helpText).toContain("openclaw config set gateway.port 19001 --strict-json");
-      expect(helpText).toContain(
-        "openclaw config set channels.discord.token --ref-provider default --ref-source",
+      // Ignore Commander line wrapping and env-injected CLI prefixes.
+      const normalizedHelp = helpText.replace(/\s+/g, " ");
+      expect(normalizedHelp).toContain("config set gateway.port 19001 --strict-json");
+      expect(normalizedHelp).toContain(
+        "channels.discord.token --ref-provider default --ref-source env --ref-id DISCORD_BOT_TOKEN",
       );
-      expect(helpText).toContain("--ref-id DISCORD_BOT_TOKEN");
-      expect(helpText).toContain(
-        "openclaw config set --batch-file ./config-set.batch.json --dry-run",
-      );
+      expect(normalizedHelp).toContain("--batch-file ./config-set.batch.json --dry-run");
     });
   });
 
@@ -1259,6 +1350,83 @@ describe("config cli", () => {
         provider: "default",
         id: "DISCORD_BOT_TOKEN",
       });
+    });
+
+    it("keeps numeric config set path segments as object keys for schema-backed Discord guild records", async () => {
+      setConfigMutationShapeSchema();
+      const resolved: OpenClawConfig = {
+        channels: {
+          discord: {
+            enabled: true,
+          },
+        },
+      } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "channels.discord.guilds.1495587801394184362.requireMention",
+        "true",
+        "--strict-json",
+      ]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const written = firstWrittenConfig() as {
+        channels?: { discord?: { guilds?: unknown } };
+      };
+      expect(written.channels?.discord?.guilds).toEqual({
+        "1495587801394184362": {
+          requireMention: true,
+        },
+      });
+      expect(Array.isArray(written.channels?.discord?.guilds)).toBe(false);
+    });
+
+    it("keeps numeric config set path segments as object keys for other schema-backed records", async () => {
+      setConfigMutationShapeSchema();
+      const resolved: OpenClawConfig = {
+        channels: {
+          telegram: {
+            enabled: true,
+          },
+        },
+      } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "channels.telegram.groups.1495587801394184362.requireMention",
+        "true",
+        "--strict-json",
+      ]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const written = firstWrittenConfig() as {
+        channels?: { telegram?: { groups?: unknown } };
+      };
+      expect(written.channels?.telegram?.groups).toEqual({
+        "1495587801394184362": {
+          requireMention: true,
+        },
+      });
+      expect(Array.isArray(written.channels?.telegram?.groups)).toBe(false);
+    });
+
+    it("still creates arrays for schema-backed numeric list indexes", async () => {
+      setConfigMutationShapeSchema();
+      const resolved: OpenClawConfig = {};
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "set", "agents.list.0.id", '"tech"', "--strict-json"]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const written = firstWrittenConfig() as {
+        agents?: { list?: unknown };
+      };
+      expect(written.agents?.list).toEqual([{ id: "tech" }]);
+      expect(Array.isArray(written.agents?.list)).toBe(true);
     });
 
     it("fails early when unsupported mutable paths are assigned SecretRef objects (builder mode)", async () => {
@@ -1334,6 +1502,25 @@ describe("config cli", () => {
         mode: "json",
         allowInsecurePath: true,
       });
+    });
+
+    it("rejects exponent-style provider builder integer options", async () => {
+      await expect(
+        runConfigCommand([
+          "config",
+          "set",
+          "secrets.providers.runner",
+          "--provider-source",
+          "exec",
+          "--provider-command",
+          "op",
+          "--provider-timeout-ms",
+          "1e3",
+        ]),
+      ).rejects.toThrow("--provider-timeout-ms must be a positive integer.");
+
+      expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
     });
 
     it("runs resolvability checks in builder dry-run mode without writing", async () => {
@@ -2634,6 +2821,28 @@ describe("config cli", () => {
       ).rejects.toThrow("Invalid path segment: prototype");
 
       expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    });
+
+    it("rejects impractical array indexes for config set", async () => {
+      const resolved = { agents: { list: [] } } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      await expect(
+        runConfigCommand(["config", "set", "agents.list.4294967294.id", '"main"']),
+      ).rejects.toThrow('Expected numeric index for array segment "4294967294"');
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    });
+
+    it("rejects signed array indexes for config set", async () => {
+      const resolved = { agents: { list: [{ id: "main" }] } } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      await expect(
+        runConfigCommand(["config", "set", "agents.list.+0.id", '"other"']),
+      ).rejects.toThrow('Expected numeric index for array segment "+0"');
+
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
     });
   });

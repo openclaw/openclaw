@@ -1,8 +1,7 @@
-import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync } from "node:fs";
-import { join, relative } from "node:path";
+import { relative } from "node:path";
 import { commandsLightTestFiles } from "../../test/vitest/vitest.commands-light-paths.mjs";
 import { fullSuiteVitestShards } from "../../test/vitest/vitest.test-shards.mjs";
+import { listTrackedTestFiles } from "./list-test-files.mjs";
 
 const EXCLUDED_FULL_SUITE_SHARDS = new Set([
   "test/vitest/vitest.full-core-contracts.config.ts",
@@ -11,40 +10,10 @@ const EXCLUDED_FULL_SUITE_SHARDS = new Set([
 ]);
 
 const EXCLUDED_PROJECT_CONFIGS = new Set(["test/vitest/vitest.channels.config.ts"]);
+const DEFAULT_NODE_TEST_RUNNER = "blacksmith-8vcpu-ubuntu-2404";
 const RELEASE_ONLY_PLUGIN_SHARDS = new Set(["agentic-plugins"]);
 function listTestFiles(rootDir) {
-  const result = spawnSync("git", ["ls-files", "--", rootDir], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  if (result.status === 0) {
-    return result.stdout
-      .split("\n")
-      .map((line) => line.trim().replaceAll("\\", "/"))
-      .filter((line) => line.endsWith(".test.ts"))
-      .toSorted((a, b) => a.localeCompare(b));
-  }
-
-  if (!existsSync(rootDir)) {
-    return [];
-  }
-
-  const files = [];
-  const visit = (dir) => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const path = join(dir, entry.name);
-      if (entry.isDirectory()) {
-        visit(path);
-        continue;
-      }
-      if (entry.isFile() && entry.name.endsWith(".test.ts")) {
-        files.push(path.replaceAll("\\", "/"));
-      }
-    }
-  };
-
-  visit(rootDir);
-  return files.toSorted((a, b) => a.localeCompare(b));
+  return listTrackedTestFiles(rootDir);
 }
 
 function createAutoReplyReplySplitShards() {
@@ -247,6 +216,34 @@ function createGatewayServerSplitShards() {
     .filter((shard) => shard.includePatterns.length > 0);
 }
 
+function resolveCronShardName(file) {
+  const name = relative("src/cron", file).replaceAll("\\", "/");
+  if (name.startsWith("isolated-agent")) {
+    return "core-runtime-cron-isolated-agent";
+  }
+  if (name.startsWith("service")) {
+    return "core-runtime-cron-service";
+  }
+  return "core-runtime-cron-core";
+}
+
+function createCronSplitShards() {
+  const groups = new Map();
+  for (const file of listTestFiles("src/cron")) {
+    const shardName = resolveCronShardName(file);
+    groups.set(shardName, [...(groups.get(shardName) ?? []), file]);
+  }
+
+  return ["core-runtime-cron-core", "core-runtime-cron-isolated-agent", "core-runtime-cron-service"]
+    .map((shardName) => ({
+      configs: ["test/vitest/vitest.cron.config.ts"],
+      includePatterns: groups.get(shardName) ?? [],
+      requiresDist: false,
+      shardName,
+    }))
+    .filter((shard) => shard.includePatterns.length > 0);
+}
+
 const SPLIT_NODE_SHARDS = new Map([
   [
     "core-unit-fast",
@@ -321,13 +318,13 @@ const SPLIT_NODE_SHARDS = new Map([
         shardName: "core-runtime-shared",
         configs: [
           "test/vitest/vitest.acp.config.ts",
-          "test/vitest/vitest.cron.config.ts",
           "test/vitest/vitest.shared-core.config.ts",
           "test/vitest/vitest.tasks.config.ts",
           "test/vitest/vitest.utils.config.ts",
         ],
         requiresDist: false,
       },
+      ...createCronSplitShards(),
     ],
   ],
   [
@@ -366,7 +363,7 @@ const SPLIT_NODE_SHARDS = new Map([
         shardName: "agentic-agents",
         configs: [
           "test/vitest/vitest.agents-core.config.ts",
-          "test/vitest/vitest.agents-pi-embedded.config.ts",
+          "test/vitest/vitest.agents-embedded-agent.config.ts",
           "test/vitest/vitest.agents-support.config.ts",
           "test/vitest/vitest.agents-tools.config.ts",
         ],
@@ -446,7 +443,7 @@ export function createNodeTestShards(options = {}) {
             shardName: splitShard.shardName,
             configs: splitConfigs,
             ...(splitShard.includePatterns ? { includePatterns: splitShard.includePatterns } : {}),
-            ...(splitShard.runner ? { runner: splitShard.runner } : {}),
+            runner: splitShard.runner ?? DEFAULT_NODE_TEST_RUNNER,
             requiresDist: splitShard.requiresDist,
           },
         ];
@@ -458,6 +455,7 @@ export function createNodeTestShards(options = {}) {
         checkName: formatNodeTestShardCheckName(shard.name),
         shardName: shard.name,
         configs,
+        runner: DEFAULT_NODE_TEST_RUNNER,
         requiresDist: DIST_DEPENDENT_NODE_SHARD_NAMES.has(shard.name),
       },
     ];

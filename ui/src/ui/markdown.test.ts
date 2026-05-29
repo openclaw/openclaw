@@ -27,6 +27,16 @@ describe("toSanitizedMarkdownHtml", () => {
     );
   });
 
+  it("strips unsupported citation control markers before display", () => {
+    const html = toSanitizedMarkdownHtml(
+      "v2026.5.20 release note citeturn2view0\n\nStill readable.",
+    );
+
+    expect(html).toBe("<p>v2026.5.20 release note</p>\n<p>Still readable.</p>\n");
+    expect(html).not.toContain("cite");
+    expect(html).not.toContain("turn2view0");
+  });
+
   // ── Additional tests for markdown-it migration ──
   describe("www autolinks", () => {
     it("links www.example.com", () => {
@@ -332,9 +342,14 @@ describe("toSanitizedMarkdownHtml", () => {
   describe("code blocks", () => {
     it("renders fenced code blocks", () => {
       const html = toSanitizedMarkdownHtml("```ts\nconsole.log(1)\n```");
-      expect(html).toBe(
-        '<div class="code-block-wrapper"><div class="code-block-header"><span class="code-block-lang">ts</span><button type="button" class="code-block-copy" data-code="console.log(1)" aria-label="Copy code"><span class="code-block-copy__idle">Copy</span><span class="code-block-copy__done">Copied!</span></button></div><pre><code class="language-ts">console.log(1)\n</code></pre></div>',
-      );
+      const fragment = htmlFragment(html);
+      const code = fragment.querySelector("pre code");
+      const copy = fragment.querySelector<HTMLButtonElement>(".code-block-copy");
+
+      expect(fragment.querySelector(".code-block-lang")?.textContent).toBe("ts");
+      expect(copy?.dataset.code).toBe("console.log(1)");
+      expect(code?.classList.contains("language-ts")).toBe(true);
+      expect(code?.textContent).toBe("console.log(1)\n");
     });
 
     it("renders indented code blocks", () => {
@@ -352,6 +367,84 @@ describe("toSanitizedMarkdownHtml", () => {
       );
     });
 
+    it("omits copy chrome when rendering user-preserved code blocks", () => {
+      const source = `python3 - <<'PY'
+import openpyxl
+
+for ws in wb.worksheets:
+    print(f"--- {ws.title} ---")
+    rows = 0
+
+    for row in ws.iter_rows(values_only=True):
+        print(row)
+PY
+`;
+      const html = toSanitizedMarkdownHtml(`\`\`\`bash\n${source}\`\`\``, {
+        codeBlockChrome: "none",
+      });
+      const fragment = htmlFragment(html);
+
+      expect(fragment.querySelector(".code-block-copy")).toBeNull();
+      expect(fragment.textContent).toBe(source);
+    });
+
+    it("keeps the no-chrome code-block cache separate from copy-enabled rendering", () => {
+      const markdown = "```\ncode\n```";
+      const plain = toSanitizedMarkdownHtml(markdown, { codeBlockChrome: "none" });
+      const copyable = toSanitizedMarkdownHtml(markdown);
+
+      expect(htmlFragment(plain).querySelector(".code-block-copy")).toBeNull();
+      expect(htmlFragment(copyable).querySelector(".code-block-copy")).toBeInstanceOf(
+        HTMLButtonElement,
+      );
+    });
+
+    it("highlights fenced code blocks while preserving copy text", () => {
+      const source = 'const answer = "yes";\nconsole.log(answer);\n';
+      const html = toSanitizedMarkdownHtml(`\`\`\`js\n${source}\`\`\``);
+      const fragment = htmlFragment(html);
+      const code = fragment.querySelector("pre code");
+      const copy = fragment.querySelector<HTMLButtonElement>(".code-block-copy");
+
+      expect(fragment.querySelector(".code-block-lang")?.textContent).toBe("js");
+      expect(copy?.dataset.code).toBe(source.trimEnd());
+      expect(code?.textContent).toBe(source);
+      expect(code?.querySelector(".hljs-keyword")?.textContent).toBe("const");
+      expect(code?.querySelector(".hljs-string")?.textContent).toBe('"yes"');
+    });
+
+    it("highlights collapsed JSON code blocks", () => {
+      const html = toSanitizedMarkdownHtml('```json\n{"ok": true}\n```');
+      const fragment = htmlFragment(html);
+      const details = fragment.querySelector("details.json-collapse");
+      const code = details?.querySelector("pre code");
+
+      expect(details?.querySelector("summary")?.textContent).toBe("JSON · 2 lines");
+      expect(code?.textContent).toBe('{"ok": true}\n');
+      expect(code?.innerHTML).toContain("hljs-");
+    });
+
+    it("auto-highlights unlabeled code blocks only when detection is confident", () => {
+      const html = toSanitizedMarkdownHtml("```\n#include <vector>\nstd::vector<int> nums;\n```");
+      const fragment = htmlFragment(html);
+      const code = fragment.querySelector("pre code");
+
+      expect(code?.classList.contains("hljs")).toBe(true);
+      expect(code?.textContent).toBe("#include <vector>\nstd::vector<int> nums;\n");
+      expect(code?.innerHTML).toContain("hljs-meta");
+      expect(code?.innerHTML).toContain("hljs-keyword");
+    });
+
+    it("keeps highlighted HTML code escaped", () => {
+      const html = toSanitizedMarkdownHtml("```html\n<script>alert(1)</script>\n```");
+      const fragment = htmlFragment(html);
+      const code = fragment.querySelector("pre code");
+
+      expect(code?.querySelector("script")).toBeNull();
+      expect(code?.textContent).toBe("<script>alert(1)</script>\n");
+      expect(code?.innerHTML).not.toContain("<script>");
+    });
+
     it("keeps localized copy labels fresh after locale changes", async () => {
       const markdown = "```ts\nconst localizedCopy = true;\n```";
       await i18n.setLocale("en");
@@ -360,12 +453,25 @@ describe("toSanitizedMarkdownHtml", () => {
       try {
         await i18n.setLocale("zh-CN");
         const chinese = toSanitizedMarkdownHtml(markdown);
+        const englishFragment = htmlFragment(english);
+        const chineseFragment = htmlFragment(chinese);
+        const englishCopy = englishFragment.querySelector<HTMLButtonElement>(".code-block-copy");
+        const chineseCopy = chineseFragment.querySelector<HTMLButtonElement>(".code-block-copy");
 
-        expect(english).toBe(
-          '<div class="code-block-wrapper"><div class="code-block-header"><span class="code-block-lang">ts</span><button type="button" class="code-block-copy" data-code="const localizedCopy = true;" aria-label="Copy code"><span class="code-block-copy__idle">Copy</span><span class="code-block-copy__done">Copied!</span></button></div><pre><code class="language-ts">const localizedCopy = true;\n</code></pre></div>',
+        expect(englishCopy?.dataset.code).toBe("const localizedCopy = true;");
+        expect(englishCopy?.getAttribute("aria-label")).toBe("Copy code");
+        expect(englishCopy?.querySelector(".code-block-copy__idle")?.textContent).toBe("Copy");
+        expect(englishCopy?.querySelector(".code-block-copy__done")?.textContent).toBe("Copied!");
+        expect(englishFragment.querySelector("pre code")?.textContent).toBe(
+          "const localizedCopy = true;\n",
         );
-        expect(chinese).toBe(
-          '<div class="code-block-wrapper"><div class="code-block-header"><span class="code-block-lang">ts</span><button type="button" class="code-block-copy" data-code="const localizedCopy = true;" aria-label="复制代码"><span class="code-block-copy__idle">复制</span><span class="code-block-copy__done">已复制！</span></button></div><pre><code class="language-ts">const localizedCopy = true;\n</code></pre></div>',
+
+        expect(chineseCopy?.dataset.code).toBe("const localizedCopy = true;");
+        expect(chineseCopy?.getAttribute("aria-label")).toBe("复制代码");
+        expect(chineseCopy?.querySelector(".code-block-copy__idle")?.textContent).toBe("复制");
+        expect(chineseCopy?.querySelector(".code-block-copy__done")?.textContent).toBe("已复制！");
+        expect(chineseFragment.querySelector("pre code")?.textContent).toBe(
+          "const localizedCopy = true;\n",
         );
       } finally {
         await i18n.setLocale("en");
@@ -374,9 +480,16 @@ describe("toSanitizedMarkdownHtml", () => {
 
     it("collapses JSON code blocks", () => {
       const html = toSanitizedMarkdownHtml('```json\n{"key": "value"}\n```');
-      expect(html).toBe(
-        '<details class="json-collapse"><summary>JSON · 2 lines</summary><div class="code-block-wrapper"><div class="code-block-header"><span class="code-block-lang">json</span><button type="button" class="code-block-copy" data-code="{&quot;key&quot;: &quot;value&quot;}" aria-label="Copy code"><span class="code-block-copy__idle">Copy</span><span class="code-block-copy__done">Copied!</span></button></div><pre><code class="language-json">{"key": "value"}\n</code></pre></div></details>',
-      );
+      const fragment = htmlFragment(html);
+      const details = fragment.querySelector("details.json-collapse");
+      const code = details?.querySelector("pre code");
+      const copy = details?.querySelector<HTMLButtonElement>(".code-block-copy");
+
+      expect(details?.querySelector("summary")?.textContent).toBe("JSON · 2 lines");
+      expect(details?.querySelector(".code-block-lang")?.textContent).toBe("json");
+      expect(copy?.dataset.code).toBe('{"key": "value"}');
+      expect(code?.classList.contains("language-json")).toBe(true);
+      expect(code?.textContent).toBe('{"key": "value"}\n');
     });
   });
 
@@ -455,6 +568,20 @@ describe("toSanitizedMarkdownHtml", () => {
     it("strips href from explicit file:// links via DOMPurify", () => {
       const html = toSanitizedMarkdownHtml("[click](file:///etc/passwd)");
       expect(html).toBe("<p><a>click</a></p>\n");
+    });
+
+    it("strips href from host-local absolute file paths", () => {
+      const html = toSanitizedMarkdownHtml(
+        "[report.docx](/Users/test/.openclaw/data/skills/output/report.docx)",
+      );
+      expect(html).toBe("<p><a>report.docx</a></p>\n");
+    });
+
+    it("keeps app-relative links navigable", () => {
+      const html = toSanitizedMarkdownHtml("[usage](/usage)");
+      expect(html).toBe(
+        '<p><a href="/usage" rel="noreferrer noopener" target="_blank">usage</a></p>\n',
+      );
     });
   });
 
