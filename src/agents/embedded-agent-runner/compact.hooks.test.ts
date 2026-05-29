@@ -309,6 +309,30 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     );
   });
 
+  it("keeps the embedded compaction system prompt after active tool selection", async () => {
+    buildEmbeddedSystemPromptMock.mockReturnValueOnce("compaction system prompt");
+
+    await compactEmbeddedAgentSessionDirect({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+    });
+
+    const createdSession = (await createAgentSessionMock.mock.results[0]?.value) as {
+      session: {
+        agent: { state: { systemPrompt?: string } };
+        setActiveToolsByName: Mock;
+        setBaseSystemPrompt: Mock;
+      };
+    };
+
+    expect(createdSession.session.agent.state.systemPrompt).toBe("compaction system prompt");
+    expect(createdSession.session.setActiveToolsByName.mock.invocationCallOrder[0]).toBeLessThan(
+      createdSession.session.setBaseSystemPrompt.mock.invocationCallOrder[0],
+    );
+  });
+
   it("routes compaction through shared stream resolution and extra params", () => {
     const resolvedStreamFn = vi.fn();
     resolveEmbeddedAgentStreamFnMock.mockReturnValue(resolvedStreamFn);
