@@ -165,6 +165,9 @@ export async function materializeBundleMcpToolsForRun(params: {
 
   return {
     tools,
+    ...(catalog.diagnostics && catalog.diagnostics.length > 0
+      ? { diagnostics: catalog.diagnostics }
+      : {}),
     dispose: async () => {
       if (disposed) {
         return;

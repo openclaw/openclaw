@@ -1,0 +1,52 @@
+{
+  "id": "workboard",
+  "enabledByDefault": false,
+  "activation": {
+    "onStartup": true
+  },
+  "name": "Workboard",
+  "description": "Dashboard workboard for agent-owned issues and sessions.",
+  "contracts": {
+    "tools": [
+      "workboard_list",
+      "workboard_read",
+      "workboard_claim",
+      "workboard_heartbeat",
+      "workboard_release",
+      "workboard_comment",
+      "workboard_proof",
+      "workboard_unblock"
+    ]
+  },
+  "toolMetadata": {
+    "workboard_list": {
+      "optional": true
+    },
+    "workboard_read": {
+      "optional": true
+    },
+    "workboard_claim": {
+      "optional": true
+    },
+    "workboard_heartbeat": {
+      "optional": true
+    },
+    "workboard_release": {
+      "optional": true
+    },
+    "workboard_comment": {
+      "optional": true
+    },
+    "workboard_proof": {
+      "optional": true
+    },
+    "workboard_unblock": {
+      "optional": true
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

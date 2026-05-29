@@ -227,7 +227,11 @@ async function discardIgnoredResponseBody(response: Response): Promise<void> {
   if (!body) {
     return;
   }
-  await body.cancel().catch(() => undefined);
+  try {
+    await body.cancel();
+  } catch {
+    // Best-effort cleanup after rejecting a response body.
+  }
 }
 
 function decodeTextContent(buffer: Buffer, charset: string | undefined): string {

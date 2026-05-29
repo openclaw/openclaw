@@ -210,7 +210,11 @@ async function runLegacyMigrationPlans(
             break;
           }
           try {
-            await store.register(targetKey, entry.value);
+            await store.register(
+              targetKey,
+              entry.value,
+              entry.ttlMs != null ? { ttlMs: entry.ttlMs } : undefined,
+            );
             const nextExpectedKeys = new Set(expectedKeys);
             nextExpectedKeys.add(targetKey);
             const liveKeys = new Set((await store.entries()).map(({ key }) => key));

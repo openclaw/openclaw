@@ -118,7 +118,11 @@ prompts that nobody is around to answer.
 
 If Codex's local system requirements file disallows implicit YOLO approval,
 reviewer, or sandbox values, OpenClaw treats the implicit default as guardian
-instead and selects allowed guardian permissions. Hostname-matching
+instead and selects allowed guardian permissions. `tools.exec.mode: "auto"`
+also forces guardian-reviewed Codex approvals and does not preserve unsafe
+legacy `approvalPolicy: "never"` or `sandbox: "danger-full-access"` overrides;
+set `tools.exec.mode: "full"` for an intentional no-approval posture.
+Hostname-matching
 `[[remote_sandbox_config]]` entries in the same requirements file are honored
 for the sandbox default decision.
 

@@ -28,6 +28,7 @@ describe("resolveOfficialPluginOnboardingInstallEntries", () => {
     expect(pluginIds).toContain("diagnostics-otel");
     expect(pluginIds).toContain("diagnostics-prometheus");
     expect(pluginIds).toContain("acpx");
+    expect(pluginIds).toContain("tokenjuice");
     expect(pluginIds).not.toContain("brave");
     expect(pluginIds).not.toContain("codex");
     expect(pluginIds).not.toContain("discord");
@@ -138,6 +139,11 @@ describe("setupOfficialPluginInstalls", () => {
           hint: "OpenClaw diff viewer plugin",
         },
         {
+          value: "copilot",
+          label: "GitHub Copilot agent runtime",
+          hint: "OpenClaw GitHub Copilot agent runtime plugin",
+        },
+        {
           value: "google-meet",
           label: "Google Meet",
           hint: "OpenClaw Google Meet participant plugin",
@@ -156,6 +162,16 @@ describe("setupOfficialPluginInstalls", () => {
           value: "openshell",
           label: "OpenShell Sandbox",
           hint: "OpenClaw OpenShell sandbox backend",
+        },
+        {
+          value: "pixverse",
+          label: "PixVerse",
+          hint: "OpenClaw PixVerse video generation provider plugin",
+        },
+        {
+          value: "tokenjuice",
+          label: "Tokenjuice",
+          hint: "OpenClaw tokenjuice exec output compaction plugin",
         },
         {
           value: "voice-call",

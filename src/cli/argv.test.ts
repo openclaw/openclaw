@@ -476,8 +476,18 @@ describe("argv helpers", () => {
       expected: 5000,
     },
     {
+      name: "valid signed decimal positive integer",
+      argv: ["node", "openclaw", "status", "--timeout", "+5000"],
+      expected: 5000,
+    },
+    {
       name: "invalid integer",
       argv: ["node", "openclaw", "status", "--timeout", "nope"],
+      expected: undefined,
+    },
+    {
+      name: "non-decimal integer",
+      argv: ["node", "openclaw", "status", "--timeout", "0x10"],
       expected: undefined,
     },
     {

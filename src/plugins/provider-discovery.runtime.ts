@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { planManifestModelCatalogRows } from "../model-catalog/manifest-planner.js";
@@ -5,10 +6,16 @@ import type { NormalizedModelCatalogRow } from "../model-catalog/types.js";
 import { sortUniqueStrings } from "../shared/string-normalization.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import { clearNativeRequireJavaScriptModuleCache } from "./native-module-require.js";
+import { withProfile } from "./plugin-load-profile.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
+import {
+  createPluginModuleLoaderCache,
+  getCachedPluginModuleLoader,
+} from "./plugin-module-loader-cache.js";
 import { resolveDiscoveredProviderPluginIds } from "./providers.js";
 import { resolvePluginProviders } from "./providers.runtime.js";
-import { createPluginSourceLoader } from "./source-loader.js";
 import type { ProviderPlugin } from "./types.js";
 
 type ProviderDiscoveryModule =
@@ -27,6 +34,30 @@ type ProviderDiscoveryEntryResult = {
   entryPluginIds: Set<string>;
   manifestEntryPluginIds: Set<string>;
 };
+
+const providerDiscoveryModuleLoaders = createPluginModuleLoaderCache();
+const providerDiscoveryModuleRoots = new Map<string, string>();
+
+function resolveProviderDiscoveryDependencyRoot(rootDir: string): string {
+  const extensionsDir = path.dirname(rootDir);
+  const distDir = path.dirname(extensionsDir);
+  // Bundled dist provider entries import hoisted dist/*.js chunks outside
+  // dist/extensions/<plugin>; lifecycle clears must evict those chunks too.
+  if (path.basename(extensionsDir) === "extensions" && path.basename(distDir) === "dist") {
+    return distDir;
+  }
+  return rootDir;
+}
+
+export function clearProviderDiscoveryModuleLoaders(): void {
+  providerDiscoveryModuleLoaders.clear();
+  for (const [modulePath, rootDir] of providerDiscoveryModuleRoots) {
+    clearNativeRequireJavaScriptModuleCache(modulePath, { dependencyRoot: rootDir });
+  }
+  providerDiscoveryModuleRoots.clear();
+}
+
+registerPluginMetadataProcessMemoLifecycleClear(clearProviderDiscoveryModuleLoaders);
 
 function normalizeDiscoveryModule(value: ProviderDiscoveryModule): ProviderPlugin[] {
   const resolved =
@@ -49,6 +80,29 @@ function normalizeDiscoveryModule(value: ProviderDiscoveryModule): ProviderPlugi
     }
   }
   return [];
+}
+
+function loadProviderDiscoveryModule(params: {
+  pluginId: string;
+  modulePath: string;
+  rootDir: string;
+}): ProviderDiscoveryModule {
+  providerDiscoveryModuleRoots.set(
+    params.modulePath,
+    resolveProviderDiscoveryDependencyRoot(params.rootDir),
+  );
+  const moduleLoader = getCachedPluginModuleLoader({
+    cache: providerDiscoveryModuleLoaders,
+    modulePath: params.modulePath,
+    importerUrl: import.meta.url,
+    loaderFilename: import.meta.url,
+    preferBuiltDist: true,
+  });
+  return withProfile(
+    { pluginId: params.pluginId, source: params.modulePath },
+    "provider-discovery-entry",
+    () => moduleLoader(params.modulePath) as ProviderDiscoveryModule,
+  );
 }
 
 function hasLiveProviderDiscoveryHook(provider: ProviderPlugin): boolean {
@@ -237,11 +291,14 @@ function resolveProviderDiscoveryEntryPlugins(params: {
       manifestEntryPluginIds,
     };
   }
-  const loadSource = createPluginSourceLoader();
   const providers: ProviderPlugin[] = [];
   for (const manifest of entryRecords) {
     try {
-      const moduleExport = loadSource(manifest.providerDiscoverySource!) as ProviderDiscoveryModule;
+      const moduleExport = loadProviderDiscoveryModule({
+        pluginId: manifest.id,
+        modulePath: manifest.providerDiscoverySource!,
+        rootDir: manifest.rootDir,
+      });
       providers.push(
         ...normalizeDiscoveryModule(moduleExport).map((provider) =>
           Object.assign({}, provider, { pluginId: manifest.id }),
