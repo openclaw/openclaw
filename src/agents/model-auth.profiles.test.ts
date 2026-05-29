@@ -127,6 +127,7 @@ vi.mock("./model-auth-env-vars.js", () => {
     "demo-local": ["DEMO_LOCAL_API_KEY"],
     huggingface: ["HUGGINGFACE_HUB_TOKEN", "HF_TOKEN"],
     "minimax-portal": ["MINIMAX_OAUTH_TOKEN", "MINIMAX_API_KEY"],
+    opencode: ["OPENCODE_ZEN_API_KEY", "OPENCODE_API_KEY"],
     "opencode-go": ["OPENCODE_GO_API_KEY", "OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"],
     openai: ["OPENAI_API_KEY"],
     qianfan: ["QIANFAN_API_KEY"],
