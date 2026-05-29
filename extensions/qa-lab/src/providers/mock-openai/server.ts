@@ -645,7 +645,7 @@ function execCommandFromToolProgressPrompt(prompt: string) {
 
 function buildMockFunctionCall(name: string, args: Record<string, unknown>) {
   const serialized = JSON.stringify(args);
-  const callSuffix = createHash("sha1")
+  const callSuffix = createHash("sha256")
     .update(name)
     .update("\0")
     .update(serialized)
