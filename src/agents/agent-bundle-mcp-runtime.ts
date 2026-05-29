@@ -381,6 +381,7 @@ const DISPOSE_TIMEOUT_MS = 5_000;
 async function disposeSession(session: BundleMcpSession) {
   session.detachStderr?.();
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
   await Promise.race([
     (async () => {
       if (session.transportType === "streamable-http") {
@@ -390,12 +391,21 @@ async function disposeSession(session: BundleMcpSession) {
       await session.client.close().catch(() => {});
     })(),
     new Promise<void>((resolve) => {
-      timer = setTimeout(resolve, DISPOSE_TIMEOUT_MS);
+      timer = setTimeout(() => {
+        timedOut = true;
+        resolve();
+      }, DISPOSE_TIMEOUT_MS);
       timer.unref?.();
     }),
   ]).finally(() => {
     if (timer) { clearTimeout(timer); }
   });
+  if (timedOut) {
+    // Force-close transport and client so a hung terminateSession() DELETE
+    // gets its AbortSignal triggered by the transport teardown.
+    await session.transport.close().catch(() => {});
+    await session.client.close().catch(() => {});
+  }
 }
 
 function createCatalogFingerprint(servers: Record<string, unknown>): string {

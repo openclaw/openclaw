@@ -1648,6 +1648,106 @@ process.on("SIGINT", shutdown);`,
 
 describe("disposeSession timeout", () => {
   it(
+    "force-closes transport and client when terminateSession hangs past the timeout",
+    { timeout: 15_000 },
+    async () => {
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-force-close-"));
+      const serverPath = path.join(tempDir, "hanging-terminate.mjs");
+      const logPath = path.join(tempDir, "server.log");
+
+      await writeExecutable(
+        serverPath,
+        `#!/usr/bin/env node
+import fs from "node:fs/promises";
+
+const logPath = ${JSON.stringify(logPath)};
+function log(line) {
+  void fs.appendFile(logPath, line + "\\n", "utf8").catch(() => {});
+}
+function send(message) {
+  process.stdout.write(JSON.stringify(message) + "\\n");
+}
+
+let buffer = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  buffer += chunk;
+  while (true) {
+    const newline = buffer.indexOf("\\n");
+    if (newline < 0) return;
+    const line = buffer.slice(0, newline).replace(/\\r$/, "");
+    buffer = buffer.slice(newline + 1);
+    if (line.trim()) {
+      const message = JSON.parse(line);
+      if (message.method === "initialize") {
+        send({
+          jsonrpc: "2.0",
+          id: message.id,
+          result: {
+            protocolVersion: message.params?.protocolVersion ?? "2025-03-26",
+            capabilities: { tools: {} },
+            serverInfo: { name: "hanging-terminate-server", version: "1.0.0" },
+          },
+        });
+      } else if (message.method === "tools/list") {
+        send({
+          jsonrpc: "2.0",
+          id: message.id,
+          result: { tools: [{ name: "probe", description: "probe", inputSchema: { type: "object" } }] },
+        });
+      } else {
+        log("recv " + String(message.method ?? "response"));
+      }
+    }
+  }
+});
+
+// Keep process alive forever and ignore all shutdown signals
+process.on("SIGTERM", () => { log("ignored SIGTERM"); });
+process.on("SIGINT", () => { log("ignored SIGINT"); });
+process.stdin.on("end", () => {
+  log("stdin-end");
+  setInterval(() => {}, 60_000);
+});`,
+      );
+
+      const runtime = await getOrCreateSessionMcpRuntime({
+        sessionId: "session-force-close-timeout",
+        sessionKey: "agent:test:session-force-close-timeout",
+        workspaceDir: "/workspace",
+        cfg: {
+          mcp: {
+            servers: {
+              hangingTerminate: {
+                command: process.execPath,
+                args: [serverPath],
+              },
+            },
+          },
+        },
+      });
+
+      const catalog = await runtime.getCatalog();
+      expect(catalog.tools).toHaveLength(1);
+
+      const start = Date.now();
+      await runtime.dispose();
+      const elapsed = Date.now() - start;
+
+      // The timeout fires at 5s and force-closes transport + client,
+      // so disposal must complete well before 8s even when the process
+      // ignores shutdown signals.
+      expect(elapsed).toBeLessThan(8_000);
+
+      await retireSessionMcpRuntime({
+        sessionId: "session-force-close-timeout",
+        reason: "test cleanup",
+      });
+      await fs.rm(tempDir, { recursive: true, force: true });
+    },
+  );
+
+  it(
     "completes disposal even when the MCP server process ignores shutdown",
     { timeout: 15_000 },
     async () => {
