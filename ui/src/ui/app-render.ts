@@ -1894,7 +1894,7 @@ export function renderApp(state: AppViewState) {
             >
               <div>
                 ${isChat
-                  ? renderChatSessionSelect(state)
+                  ? renderChatSessionSelect(state, switchChatSession)
                   : html`<div class="page-title">${titleForTab(state.tab)}</div>`}
                 ${isChat ? nothing : html`<div class="page-sub">${subtitleForTab(state.tab)}</div>`}
               </div>
