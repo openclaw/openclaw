@@ -348,6 +348,29 @@ describe("sessionFileHasContent", () => {
     expect(await sessionFileHasContent(file)).toBe(true);
   });
 
+  it("inspects the transcript tail when the newest user message is after the scan cap", async () => {
+    const file = path.join(tmpDir, "fresh-user-after-cap.jsonl");
+    const oldAnsweredTurn = [
+      { type: "message", message: { role: "user", content: "old" } },
+      { type: "message", message: { role: "assistant", content: "answered" } },
+    ];
+    const filler = Array.from({ length: 501 }, (_, index) => ({
+      type: "meta",
+      index,
+    }));
+    const freshUserTurn = [
+      { type: "message", message: { role: "user", content: "fresh unanswered" } },
+    ];
+    await fs.writeFile(
+      file,
+      [...oldAnsweredTurn, ...filler, ...freshUserTurn]
+        .map((line) => JSON.stringify(line))
+        .join("\n") + "\n",
+      "utf-8",
+    );
+    expect(await sessionFileHasContent(file)).toBe(false);
+  });
+
   it("returns true when assistant message appears after large user content", async () => {
     const file = path.join(tmpDir, "large-user.jsonl");
     // Create a user message whose JSON line exceeds 256KB to ensure the

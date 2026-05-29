@@ -39,16 +39,19 @@ async function jsonlFileHasAssistantMessage(filePath: string | undefined): Promi
     const fh = await fs.open(filePath, "r");
     try {
       const rl = readline.createInterface({ input: fh.createReadStream({ encoding: "utf-8" }) });
-      let recordCount = 0;
-      let hasAssistantAfterLatestUser = false;
+      const recentLines: string[] = [];
       for await (const line of rl) {
         if (!line.trim()) {
           continue;
         }
-        recordCount++;
-        if (recordCount > SESSION_FILE_MAX_RECORDS) {
-          break;
+        recentLines.push(line);
+        if (recentLines.length > SESSION_FILE_MAX_RECORDS) {
+          recentLines.shift();
         }
+      }
+
+      let hasAssistantAfterLatestUser = false;
+      for (const line of recentLines) {
         let obj: unknown;
         try {
           obj = JSON.parse(line);
