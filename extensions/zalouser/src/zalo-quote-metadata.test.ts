@@ -1,56 +1,45 @@
 import { describe, expect, it } from "vitest";
-import type { ZaloInboundMessage } from "./types.js";
+import { __testing as zaloTesting } from "./zalo-js.js";
 
-describe("ZaloInboundMessage quote metadata fields (#86851)", () => {
-  it("should include quotedGlobalMsgId, quotedOwnerId, quotedBody in type", () => {
-    const message: ZaloInboundMessage = {
-      threadId: "thread123",
-      isGroup: false,
-      senderId: "sender123",
-      content: "Test message",
-      timestampMs: Date.now(),
-      implicitMention: false,
-      quotedGlobalMsgId: "quotedGlobal123",
-      quotedOwnerId: "owner456",
-      quotedBody: "Quoted message body",
-      raw: {},
-    };
+describe("Zalo quote metadata extraction (#86851)", () => {
+  it("extracts quote id, owner, and body from zca-js message data", () => {
+    const message = zaloTesting.toInboundMessage(
+      {
+        type: 0,
+        data: {
+          uidFrom: "123456789",
+          idTo: "987654321",
+          content: "ok",
+          ts: 1_764_000_000_000,
+          quote: {
+            globalMsgId: 987654321234,
+            ownerId: "555444333_2",
+            msg: "Previous bot message content",
+          },
+        },
+      } as Parameters<typeof zaloTesting.toInboundMessage>[0],
+      "555444333",
+    );
 
-    expect(message.quotedGlobalMsgId).toBe("quotedGlobal123");
-    expect(message.quotedOwnerId).toBe("owner456");
-    expect(message.quotedBody).toBe("Quoted message body");
+    expect(message?.quotedGlobalMsgId).toBe("987654321234");
+    expect(message?.quotedOwnerId).toBe("555444333");
+    expect(message?.quotedBody).toBe("Previous bot message content");
+    expect(message?.implicitMention).toBe(true);
   });
 
-  it("should allow optional quote fields to be undefined", () => {
-    const message: ZaloInboundMessage = {
-      threadId: "thread123",
-      isGroup: false,
-      senderId: "sender123",
-      content: "Test message",
-      timestampMs: Date.now(),
-      raw: {},
-    };
+  it("omits quote metadata when the zca-js quote object is absent", () => {
+    const message = zaloTesting.toInboundMessage({
+      type: 0,
+      data: {
+        uidFrom: "123456789",
+        idTo: "987654321",
+        content: "plain message",
+        ts: 1_764_000_000_000,
+      },
+    } as Parameters<typeof zaloTesting.toInboundMessage>[0]);
 
-    expect(message.quotedGlobalMsgId).toBeUndefined();
-    expect(message.quotedOwnerId).toBeUndefined();
-    expect(message.quotedBody).toBeUndefined();
-  });
-
-  it("should validate quote metadata fields are optional strings", () => {
-    const messageWithQuotes: ZaloInboundMessage = {
-      threadId: "thread123",
-      isGroup: false,
-      senderId: "sender123",
-      content: "Reply with quote",
-      timestampMs: Date.now(),
-      quotedGlobalMsgId: "msgId789",
-      quotedOwnerId: "userId789",
-      quotedBody: "Original quoted content",
-      raw: {},
-    };
-
-    expect(typeof messageWithQuotes.quotedGlobalMsgId).toBe("string");
-    expect(typeof messageWithQuotes.quotedOwnerId).toBe("string");
-    expect(typeof messageWithQuotes.quotedBody).toBe("string");
+    expect(message?.quotedGlobalMsgId).toBeUndefined();
+    expect(message?.quotedOwnerId).toBeUndefined();
+    expect(message?.quotedBody).toBeUndefined();
   });
 });

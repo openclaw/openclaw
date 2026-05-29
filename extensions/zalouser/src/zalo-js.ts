@@ -960,6 +960,11 @@ function toInboundMessage(message: Message, ownUserId?: string): ZaloInboundMess
   };
 }
 
+export const testing = {
+  toInboundMessage,
+};
+export { testing as __testing };
+
 function zalouserSessionExists(profileInput?: string | null): boolean {
   const profile = normalizeProfile(profileInput);
   return readCredentials(profile) !== null;
