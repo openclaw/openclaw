@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { AcpRuntimeEvent } from "../../acp/runtime/types.js";
 import { prefixSystemMessage } from "../../infra/system-message.js";
 import { createAcpReplyProjector } from "./acp-projector.js";
 import { createAcpTestConfig as createCfg } from "./test-fixtures/acp-runtime.js";
@@ -583,6 +584,50 @@ describe("createAcpReplyProjector", () => {
       { kind: "tool", text: prefixSystemMessage("usage updated: 10/100") },
       { kind: "tool", text: prefixSystemMessage("usage updated: 11/100") },
     ]);
+  });
+
+  it("does not crash on textless visible usage_update events (#65567)", async () => {
+    // Regression for the Telegram dispatch crash: a visible usage_update
+    // status event with `text` undefined previously hit
+    // `hashText(event.text).trim()` and `emitSystemStatus(event.text).trim()`
+    // and threw TypeError on the .trim() call. Both call sites now guard
+    // against undefined; this test pins both shapes that can reach those
+    // paths so they cannot regress silently.
+    const { deliveries, projector } = createProjectorHarness(
+      createLiveCfgOverrides({
+        coalesceIdleMs: 0,
+        maxChunkChars: 64,
+        tagVisibility: {
+          usage_update: true,
+        },
+      }),
+    );
+
+    // Shape 1: no numeric usage fields, no text. The `usage_update` branch
+    // falls back to `hashText(event.text)` for the dedup tuple; previously
+    // `(undefined).trim()` threw. Now hashText returns "" without crashing.
+    // Cast is required because AcpRuntimeEvent's status variant types `text`
+    // as required; this test deliberately constructs the type-violating
+    // shape the runtime can emit in practice.
+    await projector.onEvent({
+      type: "status",
+      tag: "usage_update",
+    } as unknown as AcpRuntimeEvent);
+
+    // Shape 2: numeric textless usage update. The dedup tuple is built from
+    // `used`/`size`, but `emitSystemStatus(event.text ?? "")` is still
+    // called with the missing text. Previously this crashed on .trim();
+    // the explicit `?? ""` guard makes it a no-op visible delivery.
+    await projector.onEvent({
+      type: "status",
+      tag: "usage_update",
+      used: 10,
+      size: 100,
+    } as unknown as AcpRuntimeEvent);
+
+    // Neither shape carried renderable text, so no system-status delivery
+    // is expected. The assertion is "no crash" plus "no spurious output".
+    expect(deliveries).toEqual([]);
   });
 
   it("hides available_commands_update by default", async () => {

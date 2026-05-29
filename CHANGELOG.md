@@ -68,6 +68,7 @@ Docs: https://docs.openclaw.ai
 - Performance: prebuild QA runtime probes with generated plugin assets but without CLI startup metadata.
 - Performance: skip declaration bundling for runtime-only CLI startup and gateway watch build profiles.
 - Performance: reuse prepared provider handles, strict tool schemas, gateway runtime metadata, session maintenance config, plugin metadata, bundled skill allowlists, package-local plugin artifacts, single-entry store writes, and validated/serialized session prompt blobs.
+- Telegram/dispatch: guard `hashText` and `emitSystemStatus` against undefined `event.text` on textless visible `usage_update` status events, preventing a `TypeError: Cannot read properties of undefined (reading 'trim')` that crashed Telegram dispatch on group-chat follow-up messages. (#65567)
 
 ## 2026.5.28
 
