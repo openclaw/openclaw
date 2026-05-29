@@ -2142,7 +2142,16 @@ async function migrateLegacySessions(
     );
   }
 
+  const targetReadable =
+    !fileExists(detected.sessions.targetStorePath) || targetParsed.ok;
+  if (!targetReadable) {
+    warnings.push(
+      `Target sessions store unreadable; left untouched to avoid overwriting at ${detected.sessions.targetStorePath}`,
+    );
+  }
+
   if (
+    targetReadable &&
     (legacyParsed.ok || targetParsed.ok) &&
     (Object.keys(legacyStore).length > 0 || Object.keys(targetStore).length > 0)
   ) {
@@ -2184,7 +2193,7 @@ async function migrateLegacySessions(
     }
   }
 
-  if (legacyParsed.ok) {
+  if (legacyParsed.ok && targetReadable) {
     try {
       if (fileExists(detected.sessions.legacyStorePath)) {
         fs.rmSync(detected.sessions.legacyStorePath, { force: true });

@@ -279,4 +279,51 @@ describe("state migrations", () => {
     await expectMissingPath(resolveChannelAllowFromPath("chatapp", env, "default"));
     await expectMissingPath(resolveChannelAllowFromPath("chatapp", env, "beta"));
   });
+
+  it("preserves a corrupt target session store instead of overwriting it with legacy-only data", async () => {
+    const { root, stateDir, env, cfg } = await createLegacyStateFixture();
+
+    const targetStorePath = path.join(
+      stateDir,
+      "agents",
+      "worker-1",
+      "sessions",
+      "sessions.json",
+    );
+    // target sessions.json is corrupt (trailing garbage → JSON5.parse fails) and
+    // holds a target-only key that has no legacy counterpart.
+    const corruptBytes = `${JSON.stringify({
+      "agent:worker-1:desk:target-only": { sessionId: "target-only-session", updatedAt: 99 },
+    })}\n<<<corrupt trailing garbage>>>`;
+    await fs.writeFile(targetStorePath, corruptBytes, "utf8");
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env,
+      homedir: () => root,
+    });
+    const result = await runLegacyStateMigrations({
+      detected,
+      now: () => 1234,
+    });
+
+    // The corrupt bytes must survive on disk (parse still fails after migration).
+    const afterRaw = await fs.readFile(targetStorePath, "utf8");
+    expect(afterRaw).toContain("corrupt trailing garbage");
+    expect(afterRaw).toBe(corruptBytes);
+
+    // No "Merged sessions store" change was committed against the corrupt target.
+    expect(result.changes.some((c) => c.startsWith("Merged sessions store"))).toBe(false);
+
+    // The user is warned that the target store was left untouched because it is unreadable.
+    expect(result.warnings.some((w) => /unreadable|corrupt/i.test(w))).toBe(true);
+
+    // Legacy store is NOT deleted, so the data is still recoverable. The legacy
+    // sessions dir is preserved (renamed to a sessions.legacy-* backup because
+    // its sessions.json was intentionally not removed), keeping the data intact.
+    const backupDir = path.join(stateDir, "sessions.legacy-1234");
+    await expect(
+      fs.readFile(path.join(backupDir, "sessions.json"), "utf8"),
+    ).resolves.toContain("legacy-direct");
+  });
 });
