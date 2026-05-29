@@ -522,10 +522,11 @@ describe("speech-core native voice-note routing", () => {
 
     expect(result.success).toBe(true);
     const request = requireFirstSynthesisRequest("explicit model alias synthesis request");
-    expect(request.providerConfig).toMatchObject({
+    const providerConfig = requireRecord(request.providerConfig, "provider config");
+    expect(providerConfig).toMatchObject({
       modelId: "explicit-model",
     });
-    expect(request.providerConfig.model).toBeUndefined();
+    expect(providerConfig.model).toBeUndefined();
   });
 
   it("tries voiceModel fallbacks before auto-selected speech providers", async () => {
