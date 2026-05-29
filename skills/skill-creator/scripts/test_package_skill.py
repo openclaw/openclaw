@@ -169,6 +169,10 @@ class TestPackageSkillSecurity(TestCase):
         nested = skill_dir / "zlib"
         nested.mkdir()
         (nested / "november.txt").write_text("n\n")
+        # "alpha-x.txt" discriminates entry-name ordering from Path-object
+        # ordering: "-" (0x2d) sorts before "/" (0x2f) in the archive entry
+        # name, but Path part-tuple ordering places it after the "alpha/" dir.
+        (skill_dir / "alpha-x.txt").write_text("x\n")
         out_dir = self.temp_dir / "out"
         out_dir.mkdir()
 
@@ -178,11 +182,16 @@ class TestPackageSkillSecurity(TestCase):
         skill_file = out_dir / "order-skill.skill"
         with zipfile.ZipFile(skill_file, "r") as archive:
             names = [name for name in archive.namelist() if not name.endswith("/")]
-        # Entries must be lexicographically sorted regardless of filesystem
-        # enumeration order, so packaged archives are reproducible.
+        # Entries must be ordered by their archive entry name, regardless of
+        # filesystem enumeration or OS path-flavour, so archives are reproducible.
         self.assertEqual(names, sorted(names))
+        # Lock the entry-name contract: "alpha-x.txt" precedes "alpha/bravo.txt"
+        # (Path-object sorting would invert these).
+        self.assertLess(
+            names.index("order-skill/alpha-x.txt"),
+            names.index("order-skill/alpha/bravo.txt"),
+        )
         # Ensure the fixture actually spans multiple directories/files.
-        self.assertIn("order-skill/alpha/bravo.txt", names)
         self.assertIn("order-skill/zlib/november.txt", names)
 
 
