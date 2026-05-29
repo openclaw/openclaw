@@ -1,4 +1,9 @@
-import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
+import type {
+  ChannelRuntimeSurface,
+  ClawdbotConfig,
+  PluginRuntime,
+  RuntimeEnv,
+} from "../runtime-api.js";
 import { listEnabledFeishuAccounts, resolveFeishuRuntimeAccount } from "./accounts.js";
 import { fetchBotIdentityForMonitor } from "./monitor.startup.js";
 import {
@@ -12,6 +17,7 @@ import { setFeishuRuntime } from "./runtime.js";
 export type MonitorFeishuOpts = {
   config?: ClawdbotConfig;
   runtime?: RuntimeEnv | PluginRuntime;
+  channelRuntime?: ChannelRuntimeSurface;
   abortSignal?: AbortSignal;
   accountId?: string;
 };
@@ -31,6 +37,12 @@ function isPluginRuntime(runtime: RuntimeEnv | PluginRuntime | undefined): runti
   );
 }
 
+function createFeishuRuntimeFromChannelRuntime(
+  channelRuntime: ChannelRuntimeSurface,
+): PluginRuntime {
+  return { channel: channelRuntime } as unknown as PluginRuntime;
+}
+
 export {
   clearFeishuWebhookRateLimitStateForTest,
   getFeishuWebhookRateLimitStateSizeForTest,
@@ -45,6 +57,8 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
 
   if (isPluginRuntime(opts.runtime)) {
     setFeishuRuntime(opts.runtime);
+  } else if (opts.channelRuntime) {
+    setFeishuRuntime(createFeishuRuntimeFromChannelRuntime(opts.channelRuntime));
   }
 
   const log = opts.runtime?.log ?? console.log;

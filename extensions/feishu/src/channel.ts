@@ -1319,6 +1319,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
           return monitorFeishuProvider({
             config: ctx.cfg,
             runtime: ctx.runtime,
+            channelRuntime: ctx.channelRuntime,
             abortSignal: ctx.abortSignal,
             accountId: ctx.accountId,
           });

@@ -1,6 +1,6 @@
 import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
+import type { ChannelRuntimeSurface, ClawdbotConfig } from "../runtime-api.js";
 import { monitorFeishuProvider, stopFeishuMonitor } from "./monitor.js";
 import { resolveStartupProbeTimeoutMs } from "./monitor.startup.js";
 import { setFeishuRuntime } from "./runtime.js";
@@ -80,7 +80,7 @@ describe("Feishu monitor startup preflight", () => {
     }
   });
 
-  it("initializes the Feishu plugin runtime before starting account monitors", async () => {
+  it("initializes the Feishu plugin runtime from the gateway channel runtime", async () => {
     const started: string[] = [];
     let releaseProbe: (() => void) | undefined;
     const probeReleased = new Promise<void>((resolve) => {
@@ -96,20 +96,27 @@ describe("Feishu monitor startup preflight", () => {
       return { ok: true, botOpenId: `bot_${account.accountId}` };
     });
 
-    const runtime = {
-      ...createNonExitingRuntimeEnv(),
-      channel: {},
-    } as unknown as PluginRuntime;
+    const runtime = createNonExitingRuntimeEnv();
+    const channelRuntime = {
+      runtimeContexts: {
+        register: vi.fn(() => ({ dispose: vi.fn() })),
+        get: vi.fn(),
+        watch: vi.fn(() => vi.fn()),
+      },
+    } satisfies ChannelRuntimeSurface;
     const abortController = new AbortController();
     const monitorPromise = monitorFeishuProvider({
       config: buildMultiAccountWebsocketConfig(["alpha"]),
       runtime,
+      channelRuntime,
       abortSignal: abortController.signal,
     });
 
     try {
       await waitForStartedAccount(started, "alpha");
-      expect(setFeishuRuntime).toHaveBeenCalledWith(runtime);
+      expect(setFeishuRuntime).toHaveBeenCalledWith(
+        expect.objectContaining({ channel: channelRuntime }),
+      );
     } finally {
       releaseStartedProbe();
       abortController.abort();
