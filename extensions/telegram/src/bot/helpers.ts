@@ -88,6 +88,16 @@ export type TelegramThreadSpec = {
   scope: "dm" | "forum" | "none";
 };
 
+export function shouldAllowTelegramThreadlessFallback(
+  thread?: TelegramThreadSpec | null,
+  options?: { allowDmThreadFallback?: boolean },
+): boolean {
+  if (thread?.scope === "dm") {
+    return options?.allowDmThreadFallback === true;
+  }
+  return thread?.id == null || Math.trunc(thread.id) === TELEGRAM_GENERAL_TOPIC_ID;
+}
+
 export function shouldUseTelegramDmThreadSession(params: {
   dmThreadId?: number;
   botHasTopicsEnabled?: boolean;

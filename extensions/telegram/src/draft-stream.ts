@@ -4,12 +4,29 @@ import {
   takeMessageIdAfterStop,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
+import {
+  buildTelegramThreadParams,
+  shouldAllowTelegramThreadlessFallback,
+  type TelegramThreadSpec,
+} from "./bot/helpers.js";
 import { isSafeToRetrySendError, isTelegramClientRejection } from "./network-errors.js";
 import { normalizeTelegramReplyToMessageId } from "./outbound-params.js";
 
 const TELEGRAM_STREAM_MAX_CHARS = 4096;
 const DEFAULT_THROTTLE_MS = 1000;
+const THREAD_NOT_FOUND_RE = /400:\s*Bad Request:\s*message thread not found/i;
+
+type TelegramSendMessageParams = Parameters<Bot["api"]["sendMessage"]>[2];
+
+function hasNumericMessageThreadId(
+  params: TelegramSendMessageParams | undefined,
+): params is TelegramSendMessageParams & { message_thread_id: number } {
+  return (
+    typeof params === "object" &&
+    params !== null &&
+    typeof (params as { message_thread_id?: unknown }).message_thread_id === "number"
+  );
+}
 
 export type TelegramDraftStream = {
   update: (text: string) => void;
@@ -127,9 +144,10 @@ export function createTelegramDraftStream(params: {
     renderedParseMode: "HTML" | undefined;
     sendGeneration: number;
   };
-  const sendRenderedMessage = async (sendArgs: {
+  const sendRenderedMessageWithThreadFallback = async (sendArgs: {
     renderedText: string;
     renderedParseMode: "HTML" | undefined;
+    fallbackWarnMessage: string;
   }) => {
     const sendParams = sendArgs.renderedParseMode
       ? {
@@ -137,7 +155,31 @@ export function createTelegramDraftStream(params: {
           parse_mode: sendArgs.renderedParseMode,
         }
       : replyParams;
-    return await params.api.sendMessage(chatId, sendArgs.renderedText, sendParams);
+    const usedThreadParams = hasNumericMessageThreadId(sendParams);
+    try {
+      return {
+        sent: await params.api.sendMessage(chatId, sendArgs.renderedText, sendParams),
+        usedThreadParams,
+      };
+    } catch (err) {
+      if (!usedThreadParams || !THREAD_NOT_FOUND_RE.test(String(err))) {
+        throw err;
+      }
+      if (!shouldAllowTelegramThreadlessFallback(params.thread)) {
+        throw err;
+      }
+      const threadlessParams: TelegramSendMessageParams = { ...sendParams };
+      delete threadlessParams.message_thread_id;
+      params.warn?.(sendArgs.fallbackWarnMessage);
+      return {
+        sent: await params.api.sendMessage(
+          chatId,
+          sendArgs.renderedText,
+          Object.keys(threadlessParams).length > 0 ? threadlessParams : undefined,
+        ),
+        usedThreadParams: false,
+      };
+    }
   };
   const sendMessageTransportPreview = async ({
     renderedText,
@@ -156,12 +198,14 @@ export function createTelegramDraftStream(params: {
       return true;
     }
     messageSendAttempted = true;
-    let sent: Awaited<ReturnType<typeof sendRenderedMessage>>;
+    let sent: Awaited<ReturnType<typeof sendRenderedMessageWithThreadFallback>>["sent"];
     try {
-      sent = await sendRenderedMessage({
+      ({ sent } = await sendRenderedMessageWithThreadFallback({
         renderedText,
         renderedParseMode,
-      });
+        fallbackWarnMessage:
+          "telegram stream preview send failed with message_thread_id, retrying without thread",
+      }));
     } catch (err) {
       if (isSafeToRetrySendError(err) || isTelegramClientRejection(err)) {
         messageSendAttempted = false;
