@@ -99,6 +99,40 @@ describe("message action threading helpers", () => {
     expect(ensureOutboundSessionEntry).toHaveBeenCalledTimes(1);
   });
 
+  it("fails closed when outbound route metadata cannot be written", async () => {
+    const actionParams = Object.preventExtensions({
+      channel: "workspace",
+      target: "channel:C123",
+      message: "hi from fuzzplugin",
+    }) as Record<string, unknown>;
+    resolveOutboundSessionRoute.mockResolvedValue({
+      sessionKey: "agent:main:workspace:channel:c123:thread:111.222",
+      baseSessionKey: "base",
+      peer: { id: "peer", kind: "channel" },
+      chatType: "channel",
+      from: "from",
+      to: "channel:C123",
+      threadId: "111.222",
+    });
+
+    await expect(
+      prepareOutboundMirrorRoute({
+        cfg: workspaceConfig,
+        channel: "workspace",
+        to: "channel:C123",
+        actionParams,
+        toolContext: {
+          currentChannelId: "C123",
+          currentThreadTs: "111.222",
+          replyToMode: "all",
+        },
+        agentId: "main",
+        resolveOutboundSessionRoute,
+        ensureOutboundSessionEntry,
+      }),
+    ).rejects.toThrow("__sessionKey could not be written");
+  });
+
   it.each([
     {
       name: "injects threadId for matching target",
@@ -202,6 +236,46 @@ describe("message action threading helpers", () => {
     },
   );
 
+  it("fails closed when inherited threadId accessors reject resolved writes", () => {
+    const proto = {};
+    Object.defineProperty(proto, "threadId", {
+      get() {
+        throw new Error("fuzzplugin inherited thread getter failed");
+      },
+    });
+    const actionParams = Object.assign(Object.create(proto), {
+      channel: "forum",
+      target: "forum:123",
+      message: "hi from fuzzplugin",
+    }) as Record<string, unknown>;
+
+    expect(() =>
+      resolveAndApplyOutboundThreadId(actionParams, {
+        cfg: forumConfig,
+        to: "forum:123",
+        toolContext: defaultForumToolContext,
+        resolveAutoThreadId: () => "42",
+      }),
+    ).toThrow("threadId could not be written");
+  });
+
+  it("fails closed when synthetic action params reject resolved threadId writes", () => {
+    const actionParams = Object.preventExtensions({
+      channel: "forum",
+      target: "forum:123",
+      message: "hi from fuzzplugin",
+    }) as Record<string, unknown>;
+
+    expect(() =>
+      resolveAndApplyOutboundThreadId(actionParams, {
+        cfg: forumConfig,
+        to: "forum:123",
+        toolContext: defaultForumToolContext,
+        resolveAutoThreadId: () => "42",
+      }),
+    ).toThrow("threadId could not be written");
+  });
+
   it("passes explicit replyTo into auto-thread resolution", () => {
     const resolveAutoThreadId = vi.fn((_params: { replyToId?: string | null }) => "thread-777");
     const actionParams: Record<string, unknown> = {
@@ -288,6 +362,31 @@ describe("message action threading helpers", () => {
         },
       }),
     ).toThrow("topLevel could not be read");
+  });
+
+  it("fails closed when synthetic action params reject inherited reply writes", () => {
+    const proto = {};
+    Object.defineProperty(proto, "replyTo", {
+      set() {
+        throw new Error("fuzzplugin reply setter failed");
+      },
+    });
+    const actionParams = Object.assign(Object.create(proto), {
+      channel: "workspace",
+      target: "channel:C123",
+      message: "hi from fuzzplugin",
+    }) as Record<string, unknown>;
+
+    expect(() =>
+      resolveAndApplyOutboundReplyToId(actionParams, {
+        channel: "workspace",
+        toolContext: {
+          currentChannelId: "channel:C123",
+          currentMessageId: "msg-42",
+          replyToMode: "all",
+        },
+      }),
+    ).toThrow("replyTo could not be written");
   });
 
   it("skips inherited reply threading for batched mode", () => {

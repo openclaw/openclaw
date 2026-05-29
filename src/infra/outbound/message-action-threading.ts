@@ -48,6 +48,35 @@ function suppressesImplicitThreading(actionParams: Record<string, unknown>): boo
   );
 }
 
+function shouldApplyResolvedThreadId(actionParams: Record<string, unknown>): boolean {
+  let hasThreadId = false;
+  try {
+    hasThreadId = Object.hasOwn(actionParams, "threadId");
+  } catch {
+    throw new ToolInputError("message action params could not be read");
+  }
+  if (!hasThreadId) {
+    return true;
+  }
+  try {
+    return !actionParams.threadId;
+  } catch {
+    throw new ToolInputError("threadId could not be read");
+  }
+}
+
+function writeThreadingParam(
+  actionParams: Record<string, unknown>,
+  key: "__agentId" | "__sessionKey" | "replyTo" | "threadId",
+  value: string,
+) {
+  try {
+    actionParams[key] = value;
+  } catch {
+    throw new ToolInputError(`${key} could not be written`);
+  }
+}
+
 export function resolveAndApplyOutboundThreadId(
   actionParams: Record<string, unknown>,
   context: {
@@ -71,8 +100,8 @@ export function resolveAndApplyOutboundThreadId(
       toolContext: context.toolContext,
       replyToId: readStringParam(actionParams, "replyTo"),
     });
-  if (resolved && !actionParams.threadId) {
-    actionParams.threadId = resolved;
+  if (resolved && shouldApplyResolvedThreadId(actionParams)) {
+    writeThreadingParam(actionParams, "threadId", resolved);
   }
   return resolved ?? undefined;
 }
@@ -149,7 +178,7 @@ export function resolveAndApplyOutboundReplyToId(
   if (!resolvedReplyToId) {
     return undefined;
   }
-  actionParams.replyTo = resolvedReplyToId;
+  writeThreadingParam(actionParams, "replyTo", resolvedReplyToId);
   return resolvedReplyToId;
 }
 
@@ -209,10 +238,10 @@ export async function prepareOutboundMirrorRoute(params: {
     });
   }
   if (outboundRoute && !params.dryRun) {
-    params.actionParams["__sessionKey"] = outboundRoute.sessionKey;
+    writeThreadingParam(params.actionParams, "__sessionKey", outboundRoute.sessionKey);
   }
   if (params.agentId) {
-    params.actionParams["__agentId"] = params.agentId;
+    writeThreadingParam(params.actionParams, "__agentId", params.agentId);
   }
   return {
     resolvedThreadId,
