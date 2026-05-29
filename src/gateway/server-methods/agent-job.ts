@@ -140,6 +140,12 @@ function schedulePendingAgentRunError(snapshot: AgentRunSnapshot) {
 }
 
 function schedulePendingAgentRunTimeout(snapshot: AgentRunSnapshot) {
+  const pendingTimeout = pendingAgentRunTimeouts.get(snapshot.runId);
+  if (pendingTimeout && shouldPreserveTerminalSnapshot(pendingTimeout.snapshot, snapshot)) {
+    // Keep the first hard timeout through retry grace; later timeout-shaped
+    // cleanup events may lose provider attribution before the cache publishes.
+    return;
+  }
   clearPendingAgentRunError(snapshot.runId);
   clearPendingAgentRunTimeout(snapshot.runId);
   const dueAt = Date.now() + AGENT_RUN_TIMEOUT_RETRY_GRACE_MS;
@@ -368,12 +374,11 @@ export async function waitForAgentJob(params: {
       delayMs: number,
     ) => {
       if (
-        kind === "error" &&
         pendingTimeoutSnapshot &&
         shouldPreserveTerminalSnapshot(pendingTimeoutSnapshot, snapshot)
       ) {
         // Mirror the shared pending map: while this waiter holds a hard timeout
-        // in grace, late errors are diagnostic noise, not a new terminal result.
+        // in grace, late terminal events must not replace the original cause.
         return;
       }
       clearPendingErrorTimer();

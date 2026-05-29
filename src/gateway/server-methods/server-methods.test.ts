@@ -246,6 +246,60 @@ describe("waitForAgentJob", () => {
     }
   });
 
+  it("keeps a pending hard timeout when a late softer timeout arrives during grace", async () => {
+    vi.useFakeTimers();
+    try {
+      const runId = `run-pending-hard-timeout-late-soft-timeout-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const waitPromise = waitForAgentJob({ runId, timeoutMs: 20_000 });
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 100 },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          startedAt: 100,
+          endedAt: 200,
+          aborted: true,
+          timeoutPhase: "provider",
+        },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          startedAt: 100,
+          endedAt: 250,
+          aborted: true,
+          timeoutPhase: "gateway_draining",
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      expectRecordFields(await waitPromise, {
+        status: "timeout",
+        startedAt: 100,
+        endedAt: 200,
+        timeoutPhase: "provider",
+      });
+
+      const cached = await waitForAgentJob({ runId, timeoutMs: 1_000 });
+      expectRecordFields(cached, {
+        status: "timeout",
+        startedAt: 100,
+        endedAt: 200,
+        timeoutPhase: "provider",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps a pending hard timeout when a late lifecycle completion arrives during grace", async () => {
     vi.useFakeTimers();
     try {
