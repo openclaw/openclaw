@@ -431,6 +431,38 @@ describe("exec-policy CLI", () => {
     );
   });
 
+  it("does not re-seed managed denylist defaults removed by the operator", async () => {
+    const approvals: ExecApprovalsFile = {
+      version: 1,
+      managedDefaults: { denylistVersion: 1 },
+      defaults: {
+        security: "full",
+        ask: "off",
+        askFallback: "deny",
+      },
+      agents: {
+        "*": {
+          denylist: [],
+        },
+      },
+    };
+    mocks.setApprovals(approvals);
+    mocks.readExecApprovalsSnapshot.mockImplementationOnce(() => ({
+      path: "/tmp/exec-approvals.json",
+      exists: true,
+      raw: JSON.stringify(approvals, null, 2),
+      hash: "approvals-hash",
+      file: structuredClone(approvals),
+    }));
+
+    await runExecPolicyCommand(["exec-policy", "set", "--security", "denylist", "--json"]);
+
+    const next = mocks.getApprovals();
+    expect(next.defaults?.security).toBe("denylist");
+    expect(next.managedDefaults?.denylistVersion).toBe(1);
+    expect(next.agents?.["*"]?.denylist).toEqual([]);
+  });
+
   it("sanitizes terminal control content before rendering the text table", async () => {
     mocks.setConfig({
       tools: {

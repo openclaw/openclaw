@@ -197,6 +197,7 @@ function applyConfigExecPolicy(draft: Record<string, unknown>, policy: ExecPolic
 function applyApprovalsDefaults(
   file: ExecApprovalsFile,
   policy: ExecPolicyResolved,
+  options: { seedManagedDenylistDefaults?: boolean } = {},
 ): ExecApprovalsFile {
   const next: ExecApprovalsFile = structuredClone(file ?? { version: 1 });
   next.version = 1;
@@ -211,9 +212,29 @@ function applyApprovalsDefaults(
     next.defaults.askFallback = policy.askFallback;
   }
   if (policy.security === "denylist" || policy.askFallback === "denylist") {
-    return ensureManagedDefaultDenylistRules(next);
+    return ensureManagedDefaultDenylistRules(next, {
+      forceSeed: options.seedManagedDenylistDefaults === true,
+    });
   }
   return next;
+}
+
+function rawApprovalsHadManagedDenylistDefaults(raw: string | null): boolean {
+  if (!raw) {
+    return false;
+  }
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return (
+      parsed !== null &&
+      typeof parsed === "object" &&
+      !Array.isArray(parsed) &&
+      (parsed as { managedDefaults?: { denylistVersion?: unknown } }).managedDefaults
+        ?.denylistVersion != null
+    );
+  } catch {
+    return false;
+  }
 }
 
 function buildNextExecPolicyConfig(
@@ -347,7 +368,12 @@ async function applyLocalExecPolicy(policy: ExecPolicyResolved): Promise<ExecPol
     );
   }
   const approvalsSnapshot = readExecApprovalsSnapshot();
-  const nextApprovals = applyApprovalsDefaults(approvalsSnapshot.file, policy);
+  const seedManagedDenylistDefaults =
+    (policy.security === "denylist" || policy.askFallback === "denylist") &&
+    !rawApprovalsHadManagedDenylistDefaults(approvalsSnapshot.raw);
+  const nextApprovals = applyApprovalsDefaults(approvalsSnapshot.file, policy, {
+    seedManagedDenylistDefaults,
+  });
   const writtenApprovalsHash = hashExecApprovalsFile(nextApprovals);
   saveExecApprovals(nextApprovals);
   try {
