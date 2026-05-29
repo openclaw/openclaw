@@ -339,7 +339,7 @@ function buildReplyPayloadSendingBeforeDeliver(
   const hookCtx = deriveInboundMessageHookContext(finalized);
 
   return async (payload: ReplyPayload, info): Promise<ReplyPayload | null> => {
-    return runReplyPayloadSendingHook({
+    const hookedPayload = await runReplyPayloadSendingHook({
       payload,
       kind: info.kind,
       channel: finalized.Surface ?? finalized.Provider,
@@ -350,6 +350,7 @@ function buildReplyPayloadSendingBeforeDeliver(
         runId: opts?.runId,
       },
     });
+    return hookedPayload && hasOutboundReplyContent(hookedPayload) ? hookedPayload : null;
   };
 }
 

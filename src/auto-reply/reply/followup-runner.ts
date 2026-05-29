@@ -372,6 +372,7 @@ export function createFollowupRunner(params: {
           cfg: runtimeConfig,
           mirror: options.mirror,
           replyKind: "final",
+          runId: options.runId,
         });
         if (!result.ok) {
           const errorMsg = result.error ?? "unknown error";
