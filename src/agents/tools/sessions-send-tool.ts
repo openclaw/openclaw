@@ -55,7 +55,14 @@ const SessionsSendToolSchema = Type.Object({
   sessionKey: Type.Optional(Type.String()),
   label: Type.Optional(Type.String({ minLength: 1, maxLength: SESSION_LABEL_MAX_LENGTH })),
   agentId: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
-  message: Type.String(),
+  // Canonical body field. Kept optional at the schema layer so model-emitted
+  // alias keys (SendMessage/content/text) are not rejected before execute can
+  // normalize them; execute still enforces a non-empty message.
+  message: Type.Optional(Type.String()),
+  // Non-canonical body aliases some models emit instead of `message`.
+  SendMessage: Type.Optional(Type.String()),
+  content: Type.Optional(Type.String()),
+  text: Type.Optional(Type.String()),
   timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
 });
 
@@ -283,6 +290,19 @@ export function createSessionsSendTool(opts?: {
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const gatewayCall = opts?.callGateway ?? callGateway;
+      // Models may emit the body under non-canonical aliases. Mirror the
+      // message-tool normalization so cross-agent sends are delivered instead
+      // of rejected for a missing `message`.
+      if (typeof params.message !== "string" || !params.message.trim()) {
+        for (const alias of ["SendMessage", "content", "text"] as const) {
+          const value = params[alias];
+          if (typeof value === "string" && value.trim()) {
+            params.message = value;
+            console.warn(`[send_to_task] normalized alias "${alias}" to "message"`);
+            break;
+          }
+        }
+      }
       const message = readStringParam(params, "message", { required: true });
       const timeoutSeconds = readNonNegativeIntegerParam(params, "timeoutSeconds") ?? 30;
       const { cfg, mainKey, alias, effectiveRequesterKey, restrictToSpawned } =

@@ -786,6 +786,56 @@ describe("sessions_send gating", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
+  it.each(["SendMessage", "content", "text"])(
+    "normalizes the %s body alias to message",
+    async (alias) => {
+      const tool = createMainSessionsSendTool();
+
+      // Pass the body only under the alias (no canonical `message`). If the
+      // alias were not normalized, the required-`message` read would throw
+      // before target validation; reaching the target error proves the body
+      // was populated from the alias.
+      const result = await tool.execute("call-alias", {
+        [alias]: "hi",
+        timeoutSeconds: 5,
+      });
+
+      const details = requireDetails(result);
+      expect(details.status).toBe("error");
+      expect(details.error).toBe("Either sessionKey or label is required");
+      expect(callGatewayMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("prefers the canonical message over body aliases", async () => {
+    const tool = createMainSessionsSendTool();
+
+    const result = await tool.execute("call-alias-precedence", {
+      message: "canonical",
+      SendMessage: "alias",
+      timeoutSeconds: 5,
+    });
+
+    // Still no target, so it errors out the same way, but without throwing the
+    // required-`message` error: canonical message is kept.
+    const details = requireDetails(result);
+    expect(details.status).toBe("error");
+    expect(details.error).toBe("Either sessionKey or label is required");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("throws when no message or body alias is provided", async () => {
+    const tool = createMainSessionsSendTool();
+
+    await expect(
+      tool.execute("call-no-body", {
+        sessionKey: MAIN_AGENT_SESSION_KEY,
+        timeoutSeconds: 5,
+      }),
+    ).rejects.toThrow("message required");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
   it.each([1.5, -1, "1sec"])("rejects invalid timeoutSeconds value %s", async (timeoutSeconds) => {
     const tool = createMainSessionsSendTool();
 
