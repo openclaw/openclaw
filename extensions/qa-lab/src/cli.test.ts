@@ -466,6 +466,7 @@ describe("qa cli registration", () => {
       output: ".artifacts/qa-coverage.md",
       json: true,
       tools: false,
+      match: [],
     });
   });
 
@@ -487,6 +488,26 @@ describe("qa cli registration", () => {
       tools: true,
       json: false,
       summary: ".artifacts/runtime-summary.json",
+      match: [],
+    });
+  });
+
+  it("routes coverage match queries into the qa runtime command", async () => {
+    await program.parseAsync([
+      "node",
+      "openclaw",
+      "qa",
+      "coverage",
+      "--match",
+      "image roundtrip",
+      "--match",
+      "native",
+    ]);
+
+    expect(runQaCoverageReportCommand).toHaveBeenCalledWith({
+      tools: false,
+      json: false,
+      match: ["image roundtrip", "native"],
     });
   });
 
@@ -501,7 +522,7 @@ describe("qa cli registration", () => {
       "--transcripts",
       "qa/scenarios/jsonl-replay",
       "--runtime-pair",
-      "pi,codex",
+      "openclaw,codex",
       "--provider-mode",
       "mock-openai",
       "--output-dir",
@@ -511,7 +532,7 @@ describe("qa cli registration", () => {
     expect(runQaJsonlReplayCommand).toHaveBeenCalledWith({
       repoRoot: "/tmp/openclaw-repo",
       transcripts: "qa/scenarios/jsonl-replay",
-      runtimePair: "pi,codex",
+      runtimePair: "openclaw,codex",
       providerMode: "mock-openai",
       outputDir: ".artifacts/qa-e2e/jsonl-replay-test",
     });
@@ -544,6 +565,42 @@ describe("qa cli registration", () => {
       host: "127.0.0.1",
       port: 44080,
     });
+  });
+
+  it("normalizes signed decimal QA numeric option values through the shared parser", async () => {
+    await program.parseAsync(["node", "openclaw", "qa", "aimock", "--port", "+044080"]);
+
+    expect(runQaProviderServerCommand).toHaveBeenCalledWith("aimock", {
+      host: "127.0.0.1",
+      port: 44080,
+    });
+  });
+
+  it.each([
+    [["qa", "suite", "--concurrency", "1.5"], "--concurrency must be a positive integer."],
+    [["qa", "suite", "--cpus", "0x4"], "--cpus must be a positive integer."],
+    [
+      ["qa", "manual", "--message", "hi", "--timeout-ms", "1e3"],
+      "--timeout-ms must be a positive integer.",
+    ],
+    [["qa", "credentials", "list", "--limit", "0x10"], "--limit must be a positive integer."],
+    [["qa", "ui", "--port", "1e4"], "--port must be a positive integer."],
+    [
+      ["qa", "docker-scaffold", "--output-dir", "/tmp/qa", "--gateway-port", "1.5"],
+      "--gateway-port must be a positive integer.",
+    ],
+    [["qa", "up", "--qa-lab-port", "0x43124"], "--qa-lab-port must be a positive integer."],
+    [["qa", "aimock", "--port", "1e4"], "--port must be a positive integer."],
+  ])("rejects non-decimal QA numeric option %j", async (args, message) => {
+    const invalidProgram = new Command();
+    invalidProgram.exitOverride();
+    invalidProgram.configureOutput({
+      writeErr: () => {},
+      writeOut: () => {},
+    });
+    registerQaLabCli(invalidProgram);
+
+    await expect(invalidProgram.parseAsync(["node", "openclaw", ...args])).rejects.toThrow(message);
   });
 
   it("shows an enable hint when a discovered runner plugin is installed but blocked", async () => {

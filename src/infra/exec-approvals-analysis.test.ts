@@ -563,9 +563,9 @@ describe("exec approvals shell analysis", () => {
   describe("shell allowlist (chained commands)", () => {
     it.each([
       {
-        allowlist: [{ pattern: "/usr/bin/obsidian-cli" }, { pattern: "/usr/bin/head" }],
+        allowlist: [{ pattern: "/usr/bin/obsidian-cli" }, { pattern: "/opt/openclaw-test/head" }],
         command:
-          "/usr/bin/obsidian-cli print-default && /usr/bin/obsidian-cli search foo | /usr/bin/head",
+          "/usr/bin/obsidian-cli print-default && /usr/bin/obsidian-cli search foo | /opt/openclaw-test/head",
         expectedAnalysisOk: true,
         expectedAllowlistSatisfied: true,
       },
@@ -624,6 +624,49 @@ describe("exec approvals shell analysis", () => {
       expect(result.segmentSatisfiedBy).toEqual(["allowlist"]);
     });
 
+    it.each([
+      {
+        name: "BSD script transcript",
+        command: "script ~/.zshenv git log -1 --format='payload'",
+        platform: "darwin" as const,
+        blockedWrapper: "script",
+      },
+      {
+        name: "GNU time output file",
+        command: "/usr/bin/time -o ~/.bashrc -a -f 'payload' git status",
+        platform: "linux" as const,
+        blockedWrapper: "time",
+      },
+    ])("rejects side-effecting dispatch wrapper allowlist bypasses for $name", (testCase) => {
+      const result = evaluateShellAllowlist({
+        command: testCase.command,
+        allowlist: [{ pattern: "git" }],
+        safeBins: new Set(),
+        cwd: "/tmp",
+        platform: testCase.platform,
+      });
+
+      expect(result.analysisOk).toBe(true);
+      expect(result.allowlistSatisfied).toBe(false);
+      expect(result.segments[0]?.resolution?.policyBlocked).toBe(true);
+      expect(result.segments[0]?.resolution?.blockedWrapper).toBe(testCase.blockedWrapper);
+      expect(result.segmentSatisfiedBy).toEqual([null]);
+    });
+
+    it("keeps GNU time transparent when it only reports to stderr", () => {
+      const result = evaluateShellAllowlist({
+        command: "/usr/bin/time -p git status",
+        allowlist: [{ pattern: "git" }],
+        safeBins: new Set(),
+        cwd: "/tmp",
+        platform: "linux",
+      });
+
+      expect(result.analysisOk).toBe(true);
+      expect(result.allowlistSatisfied).toBe(true);
+      expect(result.segmentSatisfiedBy).toEqual(["allowlist"]);
+    });
+
     it("rejects the legacy skill display prelude when only the wrapper is allowlisted", () => {
       if (process.platform === "win32") {
         return;
@@ -646,12 +689,12 @@ describe("exec approvals shell analysis", () => {
       expect(result.segmentSatisfiedBy).toEqual([null]);
     });
 
-    it.each(['/usr/bin/echo "foo && bar"', '/usr/bin/echo "foo\\" && bar"'])(
+    it.each(['/opt/openclaw-test/echo "foo && bar"', '/opt/openclaw-test/echo "foo\\" && bar"'])(
       "respects quoted chain separator for %s",
       (command) => {
         const result = evaluateShellAllowlist({
           command,
-          allowlist: [{ pattern: "/usr/bin/echo" }],
+          allowlist: [{ pattern: "/opt/openclaw-test/echo" }],
           safeBins: new Set(),
           cwd: "/tmp",
         });

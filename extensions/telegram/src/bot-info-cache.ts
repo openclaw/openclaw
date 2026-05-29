@@ -1,9 +1,14 @@
+import os from "node:os";
+import path from "node:path";
+import { readJsonFileWithFallback } from "openclaw/plugin-sdk/json-store";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { normalizeTelegramBotInfo, type TelegramBotInfo } from "./bot-info.js";
 import { getTelegramRuntime } from "./runtime.js";
 import { fingerprintTelegramBotToken } from "./token-fingerprint.js";
 
-const STORE_NAMESPACE = "telegram.bot-info-cache";
-const STORE_MAX_ENTRIES = 128;
+const LEGACY_STORE_VERSION = 1;
+export const TELEGRAM_BOT_INFO_CACHE_NAMESPACE = "telegram.bot-info-cache";
+export const TELEGRAM_BOT_INFO_CACHE_MAX_ENTRIES = 128;
 export const TELEGRAM_BOT_INFO_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 type TelegramBotInfoCacheState = {
@@ -41,30 +46,57 @@ function fingerprintFromToken(botToken?: string): string | null {
   return fingerprintTelegramBotToken(trimmed);
 }
 
+export function resolveTelegramBotInfoCachePath(
+  accountId?: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const stateDir = resolveStateDir(env, os.homedir);
+  return path.join(stateDir, "telegram", `bot-info-${normalizeAccountId(accountId)}.json`);
+}
+
 function openBotInfoCacheStore(): TelegramBotInfoCacheStore {
   return (
     botInfoCacheStoreForTest ??
     getTelegramRuntime().state.openKeyedStore<TelegramBotInfoCacheState>({
-      namespace: STORE_NAMESPACE,
-      maxEntries: STORE_MAX_ENTRIES,
+      namespace: TELEGRAM_BOT_INFO_CACHE_NAMESPACE,
+      maxEntries: TELEGRAM_BOT_INFO_CACHE_MAX_ENTRIES,
       defaultTtlMs: TELEGRAM_BOT_INFO_CACHE_MAX_AGE_MS,
     })
   );
 }
 
-function parseCachedTelegramBotInfo(value: TelegramBotInfoCacheState | undefined) {
-  if (!value || Number.isNaN(Date.parse(value.fetchedAt))) {
+function parseCachedTelegramBotInfo(value: unknown) {
+  if (!value || typeof value !== "object") {
     return null;
   }
-  const botInfo = normalizeTelegramBotInfo(value.botInfo);
+  const state = value as Partial<TelegramBotInfoCacheState>;
+  if (
+    typeof state.tokenFingerprint !== "string" ||
+    typeof state.fetchedAt !== "string" ||
+    Number.isNaN(Date.parse(state.fetchedAt))
+  ) {
+    return null;
+  }
+  const botInfo = normalizeTelegramBotInfo(state.botInfo);
   if (!botInfo) {
     return null;
   }
   return {
-    tokenFingerprint: value.tokenFingerprint,
-    fetchedAt: value.fetchedAt,
+    tokenFingerprint: state.tokenFingerprint,
+    fetchedAt: state.fetchedAt,
     botInfo,
   };
+}
+
+function parseLegacyCachedTelegramBotInfo(value: unknown) {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const state = value as { version?: unknown };
+  if (state.version !== LEGACY_STORE_VERSION) {
+    return null;
+  }
+  return parseCachedTelegramBotInfo(value);
 }
 
 export async function readCachedTelegramBotInfo(params: {
@@ -118,4 +150,16 @@ export function setTelegramBotInfoCacheStoreForTest(
   store: TelegramBotInfoCacheStore | undefined,
 ): void {
   botInfoCacheStoreForTest = store;
+}
+
+export async function listTelegramLegacyBotInfoCacheEntries(params: {
+  accountId?: string;
+  persistedPath: string;
+}): Promise<Array<{ key: string; value: TelegramBotInfoCacheState }>> {
+  const { value } = await readJsonFileWithFallback<unknown>(params.persistedPath, null);
+  const parsed = parseLegacyCachedTelegramBotInfo(value);
+  if (!parsed) {
+    return [];
+  }
+  return [{ key: normalizeAccountId(params.accountId), value: parsed }];
 }

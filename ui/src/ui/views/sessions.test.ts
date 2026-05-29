@@ -99,6 +99,7 @@ const SESSION_TABLE_HEADERS = [
   "Fast",
   "Verbose",
   "Reasoning",
+  "Actions",
 ];
 
 describe("sessions view", () => {
@@ -129,6 +130,53 @@ describe("sessions view", () => {
       includeUnknown: false,
       showArchived: true,
     });
+  });
+
+  it("offers workboard capture for dashboard sessions", async () => {
+    const container = document.createElement("div");
+    const onAddToWorkboard = vi.fn();
+    const session = {
+      key: "agent:main:dashboard:1",
+      kind: "direct",
+      updatedAt: Date.now(),
+    } as const;
+    render(
+      renderSessions({
+        ...buildProps(buildResult(session)),
+        onAddToWorkboard,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const button = container.querySelector<HTMLButtonElement>('button[title="Add to Workboard"]');
+    if (!(button instanceof HTMLButtonElement)) {
+      throw new Error("Expected Add to Workboard button");
+    }
+    button.click();
+
+    expect(onAddToWorkboard).toHaveBeenCalledWith(session);
+  });
+
+  it("marks sessions that already have workboard cards", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(
+          buildResult({
+            key: "agent:main:dashboard:1",
+            kind: "direct",
+            updatedAt: Date.now(),
+          }),
+        ),
+        workboardSessionKeys: new Set(["agent:main:dashboard:1"]),
+        onAddToWorkboard: () => undefined,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(container.querySelector('button[title="Open Workboard card"]')).not.toBeNull();
   });
 
   it("uses one short styled tooltip per session filter", async () => {
@@ -468,6 +516,7 @@ describe("sessions view", () => {
               kind: "direct",
               updatedAt: 20,
               hasActiveRun: false,
+              status: "running",
             },
             {
               key: "agent:main:failed",

@@ -7,6 +7,7 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent
 import { ensureOwnerDisplaySecret } from "../agents/owner-display.js";
 import { isVerbose } from "../global-state.js";
 import { loadDotEnv } from "../infra/dotenv.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { replaceFileAtomic, replaceFileAtomicSync } from "../infra/replace-file.js";
@@ -956,6 +957,7 @@ export type ConfigSnapshotReadOptions = {
   observe?: boolean;
   skipPluginValidation?: boolean;
   preservedLegacyRootKeys?: readonly string[];
+  suppressFutureVersionWarning?: boolean;
 };
 
 function warnOnConfigMiskeys(raw: unknown, logger: Pick<typeof console, "warn">): void {
@@ -997,6 +999,13 @@ function warnIfConfigFromFuture(cfg: OpenClawConfig, logger: Pick<typeof console
   }
 }
 
+function shouldSuppressFutureVersionWarningForEnv(env: NodeJS.ProcessEnv): boolean {
+  return (
+    isTruthyEnvValue(env.OPENCLAW_UPDATE_IN_PROGRESS) ||
+    isTruthyEnvValue(env.OPENCLAW_UPDATE_POST_CORE)
+  );
+}
+
 function resolveConfigPathForDeps(deps: Required<ConfigIoDeps>): string {
   if (deps.configPath) {
     return deps.configPath;
@@ -1005,16 +1014,17 @@ function resolveConfigPathForDeps(deps: Required<ConfigIoDeps>): string {
 }
 
 function normalizeDeps(overrides: ConfigIoDeps = {}): Required<ConfigIoDeps> {
+  const env = overrides.env ?? process.env;
   return {
     fs: overrides.fs ?? fs,
     json5: overrides.json5 ?? JSON5,
-    env: overrides.env ?? process.env,
-    homedir:
-      overrides.homedir ?? (() => resolveRequiredHomeDir(overrides.env ?? process.env, os.homedir)),
+    env,
+    homedir: overrides.homedir ?? (() => resolveRequiredHomeDir(env, os.homedir)),
     configPath: overrides.configPath ?? "",
     logger: overrides.logger ?? console,
     measure: overrides.measure ?? (async (_name, run) => await run()),
-    suppressFutureVersionWarning: overrides.suppressFutureVersionWarning ?? false,
+    suppressFutureVersionWarning:
+      overrides.suppressFutureVersionWarning ?? shouldSuppressFutureVersionWarningForEnv(env),
     observe: overrides.observe ?? true,
   };
 }
@@ -1032,6 +1042,12 @@ export function parseConfigJson5(
   raw: string,
   json5: { parse: (value: string) => unknown } = JSON5,
 ): ParseConfigJson5Result {
+  try {
+    return { ok: true, parsed: JSON.parse(raw) };
+  } catch {
+    // Keep JSON5 compatibility for authored config, but avoid the slower parser
+    // on the JSON files OpenClaw writes itself.
+  }
   try {
     return { ok: true, parsed: json5.parse(raw) };
   } catch (err) {
@@ -2310,7 +2326,15 @@ export function createConfigIO(
       if (isVitest && !shouldLogInVitest) {
         return;
       }
-      deps.logger.warn(`Config write anomaly: ${configPath} (${suspiciousReasons.join(", ")})`);
+      const shouldLogBenignMissingMeta =
+        isVerbose() || deps.env.OPENCLAW_CONFIG_WRITE_ANOMALY_LOG === "1" || shouldLogInVitest;
+      const visibleReasons = shouldLogBenignMissingMeta
+        ? suspiciousReasons
+        : suspiciousReasons.filter((reason) => reason !== "missing-meta-before-write");
+      if (visibleReasons.length === 0) {
+        return;
+      }
+      deps.logger.warn(`Config write anomaly: ${configPath} (${visibleReasons.join(", ")})`);
     };
     const previousMetadata = resolveConfigStatMetadata(previousStat);
     const auditRecordBase = createConfigWriteAuditRecordBase({
@@ -2529,8 +2553,12 @@ export function getRuntimeConfig(options?: { skipPluginValidation?: boolean }): 
   return loadConfig(options);
 }
 
-export async function readBestEffortConfig(): Promise<OpenClawConfig> {
-  return await createConfigIO().readBestEffortConfig();
+export async function readBestEffortConfig(options?: {
+  skipPluginValidation?: boolean;
+}): Promise<OpenClawConfig> {
+  return await createConfigIO(
+    options?.skipPluginValidation ? { pluginValidation: "skip" } : {},
+  ).readBestEffortConfig();
 }
 
 export async function readSourceConfigBestEffort(): Promise<OpenClawConfig> {
@@ -2544,6 +2572,7 @@ export async function readConfigFileSnapshot(
     ...(options.measure ? { measure: options.measure } : {}),
     ...(options.observe === false ? { observe: false } : {}),
     ...(options.skipPluginValidation ? { pluginValidation: "skip" } : {}),
+    ...(options.suppressFutureVersionWarning ? { suppressFutureVersionWarning: true } : {}),
     ...(options.preservedLegacyRootKeys
       ? { preservedLegacyRootKeys: options.preservedLegacyRootKeys }
       : {}),

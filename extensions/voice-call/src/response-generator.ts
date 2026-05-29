@@ -1,11 +1,15 @@
 /**
- * Voice call response generator - uses the embedded Pi agent for tool support.
+ * Voice call response generator - uses the embedded OpenClaw agent for tool support.
  * Routes voice responses through the same agent infrastructure as messaging.
  */
 
 import crypto from "node:crypto";
 import { applyModelOverrideToSessionEntry } from "openclaw/plugin-sdk/model-session-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeLowercaseStringOrEmpty,
+  normalizeStringEntries,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveVoiceCallSessionKey, type VoiceCallConfig } from "./config.js";
 import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
 import { resolveVoiceResponseModel } from "./response-model.js";
@@ -39,10 +43,6 @@ type VoiceResponsePayload = {
   isError?: boolean;
   isReasoning?: boolean;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function readExplicitToolsAllow(value: unknown): string[] | undefined {
   if (!isRecord(value)) {
@@ -159,10 +159,7 @@ function sanitizePlainSpokenText(text: string): string | null {
     return null;
   }
 
-  const paragraphs = withoutCodeFences
-    .split(/\n\s*\n+/)
-    .map((paragraph) => paragraph.trim())
-    .filter(Boolean);
+  const paragraphs = normalizeStringEntries(withoutCodeFences.split(/\n\s*\n+/));
 
   while (paragraphs.length > 1 && isLikelyMetaReasoningParagraph(paragraphs[0])) {
     paragraphs.shift();
@@ -210,7 +207,7 @@ function resolveVoiceSandboxSessionKey(agentId: string, sessionKey: string): str
 }
 
 /**
- * Generate a voice response using the embedded Pi agent with full tool support.
+ * Generate a voice response using the embedded OpenClaw agent with full tool support.
  * Uses the same agent infrastructure as messaging for consistent behavior.
  */
 export async function generateVoiceResponse(
@@ -324,7 +321,7 @@ export async function generateVoiceResponse(
   const runId = `voice:${callId}:${Date.now()}`;
 
   try {
-    const result = await agentRuntime.runEmbeddedPiAgent({
+    const result = await agentRuntime.runEmbeddedAgent({
       sessionId,
       sessionKey: resolvedSessionKey,
       sandboxSessionKey: resolveVoiceSandboxSessionKey(agentId, resolvedSessionKey),

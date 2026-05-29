@@ -2,9 +2,13 @@ import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { satisfiesPluginApiRange } from "../infra/clawhub.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { normalizeOptionalTrimmedStringList } from "../shared/string-normalization.js";
+import {
+  normalizeOptionalTrimmedStringList,
+  uniqueStrings,
+} from "../shared/string-normalization.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
@@ -54,6 +58,7 @@ import {
   resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginInstall,
 } from "./official-external-plugin-catalog.js";
+import { resolvePackagePluginApiRange } from "./package-compat.js";
 import { isPathInside, safeRealpathSync, safeStatSync } from "./path-safety.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
@@ -104,7 +109,7 @@ function resolveManifestPluginSourcePath(params: {
   rootDir: string;
   manifestPath: string;
   pluginId: string;
-  entryName: "providerCatalogEntry" | "providerDiscoveryEntry";
+  entryName: "providerCatalogEntry";
   entry: string;
   rejectHardlinks: boolean;
   diagnostics: PluginDiagnostic[];
@@ -160,7 +165,7 @@ export type PluginManifestContractListKey =
   | "externalAuthProviders"
   | "embeddingProviders"
   | "mediaUnderstandingProviders"
-  | "meetingNotesSourceProviders"
+  | "transcriptSourceProviders"
   | "documentExtractors"
   | "realtimeVoiceProviders"
   | "realtimeTranscriptionProviders"
@@ -355,9 +360,11 @@ function mergeContractLists(
   left: readonly string[] | undefined,
   right: readonly string[] | undefined,
 ): string[] | undefined {
-  const merged = [...(left ?? []), ...(right ?? [])]
-    .map((value) => value.trim())
-    .filter((value, index, all) => value.length > 0 && all.indexOf(value) === index);
+  const merged = uniqueStrings(
+    [...(left ?? []), ...(right ?? [])]
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0),
+  );
   return merged.length > 0 ? merged : undefined;
 }
 
@@ -379,7 +386,7 @@ function mergeManifestContracts(
     "realtimeTranscriptionProviders",
     "realtimeVoiceProviders",
     "mediaUnderstandingProviders",
-    "meetingNotesSourceProviders",
+    "transcriptSourceProviders",
     "documentExtractors",
     "imageGenerationProviders",
     "videoGenerationProviders",
@@ -467,12 +474,7 @@ function buildRecord(params: {
           entryName: "providerCatalogEntry" as const,
           entry: params.manifest.providerCatalogEntry,
         }
-      : params.manifest.providerDiscoveryEntry !== undefined
-        ? {
-            entryName: "providerDiscoveryEntry" as const,
-            entry: params.manifest.providerDiscoveryEntry,
-          }
-        : undefined;
+      : undefined;
   const manifestChannelConfigs =
     params.candidate.origin === "bundled" && params.bundledChannelConfigCollector
       ? params.bundledChannelConfigCollector({
@@ -757,20 +759,34 @@ function matchesInstalledPluginRecord(params: {
   if (!record) {
     return false;
   }
-  const resolvedCandidateSource = resolveUserPath(params.candidate.source, params.env);
-  const candidateSource = safeRealpathSync(resolvedCandidateSource) ?? resolvedCandidateSource;
+  const candidatePaths = [
+    params.candidate.rootDir,
+    params.candidate.packageDir,
+    params.candidate.source,
+    params.candidate.setupSource,
+  ]
+    .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+    .map((entry) => {
+      const resolved = resolveUserPath(entry, params.env);
+      return safeRealpathSync(resolved) ?? resolved;
+    });
   const trackedPaths = [record.installPath, record.sourcePath]
     .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
     .map((entry) => {
       const resolved = resolveUserPath(entry, params.env);
       return safeRealpathSync(resolved) ?? resolved;
     });
-  if (trackedPaths.length === 0) {
+  if (candidatePaths.length === 0 || trackedPaths.length === 0) {
     return false;
   }
-  return trackedPaths.some((trackedPath) => {
-    return candidateSource === trackedPath || isPathInside(trackedPath, candidateSource);
-  });
+  return trackedPaths.some((trackedPath) =>
+    candidatePaths.some(
+      (candidatePath) =>
+        candidatePath === trackedPath ||
+        isPathInside(trackedPath, candidatePath) ||
+        isPathInside(candidatePath, trackedPath),
+    ),
+  );
 }
 
 function npmSpecMatchesPackage(value: string | undefined, packageName: string): boolean {
@@ -994,6 +1010,10 @@ export function loadPluginManifestRegistry(
     }
     const manifest = manifestRes.manifest;
     if (candidate.origin !== "bundled") {
+      const packageManifestSource = path.join(
+        candidate.packageDir ?? candidate.rootDir,
+        "package.json",
+      );
       const allowLegacyBareMinHostVersion =
         candidate.origin === "global" &&
         matchesInstalledPluginRecord({
@@ -1009,10 +1029,6 @@ export function loadPluginManifestRegistry(
         allowLegacyBareSemver: allowLegacyBareMinHostVersion,
       });
       if (!minHostVersionCheck.ok) {
-        const packageManifestSource = path.join(
-          candidate.packageDir ?? candidate.rootDir,
-          "package.json",
-        );
         diagnostics.push({
           level: minHostVersionCheck.kind === "invalid" ? "error" : "warn",
           pluginId: manifest.id,
@@ -1023,6 +1039,29 @@ export function loadPluginManifestRegistry(
               : minHostVersionCheck.kind === "unknown_host_version"
                 ? `plugin requires OpenClaw >=${minHostVersionCheck.requirement.minimumLabel}, but this host version could not be determined; skipping load`
                 : `plugin requires OpenClaw >=${minHostVersionCheck.requirement.minimumLabel}, but this host is ${minHostVersionCheck.currentVersion}; skipping load`,
+        });
+        continue;
+      }
+      const packagePluginApiRangeCheck = resolvePackagePluginApiRange(candidate.packageManifest);
+      if (!packagePluginApiRangeCheck.ok) {
+        diagnostics.push({
+          level: "error",
+          pluginId: manifest.id,
+          source: packageManifestSource,
+          message: `plugin manifest invalid | ${packagePluginApiRangeCheck.error}`,
+        });
+        continue;
+      }
+      const packagePluginApiRange = packagePluginApiRangeCheck.range;
+      if (
+        packagePluginApiRange &&
+        !satisfiesPluginApiRange(currentHostVersion, packagePluginApiRange)
+      ) {
+        diagnostics.push({
+          level: "warn",
+          pluginId: manifest.id,
+          source: packageManifestSource,
+          message: `plugin requires plugin API ${packagePluginApiRange}, but this host is ${currentHostVersion}; skipping load`,
         });
         continue;
       }

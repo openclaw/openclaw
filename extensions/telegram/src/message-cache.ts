@@ -2,9 +2,11 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import type { Message } from "grammy/types";
 import { formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { appendRegularFileSync, replaceFileAtomicSync } from "openclaw/plugin-sdk/security-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveTelegramPrimaryMedia } from "./bot/body-helpers.js";
 import {
   buildSenderName,
@@ -81,7 +83,7 @@ type TelegramCachedMessageObservation = {
 type TelegramEmbeddedReplyMessage = NonNullable<Message["reply_to_message"]>;
 
 const DEFAULT_MAX_MESSAGES = 5000;
-export const TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES = 1000;
+export const TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES = 3000;
 export const TELEGRAM_MESSAGE_CACHE_PERSISTENT_NAMESPACE = "telegram.message-cache";
 const PERSISTENT_BUCKET_KEY = `plugin-state:${TELEGRAM_MESSAGE_CACHE_PERSISTENT_NAMESPACE}`;
 const COMPACT_THRESHOLD_RATIO = 2;
@@ -230,10 +232,6 @@ function normalizeMessageNodes(
   return observations;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function isString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
@@ -241,6 +239,10 @@ function isString(value: unknown): value is string {
 function readOptionalString(record: Record<string, unknown>, key: string): string | undefined {
   const value = record[key];
   return isString(value) ? value : undefined;
+}
+
+function parseSafeMessageId(value: string | undefined): number | undefined {
+  return value === undefined ? undefined : parseStrictPositiveInteger(value);
 }
 
 function isTelegramSourceMessage(value: unknown): value is Message {
@@ -791,14 +793,14 @@ export function createTelegramMessageCache(params?: {
       if (!messageId || limit <= 0) {
         return [];
       }
-      const targetId = Number(messageId);
-      if (!Number.isFinite(targetId)) {
+      const targetId = parseSafeMessageId(messageId);
+      if (targetId === undefined) {
         return [];
       }
       return (await listChatMessages({ accountId, chatId, threadId }))
         .filter((entry) => {
-          const entryId = Number(entry.messageId);
-          return Number.isFinite(entryId) && entryId < targetId;
+          const entryId = parseSafeMessageId(entry.messageId);
+          return entryId !== undefined && entryId < targetId;
         })
         .slice(-limit);
     },
@@ -823,9 +825,9 @@ function compareCachedMessageNodes(
   left: TelegramCachedMessageNode,
   right: TelegramCachedMessageNode,
 ) {
-  const leftId = Number(left.messageId);
-  const rightId = Number(right.messageId);
-  if (Number.isFinite(leftId) && Number.isFinite(rightId)) {
+  const leftId = parseSafeMessageId(left.messageId);
+  const rightId = parseSafeMessageId(right.messageId);
+  if (leftId !== undefined && rightId !== undefined) {
     return leftId - rightId;
   }
   return (left.messageId ?? "").localeCompare(right.messageId ?? "");
@@ -848,9 +850,9 @@ function isAfterSessionBoundary(
   if (!boundary) {
     return true;
   }
-  const nodeId = Number(node.messageId);
-  const boundaryId = Number(boundary.messageId);
-  if (Number.isFinite(nodeId) && Number.isFinite(boundaryId)) {
+  const nodeId = parseSafeMessageId(node.messageId);
+  const boundaryId = parseSafeMessageId(boundary.messageId);
+  if (nodeId !== undefined && boundaryId !== undefined) {
     return nodeId > boundaryId;
   }
   if (

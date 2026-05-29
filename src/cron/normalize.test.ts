@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { validateCronAddParams, validateCronUpdateParams } from "../gateway/protocol/index.js";
+import {
+  validateCronAddParams,
+  validateCronUpdateParams,
+} from "../../packages/gateway-protocol/src/index.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "./normalize.js";
 import { DEFAULT_TOP_OF_HOUR_STAGGER_MS } from "./stagger.js";
 
@@ -526,6 +529,23 @@ describe("normalizeCronJobCreate", () => {
     expect(payload.timeoutSeconds).toBe(0.03);
   });
 
+  it("drops negative agentTurn timeoutSeconds instead of converting it to no-timeout", () => {
+    const nested = normalizeCronJobCreate({
+      name: "negative nested timeout",
+      schedule: { kind: "every", everyMs: 60_000 },
+      payload: { kind: "agentTurn", message: "hello", timeoutSeconds: -5 },
+    }) as unknown as Record<string, unknown>;
+    const flattened = normalizeCronJobCreate({
+      name: "negative flat timeout",
+      schedule: { kind: "every", everyMs: 60_000 },
+      payload: { kind: "agentTurn", message: "hello" },
+      timeoutSeconds: -5,
+    }) as unknown as Record<string, unknown>;
+
+    expect(nested.payload).not.toHaveProperty("timeoutSeconds");
+    expect(flattened.payload).not.toHaveProperty("timeoutSeconds");
+  });
+
   it("preserves empty toolsAllow lists for create jobs", () => {
     const normalized = normalizeCronJobCreate({
       name: "empty-tools",
@@ -620,6 +640,74 @@ describe("normalizeCronJobCreate", () => {
     expect(validateCronAddParams(normalized)).toBe(true);
   });
 
+  it("normalizes string every schedule numbers for create jobs", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "every-string",
+      schedule: {
+        everyMs: "60000",
+        anchorMs: "123.9",
+      },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: {
+        kind: "systemEvent",
+        text: "hi",
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const schedule = normalized.schedule as Record<string, unknown>;
+    expect(schedule).toEqual({
+      kind: "every",
+      everyMs: 60_000,
+      anchorMs: 123,
+    });
+    expect(validateCronAddParams(normalized)).toBe(true);
+  });
+
+  it("normalizes string every schedule numbers for patches", () => {
+    const normalized = normalizeCronJobPatch({
+      schedule: {
+        kind: "every",
+        everyMs: "60000",
+        anchorMs: "123.9",
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const schedule = normalized.schedule as Record<string, unknown>;
+    expect(schedule).toEqual({
+      kind: "every",
+      everyMs: 60_000,
+      anchorMs: 123,
+    });
+    expect(validateCronUpdateParams({ id: "job", patch: normalized })).toBe(true);
+  });
+
+  it("keeps invalid every schedule numbers invalid for validation", () => {
+    const zeroEvery = normalizeCronJobCreate({
+      name: "every-zero",
+      schedule: {
+        kind: "every",
+        everyMs: "0",
+      },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: {
+        kind: "systemEvent",
+        text: "hi",
+      },
+    }) as unknown as Record<string, unknown>;
+    expect(validateCronAddParams(zeroEvery)).toBe(false);
+
+    const negativeAnchor = normalizeCronJobPatch({
+      schedule: {
+        kind: "every",
+        everyMs: "60000",
+        anchorMs: "-1",
+      },
+    }) as unknown as Record<string, unknown>;
+    expect(validateCronUpdateParams({ id: "job", patch: negativeAnchor })).toBe(false);
+  });
+
   it("coerces sessionTarget and wakeMode casing", () => {
     const normalized = normalizeCronJobCreate({
       name: "casing",
@@ -682,19 +770,31 @@ describe("normalizeCronJobCreate", () => {
     expect(normalized.sessionTarget).toBe("session:MySessionID");
   });
 
-  it("rejects custom session ids with path separators", () => {
+  it("preserves custom session ids with channel-native separators", () => {
+    const created = normalizeCronJobCreate({
+      name: "dingtalk-group",
+      schedule: { kind: "cron", expr: "* * * * *" },
+      sessionTarget: "session:agent:main:dingtalk:group:cid3tmd4xb19xjfk/wogxwy2a==",
+      payload: { kind: "agentTurn", message: "hello" },
+    }) as unknown as Record<string, unknown>;
+
+    expect(created.sessionTarget).toBe(
+      "session:agent:main:dingtalk:group:cid3tmd4xb19xjfk/wogxwy2a==",
+    );
+
+    const patched = normalizeCronJobPatch({
+      sessionTarget: "session:..\\outside",
+    }) as unknown as Record<string, unknown>;
+    expect(patched.sessionTarget).toBe("session:..\\outside");
+  });
+
+  it("rejects null bytes in custom session ids", () => {
     expect(() =>
       normalizeCronJobCreate({
-        name: "bad-custom-session",
+        name: "null-byte-session",
         schedule: { kind: "cron", expr: "* * * * *" },
-        sessionTarget: "session:../../outside",
+        sessionTarget: "session:bad\0id",
         payload: { kind: "agentTurn", message: "hello" },
-      }),
-    ).toThrow("invalid cron sessionTarget session id");
-
-    expect(() =>
-      normalizeCronJobPatch({
-        sessionTarget: "session:..\\outside",
       }),
     ).toThrow("invalid cron sessionTarget session id");
   });

@@ -234,9 +234,7 @@ That stages grounded durable candidates into the short-term dreaming store while
     Doctor also warns when `plugins.allow` is non-empty and tool policy uses
     wildcard or plugin-owned tool entries. `tools.allow: ["*"]` only matches tools
     from plugins that actually load; it does not bypass the exclusive plugin
-    allowlist. Doctor writes `plugins.bundledDiscovery: "compat"` for migrated
-    legacy allowlist configs to preserve existing bundled provider behavior, and
-    then points to the stricter `"allowlist"` setting.
+    allowlist.
 
   </Accordion>
   <Accordion title="2. Legacy config key migrations">
@@ -266,6 +264,7 @@ That stages grounded durable candidates into the short-term dreaming store while
     - `routing.transcribeAudio` → `tools.media.audio.models`
     - `messages.tts.<provider>` (`openai`/`elevenlabs`/`microsoft`/`edge`) → `messages.tts.providers.<provider>`
     - `messages.tts.provider: "edge"` and `messages.tts.providers.edge` → `messages.tts.provider: "microsoft"` and `messages.tts.providers.microsoft`
+    - TTS speaker selection fields (`voice`/`voiceName`/`voiceId`) → `speakerVoice`/`speakerVoiceId`
     - `channels.discord.voice.tts.<provider>` (`openai`/`elevenlabs`/`microsoft`/`edge`) → `channels.discord.voice.tts.providers.<provider>`
     - `channels.discord.accounts.<id>.voice.tts.<provider>` (`openai`/`elevenlabs`/`microsoft`/`edge`) → `channels.discord.accounts.<id>.voice.tts.providers.<provider>`
     - `plugins.entries.voice-call.config.tts.<provider>` (`openai`/`elevenlabs`/`microsoft`/`edge`) → `plugins.entries.voice-call.config.tts.providers.<provider>`
@@ -293,7 +292,7 @@ That stages grounded durable candidates into the short-term dreaming store while
 
   </Accordion>
   <Accordion title="2b. OpenCode provider overrides">
-    If you've added `models.providers.opencode`, `opencode-zen`, or `opencode-go` manually, it overrides the built-in OpenCode catalog from `@earendil-works/pi-ai`. That can force models onto the wrong API or zero out costs. Doctor warns so you can remove the override and restore per-model API routing + costs.
+    If you've added `models.providers.opencode`, `opencode-zen`, or `opencode-go` manually, it overrides the built-in OpenCode catalog from `openclaw/plugin-sdk/llm`. That can force models onto the wrong API or zero out costs. Doctor warns so you can remove the override and restore per-model API routing + costs.
   </Accordion>
   <Accordion title="2c. Browser migration and Chrome MCP readiness">
     If your browser config still points at the removed Chrome extension path, doctor normalizes it to the current host-local Chrome MCP attach model:
@@ -326,7 +325,7 @@ That stages grounded durable candidates into the short-term dreaming store while
     If you previously added legacy OpenAI transport settings under `models.providers.openai-codex`, they can shadow the built-in Codex OAuth provider path that newer releases use automatically. Doctor warns when it sees those old transport settings alongside Codex OAuth so you can remove or rewrite the stale transport override and get the built-in routing/fallback behavior back. Custom proxies and header-only overrides are still supported and do not trigger this warning.
   </Accordion>
   <Accordion title="2f. Codex route repair">
-    Doctor checks for legacy `openai-codex/*` model refs. Native Codex harness routing uses canonical `openai/*` model refs; OpenAI agent turns go through the Codex app-server harness instead of the OpenClaw PI OpenAI path.
+    Doctor checks for legacy `openai-codex/*` model refs. Native Codex harness routing uses canonical `openai/*` model refs; OpenAI agent turns go through the Codex app-server harness instead of the OpenClaw OpenAI provider path.
 
     In `--fix` / `--repair` mode, doctor rewrites affected default-agent and per-agent refs, including primary models, fallbacks, heartbeat/subagent/compaction overrides, hooks, channel model overrides, and stale persisted session route state:
 
@@ -375,6 +374,8 @@ That stages grounded durable candidates into the short-term dreaming store while
     - payload `provider` delivery aliases → explicit `delivery.channel`
     - simple legacy `notify: true` webhook fallback jobs → explicit `delivery.mode="webhook"` with `delivery.to=cron.webhook`
 
+    The Gateway also sanitizes malformed cron rows at load time so valid jobs keep running. Raw malformed rows are copied to `jobs-quarantine.json` next to the active store before they are removed from `jobs.json`; doctor reports quarantined rows so you can review or repair them manually.
+
     Doctor only auto-migrates `notify: true` jobs when it can do so without changing behavior. If a job combines legacy notify fallback with an existing non-webhook delivery mode, doctor warns and leaves that job for manual review.
 
     On Linux, doctor also warns when the user's crontab still invokes legacy `~/.openclaw/bin/ensure-whatsapp.sh`. That host-local script is not maintained by current OpenClaw and can write false `Gateway inactive` messages to `~/.openclaw/logs/whatsapp-health.log` when cron cannot reach the systemd user bus. Remove the stale crontab entry with `crontab -e`; use `openclaw channels status --probe`, `openclaw doctor`, and `openclaw gateway status` for current health checks.
@@ -413,7 +414,7 @@ That stages grounded durable candidates into the short-term dreaming store while
     - short cooldowns (rate limits/timeouts/auth failures)
     - longer disables (billing/credit failures)
 
-    Legacy Codex OAuth profiles whose tokens live in macOS Keychain (older onboarding before the file-based sidecar layout) are not picked up by the embedded runtime path — that path runs with `allowKeychainPrompt: false` and cannot trigger a Keychain prompt. Run `openclaw doctor --fix` once to migrate Keychain-backed legacy tokens inline into `auth-profiles.json`; after that, embedded turns (Telegram, cron, sub-agent dispatch) resolve them like any other inline OAuth profile.
+    Legacy Codex OAuth profiles whose tokens live in macOS Keychain (older onboarding before the file-based sidecar layout) are not picked up by the embedded runtime path — that path runs with `allowKeychainPrompt: false` and cannot trigger a Keychain prompt. Affected users will see a one-shot `log.warn` from the legacy sidecar loader naming `openclaw doctor --fix` and macOS Keychain (instead of the credential silently falling through to a downstream `No API key found for provider "openai-codex"`). Run `openclaw doctor --fix` once from an interactive terminal to migrate Keychain-backed legacy tokens inline into `auth-profiles.json`; after that, embedded turns (Telegram, cron, sub-agent dispatch) resolve them like any other inline OAuth profile.
 
   </Accordion>
   <Accordion title="6. Hooks model validation">
@@ -517,7 +518,7 @@ That stages grounded durable candidates into the short-term dreaming store while
     - **QMD backend**: probes whether the `qmd` binary is available and startable. If not, prints fix guidance including the npm package and a manual binary path option.
     - **Explicit local provider**: checks for a local model file or a recognized remote/downloadable model URL. If missing, suggests switching to a remote provider.
     - **Explicit remote provider** (`openai`, `voyage`, etc.): verifies an API key is present in the environment or auth store. Prints actionable fix hints if missing.
-    - **Auto provider**: checks local model availability first, then tries each remote provider in auto-selection order.
+    - **Legacy auto provider**: treats `memorySearch.provider: "auto"` as OpenAI, checks OpenAI readiness, and `doctor --fix` rewrites it to `provider: "openai"`.
 
     When a cached gateway probe result is available (gateway was healthy at the time of the check), doctor cross-references its result with the CLI-visible config and notes any discrepancy. Doctor does not start a fresh embedding ping on the default path; use the deep memory status command when you want a live provider check.
 

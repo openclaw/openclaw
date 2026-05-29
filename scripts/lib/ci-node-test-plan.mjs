@@ -10,6 +10,7 @@ const EXCLUDED_FULL_SUITE_SHARDS = new Set([
 ]);
 
 const EXCLUDED_PROJECT_CONFIGS = new Set(["test/vitest/vitest.channels.config.ts"]);
+const DEFAULT_NODE_TEST_RUNNER = "blacksmith-8vcpu-ubuntu-2404";
 const RELEASE_ONLY_PLUGIN_SHARDS = new Set(["agentic-plugins"]);
 function listTestFiles(rootDir) {
   return listTrackedTestFiles(rootDir);
@@ -362,7 +363,7 @@ const SPLIT_NODE_SHARDS = new Map([
         shardName: "agentic-agents",
         configs: [
           "test/vitest/vitest.agents-core.config.ts",
-          "test/vitest/vitest.agents-pi-embedded.config.ts",
+          "test/vitest/vitest.agents-embedded-agent.config.ts",
           "test/vitest/vitest.agents-support.config.ts",
           "test/vitest/vitest.agents-tools.config.ts",
         ],
@@ -442,7 +443,7 @@ export function createNodeTestShards(options = {}) {
             shardName: splitShard.shardName,
             configs: splitConfigs,
             ...(splitShard.includePatterns ? { includePatterns: splitShard.includePatterns } : {}),
-            ...(splitShard.runner ? { runner: splitShard.runner } : {}),
+            runner: splitShard.runner ?? DEFAULT_NODE_TEST_RUNNER,
             requiresDist: splitShard.requiresDist,
           },
         ];
@@ -454,6 +455,7 @@ export function createNodeTestShards(options = {}) {
         checkName: formatNodeTestShardCheckName(shard.name),
         shardName: shard.name,
         configs,
+        runner: DEFAULT_NODE_TEST_RUNNER,
         requiresDist: DIST_DEPENDENT_NODE_SHARD_NAMES.has(shard.name),
       },
     ];

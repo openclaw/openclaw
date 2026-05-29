@@ -6,9 +6,16 @@ import { callGateway } from "../gateway/call.js";
 import { isEmbeddedMode } from "../infra/embedded-mode.js";
 import { getActiveSecretsRuntimeSnapshot } from "../secrets/runtime-state.js";
 import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime-web-tools-state.js";
+import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
+import { resolveTranscriptsConfig } from "../transcripts/config.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "./agent-scope.js";
+import {
+  type HookContext,
+  isToolWrappedWithBeforeToolCallHook,
+  wrapToolWithBeforeToolCallHook,
+} from "./agent-tools.before-tool-call.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
 import {
@@ -22,11 +29,6 @@ import {
   collectPresentOpenClawTools,
   shouldIncludeUpdatePlanToolForOpenClawTools,
 } from "./openclaw-tools.registration.js";
-import {
-  type HookContext,
-  isToolWrappedWithBeforeToolCallHook,
-  wrapToolWithBeforeToolCallHook,
-} from "./pi-tools.before-tool-call.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
@@ -50,6 +52,7 @@ import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
+import { createTranscriptsTool } from "./tools/transcripts-tool.js";
 import { createTtsTool } from "./tools/tts-tool.js";
 import { createUpdatePlanTool } from "./tools/update-plan-tool.js";
 import { createVideoGenerateTool } from "./tools/video-generate-tool.js";
@@ -201,6 +204,11 @@ export function createOpenClawTools(
     toolAllowlist: options?.pluginToolAllowlist,
     toolDenylist: options?.pluginToolDenylist,
   });
+  const trimmedRunSessionKey = options?.runSessionKey?.trim();
+  const mediaGenerationAgentSessionKey =
+    trimmedRunSessionKey && isCronRunSessionKey(trimmedRunSessionKey)
+      ? trimmedRunSessionKey
+      : options?.agentSessionKey;
   const imageToolAgentDir = options?.agentDir;
   const imageTool = resolveImageToolFactoryAvailable({
     config: availabilityConfig ?? resolvedConfig,
@@ -216,6 +224,9 @@ export function createOpenClawTools(
         workspaceDir,
         sandbox,
         fsPolicy: options?.fsPolicy,
+        agentChannel: options?.agentChannel,
+        agentAccountId: options?.agentAccountId,
+        currentChannelId: options?.currentChannelId,
         modelHasVision: options?.modelHasVision,
         deferAutoModelResolution: true,
       })
@@ -226,7 +237,7 @@ export function createOpenClawTools(
         config: options?.config,
         agentDir: options?.agentDir,
         authProfileStore: options?.authProfileStore,
-        agentSessionKey: options?.agentSessionKey,
+        agentSessionKey: mediaGenerationAgentSessionKey,
         requesterOrigin: deliveryContext ?? undefined,
         workspaceDir,
         sandbox,
@@ -240,7 +251,7 @@ export function createOpenClawTools(
         config: options?.config,
         agentDir: options?.agentDir,
         authProfileStore: options?.authProfileStore,
-        agentSessionKey: options?.agentSessionKey,
+        agentSessionKey: mediaGenerationAgentSessionKey,
         requesterOrigin: deliveryContext ?? undefined,
         workspaceDir,
         sandbox,
@@ -254,7 +265,7 @@ export function createOpenClawTools(
         config: options?.config,
         agentDir: options?.agentDir,
         authProfileStore: options?.authProfileStore,
-        agentSessionKey: options?.agentSessionKey,
+        agentSessionKey: mediaGenerationAgentSessionKey,
         requesterOrigin: deliveryContext ?? undefined,
         workspaceDir,
         sandbox,
@@ -366,6 +377,7 @@ export function createOpenClawTools(
     pluginToolAllowlist: options?.pluginToolAllowlist,
     pluginToolDenylist: options?.pluginToolDenylist,
   });
+  const includeTranscriptsTool = resolveTranscriptsConfig(resolvedConfig?.transcripts).enabled;
   const tools: AnyAgentTool[] = [
     ...(embedded
       ? []
@@ -392,6 +404,7 @@ export function createOpenClawTools(
       agentId: sessionAgentId,
       agentAccountId: options?.agentAccountId,
     }),
+    ...(includeTranscriptsTool ? [createTranscriptsTool({ config: resolvedConfig })] : []),
     ...collectPresentOpenClawTools([imageGenerateTool, musicGenerateTool, videoGenerateTool]),
     ...(embedded
       ? []

@@ -33,6 +33,7 @@ on:
       - "packages/plugin-package-contract/**"
       - "packages/plugin-sdk/**"
       - "packages/memory-host-sdk/**"
+      - "packages/net-policy/**"
       - "src/*.ts"
       - "src/**/*.ts"
       - "src/config/**"
@@ -71,7 +72,9 @@ on:
       - "src/acp/control-plane/**"
       - "src/agents/cli-runner/**"
       - "src/agents/command/**"
-      - "src/agents/pi-embedded-runner/**"
+      - "src/agents/embedded-agent-runner/**"
+      - "src/agents/sessions/**"
+      - "src/agents/sessions/tools/**"
       - "src/agents/tools/**"
       - "src/agents/*completion*.ts"
       - "src/agents/*transport*.ts"
@@ -104,13 +107,13 @@ on:
       - "src/gateway/**/*auth*.ts"
       - "src/gateway/*secret*.ts"
       - "src/gateway/**/*secret*.ts"
-      - "src/gateway/protocol/**/*secret*.ts"
+      - "packages/gateway-protocol/src/**/*secret*.ts"
       - "src/gateway/resolve-configured-secret-input-string*.ts"
       - "src/gateway/security-path*.ts"
       - "src/gateway/server-methods/secrets*.ts"
       - "src/gateway/server-startup-memory.ts"
       - "src/gateway/method-scopes.ts"
-      - "src/gateway/protocol/**"
+      - "packages/gateway-protocol/src/**"
       - "src/gateway/server-methods/**"
       - "src/gateway/server-methods.ts"
       - "src/gateway/server-methods-list.ts"
@@ -222,7 +225,15 @@ jobs:
                   network_runtime=true
                   session_diagnostics=true
                   ;;
-                src/acp/control-plane/*|src/agents/cli-runner/*|src/agents/command/*|src/agents/pi-embedded-runner/*|src/agents/tools/*|src/agents/*completion*.ts|src/agents/*transport*.ts|src/agents/model-*.ts|src/agents/openclaw-tools*.ts|src/agents/provider-*.ts|src/agents/session*.ts|src/agents/tool-call*.ts|src/auto-reply/reply/agent-runner*.ts|src/auto-reply/reply/commands*.ts|src/auto-reply/reply/directive-handling*.ts|src/auto-reply/reply/dispatch-*.ts|src/auto-reply/reply/get-reply-run*.ts|src/auto-reply/reply/provider-dispatcher*.ts|src/auto-reply/reply/queue*.ts|src/auto-reply/reply/reply-run-registry*.ts|src/auto-reply/reply/session*.ts)
+                src/agents/sessions/tools/*)
+                  agent=true
+                  mcp_process=true
+                  ;;
+                src/agents/sessions/*auth*.ts|src/agents/sessions/**/*auth*.ts)
+                  agent=true
+                  core_auth_secrets=true
+                  ;;
+                src/acp/control-plane/*|src/agents/cli-runner/*|src/agents/command/*|src/agents/embedded-agent-runner/*|src/agents/sessions/*|src/agents/tools/*|src/agents/*completion*.ts|src/agents/*transport*.ts|src/agents/model-*.ts|src/agents/openclaw-tools*.ts|src/agents/provider-*.ts|src/agents/session*.ts|src/agents/tool-call*.ts|src/auto-reply/reply/agent-runner*.ts|src/auto-reply/reply/commands*.ts|src/auto-reply/reply/directive-handling*.ts|src/auto-reply/reply/dispatch-*.ts|src/auto-reply/reply/get-reply-run*.ts|src/auto-reply/reply/provider-dispatcher*.ts|src/auto-reply/reply/queue*.ts|src/auto-reply/reply/reply-run-registry*.ts|src/auto-reply/reply/session*.ts)
                   agent=true
                   ;;
                 src/auto-reply/reply/post-compaction-context.ts|src/auto-reply/reply/queue/*|src/auto-reply/reply/startup-context.ts|src/commands/doctor-session-*.ts|src/commands/session-store-targets.ts|src/commands/sessions*.ts|src/infra/diagnostic-*.ts|src/infra/diagnostics-timeline.ts|src/infra/session-delivery-queue*.ts|src/logging/diagnostic*.ts)
@@ -234,14 +245,14 @@ jobs:
                 src/config/*)
                   config=true
                   ;;
-                src/gateway/protocol/*secret*.ts|src/gateway/server-methods/secrets*.ts)
+                packages/gateway-protocol/src/*secret*.ts|packages/gateway-protocol/src/**/*secret*.ts|src/gateway/server-methods/secrets*.ts)
                   core_auth_secrets=true
                   gateway=true
                   ;;
                 src/agents/*auth*.ts|src/agents/auth-health*.ts|src/agents/auth-profiles|src/agents/auth-profiles/*|src/agents/bash-tools.exec-host-shared.ts|src/agents/sandbox|src/agents/sandbox.ts|src/agents/sandbox-*.ts|src/agents/sandbox/*|src/cron/service/jobs.ts|src/cron/stagger.ts|src/gateway/*auth*.ts|src/gateway/*secret*.ts|src/gateway/resolve-configured-secret-input-string*.ts|src/gateway/security-path*.ts|src/infra/secret-file*.ts|src/secrets/*|src/security/*)
                   core_auth_secrets=true
                   ;;
-                src/gateway/method-scopes.ts|src/gateway/protocol/*|src/gateway/server-methods/*|src/gateway/server-methods.ts|src/gateway/server-methods-list.ts)
+                packages/gateway-protocol/src/*|packages/gateway-protocol/src/**/*|src/gateway/method-scopes.ts|src/gateway/server-methods/*|src/gateway/server-methods.ts|src/gateway/server-methods-list.ts)
                   gateway=true
                   ;;
                 packages/memory-host-sdk/*|src/commands/doctor-cron-dreaming-payload-migration.ts|src/commands/doctor-memory-search.ts|src/gateway/server-startup-memory.ts|src/memory/*|src/memory-host-sdk/*)
@@ -291,7 +302,7 @@ jobs:
               esac
 
               case "${file}" in
-                src/*.ts|src/**/*.ts|extensions/*.ts|extensions/**/*.ts)
+                src/*.ts|src/**/*.ts|extensions/*.ts|extensions/**/*.ts|packages/net-policy/src/*|packages/net-policy/src/**/*)
                   network_runtime=true
                   ;;
               esac

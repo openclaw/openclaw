@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import {
   listAgentIds,
@@ -46,6 +47,7 @@ import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
   buildGroupDisplayName,
+  getSessionStoreCacheVersion,
   loadSessionStore,
   resolveAllAgentSessionStoreTargetsSync,
   resolveAgentMainSessionKey,
@@ -78,6 +80,7 @@ import {
   normalizeOptionalString,
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import { normalizeSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import type { ModelCostConfig } from "../utils/usage-format.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
@@ -395,6 +398,7 @@ function resolveEstimatedSessionCostUsd(params: {
 }
 
 const STALE_STORE_ONLY_CHILD_LINK_MS = 60 * 60 * 1_000;
+const SINGLE_ROW_CONTEXT_CACHE_MAX_ENTRIES = 64;
 
 function isFinitePositiveTimestamp(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
@@ -438,6 +442,71 @@ type SessionListRowContext = {
   displayModelIdentityByKey: Map<string, { provider?: string; model?: string }>;
   modelCostConfigByModelRef: Map<string, ModelCostConfig | undefined>;
 };
+
+type SingleRowChildSessionCandidateCacheEntry = {
+  store: Record<string, SessionEntry>;
+  storeVersion: number;
+  childSessionCandidatesByParentKey: Map<string, string[]>;
+};
+
+const singleRowChildSessionCandidateCache = new Map<
+  string,
+  SingleRowChildSessionCandidateCacheEntry
+>();
+
+function rememberSingleRowChildSessionCandidateCacheEntry(
+  storePath: string,
+  entry: SingleRowChildSessionCandidateCacheEntry,
+) {
+  if (singleRowChildSessionCandidateCache.has(storePath)) {
+    singleRowChildSessionCandidateCache.delete(storePath);
+  }
+  singleRowChildSessionCandidateCache.set(storePath, entry);
+  if (singleRowChildSessionCandidateCache.size <= SINGLE_ROW_CONTEXT_CACHE_MAX_ENTRIES) {
+    return;
+  }
+  const oldestKey = singleRowChildSessionCandidateCache.keys().next().value;
+  if (oldestKey) {
+    singleRowChildSessionCandidateCache.delete(oldestKey);
+  }
+}
+
+function buildStoreChildSessionCandidateIndex(
+  store: Record<string, SessionEntry>,
+): Map<string, string[]> {
+  const childSessionsByKey = new Map<string, string[]>();
+  for (const [key, entry] of Object.entries(store)) {
+    if (!entry) {
+      continue;
+    }
+    const parentKeys = [
+      normalizeOptionalString(entry.spawnedBy),
+      normalizeOptionalString(entry.parentSessionKey),
+    ].filter((value): value is string => Boolean(value) && value !== key);
+    for (const parentKey of parentKeys) {
+      addChildSessionKey(childSessionsByKey, parentKey, key);
+    }
+  }
+  return childSessionsByKey;
+}
+
+function getSingleRowChildSessionCandidates(params: {
+  storePath: string;
+  store: Record<string, SessionEntry>;
+}): Map<string, string[]> {
+  const storeVersion = getSessionStoreCacheVersion(params.storePath);
+  const cached = singleRowChildSessionCandidateCache.get(params.storePath);
+  if (cached && cached.store === params.store && cached.storeVersion === storeVersion) {
+    return cached.childSessionCandidatesByParentKey;
+  }
+  const childSessionCandidatesByParentKey = buildStoreChildSessionCandidateIndex(params.store);
+  rememberSingleRowChildSessionCandidateCacheEntry(params.storePath, {
+    store: params.store,
+    storeVersion,
+    childSessionCandidatesByParentKey,
+  });
+  return childSessionCandidatesByParentKey;
+}
 
 function resolveRuntimeChildSessionKeys(
   controllerSessionKey: string,
@@ -545,6 +614,45 @@ function buildStoreChildSessionIndex(
   return childSessionsByKey;
 }
 
+function resolveStoreChildSessionKeysFromCandidates(params: {
+  store: Record<string, SessionEntry>;
+  key: string;
+  now: number;
+  candidates: ReadonlyMap<string, readonly string[]>;
+}): string[] | undefined {
+  const childSessionKeys: string[] = [];
+  for (const childKey of params.candidates.get(params.key) ?? []) {
+    const entry = params.store[childKey];
+    if (!entry) {
+      continue;
+    }
+    const latest = getSessionDisplaySubagentRunByChildSessionKey(childKey);
+    if (latest) {
+      const latestControllerSessionKey =
+        normalizeOptionalString(latest.controllerSessionKey) ||
+        normalizeOptionalString(latest.requesterSessionKey);
+      if (latestControllerSessionKey !== params.key) {
+        continue;
+      }
+      if (
+        !shouldKeepSubagentRunChildLink(latest, {
+          activeDescendants: countActiveDescendantRuns(childKey),
+          now: params.now,
+        })
+      ) {
+        continue;
+      }
+      childSessionKeys.push(childKey);
+      continue;
+    }
+    if (!shouldKeepStoreOnlyChildLink(entry, params.now)) {
+      continue;
+    }
+    childSessionKeys.push(childKey);
+  }
+  return childSessionKeys.length > 0 ? childSessionKeys : undefined;
+}
+
 function buildSessionListRowContext(params: {
   store: Record<string, SessionEntry>;
   now: number;
@@ -558,6 +666,24 @@ function buildSessionListRowContext(params: {
     displayModelIdentityByKey: new Map(),
     modelCostConfigByModelRef: new Map(),
   };
+}
+
+function buildSingleRowStoreChildSessionsByKey(params: {
+  store: Record<string, SessionEntry>;
+  storePath: string;
+  key: string;
+  now: number;
+}): Map<string, string[]> {
+  const storeChildSessions = resolveStoreChildSessionKeysFromCandidates({
+    store: params.store,
+    key: params.key,
+    now: params.now,
+    candidates: getSingleRowChildSessionCandidates({
+      storePath: params.storePath,
+      store: params.store,
+    }),
+  });
+  return storeChildSessions ? new Map([[params.key, storeChildSessions]]) : new Map();
 }
 
 function createSessionRowModelCacheKey(provider: string | undefined, model: string | undefined) {
@@ -654,7 +780,7 @@ function mergeChildSessionKeys(
   if (!storeChildSessions?.length) {
     return runtimeChildSessions;
   }
-  return Array.from(new Set([...runtimeChildSessions, ...storeChildSessions]));
+  return uniqueStrings([...runtimeChildSessions, ...storeChildSessions]);
 }
 
 function resolveChildSessionKeys(
@@ -761,16 +887,17 @@ export function resolveDeletedAgentIdFromSessionKey(
   return agentId;
 }
 
-export function loadSessionEntry(sessionKey: string, opts?: { agentId?: string }) {
+export function loadSessionEntry(sessionKey: string, opts?: { agentId?: string; clone?: boolean }) {
   const cfg = getRuntimeConfig();
   const key = normalizeOptionalString(sessionKey) ?? "";
   const target = resolveGatewaySessionStoreTarget({
     cfg,
     key,
+    ...(opts?.clone === false ? { clone: false } : {}),
     ...(opts?.agentId ? { agentId: opts.agentId } : {}),
   });
   const storePath = target.storePath;
-  const store = loadSessionStore(storePath);
+  const store = loadSessionStore(storePath, opts?.clone === false ? { clone: false } : undefined);
   const freshestMatch = resolveFreshestSessionStoreMatchFromStoreKeys(store, target.storeKeys);
   const legacyKey = freshestMatch?.key !== target.canonicalKey ? freshestMatch?.key : undefined;
   return {
@@ -1147,6 +1274,7 @@ function resolveGatewaySessionStoreLookup(params: {
   key: string;
   canonicalKey: string;
   agentId: string;
+  clone?: boolean;
   initialStore?: Record<string, SessionEntry>;
 }): {
   storePath: string;
@@ -1159,8 +1287,9 @@ function resolveGatewaySessionStoreLookup(params: {
     agentId: params.agentId,
     storePath: resolveStorePath(params.cfg.session?.store, { agentId: params.agentId }),
   };
+  const loadOptions = params.clone === false ? { clone: false } : undefined;
   let selectedStorePath = fallback.storePath;
-  let selectedStore = params.initialStore ?? loadSessionStore(fallback.storePath);
+  let selectedStore = params.initialStore ?? loadSessionStore(fallback.storePath, loadOptions);
   let selectedMatch = findFreshestStoreMatch(selectedStore, ...scanTargets);
   let selectedUpdatedAt = selectedMatch?.entry.updatedAt ?? Number.NEGATIVE_INFINITY;
 
@@ -1169,7 +1298,7 @@ function resolveGatewaySessionStoreLookup(params: {
     if (!candidate) {
       continue;
     }
-    const store = loadSessionStore(candidate.storePath);
+    const store = loadSessionStore(candidate.storePath, loadOptions);
     const match = findFreshestStoreMatch(store, ...scanTargets);
     if (!match) {
       continue;
@@ -1195,6 +1324,7 @@ function resolveGatewaySessionStoreLookup(params: {
 function resolveExplicitDeletedLegacyMainStoreTarget(params: {
   cfg: OpenClawConfig;
   key: string;
+  clone?: boolean;
   scanLegacyKeys?: boolean;
 }): {
   agentId: string;
@@ -1231,11 +1361,12 @@ function resolveExplicitDeletedLegacyMainStoreTarget(params: {
         match: { entry: SessionEntry; key: string };
       }
     | undefined;
+  const loadOptions = params.clone === false ? { clone: false } : undefined;
   for (const target of resolveAllAgentSessionStoreTargetsSync(params.cfg)) {
     if (target.agentId !== legacyAgentId) {
       continue;
     }
-    const store = loadSessionStore(target.storePath);
+    const store = loadSessionStore(target.storePath, loadOptions);
     const match = findFreshestStoreMatch(store, ...lookupSeeds);
     if (!match) {
       continue;
@@ -1273,6 +1404,7 @@ export function resolveGatewaySessionStoreTarget(params: {
   cfg: OpenClawConfig;
   key: string;
   agentId?: string;
+  clone?: boolean;
   scanLegacyKeys?: boolean;
   store?: Record<string, SessionEntry>;
 }): {
@@ -1285,6 +1417,7 @@ export function resolveGatewaySessionStoreTarget(params: {
   const explicitDeletedMainTarget = resolveExplicitDeletedLegacyMainStoreTarget({
     cfg: params.cfg,
     key,
+    clone: params.clone,
     scanLegacyKeys: params.scanLegacyKeys,
   });
   if (explicitDeletedMainTarget) {
@@ -1305,6 +1438,7 @@ export function resolveGatewaySessionStoreTarget(params: {
     key,
     canonicalKey,
     agentId,
+    clone: params.clone,
     initialStore: params.store,
   });
 
@@ -1897,6 +2031,7 @@ export function buildGatewaySessionRow(params: {
     key,
     spawnedBy: subagentOwner || entry?.spawnedBy,
     spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
+    spawnedCwd: entry?.spawnedCwd,
     forkedFromParent: entry?.forkedFromParent,
     spawnDepth: entry?.spawnDepth,
     subagentRole: entry?.subagentRole,
@@ -2050,20 +2185,30 @@ export function loadGatewaySessionRow(
     transcriptUsageMaxBytes?: number;
   },
 ): GatewaySessionRow | null {
-  const { cfg, storePath, store, entry, canonicalKey } = loadSessionEntry(sessionKey);
+  const now = options?.now ?? Date.now();
+  const { cfg, storePath, store, entry, canonicalKey } = loadSessionEntry(sessionKey, {
+    clone: false,
+  });
   if (!entry) {
     return null;
   }
+  const storeChildSessionsByKey = buildSingleRowStoreChildSessionsByKey({
+    storePath,
+    store,
+    key: canonicalKey,
+    now,
+  });
   return buildGatewaySessionRow({
     cfg,
     storePath,
     store,
     key: canonicalKey,
     entry,
-    now: options?.now,
+    now,
     includeDerivedTitles: options?.includeDerivedTitles,
     includeLastMessage: options?.includeLastMessage,
     transcriptUsageMaxBytes: options?.transcriptUsageMaxBytes,
+    storeChildSessionsByKey,
   });
 }
 
@@ -2091,7 +2236,7 @@ function compareSessionEntryPairsByUpdatedAt(a: SessionEntryPair, b: SessionEntr
 }
 
 function resolveSessionsListLimit(
-  opts: import("./protocol/index.js").SessionsListParams,
+  opts: SessionsListParams,
   defaultLimit?: number,
 ): number | undefined {
   if (typeof opts.limit !== "number" || !Number.isFinite(opts.limit)) {
@@ -2100,7 +2245,7 @@ function resolveSessionsListLimit(
   return Math.max(1, Math.floor(opts.limit));
 }
 
-function resolveSessionsListOffset(opts: import("./protocol/index.js").SessionsListParams): number {
+function resolveSessionsListOffset(opts: SessionsListParams): number {
   if (typeof opts.offset !== "number" || !Number.isFinite(opts.offset)) {
     return 0;
   }
@@ -2150,7 +2295,7 @@ function sortAndLimitSessionEntries(
 function filterSessionEntries(params: {
   cfg: OpenClawConfig;
   store: Record<string, SessionEntry>;
-  opts: import("./protocol/index.js").SessionsListParams;
+  opts: SessionsListParams;
   now: number;
   rowContext?: SessionListRowContext;
 }): SessionEntryPair[] {
@@ -2258,7 +2403,7 @@ function filterSessionEntries(params: {
 function selectSessionEntries(params: {
   cfg: OpenClawConfig;
   store: Record<string, SessionEntry>;
-  opts: import("./protocol/index.js").SessionsListParams;
+  opts: SessionsListParams;
   now: number;
   rowContext?: SessionListRowContext;
   defaultLimit?: number;
@@ -2285,7 +2430,7 @@ function selectSessionEntries(params: {
 export function filterAndSortSessionEntries(params: {
   cfg: OpenClawConfig;
   store: Record<string, SessionEntry>;
-  opts: import("./protocol/index.js").SessionsListParams;
+  opts: SessionsListParams;
   now: number;
   rowContext?: SessionListRowContext;
 }): [string, SessionEntry][] {
@@ -2297,7 +2442,7 @@ export function listSessionsFromStore(params: {
   storePath: string;
   store: Record<string, SessionEntry>;
   modelCatalog?: ModelCatalogEntry[];
-  opts: import("./protocol/index.js").SessionsListParams;
+  opts: SessionsListParams;
 }): SessionsListResult {
   const { cfg, storePath, store, opts } = params;
   const now = Date.now();
@@ -2372,7 +2517,7 @@ export async function listSessionsFromStoreAsync(params: {
   storePath: string;
   store: Record<string, SessionEntry>;
   modelCatalog?: ModelCatalogEntry[];
-  opts: import("./protocol/index.js").SessionsListParams;
+  opts: SessionsListParams;
 }): Promise<SessionsListResult> {
   const { cfg, storePath, store, opts } = params;
   const now = Date.now();
