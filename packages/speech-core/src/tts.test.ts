@@ -485,14 +485,16 @@ describe("speech-core native voice-note routing", () => {
   });
 
   it("caps oversized voice model TTS timeouts before synthesis", async () => {
-    installSpeechProviders([createMockSpeechProvider("mock", { autoSelectOrder: 1 })]);
+    installSpeechProviders([
+      createMockSpeechProvider("mock", { autoSelectOrder: 1, models: ["mock-tts"] }),
+    ]);
 
     const result = await synthesizeSpeech({
       text: "Use capped explicit timeout.",
       cfg: {
         agents: {
           defaults: {
-            voiceModel: { primary: "mock", timeoutMs: Number.MAX_SAFE_INTEGER },
+            voiceModel: { primary: "mock/mock-tts", timeoutMs: Number.MAX_SAFE_INTEGER },
           },
         },
         messages: {
