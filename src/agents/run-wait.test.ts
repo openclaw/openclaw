@@ -268,7 +268,7 @@ describe("waitForAgentRun", () => {
     });
   });
 
-  it("preserves timing metadata from agent.wait", async () => {
+  it("preserves timing metadata on provider-attributed wait timeouts", async () => {
     callGatewayMock.mockResolvedValue({
       status: "ok",
       startedAt: 100,
@@ -280,7 +280,7 @@ describe("waitForAgentRun", () => {
     const result = await waitForAgentRun({ runId: "run-2", timeoutMs: 500 });
 
     expect(result).toEqual({
-      status: "ok",
+      status: "timeout",
       startedAt: 100,
       endedAt: 200,
       timeoutPhase: "provider",

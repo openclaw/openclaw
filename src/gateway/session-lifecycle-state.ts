@@ -60,6 +60,8 @@ function mapAgentRunTerminalOutcomeToSessionStatus(
     case "failed":
       return "failed";
   }
+  const unhandledReason: never = outcome.reason;
+  throw new Error(`Unhandled agent run terminal outcome: ${unhandledReason}`);
 }
 
 function resolveTerminalStatus(event: LifecycleEventLike): SessionRunStatus {
