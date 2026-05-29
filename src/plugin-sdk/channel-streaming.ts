@@ -465,7 +465,13 @@ export function createChannelProgressDraftGate(params: {
     }
     started = true;
     clearTimer();
-    startPromise = Promise.resolve().then(params.onStart);
+    startPromise = Promise.resolve()
+      .then(params.onStart)
+      .catch((error) => {
+        started = false;
+        startPromise = undefined;
+        throw error;
+      });
     return startPromise;
   };
 

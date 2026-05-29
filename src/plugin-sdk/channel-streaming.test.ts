@@ -461,6 +461,44 @@ describe("channel-streaming", () => {
     expect(onStart).toHaveBeenCalledTimes(1);
   });
 
+  it("resets started state when onStart rejects via timer", async () => {
+    vi.useFakeTimers();
+    const onStart = vi.fn(async () => {
+      throw new Error("channel send failed");
+    });
+    const gate = createChannelProgressDraftGate({ onStart });
+
+    await gate.noteWork();
+    expect(gate.hasStarted).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(onStart).toHaveBeenCalledTimes(1);
+    expect(gate.hasStarted).toBe(false);
+  });
+
+  it("resets started state when onStart rejects via noteWork", async () => {
+    vi.useFakeTimers();
+    let shouldFail = true;
+    const onStart = vi.fn(async () => {
+      if (shouldFail) {
+        throw new Error("channel send failed");
+      }
+    });
+    const gate = createChannelProgressDraftGate({ onStart });
+
+    await gate.noteWork();
+    // Second noteWork triggers start() directly; the rejection propagates
+    // but the gate resets so future calls can retry.
+    await expect(gate.noteWork()).rejects.toThrow("channel send failed");
+    expect(gate.hasStarted).toBe(false);
+
+    // After the failure clears, the gate can recover on the next attempt.
+    shouldFail = false;
+    await expect(gate.noteWork()).resolves.toBe(true);
+    expect(gate.hasStarted).toBe(true);
+    expect(onStart).toHaveBeenCalledTimes(2);
+  });
+
   it("ignores message-like tools for progress draft work", () => {
     expect(isChannelProgressDraftWorkToolName("message")).toBe(false);
     expect(isChannelProgressDraftWorkToolName("react")).toBe(false);
