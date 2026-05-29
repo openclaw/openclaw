@@ -1,5 +1,10 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { EmbeddedAgentQueueFailureReason } from "../../../agents/embedded-agent-runner/runs.js";
+import {
+  onDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  type DiagnosticEventPayload,
+} from "../../../infra/diagnostic-events.js";
 import {
   BUSY_MESSAGE_OUTCOME_LABELS,
   clearBusyMessageOutcomeStoreForTest,
@@ -14,9 +19,55 @@ const SESSION_ID = "session-1";
 
 afterEach(() => {
   clearBusyMessageOutcomeStoreForTest();
+  resetDiagnosticEventsForTest();
 });
 
 describe("busy-message-outcome", () => {
+  beforeEach(() => {
+    resetDiagnosticEventsForTest();
+  });
+
+  it("emits diagnostic events when outcomes are recorded", () => {
+    const events: DiagnosticEventPayload[] = [];
+    const stop = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+
+    recordBusyMessageOutcome({
+      kind: "active_run_steer_accepted",
+      sessionKey: SESSION_KEY,
+      sessionId: SESSION_ID,
+      channel: "telegram",
+      queueMode: "steer",
+      source: "inbound",
+    });
+    recordBusyMessageOutcome({
+      kind: "active_run_steer_rejected",
+      sessionKey: SESSION_KEY,
+      sessionId: SESSION_ID,
+      reason: "no_active_run",
+      source: "slash_steer",
+    });
+    stop();
+
+    expect(events).toHaveLength(2);
+    expect(events[0]).toMatchObject({
+      type: "message.busy.outcome",
+      outcome: "active_run_steer_accepted",
+      sessionKey: SESSION_KEY,
+      sessionId: SESSION_ID,
+      channel: "telegram",
+      queueMode: "steer",
+      source: "inbound",
+    });
+    expect(events[1]).toMatchObject({
+      type: "message.busy.outcome",
+      outcome: "active_run_steer_rejected",
+      reason: "no_active_run",
+      source: "slash_steer",
+    });
+  });
+
   it("records and reads the last outcome by session key or id", () => {
     recordBusyMessageOutcome({
       kind: "followup_enqueued",

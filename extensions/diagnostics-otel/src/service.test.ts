@@ -516,6 +516,27 @@ describe("diagnostics-otel service", () => {
       queueDepth: 2,
     });
     emitDiagnosticEvent({
+      type: "message.busy.outcome",
+      channel: "telegram",
+      source: "inbound",
+      outcome: "active_run_steer_accepted",
+      queueMode: "steer",
+    });
+    emitDiagnosticEvent({
+      type: "message.busy.outcome",
+      channel: "telegram",
+      source: "slash_steer",
+      outcome: "active_run_steer_rejected",
+      reason: "no_active_run",
+    });
+    emitDiagnosticEvent({
+      type: "message.busy.outcome",
+      channel: "telegram",
+      source: "inbound",
+      outcome: "followup_enqueued",
+      queueMode: "followup",
+    });
+    emitDiagnosticEvent({
       type: "message.received",
       channel: "telegram",
       source: "webhook",
@@ -590,6 +611,26 @@ describe("diagnostics-otel service", () => {
     expect(telemetryState.counters.get("openclaw.message.queued")?.add).toHaveBeenCalledWith(1, {
       "openclaw.channel": "telegram",
       "openclaw.source": "telegram",
+    });
+    expect(telemetryState.counters.get("openclaw.message.busy")?.add).toHaveBeenCalledWith(1, {
+      "openclaw.channel": "telegram",
+      "openclaw.source": "inbound",
+      "openclaw.queue.outcome": "active_run_steer_accepted",
+      "openclaw.queue.reason": "none",
+      "openclaw.queue.mode": "steer",
+    });
+    expect(telemetryState.counters.get("openclaw.message.busy")?.add).toHaveBeenCalledWith(1, {
+      "openclaw.channel": "telegram",
+      "openclaw.source": "slash_steer",
+      "openclaw.queue.outcome": "active_run_steer_rejected",
+      "openclaw.queue.reason": "no_active_run",
+    });
+    expect(telemetryState.counters.get("openclaw.message.busy")?.add).toHaveBeenCalledWith(1, {
+      "openclaw.channel": "telegram",
+      "openclaw.source": "inbound",
+      "openclaw.queue.outcome": "followup_enqueued",
+      "openclaw.queue.reason": "none",
+      "openclaw.queue.mode": "followup",
     });
     expect(telemetryState.histograms.get("openclaw.queue.depth")?.record).toHaveBeenCalledTimes(2);
     expect(telemetryState.histograms.get("openclaw.queue.depth")?.record).toHaveBeenCalledWith(2, {
@@ -3297,24 +3338,26 @@ describe("diagnostics-otel service", () => {
       },
       {
         inputMessages: [
-        { role: "user", content: "what changed?", timestamp: 1 },
-        {
-          role: "assistant",
-          content: [{ type: "toolCall", id: "call-1", name: "lookup", arguments: { q: "trace" } }],
-        },
-        { role: "toolResult", toolCallId: "call-1", content: { rows: 1 } },
-      ],
+          { role: "user", content: "what changed?", timestamp: 1 },
+          {
+            role: "assistant",
+            content: [
+              { type: "toolCall", id: "call-1", name: "lookup", arguments: { q: "trace" } },
+            ],
+          },
+          { role: "toolResult", toolCallId: "call-1", content: { rows: 1 } },
+        ],
         outputMessages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "the trace changed" }],
-          stopReason: "stop",
-        },
-      ],
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "the trace changed" }],
+            stopReason: "stop",
+          },
+        ],
         systemPrompt: "be exact",
         toolDefinitions: [
-        { name: "lookup", description: "Lookup data", parameters: { type: "object" } },
-      ],
+          { name: "lookup", description: "Lookup data", parameters: { type: "object" } },
+        ],
       },
     );
     await flushDiagnosticEvents();

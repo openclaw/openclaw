@@ -642,6 +642,52 @@ export function logWebhookError(params: {
   markActivity();
 }
 
+export type LogBusyMessageOutcomeParams = {
+  outcome:
+    | "active_run_steer_accepted"
+    | "active_run_steer_rejected"
+    | "followup_enqueued"
+    | "collect_enqueued"
+    | "interrupt_started"
+    | "dropped";
+  sessionId?: string;
+  sessionKey?: string;
+  channel?: string;
+  queueMode?: string;
+  reason?: string;
+  source: string;
+  runtimeFamily?: string;
+};
+
+export function logBusyMessageOutcome(params: LogBusyMessageOutcomeParams): void {
+  if (!areDiagnosticsEnabledForProcess()) {
+    return;
+  }
+  if (diag.isEnabled("debug")) {
+    diag.debug(
+      `message busy outcome: sessionId=${params.sessionId ?? "unknown"} sessionKey=${
+        params.sessionKey ?? "unknown"
+      } outcome=${params.outcome} source=${params.source}${
+        params.channel ? ` channel=${params.channel}` : ""
+      }${params.queueMode ? ` queueMode=${params.queueMode}` : ""}${
+        params.reason ? ` reason=${params.reason}` : ""
+      }`,
+    );
+  }
+  emitDiagnosticEvent({
+    type: "message.busy.outcome",
+    outcome: params.outcome,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    channel: params.channel,
+    queueMode: params.queueMode,
+    reason: params.reason,
+    source: params.source,
+    runtimeFamily: params.runtimeFamily,
+  });
+  markActivity();
+}
+
 export function logMessageQueued(params: {
   sessionId?: string;
   sessionKey?: string;

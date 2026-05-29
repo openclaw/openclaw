@@ -225,6 +225,13 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.source = event.source;
       record.queueDepth = event.queueDepth;
       break;
+    case "message.busy.outcome":
+      record.channel = event.channel;
+      record.source = event.source;
+      record.outcome = event.outcome;
+      record.queueMode = event.queueMode;
+      assignReasonCode(record, event.reason);
+      break;
     case "message.received":
       record.channel = event.channel;
       record.source = event.source;
