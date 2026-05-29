@@ -985,4 +985,27 @@ describe("anthropic transport stream", () => {
     expect(payload.thinking).toEqual({ type: "adaptive" });
     expect(payload.output_config).toEqual({ effort: "xhigh" });
   });
+
+  it("maps adaptive thinking for Claude Opus 4.8 transport runs", async () => {
+    const model = makeAnthropicTransportModel({
+      id: "claude-opus-4-8",
+      name: "Claude Opus 4.8",
+      maxTokens: 8192,
+    });
+
+    await runTransportStream(
+      model,
+      {
+        messages: [{ role: "user", content: "Think with adaptive schema." }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+        reasoning: "xhigh",
+      } as AnthropicStreamOptions,
+    );
+
+    const payload = latestAnthropicRequest().payload;
+    expect(payload.thinking).toEqual({ type: "adaptive" });
+    expect(payload.output_config).toEqual({ effort: "xhigh" });
+  });
 });
