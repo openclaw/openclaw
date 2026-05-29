@@ -56,6 +56,7 @@ type TrajectoryRuntimeRecorder = {
 
 const writers = new Map<string, TrajectoryRuntimeWriter>();
 const windowFlushes = new Map<string, Promise<void>>();
+const sourceSeqByFile = new Map<string, number>();
 const MAX_TRAJECTORY_WRITERS = 100;
 const TRAJECTORY_RUNTIME_DATA_STRING_MAX_CHARS = 32_768;
 const TRAJECTORY_RUNTIME_DATA_ARRAY_MAX_ITEMS = 64;
@@ -285,6 +286,33 @@ function parseTrajectoryWindowLine(line: string): { ts: number; seq: number } {
   }
 }
 
+function readMaxTrajectorySourceSeq(filePath: string): number {
+  return readTrajectoryWindowLines(filePath, TRAJECTORY_RUNTIME_FILE_MAX_BYTES).reduce(
+    (max, line) => {
+      try {
+        const parsed = JSON.parse(line) as { sourceSeq?: unknown; seq?: unknown };
+        const seq =
+          typeof parsed.sourceSeq === "number"
+            ? parsed.sourceSeq
+            : typeof parsed.seq === "number"
+              ? parsed.seq
+              : 0;
+        return Math.max(max, seq);
+      } catch {
+        return max;
+      }
+    },
+    0,
+  );
+}
+
+function nextTrajectorySourceSeq(filePath: string): number {
+  const previous = sourceSeqByFile.get(filePath) ?? readMaxTrajectorySourceSeq(filePath);
+  const next = previous + 1;
+  sourceSeqByFile.set(filePath, next);
+  return next;
+}
+
 function readTrajectoryWindowLines(filePath: string, maxBytes: number): string[] {
   try {
     const raw = readRegularFileSync({
@@ -484,6 +512,7 @@ export function createTrajectoryRuntimeRecorder(
 
   const buildEventLine = (type: string, data?: Record<string, unknown>): string | undefined => {
     const nextSeq = seq + 1;
+    const sourceSeq = nextTrajectorySourceSeq(filePath);
     const event: TrajectoryEvent = {
       traceSchema: "openclaw-trajectory",
       schemaVersion: 1,
@@ -492,7 +521,7 @@ export function createTrajectoryRuntimeRecorder(
       type,
       ts: new Date().toISOString(),
       seq: nextSeq,
-      sourceSeq: nextSeq,
+      sourceSeq,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
       runId: params.runId,

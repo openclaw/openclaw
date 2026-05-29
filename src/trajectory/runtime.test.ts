@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
   createTrajectoryRuntimeRecorder,
@@ -22,6 +22,7 @@ function makeTempDir(): string {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -204,6 +205,8 @@ describe("trajectory runtime", () => {
     });
 
     const staleRuntimeRecorder = expectTrajectoryRuntimeRecorder(staleRecorder);
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
     staleRuntimeRecorder.recordEvent("prompt.submitted", {
       marker: "old-recorder",
       prompt: "x".repeat(260),
@@ -219,6 +222,7 @@ describe("trajectory runtime", () => {
       marker: "new-recorder",
       prompt: "y".repeat(260),
     });
+    vi.useRealTimers();
     await newerRuntimeRecorder.flush();
     await staleRuntimeRecorder.flush();
 
