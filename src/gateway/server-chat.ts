@@ -319,7 +319,11 @@ export function createAgentEventHandler({
   };
 
   const buildSessionEventSnapshot = (sessionKey: string, evt?: AgentEventPayload) => {
-    const row = loadGatewaySessionRowForSnapshot(sessionKey);
+    const row = loadGatewaySessionRowForSnapshot(sessionKey, {
+      skipTranscriptUsageFallback: true,
+      lightweightListRow: true,
+      includeChildSessions: false,
+    });
     const lifecyclePatch = evt
       ? deriveGatewaySessionLifecycleSnapshot({
           session: row

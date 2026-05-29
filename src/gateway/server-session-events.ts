@@ -130,7 +130,10 @@ async function handleTranscriptUpdateBroadcast(
       : undefined;
   }
   const sessionSnapshot = buildGatewaySessionSnapshot({
-    sessionRow: loadGatewaySessionRow(sessionKey, { transcriptUsageMaxBytes: 64 * 1024 }),
+    sessionRow: loadGatewaySessionRow(sessionKey, {
+      transcriptUsageMaxBytes: 64 * 1024,
+      includeChildSessions: false,
+    }),
     includeSession: true,
   });
   const rawMessage = attachOpenClawTranscriptMeta(update.message, {
@@ -192,7 +195,11 @@ export function createLifecycleEventBroadcastHandler(params: {
         displayName: event.displayName,
         ts: Date.now(),
         ...buildGatewaySessionSnapshot({
-          sessionRow: loadGatewaySessionRow(event.sessionKey),
+          sessionRow: loadGatewaySessionRow(event.sessionKey, {
+            skipTranscriptUsageFallback: true,
+            lightweightListRow: true,
+            includeChildSessions: false,
+          }),
           label: event.label,
           displayName: event.displayName,
           parentSessionKey: event.parentSessionKey,
