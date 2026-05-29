@@ -2,12 +2,18 @@ import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SkillSnapshot } from "../../skills/types.js";
+import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import {
   listActiveProcessSessionReferences,
   type ActiveProcessSessionReference,
 } from "../bash-process-references.js";
 import type { ExecElevatedDefaults } from "../bash-tools.js";
-import { resolveSelectedOpenAIRuntimeProvider } from "../openai-codex-routing.js";
+import {
+  OPENAI_CODEX_PROVIDER_ID,
+  openAIProviderUsesCodexRuntimeByDefault,
+  resolveSelectedOpenAIRuntimeProvider,
+} from "../openai-codex-routing.js";
+import { findNormalizedProviderValue } from "../provider-id.js";
 
 export type EmbeddedCompactionRuntimeContext = {
   sessionKey?: string;
@@ -47,6 +53,7 @@ export function resolveEmbeddedCompactionTarget(params: {
   provider?: string | null;
   modelId?: string | null;
   authProfileId?: string | null;
+  harnessRuntime?: string | null;
   defaultProvider?: string;
   defaultModel?: string;
 }): {
@@ -65,9 +72,16 @@ export function resolveEmbeddedCompactionTarget(params: {
     if (!targetProvider) {
       return undefined;
     }
+    const harnessRuntime = shouldUseCodexRuntimeProviderForCompaction({
+      config: params.config,
+      provider: targetProvider,
+      harnessRuntime: params.harnessRuntime,
+    })
+      ? params.harnessRuntime
+      : "openclaw";
     const runtimeProvider = resolveSelectedOpenAIRuntimeProvider({
       provider: targetProvider,
-      harnessRuntime: "openclaw",
+      harnessRuntime: harnessRuntime ?? undefined,
       authProfileId,
       config: params.config,
     });
@@ -108,6 +122,22 @@ export function resolveEmbeddedCompactionTarget(params: {
   };
 }
 
+function shouldUseCodexRuntimeProviderForCompaction(params: {
+  config?: OpenClawConfig;
+  provider: string;
+  harnessRuntime?: string | null;
+}): boolean {
+  if (normalizeOptionalAgentRuntimeId(params.harnessRuntime) !== "codex") {
+    return false;
+  }
+  if (!openAIProviderUsesCodexRuntimeByDefault(params)) {
+    return false;
+  }
+  return Boolean(
+    findNormalizedProviderValue(params.config?.models?.providers, OPENAI_CODEX_PROVIDER_ID),
+  );
+}
+
 export function buildEmbeddedCompactionRuntimeContext(params: {
   sessionKey?: string | null;
   messageChannel?: string | null;
@@ -126,6 +156,7 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
   senderId?: string | null;
   provider?: string | null;
   modelId?: string | null;
+  harnessRuntime?: string | null;
   modelFallbacksOverride?: string[];
   thinkLevel?: ThinkLevel;
   reasoningLevel?: ReasoningLevel;
@@ -140,6 +171,7 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
     provider: params.provider,
     modelId: params.modelId,
     authProfileId: params.authProfileId,
+    harnessRuntime: params.harnessRuntime,
   });
   const processScopeKey = params.sessionKey?.trim();
   const activeProcessSessions =

@@ -639,7 +639,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     });
   });
 
-  it("uses the selected Codex runtime provider for OpenAI compaction context windows", async () => {
+  it("uses the selected Codex runtime provider for OpenAI compaction", async () => {
     resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "codex" });
     resolveModelMock.mockImplementation((provider = "openai", modelId = "fake") => ({
       model: { provider, api: "responses", id: modelId, input: [] },
@@ -672,7 +672,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(mockCallArg(resolveModelMock)).toBe("openai");
+    expect(mockCallArg(resolveModelMock)).toBe("openai-codex");
     expect(mockCallArg(resolveModelMock, 0, 1)).toBe("gpt-5.5");
     expectRecordFields(mockCallArg(resolveContextWindowInfoMock), {
       provider: "openai-codex",
@@ -709,6 +709,51 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     expect(result.ok).toBe(true);
     expect(mockCallArg(resolveModelMock)).toBe("openai");
     expect(mockCallArg(resolveModelMock, 0, 1)).toBe("gpt-5.5");
+  });
+
+  it("routes OpenAI compaction model overrides through Codex OAuth when Codex runtime is active", async () => {
+    resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "codex" });
+    resolveModelMock.mockImplementation((provider = "openai", modelId = "fake") => ({
+      model: { provider, api: "responses", id: modelId, input: [] },
+      error: null,
+      authStorage: { setRuntimeApiKey: vi.fn() },
+      modelRegistry: {},
+    }));
+
+    const result = await compactEmbeddedAgentSessionDirect({
+      sessionId: "session-1",
+      sessionKey: TEST_SESSION_KEY,
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+      provider: "openai",
+      model: "gpt-5.5",
+      config: {
+        models: {
+          providers: {
+            openai: {
+              models: [{ id: "gpt-5.5", contextWindow: 1_000_000 }, { id: "gpt-5.4-mini" }],
+            },
+            "openai-codex": {
+              models: [{ id: "gpt-5.5" }, { id: "gpt-5.4-mini", contextWindow: 350_000 }],
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            embeddedHarness: { runtime: "codex" },
+            compaction: { model: "openai/gpt-5.4-mini" },
+          },
+        },
+      } as never,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(mockCallArg(resolveModelMock)).toBe("openai-codex");
+    expect(mockCallArg(resolveModelMock, 0, 1)).toBe("gpt-5.4-mini");
+    expectRecordFields(mockCallArg(resolveContextWindowInfoMock), {
+      provider: "openai-codex",
+      modelId: "gpt-5.4-mini",
+    });
   });
 
   it("uses Codex auth for runtime model loading while preserving OpenAI context config", async () => {

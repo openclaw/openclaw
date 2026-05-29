@@ -169,11 +169,29 @@ export async function compactEmbeddedAgentSession(
     agentDir,
     workspaceDir: resolvedWorkspaceDir,
   });
+  const preliminaryCompactionTarget = resolveEmbeddedCompactionTarget({
+    config: params.config,
+    provider: params.provider,
+    modelId: params.model,
+    authProfileId: params.authProfileId,
+    defaultProvider: DEFAULT_PROVIDER,
+    defaultModel: DEFAULT_MODEL,
+  });
+  const preliminaryProvider = preliminaryCompactionTarget.provider ?? DEFAULT_PROVIDER;
+  const preliminaryModelId = preliminaryCompactionTarget.model ?? DEFAULT_MODEL;
+  const ceHarnessPolicy = resolveAgentHarnessPolicy({
+    provider: preliminaryProvider,
+    modelId: preliminaryModelId,
+    config: params.config,
+    agentId: agentIds.sessionAgentId,
+    sessionKey: params.sessionKey,
+  });
   const resolvedCompactionTarget = resolveEmbeddedCompactionTarget({
     config: params.config,
     provider: params.provider,
     modelId: params.model,
     authProfileId: params.authProfileId,
+    harnessRuntime: params.agentHarnessId ?? ceHarnessPolicy.runtime,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
@@ -187,13 +205,6 @@ export async function compactEmbeddedAgentSession(
     params.config,
   );
   const ceRuntimeModel = ceModel as ProviderRuntimeModel | undefined;
-  const ceHarnessPolicy = resolveAgentHarnessPolicy({
-    provider: ceProvider,
-    modelId: ceModelId,
-    config: params.config,
-    agentId: agentIds.sessionAgentId,
-    sessionKey: params.sessionKey,
-  });
   const resolvedContextTokenBudget =
     normalizeContextTokenBudget(
       resolveContextWindowInfo({
@@ -499,6 +510,7 @@ function buildCompactionContextEngineRuntimeContext(params: {
       senderId: params.params.senderId,
       provider: params.params.provider,
       modelId: params.params.model,
+      harnessRuntime: params.params.agentHarnessId,
       modelFallbacksOverride: params.params.modelFallbacksOverride,
       thinkLevel: params.params.thinkLevel,
       reasoningLevel: params.params.reasoningLevel,

@@ -489,11 +489,35 @@ async function compactEmbeddedAgentSessionDirectOnce(
     workspaceDir: resolvedWorkspace,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
   });
+  const earlyAgentIds = resolveSessionAgentIds({
+    sessionKey: params.sessionKey,
+    config: params.config,
+  });
+  const agentDir =
+    params.agentDir ?? resolveAgentDir(params.config ?? {}, earlyAgentIds.sessionAgentId);
+  const preliminaryCompactionTarget = resolveEmbeddedCompactionTarget({
+    config: params.config,
+    provider: params.provider,
+    modelId: params.model,
+    authProfileId: params.authProfileId,
+    defaultProvider: DEFAULT_PROVIDER,
+    defaultModel: DEFAULT_MODEL,
+  });
+  const preliminaryProvider = preliminaryCompactionTarget.provider ?? DEFAULT_PROVIDER;
+  const preliminaryModelId = preliminaryCompactionTarget.model ?? DEFAULT_MODEL;
+  const runtimeHarnessPolicy = resolveAgentHarnessPolicy({
+    provider: preliminaryProvider,
+    modelId: preliminaryModelId,
+    config: params.config,
+    agentId: earlyAgentIds.sessionAgentId,
+    sessionKey: params.sessionKey,
+  });
   const resolvedCompactionTarget = resolveEmbeddedCompactionTarget({
     config: params.config,
     provider: params.provider,
     modelId: params.model,
     authProfileId: params.authProfileId,
+    harnessRuntime: params.agentHarnessId ?? runtimeHarnessPolicy.runtime,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
@@ -627,11 +651,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
     sessionId: params.sessionId,
     cwd: effectiveCwd,
   });
-  const { sessionAgentId: effectiveSkillAgentId } = resolveSessionAgentIds({
-    sessionKey: params.sessionKey,
-    config: params.config,
-    agentId: params.agentId,
-  });
+  const { sessionAgentId: effectiveSkillAgentId } = earlyAgentIds;
 
   let restoreSkillEnv: (() => void) | undefined;
   let compactionSessionManager: unknown = null;
@@ -683,13 +703,6 @@ async function compactEmbeddedAgentSessionDirectOnce(
     // Apply contextTokens cap to model so session runtime's auto-compaction
     // threshold uses the effective limit, not the native context window.
     const runtimeModelWithContext = runtimeModel as ProviderRuntimeModel;
-    const runtimeHarnessPolicy = resolveAgentHarnessPolicy({
-      provider,
-      modelId,
-      config: params.config,
-      agentId: effectiveSkillAgentId,
-      sessionKey: params.sessionKey,
-    });
     const ctxInfo = resolveContextWindowInfo({
       cfg: params.config,
       provider: resolveContextConfigProviderForRuntime({
