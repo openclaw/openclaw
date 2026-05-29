@@ -1646,7 +1646,7 @@ describe("createFollowupRunner progress forwarding", () => {
         messageProvider: "slack",
       },
     });
-    runEmbeddedPiAgentMock.mockImplementationOnce(
+    runEmbeddedAgentMock.mockImplementationOnce(
       async (args: { replyOperation?: { routeThreadId?: string | number } }) => {
         expect(args.replyOperation?.routeThreadId).toBe("501.000");
         return { payloads: [], meta: { agentMeta: {} } };
@@ -1661,7 +1661,7 @@ describe("createFollowupRunner progress forwarding", () => {
 
     await runner(queued);
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
   });
 
   it("forwards queued follow-up tool progress and verbose tool result payloads", async () => {

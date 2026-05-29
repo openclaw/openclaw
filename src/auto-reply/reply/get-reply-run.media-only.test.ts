@@ -1343,7 +1343,7 @@ describe("runPreparedReply media-only handling", () => {
     "queues same-session Slack DM turns instead of steering across Slack threads using %s",
     async (_label, threadContext) => {
       const queueSettings = await import("./queue/settings-runtime.js");
-      const piRuntime = await import("../../agents/pi-embedded.runtime.js");
+      const embeddedAgentRuntime = await import("../../agents/embedded-agent.runtime.js");
       vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({
         mode: "steer",
         debounceMs: 500,
@@ -1357,11 +1357,11 @@ describe("runPreparedReply media-only handling", () => {
         routeThreadId: "500.000",
       });
       activeRun.setPhase("running");
-      vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId)
+      vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId)
         .mockReturnValueOnce("active-session")
         .mockReturnValueOnce("active-session");
-      vi.mocked(piRuntime.isEmbeddedPiRunActive).mockReturnValueOnce(true);
-      vi.mocked(piRuntime.isEmbeddedPiRunStreaming).mockReturnValueOnce(true);
+      vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunActive).mockReturnValueOnce(true);
+      vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunStreaming).mockReturnValueOnce(true);
 
       try {
         await runPreparedReply(
@@ -1405,7 +1405,7 @@ describe("runPreparedReply media-only handling", () => {
 
   it("keeps non-Slack same-session turns steerable when route threads differ", async () => {
     const queueSettings = await import("./queue/settings-runtime.js");
-    const piRuntime = await import("../../agents/pi-embedded.runtime.js");
+    const embeddedAgentRuntime = await import("../../agents/embedded-agent.runtime.js");
     vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({
       mode: "steer",
       debounceMs: 500,
@@ -1419,11 +1419,11 @@ describe("runPreparedReply media-only handling", () => {
       routeThreadId: 42,
     });
     activeRun.setPhase("running");
-    vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId)
+    vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId)
       .mockReturnValueOnce("active-session")
       .mockReturnValueOnce("active-session");
-    vi.mocked(piRuntime.isEmbeddedPiRunActive).mockReturnValueOnce(true);
-    vi.mocked(piRuntime.isEmbeddedPiRunStreaming).mockReturnValueOnce(true);
+    vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunActive).mockReturnValueOnce(true);
+    vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunStreaming).mockReturnValueOnce(true);
 
     try {
       await runPreparedReply(
