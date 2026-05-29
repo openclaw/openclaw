@@ -48,6 +48,8 @@ env:
   OPENCLAW_BUILD_PRIVATE_QA: "1"
   OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
   CRABBOX_REF: main
+  CRABBOX_AWS_REGION: us-east-1
+  CRABBOX_CAPACITY_REGIONS: us-east-1
   MANTIS_OUTPUT_DIR: .artifacts/qa-e2e/mantis/telegram-desktop-proof
 
 jobs:
@@ -223,6 +225,7 @@ jobs:
       - name: Checkout harness ref
         uses: actions/checkout@v6
         with:
+          ref: main
           persist-credentials: false
           fetch-depth: 0
 
@@ -238,9 +241,6 @@ jobs:
           set -euo pipefail
 
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
-          if [[ -n "${PR_NUMBER:-}" ]]; then
-            git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/origin/pr/${PR_NUMBER}" || true
-          fi
 
           resolve_commit() {
             local input_ref="$2"
@@ -254,7 +254,6 @@ jobs:
           }
 
           baseline_revision="$(resolve_commit baseline "$BASELINE_REF")"
-          candidate_revision="$(resolve_commit candidate "$CANDIDATE_REF")"
           if ! git merge-base --is-ancestor "$baseline_revision" refs/remotes/origin/main; then
             echo "baseline ref '${BASELINE_REF}' resolved to ${baseline_revision}, which is not on main." >&2
             exit 1
@@ -268,6 +267,11 @@ jobs:
           pr_state="$(jq -r '.state' <<<"$pr_head")"
           pr_head_sha="$(jq -r '.head_sha' <<<"$pr_head")"
           pr_head_repo="$(jq -r '.head_repo' <<<"$pr_head")"
+          candidate_revision="$CANDIDATE_REF"
+          if [[ ! "$candidate_revision" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "candidate ref '${CANDIDATE_REF}' is not an immutable commit SHA." >&2
+            exit 1
+          fi
           if [[ "$pr_state" != "open" || "$candidate_revision" != "$pr_head_sha" ]]; then
             echo "candidate ref '${CANDIDATE_REF}' resolved to ${candidate_revision}, which is not the open PR head." >&2
             exit 1
@@ -422,7 +426,7 @@ jobs:
           {
             printf '%s\n' 'Defaults env_keep += "CODEX_HOME CODEX_INTERNAL_ORIGINATOR_OVERRIDE"'
             printf '%s\n' 'Defaults env_keep += "BASELINE_REF BASELINE_SHA CANDIDATE_REF CANDIDATE_SHA"'
-            printf '%s\n' 'Defaults env_keep += "CRABBOX_ACCESS_CLIENT_ID CRABBOX_ACCESS_CLIENT_SECRET CRABBOX_COORDINATOR CRABBOX_COORDINATOR_TOKEN CRABBOX_LEASE_ID CRABBOX_PROVIDER"'
+            printf '%s\n' 'Defaults env_keep += "CRABBOX_ACCESS_CLIENT_ID CRABBOX_ACCESS_CLIENT_SECRET CRABBOX_COORDINATOR CRABBOX_COORDINATOR_TOKEN CRABBOX_AWS_REGION CRABBOX_CAPACITY_REGIONS CRABBOX_LEASE_ID CRABBOX_PROVIDER"'
             printf '%s\n' 'Defaults env_keep += "GH_TOKEN MANTIS_CANDIDATE_TRUST MANTIS_INSTRUCTIONS MANTIS_OUTPUT_DIR MANTIS_PR_NUMBER"'
             printf '%s\n' 'Defaults env_keep += "OPENCLAW_BUILD_PRIVATE_QA OPENCLAW_ENABLE_PRIVATE_QA_CLI OPENCLAW_QA_CONVEX_SECRET_CI OPENCLAW_QA_CONVEX_SITE_URL OPENCLAW_QA_CREDENTIAL_OWNER_ID OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN"'
             printf '%s\n' 'Defaults env_keep += "OPENCLAW_TELEGRAM_USER_CRABBOX_BIN OPENCLAW_TELEGRAM_USER_CRABBOX_PROVIDER OPENCLAW_TELEGRAM_USER_DRIVER_SCRIPT OPENCLAW_TELEGRAM_USER_PROOF_CMD"'
@@ -451,6 +455,8 @@ jobs:
           CRABBOX_ACCESS_CLIENT_SECRET: ${{ secrets.CRABBOX_ACCESS_CLIENT_SECRET }}
           CRABBOX_COORDINATOR: ${{ secrets.CRABBOX_COORDINATOR || secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR }}
           CRABBOX_COORDINATOR_TOKEN: ${{ secrets.CRABBOX_COORDINATOR_TOKEN || secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN }}
+          CRABBOX_AWS_REGION: ${{ env.CRABBOX_AWS_REGION }}
+          CRABBOX_CAPACITY_REGIONS: ${{ env.CRABBOX_CAPACITY_REGIONS }}
           CRABBOX_LEASE_ID: ${{ needs.resolve_request.outputs.lease_id }}
           CRABBOX_PROVIDER: ${{ needs.resolve_request.outputs.crabbox_provider }}
           GH_TOKEN: ${{ github.token }}
@@ -492,8 +498,11 @@ jobs:
             exit 0
           fi
           status=0
-          mapfile -d '' session_files < <(sudo find .artifacts/qa-e2e -path '*/telegram-user-crabbox/*/session.json' -type f -print0)
+          mapfile -d '' session_files < <(sudo find .artifacts/qa-e2e -name session.json -type f -print0)
           for session_file in "${session_files[@]}"; do
+            if ! sudo -u codex node -e 'const fs = require("fs"); const session = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); process.exit(session.command === "telegram-user-crabbox-session" ? 0 : 1);' "$session_file"; then
+              continue
+            fi
             lease_file="${session_file%/session.json}/.session/lease.json"
             if [[ ! -f "$lease_file" ]]; then
               continue
@@ -508,8 +517,11 @@ jobs:
               status=1
             fi
           done
-          mapfile -d '' lease_files < <(sudo find .artifacts/qa-e2e -path '*/telegram-user-crabbox/*/.session/lease.json' -type f -print0)
+          mapfile -d '' lease_files < <(sudo find .artifacts/qa-e2e -path '*/.session/lease.json' -type f -print0)
           for lease_file in "${lease_files[@]}"; do
+            if ! sudo -u codex node -e 'const fs = require("fs"); const lease = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); process.exit(lease.kind === "telegram-user" ? 0 : 1);' "$lease_file"; then
+              continue
+            fi
             if ! sudo -u codex env \
               OPENCLAW_QA_CONVEX_SECRET_CI="$OPENCLAW_QA_CONVEX_SECRET_CI" \
               OPENCLAW_QA_CONVEX_SITE_URL="$OPENCLAW_QA_CONVEX_SITE_URL" \

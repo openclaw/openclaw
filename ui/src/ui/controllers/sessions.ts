@@ -2,7 +2,6 @@ import {
   reconcileChatRunFromCurrentSessionRow,
   type ChatRunUiStatus,
 } from "../chat/run-lifecycle.ts";
-import { toNumber } from "../format.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type {
   GatewaySessionRow,
@@ -41,6 +40,8 @@ export type SessionsState = SessionsChatRunState & {
   sessionsCheckpointLoadingKey: string | null;
   sessionsCheckpointBusyKey: string | null;
   sessionsCheckpointErrorByKey: Record<string, string>;
+  chatSessionMessageSubscriptionKey?: string | null;
+  chatSessionMessageSubscriptionRequestedKey?: string | null;
 };
 
 export type LoadSessionsOverrides = {
@@ -76,11 +77,55 @@ type SessionsLoadControl = {
 };
 
 const sessionsLoadControls = new WeakMap<object, SessionsLoadControl>();
+const selectedSessionMessageSubscriptionGenerations = new WeakMap<object, number>();
 
 function hasCurrentChatSession(
   state: SessionsState,
 ): state is SessionsState & { sessionKey: string } {
   return typeof state.sessionKey === "string" && state.sessionKey.trim() !== "";
+}
+
+function normalizeSubscriptionKey(value: string | null | undefined): string | null {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  return normalized ? normalized : null;
+}
+
+function beginSelectedSessionMessageSubscriptionSync(state: SessionsState): number {
+  const key = state as object;
+  const next = (selectedSessionMessageSubscriptionGenerations.get(key) ?? 0) + 1;
+  selectedSessionMessageSubscriptionGenerations.set(key, next);
+  return next;
+}
+
+function isCurrentSelectedSessionMessageSubscriptionSync(
+  state: SessionsState & { sessionKey: string },
+  params: { generation: number; client: GatewayBrowserClient; requestedKey: string },
+): boolean {
+  return (
+    selectedSessionMessageSubscriptionGenerations.get(state as object) === params.generation &&
+    state.client === params.client &&
+    state.connected &&
+    state.sessionKey.trim() === params.requestedKey
+  );
+}
+
+function readSubscribedSessionMessageKey(result: unknown, fallbackKey: string): string {
+  const key =
+    result && typeof result === "object" && typeof (result as { key?: unknown }).key === "string"
+      ? (result as { key: string }).key.trim()
+      : "";
+  return key || fallbackKey;
+}
+
+async function unsubscribeSelectedSessionMessageBestEffort(
+  client: GatewayBrowserClient,
+  key: string,
+): Promise<void> {
+  try {
+    await client.request("sessions.messages.unsubscribe", { key });
+  } catch {
+    // Best-effort cleanup for stale async subscription completions.
+  }
 }
 
 function sessionPatchTargetsCurrentChatRun(
@@ -163,6 +208,22 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function hasOwn(record: Record<string, unknown>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(record, key);
+}
+
+export function parseSessionsFilterInteger(value: string): number {
+  const trimmed = value.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    return 0;
+  }
+  const parsed = Number(trimmed);
+  return Number.isSafeInteger(parsed) ? parsed : 0;
+}
+
+function normalizeSessionsFilterOverride(value: number | undefined): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  return Number.isSafeInteger(value) ? value : 0;
 }
 
 function normalizeSessionKind(value: unknown): GatewaySessionRow["kind"] | undefined {
@@ -406,8 +467,14 @@ export function applySessionsChangedEvent(
       mutableNext[field] = value;
     }
   }
-  if (!hasOwn(source, "hasActiveRun") && nextRow.status && nextRow.status !== "running") {
-    nextRow.hasActiveRun = false;
+  if (!hasOwn(source, "hasActiveRun") && nextRow.status) {
+    if (nextRow.status === "running") {
+      if (payload.phase === "start") {
+        nextRow.hasActiveRun = true;
+      }
+    } else {
+      nextRow.hasActiveRun = false;
+    }
   }
   if (nextRow.totalTokensFresh === false && !hasOwn(source, "totalTokens")) {
     delete nextRow.totalTokens;
@@ -487,6 +554,68 @@ export async function subscribeSessions(state: SessionsState) {
   }
 }
 
+export async function syncSelectedSessionMessageSubscription(
+  state: SessionsState & { sessionKey: string },
+  opts?: { force?: boolean },
+) {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  const client = state.client;
+  const nextKey = state.sessionKey.trim();
+  if (!nextKey) {
+    return;
+  }
+  const generation = beginSelectedSessionMessageSubscriptionSync(state);
+  const previousRequestedKey = normalizeSubscriptionKey(
+    state.chatSessionMessageSubscriptionRequestedKey,
+  );
+  const previousCanonicalKey = normalizeSubscriptionKey(state.chatSessionMessageSubscriptionKey);
+  const previousSelectedKey = previousRequestedKey ?? previousCanonicalKey;
+  const selectedKeyChanged = previousSelectedKey !== null && previousSelectedKey !== nextKey;
+  const shouldUnsubscribePrevious = previousCanonicalKey !== null && selectedKeyChanged;
+  const shouldSubscribe =
+    opts?.force === true ||
+    selectedKeyChanged ||
+    previousCanonicalKey === null ||
+    previousRequestedKey === null;
+  if (!shouldUnsubscribePrevious && !shouldSubscribe) {
+    return;
+  }
+  const isCurrent = () =>
+    isCurrentSelectedSessionMessageSubscriptionSync(state, {
+      generation,
+      client,
+      requestedKey: nextKey,
+    });
+  try {
+    if (shouldUnsubscribePrevious && previousCanonicalKey) {
+      await client.request("sessions.messages.unsubscribe", { key: previousCanonicalKey });
+      if (isCurrent()) {
+        state.chatSessionMessageSubscriptionKey = null;
+        state.chatSessionMessageSubscriptionRequestedKey = null;
+      }
+    }
+    if (!shouldSubscribe || !isCurrent()) {
+      return;
+    }
+    const result = await client.request("sessions.messages.subscribe", { key: nextKey });
+    const subscribedKey = readSubscribedSessionMessageKey(result, nextKey);
+    if (!isCurrent()) {
+      if (normalizeSubscriptionKey(state.chatSessionMessageSubscriptionKey) !== subscribedKey) {
+        await unsubscribeSelectedSessionMessageBestEffort(client, subscribedKey);
+      }
+      return;
+    }
+    state.chatSessionMessageSubscriptionRequestedKey = nextKey;
+    state.chatSessionMessageSubscriptionKey = subscribedKey;
+  } catch (err) {
+    if (isCurrent()) {
+      state.sessionsError = String(err);
+    }
+  }
+}
+
 export async function loadSessions(state: SessionsState, overrides?: LoadSessionsOverrides) {
   if (!state.client || !state.connected) {
     return;
@@ -540,8 +669,11 @@ async function loadSessionsOnce(
     const showArchived = overrides?.showArchived ?? state.sessionsShowArchived;
     const activeMinutes = showArchived
       ? 0
-      : (overrides?.activeMinutes ?? toNumber(state.sessionsFilterActive, 0));
-    const limit = overrides?.limit ?? toNumber(state.sessionsFilterLimit, 0);
+      : (normalizeSessionsFilterOverride(overrides?.activeMinutes) ??
+        parseSessionsFilterInteger(state.sessionsFilterActive));
+    const limit =
+      normalizeSessionsFilterOverride(overrides?.limit) ??
+      parseSessionsFilterInteger(state.sessionsFilterLimit);
     const configuredAgentsOnly = overrides?.configuredAgentsOnly ?? true;
     const params: Record<string, unknown> = {
       includeGlobal,
@@ -741,7 +873,7 @@ export async function branchSessionFromCheckpoint(
     key,
     checkpointId,
     "sessions.compaction.branch",
-    "Create a new child session from this pre-compaction checkpoint?",
+    "Create a new child session from this compacted checkpoint?",
   );
   return result?.key ?? null;
 }
@@ -756,6 +888,6 @@ export async function restoreSessionFromCheckpoint(
     key,
     checkpointId,
     "sessions.compaction.restore",
-    "Restore this session to the selected pre-compaction checkpoint?\n\nThis replaces the current active transcript for the session key.",
+    "Restore this session to the selected compacted checkpoint?\n\nThis replaces the current active transcript for the session key.",
   );
 }

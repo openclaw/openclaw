@@ -100,8 +100,13 @@ or npm install metadata. Those belong in your plugin code and `package.json`.
   },
   "cliBackends": ["openrouter-cli"],
   "syntheticAuthRefs": ["openrouter-cli"],
-  "providerAuthEnvVars": {
-    "openrouter": ["OPENROUTER_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "openrouter",
+        "envVars": ["OPENROUTER_API_KEY"]
+      }
+    ]
   },
   "providerAuthAliases": {
     "openrouter-coding": "openrouter"
@@ -149,6 +154,7 @@ or npm install metadata. Those belong in your plugin code and `package.json`.
 | ------------------------------------ | -------- | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `id`                                 | Yes      | `string`                         | Canonical plugin id. This is the id used in `plugins.entries.<id>`.                                                                                                                                                                             |
 | `configSchema`                       | Yes      | `object`                         | Inline JSON Schema for this plugin's config.                                                                                                                                                                                                    |
+| `requiresPlugins`                    | No       | `string[]`                       | Plugin ids that must also be installed for this plugin to have an effect. Discovery keeps the plugin loadable but warns when any required plugin is missing.                                                                                    |
 | `enabledByDefault`                   | No       | `true`                           | Marks a bundled plugin as enabled by default. Omit it, or set any non-`true` value, to leave the plugin disabled by default.                                                                                                                    |
 | `enabledByDefaultOnPlatforms`        | No       | `string[]`                       | Marks a bundled plugin as enabled by default only on the listed Node.js platforms, for example `["darwin"]`. Explicit config still wins.                                                                                                        |
 | `legacyPluginIds`                    | No       | `string[]`                       | Legacy ids that normalize to this canonical plugin id.                                                                                                                                                                                          |
@@ -292,8 +298,13 @@ avoid importing a plugin runtime just to have its tool factory return `null`.
 
 ```json
 {
-  "providerAuthEnvVars": {
-    "example": ["EXAMPLE_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "example",
+        "envVars": ["EXAMPLE_API_KEY"]
+      }
+    ]
   },
   "contracts": {
     "tools": ["example_search"]
@@ -617,7 +628,7 @@ read without importing the plugin runtime.
 ```json
 {
   "contracts": {
-    "agentToolResultMiddleware": ["pi", "codex"],
+    "agentToolResultMiddleware": ["openclaw", "codex"],
     "externalAuthProviders": ["acme-ai"],
     "embeddingProviders": ["openai-compatible"],
     "speechProviders": ["openai"],
@@ -638,25 +649,25 @@ read without importing the plugin runtime.
 
 Each list is optional:
 
-| Field                            | Type       | What it means                                                                                       |
-| -------------------------------- | ---------- | --------------------------------------------------------------------------------------------------- |
-| `embeddedExtensionFactories`     | `string[]` | Codex app-server extension factory ids, currently `codex-app-server`.                               |
-| `agentToolResultMiddleware`      | `string[]` | Runtime ids a bundled plugin may register tool-result middleware for.                               |
-| `externalAuthProviders`          | `string[]` | Provider ids whose external auth profile hook this plugin owns.                                     |
-| `embeddingProviders`             | `string[]` | General embedding provider ids this plugin owns for reusable vector embedding use outside memory.   |
-| `speechProviders`                | `string[]` | Speech provider ids this plugin owns.                                                               |
-| `realtimeTranscriptionProviders` | `string[]` | Realtime-transcription provider ids this plugin owns.                                               |
-| `realtimeVoiceProviders`         | `string[]` | Realtime-voice provider ids this plugin owns.                                                       |
-| `memoryEmbeddingProviders`       | `string[]` | Memory embedding provider ids this plugin owns.                                                     |
-| `mediaUnderstandingProviders`    | `string[]` | Media-understanding provider ids this plugin owns.                                                  |
-| `meetingNotesSourceProviders`    | `string[]` | Meeting-notes source provider ids this plugin owns.                                                 |
-| `imageGenerationProviders`       | `string[]` | Image-generation provider ids this plugin owns.                                                     |
-| `videoGenerationProviders`       | `string[]` | Video-generation provider ids this plugin owns.                                                     |
-| `webFetchProviders`              | `string[]` | Web-fetch provider ids this plugin owns.                                                            |
-| `webSearchProviders`             | `string[]` | Web-search provider ids this plugin owns.                                                           |
-| `migrationProviders`             | `string[]` | Import provider ids this plugin owns for `openclaw migrate`.                                        |
-| `gatewayMethodDispatch`          | `string[]` | Reserved entitlement for authenticated plugin HTTP routes that dispatch Gateway methods in-process. |
-| `tools`                          | `string[]` | Agent tool names this plugin owns.                                                                  |
+| Field                            | Type       | What it means                                                                                        |
+| -------------------------------- | ---------- | ---------------------------------------------------------------------------------------------------- |
+| `embeddedExtensionFactories`     | `string[]` | Codex app-server extension factory ids, currently `codex-app-server`.                                |
+| `agentToolResultMiddleware`      | `string[]` | Runtime ids a bundled plugin may register tool-result middleware for.                                |
+| `externalAuthProviders`          | `string[]` | Provider ids whose external auth profile hook this plugin owns.                                      |
+| `embeddingProviders`             | `string[]` | General embedding provider ids this plugin owns for reusable vector embedding use, including memory. |
+| `speechProviders`                | `string[]` | Speech provider ids this plugin owns.                                                                |
+| `realtimeTranscriptionProviders` | `string[]` | Realtime-transcription provider ids this plugin owns.                                                |
+| `realtimeVoiceProviders`         | `string[]` | Realtime-voice provider ids this plugin owns.                                                        |
+| `memoryEmbeddingProviders`       | `string[]` | Deprecated memory-specific embedding provider ids this plugin owns.                                  |
+| `mediaUnderstandingProviders`    | `string[]` | Media-understanding provider ids this plugin owns.                                                   |
+| `transcriptSourceProviders`      | `string[]` | Transcript source provider ids this plugin owns.                                                     |
+| `imageGenerationProviders`       | `string[]` | Image-generation provider ids this plugin owns.                                                      |
+| `videoGenerationProviders`       | `string[]` | Video-generation provider ids this plugin owns.                                                      |
+| `webFetchProviders`              | `string[]` | Web-fetch provider ids this plugin owns.                                                             |
+| `webSearchProviders`             | `string[]` | Web-search provider ids this plugin owns.                                                            |
+| `migrationProviders`             | `string[]` | Import provider ids this plugin owns for `openclaw migrate`.                                         |
+| `gatewayMethodDispatch`          | `string[]` | Reserved entitlement for authenticated plugin HTTP routes that dispatch Gateway methods in-process.  |
+| `tools`                          | `string[]` | Agent tool names this plugin owns.                                                                   |
 
 `contracts.embeddedExtensionFactories` is retained for bundled Codex
 app-server-only extension factories. Bundled tool-result transforms should
@@ -670,21 +681,14 @@ Tool discovery uses this list to load only the plugin runtimes that can own the
 requested tools.
 
 Provider plugins that implement `resolveExternalAuthProfiles` should declare
-`contracts.externalAuthProviders`. Plugins without the declaration still run
-through a deprecated compatibility fallback, but that fallback is slower and
-will be removed after the migration window.
-
-Bundled memory embedding providers should declare
-`contracts.memoryEmbeddingProviders` for every adapter id they expose, including
-built-in adapters such as `local`. Standalone CLI paths use this manifest
-contract to load only the owning plugin before the full Gateway runtime has
-registered providers.
+`contracts.externalAuthProviders`; undeclared external-auth hooks are ignored.
 
 General embedding providers should declare `contracts.embeddingProviders` for
 each adapter registered with `api.registerEmbeddingProvider(...)`. Use the
-general contract when vectors are meant to be consumed by multiple features,
-tools, or plugins. Keep `contracts.memoryEmbeddingProviders` for adapters whose
-shape and lifecycle are specific to OpenClaw memory indexing.
+general contract for reusable vector generation, including providers consumed by
+memory search. `contracts.memoryEmbeddingProviders` is deprecated
+memory-specific compatibility and remains only while existing providers migrate
+to the generic embedding provider seam.
 
 `contracts.gatewayMethodDispatch` currently accepts
 `"authenticated-request"`. It is an API hygiene gate for native plugin HTTP
@@ -864,6 +868,11 @@ Fields:
 | --------------- | ---------- | ------------------------------------------------------------------------------- |
 | `modelPrefixes` | `string[]` | Prefixes matched with `startsWith` against shorthand model ids.                 |
 | `modelPatterns` | `string[]` | Regex sources matched against shorthand model ids after profile suffix removal. |
+
+`modelPatterns` entries are compiled through `compileSafeRegex`, which rejects
+patterns containing nested repetition (for example `(a+)+$`). Patterns that fail
+the safety check are silently skipped, the same as syntactically invalid regex.
+Keep patterns simple and avoid nested quantifiers.
 
 ## modelCatalog reference
 
@@ -1188,9 +1197,10 @@ Important examples:
 | `openclaw.install.clawhubSpec` / `openclaw.install.npmSpec` / `openclaw.install.localPath` | Install/update hints for bundled and externally published plugins.                                                                                                                   |
 | `openclaw.install.defaultChoice`                                                           | Preferred install path when multiple install sources are available.                                                                                                                  |
 | `openclaw.install.minHostVersion`                                                          | Minimum supported OpenClaw host version, using a semver floor like `>=2026.3.22` or `>=2026.5.1-beta.1`.                                                                             |
+| `openclaw.compat.pluginApi`                                                                | Minimum OpenClaw plugin API range required by this package, using a semver floor like `>=2026.5.27`.                                                                                 |
 | `openclaw.install.expectedIntegrity`                                                       | Expected npm dist integrity string such as `sha512-...`; install and update flows verify the fetched artifact against it.                                                            |
 | `openclaw.install.allowInvalidConfigRecovery`                                              | Allows a narrow bundled-plugin reinstall recovery path when config is invalid.                                                                                                       |
-| `openclaw.startup.deferConfiguredChannelFullLoadUntilAfterListen`                          | Lets setup-only channel surfaces load before the full channel plugin during startup.                                                                                                 |
+| `openclaw.startup.deferConfiguredChannelFullLoadUntilAfterListen`                          | Lets setup-runtime channel surfaces load before listen, then defers the full configured channel plugin until post-listen activation.                                                 |
 
 Manifest metadata decides which provider/channel/setup choices appear in
 onboarding before runtime loads. `package.json#openclaw.install` tells
@@ -1201,6 +1211,17 @@ choices. Do not move install hints into `openclaw.plugin.json`.
 registry loading for non-bundled plugin sources. Invalid values are rejected;
 newer-but-valid values skip external plugins on older hosts. Bundled source
 plugins are assumed to be co-versioned with the host checkout.
+
+`openclaw.compat.pluginApi` is enforced during package install for non-bundled
+plugin sources. Use it for the OpenClaw plugin SDK/runtime API floor that the
+package was built against. It can be stricter than `minHostVersion` when a
+plugin package needs a newer API but still keeps a lower install hint for other
+flows. Official OpenClaw release sync bumps existing official plugin API floors
+to the OpenClaw release version by default, but plugin-only releases can keep a
+lower floor when the package intentionally supports older hosts. Do not use the
+package version alone as the compatibility contract. `peerDependencies.openclaw`
+remains npm package metadata; OpenClaw uses the `openclaw.compat.pluginApi`
+contract for install compatibility decisions.
 
 Official install-on-demand metadata should use `clawhubSpec` when the plugin is
 published on ClawHub; onboarding treats that as the preferred remote source and
@@ -1347,7 +1368,7 @@ See [Configuration reference](/gateway/configuration) for the full `plugins.*` s
 - Native manifests are parsed with JSON5, so comments, trailing commas, and unquoted keys are accepted as long as the final value is still an object.
 - Only documented manifest fields are read by the manifest loader. Avoid custom top-level keys.
 - `channels`, `providers`, `cliBackends`, and `skills` can all be omitted when a plugin does not need them.
-- `providerCatalogEntry` must stay lightweight and should not import broad runtime code; use it for static provider catalog metadata or narrow discovery descriptors, not request-time execution. `providerDiscoveryEntry` is the legacy spelling and still works for existing plugins.
+- `providerCatalogEntry` must stay lightweight and should not import broad runtime code; use it for static provider catalog metadata or narrow discovery descriptors, not request-time execution.
 - Exclusive plugin kinds are selected through `plugins.slots.*`: `kind: "memory"` via `plugins.slots.memory`, `kind: "context-engine"` via `plugins.slots.contextEngine` (default `legacy`).
 - Declare exclusive plugin kind in this manifest. Runtime-entry `OpenClawPluginDefinition.kind` is deprecated and remains only as a compatibility fallback for older plugins.
 - Env-var metadata (`setup.providers[].envVars`, deprecated `providerAuthEnvVars`, and `channelEnvVars`) is declarative only. Status, audit, cron delivery validation, and other read-only surfaces still apply plugin trust and effective activation policy before treating an env var as configured.

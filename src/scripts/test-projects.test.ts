@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -106,8 +107,23 @@ const {
   ) => number;
 };
 
-const VITEST_CLI_ENTRY = path.join(process.cwd(), "node_modules", "vitest", "vitest.mjs");
-const VITEST_NODE_PREFIX = ["exec", "node", "--no-maglev", VITEST_CLI_ENTRY];
+const require = createRequire(import.meta.url);
+const resolveExpectedVitestCliEntry = () => {
+  const vitestPackageJson = require.resolve("vitest/package.json");
+  return path.join(path.dirname(vitestPackageJson), "vitest.mjs");
+};
+const resolveExpectedVitestNodeArgs = (env: NodeJS.ProcessEnv) =>
+  ["1", "true", "yes", "on"].includes(
+    env.OPENCLAW_VITEST_ENABLE_MAGLEV?.trim().toLowerCase() ?? "",
+  )
+    ? []
+    : ["--no-maglev"];
+const VITEST_NODE_PREFIX = [
+  "exec",
+  "node",
+  ...resolveExpectedVitestNodeArgs(process.env),
+  resolveExpectedVitestCliEntry(),
+];
 
 describe("test-projects args", () => {
   it("drops a pnpm passthrough separator while preserving targeted filters", () => {
@@ -1056,6 +1072,39 @@ describe("test-projects args", () => {
     expect(
       findUnmatchedExplicitTestTargets(["test/vitest/vitest.contracts-channel-surface.config.ts"]),
     ).toEqual([]);
+  });
+
+  it("accepts split CI Vitest config targets routed as whole config runs", () => {
+    expect(
+      findUnmatchedExplicitTestTargets([
+        "test/vitest/vitest.agents-core.config.ts",
+        "test/vitest/vitest.agents-embedded-agent.config.ts",
+        "test/vitest/vitest.agents-support.config.ts",
+        "test/vitest/vitest.agents-tools.config.ts",
+      ]),
+    ).toEqual([]);
+  });
+
+  it("keeps split CI Vitest config targets on their own configs", () => {
+    expect(
+      buildVitestRunPlans([
+        "test/vitest/vitest.agents-core.config.ts",
+        "test/vitest/vitest.agents-tools.config.ts",
+      ]),
+    ).toEqual([
+      {
+        config: "test/vitest/vitest.agents-core.config.ts",
+        forwardedArgs: [],
+        includePatterns: null,
+        watchMode: false,
+      },
+      {
+        config: "test/vitest/vitest.agents-tools.config.ts",
+        forwardedArgs: [],
+        includePatterns: null,
+        watchMode: false,
+      },
+    ]);
   });
 
   it("accepts sentinel targets routed as whole config runs", () => {

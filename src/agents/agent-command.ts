@@ -20,6 +20,7 @@ import {
 } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
+import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
 import {
@@ -52,6 +53,7 @@ import {
   markAutoFallbackPrimaryProbe,
   resolveAutoFallbackPrimaryProbe,
   resolveAgentDir,
+  resolveAgentConfig,
   resolveDefaultAgentId,
   resolveEffectiveModelFallbacks,
   resolveSessionAgentId,
@@ -72,6 +74,7 @@ import { resolveAgentRunContext } from "./command/run-context.js";
 import { resolveSession } from "./command/session.js";
 import type { AgentCommandIngressOpts, AgentCommandOpts } from "./command/types.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
+import { classifyEmbeddedAgentRunResultForModelFallback } from "./embedded-agent-runner/result-fallback-classifier.js";
 import { resolveFastModeState } from "./fast-mode.js";
 import { ensureSelectedAgentHarnessPlugin } from "./harness/runtime-plugin.js";
 import { resolveAvailableAgentHarnessPolicy } from "./harness/selection.js";
@@ -97,9 +100,9 @@ import {
   type ModelVisibilityPolicy,
 } from "./model-visibility-policy.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "./openai-codex-routing.js";
-import { classifyEmbeddedPiRunResultForModelFallback } from "./pi-embedded-runner/result-fallback-classifier.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 import { hydrateResolvedSkillsAsync } from "./skills/snapshot-hydration.js";
+import type { SkillSnapshot } from "./skills/types.js";
 import { normalizeSpawnedRunMetadata } from "./spawned-context.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 import { ensureAgentWorkspace } from "./workspace.js";
@@ -163,6 +166,19 @@ const skillsRefreshStateRuntimeLoader = createLazyImportLoader<SkillsRefreshStat
 const skillsRemoteRuntimeLoader = createLazyImportLoader<SkillsRemoteRuntime>(
   () => import("../infra/skills-remote.js"),
 );
+
+function createEmptySkillsSnapshot(params: {
+  skillFilter: string[];
+  version?: number;
+}): SkillSnapshot {
+  return {
+    prompt: "",
+    skills: [],
+    resolvedSkills: [],
+    skillFilter: params.skillFilter,
+    version: params.version,
+  };
+}
 
 function loadAttemptExecutionRuntime(): Promise<AttemptExecutionRuntime> {
   return attemptExecutionRuntimeLoader.load();
@@ -324,6 +340,30 @@ function normalizeExplicitOverrideInput(raw: string, kind: "provider" | "model")
   return trimmed;
 }
 
+function createAgentCommandSessionWorkingCopy(params: {
+  sessionKey?: string;
+  sessionEntry?: SessionEntry;
+  sessionStore?: Record<string, SessionEntry>;
+}): {
+  sessionEntry?: SessionEntry;
+  sessionStore?: Record<string, SessionEntry>;
+} {
+  const result: {
+    sessionEntry?: SessionEntry;
+    sessionStore?: Record<string, SessionEntry>;
+  } = {};
+  if (params.sessionEntry) {
+    result.sessionEntry = { ...params.sessionEntry };
+  }
+  if (params.sessionStore || params.sessionKey) {
+    result.sessionStore = {};
+  }
+  if (params.sessionKey && result.sessionEntry && result.sessionStore) {
+    result.sessionStore[params.sessionKey] = result.sessionEntry;
+  }
+  return result;
+}
+
 async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: RuntimeEnv) {
   const isRawModelRun = opts.modelRun === true || opts.promptMode === "none";
   const message = opts.message ?? "";
@@ -396,7 +436,11 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
   const subagentLane: string = AGENT_LANE_SUBAGENT;
   const isSubagentLane = laneRaw === subagentLane;
   const timeoutSecondsRaw =
-    opts.timeout !== undefined ? Number.parseInt(opts.timeout, 10) : isSubagentLane ? 0 : undefined;
+    opts.timeout !== undefined
+      ? (parseStrictNonNegativeInteger(opts.timeout) ?? Number.NaN)
+      : isSubagentLane
+        ? 0
+        : undefined;
   if (
     timeoutSecondsRaw !== undefined &&
     (Number.isNaN(timeoutSecondsRaw) || timeoutSecondsRaw < 0)
@@ -414,18 +458,16 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
     sessionId: opts.sessionId,
     sessionKey: explicitSessionKey,
     agentId: agentIdOverride,
+    clone: false,
   });
 
-  const {
-    sessionId,
+  const { sessionId, sessionKey, storePath, isNewSession, persistedThinking, persistedVerbose } =
+    sessionResolution;
+  const { sessionEntry: sessionEntryRaw, sessionStore } = createAgentCommandSessionWorkingCopy({
     sessionKey,
-    sessionEntry: sessionEntryRaw,
-    sessionStore,
-    storePath,
-    isNewSession,
-    persistedThinking,
-    persistedVerbose,
-  } = sessionResolution;
+    sessionEntry: sessionResolution.sessionEntry,
+    sessionStore: sessionResolution.sessionStore,
+  });
   const sessionAgentId =
     agentIdOverride ??
     resolveSessionAgentId({
@@ -441,6 +483,8 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
   const workspaceDirRaw =
     normalizedSpawned.workspaceDir ?? resolveAgentWorkspaceDir(cfg, sessionAgentId);
   const workspaceDir = resolveUserPath(workspaceDirRaw);
+  const cwd =
+    normalizeOptionalString(opts.cwd) ?? normalizeOptionalString(sessionEntryRaw?.spawnedCwd);
   const agentDir = resolveAgentDir(cfg, sessionAgentId);
   const manifestMetadataSnapshot = loadManifestMetadataSnapshot({
     config: cfg,
@@ -518,6 +562,7 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
     sessionAgentId,
     outboundSession,
     workspaceDir,
+    cwd: cwd ? resolveUserPath(cwd) : undefined,
     agentDir,
     modelManifestContext,
     runId,
@@ -557,12 +602,14 @@ async function agentCommandInternal(
     sessionAgentId,
     outboundSession,
     workspaceDir,
+    cwd,
     agentDir,
     runId,
     acpManager,
     acpResolution,
     modelManifestContext,
   } = prepared;
+  const effectiveCwd = cwd ? resolveUserPath(cwd) : workspaceDir;
   let sessionEntry = prepared.sessionEntry;
 
   try {
@@ -783,7 +830,14 @@ async function agentCommandInternal(
       shouldRefreshSnapshotForVersion(currentSkillsSnapshot.version, skillsSnapshotVersion) ||
       !matchesSkillFilter(currentSkillsSnapshot.skillFilter, skillFilter);
     const needsSkillsSnapshot = isNewSession || shouldRefreshSkillsSnapshot;
+    const emptySkillsFilter = skillFilter !== undefined && skillFilter.length === 0;
     const buildSkillsSnapshot = async () => {
+      if (emptySkillsFilter) {
+        return createEmptySkillsSnapshot({
+          skillFilter,
+          version: skillsSnapshotVersion,
+        });
+      }
       const [
         { buildWorkspaceSkillSnapshot },
         { getRemoteSkillEligibility },
@@ -846,7 +900,15 @@ async function agentCommandInternal(
     }
 
     // Persist explicit /command overrides to the session store when we have a key.
-    if (sessionStore && sessionKey && !suppressVisibleSessionEffects) {
+    const hasInitialSessionOverrides = Boolean(thinkOverride || verboseOverride);
+    const shouldPersistInitialSessionTouch =
+      opts.skipInitialSessionTouch !== true || hasInitialSessionOverrides;
+    if (
+      sessionStore &&
+      sessionKey &&
+      !suppressVisibleSessionEffects &&
+      shouldPersistInitialSessionTouch
+    ) {
       const now = Date.now();
       const entry = sessionStore[sessionKey] ??
         sessionEntry ?? { sessionId, updatedAt: now, sessionStartedAt: now };
@@ -913,6 +975,8 @@ async function agentCommandInternal(
       catalog: [],
       defaultProvider,
       defaultModel,
+      allowManifestNormalization: true,
+      allowPluginNormalization: true,
       ...modelManifestContext,
     });
     if (needsModelCatalog) {
@@ -923,6 +987,8 @@ async function agentCommandInternal(
         defaultProvider,
         defaultModel,
         agentId: sessionAgentId,
+        allowManifestNormalization: true,
+        allowPluginNormalization: true,
         ...modelManifestContext,
       });
       allowedModelCatalog = visibilityPolicy.allowedCatalog;
@@ -1145,12 +1211,14 @@ async function agentCommandInternal(
           : configuredThinkingCatalog;
     const thinkingCatalog = catalogForThinking.length > 0 ? catalogForThinking : undefined;
     if (!resolvedThinkLevel) {
-      resolvedThinkLevel = resolveThinkingDefault({
-        cfg,
-        provider,
-        model,
-        catalog: thinkingCatalog,
-      });
+      resolvedThinkLevel =
+        normalizeThinkLevel(resolveAgentConfig(cfg, sessionAgentId)?.thinkingDefault) ??
+        resolveThinkingDefault({
+          cfg,
+          provider,
+          model,
+          catalog: thinkingCatalog,
+        });
     }
     if (
       !isThinkingLevelSupported({
@@ -1357,11 +1425,12 @@ async function agentCommandInternal(
             fallbackTrajectoryRecorder?.recordEvent("model.fallback_step", step);
           },
           classifyResult: ({ provider, model, result }) =>
-            classifyEmbeddedPiRunResultForModelFallback({
+            classifyEmbeddedAgentRunResultForModelFallback({
               provider,
               model,
               result,
             }),
+          abortSignal: opts.abortSignal,
           run: async (providerOverride, modelOverride, runOptions) => {
             const isAutoFallbackPrimaryProbeCandidate =
               autoFallbackPrimaryProbe &&
@@ -1397,6 +1466,7 @@ async function agentCommandInternal(
               sessionAgentId,
               sessionFile: attemptSessionFile,
               workspaceDir,
+              cwd,
               body,
               isFallbackRetry,
               resolvedThinkLevel,
@@ -1651,7 +1721,7 @@ async function agentCommandInternal(
             storePath: suppressVisibleSessionEffects ? undefined : storePath,
             sessionAgentId,
             threadId: opts.threadId,
-            sessionCwd: workspaceDir,
+            sessionCwd: effectiveCwd,
             config: cfg,
             embeddedAssistantGapFill,
           });
@@ -1676,6 +1746,7 @@ async function agentCommandInternal(
             storePath,
             sessionAgentId,
             workspaceDir,
+            cwd: effectiveCwd,
             agentDir,
             provider: result.meta.agentMeta?.provider ?? provider,
             model: result.meta.agentMeta?.model ?? model,

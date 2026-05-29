@@ -84,6 +84,13 @@ vi.mock("../agents/agent-scope.js", () => ({
     `${process.env.OPENCLAW_STATE_DIR ?? "/tmp/openclaw-state"}/agents/${agentId}/agent`,
   resolveAgentWorkspaceDir: (configForTest: unknown, agentId: string) =>
     `/tmp/openclaw-workspaces/${agentId}`,
+  // Required by src/agents/model-runtime-policy.ts, which is transitively
+  // imported through provider-auth-choice -> copilot-sdk-install ->
+  // copilot-routing -> model-runtime-policy. Without these stubs the mock
+  // surface is incomplete and the dynamic import of copilot-sdk-install
+  // explodes inside applyAuthChoice.
+  resolveSessionAgentIds: () => ({ defaultAgentId: "main", sessionAgentId: "main" }),
+  listAgentEntries: () => [],
 }));
 
 vi.mock("../agents/workspace.js", () => ({
@@ -568,7 +575,6 @@ describe("applyAuthChoice", () => {
   const lifecycle = createAuthTestLifecycle([
     "OPENCLAW_STATE_DIR",
     "OPENCLAW_AGENT_DIR",
-    "PI_CODING_AGENT_DIR",
     "ANTHROPIC_API_KEY",
     "OPENROUTER_API_KEY",
     "HF_TOKEN",
@@ -588,7 +594,6 @@ describe("applyAuthChoice", () => {
     const agentDir = path.join(stateDir, "agent");
     process.env.OPENCLAW_STATE_DIR = stateDir;
     process.env.OPENCLAW_AGENT_DIR = agentDir;
-    process.env.PI_CODING_AGENT_DIR = agentDir;
   }
   function createPrompter(overrides: Partial<WizardPrompter>): WizardPrompter {
     return createWizardPrompter(overrides, { defaultSelect: "" });

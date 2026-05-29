@@ -6,7 +6,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 import {
   embeddedRunMock,
   onceMessage,
-  piSdkMock,
+  agentDiscoveryMock,
   rpcReq,
   startConnectedServerWithClient,
   writeSessionStore,
@@ -21,9 +21,11 @@ import {
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
 
-test("sessions.compaction.* lists checkpoints and branches or restores from pre-compaction snapshots", async () => {
+test("sessions.compaction.* lists checkpoints and branches or restores from compacted transcripts", async () => {
   const { dir, storePath } = await createSessionStoreDir();
-  const fixture = await createCheckpointFixture(dir);
+  const fixture = await createCheckpointFixture(dir, { legacyPreCompactionSnapshot: false });
+  expect((await fs.readdir(dir)).some((file) => file.includes(".checkpoint."))).toBe(false);
+  const checkpointEntryCount = fixture.session.getEntries().length;
   const checkpointCreatedAt = Date.now();
   const { SessionManager } = await getSessionManagerModule();
   await writeSessionStore({
@@ -42,8 +44,7 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
             summary: "checkpoint summary",
             firstKeptEntryId: fixture.preCompactionLeafId,
             preCompaction: {
-              sessionId: fixture.preCompactionSession.getSessionId(),
-              sessionFile: fixture.preCompactionSessionFile,
+              sessionId: fixture.sessionId,
               leafId: fixture.preCompactionLeafId,
             },
             postCompaction: {
@@ -56,6 +57,11 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
         ],
       }),
     },
+  });
+  fixture.session.appendMessage({
+    role: "user",
+    content: "future turn after checkpoint",
+    timestamp: Date.now(),
   });
 
   const { ws } = await openClient();
@@ -104,8 +110,7 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
     tokensAfter: 45,
     firstKeptEntryId: fixture.preCompactionLeafId,
     preCompaction: {
-      sessionId: fixture.preCompactionSession.getSessionId(),
-      sessionFile: fixture.preCompactionSessionFile,
+      sessionId: fixture.sessionId,
       leafId: fixture.preCompactionLeafId,
     },
     postCompaction: {
@@ -119,16 +124,14 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
   const checkpoint = await rpcReq<{
     ok: true;
     key: string;
-    checkpoint: { checkpointId: string; preCompaction: { sessionFile: string } };
+    checkpoint: { checkpointId: string; preCompaction: { sessionFile?: string } };
   }>(ws, "sessions.compaction.get", {
     key: "main",
     checkpointId: "checkpoint-1",
   });
   expect(checkpoint.ok).toBe(true);
   expect(checkpoint.payload?.checkpoint.checkpointId).toBe("checkpoint-1");
-  expect(checkpoint.payload?.checkpoint.preCompaction.sessionFile).toBe(
-    fixture.preCompactionSessionFile,
-  );
+  expect(checkpoint.payload?.checkpoint.preCompaction.sessionFile).toBeUndefined();
 
   const sessionManagerOpenSpy = vi.spyOn(SessionManager, "open");
   const sessionManagerForkFromSpy = vi.spyOn(SessionManager, "forkFrom");
@@ -138,7 +141,13 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
         ok: true;
         sourceKey: string;
         key: string;
-        entry: { sessionId: string; sessionFile?: string; parentSessionKey?: string };
+        entry: {
+          sessionId: string;
+          sessionFile?: string;
+          parentSessionKey?: string;
+          totalTokens?: number;
+          totalTokensFresh?: boolean;
+        };
       }>
     >
   >;
@@ -147,7 +156,13 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
       ok: true;
       sourceKey: string;
       key: string;
-      entry: { sessionId: string; sessionFile?: string; parentSessionKey?: string };
+      entry: {
+        sessionId: string;
+        sessionFile?: string;
+        parentSessionKey?: string;
+        totalTokens?: number;
+        totalTokensFresh?: boolean;
+      };
     }>(ws, "sessions.compaction.branch", {
       key: "main",
       checkpointId: "checkpoint-1",
@@ -161,14 +176,21 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
   expect(branched.ok).toBe(true);
   expect(branched.payload?.sourceKey).toBe("agent:main:main");
   expect(branched.payload?.entry.parentSessionKey).toBe("agent:main:main");
+  expect(branched.payload?.entry.totalTokens).toBe(45);
+  expect(branched.payload?.entry.totalTokensFresh).toBe(true);
   const branchedSessionFile = branched.payload?.entry.sessionFile;
   if (!branchedSessionFile) {
     throw new Error("expected branched compaction session file");
   }
   const branchedSession = SessionManager.open(branchedSessionFile, dir);
-  expect(branchedSession.getEntries()).toHaveLength(
-    fixture.preCompactionSession.getEntries().length,
-  );
+  expect(branchedSession.getEntries()).toHaveLength(checkpointEntryCount);
+  expect(
+    branchedSession
+      .buildSessionContext()
+      .messages.some(
+        (message) => (message as { content?: unknown }).content === "future turn after checkpoint",
+      ),
+  ).toBe(false);
 
   const storeAfterBranch = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
     string,
@@ -190,7 +212,13 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
         ok: true;
         key: string;
         sessionId: string;
-        entry: { sessionId: string; sessionFile?: string; compactionCheckpoints?: unknown[] };
+        entry: {
+          sessionId: string;
+          sessionFile?: string;
+          compactionCheckpoints?: unknown[];
+          totalTokens?: number;
+          totalTokensFresh?: boolean;
+        };
       }>
     >
   >;
@@ -199,7 +227,13 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
       ok: true;
       key: string;
       sessionId: string;
-      entry: { sessionId: string; sessionFile?: string; compactionCheckpoints?: unknown[] };
+      entry: {
+        sessionId: string;
+        sessionFile?: string;
+        compactionCheckpoints?: unknown[];
+        totalTokens?: number;
+        totalTokensFresh?: boolean;
+      };
     }>(ws, "sessions.compaction.restore", {
       key: "main",
       checkpointId: "checkpoint-1",
@@ -214,14 +248,21 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
   expect(restored.payload?.key).toBe("agent:main:main");
   expect(restored.payload?.sessionId).not.toBe(fixture.sessionId);
   expect(restored.payload?.entry.compactionCheckpoints).toHaveLength(1);
+  expect(restored.payload?.entry.totalTokens).toBe(45);
+  expect(restored.payload?.entry.totalTokensFresh).toBe(true);
   const restoredSessionFile = restored.payload?.entry.sessionFile;
   if (!restoredSessionFile) {
     throw new Error("expected restored compaction session file");
   }
   const restoredSession = SessionManager.open(restoredSessionFile, dir);
-  expect(restoredSession.getEntries()).toHaveLength(
-    fixture.preCompactionSession.getEntries().length,
-  );
+  expect(restoredSession.getEntries()).toHaveLength(checkpointEntryCount);
+  expect(
+    restoredSession
+      .buildSessionContext()
+      .messages.some(
+        (message) => (message as { content?: unknown }).content === "future turn after checkpoint",
+      ),
+  ).toBe(false);
 
   const storeAfterRestore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
     string,
@@ -243,6 +284,7 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
   await writeSessionStore({
     entries: {
       main: sessionStoreEntry("sess-main", {
+        spawnedCwd: "/tmp/task-repo",
         thinkingLevel: "medium",
         reasoningLevel: "stream",
         contextBudgetStatus: {
@@ -326,8 +368,8 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
   expect(endPayload.operationId).toBe(startPayload.operationId);
   expect(typeof startPayload.ts).toBe("number");
   expect(typeof endPayload.ts).toBe("number");
-  expect(embeddedRunMock.compactEmbeddedPiSession).toHaveBeenCalledTimes(1);
-  const compactionCall = embeddedRunMock.compactEmbeddedPiSession.mock.calls.at(0)?.[0] as
+  expect(embeddedRunMock.compactEmbeddedAgentSession).toHaveBeenCalledTimes(1);
+  const compactionCall = embeddedRunMock.compactEmbeddedAgentSession.mock.calls.at(0)?.[0] as
     | {
         agentHarnessId?: string;
         allowGatewaySubagentBinding?: boolean;
@@ -342,6 +384,7 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
         thinkLevel?: string;
         trigger?: string;
         workspaceDir?: string;
+        cwd?: string;
       }
     | undefined;
   if (!compactionCall) {
@@ -357,6 +400,7 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
   }
   expect(path.basename(compactionCall.sessionFile)).toBe("sess-main.jsonl");
   expect(compactionCall.workspaceDir).toBe(path.join(os.tmpdir(), "openclaw-gateway-test"));
+  expect(compactionCall.cwd).toBe("/tmp/task-repo");
   expect(callConfig.agents?.defaults?.model?.primary).toBe("anthropic/claude-opus-4-6");
   expect(callConfig.agents?.defaults?.workspace).toBe(
     path.join(os.tmpdir(), "openclaw-gateway-test"),
@@ -386,6 +430,91 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
   expect(store["agent:main:main"]?.compactionCount).toBe(1);
   expect(store["agent:main:main"]?.contextBudgetStatus).toBeUndefined();
   expect(store["agent:main:main"]?.totalTokens).toBe(80);
+  expect(store["agent:main:main"]?.totalTokensFresh).toBe(true);
+
+  ws.close();
+});
+
+test("sessions.compact treats Codex native compaction start as pending, not completed", async () => {
+  const { dir, storePath } = await createSessionStoreDir();
+  await fs.writeFile(
+    path.join(dir, "sess-codex.jsonl"),
+    `${JSON.stringify({ role: "user", content: "hello codex" })}\n`,
+    "utf-8",
+  );
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-codex", {
+        agentHarnessId: "codex",
+        compactionCount: 2,
+        totalTokens: 54_321,
+        totalTokensFresh: true,
+      }),
+    },
+  });
+  embeddedRunMock.compactEmbeddedAgentSession.mockResolvedValueOnce({
+    ok: true,
+    compacted: false,
+    result: {
+      summary: "",
+      firstKeptEntryId: "",
+      tokensBefore: 54_321,
+      details: {
+        backend: "codex-app-server",
+        threadId: "thread-1",
+        signal: "thread/compact/start",
+        pending: true,
+      },
+    },
+  });
+
+  const { ws } = await openClient();
+  await rpcReq(ws, "sessions.subscribe", {});
+  const endEventPromise = onceMessage(
+    ws,
+    (message) =>
+      message.type === "event" &&
+      message.event === "session.operation" &&
+      (message.payload as { operation?: unknown; phase?: unknown })?.operation === "compact" &&
+      (message.payload as { operation?: unknown; phase?: unknown })?.phase === "end",
+  );
+
+  const compacted = await rpcReq<{
+    ok: true;
+    key: string;
+    compacted: boolean;
+    result?: { details?: unknown };
+  }>(ws, "sessions.compact", {
+    key: "main",
+  });
+
+  expect(compacted.ok).toBe(true);
+  expect(compacted.payload?.key).toBe("agent:main:main");
+  expect(compacted.payload?.compacted).toBe(false);
+  expect(compacted.payload?.result?.details).toMatchObject({
+    backend: "codex-app-server",
+    threadId: "thread-1",
+    signal: "thread/compact/start",
+    pending: true,
+  });
+  const endEvent = await endEventPromise;
+  expect(endEvent.payload).toMatchObject({
+    operation: "compact",
+    phase: "end",
+    sessionKey: "agent:main:main",
+    completed: false,
+  });
+
+  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    {
+      compactionCount?: number;
+      totalTokens?: number;
+      totalTokensFresh?: boolean;
+    }
+  >;
+  expect(store["agent:main:main"]?.compactionCount).toBe(2);
+  expect(store["agent:main:main"]?.totalTokens).toBe(54_321);
   expect(store["agent:main:main"]?.totalTokensFresh).toBe(true);
 
   ws.close();
@@ -422,8 +551,8 @@ test("sessions.patch preserves nested model ids under provider overrides", async
       const started = await startConnectedServerWithClient();
       const { server, ws } = started;
       try {
-        piSdkMock.enabled = true;
-        piSdkMock.models = [
+        agentDiscoveryMock.enabled = true;
+        agentDiscoveryMock.models = [
           { id: "moonshotai/kimi-k2.5", name: "Kimi K2.5 (NVIDIA)", provider: "nvidia" },
         ];
 

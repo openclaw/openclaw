@@ -1,4 +1,3 @@
-import type { AssistantMessage, Usage } from "@earendil-works/pi-ai";
 import {
   classifyAgentHarnessTerminalOutcome,
   embeddedAgentLog,
@@ -21,6 +20,7 @@ import {
   type ToolProgressDetailMode,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
+import type { AssistantMessage, Usage } from "openclaw/plugin-sdk/llm";
 import { resolveCodexLocalRuntimeAttribution } from "./local-runtime-attribution.js";
 import {
   readCodexNotificationThreadId,
@@ -62,6 +62,15 @@ export type CodexAppServerToolTelemetry = {
 export type CodexAppServerEventProjectorOptions = {
   nativePostToolUseRelayEnabled?: boolean;
   trajectoryRecorder?: CodexTrajectoryRecorder | null;
+};
+
+type ReasoningDeltaMethod = "item/reasoning/summaryTextDelta" | "item/reasoning/textDelta";
+
+type ReasoningTextGroup = {
+  itemId: string;
+  method: ReasoningDeltaMethod;
+  index: number;
+  text: string;
 };
 
 const ZERO_USAGE: Usage = {
@@ -130,7 +139,8 @@ export class CodexAppServerEventProjector {
   private readonly assistantItemOrder: string[] = [];
   private readonly assistantPhaseByItem = new Map<string, string>();
   private readonly lastCommentaryProgressTextByItem = new Map<string, string>();
-  private readonly reasoningTextByItem = new Map<string, string>();
+  private readonly reasoningTextByGroup = new Map<string, ReasoningTextGroup>();
+  private readonly reasoningItemOrder = new Map<string, number>();
   private readonly planTextByItem = new Map<string, string>();
   private readonly activeItemIds = new Set<string>();
   private readonly completedItemIds = new Set<string>();
@@ -146,7 +156,10 @@ export class CodexAppServerEventProjector {
     { chars: number; messages: number; truncated: boolean }
   >();
   private readonly toolResultOutputTextByItem = new Map<string, string>();
-  private readonly toolMetas = new Map<string, { toolName: string; meta?: string }>();
+  private readonly toolMetas = new Map<
+    string,
+    { toolName: string; meta?: string; asyncStarted?: boolean }
+  >();
   private readonly sideEffectingToolItemIds = new Set<string>();
   private readonly sideEffectingDynamicToolCallIds = new Set<string>();
   private readonly toolTranscriptMessages: AgentMessage[] = [];
@@ -204,7 +217,7 @@ export class CodexAppServerEventProjector {
         break;
       case "item/reasoning/summaryTextDelta":
       case "item/reasoning/textDelta":
-        await this.handleReasoningDelta(params);
+        await this.handleReasoningDelta(notification.method, params);
         break;
       case "item/plan/delta":
         this.handlePlanDelta(params);
@@ -258,7 +271,10 @@ export class CodexAppServerEventProjector {
     options?: { yieldDetected?: boolean },
   ): EmbeddedRunAttemptResult {
     const assistantTexts = this.collectAssistantTexts();
-    const reasoningText = collectTextValues(this.reasoningTextByItem).join("\n\n");
+    const reasoningText = collectReasoningTextValues(
+      this.reasoningTextByGroup,
+      this.reasoningItemOrder,
+    ).join("\n\n");
     const planText = collectTextValues(this.planTextByItem).join("\n\n");
     const lastAssistant =
       assistantTexts.length > 0
@@ -375,11 +391,20 @@ export class CodexAppServerEventProjector {
   recordDynamicToolResult(params: {
     callId: string;
     tool: string;
+    asyncStarted?: boolean;
     success: boolean;
     terminalType?: "blocked" | "completed" | "error";
     sideEffectEvidence?: boolean;
     contentItems: CodexDynamicToolCallOutputContentItem[];
   }): void {
+    if (params.asyncStarted === true) {
+      const existing = this.toolMetas.get(params.callId);
+      this.toolMetas.set(params.callId, {
+        toolName: existing?.toolName ?? params.tool,
+        ...(existing?.meta ? { meta: existing.meta } : {}),
+        asyncStarted: true,
+      });
+    }
     this.recordToolTranscriptResult({
       id: params.callId,
       name: params.tool,
@@ -427,15 +452,39 @@ export class CodexAppServerEventProjector {
     // turn completion chooses the last assistant item as the user-visible reply.
   }
 
-  private async handleReasoningDelta(params: JsonObject): Promise<void> {
+  private async handleReasoningDelta(
+    method: ReasoningDeltaMethod,
+    params: JsonObject,
+  ): Promise<void> {
     const itemId = readString(params, "itemId") ?? readString(params, "id") ?? "reasoning";
     const delta = readString(params, "delta") ?? "";
     if (!delta) {
       return;
     }
     this.reasoningStarted = true;
-    this.reasoningTextByItem.set(itemId, `${this.reasoningTextByItem.get(itemId) ?? ""}${delta}`);
-    await this.params.onReasoningStream?.({ text: delta });
+    if (!this.reasoningItemOrder.has(itemId)) {
+      this.reasoningItemOrder.set(itemId, this.reasoningItemOrder.size);
+    }
+    // Codex indexes reasoning sections independently within an item. Keep those
+    // sections separate so the live snapshot matches the completed item shape.
+    const groupIndex =
+      method === "item/reasoning/textDelta"
+        ? (readNonNegativeInteger(params, "contentIndex") ?? 0)
+        : (readNonNegativeInteger(params, "summaryIndex") ?? 0);
+    const groupKey = `${method}\0${itemId}\0${groupIndex}`;
+    const current = this.reasoningTextByGroup.get(groupKey);
+    this.reasoningTextByGroup.set(groupKey, {
+      itemId,
+      method,
+      index: groupIndex,
+      text: `${current?.text ?? ""}${delta}`,
+    });
+    await this.params.onReasoningStream?.({
+      text: collectReasoningTextValues(this.reasoningTextByGroup, this.reasoningItemOrder).join(
+        "\n\n",
+      ),
+      isReasoningSnapshot: true,
+    });
   }
 
   private handlePlanDelta(params: JsonObject): void {
@@ -1210,9 +1259,11 @@ export class CodexAppServerEventProjector {
       return;
     }
     const meta = itemMeta(item, this.toolProgressDetailMode());
+    const existing = this.toolMetas.get(item.id);
     this.toolMetas.set(item.id, {
       toolName,
       ...(meta ? { meta } : {}),
+      ...(existing?.asyncStarted ? { asyncStarted: true } : {}),
     });
     if (isSideEffectingNativeToolItem(item)) {
       this.sideEffectingToolItemIds.add(item.id);
@@ -1571,6 +1622,11 @@ function readNumber(record: JsonObject, key: string): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+function readNonNegativeInteger(record: JsonObject, key: string): number | undefined {
+  const value = readNumber(record, key);
+  return value !== undefined && Number.isInteger(value) && value >= 0 ? value : undefined;
+}
+
 function readBoolean(record: JsonObject, key: string): boolean | undefined {
   const value = record[key];
   return typeof value === "boolean" ? value : undefined;
@@ -1671,6 +1727,29 @@ function splitPlanText(text: string): string[] {
 
 function collectTextValues(map: Map<string, string>): string[] {
   return [...map.values()].filter((text) => text.trim().length > 0);
+}
+
+function collectReasoningTextValues(
+  groups: Map<string, ReasoningTextGroup>,
+  itemOrder: Map<string, number>,
+): string[] {
+  return [...groups.values()]
+    .toSorted((left, right) => {
+      const itemDelta =
+        (itemOrder.get(left.itemId) ?? Number.MAX_SAFE_INTEGER) -
+        (itemOrder.get(right.itemId) ?? Number.MAX_SAFE_INTEGER);
+      if (itemDelta !== 0) {
+        return itemDelta;
+      }
+      const methodDelta = reasoningMethodOrder(left.method) - reasoningMethodOrder(right.method);
+      return methodDelta !== 0 ? methodDelta : left.index - right.index;
+    })
+    .map((group) => group.text)
+    .filter((text) => text.trim().length > 0);
+}
+
+function reasoningMethodOrder(method: ReasoningDeltaMethod): number {
+  return method === "item/reasoning/summaryTextDelta" ? 0 : 1;
 }
 
 function extractRawAssistantText(item: JsonObject): string | undefined {

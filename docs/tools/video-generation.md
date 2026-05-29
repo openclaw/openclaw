@@ -63,9 +63,9 @@ session:
 2. The provider processes the job in the background (typically 30 seconds to several minutes depending on the provider and resolution; slow queue-backed providers can run up to the configured timeout).
 3. When the video is ready, OpenClaw wakes the same session with an internal completion event.
 4. The agent tells the user and attaches the finished video through the
-   message tool. If the requester session is inactive and some generated
-   video is still missing from message-tool delivery, OpenClaw sends an
-   idempotent direct fallback with only the missing video.
+   message tool. If the requester session is inactive or its active wake
+   fails, and some generated video is still missing from message-tool delivery,
+   OpenClaw sends an idempotent direct fallback with only the missing video.
 
 While a job is in flight, duplicate `video_generate` calls in the same
 session return the current task status instead of starting another
@@ -122,7 +122,7 @@ generation.
 | OpenRouter            | `google/veo-3.1-fast`           |  ✓   | Up to 4 images (first/last frame or references)      | -                                               | `OPENROUTER_API_KEY`                     |
 | Qwen                  | `wan2.6-t2v`                    |  ✓   | Yes (remote URL)                                     | Yes (remote URL)                                | `QWEN_API_KEY`                           |
 | Runway                | `gen4.5`                        |  ✓   | 1 image                                              | 1 video                                         | `RUNWAYML_API_SECRET`                    |
-| Together              | `Wan-AI/Wan2.2-T2V-A14B`        |  ✓   | 1 image                                              | -                                               | `TOGETHER_API_KEY`                       |
+| Together              | `Wan-AI/Wan2.2-T2V-A14B`        |  ✓   | `Wan-AI/Wan2.2-I2V-A14B` only                        | -                                               | `TOGETHER_API_KEY`                       |
 | Vydra                 | `veo3`                          |  ✓   | 1 image (`kling`)                                    | -                                               | `VYDRA_API_KEY`                          |
 | xAI                   | `grok-imagine-video`            |  ✓   | 1 first-frame image or up to 7 `reference_image`s    | 1 video                                         | `XAI_API_KEY`                            |
 

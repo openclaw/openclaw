@@ -1,5 +1,5 @@
-import type { StreamFn } from "@earendil-works/pi-agent-core";
-import { streamSimple } from "@earendil-works/pi-ai";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import { streamSimple } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   applyAnthropicPayloadPolicyToParams,
@@ -20,6 +20,8 @@ const log = createSubsystemLogger("anthropic-stream");
 
 const ANTHROPIC_CONTEXT_1M_BETA_LEGACY = "context-1m-2025-08-07";
 const ANTHROPIC_GA_1M_MODEL_PREFIXES = [
+  "claude-opus-4-8",
+  "claude-opus-4.8",
   "claude-opus-4-6",
   "claude-opus-4.6",
   "claude-opus-4-7",
@@ -27,14 +29,14 @@ const ANTHROPIC_GA_1M_MODEL_PREFIXES = [
   "claude-sonnet-4-6",
   "claude-sonnet-4.6",
 ] as const;
-const PI_AI_DEFAULT_ANTHROPIC_BETAS = [
+const OPENCLAW_DEFAULT_ANTHROPIC_BETAS = [
   "fine-grained-tool-streaming-2025-05-14",
   "interleaved-thinking-2025-05-14",
 ] as const;
-const PI_AI_OAUTH_ANTHROPIC_BETAS = [
+const OPENCLAW_OAUTH_ANTHROPIC_BETAS = [
   "claude-code-20250219",
   "oauth-2025-04-20",
-  ...PI_AI_DEFAULT_ANTHROPIC_BETAS,
+  ...OPENCLAW_DEFAULT_ANTHROPIC_BETAS,
 ] as const;
 
 type AnthropicServiceTier = "auto" | "standard_only";
@@ -135,10 +137,10 @@ export function createAnthropicBetaHeadersWrapper(
     const isOauth = isAnthropicOAuthApiKey(options?.apiKey);
     const effectiveBetas = betas.filter((beta) => beta !== ANTHROPIC_CONTEXT_1M_BETA_LEGACY);
 
-    const piAiBetas = isOauth
-      ? (PI_AI_OAUTH_ANTHROPIC_BETAS as readonly string[])
-      : (PI_AI_DEFAULT_ANTHROPIC_BETAS as readonly string[]);
-    const allBetas = [...new Set([...piAiBetas, ...effectiveBetas])];
+    const openClawBetas = isOauth
+      ? (OPENCLAW_OAUTH_ANTHROPIC_BETAS as readonly string[])
+      : (OPENCLAW_DEFAULT_ANTHROPIC_BETAS as readonly string[]);
+    const allBetas = [...new Set([...openClawBetas, ...effectiveBetas])];
     return underlying(model, context, {
       ...options,
       headers: mergeAnthropicBetaHeader(options?.headers, allBetas),

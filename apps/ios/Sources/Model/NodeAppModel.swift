@@ -111,6 +111,10 @@ final class NodeAppModel {
     var gatewayStatusText: String = "Offline"
     var nodeStatusText: String = "Offline"
     var operatorStatusText: String = "Offline"
+    var isOperatorGatewayConnected: Bool {
+        self.operatorConnected
+    }
+
     var gatewayServerName: String?
     var gatewayRemoteAddress: String?
     var connectedGatewayID: String?
@@ -127,6 +131,7 @@ final class NodeAppModel {
 
     var seamColorHex: String?
     private var mainSessionBaseKey: String = "main"
+    private var focusedChatSessionKey: String?
     var selectedAgentId: String?
     var gatewayDefaultAgentId: String?
     var gatewayAgents: [AgentSummary] = []
@@ -148,6 +153,8 @@ final class NodeAppModel {
     private let operatorGateway = GatewayNodeSession()
     private var nodeGatewayTask: Task<Void, Never>?
     private var operatorGatewayTask: Task<Void, Never>?
+    private var forceOperatorTalkPermissionUpgradeRequest = false
+    private var lastTalkPermissionReconnectAttemptAt: Date?
     private var voiceWakeSyncTask: Task<Void, Never>?
     @ObservationIgnored private var cameraHUDDismissTask: Task<Void, Never>?
     @ObservationIgnored private lazy var capabilityRouter: NodeCapabilityRouter = self.buildCapabilityRouter()
@@ -289,7 +296,6 @@ final class NodeAppModel {
         self.talkMode.attachGateway(self.operatorGateway)
         self.refreshLastShareEventFromRelay()
         let talkEnabled = UserDefaults.standard.bool(forKey: "talk.enabled")
-        // Route through the coordinator so VoiceWake and Talk don't fight over the microphone.
         self.setTalkEnabled(talkEnabled)
 
         // Wire up deep links from canvas taps
@@ -450,7 +456,7 @@ final class NodeAppModel {
                         await self.operatorGateway.disconnect()
                         await self.nodeGateway.disconnect()
                         await MainActor.run {
-                            self.operatorConnected = false
+                            self.setOperatorConnected(false)
                             self.gatewayConnected = false
                             // Foreground recovery must actively restart the saved gateway config.
                             // Disconnecting stale sockets alone can leave us idle if the old
@@ -541,7 +547,7 @@ final class NodeAppModel {
             await self.operatorGateway.disconnect()
             await self.nodeGateway.disconnect()
             await MainActor.run {
-                self.operatorConnected = false
+                self.setOperatorConnected(false)
                 self.gatewayConnected = false
                 self.talkMode.updateGatewayConnected(false)
                 if self.isBackgrounded {
@@ -607,6 +613,90 @@ final class NodeAppModel {
         let voice = TalkModeRealtimeVoiceSelection.resolvedOverride(rawValue) ?? ""
         UserDefaults.standard.set(voice, forKey: TalkModeRealtimeVoiceSelection.storageKey)
         self.talkMode.applyProviderSelectionChanged()
+    }
+
+    func requestTalkPermissionUpgrade() {
+        guard let config = self.activeGatewayConnectConfig else {
+            self.talkMode.gatewayTalkPermissionState = .requestFailed("Gateway is not connected")
+            self.talkMode.statusText = "Gateway not connected"
+            return
+        }
+        GatewayDiagnostics.log("talk permission upgrade requested")
+        self.talkMode.gatewayTalkPermissionState = .requestingUpgrade
+        self.talkMode.statusText = "Requesting Talk approval"
+        self.forceOperatorTalkPermissionUpgradeRequest = true
+        self.gatewayAutoReconnectEnabled = true
+        self.gatewayPairingPaused = false
+        self.gatewayPairingRequestId = nil
+        self.lastGatewayProblem = nil
+        self.operatorGatewayTask?.cancel()
+        self.operatorGatewayTask = nil
+        let sessionBox = config.tls.map { WebSocketSessionBox(session: GatewayTLSPinningSession(params: $0)) }
+        Task { [weak self] in
+            guard let self else { return }
+            await self.operatorGateway.disconnect()
+            await MainActor.run {
+                self.startOperatorGatewayLoop(
+                    url: config.url,
+                    stableID: config.effectiveStableID,
+                    token: config.token,
+                    bootstrapToken: config.bootstrapToken,
+                    password: config.password,
+                    nodeOptions: config.nodeOptions,
+                    sessionBox: sessionBox)
+            }
+        }
+    }
+
+    func pollTalkPermissionUpgrade() async {
+        guard self.talkMode.gatewayTalkPermissionState.isApprovalRequestInProgress else {
+            await self.talkMode.reloadConfig()
+            await self.talkMode.prefetchRealtimeSessionIfReady(reason: "talk_permission_poll")
+            return
+        }
+
+        guard let cfg = self.activeGatewayConnectConfig else {
+            self.talkMode.gatewayTalkPermissionState = .requestFailed("Gateway is not connected")
+            self.talkMode.statusText = "Gateway not connected"
+            return
+        }
+
+        let now = Date()
+        if let lastTalkPermissionReconnectAttemptAt,
+           now.timeIntervalSince(lastTalkPermissionReconnectAttemptAt) < 6
+        {
+            return
+        }
+        self.lastTalkPermissionReconnectAttemptAt = now
+
+        GatewayDiagnostics.log("talk permission approval poll reconnect")
+        self.gatewayAutoReconnectEnabled = true
+        self.gatewayPairingPaused = false
+        self.gatewayPairingRequestId = nil
+        self.ensureOperatorReconnectLoopIfNeeded()
+
+        if self.operatorGatewayTask == nil {
+            let sessionBox = cfg.tls.map { WebSocketSessionBox(session: GatewayTLSPinningSession(params: $0)) }
+            self.startOperatorGatewayLoop(
+                url: cfg.url,
+                stableID: cfg.effectiveStableID,
+                token: cfg.token,
+                bootstrapToken: cfg.bootstrapToken,
+                password: cfg.password,
+                nodeOptions: cfg.nodeOptions,
+                sessionBox: sessionBox)
+        }
+
+        guard await self.waitForOperatorConnection(timeoutMs: 2500, pollMs: 250) else {
+            return
+        }
+        await self.talkMode.reloadConfig()
+        await self.talkMode.prefetchRealtimeSessionIfReady(reason: "talk_permission_poll_connected")
+    }
+
+    func setTalkSpeakerphoneEnabled(_ enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: TalkDefaults.speakerphoneEnabledKey)
+        self.talkMode.applyAudioRoutePreferenceChanged()
     }
 
     func requestLocationPermissions(mode: OpenClawLocationMode) async -> Bool {
@@ -811,7 +901,7 @@ final class NodeAppModel {
                 await self.operatorGateway.disconnect()
                 await self.nodeGateway.disconnect()
                 await MainActor.run {
-                    self.operatorConnected = false
+                    self.setOperatorConnected(false)
                     self.gatewayConnected = false
                     self.gatewayStatusText = "Reconnecting…"
                     self.talkMode.updateGatewayConnected(false)
@@ -1759,9 +1849,25 @@ extension NodeAppModel {
     }
 
     var chatSessionKey: String {
+        if let focused = self.focusedChatSessionKey?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !focused.isEmpty
+        {
+            return focused
+        }
         // Keep chat aligned with the gateway's resolved main session key.
         // A hardcoded "ios" base creates synthetic placeholder sessions in the chat UI.
-        self.mainSessionKey
+        return self.mainSessionKey
+    }
+
+    func openChat(sessionKey: String?) {
+        self.focusChatSession(sessionKey)
+        self.openChatRequestID &+= 1
+    }
+
+    func focusChatSession(_ sessionKey: String?) {
+        let trimmed = (sessionKey ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        self.focusedChatSessionKey = trimmed.isEmpty ? nil : trimmed
+        self.talkMode.updateMainSessionKey(self.chatSessionKey)
     }
 
     var activeAgentName: String {
@@ -1783,13 +1889,13 @@ extension NodeAppModel {
         token: String?,
         bootstrapToken: String?,
         password: String?,
-        connectOptions: GatewayConnectOptions)
+        connectOptions: GatewayConnectOptions,
+        forceReconnect: Bool = false)
     {
         let stableID = gatewayStableID.trimmingCharacters(in: .whitespacesAndNewlines)
         let effectiveStableID = stableID.isEmpty ? url.absoluteString : stableID
         let sessionBox = tls.map { WebSocketSessionBox(session: GatewayTLSPinningSession(params: $0)) }
-
-        self.activeGatewayConnectConfig = GatewayConnectConfig(
+        let nextConfig = GatewayConnectConfig(
             url: url,
             stableID: stableID,
             tls: tls,
@@ -1797,13 +1903,24 @@ extension NodeAppModel {
             bootstrapToken: bootstrapToken,
             password: password,
             nodeOptions: connectOptions)
-        self.prepareForGatewayConnect(url: url, stableID: effectiveStableID)
-        if self.shouldStartOperatorGatewayLoop(
+        let operatorLoopRequired = self.shouldStartOperatorGatewayLoop(
             token: token,
             bootstrapToken: bootstrapToken,
             password: password,
             stableID: effectiveStableID)
+        if let activeConfig = self.activeGatewayConnectConfig,
+           activeConfig.hasSameConnectionInputs(as: nextConfig),
+           self.nodeGatewayTask != nil,
+           self.operatorGatewayTask != nil || !operatorLoopRequired,
+           !forceReconnect
         {
+            self.gatewayAutoReconnectEnabled = true
+            return
+        }
+
+        self.activeGatewayConnectConfig = nextConfig
+        self.prepareForGatewayConnect(url: url, stableID: effectiveStableID)
+        if operatorLoopRequired {
             self.startOperatorGatewayLoop(
                 url: url,
                 stableID: effectiveStableID,
@@ -1827,8 +1944,7 @@ extension NodeAppModel {
     }
 
     /// Preferred entry-point: apply a single config object and start both sessions.
-    func applyGatewayConnectConfig(_ cfg: GatewayConnectConfig) {
-        self.activeGatewayConnectConfig = cfg
+    func applyGatewayConnectConfig(_ cfg: GatewayConnectConfig, forceReconnect: Bool = false) {
         self.connectToGateway(
             url: cfg.url,
             // Preserve the caller-provided stableID (may be empty) and let connectToGateway
@@ -1838,7 +1954,8 @@ extension NodeAppModel {
             token: cfg.token,
             bootstrapToken: cfg.bootstrapToken,
             password: cfg.password,
-            connectOptions: cfg.nodeOptions)
+            connectOptions: cfg.nodeOptions,
+            forceReconnect: forceReconnect)
     }
 
     func disconnectGateway() {
@@ -1864,7 +1981,7 @@ extension NodeAppModel {
         self.connectedGatewayID = nil
         self.activeGatewayConnectConfig = nil
         self.gatewayConnected = false
-        self.operatorConnected = false
+        self.setOperatorConnected(false)
         self.talkMode.updateGatewayConnected(false)
         self.seamColorHex = nil
         self.mainSessionBaseKey = "main"
@@ -1887,7 +2004,7 @@ extension NodeAppModel {
         self.gatewayRemoteAddress = nil
         self.connectedGatewayID = stableID
         self.gatewayConnected = false
-        self.operatorConnected = false
+        self.setOperatorConnected(false)
         self.voiceWakeSyncTask?.cancel()
         self.voiceWakeSyncTask = nil
         LiveActivityManager.shared.endActivity(reason: "new_gateway_connect")
@@ -2026,7 +2143,11 @@ extension NodeAppModel {
         sessionBox: WebSocketSessionBox?) async
     {
         self.clearPersistedGatewayBootstrapTokenIfNeeded()
-        if self.operatorGatewayTask == nil, self.shouldStartOperatorGatewayLoop(
+        self.operatorGatewayTask?.cancel()
+        self.operatorGatewayTask = nil
+        await self.operatorGateway.disconnect()
+
+        if self.shouldStartOperatorGatewayLoop(
             token: token,
             bootstrapToken: nil,
             password: password,
@@ -2107,7 +2228,8 @@ extension NodeAppModel {
                     displayName: nodeOptions.clientDisplayName,
                     includeApprovalScope: self.shouldRequestOperatorApprovalScope(
                         token: reconnectAuth.token,
-                        password: reconnectAuth.password))
+                        password: reconnectAuth.password),
+                    forceExplicitScopes: self.forceOperatorTalkPermissionUpgradeRequest)
 
                 do {
                     try await self.operatorGateway.connect(
@@ -2120,12 +2242,14 @@ extension NodeAppModel {
                         onConnected: { [weak self] in
                             guard let self else { return }
                             await MainActor.run {
-                                self.operatorConnected = true
+                                self.setOperatorConnected(true)
+                                self.forceOperatorTalkPermissionUpgradeRequest = false
                                 self.talkMode.updateGatewayConnected(true)
                             }
                             GatewayDiagnostics.log(
                                 "operator gateway connected host=\(url.host ?? "?") scheme=\(url.scheme ?? "?")")
                             await self.talkMode.reloadConfig()
+                            await self.talkMode.prefetchRealtimeSessionIfReady(reason: "operator_connected")
                             await self.refreshBrandingFromGateway()
                             await self.refreshAgentsFromGateway()
                             await self.refreshShareRouteFromGateway()
@@ -2136,7 +2260,7 @@ extension NodeAppModel {
                         onDisconnected: { [weak self] reason in
                             guard let self else { return }
                             await MainActor.run {
-                                self.operatorConnected = false
+                                self.setOperatorConnected(false)
                                 self.talkMode.updateGatewayConnected(false)
                                 LiveActivityManager.shared.endActivity(reason: "operator_disconnected")
                             }
@@ -2158,6 +2282,29 @@ extension NodeAppModel {
                 } catch {
                     attempt += 1
                     GatewayDiagnostics.log("operator gateway connect error: \(error.localizedDescription)")
+                    let problem = await MainActor.run {
+                        let nextProblem = GatewayConnectionProblemMapper.map(error: error)
+                        if let nextProblem {
+                            if nextProblem.kind == .pairingScopeUpgradeRequired {
+                                self.gatewayPairingPaused = true
+                                self.gatewayPairingRequestId = nextProblem.requestId
+                                self.talkMode.markTalkPermissionUpgradeRequested(requestId: nextProblem.requestId)
+                            }
+                        }
+                        return nextProblem
+                    }
+                    if problem?.needsPairingApproval == true {
+                        self.operatorGatewayTask?.cancel()
+                        self.operatorGatewayTask = nil
+                        await self.operatorGateway.disconnect()
+                        break
+                    }
+                    if problem?.pauseReconnect == true {
+                        self.operatorGatewayTask?.cancel()
+                        self.operatorGatewayTask = nil
+                        await self.operatorGateway.disconnect()
+                        break
+                    }
                     let sleepSeconds = min(8.0, 0.5 * pow(1.7, Double(attempt)))
                     try? await Task.sleep(nanoseconds: UInt64(sleepSeconds * 1_000_000_000))
                 }
@@ -2380,7 +2527,7 @@ extension NodeAppModel {
                 self.gatewayRemoteAddress = nil
                 self.connectedGatewayID = nil
                 self.gatewayConnected = false
-                self.operatorConnected = false
+                self.setOperatorConnected(false)
                 self.talkMode.updateGatewayConnected(false)
                 self.seamColorHex = nil
                 self.mainSessionBaseKey = "main"
@@ -2420,7 +2567,8 @@ extension NodeAppModel {
     private func makeOperatorConnectOptions(
         clientId: String,
         displayName: String?,
-        includeApprovalScope: Bool) -> GatewayConnectOptions
+        includeApprovalScope: Bool,
+        forceExplicitScopes: Bool = false) -> GatewayConnectOptions
     {
         var scopes = ["operator.read", "operator.write", "operator.talk.secrets"]
         // Preserve reconnect compatibility for older paired operator tokens that were
@@ -2431,6 +2579,7 @@ extension NodeAppModel {
         return GatewayConnectOptions(
             role: "operator",
             scopes: scopes,
+            scopesAreExplicit: forceExplicitScopes,
             caps: [],
             commands: [],
             permissions: [:],
@@ -2452,6 +2601,11 @@ extension NodeAppModel {
 
     private func isOperatorConnected() async -> Bool {
         self.operatorConnected
+    }
+
+    private func setOperatorConnected(_ connected: Bool) {
+        self.operatorConnected = connected
+        self.operatorStatusText = connected ? "Connected" : "Offline"
     }
 }
 
@@ -2561,7 +2715,9 @@ extension NodeAppModel {
 
     func reloadTalkConfig() {
         Task { [weak self] in
-            await self?.talkMode.reloadConfig()
+            guard let self else { return }
+            await self.talkMode.reloadConfig()
+            await self.talkMode.prefetchRealtimeSessionIfReady(reason: "config_reload")
         }
     }
 
@@ -3793,7 +3949,7 @@ extension NodeAppModel {
         self.operatorGatewayTask?.cancel()
         self.operatorGatewayTask = nil
         await self.operatorGateway.disconnect()
-        self.operatorConnected = false
+        self.setOperatorConnected(false)
         self.talkMode.updateGatewayConnected(false)
         self.stopGatewayHealthMonitor()
 
@@ -3862,7 +4018,7 @@ extension NodeAppModel {
             self.grantBackgroundReconnectLease(seconds: 30, reason: "wake_\(wakeId)")
             await self.operatorGateway.disconnect()
             await self.nodeGateway.disconnect()
-            self.operatorConnected = false
+            self.setOperatorConnected(false)
             self.gatewayConnected = false
             self.gatewayStatusText = "Reconnecting…"
             self.talkMode.updateGatewayConnected(false)
@@ -4283,12 +4439,14 @@ extension NodeAppModel {
     func _test_makeOperatorConnectOptions(
         clientId: String,
         displayName: String?,
-        includeApprovalScope: Bool) -> GatewayConnectOptions
+        includeApprovalScope: Bool,
+        forceExplicitScopes: Bool = false) -> GatewayConnectOptions
     {
         self.makeOperatorConnectOptions(
             clientId: clientId,
             displayName: displayName,
-            includeApprovalScope: includeApprovalScope)
+            includeApprovalScope: includeApprovalScope,
+            forceExplicitScopes: forceExplicitScopes)
     }
 
     func _test_presentExecApprovalPrompt(_ prompt: ExecApprovalPrompt) {

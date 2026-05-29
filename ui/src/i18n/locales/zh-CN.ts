@@ -360,6 +360,7 @@ export const zh_CN: TranslationMap = {
     pending: "{count} 个待处理",
     allowOnce: "允许一次",
     alwaysAllow: "始终允许",
+    allowAlwaysUnavailable: "有效的批准策略要求每次都批准，因此“始终允许”不可用。",
     deny: "拒绝",
     labels: {
       host: "主机",
@@ -391,6 +392,7 @@ export const zh_CN: TranslationMap = {
   },
   tabs: {
     agents: "代理",
+    activity: "活动",
     overview: "概览",
     channels: "频道",
     instances: "实例",
@@ -412,6 +414,7 @@ export const zh_CN: TranslationMap = {
   },
   subtitles: {
     agents: "工作区、工具、身份。",
+    activity: "浏览器本地工具活动摘要。",
     overview: "状态、入口点、健康。",
     channels: "频道和设置。",
     instances: "已连接客户端和节点。",
@@ -430,6 +433,42 @@ export const zh_CN: TranslationMap = {
     debug: "快照、事件、RPC。",
     logs: "实时网关日志。",
     dreams: "睡眠时进行记忆巩固。",
+  },
+  activity: {
+    title: "活动",
+    subtitle: "从实时会话事件派生的临时工具活动。",
+    visibleCount: "{visible} / {total}",
+    filtersLabel: "活动筛选器",
+    search: "搜索",
+    searchPlaceholder: "按工具、摘要、运行、会话筛选",
+    toolFilter: "工具",
+    allTools: "所有工具",
+    statusFilters: "状态筛选器",
+    autoFollow: "自动跟随",
+    expandAll: "全部展开",
+    collapseAll: "全部折叠",
+    clear: "清除",
+    empty: "暂无工具活动。",
+    emptyFiltered: "没有符合这些筛选条件的活动。",
+    entrySummary: "{argumentSummary}",
+    argumentHiddenOne: "已隐藏 1 个参数",
+    argumentsHidden: "已隐藏 {count} 个参数",
+    streamLabel: "工具活动条目",
+    toolCallId: "工具调用",
+    runId: "运行",
+    session: "会话",
+    outputTruncated: "预览已隐藏并截断。",
+    noOutputPreview: "无输出预览。",
+    status: {
+      running: "运行中",
+      done: "已完成",
+      error: "错误",
+    },
+    duration: {
+      ms: "{count} ms",
+      seconds: "{count} s",
+      minutes: "{minutes}m {seconds}s",
+    },
   },
   overview: {
     access: {
@@ -1050,6 +1089,11 @@ export const zh_CN: TranslationMap = {
       stopGenerating: "停止生成",
       send: "发送",
       sendMessage: "发送消息",
+    },
+    queue: {
+      retry: "重试",
+      retrySend: "重试发送",
+      retryQueuedMessage: "重试队列中的消息",
     },
     composer: {
       placeholder: "给 {name} 发消息（Enter 发送）",

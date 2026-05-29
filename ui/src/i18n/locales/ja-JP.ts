@@ -365,6 +365,8 @@ export const ja_JP: TranslationMap = {
     pending: "{count} pending",
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
+    allowAlwaysUnavailable:
+      "有効な承認ポリシーでは毎回承認が必要なため、Allow Always は利用できません。",
     deny: "Deny",
     labels: {
       host: "Host",
@@ -396,6 +398,7 @@ export const ja_JP: TranslationMap = {
   },
   tabs: {
     agents: "エージェント",
+    activity: "アクティビティ",
     overview: "概要",
     channels: "チャンネル",
     instances: "インスタンス",
@@ -417,6 +420,7 @@ export const ja_JP: TranslationMap = {
   },
   subtitles: {
     agents: "ワークスペース、ツール、ID。",
+    activity: "ブラウザー内のツールアクティビティ概要。",
     overview: "ステータス、エントリーポイント、健全性。",
     channels: "チャンネルと設定。",
     instances: "接続されたクライアントとノード。",
@@ -435,6 +439,42 @@ export const ja_JP: TranslationMap = {
     debug: "スナップショット、イベント、RPC。",
     logs: "ライブ Gateway ログ。",
     dreams: "スリープ中のメモリ統合。",
+  },
+  activity: {
+    title: "アクティビティ",
+    subtitle: "ライブセッションイベントから生成される一時的なツールアクティビティ。",
+    visibleCount: "{visible} / {total}",
+    filtersLabel: "アクティビティフィルター",
+    search: "検索",
+    searchPlaceholder: "ツール、概要、実行、セッションで絞り込み",
+    toolFilter: "ツール",
+    allTools: "すべてのツール",
+    statusFilters: "ステータスフィルター",
+    autoFollow: "自動追従",
+    expandAll: "すべて展開",
+    collapseAll: "すべて折りたたむ",
+    clear: "クリア",
+    empty: "ツールアクティビティはまだありません。",
+    emptyFiltered: "これらのフィルターに一致するアクティビティはありません。",
+    entrySummary: "{argumentSummary}",
+    argumentHiddenOne: "1 件の引数が非表示",
+    argumentsHidden: "{count} 件の引数が非表示",
+    streamLabel: "ツールアクティビティエントリ",
+    toolCallId: "ツール呼び出し",
+    runId: "実行",
+    session: "セッション",
+    outputTruncated: "プレビューは編集され、切り詰められています。",
+    noOutputPreview: "出力プレビューはありません。",
+    status: {
+      running: "実行中",
+      done: "完了",
+      error: "エラー",
+    },
+    duration: {
+      ms: "{count} ms",
+      seconds: "{count} s",
+      minutes: "{minutes}m {seconds}s",
+    },
   },
   overview: {
     access: {
@@ -1088,6 +1128,11 @@ export const ja_JP: TranslationMap = {
       stopGenerating: "Stop generating",
       send: "Send",
       sendMessage: "Send message",
+    },
+    queue: {
+      retry: "再試行",
+      retrySend: "送信を再試行",
+      retryQueuedMessage: "キュー内のメッセージを再試行",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",

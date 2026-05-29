@@ -8,6 +8,10 @@ import YAML from "yaml";
 const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 const dockerfilePath = join(repoRoot, "Dockerfile");
 const dockerReleaseWorkflowPath = join(repoRoot, ".github/workflows/docker-release.yml");
+const fullReleaseValidationWorkflowPath = join(
+  repoRoot,
+  ".github/workflows/full-release-validation.yml",
+);
 const dockerSetupDockerfilePaths = ["Dockerfile", "scripts/docker/sandbox/Dockerfile"] as const;
 const pnpmWorkspacePath = join(repoRoot, "pnpm-workspace.yaml");
 
@@ -246,6 +250,20 @@ describe("Dockerfile", () => {
     );
   });
 
+  it("keeps runtime workspace templates in final images", async () => {
+    const dockerfile = await readFile(dockerfilePath, "utf8");
+    const runtimeStageIndex = dockerfile.lastIndexOf("FROM base-runtime");
+    const templatesCopyIndex = dockerfile.indexOf(
+      "COPY --from=runtime-assets --chown=node:node /app/src/agents/templates ./src/agents/templates",
+      runtimeStageIndex,
+    );
+    const userIndex = dockerfile.indexOf("USER node", runtimeStageIndex);
+
+    expect(runtimeStageIndex).toBeGreaterThan(-1);
+    expect(templatesCopyIndex).toBeGreaterThan(runtimeStageIndex);
+    expect(templatesCopyIndex).toBeLessThan(userIndex);
+  });
+
   it("keeps package manager patch files in runtime images", async () => {
     const dockerfile = collapseDockerContinuations(await readFile(dockerfilePath, "utf8"));
     const pnpmWorkspace = YAML.parse(await readFile(pnpmWorkspacePath, "utf8")) as {
@@ -273,8 +291,49 @@ describe("Dockerfile", () => {
     const workflow = await readFile(dockerReleaseWorkflowPath, "utf8");
     const releaseKeepList = "OPENCLAW_EXTENSIONS=diagnostics-otel,codex";
 
-    expect(workflow.match(new RegExp(releaseKeepList, "g"))).toHaveLength(2);
+    expect(workflow.match(new RegExp(releaseKeepList, "g"))).toHaveLength(4);
     expect(workflow).not.toContain("OPENCLAW_EXTENSIONS=diagnostics-otel\n");
+  });
+
+  it("publishes official Docker browser images with baked Chromium", async () => {
+    const workflow = await readFile(dockerReleaseWorkflowPath, "utf8");
+
+    expect(workflow).toContain("Build and push amd64 browser image");
+    expect(workflow).toContain("Build and push arm64 browser image");
+    expect(workflow).toContain("OPENCLAW_INSTALL_BROWSER=1");
+    expect(workflow).toContain('${IMAGE}:${version}-browser"');
+    expect(workflow).toContain('${IMAGE}:latest-browser"');
+    expect(workflow).toContain('${IMAGE}:main-browser"');
+    expect(workflow).not.toContain("main-browser-amd64");
+    expect(workflow).not.toContain("main-browser-arm64");
+    expect(workflow).toContain("Smoke test amd64 browser image");
+    expect(workflow).toContain("Smoke test arm64 browser image");
+    expect(workflow).toContain("chrome-headless-shell");
+    expect(workflow).toContain("grep -q '^ARG OPENCLAW_INSTALL_BROWSER' Dockerfile");
+    expect(workflow).toContain("if: steps.tags.outputs.browser != ''");
+    expect(workflow).toContain('git show "${SOURCE_REF}:Dockerfile"');
+    expect(workflow).toContain('if [[ -n "${BROWSER_TAGS}" ]]; then');
+  });
+
+  it("smokes runtime workspace templates before Docker release manifests publish", async () => {
+    const workflow = await readFile(dockerReleaseWorkflowPath, "utf8");
+
+    expect(workflow).toContain("Smoke test amd64 runtime workspace templates");
+    expect(workflow).toContain("Smoke test arm64 runtime workspace templates");
+    expect(workflow).toContain("test -f /app/src/agents/templates/HEARTBEAT.md");
+    expect(workflow).toContain('grep -F "Missing workspace template:"');
+    expect(workflow).toContain('test -f "${temp_root}/home/.openclaw/workspace/HEARTBEAT.md"');
+  });
+
+  it("keeps runtime workspace template smoke in full release validation", async () => {
+    const workflow = await readFile(fullReleaseValidationWorkflowPath, "utf8");
+
+    expect(workflow).toContain("Build and smoke test final Docker runtime image");
+    expect(workflow).toContain('-t "${image_ref}"');
+    expect(workflow).toContain("test -f /app/src/agents/templates/HEARTBEAT.md");
+    expect(workflow).toContain('grep -F "Missing workspace template:"');
+    expect(workflow).toContain('test -f "${temp_root}/home/.openclaw/workspace/HEARTBEAT.md"');
+    expect(workflow).not.toContain("scripts/docker/runtime-workspace-template-smoke.sh");
   });
 
   it("does not override bundled plugin discovery in runtime images", async () => {
@@ -327,15 +386,24 @@ describe("Dockerfile", () => {
   it("pre-creates named-volume mount points before switching to the node user", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     const runtimeStageIndex = dockerfile.lastIndexOf("FROM base-runtime");
-    const stateDirIndex = dockerfile.indexOf(
-      "RUN install -d -m 0700 -o node -g node \\",
+    const parentConfigDirIndex = dockerfile.indexOf(
+      "RUN install -d -m 0755 -o node -g node /home/node/.config",
       runtimeStageIndex,
+    );
+    const stateDirIndex = dockerfile.indexOf(
+      "install -d -m 0700 -o node -g node \\",
+      parentConfigDirIndex,
     );
     const userIndex = dockerfile.indexOf("USER node", runtimeStageIndex);
 
     expect(runtimeStageIndex).toBeGreaterThan(-1);
+    // Regression: /home/node/.config parent must be created with node ownership
+    // before the leaf .config/openclaw dir (issue #85968).
+    expect(parentConfigDirIndex).toBeGreaterThan(-1);
     expect(stateDirIndex).toBeGreaterThan(-1);
     expect(userIndex).toBeGreaterThan(-1);
+    expect(parentConfigDirIndex).toBeGreaterThan(runtimeStageIndex);
+    expect(parentConfigDirIndex).toBeLessThan(stateDirIndex);
     expect(stateDirIndex).toBeGreaterThan(runtimeStageIndex);
     expect(stateDirIndex).toBeLessThan(userIndex);
     expect(dockerfile).not.toContain("mkdir -p /home/node/.openclaw");
@@ -346,6 +414,10 @@ describe("Dockerfile", () => {
     );
     expect(dockerfile).toContain(
       "stat -c '%U:%G %a' /home/node/.openclaw/workspace | grep -qx 'node:node 700'",
+    );
+    // Regression: assert parent /home/node/.config is also node-owned (issue #85968).
+    expect(dockerfile).toContain(
+      "stat -c '%U:%G %a' /home/node/.config | grep -qx 'node:node 755'",
     );
     expect(dockerfile).toContain(
       "stat -c '%U:%G %a' /home/node/.config/openclaw | grep -qx 'node:node 700'",

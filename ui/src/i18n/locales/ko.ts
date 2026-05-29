@@ -361,6 +361,8 @@ export const ko: TranslationMap = {
     pending: "{count} pending",
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
+    allowAlwaysUnavailable:
+      "유효한 승인 정책이 매번 승인을 요구하므로, 항상 허용을 사용할 수 없습니다.",
     deny: "Deny",
     labels: {
       host: "Host",
@@ -392,6 +394,7 @@ export const ko: TranslationMap = {
   },
   tabs: {
     agents: "에이전트",
+    activity: "활동",
     overview: "개요",
     channels: "채널",
     instances: "인스턴스",
@@ -413,6 +416,7 @@ export const ko: TranslationMap = {
   },
   subtitles: {
     agents: "워크스페이스, 도구, 정체성.",
+    activity: "브라우저 로컬 도구 활동 요약입니다.",
     overview: "상태, 진입점, 상태 정보.",
     channels: "채널 및 설정.",
     instances: "연결된 클라이언트와 노드.",
@@ -431,6 +435,42 @@ export const ko: TranslationMap = {
     debug: "스냅샷, 이벤트, RPC.",
     logs: "실시간 Gateway 로그.",
     dreams: "수면 중 메모리 통합.",
+  },
+  activity: {
+    title: "활동",
+    subtitle: "라이브 세션 이벤트에서 파생된 임시 도구 활동입니다.",
+    visibleCount: "{visible}/{total}",
+    filtersLabel: "활동 필터",
+    search: "검색",
+    searchPlaceholder: "도구, 요약, 실행, 세션으로 필터링",
+    toolFilter: "도구",
+    allTools: "모든 도구",
+    statusFilters: "상태 필터",
+    autoFollow: "자동 따라가기",
+    expandAll: "모두 펼치기",
+    collapseAll: "모두 접기",
+    clear: "지우기",
+    empty: "아직 도구 활동이 없습니다.",
+    emptyFiltered: "이 필터와 일치하는 활동이 없습니다.",
+    entrySummary: "{argumentSummary}",
+    argumentHiddenOne: "인수 1개 숨김",
+    argumentsHidden: "인수 {count}개 숨김",
+    streamLabel: "도구 활동 항목",
+    toolCallId: "도구 호출",
+    runId: "실행",
+    session: "세션",
+    outputTruncated: "미리 보기가 마스킹되고 잘렸습니다.",
+    noOutputPreview: "출력 미리보기가 없습니다.",
+    status: {
+      running: "실행 중",
+      done: "완료",
+      error: "오류",
+    },
+    duration: {
+      ms: "{count} ms",
+      seconds: "{count} s",
+      minutes: "{minutes}m {seconds}s",
+    },
   },
   overview: {
     access: {
@@ -1077,6 +1117,11 @@ export const ko: TranslationMap = {
       stopGenerating: "Stop generating",
       send: "Send",
       sendMessage: "Send message",
+    },
+    queue: {
+      retry: "다시 시도",
+      retrySend: "전송 다시 시도",
+      retryQueuedMessage: "대기 중인 메시지 다시 시도",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",

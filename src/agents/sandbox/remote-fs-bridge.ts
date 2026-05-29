@@ -7,6 +7,7 @@ import type {
 } from "./backend-handle.types.js";
 import { SANDBOX_PINNED_MUTATION_PYTHON } from "./fs-bridge-mutation-helper.js";
 import { createWritableRenameTargetResolver } from "./fs-bridge-rename-targets.js";
+import { parseSandboxStatMtimeMs, parseSandboxStatSize } from "./fs-bridge-stat-parse.js";
 import type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "./fs-bridge.types.js";
 import {
   isPathInsideContainerRoot,
@@ -235,7 +236,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       signal: params.signal,
     });
     const result = await this.runRemoteScript({
-      script: 'set -eu\nstat -c "%F|%s|%Y" -- "$1"',
+      script: 'set -eu\nstat -c "%F|%s|%y" -- "$1"',
       args: [canonical],
       signal: params.signal,
     });
@@ -243,8 +244,8 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     const [kindRaw = "", sizeRaw = "0", mtimeRaw = "0"] = output.split("|");
     return {
       type: kindRaw === "directory" ? "directory" : kindRaw === "regular file" ? "file" : "other",
-      size: Number(sizeRaw),
-      mtimeMs: Number(mtimeRaw) * 1000,
+      size: parseSandboxStatSize(sizeRaw),
+      mtimeMs: parseSandboxStatMtimeMs(mtimeRaw),
     };
   }
 

@@ -364,6 +364,8 @@ export const fr: TranslationMap = {
     pending: "{count} pending",
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
+    allowAlwaysUnavailable:
+      "La politique d’approbation effective exige une approbation à chaque fois, donc Autoriser toujours n’est pas disponible.",
     deny: "Deny",
     labels: {
       host: "Host",
@@ -395,6 +397,7 @@ export const fr: TranslationMap = {
   },
   tabs: {
     agents: "Agents",
+    activity: "Activité",
     overview: "Aperçu",
     channels: "Canaux",
     instances: "Instances",
@@ -416,6 +419,7 @@ export const fr: TranslationMap = {
   },
   subtitles: {
     agents: "Espaces de travail, outils, identités.",
+    activity: "Résumés d’activité des outils locaux au navigateur.",
     overview: "Statut, points d’entrée, santé.",
     channels: "Canaux et paramètres.",
     instances: "Clients et nœuds connectés.",
@@ -434,6 +438,42 @@ export const fr: TranslationMap = {
     debug: "Captures, événements, RPC.",
     logs: "Journaux Gateway en direct.",
     dreams: "Consolidation de la mémoire pendant le sommeil.",
+  },
+  activity: {
+    title: "Activité",
+    subtitle: "Activité éphémère des outils dérivée des événements de session en direct.",
+    visibleCount: "{visible} sur {total}",
+    filtersLabel: "Filtres d’activité",
+    search: "Rechercher",
+    searchPlaceholder: "Filtrer par outil, résumé, exécution, session",
+    toolFilter: "Outil",
+    allTools: "Tous les outils",
+    statusFilters: "Filtres d’état",
+    autoFollow: "Suivi automatique",
+    expandAll: "Tout développer",
+    collapseAll: "Tout réduire",
+    clear: "Effacer",
+    empty: "Aucune activité d’outil pour le moment.",
+    emptyFiltered: "Aucune activité ne correspond à ces filtres.",
+    entrySummary: "{argumentSummary}",
+    argumentHiddenOne: "1 argument masqué",
+    argumentsHidden: "{count} arguments masqués",
+    streamLabel: "Entrées d’activité des outils",
+    toolCallId: "Appel d’outil",
+    runId: "Exécuter",
+    session: "Session",
+    outputTruncated: "Aperçu masqué et tronqué.",
+    noOutputPreview: "Aucun aperçu de sortie.",
+    status: {
+      running: "En cours d’exécution",
+      done: "Terminé",
+      error: "Erreur",
+    },
+    duration: {
+      ms: "{count} ms",
+      seconds: "{count} s",
+      minutes: "{minutes}m {seconds}s",
+    },
   },
   overview: {
     access: {
@@ -1097,6 +1137,11 @@ export const fr: TranslationMap = {
       stopGenerating: "Stop generating",
       send: "Send",
       sendMessage: "Send message",
+    },
+    queue: {
+      retry: "Réessayer",
+      retrySend: "Réessayer l’envoi",
+      retryQueuedMessage: "Réessayer le message en file d’attente",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",

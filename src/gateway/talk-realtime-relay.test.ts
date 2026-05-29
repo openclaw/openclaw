@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   setActiveEmbeddedRun,
   testing as embeddedRunTesting,
-} from "../agents/pi-embedded-runner/runs.js";
+} from "../agents/embedded-agent-runner/runs.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import type { RealtimeVoiceBridgeCreateRequest } from "../talk/provider-types.js";
 import {
@@ -237,8 +237,8 @@ describe("talk realtime gateway relay", () => {
       providerConfig: { model: "provider-model" },
       audioFormat: { encoding: "pcm16", sampleRateHz: 24000, channels: 1 },
       instructions: "be brief",
-      autoRespondToAudio: false,
-      interruptResponseOnInputAudio: false,
+      autoRespondToAudio: true,
+      interruptResponseOnInputAudio: true,
     });
 
     const readyPayload = findEventPayload(events, (payload) => payload.type === "ready");
@@ -345,7 +345,7 @@ describe("talk realtime gateway relay", () => {
     stopTalkRealtimeRelaySession({ relaySessionId: session.relaySessionId, connId: "conn-1" });
 
     expect(bridge.sendAudio).toHaveBeenCalledWith(Buffer.from("audio-in"));
-    expect(bridge.sendUserMessage).toHaveBeenCalledWith("hello");
+    expect(bridge.sendUserMessage).not.toHaveBeenCalledWith("hello");
     expect(bridge.setMediaTimestamp).toHaveBeenCalledWith(123);
     expect(bridge.submitToolResult).toHaveBeenNthCalledWith(
       1,
@@ -446,7 +446,65 @@ describe("talk realtime gateway relay", () => {
     expectRecordFields(closePayload.talkEvent, { type: "session.closed", final: true });
   });
 
-  it("preserves provider-direct replies unless forced consult routing is configured", async () => {
+  it("does not route assistant echo transcripts back into the realtime model", async () => {
+    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+    const bridge = {
+      connect: vi.fn(async () => undefined),
+      sendAudio: vi.fn(),
+      setMediaTimestamp: vi.fn(),
+      sendUserMessage: vi.fn(),
+      handleBargeIn: vi.fn(),
+      submitToolResult: vi.fn(),
+      acknowledgeMark: vi.fn(),
+      close: vi.fn(),
+      isConnected: vi.fn(() => true),
+    };
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "relay-test",
+      label: "Relay Test",
+      isConfigured: () => true,
+      createBridge: (req) => {
+        bridgeRequest = req;
+        return bridge;
+      },
+    };
+    const events: Array<{ event: string; payload: unknown; connIds: string[] }> = [];
+    const context = {
+      broadcastToConnIds: (event: string, payload: unknown, connIds: ReadonlySet<string>) => {
+        events.push({ event, payload, connIds: [...connIds] });
+      },
+    } as never;
+
+    createTalkRealtimeRelaySession({
+      context,
+      connId: "conn-1",
+      provider,
+      providerConfig: {},
+      instructions: "brief",
+      tools: [],
+    });
+
+    bridgeRequest?.onTranscript?.(
+      "assistant",
+      "I am checking the latest status for you now.",
+      true,
+    );
+    bridgeRequest?.onTranscript?.("user", "checking the latest status for you now", true);
+
+    expect(bridge.sendUserMessage).not.toHaveBeenCalled();
+    expect(
+      events.some((entry) => {
+        const payload = entry.payload;
+        return (
+          typeof payload === "object" &&
+          payload !== null &&
+          (payload as Record<string, unknown>).type === "toolCall"
+        );
+      }),
+    ).toBe(false);
+  });
+
+  it("leaves provider-direct audio replies to server VAD unless forced consult routing is configured", async () => {
     vi.useFakeTimers();
 
     let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
@@ -490,7 +548,7 @@ describe("talk realtime gateway relay", () => {
     await Promise.resolve();
 
     bridgeRequest?.onTranscript?.("user", "Can you answer directly?", true);
-    expect(bridge.sendUserMessage).toHaveBeenLastCalledWith("Can you answer directly?");
+    expect(bridge.sendUserMessage).not.toHaveBeenCalled();
     expect(
       events.some((entry) => {
         const payload = entry.payload;
@@ -549,6 +607,8 @@ describe("talk realtime gateway relay", () => {
       forceAgentConsultOnFinalTranscript: true,
     });
     await Promise.resolve();
+
+    expectRecordFields(bridgeRequest, { autoRespondToAudio: false });
 
     bridgeRequest?.onTranscript?.("user", "Can you check this?", true);
     expect(bridge.sendUserMessage).not.toHaveBeenCalledWith("Can you check this?");
@@ -1179,7 +1239,7 @@ describe("talk realtime gateway relay", () => {
     });
   });
 
-  it("forwards control-like transcripts when the linked relay run is already gone", async () => {
+  it("does not duplicate control-like transcripts when the linked relay run is already gone", async () => {
     let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
     const bridge = {
       connect: vi.fn(async () => undefined),
@@ -1223,7 +1283,7 @@ describe("talk realtime gateway relay", () => {
 
     bridgeRequest?.onTranscript?.("user", "status", true);
 
-    expect(bridge.sendUserMessage).toHaveBeenCalledWith("status");
+    expect(bridge.sendUserMessage).not.toHaveBeenCalled();
     expect(bridge.submitToolResult).not.toHaveBeenCalled();
   });
 

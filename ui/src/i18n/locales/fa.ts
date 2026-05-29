@@ -363,6 +363,8 @@ export const fa: TranslationMap = {
     pending: "{count} در انتظار",
     allowOnce: "یک‌بار مجاز کن",
     alwaysAllow: "همیشه مجاز کن",
+    allowAlwaysUnavailable:
+      "سیاست تأیید مؤثر هر بار به تأیید نیاز دارد، بنابراین «همیشه مجاز باشد» در دسترس نیست.",
     deny: "رد کردن",
     labels: {
       host: "میزبان",
@@ -394,6 +396,7 @@ export const fa: TranslationMap = {
   },
   tabs: {
     agents: "عامل‌ها",
+    activity: "فعالیت",
     overview: "نمای کلی",
     channels: "کانال‌ها",
     instances: "نمونه‌ها",
@@ -415,6 +418,7 @@ export const fa: TranslationMap = {
   },
   subtitles: {
     agents: "فضاهای کاری، ابزارها، هویت‌ها.",
+    activity: "خلاصه‌های فعالیت ابزار در مرورگر محلی.",
     overview: "وضعیت، نقاط ورود، سلامت.",
     channels: "کانال‌ها و تنظیمات.",
     instances: "کلاینت‌ها و گره‌های متصل.",
@@ -433,6 +437,42 @@ export const fa: TranslationMap = {
     debug: "نماهای لحظه‌ای، رویدادها، RPC.",
     logs: "گزارش‌های زنده Gateway.",
     dreams: "رؤیاپردازی حافظه، یکپارچه‌سازی و بازتاب.",
+  },
+  activity: {
+    title: "فعالیت",
+    subtitle: "فعالیت موقتی ابزار که از رویدادهای نشست زنده استخراج شده است.",
+    visibleCount: "{visible} از {total}",
+    filtersLabel: "فیلترهای فعالیت",
+    search: "جستجو",
+    searchPlaceholder: "فیلتر بر اساس ابزار، خلاصه، اجرا، نشست",
+    toolFilter: "ابزار",
+    allTools: "همه ابزارها",
+    statusFilters: "فیلترهای وضعیت",
+    autoFollow: "دنبال‌کردن خودکار",
+    expandAll: "باز کردن همه",
+    collapseAll: "بستن همه",
+    clear: "پاک کردن",
+    empty: "هنوز هیچ فعالیت ابزاری وجود ندارد.",
+    emptyFiltered: "هیچ فعالیتی با این فیلترها مطابقت ندارد.",
+    entrySummary: "{argumentSummary}",
+    argumentHiddenOne: "۱ آرگومان پنهان شده است",
+    argumentsHidden: "{count} آرگومان پنهان شده‌اند",
+    streamLabel: "ورودی‌های فعالیت ابزار",
+    toolCallId: "فراخوانی ابزار",
+    runId: "اجرا کنید",
+    session: "نشست",
+    outputTruncated: "پیش‌نمایش ویرایش و کوتاه شده است.",
+    noOutputPreview: "پیش‌نمایش خروجی وجود ندارد.",
+    status: {
+      running: "در حال اجرا",
+      done: "انجام شد",
+      error: "خطا",
+    },
+    duration: {
+      ms: "{count} ms",
+      seconds: "{count} s",
+      minutes: "{minutes}m {seconds}s",
+    },
   },
   overview: {
     access: {
@@ -1086,6 +1126,11 @@ export const fa: TranslationMap = {
       stopGenerating: "Stop generating",
       send: "Send",
       sendMessage: "Send message",
+    },
+    queue: {
+      retry: "تلاش مجدد",
+      retrySend: "ارسال مجدد",
+      retryQueuedMessage: "تلاش مجدد برای پیام در صف",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",

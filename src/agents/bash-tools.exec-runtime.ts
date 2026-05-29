@@ -1,5 +1,4 @@
 import path from "node:path";
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
 import {
   type EventSessionRoutingPolicy,
@@ -18,9 +17,11 @@ import { isDangerousHostInheritedEnvVarName } from "../infra/host-env-security.j
 import { findPathKey, mergePathPrepend, removePathPrepend } from "../infra/path-prepend.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { isSubagentSessionKey } from "../sessions/session-key-utils.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import type { ProcessSession } from "./bash-process-registry.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
+import type { AgentToolResult } from "./runtime/index.js";
 export { applyPathPrepend, findPathKey, normalizePathPrepend } from "../infra/path-prepend.js";
 export {
   normalizeExecAsk,
@@ -114,7 +115,7 @@ export function validateHostEnv(env: Record<string, string>): void {
   }
 }
 export const DEFAULT_MAX_OUTPUT = clampWithDefault(
-  readEnvInt("PI_BASH_MAX_OUTPUT_CHARS"),
+  readEnvInt("OPENCLAW_BASH_MAX_OUTPUT_CHARS", "PI_BASH_MAX_OUTPUT_CHARS"),
   200_000,
   1_000,
   200_000,
@@ -306,10 +307,7 @@ export function applyShellPath(env: Record<string, string>, shellPath?: string |
   if (!shellPath) {
     return;
   }
-  const entries = shellPath
-    .split(path.delimiter)
-    .map((part) => part.trim())
-    .filter(Boolean);
+  const entries = normalizeStringEntries(shellPath.split(path.delimiter));
   if (entries.length === 0) {
     return;
   }
@@ -717,7 +715,7 @@ export async function runExecProcess(opts: {
       return;
     }
     const tailText = session.tail || session.aggregated;
-    // Note: opts.onUpdate() is provided by pi-agent-core's agent-loop and
+    // Note: opts.onUpdate() is provided by agent runtime's agent-loop and
     // internally pushes Promise.resolve(emit(event)) into an updateEvents
     // array.  Because emit → processEvents is async, any failure (e.g.
     // activeRun cleared) produces a *rejected Promise*, not a synchronous
