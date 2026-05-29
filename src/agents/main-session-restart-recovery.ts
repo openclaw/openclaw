@@ -20,16 +20,16 @@ import { callGateway } from "../gateway/call.js";
 import { readSessionMessagesAsync } from "../gateway/session-utils.fs.js";
 import { resolveGatewaySessionStoreTarget } from "../gateway/session-utils.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { CommandLane } from "../process/lanes.js";
 import { getCommandLaneSnapshot } from "../process/command-queue.js";
+import { CommandLane } from "../process/lanes.js";
 import { isAcpSessionKey, isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { deliveryContextFromSession } from "../utils/delivery-context.shared.js";
-import { resolveEmbeddedSessionLane } from "./pi-embedded-runner/lanes.js";
+import { resolveEmbeddedSessionLane } from "./embedded-agent-runner/lanes.js";
 import {
-  isEmbeddedPiRunActive,
-  isEmbeddedPiRunHandleActive,
-} from "./pi-embedded-runner/runs.js";
+  isEmbeddedAgentRunActive,
+  isEmbeddedAgentRunHandleActive,
+} from "./embedded-agent-runner/runs.js";
 import { resolveAgentSessionDirs } from "./session-dirs.js";
 import type { SessionLockInspection } from "./session-write-lock.js";
 
@@ -477,8 +477,8 @@ async function recoverStore(params: {
     // empty check confirms the row is stale from the old process.
     if (!entry.abortedLastRun) {
       const hasActiveRun =
-        (typeof entry.sessionId === "string" && isEmbeddedPiRunActive(entry.sessionId)) ||
-        isEmbeddedPiRunHandleActive(sessionKey);
+        (typeof entry.sessionId === "string" && isEmbeddedAgentRunActive(entry.sessionId)) ||
+        isEmbeddedAgentRunHandleActive(sessionKey);
       const sessionLane = resolveEmbeddedSessionLane(sessionKey);
       const hasActiveLane = sessionLane
         ? getCommandLaneSnapshot(sessionLane).activeCount > 0

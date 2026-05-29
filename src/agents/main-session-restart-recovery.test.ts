@@ -19,12 +19,12 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: vi.fn(async () => ({ runId: "run-resumed" })),
 }));
 
-vi.mock("./pi-embedded-runner/runs.js", () => ({
-  isEmbeddedPiRunActive: vi.fn(() => false),
-  isEmbeddedPiRunHandleActive: vi.fn(() => false),
+vi.mock("./embedded-agent-runner/runs.js", () => ({
+  isEmbeddedAgentRunActive: vi.fn(() => false),
+  isEmbeddedAgentRunHandleActive: vi.fn(() => false),
 }));
 
-vi.mock("./pi-embedded-runner/lanes.js", () => ({
+vi.mock("./embedded-agent-runner/lanes.js", () => ({
   resolveEmbeddedSessionLane: vi.fn(() => null),
 }));
 
@@ -579,8 +579,8 @@ describe("main-session-restart-recovery", () => {
     ]);
 
     // Simulate the current process having an active run for this session
-    const { isEmbeddedPiRunActive } = await import("./pi-embedded-runner/runs.js");
-    const spy = vi.mocked(isEmbeddedPiRunActive);
+    const { isEmbeddedAgentRunActive } = await import("./embedded-agent-runner/runs.js");
+    const spy = vi.mocked(isEmbeddedAgentRunActive);
     spy.mockReturnValue(true);
 
     const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
