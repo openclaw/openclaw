@@ -18,6 +18,7 @@ import type {
   CommandHandlerResult,
   HandleCommandsParams,
 } from "./commands-types.js";
+import { recordBusyMessageOutcome } from "./queue/busy-message-outcome.js";
 
 const STEER_USAGE = "Usage: /steer <message>";
 
@@ -154,12 +155,28 @@ export const handleSteerCommand: CommandHandler = async (params, allowTextComman
   }
   if (!queueOutcome.queued) {
     const summary = formatEmbeddedAgentQueueFailureSummary(queueOutcome);
+    recordBusyMessageOutcome({
+      kind: "active_run_steer_rejected",
+      sessionKey: targetSessionKey,
+      sessionId,
+      queueMode: "steer",
+      reason: queueOutcome.reason,
+      source: "slash_steer",
+    });
     return continueWithSteerFallback(
       params,
       message,
       `steer: active session ${sessionId} rejected steering injection: ${summary}; continuing with /steer payload as a normal prompt`,
     );
   }
+
+  recordBusyMessageOutcome({
+    kind: "active_run_steer_accepted",
+    sessionKey: targetSessionKey,
+    sessionId,
+    queueMode: "steer",
+    source: "slash_steer",
+  });
 
   return { shouldContinue: false, reply: { text: "steered current session." } };
 };

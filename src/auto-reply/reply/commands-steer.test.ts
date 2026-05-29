@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
+import {
+  clearBusyMessageOutcomeStoreForTest,
+  getLastBusyMessageOutcome,
+} from "./queue/busy-message-outcome.js";
 
 const steerRuntimeMocks = vi.hoisted(() => ({
   formatEmbeddedAgentQueueFailureSummary: vi.fn(),
@@ -24,6 +28,7 @@ function buildParams(commandBody: string) {
 
 describe("handleSteerCommand", () => {
   beforeEach(() => {
+    clearBusyMessageOutcomeStoreForTest();
     steerRuntimeMocks.formatEmbeddedAgentQueueFailureSummary
       .mockReset()
       .mockReturnValue(
@@ -59,6 +64,12 @@ describe("handleSteerCommand", () => {
         debounceMs: 0,
       },
     );
+    expect(getLastBusyMessageOutcome("agent:main:main")).toMatchObject({
+      kind: "active_run_steer_accepted",
+      sessionId: "session-active",
+      queueMode: "steer",
+      source: "slash_steer",
+    });
   });
 
   it("prefers the native command target session key over the slash-command session", async () => {
@@ -152,6 +163,13 @@ describe("handleSteerCommand", () => {
       sessionId: "session-active",
       reason: "not_streaming",
       gatewayHealth: "live",
+    });
+    expect(getLastBusyMessageOutcome("agent:main:main")).toMatchObject({
+      kind: "active_run_steer_rejected",
+      sessionId: "session-active",
+      queueMode: "steer",
+      reason: "not_streaming",
+      source: "slash_steer",
     });
   });
 

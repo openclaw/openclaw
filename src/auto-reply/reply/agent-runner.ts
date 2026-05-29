@@ -10,6 +10,7 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import {
   formatEmbeddedAgentQueueFailureSummary,
   queueEmbeddedAgentMessageWithOutcomeAsync,
+  type EmbeddedAgentQueueFailureReason,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
@@ -92,8 +93,13 @@ import {
   refreshQueuedFollowupSession,
   scheduleFollowupDrain,
   type FollowupRun,
+  type QueueMode,
   type QueueSettings,
 } from "./queue.js";
+import {
+  recordBusyMessageOutcome,
+  type BusyMessageOutcomeKind,
+} from "./queue/busy-message-outcome.js";
 import { createReplyMediaContext } from "./reply-media-paths.js";
 import { replyRunRegistry, type ReplyOperation } from "./reply-run-registry.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
@@ -104,6 +110,25 @@ import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
+
+function recordInboundBusyMessageOutcome(params: {
+  kind: BusyMessageOutcomeKind;
+  sessionKey?: string;
+  sessionId: string;
+  channel?: string;
+  queueMode: QueueMode;
+  reason?: EmbeddedAgentQueueFailureReason;
+}): void {
+  recordBusyMessageOutcome({
+    kind: params.kind,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    channel: params.channel,
+    queueMode: params.queueMode,
+    reason: params.reason,
+    source: "inbound",
+  });
+}
 
 function markBeforeAgentRunBlockedPayloads(payloads: ReplyPayload[]): ReplyPayload[] {
   return payloads.map((payload) =>
@@ -1129,6 +1154,21 @@ export async function runReplyAgent(params: {
     storePath,
     resolvedVerboseLevel,
   });
+  const busyOutcomeChannel = normalizeOptionalString(sessionCtx.Surface ?? sessionCtx.Provider);
+  const recordBusyOutcome = (params: {
+    kind: BusyMessageOutcomeKind;
+    sessionId: string;
+    reason?: EmbeddedAgentQueueFailureReason;
+  }) => {
+    recordInboundBusyMessageOutcome({
+      kind: params.kind,
+      sessionKey: sessionKey ?? followupRun.run.sessionKey,
+      sessionId: params.sessionId,
+      channel: busyOutcomeChannel,
+      queueMode: activeRunQueueMode,
+      reason: params.reason,
+    });
+  };
 
   const pendingToolTasks = new Set<Promise<void>>();
   const blockReplyTimeoutMs = opts?.blockReplyTimeoutMs ?? BLOCK_REPLY_SEND_TIMEOUT_MS;
@@ -1161,10 +1201,19 @@ export async function runReplyAgent(params: {
       },
     );
     if (steerOutcome.queued) {
+      recordBusyOutcome({
+        kind: "active_run_steer_accepted",
+        sessionId: steerSessionId,
+      });
       await touchActiveSessionEntry();
       typing.cleanup();
       return undefined;
     }
+    recordBusyOutcome({
+      kind: "active_run_steer_rejected",
+      sessionId: steerSessionId,
+      reason: steerOutcome.reason,
+    });
     const summary = formatEmbeddedAgentQueueFailureSummary(steerOutcome);
     logVerbose(`queue: active session ${steerSessionId} rejected steering injection: ${summary}`);
   }
@@ -1191,11 +1240,19 @@ export async function runReplyAgent(params: {
   });
 
   if (activeRunQueueAction === "drop") {
+    recordBusyOutcome({
+      kind: "dropped",
+      sessionId: followupRun.run.sessionId,
+    });
     typing.cleanup();
     return undefined;
   }
 
   if (activeRunQueueAction === "enqueue-followup") {
+    recordBusyOutcome({
+      kind: activeRunQueueMode === "collect" ? "collect_enqueued" : "followup_enqueued",
+      sessionId: followupRun.run.sessionId,
+    });
     enqueueFollowupRun(
       queueKey,
       followupRun,

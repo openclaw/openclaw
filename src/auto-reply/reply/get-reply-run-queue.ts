@@ -2,6 +2,7 @@ import { logVerbose } from "../../globals.js";
 import type { ReplyPayload } from "../types.js";
 import type { ActiveRunQueueAction } from "./queue-policy.js";
 import type { QueueSettings } from "./queue.js";
+import { recordBusyMessageOutcome } from "./queue/busy-message-outcome.js";
 
 export type ReplyRunQueueBusyState = {
   activeSessionId: string | undefined;
@@ -31,6 +32,13 @@ export async function resolvePreparedReplyQueueState(params: {
 
   if (params.queueMode === "interrupt") {
     const aborted = params.abortActiveRun(params.activeSessionId);
+    recordBusyMessageOutcome({
+      kind: "interrupt_started",
+      sessionKey: params.sessionKey,
+      sessionId: params.activeSessionId,
+      queueMode: "interrupt",
+      source: "inbound",
+    });
     logVerbose(
       `Interrupting active run for ${params.sessionKey ?? params.sessionId} (aborted=${aborted})`,
     );
