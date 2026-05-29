@@ -1,7 +1,6 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { matchesSkillFilter } from "../../skills/filter.js";
-import type { SkillSnapshot } from "../../skills/index.js";
+import type { SkillSnapshot } from "../../skills/types.js";
 
 const skillsSnapshotRuntimeLoader = createLazyImportLoader(
   () => import("./skills-snapshot.runtime.js"),
@@ -24,20 +23,12 @@ export async function resolveCronSkillsSnapshot(params: {
   }
 
   const runtime = await loadSkillsSnapshotRuntime();
-  const snapshotVersion = runtime.getSkillsSnapshotVersion(params.workspaceDir);
-  const skillFilter = runtime.resolveAgentSkillsFilter(params.config, params.agentId);
-  const existingSnapshot = params.existingSnapshot;
-  const shouldRefresh =
-    !existingSnapshot ||
-    existingSnapshot.version !== snapshotVersion ||
-    !matchesSkillFilter(existingSnapshot.skillFilter, skillFilter);
-  if (!shouldRefresh) {
-    return existingSnapshot;
-  }
-
-  return runtime.buildWorkspaceSkillSnapshot(params.workspaceDir, {
+  const skillFilter = runtime.resolveEffectiveAgentSkillFilter(params.config, params.agentId);
+  return runtime.resolveReusableWorkspaceSkillSnapshot({
+    workspaceDir: params.workspaceDir,
     config: params.config,
     agentId: params.agentId,
+    existingSnapshot: params.existingSnapshot,
     skillFilter,
     eligibility: {
       remote: runtime.getRemoteSkillEligibility({
@@ -47,6 +38,7 @@ export async function resolveCronSkillsSnapshot(params: {
         }),
       }),
     },
-    snapshotVersion,
-  });
+    watch: false,
+    hydrateExisting: false,
+  }).snapshot;
 }

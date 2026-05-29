@@ -22,12 +22,16 @@ vi.mock("../../agents/sandbox.js", () => ({
   resolveSandboxRuntimeStatus: vi.fn(() => ({ sandboxed: false, mode: "off" })),
 }));
 
-vi.mock("../../skills/index.js", () => ({
-  buildWorkspaceSkillSnapshot: vi.fn(() => ({ prompt: "", skills: [], resolvedSkills: [] })),
+vi.mock("../../skills/remote.js", () => ({
+  getRemoteSkillEligibility: vi.fn(() => false),
 }));
 
-vi.mock("../../skills/refresh.js", () => ({
-  getSkillsSnapshotVersion: vi.fn(() => "test-snapshot"),
+vi.mock("../../skills/session-snapshot.js", () => ({
+  resolveReusableWorkspaceSkillSnapshot: vi.fn(() => ({
+    snapshot: { prompt: "", skills: [], resolvedSkills: [] },
+    shouldRefresh: false,
+    snapshotVersion: "test-snapshot",
+  })),
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({
@@ -58,10 +62,6 @@ vi.mock("../../agents/agent-tools.js", () => ({
 
 vi.mock("../../tts/tts.js", () => ({
   buildTtsSystemPromptHint: vi.fn(() => undefined),
-}));
-
-vi.mock("../../infra/skills-remote.js", () => ({
-  getRemoteSkillEligibility: vi.fn(() => false),
 }));
 
 function makeParams(): HandleCommandsParams {

@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { NodeRegistry } from "../gateway/node-registry.js";
-import { getSkillsSnapshotVersion, resetSkillsRefreshForTest } from "../skills/refresh.js";
+import { getSkillsSnapshotVersion, resetSkillsRefreshForTest } from "./refresh.js";
 import {
   getRemoteSkillEligibility,
   recordRemoteNodeBins,
@@ -13,7 +13,7 @@ import {
   removeRemoteNodeInfo,
   refreshRemoteNodeBins,
   setSkillsRemoteRegistry,
-} from "./skills-remote.js";
+} from "./remote.js";
 
 function createRemoteSkillWorkspace(bin: string): { cfg: OpenClawConfig; workspaceDir: string } {
   const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-remote-skills-"));

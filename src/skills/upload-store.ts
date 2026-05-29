@@ -2,11 +2,11 @@ import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolveStateDir } from "../../config/paths.js";
-import { DEFAULT_MAX_ARCHIVE_BYTES_ZIP } from "../../infra/archive.js";
-import { formatErrorMessage } from "../../infra/errors.js";
-import { createAsyncLock, readDurableJsonFile, writeJsonAtomic } from "../../infra/json-files.js";
-import { validateRequestedSkillSlug } from "../../skills/archive-install.js";
+import { resolveStateDir } from "../config/paths.js";
+import { DEFAULT_MAX_ARCHIVE_BYTES_ZIP } from "../infra/archive.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { createAsyncLock, readDurableJsonFile, writeJsonAtomic } from "../infra/json-files.js";
+import { validateRequestedSkillSlug } from "./archive-install.js";
 
 export const SKILL_UPLOAD_TTL_MS = 60 * 60 * 1000;
 export const MAX_SKILL_UPLOAD_CHUNK_BYTES = 4 * 1024 * 1024;

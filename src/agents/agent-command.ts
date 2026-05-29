@@ -39,7 +39,9 @@ import {
 import { resolveSendPolicy } from "../sessions/send-policy.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { hydrateResolvedSkillsAsync } from "../skills/snapshot-hydration.js";
+import { resolveEffectiveAgentSkillFilter } from "../skills/agent-filter.js";
+import type { getRemoteSkillEligibility } from "../skills/remote.js";
+import type { resolveReusableWorkspaceSkillSnapshot } from "../skills/session-snapshot.js";
 import type { SkillSnapshot } from "../skills/types.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import { createTrajectoryRuntimeRecorder } from "../trajectory/runtime.js";
@@ -58,7 +60,6 @@ import {
   resolveDefaultAgentId,
   resolveEffectiveModelFallbacks,
   resolveSessionAgentId,
-  resolveAgentSkillsFilter,
   resolveAgentWorkspaceDir,
 } from "./agent-scope.js";
 import { isStoredCredentialCompatibleWithAuthProvider } from "./auth-profiles/order.js";
@@ -117,10 +118,10 @@ type CliCompactionRuntime = typeof import("./command/cli-compaction.js");
 type TranscriptResolveRuntime = typeof import("../config/sessions/transcript-resolve.runtime.js");
 type CliDepsRuntime = typeof import("../cli/deps.js");
 type ExecDefaultsRuntime = typeof import("./exec-defaults.js");
-type SkillsRuntime = typeof import("../skills/index.js");
-type SkillsFilterRuntime = typeof import("../skills/filter.js");
-type SkillsRefreshStateRuntime = typeof import("../skills/refresh-state.js");
-type SkillsRemoteRuntime = typeof import("../infra/skills-remote.js");
+type SkillsRuntime = {
+  getRemoteSkillEligibility: typeof getRemoteSkillEligibility;
+  resolveReusableWorkspaceSkillSnapshot: typeof resolveReusableWorkspaceSkillSnapshot;
+};
 
 const attemptExecutionRuntimeLoader = createLazyImportLoader<AttemptExecutionRuntime>(
   () => import("./command/attempt-execution.runtime.js"),
@@ -153,31 +154,16 @@ const cliDepsRuntimeLoader = createLazyImportLoader<CliDepsRuntime>(() => import
 const execDefaultsRuntimeLoader = createLazyImportLoader<ExecDefaultsRuntime>(
   () => import("./exec-defaults.js"),
 );
-const skillsRuntimeLoader = createLazyImportLoader<SkillsRuntime>(
-  () => import("../skills/index.js"),
-);
-const skillsFilterRuntimeLoader = createLazyImportLoader<SkillsFilterRuntime>(
-  () => import("../skills/filter.js"),
-);
-const skillsRefreshStateRuntimeLoader = createLazyImportLoader<SkillsRefreshStateRuntime>(
-  () => import("../skills/refresh-state.js"),
-);
-const skillsRemoteRuntimeLoader = createLazyImportLoader<SkillsRemoteRuntime>(
-  () => import("../infra/skills-remote.js"),
-);
-
-function createEmptySkillsSnapshot(params: {
-  skillFilter: string[];
-  version?: number;
-}): SkillSnapshot {
+const skillsRuntimeLoader = createLazyImportLoader<SkillsRuntime>(async () => {
+  const [remote, sessionSnapshot] = await Promise.all([
+    import("../skills/remote.js"),
+    import("../skills/session-snapshot.js"),
+  ]);
   return {
-    prompt: "",
-    skills: [],
-    resolvedSkills: [],
-    skillFilter: params.skillFilter,
-    version: params.version,
+    getRemoteSkillEligibility: remote.getRemoteSkillEligibility,
+    resolveReusableWorkspaceSkillSnapshot: sessionSnapshot.resolveReusableWorkspaceSkillSnapshot,
   };
-}
+});
 
 function loadAttemptExecutionRuntime(): Promise<AttemptExecutionRuntime> {
   return attemptExecutionRuntimeLoader.load();
@@ -225,18 +211,6 @@ function loadExecDefaultsRuntime(): Promise<ExecDefaultsRuntime> {
 
 function loadSkillsRuntime(): Promise<SkillsRuntime> {
   return skillsRuntimeLoader.load();
-}
-
-function loadSkillsFilterRuntime(): Promise<SkillsFilterRuntime> {
-  return skillsFilterRuntimeLoader.load();
-}
-
-function loadSkillsRefreshStateRuntime(): Promise<SkillsRefreshStateRuntime> {
-  return skillsRefreshStateRuntimeLoader.load();
-}
-
-function loadSkillsRemoteRuntime(): Promise<SkillsRemoteRuntime> {
-  return skillsRemoteRuntimeLoader.load();
 }
 
 async function resolveAgentCommandDeps(deps: CliDeps | undefined): Promise<CliDeps> {
@@ -819,55 +793,33 @@ async function agentCommandInternal(
       });
     }
 
-    const [{ getSkillsSnapshotVersion, shouldRefreshSnapshotForVersion }, { matchesSkillFilter }] =
-      await Promise.all([loadSkillsRefreshStateRuntime(), loadSkillsFilterRuntime()]);
-    const skillsSnapshotVersion = getSkillsSnapshotVersion(workspaceDir);
-    const skillFilter = resolveAgentSkillsFilter(cfg, sessionAgentId);
+    const skillFilter = resolveEffectiveAgentSkillFilter(cfg, sessionAgentId);
     const currentSkillsSnapshot = sessionEntry?.skillsSnapshot;
-    const shouldRefreshSkillsSnapshot =
-      !currentSkillsSnapshot ||
-      shouldRefreshSnapshotForVersion(currentSkillsSnapshot.version, skillsSnapshotVersion) ||
-      !matchesSkillFilter(currentSkillsSnapshot.skillFilter, skillFilter);
-    const needsSkillsSnapshot = isNewSession || shouldRefreshSkillsSnapshot;
-    const emptySkillsFilter = skillFilter !== undefined && skillFilter.length === 0;
-    const buildSkillsSnapshot = async () => {
-      if (emptySkillsFilter) {
-        return createEmptySkillsSnapshot({
-          skillFilter,
-          version: skillsSnapshotVersion,
-        });
-      }
-      const [
-        { buildWorkspaceSkillSnapshot },
-        { getRemoteSkillEligibility },
-        { canExecRequestNode },
-      ] = await Promise.all([
-        loadSkillsRuntime(),
-        loadSkillsRemoteRuntime(),
-        loadExecDefaultsRuntime(),
-      ]);
-      return buildWorkspaceSkillSnapshot(workspaceDir, {
-        config: cfg,
-        eligibility: {
-          remote: getRemoteSkillEligibility({
-            advertiseExecNode: canExecRequestNode({
-              cfg,
-              sessionEntry,
-              sessionKey,
-              agentId: sessionAgentId,
-            }),
+    const [
+      { getRemoteSkillEligibility, resolveReusableWorkspaceSkillSnapshot },
+      { canExecRequestNode },
+    ] = await Promise.all([loadSkillsRuntime(), loadExecDefaultsRuntime()]);
+    const skillSnapshotState = resolveReusableWorkspaceSkillSnapshot({
+      workspaceDir,
+      config: cfg,
+      agentId: sessionAgentId,
+      existingSnapshot: isNewSession ? undefined : currentSkillsSnapshot,
+      skillFilter,
+      eligibility: {
+        remote: getRemoteSkillEligibility({
+          advertiseExecNode: canExecRequestNode({
+            cfg,
+            sessionEntry,
+            sessionKey,
+            agentId: sessionAgentId,
           }),
-        },
-        snapshotVersion: skillsSnapshotVersion,
-        skillFilter,
-        agentId: sessionAgentId,
-      });
-    };
-    const skillsSnapshot = needsSkillsSnapshot
-      ? await buildSkillsSnapshot()
-      : !currentSkillsSnapshot
-        ? undefined
-        : await hydrateResolvedSkillsAsync(currentSkillsSnapshot, buildSkillsSnapshot);
+        }),
+      },
+      watch: false,
+    });
+    const needsSkillsSnapshot =
+      isNewSession || !currentSkillsSnapshot || skillSnapshotState.shouldRefresh;
+    const skillsSnapshot = skillSnapshotState.snapshot;
 
     if (
       skillsSnapshot &&

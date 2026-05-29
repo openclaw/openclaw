@@ -53,7 +53,11 @@ vi.mock("../../agents/agent-scope.js", () => ({
   resolveSessionAgentId: resolveSessionAgentIdMock,
 }));
 
-vi.mock("../../skills/index.js", () => ({
+vi.mock("../../skills/remote.js", () => ({
+  getRemoteSkillEligibility: getRemoteSkillEligibilityMock,
+}));
+
+vi.mock("../../skills/service.js", () => ({
   buildWorkspaceSkillSnapshot: buildWorkspaceSkillSnapshotMock,
 }));
 
@@ -70,10 +74,6 @@ vi.mock("../../config/sessions.js", () => ({
   updateSessionStore: vi.fn(),
   resolveSessionFilePath: vi.fn(),
   resolveSessionFilePathOptions: vi.fn(),
-}));
-
-vi.mock("../../infra/skills-remote.js", () => ({
-  getRemoteSkillEligibility: getRemoteSkillEligibilityMock,
 }));
 
 vi.mock("../../routing/session-key.js", () => ({

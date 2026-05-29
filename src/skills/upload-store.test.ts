@@ -7,7 +7,7 @@ import {
   createSkillUploadStore,
   MAX_ACTIVE_SKILL_UPLOADS,
   SkillUploadRequestError,
-} from "./skills-upload-store.js";
+} from "./upload-store.js";
 
 let tempDirs: string[] = [];
 

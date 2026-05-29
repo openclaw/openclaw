@@ -26,7 +26,6 @@ import {
   type ClawHubSkillSecurityVerdictItem,
 } from "../../infra/clawhub.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
@@ -35,11 +34,14 @@ import {
   searchSkillsFromClawHub,
   updateSkillsFromClawHub,
 } from "../../skills/clawhub.js";
-import { loadWorkspaceSkillEntries, type SkillEntry } from "../../skills/index.js";
 import { installSkill } from "../../skills/install.js";
+import { getRemoteSkillEligibility } from "../../skills/remote.js";
 import { buildWorkspaceSkillStatus } from "../../skills/status.js";
+import type { SkillEntry } from "../../skills/types.js";
+import { installUploadedSkillArchive } from "../../skills/upload-install.js";
+import { loadWorkspaceSkillEntries } from "../../skills/workspace.js";
 import { updateSkillConfigEntry } from "./skills-config-mutations.js";
-import { installUploadedSkillArchive, skillsUploadHandlers } from "./skills-upload.js";
+import { skillsUploadHandlers } from "./skills-upload.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 
 function collectSkillBins(entries: SkillEntry[]): string[] {
@@ -499,12 +501,24 @@ export const skillsHandlers: GatewayRequestHandlers = {
         sha256: p.sha256,
         timeoutMs: p.timeoutMs,
         workspaceDir: workspaceDirRaw,
-        context,
+        config: context.getRuntimeConfig(),
+        log: context.logGateway,
       });
+      const errorCode =
+        !result.ok && result.errorKind === "invalid-request"
+          ? ErrorCodes.INVALID_REQUEST
+          : ErrorCodes.UNAVAILABLE;
+      const responseResult = result.ok
+        ? result
+        : {
+            ok: false,
+            error: result.error,
+            errorCode,
+          };
       respond(
         result.ok,
-        result,
-        result.ok ? undefined : errorShape(result.errorCode, result.error),
+        responseResult,
+        result.ok ? undefined : errorShape(errorCode, result.error),
       );
       return;
     }

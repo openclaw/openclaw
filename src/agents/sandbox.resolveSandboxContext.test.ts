@@ -33,15 +33,15 @@ vi.mock("../plugin-sdk/browser-control-auth.js", () => browserControlAuthMock);
 
 vi.mock("../plugin-sdk/browser-profiles.js", () => browserProfilesMock);
 
-vi.mock("../infra/skills-remote.js", () => ({
-  getRemoteSkillEligibility: vi.fn(() => ({ note: "test-remote" })),
-}));
-
 vi.mock("./exec-defaults.js", () => ({
   canExecRequestNode: vi.fn(() => false),
 }));
 
-vi.mock("../skills/index.js", () => ({
+vi.mock("../skills/remote.js", () => ({
+  getRemoteSkillEligibility: vi.fn(() => ({ note: "test-remote" })),
+}));
+
+vi.mock("../skills/workspace.js", () => ({
   syncSkillsToWorkspace: syncSkillsToWorkspaceMock,
 }));
 

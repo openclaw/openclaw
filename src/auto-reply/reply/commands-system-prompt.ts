@@ -12,10 +12,9 @@ import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import { buildConfiguredAgentSystemPrompt } from "../../agents/system-prompt-config.js";
 import { buildSystemPromptParams } from "../../agents/system-prompt-params.js";
 import type { WorkspaceBootstrapFile } from "../../agents/workspace.js";
-import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../plugins/command-registry-state.js";
-import { buildWorkspaceSkillSnapshot } from "../../skills/index.js";
-import { getSkillsSnapshotVersion } from "../../skills/refresh-state.js";
+import { getRemoteSkillEligibility } from "../../skills/remote.js";
+import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/session-snapshot.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 
@@ -60,7 +59,8 @@ export async function resolveCommandsSystemPromptBundle(
   });
   const skillsSnapshot = (() => {
     try {
-      return buildWorkspaceSkillSnapshot(workspaceDir, {
+      return resolveReusableWorkspaceSkillSnapshot({
+        workspaceDir,
         config: params.cfg,
         agentId: sessionAgentId,
         eligibility: {
@@ -73,13 +73,13 @@ export async function resolveCommandsSystemPromptBundle(
             }),
           }),
         },
-        snapshotVersion: getSkillsSnapshotVersion(workspaceDir),
+        watch: false,
       });
     } catch {
-      return { prompt: "", skills: [], resolvedSkills: [] };
+      return { snapshot: { prompt: "", skills: [], resolvedSkills: [] } };
     }
   })();
-  const skillsPrompt = skillsSnapshot.prompt ?? "";
+  const skillsPrompt = skillsSnapshot.snapshot.prompt ?? "";
   const tools = (() => {
     try {
       return createOpenClawCodingTools({

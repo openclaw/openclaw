@@ -3,8 +3,8 @@ import { readConfigFileSnapshot, resolveGatewayPort } from "../../config/config.
 import { readLastGatewayErrorLine } from "../../daemon/diagnostics.js";
 import { inspectPortUsage } from "../../infra/ports.js";
 import { readRestartSentinel } from "../../infra/restart-sentinel.js";
-import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { buildPluginCompatibilityNotices } from "../../plugins/status.js";
+import { getRemoteSkillEligibility } from "../../skills/remote.js";
 import { buildWorkspaceSkillStatus } from "../../skills/status.js";
 import { buildStatusAllOverviewRows } from "../status-overview-rows.ts";
 import {

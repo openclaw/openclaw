@@ -1,19 +1,17 @@
 import fs from "node:fs";
-import {
-  listAgentIds,
-  resolveAgentSkillsFilter,
-  resolveAgentWorkspaceDir,
-} from "../agents/agent-scope.js";
+import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { canExecRequestNode } from "../agents/exec-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
-import { getRemoteSkillEligibility } from "../infra/skills-remote.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
 import { uniqueStrings } from "../shared/string-normalization.js";
-import { buildWorkspaceSkillCommandSpecs, type SkillCommandSpec } from "../skills/index.js";
+import { resolveEffectiveAgentSkillFilter } from "../skills/agent-filter.js";
+import { buildWorkspaceSkillCommandSpecs } from "../skills/command-specs.js";
+import { getRemoteSkillEligibility } from "../skills/remote.js";
+import type { SkillCommandSpec } from "../skills/types.js";
 import { listReservedChatSlashCommandNames } from "./skill-commands-base.js";
 export {
   listReservedChatSlashCommandNames,
@@ -97,7 +95,7 @@ export function listSkillCommandsForAgents(params: {
       logVerbose(`Skipping agent "${agentId}": cannot resolve workspace: ${workspaceDir}`);
       continue;
     }
-    const skillFilter = resolveAgentSkillsFilter(params.cfg, agentId);
+    const skillFilter = resolveEffectiveAgentSkillFilter(params.cfg, agentId);
     const existing = workspaceFilters.get(canonicalDir);
     if (existing) {
       existing.skillFilter = mergeSkillFilters(existing.skillFilter, skillFilter);

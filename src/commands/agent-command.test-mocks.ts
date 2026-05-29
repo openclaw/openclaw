@@ -1,5 +1,4 @@
 import { vi } from "vitest";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
 
 vi.mock("../logging/subsystem.js", () => {
   const createMockLogger = () => ({
@@ -245,32 +244,30 @@ vi.mock("../skills/index.js", () => ({
   loadWorkspaceSkillEntries: vi.fn(() => []),
 }));
 
-vi.mock("../skills/refresh.js", () => ({
-  getSkillsSnapshotVersion: vi.fn(() => 0),
+vi.mock("../skills/remote.js", () => ({
+  getRemoteSkillEligibility: vi.fn(() => undefined),
 }));
 
-vi.mock("../skills/refresh-state.js", () => ({
-  getSkillsSnapshotVersion: vi.fn(() => 0),
-  shouldRefreshSnapshotForVersion: vi.fn(() => false),
+vi.mock("../skills/agent-filter.js", () => ({
+  resolveEffectiveAgentSkillFilter: vi.fn(() => undefined),
 }));
 
-vi.mock("../skills/filter.js", () => ({
-  normalizeSkillFilter: vi.fn((skillFilter?: ReadonlyArray<unknown>) =>
-    skillFilter ? normalizeStringEntries(skillFilter) : undefined,
+vi.mock("../skills/session-snapshot.js", () => ({
+  resolveReusableWorkspaceSkillSnapshot: vi.fn(
+    (params?: { existingSnapshot?: unknown; skillFilter?: string[] }) => ({
+      snapshot: params?.existingSnapshot ?? {
+        prompt: "",
+        skills: [],
+        resolvedSkills: [],
+        ...(params?.skillFilter === undefined ? {} : { skillFilter: params.skillFilter }),
+        version: 0,
+      },
+      shouldRefresh: !params?.existingSnapshot,
+      snapshotVersion: 0,
+    }),
   ),
-  normalizeSkillFilterForComparison: vi.fn((skillFilter?: ReadonlyArray<unknown>) =>
-    skillFilter
-      ?.map((entry) => String(entry).trim())
-      .filter(Boolean)
-      .toSorted(),
-  ),
-  matchesSkillFilter: vi.fn(() => true),
 }));
 
 vi.mock("../agents/exec-defaults.js", () => ({
   canExecRequestNode: vi.fn(() => false),
-}));
-
-vi.mock("../infra/skills-remote.js", () => ({
-  getRemoteSkillEligibility: vi.fn(() => undefined),
 }));
