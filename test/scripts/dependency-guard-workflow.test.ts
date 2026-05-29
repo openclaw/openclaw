@@ -4,6 +4,11 @@ import { parse } from "yaml";
 
 const WORKFLOW = ".github/workflows/dependency-guard.yml";
 const CODEOWNERS = ".github/CODEOWNERS";
+const BACKFILL_EXCLUDED_WORKFLOWS = [
+  [".github/workflows/auto-response.yml", "auto-response"],
+  [".github/workflows/clawsweeper-dispatch.yml", "dispatch"],
+  [".github/workflows/real-behavior-proof.yml", "real-behavior-proof"],
+];
 
 type WorkflowStep = {
   name?: string;
@@ -33,6 +38,10 @@ function readWorkflow(): Workflow {
   return parse(readFileSync(WORKFLOW, "utf8")) as Workflow;
 }
 
+function readWorkflowFile(path: string): Workflow {
+  return parse(readFileSync(path, "utf8")) as Workflow;
+}
+
 describe("dependency guard workflow", () => {
   it("uses the dependency guard check name", () => {
     const parsed = readWorkflow();
@@ -55,6 +64,16 @@ describe("dependency guard workflow", () => {
     ]);
     expect(job?.if).toContain("github.event.action != 'labeled'");
     expect(job?.if).toContain("github.event.label.name == 'dependency-guard-backfill'");
+  });
+
+  it("keeps the temporary backfill label from waking unrelated PR automation", () => {
+    for (const [workflowFile, jobName] of BACKFILL_EXCLUDED_WORKFLOWS) {
+      const job = readWorkflowFile(workflowFile).jobs?.[jobName];
+
+      expect(job?.if).toContain("github.event.action == 'labeled'");
+      expect(job?.if).toContain("github.event.action == 'unlabeled'");
+      expect(job?.if).toContain("github.event.label.name == 'dependency-guard-backfill'");
+    }
   });
 
   it("uses a metadata-only pull_request_target workflow with minimal write permissions", () => {
