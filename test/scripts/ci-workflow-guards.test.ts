@@ -54,6 +54,10 @@ describe("ci workflow guards", () => {
       expect(checkoutStep.run, jobName).toContain(
         "fetch --no-tags --prune --no-recurse-submodules --depth=1 origin",
       );
+      if (jobName !== "skills-python") {
+        expect(checkoutStep.run, jobName).toContain('if [ "$fetch_status" = "124" ]');
+        expect(checkoutStep.run, jobName).toContain("timed out");
+      }
       expect(checkoutStep.run, jobName).not.toContain(
         'git -C "$GITHUB_WORKSPACE" fetch --no-tags --depth=1',
       );

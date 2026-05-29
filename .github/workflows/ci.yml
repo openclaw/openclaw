@@ -93,9 +93,16 @@ jobs:
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${ref}:refs/remotes/origin/checkout"
           }
-          if ! fetch_checkout_ref "$CHECKOUT_REF"; then
+          if fetch_checkout_ref "$CHECKOUT_REF"; then
+            :
+          else
+            fetch_status="$?"
+            if [ "$fetch_status" = "124" ] || [ "$fetch_status" = "137" ]; then
+              echo "::error::checkout fetch for '$CHECKOUT_REF' timed out"
+              exit "$fetch_status"
+            fi
             if [ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ] || [ "$CHECKOUT_REF" = "$CHECKOUT_FALLBACK_REF" ]; then
-              exit 1
+              exit "$fetch_status"
             fi
             echo "::warning::workflow_dispatch target_ref '$CHECKOUT_REF' is unavailable; falling back to head SHA '$CHECKOUT_FALLBACK_REF'"
             fetch_checkout_ref "$CHECKOUT_FALLBACK_REF"
@@ -335,9 +342,16 @@ jobs:
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${ref}:refs/remotes/origin/checkout"
           }
-          if ! fetch_checkout_ref "$CHECKOUT_REF"; then
+          if fetch_checkout_ref "$CHECKOUT_REF"; then
+            :
+          else
+            fetch_status="$?"
+            if [ "$fetch_status" = "124" ] || [ "$fetch_status" = "137" ]; then
+              echo "::error::checkout fetch for '$CHECKOUT_REF' timed out"
+              exit "$fetch_status"
+            fi
             if [ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ] || [ "$CHECKOUT_REF" = "$CHECKOUT_FALLBACK_REF" ]; then
-              exit 1
+              exit "$fetch_status"
             fi
             echo "::warning::workflow_dispatch target_ref '$CHECKOUT_REF' is unavailable; falling back to head SHA '$CHECKOUT_FALLBACK_REF'"
             fetch_checkout_ref "$CHECKOUT_FALLBACK_REF"
