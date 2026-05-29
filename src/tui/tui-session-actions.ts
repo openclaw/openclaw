@@ -1,6 +1,6 @@
 import type { TUI } from "@earendil-works/pi-tui";
+import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import { resolveSessionInfoModelSelection } from "../agents/model-selection-display.js";
-import type { SessionsPatchResult } from "../gateway/protocol/index.js";
 import {
   normalizeAgentId,
   normalizeMainKey,
@@ -144,6 +144,7 @@ export function createSessionActions(context: SessionActionContext) {
     defaults?: SessionInfoDefaults | null;
     force?: boolean;
   }) => {
+    const hasEntryUpdate = "entry" in params;
     const entry = params.entry ?? undefined;
     const defaults = params.defaults ?? lastSessionDefaults ?? undefined;
     const previousDefaults = lastSessionDefaults;
@@ -199,6 +200,9 @@ export function createSessionActions(context: SessionActionContext) {
     if (entry?.totalTokens !== undefined) {
       next.totalTokens = entry.totalTokens;
     }
+    if (hasEntryUpdate) {
+      next.goal = entry?.goal;
+    }
     if (entry?.contextTokens !== undefined || defaults?.contextTokens !== undefined) {
       next.contextTokens =
         entry?.contextTokens ?? defaults?.contextTokens ?? state.sessionInfo.contextTokens;
@@ -227,7 +231,10 @@ export function createSessionActions(context: SessionActionContext) {
   const runRefreshSessionInfo = async () => {
     try {
       const resolveListAgentId = () => {
-        if (state.currentSessionKey === "global" || state.currentSessionKey === "unknown") {
+        if (state.currentSessionKey === "global") {
+          return state.currentAgentId;
+        }
+        if (state.currentSessionKey === "unknown") {
           return undefined;
         }
         const parsed = parseAgentSessionKey(state.currentSessionKey);
@@ -237,8 +244,8 @@ export function createSessionActions(context: SessionActionContext) {
       const result = await client.listSessions({
         limit: TUI_SESSION_LOOKUP_LIMIT,
         search: state.currentSessionKey,
-        includeGlobal: false,
-        includeUnknown: false,
+        includeGlobal: state.currentSessionKey === "global",
+        includeUnknown: state.currentSessionKey === "unknown",
         agentId: listAgentId,
       });
       const normalizeMatchKey = (key: string) => parseAgentSessionKey(key)?.rest ?? key;
@@ -298,6 +305,7 @@ export function createSessionActions(context: SessionActionContext) {
     try {
       const history = await client.loadHistory({
         sessionKey: state.currentSessionKey,
+        ...(state.currentSessionKey === "global" ? { agentId: state.currentAgentId } : {}),
         limit: opts.historyLimit ?? 200,
       });
       const record = history as {
@@ -394,19 +402,45 @@ export function createSessionActions(context: SessionActionContext) {
     await loadHistory();
   };
 
-  const abortActive = async () => {
-    const runId = state.activeChatRunId ?? state.pendingChatRunId ?? null;
-    if (!runId) {
-      chatLog.addSystem("no active run");
+  const abortActive = async (params?: { preferActive?: boolean }) => {
+    if (
+      opts.local === true &&
+      state.activityStatus === "finishing context" &&
+      !params?.preferActive &&
+      !state.pendingChatRunId
+    ) {
+      chatLog.addSystem("agent is finishing context; wait for it to finish before aborting");
       tui.requestRender();
       return;
     }
+    const runIds =
+      params?.preferActive && state.activeChatRunId && state.pendingChatRunId
+        ? [state.pendingChatRunId, state.activeChatRunId]
+        : [
+            !params?.preferActive && state.activeChatRunId && state.pendingChatRunId
+              ? state.pendingChatRunId
+              : (state.activeChatRunId ?? state.pendingChatRunId ?? null),
+          ].filter((runId) => runId !== null);
+    if (runIds.length === 0) {
+      chatLog.addSystem("no active run", { coalesceConsecutive: true });
+      tui.requestRender();
+      return;
+    }
+    const abortsPendingRun = Boolean(
+      state.pendingChatRunId && runIds.includes(state.pendingChatRunId),
+    );
     try {
-      await client.abortChat({
-        sessionKey: state.currentSessionKey,
-        runId,
-      });
+      for (const runId of runIds) {
+        await client.abortChat({
+          sessionKey: state.currentSessionKey,
+          ...(state.currentSessionKey === "global" ? { agentId: state.currentAgentId } : {}),
+          runId,
+        });
+      }
       state.pendingChatRunId = null;
+      if (abortsPendingRun) {
+        state.pendingOptimisticUserMessage = false;
+      }
       setActivityStatus("aborted");
     } catch (err) {
       chatLog.addSystem(`abort failed: ${String(err)}`);

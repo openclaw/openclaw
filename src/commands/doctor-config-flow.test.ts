@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
 import {
   getDoctorConfigInputForTest,
@@ -637,6 +637,58 @@ vi.mock("./doctor/shared/stale-plugin-config.js", () => ({
   })),
 }));
 
+vi.mock("./doctor/shared/plugin-tool-allowlist-warnings.js", () => ({
+  collectBundledProviderAllowlistPolicyWarnings: vi.fn(() => []),
+  collectPluginToolAllowlistWarnings: vi.fn(() => []),
+}));
+
+vi.mock("../doctor-plugin-registry.js", () => ({
+  maybeRepairManagedNpmOpenClawPeerLinks: vi.fn(async () => undefined),
+  maybeRepairStaleManagedNpmBundledPlugins: vi.fn(() => undefined),
+}));
+
+vi.mock("../doctor-auth-oauth-sidecar.js", () => ({
+  maybeRepairLegacyOAuthSidecarProfiles: vi.fn(async () => ({
+    detected: [],
+    changes: [],
+    warnings: [],
+  })),
+}));
+
+vi.mock("./doctor/shared/context-engine-host-compat.js", () => ({
+  maybeRepairContextEngineHostCompatibility: vi.fn(async ({ cfg }) => ({
+    config: cfg,
+    changes: [],
+  })),
+}));
+
+vi.mock("./doctor/shared/missing-configured-plugin-install.js", () => ({
+  repairMissingConfiguredPluginInstalls: vi.fn(async ({ cfg }) => ({
+    config: cfg,
+    changes: [],
+    warnings: [],
+    failedPluginIds: [],
+  })),
+}));
+
+vi.mock("./doctor/shared/active-tool-schema-warnings.js", () => ({
+  collectActiveToolSchemaProjectionWarnings: vi.fn(() => []),
+}));
+
+vi.mock("./doctor/shared/plugin-dependency-cleanup.js", () => ({
+  cleanupLegacyPluginDependencyState: vi.fn(async () => ({
+    changes: [],
+    warnings: [],
+  })),
+}));
+
+vi.mock("./doctor/shared/stale-oauth-profile-shadows.js", () => ({
+  repairStaleOAuthProfileShadows: vi.fn(async () => ({
+    changes: [],
+    warnings: [],
+  })),
+}));
+
 vi.mock("./doctor/channel-capabilities.js", () => {
   const byChannel = {
     googlechat: {
@@ -654,7 +706,7 @@ vi.mock("./doctor/channel-capabilities.js", () => {
     msteams: {
       dmAllowFromMode: "topOnly",
       groupModel: "hybrid",
-      groupAllowFromFallbackToAllowFrom: false,
+      groupAllowFromFallbackToAllowFrom: true,
       warnOnEmptyGroupSenderAllowlist: true,
     },
     zalouser: {
@@ -864,6 +916,14 @@ vi.mock("./doctor/shared/legacy-config-issues.js", async () => {
 });
 
 vi.mock("../plugins/setup-registry.js", () => ({
+  resolvePluginSetupCliBackend: vi.fn(() => undefined),
+  resolvePluginSetupRegistry: vi.fn(() => ({
+    providers: [],
+    cliBackends: [],
+    configMigrations: [],
+    autoEnableProbes: [],
+    diagnostics: [],
+  })),
   resolvePluginSetupAutoEnableReasons: vi.fn(() => []),
   runPluginSetupConfigMigrations: vi.fn(({ config }: { config: unknown }) => ({
     config,
@@ -1097,59 +1157,63 @@ vi.mock("./doctor/shared/preview-warnings.js", () => {
     ];
   }
 
-  return {
-    collectDoctorPreviewWarnings: vi.fn(
-      async ({
-        cfg,
-      }: {
-        cfg: {
-          channels?: Record<string, unknown>;
-          plugins?: { enabled?: boolean; entries?: Record<string, { enabled?: boolean }> };
-        };
-        doctorFixCommand: string;
-      }) => {
-        const warnings: string[] = [];
-        const telegram = asRecord(cfg.channels?.telegram);
-        if (telegram) {
-          const telegramBlocked =
-            cfg.plugins?.enabled === false || cfg.plugins?.entries?.telegram?.enabled === false;
-          if (telegramBlocked) {
-            warnings.push(
-              cfg.plugins?.enabled === false
-                ? "- channels.telegram: channel is configured, but plugins.enabled=false blocks channel plugins globally. Fix plugin enablement before relying on setup guidance for this channel."
-                : '- channels.telegram: channel is configured, but plugin "telegram" is disabled by plugins.entries.telegram.enabled=false. Fix plugin enablement before relying on setup guidance for this channel.',
-            );
-          } else {
+  async function collectWarnings({
+    cfg,
+  }: {
+    cfg: {
+      channels?: Record<string, unknown>;
+      plugins?: { enabled?: boolean; entries?: Record<string, { enabled?: boolean }> };
+    };
+    doctorFixCommand: string;
+  }): Promise<string[]> {
+    const warnings: string[] = [];
+    const telegram = asRecord(cfg.channels?.telegram);
+    if (telegram) {
+      const telegramBlocked =
+        cfg.plugins?.enabled === false || cfg.plugins?.entries?.telegram?.enabled === false;
+      if (telegramBlocked) {
+        warnings.push(
+          cfg.plugins?.enabled === false
+            ? "- channels.telegram: channel is configured, but plugins.enabled=false blocks channel plugins globally. Fix plugin enablement before relying on setup guidance for this channel."
+            : '- channels.telegram: channel is configured, but plugin "telegram" is disabled by plugins.entries.telegram.enabled=false. Fix plugin enablement before relying on setup guidance for this channel.',
+        );
+      } else {
+        warnings.push(
+          ...telegramFirstTimeWarnings({
+            account: telegram,
+            prefix: "channels.telegram",
+          }),
+        );
+        const accounts = asRecord(telegram.accounts);
+        for (const [accountId, accountRaw] of Object.entries(accounts ?? {})) {
+          const account = asRecord(accountRaw);
+          if (account) {
             warnings.push(
               ...telegramFirstTimeWarnings({
-                account: telegram,
-                prefix: "channels.telegram",
+                account,
+                parent: telegram,
+                prefix: `channels.telegram.accounts.${accountId}`,
               }),
             );
-            const accounts = asRecord(telegram.accounts);
-            for (const [accountId, accountRaw] of Object.entries(accounts ?? {})) {
-              const account = asRecord(accountRaw);
-              if (account) {
-                warnings.push(
-                  ...telegramFirstTimeWarnings({
-                    account,
-                    parent: telegram,
-                    prefix: `channels.telegram.accounts.${accountId}`,
-                  }),
-                );
-              }
-            }
           }
         }
-        const imessage = asRecord(cfg.channels?.imessage);
-        if (imessage?.groupPolicy === "allowlist" && !hasStringEntries(imessage.groupAllowFrom)) {
-          warnings.push(
-            '- channels.imessage.groupPolicy is "allowlist" but groupAllowFrom is empty — this channel does not fall back to allowFrom, so all group messages will be silently dropped.',
-          );
-        }
-        return warnings;
-      },
-    ),
+      }
+    }
+    const imessage = asRecord(cfg.channels?.imessage);
+    if (imessage?.groupPolicy === "allowlist" && !hasStringEntries(imessage.groupAllowFrom)) {
+      warnings.push(
+        '- channels.imessage.groupPolicy is "allowlist" but groupAllowFrom is empty — this channel does not fall back to allowFrom, so all group messages will be silently dropped.',
+      );
+    }
+    return warnings;
+  }
+
+  return {
+    collectDoctorPreviewNotes: vi.fn(async (params) => ({
+      infoNotes: [],
+      warningNotes: await collectWarnings(params),
+    })),
+    collectDoctorPreviewWarnings: vi.fn(collectWarnings),
   };
 });
 
@@ -1396,6 +1460,17 @@ type RepairedDiscordPolicy = {
 };
 
 describe("doctor config flow", () => {
+  beforeAll(async () => {
+    await Promise.all([
+      import("../config/plugin-auto-enable.js"),
+      import("./doctor/repair-sequencing.js"),
+      import("./doctor/shared/channel-doctor.js"),
+      import("./doctor/shared/legacy-config-issues.js"),
+      import("./doctor/shared/plugin-tool-allowlist-warnings.js"),
+      import("./doctor/shared/preview-warnings.js"),
+    ]);
+  });
+
   beforeEach(() => {
     terminalNoteMock.mockClear();
     collectImplicitFallbackClobberWarningsMock.mockClear();
@@ -1407,7 +1482,7 @@ describe("doctor config flow", () => {
     const result = await runDoctorConfigWithInput({
       config: {
         gateway: { auth: { mode: "token", token: 123 } },
-        agents: { list: [{ id: "pi" }] },
+        agents: { list: [{ id: "openclaw" }] },
       },
       run: loadAndMaybeMigrateDoctorConfig,
     });
@@ -1678,7 +1753,7 @@ describe("doctor config flow", () => {
       config: {
         bridge: { bind: "auto" },
         gateway: { auth: { mode: "token", token: "ok", extra: true } },
-        agents: { list: [{ id: "pi" }] },
+        agents: { list: [{ id: "openclaw" }] },
         session: {
           maintenance: {
             rotateBytes: "10mb",
@@ -1714,8 +1789,9 @@ describe("doctor config flow", () => {
     expect(
       ((browser.profiles as Record<string, { driver?: string }>)?.chromeLive ?? {}).driver,
     ).toBe("existing-session");
-    expect(result.cfg.plugins?.allow).toEqual(["telegram", "browser"]);
+    expect(result.cfg.plugins?.allow).toEqual(["telegram", "browser", "codex"]);
     expect(result.cfg.plugins?.entries?.browser?.enabled).toBe(true);
+    expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(true);
   });
 
   it("preserves commitments config on repair", async () => {
@@ -1734,7 +1810,7 @@ describe("doctor config flow", () => {
       enabled: true,
       maxPerDay: 2,
     });
-  });
+  }, 300_000);
 
   it("preserves discord streaming intent while stripping unsupported keys on repair", async () => {
     const result = await runDoctorConfigWithInput({
@@ -2607,6 +2683,51 @@ describe("doctor config flow", () => {
             message.includes('Run "openclaw doctor --fix" to migrate legacy config keys.'),
         ),
       ).toBe(true);
+    } finally {
+      noteSpy.mockClear();
+    }
+  });
+
+  it("titles the legacy migration panel as a preview when --fix is not passed (#80817)", async () => {
+    const noteSpy = resetTerminalNoteMock();
+    try {
+      await runDoctorConfigWithInput({
+        config: {
+          heartbeat: {
+            model: "anthropic/claude-3-5-haiku-20241022",
+            every: "30m",
+          },
+        },
+        run: loadAndMaybeMigrateDoctorConfig,
+      });
+      const changeTitles = noteSpy.mock.calls.map(([, title]) => title);
+      expect(changeTitles).toContain("Doctor changes preview");
+      expect(changeTitles).not.toContain("Doctor changes");
+      const previewPanel = noteSpy.mock.calls.find(
+        ([, title]) => title === "Doctor changes preview",
+      );
+      expect(previewPanel?.[0]).toContain("Moved heartbeat to");
+    } finally {
+      noteSpy.mockClear();
+    }
+  });
+
+  it("titles the legacy migration panel as applied when --fix is passed (#80817)", async () => {
+    const noteSpy = resetTerminalNoteMock();
+    try {
+      await runDoctorConfigWithInput({
+        repair: true,
+        config: {
+          heartbeat: {
+            model: "anthropic/claude-3-5-haiku-20241022",
+            every: "30m",
+          },
+        },
+        run: loadAndMaybeMigrateDoctorConfig,
+      });
+      const changeTitles = noteSpy.mock.calls.map(([, title]) => title);
+      expect(changeTitles).toContain("Doctor changes");
+      expect(changeTitles).not.toContain("Doctor changes preview");
     } finally {
       noteSpy.mockClear();
     }

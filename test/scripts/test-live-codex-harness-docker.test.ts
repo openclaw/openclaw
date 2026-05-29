@@ -37,4 +37,81 @@ describe("scripts/test-live-codex-harness-docker.sh", () => {
       script.indexOf('OPENCLAW_LIVE_DOCKER_REPO_ROOT="$ROOT_DIR"'),
     );
   });
+
+  it("forwards API-key auth through both OpenAI and Codex env names", () => {
+    const script = fs.readFileSync(SCRIPT_PATH, "utf8");
+
+    expect(script).toContain("printf 'OPENAI_API_KEY=%s\\n' \"${OPENAI_API_KEY}\"");
+    expect(script).toContain("printf 'CODEX_API_KEY=%s\\n' \"${CODEX_API_KEY:-$OPENAI_API_KEY}\"");
+    expect(script.indexOf("OPENAI_API_KEY=%s")).toBeLessThan(script.indexOf("CODEX_API_KEY=%s"));
+  });
+
+  it("keeps API-key runs on the ephemeral Docker home", () => {
+    const script = fs.readFileSync(SCRIPT_PATH, "utf8");
+
+    expect(script).toContain('DOCKER_USER="$(id -u):$(id -g)"');
+    expect(script).toContain('if [[ "$CODEX_HARNESS_AUTH_MODE" == "api-key" ]]; then');
+    expect(script).toContain('if [[ -z "${DOCKER_HOME_DIR:-}" ]]; then');
+    expect(script).not.toContain('DOCKER_USER="0:0"');
+    expect(script).toContain(
+      'DOCKER_HOME_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-docker-home.XXXXXX")"',
+    );
+    expect(script).toContain(
+      'CONFIG_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-docker-config.XXXXXX")"',
+    );
+    expect(script).toContain(
+      'WORKSPACE_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-docker-workspace.XXXXXX")"',
+    );
+    expect(script).toContain('DOCKER_CACHE_CONTAINER_DIR="/home/node/.cache"');
+    expect(script).toContain('DOCKER_CLI_TOOLS_CONTAINER_DIR="/home/node/.npm-global"');
+    expect(script).toContain('PROFILE_STATUS="api-key-env"');
+    expect(script).toContain(
+      'chmod 0777 "$DOCKER_HOME_DIR" "$CONFIG_DIR" "$WORKSPACE_DIR" || true',
+    );
+    expect(script).toContain('if [[ "$CODEX_HARNESS_AUTH_MODE" != "api-key" ]]; then');
+    expect(script.indexOf('PROFILE_STATUS="api-key-env"')).toBeLessThan(
+      script.indexOf("openclaw_live_append_array DOCKER_RUN_ARGS PROFILE_MOUNT"),
+    );
+    expect(script).toContain("cleanup_codex_live_mounts() {");
+    expect(script).toContain(
+      'chmod -R a+rwX "$HOME" "$NPM_CONFIG_PREFIX" "$XDG_CACHE_HOME" 2>/dev/null || true',
+    );
+    expect(script).toContain("trap cleanup_codex_live_mounts EXIT");
+    expect(script.indexOf("cleanup_codex_live_mounts()")).toBeLessThan(
+      script.indexOf('mkdir -p "$NPM_CONFIG_PREFIX" "$XDG_CACHE_HOME"'),
+    );
+  });
+
+  it("forwards the live Codex bind provider override into Docker", () => {
+    const script = fs.readFileSync(SCRIPT_PATH, "utf8");
+
+    expect(script).toContain(
+      '-e OPENCLAW_LIVE_CODEX_BIND_PROVIDER="${OPENCLAW_LIVE_CODEX_BIND_PROVIDER:-}"',
+    );
+  });
+
+  it("installs the plugin-pinned Codex CLI package for app-server proof", () => {
+    const script = fs.readFileSync(SCRIPT_PATH, "utf8");
+
+    expect(script).toContain('"$ROOT_DIR/extensions/codex/package.json"');
+    expect(script).toContain("process.stdout.write(`@openai/codex@${version}`);");
+    expect(script).toContain('-e OPENCLAW_LIVE_CODEX_CLI_PACKAGE_SPEC="$CODEX_CLI_PACKAGE_SPEC"');
+    expect(script).toContain(
+      'run_setup_command npm install -g "$OPENCLAW_LIVE_CODEX_CLI_PACKAGE_SPEC"',
+    );
+    expect(script).not.toContain("run_setup_command npm install -g @openai/codex");
+  });
+
+  it("fails instead of skipping when Codex auth cannot identify an account", () => {
+    const script = fs.readFileSync(SCRIPT_PATH, "utf8");
+
+    expect(script).toContain("Failed to extract accountId from token");
+    expect(script).toContain(
+      "ERROR: Codex auth cannot extract accountId from the available token; refresh OPENCLAW_CODEX_AUTH_JSON or use OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key.",
+    );
+    expect(script).not.toContain(
+      "SKIP: Codex auth cannot extract accountId from the available token; skipping live Codex harness lane.",
+    );
+    expect(script).not.toMatch(/Failed to extract accountId from token[\s\S]{0,180}exit 0/u);
+  });
 });

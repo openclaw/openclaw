@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { formatErrorMessage } from "../infra/errors.js";
 import { buildExecApprovalUnavailableReplyPayload } from "../infra/exec-approval-reply.js";
 import {
@@ -25,6 +24,8 @@ import {
 import { buildApprovalPendingMessage } from "./bash-tools.exec-runtime.js";
 import { DEFAULT_APPROVAL_TIMEOUT_MS } from "./bash-tools.exec-runtime.js";
 import type { ExecElevatedDefaults, ExecToolDetails } from "./bash-tools.exec-types.js";
+import { isExecDeniedResultText } from "./exec-approval-result.js";
+import type { AgentToolResult } from "./runtime/index.js";
 
 type ResolvedExecApprovals = ReturnType<typeof resolveExecApprovals>;
 export const MAX_EXEC_APPROVAL_FOLLOWUP_FAILURE_LOG_KEYS = 256;
@@ -352,15 +353,14 @@ export function enforceStrictInlineEvalApprovalBoundary(params: {
   approvedByAsk: boolean;
   deniedReason: string | null;
   requiresInlineEvalApproval: boolean;
+  requiresAutoReviewHumanApproval?: boolean;
 }): {
   approvedByAsk: boolean;
   deniedReason: string | null;
 } {
-  if (
-    !params.baseDecision.timedOut ||
-    !params.requiresInlineEvalApproval ||
-    !params.approvedByAsk
-  ) {
+  const requiresRealApproval =
+    params.requiresInlineEvalApproval || params.requiresAutoReviewHumanApproval === true;
+  if (!params.baseDecision.timedOut || !requiresRealApproval || !params.approvedByAsk) {
     return {
       approvedByAsk: params.approvedByAsk,
       deniedReason: params.deniedReason,
@@ -412,7 +412,7 @@ export async function sendExecApprovalFollowupResult(
   const send = deps.sendExecApprovalFollowup ?? sendExecApprovalFollowup;
   const warn = deps.logWarn ?? logWarn;
   const runtimeHandoff =
-    target.direct === true || !target.sessionKey
+    target.direct === true || !target.sessionKey || isExecDeniedResultText(resultText)
       ? undefined
       : registerExecApprovalFollowupRuntimeHandoff({
           approvalId: target.approvalId,

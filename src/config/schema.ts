@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { CHANNEL_IDS } from "../channels/ids.js";
+import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
 import { computeBaseConfigSchemaResponse } from "./schema-base.js";
@@ -25,6 +26,9 @@ type JsonSchemaObject = JsonSchemaNode & {
   required?: string[];
   additionalProperties?: JsonSchemaObject | boolean;
   items?: JsonSchemaObject | JsonSchemaObject[];
+  anyOf?: JsonSchemaObject[];
+  oneOf?: JsonSchemaObject[];
+  allOf?: JsonSchemaObject[];
 };
 
 const asJsonSchemaObject = (value: unknown): JsonSchemaObject | null =>
@@ -62,6 +66,8 @@ const LOOKUP_SCHEMA_BOOLEAN_KEYS = new Set([
   "writeOnly",
 ]);
 const MAX_LOOKUP_PATH_SEGMENTS = 32;
+const LOOKUP_SCHEMA_COMPOSITION_KEYS = ["anyOf", "oneOf", "allOf"] as const;
+const LOOKUP_SCHEMA_NESTED_FORM_DEPTH = 4;
 
 function isObjectSchema(schema: JsonSchemaObject): boolean {
   const type = schema.type;
@@ -107,13 +113,25 @@ export type ConfigSchemaLookupChild = {
   type?: string | string[];
   required: boolean;
   hasChildren: boolean;
+  reloadKind?: ConfigSchemaReloadKind;
   hint?: ConfigUiHint;
   hintPath?: string;
 };
 
+export type ConfigSchemaReloadKind = "restart" | "hot" | "none";
+
+export type ConfigSchemaReloadMetadata = {
+  kind: ConfigSchemaReloadKind;
+};
+
+export type ConfigSchemaReloadMetadataResolver = (
+  path: string,
+) => ConfigSchemaReloadMetadata | null | undefined;
+
 export type ConfigSchemaLookupResult = {
   path: string;
   schema: JsonSchemaNode;
+  reloadKind?: ConfigSchemaReloadKind;
   hint?: ConfigUiHint;
   hintPath?: string;
   children: ConfigSchemaLookupChild[];
@@ -642,7 +660,7 @@ function resolveLookupChildSchema(
     return asJsonSchemaObject(properties[segment]);
   }
 
-  const itemIndex = /^\d+$/.test(segment) ? Number.parseInt(segment, 10) : undefined;
+  const itemIndex = parseConfigPathArrayIndex(segment);
   const items = resolveItemsSchema(schema, itemIndex);
   if ((segment === "*" || itemIndex !== undefined) && items) {
     return items;
@@ -655,7 +673,7 @@ function resolveLookupChildSchema(
   return null;
 }
 
-function stripSchemaForLookup(schema: JsonSchemaObject): JsonSchemaNode {
+function stripSchemaForLookup(schema: JsonSchemaObject, nestedFormDepth = 0): JsonSchemaNode {
   const next: JsonSchemaNode = {};
 
   for (const [key, value] of Object.entries(schema)) {
@@ -703,6 +721,41 @@ function stripSchemaForLookup(schema: JsonSchemaObject): JsonSchemaNode {
     }
   }
 
+  if (
+    schema.properties &&
+    ((nestedFormDepth > 0 && nestedFormDepth <= LOOKUP_SCHEMA_NESTED_FORM_DEPTH) ||
+      (schema.additionalProperties && typeof schema.additionalProperties === "object"))
+  ) {
+    next.properties = Object.fromEntries(
+      Object.entries(schema.properties).map(([key, child]) => [
+        key,
+        stripSchemaForLookup(child, nestedFormDepth + 1),
+      ]),
+    );
+  }
+  if (schema.additionalProperties && typeof schema.additionalProperties === "object") {
+    next.additionalProperties = stripSchemaForLookup(
+      schema.additionalProperties,
+      nestedFormDepth + 1,
+    );
+  }
+  if (Array.isArray(schema.items)) {
+    next.items = schema.items.map((item) => stripSchemaForLookup(item, nestedFormDepth + 1));
+  } else if (schema.items && typeof schema.items === "object") {
+    next.items = stripSchemaForLookup(schema.items, nestedFormDepth + 1);
+  }
+  if (nestedFormDepth <= LOOKUP_SCHEMA_NESTED_FORM_DEPTH) {
+    for (const key of LOOKUP_SCHEMA_COMPOSITION_KEYS) {
+      const variants = schema[key];
+      if (!Array.isArray(variants)) {
+        continue;
+      }
+      next[key] = variants
+        .filter((variant) => variant && typeof variant === "object")
+        .map((variant) => stripSchemaForLookup(variant, nestedFormDepth + 1));
+    }
+  }
+
   return next;
 }
 
@@ -710,6 +763,7 @@ function buildLookupChildren(
   schema: JsonSchemaObject,
   path: string,
   uiHints: ConfigUiHints,
+  resolveReloadMetadata?: ConfigSchemaReloadMetadataResolver,
 ): ConfigSchemaLookupChild[] {
   const children: ConfigSchemaLookupChild[] = [];
   const required = new Set(schema.required ?? []);
@@ -717,12 +771,14 @@ function buildLookupChildren(
   const pushChild = (key: string, childSchema: JsonSchemaObject, isRequired: boolean) => {
     const childPath = path ? `${path}.${key}` : key;
     const resolvedHint = resolveUiHintMatch(uiHints, childPath);
+    const reloadMetadata = resolveReloadMetadata?.(childPath);
     children.push({
       key,
       path: childPath,
       type: childSchema.type,
       required: isRequired,
       hasChildren: schemaHasChildren(childSchema),
+      reloadKind: reloadMetadata?.kind,
       hint: resolvedHint?.hint,
       hintPath: resolvedHint?.path,
     });
@@ -748,13 +804,15 @@ function buildLookupChildren(
 export function lookupConfigSchema(
   response: ConfigSchemaResponse,
   path: string,
+  resolveReloadMetadata?: ConfigSchemaReloadMetadataResolver,
 ): ConfigSchemaLookupResult | null {
+  const wantsRoot = path.trim() === ".";
   const normalizedPath = normalizeLookupPath(path);
-  if (!normalizedPath) {
+  if (!normalizedPath && !wantsRoot) {
     return null;
   }
   const parts = splitLookupPath(normalizedPath);
-  if (parts.length === 0 || parts.length > MAX_LOOKUP_PATH_SEGMENTS) {
+  if ((!wantsRoot && parts.length === 0) || parts.length > MAX_LOOKUP_PATH_SEGMENTS) {
     return null;
   }
 
@@ -771,11 +829,18 @@ export function lookupConfigSchema(
   }
 
   const resolvedHint = resolveUiHintMatch(response.uiHints, normalizedPath);
+  const reloadMetadata = resolveReloadMetadata?.(normalizedPath);
   return {
-    path: normalizedPath,
+    path: wantsRoot ? "." : normalizedPath,
     schema: stripSchemaForLookup(current),
+    reloadKind: reloadMetadata?.kind,
     hint: resolvedHint?.hint,
     hintPath: resolvedHint?.path,
-    children: buildLookupChildren(current, normalizedPath, response.uiHints),
+    children: buildLookupChildren(
+      current,
+      wantsRoot ? "" : normalizedPath,
+      response.uiHints,
+      resolveReloadMetadata,
+    ),
   };
 }

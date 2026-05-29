@@ -14,6 +14,14 @@ vi.mock("./channel-ops.js", () => ({
   scryUrbitPath: vi.fn().mockResolvedValue({}),
 }));
 
+function requireFirstMockCall(calls: readonly unknown[][], label: string): unknown[] {
+  const call = calls.at(0);
+  if (!call) {
+    throw new Error(`Expected ${label} call`);
+  }
+  return call;
+}
+
 describe("UrbitSSEClient", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -43,7 +51,12 @@ describe("UrbitSSEClient", () => {
       });
 
       expect(mockUrbitFetch).toHaveBeenCalledTimes(1);
-      const callArgs = mockUrbitFetch.mock.calls[0][0];
+      const callArgs = requireFirstMockCall(mockUrbitFetch.mock.calls, "urbit fetch")[0] as
+        | Parameters<typeof urbitFetch>[0]
+        | undefined;
+      if (!callArgs) {
+        throw new Error("Expected urbit fetch arguments");
+      }
       expect(callArgs.path).toContain("/~/channel/");
       expect(callArgs.init?.method).toBe("PUT");
 
@@ -156,6 +169,35 @@ describe("UrbitSSEClient", () => {
   });
 
   describe("event acking", () => {
+    it("logs malformed SSE JSON with an owned parser error", () => {
+      const logger = { error: vi.fn() };
+      const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123", {
+        logger,
+      });
+
+      client.processEvent("id: 1\ndata: {not json");
+
+      expect(logger.error).toHaveBeenCalledWith(
+        "Error parsing SSE event: Error: Tlon Urbit SSE event was malformed JSON",
+      );
+    });
+
+    it("ignores malformed event ids when deciding whether to ack", async () => {
+      const mockUrbitFetch = vi.mocked(urbitFetch);
+      mockUrbitFetch.mockResolvedValue({
+        response: { ok: true, status: 200 } as unknown as Response,
+        finalUrl: "https://example.com",
+        release: vi.fn().mockResolvedValue(undefined),
+      });
+      const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
+
+      client.processEvent('id: 25abc\ndata: {"json":{"ok":true}}');
+      await Promise.resolve();
+
+      expect(mockUrbitFetch).not.toHaveBeenCalled();
+      expect((client as unknown as { lastHeardEventId: number }).lastHeardEventId).toBe(-1);
+    });
+
     it("tracks lastHeardEventId and ackThreshold", () => {
       const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
 

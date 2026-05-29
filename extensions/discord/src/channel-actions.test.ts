@@ -139,6 +139,27 @@ describe("discordMessageActions", () => {
     ]);
   });
 
+  it("requires trusted requester sender for privileged guild admin actions only from Discord turns", () => {
+    expect(
+      discordMessageActions.requiresTrustedRequesterSender?.({
+        action: "channel-delete",
+        toolContext: { currentChannelProvider: "discord" },
+      }),
+    ).toBe(true);
+    expect(
+      discordMessageActions.requiresTrustedRequesterSender?.({
+        action: "channel-delete",
+        toolContext: { currentChannelProvider: "telegram" },
+      }),
+    ).toBe(false);
+    expect(
+      discordMessageActions.requiresTrustedRequesterSender?.({
+        action: "read",
+        toolContext: { currentChannelProvider: "discord" },
+      }),
+    ).toBe(false);
+  });
+
   it("describes scoped account actions when only the account token is an unresolved SecretRef", () => {
     const discovery = discordMessageActions.describeMessageTool?.({
       cfg: {
@@ -409,6 +430,33 @@ describe("discordMessageActions", () => {
             ],
           },
           filename: "photo.png",
+        },
+      },
+    });
+  });
+
+  it("prepares inbound event delivery metadata for durable core sends", async () => {
+    const prepared = await discordMessageActions.prepareSendPayload?.({
+      ctx: {
+        channel: "discord",
+        action: "send",
+        cfg: {} as OpenClawConfig,
+        params: {},
+        sessionKey: "agent:main:discord:channel:c1",
+        inboundEventKind: "room_event",
+      },
+      to: "channel:123",
+      payload: { text: "hello" },
+    });
+
+    expect(prepared).toEqual({
+      text: "hello",
+      channelData: {
+        discord: {
+          __openclawInboundEventDelivery: {
+            sessionKey: "agent:main:discord:channel:c1",
+            inboundEventKind: "room_event",
+          },
         },
       },
     });

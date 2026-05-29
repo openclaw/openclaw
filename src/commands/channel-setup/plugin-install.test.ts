@@ -95,6 +95,7 @@ import type { ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.j
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
+import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import {
   pinActivePluginChannelRegistry,
@@ -208,13 +209,11 @@ function expectSetupSnapshotDoesNotScopeToPlugin(params: {
   });
 
   expect(loadOpenClawPlugins).toHaveBeenCalledTimes(1);
-  const firstLoadCall = vi.mocked(loadOpenClawPlugins).mock.calls[0]?.[0] as
-    | { onlyPluginIds?: string[] }
-    | undefined;
-  expect(firstLoadCall?.onlyPluginIds).toStrictEqual([]);
+  expect(requireMockCallArg(vi.mocked(loadOpenClawPlugins), 0).onlyPluginIds).toStrictEqual([]);
 }
 
 beforeEach(() => {
+  clearPluginMetadataLifecycleCaches();
   vi.clearAllMocks();
   execFileSync.mockImplementation(() => {
     throw new Error("not a git worktree");
@@ -233,6 +232,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  clearPluginMetadataLifecycleCaches();
   if (ORIGINAL_OPENCLAW_STATE_DIR === undefined) {
     delete process.env.OPENCLAW_STATE_DIR;
   } else {
@@ -300,11 +300,7 @@ async function runInitialValueForChannel(channel: "dev" | "beta") {
     runtime,
   });
 
-  const call = select.mock.calls[0];
-  if (!call) {
-    throw new Error("Expected select call");
-  }
-  return call[0]?.initialValue;
+  return requireMockCallArg(select, 0).initialValue;
 }
 
 function expectPluginLoadedFromLocalPath(
@@ -424,7 +420,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
     });
 
     expectRecordFields(requireMockCallArg(installPluginFromNpmSpec, 0), "npm install args", {
-      extensionsDir: path.join(profileStateDir, "extensions"),
+      extensionsDir: path.resolve(profileStateDir, "extensions"),
       spec: bundledChatNpmSpec,
     });
   });
@@ -997,7 +993,31 @@ describe("ensureChannelSetupPluginInstalled", () => {
   it("scopes snapshots by activation-declared channel ownership when direct channel lists are empty", () => {
     const runtime = makeRuntime();
     const cfg: OpenClawConfig = {};
-    mockActivationOnlyPlugin({ id: "custom-external-chat-plugin" });
+    let sawTrustedCandidate = false;
+    loadPluginManifestRegistry.mockImplementation((args: unknown) => {
+      if (
+        isRecord(args) &&
+        args.config === cfg &&
+        args.workspaceDir === "/tmp/openclaw-workspace" &&
+        Array.isArray(args.candidates)
+      ) {
+        sawTrustedCandidate ||= args.candidates.some((candidate) => {
+          const record = isRecord(candidate) ? candidate : {};
+          return record.idHint === "custom-external-chat-plugin" && record.origin === "bundled";
+        });
+      }
+      return {
+        plugins: [
+          createManifestRecord({
+            id: "custom-external-chat-plugin",
+            activation: {
+              onChannels: ["external-chat"],
+            },
+          }),
+        ],
+        diagnostics: [],
+      };
+    });
 
     loadChannelSetupPluginRegistrySnapshotForChannel({
       cfg,
@@ -1009,18 +1029,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
     expectLoadOpenClawPluginFields({
       onlyPluginIds: ["custom-external-chat-plugin"],
     });
-    const manifestCall = loadPluginManifestRegistry.mock.calls
-      .map((call) => requireRecord(call[0], "manifest registry args"))
-      .find((args) =>
-        requireArray(args.candidates, "manifest candidates").some((candidate) => {
-          const record = requireRecord(candidate, "manifest candidate");
-          return record.idHint === "custom-external-chat-plugin" && record.origin === "bundled";
-        }),
-      );
-    expectRecordFields(manifestCall, "manifest registry args", {
-      config: cfg,
-      workspaceDir: "/tmp/openclaw-workspace",
-    });
+    expect(sawTrustedCandidate).toBe(true);
   });
 
   it("uses live manifest discovery for activation-declared setup scoping", () => {

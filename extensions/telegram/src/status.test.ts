@@ -27,15 +27,14 @@ function expectIssueListContainsFields(
   issues: StatusIssue[],
   expected: Partial<StatusIssue>,
 ): void {
-  expect(
-    issues.some((issue) =>
-      Object.entries(expected).every(([key, value]) => issue[key as keyof StatusIssue] === value),
-    ),
-  ).toBe(true);
+  const match = issues.find((issue) =>
+    Object.entries(expected).every(([key, value]) => issue[key as keyof StatusIssue] === value),
+  );
+  expectIssueFields(match, expected);
 }
 
 function expectIssueMessageContains(issues: StatusIssue[], text: string): void {
-  expect(issues.some((issue) => issue.message.includes(text))).toBe(true);
+  expect(issues.map((issue) => issue.message).join("\n")).toContain(text);
 }
 
 describe("collectTelegramStatusIssues", () => {
@@ -118,6 +117,56 @@ describe("collectTelegramStatusIssues", () => {
     expect(issues[0]?.message).toContain("has not completed a successful getUpdates call");
     expect(issues[0]?.message).toContain("network timeout");
     expect(issues[0]?.fix).toContain("channels status --probe");
+  });
+
+  it("reports isolated polling spool backlog stalls distinctly from startup failures", () => {
+    const issues = collectTelegramStatusIssues([
+      {
+        accountId: "main",
+        enabled: true,
+        configured: true,
+        running: true,
+        mode: "polling",
+        connected: false,
+        lastStartAt: Date.now() - 121_000,
+        lastError:
+          "Telegram isolated polling spool backlog stalled behind update 42 on lane telegram:123 for 1500100ms; marking polling unhealthy until the backlog drains.",
+      } as ChannelAccountSnapshot,
+    ]);
+
+    expect(issues).toHaveLength(1);
+    expectIssueFields(issues[0], {
+      channel: "telegram",
+      accountId: "main",
+      kind: "runtime",
+    });
+    expect(issues[0]?.message).toContain("spool backlog is stalled");
+    expect(issues[0]?.message).not.toContain("has not completed a successful getUpdates call");
+  });
+
+  it("reports isolated polling spool handler timeouts distinctly from startup failures", () => {
+    const issues = collectTelegramStatusIssues([
+      {
+        accountId: "main",
+        enabled: true,
+        configured: true,
+        running: true,
+        mode: "polling",
+        connected: false,
+        lastStartAt: Date.now() - 121_000,
+        lastError:
+          "Telegram isolated polling spool handler timed out behind update 42 on lane telegram:123 after 1500100ms; marking the update failed and restarting isolated ingress so later updates can drain.",
+      } as ChannelAccountSnapshot,
+    ]);
+
+    expect(issues).toHaveLength(1);
+    expectIssueFields(issues[0], {
+      channel: "telegram",
+      accountId: "main",
+      kind: "runtime",
+    });
+    expect(issues[0]?.message).toContain("spool backlog is stalled");
+    expect(issues[0]?.message).not.toContain("has not completed a successful getUpdates call");
   });
 
   it("does not report polling startup before the connect grace expires", () => {

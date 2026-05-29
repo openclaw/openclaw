@@ -1,3 +1,4 @@
+import { asNullableRecord } from "../../shared/record-coerce.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { AcpRuntimeError, withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
 import type {
@@ -16,11 +17,7 @@ import {
   resolveRuntimeOptionsFromMeta,
 } from "./runtime-options.js";
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
+const OPTIONAL_TIMEOUT_CONFIG_KEYS = new Set(["timeout", "timeout_seconds"]);
 
 function extractConfigOptionKeys(value: unknown): string[] {
   if (!Array.isArray(value)) {
@@ -31,18 +28,43 @@ function extractConfigOptionKeys(value: unknown): string[] {
       if (typeof entry === "string") {
         return normalizeText(entry);
       }
-      const record = asRecord(entry);
+      const record = asNullableRecord(entry);
       return normalizeText(record?.id ?? record?.key);
     })
     .filter(Boolean) as string[];
 }
 
 function extractRuntimeStatusConfigOptionKeys(status: AcpRuntimeStatus | undefined): string[] {
-  const details = asRecord(status?.details);
+  const details = asNullableRecord(status?.details);
   return [
     ...extractConfigOptionKeys(details?.configOptions),
     ...extractConfigOptionKeys(details?.config_options),
   ];
+}
+
+function isOptionalTimeoutConfigKey(key: string): boolean {
+  return OPTIONAL_TIMEOUT_CONFIG_KEYS.has(normalizeLowercaseStringOrEmpty(key));
+}
+
+function isUnsupportedOptionalTimeoutConfigRejection(key: string, error: unknown): boolean {
+  if (!isOptionalTimeoutConfigKey(key)) {
+    return false;
+  }
+  const errorCode = error && typeof error === "object" ? (error as { code?: unknown }).code : null;
+  if (errorCode === "ACP_BACKEND_UNSUPPORTED_CONTROL") {
+    return true;
+  }
+  const message =
+    error instanceof Error ? error.message : typeof error === "string" ? error : String(error);
+  const normalized = normalizeLowercaseStringOrEmpty(message);
+  return (
+    normalized.includes("session/set_config_option") &&
+    (normalized.includes("-32602") ||
+      normalized.includes("invalid params") ||
+      normalized.includes("unsupported") ||
+      normalized.includes("not supported") ||
+      normalized.includes("not implement"))
+  );
 }
 
 export async function resolveManagerRuntimeCapabilities(params: {
@@ -159,11 +181,18 @@ export async function applyManagerRuntimeControls(params: {
               `ACP backend "${backend}" does not accept config key "${key}".`,
             );
           }
-          await params.runtime.setConfigOption({
-            handle: params.handle,
-            key,
-            value,
-          });
+          try {
+            await params.runtime.setConfigOption({
+              handle: params.handle,
+              key,
+              value,
+            });
+          } catch (error) {
+            if (isUnsupportedOptionalTimeoutConfigRejection(key, error)) {
+              continue;
+            }
+            throw error;
+          }
         }
       }
     },

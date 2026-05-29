@@ -1,7 +1,7 @@
 import {
   createActionGate,
   jsonResult,
-  readNumberParam,
+  readPositiveIntegerParam,
   readReactionParams,
   readStringParam,
 } from "openclaw/plugin-sdk/channel-actions";
@@ -57,7 +57,7 @@ async function loadGoogleChatActionMedia(params: {
 }) {
   const runtime = getGoogleChatRuntime();
   return /^https?:\/\//i.test(params.mediaUrl)
-    ? await runtime.channel.media.fetchRemoteMedia({
+    ? await runtime.channel.media.readRemoteMediaBuffer({
         url: params.mediaUrl,
         maxBytes: params.maxBytes,
       })
@@ -213,7 +213,7 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
 
     if (action === "reactions") {
       const messageName = readStringParam(params, "messageId", { required: true });
-      const limit = readNumberParam(params, "limit", { integer: true });
+      const limit = readPositiveIntegerParam(params, "limit");
       const reactions = await listGoogleChatReactions({
         account,
         messageName,

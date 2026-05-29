@@ -56,7 +56,7 @@ vi.mock("../send.messages.js", () => ({
   createThreadDiscord: hoisted.createThreadDiscord,
 }));
 
-const { __testing, createThreadBindingManager } = await import("./thread-bindings.manager.js");
+const { testing, createThreadBindingManager } = await import("./thread-bindings.manager.js");
 const {
   autoBindSpawnedDiscordSubagent,
   reconcileAcpThreadBindingsOnStartup,
@@ -115,7 +115,7 @@ function mockCallArg(mock: unknown, callIndex: number, argIndex: number, label: 
 
 describe("thread binding lifecycle", () => {
   beforeEach(() => {
-    __testing.resetThreadBindingsForTests();
+    testing.resetThreadBindingsForTests();
     clearRuntimeConfigSnapshot();
     vi.restoreAllMocks();
     hoisted.sendMessageDiscord.mockReset().mockResolvedValue({});
@@ -327,13 +327,15 @@ describe("thread binding lifecycle", () => {
       hoisted.sendWebhookMessageDiscord.mockClear();
 
       await vi.advanceTimersByTimeAsync(120_000);
-      await __testing.runThreadBindingSweepForAccount("default");
+      await testing.runThreadBindingSweepForAccount("default");
 
       expect(manager.getByThreadId("thread-1")).toBeUndefined();
       expect(hoisted.restGet).not.toHaveBeenCalled();
       expect(hoisted.sendWebhookMessageDiscord).not.toHaveBeenCalled();
       expect(hoisted.sendMessageDiscord).toHaveBeenCalledTimes(1);
-      const farewell = hoisted.sendMessageDiscord.mock.calls[0]?.[1] as string | undefined;
+      const farewell = mockCallArg(hoisted.sendMessageDiscord, 0, 1, "sendMessageDiscord") as
+        | string
+        | undefined;
       expect(farewell).toContain("after 1m of inactivity");
     } finally {
       vi.useRealTimers();
@@ -368,11 +370,13 @@ describe("thread binding lifecycle", () => {
       hoisted.sendMessageDiscord.mockClear();
 
       await vi.advanceTimersByTimeAsync(120_000);
-      await __testing.runThreadBindingSweepForAccount("default");
+      await testing.runThreadBindingSweepForAccount("default");
 
       expect(manager.getByThreadId("thread-1")).toBeUndefined();
       expect(hoisted.sendMessageDiscord).toHaveBeenCalledTimes(1);
-      const farewell = hoisted.sendMessageDiscord.mock.calls[0]?.[1] as string | undefined;
+      const farewell = mockCallArg(hoisted.sendMessageDiscord, 0, 1, "sendMessageDiscord") as
+        | string
+        | undefined;
       expect(farewell).toContain("max age of 1m");
     } finally {
       vi.useRealTimers();
@@ -388,7 +392,7 @@ describe("thread binding lifecycle", () => {
       hoisted.restGet.mockRejectedValueOnce(new Error("ECONNRESET"));
 
       await vi.advanceTimersByTimeAsync(120_000);
-      await __testing.runThreadBindingSweepForAccount("default");
+      await testing.runThreadBindingSweepForAccount("default");
 
       expectFields(requireBinding(manager, "thread-1"), "thread binding", {
         threadId: "thread-1",
@@ -414,7 +418,7 @@ describe("thread binding lifecycle", () => {
       });
 
       await vi.advanceTimersByTimeAsync(120_000);
-      await __testing.runThreadBindingSweepForAccount("default");
+      await testing.runThreadBindingSweepForAccount("default");
 
       expect(manager.getByThreadId("thread-1")).toBeUndefined();
       expect(hoisted.sendWebhookMessageDiscord).not.toHaveBeenCalled();
@@ -595,7 +599,7 @@ describe("thread binding lifecycle", () => {
       expect(updated[0]?.idleTimeoutMs).toBe(0);
 
       await vi.advanceTimersByTimeAsync(240_000);
-      await __testing.runThreadBindingSweepForAccount("default");
+      await testing.runThreadBindingSweepForAccount("default");
 
       expectFields(requireBinding(manager, "thread-1"), "thread binding", {
         threadId: "thread-1",
@@ -659,7 +663,7 @@ describe("thread binding lifecycle", () => {
       hoisted.sendMessageDiscord.mockClear();
 
       await vi.advanceTimersByTimeAsync(120_000);
-      await __testing.runThreadBindingSweepForAccount("default");
+      await testing.runThreadBindingSweepForAccount("default");
 
       expectFields(requireBinding(manager, "thread-2"), "thread binding", {
         threadId: "thread-2",
@@ -717,7 +721,7 @@ describe("thread binding lifecycle", () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-thread-bindings-"));
     process.env.OPENCLAW_STATE_DIR = stateDir;
     try {
-      __testing.resetThreadBindingsForTests();
+      testing.resetThreadBindingsForTests();
       vi.setSystemTime(new Date("2026-02-20T00:00:00.000Z"));
       const manager = createTestThreadBindingManager({
         accountId: "default",
@@ -741,7 +745,7 @@ describe("thread binding lifecycle", () => {
       vi.setSystemTime(touchedAt);
       manager.touchThread({ threadId: "thread-1" });
 
-      __testing.resetThreadBindingsForTests();
+      testing.resetThreadBindingsForTests();
       const reloaded = createTestThreadBindingManager({
         accountId: "default",
         persist: true,
@@ -759,7 +763,7 @@ describe("thread binding lifecycle", () => {
         }),
       ).toBe(new Date("2026-02-20T00:01:30.000Z").getTime());
     } finally {
-      __testing.resetThreadBindingsForTests();
+      testing.resetThreadBindingsForTests();
       if (previousStateDir === undefined) {
         delete process.env.OPENCLAW_STATE_DIR;
       } else {
@@ -949,9 +953,12 @@ describe("thread binding lifecycle", () => {
       threadId: "thread-created-runtime",
       targetSessionKey: "agent:main:subagent:child-runtime",
     });
-    const firstClientArgs = hoisted.createDiscordRestClient.mock.calls[0]?.[0] as
-      | { accountId?: string; token?: string }
-      | undefined;
+    const firstClientArgs = mockCallArg(
+      hoisted.createDiscordRestClient,
+      0,
+      0,
+      "createDiscordRestClient",
+    ) as { accountId?: string; token?: string } | undefined;
     expectFields(firstClientArgs, "first client args", {
       accountId: "runtime",
       token: "runtime-token",
@@ -1832,8 +1839,8 @@ describe("thread binding lifecycle", () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-thread-bindings-"));
     process.env.OPENCLAW_STATE_DIR = stateDir;
     try {
-      __testing.resetThreadBindingsForTests();
-      const bindingsPath = __testing.resolveThreadBindingsPath();
+      testing.resetThreadBindingsForTests();
+      const bindingsPath = testing.resolveThreadBindingsPath();
       fs.mkdirSync(path.dirname(bindingsPath), { recursive: true });
       const boundAt = Date.now() - 10_000;
       const expiresAt = boundAt + 60_000;
@@ -1919,7 +1926,7 @@ describe("thread binding lifecycle", () => {
         }),
       ).toBeUndefined();
     } finally {
-      __testing.resetThreadBindingsForTests();
+      testing.resetThreadBindingsForTests();
       if (previousStateDir === undefined) {
         delete process.env.OPENCLAW_STATE_DIR;
       } else {
@@ -1934,8 +1941,8 @@ describe("thread binding lifecycle", () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-thread-bindings-"));
     process.env.OPENCLAW_STATE_DIR = stateDir;
     try {
-      __testing.resetThreadBindingsForTests();
-      const bindingsPath = __testing.resolveThreadBindingsPath();
+      testing.resetThreadBindingsForTests();
+      const bindingsPath = testing.resolveThreadBindingsPath();
       fs.mkdirSync(path.dirname(bindingsPath), { recursive: true });
       const now = Date.now();
       fs.writeFileSync(
@@ -1975,7 +1982,7 @@ describe("thread binding lifecycle", () => {
       };
       expect(Object.keys(payload.bindings ?? {})).toStrictEqual([]);
     } finally {
-      __testing.resetThreadBindingsForTests();
+      testing.resetThreadBindingsForTests();
       if (previousStateDir === undefined) {
         delete process.env.OPENCLAW_STATE_DIR;
       } else {

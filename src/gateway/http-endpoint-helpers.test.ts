@@ -95,6 +95,28 @@ describe("handleGatewayPostJsonEndpoint", () => {
     });
   });
 
+  it("matches paths without trusting malformed Host headers", async () => {
+    vi.mocked(authorizeGatewayHttpRequestOrReply).mockResolvedValue({
+      trustDeclaredOperatorScopes: true,
+    });
+    vi.mocked(readJsonBodyOrError).mockResolvedValue({ ok: true });
+
+    const result = await handleGatewayPostJsonEndpoint(
+      {
+        url: "/v1/ok",
+        method: "POST",
+        headers: { host: "[" },
+      } as unknown as IncomingMessage,
+      {} as unknown as ServerResponse,
+      { pathname: "/v1/ok", auth: {} as unknown as ResolvedGatewayAuth, maxBodyBytes: 123 },
+    );
+
+    expect(result).toEqual({
+      body: { ok: true },
+      requestAuth: { trustDeclaredOperatorScopes: true },
+    });
+  });
+
   it("returns undefined and replies when required operator scope is missing", async () => {
     vi.mocked(authorizeGatewayHttpRequestOrReply).mockResolvedValue({
       trustDeclaredOperatorScopes: false,
@@ -157,7 +179,7 @@ describe("handleGatewayPostJsonEndpoint", () => {
       },
     );
 
-    const [, requestAuth] = (resolveOperatorScopes.mock.calls[0] as unknown as
+    const [, requestAuth] = (resolveOperatorScopes.mock.calls.at(0) as unknown as
       | [IncomingMessage, { authMethod?: string; trustDeclaredOperatorScopes: boolean }]
       | undefined) ?? [undefined, undefined];
     expect(requestAuth?.authMethod).toBe("token");

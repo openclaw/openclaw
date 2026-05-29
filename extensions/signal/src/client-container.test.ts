@@ -1,4 +1,5 @@
 import * as fetchModule from "openclaw/plugin-sdk/fetch-runtime";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import {
   containerCheck,
@@ -57,7 +58,7 @@ function parseFetchBody(index = 0): Record<string, unknown> {
 
 function expectMockLogNotContains(mock: ReturnType<typeof vi.fn>, expected: string): void {
   const messages = mock.mock.calls.map((call) => String(call[0] ?? ""));
-  expect(messages.every((message) => !message.includes(expected))).toBe(true);
+  expect(messages.join("\n")).not.toContain(expected);
 }
 
 // Minimal WebSocket mock for connection-log assertions.
@@ -292,6 +293,29 @@ describe("containerRestRequest", () => {
       throw new Error("expected fetch call to include an abort signal");
     }
   });
+
+  it("caps oversized REST request timeouts before arming abort timers", async () => {
+    const timeoutSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockReturnValue(0 as unknown as ReturnType<typeof setTimeout>);
+    try {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        status: 200,
+        text: async () => "{}",
+      });
+
+      await containerRestRequest("/v1/about", {
+        baseUrl: "http://localhost:8080",
+        timeoutMs: Number.MAX_SAFE_INTEGER,
+      });
+
+      expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+      expect(requireFetchCall()[1].signal).toBeInstanceOf(AbortSignal);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
 });
 
 describe("containerSendMessage", () => {
@@ -341,6 +365,26 @@ describe("containerSendMessage", () => {
     ).rejects.toThrow("Signal REST send returned invalid timestamp");
   });
 
+  it.each(["0x18bcfe56800", "1700000000000.5"])(
+    "rejects non-decimal integer send timestamp %s",
+    async (timestamp) => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ timestamp }),
+      });
+
+      await expect(
+        containerSendMessage({
+          baseUrl: "http://localhost:8080",
+          account: "+14259798283",
+          recipients: ["+15550001111"],
+          message: "Hello world",
+        }),
+      ).rejects.toThrow("Signal REST send returned invalid timestamp");
+    },
+  );
+
   it("uses container styled text mode when styles are provided", async () => {
     mockFetch.mockResolvedValue({
       ok: true,
@@ -377,8 +421,7 @@ describe("containerSendMessage", () => {
       textStyles: [{ start: 0, length: 4, style: "BOLD" }],
     });
 
-    const callArgs = mockFetch.mock.calls[0];
-    const body = JSON.parse(callArgs[1].body);
+    const body = parseFetchBody();
     expect(body.message).toBe("**Bold** \\* not italic");
   });
 
@@ -397,8 +440,7 @@ describe("containerSendMessage", () => {
       textStyles: [{ start: 0, length: 4, style: "BOLD" }],
     });
 
-    const callArgs = mockFetch.mock.calls[0];
-    const body = JSON.parse(callArgs[1].body);
+    const body = parseFetchBody();
     expect(body.message).toBe("**Bold** C:\\Temp\\file and /foo\\bar/");
   });
 
@@ -427,8 +469,7 @@ describe("containerSendMessage", () => {
       attachments: [tmpFile],
     });
 
-    const callArgs = mockFetch.mock.calls[0];
-    const body = JSON.parse(callArgs[1].body);
+    const body = parseFetchBody();
     expect(body.attachments).toBeUndefined();
     if (!Array.isArray(body.base64_attachments)) {
       throw new Error("expected base64 attachments array");
@@ -621,6 +662,24 @@ describe("containerFetchAttachment", () => {
         maxResponseBytes: 4,
       }),
     ).rejects.toThrow("Signal REST attachment exceeded size limit");
+    expect(arrayBuffer).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed content-length before reading attachments", async () => {
+    const arrayBuffer = vi.fn();
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers({ "content-length": "0x3" }),
+      arrayBuffer,
+    });
+
+    await expect(
+      containerFetchAttachment("attachment-123", {
+        baseUrl: "http://localhost:8080",
+        maxResponseBytes: 4,
+      }),
+    ).rejects.toThrow("invalid content-length header: 0x3");
     expect(arrayBuffer).not.toHaveBeenCalled();
   });
 

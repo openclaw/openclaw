@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore, ProfileUsageStats } from "./types.js";
 import {
-  __testing as authProfileUsageTesting,
+  testing as authProfileUsageTesting,
   clearAuthProfileCooldown,
   clearExpiredCooldowns,
   isProfileInCooldown,
@@ -876,7 +876,7 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     await markCodexFailureAt({ store, now });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [url, init] = fetchMock.mock.calls.at(0) as [string, RequestInit];
     expect(url).toBe("https://chatgpt.com/backend-api/wham/usage");
     expect(init.method).toBe("GET");
     const headers = init.headers as Record<string, string>;
@@ -955,6 +955,27 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     await markCodexFailureAt({ store, now, reason: "unknown" });
 
     expect(store.usageStats?.["openai-codex:default"]?.cooldownUntil).toBe(now + 30_000);
+  });
+
+  it.each([
+    ["reset_after_seconds", { reset_after_seconds: Number.MAX_SAFE_INTEGER }],
+    ["reset_at", { reset_at: Number.MAX_SAFE_INTEGER }],
+  ])("does not pin profiles from unsafe WHAM %s values", async (_label, resetFields) => {
+    const now = 1_700_000_000_000;
+    const store = makeStore({});
+    mockWhamResponse(200, {
+      rate_limit: {
+        limit_reached: true,
+        primary_window: { used_percent: 100, ...resetFields },
+      },
+    });
+
+    await markCodexFailureAt({ store, now });
+
+    const stats = store.usageStats?.["openai-codex:default"];
+    expect(stats?.blockedUntil).toBeUndefined();
+    expect(stats?.cooldownUntil).toBe(now + 30_000);
+    expect(stats?.cooldownReason).toBe("rate_limit");
   });
 
   it("leaves non-codex providers on the normal stepped backoff path", async () => {

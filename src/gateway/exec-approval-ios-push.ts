@@ -9,7 +9,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "../infra/exec-approvals.js";
 import {
   clearApnsRegistrationIfCurrent,
-  loadApnsRegistration,
+  loadApnsRegistrations,
   resolveApnsAuthConfigFromEnv,
   resolveApnsRelayConfigFromEnv,
   sendApnsExecApprovalAlert,
@@ -29,6 +29,11 @@ type GatewayLikeLogger = {
   debug?: (message: string) => void;
   warn?: (message: string) => void;
   error?: (message: string) => void;
+};
+
+type ApprovalPushTarget = {
+  deviceId: string;
+  scopes: readonly string[];
 };
 
 type DeliveryTarget = {
@@ -91,23 +96,34 @@ function shouldTargetDevice(params: {
 async function loadRegisteredTargets(params: {
   deviceIds: readonly string[];
 }): Promise<DeliveryTarget[]> {
-  const targets = await Promise.all(
-    params.deviceIds.map(async (nodeId) => {
-      const registration = await loadApnsRegistration(nodeId);
-      return registration ? { nodeId, registration } : null;
-    }),
-  );
-  return targets.filter((target): target is DeliveryTarget => target !== null);
+  if (params.deviceIds.length === 0) {
+    return [];
+  }
+  return await loadApnsRegistrations(params.deviceIds);
 }
 
 async function resolvePairedTargets(params: {
   requireApprovalScope: boolean;
+  isTargetVisible?: (target: ApprovalPushTarget) => boolean;
 }): Promise<DeliveryTarget[]> {
   const pairing = await listDevicePairing();
   const deviceIds = pairing.paired
-    .filter((device) =>
-      shouldTargetDevice({ device, requireApprovalScope: params.requireApprovalScope }),
-    )
+    .filter((device) => {
+      if (!shouldTargetDevice({ device, requireApprovalScope: params.requireApprovalScope })) {
+        return false;
+      }
+      const operatorToken = resolveActiveOperatorToken(device);
+      if (
+        params.isTargetVisible &&
+        !params.isTargetVisible({
+          deviceId: device.deviceId,
+          scopes: operatorToken?.scopes ?? [],
+        })
+      ) {
+        return false;
+      }
+      return true;
+    })
     .map((device) => device.deviceId);
   return await loadRegisteredTargets({ deviceIds });
 }
@@ -115,11 +131,15 @@ async function resolvePairedTargets(params: {
 async function resolveDeliveryPlan(params: {
   requireApprovalScope: boolean;
   explicitNodeIds?: readonly string[];
+  isTargetVisible?: (target: ApprovalPushTarget) => boolean;
   log: GatewayLikeLogger;
 }): Promise<DeliveryPlan> {
   const targets = params.explicitNodeIds?.length
     ? await loadRegisteredTargets({ deviceIds: params.explicitNodeIds })
-    : await resolvePairedTargets({ requireApprovalScope: params.requireApprovalScope });
+    : await resolvePairedTargets({
+        requireApprovalScope: params.requireApprovalScope,
+        isTargetVisible: params.isTargetVisible,
+      });
   if (targets.length === 0) {
     return { targets: [] };
   }
@@ -137,19 +157,30 @@ async function resolveDeliveryPlan(params: {
     }
   }
 
-  let relayConfig: ApnsRelayConfig | undefined;
+  const relayConfigByNodeId = new Map<string, ApnsRelayConfig>();
   if (needsRelay) {
-    const relay = resolveApnsRelayConfigFromEnv(process.env, getRuntimeConfig().gateway);
-    if (relay.ok) {
-      relayConfig = relay.value;
-    } else {
-      params.log.warn?.(`exec approvals: iOS relay APNs config unavailable: ${relay.error}`);
+    for (const target of targets) {
+      if (target.registration.transport !== "relay") {
+        continue;
+      }
+      const relay = resolveApnsRelayConfigFromEnv(process.env, getRuntimeConfig().gateway, {
+        registrationRelayOrigin: target.registration.relayOrigin,
+      });
+      if (relay.ok) {
+        relayConfigByNodeId.set(target.nodeId, relay.value);
+      } else {
+        params.log.warn?.(`exec approvals: iOS relay APNs config unavailable: ${relay.error}`);
+      }
     }
   }
+  const relayConfig = relayConfigByNodeId.values().next().value;
 
   return {
     targets: targets.filter((target) =>
-      target.registration.transport === "direct" ? Boolean(directAuth) : Boolean(relayConfig),
+      target.registration.transport === "direct"
+        ? Boolean(directAuth)
+        : relayConfigByNodeId.has(target.nodeId) &&
+          relayConfigByNodeId.get(target.nodeId)?.baseUrl === relayConfig?.baseUrl,
     ),
     directAuth,
     relayConfig,
@@ -260,10 +291,14 @@ export function createExecApprovalIosPushDelivery(params: { log: GatewayLikeLogg
   const pendingDeliveryStateById = new Map<string, Promise<ApprovalDeliveryState | null>>();
 
   return {
-    async handleRequested(request: ExecApprovalRequest): Promise<boolean> {
+    async handleRequested(
+      request: ExecApprovalRequest,
+      opts?: { isTargetVisible?: (target: ApprovalPushTarget) => boolean },
+    ): Promise<boolean> {
       const deliveryStatePromise = (async (): Promise<ApprovalDeliveryState | null> => {
         const plan = await resolveDeliveryPlan({
           requireApprovalScope: true,
+          isTargetVisible: opts?.isTargetVisible,
           log: params.log,
         });
         if (plan.targets.length === 0) {

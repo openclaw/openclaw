@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -10,6 +13,7 @@ const loggerWarn = vi.hoisted(() => vi.fn());
 
 const undiciFetch = vi.hoisted(() => vi.fn());
 const setGlobalDispatcher = vi.hoisted(() => vi.fn());
+const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
 type MockDispatcherInstance = {
   options?: Record<string, unknown> | string;
   destroy: ReturnType<typeof vi.fn>;
@@ -61,13 +65,17 @@ vi.mock("node:net", async () => {
   };
 });
 
-vi.mock("undici", () => ({
-  Agent: AgentCtor,
-  EnvHttpProxyAgent: EnvHttpProxyAgentCtor,
-  ProxyAgent: ProxyAgentCtor,
-  fetch: undiciFetch,
-  setGlobalDispatcher,
-}));
+vi.mock("undici", async () => {
+  const actual = await vi.importActual<typeof import("undici")>("undici");
+  return {
+    ...actual,
+    Agent: AgentCtor,
+    EnvHttpProxyAgent: EnvHttpProxyAgentCtor,
+    ProxyAgent: ProxyAgentCtor,
+    fetch: undiciFetch,
+    setGlobalDispatcher,
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   createSubsystemLogger: () => ({
@@ -103,6 +111,7 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
 let resolveTelegramFetch: typeof import("./fetch.js").resolveTelegramFetch;
 let resolveTelegramApiBase: typeof import("./fetch.js").resolveTelegramApiBase;
 let resolveTelegramTransport: typeof import("./fetch.js").resolveTelegramTransport;
+const tempDirs: string[] = [];
 
 type TelegramDispatcherPolicy = NonNullable<
   ReturnType<typeof resolveTelegramTransport>["dispatcherAttempts"]
@@ -132,6 +141,8 @@ beforeEach(() => {
     "NO_PROXY",
     "no_proxy",
     "OPENCLAW_PROXY_URL",
+    "OPENCLAW_PROXY_ACTIVE",
+    "OPENCLAW_PROXY_CA_FILE",
   ]) {
     vi.stubEnv(key, "");
   }
@@ -140,10 +151,15 @@ beforeEach(() => {
   loggerWarn.mockReset();
   getDefaultResultOrder.mockReset();
   getDefaultResultOrder.mockReturnValue("ipv4first");
+  installUndiciRuntimeDeps();
 });
 
 afterEach(() => {
+  Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
   vi.unstubAllEnvs();
+  for (const dir of tempDirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 function resolveTelegramFetchOrThrow(
@@ -173,6 +189,40 @@ function getDispatcherFromUndiciCall(nth: number) {
     throw new Error(`missing dispatcher for undici fetch call #${nth}`);
   }
   return dispatcher;
+}
+
+function constructorOptions(ctor: ReturnType<typeof vi.fn>, label: string): unknown {
+  const call = ctor.mock.calls.at(0);
+  if (!call) {
+    throw new Error(`missing ${label} constructor call`);
+  }
+  return call[0];
+}
+
+function writeTempCa(contents: string): string {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-proxy-ca-"));
+  tempDirs.push(dir);
+  const caFile = path.join(dir, "proxy-ca.pem");
+  writeFileSync(caFile, contents, "utf8");
+  return caFile;
+}
+
+function installUndiciRuntimeDeps(): void {
+  (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+    Agent: AgentCtor,
+    EnvHttpProxyAgent: EnvHttpProxyAgentCtor,
+    Pool: vi.fn(function MockPool(
+      this: MockDispatcherInstance,
+      _origin: unknown,
+      options?: Record<string, unknown>,
+    ) {
+      this.options = options;
+      this.destroy = vi.fn(async () => undefined);
+      this.close = vi.fn(async () => undefined);
+    }),
+    ProxyAgent: ProxyAgentCtor,
+    fetch: undiciFetch,
+  };
 }
 
 function buildFetchFallbackError(code: string) {
@@ -229,6 +279,11 @@ function expectStickyAutoSelectDispatcher(
   const options = dispatcher?.options?.[field];
   expect(options?.autoSelectFamily).toBe(true);
   expect(options?.autoSelectFamilyAttemptTimeout).toBe(300);
+}
+
+function expectTelegramKeepAliveOptions(options: Record<string, unknown> | undefined): void {
+  expect(options?.keepAlive).toBe(true);
+  expect(options?.keepAliveInitialDelay).toBe(30_000);
 }
 
 function expectHttp1OnlyDispatcher(
@@ -374,6 +429,7 @@ describe("resolveTelegramFetch", () => {
     expectHttp1OnlyDispatcher(dispatcher);
     expect(dispatcher?.options?.connect?.autoSelectFamily).toBe(true);
     expect(dispatcher?.options?.connect?.autoSelectFamilyAttemptTimeout).toBe(300);
+    expectTelegramKeepAliveOptions(dispatcher?.options?.connect);
     expect(typeof dispatcher?.options?.connect?.lookup).toBe("function");
   });
 
@@ -400,15 +456,46 @@ describe("resolveTelegramFetch", () => {
     await resolved("https://api.telegram.org/botx/getMe");
 
     expect(EnvHttpProxyAgentCtor).toHaveBeenCalledTimes(1);
-    expect(EnvHttpProxyAgentCtor.mock.calls[0]?.[0]?.httpsProxy).toBe("http://127.0.0.1:7890");
+    const envProxyOptions = constructorOptions(EnvHttpProxyAgentCtor, "env proxy") as {
+      httpsProxy?: string;
+    };
+    expect(envProxyOptions.httpsProxy).toBe("http://127.0.0.1:7890");
     expect(AgentCtor).not.toHaveBeenCalled();
 
     const dispatcher = getDispatcherFromUndiciCall(1);
     expectHttp1OnlyDispatcher(dispatcher);
     expect(dispatcher?.options?.connect?.autoSelectFamily).toBe(false);
     expect(dispatcher?.options?.connect?.autoSelectFamilyAttemptTimeout).toBe(300);
+    expectTelegramKeepAliveOptions(dispatcher?.options?.connect);
     expect(dispatcher?.options?.proxyTls?.autoSelectFamily).toBe(false);
     expect(dispatcher?.options?.proxyTls?.autoSelectFamilyAttemptTimeout).toBe(300);
+    expectTelegramKeepAliveOptions(dispatcher?.options?.proxyTls);
+  });
+
+  it("adds managed proxy CA trust to Telegram env proxy dispatchers", async () => {
+    const caFile = writeTempCa("telegram-managed-proxy-ca");
+    vi.stubEnv("https_proxy", "https://proxy.example:8443");
+    vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
+    vi.stubEnv("OPENCLAW_PROXY_CA_FILE", caFile);
+    undiciFetch.mockResolvedValue({ ok: true } as Response);
+
+    const resolved = resolveTelegramFetchOrThrow(undefined, {
+      network: {
+        autoSelectFamily: false,
+        dnsResultOrder: "ipv4first",
+      },
+    });
+
+    await resolved("https://api.telegram.org/botx/getMe");
+
+    expect(EnvHttpProxyAgentCtor).toHaveBeenCalledTimes(1);
+    const envProxyOptions = constructorOptions(EnvHttpProxyAgentCtor, "env proxy") as {
+      httpsProxy?: string;
+      proxyTls?: { ca?: unknown; autoSelectFamily?: boolean };
+    };
+    expect(envProxyOptions.httpsProxy).toBe("https://proxy.example:8443");
+    expect(envProxyOptions.proxyTls?.ca).toBe("telegram-managed-proxy-ca");
+    expect(envProxyOptions.proxyTls?.autoSelectFamily).toBe(false);
   });
 
   it("uses the OpenClaw debug proxy URL when no explicit proxy fetch is provided", async () => {
@@ -420,11 +507,12 @@ describe("resolveTelegramFetch", () => {
     await resolved("https://api.telegram.org/botTOKEN/getMe");
 
     expect(ProxyAgentCtor).toHaveBeenCalledTimes(1);
-    const proxyOptions = ProxyAgentCtor.mock.calls[0]?.[0] as
-      | { allowH2?: boolean; uri?: string }
-      | undefined;
-    expect(proxyOptions?.allowH2).toBe(false);
-    expect(proxyOptions?.uri).toBe("http://127.0.0.1:7777");
+    const proxyOptions = constructorOptions(ProxyAgentCtor, "debug proxy") as {
+      allowH2?: boolean;
+      uri?: string;
+    };
+    expect(proxyOptions.allowH2).toBe(false);
+    expect(proxyOptions.uri).toBe("http://127.0.0.1:7777");
   });
 
   it("uses OPENCLAW_PROXY_URL as a Telegram explicit proxy when proxy env is absent", async () => {
@@ -441,12 +529,14 @@ describe("resolveTelegramFetch", () => {
     await transport.fetch("https://api.telegram.org/botTOKEN/getMe");
 
     expect(ProxyAgentCtor).toHaveBeenCalledTimes(1);
-    const proxyOptions = ProxyAgentCtor.mock.calls[0]?.[0] as
-      | { allowH2?: boolean; uri?: string; requestTls?: { autoSelectFamily?: boolean } }
-      | undefined;
-    expect(proxyOptions?.allowH2).toBe(false);
-    expect(proxyOptions?.uri).toBe("http://127.0.0.1:7788");
-    expect(proxyOptions?.requestTls?.autoSelectFamily).toBe(false);
+    const proxyOptions = constructorOptions(ProxyAgentCtor, "OpenClaw proxy") as {
+      allowH2?: boolean;
+      uri?: string;
+      requestTls?: { autoSelectFamily?: boolean };
+    };
+    expect(proxyOptions.allowH2).toBe(false);
+    expect(proxyOptions.uri).toBe("http://127.0.0.1:7788");
+    expect(proxyOptions.requestTls?.autoSelectFamily).toBe(false);
     expect(EnvHttpProxyAgentCtor).not.toHaveBeenCalled();
     expect(AgentCtor).not.toHaveBeenCalled();
     const dispatcherPolicy = transport.dispatcherAttempts?.[0]?.dispatcherPolicy as
@@ -642,10 +732,14 @@ describe("resolveTelegramFetch", () => {
     await resolved("https://api.telegram.org/botx/sendMessage");
 
     expect(EnvHttpProxyAgentCtor).toHaveBeenCalledTimes(1);
-    const proxyOptions = EnvHttpProxyAgentCtor.mock.calls[0]?.[0];
-    expect(proxyOptions?.allowH2).toBe(false);
-    expect(proxyOptions?.httpProxy).toBe("http://127.0.0.1:7891");
-    expect(proxyOptions?.httpsProxy).toBe("http://127.0.0.1:7891");
+    const proxyOptions = constructorOptions(EnvHttpProxyAgentCtor, "env proxy") as {
+      allowH2?: boolean;
+      httpProxy?: string;
+      httpsProxy?: string;
+    };
+    expect(proxyOptions.allowH2).toBe(false);
+    expect(proxyOptions.httpProxy).toBe("http://127.0.0.1:7891");
+    expect(proxyOptions.httpsProxy).toBe("http://127.0.0.1:7891");
     expect(AgentCtor).not.toHaveBeenCalled();
 
     expect(transport.dispatcherAttempts?.[0]?.dispatcherPolicy?.mode).toBe("env-proxy");
@@ -1013,6 +1107,23 @@ describe("resolveTelegramFetch", () => {
     );
 
     expect(undiciFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries sticky fallback when the local network is down during connect", async () => {
+    undiciFetch
+      .mockRejectedValueOnce(buildFetchFallbackError("ENETDOWN"))
+      .mockResolvedValueOnce({ ok: true } as Response);
+
+    const resolved = resolveTelegramFetchOrThrow(undefined, {
+      network: {
+        autoSelectFamily: true,
+      },
+    });
+
+    await resolved("https://api.telegram.org/botx/getUpdates");
+
+    expect(undiciFetch).toHaveBeenCalledTimes(2);
+    expect(getDispatcherFromUndiciCall(1)).not.toBe(getDispatcherFromUndiciCall(2));
   });
 
   it("keeps per-resolver transport policy isolated across multiple accounts", async () => {

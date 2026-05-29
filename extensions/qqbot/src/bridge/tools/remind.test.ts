@@ -33,15 +33,9 @@ describe("bridge/tools/remind", () => {
     callGatewayToolMock.mockResolvedValue({ ok: true });
   });
 
-  it("marks qqbot_remind as owner-only", () => {
-    const tool = createRemindTool();
-    expect(tool.ownerOnly).toBe(true);
-  });
-
   it("schedules reminders directly through Gateway cron with ambient QQ delivery context", async () => {
     callGatewayToolMock.mockResolvedValue({ id: "job-1" });
     const tool = createRemindTool({
-      senderIsOwner: true,
       deliveryContext: { to: "qqbot:c2c:user-openid", accountId: "bot2" },
     });
 
@@ -51,7 +45,7 @@ describe("bridge/tools/remind", () => {
       time: "5m",
     });
 
-    const addCall = callGatewayToolMock.mock.calls[0];
+    const addCall = callGatewayToolMock.mock.calls.at(0);
     const addPayload = addCall?.[2] as CronAddToolPayload | undefined;
     expect(addCall?.[0]).toBe("cron.add");
     expect(addCall?.[1]).toEqual({ timeoutMs: 60_000 });
@@ -73,7 +67,7 @@ describe("bridge/tools/remind", () => {
   });
 
   it("routes list and remove through Gateway cron without exposing generic cron to the model", async () => {
-    const tool = createRemindTool({ senderIsOwner: true });
+    const tool = createRemindTool({});
 
     await tool.execute("tool-call-1", { action: "list" });
     await tool.execute("tool-call-2", { action: "remove", jobId: "job-1" });
@@ -91,7 +85,6 @@ describe("bridge/tools/remind", () => {
     const callCron = vi.fn(async (_params: unknown) => ({ id: "job-1" }));
     const tool = createRemindTool(
       {
-        senderIsOwner: true,
         deliveryContext: { to: "qqbot:c2c:user-openid", accountId: "bot2" },
       },
       { callCron },
@@ -103,7 +96,7 @@ describe("bridge/tools/remind", () => {
       time: "5m",
     });
 
-    const cronParams = callCron.mock.calls[0]?.[0] as RemindCronAction | undefined;
+    const cronParams = callCron.mock.calls.at(0)?.[0] as RemindCronAction | undefined;
     expect(cronParams?.action).toBe("add");
     if (cronParams?.action !== "add") {
       throw new Error("Expected add reminder cron params");
@@ -117,7 +110,7 @@ describe("bridge/tools/remind", () => {
     expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 
-  it("does not schedule when sender ownership is missing", async () => {
+  it("schedules when sender ownership is missing", async () => {
     const callCron = vi.fn(async (_params: unknown) => ({ id: "job-1" }));
     const tool = createRemindTool(
       {
@@ -126,16 +119,13 @@ describe("bridge/tools/remind", () => {
       { callCron },
     );
 
-    const result = await tool.execute("tool-call-1", {
+    await tool.execute("tool-call-1", {
       action: "add",
       content: "drink water",
       time: "5m",
     });
 
-    expect(callCron).not.toHaveBeenCalled();
+    expect(callCron).toHaveBeenCalledTimes(1);
     expect(callGatewayToolMock).not.toHaveBeenCalled();
-    expect(result.details).toEqual({
-      error: "QQ reminders require an owner-authorized sender.",
-    });
   });
 });

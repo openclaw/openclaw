@@ -172,6 +172,18 @@ function installConsoleMethodSpy(method: "log" | "warn") {
   return spy;
 }
 
+function requireConsoleMessage(spy: { mock: { calls: unknown[][] } }, index = 0): string {
+  const call = spy.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected console call ${index}`);
+  }
+  expect(typeof call[0]).toBe("string");
+  if (typeof call[0] !== "string") {
+    throw new Error(`expected console call ${index} to contain a string message`);
+  }
+  return call[0];
+}
+
 function resolveWithConflictingCoreName(options?: { suppressNameConflicts?: boolean }) {
   return resolvePluginTools(
     createResolveToolsParams({
@@ -212,6 +224,7 @@ function resolveAutoEnabledOptionalDemoTools() {
   const { rawContext, autoEnabledConfig } = createAutoEnabledOptionalContext();
   installToolManifestSnapshot({
     config: autoEnabledConfig,
+    compatibleConfigs: [rawContext.config],
     plugin: {
       id: "optional-demo",
       origin: "bundled",
@@ -261,11 +274,13 @@ function createOptionalDemoActiveRegistry() {
 
 function installToolManifestSnapshot(params: {
   config: ReturnType<typeof createContext>["config"];
+  compatibleConfigs?: ReturnType<typeof createContext>["config"][];
   env?: NodeJS.ProcessEnv;
   plugin: Record<string, unknown>;
 }) {
   installToolManifestSnapshots({
     config: params.config,
+    compatibleConfigs: params.compatibleConfigs,
     env: params.env,
     plugins: [params.plugin],
   });
@@ -273,6 +288,7 @@ function installToolManifestSnapshot(params: {
 
 function installToolManifestSnapshots(params: {
   config: ReturnType<typeof createContext>["config"];
+  compatibleConfigs?: ReturnType<typeof createContext>["config"][];
   env?: NodeJS.ProcessEnv;
   plugins: Record<string, unknown>[];
 }) {
@@ -329,7 +345,12 @@ function installToolManifestSnapshots(params: {
         manifestPluginCount: plugins.length,
       },
     } as never,
-    { config: params.config, env: params.env ?? process.env, workspaceDir: "/tmp" },
+    {
+      config: params.config,
+      compatibleConfigs: params.compatibleConfigs,
+      env: params.env ?? process.env,
+      workspaceDir: "/tmp",
+    },
   );
 }
 
@@ -1343,8 +1364,11 @@ describe("resolvePluginTools optional tools", () => {
     expectResolvedToolNames(first, ["other_tool", "optional_tool"]);
     expectResolvedToolNames(second, ["other_tool", "optional_tool"]);
     expect(getPluginToolMeta(first[0])?.optional).toBe(false);
+    expect(getPluginToolMeta(first[0])?.trustedLocalMedia).toBe(true);
     expect(getPluginToolMeta(first[1])?.optional).toBe(true);
+    expect(getPluginToolMeta(first[1])?.trustedLocalMedia).toBe(true);
     expect(getPluginToolMeta(second[1])?.optional).toBe(true);
+    expect(getPluginToolMeta(second[1])?.trustedLocalMedia).toBe(true);
     expect(factory).toHaveBeenCalledTimes(1);
   });
 
@@ -1523,7 +1547,7 @@ describe("resolvePluginTools optional tools", () => {
 
     expectResolvedToolNames(tools, ["optional_tool"]);
     expect(warnSpy).toHaveBeenCalledTimes(1);
-    const message = String(warnSpy.mock.calls[0]?.[0] ?? "");
+    const message = requireConsoleMessage(warnSpy);
     expect(message).toContain("[trace:plugin-tools] factory timings");
     expect(message).toContain("totalMs=1200");
     expect(message).toContain("optional-demo:1200ms@1200ms");
@@ -1553,7 +1577,7 @@ describe("resolvePluginTools optional tools", () => {
 
     expectResolvedToolNames(tools, ["optional_tool"]);
     expect(logSpy).toHaveBeenCalledTimes(1);
-    const message = String(logSpy.mock.calls[0]?.[0] ?? "");
+    const message = requireConsoleMessage(logSpy);
     expect(message).toContain("[trace:plugin-tools] factory timings");
     expect(message).toContain("totalMs=5");
     expect(message).toContain("optional-demo:5ms@5ms");

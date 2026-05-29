@@ -33,8 +33,23 @@ type DeliveryRequest = DeliveryIntentCallbackParams & {
 
 const cfg = {} as OpenClawConfig;
 
+function requireMockCall(
+  mock: { mock: { calls: unknown[][] } },
+  callIndex: number,
+  label: string,
+): unknown[] {
+  const resolvedIndex = callIndex < 0 ? mock.mock.calls.length + callIndex : callIndex;
+  const call = mock.mock.calls[resolvedIndex];
+  if (!call) {
+    throw new Error(`expected ${label} call ${callIndex}`);
+  }
+  return call;
+}
+
 function latestDeliveryRequest(): DeliveryRequest {
-  const [request] = deliverOutboundPayloads.mock.calls.at(-1) as unknown as [DeliveryRequest];
+  const [request] = requireMockCall(deliverOutboundPayloads, -1, "delivery request") as [
+    DeliveryRequest,
+  ];
   return request;
 }
 
@@ -293,7 +308,7 @@ describe("withDurableMessageSendContext", () => {
     );
 
     expect(onEditReceipt).toHaveBeenCalledTimes(1);
-    const [editReceiptArg, renderedArg] = onEditReceipt.mock.calls[0] as unknown as [
+    const [editReceiptArg, renderedArg] = requireMockCall(onEditReceipt, 0, "edit receipt") as [
       unknown,
       { payloads?: unknown },
     ];
@@ -353,7 +368,7 @@ describe("withDurableMessageSendContext", () => {
     expect(result.reason).toBe("no_visible_result");
     expect(result.deliveryIntent?.id).toBe("intent-2");
     expect(onCommitReceipt).toHaveBeenCalledTimes(1);
-    const [receiptArg] = onCommitReceipt.mock.calls[0] as unknown as [
+    const [receiptArg] = requireMockCall(onCommitReceipt, 0, "commit receipt") as [
       { platformMessageIds?: unknown },
     ];
     expect(receiptArg.platformMessageIds).toEqual([]);
@@ -388,7 +403,7 @@ describe("withDurableMessageSendContext", () => {
       hookEffect: { cancelReason: "owned-by-other-agent" },
     });
     expect(onCommitReceipt).toHaveBeenCalledTimes(1);
-    const [receiptArg] = onCommitReceipt.mock.calls[0] as unknown as [
+    const [receiptArg] = requireMockCall(onCommitReceipt, 0, "commit receipt") as [
       { platformMessageIds?: unknown },
     ];
     expect(receiptArg.platformMessageIds).toEqual([]);
@@ -420,7 +435,7 @@ describe("withDurableMessageSendContext", () => {
       reason: "cancelled_by_message_sending_hook",
     });
     expect(onPayloadDeliveryOutcome).toHaveBeenCalledTimes(1);
-    const [outcomeArg] = onPayloadDeliveryOutcome.mock.calls[0] as unknown as [
+    const [outcomeArg] = requireMockCall(onPayloadDeliveryOutcome, 0, "payload outcome") as [
       OutboundPayloadDeliveryOutcome,
     ];
     expect(outcomeArg.index).toBe(0);

@@ -3,6 +3,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
+import {
+  asFiniteNumberInRange,
+  parseStrictFiniteNumber,
+  parseStrictNonNegativeInteger,
+} from "openclaw/plugin-sdk/number-runtime";
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import {
   privateFileStoreSync,
@@ -52,6 +57,8 @@ const GROUP_CONTEXT_CACHE_TTL_MS = 5 * 60_000;
 const GROUP_CONTEXT_CACHE_MAX_ENTRIES = 500;
 const LISTENER_WATCHDOG_INTERVAL_MS = 30_000;
 const LISTENER_WATCHDOG_MAX_GAP_MS = 35_000;
+const ZALO_TIMESTAMP_MS_THRESHOLD = 1_000_000_000_000;
+const MAX_SAFE_ZALO_TIMESTAMP_SECONDS = Number.MAX_SAFE_INTEGER / 1000;
 
 const apiByProfile = new Map<string, API>();
 const apiInitByProfile = new Map<string, Promise<API>>();
@@ -260,17 +267,27 @@ function normalizeMessageContent(content: unknown): string {
 }
 
 function resolveInboundTimestamp(rawTs: unknown): number {
-  if (typeof rawTs === "number" && Number.isFinite(rawTs)) {
-    return rawTs > 1_000_000_000_000 ? rawTs : rawTs * 1000;
-  }
-  const parsed = Number.parseInt(
-    typeof rawTs === "string" ? rawTs : typeof rawTs === "number" ? String(rawTs) : "",
-    10,
-  );
-  if (!Number.isFinite(parsed) || parsed <= 0) {
+  const parsed =
+    typeof rawTs === "number"
+      ? rawTs
+      : typeof rawTs === "string"
+        ? parseStrictFiniteNumber(rawTs)
+        : undefined;
+  const timestamp = asFiniteNumberInRange(parsed, {
+    min: 0,
+    minExclusive: true,
+    max: Number.MAX_SAFE_INTEGER,
+  });
+  if (timestamp === undefined) {
     return Date.now();
   }
-  return parsed > 1_000_000_000_000 ? parsed : parsed * 1000;
+  if (timestamp > ZALO_TIMESTAMP_MS_THRESHOLD) {
+    return Math.trunc(timestamp);
+  }
+  if (timestamp > MAX_SAFE_ZALO_TIMESTAMP_SECONDS) {
+    return Date.now();
+  }
+  return Math.trunc(timestamp * 1000);
 }
 
 function extractMentionIds(rawMentions: unknown): string[] {
@@ -302,8 +319,8 @@ function toNonNegativeInteger(value: unknown): number | null {
     return normalized >= 0 ? normalized : null;
   }
   if (typeof value === "string" && value.trim().length > 0) {
-    const parsed = Number.parseInt(value.trim(), 10);
-    if (Number.isFinite(parsed)) {
+    const parsed = parseStrictNonNegativeInteger(value);
+    if (parsed !== undefined) {
       return parsed >= 0 ? parsed : null;
     }
   }
@@ -914,6 +931,14 @@ function toInboundMessage(message: Message, ownUserId?: string): ZaloInboundMess
     data.quote && typeof data.quote === "object"
       ? toNumberId((data.quote as { ownerId?: unknown }).ownerId)
       : "";
+  const quotedGlobalMsgId =
+    data.quote && typeof data.quote === "object"
+      ? toStringValue((data.quote as { globalMsgId?: unknown }).globalMsgId)
+      : "";
+  const quotedBody =
+    data.quote && typeof data.quote === "object"
+      ? toStringValue((data.quote as { msg?: unknown }).msg)
+      : "";
   const hasAnyMention = mentionIds.length > 0;
   const canResolveExplicitMention = Boolean(normalizedOwnUserId);
   const wasExplicitlyMentioned = Boolean(
@@ -943,10 +968,18 @@ function toInboundMessage(message: Message, ownUserId?: string): ZaloInboundMess
     canResolveExplicitMention,
     wasExplicitlyMentioned,
     implicitMention,
+    quotedGlobalMsgId: quotedGlobalMsgId || undefined,
+    quotedOwnerId: quoteOwnerId || undefined,
+    quotedBody: quotedBody || undefined,
     eventMessage,
     raw: message,
   };
 }
+
+export const testing = {
+  toInboundMessage,
+};
+export { testing as __testing };
 
 function zalouserSessionExists(profileInput?: string | null): boolean {
   const profile = normalizeProfile(profileInput);

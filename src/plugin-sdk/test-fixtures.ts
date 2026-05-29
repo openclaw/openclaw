@@ -14,7 +14,7 @@ export {
   createSandboxPruneConfig,
   createSandboxSshConfig,
 } from "./test-helpers/sandbox-fixtures.js";
-export { writeSkill } from "../agents/skills.e2e-test-helpers.js";
+export { writeSkill } from "../skills/test-support/e2e-test-helpers.js";
 export {
   castAgentMessage,
   makeAgentAssistantMessage,
@@ -42,3 +42,9 @@ export {
   repoInstallSpec,
 } from "./test-helpers/bundled-plugin-paths.js";
 export { importFreshModule } from "./test-helpers/import-fresh.js";
+export {
+  createGrayscaleAlphaPngBuffer,
+  createNoisyPngBuffer,
+  createNoisyRgbaBuffer,
+  createSolidPngBuffer,
+} from "./test-helpers/image-fixtures.js";

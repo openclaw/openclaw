@@ -218,6 +218,7 @@ Browser settings live in `~/.openclaw/openclaw.json`.
 - Browser navigation and open-tab are SSRF-guarded before navigation and best-effort re-checked on the final `http(s)` URL afterwards.
 - In strict SSRF mode, remote CDP endpoint discovery and `/json/version` probes (`cdpUrl`) are checked too.
 - Gateway/provider `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY` environment variables do not automatically proxy the OpenClaw-managed browser. Managed Chrome launches direct by default so provider proxy settings do not weaken browser SSRF checks.
+- OpenClaw-managed local CDP readiness probes and DevTools WebSocket connections bypass the managed network proxy for the exact launched loopback endpoint, so `openclaw browser start` still works when an operator proxy blocks loopback egress.
 - To proxy the managed browser itself, pass explicit Chrome proxy flags through `browser.extraArgs`, such as `--proxy-server=...` or `--proxy-pac-url=...`. Strict SSRF mode blocks explicit browser proxy routing unless private-network browser access is intentionally enabled.
 - `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork` is off by default; enable only when private-network browser access is intentionally trusted.
 - `browser.ssrfPolicy.allowPrivateNetwork` remains supported as a legacy alias.
@@ -442,6 +443,10 @@ CDP URL shapes and picks the right connection strategy automatically:
   providers can still use their root WebSocket endpoint when their discovery
   endpoint advertises a short-lived URL that is not suitable for Playwright CDP.
 
+`openclaw browser doctor` uses the same discovery-first, WebSocket-fallback
+logic as runtime attach, so a bare-root URL that connects successfully is not
+reported as unreachable by diagnostics.
+
 ### Browserbase
 
 [Browserbase](https://www.browserbase.com) is a cloud platform for running
@@ -476,6 +481,42 @@ Notes:
   See [pricing](https://www.browserbase.com/pricing) for paid plan limits.
 - See the [Browserbase docs](https://docs.browserbase.com) for full API
   reference, SDK guides, and integration examples.
+
+### Notte
+
+[Notte](https://www.notte.cc) is a cloud platform for running headless
+browsers with built-in stealth, residential proxies, and a CDP-native
+WebSocket gateway.
+
+```json5
+{
+  browser: {
+    enabled: true,
+    defaultProfile: "notte",
+    remoteCdpTimeoutMs: 3000,
+    remoteCdpHandshakeTimeoutMs: 5000,
+    profiles: {
+      notte: {
+        cdpUrl: "wss://us-prod.notte.cc/sessions/connect?token=<NOTTE_API_KEY>",
+        color: "#7C3AED",
+      },
+    },
+  },
+}
+```
+
+Notes:
+
+- [Sign up](https://console.notte.cc) and copy your **API Key** from the
+  console settings page.
+- Replace `<NOTTE_API_KEY>` with your real Notte API key.
+- Notte auto-creates a browser session on WebSocket connect, so no manual
+  session creation step is needed. The session is destroyed when the
+  WebSocket disconnects.
+- The free tier allows five concurrent sessions and 100 lifetime browser
+  hours. See [pricing](https://www.notte.cc/#pricing) for paid plan limits.
+- See the [Notte docs](https://docs.notte.cc) for full API reference, SDK
+  guides, and integration examples.
 
 ## Security
 
@@ -646,7 +687,8 @@ Compared to the managed `openclaw` profile, existing-session drivers are more co
 
 - **Screenshots** - page captures and `--ref` element captures work; CSS `--element` selectors do not. `--full-page` cannot combine with `--ref` or `--element`. Playwright is not required for page or ref-based element screenshots.
 - **Actions** - `click`, `type`, `hover`, `scrollIntoView`, `drag`, and `select` require snapshot refs (no CSS selectors). `click-coords` clicks visible viewport coordinates and does not require a snapshot ref. `click` is left-button only. `type` does not support `slowly=true`; use `fill` or `press`. `press` does not support `delayMs`. `type`, `hover`, `scrollIntoView`, `drag`, `select`, `fill`, and `evaluate` do not support per-call timeouts. `select` accepts a single value.
-- **Wait / upload / dialog** - `wait --url` supports exact, substring, and glob patterns; `wait --load networkidle` is not supported. Upload hooks require `ref` or `inputRef`, one file at a time, no CSS `element`. Dialog hooks do not support timeout overrides.
+- **Wait / upload / dialog** - `wait --url` supports exact, substring, and glob patterns; `wait --load networkidle` is not supported. Upload hooks require `ref` or `inputRef`, one file at a time, no CSS `element`. Dialog hooks do not support timeout overrides or `dialogId`.
+- **Dialog visibility** - Managed browser action responses include `blockedByDialog` and `browserState.dialogs.pending` when an action opens a modal dialog; snapshots also include pending dialog state. Respond with `browser dialog --accept/--dismiss --dialog-id <id>` while a dialog is pending. Dialogs handled outside OpenClaw appear under `browserState.dialogs.recent`.
 - **Managed-only features** - batch actions, PDF export, download interception, and `responsebody` still require the managed browser path.
 
 </Accordion>

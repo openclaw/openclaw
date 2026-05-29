@@ -4,16 +4,19 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setBundledPluginsDirOverrideForTest } from "../plugins/bundled-dir.js";
 import {
   clearCurrentPluginMetadataSnapshot,
+  getCurrentPluginMetadataSnapshot,
   setCurrentPluginMetadataSnapshot,
 } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import type { InstalledPluginIndexRecord } from "../plugins/installed-plugin-index.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { resolveOptionalMediaToolFactoryPlan } from "./openclaw-tools.media-factory-plan.js";
 import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY } from "./tool-policy.js";
+import { loadCapabilityMetadataSnapshot } from "./tools/manifest-capability-availability.js";
 import * as pdfModelConfigModule from "./tools/pdf-tool.model-config.js";
 
 type CreateOpenClawToolsOptions = Parameters<
@@ -156,11 +159,13 @@ function installSnapshot(
 
 describe("optional media tool factory planning", () => {
   beforeEach(() => {
+    resetPluginRuntimeStateForTest();
     clearSecretsRuntimeSnapshot();
   });
 
   afterEach(() => {
     clearCurrentPluginMetadataSnapshot();
+    resetPluginRuntimeStateForTest();
     clearSecretsRuntimeSnapshot();
     setBundledPluginsDirOverrideForTest(undefined);
     vi.unstubAllEnvs();
@@ -202,6 +207,44 @@ describe("optional media tool factory planning", () => {
       musicGenerate: false,
       pdf: false,
     });
+  });
+
+  it("does not plan media factories from workspace-scoped metadata without workspace context", () => {
+    const config: OpenClawConfig = {};
+    setBundledPluginsDirOverrideForTest("/nonexistent/bundled/plugins");
+    installSnapshot(
+      config,
+      [
+        createPlugin({
+          id: "image-owner",
+          contracts: { imageGenerationProviders: ["image-owner"] },
+          setupProviders: [{ id: "image-owner", envVars: ["IMAGE_OWNER_API_KEY"] }],
+        }),
+      ],
+      undefined,
+      "/workspace/a",
+    );
+    expect(getCurrentPluginMetadataSnapshot({ config })).toBeUndefined();
+    expect(
+      getCurrentPluginMetadataSnapshot({ config, workspaceDir: "/workspace/a" }),
+    ).toBeDefined();
+    expect(
+      loadCapabilityMetadataSnapshot({ config }).plugins.map((plugin) => plugin.id),
+    ).not.toContain("image-owner");
+
+    expect(
+      resolveOptionalMediaToolFactoryPlan({
+        config,
+        authStore: createAuthStore(["image-owner"]),
+      }).imageGenerate,
+    ).toBe(false);
+    expect(
+      resolveOptionalMediaToolFactoryPlan({
+        config,
+        workspaceDir: "/workspace/a",
+        authStore: createAuthStore(["image-owner"]),
+      }).imageGenerate,
+    ).toBe(true);
   });
 
   it("keeps explicit model configs on the factory path", () => {
@@ -852,19 +895,27 @@ describe("optional media tool factory planning", () => {
 
   it("does not register the image tool without cheap vision availability evidence", async () => {
     const config: OpenClawConfig = {};
-    installSnapshot(config, [
-      createPlugin({
-        id: "media-owner",
-        contracts: { mediaUnderstandingProviders: ["media-owner"] },
-        setupProviders: [{ id: "media-owner", envVars: ["MEDIA_OWNER_API_KEY"] }],
-      }),
-    ]);
+    const workspaceDir = "/tmp/openclaw-workspace";
+    vi.stubEnv("MEDIA_OWNER_API_KEY", "");
+    installSnapshot(
+      config,
+      [
+        createPlugin({
+          id: "media-owner",
+          contracts: { mediaUnderstandingProviders: ["media-owner"] },
+          setupProviders: [{ id: "media-owner", envVars: ["MEDIA_OWNER_API_KEY"] }],
+        }),
+      ],
+      undefined,
+      workspaceDir,
+    );
 
     expect(
       (
         await createOpenClawToolsForTest({
           config,
           agentDir: "/tmp/openclaw-agent",
+          workspaceDir,
           authProfileStore: createAuthStore(),
           disablePluginTools: true,
         })

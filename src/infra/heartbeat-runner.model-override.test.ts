@@ -32,6 +32,10 @@ function expectReplyOptions(options: unknown, expected: Record<string, unknown>)
   return actual;
 }
 
+function firstReplyCall(replySpy: HeartbeatReplySpy) {
+  return replySpy.mock.calls[0] ?? [];
+}
+
 async function withHeartbeatFixture(
   run: (ctx: {
     tmpDir: string;
@@ -83,14 +87,17 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
     });
 
     expect(params.replySpy).toHaveBeenCalledTimes(1);
+    const [ctx, opts] = firstReplyCall(params.replySpy);
     return {
-      ctx: params.replySpy.mock.calls[0]?.[0],
-      opts: params.replySpy.mock.calls[0]?.[1],
+      ctx,
+      opts,
       replySpy: params.replySpy,
     };
   }
 
   async function runDefaultsHeartbeat(params: {
+    every?: string;
+    defaultTimeoutSeconds?: number;
     model?: string;
     suppressToolErrorWarnings?: boolean;
     timeoutSeconds?: number;
@@ -102,8 +109,9 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
         agents: {
           defaults: {
             workspace: tmpDir,
+            timeoutSeconds: params.defaultTimeoutSeconds,
             heartbeat: {
-              every: "5m",
+              every: params.every ?? "5m",
               target: "whatsapp",
               model: params.model,
               suppressToolErrorWarnings: params.suppressToolErrorWarnings,
@@ -167,7 +175,7 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
       });
 
       expect(result.replySpy).toHaveBeenCalledTimes(1);
-      const [ctx, opts, passedConfig] = result.replySpy.mock.calls[0] ?? [];
+      const [ctx, opts, passedConfig] = firstReplyCall(result.replySpy);
       if (!ctx || typeof ctx !== "object") {
         throw new Error("expected heartbeat reply context");
       }
@@ -201,6 +209,30 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
     expectReplyOptions(replyOpts, {
       isHeartbeat: true,
       timeoutOverrideSeconds: 45,
+    });
+  });
+
+  it("uses heartbeat cadence as the default reply-run timeout override", async () => {
+    const replyOpts = await runDefaultsHeartbeat({});
+    expectReplyOptions(replyOpts, {
+      isHeartbeat: true,
+      timeoutOverrideSeconds: 300,
+    });
+  });
+
+  it("caps the default heartbeat reply-run timeout override", async () => {
+    const replyOpts = await runDefaultsHeartbeat({ every: "30m" });
+    expectReplyOptions(replyOpts, {
+      isHeartbeat: true,
+      timeoutOverrideSeconds: 600,
+    });
+  });
+
+  it("preserves explicit default agent timeout for heartbeat runs", async () => {
+    const replyOpts = await runDefaultsHeartbeat({ defaultTimeoutSeconds: 60, every: "30m" });
+    expectReplyOptions(replyOpts, {
+      isHeartbeat: true,
+      timeoutOverrideSeconds: 60,
     });
   });
 

@@ -7,6 +7,7 @@ import {
   normalizeHostnameSuffixAllowlist,
   type SsrFPolicy,
 } from "openclaw/plugin-sdk/ssrf-policy";
+import { fetchWithSsrFGuard, type LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   isRecord,
   normalizeLowercaseStringOrEmpty,
@@ -62,6 +63,7 @@ const DEFAULT_MEDIA_HOST_ALLOWLIST = [
   "media.ams.skype.com",
   // Bot Framework attachment URLs
   "trafficmanager.net",
+  "botframework.azure.cn",
   "blob.core.windows.net",
   "azureedge.net",
   "microsoft.com",
@@ -73,6 +75,7 @@ const DEFAULT_MEDIA_AUTH_HOST_ALLOWLIST = [
   // Bot Framework Service URL (smba.trafficmanager.net) used for outbound
   // replies and inbound attachment downloads (clipboard-pasted images).
   "smba.trafficmanager.net",
+  "botframework.azure.cn",
   "graph.microsoft.com",
   "graph.microsoft.us",
   "graph.microsoft.de",
@@ -307,8 +310,36 @@ export function extractHtmlFromAttachment(att: MSTeamsAttachmentLike): string | 
   return text;
 }
 
-function isLikelyBase64Payload(value: string): boolean {
-  return /^[A-Za-z0-9+/=\r\n]+$/.test(value);
+function canonicalizeInlineBase64Payload(value: string): string | undefined {
+  let cleaned = "";
+  let padding = 0;
+  let sawPadding = false;
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 0x20) {
+      continue;
+    }
+    if (code === 0x3d) {
+      padding += 1;
+      if (padding > 2) {
+        return undefined;
+      }
+      sawPadding = true;
+      cleaned += "=";
+      continue;
+    }
+    const isDataChar =
+      (code >= 0x41 && code <= 0x5a) ||
+      (code >= 0x61 && code <= 0x7a) ||
+      (code >= 0x30 && code <= 0x39) ||
+      code === 0x2b ||
+      code === 0x2f;
+    if (sawPadding || !isDataChar) {
+      return undefined;
+    }
+    cleaned += value[index];
+  }
+  return cleaned && cleaned.length % 4 === 0 ? cleaned : undefined;
 }
 
 function decodeDataImageWithLimits(
@@ -325,11 +356,12 @@ function decodeDataImageWithLimits(
     return { candidate: null, estimatedBytes: 0 };
   }
   const payload = match[3] ?? "";
-  if (!payload || !isLikelyBase64Payload(payload)) {
+  const canonicalPayload = canonicalizeInlineBase64Payload(payload);
+  if (!canonicalPayload) {
     return { candidate: null, estimatedBytes: 0 };
   }
 
-  const estimatedBytes = estimateBase64DecodedBytes(payload);
+  const estimatedBytes = estimateBase64DecodedBytes(canonicalPayload);
   if (estimatedBytes <= 0) {
     return { candidate: null, estimatedBytes: 0 };
   }
@@ -338,7 +370,7 @@ function decodeDataImageWithLimits(
   }
 
   try {
-    const data = Buffer.from(payload, "base64");
+    const data = Buffer.from(canonicalPayload, "base64");
     return {
       candidate: { kind: "data", data, contentType, placeholder: "<media:image>" },
       estimatedBytes,
@@ -438,6 +470,45 @@ export type MSTeamsAttachmentDownloadLogger = {
 
 export type MSTeamsAttachmentResolveFn = (hostname: string) => Promise<{ address: string }>;
 
+function isMockFetchFn(fetchFn: typeof fetch): boolean {
+  const candidate = fetchFn as unknown as { mock?: unknown };
+  return Boolean(
+    candidate.mock || Object.prototype.hasOwnProperty.call(candidate, "_isMockFunction"),
+  );
+}
+
+function resolveGuardedFetchImpl(params: {
+  fetchFn?: typeof fetch;
+  fetchFnSupportsDispatcher?: boolean;
+}): typeof fetch | undefined {
+  if (!params.fetchFn) {
+    return undefined;
+  }
+  if (
+    params.fetchFnSupportsDispatcher === true ||
+    params.fetchFn === fetch ||
+    params.fetchFn === globalThis.fetch ||
+    isMockFetchFn(params.fetchFn)
+  ) {
+    return params.fetchFn;
+  }
+  throw new Error(
+    "MSTeams attachment fetchFn must set fetchFnSupportsDispatcher to use guarded DNS pinning",
+  );
+}
+
+function resolveRetainedAuthorizationRedirectHostnameAllowlist(
+  input?: string[],
+): string[] | undefined {
+  if (!input) {
+    return undefined;
+  }
+  if (input.includes("*")) {
+    return ["*"];
+  }
+  return resolveMediaSsrfPolicy(input)?.hostnameAllowlist;
+}
+
 export function resolveAttachmentFetchPolicy(params?: {
   allowHosts?: string[];
   authAllowHosts?: string[];
@@ -506,6 +577,51 @@ export async function resolveAndValidateIP(
 
 /** Maximum number of redirects to follow in safeFetch. */
 const MAX_SAFE_REDIRECTS = 5;
+const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);
+
+function responseWithRelease(response: Response, release: () => Promise<void>): Response {
+  let released = false;
+  const releaseOnce = async () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    await release();
+  };
+
+  if (!response.body || NULL_BODY_STATUSES.has(response.status)) {
+    void releaseOnce();
+    return response;
+  }
+
+  const reader = response.body.getReader();
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const next = await reader.read();
+        if (next.done) {
+          controller.close();
+          await releaseOnce();
+          return;
+        }
+        controller.enqueue(next.value);
+      } catch (err) {
+        await releaseOnce();
+        throw err;
+      }
+    },
+    async cancel(reason) {
+      void reader.cancel(reason).catch(() => {});
+      await releaseOnce();
+    },
+  });
+
+  return new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+}
 
 /**
  * Fetch a URL with redirect: "manual", validating each redirect target
@@ -525,10 +641,10 @@ export async function safeFetch(params: {
    */
   authorizationAllowHosts?: string[];
   fetchFn?: typeof fetch;
+  fetchFnSupportsDispatcher?: boolean;
   requestInit?: RequestInit;
   resolveFn?: MSTeamsAttachmentResolveFn;
 }): Promise<Response> {
-  const fetchFn = params.fetchFn ?? fetch;
   const resolveFn = params.resolveFn ?? lookup;
   const hasDispatcher = Boolean(
     params.requestInit &&
@@ -542,6 +658,38 @@ export async function safeFetch(params: {
     throw new Error(`Initial download URL blocked: ${currentUrl}`);
   }
 
+  // Authorization is only allowed on explicitly auth-allowlisted hosts, including
+  // the first hop. Redirect hops apply the same rule below or in fetchWithSsrFGuard.
+  if (
+    currentHeaders.has("authorization") &&
+    params.authorizationAllowHosts &&
+    !isUrlAllowed(currentUrl, params.authorizationAllowHosts)
+  ) {
+    currentHeaders.delete("authorization");
+  }
+
+  if (!hasDispatcher) {
+    const guarded = await fetchWithSsrFGuard({
+      url: currentUrl,
+      fetchImpl: resolveGuardedFetchImpl({
+        fetchFn: params.fetchFn,
+        fetchFnSupportsDispatcher: params.fetchFnSupportsDispatcher,
+      }),
+      init: {
+        ...params.requestInit,
+        headers: currentHeaders,
+      },
+      maxRedirects: MAX_SAFE_REDIRECTS,
+      requireHttps: true,
+      policy: resolveMediaSsrfPolicy(params.allowHosts),
+      lookupFn: resolveFn as LookupFn,
+      retainAuthorizationRedirectHostnameAllowlist:
+        resolveRetainedAuthorizationRedirectHostnameAllowlist(params.authorizationAllowHosts),
+      auditContext: "msteams.attachment",
+    });
+    return responseWithRelease(guarded.response, guarded.release);
+  }
+
   if (resolveFn) {
     try {
       const initialHost = new URL(currentUrl).hostname;
@@ -552,7 +700,7 @@ export async function safeFetch(params: {
   }
 
   for (let i = 0; i <= MAX_SAFE_REDIRECTS; i++) {
-    const res = await fetchFn(currentUrl, {
+    const res = await (params.fetchFn ?? fetch)(currentUrl, {
       ...params.requestInit,
       headers: currentHeaders,
       redirect: "manual",
@@ -612,6 +760,7 @@ export async function safeFetchWithPolicy(params: {
   url: string;
   policy: MSTeamsAttachmentFetchPolicy;
   fetchFn?: typeof fetch;
+  fetchFnSupportsDispatcher?: boolean;
   requestInit?: RequestInit;
   resolveFn?: MSTeamsAttachmentResolveFn;
 }): Promise<Response> {
@@ -620,6 +769,7 @@ export async function safeFetchWithPolicy(params: {
     allowHosts: params.policy.allowHosts,
     authorizationAllowHosts: params.policy.authAllowHosts,
     fetchFn: params.fetchFn,
+    fetchFnSupportsDispatcher: params.fetchFnSupportsDispatcher,
     requestInit: params.requestInit,
     resolveFn: params.resolveFn,
   });

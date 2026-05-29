@@ -1,7 +1,5 @@
 import { collectTextContentBlocks } from "../../agents/content-blocks.js";
-import type { BlockReplyChunking } from "../../agents/pi-embedded-block-chunker.js";
-import type { SkillCommandSpec } from "../../agents/skills.js";
-import { applyOwnerOnlyToolPolicy } from "../../agents/tool-policy.js";
+import type { BlockReplyChunking } from "../../agents/embedded-agent-block-chunker.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -13,11 +11,12 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
-import { resolveGatewayMessageChannel } from "../../utils/message-channel.js";
 import {
   listReservedChatSlashCommandNames,
   resolveSkillCommandInvocation,
-} from "../skill-commands-base.js";
+} from "../../skills/discovery/chat-commands.js";
+import type { SkillCommandSpec } from "../../skills/types.js";
+import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -36,16 +35,16 @@ import type { createModelSelectionState } from "./model-selection.js";
 import { extractInlineSimpleCommand } from "./reply-inline.js";
 import type { TypingController } from "./typing.js";
 
-type SkillCommandsRuntime = typeof import("../skill-commands.runtime.js");
-type OpenClawToolsRuntime = typeof import("../../agents/openclaw-tools.runtime.js");
+type SkillCommandsRuntime = typeof import("../../skills/discovery/chat-commands.runtime.js");
+type SkillToolDispatchRuntime = typeof import("../../skills/runtime/tool-dispatch.js");
 type AbortCutoffRuntime = typeof import("./abort-cutoff.runtime.js");
 type CommandsRuntime = typeof import("./commands.runtime.js");
 
 const skillCommandsRuntimeLoader = createLazyImportLoader<SkillCommandsRuntime>(
-  () => import("../skill-commands.runtime.js"),
+  () => import("../../skills/discovery/chat-commands.runtime.js"),
 );
-const openClawToolsRuntimeLoader = createLazyImportLoader<OpenClawToolsRuntime>(
-  () => import("../../agents/openclaw-tools.runtime.js"),
+const skillToolDispatchRuntimeLoader = createLazyImportLoader<SkillToolDispatchRuntime>(
+  () => import("../../skills/runtime/tool-dispatch.js"),
 );
 const abortCutoffRuntimeLoader = createLazyImportLoader<AbortCutoffRuntime>(
   () => import("./abort-cutoff.runtime.js"),
@@ -59,8 +58,8 @@ function loadSkillCommandsRuntime(): Promise<SkillCommandsRuntime> {
   return skillCommandsRuntimeLoader.load();
 }
 
-function loadOpenClawToolsRuntime(): Promise<OpenClawToolsRuntime> {
-  return openClawToolsRuntimeLoader.load();
+function loadSkillToolDispatchRuntime(): Promise<SkillToolDispatchRuntime> {
+  return skillToolDispatchRuntimeLoader.load();
 }
 
 function loadAbortCutoffRuntime(): Promise<AbortCutoffRuntime> {
@@ -127,7 +126,25 @@ export type InlineActionResult =
       kind: "continue";
       directives: InlineDirectives;
       abortedLastRun: boolean;
+      cleanedBody: string;
     };
+
+// Command / skill-dispatch handlers ("/compact", "/status", tool-not-available
+// errors, etc.) emit system-meta feedback for an explicit user action; they
+// are not assistant source content. Mark them so dispatch-from-config does
+// not silently drop them when sourceReplyDeliveryMode === "message_tool_only"
+// (the default for many channels and group chats). See #87107.
+function markCommandReplyForDelivery(
+  reply: ReplyPayload | ReplyPayload[] | undefined,
+): ReplyPayload | ReplyPayload[] | undefined {
+  if (!reply) {
+    return reply;
+  }
+  if (Array.isArray(reply)) {
+    return reply.map((payload) => markReplyPayloadForSourceSuppressionDelivery(payload));
+  }
+  return markReplyPayloadForSourceSuppressionDelivery(reply);
+}
 
 function extractTextFromToolResult(result: unknown): string | null {
   if (!result || typeof result !== "object") {
@@ -283,34 +300,51 @@ export async function handleInlineActions(params: {
     const dispatch = skillInvocation.command.dispatch;
     if (dispatch?.kind === "tool") {
       const rawArgs = (skillInvocation.args ?? "").trim();
-      const channel =
-        resolveGatewayMessageChannel(ctx.Surface) ??
-        resolveGatewayMessageChannel(ctx.Provider) ??
-        undefined;
-
-      const { createOpenClawTools } = await loadOpenClawToolsRuntime();
-      const tools = createOpenClawTools({
-        agentSessionKey: sessionKey,
-        agentChannel: channel,
-        agentAccountId: (ctx as { AccountId?: string }).AccountId,
-        agentTo: ctx.OriginatingTo ?? ctx.To,
-        agentThreadId: ctx.MessageThreadId ?? undefined,
-        agentGroupId: extractExplicitGroupId(ctx.From),
-        requesterAgentIdOverride: agentId,
+      const { resolveSkillDispatchTools } = await loadSkillToolDispatchRuntime();
+      const authorizedTools = resolveSkillDispatchTools({
+        message: {
+          surface: ctx.Surface,
+          provider: ctx.Provider,
+          accountId: ctx.AccountId,
+          senderId: ctx.SenderId,
+          senderName: ctx.SenderName,
+          senderUsername: ctx.SenderUsername,
+          senderE164: ctx.SenderE164,
+          originatingTo: ctx.OriginatingTo,
+          to: ctx.To,
+          messageThreadId: ctx.MessageThreadId,
+          memberRoleIds: ctx.MemberRoleIds,
+        },
+        cfg,
+        agentId,
         agentDir,
+        sessionEntry: targetSessionEntry,
+        sessionKey,
         workspaceDir,
-        config: cfg,
-        allowGatewaySubagentBinding: true,
-        senderIsOwner: command.senderIsOwner,
-        sessionId: targetSessionEntry?.sessionId,
+        provider,
+        model,
+        senderId: command.senderId,
         currentChannelId: command.channelId,
+        groupId: extractExplicitGroupId(ctx.From),
+        skillCommand: {
+          name: skillInvocation.command.name,
+          skillName: skillInvocation.command.skillName,
+          ...(skillInvocation.command.skillSource
+            ? { skillSource: skillInvocation.command.skillSource }
+            : {}),
+          toolName: dispatch.toolName,
+        },
       });
-      const authorizedTools = applyOwnerOnlyToolPolicy(tools, command.senderIsOwner);
 
       const tool = authorizedTools.find((candidate) => candidate.name === dispatch.toolName);
       if (!tool) {
         typing.cleanup();
-        return { kind: "reply", reply: { text: `❌ Tool not available: ${dispatch.toolName}` } };
+        return {
+          kind: "reply",
+          reply: markCommandReplyForDelivery({
+            text: `❌ Tool not available: ${dispatch.toolName}`,
+          }),
+        };
       }
 
       const toolCallId = `cmd_${generateSecureToken(8)}`;
@@ -326,16 +360,19 @@ export async function handleInlineActions(params: {
           typing.cleanup();
           return {
             kind: "reply",
-            reply: { text: `❌ Tool call blocked: ${blockedReason}` },
+            reply: markCommandReplyForDelivery({ text: `❌ Tool call blocked: ${blockedReason}` }),
           };
         }
         const text = extractTextFromToolResult(result) ?? "✅ Done.";
         typing.cleanup();
-        return { kind: "reply", reply: { text } };
+        return { kind: "reply", reply: markCommandReplyForDelivery({ text }) };
       } catch (err) {
         const message = formatErrorMessage(err);
         typing.cleanup();
-        return { kind: "reply", reply: { text: `❌ ${message}` } };
+        return {
+          kind: "reply",
+          reply: markCommandReplyForDelivery({ text: `❌ ${message}` }),
+        };
       }
     }
 
@@ -497,7 +534,7 @@ export async function handleInlineActions(params: {
     if (inlineResult.reply) {
       if (!inlineCommand.cleaned) {
         typing.cleanup();
-        return { kind: "reply", reply: inlineResult.reply };
+        return { kind: "reply", reply: markCommandReplyForDelivery(inlineResult.reply) };
       }
       await sendInlineReply(inlineResult.reply);
     }
@@ -537,6 +574,7 @@ export async function handleInlineActions(params: {
       kind: "continue",
       directives,
       abortedLastRun,
+      cleanedBody,
     };
   }
   const remainingBodyAfterInlineStatus = (() => {
@@ -555,15 +593,26 @@ export async function handleInlineActions(params: {
     return { kind: "reply", reply: undefined };
   }
 
+  const commandBodyBeforeRun = command.commandBodyNormalized;
+  const bodyBeforeRun = sessionCtx.BodyStripped ?? sessionCtx.BodyForAgent;
   const commandResult = await runCommands(command);
   if (!commandResult.shouldContinue) {
     typing.cleanup();
-    return { kind: "reply", reply: commandResult.reply };
+    return { kind: "reply", reply: markCommandReplyForDelivery(commandResult.reply) };
+  }
+  if (command.commandBodyNormalized !== commandBodyBeforeRun) {
+    cleanedBody = command.commandBodyNormalized;
+  } else {
+    const bodyAfterRun = sessionCtx.BodyStripped ?? sessionCtx.BodyForAgent;
+    if (bodyAfterRun !== undefined && bodyAfterRun !== bodyBeforeRun) {
+      cleanedBody = bodyAfterRun;
+    }
   }
 
   return {
     kind: "continue",
     directives,
     abortedLastRun,
+    cleanedBody,
   };
 }

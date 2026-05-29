@@ -1,11 +1,11 @@
-import type { Api, Model } from "@earendil-works/pi-ai";
+import type { Api, Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import {
   createMantleAnthropicStreamFn,
   resolveMantleAnthropicBaseUrl,
 } from "./mantle-anthropic.runtime.js";
 
-function createTestModel(): Model<Api> {
+function createTestModel(): Model {
   return {
     id: "anthropic.claude-opus-4-7",
     name: "Claude Opus 4.7",
@@ -20,7 +20,7 @@ function createTestModel(): Model<Api> {
     cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
     contextWindow: 1_000_000,
     maxTokens: 128_000,
-  } as Model<Api>;
+  } as Model;
 }
 
 function createTestDeps() {
@@ -35,6 +35,27 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
     throw new Error(`Expected ${label} to be an object`);
   }
   return value as Record<string, unknown>;
+}
+
+function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0, argIndex = 0): unknown {
+  const call = mock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected mock call ${index}`);
+  }
+  return call[argIndex];
+}
+
+function expectFirstStreamCall(
+  deps: ReturnType<typeof createTestDeps>,
+  model: Model,
+  context: unknown,
+) {
+  expect(mockCallArg(deps.stream, 0, 0)).toBe(model);
+  expect(mockCallArg(deps.stream, 0, 1)).toBe(context);
+}
+
+function firstStreamOptions(deps: ReturnType<typeof createTestDeps>): Record<string, unknown> {
+  return requireRecord(mockCallArg(deps.stream, 0, 2), "stream options");
 }
 
 describe("createMantleAnthropicStreamFn", () => {
@@ -53,7 +74,7 @@ describe("createMantleAnthropicStreamFn", () => {
     });
 
     expect(result).toBe(stream);
-    const clientOptions = requireRecord(deps.createClient.mock.calls[0]?.[0], "client options");
+    const clientOptions = requireRecord(mockCallArg(deps.createClient), "client options");
     expect(clientOptions.apiKey).toBeNull();
     expect(clientOptions.authToken).toBe("bedrock-bearer-token");
     expect(clientOptions.baseURL).toBe("https://bedrock-mantle.us-east-1.api.aws/anthropic");
@@ -63,9 +84,8 @@ describe("createMantleAnthropicStreamFn", () => {
     expect(defaultHeaders["X-Test"]).toBe("model-header");
     expect(defaultHeaders["X-Caller"]).toBe("caller-header");
 
-    expect(deps.stream.mock.calls[0]?.[0]).toBe(model);
-    expect(deps.stream.mock.calls[0]?.[1]).toBe(context);
-    const streamOptions = requireRecord(deps.stream.mock.calls[0]?.[2], "stream options");
+    expectFirstStreamCall(deps, model, context);
+    const streamOptions = firstStreamOptions(deps);
     const client = requireRecord(streamOptions.client, "stream client");
     expect(requireRecord(client.options, "stream client options").authToken).toBe(
       "bedrock-bearer-token",
@@ -85,9 +105,8 @@ describe("createMantleAnthropicStreamFn", () => {
       reasoning: "high",
     });
 
-    expect(deps.stream.mock.calls[0]?.[0]).toBe(model);
-    expect(deps.stream.mock.calls[0]?.[1]).toBe(context);
-    const streamOptions = requireRecord(deps.stream.mock.calls[0]?.[2], "stream options");
+    expectFirstStreamCall(deps, model, context);
+    const streamOptions = firstStreamOptions(deps);
     expect(streamOptions.temperature).toBeUndefined();
     expect(streamOptions.thinkingEnabled).toBe(false);
   });

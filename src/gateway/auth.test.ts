@@ -1,4 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import os from "node:os";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeNetworkInterfacesSnapshot } from "../test-helpers/network-interfaces.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import {
   assertGatewayAuthConfigured,
@@ -142,6 +144,7 @@ describe("gateway auth", () => {
     { name: "X-Forwarded-For", headers: { "x-forwarded-for": "203.0.113.10" } },
     { name: "X-Forwarded-Proto", headers: { "x-forwarded-proto": "https" } },
     { name: "X-Forwarded-Host", headers: { "x-forwarded-host": "gateway.example" } },
+    { name: "X-Forwarded-User", headers: { "x-forwarded-user": "nick@example.com" } },
     { name: "X-Real-IP", headers: { "x-real-ip": "203.0.113.10" } },
   ])("treats $name as forwarded request evidence", ({ headers }) => {
     const req = {
@@ -558,6 +561,26 @@ describe("gateway auth", () => {
 });
 
 describe("trusted-proxy auth", () => {
+  function mockLocalInterfaces(nonLoopbackAddress = "10.0.0.2", family: "IPv4" | "IPv6" = "IPv4") {
+    const spy = vi.isMockFunction(os.networkInterfaces)
+      ? vi.mocked(os.networkInterfaces)
+      : vi.spyOn(os, "networkInterfaces");
+    spy.mockReturnValue(
+      makeNetworkInterfacesSnapshot({
+        lo: [{ address: "127.0.0.1", family: "IPv4", internal: true }],
+        eth0: [{ address: nonLoopbackAddress, family }],
+      }),
+    );
+  }
+
+  beforeEach(() => {
+    mockLocalInterfaces();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   type GatewayConnectInput = Parameters<typeof authorizeGatewayConnect>[0];
   const trustedProxyConfig = {
     userHeader: "x-forwarded-user",
@@ -600,6 +623,57 @@ describe("trusted-proxy auth", () => {
     expect(res.ok).toBe(true);
     expect(res.method).toBe("trusted-proxy");
     expect(res.user).toBe("nick@example.com");
+  });
+
+  it("rejects trusted-proxy headers from the host non-loopback interface address", async () => {
+    mockLocalInterfaces("10.0.0.1");
+
+    const res = await authorizeTrustedProxy({
+      trustedProxies: ["10.0.0.1"],
+      remoteAddress: "10.0.0.1",
+      headers: {
+        "x-forwarded-user": "nick@example.com",
+        "x-forwarded-proto": "https",
+        "x-openclaw-proxy-auth": "present",
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("trusted_proxy_local_interface_source");
+  });
+
+  it("rejects trusted-proxy headers when local interface discovery fails", async () => {
+    vi.mocked(os.networkInterfaces).mockImplementation(() => {
+      throw new Error("interface discovery failed");
+    });
+
+    const res = await authorizeTrustedProxy({
+      trustedProxies: ["10.0.0.1"],
+      remoteAddress: "10.0.0.1",
+      headers: {
+        "x-forwarded-user": "nick@example.com",
+        "x-forwarded-proto": "https",
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("trusted_proxy_local_interface_check_failed");
+  });
+
+  it("rejects trusted-proxy headers from a host IPv6 interface address", async () => {
+    mockLocalInterfaces("fd7a:115c:a1e0::1234", "IPv6");
+
+    const res = await authorizeTrustedProxy({
+      trustedProxies: ["fd7a:115c:a1e0::1234"],
+      remoteAddress: "fd7a:115c:a1e0::1234",
+      headers: {
+        "x-forwarded-user": "nick@example.com",
+        "x-forwarded-proto": "https",
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("trusted_proxy_local_interface_source");
   });
 
   it("rejects trusted-proxy HTTP requests from origins outside the allowlist", async () => {
@@ -951,7 +1025,7 @@ describe("trusted-proxy auth", () => {
       expect(res.reason).toBe("trusted_proxy_loopback_source");
     });
 
-    it("rejects local-direct password credentials when trusted-proxy auth fails", async () => {
+    it("accepts local-direct password fallback when trusted-proxy auth fails", async () => {
       const limiter = createLimiterSpy();
       const res = await authorizeLocalDirect({
         password: "local-password", // pragma: allowlist secret
@@ -959,13 +1033,13 @@ describe("trusted-proxy auth", () => {
         rateLimiter: limiter,
       });
 
-      expect(res).toEqual({ ok: false, reason: "trusted_proxy_loopback_source" });
-      expect(limiter.check).not.toHaveBeenCalled();
-      expect(limiter.reset).not.toHaveBeenCalled();
+      expect(res).toEqual({ ok: true, method: "password" });
+      expect(limiter.check).toHaveBeenCalledWith("127.0.0.1", "shared-secret");
+      expect(limiter.reset).toHaveBeenCalledWith("127.0.0.1", "shared-secret");
       expect(limiter.recordFailure).not.toHaveBeenCalled();
     });
 
-    it("ignores wrong local-direct password credentials when trusted-proxy auth fails", async () => {
+    it("rejects wrong local-direct password fallback and records the failure", async () => {
       const limiter = createLimiterSpy();
       const res = await authorizeLocalDirect({
         password: "local-password", // pragma: allowlist secret
@@ -973,13 +1047,13 @@ describe("trusted-proxy auth", () => {
         rateLimiter: limiter,
       });
 
-      expect(res).toEqual({ ok: false, reason: "trusted_proxy_loopback_source" });
-      expect(limiter.check).not.toHaveBeenCalled();
-      expect(limiter.recordFailure).not.toHaveBeenCalled();
+      expect(res).toEqual({ ok: false, reason: "password_mismatch" });
+      expect(limiter.check).toHaveBeenCalledWith("127.0.0.1", "shared-secret");
+      expect(limiter.recordFailure).toHaveBeenCalledWith("127.0.0.1", "shared-secret");
       expect(limiter.reset).not.toHaveBeenCalled();
     });
 
-    it("does not apply shared-secret rate limits to trusted-proxy failures", async () => {
+    it("enforces rate-limit lockout before local-direct password fallback", async () => {
       const limiter = createLimiterSpy();
       limiter.check.mockReturnValueOnce({
         allowed: false,
@@ -993,10 +1067,27 @@ describe("trusted-proxy auth", () => {
         rateLimiter: limiter,
       });
 
-      expect(res).toEqual({ ok: false, reason: "trusted_proxy_loopback_source" });
-      expect(limiter.check).not.toHaveBeenCalled();
+      expect(res).toEqual({
+        ok: false,
+        reason: "rate_limited",
+        rateLimited: true,
+        retryAfterMs: 2500,
+      });
       expect(limiter.recordFailure).not.toHaveBeenCalled();
       expect(limiter.reset).not.toHaveBeenCalled();
+    });
+
+    it("accepts local-direct password fallback before required-header failure", async () => {
+      const res = await authorizeLocalDirect({
+        password: "local-password", // pragma: allowlist secret
+        connectPassword: "local-password", // pragma: allowlist secret
+        trustedProxy: {
+          ...trustedProxyConfig,
+          allowLoopback: true,
+        },
+      });
+
+      expect(res).toEqual({ ok: true, method: "password" });
     });
 
     it("keeps local-direct trusted-proxy on proxy failure when no password is supplied", async () => {

@@ -1,16 +1,15 @@
 {
   "name": "@openclaw/xai-plugin",
-  "version": "2026.5.10-beta.1",
+  "version": "2026.5.28",
   "private": true,
   "description": "OpenClaw xAI plugin",
   "type": "module",
   "dependencies": {
-    "@earendil-works/pi-ai": "0.74.0",
     "typebox": "1.1.38"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
-    "ws": "^8.20.0"
+    "ws": "8.21.0"
   },
   "openclaw": {
     "extensions": [

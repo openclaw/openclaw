@@ -69,6 +69,14 @@ function appendTelegramRuntimeError(message: string, lastError: unknown): string
   return error ? `${message}: ${error}` : message;
 }
 
+function isTelegramPollingBacklogStallError(lastError: unknown): boolean {
+  const error = asString(lastError);
+  return Boolean(
+    error?.includes("isolated polling spool backlog stalled") ||
+    error?.includes("isolated polling spool handler timed out"),
+  );
+}
+
 function collectTelegramPollingRuntimeIssues(params: {
   account: TelegramAccountStatus;
   accountId: string;
@@ -88,14 +96,14 @@ function collectTelegramPollingRuntimeIssues(params: {
     const withinStartupGrace =
       lastStartAt != null && now - lastStartAt < TELEGRAM_POLLING_CONNECT_GRACE_MS;
     if (!withinStartupGrace) {
+      const message = isTelegramPollingBacklogStallError(account.lastError)
+        ? "Telegram isolated polling spool backlog is stalled while Bot API polling is still succeeding"
+        : "Telegram polling is running but has not completed a successful getUpdates call since startup";
       issues.push({
         channel: "telegram",
         accountId,
         kind: "runtime",
-        message: appendTelegramRuntimeError(
-          "Telegram polling is running but has not completed a successful getUpdates call since startup",
-          account.lastError,
-        ),
+        message: appendTelegramRuntimeError(message, account.lastError),
         fix,
       });
     }

@@ -29,7 +29,10 @@ vi.mock("./plugin-registry.js", () => ({
   loadPluginRegistrySnapshot: mocks.loadPluginRegistrySnapshot,
 }));
 
-import { resolvePluginConfigContractsById } from "./config-contracts.js";
+import {
+  collectPluginConfigContractMatches,
+  resolvePluginConfigContractsById,
+} from "./config-contracts.js";
 
 type PluginManifestRecord = PluginManifestRegistry["plugins"][number];
 
@@ -270,5 +273,42 @@ describe("resolvePluginConfigContractsById", () => {
       }),
     ).toEqual(new Map());
     expect(mocks.loadBundledManifestRegistry).not.toHaveBeenCalled();
+  });
+});
+
+describe("collectPluginConfigContractMatches", () => {
+  it("only accepts canonical array index path segments", () => {
+    const root = { items: ["first", "second"] };
+
+    expect(
+      collectPluginConfigContractMatches({
+        root,
+        pathPattern: "items.1",
+      }),
+    ).toEqual([{ path: "items[1]", value: "second" }]);
+    expect(
+      collectPluginConfigContractMatches({
+        root,
+        pathPattern: "items.1.5",
+      }),
+    ).toEqual([]);
+    expect(
+      collectPluginConfigContractMatches({
+        root,
+        pathPattern: "items.01",
+      }),
+    ).toEqual([]);
+  });
+
+  it("rejects array indexes outside canonical config path bounds", () => {
+    const items = Array<string>(100_002);
+    items[100_001] = "too far";
+
+    expect(
+      collectPluginConfigContractMatches({
+        root: { items },
+        pathPattern: "items.100001",
+      }),
+    ).toEqual([]);
   });
 });

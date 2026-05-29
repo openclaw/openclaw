@@ -143,7 +143,6 @@ describe("channelsHandlers channels.status", () => {
 
     expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith({
       config: {},
-      env: process.env,
     });
     const snapshotArgs = requireRecord(requireFirstCallArg(mocks.buildChannelAccountSnapshot));
     expect(snapshotArgs.cfg).toBe(autoEnabledConfig);
@@ -225,10 +224,19 @@ describe("channelsHandlers channels.status", () => {
     const payload = requireRespondPayload(respond);
     expect(payload.channelOrder).toEqual(["imessage"]);
     expect(payload.channels).toEqual({
-      imessage: expect.any(Object),
+      imessage: { configured: true },
     });
     expect(payload.channelAccounts).toEqual({
-      imessage: [expect.objectContaining({ accountId: "default" })],
+      imessage: [
+        {
+          accountId: "default",
+          configured: true,
+          lastProbeAt: expect.any(Number),
+          lastInboundAt: null,
+          lastOutboundAt: null,
+          healthState: "not-running",
+        },
+      ],
     });
   });
 

@@ -189,11 +189,11 @@ describe("runDiscordGatewayLifecycle", () => {
   }
 
   function expectMockMessageContains(mock: ReturnType<typeof vi.fn>, expected: string): void {
-    expect(mockMessages(mock).some((message) => message.includes(expected))).toBe(true);
+    expect(mockMessages(mock).join("\n")).toContain(expected);
   }
 
   function expectMockMessageNotContains(mock: ReturnType<typeof vi.fn>, expected: string): void {
-    expect(mockMessages(mock).every((message) => !message.includes(expected))).toBe(true);
+    expect(mockMessages(mock).join("\n")).not.toContain(expected);
   }
 
   type StatusPatch = {
@@ -231,6 +231,20 @@ describe("runDiscordGatewayLifecycle", () => {
       }),
     ).toBe(120_000);
     expect(resolveDiscordGatewayRuntimeReadyTimeoutMs({ env: {} })).toBe(30_000);
+  });
+
+  it("ignores non-integer gateway READY timeout values", () => {
+    expect(
+      resolveDiscordGatewayReadyTimeoutMs({
+        configuredTimeoutMs: 1.5,
+        env: { OPENCLAW_DISCORD_READY_TIMEOUT_MS: "0x1000" },
+      }),
+    ).toBe(15_000);
+    expect(
+      resolveDiscordGatewayRuntimeReadyTimeoutMs({
+        env: { OPENCLAW_DISCORD_RUNTIME_READY_TIMEOUT_MS: "1e3" },
+      }),
+    ).toBe(30_000);
   });
 
   it("cleans up thread bindings when gateway wait fails before READY", async () => {

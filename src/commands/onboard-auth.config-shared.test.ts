@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { AgentModelEntryConfig } from "../config/types.agent-defaults.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import {
+  applyAgentDefaultModelPrimary,
   applyProviderConfigWithDefaultModelPreset,
   applyProviderConfigWithModelCatalogPreset,
   applyProviderConfigWithDefaultModel,
@@ -184,6 +185,36 @@ describe("onboard auth provider config merges", () => {
     ]);
   });
 
+  it("normalizes retired Google provider catalog ids when applying only an agent default", () => {
+    const next = applyAgentDefaultModelPrimary(
+      {
+        models: {
+          providers: {
+            google: {
+              api: "google-generative-ai",
+              baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+              models: [makeModel("google/gemini-3-pro-preview")],
+            },
+            kilocode: {
+              api: "openai-completions",
+              baseUrl: "https://kilocode.example.com/v1",
+              models: [makeModel("google/gemini-3-pro-preview")],
+            },
+          },
+        },
+      },
+      "google/gemini-3.1-pro-preview",
+    );
+
+    expect(next.models?.providers?.google?.models?.map((m) => m.id)).toEqual([
+      "google/gemini-3.1-pro-preview",
+    ]);
+    expect(next.models?.providers?.kilocode?.models?.map((m) => m.id)).toEqual([
+      "google/gemini-3.1-pro-preview",
+    ]);
+    expect(next.agents?.defaults?.model).toEqual({ primary: "google/gemini-3.1-pro-preview" });
+  });
+
   it("supports single default model convenience wrapper", () => {
     const next = applyProviderConfigWithDefaultModel(
       {},
@@ -251,6 +282,46 @@ describe("onboard auth provider config merges", () => {
     expect(next.agents?.defaults?.model).toEqual({ primary: "custom/model-z" });
   });
 
+  it("does not let default-model presets replace an existing default model", () => {
+    const next = applyProviderConfigWithDefaultModelPreset(
+      {
+        agents: {
+          defaults: {
+            models: {
+              "claude-max-proxy/claude-opus-4-7": {},
+              "claude-max-proxy/claude-sonnet-4-6": {},
+            },
+            model: {
+              primary: "claude-max-proxy/claude-opus-4-7",
+              fallbacks: ["claude-max-proxy/claude-sonnet-4-6"],
+            },
+          },
+        },
+      },
+      {
+        providerId: "moonshot",
+        api: "openai-completions",
+        baseUrl: "https://api.moonshot.cn/v1",
+        defaultModel: makeModel("kimi-k2.6"),
+        aliases: [{ modelRef: "moonshot/kimi-k2.6", alias: "Kimi" }],
+        primaryModelRef: "moonshot/kimi-k2.6",
+      },
+    );
+
+    expect(next.agents?.defaults?.model).toEqual({
+      primary: "claude-max-proxy/claude-opus-4-7",
+      fallbacks: ["claude-max-proxy/claude-sonnet-4-6"],
+    });
+    expect(next.agents?.defaults?.models).toEqual({
+      "claude-max-proxy/claude-opus-4-7": {},
+      "claude-max-proxy/claude-sonnet-4-6": {},
+      "moonshot/kimi-k2.6": { alias: "Kimi" },
+    });
+    expect(next.models?.providers?.moonshot?.models?.map((model) => model.id)).toEqual([
+      "kimi-k2.6",
+    ]);
+  });
+
   it("applies catalog presets with alias and merged catalog models", () => {
     const next = applyProviderConfigWithModelCatalogPreset(
       {
@@ -282,5 +353,37 @@ describe("onboard auth provider config merges", () => {
       alias: "Catalog Alias",
     });
     expect(next.agents?.defaults?.model).toEqual({ primary: "custom/model-b" });
+  });
+
+  it("does not let catalog presets replace an existing default model", () => {
+    const next = applyProviderConfigWithModelCatalogPreset(
+      {
+        agents: {
+          defaults: {
+            models: {
+              "custom-existing/model-a": {},
+            },
+            model: {
+              primary: "custom-existing/model-a",
+            },
+          },
+        },
+      },
+      {
+        providerId: "custom",
+        api: "openai-completions",
+        baseUrl: "https://example.com/v1",
+        catalogModels: [makeModel("model-b")],
+        aliases: [{ modelRef: "custom/model-b", alias: "Catalog Alias" }],
+        primaryModelRef: "custom/model-b",
+      },
+    );
+
+    expect(next.agents?.defaults?.model).toEqual({ primary: "custom-existing/model-a" });
+    expect(next.agents?.defaults?.models).toEqual({
+      "custom-existing/model-a": {},
+      "custom/model-b": { alias: "Catalog Alias" },
+    });
+    expect(next.models?.providers?.custom?.models?.map((model) => model.id)).toEqual(["model-b"]);
   });
 });

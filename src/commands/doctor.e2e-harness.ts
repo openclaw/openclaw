@@ -242,13 +242,15 @@ vi.mock("@clack/prompts", () => ({
   select,
 }));
 
-vi.mock("../agents/skills-status.js", () => ({
+vi.mock("../skills/discovery/status.js", () => ({
   buildWorkspaceSkillStatus: () => ({ skills: [] }),
 }));
 
 vi.mock("../plugins/loader.js", () => ({
+  getRuntimePluginRegistryForLoadOptions: () => null,
   isPluginRegistryLoadInFlight: () => false,
   loadOpenClawPlugins: () => createEmptyPluginRegistry(),
+  resolveCompatibleRuntimePluginRegistry: () => null,
   resolveRuntimePluginRegistry: () => null,
 }));
 
@@ -499,7 +501,7 @@ export async function arrangeLegacyStateMigrationTest(): Promise<{
 
   detectLegacyStateMigrations.mockClear();
   runLegacyStateMigrations.mockClear();
-  detectLegacyStateMigrations.mockResolvedValueOnce(
+  detectLegacyStateMigrations.mockResolvedValue(
     createLegacyStateMigrationDetectionResult({
       hasLegacySessions: true,
       preview: ["- Legacy sessions detected"],

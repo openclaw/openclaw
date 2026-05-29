@@ -4,12 +4,12 @@ import {
   normalizeOptionalAccountId,
   resolveListedDefaultAccountId,
 } from "openclaw/plugin-sdk/account-core";
+import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createAttachedChannelResultAdapter,
   type ChannelOutboundAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-send-deps";
 import { sendTextMediaPayload } from "openclaw/plugin-sdk/reply-payload";
 import {
   normalizeWhatsAppOutboundPayload,
@@ -32,6 +32,7 @@ type WhatsAppSendTextOptions = {
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
   gifPlayback?: boolean;
   audioAsVoice?: boolean;
+  forceDocument?: boolean;
   accountId?: string;
   quotedMessageKey?: {
     id: string;
@@ -192,6 +193,7 @@ export function createWhatsAppOutboundBase({
         accountId,
         deps,
         gifPlayback,
+        forceDocument,
         replyToId,
       }) => {
         const send =
@@ -214,6 +216,7 @@ export function createWhatsAppOutboundBase({
           ...(audioAsVoice === undefined ? {} : { audioAsVoice }),
           accountId: accountId ?? undefined,
           gifPlayback,
+          forceDocument,
           quotedMessageKey,
         });
       },

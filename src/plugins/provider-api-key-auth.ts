@@ -1,9 +1,9 @@
-import { upsertAuthProfile } from "../agents/auth-profiles/profiles.js";
+import { upsertAuthProfileWithLock } from "../agents/auth-profiles/profiles.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretInput } from "../config/types.secrets.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
+import { normalizeUniqueStringEntries } from "../shared/string-normalization.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import type {
   ProviderAuthMethod,
@@ -32,6 +32,8 @@ type ProviderApiKeyAuthMethodOptions = {
   applyConfig?: (cfg: OpenClawConfig) => OpenClawConfig;
 };
 
+type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
+
 const loadProviderApiKeyAuthRuntime = createLazyRuntimeSurface(
   () => import("./provider-api-key-auth.runtime.js"),
   ({ providerApiKeyAuthRuntime }) => providerApiKeyAuthRuntime,
@@ -50,11 +52,20 @@ function resolveProfileIds(params: {
   profileId?: string;
   profileIds?: string[];
 }) {
-  const explicit = Array.from(new Set(normalizeStringEntries(params.profileIds ?? [])));
+  const explicit = normalizeUniqueStringEntries(params.profileIds ?? []);
   if (explicit.length > 0) {
     return explicit;
   }
   return [resolveProfileId(params)];
+}
+
+async function upsertAuthProfileWithLockOrThrow(params: UpsertAuthProfileParams): Promise<void> {
+  const updated = await upsertAuthProfileWithLock(params);
+  if (!updated) {
+    throw new Error(
+      "Failed to update auth profile store; the auth store lock may be busy. Wait a moment and retry.",
+    );
+  }
 }
 
 async function applyApiKeyConfig(params: {
@@ -177,7 +188,7 @@ export function createProviderApiKeyAuthMethod(
           if (!credential) {
             return null;
           }
-          upsertAuthProfile({
+          await upsertAuthProfileWithLockOrThrow({
             profileId,
             credential,
             agentDir: ctx.agentDir,

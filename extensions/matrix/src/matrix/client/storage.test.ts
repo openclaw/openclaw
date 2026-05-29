@@ -106,7 +106,7 @@ describe("matrix client storage paths", () => {
 
   function expectFallbackMigrationSnapshot(env: NodeJS.ProcessEnv): void {
     expect(maybeCreateMatrixMigrationSnapshotMock).toHaveBeenCalledTimes(1);
-    const [params] = maybeCreateMatrixMigrationSnapshotMock.mock.calls[0] ?? [];
+    const [params] = maybeCreateMatrixMigrationSnapshotMock.mock.calls.at(0) ?? [];
     expect(params).toEqual({
       env,
       log: {

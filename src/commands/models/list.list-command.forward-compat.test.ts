@@ -19,6 +19,46 @@ const OPENAI_CODEX_53_MODEL = {
 };
 
 const mocks = vi.hoisted(() => {
+  const emptyPluginIndex = {
+    version: 1,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1,
+    policyHash: "models-list-command-forward-compat-test",
+    generatedAtMs: 0,
+    installRecords: {},
+    plugins: [],
+    diagnostics: [],
+  };
+  const emptyPluginMetadataSnapshot = {
+    policyHash: "models-list-command-forward-compat-test",
+    configFingerprint: "models-list-command-forward-compat-test",
+    index: emptyPluginIndex,
+    registryDiagnostics: [],
+    manifestRegistry: { plugins: [], diagnostics: [] },
+    plugins: [],
+    diagnostics: [],
+    byPluginId: new Map(),
+    normalizePluginId: (pluginId: string) => pluginId,
+    owners: {
+      channels: new Map(),
+      channelConfigs: new Map(),
+      providers: new Map(),
+      modelCatalogProviders: new Map(),
+      cliBackends: new Map(),
+      setupProviders: new Map(),
+      commandAliases: new Map(),
+      contracts: new Map(),
+    },
+    metrics: {
+      registrySnapshotMs: 0,
+      manifestRegistryMs: 0,
+      ownerMapsMs: 0,
+      totalMs: 0,
+      indexPluginCount: 0,
+      manifestPluginCount: 0,
+    },
+  };
   const sourceConfig = {
     agents: { defaults: { model: { primary: "openai-codex/gpt-5.4" } } },
     models: {
@@ -40,6 +80,7 @@ const mocks = vi.hoisted(() => {
     },
   };
   return {
+    emptyPluginMetadataSnapshot,
     sourceConfig,
     resolvedConfig,
     loadModelsConfigWithSource: vi.fn(),
@@ -57,6 +98,7 @@ const mocks = vi.hoisted(() => {
     printModelTable: vi.fn(),
     resolveModelWithRegistry: vi.fn(),
     readPersistedInstalledPluginIndexSync: vi.fn(),
+    loadManifestMetadataSnapshot: vi.fn(),
     loadPluginRegistrySnapshotWithMetadata: vi.fn(),
   };
 });
@@ -96,6 +138,7 @@ function resetMocks() {
   mocks.printModelTable.mockReset();
   mocks.resolveModelWithRegistry.mockReturnValue({ ...OPENAI_CODEX_MODEL });
   mocks.readPersistedInstalledPluginIndexSync.mockReturnValue(null);
+  mocks.loadManifestMetadataSnapshot.mockReturnValue(mocks.emptyPluginMetadataSnapshot);
   mocks.loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
     source: "persisted",
     snapshot: { plugins: [] },
@@ -108,7 +151,8 @@ function createRuntime() {
 }
 
 function lastPrintedRows<T>() {
-  return (mocks.printModelTable.mock.calls.at(-1)?.[0] ?? []) as T[];
+  const calls = mocks.printModelTable.mock.calls;
+  return (calls[calls.length - 1]?.[0] ?? []) as T[];
 }
 
 function requireRow<T extends { key: string }>(rows: T[], key: string): T {
@@ -121,6 +165,11 @@ function requireRow<T extends { key: string }>(rows: T[], key: string): T {
 
 function expectRowKeys(rows: Array<{ key: string }>, keys: string[]) {
   expect(rows.map((row) => row.key)).toEqual(keys);
+}
+
+function expectFirstRegistryConfig() {
+  const [cfg] = mocks.loadModelRegistry.mock.calls[0] ?? [];
+  expect(cfg).toBe(mocks.resolvedConfig);
 }
 
 function expectRowFields(
@@ -241,16 +290,18 @@ function installModelsListCommandForwardCompatMocks() {
   }));
 
   vi.doMock("../../agents/agent-scope.js", () => ({
+    listAgentEntries: vi.fn(() => []),
     resolveAgentWorkspaceDir: vi.fn(() => "/tmp/openclaw-workspace"),
     resolveDefaultAgentDir: mocks.resolveDefaultAgentDir,
     resolveDefaultAgentId: vi.fn(() => "main"),
+    resolveSessionAgentIds: vi.fn(() => ({ defaultAgentId: "main", sessionAgentId: "main" })),
   }));
 
   vi.doMock("../../agents/model-catalog.js", () => ({
     loadModelCatalog: mocks.loadModelCatalog,
   }));
 
-  vi.doMock("../../agents/pi-embedded-runner/model.js", () => ({
+  vi.doMock("../../agents/embedded-agent-runner/model.js", () => ({
     resolveModelWithRegistry: mocks.resolveModelWithRegistry,
   }));
 
@@ -261,6 +312,10 @@ function installModelsListCommandForwardCompatMocks() {
 
   vi.doMock("../../plugins/installed-plugin-index-store.js", () => ({
     readPersistedInstalledPluginIndexSync: mocks.readPersistedInstalledPluginIndexSync,
+  }));
+
+  vi.doMock("../../plugins/manifest-contract-eligibility.js", () => ({
+    loadManifestMetadataSnapshot: mocks.loadManifestMetadataSnapshot,
   }));
 
   vi.doMock("../../plugins/plugin-registry.js", async (importOriginal) => {
@@ -608,8 +663,8 @@ describe("modelsListCommand forward-compat", () => {
       mocks.loadModelCatalog.mockResolvedValueOnce([
         {
           provider: "google",
-          id: "gemini-3.1-flash-lite-preview",
-          name: "Gemini 3.1 Flash Lite Preview",
+          id: "gemini-3.1-flash-lite",
+          name: "Gemini 3.1 Flash Lite",
           input: ["text"],
           contextWindow: 1_000_000,
         },
@@ -623,12 +678,12 @@ describe("modelsListCommand forward-compat", () => {
       expectRowKeys(rows, [
         "xiaomi/mimo-v2.5-pro",
         "xiaomi/mimo-v2.5",
-        "google/gemini-3.1-flash-lite-preview",
+        "google/gemini-3.1-flash-lite",
       ]);
       expectRowFields(rows, "xiaomi/mimo-v2.5-pro", { name: "MiMo V2.5 Pro" });
       expectRowFields(rows, "xiaomi/mimo-v2.5", { name: "MiMo V2.5" });
-      expectRowFields(rows, "google/gemini-3.1-flash-lite-preview", {
-        name: "Gemini 3.1 Flash Lite Preview",
+      expectRowFields(rows, "google/gemini-3.1-flash-lite", {
+        name: "Gemini 3.1 Flash Lite",
         available: true,
       });
     });
@@ -820,12 +875,14 @@ describe("modelsListCommand forward-compat", () => {
 
       expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
       expect(mocks.loadModelRegistry).not.toHaveBeenCalled();
-      expect(mocks.loadProviderCatalogModelsForList).toHaveBeenCalledWith({
-        cfg: mocks.resolvedConfig,
-        agentDir: "/tmp/openclaw-agent",
-        providerFilter: "codex",
-        staticOnly: true,
-      });
+      expect(mocks.loadProviderCatalogModelsForList).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cfg: mocks.resolvedConfig,
+          agentDir: "/tmp/openclaw-agent",
+          providerFilter: "codex",
+          staticOnly: true,
+        }),
+      );
       const rows = lastPrintedRows<{ key: string; available: boolean }>();
       expectRowKeys(rows, ["codex/gpt-5.4"]);
       expectRowFields(rows, "codex/gpt-5.4", { available: true });
@@ -914,7 +971,7 @@ describe("modelsListCommand forward-compat", () => {
 
       await modelsListCommand({ all: true, provider: "openai", json: true }, runtime as never);
 
-      expect(mocks.loadModelRegistry.mock.calls[0]?.[0]).toBe(mocks.resolvedConfig);
+      expectFirstRegistryConfig();
       expect(modelRegistryOptions().providerFilter).toBe("openai");
       expect(modelRegistryOptions().normalizeModels).toBe(true);
       expectRowKeys(lastPrintedRows<{ key: string }>(), ["openai/gpt-5.4", "openai/gpt-5.5-pro"]);
@@ -976,7 +1033,7 @@ describe("modelsListCommand forward-compat", () => {
 
       await modelsListCommand({ all: true, json: true }, runtime as never);
 
-      expect(mocks.loadModelRegistry.mock.calls[0]?.[0]).toBe(mocks.resolvedConfig);
+      expectFirstRegistryConfig();
       expect(modelRegistryOptions().providerFilter).toBeUndefined();
       expect(modelRegistryOptions().normalizeModels).toBe(false);
       expect(mocks.loadProviderCatalogModelsForList).not.toHaveBeenCalled();
@@ -1006,21 +1063,27 @@ describe("modelsListCommand forward-compat", () => {
         runtime as never,
       );
 
-      expect(mocks.loadModelRegistry.mock.calls[0]?.[0]).toBe(mocks.resolvedConfig);
+      expectFirstRegistryConfig();
       expect(modelRegistryOptions().providerFilter).toBe("openai-codex");
       expect(modelRegistryOptions().normalizeModels).toBe(true);
-      expect(mocks.loadProviderCatalogModelsForList).toHaveBeenNthCalledWith(1, {
-        cfg: mocks.resolvedConfig,
-        agentDir: "/tmp/openclaw-agent",
-        providerFilter: "openai-codex",
-        staticOnly: true,
-      });
-      expect(mocks.loadProviderCatalogModelsForList).toHaveBeenNthCalledWith(2, {
-        cfg: mocks.resolvedConfig,
-        agentDir: "/tmp/openclaw-agent",
-        providerFilter: "openai-codex",
-        staticOnly: undefined,
-      });
+      expect(mocks.loadProviderCatalogModelsForList).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          cfg: mocks.resolvedConfig,
+          agentDir: "/tmp/openclaw-agent",
+          providerFilter: "openai-codex",
+          staticOnly: true,
+        }),
+      );
+      expect(mocks.loadProviderCatalogModelsForList).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          cfg: mocks.resolvedConfig,
+          agentDir: "/tmp/openclaw-agent",
+          providerFilter: "openai-codex",
+          staticOnly: undefined,
+        }),
+      );
       const rows = lastPrintedRows<{ key: string; available: boolean }>();
       expectRowKeys(rows, ["openai-codex/gpt-5.4"]);
       expectRowFields(rows, "openai-codex/gpt-5.4", { available: true });
@@ -1064,7 +1127,7 @@ describe("modelsListCommand forward-compat", () => {
 
       await modelsListCommand({ all: true, provider: "anthropic", json: true }, runtime as never);
 
-      expect(mocks.loadModelRegistry.mock.calls[0]?.[0]).toBe(mocks.resolvedConfig);
+      expectFirstRegistryConfig();
       expect(modelRegistryOptions().providerFilter).toBe("anthropic");
       expect(modelRegistryOptions().normalizeModels).toBe(false);
       expect(modelRegistryOptions().loadAvailability).toBe(false);
@@ -1272,8 +1335,8 @@ describe("modelsListCommand forward-compat", () => {
     });
   });
 
-  describe("provider filter canonicalization", () => {
-    it("matches alias-valued discovered providers against canonical provider filters", async () => {
+  describe("provider filter matching", () => {
+    it("matches discovered providers against exact provider filters", async () => {
       mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
       mocks.hasProviderStaticCatalogForFilter.mockResolvedValueOnce(true);
       mocks.loadModelRegistry.mockResolvedValueOnce({
@@ -1310,7 +1373,7 @@ describe("modelsListCommand forward-compat", () => {
 
       const runtime = createRuntime();
 
-      await modelsListCommand({ all: true, provider: "z-ai", json: true }, runtime as never);
+      await modelsListCommand({ all: true, provider: "z.ai", json: true }, runtime as never);
 
       expect(mocks.printModelTable).toHaveBeenCalled();
       expectRowKeys(lastPrintedRows<{ key: string }>(), ["z.ai/glm-4.5"]);

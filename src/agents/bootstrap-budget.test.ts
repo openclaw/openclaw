@@ -103,6 +103,29 @@ describe("analyzeBootstrapBudget", () => {
 });
 
 describe("bootstrap prompt warnings", () => {
+  it("handles malformed truncation entries without names", () => {
+    const analysis = analyzeBootstrapBudget({
+      files: [
+        {
+          name: "TEMP.md",
+          path: "/tmp/unknown",
+          missing: false,
+          rawChars: 10,
+          injectedChars: 1,
+          truncated: true,
+        },
+      ],
+      bootstrapMaxChars: 5,
+      bootstrapTotalMaxChars: 5,
+    });
+    (analysis.truncatedFiles[0] as { name?: string }).name = undefined;
+
+    const lines = formatBootstrapTruncationWarningLines({
+      analysis,
+    });
+    expect(lines.join("\n")).toContain("10 raw -> 1 injected");
+  });
+
   it("appends warning details to the turn prompt instead of mutating the system prompt", () => {
     const prompt = appendBootstrapPromptWarning("Please continue.", [
       "AGENTS.md: 200 raw -> 0 injected",
@@ -326,6 +349,28 @@ describe("bootstrap prompt warnings", () => {
     expect(lines).toContain("+1 more truncated file(s).");
   });
 
+  it("warns explicitly when AGENTS.md bootstrap policy is truncated", () => {
+    const analysis = analyzeBootstrapBudget({
+      files: [
+        {
+          name: "AGENTS.md",
+          path: "/tmp/AGENTS.md",
+          missing: false,
+          rawChars: 150,
+          injectedChars: 100,
+          truncated: true,
+        },
+      ],
+      bootstrapMaxChars: 120,
+      bootstrapTotalMaxChars: 200,
+    });
+    const lines = formatBootstrapTruncationWarningLines({ analysis });
+
+    expect(lines).toContain(
+      "AGENTS.md was truncated; read the full AGENTS.md before relying on scoped policy.",
+    );
+  });
+
   it("disambiguates duplicate file names in warning lines", () => {
     const analysis = analyzeBootstrapBudget({
       files: [
@@ -388,7 +433,11 @@ describe("bootstrap prompt warnings", () => {
       previousSignature: signature,
     });
     expect(always.warningShown).toBe(true);
-    expect(always.lines.length).toBeGreaterThan(0);
+    expect(always.lines).toStrictEqual([
+      "AGENTS.md: 150 raw -> 100 injected (~33% removed; max/file).",
+      "AGENTS.md was truncated; read the full AGENTS.md before relying on scoped policy.",
+      "If unintentional, raise agents.defaults.bootstrapMaxChars and/or agents.defaults.bootstrapTotalMaxChars.",
+    ]);
   });
 
   it("uses file path in signature to avoid collisions for duplicate names", () => {
@@ -452,7 +501,7 @@ describe("bootstrap prompt warnings", () => {
     expect(meta.warningMode).toBe("once");
     expect(meta.warningShown).toBe(true);
     expect(meta.truncatedFiles).toBe(1);
-    expect(meta.nearLimitFiles).toBeGreaterThanOrEqual(1);
+    expect(meta.nearLimitFiles).toBe(1);
     expect(meta.promptWarningSignature).toBe(warning.signature);
     expect(meta.warningSignaturesSeen).toEqual([warning.signature]);
   });

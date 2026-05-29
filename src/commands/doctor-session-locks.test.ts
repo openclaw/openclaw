@@ -23,6 +23,14 @@ async function expectPathMissing(targetPath: string): Promise<void> {
   }
 }
 
+function firstNoteCall(): [string, string] {
+  const call = note.mock.calls[0];
+  if (!call) {
+    throw new Error("expected note call");
+  }
+  return call as [string, string];
+}
+
 describe("noteSessionLockHealth", () => {
   let state: OpenClawTestState;
 
@@ -55,7 +63,7 @@ describe("noteSessionLockHealth", () => {
     });
 
     expect(note).toHaveBeenCalledTimes(1);
-    const [message, title] = note.mock.calls[0] as [string, string];
+    const [message, title] = firstNoteCall();
     expect(title).toBe("Session locks");
     expect(message).toContain("Found 1 session lock file");
     expect(message).toContain(`pid=${process.pid} (alive)`);
@@ -88,12 +96,36 @@ describe("noteSessionLockHealth", () => {
     });
 
     expect(note).toHaveBeenCalledTimes(1);
-    const [message] = note.mock.calls[0] as [string, string];
+    const [message] = firstNoteCall();
     expect(message).toContain("[removed]");
     expect(message).toContain("Removed 1 stale session lock file");
 
     await expectPathMissing(staleLock);
     await expect(fs.access(freshLock)).resolves.toBeUndefined();
+  });
+
+  it("uses configured stale threshold without removing live OpenClaw lock files", async () => {
+    const sessionsDir = state.sessionsDir();
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const configuredStaleLock = path.join(sessionsDir, "configured-stale.jsonl.lock");
+    await fs.writeFile(
+      configuredStaleLock,
+      JSON.stringify({ pid: process.pid, createdAt: new Date(Date.now() - 45_000).toISOString() }),
+      "utf8",
+    );
+
+    await noteSessionLockHealth({
+      shouldRepair: true,
+      config: { session: { writeLock: { staleMs: 30_000 } } },
+      readOwnerProcessArgs: () => ["node", "/opt/openclaw/openclaw.mjs", "doctor"],
+    });
+
+    expect(note).toHaveBeenCalledTimes(1);
+    const [message] = firstNoteCall();
+    expect(message).toContain("stale=yes (too-old)");
+    expect(message).not.toContain("[removed]");
+    await expect(fs.access(configuredStaleLock)).resolves.toBeUndefined();
   });
 
   it("removes fresh live locks when the owner is not an OpenClaw process", async () => {
@@ -114,7 +146,7 @@ describe("noteSessionLockHealth", () => {
     });
 
     expect(note).toHaveBeenCalledTimes(1);
-    const [message] = note.mock.calls[0] as [string, string];
+    const [message] = firstNoteCall();
     expect(message).toContain("stale=yes (non-openclaw-owner)");
     expect(message).toContain("[removed]");
     expect(message).toContain("Removed 1 stale session lock file");

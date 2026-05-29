@@ -1,7 +1,20 @@
+import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 
 function listContractTestFiles(rootDir = "src/channels/plugins/contracts") {
+  const result = spawnSync("git", ["ls-files", "--", rootDir], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (result.status === 0) {
+    return result.stdout
+      .split("\n")
+      .map((line) => line.trim().replaceAll("\\", "/"))
+      .filter((line) => line.endsWith(".test.ts"))
+      .toSorted((a, b) => a.localeCompare(b));
+  }
+
   if (!existsSync(rootDir)) {
     return [];
   }
@@ -17,19 +30,19 @@ const CONTRACT_FILE_WEIGHTS = new Map([
   ["outbound-payload.contract.test.ts", 18],
   ["plugins-core.catalog.paths.contract.test.ts", 28],
   ["plugins-core.catalog.entries.contract.test.ts", 16],
-  ["session-binding.registry-backed.contract.test.ts", 16],
+  ["session-binding.registry-backed.contract.test.ts", 40],
 ]);
 
 function resolveContractFileWeight(file) {
   const name = file.replaceAll("\\", "/").split("/").pop();
   if (name.startsWith("plugin.registry-backed-shard-")) {
-    return 40;
+    return 48;
   }
   if (name.startsWith("surfaces-only.registry-backed-shard-")) {
     return 40;
   }
   if (name.startsWith("directory.registry-backed-shard-")) {
-    return 24;
+    return 36;
   }
   if (name.startsWith("threading.registry-backed-shard-")) {
     return 18;
@@ -39,7 +52,7 @@ function resolveContractFileWeight(file) {
 
 export function createChannelContractTestShards() {
   const rootDir = "src/channels/plugins/contracts";
-  const suffixes = ["a", "b", "c"];
+  const suffixes = ["a", "b"];
   const groups = Object.fromEntries(
     suffixes.map((suffix) => [`checks-fast-contracts-channels-${suffix}`, []]),
   );
