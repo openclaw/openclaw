@@ -3873,6 +3873,42 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
+  it("replays a visible final DM response when durable delivery suppresses the first send", async () => {
+    loadSessionStore.mockReturnValue({
+      "agent:default:telegram:direct:123": { sessionId: "s1" },
+    });
+    readLatestAssistantTextFromSessionTranscript.mockResolvedValue({
+      text: "Recovered final answer",
+      timestamp: Date.now() + 1_000,
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Recovered final answer" }, { kind: "final" });
+      return { queuedFinal: false };
+    });
+    deliverInboundReplyWithMessageSendContext.mockResolvedValue({
+      status: "handled_no_send",
+      reason: "no_visible_result",
+      delivery: {
+        messageIds: ["m1"],
+        visibleReplySent: false,
+      },
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "agent:default:telegram:direct:123",
+        } as TelegramMessageContext["ctxPayload"],
+      }),
+      streamMode: "off",
+    });
+
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
+    expectDeliveredReply(0, {
+      text: "Recovered final answer",
+    });
+  });
+
   it("does not emit a silent-reply fallback for no-response group turns", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
       queuedFinal: false,

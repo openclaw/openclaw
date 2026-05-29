@@ -2187,6 +2187,28 @@ export const dispatchTelegramMessage = async ({
     sentFallback = result.delivered;
   }
 
+  const shouldRetryMissingFinalResponse =
+    !isRoomEvent &&
+    !dispatchError &&
+    !sentFallback &&
+    !deliverySummary.delivered &&
+    !queuedFinal &&
+    finalAnswerDeliveryStarted &&
+    !finalAnswerDelivered &&
+    !suppressSilentReplyFallback;
+  if (shouldRetryMissingFinalResponse) {
+    const fallbackText =
+      (await resolveCurrentTurnTranscriptFinalText())?.trim() || EMPTY_RESPONSE_FALLBACK;
+    const result = await (telegramDeps.deliverReplies ?? deliverReplies)({
+      replies: [{ text: fallbackText }],
+      ...deliveryBaseOptions,
+      transcriptMirror: undefined,
+      silent: false,
+      mediaLoader: telegramDeps.loadWebMedia,
+    });
+    sentFallback = result.delivered;
+  }
+
   if (
     !sentFallback &&
     !dispatchError &&
