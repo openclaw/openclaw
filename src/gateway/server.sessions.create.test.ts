@@ -233,6 +233,45 @@ test("sessions.create inherits healthy auto auth runtime selection", async () =>
   expect(created.payload?.entry?.authProfileOverrideSource).toBe("auto");
 });
 
+test("sessions.create inherits runtime-equivalent OpenAI Codex auth aliases", async () => {
+  await createSessionStoreDir();
+  testState.agentConfig = { model: { primary: "openai/gpt-5.5" } };
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-parent", {
+        modelProvider: "openai-codex",
+        model: "gpt-5.5",
+        contextTokens: 200000,
+        authProfileOverride: "openai-codex:default",
+        authProfileOverrideSource: "auto",
+      }),
+    },
+  });
+
+  const created = await directSessionReq<{
+    entry?: {
+      modelProvider?: string;
+      model?: string;
+      contextTokens?: number;
+      authProfileOverride?: string;
+      authProfileOverrideSource?: string;
+      parentSessionKey?: string;
+    };
+  }>("sessions.create", {
+    agentId: "main",
+    label: "Fresh Chat",
+    parentSessionKey: "main",
+  });
+
+  expect(created.ok).toBe(true);
+  expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:main");
+  expect(created.payload?.entry?.modelProvider).toBe("openai-codex");
+  expect(created.payload?.entry?.model).toBe("gpt-5.5");
+  expect(created.payload?.entry?.contextTokens).toBe(200000);
+  expect(created.payload?.entry?.authProfileOverride).toBe("openai-codex:default");
+  expect(created.payload?.entry?.authProfileOverrideSource).toBe("auto");
+});
+
 test("sessions.create accepts an explicit key for persistent dashboard sessions", async () => {
   await createSessionStoreDir();
 

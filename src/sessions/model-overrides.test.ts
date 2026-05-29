@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import {
   applyModelOverrideToSessionEntry,
+  clearStaleAutoRuntimeAuthProfileSelection,
+  hasStaleAutoRuntimeAuthProfileSelection,
   repairProviderWrappedModelOverride,
 } from "./model-overrides.js";
 
@@ -49,6 +51,35 @@ function contextBudgetStatus(params: {
     unwindowedMessageCount: 2,
   };
 }
+
+describe("stale auto runtime auth profile selection", () => {
+  it("does not treat runtime-equivalent OpenAI Codex aliases as stale", () => {
+    const entry: SessionEntry = {
+      sessionId: "sess-openai-codex-alias",
+      updatedAt: Date.now(),
+      modelProvider: "openai-codex",
+      model: "gpt-5.5",
+      contextTokens: 200_000,
+      authProfileOverride: "openai-codex:default",
+      authProfileOverrideSource: "auto",
+    };
+
+    const isStale = hasStaleAutoRuntimeAuthProfileSelection(entry, {
+      provider: "openai",
+      model: "gpt-5.5",
+    });
+    const result = clearStaleAutoRuntimeAuthProfileSelection(entry, {
+      provider: "openai",
+      model: "gpt-5.5",
+    });
+
+    expect(isStale).toBe(false);
+    expect(result.updated).toBe(false);
+    expect(entry.modelProvider).toBe("openai-codex");
+    expect(entry.model).toBe("gpt-5.5");
+    expect(entry.authProfileOverride).toBe("openai-codex:default");
+  });
+});
 
 describe("applyModelOverrideToSessionEntry", () => {
   it("clears stale runtime model fields when switching overrides", () => {

@@ -1687,6 +1687,23 @@ describe("resolveSessionModelRef", () => {
     expect(resolved).toEqual({ provider: "minimax", model: "MiniMax-M2.7" });
   });
 
+  test("preserves runtime-equivalent OpenAI Codex auth aliases", () => {
+    const cfg = createModelDefaultsConfig({
+      primary: "openai/gpt-5.5",
+    });
+
+    const resolved = resolveSessionModelRef(cfg, {
+      sessionId: "s-auto-auth-runtime-alias",
+      updatedAt: Date.now(),
+      modelProvider: "openai-codex",
+      model: "gpt-5.5",
+      authProfileOverride: "openai-codex:default",
+      authProfileOverrideSource: "auto",
+    });
+
+    expect(resolved).toEqual({ provider: "openai-codex", model: "gpt-5.5" });
+  });
+
   test("falls back to override when runtime model is not recorded yet", () => {
     const cfg = createModelDefaultsConfig({
       primary: "anthropic/claude-opus-4-6",

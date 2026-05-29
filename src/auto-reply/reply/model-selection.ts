@@ -244,6 +244,7 @@ export async function createModelSelectionState(params: {
     hasStaleAutoRuntimeAuthProfileSelection(sessionEntry, {
       provider: primaryProvider,
       model: primaryModel,
+      config: cfg,
     });
 
   if (needsModelCatalog) {
@@ -376,6 +377,7 @@ export async function createModelSelectionState(params: {
     const { updated } = clearStaleAutoRuntimeAuthProfileSelection(sessionEntry, {
       provider: primaryProvider,
       model: primaryModel,
+      config: cfg,
     });
     if (updated) {
       sessionStore[sessionKey] = sessionEntry;

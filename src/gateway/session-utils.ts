@@ -1645,7 +1645,10 @@ export function resolveSessionModelRef(
         defaultModel: DEFAULT_MODEL,
         allowPluginNormalization: options?.allowPluginNormalization,
       });
-  const ignoreRuntimeModel = hasStaleAutoRuntimeAuthProfileSelection(entry, resolved);
+  const ignoreRuntimeModel = hasStaleAutoRuntimeAuthProfileSelection(entry, {
+    ...resolved,
+    config: cfg,
+  });
   const runtimeProvider = ignoreRuntimeModel
     ? undefined
     : normalizeOptionalString(entry?.modelProvider);
