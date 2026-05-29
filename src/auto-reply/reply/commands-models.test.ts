@@ -380,7 +380,7 @@ describe("handleModelsCommand", () => {
     expect(result?.reply?.text).not.toContain("- anthropic");
   });
 
-  it("hides bare backwards-compat aliases but surfaces supported CLI runtime providers in /models lists", async () => {
+  it("dedupes implicit CLI runtime providers when canonical providers already list the same models", async () => {
     modelCatalogMocks.loadModelCatalog.mockResolvedValueOnce([
       { provider: "codex", id: "gpt-5.5", name: "GPT-5.5" },
       { provider: "claude-cli", id: "claude-opus-4-7", name: "Claude Opus" },
@@ -407,10 +407,78 @@ describe("handleModelsCommand", () => {
     expect(result?.reply?.text).toContain("- anthropic (1)");
     expect(result?.reply?.text).toContain("- google (1)");
     expect(result?.reply?.text).toContain("- openai (1)");
-    expect(result?.reply?.text).toContain("- claude-cli (1)");
-    expect(result?.reply?.text).toContain("- google-gemini-cli (1)");
+    expect(result?.reply?.text).not.toContain("- claude-cli (1)");
+    expect(result?.reply?.text).not.toContain("- google-gemini-cli (1)");
     expect(result?.reply?.text).not.toMatch(/^- codex \(/m);
     expect(result?.reply?.text).not.toMatch(/^- codex-cli \(/m);
+  });
+
+  it("preserves explicit CLI runtime provider full-catalog browse", async () => {
+    modelCatalogMocks.loadModelCatalog.mockResolvedValueOnce([
+      { provider: "claude-cli", id: "claude-opus-4-7", name: "Claude Opus" },
+      { provider: "anthropic", id: "claude-opus-4-7", name: "Claude Opus" },
+    ]);
+    modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic", "claude-cli"]);
+
+    const result = await handleModelsCommand(
+      buildParams("/models claude-cli all", {
+        agents: { defaults: { model: { primary: "anthropic/claude-opus-4-7" } } },
+      }),
+      true,
+    );
+
+    expect(result?.reply?.text).toContain("Models (claude-cli)");
+    expect(result?.reply?.text).toContain("- claude-cli/claude-opus-4-7");
+  });
+
+  it("dedupes the CLI runtime alias for a canonical model routed through that runtime", async () => {
+    modelCatalogMocks.loadModelCatalog.mockResolvedValueOnce([
+      { provider: "claude-cli", id: "claude-opus-4-7", name: "Claude Opus" },
+      { provider: "anthropic", id: "claude-opus-4-7", name: "Claude Opus" },
+    ]);
+    modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic", "claude-cli"]);
+
+    const result = await handleModelsCommand(
+      buildParams("/models", {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-7" },
+            models: {
+              "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+            },
+          },
+        },
+      }),
+      true,
+    );
+
+    expect(result?.reply?.text).toContain("- anthropic (1)");
+    expect(result?.reply?.text).not.toContain("- claude-cli (1)");
+  });
+
+  it("preserves explicitly configured legacy CLI runtime provider refs", async () => {
+    modelCatalogMocks.loadModelCatalog.mockResolvedValueOnce([
+      { provider: "claude-cli", id: "claude-opus-4-7", name: "Claude Opus" },
+      { provider: "anthropic", id: "claude-opus-4-7", name: "Claude Opus" },
+    ]);
+    modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic", "claude-cli"]);
+
+    const result = await handleModelsCommand(
+      buildParams("/models", {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-7" },
+            models: {
+              "claude-cli/claude-opus-4-7": {},
+            },
+          },
+        },
+      }),
+      true,
+    );
+
+    expect(result?.reply?.text).toContain("- anthropic (1)");
+    expect(result?.reply?.text).toContain("- claude-cli (1)");
   });
 
   it("sources CLI runtime provider model lists from the catalog", async () => {
