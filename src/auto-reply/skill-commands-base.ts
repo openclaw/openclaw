@@ -2,7 +2,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
-import type { SkillCommandSpec } from "../skills/index.js";
+import type { SkillCommandSpec } from "../skills/types.js";
 import { getChatCommands } from "./commands-registry.data.js";
 
 export function listReservedChatSlashCommandNames(extraNames: string[] = []): Set<string> {

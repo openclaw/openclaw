@@ -2,7 +2,7 @@ import fs from "node:fs";
 import type { LiveSessionModelSelection } from "../../agents/live-model-switch.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { isCronSessionKey } from "../../sessions/session-key-utils.js";
-import type { SkillSnapshot } from "../../skills/index.js";
+import type { SkillSnapshot } from "../../skills/types.js";
 import type { resolveCronSession } from "./session.js";
 
 type MutableSessionStore = Record<string, SessionEntry>;

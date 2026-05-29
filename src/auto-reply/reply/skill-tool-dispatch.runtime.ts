@@ -28,7 +28,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { getPluginToolMeta } from "../../plugins/tools.js";
-import type { SkillCommandSpec } from "../../skills/index.js";
+import type { SkillCommandSpec } from "../../skills/types.js";
 import { resolveGatewayMessageChannel } from "../../utils/message-channel.js";
 import type { MsgContext } from "../templating.js";
 import { extractExplicitGroupId } from "./group-id.js";

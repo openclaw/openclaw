@@ -6,7 +6,7 @@ import {
 import { getChannelPlugin, getLoadedChannelPlugin } from "../channels/plugins/index.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
-import type { SkillCommandSpec } from "../skills/index.js";
+import type { SkillCommandSpec } from "../skills/types.js";
 import { listChatCommands, listChatCommandsForConfig } from "./commands-registry-list.js";
 import { normalizeCommandBody } from "./commands-registry-normalize.js";
 import { getChatCommands } from "./commands-registry.data.js";

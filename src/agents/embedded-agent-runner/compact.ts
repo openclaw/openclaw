@@ -28,8 +28,8 @@ import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-ke
 import {
   applySkillEnvOverrides,
   applySkillEnvOverridesFromSnapshot,
-  resolveSkillsPromptForRun,
-} from "../../skills/index.js";
+} from "../../skills/env-overrides.js";
+import { resolveSkillsPromptForRun } from "../../skills/workspace.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";

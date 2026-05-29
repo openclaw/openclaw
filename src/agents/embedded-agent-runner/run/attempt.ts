@@ -55,8 +55,8 @@ import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import {
   applySkillEnvOverrides,
   applySkillEnvOverridesFromSnapshot,
-  resolveSkillsPromptForRun,
-} from "../../../skills/index.js";
+} from "../../../skills/env-overrides.js";
+import { resolveSkillsPromptForRun } from "../../../skills/workspace.js";
 import {
   buildTrajectoryArtifacts,
   buildTrajectoryRunMetadata,
