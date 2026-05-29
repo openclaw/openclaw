@@ -293,8 +293,10 @@ function persistTaskUpsert(task: TaskRecord) {
     }
     return;
   }
+  // Snapshot fallback: project the pending upsert so the snapshot is correct
+  // even though we persist before mutating the in-memory `tasks` map.
   store.saveSnapshot({
-    tasks,
+    tasks: new Map(tasks).set(task.taskId, task),
     deliveryStates: taskDeliveryStates,
   });
 }
@@ -302,16 +304,27 @@ function persistTaskUpsert(task: TaskRecord) {
 function persistTaskDelete(taskId: string) {
   const store = getTaskRegistryStore();
   if (store.deleteTaskWithDeliveryState) {
+    // Composite delete removes the task row and its delivery state in a single
+    // transaction. This is the only atomic "remove both records" store
+    // primitive, and the one the default sqlite store uses.
     store.deleteTaskWithDeliveryState(taskId);
     return;
   }
-  if (store.deleteTask) {
-    store.deleteTask(taskId);
-    return;
-  }
+  // No atomic composite delete is available: persist the removal of BOTH the
+  // task and its delivery state in one projected snapshot. saveSnapshot is a
+  // required store method and writes atomically. Using the separate deleteTask
+  // / deleteDeliveryState methods instead would either leave the delivery-state
+  // row behind (a task-only delete) or, if both were called, reintroduce a
+  // two-write divergence window when the second delete threw before the
+  // in-memory mutation. Projecting both deletions into a single snapshot keeps
+  // the persisted store consistent under the persist-before-in-memory ordering.
+  const projectedTasks = new Map(tasks);
+  projectedTasks.delete(taskId);
+  const projectedDeliveryStates = new Map(taskDeliveryStates);
+  projectedDeliveryStates.delete(taskId);
   store.saveSnapshot({
-    tasks,
-    deliveryStates: taskDeliveryStates,
+    tasks: projectedTasks,
+    deliveryStates: projectedDeliveryStates,
   });
 }
 
@@ -319,18 +332,6 @@ function persistTaskDeliveryStateUpsert(state: TaskDeliveryState) {
   const store = getTaskRegistryStore();
   if (store.upsertDeliveryState) {
     store.upsertDeliveryState(state);
-    return;
-  }
-  store.saveSnapshot({
-    tasks,
-    deliveryStates: taskDeliveryStates,
-  });
-}
-
-function persistTaskDeliveryStateDelete(taskId: string) {
-  const store = getTaskRegistryStore();
-  if (store.deleteDeliveryState) {
-    store.deleteDeliveryState(taskId);
     return;
   }
   store.saveSnapshot({
@@ -1050,6 +1051,13 @@ function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskRecord | nu
     normalizeOptionalString(current.childSessionKey) !==
       normalizeOptionalString(next.childSessionKey);
   const parentFlowIndexChanged = current.parentFlowId?.trim() !== next.parentFlowId?.trim();
+  // Persist to the store before mutating in-memory state. The store is the
+  // source of truth and may reject the write (e.g. the sqlite store rolls back
+  // and re-throws on SQLITE_BUSY/FULL/IOERR). Mutating the in-memory maps first
+  // would leave them ahead of sqlite on a persist failure, so the two stores
+  // diverge until the next reload. Persisting first means a throw leaves the
+  // in-memory state untouched and consistent with sqlite.
+  persistTaskUpsert(next);
   tasks.set(taskId, next);
   if (patch.runId && patch.runId !== current.runId) {
     rebuildRunIdIndex();
@@ -1064,7 +1072,6 @@ function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskRecord | nu
     deleteParentFlowIdIndex(taskId, current);
     addParentFlowIdIndex(taskId, next);
   }
-  persistTaskUpsert(next);
   try {
     syncFlowFromTask(next);
   } catch (error) {
@@ -2230,14 +2237,20 @@ export function deleteTaskRecordById(taskId: string): boolean {
   if (!current) {
     return false;
   }
+  // Persist the delete before mutating in-memory state, as a single atomic
+  // store operation. If the persist throws (the sqlite store rolls back and
+  // re-throws on SQLITE_BUSY/FULL/IOERR), the in-memory record is left intact
+  // and stays consistent with sqlite, instead of being dropped from memory
+  // while sqlite still holds the row (which would resurrect the task on the
+  // next reload). persistTaskDelete removes the task and its delivery state
+  // together, so no separate delivery-state delete is issued here.
+  persistTaskDelete(taskId);
   deleteOwnerKeyIndex(taskId, current);
   deleteParentFlowIdIndex(taskId, current);
   deleteRelatedSessionKeyIndex(taskId, current);
   tasks.delete(taskId);
   taskDeliveryStates.delete(taskId);
   rebuildRunIdIndex();
-  persistTaskDelete(taskId);
-  persistTaskDeliveryStateDelete(taskId);
   emitTaskRegistryObserverEvent(() => ({
     kind: "deleted",
     taskId: current.taskId,

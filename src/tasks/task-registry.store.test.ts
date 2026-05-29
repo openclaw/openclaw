@@ -14,8 +14,10 @@ import {
   createTaskRecord,
   deleteTaskRecordById,
   findTaskByRunId,
+  getTaskById,
   getTaskRegistrySnapshot,
   listFreshTasksForOwnerKey,
+  markTaskTerminalById,
   maybeDeliverTaskStateChangeUpdate,
   resetTaskRegistryForTests,
 } from "./task-registry.js";
@@ -676,5 +678,211 @@ describe("task-registry store runtime", () => {
         expect(statSync(databasePath).mode & 0o777).toBe(0o600);
       },
     );
+  });
+
+  it("does not diverge sqlite-direct reads when an upsert persist throws", () => {
+    const ownerKey = "agent:main:main";
+    // sqlite holds the source-of-truth row. status=running (current). When the
+    // upsert throws, sqlite keeps this value (withWriteTransaction ROLLBACK +
+    // re-throw).
+    const sqliteRow: TaskRecord = {
+      ...createStoredTask(),
+      taskId: "task-diverge",
+      runId: "run-diverge",
+      ownerKey,
+      status: "running",
+    };
+    const sqliteState = new Map<string, TaskRecord>([[sqliteRow.taskId, sqliteRow]]);
+
+    let failUpsert = false;
+    const upsertTaskWithDeliveryState = vi.fn((params: { task: TaskRecord }) => {
+      if (failUpsert) {
+        // Same failure mode as production SQLITE_BUSY/FULL/IOERR ->
+        // withWriteTransaction ROLLBACK + re-throw. The sqlite row is untouched.
+        throw new Error("SQLITE_FULL: database or disk is full");
+      }
+      sqliteState.set(params.task.taskId, params.task);
+    });
+    const deleteTaskWithDeliveryState = vi.fn((taskId: string) => {
+      sqliteState.delete(taskId);
+    });
+    // sqlite-direct reader (listFreshTasksForOwnerKey -> store.listTasksForOwnerKey).
+    // Always returns the sqlite source of truth.
+    const listTasksForOwnerKey = vi.fn((key: string) =>
+      [...sqliteState.values()].filter((task) => task.ownerKey === key),
+    );
+
+    configureTaskRegistryRuntime({
+      store: {
+        loadSnapshot: () => ({
+          tasks: new Map(sqliteState),
+          deliveryStates: new Map(),
+        }),
+        saveSnapshot: () => {},
+        upsertTaskWithDeliveryState,
+        deleteTaskWithDeliveryState,
+        listTasksForOwnerKey,
+      },
+    });
+
+    // in-memory loads the same row via loadSnapshot. Start state: both running.
+    const initial = listFreshTasksForOwnerKey(ownerKey);
+    expect(initial.find((task) => task.taskId === "task-diverge")?.status).toBe("running");
+
+    // Attempt a transition running -> succeeded. updateTask must persist before
+    // committing the in-memory map, so when persist throws the in-memory state
+    // is left untouched.
+    failUpsert = true;
+    expect(() =>
+      markTaskTerminalById({
+        taskId: "task-diverge",
+        status: "succeeded",
+        endedAt: 200,
+      }),
+    ).toThrow(/SQLITE_FULL/);
+
+    // Divergence check: persist failed, so the in-memory mutation must not be
+    // committed. The discriminating read is the in-memory path (getTaskById):
+    // in the buggy ordering the in-memory record is left at "succeeded" while
+    // sqlite still holds "running", so the two stores diverge. With
+    // persist-before-in-memory the in-memory record stays "running".
+    failUpsert = false;
+    expect(getTaskById("task-diverge")?.status).toBe("running");
+
+    // The sqlite-direct reader (used by media-generation-task-status-shared)
+    // also keeps "running", so both read paths agree.
+    const after = listFreshTasksForOwnerKey(ownerKey);
+    const seen = after.find((task) => task.taskId === "task-diverge");
+    expect(seen?.status).toBe("running");
+  });
+
+  it("deletes through a single atomic store call without a redundant delivery-state delete", () => {
+    const deleteTaskWithDeliveryState = vi.fn();
+    const deleteDeliveryState = vi.fn();
+    configureTaskRegistryRuntime({
+      store: {
+        loadSnapshot: () => ({
+          tasks: new Map(),
+          deliveryStates: new Map(),
+        }),
+        saveSnapshot: () => {},
+        upsertTaskWithDeliveryState: vi.fn(),
+        deleteTaskWithDeliveryState,
+        deleteDeliveryState,
+      },
+    });
+
+    const created = createTaskRecord({
+      runtime: "acp",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      childSessionKey: "agent:codex:acp:new",
+      runId: "run-atomic-delete",
+      task: "Atomic delete task",
+      status: "running",
+      deliveryStatus: "pending",
+    });
+
+    expect(deleteTaskRecordById(created.taskId)).toBe(true);
+
+    // The composite delete already removes the task and its delivery state in a
+    // single transaction. A second, non-transactional delivery-state delete
+    // before the in-memory mutation would re-open the divergence window (sqlite
+    // deleted / memory retained) if it threw, so it must not be issued.
+    expect(deleteTaskWithDeliveryState).toHaveBeenCalledTimes(1);
+    expect(deleteTaskWithDeliveryState).toHaveBeenCalledWith(created.taskId);
+    expect(deleteDeliveryState).not.toHaveBeenCalled();
+  });
+
+  it("persists snapshot-only deletes without resurrecting the task", () => {
+    const persistedTaskIds: string[][] = [];
+    const persistedDeliveryIds: string[][] = [];
+    const saveSnapshot = vi.fn(
+      (snapshot: {
+        tasks: ReadonlyMap<string, TaskRecord>;
+        deliveryStates: ReadonlyMap<string, TaskDeliveryState>;
+      }) => {
+        // Capture the keys at call time. A real store serializes the snapshot
+        // immediately; holding the live map reference would let the in-memory
+        // delete (which runs after persistence) mask a resurrected row.
+        persistedTaskIds.push([...snapshot.tasks.keys()]);
+        persistedDeliveryIds.push([...snapshot.deliveryStates.keys()]);
+      },
+    );
+    configureTaskRegistryRuntime({
+      store: {
+        loadSnapshot: () => ({
+          tasks: new Map([[createStoredTask().taskId, createStoredTask()]]),
+          deliveryStates: new Map<string, TaskDeliveryState>([
+            ["task-restored", { taskId: "task-restored", lastNotifiedEventAt: 100 }],
+          ]),
+        }),
+        saveSnapshot,
+      },
+    });
+
+    // Trigger restore so the task and its delivery state are loaded into memory.
+    expect(findTaskByRunId("run-restored")?.taskId).toBe("task-restored");
+
+    expect(deleteTaskRecordById("task-restored")).toBe(true);
+
+    // A snapshot-only store persists the delete by saving a projected snapshot.
+    // The final persisted snapshot must exclude both the task and its delivery
+    // state; saving the task and delivery deletions as two separate snapshots
+    // would let the second save (built from the un-projected in-memory maps)
+    // resurrect the row the first save removed.
+    expect(saveSnapshot).toHaveBeenCalled();
+    expect(persistedTaskIds.at(-1)).not.toContain("task-restored");
+    expect(persistedDeliveryIds.at(-1)).not.toContain("task-restored");
+  });
+
+  it("persists deletes atomically for non-composite stores with separate delete methods", () => {
+    const backing = {
+      tasks: new Map<string, TaskRecord>(),
+      deliveryStates: new Map<string, TaskDeliveryState>(),
+    };
+    const deleteTask = vi.fn((taskId: string) => {
+      backing.tasks.delete(taskId);
+    });
+    const deleteDeliveryState = vi.fn((taskId: string) => {
+      backing.deliveryStates.delete(taskId);
+    });
+    const saveSnapshot = vi.fn(
+      (snapshot: {
+        tasks: ReadonlyMap<string, TaskRecord>;
+        deliveryStates: ReadonlyMap<string, TaskDeliveryState>;
+      }) => {
+        backing.tasks = new Map(snapshot.tasks);
+        backing.deliveryStates = new Map(snapshot.deliveryStates);
+      },
+    );
+    configureTaskRegistryRuntime({
+      store: {
+        loadSnapshot: () => ({
+          tasks: new Map([[createStoredTask().taskId, createStoredTask()]]),
+          deliveryStates: new Map<string, TaskDeliveryState>([
+            ["task-restored", { taskId: "task-restored", lastNotifiedEventAt: 100 }],
+          ]),
+        }),
+        saveSnapshot,
+        // Non-composite store: separate task / delivery-state deletes, no
+        // deleteTaskWithDeliveryState.
+        deleteTask,
+        deleteDeliveryState,
+      },
+    });
+
+    // Trigger restore so the task and its delivery state are loaded into memory.
+    expect(findTaskByRunId("run-restored")?.taskId).toBe("task-restored");
+
+    expect(deleteTaskRecordById("task-restored")).toBe(true);
+
+    // Without a composite delete, the removal of both the task and its delivery
+    // state is persisted atomically through one projected snapshot, so neither a
+    // leftover delivery-state row nor a two-write divergence window remains.
+    expect(backing.tasks.has("task-restored")).toBe(false);
+    expect(backing.deliveryStates.has("task-restored")).toBe(false);
+    expect(deleteTask).not.toHaveBeenCalled();
+    expect(deleteDeliveryState).not.toHaveBeenCalled();
   });
 });
