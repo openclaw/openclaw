@@ -1366,6 +1366,51 @@ describe("createTelegramBot", () => {
       await rm(workspaceDir, { recursive: true, force: true });
     }
   });
+  it("answers Speakeasy reservation failures before leaving the callback", async () => {
+    const workspaceDir = await mkdtemp(path.join(tmpdir(), "openclaw-speakeasy-test-"));
+    const previousWorkspace = process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR;
+    process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR = workspaceDir;
+    await mkdir(path.join(workspaceDir, "config"), { recursive: true });
+    await writeFile(
+      path.join(workspaceDir, "config", "speakeasy-chats.json"),
+      JSON.stringify({ enabled: ["telegram:1234"] }),
+    );
+    await writeFile(path.join(workspaceDir, "state"), "not a directory");
+
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = getOnHandler("callback_query") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    try {
+      await callbackHandler({
+        callbackQuery: {
+          id: "cbq-speakeasy-reservation-fail",
+          data: `${SPEAKEASY_VOICE_CALLBACK_PREFIX}voiceid`,
+          from: { id: 9, first_name: "Ada", username: "ada_bot" },
+          message: {
+            chat: { id: 1234, type: "private" },
+            date: 1736380800,
+            message_id: 10,
+            text: "This is the exact source bubble text to render as a voice note.",
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      });
+
+      expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-speakeasy-reservation-fail", {
+        text: "Voice note is temporarily unavailable. Please try again.",
+        show_alert: false,
+      });
+      expect(replySpy).not.toHaveBeenCalled();
+      expect(generateSpeakeasyVoiceNoteSpy).not.toHaveBeenCalled();
+      expect(sendVoiceSpy).not.toHaveBeenCalled();
+    } finally {
+      process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR = previousWorkspace;
+      await rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
   it("rejects non-voice-note Speakeasy output before sendVoice", async () => {
     const workspaceDir = await mkdtemp(path.join(tmpdir(), "openclaw-speakeasy-test-"));
     const previousWorkspace = process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR;

@@ -4,6 +4,7 @@ import {
   chmodSync,
   closeSync,
   existsSync,
+  linkSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -154,6 +155,7 @@ export function loadSpeakeasyCache(cfg: OpenClawConfig): SpeakeasyVoiceCache {
 export function writeSpeakeasyCache(cfg: OpenClawConfig, cache: SpeakeasyVoiceCache): void {
   const cachePath = resolveSpeakeasyCachePath(cfg);
   mkdirSync(path.dirname(cachePath), { recursive: true });
+  chmodExistingSpeakeasyCache(cachePath);
   writeFileSync(cachePath, `${JSON.stringify(cache, null, 2)}\n`, {
     encoding: "utf8",
     mode: 0o600,
@@ -165,20 +167,34 @@ function waitForSpeakeasyCacheLock(): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
 }
 
+function chmodExistingSpeakeasyCache(cachePath: string): void {
+  try {
+    chmodSync(cachePath, 0o600);
+  } catch (err) {
+    if (!isFileNotFoundError(err)) {
+      throw err;
+    }
+  }
+}
+
 function acquireSpeakeasyCacheLock(cachePath: string): () => void {
   const lockPath = `${cachePath}.lock`;
   const deadline = Date.now() + SPEAKEASY_CACHE_LOCK_TIMEOUT_MS;
   mkdirSync(path.dirname(cachePath), { recursive: true });
   while (true) {
     let fd: number | undefined;
+    const lockToken = randomUUID();
     try {
       fd = openSync(lockPath, "wx", 0o600);
+      writeFileSync(fd, lockToken, "utf8");
       return () => {
         if (fd !== undefined) {
           closeSync(fd);
         }
         try {
-          unlinkSync(lockPath);
+          if (readFileSync(lockPath, "utf8") === lockToken) {
+            unlinkSync(lockPath);
+          }
         } catch {
           // Best effort: another recovery path may have already removed a stale lock.
         }
@@ -199,16 +215,37 @@ function isFileAlreadyExistsError(err: unknown): boolean {
   return Boolean(err && typeof err === "object" && "code" in err && err.code === "EEXIST");
 }
 
+function isFileNotFoundError(err: unknown): boolean {
+  return Boolean(err && typeof err === "object" && "code" in err && err.code === "ENOENT");
+}
+
 function recoverStaleSpeakeasyCacheLock(lockPath: string): boolean {
+  const claimPath = `${lockPath}.${process.pid}.${randomUUID()}.stale`;
   try {
-    const ageMs = Date.now() - statSync(lockPath).mtimeMs;
+    linkSync(lockPath, claimPath);
+    const claimStats = statSync(claimPath);
+    const lockStats = statSync(lockPath);
+    if (claimStats.dev !== lockStats.dev || claimStats.ino !== lockStats.ino) {
+      return false;
+    }
+    const ageMs = Date.now() - claimStats.mtimeMs;
     if (ageMs < SPEAKEASY_CACHE_LOCK_STALE_MS) {
+      return false;
+    }
+    const currentStats = statSync(lockPath);
+    if (claimStats.dev !== currentStats.dev || claimStats.ino !== currentStats.ino) {
       return false;
     }
     unlinkSync(lockPath);
     return true;
   } catch {
     return false;
+  } finally {
+    try {
+      unlinkSync(claimPath);
+    } catch {
+      // Best effort: the claim path may not exist if linking failed.
+    }
   }
 }
 

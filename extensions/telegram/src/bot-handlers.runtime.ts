@@ -2178,11 +2178,18 @@ export const registerTelegramHandlers = ({
         callbackThreadId != null ? `${chatId}:topic:${callbackThreadId}` : String(chatId);
       const runtimeCfg = telegramDeps.getRuntimeConfig();
       if (isSpeakeasyVoiceCallback) {
-        const reserved = reserveSpeakeasyVoiceGeneration({
-          cfg: runtimeCfg,
-          data,
-          chatId: String(chatId),
-        });
+        let reserved: ReturnType<typeof reserveSpeakeasyVoiceGeneration>;
+        try {
+          reserved = reserveSpeakeasyVoiceGeneration({
+            cfg: runtimeCfg,
+            data,
+            chatId: String(chatId),
+          });
+        } catch (err) {
+          logVerbose(`Speakeasy voice reservation failed: ${err}`);
+          await answerSpeakeasyCallback("Voice note is temporarily unavailable. Please try again.");
+          return;
+        }
         if (!reserved.ok) {
           await answerSpeakeasyCallback(
             reserved.reason === "disabled"

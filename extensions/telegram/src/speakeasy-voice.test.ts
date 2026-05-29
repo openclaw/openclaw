@@ -107,6 +107,23 @@ describe("speakeasy voice button", () => {
     });
   });
 
+  it("fixes existing cache file permissions before writing reply text", async () => {
+    await withSpeakeasyWorkspace(async ({ cfg, workspaceDir }) => {
+      const cachePath = path.join(workspaceDir, "state", "speakeasy-cache.json");
+      await writeFile(cachePath, JSON.stringify({ version: 1, entries: {}, generations: {} }), {
+        mode: 0o644,
+      });
+
+      withSpeakeasyVoiceButton({
+        reply: { text: "This reply is long enough to qualify for on-demand voice playback." },
+        cfg,
+        chatId: "123",
+      });
+
+      expect((await stat(cachePath)).mode & 0o777).toBe(0o600);
+    });
+  });
+
   it("rejects non-voice-note Speakeasy output paths", () => {
     expect(() => assertSpeakeasyVoiceNoteOutputPath("/tmp/speakeasy.mp3")).toThrow(
       "not a Telegram voice-note file",
