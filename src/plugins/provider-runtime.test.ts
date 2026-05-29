@@ -29,6 +29,8 @@ type ResolveOwningPluginIdsForProvider =
   typeof import("./providers.js").resolveOwningPluginIdsForProvider;
 type ResolveBundledProviderPolicySurface =
   typeof import("./provider-public-artifacts.js").resolveBundledProviderPolicySurface;
+type LoadPluginMetadataSnapshot =
+  typeof import("./plugin-metadata-snapshot.js").loadPluginMetadataSnapshot;
 
 const resolvePluginProvidersMock = vi.fn<ResolvePluginProviders>((_) => [] as ProviderPlugin[]);
 const isPluginProvidersLoadInFlightMock = vi.fn<IsPluginProvidersLoadInFlight>((_) => false);
@@ -46,6 +48,16 @@ const resolveBundledProviderPolicySurfaceMock = vi.fn<ResolveBundledProviderPoli
   (_) => null,
 );
 const providerRuntimeWarnMock = vi.fn();
+const loadPluginMetadataSnapshotMock = vi.fn<LoadPluginMetadataSnapshot>(
+  (_) =>
+    ({
+      plugins: [] as any[],
+      diagnostics: [] as any[],
+      registryDiagnostics: [] as any[],
+      manifestRegistry: { plugins: [] as any[], diagnostics: [] as any[] },
+      index: { plugins: [] as any[], diagnostics: [] as any[], installRecords: {} },
+    }) as any,
+);
 
 let augmentModelCatalogWithProviderPlugins: typeof import("./provider-runtime.js").augmentModelCatalogWithProviderPlugins;
 let buildProviderAuthDoctorHintWithPlugin: typeof import("./provider-runtime.js").buildProviderAuthDoctorHintWithPlugin;
@@ -283,6 +295,10 @@ async function expectResolvedAsyncValues(
 describe("provider-runtime", () => {
   beforeAll(async () => {
     vi.resetModules();
+    vi.doMock("./plugin-metadata-snapshot.js", () => ({
+      loadPluginMetadataSnapshot: (params: unknown) =>
+        loadPluginMetadataSnapshotMock(params as never),
+    }));
     vi.doMock("./provider-public-artifacts.js", () => ({
       resolveBundledProviderPolicySurface: (provider: string) =>
         resolveBundledProviderPolicySurfaceMock(provider),
@@ -367,6 +383,14 @@ describe("provider-runtime", () => {
   beforeEach(() => {
     resetPluginRuntimeStateForTest();
     providerRuntimeTesting.clearProviderRuntimePluginCacheForTest();
+    loadPluginMetadataSnapshotMock.mockReset();
+    loadPluginMetadataSnapshotMock.mockReturnValue({
+      plugins: [] as any[],
+      diagnostics: [] as any[],
+      registryDiagnostics: [] as any[],
+      manifestRegistry: { plugins: [] as any[], diagnostics: [] as any[] },
+      index: { plugins: [] as any[], diagnostics: [] as any[], installRecords: {} },
+    } as any);
     providerRuntimeTesting.resetExternalAuthFallbackWarningCacheForTest();
     resolvePluginProvidersMock.mockReset();
     resolvePluginProvidersMock.mockReturnValue([]);
@@ -923,6 +947,32 @@ describe("provider-runtime", () => {
       },
     });
     expect(profile?.profileId).toBe("demo-provider:external");
+  });
+
+  it("asserts that external-auth resolution passes the loaded pluginMetadataSnapshot into provider plugin resolution", () => {
+    const mockSnapshot = {
+      plugins: [],
+      diagnostics: [],
+      registryDiagnostics: [],
+      manifestRegistry: { plugins: [], diagnostics: [] },
+      index: { plugins: [], diagnostics: [], installRecords: {} },
+    };
+    loadPluginMetadataSnapshotMock.mockReturnValue(mockSnapshot as any);
+    resolveExternalAuthProfileProviderPluginIdsMock.mockReturnValue(["demo-plugin"]);
+    resolvePluginProvidersMock.mockReturnValue([]);
+
+    resolveExternalAuthProfilesWithPlugins({
+      env: process.env,
+      context: {
+        env: process.env,
+        store: { version: 1, profiles: {} },
+      },
+    });
+
+    expect(loadPluginMetadataSnapshotMock).toHaveBeenCalledTimes(1);
+    expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(1);
+    const lastParams = getLastResolvePluginProvidersParams();
+    expect(lastParams.pluginMetadataSnapshot).toBe(mockSnapshot);
   });
 
   it("resolves catalog hook provider loads when only non-plugin config changes", async () => {

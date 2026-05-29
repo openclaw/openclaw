@@ -12,6 +12,7 @@ import {
   type ConfigScopedRuntimeCache,
 } from "./plugin-cache-primitives.js";
 import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
+import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
 import { resolveProviderConfigApiOwnerHint } from "./provider-config-owner.js";
 import { isPluginProvidersLoadInFlight, resolvePluginProviders } from "./providers.runtime.js";
 import type { PluginRegistry } from "./registry-types.js";
@@ -41,6 +42,7 @@ export type ProviderRuntimePluginLookupParams = {
   env?: NodeJS.ProcessEnv;
   applyAutoEnable?: boolean;
   bundledProviderVitestCompat?: boolean;
+  pluginMetadataSnapshot?: PluginMetadataRegistryView;
 };
 
 export type ProviderRuntimePluginHandle = ProviderRuntimePluginLookupParams & {
@@ -192,6 +194,7 @@ export function resolveProviderPluginsForHooks(params: {
   modelRefs?: readonly string[];
   applyAutoEnable?: boolean;
   bundledProviderVitestCompat?: boolean;
+  pluginMetadataSnapshot?: PluginMetadataRegistryView;
 }): ProviderPlugin[] {
   const env = params.env ?? process.env;
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
@@ -263,6 +266,7 @@ export function resolveProviderRuntimePlugin(
         modelRefs: lookupScope.modelRefs,
         applyAutoEnable: params.applyAutoEnable,
         bundledProviderVitestCompat: params.bundledProviderVitestCompat,
+        pluginMetadataSnapshot: params.pluginMetadataSnapshot,
       }).find((plugin) => {
         if (apiOwnerHint) {
           return (

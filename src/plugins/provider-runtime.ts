@@ -873,11 +873,12 @@ export function resolveExternalAuthProfilesWithPlugins(params: {
 }): ProviderExternalAuthProfile[] {
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
   const env = params.env ?? process.env;
-  const { manifestRegistry } = loadPluginMetadataSnapshot({
+  const snapshot = loadPluginMetadataSnapshot({
     config: params.config ?? {},
     workspaceDir,
     env,
   });
+  const { manifestRegistry } = snapshot;
   const externalAuthPluginIds = resolveExternalAuthProfileProviderPluginIds({
     config: params.config,
     workspaceDir,
@@ -902,6 +903,7 @@ export function resolveExternalAuthProfilesWithPlugins(params: {
     workspaceDir,
     env,
     onlyPluginIds: pluginIds,
+    pluginMetadataSnapshot: snapshot,
   })) {
     const profiles =
       plugin.resolveExternalAuthProfiles?.(params.context) ??
