@@ -212,6 +212,8 @@ function resolveUpdateStatusBanner(params: { status?: string; reason?: string })
       "restart-unhealthy":
         "The replacement process never became healthy. The previous process stayed up so you can recover.",
       "doctor-failed": "Doctor repair failed. Run `openclaw doctor --non-interactive` and retry.",
+      "managed-service-handoff-started":
+        "The update was handed off to the host service. The gateway will restart automatically when the update completes.",
     }[reason] ?? "See the gateway logs for the exact failure and retry once the cause is fixed.";
   return {
     tone,
@@ -290,6 +292,7 @@ export async function runUpdate(state: ConfigState) {
       sessionKey: state.applySessionKey,
     });
     const status = res.result?.status ?? (res.ok === true ? "ok" : "error");
+<<<<<<< HEAD
     const handoffStarted =
       res.ok === true &&
       status === "skipped" &&
