@@ -25,6 +25,7 @@ const PLUGIN_DOC_ALIASES = new Map([
   ["exa", "/tools/exa-search"],
   ["firecrawl", "/tools/firecrawl"],
   ["perplexity", "/tools/perplexity-search"],
+  ["policy", "/cli/policy"],
   ["tavily", "/tools/tavily"],
   ["tokenjuice", "/tools/tokenjuice"],
 ]);
@@ -113,6 +114,7 @@ function humanizeId(value) {
     ["opencode", "OpenCode"],
     ["openrouter", "OpenRouter"],
     ["otel", "OpenTelemetry"],
+    ["pixverse", "PixVerse"],
     ["qa", "QA"],
     ["qqbot", "QQ Bot"],
     ["qwen", "Qwen"],

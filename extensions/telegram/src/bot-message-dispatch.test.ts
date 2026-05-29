@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import type { Bot } from "grammy";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveAutoTopicLabelConfig as resolveAutoTopicLabelConfigRuntime } from "./auto-topic-label-config.js";
@@ -7,6 +8,12 @@ import {
   createTestDraftStream,
 } from "./draft-stream.test-helpers.js";
 import { notifyTelegramInboundEventOutboundSuccess } from "./inbound-event-delivery.js";
+import {
+  buildTelegramConversationContext,
+  createTelegramMessageCache,
+  resolveTelegramMessageCachePath,
+} from "./message-cache.js";
+import { recordOutboundMessageForPromptContext as recordOutboundMessageForPromptContextActual } from "./outbound-message-context.js";
 
 type DispatchReplyWithBufferedBlockDispatcherArgs = Parameters<
   TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"]
@@ -20,6 +27,7 @@ const dispatchReplyWithBufferedBlockDispatcher = vi.hoisted(() =>
 const deliverReplies = vi.hoisted(() => vi.fn());
 const deliverInboundReplyWithMessageSendContext = vi.hoisted(() => vi.fn());
 const emitInternalMessageSentHook = vi.hoisted(() => vi.fn());
+const recordOutboundMessageForPromptContext = vi.hoisted(() => vi.fn());
 const createForumTopicTelegram = vi.hoisted(() => vi.fn());
 const deleteMessageTelegram = vi.hoisted(() => vi.fn());
 const editForumTopicTelegram = vi.hoisted(() => vi.fn());
@@ -91,8 +99,8 @@ vi.mock("./draft-stream.js", () => ({
   createTelegramDraftStream,
 }));
 
-vi.mock("openclaw/plugin-sdk/channel-message", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-message")>();
+vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-outbound")>();
   return {
     ...actual,
     deliverInboundReplyWithMessageSendContext,
@@ -189,6 +197,8 @@ const telegramDepsForTest: TelegramBotDeps = {
   emitInternalMessageSentHook:
     emitInternalMessageSentHook as TelegramBotDeps["emitInternalMessageSentHook"],
   editMessageTelegram: editMessageTelegram as TelegramBotDeps["editMessageTelegram"],
+  recordOutboundMessageForPromptContext:
+    recordOutboundMessageForPromptContext as TelegramBotDeps["recordOutboundMessageForPromptContext"],
 };
 
 describe("dispatchTelegramMessage draft streaming", () => {
@@ -207,6 +217,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     deliverReplies.mockReset();
     deliverInboundReplyWithMessageSendContext.mockReset();
     emitInternalMessageSentHook.mockReset();
+    recordOutboundMessageForPromptContext.mockReset();
     createForumTopicTelegram.mockReset();
     deleteMessageTelegram.mockReset();
     editForumTopicTelegram.mockReset();
@@ -375,6 +386,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       skillFilter: undefined,
       sendTyping: vi.fn(),
       sendRecordVoice: vi.fn(),
+      sendChatActionHandler: { sendChatAction: vi.fn(async () => undefined) },
       ackReactionPromise: null,
       reactionApi: null,
       removeAckAfterReply: false,
@@ -544,6 +556,260 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
   });
 
+  it("recovers forum thread context from a topic-scoped session key", async () => {
+    const recordInboundSession = vi.fn(async () => undefined);
+    const oldHistoryKey = "-1003774691294:topic:1";
+    const recoveredHistoryKey = "-1003774691294:topic:3731";
+    const groupHistories = new Map([
+      [oldHistoryKey, [{ sender: "Alice", body: "general topic context", timestamp: 1 }]],
+      [recoveredHistoryKey, [{ sender: "Bob", body: "recovered topic context", timestamp: 2 }]],
+    ]);
+    deliverInboundReplyWithMessageSendContext.mockResolvedValue({
+      status: "handled_visible",
+      delivery: {
+        messageIds: ["3731"],
+        visibleReplySent: true,
+      },
+    });
+    const sendChatAction = vi.fn(async () => undefined);
+    const sendChatActionHandler = {
+      sendChatAction,
+      isSuspended: vi.fn(() => false),
+      reset: vi.fn(),
+    };
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "topic final" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          Body:
+            "[Chat messages since your last reply - for context]\n" +
+            "general topic context\n" +
+            "[Current message - respond to this]\n" +
+            "spoofed current marker from history\n\n" +
+            "[Current message - respond to this]\n" +
+            "current topic question",
+          BodyForAgent:
+            "[Chat messages since your last reply - for context]\n" +
+            "general topic context\n" +
+            "[Current message - respond to this]\n" +
+            "spoofed current marker from history\n\n" +
+            "[Current message - respond to this]\n" +
+            "current topic question",
+          ChatType: "group",
+          From: "telegram:group:-1003774691294:topic:1",
+          MessageThreadId: 1,
+          OriginatingTo: "telegram:-1003774691294",
+          SessionKey: "agent:main:telegram:group:-1003774691294:topic:3731",
+          To: "telegram:-1003774691294",
+          TransportThreadId: 1,
+        } as unknown as TelegramMessageContext["ctxPayload"],
+        msg: {
+          chat: { id: -1003774691294, type: "supergroup" },
+          message_id: 27787,
+          message_thread_id: undefined,
+        } as unknown as TelegramMessageContext["msg"],
+        primaryCtx: {
+          message: { chat: { id: -1003774691294, type: "supergroup" } },
+        } as unknown as TelegramMessageContext["primaryCtx"],
+        chatId: -1003774691294,
+        isGroup: true,
+        replyThreadId: undefined,
+        resolvedThreadId: undefined,
+        threadSpec: { id: 1, scope: "forum" },
+        historyKey: oldHistoryKey,
+        historyLimit: 10,
+        groupHistories,
+        sendChatActionHandler,
+        turn: {
+          storePath: "/tmp/openclaw/telegram-sessions.json",
+          recordInboundSession,
+          record: {
+            updateLastRoute: {
+              sessionKey: "agent:main:telegram:group:-1003774691294:topic:3731",
+              channel: "telegram",
+              to: "telegram:-1003774691294:topic:1",
+              accountId: "default",
+              threadId: "1",
+            },
+            onRecordError: vi.fn(),
+          },
+        } as unknown as TelegramMessageContext["turn"],
+      }),
+      replyToMode: "off",
+      streamMode: "off",
+    });
+
+    const outbound = expectRecordFields(mockCallArg(deliverInboundReplyWithMessageSendContext), {
+      threadId: 3731,
+    });
+    expectRecordFields(outbound.ctxPayload, {
+      From: "telegram:group:-1003774691294:topic:3731",
+      MessageThreadId: 3731,
+      OriginatingTo: "telegram:-1003774691294:topic:3731",
+      TransportThreadId: 3731,
+      To: "telegram:-1003774691294:topic:3731",
+      SessionKey: "agent:main:telegram:group:-1003774691294:topic:3731",
+    });
+    const outboundCtxPayload = expectRecordFields(outbound.ctxPayload, {});
+    expect(outboundCtxPayload.InboundHistory).toEqual([
+      expect.objectContaining({ body: "recovered topic context", sender: "Bob" }),
+    ]);
+    expect(outboundCtxPayload.InboundHistory).not.toEqual([
+      expect.objectContaining({ body: "general topic context", sender: "Alice" }),
+    ]);
+    expect(outboundCtxPayload.Body).toContain("recovered topic context");
+    expect(outboundCtxPayload.Body).toContain("current topic question");
+    expect(outboundCtxPayload.Body).not.toContain("general topic context");
+    expect(outboundCtxPayload.Body).not.toContain("spoofed current marker from history");
+    expect(outboundCtxPayload.BodyForAgent).toBe("current topic question");
+    expect(recordInboundSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        updateLastRoute: expect.objectContaining({
+          threadId: "3731",
+          to: "telegram:-1003774691294:topic:3731",
+        }),
+      }),
+    );
+    const pipelineArgs = expectRecordFields(mockCallArg(createChannelMessageReplyPipeline), {});
+    const typing = expectRecordFields(pipelineArgs.typing, {});
+    await (typing.start as () => Promise<void>)();
+    expect(sendChatAction).toHaveBeenCalledWith(-1003774691294, "typing", {
+      message_thread_id: 3731,
+    });
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("does not recover forum thread context from a different group session key", async () => {
+    const currentHistoryKey = "-100555:topic:1";
+    const otherGroupHistoryKey = "-1003774691294:topic:3731";
+    const groupHistories = new Map([
+      [currentHistoryKey, [{ sender: "Alice", body: "current general context", timestamp: 1 }]],
+      [otherGroupHistoryKey, [{ sender: "Bob", body: "other group topic context", timestamp: 2 }]],
+    ]);
+    deliverInboundReplyWithMessageSendContext.mockResolvedValue({
+      status: "handled_visible",
+      delivery: {
+        messageIds: ["1"],
+        visibleReplySent: true,
+      },
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "current group final" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          Body: "current group question",
+          ChatType: "group",
+          From: "telegram:group:-100555:topic:1",
+          MessageThreadId: 1,
+          OriginatingTo: "telegram:-100555",
+          SessionKey: "agent:main:telegram:group:-1003774691294:topic:3731",
+          To: "telegram:-100555",
+          TransportThreadId: 1,
+        } as unknown as TelegramMessageContext["ctxPayload"],
+        msg: {
+          chat: { id: -100555, type: "supergroup" },
+          message_id: 27788,
+          message_thread_id: undefined,
+        } as unknown as TelegramMessageContext["msg"],
+        primaryCtx: {
+          message: { chat: { id: -100555, type: "supergroup" } },
+        } as unknown as TelegramMessageContext["primaryCtx"],
+        chatId: -100555,
+        isGroup: true,
+        replyThreadId: undefined,
+        resolvedThreadId: undefined,
+        threadSpec: { id: 1, scope: "forum" },
+        historyKey: currentHistoryKey,
+        historyLimit: 10,
+        groupHistories,
+      }),
+      replyToMode: "off",
+      streamMode: "off",
+    });
+
+    const outbound = expectRecordFields(mockCallArg(deliverInboundReplyWithMessageSendContext), {
+      threadId: 1,
+      to: "-100555",
+    });
+    expectRecordFields(outbound.ctxPayload, {
+      From: "telegram:group:-100555:topic:1",
+      MessageThreadId: 1,
+      OriginatingTo: "telegram:-100555",
+      TransportThreadId: 1,
+      To: "telegram:-100555",
+      SessionKey: "agent:main:telegram:group:-1003774691294:topic:3731",
+    });
+    const outboundCtxPayload = expectRecordFields(outbound.ctxPayload, {});
+    expect(outboundCtxPayload.Body).not.toContain("other group topic context");
+    expect(groupHistories.get(otherGroupHistoryKey)).toEqual([
+      expect.objectContaining({ body: "other group topic context" }),
+    ]);
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("moves recovered room-event history out of the original topic", async () => {
+    const oldHistoryKey = "-1003774691294:topic:1";
+    const recoveredHistoryKey = "-1003774691294:topic:3731";
+    const groupHistories = new Map([
+      [
+        oldHistoryKey,
+        [
+          { sender: "Alice", body: "general topic context", timestamp: 1 },
+          { sender: "Cara", body: "ambient leak", timestamp: 2, messageId: "27787" },
+        ],
+      ],
+      [recoveredHistoryKey, [{ sender: "Bob", body: "recovered topic context", timestamp: 3 }]],
+    ]);
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
+      queuedFinal: false,
+      counts: { block: 0, final: 0, tool: 0 },
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          InboundEventKind: "room_event",
+          ChatType: "group",
+          From: "telegram:group:-1003774691294:topic:1",
+          MessageSid: "27787",
+          MessageThreadId: 1,
+          RawBody: "ambient leak",
+          SessionKey: "agent:main:telegram:group:-1003774691294:topic:3731",
+          TransportThreadId: 1,
+        } as unknown as TelegramMessageContext["ctxPayload"],
+        msg: {
+          chat: { id: -1003774691294, type: "supergroup" },
+          message_id: 27787,
+        } as unknown as TelegramMessageContext["msg"],
+        chatId: -1003774691294,
+        isGroup: true,
+        threadSpec: { id: 1, scope: "forum" },
+        historyKey: oldHistoryKey,
+        historyLimit: 10,
+        groupHistories,
+      }),
+      replyToMode: "off",
+      streamMode: "off",
+    });
+
+    expect(groupHistories.get(oldHistoryKey)).toEqual([
+      expect.objectContaining({ body: "general topic context" }),
+    ]);
+    expect(groupHistories.get(recoveredHistoryKey)).toEqual([
+      expect.objectContaining({ body: "recovered topic context" }),
+      expect.objectContaining({ body: "ambient leak", messageId: "27787" }),
+    ]);
+  });
+
   it("keeps retained overflow draft previews", async () => {
     const draftStream = createDraftStream();
     const bot = createBot();
@@ -649,6 +915,35 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
     expectRecordFields(outbound.payload, { mediaUrl: "file:///tmp/final.png" });
     expectRecordFields(outbound.requiredCapabilities, { media: true, payload: true });
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("suppresses text-only tool output after media-only final Telegram replies", async () => {
+    deliverInboundReplyWithMessageSendContext.mockResolvedValue({
+      status: "handled_visible",
+      delivery: {
+        messageIds: ["1002"],
+        visibleReplySent: true,
+      },
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ mediaUrl: "file:///tmp/final.png" }, { kind: "final" });
+      await dispatcherOptions.deliver({ text: "late tool output" }, { kind: "tool" });
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "off",
+      telegramDeps: telegramDepsForTest,
+    });
+
+    expect(deliverInboundReplyWithMessageSendContext).toHaveBeenCalledTimes(1);
+    const outbound = expectRecordFields(mockCallArg(deliverInboundReplyWithMessageSendContext), {
+      channel: "telegram",
+      info: { kind: "final" },
+    });
+    expectRecordFields(outbound.payload, { mediaUrl: "file:///tmp/final.png" });
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
@@ -941,6 +1236,87 @@ describe("dispatchTelegramMessage draft streaming", () => {
       content: "Final answer",
       messageId: 2001,
     });
+    expectRecordFields(mockCallArg(recordOutboundMessageForPromptContext), {
+      chatId: "123",
+      messageId: 2001,
+      text: "Final answer",
+      messageThreadId: 777,
+    });
+  });
+
+  it("records streamed final replies into the prompt context cache", async () => {
+    const storePath = `/tmp/openclaw-telegram-stream-context-${process.pid}-${Date.now()}.json`;
+    const persistedPath = resolveTelegramMessageCachePath(storePath);
+    try {
+      setupDraftStreams({ answerMessageId: 1497 });
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+        await dispatcherOptions.deliver(
+          { text: "Done already: timeoutSeconds is now 7200s." },
+          { kind: "final" },
+        );
+        return { queuedFinal: true };
+      });
+
+      await dispatchWithContext({
+        context: createContext(),
+        cfg: { session: { store: storePath } },
+        telegramDeps: {
+          ...telegramDepsForTest,
+          recordOutboundMessageForPromptContext: recordOutboundMessageForPromptContextActual,
+        },
+      });
+
+      const cache = createTelegramMessageCache({ persistedPath });
+      await cache.record({
+        accountId: "default",
+        chatId: "123",
+        threadId: 777,
+        msg: {
+          chat: { id: 123, type: "private", first_name: "Keshav" },
+          message_thread_id: 777,
+          message_id: 1521,
+          date: 1_779_425_460,
+          text: "Did all Amazon crons run fine",
+          from: { id: 5185575566, is_bot: false, first_name: "Keshav" },
+        },
+      });
+
+      const context = await buildTelegramConversationContext({
+        cache,
+        accountId: "default",
+        chatId: "123",
+        threadId: 777,
+        messageId: "1521",
+        replyChainNodes: [],
+        recentLimit: 10,
+        replyTargetWindowSize: 2,
+      });
+
+      expect(context.map((entry) => entry.node.messageId)).toContain("1497");
+      expect(context.map((entry) => entry.node.body)).toContain(
+        "Done already: timeoutSeconds is now 7200s.",
+      );
+    } finally {
+      fs.rmSync(persistedPath, { force: true });
+    }
+  });
+
+  it("suppresses text-only tool payloads delivered after the final answer", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
+      await dispatcherOptions.deliver(
+        { text: "failed command output", isError: true },
+        { kind: "tool" },
+      );
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(answerDraftStream.update).toHaveBeenCalledTimes(1);
+    expect(answerDraftStream.update).toHaveBeenCalledWith("Final answer");
+    expect(deliverReplies).not.toHaveBeenCalled();
   });
 
   it("mirrors preview-finalized finals into the session transcript", async () => {
@@ -1605,6 +1981,35 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(editMessageTelegram).not.toHaveBeenCalled();
   });
 
+  it("does not stream text-only tool results into progress drafts", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await dispatcherOptions.deliver(
+          { text: "stdout line one\nstdout line two" },
+          { kind: "tool" },
+        );
+        await replyOptions?.onItemEvent?.({ kind: "search", progressText: "docs lookup" });
+        return { queuedFinal: false };
+      },
+    );
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+    });
+
+    expect(answerDraftStream.update).not.toHaveBeenCalledWith(
+      expect.stringContaining("stdout line one"),
+    );
+    expect(answerDraftStream.update).toHaveBeenLastCalledWith(
+      "Shelling\n\n`🛠️ Exec`\n`🔎 Web Search: docs lookup`",
+    );
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
   it("does not restart progress drafts after final answer delivery", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
@@ -1612,6 +2017,66 @@ describe("dispatchTelegramMessage draft streaming", () => {
         await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
         await dispatcherOptions.deliver({ text: "Branch is up to date" }, { kind: "final" });
         await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+    });
+
+    expect(answerDraftStream.update).toHaveBeenCalledTimes(1);
+    expect(answerDraftStream.update).toHaveBeenCalledWith("Shelling\n\n`🛠️ Exec`");
+    expectDeliveredReply(0, { text: "Branch is up to date" });
+  });
+
+  it("does not restart progress drafts for command output after final answer delivery", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await dispatcherOptions.deliver({ text: "Branch is up to date" }, { kind: "final" });
+        await replyOptions?.onCommandOutput?.({
+          phase: "end",
+          title: "Exec",
+          name: "exec",
+          status: "failed",
+          exitCode: 1,
+        });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+    });
+
+    expect(answerDraftStream.update).toHaveBeenCalledTimes(1);
+    expect(answerDraftStream.update).toHaveBeenCalledWith("Shelling\n\n`🛠️ Exec`");
+    expectDeliveredReply(0, { text: "Branch is up to date" });
+  });
+
+  it("does not restart progress drafts for command output while final answer delivery is pending", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        const finalDelivery = dispatcherOptions.deliver(
+          { text: "Branch is up to date" },
+          { kind: "final" },
+        );
+        await replyOptions?.onCommandOutput?.({
+          phase: "end",
+          title: "Exec",
+          name: "exec",
+          status: "failed",
+          exitCode: 1,
+        });
+        await finalDelivery;
         return { queuedFinal: true };
       },
     );
@@ -1671,6 +2136,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     const firstChunk = answerDraftStream.update.mock.calls.at(-1)?.[0] ?? "";
     expect(firstChunk.length).toBeLessThanOrEqual(80);
+    expectRecordFields(mockCallArg(recordOutboundMessageForPromptContext), {
+      messageId: 2001,
+      text: firstChunk,
+    });
     expect(deliverReplies).toHaveBeenCalled();
     const followUpTexts = deliverReplies.mock.calls.flatMap((call: unknown[]) =>
       ((call[0] as { replies?: Array<{ text?: string }> }).replies ?? []).map(
@@ -1683,6 +2152,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
   it("keeps streamed final text in place when late media arrives", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    const mediaMaxBytes = 50 * 1024 * 1024;
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
         await replyOptions?.onPartialReply?.({ text: "Photo" });
@@ -1694,10 +2164,14 @@ describe("dispatchTelegramMessage draft streaming", () => {
       },
     );
 
-    await dispatchWithContext({ context: createContext() });
+    await dispatchWithContext({
+      context: createContext(),
+      telegramCfg: { mediaMaxMb: 50 },
+    });
 
     expect(answerDraftStream.clear).not.toHaveBeenCalled();
     expect(answerDraftStream.update).toHaveBeenCalledWith("Photo");
+    expectDeliverRepliesParams({ mediaMaxBytes });
     expectDeliveredReply(0, { text: undefined, mediaUrl: "https://example.com/a.png" });
   });
 
@@ -1947,6 +2421,41 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(reasoningDraftStream.update).toHaveBeenCalledWith("Thinking\n\n_Thinking_");
     expect(answerDraftStream.update).toHaveBeenCalledWith("Answer");
     expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("replaces reasoning snapshots on the reasoning lane", async () => {
+    const { reasoningDraftStream } = setupDraftStreams({
+      answerMessageId: 2001,
+      reasoningMessageId: 3001,
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      const onReasoningStream = replyOptions?.onReasoningStream as
+        | ((payload: {
+            text?: string;
+            delta?: string;
+            isReasoningSnapshot?: boolean;
+          }) => Promise<void> | void)
+        | undefined;
+      await onReasoningStream?.({
+        text: "<think>Checking</think>",
+        delta: "Checking",
+        isReasoningSnapshot: true,
+      });
+      await onReasoningStream?.({
+        text: "<think>Reading\n\nChecking</think>",
+        delta: "Reading\n\nChecking",
+        isReasoningSnapshot: true,
+      });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({ context: createReasoningStreamContext() });
+
+    expect(reasoningDraftStream.update).toHaveBeenLastCalledWith(
+      "Thinking\n\n_Reading_\n\n_Checking_",
+    );
+    const updates = reasoningDraftStream.update.mock.calls.map((call) => call[0]);
+    expect(updates.join("\n")).not.toContain("CheckingReading");
   });
 
   it("streams reasoning from configured defaults", async () => {
@@ -2603,6 +3112,88 @@ describe("dispatchTelegramMessage draft streaming", () => {
       ),
     );
     expect(deliveredTexts).toContain("fresh request answer");
+  });
+
+  it("keeps newer DM requests from aborting active same-session dispatch", async () => {
+    let firstStarted: (() => void) | undefined;
+    const firstStartGate = new Promise<void>((resolve) => {
+      firstStarted = resolve;
+    });
+    let releaseFirst: (() => void) | undefined;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let secondStarted: (() => void) | undefined;
+    const secondStartGate = new Promise<void>((resolve) => {
+      secondStarted = resolve;
+    });
+    let firstAbortSignal: AbortSignal | undefined;
+    dispatchReplyWithBufferedBlockDispatcher
+      .mockImplementationOnce(async ({ dispatcherOptions, replyOptions }) => {
+        firstAbortSignal = replyOptions?.abortSignal;
+        firstStarted?.();
+        await firstGate;
+        await dispatcherOptions.deliver({ text: "earlier DM answer" }, { kind: "final" });
+        return {
+          queuedFinal: true,
+          counts: { block: 0, final: 1, tool: 0 },
+        };
+      })
+      .mockImplementationOnce(async ({ dispatcherOptions }) => {
+        secondStarted?.();
+        await dispatcherOptions.deliver({ text: "fresh DM answer" }, { kind: "final" });
+        return {
+          queuedFinal: true,
+          counts: { block: 0, final: 1, tool: 0 },
+        };
+      });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    const createDirectContext = (messageId: number, body: string) =>
+      createContext({
+        ctxPayload: {
+          SessionKey: "agent:main:main",
+          ChatType: "direct",
+          MessageSid: String(messageId),
+          RawBody: body,
+          BodyForAgent: body,
+          CommandBody: body,
+          CommandAuthorized: true,
+        } as unknown as TelegramMessageContext["ctxPayload"],
+        msg: {
+          chat: { id: 123, type: "private" },
+          message_id: messageId,
+        } as unknown as TelegramMessageContext["msg"],
+        chatId: 123,
+        isGroup: false,
+        historyKey: "telegram:123",
+        historyLimit: 10,
+        groupHistories: new Map(),
+        threadSpec: { id: undefined, scope: "none" },
+      });
+
+    const firstPromise = dispatchWithContext({
+      context: createDirectContext(99, "first request"),
+      streamMode: "off",
+    });
+    await firstStartGate;
+    const secondPromise = dispatchWithContext({
+      context: createDirectContext(100, "second request"),
+      streamMode: "off",
+    });
+    await secondStartGate;
+
+    expect(firstAbortSignal?.aborted).toBe(false);
+    releaseFirst?.();
+    await Promise.all([firstPromise, secondPromise]);
+
+    const deliveredTexts = deliverReplies.mock.calls.flatMap((call) =>
+      ((call[0] as { replies?: Array<{ text?: string }> }).replies ?? []).map(
+        (reply) => reply.text,
+      ),
+    );
+    expect(deliveredTexts).toContain("fresh DM answer");
+    expect(deliveredTexts).toContain("earlier DM answer");
   });
 
   it("keeps /btw side questions from aborting an active same-session dispatch", async () => {

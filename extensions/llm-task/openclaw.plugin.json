@@ -25,15 +25,17 @@
         "description": "Allowlist of provider/model keys like openai-codex/gpt-5.2."
       },
       "maxTokens": {
-        "type": "number"
+        "type": "integer",
+        "minimum": 1
       },
       "timeoutMs": {
-        "type": "number"
+        "type": "integer",
+        "minimum": 1
       }
     },
     "additionalProperties": false
   },
-  "version": "2026.5.19",
+  "version": "2026.5.21",
   "contracts": {
     "tools": [
       "llm-task"

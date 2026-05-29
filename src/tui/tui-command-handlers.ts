@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Component, SelectItem, TUI } from "@earendil-works/pi-tui";
+import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import { modelKey } from "../agents/model-ref-shared.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
@@ -7,7 +8,7 @@ import {
   normalizeUsageDisplay,
   resolveResponseUsageMode,
 } from "../auto-reply/thinking.js";
-import type { SessionsPatchResult } from "../gateway/protocol/index.js";
+import { isChatStopCommandText } from "../gateway/chat-abort.js";
 import { formatRelativeTimestamp } from "../infra/format-time/format-relative.ts";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { helpText, parseCommand } from "./commands.js";
@@ -45,7 +46,7 @@ type CommandHandlerContext = {
   loadHistory: () => Promise<void>;
   setSession: (key: string) => Promise<void>;
   refreshAgents: () => Promise<void>;
-  abortActive: () => Promise<void>;
+  abortActive: (params?: { preferActive?: boolean }) => Promise<void>;
   setActivityStatus: (text: string) => void;
   formatSessionKey: (key: string) => string;
   applySessionInfoFromPatch: (result: SessionsPatchResult) => void;
@@ -61,6 +62,11 @@ type CommandHandlerContext = {
 
 function isBtwCommand(text: string): boolean {
   return /^\/(?:btw|side)(?::|\s|$)/i.test(text.trim());
+}
+
+function isSlashStopCommand(text: string): boolean {
+  const trimmed = text.trim();
+  return trimmed.startsWith("/") && isChatStopCommandText(trimmed);
 }
 
 export function createCommandHandlers(context: CommandHandlerContext) {
@@ -98,6 +104,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     closeOverlay();
     tui.requestRender();
   };
+
+  const hasTrackedAbortTarget = () =>
+    Boolean(state.activeChatRunId || state.pendingChatRunId || state.pendingOptimisticUserMessage);
 
   const openSelector = (
     selector: {
@@ -606,6 +615,13 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       case "abort":
         await abortActive();
         break;
+      case "stop":
+        if (hasTrackedAbortTarget()) {
+          await abortActive({ preferActive: true });
+          break;
+        }
+        await sendMessage(raw);
+        break;
       case "settings":
         openSettings();
         break;
@@ -632,9 +648,21 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       return;
     }
     const isBtw = isBtwCommand(text);
+    const busy = Boolean(
+      state.activeChatRunId || state.pendingChatRunId || state.pendingOptimisticUserMessage,
+    );
+    if (
+      hasTrackedAbortTarget() &&
+      (isSlashStopCommand(text) || (busy && isChatStopCommandText(text)))
+    ) {
+      await abortActive({ preferActive: true });
+      return;
+    }
     if (
       !isBtw &&
-      (state.activeChatRunId || state.pendingChatRunId || state.pendingOptimisticUserMessage)
+      (state.pendingChatRunId ||
+        state.pendingOptimisticUserMessage ||
+        (opts.local !== true && state.activeChatRunId))
     ) {
       chatLog.addSystem("agent is busy — press Esc to abort before sending a new message");
       tui.requestRender();
@@ -643,6 +671,14 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     const runId = randomUUID();
     try {
       if (!isBtw) {
+        if (
+          opts.local === true &&
+          state.activeChatRunId &&
+          !state.pendingChatRunId &&
+          !state.pendingOptimisticUserMessage
+        ) {
+          chatLog.reserveAssistantSlot(state.activeChatRunId);
+        }
         chatLog.addUser(text);
         state.pendingOptimisticUserMessage = true;
         setActivityStatus("sending");

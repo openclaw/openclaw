@@ -216,7 +216,7 @@ function normalizeExpires(value: unknown, now: () => number): number | undefined
     typeof value === "number"
       ? value
       : typeof value === "string"
-        ? Number.parseFloat(value)
+        ? parsePositiveSeconds(value)
         : Number.NaN;
   if (!Number.isFinite(seconds) || seconds <= 0) {
     return undefined;
@@ -229,12 +229,20 @@ function normalizePositiveSecondsToMs(value: unknown): number | undefined {
     typeof value === "number"
       ? value
       : typeof value === "string"
-        ? Number.parseFloat(value)
+        ? parsePositiveSeconds(value)
         : Number.NaN;
   if (!Number.isFinite(seconds) || seconds <= 0) {
     return undefined;
   }
   return Math.trunc(seconds * 1000);
+}
+
+function parsePositiveSeconds(raw: string): number {
+  const trimmed = raw.trim();
+  if (!/^\d+(?:\.\d+)?$/.test(trimmed)) {
+    return Number.NaN;
+  }
+  return Number(trimmed);
 }
 
 function parseXaiOAuthTokenResponse(
@@ -511,7 +519,7 @@ function readCredentialString<TKey extends string>(
 }
 
 async function noteXaiOAuthUrl(ctx: ProviderAuthContext, authorizeUrl: string): Promise<void> {
-  const lines = ["Open this xAI OAuth URL in your browser:", authorizeUrl];
+  const lines = ["Open this xAI OAuth URL in your browser:"];
   if (ctx.isRemote) {
     lines.push(
       "",
@@ -520,6 +528,11 @@ async function noteXaiOAuthUrl(ctx: ProviderAuthContext, authorizeUrl: string): 
     );
   }
   await ctx.prompter.note(lines.join("\n"), "xAI OAuth");
+  if (ctx.prompter.plain) {
+    await ctx.prompter.plain(`\n${authorizeUrl}\n`);
+    return;
+  }
+  ctx.runtime.log(`\n${authorizeUrl}\n`);
 }
 
 export async function loginXaiOAuth(ctx: ProviderAuthContext): Promise<ProviderAuthResult> {

@@ -38,7 +38,17 @@ import {
   type CommandRunner,
 } from "./update-global.js";
 
+const execFileSyncMock = vi.hoisted(() => vi.fn(() => "/tmp/openclaw-test-global-npmrc\n"));
 const TELEGRAM_RUNTIME_API = bundledDistPluginFile("telegram", "runtime-api.js");
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    execFileSync: execFileSyncMock,
+  };
+});
+
 async function writeGlobalPackageJson(packageRoot: string, version = "1.0.0") {
   await fs.writeFile(
     path.join(packageRoot, "package.json"),
@@ -84,6 +94,7 @@ describe("update global helpers", () => {
   let envSnapshot: ReturnType<typeof captureEnv> | undefined;
 
   afterEach(() => {
+    execFileSyncMock.mockClear();
     envSnapshot?.restore();
     envSnapshot = undefined;
   });
@@ -238,12 +249,15 @@ describe("update global helpers", () => {
     expect(isExplicitPackageInstallSpec("github:openclaw/openclaw#main")).toBe(true);
     expect(isExplicitPackageInstallSpec("https://example.com/openclaw-main.tgz")).toBe(true);
     expect(isExplicitPackageInstallSpec("file:/tmp/openclaw-main.tgz")).toBe(true);
+    expect(isExplicitPackageInstallSpec("/tmp/openclaw-main.tgz")).toBe(true);
+    expect(isExplicitPackageInstallSpec("openclaw-main.tgz")).toBe(true);
     expect(isExplicitPackageInstallSpec("beta")).toBe(false);
 
     expect(canResolveRegistryVersionForPackageTarget("latest")).toBe(true);
     expect(canResolveRegistryVersionForPackageTarget("2026.3.22")).toBe(true);
     expect(canResolveRegistryVersionForPackageTarget("main")).toBe(false);
     expect(canResolveRegistryVersionForPackageTarget("github:openclaw/openclaw#main")).toBe(false);
+    expect(canResolveRegistryVersionForPackageTarget("/tmp/openclaw-main.tgz")).toBe(false);
   });
 
   it("detects install managers from resolved roots and on-disk presence", async () => {
@@ -503,7 +517,7 @@ describe("update global helpers", () => {
           "--no-fund",
           "--no-audit",
           "--loglevel=error",
-          "--min-release-age=0",
+          expect.stringMatching(/^--before=/),
         ]);
       });
     });

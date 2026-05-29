@@ -186,6 +186,15 @@ class MicCaptureManager(
     }
   }
 
+  fun cancelMicCapture() {
+    transcriptionDrainJob?.cancel()
+    transcriptionDrainJob = null
+    _micEnabled.value = false
+    _micCooldown.value = false
+    _liveTranscript.value = null
+    stop()
+  }
+
   suspend fun pauseForTts() {
     val shouldPause =
       synchronized(ttsPauseLock) {
@@ -251,6 +260,11 @@ class MicCaptureManager(
     if (hasQueuedMessages()) {
       _statusText.value = queuedWaitingStatus()
     }
+  }
+
+  internal fun submitTranscribedMessage(text: String) {
+    queueRecognizedMessage(text)
+    sendQueuedIfIdle()
   }
 
   fun handleGatewayEvent(
@@ -692,8 +706,7 @@ class MicCaptureManager(
         val text = obj["text"].asStringOrNull()?.trim().orEmpty()
         if (text.isNotEmpty()) {
           if (text != flushedPartialTranscript) {
-            queueRecognizedMessage(text)
-            sendQueuedIfIdle()
+            submitTranscribedMessage(text)
           } else {
             flushedPartialTranscript = null
             _liveTranscript.value = null

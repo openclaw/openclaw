@@ -1,5 +1,14 @@
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { resolveSpawnCall, shouldUseCmdExeForCommand } from "../../scripts/ui.js";
+import {
+  isDirectScriptExecution,
+  resolvePnpmSpawnCall,
+  resolveSpawnCall,
+  shouldUseCmdExeForCommand,
+} from "../../scripts/ui.js";
 
 describe("scripts/ui windows spawn behavior", () => {
   it("wraps Windows command launchers with cmd.exe without enabling shell mode", () => {
@@ -20,7 +29,7 @@ describe("scripts/ui windows spawn behavior", () => {
         "/d",
         "/s",
         "/c",
-        '"C:\\Program Files\\nodejs\\pnpm.cmd" run build -t "path with spaces"',
+        '""C:\\Program Files\\nodejs\\pnpm.cmd" run build -t "path with spaces""',
       ],
       options: {
         cwd: "C:\\repo\\ui",
@@ -69,6 +78,44 @@ describe("scripts/ui windows spawn behavior", () => {
     ).toThrow(/unsafe windows cmd\.exe argument/i);
   });
 
+  it("routes Windows Corepack pnpm entrypoints through node", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pnpm-runner-"));
+    const npmExecPath = path.join(tempDir, "pnpm.mjs");
+    fs.writeFileSync(npmExecPath, "console.log('pnpm');\n");
+
+    try {
+      expect(
+        resolvePnpmSpawnCall(
+          ["run", "build"],
+          {
+            npm_execpath: npmExecPath,
+            ComSpec: "C:\\Windows\\System32\\cmd.exe",
+          },
+          {
+            cwd: "C:\\repo\\ui",
+            nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
+            platform: "win32",
+          },
+        ),
+      ).toEqual({
+        command: "C:\\Program Files\\nodejs\\node.exe",
+        args: [npmExecPath, "run", "build"],
+        options: {
+          cwd: "C:\\repo\\ui",
+          stdio: "inherit",
+          env: {
+            npm_execpath: npmExecPath,
+            ComSpec: "C:\\Windows\\System32\\cmd.exe",
+          },
+          shell: false,
+          windowsVerbatimArguments: undefined,
+        },
+      });
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
   it("keeps non-Windows launches direct even with shell metacharacters", () => {
     expect(
       resolveSpawnCall(
@@ -87,5 +134,30 @@ describe("scripts/ui windows spawn behavior", () => {
         shell: false,
       },
     });
+  });
+
+  it("detects direct execution through a junctioned script path", () => {
+    const realScriptPath = path.resolve("repo/openclaw/scripts/ui.js");
+    const junctionScriptPath = path.resolve("linked/openclaw/scripts/ui.js");
+    const realpath = (entry: string) => (entry === junctionScriptPath ? realScriptPath : entry);
+
+    expect(isDirectScriptExecution(junctionScriptPath, realScriptPath, realpath)).toBe(true);
+  });
+
+  it("honors build-all no-pnpm mode before requiring a pnpm runner", () => {
+    const result = spawnSync(process.execPath, ["scripts/ui.js", "build", "--help"], {
+      cwd: path.resolve("."),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENCLAW_BUILD_ALL_NO_PNPM: "1",
+        PATH: "",
+      },
+    });
+
+    const output = `${result.stdout}${result.stderr}`;
+    expect(result.status).toBe(0);
+    expect(output).not.toContain("Missing UI runner");
+    expect(output).toContain("vite");
   });
 });

@@ -79,6 +79,7 @@ export function isExplicitPackageInstallSpec(value: string): boolean {
     return false;
   }
   return (
+    /\.(?:tgz|tar\.gz)$/iu.test(trimmed) ||
     trimmed.includes("://") ||
     trimmed.includes("#") ||
     /^(?:file|github|git\+ssh|git\+https|git\+http|git\+file|npm):/i.test(trimmed)
@@ -88,7 +89,9 @@ export function isExplicitPackageInstallSpec(value: string): boolean {
 function stripPrimaryPackageAlias(spec: string): string {
   const normalized = normalizePackageTarget(spec);
   const prefix = `${PRIMARY_PACKAGE_NAME}@`;
-  return normalized.startsWith(prefix) ? normalized.slice(prefix.length).trim() : normalized;
+  return normalized.toLowerCase().startsWith(prefix)
+    ? normalized.slice(prefix.length).trim()
+    : normalized;
 }
 
 function isPnpmOpenClawSourceInstallSpec(spec: string): boolean {

@@ -93,7 +93,7 @@ On Discord, native command specs may include `descriptionLocalizations`, which O
   Enables `/restart` plus gateway restart tool actions.
 </ParamField>
 <ParamField path="commands.ownerAllowFrom" type="string[]">
-  Sets the explicit owner allowlist for owner-only command/tool surfaces. This is the human operator account that can approve dangerous actions and run commands such as `/diagnostics`, `/export-trajectory`, and `/config`. It is separate from `commands.allowFrom` and from DM pairing access.
+  Sets the explicit owner allowlist for owner-only command surfaces and owner-gated channel actions. This is the human operator account that can approve dangerous actions and run commands such as `/diagnostics`, `/export-trajectory`, and `/config`. It is separate from `commands.allowFrom` and from DM pairing access.
 </ParamField>
 <ParamField path="channels.<channel>.commands.enforceOwnerForCommands" type="boolean" default="false">
   Per-channel: makes owner-only commands require **owner identity** to run on that surface. When `true`, the sender must either match a resolved owner candidate (for example an entry in `commands.ownerAllowFrom` or provider-native owner metadata) or hold internal `operator.admin` scope on an internal message channel. A wildcard entry in channel `allowFrom`, or an empty/unresolved owner-candidate list, is **not** sufficient — owner-only commands fail closed on that channel. Leave this off if you want owner-only commands gated only by `ownerAllowFrom` and the standard command allowlists.
@@ -136,7 +136,7 @@ Current source-of-truth:
   </Accordion>
   <Accordion title="Model and run controls">
     - `/think <level|default>` sets the thinking level or clears the session override. Options come from the active model's provider profile; common levels are `off`, `minimal`, `low`, `medium`, and `high`, with custom levels such as `xhigh`, `adaptive`, `max`, or binary `on` only where supported. Aliases: `/thinking`, `/t`.
-    - `/verbose on|off|full` toggles verbose output. Alias: `/v`.
+    - `/verbose on|off|full` toggles verbose output. Authorized external channel senders may persist the session override; internal gateway/webchat clients need `operator.admin`. Alias: `/v`.
     - `/trace on|off` toggles plugin trace output for the current session.
     - `/fast [status|on|off|default]` shows, sets, or clears fast mode.
     - `/reasoning [on|off|stream]` toggles reasoning visibility. Alias: `/reason`.
@@ -164,18 +164,16 @@ Current source-of-truth:
   <Accordion title="Skills, allowlists, approvals">
     - `/skill <name> [input]` runs a skill by name.
     - `/allowlist [list|add|remove] ...` manages allowlist entries. Text-only.
-    - `/approve <id> <decision>` resolves exec approval prompts.
+    - `/approve <id> <decision>` resolves exec or plugin approval prompts.
     - `/btw <question>` asks a side question without changing future session context. Alias: `/side`. See [BTW](/tools/btw).
 
   </Accordion>
   <Accordion title="Subagents and ACP">
-    - `/subagents list|kill|log|info|send|steer|spawn` manages sub-agent runs for the current session.
+    - `/subagents list|log|info` inspects sub-agent runs for the current session.
     - `/acp spawn|cancel|steer|close|sessions|status|set-mode|set|cwd|permissions|timeout|model|reset-options|doctor|install|help` manages ACP sessions and runtime options.
     - `/focus <target>` binds the current Discord thread or Telegram topic/conversation to a session target.
     - `/unfocus` removes the current binding.
     - `/agents` lists thread-bound agents for the current session.
-    - `/kill <id|#|all>` aborts one or all running sub-agents.
-    - `/subagents steer <id|#> <message>` sends steering to a running sub-agent. See [Steer](/tools/steer).
 
   </Accordion>
   <Accordion title="Owner-only writes and admin">
@@ -266,7 +264,7 @@ User-invocable skills are also exposed as slash commands:
     - `/trace` is narrower than `/verbose`: it only reveals plugin-owned trace/debug lines and keeps normal verbose tool chatter off.
     - `/fast on|off` persists a session override. Use the Sessions UI `inherit` option to clear it and fall back to config defaults.
     - `/fast` is provider-specific: OpenAI/OpenAI Codex map it to `service_tier=priority` on native Responses endpoints, while direct public Anthropic requests, including OAuth-authenticated traffic sent to `api.anthropic.com`, map it to `service_tier=auto` or `standard_only`. See [OpenAI](/providers/openai) and [Anthropic](/providers/anthropic).
-    - Tool failure summaries are still shown when relevant, but detailed failure text is only included when `/verbose` is `on` or `full`.
+    - Tool failure summaries are still shown when relevant, but detailed failure text is only included when `/verbose full` is enabled.
     - `/reasoning`, `/verbose`, and `/trace` are risky in group settings: they may reveal internal reasoning, tool output, or plugin diagnostics you did not intend to expose. Prefer leaving them off, especially in group chats.
 
   </Accordion>
@@ -314,7 +312,7 @@ For profile and override editing, use the Control UI Tools panel or config/catal
 
 - **Provider usage/quota** (example: "Claude 80% left") shows up in `/status` for the current model provider when usage tracking is enabled. OpenClaw normalizes provider windows to `% left`; for MiniMax, remaining-only percent fields are inverted before display, and `model_remains` responses prefer the chat-model entry plus a model-tagged plan label.
 - **Token/cache lines** in `/status` can fall back to the latest transcript usage entry when the live session snapshot is sparse. Existing nonzero live values still win, and transcript fallback can also recover the active runtime model label plus a larger prompt-oriented total when stored totals are missing or smaller.
-- **Execution vs runtime:** `/status` reports `Execution` for the effective sandbox path and `Runtime` for who is actually running the session: `OpenClaw Pi Default`, `OpenAI Codex`, a CLI backend, or an ACP backend.
+- **Execution vs runtime:** `/status` reports `Execution` for the effective sandbox path and `Runtime` for who is actually running the session: `OpenClaw Default`, `OpenAI Codex`, a CLI backend, or an ACP backend.
 - **Per-response tokens/cost** is controlled by `/usage off|tokens|full` (appended to normal replies).
 - `/model status` is about **models/auth/endpoints**, not usage.
 
@@ -411,7 +409,7 @@ Examples:
 ```
 
 <Note>
-`/mcp` stores config in OpenClaw config, not Pi-owned project settings. Runtime adapters decide which transports are actually executable.
+`/mcp` stores config in OpenClaw config, not embedded-agent project settings. Runtime adapters decide which transports are actually executable.
 </Note>
 
 ## Plugin updates

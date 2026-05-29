@@ -61,16 +61,32 @@
       "destination": "/channels/matrix-migration"
     },
     {
+      "source": "/mcp",
+      "destination": "/cli/mcp"
+    },
+    {
       "source": "/help/gpt54-codex-agentic-parity",
-      "destination": "/help/gpt55-codex-agentic-parity"
+      "destination": "/agent-runtime-architecture"
     },
     {
       "source": "/help/gpt54-codex-agentic-parity-maintainers",
-      "destination": "/help/gpt55-codex-agentic-parity-maintainers"
+      "destination": "/agent-runtime-architecture"
     },
     {
-      "source": "/mcp",
-      "destination": "/cli/mcp"
+      "source": "/help/gpt55-codex-agentic-parity",
+      "destination": "/agent-runtime-architecture"
+    },
+    {
+      "source": "/help/gpt55-codex-agentic-parity-maintainers",
+      "destination": "/agent-runtime-architecture"
+    },
+    {
+      "source": "/pi",
+      "destination": "/agent-runtime-architecture"
+    },
+    {
+      "source": "/pi-dev",
+      "destination": "/openclaw-agent-runtime"
     },
     {
       "source": "/providers/modelstudio",
@@ -226,10 +242,14 @@
     },
     {
       "source": "/glm",
-      "destination": "/providers/glm"
+      "destination": "/providers/zai"
     },
     {
       "source": "/zai",
+      "destination": "/providers/zai"
+    },
+    {
+      "source": "/providers/glm",
       "destination": "/providers/zai"
     },
     {
@@ -1040,12 +1060,13 @@
                   "install/oracle",
                   "install/railway",
                   "install/raspberry-pi",
-                  "install/render"
+                  "install/render",
+                  "install/upstash"
                 ]
               },
               {
                 "group": "Advanced setup",
-                "pages": ["start/setup", "pi-dev"]
+                "pages": ["start/setup", "openclaw-agent-runtime"]
               }
             ]
           },
@@ -1226,6 +1247,7 @@
                   "plugins/sdk-provider-plugins",
                   "plugins/cli-backend-plugins",
                   "plugins/hooks",
+                  "plugins/plugin-permission-requests",
                   "plugins/adding-capabilities"
                 ]
               },
@@ -1381,7 +1403,6 @@
                   "providers/fal",
                   "providers/fireworks",
                   "providers/github-copilot",
-                  "providers/glm",
                   "providers/google",
                   "providers/gradium",
                   "providers/groq",
@@ -1401,6 +1422,7 @@
                   "providers/opencode-go",
                   "providers/openrouter",
                   "providers/perplexity-provider",
+                  "providers/pixverse",
                   "providers/qianfan",
                   "providers/qwen",
                   "providers/runway",
@@ -1433,7 +1455,8 @@
                   "platforms/linux",
                   "platforms/windows",
                   "platforms/android",
-                  "platforms/ios"
+                  "platforms/ios",
+                  "platforms/easyrunner"
                 ]
               },
               {
@@ -1529,7 +1552,9 @@
                     "group": "Security and sandboxing",
                     "pages": [
                       "gateway/security/index",
+                      "gateway/security/exposure-runbook",
                       "gateway/security/secure-file-operations",
+                      "gateway/security/shrinkwrap",
                       "gateway/security/audit-checks",
                       "gateway/operator-scopes",
                       "gateway/sandboxing",
@@ -1669,7 +1694,7 @@
                   },
                   {
                     "group": "Plugins and skills",
-                    "pages": ["cli/plugins", "cli/path", "cli/skills"]
+                    "pages": ["cli/plugins", "cli/path", "cli/policy", "cli/skills"]
                   },
                   {
                     "group": "Interfaces",
@@ -1736,8 +1761,8 @@
                   "plugins/architecture-internals",
                   "plugins/sdk-migration",
                   "plugins/compatibility",
-                  "plugins/sdk-channel-message",
-                  "plugins/sdk-channel-turn",
+                  "plugins/sdk-channel-outbound",
+                  "plugins/sdk-channel-inbound",
                   "plugins/sdk-channel-ingress",
                   "plugins/message-presentation"
                 ]
@@ -1759,7 +1784,7 @@
               {
                 "group": "Technical reference",
                 "pages": [
-                  "pi",
+                  "agent-runtime-architecture",
                   "reference/wizard",
                   "reference/token-use",
                   "reference/secretref-credential-surface",
@@ -1779,9 +1804,7 @@
                   "concepts/markdown-formatting",
                   "concepts/typing-indicators",
                   "concepts/usage-tracking",
-                  "concepts/timezone",
-                  "help/gpt55-codex-agentic-parity",
-                  "help/gpt55-codex-agentic-parity-maintainers"
+                  "concepts/timezone"
                 ]
               },
               {
@@ -1793,6 +1816,7 @@
                 "pages": [
                   "reference/RELEASING",
                   "reference/full-release-validation",
+                  "reference/release-performance-sweep",
                   "reference/test",
                   "ci",
                   "help/scripts"

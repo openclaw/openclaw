@@ -5,6 +5,10 @@ import {
   normalizeHeadersInitForFetch,
   normalizeRequestInitHeadersForFetch,
 } from "../fetch-headers.js";
+import {
+  shouldUseConfiguredLocalOriginManagedProxyBypass,
+  type ConfiguredLocalOriginManagedProxyBypass,
+} from "./configured-local-origin-bypass.js";
 import { hasProxyEnvConfigured, shouldUseEnvHttpProxyForUrl } from "./proxy-env.js";
 import { retainSafeHeadersForCrossOriginRedirect as retainSafeRedirectHeaders } from "./redirect-headers.js";
 import {
@@ -91,6 +95,14 @@ export type GuardedFetchResult = {
   finalUrl: string;
   release: () => Promise<void>;
   refreshTimeout?: () => void;
+};
+
+type GuardedFetchInternalOptions = GuardedFetchOptions & {
+  managedProxyBypass?: ConfiguredLocalOriginManagedProxyBypass;
+};
+
+export type GuardedFetchConfiguredLocalOriginOptions = GuardedFetchOptions & {
+  configuredLocalOriginBaseUrl: string;
 };
 
 type GuardedFetchPresetOptions = Omit<
@@ -250,11 +262,16 @@ async function captureGuardedFetchExchange(params: {
   transport?: "http" | "sse";
   capture: GuardedFetchOptions["capture"];
   auditContext?: string;
+  capturedByGlobalFetchPatch?: boolean;
 }): Promise<void> {
   if (params.capture === false || !isTruthyEnvValue(process.env[OPENCLAW_DEBUG_PROXY_ENABLED])) {
     return;
   }
-  const { captureHttpExchange } = await import("../../proxy-capture/runtime.js");
+  const { captureHttpExchange, isDebugProxyGlobalFetchPatchInstalled } =
+    await import("../../proxy-capture/runtime.js");
+  if (params.capturedByGlobalFetchPatch && isDebugProxyGlobalFetchPatchInstalled()) {
+    return;
+  }
   captureHttpExchange({
     url: params.url,
     method: params.method,
@@ -343,6 +360,29 @@ function rewriteRedirectInitForCrossOrigin(params: {
 export { fetchWithRuntimeDispatcher } from "./runtime-fetch.js";
 
 export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<GuardedFetchResult> {
+  const { managedProxyBypass: _ignoredManagedProxyBypass, ...publicParams } =
+    params as GuardedFetchOptions & {
+      managedProxyBypass?: unknown;
+    };
+  return await fetchWithSsrFGuardInternal(publicParams);
+}
+
+export async function fetchConfiguredLocalOriginWithSsrFGuard({
+  configuredLocalOriginBaseUrl,
+  ...params
+}: GuardedFetchConfiguredLocalOriginOptions): Promise<GuardedFetchResult> {
+  return await fetchWithSsrFGuardInternal({
+    ...params,
+    managedProxyBypass: {
+      kind: "configured-local-origin",
+      baseUrl: configuredLocalOriginBaseUrl,
+    },
+  });
+}
+
+async function fetchWithSsrFGuardInternal(
+  params: GuardedFetchInternalOptions,
+): Promise<GuardedFetchResult> {
   const defaultFetch: FetchLike | undefined = params.fetchImpl ?? globalThis.fetch;
   if (!defaultFetch) {
     throw new Error("fetch is not available");
@@ -432,11 +472,17 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
       if (canUseTrustedEnvProxy) {
         dispatcher = createHttp1EnvHttpProxyAgent(undefined, timeoutMs);
       } else if (canUseManagedProxy) {
-        await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
+        const pinned = await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
           lookupFn: params.lookupFn,
           policy: policyForUrl,
         });
-        dispatcher = createHttp1EnvHttpProxyAgent(undefined, timeoutMs);
+        dispatcher = shouldUseConfiguredLocalOriginManagedProxyBypass({
+          url: parsedUrl,
+          managedProxyBypass: params.managedProxyBypass,
+          resolvedAddresses: pinned.addresses,
+        })
+          ? createPinnedDispatcher(pinned, params.dispatcherPolicy, policyForUrl, timeoutMs)
+          : createHttp1EnvHttpProxyAgent(undefined, timeoutMs);
       } else if (usesTrustedExplicitProxyMode) {
         // Explicit proxy targets are still checked against the caller's hostname
         // policy, but the proxy does the DNS resolution for the final target.
@@ -487,6 +533,12 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
       const response = shouldUseRuntimeFetch
         ? await fetchWithRuntimeDispatcher(parsedUrl.toString(), init)
         : await defaultFetch(parsedUrl.toString(), init);
+      const capturedByGlobalFetchPatch =
+        !shouldUseRuntimeFetch &&
+        isAmbientGlobalFetch({
+          fetchImpl: defaultFetch,
+          globalFetch: globalThis.fetch,
+        });
 
       await captureGuardedFetchExchange({
         url: parsedUrl.toString(),
@@ -498,6 +550,7 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
         transport: "http",
         capture: params.capture,
         auditContext: params.auditContext,
+        capturedByGlobalFetchPatch,
       });
 
       if (isRedirectStatus(response.status)) {

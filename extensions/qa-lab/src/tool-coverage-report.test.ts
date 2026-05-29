@@ -60,7 +60,7 @@ describe("qa tool coverage report", () => {
         capabilityLayer: "codex-native-workspace",
         required: true,
         fixtureCount: 1,
-        pi: "not-run",
+        openclaw: "not-run",
         codex: "not-run",
         drift: "not-run",
       }),
@@ -95,8 +95,8 @@ describe("qa tool coverage report", () => {
               scenarioId: "tool-read",
               drift: "none",
               cells: {
-                pi: {
-                  runtime: "pi",
+                openclaw: {
+                  runtime: "openclaw",
                   transcriptBytes: "",
                   toolCalls: [{ tool: "read", argsHash: "a", resultHash: "r" }],
                   finalText: "",
@@ -124,8 +124,8 @@ describe("qa tool coverage report", () => {
               drift: "tool-result-shape",
               driftDetails: "tool result differs",
               cells: {
-                pi: {
-                  runtime: "pi",
+                openclaw: {
+                  runtime: "openclaw",
                   transcriptBytes: "",
                   toolCalls: [{ tool: "write", argsHash: "a", resultHash: "r1" }],
                   finalText: "",
@@ -147,7 +147,7 @@ describe("qa tool coverage report", () => {
           },
         ],
         run: {
-          runtimePair: ["pi", "codex"],
+          runtimePair: ["openclaw", "codex"],
         },
       },
       generatedAt: "2026-05-10T00:00:00.000Z",
@@ -185,8 +185,8 @@ describe("qa tool coverage report", () => {
               scenarioId: "tool-optional",
               drift: "tool-call-shape",
               cells: {
-                pi: {
-                  runtime: "pi",
+                openclaw: {
+                  runtime: "openclaw",
                   transcriptBytes: "",
                   toolCalls: [],
                   finalText: "",
@@ -223,6 +223,68 @@ describe("qa tool coverage report", () => {
     );
   });
 
+  it("keeps searchable OpenClaw dynamic tool rows report-only by default", () => {
+    const report = buildQaToolCoverageReport({
+      scenarios: [
+        makeScenario("tool-searchable-web-search", "web-search", {
+          toolName: "web_search",
+          toolCoverage: {
+            bucket: "openclaw-dynamic-integration",
+            expectedLayer: "openclaw-dynamic",
+            capabilityLayer: "openclaw-dynamic-searchable",
+          },
+        }),
+      ],
+      summary: {
+        scenarios: [
+          {
+            name: "tool web_search searchable",
+            status: "fail",
+            runtimeParity: {
+              scenarioId: "tool-searchable-web-search",
+              drift: "tool-call-shape",
+              driftDetails: "searchable discovery was report-only",
+              cells: {
+                openclaw: {
+                  runtime: "openclaw",
+                  transcriptBytes: "",
+                  toolCalls: [{ tool: "web_search", argsHash: "a", resultHash: "r" }],
+                  finalText: "",
+                  usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+                  wallClockMs: 1,
+                  bootStateLines: [],
+                },
+                codex: {
+                  runtime: "codex",
+                  transcriptBytes: "",
+                  toolCalls: [],
+                  finalText: "",
+                  usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+                  wallClockMs: 1,
+                  bootStateLines: [],
+                },
+              },
+            },
+          },
+        ],
+      },
+      generatedAt: "2026-05-10T00:00:00.000Z",
+    });
+
+    expect(report.pass).toBe(true);
+    expect(report.failures).toEqual([]);
+    expect(report.reportOnlyTools).toBe(1);
+    expect(report.passingTools).toBe(0);
+    expect(report.searchableDynamicTools).toBe(1);
+    expect(report.rows[0]).toEqual(
+      expect.objectContaining({
+        capabilityLayer: "openclaw-dynamic-searchable",
+        required: false,
+        drift: "tool-call-shape",
+      }),
+    );
+  });
+
   it("passes required OpenClaw dynamic tool coverage when both runtimes exercise the tool", () => {
     const report = buildQaToolCoverageReport({
       scenarios: [
@@ -246,8 +308,8 @@ describe("qa tool coverage report", () => {
               drift: "tool-result-shape",
               driftDetails: "runtime envelopes differ",
               cells: {
-                pi: {
-                  runtime: "pi",
+                openclaw: {
+                  runtime: "openclaw",
                   transcriptBytes: "",
                   toolCalls: [{ tool: "web_search", argsHash: "a", resultHash: "r1" }],
                   finalText: "",
@@ -300,8 +362,8 @@ describe("qa tool coverage report", () => {
               drift: "tool-call-shape",
               driftDetails: "Codex emitted no web_search call",
               cells: {
-                pi: {
-                  runtime: "pi",
+                openclaw: {
+                  runtime: "openclaw",
                   transcriptBytes: "",
                   toolCalls: [{ tool: "web_search", argsHash: "a", resultHash: "r" }],
                   finalText: "",
@@ -327,9 +389,7 @@ describe("qa tool coverage report", () => {
     });
 
     expect(report.pass).toBe(false);
-    expect(report.failures).toEqual([
-      "web-search missing codex tool call web_search",
-    ]);
+    expect(report.failures).toEqual(["web-search missing codex tool call web_search"]);
   });
 
   it("fails required OpenClaw dynamic tool coverage when the fixture failure mode is preserved", () => {
@@ -355,8 +415,8 @@ describe("qa tool coverage report", () => {
               drift: "failure-mode",
               driftDetails: "at least one runtime failed",
               cells: {
-                pi: {
-                  runtime: "pi",
+                openclaw: {
+                  runtime: "openclaw",
                   transcriptBytes: "",
                   toolCalls: [{ tool: "web_search", argsHash: "a", resultHash: "r" }],
                   finalText: "",

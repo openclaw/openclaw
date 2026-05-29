@@ -8,11 +8,13 @@ import {
   listChannelCatalogEntries,
   type PluginChannelCatalogEntry,
 } from "../../plugins/channel-catalog-registry.js";
+import type { PluginDiscoveryResult } from "../../plugins/discovery.js";
 import {
   getCachedPluginModuleLoader,
   type PluginModuleLoaderCache,
 } from "../../plugins/plugin-module-loader-cache.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { normalizeTrimmedStringList } from "../../shared/string-normalization.js";
 import { loadChannelPluginModule, resolveExistingPluginModulePath } from "./module-loader.js";
 
 type ChannelPackageStateChecker = (params: {
@@ -59,15 +61,6 @@ function loadChannelPackageStateModule(params: { modulePath: string; rootDir: st
     });
     return loader(params.modulePath);
   }
-}
-
-function normalizeStringList(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value
-    .map((entry) => normalizeOptionalString(entry))
-    .filter((entry): entry is string => Boolean(entry));
 }
 
 function hasNonEmptyEnvValue(env: NodeJS.ProcessEnv | undefined, key: string): boolean {
@@ -159,8 +152,8 @@ function resolveChannelPackageStateMetadata(
   const specifier = normalizeOptionalString(metadata.specifier) ?? "";
   const exportName = normalizeOptionalString(metadata.exportName) ?? "";
   const envMetadata = "env" in metadata ? metadata.env : undefined;
-  const allOf = normalizeStringList(envMetadata?.allOf);
-  const anyOf = normalizeStringList(envMetadata?.anyOf);
+  const allOf = normalizeTrimmedStringList(envMetadata?.allOf);
+  const anyOf = normalizeTrimmedStringList(envMetadata?.anyOf);
   const env = allOf.length > 0 || anyOf.length > 0 ? { allOf, anyOf } : undefined;
   if ((!specifier || !exportName) && !env) {
     return null;
@@ -174,10 +167,12 @@ function resolveChannelPackageStateMetadata(
 
 function listChannelPackageStateCatalog(
   metadataKey: ChannelPackageStateMetadataKey,
+  discovery?: PluginDiscoveryResult,
 ): PluginChannelCatalogEntry[] {
-  return listChannelCatalogEntries({ origin: "bundled" }).filter((entry) =>
-    Boolean(resolveChannelPackageStateMetadata(entry, metadataKey)),
-  );
+  return listChannelCatalogEntries({
+    origin: "bundled",
+    discovery,
+  }).filter((entry) => Boolean(resolveChannelPackageStateMetadata(entry, metadataKey)));
 }
 
 function resolveChannelPackageStateChecker(params: {
@@ -235,10 +230,12 @@ function resolvePackageStateChannelId(entry: PluginChannelCatalogEntry): string 
 
 export function listBundledChannelIdsForPackageState(
   metadataKey: ChannelPackageStateMetadataKey,
+  discovery?: PluginDiscoveryResult,
 ): string[] {
-  return listChannelPackageStateCatalog(metadataKey)
+  return listChannelPackageStateCatalog(metadataKey, discovery)
     .map((entry) => resolvePackageStateChannelId(entry))
-    .filter((channelId): channelId is string => Boolean(channelId));
+    .filter((channelId): channelId is string => Boolean(channelId))
+    .toSorted((left, right) => left.localeCompare(right));
 }
 
 export function hasBundledChannelPackageState(params: {
@@ -246,9 +243,10 @@ export function hasBundledChannelPackageState(params: {
   channelId: string;
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  discovery?: PluginDiscoveryResult;
 }): boolean {
   const requestedChannelId = normalizeOptionalString(params.channelId);
-  const entry = listChannelPackageStateCatalog(params.metadataKey).find(
+  const entry = listChannelPackageStateCatalog(params.metadataKey, params.discovery).find(
     (candidate) => resolvePackageStateChannelId(candidate) === requestedChannelId,
   );
   if (!entry) {

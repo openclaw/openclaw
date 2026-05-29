@@ -4,7 +4,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import { createContext, Script } from "node:vm";
-import { validateJsonSchemaValue, type JsonSchemaObject } from "openclaw/plugin-sdk/config-schema";
+import {
+  validateJsonSchemaValue,
+  type JsonSchemaObject,
+} from "openclaw/plugin-sdk/json-schema-runtime";
 import type { RealtimeTranscriptionProviderPlugin } from "openclaw/plugin-sdk/realtime-transcription";
 import type { RealtimeVoiceProviderPlugin } from "openclaw/plugin-sdk/realtime-voice";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -147,6 +150,44 @@ function requireConfigProperty(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+type MockSessionEntry = {
+  sessionId?: string;
+  updatedAt?: number;
+  [key: string]: unknown;
+};
+
+function createMockSessionRuntime(sessionStore: Record<string, unknown>) {
+  return {
+    resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
+    loadSessionStore: vi.fn(() => sessionStore),
+    saveSessionStore: vi.fn(async () => {}),
+    updateSessionStore: vi.fn(async (_storePath, mutator: (store: never) => unknown) =>
+      mutator(sessionStore as never),
+    ),
+    getSessionEntry: vi.fn(
+      ({ sessionKey }: { sessionKey: string }) => sessionStore[sessionKey] as MockSessionEntry,
+    ),
+    patchSessionEntry: vi.fn(
+      async ({
+        sessionKey,
+        fallbackEntry,
+        update,
+      }: {
+        sessionKey: string;
+        fallbackEntry: MockSessionEntry;
+        update: (entry: MockSessionEntry) => Promise<MockSessionEntry> | MockSessionEntry;
+      }) => {
+        const current = (sessionStore[sessionKey] as MockSessionEntry | undefined) ?? fallbackEntry;
+        const patch = await update(current);
+        const next = { ...current, ...patch };
+        sessionStore[sessionKey] = next;
+        return next;
+      },
+    ),
+    resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
+  };
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -774,6 +815,18 @@ describe("google-meet plugin", () => {
       accessToken: "access-token",
       expiresAt: 123456,
     });
+  });
+
+  it.each(["0x10", "1e3"])("ignores non-decimal env numeric fallbacks: %s", (expiresAt) => {
+    const config = resolveGoogleMeetConfigWithEnv(
+      {},
+      {
+        OPENCLAW_GOOGLE_MEET_ACCESS_TOKEN: "access-token",
+        OPENCLAW_GOOGLE_MEET_ACCESS_TOKEN_EXPIRES_AT: expiresAt,
+      },
+    );
+
+    expect(config.oauth).toEqual({ accessToken: "access-token" });
   });
 
   it("requires explicit Meet URLs", () => {
@@ -1578,11 +1631,29 @@ describe("google-meet plugin", () => {
       accessToken: "token",
       expiresAt: Date.now() + 120_000,
       conferenceRecord: "rec-1",
-      pageSize: 3,
+      pageSize: "3",
     });
 
     expect(result.details.attendance).toHaveLength(1);
     expect(result.details.attendance?.[0]?.displayName).toBe("Alice");
+  });
+
+  it("rejects fractional attendance page sizes", async () => {
+    stubMeetArtifactsApi();
+    const { tools } = setup();
+    const tool = tools[0] as {
+      execute: (id: string, params: unknown) => Promise<{ details: { error?: string } }>;
+    };
+
+    const result = await tool.execute("id", {
+      action: "attendance",
+      accessToken: "token",
+      expiresAt: Date.now() + 120_000,
+      conferenceRecord: "rec-1",
+      pageSize: "3.5",
+    });
+
+    expect(result.details.error).toBe("pageSize must be a positive integer");
   });
 
   it("writes export bundles through the tool", async () => {
@@ -3558,7 +3629,7 @@ describe("google-meet plugin", () => {
     const result = await tool.execute("id", {
       action: "test_listen",
       url: "https://meet.google.com/abc-defg-hij",
-      timeoutMs: 100,
+      timeoutMs: "100",
     });
 
     const startCall = nodesInvoke.mock.calls.find(([rawCall]) => {
@@ -3576,6 +3647,17 @@ describe("google-meet plugin", () => {
     expect(startParams.mode).toBe("transcribe");
     expect(result.details.listenVerified).toBe(true);
     expect(result.details.transcriptLines).toBe(1);
+  });
+
+  it("rejects fractional test-listen gateway timeouts", async () => {
+    const { methods } = setup({ defaultTransport: "chrome-node" });
+
+    await expect(
+      invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.testListen", {
+        url: "https://meet.google.com/abc-defg-hij",
+        timeoutMs: "100.5",
+      }),
+    ).rejects.toThrow("timeoutMs must be a positive integer");
   });
 
   it("does not start a second realtime response for test speech", async () => {
@@ -4077,14 +4159,8 @@ describe("google-meet plugin", () => {
         resolveAgentDir: vi.fn(() => "/tmp/agent"),
         resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
         ensureAgentWorkspace: vi.fn(async () => {}),
-        session: {
-          resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
-          loadSessionStore: vi.fn(() => sessionStore),
-          saveSessionStore: vi.fn(async () => {}),
-          updateSessionStore: vi.fn(async (_storePath, mutator) => mutator(sessionStore as never)),
-          resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
-        },
-        runEmbeddedPiAgent: vi.fn(async () => ({
+        session: createMockSessionRuntime(sessionStore),
+        runEmbeddedAgent: vi.fn(async () => ({
           payloads: [{ text: "Use the Portugal launch data." }],
           meta: {},
         })),
@@ -4117,7 +4193,7 @@ describe("google-meet plugin", () => {
     const audioChunk = mockCallArg(sendAudio, 0) as Buffer;
     expect(Buffer.isBuffer(audioChunk)).toBe(true);
     expect(audioChunk.byteLength).toBeGreaterThan(0);
-    expect(runtime.agent.runEmbeddedPiAgent).toHaveBeenCalled();
+    expect(runtime.agent.runEmbeddedAgent).toHaveBeenCalled();
     expect(runtime.tts.textToSpeechTelephony).toHaveBeenCalledWith({
       text: "Use the Portugal launch data.",
       cfg: {},
@@ -4245,14 +4321,8 @@ describe("google-meet plugin", () => {
         resolveAgentDir: vi.fn(() => "/tmp/agent"),
         resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
         ensureAgentWorkspace: vi.fn(async () => {}),
-        session: {
-          resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
-          loadSessionStore: vi.fn(() => sessionStore),
-          saveSessionStore: vi.fn(async () => {}),
-          updateSessionStore: vi.fn(async (_storePath, mutator) => mutator(sessionStore as never)),
-          resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
-        },
-        runEmbeddedPiAgent: vi.fn(async (_request: unknown) => ({
+        session: createMockSessionRuntime(sessionStore),
+        runEmbeddedAgent: vi.fn(async (_request: unknown) => ({
           payloads: [{ text: "Use the Portugal launch data." }],
           meta: {},
         })),
@@ -4382,9 +4452,9 @@ describe("google-meet plugin", () => {
     ]) {
       expect(talkEventTypes).toContain(type);
     }
-    expect(runtime.agent.runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
+    expect(runtime.agent.runEmbeddedAgent).toHaveBeenCalledTimes(1);
     const agentRequest = requireRecord(
-      mockCallArg(runtime.agent.runEmbeddedPiAgent, 0),
+      mockCallArg(runtime.agent.runEmbeddedAgent, 0),
       "embedded agent request",
     );
     expect(agentRequest.messageProvider).toBe("google-meet");
@@ -4410,119 +4480,122 @@ describe("google-meet plugin", () => {
   });
 
   it("defaults Chrome command-pair realtime to agent-driven talk-back", async () => {
-    let callbacks: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
-    const sendUserMessage = vi.fn();
-    const bridge = {
-      connect: vi.fn(async () => {}),
-      sendAudio: vi.fn(),
-      sendUserMessage,
-      setMediaTimestamp: vi.fn(),
-      submitToolResult: vi.fn(),
-      acknowledgeMark: vi.fn(),
-      close: vi.fn(),
-      triggerGreeting: vi.fn(),
-      isConnected: vi.fn(() => true),
-    };
-    const provider: RealtimeVoiceProviderPlugin = {
-      id: "openai",
-      label: "OpenAI",
-      defaultModel: "gpt-realtime-2",
-      autoSelectOrder: 1,
-      resolveConfig: ({ rawConfig }) => rawConfig,
-      isConfigured: () => true,
-      createBridge: (req) => {
-        callbacks = req;
-        return bridge;
-      },
-    };
-    const inputStdout = new PassThrough();
-    const makeProcess = (stdio: {
-      stdin?: { write(chunk: unknown): unknown } | null;
-      stdout?: { on(event: "data", listener: (chunk: unknown) => void): unknown } | null;
-    }): TestBridgeProcess => {
-      const proc = new EventEmitter() as unknown as TestBridgeProcess;
-      proc.stdin = stdio.stdin;
-      proc.stdout = stdio.stdout;
-      proc.stderr = new PassThrough();
-      proc.killed = false;
-      proc.kill = vi.fn(() => {
-        proc.killed = true;
-        return true;
+    vi.useFakeTimers();
+    try {
+      let callbacks: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
+      const sendUserMessage = vi.fn();
+      const bridge = {
+        connect: vi.fn(async () => {}),
+        sendAudio: vi.fn(),
+        sendUserMessage,
+        setMediaTimestamp: vi.fn(),
+        submitToolResult: vi.fn(),
+        acknowledgeMark: vi.fn(),
+        close: vi.fn(),
+        triggerGreeting: vi.fn(),
+        isConnected: vi.fn(() => true),
+      };
+      const provider: RealtimeVoiceProviderPlugin = {
+        id: "openai",
+        label: "OpenAI",
+        defaultModel: "gpt-realtime-2",
+        autoSelectOrder: 1,
+        resolveConfig: ({ rawConfig }) => rawConfig,
+        isConfigured: () => true,
+        createBridge: (req) => {
+          callbacks = req;
+          return bridge;
+        },
+      };
+      const inputStdout = new PassThrough();
+      const makeProcess = (stdio: {
+        stdin?: { write(chunk: unknown): unknown } | null;
+        stdout?: { on(event: "data", listener: (chunk: unknown) => void): unknown } | null;
+      }): TestBridgeProcess => {
+        const proc = new EventEmitter() as unknown as TestBridgeProcess;
+        proc.stdin = stdio.stdin;
+        proc.stdout = stdio.stdout;
+        proc.stderr = new PassThrough();
+        proc.killed = false;
+        proc.kill = vi.fn(() => {
+          proc.killed = true;
+          return true;
+        });
+        return proc;
+      };
+      const outputProcess = makeProcess({
+        stdin: new Writable({
+          write(_chunk, _encoding, done) {
+            done();
+          },
+        }),
+        stdout: null,
       });
-      return proc;
-    };
-    const outputProcess = makeProcess({
-      stdin: new Writable({
-        write(_chunk, _encoding, done) {
-          done();
+      const inputProcess = makeProcess({ stdout: inputStdout, stdin: null });
+      const spawnMock = vi
+        .fn()
+        .mockReturnValueOnce(outputProcess)
+        .mockReturnValueOnce(inputProcess);
+      const sessionStore: Record<string, unknown> = {};
+      const runtime = {
+        agent: {
+          resolveAgentDir: vi.fn(() => "/tmp/agent"),
+          resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
+          ensureAgentWorkspace: vi.fn(async () => {}),
+          session: createMockSessionRuntime(sessionStore),
+          runEmbeddedAgent: vi.fn(async (_request: unknown) => ({
+            payloads: [{ text: "The launch is still on track." }],
+            meta: {},
+          })),
+          resolveAgentTimeoutMs: vi.fn(() => 1000),
         },
-      }),
-      stdout: null,
-    });
-    const inputProcess = makeProcess({ stdout: inputStdout, stdin: null });
-    const spawnMock = vi.fn().mockReturnValueOnce(outputProcess).mockReturnValueOnce(inputProcess);
-    const sessionStore: Record<string, unknown> = {};
-    const runtime = {
-      agent: {
-        resolveAgentDir: vi.fn(() => "/tmp/agent"),
-        resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
-        ensureAgentWorkspace: vi.fn(async () => {}),
-        session: {
-          resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
-          loadSessionStore: vi.fn(() => sessionStore),
-          saveSessionStore: vi.fn(async () => {}),
-          updateSessionStore: vi.fn(async (_storePath, mutator) => mutator(sessionStore as never)),
-          resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
-        },
-        runEmbeddedPiAgent: vi.fn(async (_request: unknown) => ({
-          payloads: [{ text: "The launch is still on track." }],
-          meta: {},
-        })),
-        resolveAgentTimeoutMs: vi.fn(() => 1000),
-      },
-    };
+      };
 
-    const handle = await startCommandRealtimeAudioBridge({
-      config: resolveGoogleMeetConfig({ realtime: { provider: "openai", agentId: "jay" } }),
-      fullConfig: {} as never,
-      runtime: runtime as never,
-      meetingSessionId: "meet-1",
-      inputCommand: ["capture-meet"],
-      outputCommand: ["play-meet"],
-      logger: noopLogger,
-      providers: [provider],
-      spawn: spawnMock,
-    });
+      const handle = await startCommandRealtimeAudioBridge({
+        config: resolveGoogleMeetConfig({ realtime: { provider: "openai", agentId: "jay" } }),
+        fullConfig: {} as never,
+        runtime: runtime as never,
+        meetingSessionId: "meet-1",
+        inputCommand: ["capture-meet"],
+        outputCommand: ["play-meet"],
+        logger: noopLogger,
+        providers: [provider],
+        spawn: spawnMock,
+      });
 
-    if (!callbacks) {
-      throw new Error("Expected realtime bridge callbacks");
+      if (!callbacks) {
+        throw new Error("Expected realtime bridge callbacks");
+      }
+      expect(callbacks.autoRespondToAudio).toBe(false);
+      expect(callbacks.tools).toStrictEqual([]);
+      callbacks?.onTranscript?.("user", "Are we still on track?", true);
+      callbacks?.onTranscript?.("user", "Please include launch blockers.", true);
+
+      await vi.advanceTimersByTimeAsync(GOOGLE_MEET_AGENT_TRANSCRIPT_DEBOUNCE_MS);
+      await vi.waitFor(() => {
+        expect(runtime.agent.runEmbeddedAgent).toHaveBeenCalledTimes(1);
+      });
+      const consultArgs = requireRecord(
+        (runtime.agent.runEmbeddedAgent.mock.calls as unknown[][])[0]?.[0],
+        "default talk-back agent request",
+      );
+      expect(consultArgs.agentId).toBe("jay");
+      expect(consultArgs.spawnedBy).toBe("agent:jay:main");
+      expect(consultArgs.sessionKey).toBe("agent:jay:subagent:google-meet:meet-1");
+      expect(consultArgs.sandboxSessionKey).toBe("agent:jay:subagent:google-meet:meet-1");
+      expect(JSON.stringify(consultArgs)).toContain(
+        "Are we still on track?\\nPlease include launch blockers.",
+      );
+      expect(sendUserMessage).toHaveBeenCalledTimes(1);
+      const sentUserMessage = mockCallArg(sendUserMessage, 0) as string;
+      expect(typeof sentUserMessage).toBe("string");
+      expect(sentUserMessage).toContain(JSON.stringify("The launch is still on track."));
+      expect(sessionStore).toHaveProperty("agent:jay:subagent:google-meet:meet-1");
+
+      await handle.stop();
+    } finally {
+      vi.useRealTimers();
     }
-    expect(callbacks.autoRespondToAudio).toBe(false);
-    expect(callbacks.tools).toStrictEqual([]);
-    callbacks?.onTranscript?.("user", "Are we still on track?", true);
-    callbacks?.onTranscript?.("user", "Please include launch blockers.", true);
-
-    await vi.waitFor(() => {
-      expect(runtime.agent.runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
-    });
-    const consultArgs = requireRecord(
-      (runtime.agent.runEmbeddedPiAgent.mock.calls as unknown[][])[0]?.[0],
-      "default talk-back agent request",
-    );
-    expect(consultArgs.agentId).toBe("jay");
-    expect(consultArgs.spawnedBy).toBe("agent:jay:main");
-    expect(consultArgs.sessionKey).toBe("agent:jay:subagent:google-meet:meet-1");
-    expect(consultArgs.sandboxSessionKey).toBe("agent:jay:subagent:google-meet:meet-1");
-    expect(JSON.stringify(consultArgs)).toContain(
-      "Are we still on track?\\nPlease include launch blockers.",
-    );
-    expect(sendUserMessage).toHaveBeenCalledTimes(1);
-    const sentUserMessage = mockCallArg(sendUserMessage, 0) as string;
-    expect(typeof sentUserMessage).toBe("string");
-    expect(sentUserMessage).toContain(JSON.stringify("The launch is still on track."));
-    expect(sessionStore).toHaveProperty("agent:jay:subagent:google-meet:meet-1");
-
-    await handle.stop();
   });
 
   it("tracks queued playback time when suppressing realtime input echo", () => {
@@ -4741,14 +4814,8 @@ describe("google-meet plugin", () => {
         resolveAgentDir: vi.fn(() => "/tmp/agent"),
         resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
         ensureAgentWorkspace: vi.fn(async () => {}),
-        session: {
-          resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
-          loadSessionStore: vi.fn(() => sessionStore),
-          saveSessionStore: vi.fn(async () => {}),
-          updateSessionStore: vi.fn(async (_storePath, mutator) => mutator(sessionStore as never)),
-          resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
-        },
-        runEmbeddedPiAgent: vi.fn(async () => ({
+        session: createMockSessionRuntime(sessionStore),
+        runEmbeddedAgent: vi.fn(async () => ({
           payloads: [{ text: "Use the launch update." }],
           meta: {},
         })),
@@ -4894,6 +4961,7 @@ describe("google-meet plugin", () => {
   });
 
   it("keeps paired-node realtime audio alive after transient input pull failures", async () => {
+    vi.useFakeTimers();
     const sendAudio = vi.fn();
     const bridge = {
       connect: vi.fn(async () => {}),
@@ -4939,33 +5007,40 @@ describe("google-meet plugin", () => {
         }),
       },
     };
+    let handle: Awaited<ReturnType<typeof startNodeRealtimeAudioBridge>> | undefined;
 
-    const handle = await startNodeRealtimeAudioBridge({
-      config: resolveGoogleMeetConfig({
-        realtime: { provider: "openai", model: "gpt-realtime" },
-      }),
-      fullConfig: {} as never,
-      runtime: runtime as never,
-      meetingSessionId: "meet-1",
-      nodeId: "node-1",
-      bridgeId: "bridge-1",
-      logger: noopLogger,
-      providers: [provider],
-    });
+    try {
+      handle = await startNodeRealtimeAudioBridge({
+        config: resolveGoogleMeetConfig({
+          realtime: { provider: "openai", model: "gpt-realtime" },
+        }),
+        fullConfig: {} as never,
+        runtime: runtime as never,
+        meetingSessionId: "meet-1",
+        nodeId: "node-1",
+        bridgeId: "bridge-1",
+        logger: noopLogger,
+        providers: [provider],
+      });
 
-    await vi.waitFor(() => {
-      expect(sendAudio).toHaveBeenCalledWith(Buffer.from([5, 4, 3]));
-    });
-    expect(bridge.close).not.toHaveBeenCalled();
-    const health = handle.getHealth();
-    expect(health.audioInputActive).toBe(true);
-    expect(health.lastInputBytes).toBe(3);
-    expect(health.consecutiveInputErrors).toBe(0);
+      await vi.advanceTimersByTimeAsync(250);
+      await vi.waitFor(() => {
+        expect(sendAudio).toHaveBeenCalledWith(Buffer.from([5, 4, 3]));
+      });
+      expect(bridge.close).not.toHaveBeenCalled();
+      const health = handle.getHealth();
+      expect(health.audioInputActive).toBe(true);
+      expect(health.lastInputBytes).toBe(3);
+      expect(health.consecutiveInputErrors).toBe(0);
 
-    await vi.waitFor(() => {
-      expect(idlePullStarted).toBe(true);
-    });
-    await handle.stop();
+      await vi.waitFor(() => {
+        expect(idlePullStarted).toBe(true);
+      });
+      await handle.stop();
+    } finally {
+      await handle?.stop();
+      vi.useRealTimers();
+    }
   });
 
   it("stops paired-node realtime audio after repeated input pull failures", async () => {
@@ -5013,6 +5088,7 @@ describe("google-meet plugin", () => {
         providers: [provider],
       });
 
+      await vi.advanceTimersByTimeAsync(1_000);
       await vi.waitFor(
         () => {
           expect(bridge.close).toHaveBeenCalled();

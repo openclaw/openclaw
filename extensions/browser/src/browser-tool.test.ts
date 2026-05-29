@@ -123,6 +123,7 @@ const configMocks = vi.hoisted(() => ({
     () => {
       browser: Record<string, unknown>;
       gateway?: { nodes?: { browser?: { node?: string } } };
+      agents?: { defaults?: { imageMaxDimensionPx?: number } };
     }
   >(() => ({ browser: {} })),
 }));
@@ -185,6 +186,12 @@ vi.mock("./browser-tool.runtime.js", () => {
     ...gatewayMocks,
     ...sessionTabRegistryMocks,
     getRuntimeConfig: configMocks.loadConfig,
+    resolveRuntimeImageSanitization: () => {
+      const configured = configMocks.loadConfig().agents?.defaults?.imageMaxDimensionPx;
+      return typeof configured === "number" && Number.isFinite(configured)
+        ? { maxDimensionPx: Math.max(1, Math.floor(configured)) }
+        : undefined;
+    },
     applyBrowserProxyPaths: vi.fn(),
     getBrowserProfileCapabilities: (profile: Record<string, unknown>) => ({
       usesChromeMcp: profile.driver === "existing-session",
@@ -197,6 +204,26 @@ vi.mock("./browser-tool.runtime.js", () => {
     listNodes: nodesUtilsMocks.listNodes,
     normalizeOptionalString: (value: unknown) => readStringValue(value)?.trim() || undefined,
     persistBrowserProxyFiles: vi.fn(async () => new Map<string, string>()),
+    readPositiveIntegerParam: (
+      params: Record<string, unknown>,
+      key: string,
+      options?: { message?: string },
+    ) => {
+      const raw = params[key];
+      if (raw == null) {
+        return undefined;
+      }
+      const value =
+        typeof raw === "number"
+          ? raw
+          : typeof raw === "string" && /^\d+$/.test(raw.trim())
+            ? Number(raw.trim())
+            : undefined;
+      if (value === undefined || !Number.isInteger(value) || value <= 0) {
+        throw new Error(options?.message ?? `${key} must be a positive integer`);
+      }
+      return value;
+    },
     readStringParam,
     readStringValue,
     resolveExistingPathsWithinRoot: vi.fn(async ({ requestedPaths }) => ({
@@ -451,6 +478,44 @@ describe("browser tool snapshot maxChars", () => {
     expect(opts.maxChars).toBe(override);
   });
 
+  it("parses string snapshot numeric options", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "snapshot",
+      target: "host",
+      snapshotFormat: "ai",
+      depth: "2",
+      limit: "4",
+      maxChars: "2000",
+      timeoutMs: "9000",
+    });
+
+    const opts = lastMockCallArg<{
+      depth?: number;
+      limit?: number;
+      maxChars?: number;
+      timeoutMs?: number;
+    }>(browserClientMocks.browserSnapshot, 1);
+    expect(opts.depth).toBe(2);
+    expect(opts.limit).toBe(4);
+    expect(opts.maxChars).toBe(2000);
+    expect(opts.timeoutMs).toBe(9000);
+  });
+
+  it("rejects fractional snapshot numeric options", async () => {
+    const tool = createBrowserTool();
+
+    await expect(
+      tool.execute?.("call-1", {
+        action: "snapshot",
+        target: "host",
+        snapshotFormat: "ai",
+        maxChars: 12.5,
+      }),
+    ).rejects.toThrow("maxChars must be a non-negative integer.");
+    expect(browserClientMocks.browserSnapshot).not.toHaveBeenCalled();
+  });
+
   it("skips the default when maxChars is explicitly zero", async () => {
     const tool = createBrowserTool();
     await tool.execute?.("call-1", {
@@ -509,6 +574,37 @@ describe("browser tool snapshot maxChars", () => {
     expect(opts.timeoutMs).toBe(60_000);
   });
 
+  it("parses string top-level timeoutMs values", async () => {
+    setResolvedBrowserProfiles({
+      user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
+    });
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "open",
+      profile: "user",
+      url: "https://example.com",
+      timeoutMs: "60000",
+    });
+
+    const opts = lastMockCallArg<{ profile?: string; timeoutMs?: number }>(
+      browserClientMocks.browserOpenTab,
+      2,
+    );
+    expect(opts.timeoutMs).toBe(60_000);
+  });
+
+  it("rejects fractional top-level timeoutMs values", async () => {
+    const tool = createBrowserTool();
+
+    await expect(
+      tool.execute?.("call-1", {
+        action: "profiles",
+        timeoutMs: 12.5,
+      }),
+    ).rejects.toThrow("timeoutMs must be a positive integer.");
+    expect(browserClientMocks.browserProfiles).not.toHaveBeenCalled();
+  });
+
   it("passes top-level timeoutMs through to close without targetId", async () => {
     setResolvedBrowserProfiles({
       user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
@@ -545,6 +641,86 @@ describe("browser tool snapshot maxChars", () => {
     );
     expect(opts.format).toBe("ai");
     expect(opts.refs).toBe("aria");
+  });
+
+  it("propagates input.timeoutMs into the direct browser snapshot call", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "snapshot",
+      target: "host",
+      snapshotFormat: "ai",
+      timeoutMs: 9000,
+    });
+
+    expect(browserClientMocks.browserSnapshot).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({
+        format: "ai",
+        timeoutMs: 9000,
+      }),
+    );
+  });
+
+  it("falls back to the default snapshot timeout in the direct browser snapshot call", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "snapshot",
+      target: "host",
+      snapshotFormat: "ai",
+    });
+
+    expect(browserClientMocks.browserSnapshot).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({
+        format: "ai",
+        // DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS = 20_000.
+        timeoutMs: 20_000,
+      }),
+    );
+  });
+
+  it("propagates input.timeoutMs into the proxied browser snapshot request", async () => {
+    mockSingleBrowserProxyNode();
+    setResolvedBrowserProfiles({
+      user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
+    });
+    gatewayMocks.callGatewayTool.mockResolvedValue({
+      ok: true,
+      payload: {
+        result: {
+          ok: true,
+          format: "ai",
+          targetId: "t1",
+          url: "https://x",
+          snapshot: "ok",
+        },
+        files: [],
+      },
+    });
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "snapshot",
+      target: "node",
+      profile: "user",
+      snapshotFormat: "ai",
+      timeoutMs: 7777,
+    });
+
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      // proxy adds a 5_000 ms slack on top of the per-request timeout.
+      expect.objectContaining({ timeoutMs: 7777 + 5_000 }),
+      expect.objectContaining({
+        command: "browser.proxy",
+        params: expect.objectContaining({
+          method: "GET",
+          path: "/snapshot",
+          profile: "user",
+          query: expect.objectContaining({ timeoutMs: 7777 }),
+          timeoutMs: 7777,
+        }),
+      }),
+    );
   });
 
   it("uses config snapshot defaults when mode is not provided", async () => {
@@ -713,6 +889,45 @@ describe("browser tool snapshot maxChars", () => {
     );
     expect(opts.targetId).toBe("tab-1");
     expect(opts.timeoutMs).toBe(12_345);
+  });
+
+  it("parses string screenshot timeoutMs values", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "screenshot",
+      target: "host",
+      targetId: "tab-1",
+      timeoutMs: "12345",
+    });
+
+    const opts = lastMockCallArg<{ targetId?: string; timeoutMs?: number }>(
+      browserActionsMocks.browserScreenshotAction,
+      1,
+    );
+    expect(opts.timeoutMs).toBe(12_345);
+  });
+
+  it("passes configured image sanitization to screenshot image results", async () => {
+    configMocks.loadConfig.mockReturnValue({
+      browser: {},
+      agents: { defaults: { imageMaxDimensionPx: 2000 } },
+    } as never);
+    toolCommonMocks.imageResultFromFile.mockResolvedValueOnce({
+      content: [{ type: "image", data: "base64", mimeType: "image/png" }],
+      details: { path: "/tmp/test.png" },
+    });
+
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "screenshot",
+      target: "host",
+      targetId: "tab-1",
+    });
+
+    const imageParams = lastMockCallArg<{
+      imageSanitization?: { maxDimensionPx?: number };
+    }>(toolCommonMocks.imageResultFromFile, 0);
+    expect(imageParams.imageSanitization).toEqual({ maxDimensionPx: 2000 });
   });
 
   it("passes screenshot timeoutMs through the node browser proxy", async () => {
@@ -1157,12 +1372,50 @@ describe("browser tool act compatibility", () => {
     expect(request.params?.body).toEqual({ kind: "wait", timeMs: 20_000, timeoutMs: 45_000 });
     expect(request.params?.timeoutMs).toBe(45_000 + 5_000);
   });
+
+  it("honors string act request timeouts when sizing node proxy calls", async () => {
+    mockSingleBrowserProxyNode();
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "act",
+      target: "node",
+      request: { kind: "wait", timeMs: "20000", timeoutMs: "45000" },
+    });
+
+    const { options, request } = lastNodeInvokeCall();
+    expect(options.timeoutMs).toBe(55_000);
+    expect(request.params?.path).toBe("/act");
+    expect(request.params?.body).toEqual({
+      kind: "wait",
+      timeMs: "20000",
+      timeoutMs: "45000",
+    });
+    expect(request.params?.timeoutMs).toBe(50_000);
+  });
+
+  it("rejects fractional act request timeouts before node proxy calls", async () => {
+    mockSingleBrowserProxyNode();
+    const tool = createBrowserTool();
+
+    await expect(
+      tool.execute?.("call-1", {
+        action: "act",
+        target: "node",
+        request: { kind: "wait", timeMs: "20000", timeoutMs: "45000.5" },
+      }),
+    ).rejects.toThrow("timeoutMs must be a positive integer.");
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
+  });
 });
 
 describe("browser tool snapshot labels", () => {
   registerBrowserToolAfterEachReset();
 
   it("returns image + text when labels are requested", async () => {
+    configMocks.loadConfig.mockReturnValue({
+      browser: {},
+      agents: { defaults: { imageMaxDimensionPx: 2000 } },
+    } as never);
     const tool = createBrowserTool();
     const imageResult = {
       content: [
@@ -1188,12 +1441,14 @@ describe("browser tool snapshot labels", () => {
       labels: true,
     });
 
-    const imageParams = lastMockCallArg<{ path?: string; extraText?: string }>(
-      toolCommonMocks.imageResultFromFile,
-      0,
-    );
+    const imageParams = lastMockCallArg<{
+      path?: string;
+      extraText?: string;
+      imageSanitization?: { maxDimensionPx?: number };
+    }>(toolCommonMocks.imageResultFromFile, 0);
     expect(imageParams.path).toBe("/tmp/snap.png");
     expect(imageParams.extraText).toContain("<<<EXTERNAL_UNTRUSTED_CONTENT");
+    expect(imageParams.imageSanitization).toEqual({ maxDimensionPx: 2000 });
     expect(result).toEqual(imageResult);
     expect(result?.content).toHaveLength(2);
     expect(result?.content?.[0]).toEqual({ type: "text", text: "label text" });

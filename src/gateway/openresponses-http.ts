@@ -8,9 +8,9 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { isClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import type { ImageContent } from "../agents/command/types.js";
-import type { ClientToolDefinition } from "../agents/pi-embedded-runner/run/params.js";
-import { isClientToolNameConflictError } from "../agents/pi-tool-definition-adapter.js";
+import type { ClientToolDefinition } from "../agents/embedded-agent-runner/run/params.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
@@ -32,6 +32,7 @@ import {
   type InputImageSource,
 } from "../media/input-files.js";
 import { defaultRuntime } from "../runtime.js";
+import { resolveIntegerOption } from "../shared/number-coercion.js";
 import { resolveAssistantStreamDeltaText } from "./agent-event-assistant-text.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -44,7 +45,6 @@ import {
   resolveGatewayRequestContext,
   resolveOpenAiCompatModelOverride,
   resolveOpenAiCompatibleHttpOperatorScopes,
-  resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
 import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
 import {
@@ -221,6 +221,7 @@ export const testing = {
   getResponseSessionIds() {
     return [...responseSessionMap.keys()];
   },
+  resolveResponsesLimits,
 };
 
 function writeSseEvent(res: ServerResponse, event: StreamingEvent) {
@@ -243,10 +244,7 @@ function resolveResponsesLimits(
   const fileLimits = resolveInputFileLimits(files);
   return {
     maxBodyBytes: config?.maxBodyBytes ?? DEFAULT_BODY_BYTES,
-    maxUrlParts:
-      typeof config?.maxUrlParts === "number"
-        ? Math.max(0, Math.floor(config.maxUrlParts))
-        : DEFAULT_MAX_URL_PARTS,
+    maxUrlParts: resolveIntegerOption(config?.maxUrlParts, DEFAULT_MAX_URL_PARTS, { min: 0 }),
     files: {
       ...fileLimits,
       urlAllowlist: normalizeInputHostnameAllowlist(files?.urlAllowlist),
@@ -401,7 +399,6 @@ async function runResponsesAgentCommand(params: {
   sessionKey: string;
   runId: string;
   messageChannel: string;
-  senderIsOwner: boolean;
   deps: CliDeps;
   abortSignal?: AbortSignal;
 }) {
@@ -418,7 +415,6 @@ async function runResponsesAgentCommand(params: {
       deliver: false,
       messageChannel: params.messageChannel,
       bestEffortDeliver: false,
-      senderIsOwner: params.senderIsOwner,
       allowModelOverride: true,
       abortSignal: params.abortSignal,
     },
@@ -456,10 +452,6 @@ export async function handleOpenResponsesHttpRequest(
   if (!handled) {
     return true;
   }
-  // On the compat surface, shared-secret bearer auth is also treated as an
-  // owner sender so owner-only tool policy matches the documented contract.
-  const senderIsOwner = resolveOpenAiCompatibleHttpSenderIsOwner(req, handled.requestAuth);
-
   // Validate request body with Zod
   const parseResult = CreateResponseBodySchema.safeParse(handled.body);
   if (!parseResult.success) {
@@ -701,7 +693,6 @@ export async function handleOpenResponsesHttpRequest(
         sessionKey,
         runId: responseId,
         messageChannel,
-        senderIsOwner,
         deps,
         abortSignal: abortController.signal,
       });
@@ -1008,7 +999,6 @@ export async function handleOpenResponsesHttpRequest(
         sessionKey,
         runId: responseId,
         messageChannel,
-        senderIsOwner,
         deps,
         abortSignal: abortController.signal,
       });

@@ -133,6 +133,24 @@ describe("startGatewayMaintenanceTimers", () => {
     stopMaintenanceTimers(timers);
   });
 
+  it("refreshes automatic health snapshots without live channel probes", async () => {
+    vi.useFakeTimers();
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const deps = createMaintenanceTimerDeps();
+    deps.refreshGatewayHealthSnapshot = vi.fn(async () => ({ ok: true }) as HealthSummary);
+
+    const timers = startGatewayMaintenanceTimers(deps);
+
+    expect(deps.refreshGatewayHealthSnapshot).toHaveBeenCalledWith({ probe: false });
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(deps.refreshGatewayHealthSnapshot).toHaveBeenCalledTimes(2);
+    expect(deps.refreshGatewayHealthSnapshot).toHaveBeenLastCalledWith({ probe: false });
+
+    stopMaintenanceTimers(timers);
+  });
+
   it("skips overlapping media cleanup runs", async () => {
     vi.useFakeTimers();
     let resolveCleanup = () => {};
@@ -302,6 +320,43 @@ describe("startGatewayMaintenanceTimers", () => {
 
     expect(deps.dedupe.has("agent:active-agent")).toBe(true);
     expect(deps.dedupe.has("agent:stale-agent")).toBe(false);
+
+    stopMaintenanceTimers(timers);
+  });
+
+  it("keeps pending accepted agent dedupe entries until their run expiry", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const deps = createMaintenanceTimerDeps();
+    const now = Date.now();
+    deps.dedupe.set("agent:pending-agent", {
+      ts: now - DEDUPE_TTL_MS - 1,
+      ok: true,
+      payload: {
+        runId: "pending-agent",
+        sessionKey: "agent:main:main",
+        status: "accepted",
+        expiresAtMs: now + 120_000,
+      },
+    });
+    deps.dedupe.set("agent:expired-pending-agent", {
+      ts: now - DEDUPE_TTL_MS - 1,
+      ok: true,
+      payload: {
+        runId: "expired-pending-agent",
+        sessionKey: "agent:main:main",
+        status: "accepted",
+        expiresAtMs: now - 1,
+      },
+    });
+
+    const timers = startGatewayMaintenanceTimers(deps);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(deps.dedupe.has("agent:pending-agent")).toBe(true);
+    expect(deps.dedupe.has("agent:expired-pending-agent")).toBe(false);
 
     stopMaintenanceTimers(timers);
   });

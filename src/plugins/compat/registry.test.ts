@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { describe, expect, it } from "vitest";
+import { listGitTrackedFiles } from "../../test-utils/repo-files.js";
 import {
   getPluginCompatRecord,
   isPluginCompatCode,
@@ -8,6 +9,23 @@ import {
 } from "./registry.js";
 
 const datePattern = /^\d{4}-\d{2}-\d{2}$/u;
+const sourceRootsForDeprecatedCallGuard = [
+  "src",
+  "extensions",
+  "packages",
+  "test",
+  "scripts",
+] as const;
+const deprecatedTargetParserCallPattern =
+  /\.parseExplicitTarget\?\.\s*\(|parseExplicitTargetFor(?:Channel|LoadedChannel)\s*\(|resolveRouteTargetFor(?:Channel|LoadedChannel)\s*\(/u;
+const deprecatedTargetParserCompatFiles = new Set([
+  "src/auto-reply/reply/group-id.ts",
+  "src/channels/plugins/target-parsing-loaded.ts",
+  "src/channels/plugins/target-parsing.test.ts",
+  "src/infra/outbound/outbound-session.ts",
+  "src/infra/outbound/outbound-session.test-helpers.ts",
+  "src/plugins/compat/registry.test.ts",
+]);
 
 const knownDeprecatedSurfaceMarkers = [
   {
@@ -44,6 +62,11 @@ const knownDeprecatedSurfaceMarkers = [
     code: "agent-tool-result-harness-alias",
     file: "src/plugins/agent-tool-result-middleware-types.ts",
     marker: "AgentToolResultMiddlewareHarness",
+  },
+  {
+    code: "embedded-pi-agent-sdk-aliases",
+    file: "src/plugins/runtime/types-core.ts",
+    marker: "runEmbeddedPiAgent",
   },
   {
     code: "runtime-config-load-write",
@@ -133,12 +156,17 @@ const knownDeprecatedSurfaceMarkers = [
   {
     code: "legacy-root-sdk-import",
     file: "src/plugin-sdk/compat.ts",
-    marker: "@deprecated Use `openclaw/plugin-sdk/channel-message`.",
+    marker: "@deprecated Use `openclaw/plugin-sdk/channel-outbound`.",
   },
   {
     code: "legacy-deactivate-hook-alias",
     file: "src/plugins/hook-types.ts",
     marker: "@deprecated Use gateway_stop",
+  },
+  {
+    code: "deprecated-memory-embedding-provider-api",
+    file: "src/plugins/types.ts",
+    marker: "registerMemoryEmbeddingProvider",
   },
   {
     code: "channel-route-key-aliases",
@@ -149,6 +177,36 @@ const knownDeprecatedSurfaceMarkers = [
     code: "channel-target-comparable-aliases",
     file: "src/channels/plugins/target-parsing-loaded.ts",
     marker: "ComparableChannelTarget",
+  },
+  {
+    code: "channel-explicit-target-parser",
+    file: "src/channels/plugins/types.core.ts",
+    marker: "parseExplicitTarget?:",
+  },
+  {
+    code: "channel-explicit-target-parser",
+    file: "src/plugin-sdk/channel-route.ts",
+    marker: "resolveChannelRouteTargetWithParser",
+  },
+  {
+    code: "channel-explicit-target-parser",
+    file: "src/channels/plugins/target-parsing-loaded.ts",
+    marker: "ParsedChannelExplicitTarget",
+  },
+  {
+    code: "channel-explicit-target-parser",
+    file: "src/channels/plugins/target-parsing-loaded.ts",
+    marker: "parseExplicitTargetForLoadedChannel",
+  },
+  {
+    code: "channel-explicit-target-parser",
+    file: "src/channels/plugins/target-parsing-loaded.ts",
+    marker: "resolveRouteTargetForLoadedChannel",
+  },
+  {
+    code: "channel-messaging-targets-subpath",
+    file: "src/plugin-sdk/messaging-targets.ts",
+    marker: "openclaw/plugin-sdk/channel-targets",
   },
 ] as const;
 
@@ -167,6 +225,12 @@ function expectNonEmptyStringList(values: readonly string[], label: string) {
   for (const value of values) {
     expect(value, label).toMatch(/\S/u);
   }
+}
+
+function listTrackedSourceFiles(): string[] {
+  return (listGitTrackedFiles({ pathspecs: sourceRootsForDeprecatedCallGuard }) ?? []).filter(
+    (file) => /\.(?:ts|tsx|mts|cts)$/u.test(file),
+  );
 }
 
 describe("plugin compatibility registry", () => {
@@ -214,5 +278,13 @@ describe("plugin compatibility registry", () => {
       expect(isPluginCompatCode(surface.code), surface.code).toBe(true);
       expect(fs.readFileSync(surface.file, "utf8"), surface.file).toContain(surface.marker);
     }
+  });
+
+  it("keeps deprecated explicit target parser calls inside compatibility shims", () => {
+    const offenders = listTrackedSourceFiles()
+      .filter((file) => !deprecatedTargetParserCompatFiles.has(file))
+      .filter((file) => deprecatedTargetParserCallPattern.test(fs.readFileSync(file, "utf8")));
+
+    expect(offenders).toEqual([]);
   });
 });

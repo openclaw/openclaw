@@ -7,16 +7,27 @@ import {
 import {
   installSkillFromClawHub,
   readTrackedClawHubSkillSlugs,
+  resolveClawHubSkillVerificationTarget,
   searchSkillsFromClawHub,
   updateSkillsFromClawHub,
 } from "../agents/skills-clawhub.js";
+import {
+  installSkillFromSource,
+  isSkillSourceInstallSpec,
+} from "../agents/skills-source-install.js";
 import { getRuntimeConfig } from "../config/config.js";
+import {
+  fetchClawHubSkillCard,
+  fetchClawHubSkillVerification,
+  type ClawHubSkillVerificationResponse,
+} from "../infra/clawhub.js";
 import { defaultRuntime } from "../runtime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import { CONFIG_DIR } from "../utils.js";
 import { resolveOptionFromCommand } from "./cli-utils.js";
+import { parseStrictPositiveIntOption } from "./program/helpers.js";
 import { formatSkillInfo, formatSkillsCheck, formatSkillsList } from "./skills-cli.format.js";
 
 export type {
@@ -28,6 +39,10 @@ export { formatSkillInfo, formatSkillsCheck, formatSkillsList } from "./skills-c
 
 type SkillStatusReport = Awaited<
   ReturnType<(typeof import("../agents/skills-status.js"))["buildWorkspaceSkillStatus"]>
+>;
+type ResolvedClawHubSkillVerificationTarget = Extract<
+  Awaited<ReturnType<typeof resolveClawHubSkillVerificationTarget>>,
+  { ok: true }
 >;
 
 type ResolveSkillsWorkspaceOptions = {
@@ -75,7 +90,6 @@ async function runSkillsAction(
   try {
     const report = await loadSkillsStatusReport(options);
     defaultRuntime.writeStdout(render(report));
-    defaultRuntime.exit(0);
   } catch (err) {
     defaultRuntime.error(String(err));
     defaultRuntime.exit(1);
@@ -102,6 +116,45 @@ function resolveClawHubTargetWorkspaceDir(
   return resolveActiveWorkspaceDir({ agentId });
 }
 
+function shouldFailSkillVerification(result: ClawHubSkillVerificationResponse): boolean {
+  const envelope = result as { ok: unknown; decision: unknown };
+  return envelope.ok !== true || envelope.decision !== "pass";
+}
+
+function buildSkillVerificationOutput(
+  result: ClawHubSkillVerificationResponse,
+  target: ResolvedClawHubSkillVerificationTarget,
+): Record<string, unknown> {
+  return {
+    ...result,
+    openclaw: {
+      resolution: {
+        source: target.resolution.source,
+        selector: target.resolution.selector,
+        registry: target.resolution.registry,
+        installedVersion: target.resolution.installedVersion,
+      },
+    },
+  };
+}
+
+function readVerifiedSkillCardUrl(
+  result: ClawHubSkillVerificationResponse,
+): { ok: true; url: string } | { ok: false; error: string } {
+  if (!result.card || typeof result.card !== "object" || Array.isArray(result.card)) {
+    return { ok: false, error: "ClawHub verification response did not include a Skill Card URL." };
+  }
+  const card = result.card as { available?: unknown; url?: unknown };
+  if (card.available === false) {
+    return { ok: false, error: "Skill Card is not available." };
+  }
+  const url = normalizeOptionalString(card.url);
+  if (!url) {
+    return { ok: false, error: "ClawHub verification response did not include a Skill Card URL." };
+  }
+  return { ok: true, url };
+}
+
 /**
  * Register the skills CLI commands
  */
@@ -120,7 +173,7 @@ export function registerSkillsCli(program: Command) {
     .command("search")
     .description("Search ClawHub skills")
     .argument("[query...]", "Optional search query")
-    .option("--limit <n>", "Max results", (value) => Number.parseInt(value, 10))
+    .option("--limit <n>", "Max results", (value) => parseStrictPositiveIntOption(value, "--limit"))
     .option("--json", "Output as JSON", false)
     .action(async (queryParts: string[], opts: { limit?: number; json?: boolean }) => {
       try {
@@ -149,21 +202,61 @@ export function registerSkillsCli(program: Command) {
 
   skills
     .command("install")
-    .description("Install a skill from ClawHub into the active or shared managed directory")
-    .argument("<slug>", "ClawHub skill slug")
+    .description("Install a skill from ClawHub, git, or a local directory")
+    .argument("<slug>", "ClawHub skill slug, git:<repo>, or local skill directory")
     .option("--version <version>", "Install a specific version")
     .option("--force", "Overwrite an existing workspace skill", false)
     .option("--global", "Install into the shared managed skills directory", false)
     .option("--agent <id>", "Target agent workspace (defaults to cwd-inferred, then default agent)")
+    .option("--as <slug>", "Install a git/local skill under this slug")
     .action(
       async (
         slug: string,
-        opts: { version?: string; force?: boolean; global?: boolean; agent?: string },
+        opts: {
+          version?: string;
+          force?: boolean;
+          global?: boolean;
+          agent?: string;
+          as?: string;
+        },
         command: Command,
       ) => {
         try {
           const workspaceDir = resolveClawHubTargetWorkspaceDir(command, opts);
           if (!workspaceDir) {
+            return;
+          }
+          if (isSkillSourceInstallSpec(slug)) {
+            if (opts.version) {
+              defaultRuntime.error("--version is only supported for ClawHub skill installs.");
+              defaultRuntime.exit(1);
+              return;
+            }
+            const result = await installSkillFromSource({
+              workspaceDir,
+              spec: slug,
+              slug: opts.as,
+              force: Boolean(opts.force),
+              logger: {
+                info: (message) => defaultRuntime.log(message),
+                warn: (message) => defaultRuntime.log(theme.warn(message)),
+              },
+            });
+            if (!result.ok) {
+              defaultRuntime.error(result.error);
+              defaultRuntime.exit(1);
+              return;
+            }
+            defaultRuntime.log(
+              `Installed ${result.slug} from ${result.source} -> ${result.targetDir}`,
+            );
+            return;
+          }
+          if (opts.as) {
+            defaultRuntime.error(
+              "--as is only supported for git and local directory skill installs.",
+            );
+            defaultRuntime.exit(1);
             return;
           }
           const result = await installSkillFromClawHub({
@@ -244,6 +337,76 @@ export function registerSkillsCli(program: Command) {
         } catch (err) {
           defaultRuntime.error(String(err));
           defaultRuntime.exit(1);
+        }
+      },
+    );
+
+  skills
+    .command("verify")
+    .description("Verify a ClawHub skill with ClawHub")
+    .argument("<slug>", "ClawHub skill slug")
+    .option("--version <version>", "Verify a specific version")
+    .option("--tag <tag>", "Verify a dist tag")
+    .option("--card", "Print the generated Skill Card Markdown", false)
+    .option(
+      "--global",
+      "Resolve installed skill metadata from the shared managed skills directory",
+      false,
+    )
+    .option("--agent <id>", "Target agent workspace (defaults to cwd-inferred, then default agent)")
+    .action(
+      async (
+        slug: string,
+        opts: { version?: string; tag?: string; card?: boolean; global?: boolean; agent?: string },
+        command: Command,
+      ) => {
+        let exitCode: number | undefined;
+        try {
+          const workspaceDir = resolveClawHubTargetWorkspaceDir(command, opts);
+          if (!workspaceDir) {
+            return;
+          }
+          const target = await resolveClawHubSkillVerificationTarget({
+            workspaceDir,
+            slug,
+            version: opts.version,
+            tag: opts.tag,
+          });
+          if (!target.ok) {
+            defaultRuntime.error(target.error);
+            exitCode = 1;
+          } else {
+            const verification = await fetchClawHubSkillVerification({
+              slug: target.slug,
+              version: target.version,
+              tag: target.tag,
+              baseUrl: target.baseUrl,
+            });
+            if (opts.card) {
+              const cardUrl = readVerifiedSkillCardUrl(verification);
+              if (!cardUrl.ok) {
+                defaultRuntime.error(cardUrl.error);
+                exitCode = 1;
+              } else {
+                const card = await fetchClawHubSkillCard({
+                  url: cardUrl.url,
+                  baseUrl: target.baseUrl,
+                });
+                defaultRuntime.writeStdout(card.endsWith("\n") ? card : `${card}\n`);
+                exitCode = shouldFailSkillVerification(verification) ? 1 : undefined;
+              }
+            } else {
+              defaultRuntime.writeJson(buildSkillVerificationOutput(verification, target));
+              exitCode = shouldFailSkillVerification(verification) ? 1 : undefined;
+            }
+          }
+        } catch (err) {
+          defaultRuntime.error(String(err));
+          defaultRuntime.exit(1);
+          return;
+        }
+        if (exitCode) {
+          defaultRuntime.exit(exitCode);
         }
       },
     );

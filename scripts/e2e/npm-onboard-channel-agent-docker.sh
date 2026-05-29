@@ -12,6 +12,17 @@ DOCKER_TARGET="${OPENCLAW_NPM_ONBOARD_DOCKER_TARGET:-bare}"
 HOST_BUILD="${OPENCLAW_NPM_ONBOARD_HOST_BUILD:-1}"
 PACKAGE_TGZ="${OPENCLAW_CURRENT_PACKAGE_TGZ:-}"
 CHANNEL="${OPENCLAW_NPM_ONBOARD_CHANNEL:-telegram}"
+run_log=""
+
+cleanup() {
+  if [ -n "${PACKAGE_TGZ:-}" ]; then
+    docker_e2e_cleanup_package_tgz "$PACKAGE_TGZ"
+  fi
+  if [ -n "${run_log:-}" ]; then
+    rm -f "$run_log"
+  fi
+}
+trap cleanup EXIT
 
 case "$CHANNEL" in
 telegram | discord | slack) ;;
@@ -112,13 +123,16 @@ dump_debug_logs() {
     /tmp/openclaw-agent.err \
     /tmp/openclaw-agent.json \
     /tmp/openclaw-mock-openai.log \
-    "$MOCK_REQUEST_LOG"
+    "$MOCK_REQUEST_LOG" \
+    "$OPENCLAW_HOME/.openclaw/openclaw.json" \
+    "$OPENCLAW_HOME/.openclaw/agents/main/agent/auth-profiles.json"
 }
 trap 'status=$?; dump_debug_logs "$status"; exit "$status"' ERR
 
 openclaw_e2e_install_package /tmp/openclaw-install.log
 
 command -v openclaw >/dev/null
+openclaw_e2e_enable_openclaw_cli_timeout
 package_root="$(openclaw_e2e_package_root)"
 if [ -d "$package_root/dist/extensions/$CHANNEL" ]; then
   CHANNEL_PACKAGE_MODE="bundled"
@@ -144,7 +158,6 @@ openclaw onboard --non-interactive --accept-risk \
   --json >/tmp/openclaw-onboard.json
 
 node scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs assert-onboard-state "$HOME"
-node scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs configure-mock-model "$MOCK_PORT"
 
 openclaw_e2e_assert_dep_absent "$DEP_SENTINEL" "$HOME/.openclaw"
 
@@ -165,22 +178,30 @@ else
   openclaw_e2e_assert_dep_absent "$DEP_SENTINEL" "$HOME/.openclaw"
 fi
 
+node scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs configure-mock-model "$MOCK_PORT"
+node scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs assert-mock-model-config "$MOCK_PORT"
+
 echo "Running local agent turn against mocked OpenAI..."
+set +e
 openclaw agent --local \
   --agent main \
   --session-id npm-onboard-channel-agent \
   --message "Return the success marker from the test server." \
   --thinking off \
   --json >/tmp/openclaw-agent.combined 2>&1
+agent_status=$?
+set -e
+if [ "$agent_status" -ne 0 ]; then
+  dump_debug_logs "$agent_status"
+  exit "$agent_status"
+fi
 
 node scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs assert-agent-turn "$SUCCESS_MARKER" "$MOCK_REQUEST_LOG"
 
 echo "npm tarball onboard/channel/agent Docker E2E passed for $CHANNEL"
 EOF
   docker_e2e_print_log "$run_log"
-  rm -f "$run_log"
   exit 1
 fi
 
-rm -f "$run_log"
 echo "npm tarball onboard/channel/agent Docker E2E passed ($CHANNEL)"
