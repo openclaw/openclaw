@@ -71,6 +71,11 @@ function shouldSendAcceptedDiscordTypingCue(ctx: DiscordMessagePreflightContext)
   if (!ctx.messageText?.trim()) {
     return false;
   }
+  // Room-event (ambient/lurk) turns reply with suppressTyping; mirror Telegram's
+  // early cue and stay quiet so they don't flash a typing indicator pre-run.
+  if (ctx.inboundEventKind === "room_event") {
+    return false;
+  }
   const configuredTypingMode = ctx.cfg.session?.typingMode ?? ctx.cfg.agents?.defaults?.typingMode;
   return configuredTypingMode === undefined || configuredTypingMode === "instant";
 }
