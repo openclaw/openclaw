@@ -84,6 +84,10 @@ function shouldEscalateRetryLimit(reason: FailoverReason | null): boolean {
   );
 }
 
+export function isSameProfileRetryFailoverReason(reason: FailoverReason | null): boolean {
+  return reason === "overloaded";
+}
+
 function isTerminalFormatFailure(params: {
   allowFormatRetry?: boolean;
   failoverFailure: boolean;

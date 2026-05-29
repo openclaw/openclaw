@@ -139,7 +139,11 @@ import { resolveAuthProfileFailureReason } from "./run/auth-profile-failure-poli
 import { runEmbeddedAttemptWithBackend } from "./run/backend.js";
 import { resolveCodexAppServerRecoveryRetry } from "./run/codex-app-server-recovery.js";
 import { createFailoverDecisionLogger } from "./run/failover-observation.js";
-import { mergeRetryFailoverReason, resolveRunFailoverDecision } from "./run/failover-policy.js";
+import {
+  isSameProfileRetryFailoverReason,
+  mergeRetryFailoverReason,
+  resolveRunFailoverDecision,
+} from "./run/failover-policy.js";
 import { hasEmbeddedRunConfiguredModelFallbacks } from "./run/fallbacks.js";
 import {
   buildErrorAgentMeta,
@@ -206,6 +210,8 @@ import { createUsageAccumulator, mergeUsageIntoAccumulator } from "./usage-accum
 type ApiKeyInfo = ResolvedProviderAuth;
 
 const MAX_SAME_MODEL_IDLE_TIMEOUT_RETRIES = 1;
+const MAX_SAME_PROFILE_OVERLOAD_RETRIES = 1;
+const SAME_PROFILE_OVERLOAD_RETRY_BACKOFF_MS = 1_000;
 const EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS = 30_000;
 const MID_TURN_PRECHECK_CONTINUATION_PROMPT =
   "Continue from the current transcript after the latest tool result. Do not repeat the original user request, and do not rerun completed tools unless the transcript shows they are still needed.";
@@ -1186,6 +1192,7 @@ export async function runEmbeddedAgent(
       let compactionContinuationRetryAttempts = 0;
       let beforeAgentFinalizeRevisionAttempts = 0;
       let sameModelIdleTimeoutRetries = 0;
+      let sameProfileOverloadRetries = 0;
       // Cost-runaway breaker for #76293. State lives at the run-loop level
       // on purpose so it survives across attempt boundaries and across
       // profile/auth retries within this embedded run (a wrapper-local
@@ -1322,15 +1329,9 @@ export async function runEmbeddedAgent(
           providerStarted: opts?.providerStarted,
           policy: params.authProfileFailurePolicy,
         });
-      const maybeBackoffBeforeOverloadFailover = async (reason: FailoverReason | null) => {
-        if (reason !== "overloaded" || overloadFailoverBackoffMs <= 0) {
-          return;
-        }
-        log.warn(
-          `overload backoff before failover for ${provider}/${modelId}: delayMs=${overloadFailoverBackoffMs}`,
-        );
+      const sleepForOverloadBackoff = async (delayMs: number) => {
         try {
-          await sleepWithAbort(overloadFailoverBackoffMs, params.abortSignal);
+          await sleepWithAbort(delayMs, params.abortSignal);
         } catch (err) {
           if (params.abortSignal?.aborted) {
             const abortErr = new Error("Operation aborted", { cause: err });
@@ -1339,6 +1340,22 @@ export async function runEmbeddedAgent(
           }
           throw err;
         }
+      };
+      const maybeBackoffBeforeOverloadFailover = async (reason: FailoverReason | null) => {
+        if (reason !== "overloaded" || overloadFailoverBackoffMs <= 0) {
+          return;
+        }
+        log.warn(
+          `overload backoff before failover for ${provider}/${modelId}: delayMs=${overloadFailoverBackoffMs}`,
+        );
+        await sleepForOverloadBackoff(overloadFailoverBackoffMs);
+      };
+      const backoffBeforeSameProfileOverloadRetry = async () => {
+        const delayMs = Math.max(overloadFailoverBackoffMs, SAME_PROFILE_OVERLOAD_RETRY_BACKOFF_MS);
+        log.warn(
+          `overload backoff before same-profile retry for ${provider}/${modelId}: delayMs=${delayMs}`,
+        );
+        await sleepForOverloadBackoff(delayMs);
       };
       // Resolve the context engine once and reuse across retries to avoid
       // repeated initialization/connection overhead per attempt.
@@ -2652,6 +2669,31 @@ export async function runEmbeddedAgent(
                 log.warn(`prompt profile failure mark failed: ${String(err)}`);
               }
             }
+            if (
+              promptFailoverDecision.action === "surface_error" &&
+              !fallbackConfigured &&
+              isSameProfileRetryFailoverReason(promptFailoverReason) &&
+              sameProfileOverloadRetries < MAX_SAME_PROFILE_OVERLOAD_RETRIES
+            ) {
+              sameProfileOverloadRetries += 1;
+              traceAttempts.push({
+                provider,
+                model: modelId,
+                result: "same_profile_retry",
+                ...(promptFailoverReason ? { reason: promptFailoverReason } : {}),
+                stage: "prompt",
+              });
+              lastRetryFailoverReason = mergeRetryFailoverReason({
+                previous: lastRetryFailoverReason,
+                failoverReason: promptFailoverReason,
+              });
+              log.warn(
+                `prompt-side transient ${promptFailoverReason ?? "unknown"} with no fallback; retrying same profile (${sameProfileOverloadRetries}/${MAX_SAME_PROFILE_OVERLOAD_RETRIES}) for ${provider}/${modelId}`,
+              );
+              await backoffBeforeSameProfileOverloadRetry();
+              continue;
+            }
+
             const fallbackThinking = pickFallbackThinkingLevel({
               message: errorText,
               attempted: attemptedThinking,
@@ -2840,12 +2882,15 @@ export async function runEmbeddedAgent(
             isProbeSession,
             overloadProfileRotations,
             overloadProfileRotationLimit,
+            sameProfileOverloadRetries,
+            sameProfileOverloadRetryLimit: MAX_SAME_PROFILE_OVERLOAD_RETRIES,
             previousRetryFailoverReason: lastRetryFailoverReason,
             logAssistantFailoverDecision,
             warn: (message) => log.warn(message),
             maybeMarkAuthProfileFailure,
             maybeEscalateRateLimitProfileFallback,
             maybeBackoffBeforeOverloadFailover,
+            backoffBeforeSameProfileOverloadRetry,
             advanceAuthProfile: advanceAttemptAuthProfile,
           });
           overloadProfileRotations = assistantFailoverOutcome.overloadProfileRotations;
@@ -2857,12 +2902,19 @@ export async function runEmbeddedAgent(
                 assistantFailoverOutcome.retryKind === "same_model_idle_timeout" ||
                 assistantFailoverReason === "timeout"
                   ? "timeout"
-                  : "rotate_profile",
+                  : assistantFailoverOutcome.retryKind === "same_profile_transient"
+                    ? "same_profile_retry"
+                    : "rotate_profile",
               ...(assistantFailoverReason ? { reason: assistantFailoverReason } : {}),
               stage: "assistant",
             });
             if (assistantFailoverOutcome.retryKind === "same_model_idle_timeout") {
               sameModelIdleTimeoutRetries += 1;
+            }
+            if (assistantFailoverOutcome.retryKind === "same_profile_transient") {
+              sameProfileOverloadRetries =
+                assistantFailoverOutcome.sameProfileOverloadRetries ??
+                sameProfileOverloadRetries + 1;
             }
             lastRetryFailoverReason = assistantFailoverOutcome.lastRetryFailoverReason;
             continue;
