@@ -80,6 +80,7 @@ import {
   isCurrentApprovalTurnRequestParams,
   isCurrentThreadOptionalTurnRequestParams,
   isCurrentThreadTurnRequestParams,
+  isNativeResponseStreamDeltaNotification,
   isTerminalTurnStatus,
 } from "./attempt-notifications.js";
 import {
@@ -1276,8 +1277,21 @@ export async function runCodexAppServerAttempt(
     // Touch idle-watch timestamps at receive time, not just after queued
     // projection.  A queued terminal event should suppress short false-idle
     // guards, while the full attempt watchdog still releases a wedged queue.
-    if (correlation.matchesActiveTurn !== false) {
-      turnWatches.noteNotificationReceived(notification.method);
+    const isNativeResponseStreamDelta = isNativeResponseStreamDeltaNotification(notification);
+    if (correlation.matchesActiveTurn !== false || isNativeResponseStreamDelta) {
+      // Raw response deltas can stream large custom tool inputs before Codex
+      // emits the app-server item/tool call notification we usually track.
+      // Count forwarded deltas as activity so the completion guard does not
+      // abort an actively generated side-effecting edit.
+      turnWatches.noteNotificationReceived(
+        notification.method,
+        isNativeResponseStreamDelta
+          ? {
+              attemptProgress: true,
+              details: { lastNotificationMethod: notification.method },
+            }
+          : undefined,
+      );
     }
     notificationQueue = notificationQueue.then(
       () => handleNotification(notification),

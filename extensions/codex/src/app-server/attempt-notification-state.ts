@@ -175,8 +175,8 @@ export function applyCodexTurnNotificationState(params: {
     turnWatches.armAssistantCompletionIdleWatch(describeNotificationActivity(notification));
   } else if (postToolRawAssistantCompletionNeedsTerminalGuard) {
     // A post-tool assistant status can be followed by native Codex streaming a
-    // large custom tool input. Those deltas are invisible here, so a short
-    // completion guard would kill active edits before the next item appears.
+    // large custom tool input. Forwarded raw deltas refresh activity at enqueue
+    // time; keep this guard conservative for versions that do not forward them.
     turnWatches.armCompletionIdleWatch({
       timeoutMs: params.postToolRawAssistantCompletionIdleTimeoutMs,
     });
