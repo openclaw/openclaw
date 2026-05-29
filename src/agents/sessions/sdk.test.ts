@@ -102,6 +102,8 @@ describe("createAgentSession tool defaults", () => {
       name: "custom_lookup",
       label: "Custom Lookup",
       description: "Looks up a test value.",
+      promptSnippet: "Lookup test values",
+      promptGuidelines: ["Use custom_lookup for test values."],
       parameters: Type.Object({}),
       execute: async () => ({
         content: [{ type: "text", text: "ok" }],
