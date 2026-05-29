@@ -473,7 +473,8 @@ export async function loadCompactHooksHarness(): Promise<{
     resolveProviderSystemPromptContribution: vi.fn(() => undefined),
     resolveProviderTextTransforms: vi.fn(() => undefined),
     transformProviderSystemPrompt: vi.fn(
-      (params: { systemPrompt?: string }) => params.systemPrompt,
+      (params: { systemPrompt?: string; context?: { systemPrompt?: string } }) =>
+        params.context?.systemPrompt ?? params.systemPrompt,
     ),
   }));
 
