@@ -238,7 +238,6 @@ describe("managed npm root", () => {
       "fast-uri": "3.1.2",
       "follow-redirects": "1.16.0",
       "ip-address": "10.2.0",
-      "libsodium-wrappers-sumo": "0.7.15",
       "node-domexception": "npm:@nolyfill/domexception@1.0.28",
       uuid: "14.0.0",
     });
