@@ -9,6 +9,7 @@ import type { ResponseUsageMode, SessionInfo, SessionScope } from "./tui-types.j
 
 export type ChatSendOptions = {
   sessionKey: string;
+  agentId?: string;
   sessionId?: string | null;
   message: string;
   thinking?: string;
@@ -19,6 +20,7 @@ export type ChatSendOptions = {
 
 export type TuiGoalCommandOptions = {
   sessionKey: string;
+  agentId?: string;
   command: string;
 };
 
@@ -118,13 +120,18 @@ export type TuiBackend = {
   sendChat: (opts: ChatSendOptions) => Promise<{ runId: string }>;
   abortChat: (opts: {
     sessionKey: string;
+    agentId?: string;
     runId: string;
   }) => Promise<{ ok: boolean; aborted: boolean }>;
-  loadHistory: (opts: { sessionKey: string; limit?: number }) => Promise<unknown>;
+  loadHistory: (opts: { sessionKey: string; agentId?: string; limit?: number }) => Promise<unknown>;
   listSessions: (opts?: SessionsListParams) => Promise<TuiSessionList>;
   listAgents: () => Promise<TuiAgentsList>;
   patchSession: (opts: SessionsPatchParams) => Promise<SessionsPatchResult>;
-  resetSession: (key: string, reason?: "new" | "reset") => Promise<unknown>;
+  resetSession: (
+    key: string,
+    reason?: "new" | "reset",
+    opts?: { agentId?: string },
+  ) => Promise<unknown>;
   getGatewayStatus: () => Promise<unknown>;
   listModels: () => Promise<TuiModelChoice[]>;
   listCommands?: (opts?: CommandsListParams) => Promise<CommandEntry[]>;

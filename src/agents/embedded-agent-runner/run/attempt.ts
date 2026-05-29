@@ -3207,6 +3207,7 @@ export async function runEmbeddedAttempt(
             sessionFile: params.sessionFile,
             sessionId: params.sessionId,
             sessionKey: params.sessionKey,
+            agentId: sessionAgentId,
           });
           if (truncationResult.truncated) {
             preflightRecovery = {
@@ -3869,6 +3870,7 @@ export async function runEmbeddedAttempt(
               sessionFile: params.sessionFile,
               sessionId: params.sessionId,
               sessionKey: params.sessionKey,
+              agentId: sessionAgentId,
             });
             if (truncationResult.truncated) {
               preflightRecovery = {

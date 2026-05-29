@@ -108,6 +108,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
   const hasTrackedAbortTarget = () =>
     Boolean(state.activeChatRunId || state.pendingChatRunId || state.pendingOptimisticUserMessage);
 
+  const currentSessionPatchTarget = () => ({
+    key: state.currentSessionKey,
+    ...(state.currentSessionKey === "global" ? { agentId: state.currentAgentId } : {}),
+  });
+
   const openSelector = (
     selector: {
       onSelect?: (item: SelectItem) => void;
@@ -146,7 +151,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       openSelector(selector, async (value) => {
         try {
           const result = await client.patchSession({
-            key: state.currentSessionKey,
+            ...currentSessionPatchTarget(),
             model: value,
           });
           chatLog.addSystem(`model set to ${value}`);
@@ -386,6 +391,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           try {
             const result = await client.runGoalCommand({
               sessionKey: state.currentSessionKey,
+              agentId: state.currentAgentId,
               command: raw,
             });
             chatLog.addSystem(result.text);
@@ -422,7 +428,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         } else {
           try {
             const result = await client.patchSession({
-              key: state.currentSessionKey,
+              ...currentSessionPatchTarget(),
               model: args,
             });
             chatLog.addSystem(`model set to ${args}`);
@@ -446,7 +452,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         }
         try {
           const result = await client.patchSession({
-            key: state.currentSessionKey,
+            ...currentSessionPatchTarget(),
             thinkingLevel: args,
           });
           chatLog.addSystem(`thinking set to ${args}`);
@@ -463,7 +469,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         }
         try {
           const result = await client.patchSession({
-            key: state.currentSessionKey,
+            ...currentSessionPatchTarget(),
             verboseLevel: args,
           });
           chatLog.addSystem(`verbose set to ${args}`);
@@ -480,7 +486,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         }
         try {
           const result = await client.patchSession({
-            key: state.currentSessionKey,
+            ...currentSessionPatchTarget(),
             traceLevel: args,
           });
           chatLog.addSystem(`trace set to ${args}`);
@@ -501,7 +507,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         }
         try {
           const result = await client.patchSession({
-            key: state.currentSessionKey,
+            ...currentSessionPatchTarget(),
             fastMode: args === "on",
           });
           chatLog.addSystem(`fast mode ${args === "on" ? "enabled" : "disabled"}`);
@@ -518,7 +524,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         }
         try {
           const result = await client.patchSession({
-            key: state.currentSessionKey,
+            ...currentSessionPatchTarget(),
             reasoningLevel: args,
           });
           chatLog.addSystem(`reasoning set to ${args}`);
@@ -540,7 +546,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           normalized ?? (current === "off" ? "tokens" : current === "tokens" ? "full" : "off");
         try {
           const result = await client.patchSession({
-            key: state.currentSessionKey,
+            ...currentSessionPatchTarget(),
             responseUsage: next === "off" ? null : next,
           });
           chatLog.addSystem(`usage footer: ${next}`);
@@ -562,7 +568,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         }
         try {
           const result = await client.patchSession({
-            key: state.currentSessionKey,
+            ...currentSessionPatchTarget(),
             elevatedLevel: args,
           });
           chatLog.addSystem(`elevated set to ${args}`);
@@ -584,7 +590,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         }
         try {
           const result = await client.patchSession({
-            key: state.currentSessionKey,
+            ...currentSessionPatchTarget(),
             groupActivation: activation,
           });
           chatLog.addSystem(`activation set to ${activation}`);
@@ -621,7 +627,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           state.sessionInfo.totalTokens = null;
           tui.requestRender();
 
-          await client.resetSession(state.currentSessionKey, name);
+          await client.resetSession(
+            state.currentSessionKey,
+            name,
+            state.currentSessionKey === "global" ? { agentId: state.currentAgentId } : undefined,
+          );
           chatLog.addSystem(`session ${state.currentSessionKey} reset`);
           await loadHistory();
         } catch (err) {
@@ -704,6 +714,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       tui.requestRender();
       await client.sendChat({
         sessionKey: state.currentSessionKey,
+        ...(state.currentSessionKey === "global" ? { agentId: state.currentAgentId } : {}),
         sessionId: state.currentSessionId,
         message: text,
         thinking: opts.thinking,

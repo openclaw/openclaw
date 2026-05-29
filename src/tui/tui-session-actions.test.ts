@@ -257,7 +257,37 @@ describe("tui session actions", () => {
       search: "global",
       includeGlobal: true,
       includeUnknown: false,
-      agentId: undefined,
+      agentId: "main",
+    });
+  });
+
+  it("keeps global session info aligned with selected-agent chat history", async () => {
+    const listSessions = vi.fn().mockResolvedValue({
+      ts: Date.now(),
+      path: "/tmp/sessions.json",
+      count: 1,
+      defaults: {},
+      sessions: [{ key: "global", updatedAt: 1 }],
+    });
+    const state = createBaseState({
+      currentAgentId: "work",
+      currentSessionKey: "global",
+      sessionScope: "global",
+    });
+
+    const { refreshSessionInfo } = createTestSessionActions({
+      client: { listSessions } as unknown as TuiBackend,
+      state,
+    });
+
+    await refreshSessionInfo();
+
+    expect(listSessions).toHaveBeenCalledWith({
+      limit: TUI_SESSION_LOOKUP_LIMIT,
+      search: "global",
+      includeGlobal: true,
+      includeUnknown: false,
+      agentId: "work",
     });
   });
 
@@ -450,6 +480,28 @@ describe("tui session actions", () => {
     expect(setActivityStatus).toHaveBeenCalledWith("aborted");
   });
 
+  it("passes the selected agent when aborting selected global runs", async () => {
+    const abortChat = vi.fn().mockResolvedValue({ ok: true, aborted: true });
+    const state = createBaseState({
+      currentAgentId: "work",
+      currentSessionKey: "global",
+      pendingChatRunId: "run-work-global",
+    });
+
+    const { abortActive } = createTestSessionActions({
+      client: { listSessions: vi.fn(), abortChat } as unknown as TuiBackend,
+      state,
+    });
+
+    await abortActive();
+
+    expect(abortChat).toHaveBeenCalledWith({
+      sessionKey: "global",
+      agentId: "work",
+      runId: "run-work-global",
+    });
+  });
+
   it("coalesces repeated no-active-run abort notices", async () => {
     const addSystem = vi.fn();
     const requestRender = vi.fn();
@@ -638,5 +690,33 @@ describe("tui session actions", () => {
 
     expect(state.currentSessionId).toBe("session-main");
     expect(rememberSessionKey).toHaveBeenCalledWith("agent:main:main");
+  });
+
+  it("loads selected-agent global history with the selected agent id", async () => {
+    const loadHistory = vi.fn().mockResolvedValue({
+      sessionId: "session-work-global",
+      messages: [],
+    });
+    const state = createBaseState({
+      currentAgentId: "work",
+      currentSessionKey: "global",
+    });
+
+    const { loadHistory: runLoadHistory } = createTestSessionActions({
+      client: {
+        listSessions: vi.fn(),
+        loadHistory,
+      } as unknown as TuiBackend,
+      state,
+    });
+
+    await runLoadHistory();
+
+    expect(loadHistory).toHaveBeenCalledWith({
+      sessionKey: "global",
+      agentId: "work",
+      limit: 200,
+    });
+    expect(state.currentSessionId).toBe("session-work-global");
   });
 });

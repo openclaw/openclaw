@@ -2,7 +2,8 @@ import {
   reconcileChatRunFromCurrentSessionRow,
   type ChatRunUiStatus,
 } from "../chat/run-lifecycle.ts";
-import type { GatewayBrowserClient } from "../gateway.ts";
+import type { GatewayBrowserClient, GatewayHelloOk } from "../gateway.ts";
+import { normalizeAgentId, parseAgentSessionKey } from "../session-key.ts";
 import type {
   GatewaySessionRow,
   SessionCompactionCheckpoint,
@@ -42,6 +43,10 @@ export type SessionsState = SessionsChatRunState & {
   sessionsCheckpointErrorByKey: Record<string, string>;
   chatSessionMessageSubscriptionKey?: string | null;
   chatSessionMessageSubscriptionRequestedKey?: string | null;
+  chatSessionMessageSubscriptionAgentId?: string | null;
+  assistantAgentId?: string | null;
+  agentsList?: { defaultId?: string | null } | null;
+  hello?: GatewayHelloOk | null;
 };
 
 export type LoadSessionsOverrides = {
@@ -90,6 +95,82 @@ function normalizeSubscriptionKey(value: string | null | undefined): string | nu
   return normalized ? normalized : null;
 }
 
+function isGlobalSessionKey(value: string | null | undefined): boolean {
+  return (value ?? "").trim().toLowerCase() === "global";
+}
+
+function resolveSelectedGlobalAgentId(state: SessionsState): string {
+  const parsed = parseAgentSessionKey(state.sessionKey);
+  if (parsed?.agentId) {
+    return normalizeAgentId(parsed.agentId);
+  }
+  const snapshot = state.hello?.snapshot as
+    | { sessionDefaults?: { defaultAgentId?: string } }
+    | undefined;
+  const assistantAgentId =
+    typeof state.assistantAgentId === "string" && state.assistantAgentId.trim()
+      ? state.assistantAgentId
+      : undefined;
+  const defaultAgentId =
+    typeof state.agentsList?.defaultId === "string" && state.agentsList.defaultId.trim()
+      ? state.agentsList.defaultId
+      : undefined;
+  const helloDefaultAgentId =
+    typeof snapshot?.sessionDefaults?.defaultAgentId === "string" &&
+    snapshot.sessionDefaults.defaultAgentId.trim()
+      ? snapshot.sessionDefaults.defaultAgentId
+      : undefined;
+  return normalizeAgentId(assistantAgentId ?? defaultAgentId ?? helloDefaultAgentId ?? "main");
+}
+
+function resolveDefaultGlobalAgentId(state: SessionsState): string {
+  const snapshot = state.hello?.snapshot as
+    | { sessionDefaults?: { defaultAgentId?: string } }
+    | undefined;
+  const defaultAgentId =
+    typeof state.agentsList?.defaultId === "string" && state.agentsList.defaultId.trim()
+      ? state.agentsList.defaultId
+      : typeof snapshot?.sessionDefaults?.defaultAgentId === "string" &&
+          snapshot.sessionDefaults.defaultAgentId.trim()
+        ? snapshot.sessionDefaults.defaultAgentId
+        : "main";
+  return normalizeAgentId(defaultAgentId);
+}
+
+function sessionsChangedGlobalAgentMatches(
+  state: SessionsState,
+  payload: Record<string, unknown>,
+  key: string,
+): boolean {
+  if (!isGlobalSessionKey(key)) {
+    return true;
+  }
+  const eventSession = isRecord(payload.session) ? payload.session : null;
+  const rawAgentId =
+    (typeof payload.agentId === "string" && payload.agentId.trim()) ||
+    (typeof eventSession?.agentId === "string" && eventSession.agentId.trim());
+  const eventAgentId = rawAgentId ? normalizeAgentId(rawAgentId) : null;
+  const selectedAgentId = resolveSelectedGlobalAgentId(state);
+  if (eventAgentId) {
+    return eventAgentId === selectedAgentId;
+  }
+  return selectedAgentId === resolveDefaultGlobalAgentId(state);
+}
+
+function buildSelectedSessionMessageSubscriptionParams(state: SessionsState, key: string) {
+  return {
+    key,
+    ...(isGlobalSessionKey(key) ? { agentId: resolveSelectedGlobalAgentId(state) } : {}),
+  };
+}
+
+function buildSelectedSessionRequestParams(state: SessionsState, key: string) {
+  return {
+    key,
+    ...(isGlobalSessionKey(key) ? { agentId: resolveSelectedGlobalAgentId(state) } : {}),
+  };
+}
+
 function beginSelectedSessionMessageSubscriptionSync(state: SessionsState): number {
   const key = state as object;
   const next = (selectedSessionMessageSubscriptionGenerations.get(key) ?? 0) + 1;
@@ -99,13 +180,20 @@ function beginSelectedSessionMessageSubscriptionSync(state: SessionsState): numb
 
 function isCurrentSelectedSessionMessageSubscriptionSync(
   state: SessionsState & { sessionKey: string },
-  params: { generation: number; client: GatewayBrowserClient; requestedKey: string },
+  params: {
+    generation: number;
+    client: GatewayBrowserClient;
+    requestedKey: string;
+    requestedAgentId?: string | null;
+  },
 ): boolean {
   return (
     selectedSessionMessageSubscriptionGenerations.get(state as object) === params.generation &&
     state.client === params.client &&
     state.connected &&
-    state.sessionKey.trim() === params.requestedKey
+    state.sessionKey.trim() === params.requestedKey &&
+    (!isGlobalSessionKey(params.requestedKey) ||
+      resolveSelectedGlobalAgentId(state) === (params.requestedAgentId ?? null))
   );
 }
 
@@ -120,9 +208,13 @@ function readSubscribedSessionMessageKey(result: unknown, fallbackKey: string): 
 async function unsubscribeSelectedSessionMessageBestEffort(
   client: GatewayBrowserClient,
   key: string,
+  agentId?: string | null,
 ): Promise<void> {
   try {
-    await client.request("sessions.messages.unsubscribe", { key });
+    await client.request("sessions.messages.unsubscribe", {
+      key,
+      ...(isGlobalSessionKey(key) && agentId ? { agentId } : {}),
+    });
   } catch {
     // Best-effort cleanup for stale async subscription completions.
   }
@@ -157,6 +249,7 @@ const SESSION_EVENT_ROW_FIELDS = [
   "endedAt",
   "elevatedLevel",
   "fastMode",
+  "goal",
   "hasActiveRun",
   "inputTokens",
   "kind",
@@ -331,7 +424,7 @@ async function fetchSessionCompactionCheckpoints(state: SessionsState, key: stri
   try {
     const result = await state.client?.request<SessionsCompactionListResult>(
       "sessions.compaction.list",
-      { key },
+      buildSelectedSessionRequestParams(state, key),
     );
     if (result) {
       state.sessionsCheckpointItemsByKey = {
@@ -388,8 +481,14 @@ async function runCompactionMutation<T>(
   const client = state.client;
   state.sessionsCheckpointBusyKey = checkpointId;
   try {
-    const result = await client.request<T>(method, { key, checkpointId });
-    await loadSessions(state);
+    const result = await client.request<T>(method, {
+      ...buildSelectedSessionRequestParams(state, key),
+      checkpointId,
+    });
+    await loadSessions(
+      state,
+      isGlobalSessionKey(key) ? { agentId: resolveSelectedGlobalAgentId(state) } : undefined,
+    );
     return result;
   } catch (err) {
     state.sessionsError = String(err);
@@ -427,6 +526,9 @@ export function applySessionsChangedEvent(
   if (!key) {
     return { applied: false };
   }
+  if (!sessionsChangedGlobalAgentMatches(state, payload, key)) {
+    return { applied: false };
+  }
 
   const previousRows = state.sessionsResult.sessions;
   const existingIndex = previousRows.findIndex((row) => row.key === key);
@@ -457,11 +559,14 @@ export function applySessionsChangedEvent(
   };
   const mutableNext = nextRow as unknown as Record<string, unknown>;
   for (const field of SESSION_EVENT_ROW_FIELDS) {
-    if (!hasOwn(source, field)) {
+    const hasField = hasOwn(source, field);
+    const hasTopLevelGoalClear =
+      field === "goal" && hasOwn(payload, "goal") && payload.goal === null;
+    if (!hasField && !hasTopLevelGoalClear) {
       continue;
     }
-    const value = source[field];
-    if (value === undefined) {
+    const value = hasTopLevelGoalClear ? null : source[field];
+    if (value === undefined || (field === "goal" && value === null)) {
       delete mutableNext[field];
     } else {
       mutableNext[field] = value;
@@ -572,11 +677,20 @@ export async function syncSelectedSessionMessageSubscription(
   );
   const previousCanonicalKey = normalizeSubscriptionKey(state.chatSessionMessageSubscriptionKey);
   const previousSelectedKey = previousRequestedKey ?? previousCanonicalKey;
+  const nextSubscriptionAgentId = isGlobalSessionKey(nextKey)
+    ? resolveSelectedGlobalAgentId(state)
+    : null;
+  const selectedAgentChanged =
+    isGlobalSessionKey(nextKey) &&
+    previousSelectedKey === nextKey &&
+    (state.chatSessionMessageSubscriptionAgentId ?? null) !== nextSubscriptionAgentId;
   const selectedKeyChanged = previousSelectedKey !== null && previousSelectedKey !== nextKey;
-  const shouldUnsubscribePrevious = previousCanonicalKey !== null && selectedKeyChanged;
+  const shouldUnsubscribePrevious =
+    previousCanonicalKey !== null && (selectedKeyChanged || selectedAgentChanged);
   const shouldSubscribe =
     opts?.force === true ||
     selectedKeyChanged ||
+    selectedAgentChanged ||
     previousCanonicalKey === null ||
     previousRequestedKey === null;
   if (!shouldUnsubscribePrevious && !shouldSubscribe) {
@@ -587,28 +701,43 @@ export async function syncSelectedSessionMessageSubscription(
       generation,
       client,
       requestedKey: nextKey,
+      requestedAgentId: nextSubscriptionAgentId,
     });
   try {
     if (shouldUnsubscribePrevious && previousCanonicalKey) {
-      await client.request("sessions.messages.unsubscribe", { key: previousCanonicalKey });
+      await client.request("sessions.messages.unsubscribe", {
+        key: previousCanonicalKey,
+        ...(isGlobalSessionKey(previousCanonicalKey) && state.chatSessionMessageSubscriptionAgentId
+          ? { agentId: state.chatSessionMessageSubscriptionAgentId }
+          : {}),
+      });
       if (isCurrent()) {
         state.chatSessionMessageSubscriptionKey = null;
         state.chatSessionMessageSubscriptionRequestedKey = null;
+        state.chatSessionMessageSubscriptionAgentId = null;
       }
     }
     if (!shouldSubscribe || !isCurrent()) {
       return;
     }
-    const result = await client.request("sessions.messages.subscribe", { key: nextKey });
+    const subscriptionParams = buildSelectedSessionMessageSubscriptionParams(state, nextKey);
+    const result = await client.request("sessions.messages.subscribe", subscriptionParams);
     const subscribedKey = readSubscribedSessionMessageKey(result, nextKey);
+    const subscribedAgentId = "agentId" in subscriptionParams ? subscriptionParams.agentId : null;
     if (!isCurrent()) {
-      if (normalizeSubscriptionKey(state.chatSessionMessageSubscriptionKey) !== subscribedKey) {
-        await unsubscribeSelectedSessionMessageBestEffort(client, subscribedKey);
+      const staleKeyChanged =
+        normalizeSubscriptionKey(state.chatSessionMessageSubscriptionKey) !== subscribedKey;
+      const staleAgentChanged =
+        isGlobalSessionKey(subscribedKey) &&
+        (state.chatSessionMessageSubscriptionAgentId ?? null) !== subscribedAgentId;
+      if (staleKeyChanged || staleAgentChanged) {
+        await unsubscribeSelectedSessionMessageBestEffort(client, subscribedKey, subscribedAgentId);
       }
       return;
     }
     state.chatSessionMessageSubscriptionRequestedKey = nextKey;
     state.chatSessionMessageSubscriptionKey = subscribedKey;
+    state.chatSessionMessageSubscriptionAgentId = subscribedAgentId;
   } catch (err) {
     if (isCurrent()) {
       state.sessionsError = String(err);
@@ -762,7 +891,10 @@ export async function patchSession(
   if (!state.client || !state.connected) {
     return;
   }
-  const params: Record<string, unknown> = { key };
+  const params: Record<string, unknown> = {
+    key,
+    ...(isGlobalSessionKey(key) ? { agentId: resolveSelectedGlobalAgentId(state) } : {}),
+  };
   for (const field of [
     "label",
     "thinkingLevel",
@@ -776,7 +908,10 @@ export async function patchSession(
   }
   try {
     await state.client.request("sessions.patch", params);
-    await loadSessions(state);
+    await loadSessions(
+      state,
+      isGlobalSessionKey(key) ? { agentId: resolveSelectedGlobalAgentId(state) } : undefined,
+    );
   } catch (err) {
     state.sessionsError = String(err);
   }
@@ -831,7 +966,11 @@ export async function deleteSessionsAndRefresh(
   const refreshedDuringDelete = await withSessionsLoading(state, async () => {
     for (const key of keys) {
       try {
-        await client.request("sessions.delete", { key, deleteTranscript: true });
+        await client.request("sessions.delete", {
+          key,
+          ...(isGlobalSessionKey(key) ? { agentId: resolveSelectedGlobalAgentId(state) } : {}),
+          deleteTranscript: true,
+        });
         deleted.push(key);
       } catch (err) {
         deleteErrors.push(String(err));
@@ -839,7 +978,11 @@ export async function deleteSessionsAndRefresh(
     }
   });
   if (deleted.length > 0 && !refreshedDuringDelete) {
-    await loadSessions(state);
+    const selectedGlobalDeleted = deleted.some((key) => isGlobalSessionKey(key));
+    await loadSessions(
+      state,
+      selectedGlobalDeleted ? { agentId: resolveSelectedGlobalAgentId(state) } : undefined,
+    );
   }
   if (deleteErrors.length > 0) {
     state.sessionsError = deleteErrors.join("; ");

@@ -1685,6 +1685,35 @@ describe("listSessionsFromStore selected model display", () => {
     ]);
   });
 
+  test("keeps the scoped global row when filtering by agent", () => {
+    const now = Date.now();
+    const result = listSessionsFromStore({
+      cfg: {
+        ...createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
+        agents: {
+          defaults: { model: { primary: "openai/gpt-5.4" } },
+          list: [
+            { id: "main", default: true, model: { primary: "openai/gpt-5.4" } },
+            { id: "work", model: { primary: "anthropic/claude-opus-4-6" } },
+          ],
+        },
+      } as OpenClawConfig,
+      storePath: "/tmp/sessions.json",
+      store: {
+        global: { sessionId: "global", updatedAt: now } as SessionEntry,
+        "agent:main:main": { sessionId: "main", updatedAt: now - 1 } as SessionEntry,
+        "agent:work:main": { sessionId: "work", updatedAt: now - 2 } as SessionEntry,
+      },
+      opts: { agentId: "work", includeGlobal: true, search: "global" },
+    });
+
+    expect(result.sessions.map((session) => session.key)).toEqual(["global"]);
+    expect(result.sessions[0]).toMatchObject({
+      modelProvider: "anthropic",
+      model: "claude-opus-4-6",
+    });
+  });
+
   test("shows the selected override model even when a fallback runtime model exists", () => {
     const cfg = createModelDefaultsConfig({
       primary: "anthropic/claude-opus-4-6",

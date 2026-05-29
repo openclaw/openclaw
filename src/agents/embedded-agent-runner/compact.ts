@@ -430,6 +430,7 @@ export async function compactEmbeddedAgentSessionDirect(
   const fallbackAgentId = resolveSessionAgentIds({
     sessionKey: params.sandboxSessionKey ?? params.sessionKey,
     config: params.config,
+    agentId: params.agentId,
   }).sessionAgentId;
   const fallbackSessionKey = params.sandboxSessionKey ?? params.sessionKey ?? params.sessionId;
   try {
@@ -533,6 +534,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
   const earlyAgentIds = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
     config: params.config,
+    agentId: params.agentId,
   });
   const agentDir =
     params.agentDir ?? resolveAgentDir(params.config ?? {}, earlyAgentIds.sessionAgentId);
@@ -628,6 +630,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
   const { sessionAgentId: effectiveSkillAgentId } = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
     config: params.config,
+    agentId: params.agentId,
   });
 
   let restoreSkillEnv: (() => void) | undefined;
@@ -873,6 +876,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
     const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
       sessionKey: params.sessionKey,
       config: params.config,
+      agentId: params.agentId,
     });
     // Resolve channel-specific message actions for system prompt
     const channelActions = runtimeChannel
@@ -1371,6 +1375,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
           await runPostCompactionSideEffects({
             config: params.config,
             sessionKey: params.sessionKey,
+            agentId: sessionAgentId,
             sessionFile: activeSessionFile,
           });
           if (params.config && params.sessionKey && checkpointSnapshot) {

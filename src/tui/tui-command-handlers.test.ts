@@ -22,15 +22,23 @@ async function flushAsyncSelect() {
 
 function expectSendChatFields(
   sendChat: ReturnType<typeof vi.fn>,
-  expected: { message: string; sessionId?: string; sessionKey?: string },
+  expected: { message: string; agentId?: string; sessionId?: string; sessionKey?: string },
 ) {
   const calls = sendChat.mock.calls;
   const call = calls[calls.length - 1];
   if (!call) {
     throw new Error("expected gateway sendChat call");
   }
-  const payload = call[0] as { message?: unknown; sessionId?: unknown; sessionKey?: unknown };
+  const payload = call[0] as {
+    message?: unknown;
+    agentId?: unknown;
+    sessionId?: unknown;
+    sessionKey?: unknown;
+  };
   expect(payload.message).toBe(expected.message);
+  if (expected.agentId !== undefined) {
+    expect(payload.agentId).toBe(expected.agentId);
+  }
   if (expected.sessionId !== undefined) {
     expect(payload.sessionId).toBe(expected.sessionId);
   }
@@ -70,6 +78,8 @@ function createHarness(params?: {
   activityStatus?: string;
   opts?: { local?: boolean };
   currentSessionId?: string | null;
+  currentAgentId?: string;
+  currentSessionKey?: string;
   abortActive?: AbortActiveMock;
 }) {
   const sendChat = params?.sendChat ?? vi.fn().mockResolvedValue({ runId: "r1" });
@@ -102,8 +112,8 @@ function createHarness(params?: {
       ? (vi.fn().mockResolvedValue({ exitCode: 0, signal: null }) as unknown as RunAuthFlow)
       : undefined);
   const state = {
-    currentAgentId: "main",
-    currentSessionKey: "agent:main:main",
+    currentAgentId: params?.currentAgentId ?? "main",
+    currentSessionKey: params?.currentSessionKey ?? "agent:main:main",
     currentSessionId: params?.currentSessionId ?? null,
     activeChatRunId: params?.activeChatRunId ?? null,
     pendingOptimisticUserMessage: params?.pendingOptimisticUserMessage ?? false,
@@ -269,11 +279,45 @@ describe("tui command handlers", () => {
 
     expect(runGoalCommand).toHaveBeenCalledWith({
       sessionKey: "agent:main:main",
+      agentId: "main",
       command: "/goal start ship",
     });
     expect(sendChat).not.toHaveBeenCalled();
     expect(addSystem).toHaveBeenCalledWith("Goal started: ship");
     expect(refreshSessionInfo).toHaveBeenCalled();
+  });
+
+  it("passes the selected agent for local global goal commands", async () => {
+    const runGoalCommand = vi.fn().mockResolvedValue({ text: "Goal started: ship" });
+    const { handleCommand } = createHarness({
+      opts: { local: true },
+      currentAgentId: "work",
+      currentSessionKey: "global",
+      runGoalCommand,
+    });
+
+    await handleCommand("/goal start ship");
+
+    expect(runGoalCommand).toHaveBeenCalledWith({
+      sessionKey: "global",
+      agentId: "work",
+      command: "/goal start ship",
+    });
+  });
+
+  it("passes the selected agent when sending global chat", async () => {
+    const { handleCommand, sendChat } = createHarness({
+      currentAgentId: "work",
+      currentSessionKey: "global",
+    });
+
+    await handleCommand("hello");
+
+    expectSendChatFields(sendChat, {
+      sessionKey: "global",
+      agentId: "work",
+      message: "hello",
+    });
   });
 
   it("forwards goal commands to the gateway outside local mode", async () => {
@@ -490,8 +534,36 @@ describe("tui command handlers", () => {
     expect(uuidParts.every((part) => /^[0-9a-f]+$/.test(part))).toBe(true);
     // /reset still resets the shared session
     expect(resetSession).toHaveBeenCalledTimes(1);
-    expect(resetSession).toHaveBeenCalledWith("agent:main:main", "reset");
+    expect(resetSession).toHaveBeenCalledWith("agent:main:main", "reset", undefined);
     expect(loadHistory).toHaveBeenCalledTimes(1); // /reset calls loadHistory directly; /new does so indirectly via setSession
+  });
+
+  it("scopes /reset for the selected global agent", async () => {
+    const { handleCommand, resetSession } = createHarness({
+      currentSessionKey: "global",
+      currentAgentId: "work",
+    });
+
+    await handleCommand("/reset");
+
+    expect(resetSession).toHaveBeenCalledWith("global", "reset", { agentId: "work" });
+  });
+
+  it("scopes selected global session patches to the selected agent", async () => {
+    const patchSession = vi.fn().mockResolvedValue({ fastMode: true });
+    const { handleCommand } = createHarness({
+      currentSessionKey: "global",
+      currentAgentId: "work",
+      patchSession,
+    });
+
+    await handleCommand("/fast on");
+
+    expect(patchSession).toHaveBeenCalledWith({
+      key: "global",
+      agentId: "work",
+      fastMode: true,
+    });
   });
 
   it("reports send failures and marks activity status as error", async () => {

@@ -292,7 +292,11 @@ async function persistTextTurnTranscript(
     await lock.release();
   }
 
-  emitSessionTranscriptUpdate({ sessionFile, sessionKey: params.sessionKey });
+  emitSessionTranscriptUpdate({
+    sessionFile,
+    sessionKey: params.sessionKey,
+    agentId: params.sessionAgentId,
+  });
   return sessionEntry;
 }
 
