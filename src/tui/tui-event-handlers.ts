@@ -192,6 +192,9 @@ export function createEventHandlers(context: EventHandlerContext) {
       return;
     }
     lastSessionKey = state.currentSessionKey;
+    if (state.activeChatRunId || state.pendingChatRunId || state.pendingOptimisticUserMessage) {
+      return;
+    }
     finalizedRuns.clear();
     finalizedRunsWithDisplay.clear();
     sessionRuns.clear();
@@ -549,6 +552,16 @@ export function createEventHandlers(context: EventHandlerContext) {
     clearPendingTerminalLifecycleError(evt.runId);
     chatLog.dismissPendingSystem(evt.runId);
     noteSessionRun(evt.runId);
+    const activeRunId = state.activeChatRunId;
+    const isPendingChatRun = state.pendingChatRunId === evt.runId;
+    const isNewOptimisticRun =
+      state.pendingOptimisticUserMessage &&
+      !isLocalBtwRunId?.(evt.runId) &&
+      (isPendingChatRun || !activeRunId || activeRunId !== evt.runId);
+    if (isNewOptimisticRun) {
+      noteLocalRunId?.(evt.runId);
+      state.pendingOptimisticUserMessage = false;
+    }
     if (!state.activeChatRunId && !isLocalBtwRunId?.(evt.runId)) {
       state.activeChatRunId = evt.runId;
       if (state.pendingOptimisticUserMessage) {
@@ -556,7 +569,7 @@ export function createEventHandlers(context: EventHandlerContext) {
         state.pendingOptimisticUserMessage = false;
       }
     }
-    if (state.pendingChatRunId === evt.runId) {
+    if (isPendingChatRun) {
       state.pendingChatRunId = null;
     }
     if (evt.state === "delta") {
@@ -720,9 +733,7 @@ export function createEventHandlers(context: EventHandlerContext) {
         state.activeChatRunId = evt.runId;
         state.pendingChatRunId = null;
         if (state.pendingOptimisticUserMessage) {
-          if (localMode) {
-            noteLocalRunId?.(evt.runId);
-          }
+          noteLocalRunId?.(evt.runId);
           state.pendingOptimisticUserMessage = false;
         }
       }

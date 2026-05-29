@@ -107,6 +107,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     setActivityStatus,
     formatSessionKey,
     applySessionInfoFromPatch,
+    noteLocalRunId,
     noteLocalBtwRunId,
     forgetLocalRunId,
     forgetLocalBtwRunId,
@@ -730,6 +731,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           chatLog.reserveAssistantSlot(state.activeChatRunId);
         }
         chatLog.addUser(text);
+        noteLocalRunId?.(runId);
         state.pendingOptimisticUserMessage = true;
         setActivityStatus("sending");
       } else {
@@ -757,6 +759,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       }
       if (!isBtw && state.activeChatRunId) {
         forgetLocalRunId?.(state.activeChatRunId);
+      }
+      if (!isBtw) {
+        forgetLocalRunId?.(runId);
       }
       if (!isBtw) {
         state.pendingOptimisticUserMessage = false;

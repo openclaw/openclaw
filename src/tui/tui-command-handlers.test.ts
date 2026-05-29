@@ -508,12 +508,13 @@ describe("tui command handlers", () => {
     expect(addSystem).toHaveBeenCalledWith("agent set to work; use /crestodian to return");
   });
 
-  it("defers local run binding until gateway events provide a real run id", async () => {
-    const { handleCommand, noteLocalRunId, state } = createHarness();
+  it("marks the generated runId as local before gateway events arrive", async () => {
+    const { handleCommand, sendChat, noteLocalRunId, state } = createHarness();
 
     await handleCommand("/context detail");
 
-    expect(noteLocalRunId).not.toHaveBeenCalled();
+    const sentRunId = (firstMockArg(sendChat, "sendChat") as { runId: string }).runId;
+    expect(noteLocalRunId).toHaveBeenCalledWith(sentRunId);
     expect(state.activeChatRunId).toBeNull();
     expect(state.pendingOptimisticUserMessage).toBe(true);
   });
