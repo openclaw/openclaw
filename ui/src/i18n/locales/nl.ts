@@ -391,6 +391,7 @@ export const nl: TranslationMap = {
     control: "Control",
     agent: "Agent",
     settings: "Instellingen",
+    plugins: "Plug-ins",
     expand: "Zijbalk uitvouwen",
     collapse: "Zijbalk samenvouwen",
     resize: "Zijbalkgrootte aanpassen",

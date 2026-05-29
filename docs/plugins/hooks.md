@@ -377,6 +377,34 @@ durable session state while cleanup callbacks let plugins release scheduler
 jobs, run context, and other out-of-band resources for the old runtime
 generation.
 
+### Control UI entry points
+
+Workflow plugins can add a top-level Control UI app-nav item with
+`api.session.controls.registerControlUiEntryPoint(...)`:
+
+```typescript
+api.session.controls.registerControlUiEntryPoint({
+  id: "sessions",
+  surface: "app-nav",
+  label: "Sessions",
+  path: "/plugins/my-plugin/sessions",
+  openMode: "in-app",
+  requiredScopes: ["operator.read"],
+});
+```
+
+Entry point paths must stay under the registering plugin's
+`/plugins/<plugin-id>/...` HTTP route. `openMode` defaults to `in-app`; plugins
+can request `same-window` or `new-window` when the experience should leave the
+embedded Control UI frame.
+
+`requiredScopes` controls both visibility and launch authority. When omitted,
+OpenClaw treats the entry as `operator.read`. Admin callers may see and launch
+read-scoped entries, but the short-lived launch token and follow-up iframe
+session are minted with only the entry's required scopes, not the caller's full
+operator scope set. This keeps plugin UI routes least-privilege unless the entry
+explicitly asks for broader scopes.
+
 ## Message hooks
 
 Use message hooks for channel-level routing and delivery policy:

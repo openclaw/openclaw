@@ -62,6 +62,8 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "plugin.approval.waitDecision", scope: "operator.approvals" },
   { name: "plugin.approval.resolve", scope: "operator.approvals" },
   { name: "plugins.uiDescriptors", scope: "operator.read" },
+  { name: "plugins.uiEntryPoints", scope: "operator.read" },
+  { name: "plugins.uiEntryPointLaunch", scope: "operator.read" },
   { name: "plugins.sessionAction", scope: "dynamic" },
   { name: "wizard.start", scope: "operator.admin" },
   { name: "wizard.next", scope: "operator.admin" },

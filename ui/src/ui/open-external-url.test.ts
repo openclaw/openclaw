@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { openExternalUrlSafe, resolveSafeExternalUrl } from "./open-external-url.ts";
+import {
+  navigateReservedExternalWindow,
+  openExternalUrlSafe,
+  reserveExternalWindow,
+  resolveSafeExternalUrl,
+} from "./open-external-url.ts";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -85,6 +90,56 @@ describe("resolveSafeExternalUrl", () => {
 });
 
 describe("openExternalUrlSafe", () => {
+  it("reserves a blank external window and clears opener synchronously", () => {
+    const openedLikeProxy = {
+      opener: { postMessage: () => void 0 },
+    } as unknown as WindowProxy;
+    const openMock = vi
+      .spyOn(window, "open")
+      .mockImplementation(() => openedLikeProxy as unknown as Window);
+
+    const opened = reserveExternalWindow();
+
+    expect(openMock).toHaveBeenCalledWith("about:blank", "_blank");
+    expect(opened).toBe(openedLikeProxy);
+    expect(openedLikeProxy.opener).toBeNull();
+  });
+
+  it("navigates a reserved window to a safe URL", () => {
+    const openedLikeProxy = {
+      opener: { postMessage: () => void 0 },
+      location: { assign: vi.fn() },
+      close: vi.fn(),
+    } as unknown as WindowProxy;
+
+    expect(
+      navigateReservedExternalWindow(openedLikeProxy, "/plugin", {
+        baseHref: "https://openclaw.ai/chat",
+      }),
+    ).toBe(true);
+
+    expect(openedLikeProxy.location.assign).toHaveBeenCalledWith("https://openclaw.ai/plugin");
+    expect(openedLikeProxy.close).not.toHaveBeenCalled();
+    expect(openedLikeProxy.opener).toBeNull();
+  });
+
+  it("closes a reserved window for unsafe URLs", () => {
+    const openedLikeProxy = {
+      opener: { postMessage: () => void 0 },
+      location: { assign: vi.fn() },
+      close: vi.fn(),
+    } as unknown as WindowProxy;
+
+    expect(
+      navigateReservedExternalWindow(openedLikeProxy, "javascript:alert(1)", {
+        baseHref: "https://openclaw.ai/chat",
+      }),
+    ).toBe(false);
+
+    expect(openedLikeProxy.location.assign).not.toHaveBeenCalled();
+    expect(openedLikeProxy.close).toHaveBeenCalled();
+  });
+
   it("nulls opener when window.open returns a proxy-like object", () => {
     const openedLikeProxy = {
       opener: { postMessage: () => void 0 },

@@ -387,6 +387,7 @@ export const th: TranslationMap = {
     control: "ควบคุม",
     agent: "เอเจนต์",
     settings: "การตั้งค่า",
+    plugins: "ปลั๊กอิน",
     expand: "ขยายแถบด้านข้าง",
     collapse: "ย่อแถบด้านข้าง",
     resize: "ปรับขนาดแถบด้านข้าง",

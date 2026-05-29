@@ -390,6 +390,7 @@ export const fa: TranslationMap = {
     control: "کنترل",
     agent: "عامل",
     settings: "تنظیمات",
+    plugins: "افزونه‌ها",
     expand: "گسترش نوار کناری",
     collapse: "جمع کردن نوار کناری",
     resize: "تغییر اندازه نوار کناری",

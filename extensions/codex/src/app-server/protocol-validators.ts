@@ -348,23 +348,6 @@ function normalizeThreadItem(value: unknown): unknown {
   }
 }
 
-function normalizeThreadResponse(value: unknown): unknown {
-  if (!value || typeof value !== "object" || Array.isArray(value) || !("thread" in value)) {
-    return value;
-  }
-  const thread = (value as { thread?: unknown }).thread;
-  if (thread && typeof thread === "object" && !Array.isArray(thread)) {
-    const t = thread as { id?: string; sessionId?: string };
-    if (typeof t.id === "string" && typeof t.sessionId !== "string") {
-      return { ...value, thread: { ...thread, sessionId: t.id } };
-    }
-    if (typeof t.sessionId === "string" && typeof t.id !== "string") {
-      return { ...value, thread: { ...thread, id: t.sessionId } };
-    }
-  }
-  return value;
-}
-
 function normalizeTurnStartResponse(value: unknown): unknown {
   if (!value || typeof value !== "object" || Array.isArray(value) || !("turn" in value)) {
     return value;
@@ -382,6 +365,34 @@ function normalizeTurnCompletedNotification(value: unknown): unknown {
   return {
     ...value,
     turn: normalizeTurn((value as { turn?: unknown }).turn),
+  };
+}
+
+function normalizeThreadResponse(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value) || !("thread" in value)) {
+    return value;
+  }
+  const thread = (value as { thread?: unknown }).thread;
+  if (!thread || typeof thread !== "object" || Array.isArray(thread)) {
+    return value;
+  }
+  const existing = thread as { id?: unknown; sessionId?: unknown };
+  const id =
+    typeof existing.id === "string"
+      ? existing.id
+      : typeof existing.sessionId === "string"
+        ? existing.sessionId
+        : undefined;
+  if (!id) {
+    return value;
+  }
+  return {
+    ...value,
+    thread: {
+      ...thread,
+      id,
+      sessionId: typeof existing.sessionId === "string" ? existing.sessionId : id,
+    },
   };
 }
 

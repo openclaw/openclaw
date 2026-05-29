@@ -392,6 +392,7 @@ export const de: TranslationMap = {
     control: "Steuerung",
     agent: "Agent",
     settings: "Einstellungen",
+    plugins: "Plugins",
     expand: "Seitenleiste ausklappen",
     collapse: "Seitenleiste einklappen",
     resize: "Seitenleiste in der Größe ändern",

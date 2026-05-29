@@ -161,6 +161,29 @@ describe("Codex app-server dynamic tool schema boundary contract", () => {
     expect(binding.threadId).toBe("thread-priority");
   });
 
+  it("accepts thread/start responses that omit sessionId", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        const result = threadStartResult("thread-without-session-id");
+        delete (result.thread as { sessionId?: string }).sessionId;
+        return result;
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const binding = await startOrResumeThread({
+      client: { request } as never,
+      params: createParams(sessionFile, workspaceDir),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createAppServerOptions(),
+    });
+
+    expect(binding.threadId).toBe("thread-without-session-id");
+  });
+
   it("treats dynamic tool schema changes as thread-fingerprint changes", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");

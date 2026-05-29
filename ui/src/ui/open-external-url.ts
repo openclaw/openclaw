@@ -59,6 +59,30 @@ export type OpenExternalUrlSafeOptions = ResolveSafeExternalUrlOptions & {
   baseHref?: string;
 };
 
+export function reserveExternalWindow(): WindowProxy | null {
+  const opened = window.open("about:blank", "_blank");
+  if (opened) {
+    opened.opener = null;
+  }
+  return opened;
+}
+
+export function navigateReservedExternalWindow(
+  opened: WindowProxy,
+  rawUrl: string,
+  opts: OpenExternalUrlSafeOptions = {},
+): boolean {
+  const baseHref = opts.baseHref ?? window.location.href;
+  const safeUrl = resolveSafeExternalUrl(rawUrl, baseHref, opts);
+  if (!safeUrl) {
+    opened.close();
+    return false;
+  }
+  opened.opener = null;
+  opened.location.assign(safeUrl);
+  return true;
+}
+
 export function openExternalUrlSafe(
   rawUrl: string,
   opts: OpenExternalUrlSafeOptions = {},

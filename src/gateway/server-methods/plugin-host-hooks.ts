@@ -5,6 +5,8 @@ import {
   validatePluginsSessionActionParams,
   validatePluginsSessionActionResult,
   validatePluginsUiDescriptorsParams,
+  validatePluginsUiEntryPointLaunchParams,
+  validatePluginsUiEntryPointsParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -18,6 +20,7 @@ import {
 import { isRecord } from "../../shared/record-coerce.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { ADMIN_SCOPE, READ_SCOPE, WRITE_SCOPE } from "../operator-scopes.js";
+import { issuePluginUiEntryPointLaunchPath } from "../plugin-ui-entry-launch-tokens.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 const log = createSubsystemLogger("gateway/plugin-host-hooks");
@@ -35,6 +38,25 @@ function validatePluginSessionActionJsonFields(
     }
   }
   return undefined;
+}
+
+function hasRequiredPluginScopes(params: {
+  clientScopes: readonly string[];
+  requiredScopes?: readonly string[];
+}): boolean {
+  const requiredScopes = params.requiredScopes?.length ? params.requiredScopes : [READ_SCOPE];
+  if (params.clientScopes.includes(ADMIN_SCOPE)) {
+    return true;
+  }
+  return requiredScopes.every(
+    (scope) =>
+      params.clientScopes.includes(scope) ||
+      (scope === READ_SCOPE && params.clientScopes.includes(WRITE_SCOPE)),
+  );
+}
+
+function resolveControlUiEntryPointLaunchScopes(requiredScopes?: readonly string[]): string[] {
+  return requiredScopes?.length ? [...requiredScopes] : [READ_SCOPE];
 }
 
 export const pluginHostHookHandlers: GatewayRequestHandlers = {
@@ -57,6 +79,80 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
       }),
     );
     respond(true, { ok: true, descriptors }, undefined);
+  },
+  "plugins.uiEntryPoints": ({ params, client, respond }) => {
+    if (!validatePluginsUiEntryPointsParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid plugins.uiEntryPoints params: ${formatValidationErrors(validatePluginsUiEntryPointsParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
+    const entryPoints = (getActivePluginRegistry()?.controlUiEntryPoints ?? [])
+      .filter((entry) =>
+        hasRequiredPluginScopes({
+          clientScopes: scopes,
+          requiredScopes: entry.entryPoint.requiredScopes,
+        }),
+      )
+      .map((entry) =>
+        Object.assign({}, entry.entryPoint, {
+          pluginId: entry.pluginId,
+          pluginName: entry.pluginName,
+        }),
+      );
+    respond(true, { ok: true, entryPoints }, undefined);
+  },
+  "plugins.uiEntryPointLaunch": ({ params, client, respond }) => {
+    if (!validatePluginsUiEntryPointLaunchParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid plugins.uiEntryPointLaunch params: ${formatValidationErrors(validatePluginsUiEntryPointLaunchParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
+    const id = normalizeOptionalString(params.id);
+    const pluginId = normalizeOptionalString(params.pluginId);
+    const requestedPath = normalizeOptionalString(params.path);
+    const entry = (getActivePluginRegistry()?.controlUiEntryPoints ?? []).find(
+      (candidate) =>
+        candidate.pluginId === pluginId &&
+        candidate.entryPoint.id === id &&
+        candidate.entryPoint.path === requestedPath &&
+        hasRequiredPluginScopes({
+          clientScopes: scopes,
+          requiredScopes: candidate.entryPoint.requiredScopes,
+        }),
+    );
+    if (!entry) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, "plugin UI entry point is not available"),
+      );
+      return;
+    }
+    const contextTokens =
+      typeof params.contextTokens === "number" && Number.isFinite(params.contextTokens)
+        ? Math.max(1, Math.floor(params.contextTokens))
+        : undefined;
+    const path = issuePluginUiEntryPointLaunchPath({
+      path: entry.entryPoint.path,
+      scopes: resolveControlUiEntryPointLaunchScopes(entry.entryPoint.requiredScopes),
+      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+      ...(contextTokens ? { contextTokens } : {}),
+    });
+    respond(true, { ok: true, path, expiresInMs: 60_000 }, undefined);
   },
   "plugins.sessionAction": async ({ params, client, respond }) => {
     if (!validatePluginsSessionActionParams(params)) {

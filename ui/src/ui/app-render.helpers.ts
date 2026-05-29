@@ -19,7 +19,19 @@ import {
   syncSelectedSessionMessageSubscription,
 } from "./controllers/sessions.ts";
 import { icons } from "./icons.ts";
-import { iconForTab, isSettingsTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
+import {
+  iconForTab,
+  isSettingsTab,
+  pathForPluginUiEntryPoint,
+  pathForTab,
+  titleForTab,
+  type Tab,
+} from "./navigation.ts";
+import {
+  navigateReservedExternalWindow,
+  openExternalUrlSafe,
+  reserveExternalWindow,
+} from "./open-external-url.ts";
 import { isCronSessionKey, parseSessionKey, resolveSessionDisplayName } from "./session-display.ts";
 import {
   normalizeAgentId,
@@ -29,6 +41,7 @@ import {
 import { normalizeChatAutoScrollMode, type ChatAutoScrollMode } from "./storage.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "./string-coerce.ts";
 import type { ThemeMode } from "./theme.ts";
+import type { PluginControlUiEntryPoint, PluginsUiEntryPointLaunchResult } from "./types.ts";
 import type { SessionsListResult } from "./types.ts";
 import type { ChatQueueItem } from "./ui-types.ts";
 
@@ -190,7 +203,9 @@ const NEW_CHAT_CREATE_FAILED_MESSAGE =
 
 export function renderTab(state: AppViewState, tab: Tab, opts?: { collapsed?: boolean }) {
   const href = pathForTab(tab, state.basePath);
-  const isActive = tab === "config" ? isSettingsTab(state.tab) : state.tab === tab;
+  const isActive =
+    !state.activePluginUiEntryPoint &&
+    (tab === "config" ? isSettingsTab(state.tab) : state.tab === tab);
   const collapsed = opts?.collapsed ?? state.settings.navCollapsed;
   return html`
     <a
@@ -208,6 +223,8 @@ export function renderTab(state: AppViewState, tab: Tab, opts?: { collapsed?: bo
           return;
         }
         event.preventDefault();
+        state.activePluginUiEntryPoint = null;
+        state.activePluginUiEntryPointSrc = null;
         if (tab === "chat") {
           if (!state.sessionKey) {
             const mainSessionKey = resolveSidebarChatSessionKey(state);
@@ -225,6 +242,99 @@ export function renderTab(state: AppViewState, tab: Tab, opts?: { collapsed?: bo
       ${!collapsed ? html`<span class="nav-item__text">${titleForTab(tab)}</span>` : nothing}
     </a>
   `;
+}
+
+export function renderPluginUiEntryPoint(
+  state: AppViewState,
+  entryPoint: PluginControlUiEntryPoint,
+  opts?: { collapsed?: boolean },
+) {
+  const href = pathForPluginUiEntryPoint({
+    pluginId: entryPoint.pluginId,
+    path: entryPoint.path,
+    basePath: state.basePath,
+  });
+  if (!href) {
+    return nothing;
+  }
+  const isActive =
+    state.activePluginUiEntryPoint?.pluginId === entryPoint.pluginId &&
+    state.activePluginUiEntryPoint.id === entryPoint.id &&
+    state.activePluginUiEntryPoint.path === entryPoint.path;
+  const collapsed = opts?.collapsed ?? state.settings.navCollapsed;
+  return html`
+    <a
+      class="nav-item nav-item--plugin ${isActive ? "nav-item--active" : ""}"
+      href=${href}
+      title=${entryPoint.label}
+      @click=${(event: MouseEvent) => {
+        if (event.defaultPrevented || event.button !== 0) {
+          return;
+        }
+        event.preventDefault();
+        const reservedWindow =
+          entryPoint.openMode === "new-window" ? reserveExternalWindow() : null;
+        void openPluginUiEntryPoint(state, entryPoint, href, reservedWindow);
+      }}
+    >
+      <span class="nav-item__icon" aria-hidden="true">${icons.puzzle}</span>
+      ${!collapsed ? html`<span class="nav-item__text">${entryPoint.label}</span>` : nothing}
+    </a>
+  `;
+}
+
+async function openPluginUiEntryPoint(
+  state: AppViewState,
+  entryPoint: PluginControlUiEntryPoint,
+  fallbackHref: string,
+  reservedWindow?: WindowProxy | null,
+): Promise<void> {
+  const openMode = entryPoint.openMode ?? "in-app";
+  if (!state.client) {
+    openPluginUiEntryPointPath(state, entryPoint, fallbackHref, openMode, reservedWindow);
+    return;
+  }
+  try {
+    const activeSession = state.sessionsResult?.sessions.find(
+      (row) => row.key === state.sessionKey,
+    );
+    const contextTokens =
+      activeSession?.contextTokens ?? state.sessionsResult?.defaults?.contextTokens ?? undefined;
+    const result = (await state.client.request("plugins.uiEntryPointLaunch", {
+      id: entryPoint.id,
+      pluginId: entryPoint.pluginId,
+      path: entryPoint.path,
+      ...(state.sessionKey ? { sessionKey: state.sessionKey } : {}),
+      ...(typeof contextTokens === "number" && contextTokens > 0 ? { contextTokens } : {}),
+    })) as PluginsUiEntryPointLaunchResult;
+    openPluginUiEntryPointPath(state, entryPoint, result.path, openMode, reservedWindow);
+  } catch {
+    openPluginUiEntryPointPath(state, entryPoint, fallbackHref, openMode, reservedWindow);
+  }
+}
+
+function openPluginUiEntryPointPath(
+  state: AppViewState,
+  entryPoint: PluginControlUiEntryPoint,
+  path: string,
+  openMode: NonNullable<PluginControlUiEntryPoint["openMode"]>,
+  reservedWindow?: WindowProxy | null,
+) {
+  if (openMode === "new-window") {
+    if (reservedWindow) {
+      navigateReservedExternalWindow(reservedWindow, path);
+      return;
+    }
+    openExternalUrlSafe(path);
+    return;
+  }
+  if (openMode === "same-window") {
+    window.location.assign(path);
+    return;
+  }
+  state.activePluginUiEntryPoint = entryPoint;
+  state.activePluginUiEntryPointSrc = path;
+  state.navDrawerOpen = false;
 }
 
 function renderCronFilterIcon(hiddenCount: number) {

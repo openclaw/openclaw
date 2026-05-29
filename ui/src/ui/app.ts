@@ -41,7 +41,10 @@ import {
   handleUpdated,
 } from "./app-lifecycle.ts";
 import { initNativeBridge } from "./app-native-bridge.ts";
-import { createChatSession as createChatSessionInternal } from "./app-render.helpers.ts";
+import {
+  createChatSession as createChatSessionInternal,
+  switchChatSession,
+} from "./app-render.helpers.ts";
 import { renderApp } from "./app-render.ts";
 import {
   exportLogs as exportLogsInternal,
@@ -102,6 +105,7 @@ import {
   type ExecApprovalRequest,
 } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
+import { loadSessions as loadSessionsInternal } from "./controllers/sessions.ts";
 import type {
   ClawHubSearchResult,
   ClawHubSkillSecurityVerdict,
@@ -139,6 +143,7 @@ import type {
   NostrProfile,
   ToolsCatalogResult,
   ToolsEffectiveResult,
+  PluginControlUiEntryPoint,
 } from "./types.ts";
 import { type ChatAttachment, type ChatQueueItem, type CronFormState } from "./ui-types.ts";
 import { generateUUID } from "./uuid.ts";
@@ -152,6 +157,127 @@ declare global {
 
 const bootAssistantIdentity = normalizeAssistantIdentity({});
 const bootLocalUserIdentity = loadLocalUserIdentity();
+const PLUGIN_UI_REQUEST_FORBIDDEN_HEADERS = new Set([
+  "authorization",
+  "cookie",
+  "host",
+  "set-cookie",
+  "x-openclaw-scopes",
+]);
+const PLUGIN_UI_REQUEST_METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"]);
+
+type PluginUiRequestMessage = {
+  type?: unknown;
+  id?: unknown;
+  path?: unknown;
+  init?: unknown;
+};
+
+function asStringRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+function normalizePluginUiRequestMethod(value: unknown): string {
+  if (typeof value !== "string") {
+    return "GET";
+  }
+  const method = value.trim().toUpperCase();
+  return PLUGIN_UI_REQUEST_METHODS.has(method) ? method : "GET";
+}
+
+function resolvePluginUiRequestPath(
+  entryPoint: PluginControlUiEntryPoint,
+  rawPath: unknown,
+): string | null {
+  if (typeof rawPath !== "string") {
+    return null;
+  }
+  try {
+    const url = new URL(rawPath, window.location.origin);
+    if (url.origin !== window.location.origin) {
+      return null;
+    }
+    const pluginRoot = `/plugins/${entryPoint.pluginId}`;
+    if (url.pathname !== pluginRoot && !url.pathname.startsWith(`${pluginRoot}/`)) {
+      return null;
+    }
+    return `${url.pathname}${url.search}`;
+  } catch {
+    return null;
+  }
+}
+
+function buildPluginUiRequestInit(rawInit: unknown): RequestInit {
+  const init = asStringRecord(rawInit) ?? {};
+  const method = normalizePluginUiRequestMethod(init.method);
+  const headers = new Headers();
+  const rawHeaders = asStringRecord(init.headers);
+  if (rawHeaders) {
+    for (const [name, value] of Object.entries(rawHeaders)) {
+      const normalizedName = name.trim().toLowerCase();
+      if (
+        !normalizedName ||
+        PLUGIN_UI_REQUEST_FORBIDDEN_HEADERS.has(normalizedName) ||
+        typeof value !== "string"
+      ) {
+        continue;
+      }
+      headers.set(name, value);
+    }
+  }
+  const requestInit: RequestInit = {
+    method,
+    credentials: "same-origin",
+    headers,
+  };
+  if (method !== "GET" && method !== "HEAD" && typeof init.body === "string") {
+    requestInit.body = init.body;
+  }
+  return requestInit;
+}
+
+async function proxyPluginUiFrameRequest(params: {
+  frame: HTMLIFrameElement;
+  entryPoint: PluginControlUiEntryPoint;
+  message: PluginUiRequestMessage;
+}): Promise<void> {
+  const id = typeof params.message.id === "string" ? params.message.id : "";
+  const reply = (payload: Record<string, unknown>) => {
+    params.frame.contentWindow?.postMessage(
+      { type: "openclaw.pluginUi.response", id, ...payload },
+      "*",
+    );
+  };
+  const path = resolvePluginUiRequestPath(params.entryPoint, params.message.path);
+  if (!path) {
+    reply({ ok: false, status: 400, statusText: "Bad Request", body: "Invalid plugin path" });
+    return;
+  }
+  try {
+    const response = await fetch(path, buildPluginUiRequestInit(params.message.init));
+    const headers: Record<string, string> = {};
+    response.headers.forEach((value, name) => {
+      headers[name] = value;
+    });
+    reply({
+      ok: response.ok,
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+      body: await response.text(),
+    });
+  } catch (error) {
+    reply({
+      ok: false,
+      status: 0,
+      statusText: "Network Error",
+      body: error instanceof Error ? error.message : "Plugin request failed",
+    });
+  }
+}
 
 function resolveOnboardingMode(): boolean {
   if (!window.location.search) {
@@ -638,6 +764,13 @@ export class OpenClawApp extends LitElement {
   @state() logsLimit = 500;
   @state() logsMaxBytes = 250_000;
   @state() logsAtBottom = true;
+  @state() pluginUiEntryPoints: PluginControlUiEntryPoint[] = [];
+  @state() activePluginUiEntryPoint: PluginControlUiEntryPoint | null = null;
+  @state() activePluginUiEntryPointSrc: string | null = null;
+  private pluginUiBridgeFrame: HTMLIFrameElement | null = null;
+  private pluginUiBridgeLoadHandler: (() => void) | null = null;
+  private pluginUiBridgePort: MessagePort | null = null;
+  private pluginUiBridgeKey: string | null = null;
 
   client: GatewayBrowserClient | null = null;
   chatScrollFrame: number | null = null;
@@ -709,6 +842,98 @@ export class OpenClawApp extends LitElement {
     }
     this.setChatMobileControlsOpen(false);
   };
+  private pluginUiMessageHandler = (event: MessageEvent) => {
+    const data = event.data as { type?: unknown; target?: unknown; sessionKey?: unknown } | null;
+    if (!this.activePluginUiEntryPoint) {
+      return;
+    }
+    const frame = this.querySelector(".plugin-ui-entry-frame") as HTMLIFrameElement | null;
+    if (frame?.contentWindow && event.source !== frame.contentWindow) {
+      return;
+    }
+    if (data?.type !== "openclaw.pluginUi.navigate" || data.target !== "chat") {
+      return;
+    }
+    this.activePluginUiEntryPoint = null;
+    this.activePluginUiEntryPointSrc = null;
+    const sessionKey = typeof data.sessionKey === "string" ? data.sessionKey.trim() : "";
+    if (sessionKey) {
+      void this.navigatePluginUiToChatSession(sessionKey);
+      return;
+    }
+    this.setTab("chat");
+  };
+
+  private async navigatePluginUiToChatSession(sessionKey: string) {
+    this.setTab("chat");
+    await loadSessionsInternal(this as unknown as Parameters<typeof loadSessionsInternal>[0], {
+      activeMinutes: 0,
+      limit: 0,
+      includeGlobal: true,
+      includeUnknown: true,
+      showArchived: this.sessionsShowArchived,
+    });
+    switchChatSession(this as unknown as AppViewState, sessionKey);
+  }
+
+  private teardownPluginUiBridge() {
+    if (this.pluginUiBridgeFrame && this.pluginUiBridgeLoadHandler) {
+      this.pluginUiBridgeFrame.removeEventListener("load", this.pluginUiBridgeLoadHandler);
+    }
+    this.pluginUiBridgePort?.close();
+    this.pluginUiBridgeFrame = null;
+    this.pluginUiBridgeLoadHandler = null;
+    this.pluginUiBridgePort = null;
+    this.pluginUiBridgeKey = null;
+  }
+
+  private installPluginUiBridgePort(frame: HTMLIFrameElement, bridgeKey: string) {
+    const entryPoint = this.activePluginUiEntryPoint;
+    const targetWindow = frame.contentWindow;
+    if (!entryPoint || !targetWindow || this.pluginUiBridgeFrame !== frame) {
+      return;
+    }
+    this.pluginUiBridgePort?.close();
+    const channel = new MessageChannel();
+    this.pluginUiBridgePort = channel.port1;
+    this.pluginUiBridgePort.addEventListener("message", (event: MessageEvent) => {
+      const data = event.data as PluginUiRequestMessage | null;
+      if (
+        data?.type !== "openclaw.pluginUi.request" ||
+        this.pluginUiBridgeFrame !== frame ||
+        this.pluginUiBridgeKey !== bridgeKey ||
+        !this.activePluginUiEntryPoint
+      ) {
+        return;
+      }
+      void proxyPluginUiFrameRequest({
+        frame,
+        entryPoint: this.activePluginUiEntryPoint,
+        message: data,
+      });
+    });
+    this.pluginUiBridgePort.start();
+    targetWindow.postMessage({ type: "openclaw.pluginUi.connect" }, "*", [channel.port2]);
+  }
+
+  private syncPluginUiBridge() {
+    const frame = this.querySelector(".plugin-ui-entry-frame") as HTMLIFrameElement | null;
+    const entryPoint = this.activePluginUiEntryPoint;
+    if (!entryPoint || !this.activePluginUiEntryPointSrc || !frame) {
+      this.teardownPluginUiBridge();
+      return;
+    }
+    const bridgeKey = `${entryPoint.id}\n${this.activePluginUiEntryPointSrc}`;
+    if (this.pluginUiBridgeFrame === frame && this.pluginUiBridgeKey === bridgeKey) {
+      return;
+    }
+    this.teardownPluginUiBridge();
+    this.pluginUiBridgeFrame = frame;
+    this.pluginUiBridgeKey = bridgeKey;
+    this.pluginUiBridgeLoadHandler = () => this.installPluginUiBridgePort(frame, bridgeKey);
+    frame.addEventListener("load", this.pluginUiBridgeLoadHandler);
+    this.installPluginUiBridgePort(frame, bridgeKey);
+  }
 
   override createRenderRoot() {
     return this;
@@ -739,6 +964,7 @@ export class OpenClawApp extends LitElement {
     document.addEventListener("keydown", this.globalKeydownHandler);
     document.addEventListener("keydown", this.chatMobileControlsKeydownHandler);
     document.addEventListener("pointerdown", this.chatMobileControlsPointerdownHandler);
+    window.addEventListener("message", this.pluginUiMessageHandler);
     handleConnected(this as unknown as Parameters<typeof handleConnected>[0]);
     this.nativeBridgeCleanup = initNativeBridge(this);
     void this.initWebPushState();
@@ -754,6 +980,8 @@ export class OpenClawApp extends LitElement {
     this.nativeBridgeCleanup = null;
     document.removeEventListener("keydown", this.chatMobileControlsKeydownHandler);
     document.removeEventListener("pointerdown", this.chatMobileControlsPointerdownHandler);
+    window.removeEventListener("message", this.pluginUiMessageHandler);
+    this.teardownPluginUiBridge();
     if (this.sessionSwitchNoticeTimer !== null) {
       window.clearTimeout(this.sessionSwitchNoticeTimer);
       this.sessionSwitchNoticeTimer = null;
@@ -769,6 +997,7 @@ export class OpenClawApp extends LitElement {
 
   protected override updated(changed: Map<PropertyKey, unknown>) {
     handleUpdated(this as unknown as Parameters<typeof handleUpdated>[0], changed);
+    this.syncPluginUiBridge();
     // Some render callbacks assign tab directly while preparing nested panel state.
     if (changed.has("tab") && this.tab !== "chat" && this.chatMobileControlsOpen) {
       this.setChatMobileControlsOpen(false);

@@ -42,6 +42,7 @@ function createStubPluginRegistry(): PluginRegistry {
     trustedToolPolicies: [],
     toolMetadata: [],
     controlUiDescriptors: [],
+    controlUiEntryPoints: [],
     runtimeLifecycles: [],
     agentEventSubscriptions: [],
     sessionSchedulerJobs: [],

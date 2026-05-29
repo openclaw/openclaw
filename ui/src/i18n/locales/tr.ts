@@ -391,6 +391,7 @@ export const tr: TranslationMap = {
     control: "Kontrol",
     agent: "Aracı",
     settings: "Ayarlar",
+    plugins: "Eklentiler",
     expand: "Kenar çubuğunu genişlet",
     collapse: "Kenar çubuğunu daralt",
     resize: "Kenar çubuğunu yeniden boyutlandır",

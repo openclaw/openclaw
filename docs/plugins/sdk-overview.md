@@ -182,6 +182,7 @@ plugins.
 | `api.registerToolMetadata(...)`                                                      | Tool catalog display metadata without changing the tool implementation                                                            |
 | `api.registerCommand(...)`                                                           | Scoped plugin commands; command results can set `continueAgent: true`; Discord native commands support `descriptionLocalizations` |
 | `api.session.controls.registerControlUiDescriptor(...)`                              | Control UI contribution descriptors for session, tool, run, or settings surfaces                                                  |
+| `api.session.controls.registerControlUiEntryPoint(...)`                              | Top-level Control UI app-nav entry points backed by plugin-owned `/plugins/<plugin-id>/...` routes                                |
 | `api.lifecycle.registerRuntimeLifecycle(...)`                                        | Cleanup callbacks for plugin-owned runtime resources on reset/delete/reload paths                                                 |
 | `api.agent.events.registerAgentEventSubscription(...)`                               | Sanitized event subscriptions for workflow state and monitors                                                                     |
 | `api.runContext.setRunContext(...)` / `getRunContext(...)` / `clearRunContext(...)`  | Per-run plugin scratch state cleared on terminal run lifecycle                                                                    |
@@ -200,6 +201,7 @@ Use the grouped namespaces for new plugin code:
 - `api.session.workflow.unscheduleSessionTurnsByTag(...)`
 - `api.session.controls.registerSessionAction(...)`
 - `api.session.controls.registerControlUiDescriptor(...)`
+- `api.session.controls.registerControlUiEntryPoint(...)`
 - `api.agent.events.registerAgentEventSubscription(...)`
 - `api.agent.events.emitAgentEvent(...)`
 - `api.runContext.setRunContext(...)` / `getRunContext(...)` / `clearRunContext(...)`
