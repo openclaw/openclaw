@@ -29,7 +29,7 @@ Plain `security audit` stays on the cold config/filesystem/read-only path. It do
 
 The audit warns when multiple DM senders share the main session and recommends **secure DM mode**: `session.dmScope="per-channel-peer"` (or `per-account-channel-peer` for multi-account channels) for shared inboxes.
 This is for cooperative/shared inbox hardening. A single Gateway shared by mutually untrusted/adversarial operators is not a recommended setup; split trust boundaries with separate gateways (or separate OS users/hosts).
-It also emits `security.trust_model.multi_user_heuristic` when config suggests likely shared-user ingress (for example open DM/group policy, configured group targets, or wildcard sender rules), and reminds you that OpenClaw is a personal-assistant trust model by default.
+It also emits `security.trust_model.multi_user_heuristic` when config combines a _broadening_ signal — open `dmPolicy`/`groupPolicy` or wildcard `allowFrom`/`groupAllowFrom` — with the channel reachability surface, and reminds you that OpenClaw is a personal-assistant trust model by default. Single-operator setups that run multiple agents under `channels.<channel>.accounts.<id>` with allowlisted group targets do **not** trip the heuristic on their own; broadening signals are required.
 For intentional shared-user setups, the audit guidance is to sandbox all sessions, keep filesystem access workspace-scoped, and keep personal/private identities or credentials off that runtime.
 It also warns when small models (`<=300B`) are used without sandboxing and with web/browser tools enabled.
 For webhook ingress, it warns when:
@@ -39,8 +39,9 @@ For webhook ingress, it warns when:
 - `hooks.path="/"`
 - `hooks.defaultSessionKey` is unset
 - `hooks.allowedAgentIds` is unrestricted
-- request `sessionKey` overrides are enabled
-- overrides are enabled without `hooks.allowedSessionKeyPrefixes`
+- request `sessionKey` overrides are enabled without `hooks.allowedSessionKeyPrefixes`
+
+When request `sessionKey` overrides are enabled **with** `hooks.allowedSessionKeyPrefixes` constrained, the audit emits an INFO-level acknowledgement instead of a warning, since the prefix allowlist bounds which session keys an external caller can choose.
 
 If Gateway password auth is supplied only at startup, pass the same value to `openclaw security audit --auth password --password <password>` so the audit can check it against `hooks.token`.
 Password-mode reuse is an audit finding for compatibility; rotate one of the secrets instead of expecting Gateway startup to reject that configuration.

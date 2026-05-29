@@ -28,8 +28,8 @@ describe("security audit trust model findings", () => {
           tools: { elevated: { enabled: true, allowFrom: { whatsapp: ["+1"] } } },
           channels: { whatsapp: { groupPolicy: "open" } },
         } satisfies OpenClawConfig,
-        assert: () => {
-          const findings = audit(cases[0].cfg);
+        assert: (cfg: OpenClawConfig) => {
+          const findings = audit(cfg);
           expect(
             findings.some(
               (finding) =>
@@ -45,8 +45,8 @@ describe("security audit trust model findings", () => {
           channels: { whatsapp: { groupPolicy: "open" } },
           tools: { elevated: { enabled: false } },
         } satisfies OpenClawConfig,
-        assert: () => {
-          const findings = audit(cases[1].cfg);
+        assert: (cfg: OpenClawConfig) => {
+          const findings = audit(cfg);
           expect(
             findings.some(
               (finding) =>
@@ -70,8 +70,8 @@ describe("security audit trust model findings", () => {
             },
           },
         } satisfies OpenClawConfig,
-        assert: () => {
-          const findings = audit(cases[2].cfg);
+        assert: (cfg: OpenClawConfig) => {
+          const findings = audit(cfg);
           expect(
             findings.some(
               (finding) => finding.checkId === "security.exposure.open_groups_with_runtime_or_fs",
@@ -90,8 +90,8 @@ describe("security audit trust model findings", () => {
             fs: { workspaceOnly: true },
           },
         } satisfies OpenClawConfig,
-        assert: () => {
-          const findings = audit(cases[3].cfg);
+        assert: (cfg: OpenClawConfig) => {
+          const findings = audit(cfg);
           expect(
             findings.some(
               (finding) => finding.checkId === "security.exposure.open_groups_with_runtime_or_fs",
@@ -100,7 +100,57 @@ describe("security audit trust model findings", () => {
         },
       },
       {
-        name: "warns when config heuristics suggest a likely multi-user setup",
+        name: "warns when config combines a scoped allowlist with a broadening signal (open dmPolicy)",
+        cfg: {
+          channels: {
+            discord: {
+              groupPolicy: "allowlist",
+              dmPolicy: "open",
+              guilds: {
+                "1234567890": {
+                  channels: {
+                    "7777777777": { enabled: true },
+                  },
+                },
+              },
+            },
+          },
+          tools: { elevated: { enabled: false } },
+        } satisfies OpenClawConfig,
+        assert: (cfg: OpenClawConfig) => {
+          const findings = audit(cfg);
+          const finding = requireMultiUserHeuristicFinding(findings);
+          expect(finding.severity).toBe("warn");
+          // Detail surfaces the scoped allowlist signal alongside the broadening signal.
+          expect(finding.detail).toContain(
+            'channels.discord.groupPolicy="allowlist" with configured group targets',
+          );
+          expect(finding.detail).toContain('channels.discord.dmPolicy="open"');
+          expect(finding.detail).toContain("personal-assistant");
+          expect(finding.remediation).toContain('agents.defaults.sandbox.mode="all"');
+        },
+      },
+      {
+        name: "does not warn for multi-user heuristic when no shared-user signals are configured",
+        cfg: {
+          channels: {
+            discord: {
+              groupPolicy: "allowlist",
+            },
+          },
+          tools: { elevated: { enabled: false } },
+        } satisfies OpenClawConfig,
+        assert: (cfg: OpenClawConfig) => {
+          const findings = audit(cfg);
+          expect(
+            findings.some(
+              (finding) => finding.checkId === "security.trust_model.multi_user_heuristic",
+            ),
+          ).toBe(false);
+        },
+      },
+      {
+        name: "does not fire on a single-operator allowlist-with-targets pattern (#26859)",
         cfg: {
           channels: {
             discord: {
@@ -116,29 +166,8 @@ describe("security audit trust model findings", () => {
           },
           tools: { elevated: { enabled: false } },
         } satisfies OpenClawConfig,
-        assert: () => {
-          const findings = audit(cases[4].cfg);
-          const finding = requireMultiUserHeuristicFinding(findings);
-          expect(finding.severity).toBe("warn");
-          expect(finding.detail).toContain(
-            'channels.discord.groupPolicy="allowlist" with configured group targets',
-          );
-          expect(finding.detail).toContain("personal-assistant");
-          expect(finding.remediation).toContain('agents.defaults.sandbox.mode="all"');
-        },
-      },
-      {
-        name: "does not warn for multi-user heuristic when no shared-user signals are configured",
-        cfg: {
-          channels: {
-            discord: {
-              groupPolicy: "allowlist",
-            },
-          },
-          tools: { elevated: { enabled: false } },
-        } satisfies OpenClawConfig,
-        assert: () => {
-          const findings = audit(cases[5].cfg);
+        assert: (cfg: OpenClawConfig) => {
+          const findings = audit(cfg);
           expect(
             findings.some(
               (finding) => finding.checkId === "security.trust_model.multi_user_heuristic",
@@ -146,10 +175,94 @@ describe("security audit trust model findings", () => {
           ).toBe(false);
         },
       },
+      {
+        name: "does not fire when a single operator runs multiple Discord agents with allowlist-with-targets each (#26859)",
+        cfg: {
+          channels: {
+            discord: {
+              accounts: {
+                jarvis: {
+                  groupPolicy: "allowlist",
+                  guilds: {
+                    "1111": { channels: { "2222": { enabled: true } } },
+                  },
+                },
+                pepper: {
+                  groupPolicy: "allowlist",
+                  guilds: {
+                    "1111": { channels: { "3333": { enabled: true } } },
+                  },
+                },
+              },
+            },
+          },
+          tools: { elevated: { enabled: false } },
+        } satisfies OpenClawConfig,
+        assert: (cfg: OpenClawConfig) => {
+          const findings = audit(cfg);
+          expect(
+            findings.some(
+              (finding) => finding.checkId === "security.trust_model.multi_user_heuristic",
+            ),
+          ).toBe(false);
+        },
+      },
+      {
+        name: "fires when a per-account allowFrom contains a wildcard",
+        cfg: {
+          channels: {
+            discord: {
+              accounts: {
+                pepper: {
+                  groupPolicy: "allowlist",
+                  allowFrom: ["*"],
+                },
+              },
+            },
+          },
+          tools: { elevated: { enabled: false } },
+        } satisfies OpenClawConfig,
+        assert: (cfg: OpenClawConfig) => {
+          const findings = audit(cfg);
+          const finding = findings.find(
+            (entry) => entry.checkId === "security.trust_model.multi_user_heuristic",
+          );
+          expect(finding?.severity).toBe("warn");
+          expect(finding?.detail).toContain(
+            'channels.discord.accounts.pepper.allowFrom includes "*"',
+          );
+        },
+      },
+      {
+        name: "fires when a per-account groupAllowFrom contains a wildcard",
+        cfg: {
+          channels: {
+            whatsapp: {
+              accounts: {
+                pepper: {
+                  groupPolicy: "allowlist",
+                  groupAllowFrom: ["*"],
+                },
+              },
+            },
+          },
+          tools: { elevated: { enabled: false } },
+        } satisfies OpenClawConfig,
+        assert: (cfg: OpenClawConfig) => {
+          const findings = audit(cfg);
+          const finding = findings.find(
+            (entry) => entry.checkId === "security.trust_model.multi_user_heuristic",
+          );
+          expect(finding?.severity).toBe("warn");
+          expect(finding?.detail).toContain(
+            'channels.whatsapp.accounts.pepper.groupAllowFrom includes "*"',
+          );
+        },
+      },
     ] as const;
 
     for (const testCase of cases) {
-      testCase.assert();
+      testCase.assert(testCase.cfg);
     }
   });
 });
