@@ -59,7 +59,10 @@ export function resolveThinkingDefault(params: {
   }
   if (
     normalizedProvider === "anthropic" &&
-    (normalizedModel.startsWith("claude-opus-4-7") || normalizedModel.startsWith("claude-opus-4.7"))
+    (normalizedModel.startsWith("claude-opus-4-8") ||
+      normalizedModel.startsWith("claude-opus-4.8") ||
+      normalizedModel.startsWith("claude-opus-4-7") ||
+      normalizedModel.startsWith("claude-opus-4.7"))
   ) {
     return "off";
   }

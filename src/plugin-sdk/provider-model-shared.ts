@@ -94,7 +94,12 @@ export {
 } from "../plugins/provider-model-helpers.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
-const CLAUDE_OPUS_47_MODEL_PREFIXES = ["claude-opus-4-7", "claude-opus-4.7"] as const;
+const CLAUDE_OPUS_47_MODEL_PREFIXES = [
+  "claude-opus-4-8",
+  "claude-opus-4.8",
+  "claude-opus-4-7",
+  "claude-opus-4.7",
+] as const;
 const CLAUDE_ADAPTIVE_THINKING_DEFAULT_MODEL_PREFIXES = [
   "claude-opus-4-6",
   "claude-opus-4.6",

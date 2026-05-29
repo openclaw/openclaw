@@ -12,6 +12,17 @@
       "claude-cli": {
         "models": [
           {
+            "id": "claude-opus-4-8",
+            "name": "Claude Opus 4.8 (Claude CLI)",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "mediaInput": {
+              "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
+            },
+            "contextWindow": 200000,
+            "maxTokens": 64000
+          },
+          {
             "id": "claude-opus-4-7",
             "name": "Claude Opus 4.7 (Claude CLI)",
             "reasoning": true,
@@ -50,6 +61,17 @@
         "baseUrl": "https://api.anthropic.com",
         "api": "anthropic-messages",
         "models": [
+          {
+            "id": "claude-opus-4-8",
+            "name": "Claude Opus 4.8",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "mediaInput": {
+              "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
+            },
+            "contextWindow": 200000,
+            "maxTokens": 64000
+          },
           {
             "id": "claude-opus-4-7",
             "name": "Claude Opus 4.7",
@@ -99,6 +121,7 @@
       "anthropic": {
         "aliases": {
           "opus-4.6": "claude-opus-4-6",
+          "opus-4.8": "claude-opus-4-8",
           "sonnet-4.6": "claude-sonnet-4-6"
         }
       }
@@ -184,7 +207,7 @@
     "anthropic": {
       "capabilities": ["image"],
       "defaultModels": {
-        "image": "claude-opus-4-7"
+        "image": "claude-opus-4-8"
       },
       "autoPriority": {
         "image": 20
