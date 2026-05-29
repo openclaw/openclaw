@@ -855,7 +855,7 @@ describe("agentCommand", () => {
     });
   });
 
-  it("uses default fallback list for auto session model overrides", async () => {
+  it("probes the configured primary first for origin-backed auto session model overrides", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
       writeSessionStoreSeed(store, {

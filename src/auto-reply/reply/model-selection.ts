@@ -219,9 +219,12 @@ export async function createModelSelectionState(params: {
     normalizeRuntimeModelRef(OPENAI_PROVIDER_ID, directStoredModelOverride.model).model ===
       normalizeRuntimeModelRef(OPENAI_PROVIDER_ID, primaryModel).model;
   const normalizedCurrentSelection = normalizeRuntimeModelRef(provider, model);
-  const normalizedDirectOverride = directStoredOverride
-    ? normalizeRuntimeModelRef(directStoredOverride.provider, directStoredOverride.model)
+  const normalizedDirectOverride = directStoredModelOverride
+    ? normalizeRuntimeModelRef(directStoredModelOverride.provider, directStoredModelOverride.model)
     : null;
+  // Only treat the legacy auto pin as stale when the current selection differs from the stored
+  // override. The current==stored case is the turn that deliberately re-applies the pin (e.g. an
+  // explicit run override); clearing there would fight that intent, so the guard must stay.
   const staleLegacyAutoFallbackWithoutOrigin =
     directStoredModelOverride?.source === "session" &&
     hasLegacyAutoFallbackWithoutOrigin(sessionEntry) &&

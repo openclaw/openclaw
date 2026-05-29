@@ -1642,9 +1642,7 @@ async function agentCommandInternal(
           agentId: sessionAgentId,
           sessionKey,
           hasSessionModelOverride:
-            hasExplicitRunOverride ||
-            (!hasLegacyAutoFallbackOverrideWithoutOrigin &&
-              Boolean(storedProviderOverride || storedModelOverride)),
+            hasExplicitRunOverride || Boolean(storedProviderOverride || storedModelOverride),
           modelOverrideSource: hasExplicitRunOverride ? "user" : storedModelOverrideSource,
           hasAutoFallbackProvenance: hasExplicitRunOverride
             ? false

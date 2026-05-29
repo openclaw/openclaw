@@ -697,9 +697,17 @@ describe("resolveAgentConfig", () => {
     ).toBe(true);
     expect(
       hasLegacyAutoFallbackWithoutOrigin({
+        modelOverrideSource: "auto",
+        modelOverrideFallbackOriginProvider: "anthropic",
+      }),
+    ).toBe(true);
+    expect(
+      hasLegacyAutoFallbackWithoutOrigin({
         modelOverrideSource: "user",
       }),
     ).toBe(false);
+    expect(hasLegacyAutoFallbackWithoutOrigin({})).toBe(false);
+    expect(hasLegacyAutoFallbackWithoutOrigin(undefined)).toBe(false);
   });
 
   it("recognizes recovered auto fallback provenance without a source marker", () => {
