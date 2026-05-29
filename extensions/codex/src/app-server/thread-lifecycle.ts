@@ -990,8 +990,8 @@ function buildTurnScopedCollaborationInstructions(
 ): string | null {
   const contextInstructions = joinPresentSections(
     options.turnScopedDeveloperInstructions,
-    options.skillsCollaborationInstructions,
     options.memoryCollaborationInstructions,
+    options.skillsCollaborationInstructions,
   );
   if (params.trigger === "cron") {
     return joinPresentSections(buildCronCollaborationInstructions(), contextInstructions);

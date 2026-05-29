@@ -738,6 +738,7 @@ function renderCodexWorkspaceCollaborationDeveloperInstructions(
     header: "## OpenClaw Agent Soul",
     preamble:
       "OpenClaw loaded these workspace instruction files from the active agent workspace. They are the canonical definitions of who you are, how you think and work, and the human you work alongside. Internalize and follow them accordingly.",
+    wrapperTag: "AGENT_SOUL",
   });
 }
 
@@ -745,14 +746,21 @@ function renderCodexWorkspaceDeveloperInstructions(params: {
   files: EmbeddedContextFile[];
   header: string;
   preamble: string;
+  wrapperTag?: string;
 }): string | undefined {
-  const { files, header, preamble } = params;
+  const { files, header, preamble, wrapperTag } = params;
   if (files.length === 0) {
     return undefined;
   }
   const lines = [header, "", preamble, ""];
+  if (wrapperTag) {
+    lines.push(`<${wrapperTag}>`, "");
+  }
   for (const file of files) {
     lines.push(`### ${file.path}`, "", file.content, "");
+  }
+  if (wrapperTag) {
+    lines.push(`</${wrapperTag}>`);
   }
   return lines.join("\n").trim();
 }
@@ -819,7 +827,7 @@ export function renderCodexWorkspaceMemoryReference(params: {
   const lines = [
     "## OpenClaw Workspace Memory",
     "",
-    `MEMORY.md exists in the active agent workspace. OpenClaw does not paste its contents into native Codex turns; use ${toolNames.join(" or ")} when durable memory is relevant and the tools are available.`,
+    `MEMORY.md exists in the active agent workspace as a memory file, not an instruction file. OpenClaw does not paste its contents into native Codex turns; use ${toolNames.join(" or ")} when durable memory is relevant and the tools are available.`,
     "",
   ];
   for (const file of params.files) {

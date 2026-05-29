@@ -1887,12 +1887,16 @@ describe("runCodexAppServerAttempt", () => {
     expect(collaborationInstructions).toContain("# Collaboration Mode: Default");
     expect(collaborationInstructions).toContain("request_user_input availability");
     expect(collaborationInstructions).toContain("OpenClaw Agent Soul");
+    expect(collaborationInstructions).toContain("<AGENT_SOUL>");
+    expect(collaborationInstructions).toContain("</AGENT_SOUL>");
     expect(collaborationInstructions).toContain(soulGuidance);
     expect(collaborationInstructions).toContain(identityGuidance);
     expect(collaborationInstructions).not.toContain(toolGuidance);
     expect(collaborationInstructions).toContain(userProfile);
     expect(collaborationInstructions).toContain("OpenClaw Workspace Memory");
-    expect(collaborationInstructions).toContain("MEMORY.md exists in the active agent workspace");
+    expect(collaborationInstructions).toContain(
+      "MEMORY.md exists in the active agent workspace as a memory file, not an instruction file",
+    );
     expect(collaborationInstructions).toContain("memory_search");
     expect(collaborationInstructions).toContain("memory_get");
     expect(collaborationInstructions).not.toContain(memorySummary);
@@ -1999,6 +2003,8 @@ describe("runCodexAppServerAttempt", () => {
     const collaborationInstructions =
       turnStartParams.collaborationMode?.settings?.developer_instructions ?? "";
     expect(collaborationInstructions).toContain("OpenClaw Agent Soul");
+    expect(collaborationInstructions).toContain("<AGENT_SOUL>");
+    expect(collaborationInstructions).toContain("</AGENT_SOUL>");
     expect(collaborationInstructions).toContain(soulGuidance);
     expect(collaborationInstructions).toContain(identityGuidance);
     expect(collaborationInstructions).toContain(userProfile);
