@@ -1861,6 +1861,41 @@ describe("executeNodeHostCommand", () => {
     expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 
+  it("keeps gateway-enforced approval modes working on older nodes", async () => {
+    resolveExecHostApprovalContextMock.mockReturnValueOnce({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "allowlist",
+      hostAsk: "always",
+      askFallback: "deny",
+    });
+    listNodesMock.mockResolvedValueOnce([
+      {
+        nodeId: "node-1",
+        commands: ["system.run", "system.run.prepare"],
+        connected: true,
+        platform: process.platform,
+      },
+    ]);
+
+    await executeNodeHostCommand({
+      command: "bun ./script.ts",
+      workdir: "/tmp/work",
+      env: {},
+      security: "allowlist",
+      ask: "always",
+      requestedNode: "node-1",
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+      agentId: "requested-agent",
+      sessionKey: "requested-session",
+    });
+
+    const runParams = requireRunParams(requireGatewayCommand("system.run"));
+    expect(runParams).not.toHaveProperty("requestedSecurity");
+    expect(runParams).not.toHaveProperty("requestedAsk");
+  });
+
   it("forwards host-tightened policy to node system run", async () => {
     resolveExecHostApprovalContextMock.mockReturnValueOnce({
       approvals: { allowlist: [], file: { version: 1, agents: {} } },

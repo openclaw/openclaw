@@ -273,8 +273,8 @@ export function buildNodeSystemRunInvoke(params: {
         : {}),
       approved: params.approved,
       approvalDecision: params.approvalDecision ?? undefined,
-      requestedSecurity: params.requestedSecurity,
-      requestedAsk: params.requestedAsk,
+      ...(params.requestedSecurity != null ? { requestedSecurity: params.requestedSecurity } : {}),
+      ...(params.requestedAsk != null ? { requestedAsk: params.requestedAsk } : {}),
       runId,
       suppressNotifyOnExit:
         params.suppressNotifyOnExit === true || params.notifyOnExit === false ? true : undefined,
@@ -286,8 +286,8 @@ export function buildNodeSystemRunInvoke(params: {
 export async function invokeNodeSystemRunDirect(params: {
   request: ExecuteNodeHostCommandParams;
   target: NodeExecutionTarget;
-  requestedSecurity: ExecSecurity;
-  requestedAsk: ExecAsk;
+  requestedSecurity?: ExecSecurity;
+  requestedAsk?: ExecAsk;
 }): Promise<AgentToolResult<ExecToolDetails>> {
   const startedAt = Date.now();
   const raw = await callGatewayTool(
