@@ -83,6 +83,10 @@ jobs:
       packages: write
     env:
       IMAGE: ghcr.io/saml212/rockielab-runtime-multitenant
+      # Mac mini self-hosted runner does NOT have /usr/local/bin in PATH by default;
+      # docker lives at /usr/local/bin/docker (Docker Desktop symlink). Without this,
+      # docker/setup-qemu-action@v3 fails with "Unable to locate executable file: docker".
+      PATH: /usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin
       # Map the secret to env so we can `if:` on it (secrets context is
       # not available in step-level if expressions; env is).
       SKILLS_READ_TOKEN: ${{ secrets.PLATFORM_SKILLS_READ_TOKEN }}
