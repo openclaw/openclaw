@@ -37,16 +37,18 @@ Auth env var: `STEPFUN_API_KEY`
 
 Standard (`stepfun`):
 
-| Model ref                | Context | Max output | Notes                  |
-| ------------------------ | ------- | ---------- | ---------------------- |
-| `stepfun/step-3.5-flash` | 262,144 | 65,536     | Default standard model |
+| Model ref                | Context | Max output | Notes                              |
+| ------------------------ | ------- | ---------- | ---------------------------------- |
+| `stepfun/step-3.7-flash` | 262,144 | 65,536     | Default standard model; multimodal |
+| `stepfun/step-3.5-flash` | 262,144 | 65,536     | Text-only                          |
 
 Step Plan (`stepfun-plan`):
 
-| Model ref                          | Context | Max output | Notes                      |
-| ---------------------------------- | ------- | ---------- | -------------------------- |
-| `stepfun-plan/step-3.5-flash`      | 262,144 | 65,536     | Default Step Plan model    |
-| `stepfun-plan/step-3.5-flash-2603` | 262,144 | 65,536     | Additional Step Plan model |
+| Model ref                          | Context | Max output | Notes                               |
+| ---------------------------------- | ------- | ---------- | ----------------------------------- |
+| `stepfun-plan/step-3.7-flash`      | 262,144 | 65,536     | Default Step Plan model; multimodal |
+| `stepfun-plan/step-3.5-flash`      | 262,144 | 65,536     | Text-only                           |
+| `stepfun-plan/step-3.5-flash-2603` | 262,144 | 65,536     | Additional Step Plan model          |
 
 ## Getting started
 
@@ -89,7 +91,8 @@ Choose your provider surface and follow the setup steps.
 
     ### Model refs
 
-    - Default model: `stepfun/step-3.5-flash`
+    - Default model: `stepfun/step-3.7-flash`
+    - Alternate model: `stepfun/step-3.5-flash`
 
   </Tab>
 
@@ -129,8 +132,8 @@ Choose your provider surface and follow the setup steps.
 
     ### Model refs
 
-    - Default model: `stepfun-plan/step-3.5-flash`
-    - Alternate model: `stepfun-plan/step-3.5-flash-2603`
+    - Default model: `stepfun-plan/step-3.7-flash`
+    - Alternate models: `stepfun-plan/step-3.5-flash`, `stepfun-plan/step-3.5-flash-2603`
 
   </Tab>
 </Tabs>
@@ -142,7 +145,7 @@ Choose your provider surface and follow the setup steps.
     ```json5
     {
       env: { STEPFUN_API_KEY: "your-key" },
-      agents: { defaults: { model: { primary: "stepfun/step-3.5-flash" } } },
+      agents: { defaults: { model: { primary: "stepfun/step-3.7-flash" } } },
       models: {
         mode: "merge",
         providers: {
@@ -151,6 +154,15 @@ Choose your provider surface and follow the setup steps.
             api: "openai-completions",
             apiKey: "${STEPFUN_API_KEY}",
             models: [
+              {
+                id: "step-3.7-flash",
+                name: "Step 3.7 Flash",
+                reasoning: true,
+                input: ["text", "image", "video"],
+                cost: { input: 0.2, output: 1.15, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 262144,
+                maxTokens: 65536,
+              },
               {
                 id: "step-3.5-flash",
                 name: "Step 3.5 Flash",
@@ -172,7 +184,7 @@ Choose your provider surface and follow the setup steps.
     ```json5
     {
       env: { STEPFUN_API_KEY: "your-key" },
-      agents: { defaults: { model: { primary: "stepfun-plan/step-3.5-flash" } } },
+      agents: { defaults: { model: { primary: "stepfun-plan/step-3.7-flash" } } },
       models: {
         mode: "merge",
         providers: {
@@ -181,6 +193,15 @@ Choose your provider surface and follow the setup steps.
             api: "openai-completions",
             apiKey: "${STEPFUN_API_KEY}",
             models: [
+              {
+                id: "step-3.7-flash",
+                name: "Step 3.7 Flash",
+                reasoning: true,
+                input: ["text", "image", "video"],
+                cost: { input: 0.2, output: 1.15, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 262144,
+                maxTokens: 65536,
+              },
               {
                 id: "step-3.5-flash",
                 name: "Step 3.5 Flash",
@@ -209,6 +230,7 @@ Choose your provider surface and follow the setup steps.
 
   <Accordion title="Notes">
     - The provider is an official external package; install it before setup.
+    - `step-3.7-flash` is the default on both `stepfun` and `stepfun-plan`; it is multimodal (text, image, video).
     - `step-3.5-flash-2603` is currently exposed only on `stepfun-plan`.
     - A single auth flow writes region-matched profiles for both `stepfun` and `stepfun-plan`, so both surfaces can be discovered together.
     - Use `openclaw models list` and `openclaw models set <provider/model>` to inspect or switch models.
