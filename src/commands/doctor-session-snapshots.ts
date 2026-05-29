@@ -8,6 +8,7 @@ import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targe
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { expandHomePrefix } from "../infra/home-dir.js";
+import { writeTextAtomic } from "../infra/json-files.js";
 import { resolveBundledSkillsDir } from "../skills/loading/bundled-dir.js";
 import { shortenHomePath } from "../utils.js";
 
@@ -271,11 +272,132 @@ function loadSessionStoreForSnapshotScan(storePath: string): Record<string, Sess
   return store;
 }
 
+/**
+ * Replace stale paths in a session's snapshot metadata fields.
+ * Scoped to specific fields to avoid modifying unrelated session content
+ * (transcripts, user messages, etc.).
+ */
+function replacePathsInSession(
+  session: Record<string, unknown>,
+  finding: StaleSessionSnapshotPathFinding,
+): number {
+  let count = 0;
+
+  const jsonEscaped = JSON.stringify(finding.cachedPath).slice(1, -1);
+  const jsonEscapedExpected = JSON.stringify(finding.expectedPath).slice(1, -1);
+  const xmlEscaped = finding.cachedPath
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+  const xmlEscapedExpected = finding.expectedPath
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+
+  if (finding.field === "skillsSnapshot.prompt") {
+    const snapshot = session.skillsSnapshot as Record<string, unknown> | undefined;
+    if (snapshot && typeof snapshot.prompt === "string") {
+      let prompt = snapshot.prompt;
+      const original = prompt;
+
+      if (prompt.includes(jsonEscaped)) {
+        count += prompt.split(jsonEscaped).length - 1;
+        prompt = prompt.replaceAll(jsonEscaped, jsonEscapedExpected);
+      }
+      if (prompt.includes(xmlEscaped)) {
+        count += prompt.split(xmlEscaped).length - 1;
+        prompt = prompt.replaceAll(xmlEscaped, xmlEscapedExpected);
+      }
+      if (prompt.includes(finding.cachedPath)) {
+        count += prompt.split(finding.cachedPath).length - 1;
+        prompt = prompt.replaceAll(finding.cachedPath, finding.expectedPath);
+      }
+
+      if (prompt !== original) {
+        snapshot.prompt = prompt;
+      }
+    }
+  } else if (finding.field === "skillsSnapshot.resolvedSkills") {
+    const snapshot = session.skillsSnapshot as Record<string, unknown> | undefined;
+    if (snapshot && Array.isArray(snapshot.resolvedSkills)) {
+      for (const entry of snapshot.resolvedSkills) {
+        if (!isRecord(entry)) continue;
+
+        for (const field of ["filePath", "baseDir"] as const) {
+          if (typeof entry[field] !== "string") continue;
+          let value = entry[field] as string;
+          const original = value;
+
+          // For baseDir, also try directory form (without /SKILL.md suffix)
+          const candidates: Array<{ cached: string; expected: string }> = [
+            { cached: jsonEscaped, expected: jsonEscapedExpected },
+            { cached: finding.cachedPath, expected: finding.expectedPath },
+          ];
+          if (field === "baseDir") {
+            for (const suffix of ["/SKILL.md", "\\SKILL.md"]) {
+              if (finding.cachedPath.endsWith(suffix)) {
+                const cachedDir = finding.cachedPath.slice(0, -suffix.length);
+                const expectedDir = finding.expectedPath.slice(0, -suffix.length);
+                candidates.push(
+                  { cached: JSON.stringify(cachedDir).slice(1, -1), expected: JSON.stringify(expectedDir).slice(1, -1) },
+                  { cached: cachedDir, expected: expectedDir },
+                );
+              }
+            }
+          }
+
+          for (const { cached, expected } of candidates) {
+            if (value.includes(cached)) {
+              count += value.split(cached).length - 1;
+              value = value.replaceAll(cached, expected);
+            }
+          }
+
+          if (value !== original) {
+            (entry as Record<string, unknown>)[field] = value;
+          }
+        }
+      }
+    }
+  } else if (finding.field === "systemPromptReport.injectedWorkspaceFiles") {
+    const report = session.systemPromptReport as Record<string, unknown> | undefined;
+    if (report && Array.isArray(report.injectedWorkspaceFiles)) {
+      for (const entry of report.injectedWorkspaceFiles) {
+        if (!isRecord(entry) || typeof entry.path !== "string") continue;
+
+        let entryPath = entry.path;
+        const original = entryPath;
+
+        for (const { cached, expected } of [
+          { cached: jsonEscaped, expected: jsonEscapedExpected },
+          { cached: finding.cachedPath, expected: finding.expectedPath },
+        ]) {
+          if (entryPath.includes(cached)) {
+            count += entryPath.split(cached).length - 1;
+            entryPath = entryPath.replaceAll(cached, expected);
+          }
+        }
+
+        if (entryPath !== original) {
+          entry.path = entryPath;
+        }
+      }
+    }
+  }
+
+  return count;
+}
+
 export async function noteSessionSnapshotHealth(params?: {
   storePaths?: string[];
   bundledSkillsDir?: string;
   cfg?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  shouldRepair?: boolean;
 }) {
   const bundledSkillsDir = params?.bundledSkillsDir ?? resolveBundledSkillsDir();
   if (!bundledSkillsDir) {
@@ -318,6 +440,52 @@ export async function noteSessionSnapshotHealth(params?: {
       findings.map((finding) => finding.sessionKey),
     ),
   );
+
+  // Auto-repair stale paths when shouldRepair is enabled
+  if (params?.shouldRepair) {
+    let repairedStores = 0;
+    let totalReplacements = 0;
+
+    for (const [storePath, findings] of findingsByStore) {
+      try {
+        const raw = fs.readFileSync(storePath, "utf-8");
+        const sessions = JSON.parse(raw) as Record<string, Record<string, unknown>>;
+
+        let storeCount = 0;
+        for (const finding of findings) {
+          const session = sessions[finding.sessionKey];
+          if (!session) continue;
+          storeCount += replacePathsInSession(session, finding);
+        }
+
+        if (storeCount > 0) {
+          // Create backup before writing
+          const backupPath = `${storePath}.bak.${Date.now()}`;
+          await writeTextAtomic(backupPath, raw, { mode: 0o600 });
+
+          // Atomic write to prevent partial writes or corruption
+          const fixed = JSON.stringify(sessions, null, 2);
+          await writeTextAtomic(storePath, fixed, { mode: 0o600 });
+          totalReplacements += storeCount;
+          repairedStores++;
+        }
+      } catch (err) {
+        note(
+          `- Failed to repair session snapshot paths in ${shortenHomePath(storePath)}: ${String(err)}`,
+          "Session snapshots",
+        );
+      }
+    }
+
+    if (repairedStores > 0) {
+      note(
+        `- Repaired ${totalReplacements} stale path${totalReplacements === 1 ? "" : "s"} across ${repairedStores} store${repairedStores === 1 ? "" : "s"}.`,
+        "Session snapshots",
+      );
+      return;
+    }
+  }
+
   const lines = [
     `- Found ${affectedSessions.size} session${affectedSessions.size === 1 ? "" : "s"} with stale cached session metadata paths.`,
     `  Live bundled skills root is healthy: ${shortenHomePath(bundledSkillsDir)}`,
