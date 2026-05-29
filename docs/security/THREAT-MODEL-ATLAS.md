@@ -591,15 +591,15 @@ T-EXEC-002 → T-EXFIL-001 → External exfiltration
 
 ### 7.3 Glossary
 
-| Term                 | Definition                                                |
-| -------------------- | --------------------------------------------------------- |
-| **ATLAS**            | MITRE's Adversarial Threat Landscape for AI Systems       |
-| **ClawHub**          | OpenClaw's skill marketplace                              |
-| **Gateway**          | OpenClaw's message routing and authentication layer       |
-| **MCP**              | Model Context Protocol - tool provider interface          |
-| **Prompt Injection** | Attack where malicious instructions are embedded in input |
-| **Skill**            | Downloadable extension for OpenClaw agents                |
-| **SSRF**             | Server-Side Request Forgery                               |
+| Term                 | Definition                                                                        |
+| -------------------- | --------------------------------------------------------------------------------- |
+| **ATLAS**            | MITRE's Adversarial Threat Landscape for AI Systems                               |
+| **ClawHub**          | OpenClaw's skill marketplace                                                      |
+| **Gateway**          | OpenClaw's message routing and authentication layer                               |
+| **MCP**              | Model Context Protocol - tool provider interface                                  |
+| **Prompt Injection** | Attack where malicious instructions are embedded in input                         |
+| **Skill**            | Reusable capability bundle (instructions plus optional tools) for OpenClaw agents |
+| **SSRF**             | Server-Side Request Forgery                                                       |
 
 ---
 

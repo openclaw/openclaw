@@ -325,7 +325,7 @@ A sweeper runs every **60 seconds** and handles four things:
     Closes terminal or orphaned parent-owned one-shot ACP sessions, and closes stale terminal or orphaned persistent ACP sessions only when no active conversation binding remains.
   </Step>
   <Step title="Cleanup stamping">
-    Sets a `cleanupAfter` timestamp on terminal tasks (endedAt + 7 days). During retention, lost tasks still appear in audit as warnings; after `cleanupAfter` expires or when cleanup metadata is missing, they are errors.
+    Sets a `cleanupAfter` timestamp on terminal tasks (endedAt + 7 days; `lost` tasks use a shorter 1-day retention). During retention, lost tasks still appear in audit as warnings; after `cleanupAfter` expires or when cleanup metadata is missing, they are errors.
   </Step>
   <Step title="Pruning">
     Deletes records past their `cleanupAfter` date.
@@ -333,7 +333,7 @@ A sweeper runs every **60 seconds** and handles four things:
 </Steps>
 
 <Note>
-**Retention:** terminal task records are kept for **7 days**, then automatically pruned. No configuration needed.
+**Retention:** terminal task records are kept for **7 days** (`lost` tasks for **1 day**), then automatically pruned. No configuration needed.
 </Note>
 
 ## How tasks relate to other systems
