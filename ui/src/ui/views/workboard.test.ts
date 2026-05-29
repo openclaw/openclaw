@@ -6,6 +6,7 @@ import { renderWorkboard } from "./workboard.ts";
 
 describe("renderWorkboard", () => {
   it("renders board columns and preloaded cards", () => {
+    const now = Date.now();
     const host = {};
     const state = getWorkboardState(host);
     state.loaded = true;
@@ -38,7 +39,7 @@ describe("renderWorkboard", () => {
             key: "agent:main:dashboard:1",
             kind: "direct",
             displayName: "Dashboard session",
-            updatedAt: 2,
+            updatedAt: now,
             hasActiveRun: true,
             status: "running",
           },
@@ -272,7 +273,42 @@ describe("renderWorkboard", () => {
     );
 
     expect(container.querySelector('[role="dialog"]')?.textContent).toContain("New card");
+    expect(container.querySelector('[aria-label="Card templates"]')?.textContent).toContain(
+      "Bugfix",
+    );
     expect(container.querySelector(".workboard-board")).toBeTruthy();
+  });
+
+  it("applies card templates in the create modal", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.draftOpen = true;
+    const container = document.createElement("div");
+    const props = {
+      host,
+      client: null,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+      onRequestUpdate: () => undefined,
+    };
+
+    render(renderWorkboard(props), container);
+    [...container.querySelectorAll<HTMLButtonElement>(".workboard-template-strip .btn")]
+      .find((button) => button.textContent?.includes("Release"))
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    render(renderWorkboard(props), container);
+
+    expect(state.draftTemplateId).toBe("release");
+    expect(container.querySelector<HTMLInputElement>(".workboard-draft__title")?.value).toBe(
+      "Release: ",
+    );
+    expect(
+      container.querySelector<HTMLTextAreaElement>(".workboard-draft__notes")?.value,
+    ).toContain("Verification:");
   });
 
   it("opens and plays the mini game", () => {
@@ -346,6 +382,174 @@ describe("renderWorkboard", () => {
     expect(container.querySelector(".workboard-events")?.textContent).toContain("Moved to Review");
   });
 
+  it("renders card metadata badges and hides archived cards", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Metadata rich",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+        metadata: {
+          templateId: "plugin",
+          attempts: [{ id: "run-1", status: "blocked", startedAt: 1, endedAt: 2 }],
+          failureCount: 1,
+          comments: [{ id: "comment-1", body: "Needs owner check", createdAt: 3 }],
+          links: [{ id: "link-1", type: "relates_to", url: "https://example.com", createdAt: 4 }],
+          proof: [{ id: "proof-1", status: "passed", command: "pnpm test", createdAt: 5 }],
+          stale: { detectedAt: 6, reason: "No recent activity." },
+        },
+      },
+      {
+        id: "card-2",
+        title: "Archived task",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        position: 2000,
+        createdAt: 1,
+        updatedAt: 1,
+        metadata: { archivedAt: 7 },
+      },
+    ];
+    const container = document.createElement("div");
+
+    render(
+      renderWorkboard({
+        host,
+        client: null,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: null,
+        sessions: [],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+
+    expect(container.textContent).toContain("Plugin");
+    expect(container.textContent).toContain("1 attempts");
+    expect(container.textContent).toContain("1 failed");
+    expect(container.textContent).toContain("1 comments");
+    expect(container.textContent).toContain("1 links");
+    expect(container.textContent).toContain("1 proof");
+    expect(container.textContent).toContain("stale");
+    expect(container.textContent).not.toContain("Archived task");
+  });
+
+  it("shows stale lifecycle on executed linked cards", () => {
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(60 * 60 * 1000);
+    try {
+      const host = {};
+      const state = getWorkboardState(host);
+      state.loaded = true;
+      state.cards = [
+        {
+          id: "card-1",
+          title: "Watch stale run",
+          status: "running",
+          priority: "normal",
+          labels: [],
+          position: 1000,
+          createdAt: 1,
+          updatedAt: 1,
+          execution: {
+            id: "exec-1",
+            kind: "agent-session",
+            engine: "codex",
+            mode: "autonomous",
+            status: "running",
+            model: "openai/gpt-5.5",
+            sessionKey: "agent:main:dashboard:1",
+            startedAt: 1,
+            updatedAt: 1,
+          },
+        },
+      ];
+      const container = document.createElement("div");
+
+      render(
+        renderWorkboard({
+          host,
+          client: null,
+          connected: true,
+          pluginEnabled: true,
+          agentsList: null,
+          sessions: [
+            {
+              key: "agent:main:dashboard:1",
+              kind: "direct",
+              displayName: "Dashboard session",
+              updatedAt: 1,
+              hasActiveRun: false,
+              status: "running",
+            },
+          ],
+          onOpenSession: () => undefined,
+        }),
+        container,
+      );
+
+      expect(container.textContent).toContain("Stale");
+      expect(container.textContent).toContain("No recent session activity");
+      expect(container.textContent).not.toContain("codex autonomous");
+      expect(container.querySelector(".workboard-live")).toBeNull();
+      expect(container.querySelector('button[title="Stop session"]')).toBeNull();
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("keeps live controls for legacy running session rows", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Stop legacy run",
+        status: "running",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+        sessionKey: "agent:main:dashboard:1",
+      },
+    ];
+    const container = document.createElement("div");
+
+    render(
+      renderWorkboard({
+        host,
+        client: null,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: null,
+        sessions: [
+          {
+            key: "agent:main:dashboard:1",
+            kind: "direct",
+            displayName: "Dashboard session",
+            updatedAt: 1,
+            status: "running",
+          },
+        ],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+
+    expect(container.querySelector(".workboard-live")?.textContent).toContain("live");
+    expect(container.querySelector('button[title="Stop session"]')).not.toBeNull();
+  });
+
   it("opens an edit modal and submits card updates", async () => {
     const host = {};
     const state = getWorkboardState(host);
@@ -412,6 +616,53 @@ describe("renderWorkboard", () => {
         priority: "high",
       }),
     });
+  });
+
+  it("archives cards from the card action", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Archive me",
+        status: "done",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    const request = vi.fn(async () => ({
+      card: { ...state.cards[0], metadata: { archivedAt: 2 } },
+    }));
+    const container = document.createElement("div");
+
+    render(
+      renderWorkboard({
+        host,
+        client: { request } as unknown as GatewayBrowserClient,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: null,
+        sessions: [],
+        onOpenSession: () => undefined,
+        onRequestUpdate: () => undefined,
+      }),
+      container,
+    );
+    container
+      .querySelector<HTMLButtonElement>('button[title="Archive card"]')
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(request).toHaveBeenCalledWith("workboard.cards.archive", {
+      id: "card-1",
+      archived: true,
+    });
+    expect(state.cards[0]?.metadata?.archivedAt).toBe(2);
   });
 
   it("offers existing sessions when creating a card", () => {

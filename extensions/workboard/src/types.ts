@@ -23,7 +23,25 @@ export const WORKBOARD_EVENT_KINDS = [
   "moved",
   "linked",
   "execution_updated",
+  "attempt_started",
+  "attempt_updated",
+  "comment_added",
+  "link_added",
+  "proof_added",
+  "archived",
+  "unarchived",
+  "stale",
 ] as const;
+export const WORKBOARD_ATTEMPT_STATUSES = [
+  "running",
+  "succeeded",
+  "failed",
+  "blocked",
+  "stopped",
+] as const;
+export const WORKBOARD_LINK_TYPES = ["blocks", "blocked_by", "relates_to"] as const;
+export const WORKBOARD_PROOF_STATUSES = ["passed", "failed", "skipped", "unknown"] as const;
+export const WORKBOARD_TEMPLATE_IDS = ["bugfix", "docs", "release", "pr_review", "plugin"] as const;
 
 export type WorkboardStatus = (typeof WORKBOARD_STATUSES)[number];
 export type WorkboardPriority = (typeof WORKBOARD_PRIORITIES)[number];
@@ -31,6 +49,10 @@ export type WorkboardExecutionEngine = (typeof WORKBOARD_EXECUTION_ENGINES)[numb
 export type WorkboardExecutionMode = (typeof WORKBOARD_EXECUTION_MODES)[number];
 export type WorkboardExecutionStatus = (typeof WORKBOARD_EXECUTION_STATUSES)[number];
 export type WorkboardEventKind = (typeof WORKBOARD_EVENT_KINDS)[number];
+export type WorkboardAttemptStatus = (typeof WORKBOARD_ATTEMPT_STATUSES)[number];
+export type WorkboardLinkType = (typeof WORKBOARD_LINK_TYPES)[number];
+export type WorkboardProofStatus = (typeof WORKBOARD_PROOF_STATUSES)[number];
+export type WorkboardTemplateId = (typeof WORKBOARD_TEMPLATE_IDS)[number];
 
 export type WorkboardExecution = {
   id: string;
@@ -55,6 +77,62 @@ export type WorkboardEvent = {
   runId?: string;
 };
 
+export type WorkboardRunAttempt = {
+  id: string;
+  status: WorkboardAttemptStatus;
+  startedAt: number;
+  endedAt?: number;
+  engine?: WorkboardExecutionEngine;
+  mode?: WorkboardExecutionMode;
+  model?: string;
+  sessionKey?: string;
+  runId?: string;
+  error?: string;
+};
+
+export type WorkboardComment = {
+  id: string;
+  body: string;
+  createdAt: number;
+  updatedAt?: number;
+};
+
+export type WorkboardLink = {
+  id: string;
+  type: WorkboardLinkType;
+  createdAt: number;
+  targetCardId?: string;
+  title?: string;
+  url?: string;
+};
+
+export type WorkboardProof = {
+  id: string;
+  status: WorkboardProofStatus;
+  createdAt: number;
+  label?: string;
+  command?: string;
+  url?: string;
+  note?: string;
+};
+
+export type WorkboardStaleState = {
+  detectedAt: number;
+  lastSessionUpdatedAt?: number;
+  reason: string;
+};
+
+export type WorkboardMetadata = {
+  attempts?: WorkboardRunAttempt[];
+  comments?: WorkboardComment[];
+  links?: WorkboardLink[];
+  proof?: WorkboardProof[];
+  templateId?: WorkboardTemplateId;
+  archivedAt?: number;
+  stale?: WorkboardStaleState;
+  failureCount?: number;
+};
+
 export type WorkboardCard = {
   id: string;
   title: string;
@@ -74,6 +152,7 @@ export type WorkboardCard = {
   startedAt?: number;
   completedAt?: number;
   events?: WorkboardEvent[];
+  metadata?: WorkboardMetadata;
 };
 
 export type WorkboardListResult = {

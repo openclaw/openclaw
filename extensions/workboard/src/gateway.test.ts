@@ -49,8 +49,14 @@ describe("workboard gateway methods", () => {
       "workboard.cards.update",
       "workboard.cards.move",
       "workboard.cards.delete",
+      "workboard.cards.comment",
+      "workboard.cards.link",
+      "workboard.cards.proof",
+      "workboard.cards.archive",
+      "workboard.cards.export",
     ]);
     expect(methods.get("workboard.cards.list")?.opts).toEqual({ scope: "operator.read" });
+    expect(methods.get("workboard.cards.export")?.opts).toEqual({ scope: "operator.read" });
     expect(methods.get("workboard.cards.create")?.opts).toEqual({ scope: "operator.write" });
 
     const createHandler = methods.get("workboard.cards.create")?.handler;
@@ -66,6 +72,51 @@ describe("workboard gateway methods", () => {
     await listHandler?.({ params: {}, respond: listRespond } as never);
     expect(listRespond.mock.calls[0]?.[1]).toMatchObject({
       cards: [expect.objectContaining({ title: "Investigate queue drift" })],
+    });
+  });
+
+  it("stores metadata updates through dedicated card methods", async () => {
+    type RegisteredMethod = {
+      handler: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
+      opts: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[2];
+    };
+    const methods = new Map<string, RegisteredMethod>();
+    const api = {
+      runtime: {
+        state: {
+          openKeyedStore: vi.fn(() => createMemoryStore()),
+        },
+      },
+      registerGatewayMethod: vi.fn(
+        (method: string, handler: RegisteredMethod["handler"], opts: RegisteredMethod["opts"]) => {
+          methods.set(method, { handler, opts });
+        },
+      ),
+    } as unknown as OpenClawPluginApi;
+
+    registerWorkboardGatewayMethods({ api });
+
+    const createRespond = vi.fn();
+    await methods.get("workboard.cards.create")?.handler({
+      params: { title: "Carry metadata" },
+      respond: createRespond,
+    } as never);
+    const cardId = createRespond.mock.calls[0]?.[1]?.card.id;
+
+    const commentRespond = vi.fn();
+    await methods.get("workboard.cards.comment")?.handler({
+      params: { id: cardId, body: "Waiting on CI" },
+      respond: commentRespond,
+    } as never);
+
+    expect(commentRespond.mock.calls[0]?.[0]).toBe(true);
+    expect(commentRespond.mock.calls[0]?.[1]).toMatchObject({
+      card: {
+        metadata: {
+          comments: [expect.objectContaining({ body: "Waiting on CI" })],
+        },
+        events: expect.arrayContaining([expect.objectContaining({ kind: "comment_added" })]),
+      },
     });
   });
 

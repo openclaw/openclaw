@@ -28,7 +28,9 @@
 .workboard-toolbar__filters,
 .workboard-toolbar__actions,
 .workboard-draft__meta,
+.workboard-template-strip,
 .workboard-card__actions,
+.workboard-card__badges,
 .workboard-card__meta,
 .workboard-card__top,
 .workboard-labels {
@@ -165,6 +167,21 @@
   display: grid;
   gap: 10px;
   min-width: 0;
+}
+
+.workboard-template-strip {
+  gap: 6px;
+}
+
+.workboard-template-strip .btn {
+  min-height: 28px;
+  padding-inline: 9px;
+}
+
+.workboard-template-strip__button--active {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border-strong));
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
 }
 
 .workboard-draft__title {
@@ -457,6 +474,10 @@
   justify-content: flex-end;
 }
 
+.workboard-card__badges {
+  gap: 5px;
+}
+
 .workboard-card__execution-controls {
   display: grid;
   grid-template-columns: repeat(2, minmax(72px, 1fr));
@@ -518,6 +539,7 @@
 }
 
 .workboard-card__priority,
+.workboard-card__badges span,
 .workboard-live,
 .workboard-lifecycle,
 .workboard-labels span {

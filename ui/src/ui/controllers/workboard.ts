@@ -26,7 +26,25 @@ export const WORKBOARD_EVENT_KINDS = [
   "moved",
   "linked",
   "execution_updated",
+  "attempt_started",
+  "attempt_updated",
+  "comment_added",
+  "link_added",
+  "proof_added",
+  "archived",
+  "unarchived",
+  "stale",
 ] as const;
+export const WORKBOARD_ATTEMPT_STATUSES = [
+  "running",
+  "succeeded",
+  "failed",
+  "blocked",
+  "stopped",
+] as const;
+export const WORKBOARD_LINK_TYPES = ["blocks", "blocked_by", "relates_to"] as const;
+export const WORKBOARD_PROOF_STATUSES = ["passed", "failed", "skipped", "unknown"] as const;
+export const WORKBOARD_TEMPLATE_IDS = ["bugfix", "docs", "release", "pr_review", "plugin"] as const;
 
 export const WORKBOARD_ENGINE_MODELS = {
   codex: "openai/gpt-5.5",
@@ -39,6 +57,10 @@ export type WorkboardExecutionEngine = (typeof WORKBOARD_EXECUTION_ENGINES)[numb
 export type WorkboardExecutionMode = (typeof WORKBOARD_EXECUTION_MODES)[number];
 export type WorkboardExecutionStatus = (typeof WORKBOARD_EXECUTION_STATUSES)[number];
 export type WorkboardEventKind = (typeof WORKBOARD_EVENT_KINDS)[number];
+export type WorkboardAttemptStatus = (typeof WORKBOARD_ATTEMPT_STATUSES)[number];
+export type WorkboardLinkType = (typeof WORKBOARD_LINK_TYPES)[number];
+export type WorkboardProofStatus = (typeof WORKBOARD_PROOF_STATUSES)[number];
+export type WorkboardTemplateId = (typeof WORKBOARD_TEMPLATE_IDS)[number];
 
 export type WorkboardExecution = {
   id: string;
@@ -63,6 +85,62 @@ export type WorkboardEvent = {
   runId?: string;
 };
 
+export type WorkboardRunAttempt = {
+  id: string;
+  status: WorkboardAttemptStatus;
+  startedAt: number;
+  endedAt?: number;
+  engine?: WorkboardExecutionEngine;
+  mode?: WorkboardExecutionMode;
+  model?: string;
+  sessionKey?: string;
+  runId?: string;
+  error?: string;
+};
+
+export type WorkboardComment = {
+  id: string;
+  body: string;
+  createdAt: number;
+  updatedAt?: number;
+};
+
+export type WorkboardLink = {
+  id: string;
+  type: WorkboardLinkType;
+  createdAt: number;
+  targetCardId?: string;
+  title?: string;
+  url?: string;
+};
+
+export type WorkboardProof = {
+  id: string;
+  status: WorkboardProofStatus;
+  createdAt: number;
+  label?: string;
+  command?: string;
+  url?: string;
+  note?: string;
+};
+
+export type WorkboardStaleState = {
+  detectedAt: number;
+  lastSessionUpdatedAt?: number;
+  reason: string;
+};
+
+export type WorkboardMetadata = {
+  attempts?: WorkboardRunAttempt[];
+  comments?: WorkboardComment[];
+  links?: WorkboardLink[];
+  proof?: WorkboardProof[];
+  templateId?: WorkboardTemplateId;
+  archivedAt?: number;
+  stale?: WorkboardStaleState;
+  failureCount?: number;
+};
+
 export type WorkboardCard = {
   id: string;
   title: string;
@@ -82,6 +160,7 @@ export type WorkboardCard = {
   startedAt?: number;
   completedAt?: number;
   events?: WorkboardEvent[];
+  metadata?: WorkboardMetadata;
 };
 
 export type WorkboardLifecycleState =
@@ -89,6 +168,7 @@ export type WorkboardLifecycleState =
   | "missing"
   | "idle"
   | "running"
+  | "stale"
   | "succeeded"
   | "failed";
 
@@ -116,6 +196,7 @@ export type WorkboardUiState = {
   draftLabels: string;
   draftAgentId: string;
   draftSessionKey: string;
+  draftTemplateId: WorkboardTemplateId | "";
   busyCardId: string | null;
   draggedCardId: string | null;
   syncingCardIds: Set<string>;
@@ -136,6 +217,7 @@ const SESSION_CAPTURE_HISTORY_MAX_CHARS = 6000;
 const SESSION_CAPTURE_TEXT_MAX_CHARS = 700;
 const WORKBOARD_CAPTURE_TITLE_MAX_CHARS = 180;
 const WORKBOARD_SESSION_LABEL_MAX_CHARS = 512;
+const WORKBOARD_STALE_SESSION_MS = 30 * 60 * 1000;
 
 function createDefaultState(): WorkboardUiState {
   return {
@@ -156,6 +238,7 @@ function createDefaultState(): WorkboardUiState {
     draftLabels: "",
     draftAgentId: "",
     draftSessionKey: "",
+    draftTemplateId: "",
     busyCardId: null,
     draggedCardId: null,
     syncingCardIds: new Set(),
@@ -263,6 +346,137 @@ function normalizeEvents(value: unknown): WorkboardEvent[] {
     : [];
 }
 
+function normalizeMetadata(value: unknown): WorkboardMetadata | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const attempts = Array.isArray(value.attempts)
+    ? value.attempts.flatMap((entry): WorkboardRunAttempt[] => {
+        if (
+          !isRecord(entry) ||
+          typeof entry.id !== "string" ||
+          typeof entry.startedAt !== "number"
+        ) {
+          return [];
+        }
+        const status = WORKBOARD_ATTEMPT_STATUSES.includes(entry.status as WorkboardAttemptStatus)
+          ? (entry.status as WorkboardAttemptStatus)
+          : "running";
+        return [
+          {
+            id: entry.id,
+            status,
+            startedAt: entry.startedAt,
+            ...(typeof entry.endedAt === "number" ? { endedAt: entry.endedAt } : {}),
+            ...(WORKBOARD_EXECUTION_ENGINES.includes(entry.engine as WorkboardExecutionEngine)
+              ? { engine: entry.engine as WorkboardExecutionEngine }
+              : {}),
+            ...(WORKBOARD_EXECUTION_MODES.includes(entry.mode as WorkboardExecutionMode)
+              ? { mode: entry.mode as WorkboardExecutionMode }
+              : {}),
+            ...(typeof entry.model === "string" ? { model: entry.model } : {}),
+            ...(typeof entry.sessionKey === "string" ? { sessionKey: entry.sessionKey } : {}),
+            ...(typeof entry.runId === "string" ? { runId: entry.runId } : {}),
+            ...(typeof entry.error === "string" ? { error: entry.error } : {}),
+          },
+        ];
+      })
+    : [];
+  const comments = Array.isArray(value.comments)
+    ? value.comments.flatMap((entry): WorkboardComment[] => {
+        if (
+          !isRecord(entry) ||
+          typeof entry.id !== "string" ||
+          typeof entry.body !== "string" ||
+          typeof entry.createdAt !== "number"
+        ) {
+          return [];
+        }
+        return [
+          {
+            id: entry.id,
+            body: entry.body,
+            createdAt: entry.createdAt,
+            ...(typeof entry.updatedAt === "number" ? { updatedAt: entry.updatedAt } : {}),
+          },
+        ];
+      })
+    : [];
+  const links = Array.isArray(value.links)
+    ? value.links.flatMap((entry): WorkboardLink[] => {
+        if (
+          !isRecord(entry) ||
+          typeof entry.id !== "string" ||
+          typeof entry.createdAt !== "number"
+        ) {
+          return [];
+        }
+        return [
+          {
+            id: entry.id,
+            type: WORKBOARD_LINK_TYPES.includes(entry.type as WorkboardLinkType)
+              ? (entry.type as WorkboardLinkType)
+              : "relates_to",
+            createdAt: entry.createdAt,
+            ...(typeof entry.targetCardId === "string" ? { targetCardId: entry.targetCardId } : {}),
+            ...(typeof entry.title === "string" ? { title: entry.title } : {}),
+            ...(typeof entry.url === "string" ? { url: entry.url } : {}),
+          },
+        ];
+      })
+    : [];
+  const proof = Array.isArray(value.proof)
+    ? value.proof.flatMap((entry): WorkboardProof[] => {
+        if (
+          !isRecord(entry) ||
+          typeof entry.id !== "string" ||
+          typeof entry.createdAt !== "number"
+        ) {
+          return [];
+        }
+        return [
+          {
+            id: entry.id,
+            status: WORKBOARD_PROOF_STATUSES.includes(entry.status as WorkboardProofStatus)
+              ? (entry.status as WorkboardProofStatus)
+              : "unknown",
+            createdAt: entry.createdAt,
+            ...(typeof entry.label === "string" ? { label: entry.label } : {}),
+            ...(typeof entry.command === "string" ? { command: entry.command } : {}),
+            ...(typeof entry.url === "string" ? { url: entry.url } : {}),
+            ...(typeof entry.note === "string" ? { note: entry.note } : {}),
+          },
+        ];
+      })
+    : [];
+  const stale = isRecord(value.stale)
+    ? {
+        detectedAt:
+          typeof value.stale.detectedAt === "number" ? value.stale.detectedAt : Date.now(),
+        ...(typeof value.stale.lastSessionUpdatedAt === "number"
+          ? { lastSessionUpdatedAt: value.stale.lastSessionUpdatedAt }
+          : {}),
+        reason:
+          typeof value.stale.reason === "string"
+            ? value.stale.reason
+            : "Session has not reported recent activity.",
+      }
+    : undefined;
+  const metadata: WorkboardMetadata = {
+    ...(attempts.length ? { attempts } : {}),
+    ...(comments.length ? { comments } : {}),
+    ...(links.length ? { links } : {}),
+    ...(proof.length ? { proof } : {}),
+    ...(WORKBOARD_TEMPLATE_IDS.includes(value.templateId as WorkboardTemplateId)
+      ? { templateId: value.templateId as WorkboardTemplateId }
+      : {}),
+    ...(typeof value.archivedAt === "number" ? { archivedAt: value.archivedAt } : {}),
+    ...(stale ? { stale } : {}),
+    ...(typeof value.failureCount === "number" ? { failureCount: value.failureCount } : {}),
+  };
+  return Object.keys(metadata).length ? metadata : undefined;
+}
+
 function normalizeCard(value: unknown): WorkboardCard | null {
   if (!isRecord(value)) {
     return null;
@@ -280,6 +494,7 @@ function normalizeCard(value: unknown): WorkboardCard | null {
   }
   const execution = normalizeExecution(value.execution);
   const events = normalizeEvents(value.events);
+  const metadata = normalizeMetadata(value.metadata);
   return {
     id,
     title,
@@ -301,6 +516,7 @@ function normalizeCard(value: unknown): WorkboardCard | null {
     ...(typeof value.startedAt === "number" ? { startedAt: value.startedAt } : {}),
     ...(typeof value.completedAt === "number" ? { completedAt: value.completedAt } : {}),
     ...(events.length ? { events } : {}),
+    ...(metadata ? { metadata } : {}),
   };
 }
 
@@ -385,6 +601,7 @@ function resetDraftState(state: WorkboardUiState) {
   state.draftLabels = "";
   state.draftAgentId = "";
   state.draftSessionKey = "";
+  state.draftTemplateId = "";
 }
 
 function normalizeDraftLabels(value: string): string[] {
@@ -410,11 +627,32 @@ function draftPayload(state: WorkboardUiState) {
     labels: normalizeDraftLabels(state.draftLabels),
     agentId: state.draftAgentId,
     sessionKey: state.draftSessionKey,
+    ...(state.draftTemplateId ? { templateId: state.draftTemplateId } : {}),
   };
 }
 
 function isFailedSessionStatus(status: GatewaySessionRow["status"]): boolean {
   return status === "failed" || status === "killed" || status === "timeout";
+}
+
+function staleSessionState(session: GatewaySessionRow): WorkboardStaleState | undefined {
+  if (session.status !== "running") {
+    return undefined;
+  }
+  if (session.hasActiveRun !== false) {
+    return undefined;
+  }
+  if (
+    typeof session.updatedAt !== "number" ||
+    Date.now() - session.updatedAt < WORKBOARD_STALE_SESSION_MS
+  ) {
+    return undefined;
+  }
+  return {
+    detectedAt: Date.now(),
+    lastSessionUpdatedAt: session.updatedAt,
+    reason: "Linked session has not reported recent activity.",
+  };
 }
 
 function workboardCardSessionKey(card: WorkboardCard): string | undefined {
@@ -435,6 +673,9 @@ export function getWorkboardLifecycle(
   }
   if (!session) {
     return { session: null, state: "missing" };
+  }
+  if (staleSessionState(session)) {
+    return { session, state: "stale", targetStatus: "running" };
   }
   if (session.hasActiveRun === true || session.status === "running") {
     return { session, state: "running", targetStatus: "running" };
@@ -466,6 +707,7 @@ function executionStatusForLifecycle(
 ): WorkboardExecutionStatus | undefined {
   switch (lifecycle.state) {
     case "running":
+    case "stale":
       return "running";
     case "succeeded":
       return "review";
@@ -495,6 +737,7 @@ function lifecycleSyncKey(card: WorkboardCard, lifecycle: WorkboardLifecycle): s
     card.status,
     card.updatedAt,
     lifecycle.targetStatus ?? "",
+    lifecycle.state,
     session?.status ?? "",
     session?.hasActiveRun === true ? "active" : "idle",
     session?.updatedAt ?? "",
@@ -662,6 +905,15 @@ export async function captureSessionToWorkboard(params: {
       (card) => workboardCardSessionKey(card) === params.session.key,
     );
     if (existing) {
+      if (existing.metadata?.archivedAt) {
+        const payload = await params.client.request("workboard.cards.archive", {
+          id: existing.id,
+          archived: false,
+        });
+        const restored = normalizeCardPayload(payload);
+        replaceCard(state, restored);
+        return restored;
+      }
       return existing;
     }
     const messages = await loadSessionCaptureHistory({
@@ -718,6 +970,26 @@ export async function syncWorkboardLifecycle(params: {
         ...card.execution,
         status: executionStatus,
         updatedAt: Date.now(),
+      };
+    }
+    const stale = lifecycle.session ? staleSessionState(lifecycle.session) : undefined;
+    const existingStale = card.metadata?.stale;
+    if (stale) {
+      const staleChanged =
+        !existingStale ||
+        existingStale.lastSessionUpdatedAt !== stale.lastSessionUpdatedAt ||
+        existingStale.reason !== stale.reason;
+      if (staleChanged) {
+        patch.metadata = {
+          stale: {
+            ...stale,
+            detectedAt: existingStale?.detectedAt ?? stale.detectedAt,
+          },
+        };
+      }
+    } else if (existingStale) {
+      patch.metadata = {
+        stale: null,
       };
     }
     if (Object.keys(patch).length === 0) {
@@ -856,6 +1128,33 @@ export async function deleteWorkboardCard(params: {
   }
 }
 
+export async function archiveWorkboardCard(params: {
+  host: WorkboardHost;
+  client: GatewayBrowserClient | null;
+  cardId: string;
+  requestUpdate?: () => void;
+}) {
+  const state = getWorkboardState(params.host);
+  if (!params.client) {
+    return;
+  }
+  state.busyCardId = params.cardId;
+  state.error = null;
+  params.requestUpdate?.();
+  try {
+    const payload = await params.client.request("workboard.cards.archive", {
+      id: params.cardId,
+      archived: true,
+    });
+    replaceCard(state, normalizeCardPayload(payload));
+  } catch (error) {
+    state.error = formatError(error);
+  } finally {
+    state.busyCardId = null;
+    params.requestUpdate?.();
+  }
+}
+
 function buildCardPrompt(card: WorkboardCard): string {
   const lines = [`Work on this OpenClaw Workboard card: ${card.title}`];
   if (card.notes?.trim()) {
@@ -895,7 +1194,7 @@ function buildWorkboardExecution(params: {
     mode: params.mode,
     status: params.status,
     model: WORKBOARD_ENGINE_MODELS[params.engine],
-    startedAt: params.card.execution?.startedAt ?? now,
+    startedAt: now,
     updatedAt: now,
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     ...(params.runId ? { runId: params.runId } : {}),

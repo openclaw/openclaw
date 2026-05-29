@@ -48,15 +48,17 @@ Each card stores:
 - optional agent id
 - optional linked session, run, task, or source URL
 - optional execution metadata for a Codex or Claude session started from the card
-- recent card events such as created, moved, linked, or agent-updated changes
+- compact metadata for attempts, comments, links, proof, templates, archive state, and stale-session detection
+- recent card events such as created, moved, linked, attempt, proof, archive, stale, or agent-updated changes
 
 Cards are stored in the plugin's Gateway state. They are local to the Gateway
 state directory and move with the rest of that Gateway's OpenClaw state.
 
-Workboard keeps a compact per-card event history so operators can see how a
-card moved through the board without opening the linked session. The event trail
-is intentionally local metadata; it does not replace session transcripts or
-GitHub issue history.
+Workboard keeps compact per-card metadata so operators can see how a card moved
+through the board without opening the linked session. Events, attempt summaries,
+proof snippets, related links, comments, archive markers, and stale-session
+markers are intentionally local metadata; they do not replace session
+transcripts or GitHub issue history.
 
 ## Card executions
 
@@ -74,14 +76,20 @@ Execution metadata stores the selected engine, mode, model ref, session key,
 run id, and lifecycle status on the card. Codex executions use
 `openai/gpt-5.5`; Claude executions use `anthropic/claude-sonnet-4-6`.
 
+Each linked execution also records an attempt summary on the same card record.
+The attempt summary keeps the engine, mode, model, run id, timestamps, status,
+and rolling failure count so repeated failures remain visible on the board.
+
 ## Session lifecycle sync
 
 Cards can be linked to existing dashboard sessions or to the session created
 when you start work from a card. Linked cards show the session lifecycle inline:
-running, linked idle, done, failed, or missing.
+running, stale, linked idle, done, failed, or missing.
 
 If the linked session is missing, the card stays linked for context and still
 offers start controls so you can restart work into a fresh dashboard session.
+If an active linked session stops reporting recent activity, Workboard marks the
+card stale and stores the marker as card metadata until the lifecycle clears it.
 
 You can also capture an existing dashboard session from the Sessions tab with
 Add to Workboard. The card is linked to that session, uses the session label or
@@ -118,12 +126,17 @@ lifecycle stay owned by the regular session system.
 Use Stop on a live linked card to abort the active session run. Workboard marks
 that card `blocked` so it remains visible for follow-up.
 
+New cards can start from Workboard templates for bugfixes, docs, releases, PR
+reviews, or plugin work. Templates prefill title, notes, labels, and priority,
+and the selected template id is stored as card metadata.
+
 ## Permissions
 
 The plugin registers Gateway RPC methods under the `workboard.*` namespace:
 
 - `workboard.cards.list` requires `operator.read`
-- create, update, move, and delete methods require `operator.write`
+- `workboard.cards.export` requires `operator.read`
+- create, update, move, delete, comment, link, proof, and archive methods require `operator.write`
 
 Browsers connected with read-only operator access can inspect the board but
 cannot mutate cards.

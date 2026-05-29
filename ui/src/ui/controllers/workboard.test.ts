@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../types.ts";
 import {
+  archiveWorkboardCard,
   captureSessionToWorkboard,
   createWorkboardCard,
   getWorkboardLifecycle,
@@ -48,7 +49,7 @@ const sampleCard: WorkboardCard = {
 const sampleSession: GatewaySessionRow = {
   key: "agent:main:dashboard:1",
   kind: "direct",
-  updatedAt: 2,
+  updatedAt: Date.now(),
   displayName: "Dashboard session",
   hasActiveRun: true,
   status: "running",
@@ -95,6 +96,32 @@ describe("workboard controller", () => {
     expect(state.cards[0]).toMatchObject({ id: "card-2", title: "Write tests" });
     expect(state.draftOpen).toBe(false);
     expect(state.draftSessionKey).toBe("");
+  });
+
+  it("creates template-backed cards from draft state", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.draftTitle = "Fix: flaky worker";
+    state.draftTemplateId = "bugfix";
+    const created = {
+      ...sampleCard,
+      id: "card-2",
+      title: "Fix: flaky worker",
+      metadata: { templateId: "bugfix" },
+    } satisfies WorkboardCard;
+    const client = createClient({ "workboard.cards.create": { card: created } });
+
+    await createWorkboardCard({ host, client: client as never });
+
+    expect(client.request).toHaveBeenCalledWith(
+      "workboard.cards.create",
+      expect.objectContaining({
+        title: "Fix: flaky worker",
+        templateId: "bugfix",
+      }),
+    );
+    expect(state.cards[0]?.metadata?.templateId).toBe("bugfix");
+    expect(state.draftTemplateId).toBe("");
   });
 
   it("updates cards from draft state when editing", async () => {
@@ -230,6 +257,39 @@ describe("workboard controller", () => {
 
     expect(card).toBe(existing);
     expect(client.request).not.toHaveBeenCalled();
+  });
+
+  it("restores archived captured sessions instead of leaving them hidden", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const archived = {
+      ...sampleCard,
+      sessionKey: sampleSession.key,
+      metadata: { archivedAt: 10 },
+    } satisfies WorkboardCard;
+    const restored = {
+      ...archived,
+      metadata: {},
+    } satisfies WorkboardCard;
+    state.loaded = true;
+    state.cards = [archived];
+    const client = createClient({
+      "workboard.cards.archive": { card: restored },
+    });
+
+    const card = await captureSessionToWorkboard({
+      host,
+      client: client as never,
+      session: sampleSession,
+    });
+
+    expect(card).toMatchObject({ id: restored.id, sessionKey: sampleSession.key });
+    expect(card?.metadata?.archivedAt).toBeUndefined();
+    expect(client.request).toHaveBeenCalledWith("workboard.cards.archive", {
+      id: archived.id,
+      archived: false,
+    });
+    expect(state.cards[0]?.metadata?.archivedAt).toBeUndefined();
   });
 
   it("does not start duplicate capture requests while a session is in flight", async () => {
@@ -429,6 +489,54 @@ describe("workboard controller", () => {
     );
   });
 
+  it("resets execution start time when retrying a card run", async () => {
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1234);
+    try {
+      const host = {};
+      const previous = {
+        ...sampleCard,
+        execution: {
+          id: "card-1:codex",
+          kind: "agent-session",
+          engine: "codex",
+          mode: "autonomous",
+          status: "blocked",
+          model: "openai/gpt-5.5",
+          sessionKey: "agent:main:dashboard:1",
+          runId: "run-1",
+          startedAt: 10,
+          updatedAt: 20,
+        },
+      } satisfies WorkboardCard;
+      const client = createClient({
+        "sessions.create": { key: "agent:main:dashboard:1", runId: "run-2" },
+        "workboard.cards.update": { card: previous },
+      });
+
+      await startWorkboardCard({
+        host,
+        client: client as never,
+        card: previous,
+        engine: "codex",
+      });
+
+      expect(client.request).toHaveBeenNthCalledWith(
+        2,
+        "workboard.cards.update",
+        expect.objectContaining({
+          patch: expect.objectContaining({
+            execution: expect.objectContaining({
+              runId: "run-2",
+              startedAt: 1234,
+            }),
+          }),
+        }),
+      );
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it("starts a manual Claude execution without sending the card prompt", async () => {
     const host = {};
     const running = {
@@ -571,6 +679,35 @@ describe("workboard controller", () => {
       targetStatus: "blocked",
     });
     expect(
+      getWorkboardLifecycle(linked, [
+        {
+          ...sampleSession,
+          hasActiveRun: false,
+          status: "running",
+          updatedAt: Date.now() - 31 * 60 * 1000,
+        },
+      ]),
+    ).toMatchObject({
+      state: "stale",
+      targetStatus: "running",
+    });
+    expect(
+      getWorkboardLifecycle(linked, [
+        { ...sampleSession, hasActiveRun: true, updatedAt: Date.now() - 31 * 60 * 1000 },
+      ]),
+    ).toMatchObject({
+      state: "running",
+      targetStatus: "running",
+    });
+    expect(
+      getWorkboardLifecycle(linked, [
+        { ...sampleSession, hasActiveRun: undefined, updatedAt: Date.now() - 31 * 60 * 1000 },
+      ]),
+    ).toMatchObject({
+      state: "running",
+      targetStatus: "running",
+    });
+    expect(
       getWorkboardLifecycle(
         {
           ...sampleCard,
@@ -624,6 +761,124 @@ describe("workboard controller", () => {
       patch: { status: "running" },
     });
     expect(state.cards.find((card) => card.id === "card-review")?.status).toBe("review");
+  });
+
+  it("moves stale running sessions into running while recording stale metadata", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const staleUpdatedAt = Date.now() - 31 * 60 * 1000;
+    const linked = {
+      ...sampleCard,
+      sessionKey: sampleSession.key,
+      metadata: {
+        comments: [{ id: "comment-1", body: "Keep me", createdAt: 1 }],
+      },
+    } satisfies WorkboardCard;
+    state.loaded = true;
+    state.cards = [linked];
+    const client = createClient({
+      "workboard.cards.update": {
+        card: {
+          ...linked,
+          status: "running",
+          metadata: {
+            stale: {
+              detectedAt: 1,
+              lastSessionUpdatedAt: staleUpdatedAt,
+              reason: "Linked session has not reported recent activity.",
+            },
+          },
+        },
+      },
+    });
+
+    await syncWorkboardLifecycle({
+      host,
+      client: client as never,
+      sessions: [{ ...sampleSession, updatedAt: staleUpdatedAt, hasActiveRun: false }],
+    });
+
+    expect(client.request).toHaveBeenCalledWith("workboard.cards.update", {
+      id: "card-1",
+      patch: {
+        status: "running",
+        metadata: {
+          stale: expect.objectContaining({
+            lastSessionUpdatedAt: staleUpdatedAt,
+            reason: "Linked session has not reported recent activity.",
+          }),
+        },
+      },
+    });
+  });
+
+  it("syncs stale session metadata and clears it when the session recovers", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const linked = {
+      ...sampleCard,
+      status: "running",
+      sessionKey: sampleSession.key,
+      metadata: {
+        comments: [{ id: "comment-1", body: "Keep me", createdAt: 1 }],
+        stale: {
+          detectedAt: 1,
+          lastSessionUpdatedAt: 1,
+          reason: "Linked session has not reported recent activity.",
+        },
+      },
+    } satisfies WorkboardCard;
+    state.loaded = true;
+    state.cards = [linked];
+    const client = createClient({
+      "workboard.cards.update": {
+        card: { ...linked, metadata: undefined, updatedAt: 3 },
+      },
+    });
+
+    await syncWorkboardLifecycle({
+      host,
+      client: client as never,
+      sessions: [{ ...sampleSession, updatedAt: Date.now(), hasActiveRun: true }],
+    });
+
+    expect(client.request).toHaveBeenCalledWith("workboard.cards.update", {
+      id: "card-1",
+      patch: {
+        metadata: {
+          stale: null,
+        },
+      },
+    });
+  });
+
+  it("does not rewrite unchanged stale session metadata", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const staleUpdatedAt = Date.now() - 31 * 60 * 1000;
+    const linked = {
+      ...sampleCard,
+      status: "running",
+      sessionKey: sampleSession.key,
+      metadata: {
+        stale: {
+          detectedAt: 1,
+          lastSessionUpdatedAt: staleUpdatedAt,
+          reason: "Linked session has not reported recent activity.",
+        },
+      },
+    } satisfies WorkboardCard;
+    state.loaded = true;
+    state.cards = [linked];
+    const client = createClient({ "workboard.cards.update": { card: linked } });
+
+    await syncWorkboardLifecycle({
+      host,
+      client: client as never,
+      sessions: [{ ...sampleSession, updatedAt: staleUpdatedAt, hasActiveRun: false }],
+    });
+
+    expect(client.request).not.toHaveBeenCalled();
   });
 
   it("does not mark executions blocked when the linked session is missing from the current list", async () => {
@@ -772,6 +1027,27 @@ describe("workboard controller", () => {
       patch: { status: "blocked" },
     });
     expect(getWorkboardState(host).cards[0]).toMatchObject({ status: "blocked" });
+  });
+
+  it("archives cards through the plugin gateway method", async () => {
+    const host = {};
+    const archived = {
+      ...sampleCard,
+      metadata: { archivedAt: 20 },
+    } satisfies WorkboardCard;
+    const client = createClient({ "workboard.cards.archive": { card: archived } });
+
+    await archiveWorkboardCard({
+      host,
+      client: client as never,
+      cardId: "card-1",
+    });
+
+    expect(client.request).toHaveBeenCalledWith("workboard.cards.archive", {
+      id: "card-1",
+      archived: true,
+    });
+    expect(getWorkboardState(host).cards[0]?.metadata?.archivedAt).toBe(20);
   });
 
   it("falls back to the active session abort when the stored run id is stale", async () => {

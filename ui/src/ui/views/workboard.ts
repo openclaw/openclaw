@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
 import {
+  archiveWorkboardCard,
   deleteWorkboardCard,
   findWorkboardSession,
   getWorkboardLifecycle,
@@ -19,6 +20,7 @@ import {
   type WorkboardLifecycle,
   type WorkboardPriority,
   type WorkboardStatus,
+  type WorkboardTemplateId,
   type WorkboardUiState,
 } from "../controllers/workboard.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
@@ -40,6 +42,49 @@ type WorkboardProps = {
 const WORKBOARD_GAME_SIZE = 5;
 const WORKBOARD_GAME_GOAL = WORKBOARD_GAME_SIZE * WORKBOARD_GAME_SIZE - 1;
 const WORKBOARD_GAME_BLOCKERS = new Set([6, 8, 12, 16, 18]);
+const WORKBOARD_TEMPLATES: Array<{
+  id: WorkboardTemplateId;
+  title: string;
+  notes: string;
+  labels: string;
+  priority: WorkboardPriority;
+}> = [
+  {
+    id: "bugfix",
+    title: "Fix: ",
+    notes: "Symptom:\nCause:\nAcceptance:\nProof:",
+    labels: "fix, test",
+    priority: "high",
+  },
+  {
+    id: "docs",
+    title: "Docs: ",
+    notes: "Page:\nChange:\nSource proof:",
+    labels: "docs",
+    priority: "normal",
+  },
+  {
+    id: "release",
+    title: "Release: ",
+    notes: "Scope:\nVerification:\nCloseout:",
+    labels: "release",
+    priority: "urgent",
+  },
+  {
+    id: "pr_review",
+    title: "Review PR ",
+    notes: "Surface:\nRisks:\nProof:",
+    labels: "review",
+    priority: "normal",
+  },
+  {
+    id: "plugin",
+    title: "Plugin: ",
+    notes: "Boundary:\nConfig/docs:\nTests:",
+    labels: "plugin",
+    priority: "normal",
+  },
+];
 
 function formatStatusLabel(status: WorkboardStatus): string {
   return t(`workboard.status.${status}`);
@@ -73,6 +118,22 @@ function formatEventLabel(event: WorkboardEvent): string {
       return t("workboard.eventLinked");
     case "execution_updated":
       return t("workboard.eventExecutionUpdated");
+    case "attempt_started":
+      return t("workboard.eventAttemptStarted");
+    case "attempt_updated":
+      return t("workboard.eventAttemptUpdated");
+    case "comment_added":
+      return t("workboard.eventCommentAdded");
+    case "link_added":
+      return t("workboard.eventLinkAdded");
+    case "proof_added":
+      return t("workboard.eventProofAdded");
+    case "archived":
+      return t("workboard.eventArchived");
+    case "unarchived":
+      return t("workboard.eventUnarchived");
+    case "stale":
+      return t("workboard.eventStale");
   }
   return "";
 }
@@ -96,6 +157,38 @@ function renderEvents(card: WorkboardCard) {
   `;
 }
 
+function renderMetadataBadges(card: WorkboardCard) {
+  const metadata = card.metadata;
+  if (!metadata) {
+    return nothing;
+  }
+  const badges = [
+    metadata.templateId ? t(`workboard.template.${metadata.templateId}`) : null,
+    metadata.attempts?.length
+      ? t("workboard.badgeAttempts", { count: String(metadata.attempts.length) })
+      : null,
+    metadata.failureCount
+      ? t("workboard.badgeFailures", { count: String(metadata.failureCount) })
+      : null,
+    metadata.comments?.length
+      ? t("workboard.badgeComments", { count: String(metadata.comments.length) })
+      : null,
+    metadata.links?.length
+      ? t("workboard.badgeLinks", { count: String(metadata.links.length) })
+      : null,
+    metadata.proof?.length
+      ? t("workboard.badgeProof", { count: String(metadata.proof.length) })
+      : null,
+    metadata.stale ? t("workboard.badgeStale") : null,
+  ].filter((badge): badge is string => Boolean(badge));
+  if (badges.length === 0) {
+    return nothing;
+  }
+  return html`
+    <div class="workboard-card__badges">${badges.map((badge) => html`<span>${badge}</span>`)}</div>
+  `;
+}
+
 function matchesFilter(
   card: WorkboardCard,
   options: { query: string; priority: "all" | WorkboardPriority },
@@ -116,6 +209,15 @@ function matchesFilter(
     card.execution?.mode,
     card.execution?.model,
     card.execution?.sessionKey,
+    card.metadata?.templateId,
+    ...(card.metadata?.comments ?? []).map((comment) => comment.body),
+    ...(card.metadata?.links ?? []).flatMap((link) => [link.title, link.url, link.targetCardId]),
+    ...(card.metadata?.proof ?? []).flatMap((proof) => [
+      proof.label,
+      proof.command,
+      proof.url,
+      proof.note,
+    ]),
     ...card.labels,
   ]
     .filter((value): value is string => typeof value === "string")
@@ -166,6 +268,7 @@ function resetDraft(state: WorkboardUiState) {
   state.draftLabels = "";
   state.draftAgentId = "";
   state.draftSessionKey = "";
+  state.draftTemplateId = "";
 }
 
 function openCreateModal(state: WorkboardUiState) {
@@ -218,6 +321,19 @@ function openEditModal(state: WorkboardUiState, card: WorkboardCard) {
   state.draftLabels = card.labels.join(", ");
   state.draftAgentId = card.agentId ?? "";
   state.draftSessionKey = card.sessionKey ?? "";
+  state.draftTemplateId = card.metadata?.templateId ?? "";
+}
+
+function applyTemplate(state: WorkboardUiState, templateId: WorkboardTemplateId) {
+  const template = WORKBOARD_TEMPLATES.find((entry) => entry.id === templateId);
+  if (!template) {
+    return;
+  }
+  state.draftTemplateId = template.id;
+  state.draftTitle = template.title;
+  state.draftNotes = template.notes;
+  state.draftLabels = template.labels;
+  state.draftPriority = template.priority;
 }
 
 function renderGameArrow(
@@ -406,6 +522,28 @@ function renderCardModal(props: WorkboardProps) {
             ${icons.x}
           </button>
         </div>
+        ${!editing
+          ? html`
+              <div class="workboard-template-strip" aria-label=${t("workboard.templatesLabel")}>
+                ${WORKBOARD_TEMPLATES.map(
+                  (template) => html`
+                    <button
+                      class="btn btn--xs ${state.draftTemplateId === template.id
+                        ? "workboard-template-strip__button--active"
+                        : ""}"
+                      type="button"
+                      @click=${() => {
+                        applyTemplate(state, template.id);
+                        props.onRequestUpdate?.();
+                      }}
+                    >
+                      ${t(`workboard.template.${template.id}`)}
+                    </button>
+                  `,
+                )}
+              </div>
+            `
+          : nothing}
         <div class="workboard-draft__main">
           <label class="workboard-field">
             <span>${t("workboard.fieldTitle")}</span>
@@ -560,6 +698,12 @@ function formatLifecycle(lifecycle: WorkboardLifecycle): {
         detail: t("workboard.lifecycleNeedsReviewDetail"),
         tone: "blocked",
       };
+    case "stale":
+      return {
+        label: t("workboard.lifecycleStale"),
+        detail: t("workboard.lifecycleStaleDetail"),
+        tone: "blocked",
+      };
     case "idle":
       return {
         label: t("workboard.lifecycleLinked"),
@@ -587,13 +731,14 @@ function renderLifecycle(card: WorkboardCard, sessions: readonly GatewaySessionR
   const formatted = formatLifecycle(lifecycle);
   const session = lifecycle.session;
   const execution = card.execution;
+  const stale = lifecycle.state === "stale";
   return html`
     <div class="workboard-card__lifecycle">
       <span class="workboard-lifecycle workboard-lifecycle--${formatted.tone}">
-        ${execution ? `${execution.engine} ${execution.mode}` : formatted.label}
+        ${stale || !execution ? formatted.label : `${execution.engine} ${execution.mode}`}
       </span>
       <span class="workboard-card__lifecycle-detail">
-        ${session?.displayName ?? session?.label ?? formatted.detail}
+        ${stale ? formatted.detail : (session?.displayName ?? session?.label ?? formatted.detail)}
       </span>
     </div>
   `;
@@ -655,7 +800,9 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
   const session = findWorkboardSession(card, props.sessions);
   const busy = state.busyCardId === card.id;
   const syncing = state.syncingCardIds.has(card.id);
-  const live = session?.hasActiveRun === true || session?.status === "running";
+  const live =
+    session?.hasActiveRun === true ||
+    (session?.hasActiveRun !== false && session?.status === "running");
   const linkedSessionKey = card.sessionKey ?? card.execution?.sessionKey;
   const linked = Boolean(linkedSessionKey);
   const writable = canMutate(props);
@@ -709,6 +856,7 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
             ${card.labels.map((label) => html`<span>${label}</span>`)}
           </div>`
         : nothing}
+      ${renderMetadataBadges(card)}
       <div class="workboard-card__meta">
         ${card.agentId
           ? html`<span>${card.agentId}</span>`
@@ -763,6 +911,20 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
         ${showStartControls ? renderStartExecutionControls(props, card) : nothing}
         ${writable
           ? html`
+              <button
+                class="btn btn--icon workboard-card__icon"
+                title=${t("workboard.archiveCard")}
+                ?disabled=${busy}
+                @click=${() =>
+                  archiveWorkboardCard({
+                    host: props.host,
+                    client: props.client,
+                    cardId: card.id,
+                    requestUpdate: props.onRequestUpdate,
+                  })}
+              >
+                ${icons.check}
+              </button>
               <button
                 class="btn btn--icon workboard-card__icon workboard-card__delete"
                 title=${t("workboard.deleteCard")}
@@ -855,9 +1017,9 @@ export function renderWorkboard(props: WorkboardProps) {
     `;
   }
 
-  const filtered = state.cards.filter((card) =>
-    matchesFilter(card, { query: state.query, priority: state.priorityFilter }),
-  );
+  const filtered = state.cards
+    .filter((card) => !card.metadata?.archivedAt)
+    .filter((card) => matchesFilter(card, { query: state.query, priority: state.priorityFilter }));
   const writable = canMutate(props);
   const byStatus = new Map<WorkboardStatus, WorkboardCard[]>();
   for (const status of state.statuses) {
