@@ -102,6 +102,7 @@ describe("nodes exec approvals rendering", () => {
                 {
                   id: "default-shell-network-fetch",
                   pattern: "(?:^|[\\s;&|()<>])(?:curl|wget)(?:$|[\\s;&|()<>])",
+                  reason: "Block shell network fetch commands.",
                 },
               ],
             },
@@ -114,6 +115,7 @@ describe("nodes exec approvals rendering", () => {
     expect(card.textContent).toContain("Denylist");
     expect(card.textContent).toContain("default-shell-network-fetch");
     expect(card.textContent).toContain("(?:^|[\\s;&|()<>])(?:curl|wget)(?:$|[\\s;&|()<>])");
+    expect(card.textContent).toContain("Block shell network fetch commands.");
     expect(
       Array.from(card.querySelectorAll("option")).some(
         (option) => option.value === "denylist" && option.textContent?.trim() === "Denylist",

@@ -6,6 +6,33 @@ import {
 } from "./index.js";
 
 describe("exec approvals protocol validators", () => {
+  it("accepts denylist explanations preserved from managed defaults", () => {
+    const file = {
+      version: 1 as const,
+      agents: {
+        "*": {
+          denylist: [
+            {
+              id: "local-secret-config-access",
+              pattern: String.raw`(?:^|[\s;&|()<>])(?:secrets?|tokens?)(?:$|[\s;&|()<>])`,
+              flags: "i",
+              reason: "Block commands that reference local credentials.",
+            },
+          ],
+        },
+      },
+    };
+
+    expect(validateExecApprovalsSetParams({ file, baseHash: "abc123" })).toBe(true);
+    expect(
+      validateExecApprovalsNodeSetParams({
+        nodeId: "node-1",
+        file,
+        baseHash: "abc123",
+      }),
+    ).toBe(true);
+  });
+
   it("accepts runtime-owned allowlist metadata on gateway and node set payloads", () => {
     const file = {
       version: 1 as const,

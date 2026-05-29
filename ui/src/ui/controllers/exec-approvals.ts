@@ -23,6 +23,7 @@ export type ExecApprovalsDenylistObjectEntry = {
   id?: string;
   pattern: string;
   flags?: string;
+  reason?: string;
 };
 
 export type ExecApprovalsDenylistEntry = string | ExecApprovalsDenylistObjectEntry;

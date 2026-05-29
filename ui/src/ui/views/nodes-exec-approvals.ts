@@ -557,6 +557,10 @@ function getDenylistFlags(entry: ExecApprovalsDenylistEntry): unknown {
   return typeof entry === "string" ? undefined : entry.flags;
 }
 
+function getDenylistReason(entry: ExecApprovalsDenylistEntry): string | undefined {
+  return typeof entry === "string" ? undefined : entry.reason;
+}
+
 function getDenylistFlagsText(flags: unknown): string | undefined {
   return typeof flags === "string" ? flags : undefined;
 }
@@ -573,6 +577,7 @@ function renderDenylistEntry(
   const pattern = getDenylistPattern(entry);
   const rawFlags = getDenylistFlags(entry);
   const flags = getDenylistFlagsText(rawFlags);
+  const reason = getDenylistReason(entry)?.trim();
   const title = getDenylistId(entry)?.trim() || `Rule ${index + 1}`;
   return html`
     <div class="list-item">
@@ -580,6 +585,7 @@ function renderDenylistEntry(
         <div class="list-title">${title}</div>
         <div class="list-sub mono">${pattern.trim() ? pattern : "New rule"}</div>
         ${flags?.trim() ? html`<div class="list-sub">Flags: ${flags}</div>` : nothing}
+        ${reason ? html`<div class="list-sub">${reason}</div>` : nothing}
       </div>
       <div class="list-meta">
         <label class="field">

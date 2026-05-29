@@ -22,6 +22,7 @@ export const ExecApprovalsDenylistEntrySchema = Type.Union([
       id: Type.Optional(NonEmptyString),
       pattern: Type.String(),
       flags: Type.Optional(Type.String()),
+      reason: Type.Optional(Type.String()),
     },
     { additionalProperties: false },
   ),

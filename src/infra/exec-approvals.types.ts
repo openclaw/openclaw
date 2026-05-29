@@ -13,4 +13,5 @@ export type ExecDenylistEntry = {
   id?: string;
   pattern: string;
   flags?: string;
+  reason?: string;
 };
