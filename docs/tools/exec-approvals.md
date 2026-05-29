@@ -150,7 +150,10 @@ when set at the narrower session or agent scope.
 `denylist` entries are regex patterns evaluated before approval prompts,
 allowlist matches, safe-bin matches, durable `allow-always` trust, and process
 spawn. A match denies the command immediately and logs a policy denial. There is
-no approval override.
+no approval override. The only exception is OpenClaw's exact managed default
+`curl`/`wget` rule in `allowlist` mode; that seed rule is enforced in denylist
+mode and denylist fallback mode, while edited or custom denylist rules still win
+over allowlist trust.
 
 For setup steps, rule examples, UI guidance, default curl/wget behavior, and
 troubleshooting, see [Exec denylist](/tools/exec-denylist).
@@ -158,10 +161,13 @@ troubleshooting, see [Exec denylist](/tools/exec-denylist).
 Set `tools.exec.logDenylistDenials: false` to suppress denylist decision log
 entries. The default is `true`.
 
-The default approvals file created by OpenClaw includes normal denylist entries
-for `curl` and `wget`, because shell network fetches can bypass purpose-built
-web/search tools and can return prompt-injection payloads. Operators can edit or
-remove those entries like any other denylist rule.
+The default approvals file created by OpenClaw includes a managed wildcard
+denylist entry for `curl` and `wget`, because shell network fetches can bypass
+purpose-built web/search tools and can return prompt-injection payloads.
+Operators can edit or remove that entry like any other denylist rule. The exact
+managed default is not applied while the effective security mode is `allowlist`;
+add or edit a denylist entry if your allowlist deployment also needs to block
+those commands.
 
 ```json
 {

@@ -317,6 +317,81 @@ struct ExecApprovalsStoreRefactorTests {
     }
 
     @Test
+    func `approval evaluator keeps managed default deny rules out of allowlist mode`() async throws {
+        try await self.withTempStateDir { _ in
+            let url = ExecApprovalsStore.fileURL()
+            try FileManager().createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true)
+            let approvalsJSON = """
+                {
+                  "version": 1,
+                  "managedDefaults": { "denylistVersion": 1 },
+                  "defaults": {
+                    "security": "allowlist",
+                    "ask": "off"
+                  },
+                  "agents": {
+                    "*": {
+                      "allowlist": [{ "pattern": "*" }],
+                      "denylist": [{
+                        "id": "default-shell-network-fetch",
+                        "pattern": "(?:^|[\\\\s;&|()<>])(?:curl|wget)(?:\\\\.exe)?(?:$|[\\\\s;&|()<>$])|[\\\\\\\\/](?:curl|wget)(?:\\\\.exe)?(?:$|[\\\\s;&|()<>$])",
+                        "flags": "i"
+                      }]
+                    }
+                  }
+                }
+                """
+            try Data(approvalsJSON.utf8).write(to: url)
+
+            let evaluation = await ExecApprovalEvaluator.evaluate(
+                command: ["curl", "https://example.test/prompt"],
+                rawCommand: nil,
+                cwd: nil,
+                envOverrides: ["PATH": "/usr/bin:/bin"],
+                agentId: "main")
+            #expect(evaluation.security == .allowlist)
+            #expect(!evaluation.denylistDenied)
+        }
+    }
+
+    @Test
+    func `approval evaluator applies explicit deny rules in allowlist mode`() async throws {
+        try await self.withTempStateDir { _ in
+            let url = ExecApprovalsStore.fileURL()
+            try FileManager().createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true)
+            let approvalsJSON = """
+                {
+                  "version": 1,
+                  "defaults": {
+                    "security": "allowlist",
+                    "ask": "off"
+                  },
+                  "agents": {
+                    "*": {
+                      "allowlist": [{ "pattern": "*" }],
+                      "denylist": [{ "pattern": "curl" }]
+                    }
+                  }
+                }
+                """
+            try Data(approvalsJSON.utf8).write(to: url)
+
+            let evaluation = await ExecApprovalEvaluator.evaluate(
+                command: ["curl", "https://example.test/prompt"],
+                rawCommand: nil,
+                cwd: nil,
+                envOverrides: ["PATH": "/usr/bin:/bin"],
+                agentId: "main")
+            #expect(evaluation.security == .allowlist)
+            #expect(evaluation.denylistDenied)
+        }
+    }
+
+    @Test
     func `approval evaluator applies denylist fallback in full mode before prompt approval`() async throws {
         try await self.withTempStateDir { _ in
             let url = ExecApprovalsStore.fileURL()

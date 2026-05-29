@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import OpenClaw
 
@@ -126,6 +127,17 @@ struct ExecDenylistEvaluatorTests {
             displayCommand: "/usr/bin/printf ok",
             env: [:],
             denylist: [ExecDenylistEntry(id: "bad", pattern: "curl", flags: "g")]))
+    }
+
+    @Test func `decoded non-string denylist flags fail closed`() throws {
+        let data = #"{"pattern":"curl","flags":42}"#.data(using: .utf8)!
+        let entry = try JSONDecoder().decode(ExecDenylistEntry.self, from: data)
+
+        #expect(ExecDenylistEvaluator.denied(
+            command: ["/usr/bin/printf", "ok"],
+            displayCommand: "/usr/bin/printf ok",
+            env: [:],
+            denylist: [entry]))
     }
 
     @Test func `unsafe denylist regexes fail closed`() {

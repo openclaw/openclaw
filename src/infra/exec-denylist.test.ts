@@ -3,9 +3,28 @@ import {
   DEFAULT_EXEC_DENYLIST_ENTRIES,
   MAX_EXEC_DENYLIST_RULES,
   evaluateExecDenylist,
+  resolveExecDenylistForSecurity,
 } from "./exec-denylist.js";
 
 describe("exec denylist evaluator", () => {
+  it("keeps managed default rules out of allowlist-mode prechecks", () => {
+    expect(resolveExecDenylistForSecurity("allowlist", DEFAULT_EXEC_DENYLIST_ENTRIES)).toEqual([]);
+    expect(resolveExecDenylistForSecurity("denylist", DEFAULT_EXEC_DENYLIST_ENTRIES)).toEqual(
+      DEFAULT_EXEC_DENYLIST_ENTRIES,
+    );
+  });
+
+  it("preserves explicit allowlist-mode deny rules", () => {
+    const rule = { pattern: String.raw`(?:^|\s)echo(?:\s|$)` };
+    expect(resolveExecDenylistForSecurity("allowlist", [rule])).toEqual([rule]);
+  });
+
+  it("treats edited managed-default entries as explicit allowlist-mode deny rules", () => {
+    const [defaultEntry] = DEFAULT_EXEC_DENYLIST_ENTRIES;
+    const editedDefault = { ...defaultEntry, pattern: "echo" };
+    expect(resolveExecDenylistForSecurity("allowlist", [editedDefault])).toEqual([editedDefault]);
+  });
+
   it("denies raw command line matches", () => {
     const result = evaluateExecDenylist({
       command: "printf ok\nrm -rf /",

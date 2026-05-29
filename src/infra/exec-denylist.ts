@@ -17,6 +17,34 @@ export const DEFAULT_EXEC_DENYLIST_ENTRIES: readonly ExecDenylistEntry[] = [
   },
 ];
 
+const DEFAULT_EXEC_DENYLIST_ENTRY_BY_ID = new Map(
+  DEFAULT_EXEC_DENYLIST_ENTRIES.filter((entry) => entry.id).map((entry) => [entry.id, entry]),
+);
+
+export function isManagedDefaultExecDenylistEntry(entry: ExecDenylistEntry): boolean {
+  if (!entry.id) {
+    return false;
+  }
+  const managedDefault = DEFAULT_EXEC_DENYLIST_ENTRY_BY_ID.get(entry.id);
+  return (
+    managedDefault?.pattern === entry.pattern &&
+    (managedDefault.flags ?? undefined) === (entry.flags ?? undefined)
+  );
+}
+
+export function resolveExecDenylistForSecurity(
+  security: "deny" | "denylist" | "allowlist" | "full",
+  denylist: readonly ExecDenylistEntry[],
+): readonly ExecDenylistEntry[] {
+  if (security === "denylist") {
+    return denylist;
+  }
+  if (security === "allowlist") {
+    return denylist.filter((entry) => !isManagedDefaultExecDenylistEntry(entry));
+  }
+  return [];
+}
+
 const DEFAULT_SHELL_NETWORK_FETCH_ID = "default-shell-network-fetch";
 const DEFAULT_SHELL_NETWORK_FETCH_INVOCATION_REGEX =
   /(?:^|[;&|()<>])\s*(?:[^\s;&|()<>]*[\\/])?(?:curl|wget)(?:\.exe)?(?:$|[\s;&|()<>$])/iu;

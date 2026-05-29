@@ -176,6 +176,8 @@ struct ExecDenylistEntry: Codable, Hashable, Identifiable {
     var pattern: String
     var flags: String?
 
+    private static let malformedFlags = "\u{0}"
+
     private enum CodingKeys: String, CodingKey {
         case id
         case pattern
@@ -207,7 +209,17 @@ struct ExecDenylistEntry: Codable, Hashable, Identifiable {
 
         self.id = try? container.decodeIfPresent(String.self, forKey: .id)
         self.pattern = (try? container.decodeIfPresent(String.self, forKey: .pattern)) ?? ""
-        self.flags = try? container.decodeIfPresent(String.self, forKey: .flags)
+        if container.contains(.flags) {
+            if (try? container.decodeNil(forKey: .flags)) == true {
+                self.flags = nil
+            } else if let flags = try? container.decode(String.self, forKey: .flags) {
+                self.flags = flags
+            } else {
+                self.flags = Self.malformedFlags
+            }
+        } else {
+            self.flags = nil
+        }
     }
 
     func encode(to encoder: Encoder) throws {

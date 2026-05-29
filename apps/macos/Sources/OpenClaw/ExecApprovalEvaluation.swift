@@ -116,6 +116,20 @@ enum ExecDenylistEvaluator {
         return false
     }
 
+    static func rules(
+        for security: ExecSecurity,
+        denylist: [ExecDenylistEntry]) -> [ExecDenylistEntry]
+    {
+        switch security {
+        case .denylist:
+            denylist
+        case .allowlist:
+            denylist.filter { !self.isDefaultShellNetworkFetchEntry($0) }
+        case .deny, .full:
+            []
+        }
+    }
+
     private static func isDefaultShellNetworkFetchEntry(_ entry: ExecDenylistEntry) -> Bool {
         entry.id == self.defaultShellNetworkFetchId &&
             entry.pattern == [
@@ -926,14 +940,24 @@ enum ExecApprovalEvaluator {
         let allowlistSatisfied = security == .allowlist &&
             !allowlistResolutions.isEmpty &&
             allowlistMatches.count == allowlistResolutions.count
+        let usesDenylistFallback =
+            security == .full && ask == .always && approvals.agent.askFallback == .denylist
         let shouldEvaluateDenylist = security == .denylist ||
             security == .allowlist ||
-            (security == .full && ask == .always && approvals.agent.askFallback == .denylist)
+            usesDenylistFallback
+        let effectiveDenylist: [ExecDenylistEntry]
+        if usesDenylistFallback {
+            effectiveDenylist = approvals.denylist
+        } else {
+            effectiveDenylist = ExecDenylistEvaluator.rules(
+                for: security,
+                denylist: approvals.denylist)
+        }
         let denylistDenied = shouldEvaluateDenylist && ExecDenylistEvaluator.denied(
             command: command,
             displayCommand: displayCommand,
             env: env,
-            denylist: approvals.denylist)
+            denylist: effectiveDenylist)
 
         let skillAllow: Bool
         if approvals.agent.autoAllowSkills, !allowlistResolutions.isEmpty {

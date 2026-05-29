@@ -12,7 +12,9 @@ The exec denylist is a host exec policy mode for operators who want most shell
 commands to run, but want specific command families or command payloads to be
 blocked every time. A denylist match denies the command before approval prompts,
 allowlist matches, safe-bin matches, durable `allow-always` trust, or process
-spawn.
+spawn. The exact managed default `curl`/`wget` rule is a compatibility
+exception in `allowlist` mode; custom, edited, or operator-added denylist rules
+still win over allowlist trust.
 
 Use denylist rules for small, explicit "never run this through exec" cases. Do
 not use the exec denylist as a general URL firewall or adblock engine.
@@ -136,8 +138,15 @@ New approvals files receive a normal wildcard denylist rule for `curl` and
 }
 ```
 
-This is not a hard-coded special case. It is a normal rule entry under
-`agents["*"].denylist`, so a human operator can edit or remove it.
+This managed rule is enforced in denylist mode and when `askFallback` uses
+denylist mode. It is skipped while the effective security mode is `allowlist` so
+existing allowlist/ask workflows do not start hard-denying shell fetch commands
+only because OpenClaw seeded a default. Edit the rule, or add your own
+`curl`/`wget` denylist rule, if your allowlist deployment should also block
+those commands.
+
+Outside of that exact managed default, denylist entries are normal rule entries
+under `agents["*"].denylist`, so a human operator can edit or remove them.
 
 OpenClaw records that it has applied built-in defaults with:
 
