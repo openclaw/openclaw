@@ -461,9 +461,9 @@ function mapAgentRunTerminalOutcomeToTaskStatus(
     case "blocked":
     case "failed":
       return "failed";
+    default:
+      return outcome.reason satisfies never;
   }
-  const unhandledReason: never = outcome.reason;
-  throw new Error(`Unhandled agent run terminal outcome: ${unhandledReason}`);
 }
 
 function buildTaskLifecycleTerminalOutcome(params: {
