@@ -246,14 +246,16 @@ function stubEditedImageFlow(params?: { width?: number; height?: number }) {
 }
 
 function createFalEditProvider(params?: {
+  defaultModel?: string;
   maxInputImages?: number;
+  models?: string[];
   supportsAspectRatio?: boolean;
   aspectRatios?: string[];
 }) {
   return {
     id: "fal",
-    defaultModel: "fal-ai/flux/dev",
-    models: ["fal-ai/flux/dev", "fal-ai/flux/dev/image-to-image"],
+    defaultModel: params?.defaultModel ?? "fal-ai/flux/dev",
+    models: params?.models ?? ["fal-ai/flux/dev", "fal-ai/flux/dev/image-to-image"],
     capabilities: {
       generate: {
         maxCount: 4,
@@ -1300,6 +1302,96 @@ describe("createImageGenerateTool", () => {
     expect(details.outputFormat).toBe("jpeg");
   });
 
+  it("forwards generic fal provider options", async () => {
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+      provider: "fal",
+      model: "krea/v2/medium/text-to-image",
+      attempts: [],
+      ignoredOverrides: [],
+      images: [
+        {
+          buffer: Buffer.from("krea-out"),
+          mimeType: "image/png",
+          fileName: "krea.png",
+        },
+      ],
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
+      path: "/tmp/krea.png",
+      id: "krea.png",
+      size: 8,
+      contentType: "image/png",
+    });
+
+    const tool = createToolWithPrimaryImageModel("fal/krea/v2/medium/text-to-image");
+    await tool.execute("call-fal-krea-options", {
+      prompt: "Expressive print portrait",
+      aspectRatio: "2.35:1",
+      fal: {
+        creativity: "high",
+      },
+    });
+
+    const generateArgs = mockCallArg(generateImage, 0, "generateImage");
+    expect(generateArgs.providerOptions).toEqual({
+      fal: {
+        creativity: "high",
+      },
+    });
+    expect(generateArgs.aspectRatio).toBe("2.35:1");
+  });
+
+  it("does not infer edit resolution for fal Krea style references", async () => {
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      createFalEditProvider({
+        defaultModel: "krea/v2/medium/text-to-image",
+        models: ["krea/v2/medium/text-to-image"],
+        maxInputImages: 10,
+        supportsAspectRatio: true,
+      }),
+    ]);
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+      provider: "fal",
+      model: "krea/v2/medium/text-to-image",
+      attempts: [],
+      ignoredOverrides: [],
+      images: [
+        {
+          buffer: Buffer.from("krea-style-out"),
+          mimeType: "image/png",
+          fileName: "krea-style.png",
+        },
+      ],
+    });
+    vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
+      kind: "image",
+      buffer: Buffer.from("style-ref"),
+      contentType: "image/png",
+    });
+    vi.spyOn(imageOps, "getImageMetadata").mockResolvedValue({
+      width: 2048,
+      height: 2048,
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
+      path: "/tmp/krea-style.png",
+      id: "krea-style.png",
+      size: 14,
+      contentType: "image/png",
+    });
+
+    const tool = createToolWithPrimaryImageModel("fal/krea/v2/medium/text-to-image", {
+      workspaceDir: process.cwd(),
+    });
+    await tool.execute("call-fal-krea-style", {
+      prompt: "Style-directed portrait",
+      image: "./fixtures/style.png",
+    });
+
+    const generateArgs = mockCallArg(generateImage, 0, "generateImage");
+    expect(generateArgs.resolution).toBeUndefined();
+    expect(generateArgs.inputImages).toHaveLength(1);
+  });
+
   it.each([60.5, "60px", null])("rejects malformed OpenAI output compression %s", async (value) => {
     const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
       provider: "openai",
@@ -1972,7 +2064,7 @@ describe("createImageGenerateTool", () => {
     await expect(
       tool.execute("call-bad-aspect", { prompt: "portrait", aspectRatio: "7:5" }),
     ).rejects.toThrow(
-      "aspectRatio must be one of 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, or 21:9",
+      "aspectRatio must be one of 1:1, 2:3, 3:2, 2.35:1, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, 21:9, 4:1, 1:4, 8:1, or 1:8",
     );
   });
 
@@ -2080,7 +2172,7 @@ describe("createImageGenerateTool", () => {
       createFalEditProvider(),
     ]);
     const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage");
-    vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
+    const loadWebMedia = vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
       kind: "image",
       buffer: Buffer.from("input-image"),
       contentType: "image/png",
@@ -2093,9 +2185,10 @@ describe("createImageGenerateTool", () => {
     await expect(
       tool.execute("call-fal-edit", {
         prompt: "combine",
-        images: ["./fixtures/a.png", "./fixtures/b.png"],
+        images: ["https://example.test/a.png", "https://example.test/b.png"],
       }),
     ).rejects.toThrow("fal edit supports at most 1 reference image");
+    expect(loadWebMedia).not.toHaveBeenCalled();
     expect(generateImage).not.toHaveBeenCalled();
   });
 

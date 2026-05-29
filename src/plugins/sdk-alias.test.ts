@@ -154,6 +154,21 @@ function createExtensionApiAliasFixture(params?: {
   return { root, srcFile, distFile };
 }
 
+function writeWorkspacePackageEntry(params: {
+  root: string;
+  packageDir: string;
+  srcFile: string;
+  distFile: string;
+}) {
+  const srcFile = path.join(params.root, "packages", params.packageDir, "src", params.srcFile);
+  const distFile = path.join(params.root, "packages", params.packageDir, "dist", params.distFile);
+  mkdirSafeDir(path.dirname(srcFile));
+  mkdirSafeDir(path.dirname(distFile));
+  fs.writeFileSync(srcFile, "export {};\n", "utf-8");
+  fs.writeFileSync(distFile, "export {};\n", "utf-8");
+  return { srcFile, distFile };
+}
+
 function createPluginRuntimeAliasFixture(params?: { srcBody?: string; distBody?: string }) {
   const root = makeTempDir();
   const srcFile = path.join(root, "src", "plugins", "runtime", "index.ts");
@@ -1331,6 +1346,90 @@ describe("plugin sdk alias helpers", () => {
     });
   });
 
+  it("aliases gateway workspace packages to source when dist artifacts are missing", () => {
+    const fixture = createPluginSdkAliasFixture();
+    const gatewayClient = writeWorkspacePackageEntry({
+      root: fixture.root,
+      packageDir: "gateway-client",
+      srcFile: "index.ts",
+      distFile: "index.mjs",
+    });
+    const gatewayClientTimeouts = writeWorkspacePackageEntry({
+      root: fixture.root,
+      packageDir: "gateway-client",
+      srcFile: "timeouts.ts",
+      distFile: "timeouts.mjs",
+    });
+    const gatewayProtocol = writeWorkspacePackageEntry({
+      root: fixture.root,
+      packageDir: "gateway-protocol",
+      srcFile: "index.ts",
+      distFile: "index.mjs",
+    });
+    const gatewayProtocolSchema = writeWorkspacePackageEntry({
+      root: fixture.root,
+      packageDir: "gateway-protocol",
+      srcFile: "schema.ts",
+      distFile: "schema.mjs",
+    });
+    fs.rmSync(gatewayClient.distFile);
+    fs.rmSync(gatewayClientTimeouts.distFile);
+    fs.rmSync(gatewayProtocol.distFile);
+    fs.rmSync(gatewayProtocolSchema.distFile);
+    const sourcePluginEntry = writePluginEntry(
+      fixture.root,
+      bundledPluginFile("demo", "src/index.ts"),
+    );
+
+    const aliases = withEnv({ NODE_ENV: undefined }, () =>
+      buildPluginLoaderAliasMap(sourcePluginEntry, undefined, undefined, "dist"),
+    );
+
+    expect(fs.realpathSync(aliases["@openclaw/gateway-client"] ?? "")).toBe(
+      fs.realpathSync(gatewayClient.srcFile),
+    );
+    expect(fs.realpathSync(aliases["@openclaw/gateway-client/timeouts"] ?? "")).toBe(
+      fs.realpathSync(gatewayClientTimeouts.srcFile),
+    );
+    expect(fs.realpathSync(aliases["@openclaw/gateway-protocol"] ?? "")).toBe(
+      fs.realpathSync(gatewayProtocol.srcFile),
+    );
+    expect(fs.realpathSync(aliases["@openclaw/gateway-protocol/schema"] ?? "")).toBe(
+      fs.realpathSync(gatewayProtocolSchema.srcFile),
+    );
+  });
+
+  it("aliases gateway workspace package subpaths to dist when available", () => {
+    const fixture = createPluginSdkAliasFixture();
+    const gatewayClient = writeWorkspacePackageEntry({
+      root: fixture.root,
+      packageDir: "gateway-client",
+      srcFile: "readiness.ts",
+      distFile: "readiness.mjs",
+    });
+    const gatewayProtocol = writeWorkspacePackageEntry({
+      root: fixture.root,
+      packageDir: "gateway-protocol",
+      srcFile: "connect-error-details.ts",
+      distFile: "connect-error-details.mjs",
+    });
+    const sourcePluginEntry = writePluginEntry(
+      fixture.root,
+      bundledPluginFile("demo", "src/index.ts"),
+    );
+
+    const aliases = withEnv({ NODE_ENV: undefined }, () =>
+      buildPluginLoaderAliasMap(sourcePluginEntry, undefined, undefined, "dist"),
+    );
+
+    expect(fs.realpathSync(aliases["@openclaw/gateway-client/readiness"] ?? "")).toBe(
+      fs.realpathSync(gatewayClient.distFile),
+    );
+    expect(fs.realpathSync(aliases["@openclaw/gateway-protocol/connect-error-details"] ?? "")).toBe(
+      fs.realpathSync(gatewayProtocol.distFile),
+    );
+  });
+
   it("aliases bundled plugin package public surfaces for source plugin transforms", () => {
     const { fixture, sourceApiPath, sourceRuntimeApiPath } =
       createBundledPluginPackagePublicSurfaceAliasFixture();
@@ -2146,9 +2245,7 @@ describe("buildPluginLoaderJitiOptions", () => {
       ),
     );
 
-    expect(guardedFsCache).toContain(
-      path.join("jiti", "openclaw", "1.2.3-beta.4") + path.sep,
-    );
+    expect(guardedFsCache).toContain(path.join("jiti", "openclaw", "1.2.3-beta.4") + path.sep);
     expect(guardedFsCache.startsWith(path.join(root, "jiti") + path.sep)).toBe(false);
     expect(respectedFsCache).toContain(
       path.join(root, "jiti", "openclaw", "1.2.3-beta.4") + path.sep,

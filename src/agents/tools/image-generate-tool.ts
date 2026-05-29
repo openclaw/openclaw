@@ -101,16 +101,19 @@ import {
 
 const DEFAULT_COUNT = 1;
 const MAX_COUNT = 4;
-const MAX_INPUT_IMAGES = 5;
+const MAX_INPUT_IMAGES = 10;
 const DEFAULT_RESOLUTION: ImageGenerationResolution = "1K";
 const SUPPORTED_QUALITIES = ["low", "medium", "high", "auto"] as const;
 const SUPPORTED_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
 const SUPPORTED_BACKGROUNDS = ["transparent", "opaque", "auto"] as const;
 const SUPPORTED_OPENAI_MODERATIONS = ["low", "auto"] as const;
+const SUPPORTED_FAL_CREATIVITY = ["raw", "low", "medium", "high"] as const;
+type FalCreativity = (typeof SUPPORTED_FAL_CREATIVITY)[number];
 const SUPPORTED_ASPECT_RATIOS = new Set([
   "1:1",
   "2:3",
   "3:2",
+  "2.35:1",
   "3:4",
   "4:3",
   "4:5",
@@ -118,6 +121,10 @@ const SUPPORTED_ASPECT_RATIOS = new Set([
   "9:16",
   "16:9",
   "21:9",
+  "4:1",
+  "1:4",
+  "8:1",
+  "1:8",
 ]);
 
 const log = createSubsystemLogger("agents/tools/image-generate");
@@ -136,7 +143,7 @@ const ImageGenerateToolSchema = Type.Object({
   ),
   images: Type.Optional(
     Type.Array(Type.String(), {
-      description: `Reference images for edit; max ${MAX_INPUT_IMAGES}.`,
+      description: `Reference images for edit or style reference; max ${MAX_INPUT_IMAGES}.`,
     }),
   ),
   model: Type.Optional(
@@ -157,7 +164,8 @@ const ImageGenerateToolSchema = Type.Object({
   ),
   aspectRatio: Type.Optional(
     Type.String({
-      description: "Aspect ratio: 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, 21:9.",
+      description:
+        "Aspect ratio: 1:1, 2:3, 3:2, 2.35:1, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, 21:9, 4:1, 1:4, 8:1, 1:8.",
     }),
   ),
   resolution: Type.Optional(
@@ -195,6 +203,13 @@ const ImageGenerateToolSchema = Type.Object({
           description: "OpenAI stable end-user id.",
         }),
       ),
+    }),
+  ),
+  fal: Type.Optional(
+    Type.Object({
+      creativity: optionalStringEnum(SUPPORTED_FAL_CREATIVITY, {
+        description: "fal Krea creativity: raw, low, medium, high.",
+      }),
     }),
   ),
   count: Type.Optional(
@@ -276,7 +291,7 @@ function normalizeAspectRatio(raw: string | undefined): string | undefined {
     return normalized;
   }
   throw new ToolInputError(
-    "aspectRatio must be one of 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, or 21:9",
+    "aspectRatio must be one of 1:1, 2:3, 3:2, 2.35:1, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, 21:9, 4:1, 1:4, 8:1, or 1:8",
   );
 }
 
@@ -339,6 +354,17 @@ function normalizeOpenAIModeration(
   throw new ToolInputError("openai.moderation must be one of low or auto");
 }
 
+function normalizeFalCreativity(raw: string | undefined): FalCreativity | undefined {
+  const normalized = raw?.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  if ((SUPPORTED_FAL_CREATIVITY as readonly string[]).includes(normalized)) {
+    return normalized as FalCreativity;
+  }
+  throw new ToolInputError("fal.creativity must be one of raw, low, medium, or high");
+}
+
 function readRecordParam(params: Record<string, unknown>, key: string): Record<string, unknown> {
   const raw = params[key];
   return raw && typeof raw === "object" && !Array.isArray(raw)
@@ -371,8 +397,13 @@ function normalizeOpenAIOptions(args: Record<string, unknown>): ImageGenerationO
 function normalizeProviderOptions(
   args: Record<string, unknown>,
 ): ImageGenerationProviderOptions | undefined {
+  const falRaw = readRecordParam(args, "fal");
+  const falCreativity = normalizeFalCreativity(readStringParam(falRaw, "creativity"));
   const openai = normalizeOpenAIOptions(args);
-  return Object.keys(openai).length > 0 ? { openai } : undefined;
+  const fal = falCreativity ? { creativity: falCreativity } : undefined;
+  return fal || Object.keys(openai).length > 0
+    ? { ...(fal ? { fal } : {}), ...(Object.keys(openai).length > 0 ? { openai } : {}) }
+    : undefined;
 }
 
 function normalizeReferenceImages(args: Record<string, unknown>): string[] {
@@ -396,6 +427,35 @@ function resolveSelectedImageGenerationProvider(params: {
     modelOverride: params.modelOverride,
     parseModelRef: parseImageGenerationModelRef,
   });
+}
+
+function resolveSelectedImageGenerationModelId(params: {
+  selectedProvider: ImageGenerationProvider | undefined;
+  imageGenerationModelConfig: ToolModelConfig;
+  modelOverride?: string;
+  explicitModelRef: { provider: string; model: string } | null;
+  primaryModelRef: { provider: string; model: string } | null;
+}): string | undefined {
+  const selectedProviderId = params.selectedProvider?.id;
+  const explicitModelRef = params.explicitModelRef;
+  const primaryModelRef = params.primaryModelRef;
+  if (params.modelOverride !== undefined) {
+    if (explicitModelRef && explicitModelRef.provider === selectedProviderId) {
+      return explicitModelRef.model;
+    }
+    if (params.selectedProvider?.models?.includes(params.modelOverride)) {
+      return params.modelOverride;
+    }
+    return explicitModelRef?.model ?? params.modelOverride;
+  }
+  if (primaryModelRef && primaryModelRef.provider === selectedProviderId) {
+    return primaryModelRef.model;
+  }
+  return params.imageGenerationModelConfig.primary ?? params.selectedProvider?.defaultModel;
+}
+
+function isFalKreaImageModel(provider: ImageGenerationProvider | undefined, modelId?: string) {
+  return provider?.id === "fal" && modelId?.startsWith("krea/v2/") === true;
 }
 
 function formatIgnoredImageGenerationOverride(override: ImageGenerationIgnoredOverride): string {
@@ -874,6 +934,13 @@ export function createImageGenerateTool(options?: {
       });
       const explicitModelRef = parseImageGenerationModelRef(model);
       const primaryModelRef = parseImageGenerationModelRef(imageGenerationModelConfig.primary);
+      const selectedModelId = resolveSelectedImageGenerationModelId({
+        selectedProvider,
+        imageGenerationModelConfig,
+        modelOverride: model,
+        explicitModelRef,
+        primaryModelRef,
+      });
       const count = resolveRequestedCount(params);
       const requestKey = buildMediaGenerationRequestKey({
         tool: "image_generate",
@@ -903,6 +970,15 @@ export function createImageGenerateTool(options?: {
       if (duplicateGuardResult) {
         return duplicateGuardResult;
       }
+      validateImageGenerationCapabilities({
+        provider: selectedProvider,
+        count,
+        inputImageCount: imageInputs.length,
+        size,
+        aspectRatio,
+        resolution: explicitResolution,
+        explicitResolution: Boolean(explicitResolution),
+      });
       const configuredMediaMaxBytes = resolveConfiguredMediaMaxBytes(effectiveCfg);
       const loadedReferenceImages = await loadReferenceImages({
         imageInputs,
@@ -916,9 +992,13 @@ export function createImageGenerateTool(options?: {
         inputImages.length > 0
           ? selectedProvider?.capabilities.edit
           : selectedProvider?.capabilities.generate;
+      const suppressInferredResolution =
+        inputImages.length > 0 &&
+        !explicitResolution &&
+        isFalKreaImageModel(selectedProvider, selectedModelId);
       const resolution =
         explicitResolution ??
-        (size || modeCaps?.supportsResolution === false
+        (size || suppressInferredResolution || modeCaps?.supportsResolution === false
           ? undefined
           : inputImages.length > 0
             ? await inferResolutionFromInputImages(inputImages)
