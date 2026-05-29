@@ -208,6 +208,22 @@ describe("fetchBrowserJson loopback auth", () => {
     expect(headers.get("authorization")).toBe("Bearer loopback-token");
   });
 
+  it("does not treat explicit port zero as the default loopback bridge port", async () => {
+    mocks.resolveBrowserControlAuth.mockReturnValueOnce({
+      token: undefined,
+      password: undefined,
+    });
+    mocks.getBridgeAuthForPort.mockReturnValueOnce({ token: "bridge-token" });
+    const fetchMock = stubJsonFetchOk();
+
+    await fetchBrowserJson<{ ok: boolean }>("http://127.0.0.1:0/");
+
+    const init = requireFetchInit(fetchMock);
+    const headers = new Headers(init?.headers);
+    expect(mocks.getBridgeAuthForPort).not.toHaveBeenCalled();
+    expect(headers.get("authorization")).toBeNull();
+  });
+
   it("preserves dispatcher timeout context without no-retry hint", async () => {
     mocks.dispatch.mockRejectedValueOnce(new Error("Chrome CDP handshake timeout"));
 

@@ -1,3 +1,5 @@
+import { parseBrowserHttpUrl } from "openclaw/plugin-sdk/browser-config";
+
 /**
  * CDP port allocation for browser profiles.
  *
@@ -66,16 +68,7 @@ export function getUsedPorts(
       continue;
     }
     try {
-      const parsed = new URL(rawUrl);
-      const port =
-        parsed.port && Number.parseInt(parsed.port, 10) > 0
-          ? Number.parseInt(parsed.port, 10)
-          : parsed.protocol === "https:"
-            ? 443
-            : 80;
-      if (isValidTcpPort(port)) {
-        used.add(port);
-      }
+      used.add(parseBrowserHttpUrl(rawUrl, "browser.profiles.*.cdpUrl").port);
     } catch {
       // ignore invalid URLs
     }
