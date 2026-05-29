@@ -394,7 +394,7 @@ async function disposeSession(session: BundleMcpSession) {
       timer.unref?.();
     }),
   ]).finally(() => {
-    if (timer) clearTimeout(timer);
+    if (timer) { clearTimeout(timer); }
   });
 }
 
