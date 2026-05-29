@@ -2566,6 +2566,11 @@ describe("processDiscordMessage draft streaming", () => {
         progressText: "[[reply_to_current]] Checking route impacts.",
       });
       await params?.replyOptions?.onItemEvent?.({
+        itemId: "preamble-2",
+        kind: "preamble",
+        progressText: "NO_REPLY",
+      });
+      await params?.replyOptions?.onItemEvent?.({
         itemId: "preamble-3",
         kind: "preamble",
         progressText: "**NO_REPLY",
@@ -2595,7 +2600,7 @@ describe("processDiscordMessage draft streaming", () => {
     await runProcessDiscordMessage(ctx);
 
     expect(draftStream.update).toHaveBeenLastCalledWith(
-      "_Checking the current weather source before summarizing clearly._\n_Checking route impacts._",
+      "_Checking the current weather source before summarizing clearly._",
     );
     const updates = draftStream.update.mock.calls.map((call) => call[0]).join("\n");
     expect(updates).not.toContain("Exec");

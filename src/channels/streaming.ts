@@ -653,7 +653,8 @@ export function resolveChannelStreamingProgressCommentary(
   if (resolveChannelPreviewStreamMode(entry, "partial") !== "progress") {
     return false;
   }
-  return asBoolean(config?.progress?.commentary) ?? defaultValue;
+  const progress = asObjectRecord(config?.progress);
+  return asBoolean(progress?.commentary) ?? defaultValue;
 }
 
 export function resolveChannelStreamingPreviewCommandText(

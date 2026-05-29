@@ -122,6 +122,34 @@ export function createDiscordDraftPreviewController(params: {
     onStart: () => renderProgressDraft({ flush: true }),
   });
 
+  const clearProgressDraftLine = async (lineId: string) => {
+    const nextLines = previewToolProgressLines.filter(
+      (line) => typeof line !== "object" || line.id?.trim() !== lineId,
+    );
+    if (nextLines.length === previewToolProgressLines.length) {
+      return;
+    }
+    previewToolProgressLines = nextLines;
+    if (!progressDraftGate.hasStarted) {
+      return;
+    }
+    const previewText = formatChannelProgressDraftText({
+      entry: params.discordConfig,
+      lines: previewToolProgressLines,
+      seed: progressSeed,
+    });
+    if (previewText) {
+      await renderProgressDraft();
+      return;
+    }
+    lastPartialText = "";
+    draftText = "";
+    hasStreamedMessage = false;
+    if (draftStream?.messageId()) {
+      await draftStream.clear();
+    }
+  };
+
   const resetProgressState = () => {
     lastPartialText = "";
     draftText = "";
@@ -273,19 +301,24 @@ export function createDiscordDraftPreviewController(params: {
       }
     },
     async pushCommentaryProgress(text?: string, options?: { itemId?: string }) {
-      if (!draftStream || discordStreamMode !== "progress" || !commentaryProgressEnabled || !text) {
+      if (!draftStream || discordStreamMode !== "progress" || !commentaryProgressEnabled) {
         return;
       }
       if (finalReplyStarted || finalReplyDelivered) {
         return;
       }
-      const normalized = normalizeCommentaryProgressText(text);
-      if (!normalized) {
+      const itemId = options?.itemId?.trim();
+      if (!text && !itemId) {
         return;
       }
-      const lineId = options?.itemId?.trim()
-        ? `commentary:${options.itemId.trim()}`
-        : `commentary:${normalized}`;
+      const normalized = normalizeCommentaryProgressText(text);
+      const lineId = itemId ? `commentary:${itemId}` : normalized ? `commentary:${normalized}` : "";
+      if (!normalized) {
+        if (lineId) {
+          await clearProgressDraftLine(lineId);
+        }
+        return;
+      }
       const line: ChannelProgressDraftLine = {
         id: lineId,
         kind: "item",
