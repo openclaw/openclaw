@@ -49,6 +49,7 @@ export function resolveMaterializedSandboxSkillsRoot(rootDir: string): string {
 export function isExistingWorkspaceSkillMountSource(params: {
   rootDir: string;
   hostPath: string;
+  hostPathCache?: Map<string, string>;
 }): boolean {
   try {
     if (!fs.lstatSync(params.hostPath).isDirectory()) {
@@ -58,8 +59,14 @@ export function isExistingWorkspaceSkillMountSource(params: {
     return false;
   }
 
-  const agentRoot = resolveSandboxHostPathViaExistingAncestor(path.resolve(params.rootDir));
-  const canonicalSource = resolveSandboxHostPathViaExistingAncestor(path.resolve(params.hostPath));
+  const agentRoot = resolveSandboxHostPathViaExistingAncestor(
+    path.resolve(params.rootDir),
+    params.hostPathCache,
+  );
+  const canonicalSource = resolveSandboxHostPathViaExistingAncestor(
+    path.resolve(params.hostPath),
+    params.hostPathCache,
+  );
   return isPathInside(agentRoot, canonicalSource);
 }
 
@@ -101,11 +108,13 @@ export function resolveReadOnlyWorkspaceSkillMounts(params: {
     },
   ];
 
+  const hostPathCache = new Map<string, string>();
   return mounts
     .filter((mount) =>
       isExistingWorkspaceSkillMountSource({
         rootDir: mount.rootDir,
         hostPath: mount.hostPath,
+        hostPathCache,
       }),
     )
     .map(({ hostPath, containerPath }) => ({ hostPath, containerPath }));

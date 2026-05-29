@@ -178,6 +178,7 @@ export function resolveSandboxFsPathWithMounts(params: {
 }): SandboxResolvedFsPath {
   const mountsByContainer = [...params.mounts].toSorted(compareMountsByContainerPath);
   const mountsByHost = [...params.mounts].toSorted(compareMountsByHostPath);
+  const hostPathCache = new Map<string, string>();
   const input = params.filePath;
   const inputPosix = normalizePosixInput(input);
 
@@ -198,6 +199,7 @@ export function resolveSandboxFsPathWithMounts(params: {
       cwd: params.cwd,
       defaultContainerRoot: params.defaultContainerRoot,
       mountsByHost,
+      hostPathCache,
     });
     const protectedContainerMount = findMountByContainerPath(
       mountsByContainer,
@@ -213,7 +215,7 @@ export function resolveSandboxFsPathWithMounts(params: {
   }
 
   const hostResolved = resolveSandboxInputPath(input, params.cwd);
-  const hostMount = findMountByHostPath(mountsByHost, hostResolved);
+  const hostMount = findMountByHostPath(mountsByHost, hostResolved, hostPathCache);
   if (hostMount) {
     const relHost = path.relative(hostMount.hostRoot, hostResolved);
     const relPosix = relHost ? relHost.split(path.sep).join(path.posix.sep) : "";
@@ -276,8 +278,9 @@ function resolveRelativeContainerCandidate(params: {
   cwd: string;
   defaultContainerRoot: string;
   mountsByHost: SandboxFsMount[];
+  hostPathCache: Map<string, string>;
 }): string {
-  const cwdMount = findMountByHostPath(params.mountsByHost, path.resolve(params.cwd));
+  const cwdMount = findMountByHostPath(params.mountsByHost, path.resolve(params.cwd), params.hostPathCache);
   if (cwdMount) {
     const relHost = path.relative(cwdMount.hostRoot, path.resolve(params.cwd));
     const relPosix = relHost ? relHost.split(path.sep).join(path.posix.sep) : "";
@@ -366,22 +369,34 @@ function findMountByContainerPath(mounts: SandboxFsMount[], target: string): San
   return null;
 }
 
-function findMountByHostPath(mounts: SandboxFsMount[], target: string): SandboxFsMount | null {
+function findMountByHostPath(
+  mounts: SandboxFsMount[],
+  target: string,
+  hostPathCache: Map<string, string>,
+): SandboxFsMount | null {
   for (const mount of mounts) {
-    if (isPathInsideHost(mount.hostRoot, target)) {
+    if (isPathInsideHost(mount.hostRoot, target, hostPathCache)) {
       return mount;
     }
   }
   return null;
 }
 
-function isPathInsideHost(root: string, target: string): boolean {
-  const canonicalRoot = resolveSandboxHostPathViaExistingAncestor(path.resolve(root));
+function isPathInsideHost(
+  root: string,
+  target: string,
+  hostPathCache: Map<string, string>,
+): boolean {
+  const canonicalRoot = resolveSandboxHostPathViaExistingAncestor(
+    path.resolve(root),
+    hostPathCache,
+  );
   const resolvedTarget = path.resolve(target);
   // Preserve the final path segment so pre-existing symlink leaves are validated
   // by the dedicated symlink guard later in the bridge flow.
   const canonicalTargetParent = resolveSandboxHostPathViaExistingAncestor(
     path.dirname(resolvedTarget),
+    hostPathCache,
   );
   const canonicalTarget = path.resolve(canonicalTargetParent, path.basename(resolvedTarget));
   return isPathInside(canonicalRoot, canonicalTarget);

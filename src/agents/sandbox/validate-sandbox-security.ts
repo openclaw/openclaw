@@ -116,7 +116,10 @@ function normalizeHostPath(raw: string): string {
  * - binds that cover the system root (mounting "/" is never safe)
  * - non-absolute source paths (relative / volume names) because they are hard to validate safely
  */
-export function getBlockedBindReason(bind: string): BlockedBindReason | null {
+export function getBlockedBindReason(
+  bind: string,
+  hostPathCache?: Map<string, string>,
+): BlockedBindReason | null {
   const sourceRaw = parseBindSourcePath(bind);
   if (!isSandboxHostPathAbsolute(sourceRaw)) {
     return { kind: "non_absolute", sourcePath: sourceRaw };
@@ -128,7 +131,7 @@ export function getBlockedBindReason(bind: string): BlockedBindReason | null {
     return directReason;
   }
 
-  const canonical = resolveSandboxHostPathViaExistingAncestor(normalized);
+  const canonical = resolveSandboxHostPathViaExistingAncestor(normalized, hostPathCache);
   if (canonical !== normalized) {
     return getBlockedReasonForSourcePath(canonical, blockedHostPaths);
   }
@@ -198,7 +201,10 @@ function getBlockedHomeRoots(): string[] {
   return [...roots];
 }
 
-function normalizeAllowedRoots(roots: string[] | undefined): string[] {
+function normalizeAllowedRoots(
+  roots: string[] | undefined,
+  hostPathCache: Map<string, string>,
+): string[] {
   if (!roots?.length) {
     return [];
   }
@@ -209,7 +215,7 @@ function normalizeAllowedRoots(roots: string[] | undefined): string[] {
   const expanded = new Set<string>();
   for (const root of normalized) {
     expanded.add(root);
-    const real = resolveSandboxHostPathViaExistingAncestor(root);
+    const real = resolveSandboxHostPathViaExistingAncestor(root, hostPathCache);
     if (real !== root) {
       expanded.add(real);
     }
@@ -324,7 +330,8 @@ export function validateBindMounts(
     return;
   }
 
-  const allowedRoots = normalizeAllowedRoots(options?.allowedSourceRoots);
+  const hostPathCache = new Map<string, string>();
+  const allowedRoots = normalizeAllowedRoots(options?.allowedSourceRoots, hostPathCache);
   const blockedHostPaths = getBlockedHostPaths();
 
   for (const rawBind of binds) {
@@ -334,7 +341,7 @@ export function validateBindMounts(
     }
 
     // Fast string-only check (covers .., //, ancestor/descendant logic).
-    const blocked = getBlockedBindReason(bind);
+    const blocked = getBlockedBindReason(bind, hostPathCache);
     if (blocked) {
       throw formatBindBlockedError({ bind, reason: blocked });
     }
@@ -357,7 +364,10 @@ export function validateBindMounts(
     });
 
     // Symlink escape hardening: resolve through existing ancestors and re-check.
-    const sourceCanonical = resolveSandboxHostPathViaExistingAncestor(sourceNormalized);
+    const sourceCanonical = resolveSandboxHostPathViaExistingAncestor(
+      sourceNormalized,
+      hostPathCache,
+    );
     enforceSourcePathPolicy({
       bind,
       sourcePath: sourceCanonical,

@@ -66,12 +66,15 @@ export function getSandboxHostPathPolicyKey(raw: string): string {
  * Resolve a path through the deepest existing ancestor so parent symlinks are honored
  * even when the final source leaf does not exist yet.
  */
-export function resolveSandboxHostPathViaExistingAncestor(sourcePath: string): string {
+export function resolveSandboxHostPathViaExistingAncestor(
+  sourcePath: string,
+  cache?: Map<string, string>,
+): string {
   if (!isSandboxHostPathAbsolute(sourcePath)) {
     return sourcePath;
   }
   if (isWindowsDriveAbsolutePath(sourcePath) && process.platform !== "win32") {
     return normalizeSandboxHostPath(sourcePath);
   }
-  return normalizeSandboxHostPath(resolvePathViaExistingAncestorSync(sourcePath));
+  return normalizeSandboxHostPath(resolvePathViaExistingAncestorSync(sourcePath, cache));
 }
