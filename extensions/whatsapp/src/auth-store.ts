@@ -43,6 +43,8 @@ export function resolveDefaultWebAuthDir(): string {
   return path.join(resolveOAuthDir(), "whatsapp", DEFAULT_ACCOUNT_ID);
 }
 
+export const WA_WEB_AUTH_DIR = resolveDefaultWebAuthDir();
+
 export function readCredsJsonRaw(filePath: string): string | null {
   return readWebCredsJsonRawSync(filePath);
 }

@@ -6,6 +6,7 @@ export {
   pickWebChannel,
   readWebSelfId,
   resolveDefaultWebAuthDir,
+  WA_WEB_AUTH_DIR,
   webAuthExists,
 } from "./src/auth-store.js";
 export { createWhatsAppLoginTool } from "./src/agent-tools-login.js";

@@ -34,6 +34,15 @@ describe("WhatsApp auth dir profile resolution", () => {
     expect(authStore.resolveDefaultWebAuthDir()).toBe(expected);
   });
 
+  it("exports the legacy default auth dir as a primitive string", async () => {
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+    const authStore = await import("./auth-store.js");
+
+    const expected = path.join(tempStateDir ?? "", "credentials", "whatsapp", DEFAULT_ACCOUNT_ID);
+    expect(authStore.WA_WEB_AUTH_DIR).toBe(expected);
+    expect(typeof authStore.WA_WEB_AUTH_DIR).toBe("string");
+  });
+
   it("lists WhatsApp auth dirs under the active profile state dir", async () => {
     const accounts = await import("./accounts.js");
     process.env.OPENCLAW_STATE_DIR = tempStateDir;
