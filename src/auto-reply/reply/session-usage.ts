@@ -87,6 +87,7 @@ export async function persistSessionUsageUpdate(params: {
   lastCallUsage?: NormalizedUsage;
   modelUsed?: string;
   providerUsed?: string;
+  sessionRouteProviderUsed?: string;
   contextTokensUsed?: number;
   promptTokens?: number;
   usageIsContextSnapshot?: boolean;
@@ -162,10 +163,10 @@ export async function persistSessionUsageUpdate(params: {
                 providerUsed: params.providerUsed ?? entry.modelProvider,
                 modelUsed: params.modelUsed ?? entry.model,
               });
+          const sessionRouteProvider =
+            params.sessionRouteProviderUsed ?? params.providerUsed ?? entry.modelProvider;
           const patch: Partial<SessionEntry> = {
-            modelProvider: preserveSessionModelState
-              ? entry.modelProvider
-              : (params.providerUsed ?? entry.modelProvider),
+            modelProvider: preserveSessionModelState ? entry.modelProvider : sessionRouteProvider,
             model: preserveSessionModelState ? entry.model : (params.modelUsed ?? entry.model),
             ...(resolvedContextTokens !== undefined
               ? { contextTokens: resolvedContextTokens }
@@ -232,10 +233,10 @@ export async function persistSessionUsageUpdate(params: {
           const contextTokens = preserveUserFacingRunState
             ? entry.contextTokens
             : (params.contextTokensUsed ?? entry.contextTokens);
+          const sessionRouteProvider =
+            params.sessionRouteProviderUsed ?? params.providerUsed ?? entry.modelProvider;
           const patch: Partial<SessionEntry> = {
-            modelProvider: preserveSessionModelState
-              ? entry.modelProvider
-              : (params.providerUsed ?? entry.modelProvider),
+            modelProvider: preserveSessionModelState ? entry.modelProvider : sessionRouteProvider,
             model: preserveSessionModelState ? entry.model : (params.modelUsed ?? entry.model),
             ...(contextTokens !== undefined ? { contextTokens } : {}),
             systemPromptReport: preserveUserFacingRunState

@@ -121,6 +121,7 @@ function isEmbeddedHarnessProvider(provider: string): boolean {
 
 export function resolveReportedModelRef(params: {
   provider: string;
+  runtimeProvider?: string;
   model: string;
   assistant?: { provider?: string; model?: string } | null;
 }): {
@@ -139,6 +140,17 @@ export function resolveReportedModelRef(params: {
     return {
       provider: params.provider,
       model: params.model,
+    };
+  }
+  const runtimeProvider = params.runtimeProvider?.trim();
+  if (
+    runtimeProvider &&
+    assistantProvider === runtimeProvider &&
+    runtimeProvider !== params.provider
+  ) {
+    return {
+      provider: params.provider,
+      model: assistantModel || params.model,
     };
   }
   return {

@@ -16,6 +16,7 @@ import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { clearCliSession, setCliSessionBinding, setCliSessionId } from "../cli-session.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { isCliProvider } from "../model-selection.js";
+import { resolveUserFacingSessionProvider } from "../openai-codex-routing.js";
 import { deriveSessionTotalTokens, hasNonzeroUsage } from "../usage.js";
 
 type RunResult = Awaited<ReturnType<(typeof import("../embedded-agent.js"))["runEmbeddedAgent"]>>;
@@ -100,6 +101,13 @@ export async function updateSessionStoreAfterAgentRun(params: {
   const compactionsThisRun = Math.max(0, result.meta.agentMeta?.compactionCount ?? 0);
   const modelUsed = result.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
   const providerUsed = result.meta.agentMeta?.provider ?? fallbackProvider ?? defaultProvider;
+  const sessionRouteProviderUsed = resolveUserFacingSessionProvider({
+    provider: providerUsed,
+    model: modelUsed,
+    configuredProvider: defaultProvider,
+    fallbackProvider,
+    config: cfg,
+  });
   const agentHarnessId = normalizeOptionalString(result.meta.agentMeta?.agentHarnessId);
   const runtimeContextTokens = resolvePositiveInteger(result.meta.agentMeta?.contextTokens);
   const contextBudgetStatus = result.meta.agentMeta?.contextBudgetStatus;
@@ -159,7 +167,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
     // should not establish initial model state on an empty session.
   } else {
     setSessionRuntimeModel(next, {
-      provider: providerUsed,
+      provider: sessionRouteProviderUsed,
       model: modelUsed,
     });
   }

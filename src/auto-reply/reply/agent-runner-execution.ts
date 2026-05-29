@@ -2169,7 +2169,7 @@ export async function runAgentTurnWithFallback(params: {
                     groupSpace: normalizeOptionalString(params.sessionCtx.GroupSpace),
                     ...senderContext,
                     ...runBaseParams,
-                    provider: embeddedRunProvider,
+                    provider,
                     agentHarnessId: embeddedRunHarnessOverride,
                     agentHarnessRuntimeOverride: embeddedRunHarnessOverride,
                     sandboxSessionKey: params.runtimePolicySessionKey,

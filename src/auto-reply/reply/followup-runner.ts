@@ -14,6 +14,7 @@ import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-p
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection-cli.js";
+import { resolveUserFacingSessionProvider } from "../../agents/openai-codex-routing.js";
 import {
   buildAgentRuntimeDeliveryPlan,
   buildAgentRuntimeOutcomePlan,
@@ -970,6 +971,13 @@ export function createFollowupRunner(params: {
       const modelUsed = runResult.meta?.agentMeta?.model ?? fallbackModel ?? defaultModel;
       const providerUsed =
         runResult.meta?.agentMeta?.provider ?? fallbackProvider ?? queued.run.provider;
+      const sessionRouteProviderUsed = resolveUserFacingSessionProvider({
+        provider: providerUsed,
+        model: modelUsed,
+        configuredProvider: queued.run.provider,
+        fallbackProvider,
+        config: queued.run.config,
+      });
       const contextTokensUsed =
         resolveContextTokensForModel({
           cfg: queued.run.config,
@@ -993,6 +1001,7 @@ export function createFollowupRunner(params: {
           preserveUserFacingSessionModelState: preserveUserFacingSessionState,
           modelUsed,
           providerUsed,
+          sessionRouteProviderUsed,
           contextTokensUsed,
           systemPromptReport: runResult.meta?.systemPromptReport,
           cliSessionBinding: runResult.meta?.agentMeta?.cliSessionBinding,

@@ -1,7 +1,10 @@
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import { hasAnyAuthProfileStoreSource } from "../../agents/auth-profiles/source-check.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
-import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-codex-routing.js";
+import {
+  listOpenAIAuthProfileProvidersForAgentRuntime,
+  resolveUserFacingSessionProvider,
+} from "../../agents/openai-codex-routing.js";
 import type { SkillSnapshot } from "../../agents/skills.js";
 import { expandToolGroups, normalizeToolName } from "../../agents/tool-policy.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
@@ -882,10 +885,17 @@ async function finalizeCronRun(params: {
     finalRunResult.meta?.agentMeta?.model ??
     execution.fallbackModel ??
     execution.liveSelection.model;
-  const providerUsed =
+  const rawProviderUsed =
     finalRunResult.meta?.agentMeta?.provider ??
     execution.fallbackProvider ??
     execution.liveSelection.provider;
+  const sessionRouteProviderUsed = resolveUserFacingSessionProvider({
+    provider: rawProviderUsed,
+    model: modelUsed,
+    configuredProvider: execution.liveSelection.provider,
+    fallbackProvider: execution.fallbackProvider,
+    config: prepared.cfgWithAgentDefaults,
+  });
   const contextTokens =
     resolvePositiveContextTokens(prepared.agentCfg?.contextTokens) ??
     (await loadCronContextRuntime()).lookupContextTokens(modelUsed, {
@@ -895,15 +905,15 @@ async function finalizeCronRun(params: {
     DEFAULT_CONTEXT_TOKENS;
 
   setSessionRuntimeModel(prepared.cronSession.sessionEntry, {
-    provider: providerUsed,
+    provider: sessionRouteProviderUsed,
     model: modelUsed,
   });
   prepared.cronSession.sessionEntry.contextTokens = contextTokens;
-  if (isCliProvider(providerUsed, prepared.cfgWithAgentDefaults)) {
+  if (isCliProvider(rawProviderUsed, prepared.cfgWithAgentDefaults)) {
     const cliSessionId = finalRunResult.meta?.agentMeta?.sessionId?.trim();
     if (cliSessionId) {
       const { setCliSessionId } = await loadCliRunnerRuntime();
-      setCliSessionId(prepared.cronSession.sessionEntry, providerUsed, cliSessionId);
+      setCliSessionId(prepared.cronSession.sessionEntry, rawProviderUsed, cliSessionId);
     }
   }
   if (hasNonzeroUsage(usage)) {
@@ -919,7 +929,7 @@ async function finalizeCronRun(params: {
       estimateUsageCost({
         usage,
         cost: resolveModelCostConfig({
-          provider: providerUsed,
+          provider: rawProviderUsed,
           model: modelUsed,
           config: prepared.cfgWithAgentDefaults,
         }),
@@ -949,11 +959,11 @@ async function finalizeCronRun(params: {
     }
     telemetry = {
       model: modelUsed,
-      provider: providerUsed,
+      provider: rawProviderUsed,
       usage: telemetryUsage,
     };
   } else {
-    telemetry = { model: modelUsed, provider: providerUsed };
+    telemetry = { model: modelUsed, provider: rawProviderUsed };
   }
   await prepared.persistSessionEntry();
 

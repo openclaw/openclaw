@@ -3479,6 +3479,65 @@ describe("persistSessionUsageUpdate", () => {
     expect(stored2[sessionKey].estimatedCostUsd).toBeCloseTo(0.007725, 8);
   });
 
+  it("can persist a canonical session route while costing the raw runtime provider", async () => {
+    const storePath = await createStorePath("openclaw-usage-route-provider-");
+    const sessionKey = "main";
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      entry: { sessionId: "s1", updatedAt: Date.now() },
+    });
+
+    await persistSessionUsageUpdate({
+      storePath,
+      sessionKey,
+      cfg: {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [
+                {
+                  id: "gpt-5.5",
+                  name: "GPT-5.5",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 400_000,
+                  maxTokens: 8_192,
+                },
+              ],
+            },
+            "openai-codex": {
+              baseUrl: "https://api.openai.com/v1",
+              models: [
+                {
+                  id: "gpt-5.5",
+                  name: "GPT-5.5 Codex",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 2, output: 4, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 400_000,
+                  maxTokens: 8_192,
+                },
+              ],
+            },
+          },
+        },
+      } satisfies OpenClawConfig,
+      usage: { input: 1_000, output: 500 },
+      providerUsed: "openai-codex",
+      sessionRouteProviderUsed: "openai",
+      modelUsed: "gpt-5.5",
+      contextTokensUsed: 400_000,
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].modelProvider).toBe("openai");
+    expect(stored[sessionKey].model).toBe("gpt-5.5");
+    expect(stored[sessionKey].estimatedCostUsd).toBeCloseTo(0.004, 8);
+  });
+
   it("preserves the displayed session model when heartbeat usage uses a heartbeat model", async () => {
     const storePath = await createStorePath("openclaw-usage-heartbeat-model-");
     const sessionKey = "main";

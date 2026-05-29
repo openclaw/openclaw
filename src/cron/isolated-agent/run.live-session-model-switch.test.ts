@@ -182,6 +182,61 @@ describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206
     expect(cronSession.sessionEntry.modelProvider).toBe("anthropic");
   });
 
+  it("persists logical OpenAI route after Codex-backed cron finalization", async () => {
+    resolveConfiguredModelRefMock.mockReturnValue({
+      provider: "openai",
+      model: "gpt-5.5",
+    });
+    const cronSession = makeCronSession({
+      sessionEntry: makeCronSessionEntry({
+        model: undefined,
+        modelProvider: undefined,
+      }),
+      isNewSession: true,
+    });
+    resolveCronSessionMock.mockReturnValue(cronSession);
+    runWithModelFallbackMock.mockImplementation(async ({ provider, model }) => ({
+      result: {
+        payloads: [{ text: "task complete" }],
+        meta: {
+          agentMeta: {
+            provider: "openai-codex",
+            model: "gpt-5.5",
+            usage: { input: 100, output: 50 },
+          },
+        },
+      },
+      provider,
+      model,
+      attempts: [],
+    }));
+
+    const result = await runCronIsolatedAgentTurn(
+      makeParams({
+        cfg: {
+          agents: {
+            defaults: {
+              models: {
+                "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+              },
+            },
+          },
+        },
+        job: makeJob({
+          payload: {
+            kind: "agentTurn",
+            message: "run task",
+            model: "openai/gpt-5.5",
+          },
+        }),
+      }),
+    );
+
+    expect(result.status).toBe("ok");
+    expect(cronSession.sessionEntry.model).toBe("gpt-5.5");
+    expect(cronSession.sessionEntry.modelProvider).toBe("openai");
+  });
+
   it("retries with switched auth profile state from LiveSessionModelSwitchError", async () => {
     resolveSessionAuthProfileOverrideMock.mockResolvedValue("profile-a");
     const cronSession = makeCronSession({

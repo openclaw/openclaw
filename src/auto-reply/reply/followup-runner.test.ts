@@ -2527,6 +2527,60 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     persistSpy.mockRestore();
   });
 
+  it("keeps Codex runtime provider separate from the persisted OpenAI session route", async () => {
+    const storePath = "/tmp/openclaw-followup-codex-route-provider.json";
+    const sessionKey = "main";
+    const sessionEntry: SessionEntry = { sessionId: "session", updatedAt: Date.now() };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    const persistSpy = vi.spyOn(sessionRunAccounting, "persistRunSessionUsage");
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello world!" }],
+      meta: {
+        agentMeta: {
+          usage: { input: 10, output: 5 },
+          model: "gpt-5.5",
+          provider: "openai-codex",
+        },
+      },
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: createAsyncReplySpy() },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "openai/gpt-5.5",
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+    });
+
+    await expect(
+      runner(
+        createQueuedRun({
+          run: {
+            provider: "openai",
+            model: "gpt-5.5",
+            config: {
+              agents: {
+                defaults: {
+                  models: {
+                    "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+                  },
+                },
+              },
+            } as OpenClawConfig,
+          },
+        }),
+      ),
+    ).resolves.toBeUndefined();
+
+    const persistCall = requireMockCallArg(persistSpy, 0);
+    expect(persistCall.providerUsed).toBe("openai-codex");
+    expect(persistCall.sessionRouteProviderUsed).toBe("openai");
+    persistSpy.mockRestore();
+  });
+
   it("preserves user-facing session model state for queued internal announce fallback", async () => {
     const storePath = "/tmp/openclaw-followup-internal-announce-usage.json";
     const sessionKey = "main";

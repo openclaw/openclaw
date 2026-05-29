@@ -238,6 +238,55 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
+  it("persists logical OpenAI provider for Codex-backed OpenAI runtime metadata", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-codex-route-normalize";
+      const sessionId = "test-codex-route-normalize-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      const result: EmbeddedAgentRunResult = {
+        meta: {
+          durationMs: 1,
+          agentMeta: {
+            sessionId,
+            provider: "openai-codex",
+            model: "gpt-5.5",
+          },
+        },
+      };
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.5",
+        result,
+      });
+
+      expect(sessionStore[sessionKey]?.modelProvider).toBe("openai");
+      expect(sessionStore[sessionKey]?.model).toBe("gpt-5.5");
+      expect(loadSessionStore(storePath)[sessionKey]?.modelProvider).toBe("openai");
+    });
+  });
+
   it("clears the embedded harness pin after a CLI run", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {

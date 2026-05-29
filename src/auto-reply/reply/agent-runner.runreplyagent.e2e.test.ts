@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import {
@@ -407,6 +408,46 @@ describe("runReplyAgent heartbeat followup guard", () => {
       const { run } = createMinimalRun();
       await expect(run()).rejects.toThrow("persist exploded");
       expect(vi.mocked(scheduleFollowupDrain)).toHaveBeenCalledTimes(1);
+    } finally {
+      persistSpy.mockRestore();
+    }
+  });
+
+  it("keeps Codex runtime provider separate from the persisted OpenAI session route", async () => {
+    const accounting = await import("./session-run-accounting.js");
+    const persistSpy = vi.spyOn(accounting, "persistRunSessionUsage");
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          usage: { input: 1, output: 1 },
+          provider: "openai-codex",
+          model: "gpt-5.5",
+        },
+      },
+    });
+
+    try {
+      const { run } = createMinimalRun({
+        runOverrides: {
+          provider: "openai",
+          model: "gpt-5.5",
+          config: {
+            agents: {
+              defaults: {
+                models: {
+                  "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+                },
+              },
+            },
+          } as OpenClawConfig,
+        },
+      });
+      await run();
+
+      const persistCall = persistSpy.mock.calls[0]?.[0];
+      expect(persistCall?.providerUsed).toBe("openai-codex");
+      expect(persistCall?.sessionRouteProviderUsed).toBe("openai");
     } finally {
       persistSpy.mockRestore();
     }

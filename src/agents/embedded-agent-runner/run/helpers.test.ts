@@ -5,6 +5,7 @@ import {
   buildErrorAgentMeta,
   resolveFinalAssistantRawText,
   resolveFinalAssistantVisibleText,
+  resolveReportedModelRef,
 } from "./helpers.js";
 
 function makeAssistantMessage(
@@ -76,6 +77,41 @@ describe("resolveFinalAssistantVisibleText", () => {
     ]);
 
     expect(resolveFinalAssistantRawText(lastAssistant)).toBe("<final>keep this</final>");
+  });
+});
+
+describe("resolveReportedModelRef", () => {
+  it("reports the logical provider when Codex is only the runtime transport", () => {
+    expect(
+      resolveReportedModelRef({
+        provider: "openai",
+        runtimeProvider: "openai-codex",
+        model: "gpt-5.5",
+        assistant: { provider: "openai-codex", model: "gpt-5.5" },
+      }),
+    ).toEqual({ provider: "openai", model: "gpt-5.5" });
+  });
+
+  it("preserves explicit openai-codex selections", () => {
+    expect(
+      resolveReportedModelRef({
+        provider: "openai-codex",
+        runtimeProvider: "openai-codex",
+        model: "gpt-5.5",
+        assistant: { provider: "openai-codex", model: "gpt-5.5" },
+      }),
+    ).toEqual({ provider: "openai-codex", model: "gpt-5.5" });
+  });
+
+  it("keeps true cross-provider fallback reports", () => {
+    expect(
+      resolveReportedModelRef({
+        provider: "openai",
+        runtimeProvider: "openai-codex",
+        model: "gpt-5.5",
+        assistant: { provider: "anthropic", model: "claude-sonnet-4-6" },
+      }),
+    ).toEqual({ provider: "anthropic", model: "claude-sonnet-4-6" });
   });
 });
 
