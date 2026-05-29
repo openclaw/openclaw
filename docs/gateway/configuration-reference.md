@@ -1280,8 +1280,8 @@ One-shot jobs stay enabled until retry attempts are exhausted, then disable whil
 {
   cron: {
     failureAlert: {
-      enabled: false,
-      after: 3,
+      enabled: true,
+      after: 2,
       cooldownMs: 3600000,
       includeSkipped: false,
       mode: "announce",
@@ -1291,9 +1291,9 @@ One-shot jobs stay enabled until retry attempts are exhausted, then disable whil
 }
 ```
 
-- `enabled`: enable failure alerts for cron jobs (default: `false`).
-- `after`: consecutive failures before an alert fires (positive integer, min: `1`).
-- `cooldownMs`: minimum milliseconds between repeated alerts for the same job (non-negative integer).
+- `enabled`: controls failure alerts for cron jobs. Omit or set to `true` to alert after repeated failures; set to `false` to disable global default alerts.
+- `after`: consecutive failures before an alert fires (default: `2`; positive integer, min: `1`).
+- `cooldownMs`: minimum milliseconds between repeated alerts for the same job (default: `3600000`; non-negative integer).
 - `includeSkipped`: count consecutive skipped runs toward the alert threshold (default: `false`). Skipped runs are tracked separately and do not affect execution-error backoff.
 - `mode`: delivery mode - `"announce"` sends via a channel message; `"webhook"` posts to the configured webhook.
 - `accountId`: optional account or channel id to scope alert delivery.

@@ -195,6 +195,8 @@ for narrative text and keep technical terms in English."
 
 Failure notifications follow a separate destination path:
 
+- Failure alerts are enabled by default after repeated execution failures. Set global `cron.failureAlert.enabled: false` or per-job `failureAlert: false` to opt out.
+- By default, alerts fire after `2` consecutive failures and then wait `3600000` ms before repeating for the same job.
 - `cron.failureDestination` sets a global default for failure notifications.
 - `job.delivery.failureDestination` overrides that per job.
 - If neither is set and the job already delivers via `announce`, failure notifications now fall back to that primary announce target.
