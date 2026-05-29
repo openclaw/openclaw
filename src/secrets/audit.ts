@@ -99,6 +99,7 @@ type AuditCollector = {
   findings: SecretsAuditFinding[];
   refAssignments: RefAssignment[];
   configProviderRefPaths: Map<string, string[]>;
+  sourceManagedModelsJsonApiKeyMarkers: Map<string, Set<string>>;
   authProviderState: Map<string, ProviderAuthState>;
   filesScanned: Set<string>;
 };
@@ -121,6 +122,26 @@ function collectProviderRefPath(
     return;
   }
   collector.configProviderRefPaths.set(key, [configPath]);
+}
+
+function collectSourceManagedModelsJsonApiKeyMarker(params: {
+  collector: AuditCollector;
+  providerId: string;
+  ref: SecretRef;
+}): void {
+  const { collector, providerId, ref } = params;
+  if (ref.source !== "env") {
+    return;
+  }
+  const marker = ref.id.trim();
+  if (!marker) {
+    return;
+  }
+  const providerKey = normalizeProviderId(providerId);
+  const markers =
+    collector.sourceManagedModelsJsonApiKeyMarkers.get(providerKey) ?? new Set<string>();
+  markers.add(marker);
+  collector.sourceManagedModelsJsonApiKeyMarkers.set(providerKey, markers);
 }
 
 function trackAuthProviderState(
@@ -197,6 +218,13 @@ function collectConfigSecrets(params: {
       });
       if (target.entry.trackProviderShadowing && target.providerId) {
         collectProviderRefPath(params.collector, target.providerId, target.path);
+      }
+      if (target.entry.id === "models.providers.*.apiKey" && target.providerId) {
+        collectSourceManagedModelsJsonApiKeyMarker({
+          collector: params.collector,
+          providerId: target.providerId,
+          ref,
+        });
       }
       continue;
     }
@@ -379,6 +407,12 @@ function collectModelsJsonSecrets(params: {
         provider: providerId,
       });
     } else if (isNonEmptyString(apiKey) && !isNonSecretApiKeyMarker(apiKey)) {
+      const sourceManagedMarker = params.collector.sourceManagedModelsJsonApiKeyMarkers
+        .get(normalizeProviderId(providerId))
+        ?.has(apiKey.trim());
+      if (sourceManagedMarker) {
+        continue;
+      }
       addFinding(params.collector, {
         code: "PLAINTEXT_FOUND",
         severity: "warn",
@@ -623,6 +657,7 @@ export async function runSecretsAudit(
     findings: [],
     refAssignments: [],
     configProviderRefPaths: new Map(),
+    sourceManagedModelsJsonApiKeyMarkers: new Map(),
     authProviderState: new Map(),
     filesScanned: new Set([configPath]),
   };

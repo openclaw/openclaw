@@ -480,6 +480,53 @@ describe("secrets audit", () => {
     });
   });
 
+  it("does not flag source-managed custom env apiKey markers in models.json", async () => {
+    const customEnvMarker = "CUSTOM_PROVIDER_API_KEY";
+    await writeJsonFile(fixture.configPath, {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-completions",
+            apiKey: { source: "env", provider: "default", id: customEnvMarker },
+            models: [{ id: "gpt-5", name: "gpt-5" }],
+          },
+        },
+      },
+    });
+    await writeModelsProvider({ apiKey: customEnvMarker });
+
+    const report = await runSecretsAudit({ env: fixture.env });
+    expectModelsFinding(report, {
+      code: "PLAINTEXT_FOUND",
+      jsonPath: "providers.openai.apiKey",
+      present: false,
+    });
+  });
+
+  it("keeps custom env apiKey marker suppression scoped to its source provider", async () => {
+    const customEnvMarker = "CUSTOM_PROVIDER_API_KEY";
+    await writeJsonFile(fixture.configPath, {
+      models: {
+        providers: {
+          moonshot: {
+            baseUrl: "https://api.moonshot.cn/v1",
+            api: "openai-completions",
+            apiKey: { source: "env", provider: "default", id: customEnvMarker },
+            models: [{ id: "moonshot-v1-8k", name: "moonshot-v1-8k" }],
+          },
+        },
+      },
+    });
+    await writeModelsProvider({ apiKey: customEnvMarker });
+
+    const report = await runSecretsAudit({ env: fixture.env });
+    expectModelsFinding(report, {
+      code: "PLAINTEXT_FOUND",
+      jsonPath: "providers.openai.apiKey",
+    });
+  });
+
   it("does not flag models.json header marker values as plaintext", async () => {
     await writeModelsProvider({
       headers: {
