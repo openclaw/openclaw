@@ -935,6 +935,76 @@ describe("TelegramPollingSession", () => {
     }
   });
 
+  it("keeps isolated ingress alive when ingress typing messages show worker activity", async () => {
+    const abort = new AbortController();
+    const log = vi.fn();
+    const bot = {
+      api: {
+        deleteWebhook: vi.fn(async () => true),
+        config: { use: vi.fn() },
+      },
+      init: vi.fn(async () => undefined),
+      handleUpdate: vi.fn(async () => undefined),
+      stop: vi.fn(async () => undefined),
+    };
+    createTelegramBotMock.mockReturnValue(bot);
+
+    let onMessage: WorkerMessageListener | undefined;
+    let stopWorker: (() => void) | undefined;
+    const workerDone = new Promise<void>((resolve) => {
+      stopWorker = resolve;
+    });
+    const workerStop = vi.fn(async () => {
+      stopWorker?.();
+    });
+    const createWorker = vi.fn(() => ({
+      onMessage: vi.fn((handler: WorkerMessageListener) => {
+        onMessage = handler;
+        return () => undefined;
+      }),
+      stop: workerStop,
+      task: vi.fn(async () => {
+        await workerDone;
+      }),
+    }));
+    const watchdogHarness = installPollingStallWatchdogHarness([0]);
+    const session = createPollingSession({
+      abortSignal: abort.signal,
+      log,
+      stallThresholdMs: 30_000,
+      isolatedIngress: {
+        enabled: true,
+        createWorker,
+        drainIntervalMs: 500,
+      },
+    });
+
+    try {
+      const runPromise = session.runUntilAbort();
+      const watchdog = await watchdogHarness.waitForWatchdog();
+      onMessage?.({ type: "poll-start", offset: null, startedAt: 0 });
+      watchdogHarness.setNow(31_000);
+      onMessage?.({
+        type: "ingress-typing-sent",
+        chatId: 123,
+        sentAt: 31_000,
+      });
+      watchdogHarness.setNow(45_000);
+      watchdog?.();
+
+      expect(workerStop).not.toHaveBeenCalled();
+      expectLogIncludes(log, "ingress typing sent chat 123");
+      expectLogExcludes(log, "Polling stall detected");
+
+      abort.abort();
+      stopWorker?.();
+      await runPromise;
+    } finally {
+      watchdogHarness.restore();
+      abort.abort();
+    }
+  });
+
   it("keeps failed lanes blocked for the rest of the drain pass", async () => {
     await withTempSpool(async (tempDir) => {
       const abort = new AbortController();

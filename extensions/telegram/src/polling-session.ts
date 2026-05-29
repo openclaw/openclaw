@@ -797,6 +797,19 @@ export class TelegramPollingSession {
       if (message.type === "spooled") {
         liveness.noteGetUpdatesActivity();
       }
+      if (message.type === "ingress-typing-sent") {
+        liveness.noteGetUpdatesActivity(message.sentAt);
+        this.opts.log(`[telegram] ingress typing sent chat ${message.chatId}`);
+        return;
+      }
+      if (message.type === "ingress-typing-failed") {
+        liveness.noteGetUpdatesActivity(message.sentAt);
+        this.opts.log(
+          `[telegram] ingress typing failed chat ${message.chatId}${
+            message.message ? `: ${message.message}` : ""
+          }`,
+        );
+      }
     });
     const stopOnAbort = () => {
       void stopWorker();
