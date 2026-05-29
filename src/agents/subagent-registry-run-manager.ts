@@ -352,15 +352,12 @@ export function createSubagentRunManager(params: {
         });
         if (completion) {
           const completionStartedAt = observedStartedAt ?? completion.startedAt;
-          const completionAfterDeadline =
-            completionStartedAt === undefined
-              ? undefined
-              : resolveCompletionAfterHardRunDeadline({
-                  entry,
-                  observedStartedAt: completionStartedAt,
-                  observedEndedAt: completion.endedAt,
-                  now,
-                });
+          const completionAfterDeadline = resolveCompletionAfterHardRunDeadline({
+            entry,
+            observedStartedAt: completionStartedAt,
+            observedEndedAt: completion.endedAt,
+            now,
+          });
           if (completionAfterDeadline !== undefined) {
             await completeAsRunTimeout(completionAfterDeadline, completionStartedAt);
             return;

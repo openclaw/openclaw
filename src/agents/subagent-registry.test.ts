@@ -1516,6 +1516,54 @@ describe("subagent registry seam flow", () => {
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
   });
 
+  it("applies explicit timeout to terminal session rows without startedAt", async () => {
+    const createdAt = Date.parse("2026-03-24T12:00:00Z");
+    vi.setSystemTime(createdAt);
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        vi.setSystemTime(createdAt + 61_000);
+        return { status: "timeout" };
+      }
+      return {};
+    });
+    mocks.loadSessionStore.mockReturnValue({
+      "agent:main:subagent:child": {
+        sessionId: "sess-child",
+        status: "done",
+        updatedAt: createdAt + 61_000,
+        endedAt: createdAt + 61_000,
+      },
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-session-row-no-start-timeout",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "terminal row without start still honors timeout",
+      cleanup: "keep",
+      runTimeoutSeconds: 60,
+    });
+
+    await waitForFast(() => {
+      const run = mod
+        .listSubagentRunsForRequester("agent:main:main")
+        .find((entry) => entry.runId === "run-session-row-no-start-timeout");
+      expect(run?.endedAt).toBe(createdAt + 60_000);
+      expectRecordFields(
+        run?.outcome,
+        {
+          status: "timeout",
+          startedAt: createdAt,
+          endedAt: createdAt + 60_000,
+          elapsedMs: 60_000,
+        },
+        "terminal session row without start timeout outcome",
+      );
+    });
+    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+  });
+
   it("caps restored waits to the remaining explicit run timeout", async () => {
     const startedAt = Date.parse("2026-03-24T11:59:00Z");
     const runTimeoutSeconds = 60;
