@@ -160,6 +160,39 @@ describe("extractMathBlocks", () => {
     expect(mathBlocks.size).toBe(0);
   });
 
+  it("does NOT extract $x^2$ inside tilde fence (~~~)", () => {
+    const { mathBlocks } = extractMathBlocks("~~~\n$x^2$\n~~~");
+    expect(mathBlocks.size).toBe(0);
+  });
+
+  it("does NOT extract $x^2$ inside longer tilde fence (~~~~)", () => {
+    const { mathBlocks } = extractMathBlocks("~~~~\n$x^2$\n~~~~");
+    expect(mathBlocks.size).toBe(0);
+  });
+
+  it("does NOT extract $x^2$ inside 4-backtick fence", () => {
+    const { mathBlocks } = extractMathBlocks("````\n$x^2$\n````");
+    expect(mathBlocks.size).toBe(0);
+  });
+
+  it("does NOT extract $x^2$ inside tilde fence with info string", () => {
+    const { mathBlocks } = extractMathBlocks("~~~python\n$x^2$\n~~~");
+    expect(mathBlocks.size).toBe(0);
+  });
+
+  it("preserves math outside a closed tilde fence", () => {
+    const { mathBlocks, protectedText } = extractMathBlocks("~~~\ncode\n~~~\n$x^2$");
+    expect(mathBlocks.size).toBe(1);
+    const [[ph, { tex }]] = [...mathBlocks.entries()];
+    expect(tex).toBe("x^2");
+    expect(protectedText).toBe(`~~~\ncode\n~~~\n${ph}`);
+  });
+
+  it("does NOT extract $x^2$ when tilde fence closed by shorter fence", () => {
+    const { mathBlocks } = extractMathBlocks("~~~~\n$x^2$\n~~~");
+    expect(mathBlocks.size).toBe(0);
+  });
+
   it("does NOT extract escaped delimiters \\$5 and \\$10, outputs literal $", () => {
     const { protectedText, mathBlocks } = extractMathBlocks("\\$5 and \\$10");
     expect(mathBlocks.size).toBe(0);

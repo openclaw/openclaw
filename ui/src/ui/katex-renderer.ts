@@ -158,23 +158,64 @@ export function extractMathBlocks(markdown: string): {
   const len = markdown.length;
 
   while (i < len) {
-    if (markdown[i] === "`" && markdown[i + 1] === "`" && markdown[i + 2] === "`") {
-      const start = i;
-      i += 3;
+    // Fenced code blocks: markdown-it accepts 3+ backticks or 3+ tildes as fence openers.
+    // The closing fence must use the same character and have length >= opener length.
+    const ch = markdown[i];
+    if ((ch === "`" || ch === "~") && markdown[i + 1] === ch && markdown[i + 2] === ch) {
+      let fenceLen = 3;
+      while (i + fenceLen < len && markdown[i + fenceLen] === ch) {
+        fenceLen++;
+      }
+      const fenceStart = i;
+      i += fenceLen;
+      // Skip the info string (rest of the opening line)
       while (i < len && markdown[i] !== "\n") {
         i++;
       }
       if (i < len) {
         i++;
       }
+      // Find closing fence: same char, length >= fenceLen, on its own line
+      let closed = false;
       while (i < len) {
-        if (markdown[i] === "`" && markdown[i + 1] === "`" && markdown[i + 2] === "`") {
-          i += 3;
-          break;
+        const lineStart = i;
+        // Skip leading spaces (markdown-it allows up to 3 spaces before closing fence)
+        while (i < len && markdown[i] === " " && i - lineStart < 3) {
+          i++;
         }
-        i++;
+        if (markdown[i] === ch) {
+          let closeLen = 0;
+          while (i + closeLen < len && markdown[i + closeLen] === ch) {
+            closeLen++;
+          }
+          if (closeLen >= fenceLen) {
+            // Closing fence must be followed by whitespace or newline only
+            const afterFence = i + closeLen;
+            if (
+              afterFence >= len ||
+              markdown[afterFence] === "\n" ||
+              markdown[afterFence] === " "
+            ) {
+              i = afterFence;
+              while (i < len && markdown[i] !== "\n") {
+                i++;
+              }
+              if (i < len) {
+                i++;
+              }
+              closed = true;
+              break;
+            }
+          }
+        }
+        while (i < len && markdown[i] !== "\n") {
+          i++;
+        }
+        if (i < len) {
+          i++;
+        }
       }
-      result.push(markdown.slice(start, i));
+      result.push(markdown.slice(fenceStart, i));
       continue;
     }
 
@@ -183,14 +224,28 @@ export function extractMathBlocks(markdown: string): {
       while (i + tickCount < len && markdown[i + tickCount] === "`") {
         tickCount++;
       }
+      // 1-2 backticks: inline code (not a fence)
+      if (tickCount < 3) {
+        const closingStart = findClosingBackticks(markdown, i + tickCount, tickCount);
+        if (closingStart !== -1) {
+          result.push(markdown.slice(i, closingStart + tickCount));
+          i = closingStart + tickCount;
+          continue;
+        }
+        result.push("`");
+        i++;
+        continue;
+      }
+      // 3+ backticks without a newline after → treat as inline code (not a fence)
+      // This path is rare; the fence block above already handled the normal case
       const closingStart = findClosingBackticks(markdown, i + tickCount, tickCount);
       if (closingStart !== -1) {
         result.push(markdown.slice(i, closingStart + tickCount));
         i = closingStart + tickCount;
         continue;
       }
-      result.push("`");
-      i++;
+      result.push(markdown.slice(i, i + tickCount));
+      i += tickCount;
       continue;
     }
 
@@ -434,16 +489,26 @@ export function loadKatexCss(): void {
   if (typeof document === "undefined") {
     return;
   }
+  // Mark pending so loadKatexCss() is not re-entered while the <link> is loading
   cssLoaded = true;
   const link = document.createElement("link");
   link.rel = "stylesheet";
   import("katex/dist/katex.min.css?url")
     .then((url) => {
       link.href = url.default;
+      // The ?url import resolves once the bundler emits the asset URL,
+      // but the browser may still fail to fetch the stylesheet itself.
+      // Attach load/error handlers so failures reset cssLoaded for retry.
+      link.addEventListener("load", () => {});
+      link.addEventListener("error", () => {
+        console.warn("[katex] Browser failed to load stylesheet from", url.default);
+        cssLoaded = false;
+        link.remove();
+      });
       document.head.appendChild(link);
     })
     .catch((err) => {
-      console.warn("[katex] Failed to load CSS:", err);
+      console.warn("[katex] Failed to resolve CSS URL:", err);
       cssLoaded = false;
     });
 }
