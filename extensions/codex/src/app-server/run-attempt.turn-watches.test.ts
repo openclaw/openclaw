@@ -2147,6 +2147,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
       promptError: "codex app-server turn idle timed out waiting for turn/completed",
       codexAppServerFailure: {
         kind: "turn_completion_idle_timeout",
+        turnWatchTimeoutKind: "completion",
         transport: "stdio",
         threadId: "thread-1",
         turnId: "turn-1",

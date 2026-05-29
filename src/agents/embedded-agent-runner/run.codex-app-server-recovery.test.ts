@@ -42,6 +42,7 @@ function codexTurnCompletionIdleTimeoutAttempt(
     promptErrorSource: "prompt",
     codexAppServerFailure: {
       kind: "turn_completion_idle_timeout",
+      turnWatchTimeoutKind: "completion",
       transport: "stdio",
       threadId: "thread-1",
       turnId: "turn-1",
@@ -172,6 +173,35 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
   });
 
+  it("does not retry non-completion Codex turn watch timeouts", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      codexTurnCompletionIdleTimeoutAttempt({
+        codexAppServerFailure: {
+          kind: "turn_completion_idle_timeout",
+          turnWatchTimeoutKind: "progress",
+          transport: "stdio",
+          threadId: "thread-1",
+          turnId: "turn-1",
+          replaySafe: true,
+        },
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "codex",
+      model: "gpt-5.5",
+      runId: "run-codex-progress-idle-timeout",
+    });
+
+    expect(result.payloads?.[0]).toMatchObject({
+      isError: true,
+      text: "Request timed out before a response was generated. Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
+    });
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
+  });
+
   it("returns a timeout payload after a replay-safe turn/completed idle timeout retry is exhausted", async () => {
     mockedRunEmbeddedAttempt
       .mockResolvedValueOnce(codexTurnCompletionIdleTimeoutAttempt())
@@ -199,6 +229,7 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
       codexTurnCompletionIdleTimeoutAttempt({
         codexAppServerFailure: {
           kind: "turn_completion_idle_timeout",
+          turnWatchTimeoutKind: "completion",
           transport: "websocket",
           threadId: "thread-1",
           turnId: "turn-1",
@@ -237,6 +268,7 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
         },
         codexAppServerFailure: {
           kind: "turn_completion_idle_timeout",
+          turnWatchTimeoutKind: "completion",
           transport: "stdio",
           threadId: "thread-1",
           turnId: "turn-1",

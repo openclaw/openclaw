@@ -14,6 +14,12 @@ export function resolveCodexAppServerRecoveryRetry(params: {
   ) {
     return { retry: false, reason: failure.kind };
   }
+  if (
+    failure.kind === "turn_completion_idle_timeout" &&
+    failure.turnWatchTimeoutKind !== "completion"
+  ) {
+    return { retry: false, reason: failure.turnWatchTimeoutKind ?? "unknown_turn_watch_timeout" };
+  }
   if (failure.transport !== "stdio") {
     return { retry: false, reason: "non_stdio_transport" };
   }
