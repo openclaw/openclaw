@@ -478,6 +478,7 @@ type PreparedCronRunContext = {
   skillsSnapshot: SkillSnapshot;
   liveSelection: CronLiveSelection;
   useSubagentFallbacks: boolean;
+  modelFallbacksOverride?: string[];
   thinkLevel: ThinkLevel | undefined;
   timeoutMs: number;
   /**
@@ -649,10 +650,11 @@ async function prepareCronRunContext(params: {
     useSubagentFallbacks,
   });
   let selectedPreflightCandidate: { provider: string; model: string } | undefined;
+  let selectedPreflightCandidateIndex = -1;
   let firstUnavailablePreflight:
     | Awaited<ReturnType<typeof modelPreflightRuntime.preflightCronModelProvider>>
     | undefined;
-  for (const candidate of preflightCandidates) {
+  for (const [index, candidate] of preflightCandidates.entries()) {
     const candidatePreflight = await modelPreflightRuntime.preflightCronModelProvider({
       cfg: cfgWithAgentDefaults,
       provider: candidate.provider,
@@ -660,6 +662,7 @@ async function prepareCronRunContext(params: {
     });
     if (candidatePreflight.status === "available") {
       selectedPreflightCandidate = candidate;
+      selectedPreflightCandidateIndex = index;
       break;
     }
     firstUnavailablePreflight ??= candidatePreflight;
@@ -683,10 +686,14 @@ async function prepareCronRunContext(params: {
       }),
     };
   }
-  if (
+  const modelFallbacksOverride =
     selectedPreflightCandidate &&
     (selectedPreflightCandidate.provider !== provider || selectedPreflightCandidate.model !== model)
-  ) {
+      ? preflightCandidates
+          .slice(selectedPreflightCandidateIndex + 1)
+          .map((candidate) => `${candidate.provider}/${candidate.model}`)
+      : undefined;
+  if (selectedPreflightCandidate && modelFallbacksOverride) {
     if (firstUnavailablePreflight?.status === "unavailable") {
       logWarn(
         `[cron:${input.job.id}] Local provider preflight failed for ${firstUnavailablePreflight.provider}/${firstUnavailablePreflight.model} at ${firstUnavailablePreflight.baseUrl}; continuing with fallback ${selectedPreflightCandidate.provider}/${selectedPreflightCandidate.model}.`,
@@ -885,6 +892,7 @@ async function prepareCronRunContext(params: {
       skillsSnapshot,
       liveSelection,
       useSubagentFallbacks,
+      modelFallbacksOverride,
       thinkLevel,
       timeoutMs,
       runTimeoutOverrideMs,
@@ -1281,6 +1289,7 @@ export async function runCronIsolatedAgentTurn(params: {
       skillsSnapshot: prepared.context.skillsSnapshot,
       agentPayload: prepared.context.agentPayload,
       useSubagentFallbacks: prepared.context.useSubagentFallbacks,
+      modelFallbacksOverride: prepared.context.modelFallbacksOverride,
       agentVerboseDefault: prepared.context.agentCfg?.verboseDefault,
       liveSelection: prepared.context.liveSelection,
       cronSession: prepared.context.cronSession,

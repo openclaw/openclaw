@@ -9,6 +9,7 @@ import {
   resolveCronSessionMock,
   resetRunCronIsolatedAgentTurnHarness,
   runEmbeddedAgentMock,
+  runWithModelFallbackMock,
 } from "./isolated-agent/run.test-harness.js";
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
@@ -108,7 +109,7 @@ describe("runCronIsolatedAgentTurn model provider preflight", () => {
           defaults: {
             model: {
               primary: "ollama/qwen3:32b",
-              fallbacks: ["openrouter/nvidia/nemotron-3-super-120b-a12b:free"],
+              fallbacks: ["openrouter/nvidia/nemotron-3-super-120b-a12b:free", "openai/gpt-5.4"],
             },
           },
         },
@@ -153,9 +154,12 @@ describe("runCronIsolatedAgentTurn model provider preflight", () => {
       { provider: "ollama", model: "qwen3:32b" },
       { provider: "openrouter", model: "nvidia/nemotron-3-super-120b-a12b:free" },
     ]);
-    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toMatchObject({
+    expect(runEmbeddedAgentMock.mock.calls[0]?.[0]).toMatchObject({
       provider: "openrouter",
       model: "nvidia/nemotron-3-super-120b-a12b:free",
+    });
+    expect(runWithModelFallbackMock.mock.calls[0]?.[0]).toMatchObject({
+      fallbacksOverride: ["openai/gpt-5.4"],
     });
     expect(String(logWarnMock.mock.calls[0]?.[0] ?? "")).toContain(
       "continuing with fallback openrouter/nvidia/nemotron-3-super-120b-a12b:free",
@@ -215,6 +219,6 @@ describe("runCronIsolatedAgentTurn model provider preflight", () => {
 
     expect(result.status).toBe("skipped");
     expect(preflightCronModelProviderMock).toHaveBeenCalledOnce();
-    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 });
