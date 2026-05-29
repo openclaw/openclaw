@@ -755,6 +755,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "mcp.sessionIdleTtlMs": "MCP Runtime Idle TTL",
   ui: "UI",
   "ui.seamColor": "Accent Color",
+  "ui.mathRendering": "Math Rendering",
   "ui.assistant": "Assistant Appearance",
   "ui.assistant.name": "Assistant Name",
   "ui.assistant.avatar": "Assistant Avatar",

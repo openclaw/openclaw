@@ -19,6 +19,7 @@ import markdownItTaskLists from "markdown-it-task-lists";
 import { stripUnsupportedCitationControlMarkers } from "../../../src/shared/text/citation-control-markers.js";
 import { i18n, t } from "../i18n/index.ts";
 import { truncateText } from "./format.ts";
+import { extractMathBlocks, getKatexModule, restoreMathBlocksSync } from "./katex-renderer.ts";
 import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 
 const allowedTags = [
@@ -78,6 +79,76 @@ const sanitizeOptions = {
   ADD_DATA_URI_TAGS: ["img"],
 };
 
+// ── KaTeX: additional tags and attributes (only used when mathRendering === "katex") ──
+
+const katexAllowedTags = [
+  // SVG (KaTeX renderToString output: stretchy elements, radicals, tall delimiters, \cancel, \vec)
+  "svg",
+  "path",
+  "line",
+  // MathML (KaTeX htmlAndMathml default output mode)
+  "math",
+  "mi",
+  "mo",
+  "mn",
+  "msup",
+  "msub",
+  "msubsup",
+  "mfrac",
+  "mrow",
+  "munder",
+  "mover",
+  "munderover",
+  "mtable",
+  "mtr",
+  "mtd",
+  "mtext",
+  "mspace",
+  "mpadded",
+  "mphantom",
+  "mfenced",
+  // Metis review additions: missing MathML tags
+  "msqrt",
+  "mroot",
+  "menclose",
+  "mstyle",
+  "mlabeledtr",
+  "mglyph",
+  "semantics",
+  "annotation",
+];
+
+const katexAllowedAttrs = [
+  // SVG attributes
+  "xmlns",
+  "viewBox",
+  "d",
+  "x1",
+  "y1",
+  "x2",
+  "y2",
+  "stroke",
+  "stroke-width",
+  "fill",
+  "transform",
+  // MathML attributes
+  "mathvariant",
+  "displaystyle",
+  "scriptlevel",
+  "linethickness",
+  "lspace",
+  "rspace",
+  "stretchy",
+  "symmetric",
+  "maxsize",
+  "minsize",
+  "movablelimits",
+];
+
+// Security: <use> href/xlink:href is a known XSS vector (CVE-2023-26485).
+// KaTeX does not produce <use> tags. DOMPurify already blocks them by default.
+// This comment serves as explicit documentation of the security decision.
+
 let hooksInstalled = false;
 const MARKDOWN_CHAR_LIMIT = 140_000;
 const MARKDOWN_PARSE_LIMIT = 40_000;
@@ -93,6 +164,8 @@ export type MarkdownCodeBlockChrome = "copy" | "none";
 
 export type MarkdownRenderOptions = {
   codeBlockChrome?: MarkdownCodeBlockChrome;
+  /** Math rendering mode. When "katex", enables KaTeX rendering. */
+  mathRendering?: "off" | "katex";
 };
 
 type MarkdownRenderEnv = {
@@ -178,6 +251,19 @@ function installHooks() {
     node.setAttribute("target", "_blank");
     if (normalizeLowercaseStringOrEmpty(href).includes("tail")) {
       node.classList.add(TAIL_LINK_BLUR_CLASS);
+    }
+  });
+
+  // ── KaTeX style attribute protection ──
+  // uponSanitizeAttribute fires BEFORE _isValidAttribute check,
+  // so forceKeepAttr = true bypasses ALLOWED_ATTR check.
+  // Using node.closest('.katex') instead of classList.contains
+  // because style may appear on a CHILD of .katex (e.g., <span class="katex-html" style="...">)
+  DOMPurify.addHook("uponSanitizeAttribute", (node, hookEvent) => {
+    if (hookEvent.attrName === "style") {
+      if (node instanceof HTMLElement && node.closest(".katex")) {
+        hookEvent.forceKeepAttr = true;
+      }
     }
   });
 }
@@ -661,6 +747,96 @@ export function toSanitizedMarkdownHtml(
   return sanitized;
 }
 
+/**
+ * KaTeX-enabled variant of toSanitizedMarkdownHtml.
+ * When mathRendering === "katex", extracts math blocks before markdown-it rendering,
+ * restores them as KaTeX HTML, then sanitizes the final output through DOMPurify.
+ * When mathRendering === "off" or undefined, behaves identically to toSanitizedMarkdownHtml.
+ */
+export function toSanitizedMarkdownHtmlWithKatex(
+  markdown: string,
+  options: MarkdownRenderOptions = {},
+): string {
+  const renderOptions = normalizeMarkdownRenderOptions(options);
+  const input = stripUnsupportedCitationControlMarkers(markdown).trim();
+  if (!input) {
+    return "";
+  }
+  installHooks();
+
+  const mathMode = options.mathRendering ?? "off";
+  const cacheKey = `${i18n.getLocale()}\0${renderOptions.codeBlockChrome}\0${mathMode}\0${input}`;
+  if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
+    const cached = getCachedMarkdown(cacheKey);
+    if (cached !== null) {
+      return cached;
+    }
+  }
+
+  // ── Math extraction (pre-source protection) ──
+  let mathBlocks = new Map<string, { tex: string; displayMode: boolean }>();
+  let processedInput = input;
+  if (mathMode === "katex") {
+    const extraction = extractMathBlocks(input);
+    processedInput = extraction.protectedText;
+    mathBlocks = extraction.mathBlocks;
+  }
+
+  // ── Build sanitize options (conditionally extend for KaTeX) ──
+  const activeSanitizeOptions =
+    mathMode === "katex"
+      ? {
+          ...sanitizeOptions,
+          ALLOWED_TAGS: [...allowedTags, ...katexAllowedTags],
+          ALLOWED_ATTR: [...allowedAttrs, ...katexAllowedAttrs],
+        }
+      : sanitizeOptions;
+
+  const truncated = truncateText(processedInput, MARKDOWN_CHAR_LIMIT);
+  const suffix = truncated.truncated
+    ? `\n\n… truncated (${truncated.total} chars, showing first ${truncated.text.length}).`
+    : "";
+  if (truncated.text.length > MARKDOWN_PARSE_LIMIT) {
+    let html = renderEscapedPlainTextHtml(`${truncated.text}${suffix}`);
+    if (mathBlocks.size > 0) {
+      html = restoreMathBlocksSync(html, mathBlocks);
+    }
+    const result = DOMPurify.sanitize(html, activeSanitizeOptions);
+    if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
+      setCachedMarkdown(cacheKey, result);
+    }
+    return result;
+  }
+
+  let rendered: string;
+  try {
+    rendered = md.render(`${truncated.text}${suffix}`, renderOptions);
+  } catch (err) {
+    console.warn("[markdown] md.render failed, falling back to plain text:", err);
+    const escaped = escapeHtml(`${truncated.text}${suffix}`);
+    rendered = `<pre class="code-block">${escaped}</pre>`;
+  }
+  // Restore math blocks BEFORE sanitizing so the KaTeX HTML
+  // passes through DOMPurify with the conditional allowlists.
+  if (mathBlocks.size > 0) {
+    rendered = restoreMathBlocksSync(rendered, mathBlocks);
+  }
+  const sanitized = DOMPurify.sanitize(rendered, activeSanitizeOptions);
+  if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
+    // Skip caching when KaTeX is not yet loaded — the fallback result
+    // (raw LaTeX text) would be cached permanently, preventing proper
+    // rendering once KaTeX finishes loading.
+    if (!(mathMode === "katex" && getKatexModule() === null)) {
+      setCachedMarkdown(cacheKey, sanitized);
+    }
+  }
+  return sanitized;
+}
+
 function renderEscapedPlainTextHtml(value: string): string {
   return `<div class="markdown-plain-text-fallback">${escapeHtml(value.replace(/\r\n?/g, "\n"))}</div>`;
+}
+
+export function clearMarkdownCache(): void {
+  markdownCache.clear();
 }
