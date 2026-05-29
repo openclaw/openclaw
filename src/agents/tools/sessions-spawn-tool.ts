@@ -159,7 +159,7 @@ function createSessionsSpawnToolSchema(params: {
     taskName: Type.Optional(
       Type.String({
         description:
-          "Stable alias for later targeting; lowercase letters/digits/underscores, starts letter.",
+          "Stable alias for later targeting; lowercase letters/digits/underscores/hyphens, starts letter.",
       }),
     ),
     label: Type.Optional(Type.String()),

@@ -1100,7 +1100,7 @@
           "type": "string"
         },
         "taskName": {
-          "description": "Stable alias for later targeting; lowercase letters/digits/underscores, starts letter.",
+          "description": "Stable alias for later targeting; lowercase letters/digits/underscores/hyphens, starts letter.",
           "type": "string"
         },
         "thinking": {
