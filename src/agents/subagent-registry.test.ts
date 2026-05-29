@@ -792,6 +792,71 @@ describe("subagent registry seam flow", () => {
     expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
   });
 
+  it("allows non-explicit published timeouts to be corrected by lifecycle success", async () => {
+    const startedAt = Date.parse("2026-03-24T11:59:00Z");
+    mod.registerSubagentRun({
+      runId: "run-non-explicit-timeout-corrected",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "non-explicit timeout remains correctable",
+      cleanup: "keep",
+    });
+    const run = mod.getSubagentRunByChildSessionKey("agent:main:subagent:child");
+    expect(run).not.toBeNull();
+    Object.assign(run ?? {}, {
+      startedAt,
+      sessionStartedAt: startedAt,
+      endedAt: startedAt + 30_000,
+      outcome: {
+        status: "timeout",
+        startedAt,
+        endedAt: startedAt + 30_000,
+        elapsedMs: 30_000,
+      },
+      delivery: {
+        status: "delivered",
+        announcedAt: startedAt + 30_000,
+        deliveredAt: startedAt + 30_000,
+      },
+    });
+
+    const lastOnAgentEventCall = mocks.onAgentEvent.mock.calls[
+      mocks.onAgentEvent.mock.calls.length - 1
+    ] as unknown as
+      | [(evt: { runId: string; stream: string; data: Record<string, unknown> }) => void]
+      | undefined;
+    const lifecycleHandler = lastOnAgentEventCall?.[0];
+    expect(lifecycleHandler).toBeTypeOf("function");
+
+    lifecycleHandler?.({
+      runId: "run-non-explicit-timeout-corrected",
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        startedAt,
+        endedAt: startedAt + 35_000,
+      },
+    });
+
+    await waitForFast(() => {
+      const correctedRun = mod
+        .listSubagentRunsForRequester("agent:main:main")
+        .find((entry) => entry.runId === "run-non-explicit-timeout-corrected");
+      expect(correctedRun?.endedAt).toBe(startedAt + 35_000);
+      expectRecordFields(
+        correctedRun?.outcome,
+        {
+          status: "ok",
+          startedAt,
+          endedAt: startedAt + 35_000,
+          elapsedMs: 35_000,
+        },
+        "non-explicit published timeout corrected outcome",
+      );
+    });
+  });
+
   it("caps lifecycle timeout events to the explicit run deadline", async () => {
     const startedAt = Date.now();
     mocks.callGateway.mockImplementation(async (request: { method?: string }) => {

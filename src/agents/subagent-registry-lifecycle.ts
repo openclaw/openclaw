@@ -97,7 +97,13 @@ function resolveSubagentRunDeadlineMs(
 }
 
 function shouldPreservePublishedExplicitRunTimeout(params: { entry: SubagentRunRecord }): boolean {
-  if (params.entry.outcome?.status !== "timeout" || typeof params.entry.endedAt !== "number") {
+  if (
+    typeof params.entry.runTimeoutSeconds !== "number" ||
+    !Number.isFinite(params.entry.runTimeoutSeconds) ||
+    params.entry.runTimeoutSeconds <= 0 ||
+    params.entry.outcome?.status !== "timeout" ||
+    typeof params.entry.endedAt !== "number"
+  ) {
     return false;
   }
   if (
