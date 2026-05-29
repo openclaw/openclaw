@@ -9,7 +9,11 @@ import { listChannelPluginCatalogEntries } from "../../../channels/plugins/catal
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import { parseClawHubPluginSpec } from "../../../infra/clawhub-spec.js";
-import { isOpenClawOrgNpmSpec, parseRegistryNpmSpec } from "../../../infra/npm-registry-spec.js";
+import {
+  compareOpenClawReleaseVersions,
+  isOpenClawOrgNpmSpec,
+  parseRegistryNpmSpec,
+} from "../../../infra/npm-registry-spec.js";
 import {
   normalizeUpdateChannel,
   resolveRegistryUpdateChannel,
@@ -81,6 +85,7 @@ const REPAIRABLE_PACKAGE_ENTRY_DIAGNOSTIC_MARKERS = [
   "extension entry unreadable",
   "requires compiled runtime output",
 ] as const;
+const VERSION_BOUND_RUNTIME_PLUGIN_IDS = new Set(["codex"]);
 
 function shouldFallbackClawHubToNpm(params: {
   result: { ok: false; code?: string };
@@ -509,6 +514,71 @@ function collectInstalledPluginIdsWithRepairablePackageDiagnostics(params: {
       )
     ) {
       pluginIds.add(pluginId);
+    }
+  }
+  return pluginIds;
+}
+
+function resolveInstalledRuntimePackageVersion(params: {
+  pluginId: string;
+  snapshot: PluginMetadataSnapshot;
+  record: PluginInstallRecord;
+}): string | undefined {
+  const plugin =
+    params.snapshot.byPluginId?.get(params.pluginId) ??
+    params.snapshot.plugins.find((entry) => entry.id === params.pluginId);
+  return normalizeOptionalLowercaseString(
+    params.record.resolvedVersion ??
+      params.record.version ??
+      plugin?.packageVersion ??
+      plugin?.version,
+  );
+}
+
+function installedRuntimePackageVersionIsStale(params: {
+  installedVersion: string | undefined;
+  currentVersion: string;
+}): boolean {
+  if (!params.installedVersion) {
+    return false;
+  }
+  const comparison = compareOpenClawReleaseVersions(params.installedVersion, params.currentVersion);
+  return comparison === null ? params.installedVersion !== params.currentVersion : comparison < 0;
+}
+
+function collectInstalledPluginIdsWithStaleVersionBoundRuntimePackages(params: {
+  snapshot: PluginMetadataSnapshot;
+  installRecords: Record<string, PluginInstallRecord>;
+  configuredPluginIds: ReadonlySet<string>;
+}): Set<string> {
+  const pluginIds = new Set<string>();
+  const currentVersion = normalizeOptionalLowercaseString(VERSION);
+  if (!currentVersion) {
+    return pluginIds;
+  }
+  for (const candidate of CONFIGURED_RUNTIME_PLUGIN_INSTALL_CANDIDATES) {
+    if (
+      !VERSION_BOUND_RUNTIME_PLUGIN_IDS.has(candidate.pluginId) ||
+      !params.configuredPluginIds.has(candidate.pluginId)
+    ) {
+      continue;
+    }
+    const record = params.installRecords[candidate.pluginId];
+    if (!record) {
+      continue;
+    }
+    const installedVersion = resolveInstalledRuntimePackageVersion({
+      pluginId: candidate.pluginId,
+      snapshot: params.snapshot,
+      record,
+    });
+    if (
+      installedRuntimePackageVersionIsStale({
+        installedVersion,
+        currentVersion,
+      })
+    ) {
+      pluginIds.add(candidate.pluginId);
     }
   }
   return pluginIds;
@@ -1137,10 +1207,20 @@ async function repairMissingPluginInstalls(params: {
       snapshot,
       installRecords: records,
     });
+  const installedPluginIdsWithStaleVersionBoundRuntimePackages =
+    collectInstalledPluginIdsWithStaleVersionBoundRuntimePackages({
+      snapshot,
+      installRecords: records,
+      configuredPluginIds: params.pluginIds,
+    });
+  const installedPluginIdsWithRepairablePackages = new Set([
+    ...installedPluginIdsWithRepairablePackageDiagnostics,
+    ...installedPluginIdsWithStaleVersionBoundRuntimePackages,
+  ]);
   const officialReplacementInstallCandidates = collectOfficialReplacementInstallCandidates({
     cfg: params.cfg,
     env,
-    repairablePluginIds: installedPluginIdsWithRepairablePackageDiagnostics,
+    repairablePluginIds: installedPluginIdsWithRepairablePackages,
     configuredPluginIds: params.pluginIds,
     configuredChannelIds: params.channelIds,
     configuredChannelOwnerPluginIds,
@@ -1200,7 +1280,7 @@ async function repairMissingPluginInstalls(params: {
       ((params.pluginIds.has(pluginId) &&
         (!knownIds.has(pluginId) || isInstalledRecordMissingOnDisk(nextRecords[pluginId], env))) ||
         configuredPluginIdsWithStaleDescriptors.has(pluginId) ||
-        installedPluginIdsWithRepairablePackageDiagnostics.has(pluginId)),
+        installedPluginIdsWithRepairablePackages.has(pluginId)),
   );
 
   if (missingRecordedPluginIds.length > 0) {
@@ -1235,7 +1315,7 @@ async function repairMissingPluginInstalls(params: {
     for (const outcome of updateResult.outcomes) {
       if (outcome.status === "updated" || outcome.status === "unchanged") {
         changes.push(
-          installedPluginIdsWithRepairablePackageDiagnostics.has(outcome.pluginId)
+          installedPluginIdsWithRepairablePackages.has(outcome.pluginId)
             ? `Repaired broken installed plugin "${outcome.pluginId}".`
             : `Repaired missing configured plugin "${outcome.pluginId}".`,
         );
