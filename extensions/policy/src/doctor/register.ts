@@ -3602,7 +3602,7 @@ function sandboxContainerRuntimeSocketMountFindings(
   }
   return sandboxPostureEntries(evidence, "containerMount")
     .filter(evidenceFilter)
-    .filter((entry) => bindHostLooksLikeDockerSocket(entry.bindHost))
+    .filter((entry) => bindHostLooksLikeContainerRuntimeSocket(entry.bindHost))
     .map((entry) =>
       sandboxPostureFinding(entry, {
         checkId: CHECK_IDS.policySandboxContainerRuntimeSocketMount,
@@ -3694,16 +3694,29 @@ function sandboxPostureLabel(entry: PolicySandboxPostureEvidence): string {
   return entry.agentId === undefined ? "default sandbox config" : `agent '${entry.agentId}'`;
 }
 
-function bindHostLooksLikeDockerSocket(value: string | undefined): boolean {
+const CONTAINER_RUNTIME_SOCKET_BASENAMES = new Set([
+  "containerd.sock",
+  "docker.sock",
+  "podman.sock",
+]);
+
+const CONTAINER_RUNTIME_SOCKET_PATHS = new Set([
+  "/run/containerd/containerd.sock",
+  "/run/docker.sock",
+  "/run/podman/podman.sock",
+  "/var/run/docker.sock",
+  "/var/run/podman/podman.sock",
+]);
+
+function bindHostLooksLikeContainerRuntimeSocket(value: string | undefined): boolean {
   if (value === undefined) {
     return false;
   }
-  // This policy check currently observes Docker socket mounts only.
   const normalized = value.replaceAll("\\", "/").toLowerCase();
+  const basename = normalized.split("/").at(-1) ?? "";
   return (
-    normalized === "/var/run/docker.sock" ||
-    normalized === "/run/docker.sock" ||
-    normalized.endsWith("/docker.sock")
+    CONTAINER_RUNTIME_SOCKET_PATHS.has(normalized) ||
+    CONTAINER_RUNTIME_SOCKET_BASENAMES.has(basename)
   );
 }
 

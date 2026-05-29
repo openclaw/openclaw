@@ -3384,7 +3384,12 @@ describe("registerPolicyDoctorChecks", () => {
             backend: "docker",
             docker: {
               network: "host",
-              binds: ["/var/run/docker.sock:/var/run/docker.sock:rw", "/data:/data:rw"],
+              binds: [
+                "/var/run/docker.sock:/var/run/docker.sock:rw",
+                "/data:/data:rw",
+                "/run/containerd/containerd.sock:/containerd.sock:ro",
+                "/var/run/podman/podman.sock:/podman.sock:ro",
+              ],
               seccompProfile: "unconfined",
             },
             browser: { enabled: true },
@@ -3421,6 +3426,8 @@ describe("registerPolicyDoctorChecks", () => {
       "policy/sandbox-container-mount-mode-required",
       "policy/sandbox-container-mount-mode-required",
       "policy/sandbox-container-runtime-socket-mount",
+      "policy/sandbox-container-runtime-socket-mount",
+      "policy/sandbox-container-runtime-socket-mount",
       "policy/sandbox-container-unconfined-profile",
       "policy/sandbox-browser-cdp-source-range-missing",
     ]);
@@ -3434,6 +3441,16 @@ describe("registerPolicyDoctorChecks", () => {
         expect.objectContaining({
           checkId: "policy/sandbox-container-runtime-socket-mount",
           ocPath: "oc://openclaw.config/agents/defaults/sandbox/docker/binds/#0",
+          requirement: "oc://policy.jsonc/sandbox/containers/denyContainerRuntimeSocketMounts",
+        }),
+        expect.objectContaining({
+          checkId: "policy/sandbox-container-runtime-socket-mount",
+          ocPath: "oc://openclaw.config/agents/defaults/sandbox/docker/binds/#2",
+          requirement: "oc://policy.jsonc/sandbox/containers/denyContainerRuntimeSocketMounts",
+        }),
+        expect.objectContaining({
+          checkId: "policy/sandbox-container-runtime-socket-mount",
+          ocPath: "oc://openclaw.config/agents/defaults/sandbox/docker/binds/#3",
           requirement: "oc://policy.jsonc/sandbox/containers/denyContainerRuntimeSocketMounts",
         }),
       ]),
