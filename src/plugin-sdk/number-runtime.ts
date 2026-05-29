@@ -1,6 +1,7 @@
 // Numeric coercion helpers for plugin runtime inputs.
 
 export {
+  asFiniteNumberInRange,
   parseFiniteNumber,
   resolveIntegerOption,
   resolveNonNegativeIntegerOption,

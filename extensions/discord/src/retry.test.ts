@@ -30,6 +30,10 @@ describe("isRetryableDiscordTransientError", () => {
     ["408 status", Object.assign(new Error("request timeout"), { status: 408 })],
     ["502 status", Object.assign(new Error("bad gateway"), { status: 502 })],
     ["503 statusCode", Object.assign(new Error("service unavailable"), { statusCode: 503 })],
+    [
+      "signed string statusCode",
+      Object.assign(new Error("service unavailable"), { statusCode: "+503" }),
+    ],
     ["fetch failed", new TypeError("fetch failed")],
     ["ECONNRESET", Object.assign(new Error("socket hang up"), { code: "ECONNRESET" })],
     ["ETIMEDOUT cause", new Error("request failed", { cause: { code: "ETIMEDOUT" } })],
@@ -40,6 +44,7 @@ describe("isRetryableDiscordTransientError", () => {
 
   it.each([
     ["400 status", Object.assign(new Error("bad request"), { status: 400 })],
+    ["fractional status", Object.assign(new Error("upstream rejected request"), { status: 500.5 })],
     ["403 status", Object.assign(new Error("missing permissions"), { statusCode: 403 })],
     ["unknown channel", new Error("Unknown Channel")],
     ["plain string", "fetch failed"],

@@ -842,6 +842,7 @@ export async function loadCompactHooksHarness(): Promise<{
 
   vi.doMock("./sandbox-info.js", () => ({
     buildEmbeddedSandboxInfo: vi.fn(() => undefined),
+    resolveEmbeddedSandboxInfoExecPolicy: vi.fn(() => ({})),
   }));
 
   vi.doMock("./model.js", () => ({

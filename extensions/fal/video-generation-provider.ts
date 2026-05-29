@@ -1,6 +1,7 @@
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { assertOkOrThrowHttpError } from "openclaw/plugin-sdk/provider-http";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   fetchWithSsrFGuard,
   type SsrFPolicy,
@@ -51,6 +52,7 @@ const SEEDANCE_REFERENCE_MAX_AUDIOS_BY_MODEL = Object.fromEntries(
 );
 const DEFAULT_HTTP_TIMEOUT_MS = 30_000;
 const DEFAULT_OPERATION_TIMEOUT_MS = 1_200_000;
+const DEFAULT_GENERATED_VIDEO_MAX_BYTES = 16 * 1024 * 1024;
 const POLL_INTERVAL_MS = 5_000;
 const FAL_VIDEO_MALFORMED_RESPONSE = "fal video generation response malformed";
 const FAL_VIDEO_PENDING_STATUSES = new Set([
@@ -173,9 +175,18 @@ function extractFalVideoEntry(payload: FalVideoResponse) {
   return payload.videos?.find((entry) => normalizeOptionalString(entry.url));
 }
 
+function resolveGeneratedVideoMaxBytes(req: VideoGenerationRequest): number {
+  const configured = req.cfg.agents?.defaults?.mediaMaxMb;
+  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
+    return Math.floor(configured * 1024 * 1024);
+  }
+  return DEFAULT_GENERATED_VIDEO_MAX_BYTES;
+}
+
 async function downloadFalVideo(
   url: string,
   policy: SsrFPolicy | undefined,
+  maxBytes: number,
 ): Promise<GeneratedVideoAsset> {
   const { response, release } = await falFetchGuard({
     url,
@@ -186,12 +197,31 @@ async function downloadFalVideo(
   try {
     await assertOkOrThrowHttpError(response, "fal generated video download failed");
     const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
-    const arrayBuffer = await response.arrayBuffer();
+    const fileName = `video-1.${extensionForMime(mimeType)?.slice(1) ?? "mp4"}`;
+    let exceededMaxBytes = false;
+    let buffer: Buffer;
+    try {
+      buffer = await readResponseWithLimit(response, maxBytes, {
+        onOverflow: ({ maxBytes }) => {
+          exceededMaxBytes = true;
+          return new Error(`fal generated video download exceeds ${maxBytes} bytes`);
+        },
+      });
+    } catch (error) {
+      if (exceededMaxBytes) {
+        return {
+          url,
+          mimeType,
+          fileName,
+        };
+      }
+      throw error;
+    }
     return {
       url,
-      buffer: Buffer.from(arrayBuffer),
+      buffer,
       mimeType,
-      fileName: `video-1.${extensionForMime(mimeType)?.slice(1) ?? "mp4"}`,
+      fileName,
     };
   } finally {
     await release();
@@ -608,7 +638,7 @@ export function buildFalVideoGenerationProvider(): VideoGenerationProvider {
       if (!url) {
         throw new Error("fal video generation response missing output URL");
       }
-      const video = await downloadFalVideo(url, policy);
+      const video = await downloadFalVideo(url, policy, resolveGeneratedVideoMaxBytes(req));
       return {
         videos: [video],
         model,
