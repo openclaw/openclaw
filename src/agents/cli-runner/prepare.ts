@@ -53,7 +53,10 @@ import {
   resolveBootstrapTotalMaxChars,
 } from "../embedded-agent-helpers.js";
 import { resolvePromptBuildHookResult } from "../embedded-agent-runner/run/attempt.prompt-helpers.js";
-import { resolveAttemptPrependSystemContext } from "../embedded-agent-runner/run/attempt.prompt-helpers.js";
+import {
+  prependSystemPromptAddition,
+  resolveAttemptMediaTaskSystemPromptAddition,
+} from "../embedded-agent-runner/run/attempt.prompt-helpers.js";
 import { composeSystemPromptWithHookContext } from "../embedded-agent-runner/run/attempt.thread-helpers.js";
 import { buildCurrentInboundPrompt } from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
@@ -506,13 +509,19 @@ export async function prepareCliRunContext(
     systemPrompt =
       composeSystemPromptWithHookContext({
         baseSystemPrompt: systemPrompt,
-        prependSystemContext: resolveAttemptPrependSystemContext({
-          sessionKey: params.sessionKey,
-          trigger: params.trigger,
-          hookPrependSystemContext: hookResult.prependSystemContext,
-        }),
+        prependSystemContext: hookResult.prependSystemContext,
         appendSystemContext: hookResult.appendSystemContext,
       }) ?? systemPrompt;
+    const mediaTaskSystemPromptAddition = resolveAttemptMediaTaskSystemPromptAddition({
+      sessionKey: params.sessionKey,
+      trigger: params.trigger,
+    });
+    if (mediaTaskSystemPromptAddition) {
+      systemPrompt = prependSystemPromptAddition({
+        systemPrompt,
+        systemPromptAddition: mediaTaskSystemPromptAddition,
+      });
+    }
   } catch (error) {
     cliBackendLog.warn(`cli prompt-build hook preparation failed: ${String(error)}`);
   }
