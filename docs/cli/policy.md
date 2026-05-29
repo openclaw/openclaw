@@ -400,8 +400,41 @@ openclaw policy check --severity-min error
 attestation hashes. The same findings also appear in `openclaw doctor --lint`
 when the Policy plugin is enabled.
 
-Example clean JSON output includes stable hashes that can be recorded by an
-operator or supervisor:
+Compare an operator policy file to an authored baseline policy file:
+
+```bash
+openclaw policy compare --baseline official.policy.jsonc
+openclaw policy compare --baseline official.policy.jsonc --policy policy.jsonc --json
+```
+
+`policy compare` compares policy file syntax to policy file syntax. It does not
+inspect OpenClaw runtime state, evidence, credentials, or secrets. The command
+uses the same policy rule metadata that governs scoped overlays: allowlists must
+stay equal or narrower, denylists must stay equal or broader, required booleans
+must keep their required value, ordered strings must move only toward the more
+restrictive end of the configured order, and exact lists must match.
+
+The baseline file can be an organization-authored policy. The checked policy can
+use stricter values or add extra policy rules. A top-level checked rule can also
+satisfy a scoped baseline rule when it is equally or more restrictive because
+top-level policy applies broadly. Scope names do not need to match; scoped
+comparison is keyed by selector value such as `agentIds` or `channelIds` and by
+the policy field being checked.
+
+Example clean compare JSON output reports only policy-file comparison state:
+
+```json
+{
+  "ok": true,
+  "baselinePath": "official.policy.jsonc",
+  "policyPath": "policy.jsonc",
+  "rulesChecked": 3,
+  "findings": []
+}
+```
+
+Example clean `policy check --json` output includes stable hashes that can be
+recorded by an operator or supervisor:
 
 ```json
 {
@@ -647,6 +680,9 @@ Policy currently verifies:
 | `policy/policy-jsonc-invalid`                     | Policy cannot be parsed or contains malformed rule entries.                       |
 | `policy/policy-hash-mismatch`                     | Policy does not match configured `expectedHash`.                                  |
 | `policy/attestation-hash-mismatch`                | Current policy evidence no longer matches the accepted attestation.               |
+| `policy/policy-conformance-invalid`               | A baseline or checked policy file has invalid comparison syntax.                  |
+| `policy/policy-conformance-missing`               | A checked policy file is missing a rule required by the baseline policy file.     |
+| `policy/policy-conformance-weaker`                | A checked policy file has a weaker value than the baseline policy file.           |
 | `policy/channels-denied-provider`                 | An enabled channel matches a channel deny rule.                                   |
 | `policy/mcp-denied-server`                        | A configured MCP server is denied by policy.                                      |
 | `policy/mcp-unapproved-server`                    | A configured MCP server is outside the allowlist.                                 |
@@ -838,10 +874,11 @@ configured channel:
 
 ## Exit codes
 
-| Command        | `0`                                       | `1`                                              | `2`                          |
-| -------------- | ----------------------------------------- | ------------------------------------------------ | ---------------------------- |
-| `policy check` | No findings at the threshold.             | One or more findings met the threshold.          | Argument or runtime failure. |
-| `policy watch` | No findings and accepted hash is current. | Findings exist or accepted attestation is stale. | Argument or runtime failure. |
+| Command          | `0`                                                    | `1`                                                                 | `2`                          |
+| ---------------- | ------------------------------------------------------ | ------------------------------------------------------------------- | ---------------------------- |
+| `policy check`   | No findings at the threshold.                          | One or more findings met the threshold.                             | Argument or runtime failure. |
+| `policy compare` | The policy file is at least as strict as the baseline. | The policy file is invalid, missing, or weaker than baseline rules. | Argument or runtime failure. |
+| `policy watch`   | No findings and accepted hash is current.              | Findings exist or accepted attestation is stale.                    | Argument or runtime failure. |
 
 ## Related
 

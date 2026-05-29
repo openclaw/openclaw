@@ -135,6 +135,7 @@ export const POLICY_CHECK_IDS = [
 export type PolicyStrictnessKind =
   | "allowlist-subset"
   | "denylist-superset"
+  | "ordered-string"
   | "requires-true"
   | "requires-false"
   | "exact-list";
@@ -146,10 +147,13 @@ export type PolicyScopeSelectorKind = "agentIds" | "channelIds";
 export type PolicyRuleMetadata = {
   readonly policyPath: readonly string[];
   readonly strictness: PolicyStrictnessKind;
-  readonly valueType: "boolean" | "string" | "string-list";
+  readonly valueType: "boolean" | "channel-provider-deny-rules" | "string" | "string-list";
   readonly checkIds: readonly (typeof POLICY_CHECK_IDS)[number][];
   readonly emptyList?: PolicyEmptyListSemantics;
+  readonly allowedValues?: readonly string[];
   readonly caseSensitive?: boolean;
+  readonly normalizeValues?: "model-provider";
+  readonly orderedValues?: readonly string[];
   readonly scopeSelectors?: readonly PolicyScopeSelectorKind[];
 };
 
@@ -188,6 +192,7 @@ const SANDBOX_POLICY_RULE_METADATA = [
     valueType: "string-list",
     checkIds: [CHECK_IDS.policySandboxModeUnapproved],
     emptyList: "disabled",
+    allowedValues: ["off", "non-main", "all"],
     scopeSelectors: ["agentIds"],
   },
   {
@@ -216,11 +221,113 @@ const SANDBOX_POLICY_RULE_METADATA = [
 
 export const POLICY_RULE_METADATA = [
   {
+    policyPath: ["channels", "denyRules"],
+    strictness: "denylist-superset",
+    valueType: "channel-provider-deny-rules",
+    checkIds: [CHECK_IDS.policyDeniedChannelProvider],
+    emptyList: "meaningful",
+    caseSensitive: true,
+  },
+  {
+    policyPath: ["mcp", "servers", "allow"],
+    strictness: "allowlist-subset",
+    valueType: "string-list",
+    checkIds: [CHECK_IDS.policyUnapprovedMcpServer],
+    emptyList: "disabled",
+    caseSensitive: true,
+  },
+  {
+    policyPath: ["mcp", "servers", "deny"],
+    strictness: "denylist-superset",
+    valueType: "string-list",
+    checkIds: [CHECK_IDS.policyDeniedMcpServer],
+    caseSensitive: true,
+  },
+  {
+    policyPath: ["models", "providers", "allow"],
+    strictness: "allowlist-subset",
+    valueType: "string-list",
+    checkIds: [CHECK_IDS.policyUnapprovedModelProvider],
+    emptyList: "disabled",
+    normalizeValues: "model-provider",
+  },
+  {
+    policyPath: ["models", "providers", "deny"],
+    strictness: "denylist-superset",
+    valueType: "string-list",
+    checkIds: [CHECK_IDS.policyDeniedModelProvider],
+    normalizeValues: "model-provider",
+  },
+  {
+    policyPath: ["network", "privateNetwork", "allow"],
+    strictness: "requires-false",
+    valueType: "boolean",
+    checkIds: [CHECK_IDS.policyPrivateNetworkAccess],
+  },
+  {
+    policyPath: ["ingress", "session", "requireDmScope"],
+    strictness: "ordered-string",
+    valueType: "string",
+    orderedValues: ["main", "per-peer", "per-channel-peer", "per-account-channel-peer"],
+    checkIds: [CHECK_IDS.policyIngressDmScopeUnapproved],
+  },
+  {
+    policyPath: ["gateway", "exposure", "allowNonLoopbackBind"],
+    strictness: "requires-false",
+    valueType: "boolean",
+    checkIds: [CHECK_IDS.policyGatewayNonLoopbackBind],
+  },
+  {
+    policyPath: ["gateway", "exposure", "allowTailscaleFunnel"],
+    strictness: "requires-false",
+    valueType: "boolean",
+    checkIds: [CHECK_IDS.policyGatewayTailscaleFunnel],
+  },
+  {
+    policyPath: ["gateway", "auth", "requireAuth"],
+    strictness: "requires-true",
+    valueType: "boolean",
+    checkIds: [CHECK_IDS.policyGatewayAuthDisabled],
+  },
+  {
+    policyPath: ["gateway", "auth", "requireExplicitRateLimit"],
+    strictness: "requires-true",
+    valueType: "boolean",
+    checkIds: [CHECK_IDS.policyGatewayRateLimitMissing],
+  },
+  {
+    policyPath: ["gateway", "controlUi", "allowInsecure"],
+    strictness: "requires-false",
+    valueType: "boolean",
+    checkIds: [CHECK_IDS.policyGatewayControlUiInsecure],
+  },
+  {
+    policyPath: ["gateway", "remote", "allow"],
+    strictness: "requires-false",
+    valueType: "boolean",
+    checkIds: [CHECK_IDS.policyGatewayRemoteEnabled],
+  },
+  {
+    policyPath: ["gateway", "http", "denyEndpoints"],
+    strictness: "denylist-superset",
+    valueType: "string-list",
+    checkIds: [CHECK_IDS.policyGatewayHttpEndpointEnabled],
+    allowedValues: ["chatCompletions", "responses"],
+    caseSensitive: true,
+  },
+  {
+    policyPath: ["gateway", "http", "requireUrlAllowlists"],
+    strictness: "requires-true",
+    valueType: "boolean",
+    checkIds: [CHECK_IDS.policyGatewayHttpUrlFetchUnrestricted],
+  },
+  {
     policyPath: ["agents", "workspace", "allowedAccess"],
     strictness: "allowlist-subset",
     valueType: "string-list",
     checkIds: [CHECK_IDS.policyAgentsWorkspaceAccessDenied],
     emptyList: "disabled",
+    allowedValues: ["none", "ro", "rw"],
     scopeSelectors: ["agentIds"],
   },
   {
@@ -228,6 +335,7 @@ export const POLICY_RULE_METADATA = [
     strictness: "denylist-superset",
     valueType: "string-list",
     checkIds: [CHECK_IDS.policyAgentsToolNotDenied],
+    allowedValues: ["exec", "process", "write", "edit", "apply_patch"],
     scopeSelectors: ["agentIds"],
   },
   {
@@ -236,6 +344,7 @@ export const POLICY_RULE_METADATA = [
     valueType: "string-list",
     checkIds: [CHECK_IDS.policyToolsProfileUnapproved],
     emptyList: "disabled",
+    allowedValues: ["minimal", "coding", "messaging", "full"],
     scopeSelectors: ["agentIds"],
   },
   {
@@ -251,6 +360,7 @@ export const POLICY_RULE_METADATA = [
     valueType: "string-list",
     checkIds: [CHECK_IDS.policyToolsExecSecurityUnapproved],
     emptyList: "disabled",
+    allowedValues: ["deny", "allowlist", "full"],
     scopeSelectors: ["agentIds"],
   },
   {
@@ -259,6 +369,7 @@ export const POLICY_RULE_METADATA = [
     valueType: "string-list",
     checkIds: [CHECK_IDS.policyToolsExecAskUnapproved],
     emptyList: "disabled",
+    allowedValues: ["off", "on-miss", "always"],
     scopeSelectors: ["agentIds"],
   },
   {
@@ -267,6 +378,7 @@ export const POLICY_RULE_METADATA = [
     valueType: "string-list",
     checkIds: [CHECK_IDS.policyToolsExecHostUnapproved],
     emptyList: "disabled",
+    allowedValues: ["auto", "sandbox", "gateway", "node"],
     scopeSelectors: ["agentIds"],
   },
   {
@@ -291,6 +403,17 @@ export const POLICY_RULE_METADATA = [
     checkIds: [CHECK_IDS.policyToolsRequiredDenyMissing],
     scopeSelectors: ["agentIds"],
   },
+  {
+    policyPath: ["tools", "requireMetadata"],
+    strictness: "denylist-superset",
+    valueType: "string-list",
+    checkIds: [
+      CHECK_IDS.policyMissingToolRisk,
+      CHECK_IDS.policyMissingToolSensitivity,
+      CHECK_IDS.policyMissingToolOwner,
+    ],
+    allowedValues: ["risk", "sensitivity", "owner"],
+  },
   ...SANDBOX_POLICY_RULE_METADATA,
   {
     policyPath: ["ingress", "channels", "allowDmPolicies"],
@@ -298,6 +421,7 @@ export const POLICY_RULE_METADATA = [
     valueType: "string-list",
     checkIds: [CHECK_IDS.policyIngressDmPolicyUnapproved],
     emptyList: "disabled",
+    allowedValues: ["pairing", "allowlist", "open", "disabled"],
     scopeSelectors: ["channelIds"],
   },
   {
@@ -314,7 +438,42 @@ export const POLICY_RULE_METADATA = [
     checkIds: [CHECK_IDS.policyIngressGroupMentionRequired],
     scopeSelectors: ["channelIds"],
   },
+  {
+    policyPath: ["secrets", "requireManagedProviders"],
+    strictness: "requires-true",
+    valueType: "boolean",
+    checkIds: [CHECK_IDS.policySecretsUnmanagedProvider],
+  },
+  {
+    policyPath: ["secrets", "denySources"],
+    strictness: "denylist-superset",
+    valueType: "string-list",
+    checkIds: [CHECK_IDS.policySecretsDeniedProviderSource],
+  },
+  {
+    policyPath: ["secrets", "allowInsecureProviders"],
+    strictness: "requires-false",
+    valueType: "boolean",
+    checkIds: [CHECK_IDS.policySecretsInsecureProvider],
+  },
+  {
+    policyPath: ["auth", "profiles", "requireMetadata"],
+    strictness: "denylist-superset",
+    valueType: "string-list",
+    checkIds: [CHECK_IDS.policyAuthProfileInvalidMetadata],
+    allowedValues: ["provider", "mode"],
+  },
+  {
+    policyPath: ["auth", "profiles", "allowModes"],
+    strictness: "allowlist-subset",
+    valueType: "string-list",
+    checkIds: [CHECK_IDS.policyAuthProfileUnapprovedMode],
+    emptyList: "disabled",
+    allowedValues: ["api_key", "aws-sdk", "oauth", "token"],
+  },
 ] as const satisfies readonly PolicyRuleMetadata[];
+
+const POLICY_RULES: readonly PolicyRuleMetadata[] = POLICY_RULE_METADATA;
 
 const KNOWN_RISK_LEVELS = ["low", "medium", "high", "critical"] as const;
 const KNOWN_SENSITIVITY_LEVELS = ["public", "internal", "confidential", "restricted"] as const;
@@ -1346,7 +1505,7 @@ function toolMetadataRequirementFindings(
   ];
 }
 
-function policyContainerShapeFindings(
+export function policyContainerShapeFindings(
   policy: unknown,
   policyPath: string,
   policyDocName: string,
@@ -4561,10 +4720,7 @@ function scopedPolicyFields(
   selector: PolicyScopeSelectorKind,
 ): readonly ScopedPolicyField[] {
   const prefix = `scopes/${ocPathSegment(scopeName)}`;
-  return POLICY_RULE_METADATA.filter((rule) => {
-    const selectors = rule.scopeSelectors as readonly PolicyScopeSelectorKind[] | undefined;
-    return selectors?.includes(selector) === true;
-  })
+  return POLICY_RULES.filter((rule) => rule.scopeSelectors?.includes(selector) === true)
     .map((rule) => ({ rule, value: scopedPolicyValue(overlay, rule.policyPath) }))
     .filter((entry) => entry.value !== undefined)
     .map(({ rule, value }) => ({
@@ -4586,6 +4742,8 @@ export function isPolicyValueAtLeastAsStrict(
       return isPolicyAllowlistSubset(metadata, candidate, baseline);
     case "denylist-superset":
       return isPolicyDenylistSuperset(metadata, candidate, baseline);
+    case "ordered-string":
+      return isPolicyOrderedStringAtLeastAsStrict(metadata, candidate, baseline);
     case "requires-true":
       return baseline !== true || candidate === true;
     case "requires-false":
@@ -4594,6 +4752,28 @@ export function isPolicyValueAtLeastAsStrict(
       return samePolicyStringList(candidate, baseline, metadata);
   }
   return false;
+}
+
+function isPolicyOrderedStringAtLeastAsStrict(
+  metadata: PolicyRuleMetadata,
+  candidate: unknown,
+  baseline: unknown,
+): boolean {
+  const candidateValue = policyString(candidate, metadata);
+  const baselineValue = policyString(baseline, metadata);
+  if (
+    candidateValue === undefined ||
+    baselineValue === undefined ||
+    metadata.orderedValues === undefined
+  ) {
+    return false;
+  }
+  const orderedValues = metadata.orderedValues.map((entry) =>
+    metadata.caseSensitive === true ? entry : entry.toLowerCase(),
+  );
+  const candidateIndex = orderedValues.indexOf(candidateValue);
+  const baselineIndex = orderedValues.indexOf(baselineValue);
+  return candidateIndex >= 0 && baselineIndex >= 0 && candidateIndex >= baselineIndex;
 }
 
 function isPolicyAllowlistSubset(
@@ -4657,13 +4837,51 @@ function policyStringList(
   value: unknown,
   metadata: PolicyRuleMetadata,
 ): readonly string[] | undefined {
+  if (metadata.valueType === "channel-provider-deny-rules") {
+    return channelProviderDenyRuleList(value, metadata);
+  }
   if (!Array.isArray(value) || !value.every((entry) => typeof entry === "string")) {
     return undefined;
   }
   return value
     .map((entry) => entry.trim())
     .filter(Boolean)
-    .map((entry) => (metadata.caseSensitive === true ? entry : entry.toLowerCase()));
+    .map((entry) => normalizePolicyStringListEntry(entry, metadata));
+}
+
+function normalizePolicyStringListEntry(entry: string, metadata: PolicyRuleMetadata): string {
+  if (metadata.normalizeValues === "model-provider") {
+    return normalizeProviderId(entry);
+  }
+  return metadata.caseSensitive === true ? entry : entry.toLowerCase();
+}
+
+function channelProviderDenyRuleList(
+  value: unknown,
+  metadata: PolicyRuleMetadata,
+): readonly string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const providers: string[] = [];
+  for (const entry of value) {
+    if (!isChannelDenyRule(entry)) {
+      return undefined;
+    }
+    const provider = entry.when?.provider?.trim();
+    if (provider !== undefined && provider !== "") {
+      providers.push(metadata.caseSensitive === true ? provider : provider.toLowerCase());
+    }
+  }
+  return providers;
+}
+
+function policyString(value: unknown, metadata: PolicyRuleMetadata): string | undefined {
+  if (typeof value !== "string" || value.trim() === "") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return metadata.caseSensitive === true ? trimmed : trimmed.toLowerCase();
 }
 
 function scopedPolicyValue(overlay: Record<string, unknown>, path: readonly string[]): unknown {
