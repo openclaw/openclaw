@@ -176,22 +176,25 @@ export function auditToolPolicyFilter(params: {
       tools: matchedRuleSourceTools,
     });
     const matchedRuleSuffix = matchedRules.length > 0 ? `; matched ${matchedRules.join(", ")}` : "";
-    toolPolicyAuditLogger.info(
-      `tool policy removed ${removed.length} tool(s) via ${rule}: ${toolNames.join(", ")}${matchedRuleSuffix}`,
-      {
-        rule,
-        ruleKind,
-        ...(matchedRules.length > 0
-          ? {
-              matchedRules,
-              ...(truncated ? { matchedRulesTruncated: true } : {}),
-            }
-          : {}),
-        removedToolCount: removed.length,
-        removedTools: toolNames,
-        removedToolsTruncated: truncated,
-      },
-    );
+    const message = `tool policy removed ${removed.length} tool(s) via ${rule}: ${toolNames.join(", ")}${matchedRuleSuffix}`;
+    const metadata = {
+      rule,
+      ruleKind,
+      ...(matchedRules.length > 0
+        ? {
+            matchedRules,
+            ...(truncated ? { matchedRulesTruncated: true } : {}),
+          }
+        : {}),
+      removedToolCount: removed.length,
+      removedTools: toolNames,
+      removedToolsTruncated: truncated,
+    };
+    if (rule.startsWith("tools.profile") || rule.startsWith("tools.byProvider.profile")) {
+      toolPolicyAuditLogger.debug(message, metadata);
+    } else {
+      toolPolicyAuditLogger.info(message, metadata);
+    }
   }
 }
 
