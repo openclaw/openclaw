@@ -388,6 +388,16 @@ PY
       expect(fragment.textContent).toBe(source);
     });
 
+    it("omits copy chrome for user-role messages", () => {
+      const html = toSanitizedMarkdownHtml(
+        "```\necho hello\n```",
+        { role: "user" },
+      );
+      const fragment = htmlFragment(html);
+      expect(fragment.querySelector(".code-block-copy")).toBeNull();
+      expect(fragment.querySelector(".code-block-header")).toBeNull();
+    });
+
     it("keeps the no-chrome code-block cache separate from copy-enabled rendering", () => {
       const markdown = "```\ncode\n```";
       const plain = toSanitizedMarkdownHtml(markdown, { codeBlockChrome: "none" });

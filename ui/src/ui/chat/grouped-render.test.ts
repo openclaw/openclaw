@@ -13,7 +13,7 @@ import { normalizeMessage } from "./message-normalizer.ts";
 
 const localStorageValues = vi.hoisted(() => new Map<string, string>());
 const markdownRenderMock = vi.hoisted(() =>
-  vi.fn((value: string, _options?: { codeBlockChrome?: "copy" | "none" }) => value),
+  vi.fn((value: string, _options?: { codeBlockChrome?: "copy" | "none"; role?: "user" | "assistant" | "tool" }) => value),
 );
 
 vi.mock("../../local-storage.ts", () => ({
@@ -584,7 +584,7 @@ describe("grouped chat rendering", () => {
       "user",
     );
 
-    expect(markdownRenderMock).toHaveBeenCalledWith(markdown, { codeBlockChrome: "none" });
+    expect(markdownRenderMock).toHaveBeenCalledWith(markdown, { role: "user" });
   });
 
   it("keeps assistant markdown code-block copy chrome enabled", () => {

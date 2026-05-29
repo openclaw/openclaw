@@ -93,6 +93,7 @@ export type MarkdownCodeBlockChrome = "copy" | "none";
 
 export type MarkdownRenderOptions = {
   codeBlockChrome?: MarkdownCodeBlockChrome;
+  role?: "user" | "assistant" | "tool";
 };
 
 type MarkdownRenderEnv = {
@@ -129,7 +130,8 @@ function setCachedMarkdown(key: string, value: string) {
 
 function normalizeMarkdownRenderOptions(options: MarkdownRenderOptions = {}): MarkdownRenderEnv {
   return {
-    codeBlockChrome: options.codeBlockChrome ?? "copy",
+    codeBlockChrome:
+      options.role === "user" ? "none" : options.codeBlockChrome ?? "copy",
   };
 }
 
