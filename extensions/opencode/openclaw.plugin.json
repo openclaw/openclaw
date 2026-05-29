@@ -18,6 +18,12 @@
       }
     }
   },
+  "modelCatalog": {
+    "runtimeAugment": true,
+    "discovery": {
+      "opencode": "refreshable"
+    }
+  },
   "setup": {
     "providers": [
       {

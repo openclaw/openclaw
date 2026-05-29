@@ -1,4 +1,5 @@
 import {
+  loadPluginManifestRegistry,
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -181,5 +182,14 @@ describe("opencode provider plugin", () => {
     const claude = entries!.find((e) => e.id === "claude-opus-4-6");
     expect(claude).toBeDefined();
     expect(claude!.reasoning).toBe(true);
+  });
+
+  it("proves runtimeAugment is active in the real manifest registry", () => {
+    const registry = loadPluginManifestRegistry({});
+    const opencodePlugin = registry.plugins.find(
+      (p) => p.origin === "bundled" && p.id === "opencode",
+    );
+    expect(opencodePlugin).toBeDefined();
+    expect(opencodePlugin?.modelCatalog?.runtimeAugment).toBe(true);
   });
 });
