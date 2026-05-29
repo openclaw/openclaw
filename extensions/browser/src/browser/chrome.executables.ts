@@ -24,6 +24,7 @@ const CHROME_VERSION_RE = /\b(\d+)(?:\.\d+){1,3}\b/g;
 const PLAYWRIGHT_BROWSERS_PATH_ENV = "PLAYWRIGHT_BROWSERS_PATH";
 const BROWSER_VERSION_TIMEOUT_MS = 6000;
 const MAC_PLISTBUDDY_TIMEOUT_MS = 800;
+const WINDOWS_FILE_METADATA_TIMEOUT_MS = 4000;
 
 const CHROMIUM_BUNDLE_IDS = new Set([
   "com.google.Chrome",
@@ -752,6 +753,13 @@ export function readBrowserVersion(executablePath: string): string | null {
     }
   }
 
+  if (process.platform === "win32") {
+    // `chrome.exe --version` does not print to stdout on Windows (the GUI binary
+    // does not attach to the parent console), so the `--version` probe below is
+    // useless there. Resolve the build version from the install layout instead.
+    return readWindowsBrowserVersion(executablePath);
+  }
+
   const output = execText(executablePath, ["--version"], BROWSER_VERSION_TIMEOUT_MS);
   if (!output) {
     return null;
@@ -770,6 +778,38 @@ function readMacBundleBrowserVersion(executablePath: string): string | null {
     ["-c", "Print :CFBundleShortVersionString", plistPath],
     MAC_PLISTBUDDY_TIMEOUT_MS,
   );
+}
+
+const WINDOWS_VERSION_DIR_RE = /^\d+(?:\.\d+){1,3}$/;
+
+function readWindowsBrowserVersion(executablePath: string): string | null {
+  // Read the inspected executable's authoritative PE metadata. Pass the path as
+  // data so a configured path cannot become part of the PowerShell program.
+  const metadataVersion = execText(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      "[System.Diagnostics.FileVersionInfo]::GetVersionInfo($args[0]).ProductVersion",
+      executablePath,
+    ],
+    WINDOWS_FILE_METADATA_TIMEOUT_MS,
+  );
+  if (metadataVersion) {
+    return metadataVersion.replace(/\s+/g, " ").trim();
+  }
+
+  // Standard Chromium installers also keep a versioned child directory. Only
+  // trust that layout when it is unambiguous; updates may leave two builds.
+  try {
+    const versionDirs = fs
+      .readdirSync(path.win32.dirname(executablePath), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && WINDOWS_VERSION_DIR_RE.test(entry.name));
+    return versionDirs.length === 1 ? versionDirs[0]?.name ?? null : null;
+  } catch {
+    return null;
+  }
 }
 
 function resolveMacAppBundlePath(executablePath: string): string | null {
