@@ -22,6 +22,9 @@ const writeBackfillDiaryEntries = vi.hoisted(() => vi.fn());
 const removeBackfillDiaryEntries = vi.hoisted(() => vi.fn());
 const removeGroundedShortTermCandidates = vi.hoisted(() => vi.fn());
 const repairDreamingArtifacts = vi.hoisted(() => vi.fn());
+const readMemoryAuditSuggestions = vi.hoisted(() => vi.fn());
+const applyMemoryAuditSuggestion = vi.hoisted(() => vi.fn());
+const rejectMemoryAuditSuggestion = vi.hoisted(() => vi.fn());
 
 vi.mock("../../config/config.js", () => ({
   getRuntimeConfig,
@@ -48,6 +51,9 @@ vi.mock("./doctor.memory-core-runtime.js", () => ({
   removeBackfillDiaryEntries,
   removeGroundedShortTermCandidates,
   repairDreamingArtifacts,
+  readMemoryAuditSuggestions,
+  applyMemoryAuditSuggestion,
+  rejectMemoryAuditSuggestion,
 }));
 
 import { doctorHandlers } from "./doctor.js";
@@ -158,6 +164,45 @@ const invokeDoctorMemoryRemHarness = async (
   });
 };
 
+const invokeDoctorMemoryAuditSuggestions = async (respond: ReturnType<typeof vi.fn>) => {
+  await doctorHandlers["doctor.memory.auditSuggestions"]({
+    req: {} as never,
+    params: {} as never,
+    respond: respond as never,
+    context: makeRuntimeContext() as never,
+    client: null,
+    isWebchatConnect: () => false,
+  });
+};
+
+const invokeDoctorMemoryAuditApply = async (
+  respond: ReturnType<typeof vi.fn>,
+  params: Record<string, unknown>,
+) => {
+  await doctorHandlers["doctor.memory.auditApply"]({
+    req: {} as never,
+    params: params as never,
+    respond: respond as never,
+    context: makeRuntimeContext() as never,
+    client: null,
+    isWebchatConnect: () => false,
+  });
+};
+
+const invokeDoctorMemoryAuditReject = async (
+  respond: ReturnType<typeof vi.fn>,
+  params: Record<string, unknown>,
+) => {
+  await doctorHandlers["doctor.memory.auditReject"]({
+    req: {} as never,
+    params: params as never,
+    respond: respond as never,
+    context: makeRuntimeContext() as never,
+    client: null,
+    isWebchatConnect: () => false,
+  });
+};
+
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
   if (!record || typeof record !== "object") {
     throw new Error("Expected record");
@@ -216,6 +261,9 @@ describe("doctor.memory.status", () => {
     removeBackfillDiaryEntries.mockReset();
     removeGroundedShortTermCandidates.mockReset();
     repairDreamingArtifacts.mockReset();
+    readMemoryAuditSuggestions.mockReset();
+    applyMemoryAuditSuggestion.mockReset();
+    rejectMemoryAuditSuggestion.mockReset();
   });
 
   it("returns gateway embedding probe status for the default agent", async () => {
@@ -904,6 +952,161 @@ describe("doctor.memory dream actions", () => {
       },
       undefined,
     );
+  });
+});
+
+describe("doctor.memory audit actions", () => {
+  beforeEach(() => {
+    getRuntimeConfig.mockClear();
+    resolveDefaultAgentId.mockReset().mockReturnValue("main");
+    resolveAgentWorkspaceDir.mockReset().mockReturnValue("/tmp/openclaw");
+    readMemoryAuditSuggestions.mockReset();
+    applyMemoryAuditSuggestion.mockReset();
+    rejectMemoryAuditSuggestion.mockReset();
+  });
+
+  it("lists staged audit suggestions across configured memory workspaces", async () => {
+    getRuntimeConfig.mockReturnValue({
+      agents: {
+        list: [
+          { id: "main", default: true, workspace: "/tmp/openclaw-main" },
+          { id: "alpha", workspace: "/tmp/openclaw-alpha" },
+        ],
+      },
+    } as OpenClawConfig);
+    resolveAgentWorkspaceDir.mockImplementation((_cfg: OpenClawConfig, agentId: string) =>
+      agentId === "alpha" ? "/tmp/openclaw-alpha" : "/tmp/openclaw-main",
+    );
+    readMemoryAuditSuggestions
+      .mockResolvedValueOnce({
+        total: 1,
+        pending: 1,
+        applied: 0,
+        rejected: 0,
+        conflict: 0,
+        suggestions: [
+          {
+            id: "ma_one",
+            status: "pending",
+            action: "delete",
+            text: "",
+            rationale: "Not durable.",
+            confidence: 0.9,
+            target: {
+              surfaceId: "surface-one",
+              kind: "agent-memory",
+              path: "MEMORY.md",
+              workspaceDir: "/tmp/openclaw-main",
+            },
+            createdAt: "2026-05-23T00:00:00.000Z",
+            updatedAt: "2026-05-23T00:00:00.000Z",
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        total: 1,
+        pending: 0,
+        applied: 1,
+        rejected: 0,
+        conflict: 0,
+        suggestions: [
+          {
+            id: "ma_two",
+            status: "applied",
+            action: "add",
+            text: "Durable fact.",
+            rationale: "Worth keeping.",
+            confidence: 0.8,
+            target: {
+              surfaceId: "surface-two",
+              kind: "user-profile",
+              path: "USER.md",
+              workspaceDir: "/tmp/openclaw-alpha",
+            },
+            createdAt: "2026-05-22T00:00:00.000Z",
+            updatedAt: "2026-05-24T00:00:00.000Z",
+          },
+        ],
+      });
+    const respond = vi.fn();
+
+    await invokeDoctorMemoryAuditSuggestions(respond);
+
+    expect(readMemoryAuditSuggestions).toHaveBeenCalledWith({
+      workspaceDir: "/tmp/openclaw-main",
+    });
+    expect(readMemoryAuditSuggestions).toHaveBeenCalledWith({
+      workspaceDir: "/tmp/openclaw-alpha",
+    });
+    const payload = respondPayload(respond);
+    expect(payload).toMatchObject({
+      agentId: "main",
+      workspaces: ["/tmp/openclaw-main", "/tmp/openclaw-alpha"],
+      total: 2,
+      pending: 1,
+      applied: 1,
+      rejected: 0,
+      conflict: 0,
+    });
+    expect((payload.suggestions as Array<{ id: string }>).map((entry) => entry.id)).toEqual([
+      "ma_two",
+      "ma_one",
+    ]);
+  });
+
+  it("applies an audit suggestion only in a configured memory workspace", async () => {
+    applyMemoryAuditSuggestion.mockResolvedValue({
+      applied: true,
+      suggestion: {
+        id: "ma_one",
+        status: "pending",
+        action: "delete",
+        text: "",
+        rationale: "Not durable.",
+        confidence: 0.9,
+        target: {
+          surfaceId: "surface-one",
+          kind: "agent-memory",
+          path: "MEMORY.md",
+          workspaceDir: "/tmp/openclaw",
+        },
+        createdAt: "2026-05-23T00:00:00.000Z",
+        updatedAt: "2026-05-23T00:00:00.000Z",
+      },
+    });
+    const respond = vi.fn();
+
+    await invokeDoctorMemoryAuditApply(respond, {
+      id: "ma_one",
+      workspaceDir: "/tmp/openclaw",
+    });
+
+    expect(applyMemoryAuditSuggestion).toHaveBeenCalledWith({
+      workspaceDir: "/tmp/openclaw",
+      id: "ma_one",
+    });
+    expect(respondPayload(respond)).toMatchObject({
+      agentId: "main",
+      workspaceDir: "/tmp/openclaw",
+      id: "ma_one",
+      action: "apply",
+      applied: true,
+    });
+  });
+
+  it("rejects unconfigured audit workspaces before writing", async () => {
+    const respond = vi.fn();
+
+    await invokeDoctorMemoryAuditReject(respond, {
+      id: "ma_one",
+      workspaceDir: "/tmp/other",
+    });
+
+    expect(rejectMemoryAuditSuggestion).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(false, undefined, {
+      code: "INVALID_REQUEST",
+      message: "memory audit workspace is not configured",
+    });
   });
 });
 

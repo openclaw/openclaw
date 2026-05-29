@@ -17,6 +17,7 @@ expose their own CLI namespaces.
 Related:
 
 - Memory concept: [Memory](/concepts/memory)
+- Memory Audit: [Memory Audit](/concepts/memory-audit)
 - Memory wiki: [Memory Wiki](/plugins/memory-wiki)
 - Wiki CLI: [wiki](/cli/wiki)
 - Plugins: [Plugins](/tools/plugin)

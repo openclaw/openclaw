@@ -171,6 +171,14 @@ describe("buildGatewayReloadPlan", () => {
       registration: { restartPrefixes: ["browser"] },
       source: "test",
     },
+    {
+      pluginId: "memory-core",
+      pluginName: "Memory (Core)",
+      registration: {
+        restartPrefixes: ["plugins.entries.memory-core.config.memoryAudit"],
+      },
+      source: "test",
+    },
   ];
 
   beforeEach(() => {
@@ -341,6 +349,16 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.reloadPlugins).toBe(true);
     expect(plan.disposeMcpRuntimes).toBe(true);
     expect(plan.hotReasons).toContain("plugins.entries.lossless-claw.config.mode");
+  });
+
+  it("restarts the gateway for memory-core Memory Audit config changes", () => {
+    const plan = buildGatewayReloadPlan(["plugins.entries.memory-core.config.memoryAudit.enabled"]);
+
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toEqual(["plugins.entries.memory-core.config.memoryAudit.enabled"]);
+    expect(plan.reloadPlugins).toBe(false);
+    expect(plan.disposeMcpRuntimes).toBe(false);
+    expect(plan.hotReasons).toStrictEqual([]);
   });
 
   it("lists plugin install metadata and whole-record paths structurally", () => {

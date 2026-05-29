@@ -1,5 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  ErrorCodes,
+  errorShape,
+  type ErrorShape,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -14,9 +19,12 @@ import {
 import { getActiveMemorySearchManager } from "../../plugins/memory-runtime.js";
 import { formatError } from "../server-utils.js";
 import {
+  applyMemoryAuditSuggestion,
   dedupeDreamDiaryEntries,
   previewGroundedRemMarkdown,
   previewRemHarness,
+  readMemoryAuditSuggestions,
+  rejectMemoryAuditSuggestion,
   removeBackfillDiaryEntries,
   removeGroundedShortTermCandidates,
   repairDreamingArtifacts,
@@ -156,6 +164,62 @@ export type DoctorMemoryDreamActionPayload = {
   warnings?: string[];
   dedupedEntries?: number;
   keptEntries?: number;
+};
+
+export type DoctorMemoryAuditSuggestionPayload = {
+  id: string;
+  status: "pending" | "applied" | "rejected" | "conflict";
+  action: "add" | "edit" | "delete" | "move";
+  text: string;
+  rationale: string;
+  confidence: number;
+  target: {
+    surfaceId: string;
+    kind:
+      | "agent-instructions"
+      | "agent-memory"
+      | "user-profile"
+      | "tool-notes"
+      | "shared-memory"
+      | "daily-memory"
+      | "session-log";
+    path: string;
+    workspaceDir: string;
+    agentId?: string;
+  };
+  source?: DoctorMemoryAuditSuggestionPayload["target"] & {
+    startLine: number;
+    endLine: number;
+    hash: string;
+  };
+  reviewerAgentId?: string;
+  createdAt: string;
+  updatedAt: string;
+  appliedAt?: string;
+  rejectedAt?: string;
+  conflict?: string;
+};
+
+export type DoctorMemoryAuditSuggestionsPayload = {
+  agentId: string;
+  workspaces: string[];
+  total: number;
+  pending: number;
+  applied: number;
+  rejected: number;
+  conflict: number;
+  suggestions: DoctorMemoryAuditSuggestionPayload[];
+};
+
+export type DoctorMemoryAuditActionPayload = {
+  agentId: string;
+  workspaceDir: string;
+  id: string;
+  action: "apply" | "reject";
+  applied?: boolean;
+  rejected?: boolean;
+  conflict?: string;
+  suggestion?: DoctorMemoryAuditSuggestionPayload;
 };
 
 export type DoctorMemoryRemHarnessCandidatePayload = {
@@ -884,6 +948,47 @@ function shouldProbeMemoryEmbeddings(params: unknown): boolean {
   return record.probe === true || record.deep === true;
 }
 
+function resolveMemoryAuditWorkspaces(cfg: OpenClawConfig): string[] {
+  const agentId = resolveDefaultAgentId(cfg);
+  const fallbackWorkspace = resolveAgentWorkspaceDir(cfg, agentId);
+  const workspaces = resolveMemoryDreamingWorkspaces(cfg, {
+    primaryWorkspaceDir: fallbackWorkspace,
+    primaryAgentId: agentId,
+  }).map((entry) => entry.workspaceDir);
+  return [...new Set(workspaces.length > 0 ? workspaces : [fallbackWorkspace])];
+}
+
+function resolveRequestedMemoryAuditWorkspace(cfg: OpenClawConfig, params: unknown): string {
+  const requested = normalizeTrimmedString(asRecord(params)?.workspaceDir);
+  const workspaces = resolveMemoryAuditWorkspaces(cfg);
+  if (!requested) {
+    return workspaces[0] ?? resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+  }
+  if (!workspaces.includes(requested)) {
+    throw new Error("memory audit workspace is not configured");
+  }
+  return requested;
+}
+
+function normalizeMemoryAuditSuggestionId(params: unknown): string {
+  const id = normalizeTrimmedString(asRecord(params)?.id);
+  if (!id) {
+    throw new Error("memory audit suggestion id is required");
+  }
+  return id;
+}
+
+function memoryAuditGatewayError(err: unknown): ErrorShape {
+  const message = formatError(err);
+  const code =
+    message === "memory audit workspace is not configured" ||
+    message === "memory audit suggestion id is required" ||
+    message.startsWith("memory audit suggestion not found:")
+      ? ErrorCodes.INVALID_REQUEST
+      : ErrorCodes.UNAVAILABLE;
+  return errorShape(code, message);
+}
+
 const SKIPPED_MEMORY_EMBEDDING_PROBE = {
   ok: false,
   checked: false,
@@ -986,6 +1091,73 @@ export const doctorHandlers: GatewayRequestHandlers = {
       respond(true, payload, undefined);
     } finally {
       await manager.close?.().catch(() => {});
+    }
+  },
+  "doctor.memory.auditSuggestions": async ({ respond, context }) => {
+    const cfg = context.getRuntimeConfig();
+    const agentId = resolveDefaultAgentId(cfg);
+    const workspaces = resolveMemoryAuditWorkspaces(cfg);
+    const summaries = await Promise.all(
+      workspaces.map((workspaceDir) => readMemoryAuditSuggestions({ workspaceDir })),
+    );
+    const suggestions = summaries
+      .flatMap((summary) => summary.suggestions as DoctorMemoryAuditSuggestionPayload[])
+      .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+    const payload: DoctorMemoryAuditSuggestionsPayload = {
+      agentId,
+      workspaces,
+      total: suggestions.length,
+      pending: suggestions.filter((entry) => entry.status === "pending").length,
+      applied: suggestions.filter((entry) => entry.status === "applied").length,
+      rejected: suggestions.filter((entry) => entry.status === "rejected").length,
+      conflict: suggestions.filter((entry) => entry.status === "conflict").length,
+      suggestions,
+    };
+    respond(true, payload, undefined);
+  },
+  "doctor.memory.auditApply": async ({ respond, context, params }) => {
+    const cfg = context.getRuntimeConfig();
+    const agentId = resolveDefaultAgentId(cfg);
+    try {
+      const workspaceDir = resolveRequestedMemoryAuditWorkspace(cfg, params);
+      const id = normalizeMemoryAuditSuggestionId(params);
+      const result = await applyMemoryAuditSuggestion({ workspaceDir, id });
+      const payload: DoctorMemoryAuditActionPayload = {
+        agentId,
+        workspaceDir,
+        id,
+        action: "apply",
+        applied: result.applied,
+        ...(result.conflict ? { conflict: result.conflict } : {}),
+        ...(result.suggestion
+          ? { suggestion: result.suggestion as DoctorMemoryAuditSuggestionPayload }
+          : {}),
+      };
+      respond(true, payload, undefined);
+    } catch (err) {
+      respond(false, undefined, memoryAuditGatewayError(err));
+    }
+  },
+  "doctor.memory.auditReject": async ({ respond, context, params }) => {
+    const cfg = context.getRuntimeConfig();
+    const agentId = resolveDefaultAgentId(cfg);
+    try {
+      const workspaceDir = resolveRequestedMemoryAuditWorkspace(cfg, params);
+      const id = normalizeMemoryAuditSuggestionId(params);
+      const result = await rejectMemoryAuditSuggestion({ workspaceDir, id });
+      const payload: DoctorMemoryAuditActionPayload = {
+        agentId,
+        workspaceDir,
+        id,
+        action: "reject",
+        rejected: result.rejected,
+        ...(result.suggestion
+          ? { suggestion: result.suggestion as DoctorMemoryAuditSuggestionPayload }
+          : {}),
+      };
+      respond(true, payload, undefined);
+    } catch (err) {
+      respond(false, undefined, memoryAuditGatewayError(err));
     }
   },
   "doctor.memory.dreamDiary": async ({ respond, context }) => {

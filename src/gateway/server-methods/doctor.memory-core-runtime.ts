@@ -1,7 +1,10 @@
 export {
+  applyMemoryAuditSuggestion,
   dedupeDreamDiaryEntries,
   previewGroundedRemMarkdown,
   previewRemHarness,
+  readMemoryAuditSuggestions,
+  rejectMemoryAuditSuggestion,
   removeBackfillDiaryEntries,
   removeGroundedShortTermCandidates,
   repairDreamingArtifacts,

@@ -17,6 +17,11 @@ export { checkQmdBinaryAvailability } from "openclaw/plugin-sdk/memory-core-host
 export { hasConfiguredMemorySecretInput } from "openclaw/plugin-sdk/memory-core-host-secret";
 export { auditDreamingArtifacts, repairDreamingArtifacts } from "./src/dreaming-repair.js";
 export {
+  applyMemoryAuditSuggestion,
+  readMemoryAuditSuggestions,
+  rejectMemoryAuditSuggestion,
+} from "./src/memory-audit.js";
+export {
   auditShortTermPromotionArtifacts,
   removeGroundedShortTermCandidates,
   repairShortTermPromotionArtifacts,
@@ -26,6 +31,7 @@ export type {
   DreamingArtifactsAuditSummary,
   RepairDreamingArtifactsResult,
 } from "./src/dreaming-repair.js";
+export type { MemoryAuditSuggestion, MemoryAuditSuggestionSummary } from "./src/memory-audit.js";
 export type {
   RepairShortTermPromotionArtifactsResult,
   ShortTermAuditSummary,

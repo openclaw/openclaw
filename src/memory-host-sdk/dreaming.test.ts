@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import {
   formatMemoryDreamingDay,
   isSameMemoryDreamingDay,
+  resolveMemoryAuditConfig,
   resolveMemoryDreamingPluginConfig,
   resolveMemoryDreamingPluginId,
   resolveMemoryDreamingConfig,
@@ -115,6 +116,58 @@ describe("memory dreaming host helpers", () => {
     expect(resolved.storage).toEqual({
       mode: "separate",
       separateReports: false,
+    });
+  });
+
+  it("normalizes memory audit config independently from dreaming", () => {
+    const resolved = resolveMemoryAuditConfig({
+      pluginConfig: {
+        memoryAudit: {
+          enabled: true,
+          agentId: " audit ",
+          sessionTarget: "session:memory-audit",
+          timezone: "Asia/Tokyo",
+          model: " minimax-portal/MiniMax-M2 ",
+          delivery: {
+            mode: "announce",
+            channel: "discord",
+            to: "hex",
+            threadId: "1506869217926975488",
+            accountId: "hex",
+          },
+          daily: {
+            enabled: true,
+            cron: "10 6 * * *",
+          },
+          weekly: {
+            enabled: false,
+            cron: "0 21 * * 0",
+          },
+        },
+      },
+    });
+
+    expect(resolved).toEqual({
+      enabled: true,
+      agentId: "audit",
+      sessionTarget: "session:memory-audit",
+      timezone: "Asia/Tokyo",
+      model: "minimax-portal/MiniMax-M2",
+      daily: {
+        enabled: true,
+        cron: "10 6 * * *",
+      },
+      weekly: {
+        enabled: false,
+        cron: "0 21 * * 0",
+      },
+      delivery: {
+        mode: "announce",
+        channel: "discord",
+        to: "hex",
+        threadId: "1506869217926975488",
+        accountId: "hex",
+      },
     });
   });
 

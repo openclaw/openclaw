@@ -87,6 +87,12 @@ describe("memory-core plugin runtime registration", () => {
     vi.clearAllMocks();
   });
 
+  it("requires restart after Memory Audit config changes", () => {
+    expect(plugin.reload?.restartPrefixes).toContain(
+      "plugins.entries.memory-core.config.memoryAudit",
+    );
+  });
+
   it("wires scoped memory search cleanup through the lazy runtime", async () => {
     const runtime = registerMemoryCoreRuntime();
     const cfg = {} as OpenClawConfig;

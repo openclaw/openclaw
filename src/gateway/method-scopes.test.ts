@@ -383,6 +383,12 @@ describe("core gateway method classification", () => {
     expect(unclassified).toStrictEqual([]);
   });
 
+  it("registers Memory Audit methods as core gateway handlers", () => {
+    expect(coreGatewayHandlers["doctor.memory.auditSuggestions"]).toEqual(expect.any(Function));
+    expect(coreGatewayHandlers["doctor.memory.auditApply"]).toEqual(expect.any(Function));
+    expect(coreGatewayHandlers["doctor.memory.auditReject"]).toEqual(expect.any(Function));
+  });
+
   it("classifies every listed gateway method name", () => {
     const unclassified = listGatewayMethods().filter(
       (method) => !isGatewayMethodClassified(method),

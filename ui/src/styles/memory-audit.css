@@ -1,0 +1,392 @@
+.memory-audit-page {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+  padding: 16px;
+  overflow: auto;
+}
+
+.memory-audit-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.memory-audit-toolbar__copy {
+  min-width: 0;
+}
+
+.memory-audit-toolbar__title {
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.memory-audit-toolbar__subtitle {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 3px;
+}
+
+.memory-audit-tabs {
+  display: inline-flex;
+  width: fit-content;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--panel) 78%, transparent);
+  padding: 3px;
+}
+
+.memory-audit-tab {
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  padding: 7px 11px;
+}
+
+.memory-audit-tab.is-active {
+  background: var(--panel);
+  box-shadow: inset 0 0 0 1px var(--border);
+  color: var(--text);
+}
+
+.memory-audit-settings,
+.memory-audit-review {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.memory-audit-settings__section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--panel) 72%, transparent);
+  padding: 14px 16px;
+}
+
+.memory-audit-settings__section-title {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.memory-audit-settings__grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.memory-audit-settings__schedule {
+  display: grid;
+  grid-template-columns: minmax(170px, 0.8fr) minmax(150px, 0.7fr) minmax(220px, 1fr);
+  gap: 12px;
+}
+
+.memory-audit-settings__field,
+.memory-audit-settings__checkbox {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.memory-audit-settings__checkbox {
+  justify-content: end;
+}
+
+.memory-audit-settings__checkbox input {
+  margin-right: 6px;
+}
+
+.memory-audit-settings__checkbox span {
+  color: var(--text);
+}
+
+.memory-audit-settings__field input,
+.memory-audit-settings__field select {
+  width: 100%;
+  min-height: 38px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--input-bg, var(--panel));
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  padding: 8px 10px;
+}
+
+.memory-audit-settings__field input:disabled,
+.memory-audit-settings__field select:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.memory-audit-settings__error {
+  color: var(--danger);
+  font-size: 11px;
+}
+
+.memory-audit-settings__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.memory-audit-settings__restart-note {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.memory-audit-settings__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.memory-audit__summary {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(96px, 1fr));
+  gap: 8px;
+}
+
+.memory-audit__metric {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--panel) 72%, transparent);
+  padding: 10px 12px;
+}
+
+.memory-audit__metric-value {
+  display: block;
+  color: var(--text);
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.memory-audit__metric-label {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  margin-top: 6px;
+  text-transform: uppercase;
+}
+
+.memory-audit-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.memory-audit-item {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 14px;
+}
+
+.memory-audit-item__header,
+.memory-audit-item__actions,
+.memory-audit-item__badges,
+.memory-audit-item__meta {
+  display: flex;
+  align-items: center;
+}
+
+.memory-audit-item__header {
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.memory-audit-item__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.memory-audit-item__action {
+  flex: 0 0 auto;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.memory-audit-item__path {
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.memory-audit-item__badges {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.memory-audit-badge {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1;
+  padding: 5px 8px;
+  white-space: nowrap;
+}
+
+.memory-audit-badge--pending {
+  border-color: color-mix(in oklab, var(--accent) 38%, var(--border));
+  color: var(--accent);
+}
+
+.memory-audit-badge--applied {
+  border-color: color-mix(in oklab, var(--ok) 38%, var(--border));
+  color: var(--ok);
+}
+
+.memory-audit-badge--rejected {
+  color: var(--muted);
+}
+
+.memory-audit-badge--conflict {
+  border-color: color-mix(in oklab, var(--danger) 42%, var(--border));
+  color: var(--danger);
+}
+
+.memory-audit-item__meta {
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.memory-audit-item__meta span {
+  border-right: 1px solid var(--border);
+  padding-right: 8px;
+}
+
+.memory-audit-item__meta span:last-child {
+  border-right: 0;
+  padding-right: 0;
+}
+
+.memory-audit-item__rationale {
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.memory-audit-item__text {
+  max-height: 180px;
+  margin: 0;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: color-mix(in oklab, var(--bg) 76%, transparent);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 10px;
+  white-space: pre-wrap;
+}
+
+.memory-audit-item__conflict {
+  border: 1px solid color-mix(in oklab, var(--danger) 38%, var(--border));
+  border-radius: 6px;
+  color: var(--danger);
+  font-size: 12px;
+  padding: 8px 10px;
+}
+
+.memory-audit-item__actions {
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.memory-audit-item__actions .btn,
+.memory-audit-toolbar .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.memory-audit-item__actions svg,
+.memory-audit-toolbar svg {
+  width: 14px;
+  height: 14px;
+}
+
+.memory-audit-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 180px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.memory-audit-empty__title {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.memory-audit-empty__body {
+  max-width: 440px;
+  font-size: 12px;
+  line-height: 1.5;
+  margin-top: 6px;
+}
+
+@media (max-width: 760px) {
+  .memory-audit-page {
+    padding: 12px;
+  }
+
+  .memory-audit-toolbar,
+  .memory-audit-item__header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .memory-audit__summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .memory-audit-settings__grid,
+  .memory-audit-settings__schedule {
+    grid-template-columns: 1fr;
+  }
+
+  .memory-audit-settings__footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .memory-audit-item__badges,
+  .memory-audit-item__actions {
+    justify-content: flex-start;
+  }
+}

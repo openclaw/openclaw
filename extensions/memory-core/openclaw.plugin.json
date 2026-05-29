@@ -6,7 +6,7 @@
   "kind": "memory",
   "contracts": {
     "memoryEmbeddingProviders": ["local"],
-    "tools": ["memory_get", "memory_search"]
+    "tools": ["memory_get", "memory_search", "memory_audit_collect", "memory_audit_stage"]
   },
   "commandAliases": [
     {
@@ -25,12 +25,94 @@
       "label": "Dreaming Model",
       "placeholder": "anthropic/claude-sonnet-4-6",
       "help": "Optional provider/model override for Dream Diary narrative subagent runs. Requires plugins.entries.memory-core.subagent.allowModelOverride."
+    },
+    "memoryAudit.agentId": {
+      "label": "Memory Audit Agent",
+      "placeholder": "main",
+      "help": "Agent that receives managed memory audit cron runs and gets memory_audit_* tools."
+    },
+    "memoryAudit.daily.cron": {
+      "label": "Daily Memory Audit Cron",
+      "placeholder": "10 6 * * *",
+      "help": "Optional daily memory audit review cadence."
+    },
+    "memoryAudit.weekly.cron": {
+      "label": "Weekly Memory Audit Cron",
+      "placeholder": "0 21 * * 0",
+      "help": "Optional weekly broad memory audit review cadence."
     }
   },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "memoryAudit": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "agentId": {
+            "type": "string"
+          },
+          "sessionTarget": {
+            "type": "string"
+          },
+          "timezone": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "delivery": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": ["none", "announce", "webhook"]
+              },
+              "channel": {
+                "type": "string"
+              },
+              "to": {
+                "type": "string"
+              },
+              "threadId": {
+                "type": "string"
+              },
+              "accountId": {
+                "type": "string"
+              }
+            }
+          },
+          "daily": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "cron": {
+                "type": "string"
+              }
+            }
+          },
+          "weekly": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "cron": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
       "dreaming": {
         "type": "object",
         "additionalProperties": false,

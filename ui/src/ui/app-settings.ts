@@ -29,6 +29,7 @@ import { loadAgents, type AgentsState } from "./controllers/agents.ts";
 import { loadChannels, type ChannelsState } from "./controllers/channels.ts";
 import { loadConfig, loadConfigSchema, type ConfigState } from "./controllers/config.ts";
 import {
+  loadCronModelSuggestions,
   loadCronJobsPage,
   loadCronRuns,
   loadCronStatus,
@@ -45,6 +46,11 @@ import {
 } from "./controllers/dreaming.ts";
 import { loadExecApprovals, type ExecApprovalsState } from "./controllers/exec-approvals.ts";
 import { loadLogs, type LogsState } from "./controllers/logs.ts";
+import {
+  loadMemoryAuditSettings,
+  loadMemoryAuditSuggestions,
+  type MemoryAuditState,
+} from "./controllers/memory-audit.ts";
 import {
   loadModelAuthStatusState,
   type ModelAuthStatusState,
@@ -119,6 +125,11 @@ type SettingsHost = {
   dreamDiaryError: string | null;
   dreamDiaryPath: string | null;
   dreamDiaryContent: string | null;
+  memoryAuditLoading: boolean;
+  memoryAuditError: string | null;
+  memoryAuditSuggestions: import("./controllers/memory-audit.js").MemoryAuditSuggestions | null;
+  memoryAuditActionId: string | null;
+  memoryAuditActionMessage: { kind: "success" | "error"; text: string } | null;
 };
 
 type LocalUserIdentityHost = {
@@ -137,6 +148,7 @@ type SettingsAppHost = SettingsHost &
   DebugState &
   DevicesState &
   DreamingState &
+  MemoryAuditState &
   ExecApprovalsState &
   LogsState &
   NodesState &
@@ -148,6 +160,7 @@ type SettingsAppHost = SettingsHost &
     overviewLogCursor: number | null;
     overviewLogLines: string[];
     attentionItems: AttentionItem[];
+    cronModelSuggestions: string[];
     hello: { auth?: { role?: string; scopes?: string[] } } | null;
   };
 
@@ -458,6 +471,16 @@ export async function refreshActiveTab(host: SettingsHost) {
           loadDreamDiary(app),
           loadWikiImportInsights(app),
           loadWikiMemoryPalace(app),
+        ]);
+        break;
+      case "audit":
+        await Promise.all([
+          loadMemoryAuditSettings(app),
+          loadMemoryAuditSuggestions(app),
+          loadAgents(app),
+          loadSessions(app),
+          loadChannels(app, false),
+          loadCronModelSuggestions(app),
         ]);
         break;
       case "chat": {

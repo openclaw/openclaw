@@ -310,6 +310,9 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: [
       "doctor.memory.status",
+      "doctor.memory.auditSuggestions",
+      "doctor.memory.auditApply",
+      "doctor.memory.auditReject",
       "doctor.memory.dreamDiary",
       "doctor.memory.backfillDreamDiary",
       "doctor.memory.resetDreamDiary",

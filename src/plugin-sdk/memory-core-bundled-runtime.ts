@@ -34,6 +34,17 @@ type RuntimeFacadeModule = {
     archiveDiary?: boolean;
     now?: Date;
   }) => Promise<RepairDreamingArtifactsResult>;
+  readMemoryAuditSuggestions: (params: {
+    workspaceDir: string;
+  }) => Promise<MemoryAuditSuggestionSummary>;
+  applyMemoryAuditSuggestion: (params: {
+    workspaceDir: string;
+    id: string;
+  }) => Promise<{ applied: boolean; suggestion?: MemoryAuditSuggestion; conflict?: string }>;
+  rejectMemoryAuditSuggestion: (params: {
+    workspaceDir: string;
+    id: string;
+  }) => Promise<{ rejected: boolean; suggestion?: MemoryAuditSuggestion }>;
 };
 
 type GroundedRemPreviewItem = {
@@ -166,6 +177,48 @@ type RepairDreamingArtifactsResult = {
   warnings: string[];
 };
 
+type MemoryAuditAction = "add" | "edit" | "delete" | "move";
+type MemoryAuditSurfaceKind = "agent-memory" | "user-profile" | "tool-notes" | "shared-memory";
+type MemoryAuditSuggestionStatus = "pending" | "applied" | "rejected" | "conflict";
+
+type MemoryAuditSuggestionTarget = {
+  surfaceId: string;
+  kind: MemoryAuditSurfaceKind;
+  path: string;
+  workspaceDir: string;
+  agentId?: string;
+};
+
+type MemoryAuditSuggestion = {
+  id: string;
+  status: MemoryAuditSuggestionStatus;
+  action: MemoryAuditAction;
+  text: string;
+  rationale: string;
+  confidence: number;
+  source?: MemoryAuditSuggestionTarget & {
+    startLine: number;
+    endLine: number;
+    hash: string;
+  };
+  target: MemoryAuditSuggestionTarget;
+  reviewerAgentId?: string;
+  createdAt: string;
+  updatedAt: string;
+  appliedAt?: string;
+  rejectedAt?: string;
+  conflict?: string;
+};
+
+type MemoryAuditSuggestionSummary = {
+  total: number;
+  pending: number;
+  applied: number;
+  rejected: number;
+  conflict: number;
+  suggestions: MemoryAuditSuggestion[];
+};
+
 function loadApiFacadeModule(): ApiFacadeModule {
   return loadBundledPluginPublicSurfaceModuleSync<ApiFacadeModule>({
     dirName: "memory-core",
@@ -200,6 +253,27 @@ export const repairDreamingArtifacts: RuntimeFacadeModule["repairDreamingArtifac
   loadRuntimeFacadeModule().repairDreamingArtifacts(
     ...args,
   )) as RuntimeFacadeModule["repairDreamingArtifacts"];
+
+export const readMemoryAuditSuggestions: RuntimeFacadeModule["readMemoryAuditSuggestions"] = ((
+  ...args
+) =>
+  loadRuntimeFacadeModule().readMemoryAuditSuggestions(
+    ...args,
+  )) as RuntimeFacadeModule["readMemoryAuditSuggestions"];
+
+export const applyMemoryAuditSuggestion: RuntimeFacadeModule["applyMemoryAuditSuggestion"] = ((
+  ...args
+) =>
+  loadRuntimeFacadeModule().applyMemoryAuditSuggestion(
+    ...args,
+  )) as RuntimeFacadeModule["applyMemoryAuditSuggestion"];
+
+export const rejectMemoryAuditSuggestion: RuntimeFacadeModule["rejectMemoryAuditSuggestion"] = ((
+  ...args
+) =>
+  loadRuntimeFacadeModule().rejectMemoryAuditSuggestion(
+    ...args,
+  )) as RuntimeFacadeModule["rejectMemoryAuditSuggestion"];
 
 export const previewGroundedRemMarkdown: ApiFacadeModule["previewGroundedRemMarkdown"] = ((
   ...args
