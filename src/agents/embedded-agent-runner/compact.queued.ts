@@ -227,6 +227,7 @@ export async function compactEmbeddedAgentSession(
   const contextEngineRuntimeContext = buildCompactionContextEngineRuntimeContext({
     params,
     agentDir,
+    harnessRuntime: params.agentHarnessId ?? ceHarnessPolicy.runtime,
     contextTokenBudget,
     contextEnginePluginId: resolveContextEngineOwnerPluginId(contextEngine),
   });
@@ -482,6 +483,7 @@ export async function compactEmbeddedAgentSession(
 function buildCompactionContextEngineRuntimeContext(params: {
   params: CompactEmbeddedAgentSessionParams;
   agentDir: string;
+  harnessRuntime?: string;
   contextEnginePluginId?: string;
   contextTokenBudget?: number;
 }): ContextEngineRuntimeContext {
@@ -510,7 +512,7 @@ function buildCompactionContextEngineRuntimeContext(params: {
       senderId: params.params.senderId,
       provider: params.params.provider,
       modelId: params.params.model,
-      harnessRuntime: params.params.agentHarnessId,
+      harnessRuntime: params.harnessRuntime,
       modelFallbacksOverride: params.params.modelFallbacksOverride,
       thinkLevel: params.params.thinkLevel,
       reasoningLevel: params.params.reasoningLevel,

@@ -1765,6 +1765,41 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     });
   });
 
+  it("passes implicit Codex runtime to queued context-engine runtime context", async () => {
+    resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "codex" });
+    maybeCompactAgentHarnessSessionMock.mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      result: {
+        summary: "harness",
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 100,
+      },
+    });
+
+    const result = await compactEmbeddedAgentSession(
+      wrappedCompactionArgs({
+        provider: "openai",
+        model: "gpt-5.5",
+        config: {
+          models: {
+            providers: {
+              "openai-codex": { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
+            },
+          },
+        },
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    const harnessArg = mockCallArg(maybeCompactAgentHarnessSessionMock) as Record<string, unknown>;
+    expectRecordFields(harnessArg.contextEngineRuntimeContext, {
+      provider: "openai",
+      runtimeProvider: "openai-codex",
+      model: "gpt-5.5",
+    });
+  });
+
   it("fails deferred budget compaction when background maintenance is not scheduled", async () => {
     const dispose = vi.fn(async () => {});
     const maintain = vi.fn(async () => ({
