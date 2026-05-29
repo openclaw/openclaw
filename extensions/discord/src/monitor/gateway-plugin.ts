@@ -102,6 +102,10 @@ function createGatewayPlugin(params: {
     intents: number;
     autoInteractions: boolean;
   };
+  /** Per-account startup jitter in ms (0 = no delay). Applied only on the
+   *  first connect() call to spread simultaneous gateway connections across
+   *  accounts without affecting exponential-backoff reconnect scheduling. */
+  startupJitterMs?: number;
   gatewayInfoTimeoutMs: number;
   fetchImpl: DiscordGatewayFetch;
   fetchInit?: DiscordGatewayFetchInit;
@@ -111,9 +115,24 @@ function createGatewayPlugin(params: {
 }): discordGateway.GatewayPlugin {
   class OpenClawGatewayPlugin extends discordGateway.GatewayPlugin {
     private gatewayInfoUsedFallback = false;
+    private remainingStartupJitterMs = params.startupJitterMs ?? 0;
 
     constructor() {
       super(params.options);
+    }
+
+    override connect(resume = false): void {
+      // Apply per-account startup jitter on the first non-resume connect only.
+      // Subsequent reconnects skip the delay so exponential backoff is unaffected.
+      const jitter = this.remainingStartupJitterMs;
+      if (!resume && jitter > 0) {
+        this.remainingStartupJitterMs = 0;
+        setTimeout(() => {
+          super.connect(resume);
+        }, jitter).unref();
+        return;
+      }
+      super.connect(resume);
     }
 
     override registerClient(client: DiscordGatewayClient) {
@@ -256,14 +275,17 @@ export function waitForDiscordGatewayPluginRegistration(
   return registrationPromises.get(plugin as discordGateway.GatewayPlugin);
 }
 
-// Stagger reconnect base delay by accountId to avoid thundering herd on multi-account setups.
-// Each account gets a deterministic 0-4999ms offset based on a hash of its id.
-function staggeredBaseDelay(accountId: string): number {
+// Compute a deterministic per-account startup jitter (0–249 ms) to spread
+// simultaneous gateway connect() calls and avoid a thundering-herd burst on
+// multi-account gateway restarts. The range is intentionally small so that
+// startup is barely perceptible, and is additive — not a replacement of
+// Carbon's own exponential-backoff base, which is hardcoded at 1 s × 2^n.
+export function computeAccountStartupJitterMs(accountId: string): number {
   let hash = 0;
   for (let i = 0; i < accountId.length; i++) {
     hash = (hash * 31 + accountId.charCodeAt(i)) >>> 0;
   }
-  return hash % 5000;
+  return hash % 250;
 }
 
 export function createDiscordGatewayPlugin(params: {
@@ -282,7 +304,7 @@ export function createDiscordGatewayPlugin(params: {
     configuredTimeoutMs: params.discordConfig?.gatewayInfoTimeoutMs,
     env: process.env,
   });
-  const baseDelay = params.accountId ? staggeredBaseDelay(params.accountId) : 0;
+  const startupJitterMs = params.accountId ? computeAccountStartupJitterMs(params.accountId) : 0;
   let fetchImpl = createDiscordGatewayMetadataFetch(debugProxySettings.enabled);
   let wsAgent: DiscordGatewayWebSocketAgent = new HttpsAgent({
     lookup: discordDnsLookup,
@@ -305,11 +327,12 @@ export function createDiscordGatewayPlugin(params: {
 
   return createGatewayPlugin({
     options: {
-      reconnect: { maxAttempts: 50, baseDelay },
+      reconnect: { maxAttempts: 50 },
       intents,
       // OpenClaw registers its own async interaction listener.
       autoInteractions: false,
     },
+    startupJitterMs,
     gatewayInfoTimeoutMs,
     fetchImpl,
     runtime: params.runtime,

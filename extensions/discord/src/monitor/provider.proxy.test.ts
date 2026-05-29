@@ -816,3 +816,32 @@ describe("createDiscordGatewayPlugin", () => {
     });
   });
 });
+
+describe("computeAccountStartupJitterMs", () => {
+  let computeAccountStartupJitterMs: typeof import("./gateway-plugin.js").computeAccountStartupJitterMs;
+
+  beforeAll(async () => {
+    ({ computeAccountStartupJitterMs } = await import("./gateway-plugin.js"));
+  });
+
+  it("returns a value in [0, 249]", () => {
+    for (const id of ["acc-1", "acc-2", "acc-abc", "longAccountIdWithMoreChars", ""]) {
+      const jitter = computeAccountStartupJitterMs(id);
+      expect(jitter).toBeGreaterThanOrEqual(0);
+      expect(jitter).toBeLessThan(250);
+    }
+  });
+
+  it("is deterministic — same accountId produces same result", () => {
+    expect(computeAccountStartupJitterMs("cherry")).toBe(computeAccountStartupJitterMs("cherry"));
+    expect(computeAccountStartupJitterMs("butler")).toBe(computeAccountStartupJitterMs("butler"));
+  });
+
+  it("produces distinct values for different accountIds", () => {
+    const ids = ["cherry", "butler", "scholar", "buddy", "publisher"];
+    const values = ids.map((id) => computeAccountStartupJitterMs(id));
+    const unique = new Set(values);
+    // All five IDs should hash to different jitter values
+    expect(unique.size).toBe(ids.length);
+  });
+});
