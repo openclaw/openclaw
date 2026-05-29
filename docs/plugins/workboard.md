@@ -48,9 +48,15 @@ Each card stores:
 - optional agent id
 - optional linked session, run, task, or source URL
 - optional execution metadata for a Codex or Claude session started from the card
+- recent card events such as created, moved, linked, or agent-updated changes
 
 Cards are stored in the plugin's Gateway state. They are local to the Gateway
 state directory and move with the rest of that Gateway's OpenClaw state.
+
+Workboard keeps a compact per-card event history so operators can see how a
+card moved through the board without opening the linked session. The event trail
+is intentionally local metadata; it does not replace session transcripts or
+GitHub issue history.
 
 ## Card executions
 
@@ -73,6 +79,9 @@ run id, and lifecycle status on the card. Codex executions use
 Cards can be linked to existing dashboard sessions or to the session created
 when you start work from a card. Linked cards show the session lifecycle inline:
 running, linked idle, done, failed, or missing.
+
+If the linked session is missing, the card stays linked for context and still
+offers start controls so you can restart work into a fresh dashboard session.
 
 You can also capture an existing dashboard session from the Sessions tab with
 Add to Workboard. The card is linked to that session, uses the session label or

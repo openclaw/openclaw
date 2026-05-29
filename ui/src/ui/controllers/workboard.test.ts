@@ -204,7 +204,20 @@ describe("workboard controller", () => {
   it("does not duplicate existing captured sessions", async () => {
     const host = {};
     const state = getWorkboardState(host);
-    const existing = { ...sampleCard, sessionKey: sampleSession.key };
+    const existing = {
+      ...sampleCard,
+      execution: {
+        id: "exec-1",
+        kind: "agent-session",
+        engine: "codex",
+        mode: "autonomous",
+        status: "running",
+        model: "openai/gpt-5.5",
+        sessionKey: sampleSession.key,
+        startedAt: 1,
+        updatedAt: 1,
+      },
+    } satisfies WorkboardCard;
     state.loaded = true;
     state.cards = [existing];
     const client = createClient({});
@@ -223,6 +236,8 @@ describe("workboard controller", () => {
     const host = {};
     const state = getWorkboardState(host);
     state.capturingSessionKeys.add(sampleSession.key);
+    const existing = { ...sampleCard, sessionKey: sampleSession.key };
+    state.cards = [existing];
     const client = createClient({});
 
     const card = await captureSessionToWorkboard({
@@ -231,7 +246,7 @@ describe("workboard controller", () => {
       session: sampleSession,
     });
 
-    expect(card).toBeNull();
+    expect(card).toBe(existing);
     expect(client.request).not.toHaveBeenCalled();
   });
 
@@ -534,6 +549,12 @@ describe("workboard controller", () => {
 
     const linked = { ...sampleCard, sessionKey: sampleSession.key };
     expect(getWorkboardLifecycle(linked, [sampleSession])).toMatchObject({
+      state: "running",
+      targetStatus: "running",
+    });
+    expect(
+      getWorkboardLifecycle(linked, [{ ...sampleSession, hasActiveRun: false, status: "running" }]),
+    ).toMatchObject({
       state: "running",
       targetStatus: "running",
     });

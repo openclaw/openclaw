@@ -2044,6 +2044,10 @@ export function renderApp(state: AppViewState) {
                   enabledByDefault: false,
                 },
               );
+              const operatorCanWrite = hasOperatorWriteAccess(
+                (state.hello as { auth?: { role?: string; scopes?: string[] } } | null)?.auth ??
+                  null,
+              );
               return m.renderSessions({
                 loading: state.sessionsLoading,
                 result: state.sessionsResult,
@@ -2064,7 +2068,7 @@ export function renderApp(state: AppViewState) {
                 selectedKeys: state.sessionsSelectedKeys,
                 workboardSessionKeys: new Set(
                   workboardState.cards
-                    .map((card) => card.sessionKey)
+                    .flatMap((card) => [card.sessionKey, card.execution?.sessionKey])
                     .filter((key): key is string => typeof key === "string" && key.length > 0),
                 ),
                 workboardBusySessionKey: [...workboardState.capturingSessionKeys][0] ?? null,
@@ -2168,17 +2172,18 @@ export function renderApp(state: AppViewState) {
                   switchChatSession(state, sessionKey);
                   state.setTab("chat" as import("./navigation.ts").Tab);
                 },
-                onAddToWorkboard: workboardEnabled
-                  ? async (session) => {
-                      await captureSessionToWorkboard({
-                        host: state,
-                        client: state.client,
-                        session,
-                        requestUpdate: requestHostUpdate,
-                      });
-                      state.setTab("workboard" as import("./navigation.ts").Tab);
-                    }
-                  : undefined,
+                onAddToWorkboard:
+                  workboardEnabled && operatorCanWrite
+                    ? async (session) => {
+                        await captureSessionToWorkboard({
+                          host: state,
+                          client: state.client,
+                          session,
+                          requestUpdate: requestHostUpdate,
+                        });
+                        state.setTab("workboard" as import("./navigation.ts").Tab);
+                      }
+                    : undefined,
                 onToggleCheckpointDetails: (sessionKey) =>
                   toggleSessionCompactionCheckpoints(state, sessionKey),
                 onBranchFromCheckpoint: async (sessionKey, checkpointId) => {

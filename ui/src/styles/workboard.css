@@ -533,6 +533,37 @@
   white-space: nowrap;
 }
 
+.workboard-events {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 7px 0 0;
+  border-top: 1px solid color-mix(in srgb, var(--border) 62%, transparent);
+  list-style: none;
+}
+
+.workboard-events li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.25;
+}
+
+.workboard-events span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workboard-events time {
+  flex: 0 0 auto;
+  color: color-mix(in srgb, var(--muted) 72%, transparent);
+}
+
 .workboard-lifecycle {
   flex: 0 0 auto;
   border-radius: 6px;

@@ -160,6 +160,83 @@ describe("renderWorkboard", () => {
     expect(container.querySelector(".workboard-card")?.getAttribute("role")).toBeNull();
   });
 
+  it("hides write controls for read-only operators", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Inspect only",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    const container = document.createElement("div");
+
+    render(
+      renderWorkboard({
+        host,
+        client: null,
+        connected: true,
+        canWrite: false,
+        pluginEnabled: true,
+        agentsList: null,
+        sessions: [],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+
+    expect(container.querySelector<HTMLButtonElement>('button[title="Edit card"]')).toBeNull();
+    expect(container.querySelector<HTMLButtonElement>('button[title="Delete card"]')).toBeNull();
+    expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(0);
+    expect(
+      container.querySelector<HTMLButtonElement>(".workboard-toolbar__actions .btn.primary"),
+    ).toBeNull();
+    expect(container.querySelector(".workboard-card")?.getAttribute("draggable")).toBe("false");
+  });
+
+  it("offers start controls when a linked session no longer exists", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Restart this",
+        status: "blocked",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+        sessionKey: "agent:main:missing:1",
+      },
+    ];
+    const container = document.createElement("div");
+
+    render(
+      renderWorkboard({
+        host,
+        client: null,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: null,
+        sessions: [],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+
+    expect(container.textContent).toContain("Session missing");
+    expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(5);
+  });
+
   it("opens a modal for new cards", () => {
     const host = {};
     getWorkboardState(host).loaded = true;
@@ -229,6 +306,44 @@ describe("renderWorkboard", () => {
 
     expect(state.gamePlayerIndex).toBe(1);
     expect(container.querySelector(".workboard-game__stats")?.textContent).toContain("Moves 1");
+  });
+
+  it("renders card event history", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Tracked task",
+        status: "review",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 2,
+        events: [
+          { id: "event-1", kind: "created", at: 1, toStatus: "todo" },
+          { id: "event-2", kind: "moved", at: 2, fromStatus: "todo", toStatus: "review" },
+        ],
+      },
+    ];
+    const container = document.createElement("div");
+
+    render(
+      renderWorkboard({
+        host,
+        client: null,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: null,
+        sessions: [],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+
+    expect(container.querySelector(".workboard-events")?.textContent).toContain("Moved to Review");
   });
 
   it("opens an edit modal and submits card updates", async () => {

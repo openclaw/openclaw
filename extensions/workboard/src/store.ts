@@ -3,9 +3,12 @@ import {
   WORKBOARD_EXECUTION_ENGINES,
   WORKBOARD_EXECUTION_MODES,
   WORKBOARD_EXECUTION_STATUSES,
+  WORKBOARD_EVENT_KINDS,
   WORKBOARD_PRIORITIES,
   WORKBOARD_STATUSES,
   type WorkboardCard,
+  type WorkboardEvent,
+  type WorkboardEventKind,
   type WorkboardExecution,
   type WorkboardExecutionEngine,
   type WorkboardExecutionMode,
@@ -16,6 +19,7 @@ import {
 
 const POSITION_STEP = 1000;
 const MAX_CARDS = 2000;
+const MAX_CARD_EVENTS = 50;
 
 export type PersistedWorkboardCard = {
   version: 1;
@@ -170,6 +174,52 @@ function normalizeTimestamp(value: unknown, fallback: number): number {
     : fallback;
 }
 
+function normalizeEvent(value: unknown): WorkboardEvent | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const id = normalizeOptionalString(record.id);
+  const kind = WORKBOARD_EVENT_KINDS.includes(record.kind as WorkboardEventKind)
+    ? (record.kind as WorkboardEventKind)
+    : null;
+  const at = normalizeTimestamp(record.at, 0);
+  if (!id || !kind || !at) {
+    return null;
+  }
+  const fromStatus =
+    typeof record.fromStatus === "string" &&
+    WORKBOARD_STATUSES.includes(record.fromStatus as WorkboardStatus)
+      ? (record.fromStatus as WorkboardStatus)
+      : undefined;
+  const toStatus =
+    typeof record.toStatus === "string" &&
+    WORKBOARD_STATUSES.includes(record.toStatus as WorkboardStatus)
+      ? (record.toStatus as WorkboardStatus)
+      : undefined;
+  const sessionKey = normalizeOptionalString(record.sessionKey);
+  const runId = normalizeOptionalString(record.runId);
+  return {
+    id,
+    kind,
+    at,
+    ...(fromStatus ? { fromStatus } : {}),
+    ...(toStatus ? { toStatus } : {}),
+    ...(sessionKey ? { sessionKey } : {}),
+    ...(runId ? { runId } : {}),
+  };
+}
+
+function normalizeEvents(value: unknown): WorkboardEvent[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map(normalizeEvent)
+    .filter((event): event is WorkboardEvent => event !== null)
+    .slice(-MAX_CARD_EVENTS);
+}
+
 function normalizeExecution(value: unknown): WorkboardExecution | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
@@ -234,6 +284,60 @@ function compareCards(left: WorkboardCard, right: WorkboardCard): number {
   return left.createdAt - right.createdAt;
 }
 
+function cardSessionKey(card: WorkboardCard): string | undefined {
+  return card.sessionKey ?? card.execution?.sessionKey;
+}
+
+function cardRunId(card: WorkboardCard): string | undefined {
+  return card.runId ?? card.execution?.runId;
+}
+
+function appendEvent(
+  card: WorkboardCard,
+  event: Omit<WorkboardEvent, "id" | "at">,
+  at = Date.now(),
+): WorkboardEvent[] {
+  return [
+    ...normalizeEvents(card.events),
+    {
+      id: randomUUID(),
+      at,
+      ...event,
+    },
+  ].slice(-MAX_CARD_EVENTS);
+}
+
+function updateEvent(
+  existing: WorkboardCard,
+  next: WorkboardCard,
+): Omit<WorkboardEvent, "id" | "at"> {
+  if (existing.status !== next.status || existing.position !== next.position) {
+    return {
+      kind: "moved",
+      fromStatus: existing.status,
+      toStatus: next.status,
+    };
+  }
+  if (cardSessionKey(existing) !== cardSessionKey(next)) {
+    return {
+      kind: "linked",
+      ...(cardSessionKey(next) ? { sessionKey: cardSessionKey(next) } : {}),
+    };
+  }
+  if (
+    existing.execution?.status !== next.execution?.status ||
+    existing.execution?.engine !== next.execution?.engine ||
+    cardRunId(existing) !== cardRunId(next)
+  ) {
+    return {
+      kind: "execution_updated",
+      ...(cardSessionKey(next) ? { sessionKey: cardSessionKey(next) } : {}),
+      ...(cardRunId(next) ? { runId: cardRunId(next) } : {}),
+    };
+  }
+  return { kind: "edited" };
+}
+
 function removeUndefinedCardFields(card: WorkboardCard): WorkboardCard {
   const next = { ...card };
   for (const key of [
@@ -277,10 +381,13 @@ export class WorkboardStore {
     const now = Date.now();
     const status = normalizeStatus(input.status, "todo");
     const cards = await this.list();
-    const position =
-      normalizePosition(input.position, 0) ||
-      Math.max(0, ...cards.filter((card) => card.status === status).map((card) => card.position)) +
-        POSITION_STEP;
+    const normalizedPosition = normalizePosition(input.position, Number.NaN);
+    const position = Number.isFinite(normalizedPosition)
+      ? normalizedPosition
+      : Math.max(
+          0,
+          ...cards.filter((card) => card.status === status).map((card) => card.position),
+        ) + POSITION_STEP;
     const notes = normalizeNotes(input.notes);
     const agentId = normalizeOptionalString(input.agentId);
     const sessionKey = normalizeOptionalString(input.sessionKey);
@@ -297,6 +404,16 @@ export class WorkboardStore {
       position,
       createdAt: now,
       updatedAt: now,
+      events: [
+        {
+          id: randomUUID(),
+          kind: "created",
+          at: now,
+          toStatus: status,
+          ...(sessionKey ? { sessionKey } : {}),
+          ...(runId ? { runId } : {}),
+        },
+      ],
       ...(notes ? { notes } : {}),
       ...(agentId ? { agentId } : {}),
       ...(sessionKey ? { sessionKey } : {}),
@@ -356,6 +473,7 @@ export class WorkboardStore {
       ...(startedAt ? { startedAt } : {}),
       ...(completedAt ? { completedAt } : {}),
     });
+    next.events = appendEvent(next, updateEvent(existing, next), now);
     if (status !== "done") {
       delete next.completedAt;
     }

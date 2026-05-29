@@ -34,6 +34,15 @@ describe("WorkboardStore", () => {
     expect((await store.list()).map((card) => card.id)).toEqual([todo.id, review.id]);
     expect(review.labels).toEqual(["release", "docs"]);
     expect(review.priority).toBe("high");
+    expect(review.events?.[0]).toMatchObject({ kind: "created", toStatus: "review" });
+  });
+
+  it("preserves explicit zero positions", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+
+    const card = await store.create({ title: "Top card", status: "todo", position: 0 });
+
+    expect(card.position).toBe(0);
   });
 
   it("keeps initial session, run, and task links when creating cards", async () => {
@@ -77,6 +86,11 @@ describe("WorkboardStore", () => {
     expect(running.status).toBe("running");
     expect(running.position).toBe(500);
     expect(running.startedAt).toBeGreaterThanOrEqual(card.createdAt);
+    expect(running.events?.at(-1)).toMatchObject({
+      kind: "moved",
+      fromStatus: "todo",
+      toStatus: "running",
+    });
 
     const done = await store.update(card.id, { status: "done" });
     expect(done.completedAt).toBeGreaterThanOrEqual(done.startedAt ?? 0);
@@ -103,6 +117,10 @@ describe("WorkboardStore", () => {
     const relinked = await store.update(card.id, { sessionKey: "agent:main:dashboard:2" });
     expect(relinked.sessionKey).toBe("agent:main:dashboard:2");
     expect(relinked.execution?.sessionKey).toBe("agent:main:dashboard:2");
+    expect(relinked.events?.at(-1)).toMatchObject({
+      kind: "linked",
+      sessionKey: "agent:main:dashboard:2",
+    });
 
     const unlinked = await store.update(card.id, { sessionKey: "" });
     expect(unlinked.sessionKey).toBeUndefined();

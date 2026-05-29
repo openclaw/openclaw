@@ -17,12 +17,20 @@ export const WORKBOARD_EXECUTION_STATUSES = [
   "blocked",
   "done",
 ] as const;
+export const WORKBOARD_EVENT_KINDS = [
+  "created",
+  "edited",
+  "moved",
+  "linked",
+  "execution_updated",
+] as const;
 
 export type WorkboardStatus = (typeof WORKBOARD_STATUSES)[number];
 export type WorkboardPriority = (typeof WORKBOARD_PRIORITIES)[number];
 export type WorkboardExecutionEngine = (typeof WORKBOARD_EXECUTION_ENGINES)[number];
 export type WorkboardExecutionMode = (typeof WORKBOARD_EXECUTION_MODES)[number];
 export type WorkboardExecutionStatus = (typeof WORKBOARD_EXECUTION_STATUSES)[number];
+export type WorkboardEventKind = (typeof WORKBOARD_EVENT_KINDS)[number];
 
 export type WorkboardExecution = {
   id: string;
@@ -35,6 +43,16 @@ export type WorkboardExecution = {
   runId?: string;
   startedAt: number;
   updatedAt: number;
+};
+
+export type WorkboardEvent = {
+  id: string;
+  kind: WorkboardEventKind;
+  at: number;
+  fromStatus?: WorkboardStatus;
+  toStatus?: WorkboardStatus;
+  sessionKey?: string;
+  runId?: string;
 };
 
 export type WorkboardCard = {
@@ -55,6 +73,7 @@ export type WorkboardCard = {
   updatedAt: number;
   startedAt?: number;
   completedAt?: number;
+  events?: WorkboardEvent[];
 };
 
 export type WorkboardListResult = {

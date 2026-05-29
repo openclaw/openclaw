@@ -20,6 +20,13 @@ export const WORKBOARD_EXECUTION_STATUSES = [
   "blocked",
   "done",
 ] as const;
+export const WORKBOARD_EVENT_KINDS = [
+  "created",
+  "edited",
+  "moved",
+  "linked",
+  "execution_updated",
+] as const;
 
 export const WORKBOARD_ENGINE_MODELS = {
   codex: "openai/gpt-5.5",
@@ -31,6 +38,7 @@ export type WorkboardPriority = (typeof WORKBOARD_PRIORITIES)[number];
 export type WorkboardExecutionEngine = (typeof WORKBOARD_EXECUTION_ENGINES)[number];
 export type WorkboardExecutionMode = (typeof WORKBOARD_EXECUTION_MODES)[number];
 export type WorkboardExecutionStatus = (typeof WORKBOARD_EXECUTION_STATUSES)[number];
+export type WorkboardEventKind = (typeof WORKBOARD_EVENT_KINDS)[number];
 
 export type WorkboardExecution = {
   id: string;
@@ -43,6 +51,16 @@ export type WorkboardExecution = {
   runId?: string;
   startedAt: number;
   updatedAt: number;
+};
+
+export type WorkboardEvent = {
+  id: string;
+  kind: WorkboardEventKind;
+  at: number;
+  fromStatus?: WorkboardStatus;
+  toStatus?: WorkboardStatus;
+  sessionKey?: string;
+  runId?: string;
 };
 
 export type WorkboardCard = {
@@ -63,6 +81,7 @@ export type WorkboardCard = {
   updatedAt: number;
   startedAt?: number;
   completedAt?: number;
+  events?: WorkboardEvent[];
 };
 
 export type WorkboardLifecycleState =
@@ -209,6 +228,41 @@ function normalizeExecution(value: unknown): WorkboardExecution | undefined {
   };
 }
 
+function normalizeEvent(value: unknown): WorkboardEvent | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const id = typeof value.id === "string" && value.id.trim() ? value.id.trim() : "";
+  const kind = WORKBOARD_EVENT_KINDS.includes(value.kind as WorkboardEventKind)
+    ? (value.kind as WorkboardEventKind)
+    : null;
+  const at = typeof value.at === "number" && Number.isFinite(value.at) ? value.at : 0;
+  if (!id || !kind || !at) {
+    return null;
+  }
+  const fromStatus = WORKBOARD_STATUSES.includes(value.fromStatus as WorkboardStatus)
+    ? (value.fromStatus as WorkboardStatus)
+    : undefined;
+  const toStatus = WORKBOARD_STATUSES.includes(value.toStatus as WorkboardStatus)
+    ? (value.toStatus as WorkboardStatus)
+    : undefined;
+  return {
+    id,
+    kind,
+    at,
+    ...(fromStatus ? { fromStatus } : {}),
+    ...(toStatus ? { toStatus } : {}),
+    ...(typeof value.sessionKey === "string" ? { sessionKey: value.sessionKey } : {}),
+    ...(typeof value.runId === "string" ? { runId: value.runId } : {}),
+  };
+}
+
+function normalizeEvents(value: unknown): WorkboardEvent[] {
+  return Array.isArray(value)
+    ? value.map(normalizeEvent).filter((event): event is WorkboardEvent => event !== null)
+    : [];
+}
+
 function normalizeCard(value: unknown): WorkboardCard | null {
   if (!isRecord(value)) {
     return null;
@@ -225,6 +279,7 @@ function normalizeCard(value: unknown): WorkboardCard | null {
     return null;
   }
   const execution = normalizeExecution(value.execution);
+  const events = normalizeEvents(value.events);
   return {
     id,
     title,
@@ -245,6 +300,7 @@ function normalizeCard(value: unknown): WorkboardCard | null {
     ...(execution ? { execution } : {}),
     ...(typeof value.startedAt === "number" ? { startedAt: value.startedAt } : {}),
     ...(typeof value.completedAt === "number" ? { completedAt: value.completedAt } : {}),
+    ...(events.length ? { events } : {}),
   };
 }
 
@@ -422,6 +478,7 @@ function executionStatusForLifecycle(
     case "unlinked":
       return undefined;
   }
+  return undefined;
 }
 
 function shouldSyncExecutionStatus(
@@ -584,7 +641,7 @@ export async function captureSessionToWorkboard(params: {
     return null;
   }
   if (state.capturingSessionKeys.has(params.session.key)) {
-    return state.cards.find((card) => card.sessionKey === params.session.key) ?? null;
+    return state.cards.find((card) => workboardCardSessionKey(card) === params.session.key) ?? null;
   }
   state.error = null;
   state.capturingSessionKeys.add(params.session.key);
@@ -601,7 +658,9 @@ export async function captureSessionToWorkboard(params: {
     if (!state.loaded) {
       return null;
     }
-    const existing = state.cards.find((card) => card.sessionKey === params.session.key);
+    const existing = state.cards.find(
+      (card) => workboardCardSessionKey(card) === params.session.key,
+    );
     if (existing) {
       return existing;
     }

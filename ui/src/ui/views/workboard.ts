@@ -15,6 +15,7 @@ import {
   type WorkboardExecutionEngine,
   type WorkboardExecutionMode,
   type WorkboardCard,
+  type WorkboardEvent,
   type WorkboardLifecycle,
   type WorkboardPriority,
   type WorkboardStatus,
@@ -52,6 +53,47 @@ function formatTime(value: number | undefined): string {
     month: "short",
     day: "numeric",
   });
+}
+
+function canMutate(props: WorkboardProps): boolean {
+  return props.canWrite !== false;
+}
+
+function formatEventLabel(event: WorkboardEvent): string {
+  switch (event.kind) {
+    case "created":
+      return t("workboard.eventCreated");
+    case "edited":
+      return t("workboard.eventEdited");
+    case "moved":
+      return event.toStatus
+        ? t("workboard.eventMovedTo", { status: formatStatusLabel(event.toStatus) })
+        : t("workboard.eventMoved");
+    case "linked":
+      return t("workboard.eventLinked");
+    case "execution_updated":
+      return t("workboard.eventExecutionUpdated");
+  }
+  return "";
+}
+
+function renderEvents(card: WorkboardCard) {
+  const events = (card.events ?? []).toReversed().slice(0, 4);
+  if (events.length === 0) {
+    return nothing;
+  }
+  return html`
+    <ol class="workboard-events" aria-label=${t("workboard.eventsLabel")}>
+      ${events.map(
+        (event) => html`
+          <li>
+            <span>${formatEventLabel(event)}</span>
+            <time>${formatTime(event.at)}</time>
+          </li>
+        `,
+      )}
+    </ol>
+  `;
 }
 
 function matchesFilter(
@@ -347,12 +389,10 @@ function renderCardModal(props: WorkboardProps) {
       >
         <div class="workboard-modal__header">
           <div>
-            <h2 id="workboard-card-modal-title">${editing ? "Edit card" : "New card"}</h2>
-            <p>
-              ${editing
-                ? "Update queue metadata and session handoff."
-                : "Queue work for an agent session."}
-            </p>
+            <h2 id="workboard-card-modal-title">
+              ${editing ? t("workboard.editCard") : t("workboard.newCard")}
+            </h2>
+            <p>${editing ? t("workboard.editCardHelp") : t("workboard.newCardHelp")}</p>
           </div>
           <button
             class="btn btn--icon workboard-card__icon"
@@ -371,7 +411,7 @@ function renderCardModal(props: WorkboardProps) {
             <span>${t("workboard.fieldTitle")}</span>
             <input
               class="input workboard-draft__title"
-              placeholder="Card title"
+              placeholder=${t("workboard.titlePlaceholder")}
               .value=${state.draftTitle}
               @input=${(event: InputEvent) => {
                 state.draftTitle = (event.currentTarget as HTMLInputElement).value;
@@ -383,7 +423,7 @@ function renderCardModal(props: WorkboardProps) {
             <span>${t("workboard.fieldNotes")}</span>
             <textarea
               class="input workboard-draft__notes"
-              placeholder="Notes, acceptance criteria, links"
+              placeholder=${t("workboard.notesPlaceholder")}
               .value=${state.draftNotes}
               @input=${(event: InputEvent) => {
                 state.draftNotes = (event.currentTarget as HTMLTextAreaElement).value;
@@ -435,7 +475,7 @@ function renderCardModal(props: WorkboardProps) {
                 props.onRequestUpdate?.();
               }}
             >
-              <option value="">Default agent</option>
+              <option value="">${t("workboard.defaultAgent")}</option>
               ${agents.map(
                 (agent) =>
                   html`<option value=${agent.id}>
@@ -568,8 +608,10 @@ function renderStartExecutionButton(
   const state = getWorkboardState(props.host);
   const busy = state.busyCardId === card.id;
   const title = engine
-    ? `${mode === "autonomous" ? "Run" : "Open"} ${engine}`
-    : "Run default agent";
+    ? mode === "autonomous"
+      ? t("workboard.runEngine", { engine })
+      : t("workboard.openEngine", { engine })
+    : t("workboard.runDefaultAgent");
   return html`
     <button
       class="btn btn--xs workboard-card__start workboard-card__start--${mode} ${engine
@@ -591,7 +633,7 @@ function renderStartExecutionButton(
         }
       }}
     >
-      ${mode === "autonomous" ? icons.play : icons.penLine} ${engine ?? "Start"}
+      ${mode === "autonomous" ? icons.play : icons.penLine} ${engine ?? t("workboard.start")}
     </button>
   `;
 }
@@ -613,9 +655,11 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
   const session = findWorkboardSession(card, props.sessions);
   const busy = state.busyCardId === card.id;
   const syncing = state.syncingCardIds.has(card.id);
-  const live = session?.hasActiveRun === true;
+  const live = session?.hasActiveRun === true || session?.status === "running";
   const linkedSessionKey = card.sessionKey ?? card.execution?.sessionKey;
   const linked = Boolean(linkedSessionKey);
+  const writable = canMutate(props);
+  const showStartControls = writable && (!linked || !session);
   return html`
     <article
       class="workboard-card priority-${card.priority} ${busy ? "workboard-card--busy" : ""} ${linked
@@ -623,8 +667,8 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
         : ""}"
       role=${linked ? "button" : nothing}
       tabindex=${linked ? 0 : nothing}
-      title=${linked ? "Open linked session" : nothing}
-      draggable="true"
+      title=${linked ? t("workboard.openLinkedSession") : nothing}
+      draggable=${writable ? "true" : "false"}
       @click=${(event: MouseEvent) => {
         if (!isCardActionTarget(event)) {
           openCardSession(props, card);
@@ -639,6 +683,10 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
         }
       }}
       @dragstart=${(event: DragEvent) => {
+        if (!writable) {
+          event.preventDefault();
+          return;
+        }
         state.draggedCardId = card.id;
         event.dataTransfer?.setData("text/plain", card.id);
         event.dataTransfer?.setDragImage(event.currentTarget as Element, 16, 16);
@@ -651,7 +699,7 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
     >
       <div class="workboard-card__top">
         <span class="workboard-card__priority">${card.priority}</span>
-        ${live ? html`<span class="workboard-live">live</span>` : nothing}
+        ${live ? html`<span class="workboard-live">${t("workboard.live")}</span>` : nothing}
         ${syncing ? html`<span class="workboard-live">${t("common.saving")}</span>` : nothing}
       </div>
       <h3>${card.title}</h3>
@@ -662,30 +710,37 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
           </div>`
         : nothing}
       <div class="workboard-card__meta">
-        ${card.agentId ? html`<span>${card.agentId}</span>` : html`<span>default agent</span>`}
+        ${card.agentId
+          ? html`<span>${card.agentId}</span>`
+          : html`<span>${t("workboard.defaultAgent")}</span>`}
         <span>${formatTime(card.updatedAt)}</span>
       </div>
+      ${renderEvents(card)}
       <div class="workboard-card__actions">
-        <button
-          class="btn btn--icon workboard-card__icon"
-          title=${t("workboard.editCard")}
-          @click=${() => {
-            openEditModal(state, card);
-            props.onRequestUpdate?.();
-          }}
-        >
-          ${icons.edit}
-        </button>
+        ${writable
+          ? html`
+              <button
+                class="btn btn--icon workboard-card__icon"
+                title=${t("workboard.editCard")}
+                @click=${() => {
+                  openEditModal(state, card);
+                  props.onRequestUpdate?.();
+                }}
+              >
+                ${icons.edit}
+              </button>
+            `
+          : nothing}
         ${linked
           ? html`
               <button
                 class="btn btn--icon workboard-card__icon"
-                title="Open session"
+                title=${t("workboard.openSession")}
                 @click=${() => props.onOpenSession(linkedSessionKey!)}
               >
                 ${icons.messageSquare}
               </button>
-              ${live
+              ${writable && live
                 ? html`
                     <button
                       class="btn btn--icon workboard-card__icon"
@@ -704,21 +759,26 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
                   `
                 : nothing}
             `
-          : renderStartExecutionControls(props, card)}
-        <button
-          class="btn btn--icon workboard-card__icon workboard-card__delete"
-          title="Delete card"
-          ?disabled=${busy}
-          @click=${() =>
-            deleteWorkboardCard({
-              host: props.host,
-              client: props.client,
-              cardId: card.id,
-              requestUpdate: props.onRequestUpdate,
-            })}
-        >
-          ${icons.trash}
-        </button>
+          : nothing}
+        ${showStartControls ? renderStartExecutionControls(props, card) : nothing}
+        ${writable
+          ? html`
+              <button
+                class="btn btn--icon workboard-card__icon workboard-card__delete"
+                title=${t("workboard.deleteCard")}
+                ?disabled=${busy}
+                @click=${() =>
+                  deleteWorkboardCard({
+                    host: props.host,
+                    client: props.client,
+                    cardId: card.id,
+                    requestUpdate: props.onRequestUpdate,
+                  })}
+              >
+                ${icons.trash}
+              </button>
+            `
+          : nothing}
       </div>
     </article>
   `;
@@ -726,16 +786,20 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
 
 function renderColumn(props: WorkboardProps, status: WorkboardStatus, cards: WorkboardCard[]) {
   const state = getWorkboardState(props.host);
+  const writable = canMutate(props);
   return html`
     <section
       class="workboard-column ${state.draggedCardId ? "workboard-column--drop" : ""}"
       @dragover=${(event: DragEvent) => {
-        if (state.draggedCardId) {
+        if (writable && state.draggedCardId) {
           event.preventDefault();
         }
       }}
       @drop=${(event: DragEvent) => {
         event.preventDefault();
+        if (!writable) {
+          return;
+        }
         const cardId = event.dataTransfer?.getData("text/plain") || state.draggedCardId;
         if (!cardId) {
           return;
@@ -757,7 +821,7 @@ function renderColumn(props: WorkboardProps, status: WorkboardStatus, cards: Wor
       <div class="workboard-column__cards">
         ${cards.length
           ? cards.map((card) => renderCard(props, card))
-          : html`<div class="workboard-empty">Drop work here</div>`}
+          : html`<div class="workboard-empty">${t("workboard.emptyColumn")}</div>`}
       </div>
     </section>
   `;
@@ -794,6 +858,7 @@ export function renderWorkboard(props: WorkboardProps) {
   const filtered = state.cards.filter((card) =>
     matchesFilter(card, { query: state.query, priority: state.priorityFilter }),
   );
+  const writable = canMutate(props);
   const byStatus = new Map<WorkboardStatus, WorkboardCard[]>();
   for (const status of state.statuses) {
     byStatus.set(status, []);
@@ -809,7 +874,7 @@ export function renderWorkboard(props: WorkboardProps) {
           <input
             class="input"
             type="search"
-            placeholder="Search cards"
+            placeholder=${t("workboard.searchPlaceholder")}
             .value=${state.query}
             @input=${(event: InputEvent) => {
               state.query = (event.currentTarget as HTMLInputElement).value;
@@ -825,7 +890,7 @@ export function renderWorkboard(props: WorkboardProps) {
               props.onRequestUpdate?.();
             }}
           >
-            <option value="all">All priorities</option>
+            <option value="all">${t("workboard.allPriorities")}</option>
             ${WORKBOARD_PRIORITIES.map(
               (priority) => html`<option value=${priority}>${priority}</option>`,
             )}
@@ -854,15 +919,19 @@ export function renderWorkboard(props: WorkboardProps) {
           >
             ${icons.play} ${t("workboard.gameButton")}
           </button>
-          <button
-            class="btn primary"
-            @click=${() => {
-              openCreateModal(state);
-              props.onRequestUpdate?.();
-            }}
-          >
-            ${icons.plus} New card
-          </button>
+          ${writable
+            ? html`
+                <button
+                  class="btn primary"
+                  @click=${() => {
+                    openCreateModal(state);
+                    props.onRequestUpdate?.();
+                  }}
+                >
+                  ${icons.plus} ${t("workboard.newCard")}
+                </button>
+              `
+            : nothing}
         </div>
       </div>
       ${state.error ? html`<div class="callout danger">${state.error}</div>` : nothing}
