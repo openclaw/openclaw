@@ -43,6 +43,17 @@ function isFreshForRun(
   return terminalAt !== undefined && terminalAt >= notBeforeMs;
 }
 
+function freshSessionStartedAt(
+  sessionEntry: SessionEntry | undefined,
+  notBeforeMs: number | undefined,
+): number | undefined {
+  const startedAt = finiteTimestamp(sessionEntry?.startedAt);
+  if (startedAt === undefined) {
+    return undefined;
+  }
+  return notBeforeMs === undefined || startedAt >= notBeforeMs ? startedAt : undefined;
+}
+
 function findSessionEntryByKey(store: Record<string, SessionEntry>, sessionKey: string) {
   const direct = store[sessionKey];
   if (direct) {
@@ -83,7 +94,7 @@ export function resolveCompletionFromSessionEntry(
   opts?: { notBeforeMs?: number },
 ): SubagentSessionCompletion | null {
   const status = sessionEntry?.status;
-  const startedAt = finiteTimestamp(sessionEntry?.startedAt);
+  const startedAt = freshSessionStartedAt(sessionEntry, opts?.notBeforeMs);
   const endedAt =
     finiteTimestamp(sessionEntry?.endedAt) ??
     finiteTimestamp(sessionEntry?.updatedAt) ??
@@ -177,6 +188,6 @@ export function resolveSubagentSessionStartedAt(params: {
     cfg: params.cfg,
   });
   return isFreshForRun(sessionEntry, params.notBeforeMs)
-    ? finiteTimestamp(sessionEntry?.startedAt)
+    ? freshSessionStartedAt(sessionEntry, params.notBeforeMs)
     : undefined;
 }

@@ -1318,6 +1318,56 @@ describe("subagent registry seam flow", () => {
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
   });
 
+  it("ignores stale session-store start time for fresh terminal completions", async () => {
+    const createdAt = Date.parse("2026-03-24T12:00:00Z");
+    const staleSessionStartedAt = createdAt - 60_000;
+    vi.setSystemTime(createdAt);
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        vi.setSystemTime(createdAt + 61_000);
+        return { status: "timeout" };
+      }
+      return {};
+    });
+    mocks.loadSessionStore.mockReturnValue({
+      "agent:main:subagent:child": {
+        sessionId: "sess-child",
+        status: "done",
+        startedAt: staleSessionStartedAt,
+        updatedAt: createdAt + 30_000,
+        endedAt: createdAt + 30_000,
+      },
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-ignore-stale-session-start",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "ignore stale session store start",
+      cleanup: "keep",
+      runTimeoutSeconds: 60,
+    });
+
+    await waitForFast(() => {
+      const run = mod
+        .listSubagentRunsForRequester("agent:main:main")
+        .find((entry) => entry.runId === "run-ignore-stale-session-start");
+      expect(run?.endedAt).toBe(createdAt + 30_000);
+      expectRecordFields(
+        run?.outcome,
+        {
+          status: "ok",
+          startedAt: createdAt,
+          endedAt: createdAt + 30_000,
+          elapsedMs: 30_000,
+        },
+        "fresh terminal completion ignores stale session start",
+      );
+    });
+    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+  });
+
   it("caps restored waits to the remaining explicit run timeout", async () => {
     const startedAt = Date.parse("2026-03-24T11:59:00Z");
     const runTimeoutSeconds = 60;
