@@ -1,8 +1,9 @@
+import { resolveVoiceModelRefs } from "../../packages/speech-core/voice-models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { sortUniqueStrings } from "../shared/string-normalization.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import { loadBundledCapabilityRuntimeRegistry } from "./bundled-capability-runtime.js";
 import {
-  withBundledPluginAllowlistCompat,
   withBundledPluginEnablementCompat,
   withBundledPluginVitestCompat,
 } from "./bundled-compat.js";
@@ -25,21 +26,25 @@ import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js
 import type { PluginRegistry } from "./registry-types.js";
 
 type CapabilityProviderRegistryKey =
+  | "embeddingProviders"
   | "memoryEmbeddingProviders"
   | "speechProviders"
   | "realtimeTranscriptionProviders"
   | "realtimeVoiceProviders"
   | "mediaUnderstandingProviders"
+  | "transcriptSourceProviders"
   | "imageGenerationProviders"
   | "videoGenerationProviders"
   | "musicGenerationProviders";
 
 type CapabilityContractKey =
+  | "embeddingProviders"
   | "memoryEmbeddingProviders"
   | "speechProviders"
   | "realtimeTranscriptionProviders"
   | "realtimeVoiceProviders"
   | "mediaUnderstandingProviders"
+  | "transcriptSourceProviders"
   | "imageGenerationProviders"
   | "videoGenerationProviders"
   | "musicGenerationProviders";
@@ -56,11 +61,13 @@ const capabilityProviderSnapshotCache: ConfigScopedRuntimeCache<CapabilityProvid
   new WeakMap();
 
 const CAPABILITY_CONTRACT_KEY: Record<CapabilityProviderRegistryKey, CapabilityContractKey> = {
+  embeddingProviders: "embeddingProviders",
   memoryEmbeddingProviders: "memoryEmbeddingProviders",
   speechProviders: "speechProviders",
   realtimeTranscriptionProviders: "realtimeTranscriptionProviders",
   realtimeVoiceProviders: "realtimeVoiceProviders",
   mediaUnderstandingProviders: "mediaUnderstandingProviders",
+  transcriptSourceProviders: "transcriptSourceProviders",
   imageGenerationProviders: "imageGenerationProviders",
   videoGenerationProviders: "videoGenerationProviders",
   musicGenerationProviders: "musicGenerationProviders",
@@ -68,6 +75,14 @@ const CAPABILITY_CONTRACT_KEY: Record<CapabilityProviderRegistryKey, CapabilityC
 
 function shouldResolveWhenPluginsAreGloballyDisabled(key: CapabilityProviderRegistryKey): boolean {
   return key === "speechProviders";
+}
+
+function shouldMergeManifestProvidersWhenActive(key: CapabilityProviderRegistryKey): boolean {
+  return (
+    key === "imageGenerationProviders" ||
+    key === "videoGenerationProviders" ||
+    key === "musicGenerationProviders"
+  );
 }
 
 function shouldSkipCapabilityResolution(params: {
@@ -81,7 +96,7 @@ function shouldSkipCapabilityResolution(params: {
 }
 
 function uniqueSorted(values: Iterable<string>): string[] {
-  return [...new Set(values)].toSorted((left, right) => left.localeCompare(right));
+  return sortUniqueStrings(values);
 }
 
 export function loadCapabilityManifestSnapshot(params: {
@@ -170,12 +185,8 @@ function resolveCapabilityProviderConfig(params: {
   pluginIds?: string[];
 }) {
   const pluginIds = params.pluginIds ?? resolveBundledCapabilityCompatPluginIds(params);
-  const allowlistCompat = withBundledPluginAllowlistCompat({
-    config: params.cfg,
-    pluginIds,
-  });
   const enablementCompat = withBundledPluginEnablementCompat({
-    config: allowlistCompat,
+    config: params.cfg,
     pluginIds,
   });
   return withBundledPluginVitestCompat({
@@ -291,7 +302,16 @@ function addStringValue(target: Set<string>, value: unknown): void {
   }
 }
 
-function collectRequestedSpeechProviderIds(cfg: OpenClawConfig | undefined): Set<string> {
+function addModelConfigProviderIds(target: Set<string>, value: unknown): void {
+  for (const ref of resolveVoiceModelRefs(value)) {
+    addStringValue(target, ref.provider);
+  }
+}
+
+function collectRequestedSpeechProviderIds(
+  cfg: OpenClawConfig | undefined,
+  options: { includeVoiceModel: boolean },
+): Set<string> {
   const requested = new Set<string>();
   const tts =
     typeof cfg?.messages?.tts === "object" && cfg.messages.tts !== null
@@ -299,7 +319,16 @@ function collectRequestedSpeechProviderIds(cfg: OpenClawConfig | undefined): Set
       : undefined;
   addStringValue(requested, tts?.provider);
   addObjectKeys(requested, tts?.providers);
+  if (options.includeVoiceModel) {
+    addModelConfigProviderIds(requested, cfg?.agents?.defaults?.voiceModel);
+  }
   addObjectKeys(requested, cfg?.models?.providers);
+  return requested;
+}
+
+function collectRequestedVoiceModelProviderIds(cfg: OpenClawConfig | undefined): Set<string> {
+  const requested = new Set<string>();
+  addModelConfigProviderIds(requested, cfg?.agents?.defaults?.voiceModel);
   return requested;
 }
 
@@ -329,15 +358,37 @@ function collectRequestedMediaUnderstandingProviderIds(
 function collectRequestedCapabilityProviderIds(params: {
   key: CapabilityProviderRegistryKey;
   cfg?: OpenClawConfig;
+  includeVoiceModel?: boolean;
 }): Set<string> | undefined {
   switch (params.key) {
     case "speechProviders":
-      return collectRequestedSpeechProviderIds(params.cfg);
+      return collectRequestedSpeechProviderIds(params.cfg, {
+        includeVoiceModel: params.includeVoiceModel ?? false,
+      });
+    case "realtimeTranscriptionProviders":
+    case "realtimeVoiceProviders":
+      return params.includeVoiceModel
+        ? collectRequestedVoiceModelProviderIds(params.cfg)
+        : undefined;
     case "mediaUnderstandingProviders":
       return collectRequestedMediaUnderstandingProviderIds(params.cfg);
     default:
       return undefined;
   }
+}
+
+function nonEmptyRequestedProviders(requested: Set<string> | undefined): Set<string> | undefined {
+  return requested && requested.size > 0 ? requested : undefined;
+}
+
+function shouldScopeCapabilityLoadToRequestedProviders(
+  key: CapabilityProviderRegistryKey,
+): boolean {
+  return (
+    key === "speechProviders" ||
+    key === "realtimeTranscriptionProviders" ||
+    key === "realtimeVoiceProviders"
+  );
 }
 
 function removeActiveProviderIds(requested: Set<string>, entries: readonly unknown[]): void {
@@ -543,31 +594,48 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
   const activeProviders = activeRegistry?.[params.key] ?? [];
   const missingRequestedProviders =
     activeProviders.length > 0
-      ? collectRequestedCapabilityProviderIds({ key: params.key, cfg: params.cfg })
+      ? nonEmptyRequestedProviders(
+          collectRequestedCapabilityProviderIds({
+            key: params.key,
+            cfg: params.cfg,
+            includeVoiceModel: true,
+          }),
+        )
       : undefined;
   if (activeProviders.length > 0 && params.key !== "memoryEmbeddingProviders") {
-    if (!missingRequestedProviders) {
+    if (!missingRequestedProviders && !shouldMergeManifestProvidersWhenActive(params.key)) {
       return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
     }
-    removeActiveProviderIds(missingRequestedProviders, activeProviders);
-    if (missingRequestedProviders.size === 0) {
-      return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
+    if (missingRequestedProviders) {
+      removeActiveProviderIds(missingRequestedProviders, activeProviders);
+      if (missingRequestedProviders.size === 0) {
+        return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
+      }
     }
   }
-  let requestedProviders: Set<string> | undefined;
-  if (params.key === "speechProviders") {
-    requestedProviders =
-      missingRequestedProviders ??
-      (activeProviders.length === 0
-        ? collectRequestedCapabilityProviderIds({ key: params.key, cfg: params.cfg })
-        : undefined);
-  }
+  const requestedProviders =
+    missingRequestedProviders ??
+    (activeProviders.length === 0
+      ? nonEmptyRequestedProviders(
+          collectRequestedCapabilityProviderIds({ key: params.key, cfg: params.cfg }),
+        )
+      : undefined);
+  const requestedProviderLoadScope =
+    requestedProviders && shouldScopeCapabilityLoadToRequestedProviders(params.key)
+      ? requestedProviders
+      : undefined;
+  const requestedPluginIds = resolveRequestedCapabilityPluginIds({
+    key: params.key,
+    cfg: params.cfg,
+    requested: requestedProviderLoadScope,
+  });
+  const requestedProviderFilter =
+    requestedProviders &&
+    (!shouldScopeCapabilityLoadToRequestedProviders(params.key) || requestedPluginIds)
+      ? requestedProviders
+      : undefined;
   const pluginIds =
-    resolveRequestedCapabilityPluginIds({
-      key: params.key,
-      cfg: params.cfg,
-      requested: requestedProviders,
-    }) ??
+    requestedPluginIds ??
     resolveCapabilityPluginIds({
       key: params.key,
       cfg: params.cfg,
@@ -586,17 +654,24 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
     cfg: params.cfg,
     bundledCompatPluginIds: pluginIds.bundledCompatPluginIds,
     loadOptions,
-    requested: requestedProviders,
+    requested: requestedProviderFilter,
   });
   if (params.key !== "memoryEmbeddingProviders") {
+    const requestedLoadedProviders = requestedProviderFilter
+      ? filterLoadedProvidersForRequestedConfig({
+          key: params.key,
+          requested: requestedProviderFilter,
+          entries: loadedProviders,
+        })
+      : loadedProviders;
     const mergeLoadedProviders =
-      activeProviders.length > 0
+      activeProviders.length > 0 && missingRequestedProviders
         ? filterLoadedProvidersForRequestedConfig({
             key: params.key,
-            requested: missingRequestedProviders ?? new Set(),
-            entries: loadedProviders,
+            requested: missingRequestedProviders,
+            entries: requestedLoadedProviders,
           })
-        : loadedProviders;
+        : requestedLoadedProviders;
     return mergeCapabilityProviders(activeProviders, mergeLoadedProviders);
   }
   return mergeCapabilityProviders(activeProviders, loadedProviders);

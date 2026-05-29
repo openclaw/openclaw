@@ -33,6 +33,15 @@ function createRuntimeCapture(): RuntimeEnv {
   } as unknown as RuntimeEnv;
 }
 
+function requireRuntimeJsonPayload(runtime: RuntimeEnv, index = 0): unknown {
+  const call = mocks.writeRuntimeJson.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected writeRuntimeJson call ${index}`);
+  }
+  expect(call[0]).toBe(runtime);
+  return call[1];
+}
+
 function createProbe(
   capability: GatewayProbeResult["auth"]["capability"],
   params: {
@@ -101,14 +110,12 @@ describe("gateway status output", () => {
       discoveryCount: 0,
     });
 
-    expect(warnings).toContainEqual(
-      expect.objectContaining({
-        code: "no_gateway_reachable",
-        message: expect.stringContaining("openclaw gateway status --deep --require-rpc"),
-        targetIds: ["localLoopback"],
-      }),
-    );
-    expect(warnings.at(0)?.message).toContain("lsof -nP -iTCP:<port>");
+    expect(warnings.find((entry) => entry.code === "no_gateway_reachable")).toStrictEqual({
+      code: "no_gateway_reachable",
+      message:
+        "No gateway answered any probe and Bonjour discovery returned no local gateways. Run `openclaw gateway status --deep --require-rpc` to inspect service state, config paths, listener owners, and logs; include `ss -ltnp` or `lsof -nP -iTCP:<port> -sTCP:LISTEN` for the configured port when filing a report.",
+      targetIds: ["localLoopback"],
+    });
   });
 
   it("derives summary capability from reachable probes only in json output", () => {
@@ -145,13 +152,10 @@ describe("gateway status output", () => {
       primaryTargetId: "reachable-read",
     });
 
-    expect(mocks.writeRuntimeJson).toHaveBeenCalledWith(
-      runtime,
-      expect.objectContaining({
-        ok: true,
-        capability: "read_only",
-      }),
-    );
+    expect(mocks.writeRuntimeJson).toHaveBeenCalledOnce();
+    const payload = requireRuntimeJsonPayload(runtime) as { ok?: unknown; capability?: unknown };
+    expect(payload?.ok).toBe(true);
+    expect(payload?.capability).toBe("read_only");
   });
 
   it("derives summary capability from reachable probes only in text output", () => {
@@ -219,22 +223,61 @@ describe("gateway status output", () => {
       primaryTargetId: "detail-timeout",
     });
 
-    expect(mocks.writeRuntimeJson).toHaveBeenCalledWith(
-      runtime,
-      expect.objectContaining({
-        ok: true,
-        degraded: true,
-        primaryTargetId: "detail-timeout",
-        targets: [
-          expect.objectContaining({
-            connect: expect.objectContaining({
-              ok: true,
-              rpcOk: false,
-              error: "timeout",
-            }),
-          }),
-        ],
-      }),
-    );
+    expect(mocks.writeRuntimeJson).toHaveBeenCalledOnce();
+    const payload = requireRuntimeJsonPayload(runtime);
+    expect(payload).toStrictEqual({
+      ok: true,
+      degraded: true,
+      capability: "read_only",
+      ts: expect.any(Number),
+      durationMs: expect.any(Number),
+      timeoutMs: 5_000,
+      primaryTargetId: "detail-timeout",
+      warnings: [
+        {
+          code: "probe_detail_failed",
+          message:
+            "Gateway accepted the WebSocket connection, but follow-up read diagnostics failed: timeout",
+          targetIds: ["detail-timeout"],
+        },
+      ],
+      network: {
+        localLoopbackUrl: "ws://127.0.0.1:18789",
+        localTailnetUrl: null,
+        tailnetIPv4: null,
+      },
+      discovery: {
+        timeoutMs: 500,
+        count: 0,
+        beacons: [],
+      },
+      targets: [
+        {
+          id: "detail-timeout",
+          kind: "explicit",
+          url: "ws://127.0.0.1:18789",
+          active: true,
+          tunnel: null,
+          connect: {
+            ok: true,
+            rpcOk: false,
+            scopeLimited: false,
+            latencyMs: 40,
+            error: "timeout",
+            close: null,
+          },
+          auth: {
+            role: "operator",
+            scopes: ["operator.read"],
+            capability: "read_only",
+          },
+          self: null,
+          config: null,
+          health: null,
+          summary: null,
+          presence: null,
+        },
+      ],
+    });
   });
 });

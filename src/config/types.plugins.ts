@@ -24,6 +24,17 @@ export type PluginEntryConfig = {
      */
     allowedModels?: string[];
   };
+  llm?: {
+    /** Explicitly allow this plugin to request a model override for api.runtime.llm.complete. */
+    allowModelOverride?: boolean;
+    /**
+     * Allowed completion model override targets as canonical provider/model refs.
+     * Use "*" to explicitly allow any model for this plugin.
+     */
+    allowedModels?: string[];
+    /** Explicitly allow this plugin to run completions against a non-default agent id. */
+    allowAgentIdOverride?: boolean;
+  };
   config?: Record<string, unknown>;
 };
 
@@ -53,19 +64,11 @@ export type PluginsConfig = {
   allow?: string[];
   /** Optional plugin denylist (plugin ids). */
   deny?: string[];
-  /**
-   * Controls how bundled plugins participate in runtime provider discovery when
-   * `allow` is configured.
-   *
-   * - `"allowlist"` (default): bundled provider plugins are gated by `allow`
-   *   and `entries.<id>.enabled` like third-party plugins.
-   * - `"compat"`: legacy mode for migrated configs; bundled provider plugins
-   *   can be force-loaded regardless of the allowlist.
-   */
-  bundledDiscovery?: "compat" | "allowlist";
   load?: PluginsLoadConfig;
   slots?: PluginSlotsConfig;
   entries?: Record<string, PluginEntryConfig>;
+  /** @deprecated Shipped upgrade marker accepted for old restrictive allowlist configs. */
+  bundledDiscovery?: "compat" | "allowlist";
   /**
    * Internal transient carrier for plugin install records during command flows.
    * This is intentionally omitted from the config schema and must not be

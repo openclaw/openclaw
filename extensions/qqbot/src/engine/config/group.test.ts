@@ -16,14 +16,14 @@ describe("engine/config/group", () => {
   describe("resolveGroupConfig precedence", () => {
     it("returns defaults when no config exists", () => {
       const cfg = resolveGroupConfig({}, "G1");
-      expect(cfg).toMatchObject({
+      expect(cfg).toStrictEqual({
         requireMention: true,
         ignoreOtherMentions: false,
         toolPolicy: "restricted",
         name: "",
+        prompt: undefined,
         historyLimit: DEFAULT_GROUP_HISTORY_LIMIT,
       });
-      expect(cfg.prompt).toBeUndefined();
     });
 
     it("falls back to wildcard when specific is missing", () => {
@@ -162,7 +162,7 @@ describe("engine/config/group", () => {
 
   describe("resolveMentionPatterns", () => {
     it("returns [] when nothing configured", () => {
-      expect(resolveMentionPatterns({})).toEqual([]);
+      expect(resolveMentionPatterns({})).toStrictEqual([]);
     });
 
     it("reads global patterns", () => {

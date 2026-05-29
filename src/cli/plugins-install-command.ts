@@ -31,8 +31,11 @@ import {
 import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { isRecord } from "../shared/record-coerce.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import { theme } from "../terminal/theme.js";
 import { shortenHomePath } from "../utils.js";
+import { formatCliCommand } from "./command-format.js";
 import { looksLikeLocalInstallSpec } from "./install-spec.js";
 import { resolvePinnedNpmInstallRecordForCli } from "./npm-resolution.js";
 import {
@@ -90,10 +93,6 @@ function findTrustedCatalogPackageInstall(packageName: string):
     ...(install?.npmSpec ? { npmSpec: install.npmSpec } : {}),
     ...(install?.expectedIntegrity ? { expectedIntegrity: install.expectedIntegrity } : {}),
   };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function isEmptyRecord(value: Record<string, unknown>): boolean {
@@ -203,7 +202,7 @@ async function tryInstallHookPackFromLocalPath(params: {
     }
 
     const existing = params.snapshot.config.hooks?.internal?.load?.extraDirs ?? [];
-    const merged = Array.from(new Set([...existing, params.resolvedPath]));
+    const merged = uniqueStrings([...existing, params.resolvedPath]);
     await persistHookPackInstall({
       snapshot: {
         config: {
@@ -490,7 +489,13 @@ function isAllowedPluginRecoveryIssue(
       issue.message.includes("plugin path not found")) ||
     (issue.path === "plugins" &&
       typeof issue.message === "string" &&
-      issue.message.includes("requires compiled runtime output"))
+      issue.message.includes("requires compiled runtime output")) ||
+    (issue.path === `plugins.entries.${pluginId}` &&
+      typeof issue.message === "string" &&
+      issue.message.includes("requires compiled runtime output")) ||
+    (issue.path === "tools.web.search.provider" &&
+      typeof issue.message === "string" &&
+      issue.message.includes(`plugin "${pluginId}"`))
   );
 }
 
@@ -587,30 +592,42 @@ export async function runPluginInstallCommand(params: {
   };
   if (opts.marketplace) {
     if (opts.link) {
-      runtime.error("`--link` is not supported with `--marketplace`.");
+      runtime.error(
+        `--link is not supported with --marketplace. Remove --link, or install a local path with ${formatCliCommand("openclaw plugins install --link <path>")}.`,
+      );
       return runtime.exit(1);
     }
     if (opts.pin) {
-      runtime.error("`--pin` is not supported with `--marketplace`.");
+      runtime.error(
+        `--pin is not supported with --marketplace. Use ${formatCliCommand("openclaw plugins install <plugin> --marketplace <name>")} without --pin.`,
+      );
       return runtime.exit(1);
     }
   }
   const gitPrefix = raw.trim().toLowerCase().startsWith("git:");
   const gitSpec = parseGitPluginSpec(raw);
   if (gitPrefix && !gitSpec) {
-    runtime.error(`unsupported git: plugin spec: ${raw}`);
+    runtime.error(
+      `Unsupported git plugin spec: ${raw}. Use ${formatCliCommand("openclaw plugins install git:<repo>@<ref>")}.`,
+    );
     return runtime.exit(1);
   }
   if (gitSpec && opts.link) {
-    runtime.error("`--link` is not supported with `git:` installs.");
+    runtime.error(
+      `--link is not supported with git: installs. Use ${formatCliCommand("openclaw plugins install git:<repo>@<ref>")} for Git installs or ${formatCliCommand("openclaw plugins install --link <path>")} for local paths.`,
+    );
     return runtime.exit(1);
   }
   if (gitSpec && opts.pin) {
-    runtime.error("`--pin` is not supported with `git:` installs; use `git:<repo>@<ref>`.");
+    runtime.error(
+      `--pin is not supported with git: installs. Pin the ref in the spec instead, for example ${formatCliCommand("openclaw plugins install git:<repo>@<ref>")}.`,
+    );
     return runtime.exit(1);
   }
   if (opts.link && opts.force) {
-    runtime.error("`--force` is not supported with `--link`.");
+    runtime.error(
+      `--force is not supported with --link. Linked plugins point at the source path directly; remove --force and re-run ${formatCliCommand("openclaw plugins install --link <path>")}.`,
+    );
     return runtime.exit(1);
   }
   const requestResolution = resolvePluginInstallRequestContext({
@@ -668,12 +685,13 @@ export async function runPluginInstallCommand(params: {
   if (fs.existsSync(resolved)) {
     if (opts.link) {
       const existing = cfg.plugins?.load?.paths ?? [];
-      const merged = Array.from(new Set([...existing, resolved]));
+      const merged = uniqueStrings([...existing, resolved]);
       const probe = await installPluginFromPath({
         ...safetyOverrides,
         mode: installMode,
         path: resolved,
         dryRun: true,
+        allowSourceTypeScriptEntries: true,
         extensionsDir,
         logger: createPluginInstallLogger(runtime),
       });
@@ -766,14 +784,18 @@ export async function runPluginInstallCommand(params: {
   }
 
   if (opts.link) {
-    runtime.error("`--link` requires a local path.");
+    runtime.error(
+      `--link requires a local path. Run ${formatCliCommand("openclaw plugins install --link <path>")}.`,
+    );
     return runtime.exit(1);
   }
 
   const npmPrefixSpec = parseNpmPrefixSpec(raw);
   if (npmPrefixSpec !== null) {
     if (!npmPrefixSpec) {
-      runtime.error("unsupported npm: spec: missing package");
+      runtime.error(
+        `Unsupported npm plugin spec: missing package. Use ${formatCliCommand("openclaw plugins install npm:<package>")}.`,
+      );
       return runtime.exit(1);
     }
     const officialNpmTrust = resolveOfficialExternalNpmPackageTrust({
@@ -808,7 +830,9 @@ export async function runPluginInstallCommand(params: {
   const npmPackPath = parseNpmPackPrefixPath(raw);
   if (npmPackPath !== null) {
     if (!npmPackPath) {
-      runtime.error("unsupported npm-pack: spec: missing pack archive path");
+      runtime.error(
+        `Unsupported npm-pack plugin spec: missing archive path. Use ${formatCliCommand("openclaw plugins install npm-pack:<path-to.tgz>")}.`,
+      );
       return runtime.exit(1);
     }
     const npmPackResult = await tryInstallPluginFromNpmPackArchive({
@@ -852,7 +876,9 @@ export async function runPluginInstallCommand(params: {
       ".zip",
     ])
   ) {
-    runtime.error(`Path not found: ${resolved}`);
+    runtime.error(
+      `Plugin path not found: ${resolved}. Check the path, or install from npm with ${formatCliCommand("openclaw plugins install npm:<package>")}.`,
+    );
     return runtime.exit(1);
   }
 

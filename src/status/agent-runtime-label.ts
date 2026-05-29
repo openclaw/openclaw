@@ -8,7 +8,7 @@ import {
 import { sanitizeTerminalText } from "../terminal/safe-text.js";
 
 const AGENT_RUNTIME_LABELS: Readonly<Record<string, string>> = {
-  pi: "OpenClaw Pi Default",
+  openclaw: "OpenClaw Default",
   codex: "OpenAI Codex",
   "codex-cli": "OpenAI Codex",
   "claude-cli": "Claude CLI",
@@ -32,10 +32,7 @@ export function resolveAgentRuntimeLabel(args: {
     return backend ? `${acpAgent} (acp/${backend})` : `${acpAgent} (acp)`;
   }
 
-  const runtimeRaw =
-    normalizeOptionalString(args.resolvedHarness) ??
-    normalizeOptionalString(args.sessionEntry?.agentRuntimeOverride) ??
-    normalizeOptionalString(args.sessionEntry?.agentHarnessId);
+  const runtimeRaw = normalizeOptionalString(args.resolvedHarness);
   const runtime = normalizeOptionalLowercaseString(runtimeRaw);
   if (runtime && runtime !== "auto" && runtime !== "default") {
     return AGENT_RUNTIME_LABELS[runtime] ?? sanitizeTerminalText(runtimeRaw ?? runtime);
@@ -53,5 +50,5 @@ export function resolveAgentRuntimeLabel(args: {
     );
   }
 
-  return AGENT_RUNTIME_LABELS.pi;
+  return AGENT_RUNTIME_LABELS.openclaw;
 }

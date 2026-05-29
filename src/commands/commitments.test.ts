@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommitmentRecord } from "../commitments/types.js";
-import type { RuntimeEnv } from "../runtime.js";
-import { commitmentsListCommand } from "./commitments.js";
+import type { OutputRuntimeEnv } from "../runtime.js";
+import { stripAnsi } from "../terminal/ansi.js";
+import { commitmentsDismissCommand, commitmentsListCommand } from "./commitments.js";
 
 const mocks = vi.hoisted(() => ({
   listCommitments: vi.fn(),
@@ -24,14 +25,19 @@ vi.mock("../config/config.js", () => ({
   getRuntimeConfig: mocks.getRuntimeConfig,
 }));
 
-function createRuntime(): { runtime: RuntimeEnv; logs: string[] } {
+function createRuntime(): { runtime: OutputRuntimeEnv; logs: string[]; stdout: string[] } {
   const logs: string[] = [];
+  const stdout: string[] = [];
   return {
     logs,
+    stdout,
     runtime: {
       log: (message: unknown) => logs.push(String(message)),
       error: vi.fn(),
       exit: vi.fn(),
+      writeStdout: (value: string) => stdout.push(value),
+      writeJson: (value: unknown, space = 2) =>
+        stdout.push(JSON.stringify(value, null, space > 0 ? space : undefined)),
     },
   };
 }
@@ -74,9 +80,43 @@ describe("commitments command", () => {
 
     await commitmentsListCommand({}, runtime);
 
-    const output = logs.join("\n");
-    expect(output).not.toContain("\u001b");
-    expect(output).not.toContain("\u0007");
-    expect(output).toContain("\\nspoofed");
+    expect(logs.map(stripAnsi)).toEqual([
+      "Commitments: 1",
+      "Store: /tmp/openclaw-commitments.json",
+      "Status filter: pending",
+      "ID               Status     Kind             Due                      Scope                        Suggested text",
+      "cm_escape        pending    event_check_in   2026-04-30T17:00:00.000Z main/telegram/+15551234567   How did it go?\\nspoofed",
+    ]);
+  });
+
+  it("writes list JSON to runtime stdout instead of log output", async () => {
+    const { runtime, logs, stdout } = createRuntime();
+
+    await commitmentsListCommand({ json: true }, runtime);
+
+    expect(logs).toEqual([]);
+    expect(stdout).toHaveLength(1);
+    expect(JSON.parse(stdout[0] ?? "{}")).toMatchObject({
+      count: 1,
+      status: "pending",
+      agentId: null,
+      store: "/tmp/openclaw-commitments.json",
+      commitments: [{ id: "cm_escape" }],
+    });
+  });
+
+  it("writes dismiss JSON to runtime stdout instead of log output", async () => {
+    const { runtime, logs, stdout } = createRuntime();
+
+    await commitmentsDismissCommand({ ids: ["cm_escape"], json: true }, runtime);
+
+    expect(logs).toEqual([]);
+    expect(stdout).toEqual([JSON.stringify({ dismissed: ["cm_escape"] }, null, 2)]);
+    expect(mocks.markCommitmentsStatus).toHaveBeenCalledWith({
+      cfg: { commitments: { enabled: true } },
+      ids: ["cm_escape"],
+      status: "dismissed",
+      nowMs: expect.any(Number),
+    });
   });
 });

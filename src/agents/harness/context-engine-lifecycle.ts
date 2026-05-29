@@ -1,12 +1,12 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { MemoryCitationsMode } from "../../config/types.memory.js";
 import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
-import { stripRuntimeContextCustomMessages } from "../internal-runtime-context.js";
-import { runContextEngineMaintenance } from "../pi-embedded-runner/context-engine-maintenance.js";
+import { runContextEngineMaintenance } from "../embedded-agent-runner/context-engine-maintenance.js";
 import {
   buildAfterTurnRuntimeContext,
   buildAfterTurnRuntimeContextFromUsage,
-} from "../pi-embedded-runner/run/attempt.prompt-helpers.js";
+} from "../embedded-agent-runner/run/attempt.prompt-helpers.js";
+import { stripRuntimeContextCustomMessages } from "../internal-runtime-context.js";
+import type { AgentMessage } from "../runtime/index.js";
 import type { SessionWriteLockAcquireTimeoutConfig } from "../session-write-lock.js";
 
 export type HarnessContextEngine = ContextEngine;
@@ -230,6 +230,7 @@ export async function runHarnessContextEngineMaintenance(params: {
   sessionManager?: unknown;
   runtimeContext?: ContextEngineRuntimeContext;
   executionMode?: "foreground" | "background";
+  onDeferredMaintenance?: (promise: Promise<void>) => void;
   config?: SessionWriteLockAcquireTimeoutConfig;
 }) {
   return await runContextEngineMaintenance({
@@ -243,6 +244,7 @@ export async function runHarnessContextEngineMaintenance(params: {
     >[0]["sessionManager"],
     runtimeContext: params.runtimeContext,
     executionMode: params.executionMode,
+    onDeferredMaintenance: params.onDeferredMaintenance,
     config: params.config,
   });
 }

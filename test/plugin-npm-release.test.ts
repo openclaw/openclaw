@@ -25,9 +25,9 @@ afterEach(() => {
 
 describe("parsePluginReleaseSelection", () => {
   it("returns an empty list for blank input", () => {
-    expect(parsePluginReleaseSelection("")).toEqual([]);
-    expect(parsePluginReleaseSelection("   ")).toEqual([]);
-    expect(parsePluginReleaseSelection(undefined)).toEqual([]);
+    expect(parsePluginReleaseSelection("")).toStrictEqual([]);
+    expect(parsePluginReleaseSelection("   ")).toStrictEqual([]);
+    expect(parsePluginReleaseSelection(undefined)).toStrictEqual([]);
   });
 
   it("dedupes and sorts comma or whitespace separated package names", () => {
@@ -75,13 +75,26 @@ describe("parsePluginReleaseArgs", () => {
   });
 
   it("parses explicit all-publishable mode", () => {
-    expect(parsePluginReleaseArgs(["--selection-mode", "all-publishable"])).toMatchObject({
+    expect(parsePluginReleaseArgs(["--selection-mode", "all-publishable"])).toEqual({
+      baseRef: undefined,
+      headRef: undefined,
       selectionMode: "all-publishable",
       selection: [],
       pluginsFlagProvided: false,
     });
   });
 });
+
+function externalPluginContract(version: string) {
+  return {
+    compat: {
+      pluginApi: `>=${version}`,
+    },
+    build: {
+      openclawVersion: version,
+    },
+  };
+}
 
 describe("collectPublishablePluginPackageErrors", () => {
   it("accepts a valid publishable plugin package candidate", () => {
@@ -98,6 +111,7 @@ describe("collectPublishablePluginPackageErrors", () => {
           },
           openclaw: {
             extensions: ["./index.ts"],
+            ...externalPluginContract("2026.3.15"),
             install: {
               npmSpec: "@openclaw/zalo",
             },
@@ -107,7 +121,7 @@ describe("collectPublishablePluginPackageErrors", () => {
           },
         },
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("flags invalid publishable plugin metadata", () => {
@@ -121,6 +135,7 @@ describe("collectPublishablePluginPackageErrors", () => {
           private: true,
           openclaw: {
             extensions: [""],
+            ...externalPluginContract("2026.3.15"),
             install: {
               npmSpec: "   ",
             },
@@ -150,6 +165,7 @@ describe("collectPublishablePluginPackageErrors", () => {
           version: "2026.5.1-beta.1",
           openclaw: {
             extensions: ["./index.ts"],
+            ...externalPluginContract("2026.5.1-beta.1"),
             install: {
               npmSpec: "@openclaw/twitch",
             },
@@ -178,6 +194,7 @@ describe("collectPublishablePluginPackageErrors", () => {
           },
           openclaw: {
             extensions: ["./index.ts"],
+            ...externalPluginContract("2026.5.1-beta.1"),
             release: {
               publishToNpm: true,
             },
@@ -185,6 +202,35 @@ describe("collectPublishablePluginPackageErrors", () => {
         },
       }),
     ).toEqual(["openclaw.install.npmSpec must be a non-empty string for publishable plugins."]);
+  });
+
+  it("requires the external plugin package compatibility contract for npm publish", () => {
+    expect(
+      collectPublishablePluginPackageErrors({
+        extensionId: "voice-call",
+        packageDir: bundledPluginRoot("voice-call"),
+        packageJson: {
+          name: "@openclaw/voice-call",
+          version: "2026.5.1-beta.1",
+          repository: {
+            type: "git",
+            url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
+          },
+          openclaw: {
+            extensions: ["./index.ts"],
+            install: {
+              npmSpec: "@openclaw/voice-call",
+            },
+            release: {
+              publishToNpm: true,
+            },
+          },
+        },
+      }),
+    ).toEqual([
+      "openclaw.compat.pluginApi is required for external code plugin packages.",
+      "openclaw.build.openclawVersion is required for external code plugin packages.",
+    ]);
   });
 });
 
@@ -207,7 +253,7 @@ describe("collectPublishablePluginPackages", () => {
       ),
     ).filter((entry) => !packageFiles.has(entry));
 
-    expect(missingExclusions).toEqual([]);
+    expect(missingExclusions).toStrictEqual([]);
   });
 
   it("collects publishable npm plugins from extension package manifests", () => {
@@ -222,6 +268,7 @@ describe("collectPublishablePluginPackages", () => {
       },
       openclaw: {
         extensions: ["./index.ts"],
+        ...externalPluginContract("2026.4.10"),
         install: {
           npmSpec: "@openclaw/demo-plugin",
         },
@@ -256,6 +303,7 @@ describe("collectPublishablePluginPackages", () => {
       },
       openclaw: {
         extensions: ["./index.ts"],
+        ...externalPluginContract("2026.4.10-beta.1"),
         install: {
           npmSpec: "@openclaw/demo-plugin",
         },
@@ -271,6 +319,7 @@ describe("collectPublishablePluginPackages", () => {
       private: true,
       openclaw: {
         extensions: ["./index.ts"],
+        ...externalPluginContract("2026.4.10-beta.1"),
         install: {
           npmSpec: "@openclaw/private-plugin",
         },
@@ -285,11 +334,15 @@ describe("collectPublishablePluginPackages", () => {
         packageNames: ["@openclaw/demo-plugin"],
       }),
     ).toEqual([
-      expect.objectContaining({
+      {
         extensionId: "demo-plugin",
+        packageDir: "extensions/demo-plugin",
+        installNpmSpec: "@openclaw/demo-plugin",
+        channel: "beta",
         packageName: "@openclaw/demo-plugin",
         publishTag: "beta",
-      }),
+        version: "2026.4.10-beta.1",
+      },
     ]);
   });
 
@@ -302,6 +355,7 @@ describe("collectPublishablePluginPackages", () => {
       private: true,
       openclaw: {
         extensions: ["./index.ts"],
+        ...externalPluginContract("2026.4.10-beta.1"),
         release: {
           publishToNpm: true,
         },
@@ -312,7 +366,7 @@ describe("collectPublishablePluginPackages", () => {
       collectPublishablePluginPackages(repoDir, {
         extensionIds: [],
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("publishes alpha plugin packages to the alpha dist-tag", () => {
@@ -327,6 +381,7 @@ describe("collectPublishablePluginPackages", () => {
       },
       openclaw: {
         extensions: ["./index.ts"],
+        ...externalPluginContract("2026.4.10-alpha.1"),
         install: {
           npmSpec: "@openclaw/demo-plugin",
         },
@@ -337,12 +392,15 @@ describe("collectPublishablePluginPackages", () => {
     });
 
     expect(collectPublishablePluginPackages(repoDir)).toEqual([
-      expect.objectContaining({
-        channel: "alpha",
+      {
+        extensionId: "demo-plugin",
+        packageDir: "extensions/demo-plugin",
+        installNpmSpec: "@openclaw/demo-plugin",
         packageName: "@openclaw/demo-plugin",
+        channel: "alpha",
         publishTag: "alpha",
         version: "2026.4.10-alpha.1",
-      }),
+      },
     ]);
   });
 });
@@ -443,6 +501,6 @@ describe("resolveChangedPublishablePluginPackages", () => {
         plugins: publishablePlugins,
         changedExtensionIds: [],
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 });

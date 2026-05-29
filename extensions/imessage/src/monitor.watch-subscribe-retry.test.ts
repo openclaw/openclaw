@@ -103,12 +103,20 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
     expect(firstClient.stop).toHaveBeenCalledTimes(1);
     expect(secondClient.waitForClose).toHaveBeenCalledTimes(1);
     expect(secondClient.stop).toHaveBeenCalledTimes(1);
-    expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining("watch.subscribe startup failed"),
+    expect(secondClient.request).toHaveBeenCalledWith(
+      "watch.subscribe",
+      { attachments: false, include_reactions: true },
+      { timeoutMs: 10_000 },
     );
-    expect(runtime.error).not.toHaveBeenCalledWith(
-      expect.stringContaining("imessage: monitor failed"),
+    expect(runtime.log).toHaveBeenCalledTimes(1);
+    expect(String(runtime.log.mock.calls[0]?.[0])).toContain(
+      "imessage: watch.subscribe startup failed (attempt 1/3): Error: imsg rpc timeout (watch.subscribe); retrying",
     );
+    expect(
+      runtime.error.mock.calls.some(([message]) =>
+        String(message).includes("imessage: monitor failed"),
+      ),
+    ).toBe(false);
   });
 
   it("still fails after bounded startup retries are exhausted", async () => {
@@ -132,6 +140,9 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
     expect(monitorError).toBeInstanceOf(Error);
     expect((monitorError as Error).message).toContain("imsg rpc timeout (watch.subscribe)");
     expect(createIMessageRpcClientMock).toHaveBeenCalledTimes(3);
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("imessage: monitor failed"));
+    expect(runtime.error).toHaveBeenCalledTimes(1);
+    expect(String(runtime.error.mock.calls[0]?.[0])).toContain(
+      "imessage: monitor failed: Error: imsg rpc timeout (watch.subscribe)",
+    );
   });
 });

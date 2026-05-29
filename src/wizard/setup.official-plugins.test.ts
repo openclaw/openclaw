@@ -15,7 +15,7 @@ vi.mock("../commands/onboarding-plugin-install.js", () => ({
 }));
 
 import {
-  __testing,
+  testing,
   resolveOfficialPluginOnboardingInstallEntries,
   setupOfficialPluginInstalls,
 } from "./setup.official-plugins.js";
@@ -61,7 +61,7 @@ describe("resolveOfficialPluginOnboardingInstallEntries", () => {
 describe("formatInstallHint", () => {
   it("describes dual-source npm-default installs as npm first", () => {
     expect(
-      __testing.formatInstallHint({
+      testing.formatInstallHint({
         clawhubSpec: "clawhub:@openclaw/diagnostics-otel",
         npmSpec: "@openclaw/diagnostics-otel",
         defaultChoice: "npm",
@@ -71,7 +71,7 @@ describe("formatInstallHint", () => {
 
   it("keeps dual-source clawhub-default installs ClawHub first", () => {
     expect(
-      __testing.formatInstallHint({
+      testing.formatInstallHint({
         clawhubSpec: "clawhub:@openclaw/diagnostics-otel",
         npmSpec: "@openclaw/diagnostics-otel",
         defaultChoice: "clawhub",
@@ -95,34 +95,94 @@ describe("setupOfficialPluginInstalls", () => {
     const prompter = createWizardPrompter({
       multiselect: multiselect as WizardPrompter["multiselect"],
     });
+    const runtime = createNonExitingRuntime();
 
     await setupOfficialPluginInstalls({
       config: {},
       prompter,
-      runtime: createNonExitingRuntime(),
+      runtime,
       workspaceDir: "/tmp/workspace",
     });
 
-    expect(multiselect).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: "Install optional plugins",
-      }),
-    );
-    expect(ensureOnboardingPluginInstalled).toHaveBeenCalledWith(
-      expect.objectContaining({
-        entry: expect.objectContaining({
-          pluginId: "diagnostics-otel",
-          trustedSourceLinkedOfficialInstall: true,
-          install: expect.objectContaining({
-            clawhubSpec: "clawhub:@openclaw/diagnostics-otel",
-            npmSpec: "@openclaw/diagnostics-otel",
-            defaultChoice: "npm",
-          }),
-        }),
-        promptInstall: false,
-        workspaceDir: "/tmp/workspace",
-      }),
-    );
+    expect(multiselect).toHaveBeenCalledExactlyOnceWith({
+      message: "Install optional plugins",
+      options: [
+        {
+          value: "__skip__",
+          label: "Skip for now",
+          hint: "Continue without installing optional plugins",
+        },
+        {
+          value: "acpx",
+          label: "ACPX Runtime",
+          hint: "OpenClaw ACP runtime backend",
+        },
+        {
+          value: "diagnostics-otel",
+          label: "Diagnostics OpenTelemetry",
+          hint: "OpenClaw diagnostics OpenTelemetry exporter",
+        },
+        {
+          value: "diagnostics-prometheus",
+          label: "Diagnostics Prometheus",
+          hint: "OpenClaw diagnostics Prometheus exporter",
+        },
+        {
+          value: "diffs-language-pack",
+          label: "Diff Viewer Language Pack",
+          hint: "OpenClaw diffs viewer syntax highlighting language pack",
+        },
+        {
+          value: "diffs",
+          label: "Diffs",
+          hint: "OpenClaw diff viewer plugin",
+        },
+        {
+          value: "google-meet",
+          label: "Google Meet",
+          hint: "OpenClaw Google Meet participant plugin",
+        },
+        {
+          value: "lobster",
+          label: "Lobster",
+          hint: "Lobster workflow tool plugin (typed pipelines + resumable approvals)",
+        },
+        {
+          value: "memory-lancedb",
+          label: "Memory LanceDB",
+          hint: "OpenClaw LanceDB-backed long-term memory plugin with auto-recall/capture",
+        },
+        {
+          value: "openshell",
+          label: "OpenShell Sandbox",
+          hint: "OpenClaw OpenShell sandbox backend",
+        },
+        {
+          value: "voice-call",
+          label: "Voice Call",
+          hint: "OpenClaw voice-call plugin",
+        },
+      ],
+    });
+    expect(ensureOnboardingPluginInstalled).toHaveBeenCalledExactlyOnceWith({
+      cfg: {},
+      entry: {
+        pluginId: "diagnostics-otel",
+        label: "Diagnostics OpenTelemetry",
+        description: "OpenClaw diagnostics OpenTelemetry exporter",
+        install: {
+          clawhubSpec: "clawhub:@openclaw/diagnostics-otel",
+          npmSpec: "@openclaw/diagnostics-otel",
+          defaultChoice: "npm",
+          minHostVersion: ">=2026.4.25",
+        },
+        trustedSourceLinkedOfficialInstall: true,
+      },
+      prompter,
+      runtime,
+      workspaceDir: "/tmp/workspace",
+      promptInstall: false,
+    });
   });
 
   it("does not install when the user skips optional plugins", async () => {

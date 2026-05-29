@@ -53,6 +53,7 @@ public actor GatewayNodeSession {
     private var activeBootstrapToken: String?
     private var activePassword: String?
     private var activeConnectOptionsKey: String?
+    private var activeSessionIdentity: ObjectIdentifier?
     private var connectOptions: GatewayConnectOptions?
     private var onConnected: (@Sendable () async -> Void)?
     private var onDisconnected: (@Sendable (String) async -> Void)?
@@ -195,11 +196,13 @@ public actor GatewayNodeSession {
         onInvoke: @escaping @Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse) async throws
     {
         let nextOptionsKey = self.connectOptionsKey(connectOptions)
+        let nextSessionIdentity = sessionBox.map { ObjectIdentifier($0.session) }
         let shouldReconnect = self.activeURL != url ||
             self.activeToken != token ||
             self.activeBootstrapToken != bootstrapToken ||
             self.activePassword != password ||
             self.activeConnectOptionsKey != nextOptionsKey ||
+            self.activeSessionIdentity != nextSessionIdentity ||
             self.channel == nil
 
         self.connectOptions = connectOptions
@@ -231,6 +234,7 @@ public actor GatewayNodeSession {
             self.activeBootstrapToken = bootstrapToken
             self.activePassword = password
             self.activeConnectOptionsKey = nextOptionsKey
+            self.activeSessionIdentity = nextSessionIdentity
         }
 
         guard let channel = self.channel else {
@@ -256,6 +260,7 @@ public actor GatewayNodeSession {
         self.activeBootstrapToken = nil
         self.activePassword = nil
         self.activeConnectOptionsKey = nil
+        self.activeSessionIdentity = nil
         self.hasEverConnected = false
         self.resetConnectionState()
     }
@@ -304,6 +309,17 @@ public actor GatewayNodeSession {
         } catch {
             self.logger.error("node event failed: \(error.localizedDescription, privacy: .public)")
         }
+    }
+
+    public func send(method: String, paramsJSON: String?) async throws {
+        guard let channel = self.channel else {
+            throw NSError(domain: "Gateway", code: 11, userInfo: [
+                NSLocalizedDescriptionKey: "not connected",
+            ])
+        }
+
+        let params = try self.decodeParamsJSON(paramsJSON)
+        try await channel.send(method: method, params: params)
     }
 
     public func request(method: String, paramsJSON: String?, timeoutSeconds: Int = 15) async throws -> Data {
@@ -452,7 +468,8 @@ public actor GatewayNodeSession {
             let req = BridgeInvokeRequest(
                 id: request.id,
                 command: request.command,
-                paramsJSON: request.paramsJSON)
+                paramsJSON: request.paramsJSON,
+                nodeId: request.nodeId)
             self.logger.info("node invoke executing id=\(request.id, privacy: .public)")
             let response = await Self.invokeWithTimeout(
                 request: req,

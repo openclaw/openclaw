@@ -34,6 +34,7 @@ import {
   parsePort,
   resolveRuntimeStatusColor,
 } from "../daemon-cli/shared.js";
+import { formatInvalidConfigPort, formatInvalidPortOption } from "../error-format.js";
 
 type NodeDaemonInstallOptions = {
   host?: string;
@@ -94,8 +95,12 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
 
   const config = await loadNodeHostConfig();
   const { host, port } = resolveNodeDefaults(opts, config);
-  if (!Number.isFinite(port ?? Number.NaN) || (port ?? 0) <= 0) {
-    fail("Invalid port");
+  if (!Number.isFinite(port ?? Number.NaN) || (port ?? 0) <= 0 || (port ?? 0) > 65_535) {
+    fail(
+      opts.port !== undefined
+        ? formatInvalidPortOption("--port")
+        : formatInvalidConfigPort("node.gateway.port"),
+    );
     return;
   }
 
@@ -131,7 +136,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
   const tlsFingerprint =
     normalizeOptionalString(opts.tlsFingerprint) || config?.gateway?.tlsFingerprint;
   const tls = Boolean(opts.tls) || Boolean(tlsFingerprint) || Boolean(config?.gateway?.tls);
-  const { programArguments, workingDirectory, environment, description } =
+  const { programArguments, workingDirectory, environment, environmentValueSources, description } =
     await buildNodeInstallPlan({
       env: process.env,
       host,
@@ -163,6 +168,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
         programArguments,
         workingDirectory,
         environment,
+        environmentValueSources,
         description,
       });
     },
@@ -271,7 +277,7 @@ export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
   if (runtime?.missingUnit) {
     defaultRuntime.error(errorText("Service unit not found."));
     for (const hint of buildNodeRuntimeHints(hintEnv)) {
-      defaultRuntime.error(errorText(hint));
+      defaultRuntime.log(errorText(hint));
     }
     return;
   }
@@ -279,7 +285,7 @@ export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
   if (runtime?.status === "stopped") {
     defaultRuntime.error(errorText("Service is loaded but not running."));
     for (const hint of buildNodeRuntimeHints(hintEnv)) {
-      defaultRuntime.error(errorText(hint));
+      defaultRuntime.log(errorText(hint));
     }
   }
 }

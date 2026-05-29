@@ -22,6 +22,10 @@ export function isContainerEnvironment(): boolean {
 }
 
 function detectContainerEnvironment(): boolean {
+  if (process.env.FLY_MACHINE_ID?.trim() && process.env.FLY_APP_NAME?.trim()) {
+    return true;
+  }
+
   for (const sentinelPath of ["/.dockerenv", "/run/.containerenv", "/var/run/.containerenv"]) {
     try {
       fs.accessSync(sentinelPath, fs.constants.F_OK);
@@ -48,6 +52,6 @@ function detectContainerEnvironment(): boolean {
 }
 
 /** @internal test helper */
-export function __resetContainerEnvironmentCacheForTest(): void {
+export function resetContainerEnvironmentCacheForTest(): void {
   containerEnvironmentCache = undefined;
 }

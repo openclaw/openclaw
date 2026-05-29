@@ -5,7 +5,10 @@ import {
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import type { ChannelDoctorAdapter } from "openclaw/plugin-sdk/channel-contract";
 import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
-import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/channel-message";
+import {
+  createChannelMessageAdapterFromOutbound,
+  createRuntimeOutboundDelegates,
+} from "openclaw/plugin-sdk/channel-outbound";
 import {
   createAllowlistProviderOpenWarningCollector,
   projectAccountConfigWarningCollector,
@@ -18,7 +21,6 @@ import {
   createRuntimeDirectoryLiveAdapter,
 } from "openclaw/plugin-sdk/directory-runtime";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
-import { createRuntimeOutboundDelegates } from "openclaw/plugin-sdk/outbound-runtime";
 import {
   buildProbeChannelStatusSummary,
   collectStatusIssuesFromLastError,
@@ -92,6 +94,7 @@ const meta = {
   docsLabel: "matrix",
   blurb: "open protocol; configure a homeserver + access token.",
   order: 70,
+  markdownCapable: true,
   quickstartAllowFrom: true,
 };
 
@@ -335,6 +338,19 @@ const matrixChannelOutbound: ChannelOutboundAdapter = {
       messageSendingHooks: true,
     },
   },
+  presentationCapabilities: {
+    supported: true,
+    buttons: true,
+    selects: true,
+    context: true,
+    divider: true,
+    limits: {
+      text: {
+        markdownDialect: "markdown",
+        supportsEdit: true,
+      },
+    },
+  },
   shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload }) =>
     shouldSuppressLocalMatrixExecApprovalPrompt({
       cfg,
@@ -343,6 +359,14 @@ const matrixChannelOutbound: ChannelOutboundAdapter = {
     }),
   ...createRuntimeOutboundDelegates({
     getRuntime: loadMatrixChannelRuntime,
+    renderPresentation: {
+      resolve: (runtime) => runtime.matrixOutbound.renderPresentation,
+      unavailableMessage: "Matrix outbound presentation rendering is unavailable",
+    },
+    sendPayload: {
+      resolve: (runtime) => runtime.matrixOutbound.sendPayload,
+      unavailableMessage: "Matrix outbound payload delivery is unavailable",
+    },
     sendText: {
       resolve: (runtime) => runtime.matrixOutbound.sendText,
       unavailableMessage: "Matrix outbound text delivery is unavailable",
@@ -435,6 +459,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
           }).map(projectMatrixConversationBinding),
       },
       messaging: {
+        defaultMarkdownTableMode: "bullets",
         targetPrefixes: ["matrix"],
         normalizeTarget: normalizeMatrixMessagingTarget,
         resolveInboundConversation: ({ to, conversationId, threadId }) =>

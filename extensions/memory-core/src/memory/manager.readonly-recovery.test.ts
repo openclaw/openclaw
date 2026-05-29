@@ -6,7 +6,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { openMemoryDatabaseAtPath } from "./manager-db.js";
 import {
-  _createMemorySyncControlConfigForTests,
+  createMemorySyncControlConfigForTests,
   enqueueMemoryTargetedSessionSync,
   runMemorySyncWithReadonlyRecovery,
   type MemoryReadonlyRecoveryState,
@@ -54,8 +54,8 @@ describe("memory manager readonly recovery", () => {
     };
   }
 
-  function _createMemoryConfig(): OpenClawConfig {
-    return _createMemorySyncControlConfigForTests(workspaceDir, indexPath);
+  function createMemoryConfigForTests(): OpenClawConfig {
+    return createMemorySyncControlConfigForTests(workspaceDir, indexPath);
   }
 
   function createReadonlyRecoveryHarness() {
@@ -213,7 +213,7 @@ describe("memory manager readonly recovery", () => {
     expect(harness.vector.dims).toBe(768);
   });
 
-  it("sets busy_timeout on memory sqlite connections", async () => {
+  it("sets busy_timeout on memory sqlite connections", () => {
     const db = openMemoryDatabaseAtPath(indexPath, false);
     const row = db.prepare("PRAGMA busy_timeout").get() as
       | { busy_timeout?: number; timeout?: number }

@@ -2,7 +2,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AssistantMessage, UserMessage } from "@mariozechner/pi-ai";
+import type { AssistantMessage, UserMessage } from "openclaw/plugin-sdk/llm";
 import { afterAll, beforeAll, beforeEach, expect, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { InternalHookEvent } from "../../hooks/internal-hooks.js";
@@ -12,19 +12,19 @@ import {
   connectOk,
   embeddedRunMock,
   installGatewayTestHooks,
-  piSdkMock,
+  agentDiscoveryMock,
   rpcReq,
   testState,
   writeSessionStore,
 } from "../test-helpers.js";
 
 let sessionManagerModulePromise:
-  | Promise<typeof import("@mariozechner/pi-coding-agent")>
+  | Promise<typeof import("../../agents/sessions/index.js")>
   | undefined;
 let gatewayConfigModulePromise: Promise<typeof import("../../config/config.js")> | undefined;
 
 export async function getSessionManagerModule() {
-  sessionManagerModulePromise ??= import("@mariozechner/pi-coding-agent");
+  sessionManagerModulePromise ??= import("../../agents/sessions/index.js");
   return await sessionManagerModulePromise;
 }
 
@@ -67,7 +67,7 @@ const bootstrapCacheMocks = vi.hoisted(() => ({
 
 const sessionHookMocks = vi.hoisted(() => ({
   hasInternalHookListeners: vi.fn(() => true),
-  triggerInternalHook: vi.fn(async (_event: unknown) => {}),
+  triggerInternalHook: vi.fn(async (_eventValue: unknown) => {}),
 }));
 
 const beforeResetHookMocks = vi.hoisted(() => ({
@@ -120,6 +120,16 @@ const bundleMcpRuntimeMocks = vi.hoisted(() => ({
 vi.mock("../../auto-reply/reply/queue.js", async () => {
   const actual = await vi.importActual<typeof import("../../auto-reply/reply/queue.js")>(
     "../../auto-reply/reply/queue.js",
+  );
+  return {
+    ...actual,
+    clearSessionQueues: sessionCleanupMocks.clearSessionQueues,
+  };
+});
+
+vi.mock("../../auto-reply/reply/queue/cleanup.js", async () => {
+  const actual = await vi.importActual<typeof import("../../auto-reply/reply/queue/cleanup.js")>(
+    "../../auto-reply/reply/queue/cleanup.js",
   );
   return {
     ...actual,
@@ -221,7 +231,7 @@ vi.mock("../../plugin-sdk/browser-maintenance.js", () => ({
   movePathToTrash: vi.fn(async () => {}),
 }));
 
-vi.mock("../../agents/pi-bundle-mcp-tools.js", () => ({
+vi.mock("../../agents/agent-bundle-mcp-tools.js", () => ({
   disposeSessionMcpRuntime: bundleMcpRuntimeMocks.disposeSessionMcpRuntime,
   disposeAllSessionMcpRuntimes: bundleMcpRuntimeMocks.disposeAllSessionMcpRuntimes,
   retireSessionMcpRuntime: ({ sessionId }: { sessionId?: string | null }) =>
@@ -233,8 +243,8 @@ vi.mock("../../agents/pi-bundle-mcp-tools.js", () => ({
 export function setupGatewaySessionsTestHarness() {
   installGatewayTestHooks({ scope: "suite" });
 
-  let harness: GatewayServerHarness;
-  let sharedSessionStoreDir: string;
+  let harness: GatewayServerHarness | undefined;
+  let sharedSessionStoreDir: string | undefined;
   let sessionStoreCaseSeq = 0;
 
   beforeAll(async () => {
@@ -243,8 +253,10 @@ export function setupGatewaySessionsTestHarness() {
   });
 
   afterAll(async () => {
-    await harness.close();
-    await fs.rm(sharedSessionStoreDir, { recursive: true, force: true });
+    await harness?.close();
+    if (sharedSessionStoreDir) {
+      await fs.rm(sharedSessionStoreDir, { recursive: true, force: true });
+    }
   });
 
   beforeEach(async () => {
@@ -283,11 +295,25 @@ export function setupGatewaySessionsTestHarness() {
     bundleMcpRuntimeMocks.disposeSessionMcpRuntime.mockResolvedValue(undefined);
   });
 
+  const requireHarness = () => {
+    if (!harness) {
+      throw new Error("Gateway sessions test harness was not started");
+    }
+    return harness;
+  };
+
+  const requireSharedSessionStoreDir = () => {
+    if (!sharedSessionStoreDir) {
+      throw new Error("Gateway sessions shared session store dir was not created");
+    }
+    return sharedSessionStoreDir;
+  };
+
   const openClient = async (opts?: Parameters<typeof connectOk>[1]) =>
-    await harness.openClient(opts);
+    await requireHarness().openClient(opts);
 
   async function createSessionStoreDir() {
-    const dir = path.join(sharedSessionStoreDir, `case-${sessionStoreCaseSeq++}`);
+    const dir = path.join(requireSharedSessionStoreDir(), `case-${sessionStoreCaseSeq++}`);
     await fs.mkdir(dir, { recursive: true });
     const storePath = path.join(dir, "sessions.json");
     testState.sessionStorePath = storePath;
@@ -307,7 +333,7 @@ export function setupGatewaySessionsTestHarness() {
 
   return {
     createSessionStoreDir,
-    getHarness: () => harness,
+    getHarness: requireHarness,
     openClient,
     seedActiveMainSession,
   };
@@ -329,7 +355,10 @@ export function sessionStoreEntry(sessionId: string, overrides: Partial<SessionE
   };
 }
 
-export async function createCheckpointFixture(dir: string) {
+export async function createCheckpointFixture(
+  dir: string,
+  options: { legacyPreCompactionSnapshot?: boolean } = { legacyPreCompactionSnapshot: true },
+) {
   const { SessionManager } = await getSessionManagerModule();
   const session = SessionManager.create(dir, dir);
   const userMessage: UserMessage = {
@@ -370,12 +399,16 @@ export async function createCheckpointFixture(dir: string) {
   if (!sessionFile) {
     throw new Error("expected persisted session file");
   }
-  const preCompactionSessionFile = path.join(
-    dir,
-    `${path.parse(sessionFile).name}.checkpoint-test.jsonl`,
-  );
-  fsSync.copyFileSync(sessionFile, preCompactionSessionFile);
-  const preCompactionSession = SessionManager.open(preCompactionSessionFile, dir);
+  const legacyPreCompactionSnapshot = options.legacyPreCompactionSnapshot ?? true;
+  const preCompactionSessionFile = legacyPreCompactionSnapshot
+    ? path.join(dir, `${path.parse(sessionFile).name}.checkpoint-test.jsonl`)
+    : undefined;
+  if (preCompactionSessionFile) {
+    fsSync.copyFileSync(sessionFile, preCompactionSessionFile);
+  }
+  const preCompactionSession = preCompactionSessionFile
+    ? SessionManager.open(preCompactionSessionFile, dir)
+    : undefined;
   session.appendCompaction("checkpoint summary", preCompactionLeafId, 123, { ok: true });
   const postCompactionLeafId = session.getLeafId();
   if (!postCompactionLeafId) {
@@ -405,7 +438,9 @@ export function expectActiveRunCleanup(
   const clearedKeys = (
     sessionCleanupMocks.clearSessionQueues.mock.calls as unknown as Array<[string[]]>
   )[0]?.[0];
-  expect(clearedKeys).toEqual(expect.arrayContaining(expectedQueueKeys));
+  for (const key of expectedQueueKeys) {
+    expect(clearedKeys).toContain(key);
+  }
   expect(embeddedRunMock.abortCalls).toEqual([sessionId]);
   expect(embeddedRunMock.waitCalls).toEqual([sessionId]);
 }
@@ -460,7 +495,7 @@ export async function directSessionReq<TPayload = unknown>(
     context: {
       broadcastToConnIds: vi.fn(),
       getSessionEventSubscriberConnIds: () => new Set<string>(),
-      loadGatewayModelCatalog: async () => piSdkMock.models,
+      loadGatewayModelCatalog: async () => agentDiscoveryMock.models,
       getRuntimeConfig: getRuntimeConfig,
       ...opts?.context,
     } as never,

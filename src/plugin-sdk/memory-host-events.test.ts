@@ -86,6 +86,21 @@ describe("createPersistentDedupe", () => {
     expect(raceSecond).toBe(false);
   });
 
+  it("bounds non-finite persistent dedupe options", async () => {
+    const root = await createTempDir("openclaw-dedupe-");
+    const dedupe = createPersistentDedupe({
+      ttlMs: Number.NaN,
+      memoryMaxSize: Number.NaN,
+      fileMaxEntries: Number.NaN,
+      resolveFilePath: (namespace) => path.join(root, `${namespace}.json`),
+    });
+
+    expect(await dedupe.checkAndRecord("m1", { namespace: "a", now: 100 })).toBe(true);
+    expect(await dedupe.hasRecent("m1", { namespace: "a", now: 100 })).toBe(true);
+    expect(await dedupe.checkAndRecord("m1", { namespace: "a", now: 100 })).toBe(false);
+    expect(dedupe.memorySize()).toBe(0);
+  });
+
   it("falls back to memory-only behavior on disk errors", async () => {
     const dedupe = createPersistentDedupe({
       ttlMs: 10_000,
@@ -135,8 +150,10 @@ describe("createClaimableDedupe", () => {
     await expect(dedupe.claim("line:evt-1")).resolves.toEqual({ kind: "duplicate" });
 
     const claims = await Promise.all([dedupe.claim("line:race-1"), dedupe.claim("line:race-1")]);
-    expect(claims.filter((claim) => claim.kind === "claimed")).toHaveLength(1);
-    expect(claims.filter((claim) => claim.kind === "inflight")).toHaveLength(1);
+    const countClaimKind = (kind: (typeof claims)[number]["kind"]) =>
+      claims.reduce((count, claim) => count + (claim.kind === kind ? 1 : 0), 0);
+    expect(countClaimKind("claimed")).toBe(1);
+    expect(countClaimKind("inflight")).toBe(1);
 
     const waitingClaim = claims.find((claim) => claim.kind === "inflight");
     await expect(dedupe.commit("line:race-1")).resolves.toBe(true);
@@ -188,5 +205,17 @@ describe("createClaimableDedupe", () => {
     await expect(reader.claim("m1", { namespace: "acct" })).resolves.toEqual({
       kind: "duplicate",
     });
+  });
+
+  it("bounds non-finite claimable dedupe options", async () => {
+    const dedupe = createClaimableDedupe({
+      ttlMs: Number.NaN,
+      memoryMaxSize: Number.NaN,
+    });
+
+    await expect(dedupe.claim("m1", { now: 100 })).resolves.toEqual({ kind: "claimed" });
+    await expect(dedupe.commit("m1", { now: 100 })).resolves.toBe(true);
+    await expect(dedupe.claim("m1", { now: 100 })).resolves.toEqual({ kind: "claimed" });
+    expect(dedupe.memorySize()).toBe(0);
   });
 });

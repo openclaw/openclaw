@@ -1,3 +1,8 @@
+import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../../../packages/gateway-protocol/src/client-info.js";
+import type { ConnectParams } from "../../../../packages/gateway-protocol/src/index.js";
 import { verifyDeviceSignature } from "../../../infra/device-identity.js";
 import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
@@ -10,8 +15,6 @@ import {
   isPrivateOrLoopbackHost,
   resolveHostName,
 } from "../../net.js";
-import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../protocol/client-info.js";
-import type { ConnectParams } from "../../protocol/index.js";
 import type { AuthProvidedKind } from "./auth-messages.js";
 
 export const BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP = "198.18.0.1";
@@ -35,6 +38,7 @@ type HandshakeConnectAuth = {
   bootstrapToken?: string;
   deviceToken?: string;
   password?: string;
+  approvalRuntimeToken?: string;
 };
 
 function resolveBrowserOriginRateLimitKey(requestOrigin?: string): string {
@@ -262,13 +266,19 @@ export function shouldSkipLocalBackendSelfPairing(params: {
   if (!isBackendClient) {
     return false;
   }
+  const isLocal =
+    params.locality === "direct_local" || params.locality === "shared_secret_loopback_local";
+  if (!isLocal || params.hasBrowserOriginHeader) {
+    return false;
+  }
+  // No-auth local backend: scoped bypass — not shared secret, but local-only
+  // device-less operation is safe when auth.mode is explicitly "none".
+  if (params.authMethod === "none") {
+    return true;
+  }
   const usesSharedSecretAuth = params.authMethod === "token" || params.authMethod === "password";
   const usesDeviceTokenAuth = params.authMethod === "device-token";
-  return (
-    (params.locality === "direct_local" || params.locality === "shared_secret_loopback_local") &&
-    !params.hasBrowserOriginHeader &&
-    ((params.sharedAuthOk && usesSharedSecretAuth) || usesDeviceTokenAuth)
-  );
+  return (params.sharedAuthOk && usesSharedSecretAuth) || usesDeviceTokenAuth;
 }
 
 function resolveSignatureToken(connectParams: ConnectParams): string | null {
@@ -394,6 +404,12 @@ export function resolveUnauthorizedHandshakeContext(params: {
         authProvided,
         canRetryWithDeviceToken,
         recommendedNextStep: "update_auth_credentials",
+      });
+    case "scope_mismatch":
+      return buildUnauthorizedHandshakeContext({
+        authProvided,
+        canRetryWithDeviceToken,
+        recommendedNextStep: "review_auth_configuration",
       });
     case "rate_limited":
       return buildUnauthorizedHandshakeContext({

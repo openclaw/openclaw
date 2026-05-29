@@ -96,9 +96,9 @@ add Node's sync I/O trace flag through the source runner:
 OPENCLAW_TRACE_SYNC_IO=1 pnpm openclaw gateway --force
 ```
 
-`pnpm gateway:watch` enables this flag by default for the watched Gateway child.
-Set `OPENCLAW_TRACE_SYNC_IO=0` to suppress Node sync I/O trace output in watch
-mode.
+`pnpm gateway:watch` leaves this flag disabled by default for the watched
+Gateway child. Set `OPENCLAW_TRACE_SYNC_IO=1` when you explicitly want Node
+sync I/O trace output in watch mode.
 
 ## Gateway watch mode
 
@@ -278,27 +278,24 @@ Default file:
 
 `~/.openclaw/logs/raw-stream.jsonl`
 
-## Raw chunk logging (pi-mono)
+## Raw OpenAI-compatible chunk logging
 
 To capture **raw OpenAI-compat chunks** before they are parsed into blocks,
-pi-mono exposes a separate logger:
+enable the transport logger:
 
 ```bash
-PI_RAW_STREAM=1
+OPENCLAW_RAW_STREAM=1
 ```
 
 Optional path:
 
 ```bash
-PI_RAW_STREAM_PATH=~/.pi-mono/logs/raw-openai-completions.jsonl
+OPENCLAW_RAW_STREAM_PATH=~/.openclaw/logs/raw-openai-completions.jsonl
 ```
 
 Default file:
 
-`~/.pi-mono/logs/raw-openai-completions.jsonl`
-
-> Note: this is only emitted by processes using pi-mono's
-> `openai-completions` provider.
+`~/.openclaw/logs/raw-openai-completions.jsonl`
 
 ## Safety notes
 

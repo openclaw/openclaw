@@ -77,7 +77,8 @@ driver's safety model.
 ## Quick setup
 
 Set `plugins.entries.codex.config.computerUse` when Codex-mode turns must have
-Computer Use available before a thread starts:
+Computer Use available before a thread starts. `autoInstall: true` opts
+Computer Use in and lets OpenClaw install or re-enable it before the turn:
 
 ```json5
 {
@@ -96,9 +97,6 @@ Computer Use available before a thread starts:
   agents: {
     defaults: {
       model: "openai/gpt-5.5",
-      agentRuntime: {
-        id: "codex",
-      },
     },
   },
 }
@@ -114,9 +112,8 @@ register the bundled Codex marketplace from
 fails. If setup still cannot make the MCP server available, the turn fails
 before the thread starts.
 
-Existing sessions keep their runtime and Codex thread binding. After changing
-`agentRuntime` or Computer Use config, use `/new` or `/reset` in the affected
-chat before testing.
+After changing Computer Use config, use `/new` or `/reset` in the affected chat
+before testing if an existing Codex thread has already started.
 
 ## Commands
 
@@ -133,7 +130,8 @@ not `openclaw codex ...` CLI subcommands:
 ```
 
 `status` is read-only. It does not add marketplace sources, install plugins, or
-enable Codex plugin support.
+enable Codex plugin support. If no config opts Computer Use in, `status` can
+report disabled even after a one-off install command.
 
 `install` enables Codex app-server plugin support, optionally adds a configured
 marketplace source, installs or re-enables the configured plugin through Codex
@@ -181,9 +179,10 @@ You can also register it explicitly from a shell with Codex:
 codex plugin marketplace add /Applications/Codex.app/Contents/Resources/plugins/openai-bundled
 ```
 
-If you use a nonstandard Codex app path, set `computerUse.marketplacePath` to a
-local marketplace file path or run `/codex computer-use install --source
-<marketplace-source>` once.
+If you use a nonstandard Codex app path, run `/codex computer-use install
+--source <marketplace-root>` once or set `computerUse.marketplacePath` to a
+local marketplace file path. Use `--marketplace-path` only when you have the
+marketplace JSON file path, not the bundled marketplace root.
 
 ## Remote catalog limit
 
@@ -282,8 +281,9 @@ fresh OpenClaw session.
 **A Computer Use tool says `Native hook relay unavailable`.** The Codex-native
 tool hook could not reach an active OpenClaw relay through the local bridge or
 Gateway fallback. Start a fresh OpenClaw session with `/new` or `/reset`. If it
-keeps happening, restart the gateway so old app-server threads and hook
-registrations are dropped, then retry.
+works once and then fails again on a later tool call, `/new` is only clearing the
+current attempt; restart the Codex app-server or OpenClaw Gateway so old threads
+and hook registrations are dropped, then retry in a fresh session.
 
 **Turn-start auto-install refuses a source.** This is intentional. Add the
 source with explicit `/codex computer-use install --source <marketplace-source>`

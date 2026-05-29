@@ -1,7 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { evaluateShellAllowlist, normalizeSafeBins } from "./exec-approvals-allowlist.js";
+import {
+  evaluateExecAllowlist,
+  evaluateShellAllowlist,
+  normalizeSafeBins,
+} from "./exec-approvals-allowlist.js";
 import {
   analyzeArgvCommand,
   analyzeShellCommand,
@@ -23,21 +27,14 @@ function expectAnalyzedShellCommand(
   return res;
 }
 
-function createSkillPreludeFixture(options: { withWrapper?: boolean } = {}) {
+function createSkillWrapperFixture() {
   const skillRoot = makeTempDir();
-  const skillDir = path.join(skillRoot, "skills", "gog");
-  const skillPath = path.join(skillDir, "SKILL.md");
   const wrapperPath = path.join(skillRoot, "bin", "gog-wrapper");
 
-  fs.mkdirSync(skillDir, { recursive: true });
-  fs.writeFileSync(skillPath, "# gog\n");
+  fs.mkdirSync(path.dirname(wrapperPath), { recursive: true });
+  fs.writeFileSync(wrapperPath, "#!/bin/sh\n", { mode: 0o755 });
 
-  if (options.withWrapper) {
-    fs.mkdirSync(path.dirname(wrapperPath), { recursive: true });
-    fs.writeFileSync(wrapperPath, "#!/bin/sh\n", { mode: 0o755 });
-  }
-
-  return { skillRoot, skillPath, wrapperPath };
+  return { skillRoot, wrapperPath };
 }
 
 describe("exec approvals shell analysis", () => {
@@ -216,6 +213,7 @@ describe("exec approvals shell analysis", () => {
     it("still rejects unquoted metacharacters on Windows", () => {
       const cases = [
         "ping 127.0.0.1 -n 1 & whoami",
+        "node allowed.js; unlisted.exe",
         "echo hello | clip",
         "node tool.js > output.txt",
         "for /f %i in (file.txt) do echo %i",
@@ -608,16 +606,14 @@ describe("exec approvals shell analysis", () => {
       expect(result.allowlistSatisfied).toBe(testCase.expectedAllowlistSatisfied);
     });
 
-    it("allows the skill display prelude when a later skill wrapper is allowlisted", () => {
+    it("allows a direct skill wrapper command when the wrapper is allowlisted", () => {
       if (process.platform === "win32") {
         return;
       }
-      const { skillRoot, skillPath, wrapperPath } = createSkillPreludeFixture({
-        withWrapper: true,
-      });
+      const { skillRoot, wrapperPath } = createSkillWrapperFixture();
 
       const result = evaluateShellAllowlist({
-        command: `cat ${skillPath} && printf '\\n---CMD---\\n' && ${wrapperPath} calendar events primary --today --json`,
+        command: `${wrapperPath} calendar events primary --today --json`,
         allowlist: [{ pattern: wrapperPath }],
         safeBins: new Set(),
         cwd: skillRoot,
@@ -625,55 +621,64 @@ describe("exec approvals shell analysis", () => {
 
       expect(result.analysisOk).toBe(true);
       expect(result.allowlistSatisfied).toBe(true);
-      expect(result.segmentSatisfiedBy).toEqual(["skillPrelude", "skillPrelude", "allowlist"]);
+      expect(result.segmentSatisfiedBy).toEqual(["allowlist"]);
     });
 
-    it("does not treat arbitrary allowlisted binaries as trusted skill wrappers", () => {
-      if (process.platform === "win32") {
-        return;
-      }
-      const { skillRoot, skillPath } = createSkillPreludeFixture();
-
+    it.each([
+      {
+        name: "BSD script transcript",
+        command: "script ~/.zshenv git log -1 --format='payload'",
+        platform: "darwin" as const,
+        blockedWrapper: "script",
+      },
+      {
+        name: "GNU time output file",
+        command: "/usr/bin/time -o ~/.bashrc -a -f 'payload' git status",
+        platform: "linux" as const,
+        blockedWrapper: "time",
+      },
+    ])("rejects side-effecting dispatch wrapper allowlist bypasses for $name", (testCase) => {
       const result = evaluateShellAllowlist({
-        command: `cat ${skillPath} && printf '\\n---CMD---\\n' && /bin/echo calendar events primary --today --json`,
-        allowlist: [{ pattern: "/bin/echo" }],
+        command: testCase.command,
+        allowlist: [{ pattern: "git" }],
         safeBins: new Set(),
-        cwd: skillRoot,
+        cwd: "/tmp",
+        platform: testCase.platform,
       });
 
       expect(result.analysisOk).toBe(true);
       expect(result.allowlistSatisfied).toBe(false);
+      expect(result.segments[0]?.resolution?.policyBlocked).toBe(true);
+      expect(result.segments[0]?.resolution?.blockedWrapper).toBe(testCase.blockedWrapper);
       expect(result.segmentSatisfiedBy).toEqual([null]);
     });
 
-    it("still rejects the skill display prelude when no trusted skill command follows", () => {
-      if (process.platform === "win32") {
-        return;
-      }
-      const { skillRoot, skillPath } = createSkillPreludeFixture();
-
+    it("keeps GNU time transparent when it only reports to stderr", () => {
       const result = evaluateShellAllowlist({
-        command: `cat ${skillPath} && printf '\\n---CMD---\\n'`,
-        allowlist: [],
+        command: "/usr/bin/time -p git status",
+        allowlist: [{ pattern: "git" }],
         safeBins: new Set(),
-        cwd: skillRoot,
+        cwd: "/tmp",
+        platform: "linux",
       });
 
       expect(result.analysisOk).toBe(true);
-      expect(result.allowlistSatisfied).toBe(false);
-      expect(result.segmentSatisfiedBy).toEqual([null]);
+      expect(result.allowlistSatisfied).toBe(true);
+      expect(result.segmentSatisfiedBy).toEqual(["allowlist"]);
     });
 
-    it("rejects the skill display prelude when a trusted wrapper is not reachable", () => {
+    it("rejects the legacy skill display prelude when only the wrapper is allowlisted", () => {
       if (process.platform === "win32") {
         return;
       }
-      const { skillRoot, skillPath, wrapperPath } = createSkillPreludeFixture({
-        withWrapper: true,
-      });
+      const { skillRoot, wrapperPath } = createSkillWrapperFixture();
+      const skillDir = path.join(skillRoot, "skills", "gog");
+      const skillPath = path.join(skillDir, "SKILL.md");
+      fs.mkdirSync(skillDir, { recursive: true });
+      fs.writeFileSync(skillPath, "# gog\n");
 
       const result = evaluateShellAllowlist({
-        command: `cat ${skillPath} && printf '\\n---CMD---\\n' && false && ${wrapperPath} calendar events primary --today --json`,
+        command: `cat ${skillPath} && printf '\\n---CMD---\\n' && ${wrapperPath} calendar events primary --today --json`,
         allowlist: [{ pattern: wrapperPath }],
         safeBins: new Set(),
         cwd: skillRoot,
@@ -707,6 +712,240 @@ describe("exec approvals shell analysis", () => {
       });
       expect(result.analysisOk).toBe(false);
       expect(result.allowlistSatisfied).toBe(false);
+    });
+
+    it("does not satisfy bare wrapper allowlist entries for inline cmd payloads", () => {
+      const dir = makeTempDir();
+      const cmdPath = path.join(dir, "cmd.exe");
+      fs.writeFileSync(cmdPath, "");
+      fs.chmodSync(cmdPath, 0o755);
+      try {
+        const result = evaluateShellAllowlist({
+          command: "cmd.exe -c echo sample",
+          allowlist: [{ pattern: cmdPath }],
+          safeBins: new Set(),
+          cwd: dir,
+          env: makePathEnv(dir),
+          platform: "win32",
+        });
+        expect(result.analysisOk).toBe(true);
+        expect(result.allowlistSatisfied).toBe(false);
+        expect(result.segmentAllowlistEntries).toEqual([null]);
+        expect(result.segmentSatisfiedBy).toEqual([null]);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("evaluates inline cmd payloads against the inner executable", () => {
+      const dir = makeTempDir();
+      const cmdPath = path.join(dir, "cmd.exe");
+      const nodePath = path.join(dir, "node.exe");
+      for (const file of [cmdPath, nodePath]) {
+        fs.writeFileSync(file, "");
+        fs.chmodSync(file, 0o755);
+      }
+      try {
+        const result = evaluateShellAllowlist({
+          command: "cmd.exe -c node.exe app.js",
+          allowlist: [{ pattern: nodePath }],
+          safeBins: new Set(),
+          cwd: dir,
+          env: makePathEnv(dir),
+          platform: "win32",
+        });
+        expect(result.analysisOk).toBe(true);
+        expect(result.allowlistSatisfied).toBe(true);
+        expect(result.allowlistMatches.map((entry) => entry.pattern)).toEqual([nodePath]);
+        expect(result.segmentAllowlistEntries).toEqual([null]);
+        expect(result.segmentSatisfiedBy).toEqual(["allowlist"]);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("rejects Windows inline cmd payloads with PowerShell command separators", () => {
+      const dir = makeTempDir();
+      const cmdPath = path.join(dir, "cmd.exe");
+      const allowedPath = path.join(dir, "allowed.exe");
+      for (const file of [cmdPath, allowedPath]) {
+        fs.writeFileSync(file, "");
+        fs.chmodSync(file, 0o755);
+      }
+      try {
+        const env = makePathEnv(dir);
+        const analysis = analyzeArgvCommand({
+          argv: ["cmd.exe", "/c", "pwsh", "-Command", "allowed.exe;", "unlisted.exe"],
+          cwd: dir,
+          env,
+        });
+        expect(analysis.ok).toBe(true);
+        const result = evaluateExecAllowlist({
+          analysis,
+          allowlist: [{ pattern: allowedPath }],
+          safeBins: new Set(),
+          cwd: dir,
+          env,
+          platform: "win32",
+        });
+        expect(result.allowlistSatisfied).toBe(false);
+        expect(result.segmentAllowlistEntries).toEqual([null]);
+        expect(result.segmentSatisfiedBy).toEqual([null]);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("rejects PowerShell inline argv payloads with trailing command tokens", () => {
+      const dir = makeTempDir();
+      const allowedPath = path.join(dir, "allowed.exe");
+      fs.writeFileSync(allowedPath, "");
+      fs.chmodSync(allowedPath, 0o755);
+      try {
+        const env = makePathEnv(dir);
+        const analysis = analyzeArgvCommand({
+          argv: ["pwsh", "-Command", "allowed.exe", ";", "unlisted.exe"],
+          cwd: dir,
+          env,
+        });
+        expect(analysis.ok).toBe(true);
+        const result = evaluateExecAllowlist({
+          analysis,
+          allowlist: [{ pattern: allowedPath }],
+          safeBins: new Set(),
+          cwd: dir,
+          env,
+          platform: "win32",
+        });
+        expect(result.allowlistSatisfied).toBe(false);
+        expect(result.segmentAllowlistEntries).toEqual([null]);
+        expect(result.segmentSatisfiedBy).toEqual([null]);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it.each([
+      {
+        name: "extra script argument",
+        scriptArgs: ["-ExtraArg"],
+        argPattern: "^\x00\x00$",
+        expected: false,
+      },
+      {
+        name: "empty script argument",
+        scriptArgs: [""],
+        argPattern: "^\x00\x00$",
+        expected: false,
+      },
+      {
+        name: "empty script argument after dispatch unwrap",
+        wrapperPrefix: ["env"],
+        scriptArgs: [""],
+        argPattern: "^\x00\x00$",
+        expected: false,
+      },
+      {
+        name: "semicolon data argument",
+        scriptArgs: ["literal;data"],
+        argPattern: "^literal;data\x00$",
+        expected: true,
+      },
+    ])(
+      "preserves PowerShell file argv for $name",
+      ({ wrapperPrefix = [], scriptArgs, argPattern, expected }) => {
+        const dir = makeTempDir();
+        const pwshPath = path.join(dir, "pwsh");
+        const scriptPath = path.join(dir, "script.ps1");
+        for (const file of [pwshPath, scriptPath]) {
+          fs.writeFileSync(file, "");
+          fs.chmodSync(file, 0o755);
+        }
+        try {
+          const env = makePathEnv(dir);
+          const analysis = analyzeArgvCommand({
+            argv: [...wrapperPrefix, "pwsh", "-File", scriptPath, ...scriptArgs],
+            cwd: dir,
+            env,
+          });
+          expect(analysis.ok).toBe(true);
+          const result = evaluateExecAllowlist({
+            analysis,
+            allowlist: [{ pattern: scriptPath, argPattern }],
+            safeBins: new Set(),
+            cwd: dir,
+            env,
+            platform: "win32",
+          });
+          expect(result.allowlistSatisfied).toBe(expected);
+          if (!expected) {
+            expect(result.segmentAllowlistEntries).toEqual([null]);
+            expect(result.segmentSatisfiedBy).toEqual([null]);
+          }
+        } finally {
+          fs.rmSync(dir, { recursive: true, force: true });
+        }
+      },
+    );
+
+    it.each([
+      { name: "slash encoded-command alias", argv: ["pwsh", "/ec", "ZQBjAGgAbwA="] },
+      { name: "encoded-command prefix abbreviation", argv: ["pwsh", "-en", "ZQBjAGgAbwA="] },
+      {
+        name: "error action alias before command",
+        argv: ["pwsh", "-ea", "stop", "-Command", "inline_payload"],
+      },
+      {
+        name: "execution policy alias before command",
+        argv: ["pwsh", "-ep", "Bypass", "-Command", "inline_payload"],
+      },
+      {
+        name: "custom pipe name before encoded-command alias",
+        argv: ["pwsh", "-cus", "pipe-name", "-ec", "ZQBjAGgAbwA="],
+      },
+      {
+        name: "token alias before command",
+        argv: ["pwsh", "-to", "token-value", "-Command", "inline_payload"],
+      },
+      {
+        name: "utc timestamp alias before command",
+        argv: ["pwsh", "-utc", "1234", "-Command", "inline_payload"],
+      },
+      {
+        name: "encoded arguments prefix before command",
+        argv: ["pwsh", "-encodeda", "YQByAGcA", "-Command", "inline_payload"],
+      },
+      {
+        name: "command with args full form",
+        argv: ["pwsh", "-CommandWithArgs", "inline_payload"],
+      },
+      {
+        name: "unrecognized shell wrapper argv",
+        argv: ["pwsh", "-UnrecognizedCommandForm", "inline_payload"],
+      },
+    ])("does not satisfy bare wrapper allowlist entries for PowerShell $name", ({ argv }) => {
+      const dir = makeTempDir();
+      const pwshPath = path.join(dir, "pwsh");
+      fs.writeFileSync(pwshPath, "");
+      fs.chmodSync(pwshPath, 0o755);
+      try {
+        const env = makePathEnv(dir);
+        const analysis = analyzeArgvCommand({ argv, cwd: dir, env });
+        expect(analysis.ok).toBe(true);
+        const result = evaluateExecAllowlist({
+          analysis,
+          allowlist: [{ pattern: pwshPath }],
+          safeBins: new Set(),
+          cwd: dir,
+          env,
+          platform: "win32",
+        });
+        expect(result.allowlistSatisfied).toBe(false);
+        expect(result.segmentAllowlistEntries).toEqual([null]);
+        expect(result.segmentSatisfiedBy).toEqual([null]);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
     });
 
     it("satisfies allowlist when bare * wildcard is present", () => {
@@ -772,7 +1011,7 @@ describe("exec approvals shell analysis", () => {
           const printfPath = binPath("printf");
           const gogPath = binPath("gog-wrapper");
           const result = evaluateShellAllowlist({
-            command: `${shellPath} -c "cat SKILL.md && printf '---CMD---' && gog-wrapper calendar events"`,
+            command: `${shellPath} -c "cat README.md && printf ready && gog-wrapper calendar events"`,
             allowlist: [{ pattern: catPath }, { pattern: printfPath }, { pattern: gogPath }],
             safeBins: new Set(),
             cwd: dir,
@@ -797,7 +1036,7 @@ describe("exec approvals shell analysis", () => {
           const catPath = binPath("cat");
           const gogPath = binPath("gog-wrapper");
           const result = evaluateShellAllowlist({
-            command: `${shellPath} -c "cat SKILL.md && rm -rf / && gog-wrapper calendar events"`,
+            command: `${shellPath} -c "cat README.md && rm -rf / && gog-wrapper calendar events"`,
             allowlist: [{ pattern: catPath }, { pattern: gogPath }],
             safeBins: new Set(),
             cwd: dir,
@@ -884,54 +1123,52 @@ describe("matchAllowlist with argPattern", () => {
   const resolution = {
     rawExecutable: "python3",
     resolvedPath: "/usr/bin/python3",
+    resolvedRealPath: "/usr/bin/python3",
     executableName: "python3",
   };
 
   it("matches path-only entry regardless of argv", () => {
-    const entries: ExecAllowlistEntry[] = [{ pattern: "/usr/bin/python3" }];
-    expect(matchAllowlist(entries, resolution, ["python3", "a.py"])).toBeTruthy();
-    expect(matchAllowlist(entries, resolution, ["python3", "b.py"])).toBeTruthy();
-    expect(matchAllowlist(entries, resolution, ["python3"])).toBeTruthy();
+    const entry = { pattern: "/usr/bin/python3" };
+    const entries: ExecAllowlistEntry[] = [entry];
+    expect(matchAllowlist(entries, resolution, ["python3", "a.py"])).toBe(entry);
+    expect(matchAllowlist(entries, resolution, ["python3", "b.py"])).toBe(entry);
+    expect(matchAllowlist(entries, resolution, ["python3"])).toBe(entry);
   });
 
   it("matches argPattern with regex", () => {
-    const entries: ExecAllowlistEntry[] = [{ pattern: "/usr/bin/python3", argPattern: "^a\\.py$" }];
-    expect(matchAllowlist(entries, resolution, ["python3", "a.py"])).toBeTruthy();
+    const entry = { pattern: "/usr/bin/python3", argPattern: "^a\\.py$" };
+    const entries: ExecAllowlistEntry[] = [entry];
+    expect(matchAllowlist(entries, resolution, ["python3", "a.py"])).toBe(entry);
     expect(matchAllowlist(entries, resolution, ["python3", "b.py"])).toBeNull();
     expect(matchAllowlist(entries, resolution, ["python3", "a.py", "--verbose"])).toBeNull();
   });
 
   it.each(["linux", "darwin"])("enforces argPattern on %s", (platform) => {
-    const entries: ExecAllowlistEntry[] = [
-      { pattern: "/usr/bin/python3", argPattern: "^safe\\.py$" },
-    ];
-    expect(matchAllowlist(entries, resolution, ["python3", "safe.py"], platform)).toBeTruthy();
+    const entry = { pattern: "/usr/bin/python3", argPattern: "^safe\\.py$" };
+    const entries: ExecAllowlistEntry[] = [entry];
+    expect(matchAllowlist(entries, resolution, ["python3", "safe.py"], platform)).toBe(entry);
     expect(matchAllowlist(entries, resolution, ["python3", "-c", "print(1)"], platform)).toBeNull();
   });
 
   it.each(["linux", "darwin", "win32"])(
     "prefers argPattern match over path-only match on %s",
     (platform) => {
-      const entries: ExecAllowlistEntry[] = [
-        { pattern: "/usr/bin/python3" },
-        { pattern: "/usr/bin/python3", argPattern: "^a\\.py$" },
-      ];
+      const pathOnlyEntry = { pattern: "/usr/bin/python3" };
+      const argPatternEntry = { pattern: "/usr/bin/python3", argPattern: "^a\\.py$" };
+      const entries: ExecAllowlistEntry[] = [pathOnlyEntry, argPatternEntry];
       const match = matchAllowlist(entries, resolution, ["python3", "a.py"], platform);
-      expect(match).toBeTruthy();
-      expect(match!.argPattern).toBe("^a\\.py$");
+      expect(match).toBe(argPatternEntry);
     },
   );
 
   it.each(["linux", "darwin", "win32"])(
     "falls back to path-only match when argPattern does not match on %s",
     (platform) => {
-      const entries: ExecAllowlistEntry[] = [
-        { pattern: "/usr/bin/python3" },
-        { pattern: "/usr/bin/python3", argPattern: "^a\\.py$" },
-      ];
+      const pathOnlyEntry = { pattern: "/usr/bin/python3" };
+      const argPatternEntry = { pattern: "/usr/bin/python3", argPattern: "^a\\.py$" };
+      const entries: ExecAllowlistEntry[] = [pathOnlyEntry, argPatternEntry];
       const match = matchAllowlist(entries, resolution, ["python3", "b.py"], platform);
-      expect(match).toBeTruthy();
-      expect(match!.argPattern).toBeUndefined();
+      expect(match).toBe(pathOnlyEntry);
     },
   );
 
@@ -948,8 +1185,7 @@ describe("matchAllowlist with argPattern", () => {
         { pattern: "/usr/bin/python3" },
       ];
       const fallback = matchAllowlist(mixedEntries, resolution, undefined, platform);
-      expect(fallback).toBeTruthy();
-      expect(fallback!.argPattern).toBeUndefined();
+      expect(fallback).toBe(mixedEntries[1]);
     },
   );
 
@@ -963,38 +1199,34 @@ describe("matchAllowlist with argPattern", () => {
     // matchArgPattern can detect \x00-join style via .includes("\x00") even for
     // single-arg patterns.  "^hello world\x00$" is the auto-generated form for
     // argv ["python3", "hello world"].
-    const entries: ExecAllowlistEntry[] = [
-      { pattern: "/usr/bin/python3", argPattern: "^hello world\x00$" },
-    ];
+    const entry = { pattern: "/usr/bin/python3", argPattern: "^hello world\x00$" };
+    const entries: ExecAllowlistEntry[] = [entry];
     // Original approved single-arg must still match (argsString = "hello world\x00").
-    expect(matchAllowlist(entries, resolution, ["python3", "hello world"])).toBeTruthy();
+    expect(matchAllowlist(entries, resolution, ["python3", "hello world"])).toBe(entry);
     // Split-arg bypass must be rejected (argsString = "hello\x00world\x00").
     expect(matchAllowlist(entries, resolution, ["python3", "hello", "world"])).toBeNull();
   });
 
   it("supports regex alternation in argPattern", () => {
-    const entries: ExecAllowlistEntry[] = [
-      { pattern: "/usr/bin/python3", argPattern: "^(a|b)\\.py$" },
-    ];
-    expect(matchAllowlist(entries, resolution, ["python3", "a.py"])).toBeTruthy();
-    expect(matchAllowlist(entries, resolution, ["python3", "b.py"])).toBeTruthy();
+    const entry = { pattern: "/usr/bin/python3", argPattern: "^(a|b)\\.py$" };
+    const entries: ExecAllowlistEntry[] = [entry];
+    expect(matchAllowlist(entries, resolution, ["python3", "a.py"])).toBe(entry);
+    expect(matchAllowlist(entries, resolution, ["python3", "b.py"])).toBe(entry);
     expect(matchAllowlist(entries, resolution, ["python3", "c.py"])).toBeNull();
   });
 
   it("distinguishes zero-arg pattern from one-empty-string-arg pattern", () => {
     // buildArgPatternFromArgv encodes [] as "^\x00\x00$" (double sentinel) and
     // [""] as "^\x00$" (single sentinel) so the two cannot cross-match.
-    const zeroArgEntries: ExecAllowlistEntry[] = [
-      { pattern: "/usr/bin/python3", argPattern: "^\x00\x00$" },
-    ];
-    const emptyArgEntries: ExecAllowlistEntry[] = [
-      { pattern: "/usr/bin/python3", argPattern: "^\x00$" },
-    ];
+    const zeroArgEntry = { pattern: "/usr/bin/python3", argPattern: "^\x00\x00$" };
+    const emptyArgEntry = { pattern: "/usr/bin/python3", argPattern: "^\x00$" };
+    const zeroArgEntries: ExecAllowlistEntry[] = [zeroArgEntry];
+    const emptyArgEntries: ExecAllowlistEntry[] = [emptyArgEntry];
     // Zero-arg command must match zero-arg pattern but not empty-string-arg pattern.
-    expect(matchAllowlist(zeroArgEntries, resolution, ["python3"])).toBeTruthy();
+    expect(matchAllowlist(zeroArgEntries, resolution, ["python3"])).toBe(zeroArgEntry);
     expect(matchAllowlist(emptyArgEntries, resolution, ["python3"])).toBeNull();
     // One-empty-string-arg command must match empty-string-arg pattern but not zero-arg pattern.
-    expect(matchAllowlist(emptyArgEntries, resolution, ["python3", ""])).toBeTruthy();
+    expect(matchAllowlist(emptyArgEntries, resolution, ["python3", ""])).toBe(emptyArgEntry);
     expect(matchAllowlist(zeroArgEntries, resolution, ["python3", ""])).toBeNull();
   });
 });
@@ -1012,7 +1244,8 @@ describe("Windows rebuildShellCommandFromSource", () => {
       platform: "win32",
     });
     expect(result.ok).toBe(true);
-    expect(result.command).toBeDefined();
+    expect(typeof result.command).toBe("string");
+    expect(result.command?.trim().length).toBeGreaterThan(0);
   });
 
   it("rejects Windows commands with unsafe tokens", () => {

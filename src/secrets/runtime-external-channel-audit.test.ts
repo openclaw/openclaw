@@ -39,7 +39,6 @@ import {
 const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
 
 const EXTERNALIZED_CHANNEL_IDS = [
-  "bluebubbles",
   "discord",
   "feishu",
   "googlechat",
@@ -128,20 +127,6 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
     const records = configureExternalChannelRecords();
     const config = asConfig({
       channels: {
-        bluebubbles: {
-          serverUrl: "http://127.0.0.1:1234",
-          password: ref("BLUEBUBBLES_PASSWORD"),
-          accounts: {
-            inherited: {
-              enabled: true,
-            },
-            work: {
-              enabled: true,
-              serverUrl: "http://127.0.0.1:1235",
-              password: ref("BLUEBUBBLES_WORK_PASSWORD"),
-            },
-          },
-        },
         discord: {
           token: ref("DISCORD_TOKEN"),
           pluralkit: {
@@ -248,8 +233,6 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config,
       env: {
-        BLUEBUBBLES_PASSWORD: "bluebubbles-password",
-        BLUEBUBBLES_WORK_PASSWORD: "bluebubbles-work-password",
         DISCORD_TOKEN: "discord-token",
         DISCORD_PLURALKIT_TOKEN: "discord-pluralkit-token",
         DISCORD_VOICE_TTS_API_KEY: "discord-voice-tts-api-key",
@@ -279,8 +262,6 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
     });
 
     expectResolvedPaths(snapshot.config, {
-      "channels.bluebubbles.password": "bluebubbles-password",
-      "channels.bluebubbles.accounts.work.password": "bluebubbles-work-password",
       "channels.discord.token": "discord-token",
       "channels.discord.pluralkit.token": "discord-pluralkit-token",
       "channels.discord.voice.tts.providers.openai.apiKey": "discord-voice-tts-api-key",
@@ -306,7 +287,7 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
       "channels.zalo.accounts.work.botToken": "zalo-work-bot-token",
       "channels.zalo.accounts.work.webhookSecret": "zalo-work-webhook-secret",
     });
-    expect(snapshot.warnings).toEqual([]);
+    expect(snapshot.warnings).toStrictEqual([]);
     expectMetadataBackedContractsWereUsed();
   });
 
@@ -314,16 +295,6 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
     const records = configureExternalChannelRecords();
     const config = asConfig({
       channels: {
-        bluebubbles: {
-          enabled: false,
-          password: inactiveExecRef("BLUEBUBBLES_DISABLED_PASSWORD"),
-          accounts: {
-            disabled: {
-              enabled: false,
-              password: inactiveExecRef("BLUEBUBBLES_DISABLED_ACCOUNT_PASSWORD"),
-            },
-          },
-        },
         discord: {
           enabled: false,
           token: inactiveExecRef("DISCORD_DISABLED_TOKEN"),
@@ -433,35 +404,31 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
     expect(
       getPath(snapshot.config, ["channels", "zalo", "accounts", "disabled", "botToken"]),
     ).toEqual(inactiveExecRef("ZALO_DISABLED_ACCOUNT_BOT_TOKEN"));
-    expect(snapshot.warnings.map((warning) => warning.path)).toEqual(
-      expect.arrayContaining([
-        "channels.bluebubbles.password",
-        "channels.bluebubbles.accounts.disabled.password",
-        "channels.discord.token",
-        "channels.discord.pluralkit.token",
-        "channels.discord.voice.tts.providers.openai.apiKey",
-        "channels.discord.accounts.disabled.token",
-        "channels.discord.accounts.disabled.pluralkit.token",
-        "channels.discord.accounts.disabled.voice.tts.providers.openai.apiKey",
-        "channels.feishu.appSecret",
-        "channels.feishu.encryptKey",
-        "channels.feishu.verificationToken",
-        "channels.feishu.accounts.disabled.appSecret",
-        "channels.feishu.accounts.disabled.encryptKey",
-        "channels.feishu.accounts.disabled.verificationToken",
-        "channels.googlechat.serviceAccount",
-        "channels.googlechat.accounts.disabled.serviceAccount",
-        "channels.msteams.appPassword",
-        "channels.nextcloud-talk.botSecret",
-        "channels.nextcloud-talk.apiPassword",
-        "channels.nextcloud-talk.accounts.disabled.botSecret",
-        "channels.nextcloud-talk.accounts.disabled.apiPassword",
-        "channels.zalo.botToken",
-        "channels.zalo.webhookSecret",
-        "channels.zalo.accounts.disabled.botToken",
-        "channels.zalo.accounts.disabled.webhookSecret",
-      ]),
-    );
+    expect(snapshot.warnings.map((warning) => warning.path)).toStrictEqual([
+      "channels.discord.token",
+      "channels.discord.accounts.disabled.token",
+      "channels.discord.pluralkit.token",
+      "channels.discord.accounts.disabled.pluralkit.token",
+      "channels.discord.voice.tts.providers.openai.apiKey",
+      "channels.discord.accounts.disabled.voice.tts.providers.openai.apiKey",
+      "channels.feishu.appSecret",
+      "channels.feishu.accounts.disabled.appSecret",
+      "channels.feishu.encryptKey",
+      "channels.feishu.accounts.disabled.encryptKey",
+      "channels.feishu.verificationToken",
+      "channels.feishu.accounts.disabled.verificationToken",
+      "channels.googlechat.serviceAccount",
+      "channels.googlechat.accounts.disabled.serviceAccount",
+      "channels.msteams.appPassword",
+      "channels.nextcloud-talk.botSecret",
+      "channels.nextcloud-talk.accounts.disabled.botSecret",
+      "channels.nextcloud-talk.apiPassword",
+      "channels.nextcloud-talk.accounts.disabled.apiPassword",
+      "channels.zalo.botToken",
+      "channels.zalo.accounts.disabled.botToken",
+      "channels.zalo.webhookSecret",
+      "channels.zalo.accounts.disabled.webhookSecret",
+    ]);
     expectMetadataBackedContractsWereUsed();
   });
 });

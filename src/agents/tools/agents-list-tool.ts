@@ -5,8 +5,10 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
-import { resolveAgentRuntimeMetadata } from "../agent-runtime-metadata.js";
+import { resolveModelAgentRuntimeMetadata } from "../agent-runtime-metadata.js";
+import { listAgentIds } from "../agent-scope-config.js";
 import { resolveAgentConfig, resolveAgentEffectiveModelPrimary } from "../agent-scope.js";
+import { resolveDefaultModelForAgent } from "../model-selection.js";
 import { resolveSubagentAllowedTargetIds } from "../subagent-target-policy.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult } from "./common.js";
@@ -21,7 +23,7 @@ type AgentListEntry = {
   model?: string;
   agentRuntime?: {
     id: string;
-    source: "env" | "agent" | "defaults" | "implicit";
+    source: "env" | "agent" | "defaults" | "model" | "provider" | "implicit" | "session-key";
   };
 };
 
@@ -33,8 +35,7 @@ export function createAgentsListTool(opts?: {
   return {
     label: "Agents",
     name: "agents_list",
-    description:
-      'List OpenClaw agent ids you can target with `sessions_spawn` when `runtime="subagent"` (based on subagent allowlists).',
+    description: 'List agent ids allowed for `sessions_spawn runtime="subagent"`.',
     parameters: AgentsListToolSchema,
     execute: async () => {
       const cfg = getRuntimeConfig();
@@ -58,7 +59,7 @@ export function createAgentsListTool(opts?: {
         cfg?.agents?.defaults?.subagents?.allowAgents;
 
       const configuredAgents = Array.isArray(cfg.agents?.list) ? cfg.agents?.list : [];
-      const configuredIds = configuredAgents.map((entry) => normalizeAgentId(entry.id));
+      const configuredIds = listAgentIds(cfg);
       const configuredNameMap = new Map<string, string>();
       for (const entry of configuredAgents) {
         const name = entry?.name?.trim() ?? "";
@@ -79,12 +80,19 @@ export function createAgentsListTool(opts?: {
         .toSorted((a, b) => a.localeCompare(b));
       const ordered = all.includes(requesterAgentId) ? [requesterAgentId, ...rest] : rest;
       const agents: AgentListEntry[] = ordered.map((id) => {
-        const agentRuntime = resolveAgentRuntimeMetadata(cfg, id);
+        const model = resolveAgentEffectiveModelPrimary(cfg, id);
+        const resolvedModel = resolveDefaultModelForAgent({ cfg, agentId: id });
+        const agentRuntime = resolveModelAgentRuntimeMetadata({
+          cfg,
+          agentId: id,
+          provider: resolvedModel.provider,
+          model: resolvedModel.model,
+        });
         return {
           id,
           name: configuredNameMap.get(id),
           configured: configuredIds.includes(id),
-          model: resolveAgentEffectiveModelPrimary(cfg, id),
+          model,
           agentRuntime,
         };
       });

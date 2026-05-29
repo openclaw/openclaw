@@ -1,3 +1,4 @@
+import { getRuntimeConfig } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
 import {
   generateImage as generateRuntimeImage,
@@ -12,6 +13,7 @@ import {
   createLazyRuntimeMethod,
   createLazyRuntimeMethodBinder,
   createLazyRuntimeModule,
+  createLazyRuntimeSurface,
 } from "../../shared/lazy-runtime.js";
 import { VERSION } from "../../version.js";
 import {
@@ -19,12 +21,7 @@ import {
   listRuntimeVideoGenerationProviders,
 } from "../../video-generation/runtime.js";
 import { listWebSearchProviders, runWebSearch } from "../../web-search/runtime.js";
-import {
-  gatewaySubagentState,
-  setGatewayNodesRuntime,
-  setGatewaySubagentRuntime,
-  clearGatewaySubagentRuntime,
-} from "./gateway-bindings.js";
+import { gatewaySubagentState } from "./gateway-bindings.js";
 import { createRuntimeAgent } from "./runtime-agent.js";
 import { defineCachedValue } from "./runtime-cache.js";
 import { createRuntimeChannel } from "./runtime-channel.js";
@@ -72,6 +69,9 @@ function createRuntimeMediaUnderstandingFacade(): PluginRuntime["mediaUnderstand
     describeImageFileWithModel: bindMediaUnderstandingRuntime(
       (runtime) => runtime.describeImageFileWithModel,
     ),
+    extractStructuredWithModel: bindMediaUnderstandingRuntime(
+      (runtime) => runtime.extractStructuredWithModel,
+    ),
     describeVideoFile: bindMediaUnderstandingRuntime((runtime) => runtime.describeVideoFile),
     transcribeAudioFile: bindMediaUnderstandingRuntime((runtime) => runtime.transcribeAudioFile),
   };
@@ -95,6 +95,25 @@ function createRuntimeMusicGeneration(): PluginRuntime["musicGeneration"] {
   return {
     generate: (params) => generateRuntimeMusic(params),
     listProviders: (params) => listRuntimeMusicGenerationProviders(params),
+  };
+}
+
+function createRuntimeLlmFacade(): PluginRuntime["llm"] {
+  const loadLlm = createLazyRuntimeSurface(
+    () => import("./runtime-llm.runtime.js"),
+    (m) =>
+      m.createRuntimeLlm({
+        getConfig: getRuntimeConfig,
+        authority: {
+          allowComplete: true,
+        },
+      }),
+  );
+  return {
+    complete: async (params) => {
+      const llm = await loadLlm();
+      return llm.complete(params);
+    },
   };
 }
 
@@ -246,6 +265,7 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     | "imageGeneration"
     | "videoGeneration"
     | "musicGeneration"
+    | "llm"
   > &
     Partial<
       Pick<
@@ -257,6 +277,7 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
         | "imageGeneration"
         | "videoGeneration"
         | "musicGeneration"
+        | "llm"
       >
     >;
 
@@ -269,6 +290,7 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
   defineCachedValue(runtime, "imageGeneration", createRuntimeImageGeneration);
   defineCachedValue(runtime, "videoGeneration", createRuntimeVideoGeneration);
   defineCachedValue(runtime, "musicGeneration", createRuntimeMusicGeneration);
+  defineCachedValue(runtime, "llm", createRuntimeLlmFacade);
 
   return runtime as unknown as PluginRuntime;
 }

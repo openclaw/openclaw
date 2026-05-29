@@ -54,6 +54,18 @@ describe("applyAgentDefaultPrimaryModel", () => {
     expect(result.changed).toBe(false);
     expect(result.next).toBe(cfg);
   });
+
+  it("normalizes retired Google Gemini primary models before writing config", () => {
+    const cfg = { agents: { defaults: {} } } as OpenClawConfig;
+    const result = applyAgentDefaultPrimaryModel({
+      cfg,
+      model: "google/gemini-3-pro-preview",
+    });
+    expect(result.changed).toBe(true);
+    expect(result.next.agents?.defaults?.model).toEqual({
+      primary: "google/gemini-3.1-pro-preview",
+    });
+  });
 });
 
 describe("cleanup path removals", () => {
@@ -82,12 +94,10 @@ describe("cleanup path removals", () => {
       { dryRun: true },
     );
 
-    const joinedLogs = runtime.log.mock.calls
-      .map(([line]) => line.replaceAll("\\", "/"))
-      .join("\n");
-    expect(joinedLogs).toContain("/tmp/openclaw-cleanup/state");
-    expect(joinedLogs).toContain("/tmp/openclaw-cleanup/oauth");
-    expect(joinedLogs).not.toContain("openclaw.json");
+    expect(runtime.log.mock.calls.map(([line]) => line.replaceAll("\\", "/"))).toEqual([
+      "[dry-run] remove /tmp/openclaw-cleanup/state",
+      "[dry-run] remove /tmp/openclaw-cleanup/oauth",
+    ]);
   });
 
   it("removes every workspace directory", async () => {
@@ -97,7 +107,9 @@ describe("cleanup path removals", () => {
     await removeWorkspaceDirs(workspaces, runtime, { dryRun: true });
 
     const logs = runtime.log.mock.calls.map(([line]) => line);
-    expect(logs).toContain("[dry-run] remove /tmp/openclaw-workspace-1");
-    expect(logs).toContain("[dry-run] remove /tmp/openclaw-workspace-2");
+    expect(logs).toEqual([
+      "[dry-run] remove /tmp/openclaw-workspace-1",
+      "[dry-run] remove /tmp/openclaw-workspace-2",
+    ]);
   });
 });

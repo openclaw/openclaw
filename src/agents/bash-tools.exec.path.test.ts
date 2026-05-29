@@ -118,11 +118,16 @@ const normalizeText = (value?: string) =>
     .replace(/\r/g, "\n")
     .trim();
 
-const normalizePathEntries = (value?: string) =>
-  normalizeText(value)
-    .split(/[:\s]+/)
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+function normalizePathEntries(value?: string): string[] {
+  const entries: string[] = [];
+  for (const entry of normalizeText(value).split(/[:\s]+/)) {
+    const normalized = entry.trim();
+    if (normalized.length > 0) {
+      entries.push(normalized);
+    }
+  }
+  return entries;
+}
 
 describe("exec PATH login shell merge", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
@@ -245,12 +250,9 @@ describe("exec PATH login shell merge", () => {
 
       expect(entries).toEqual(["/usr/bin"]);
       expect(shellPathMock).toHaveBeenCalledTimes(1);
-      expect(shellPathMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          env: process.env,
-          timeoutMs: 1234,
-        }),
-      );
+      const shellPathCall = shellPathMock.mock.calls.at(0)?.[0];
+      expect(shellPathCall?.env).toBe(process.env);
+      expect(shellPathCall?.timeoutMs).toBe(1234);
     } finally {
       fs.rmSync(shellDir, { recursive: true, force: true });
     }

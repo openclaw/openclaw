@@ -3,12 +3,15 @@ import {
   resolveDefaultAgentId,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
+import { resolveCliRuntimeModelBackendBinding } from "../../agents/cli-backends.js";
+import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
-import { listLegacyRuntimeModelProviderAliases } from "../../agents/model-runtime-aliases.js";
 import { normalizeProviderId, type ModelAliasIndex } from "../../agents/model-selection.js";
+import { resolveContextConfigProviderForRuntime } from "../../agents/openai-codex-routing.js";
 import { updateSessionStore } from "../../config/sessions/store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { triggerSessionPatchHook } from "../../gateway/session-patch-hooks.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { applyTraceOverride, applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
@@ -16,8 +19,7 @@ import { isThinkingLevelSupported, resolveSupportedThinkingLevel } from "../thin
 import { resolveModelSelectionFromDirective } from "./directive-handling.model-selection.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import {
-  canPersistInternalExecDirective,
-  canPersistInternalVerboseDirective,
+  canPersistSessionDirectiveDefaults,
   enqueueModeSwitchEvents,
 } from "./directive-handling.shared.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel } from "./directives.js";
@@ -35,6 +37,7 @@ const MODEL_RUNTIME_CLEAR_VALUES = new Set(["auto", "default"]);
 function resolveModelRuntimeOverride(params: {
   rawRuntime?: string;
   provider: string;
+  cfg: OpenClawConfig;
 }):
   | { kind: "clear" }
   | { kind: "set"; runtime: string }
@@ -49,45 +52,24 @@ function resolveModelRuntimeOverride(params: {
   if (MODEL_RUNTIME_CLEAR_VALUES.has(runtime)) {
     return { kind: "clear" };
   }
-  if (runtime === "pi") {
-    return { kind: "set", runtime: "pi" };
+  if (runtime === "openclaw") {
+    return { kind: "set", runtime: "openclaw" };
+  }
+  if (normalizeProviderId(params.provider) === "openai" && runtime === "codex") {
+    return { kind: "set", runtime: "codex" };
   }
 
   const provider = normalizeProviderId(params.provider);
-  for (const alias of listLegacyRuntimeModelProviderAliases()) {
-    if (normalizeProviderId(alias.provider) !== provider) {
-      continue;
-    }
-    const aliasRuntime = normalizeProviderId(alias.runtime);
-    if (runtime === aliasRuntime || (aliasRuntime === "codex" && runtime === "codex-app-server")) {
-      return { kind: "set", runtime: alias.runtime };
-    }
+  const backend = resolveCliRuntimeModelBackendBinding({
+    config: params.cfg,
+    provider,
+    runtime,
+  });
+  if (backend) {
+    return { kind: "set", runtime: backend.runtime };
   }
 
   return { kind: "invalid", runtime: rawRuntime };
-}
-
-function resolveContextConfigProviderForRuntime(params: {
-  provider: string;
-  runtimeId?: string;
-}): string {
-  const provider = normalizeProviderId(params.provider);
-  const runtimeId = normalizeProviderId(params.runtimeId ?? "");
-  if (provider === "openai" && runtimeId === "codex") {
-    return "openai-codex";
-  }
-  return params.provider;
-}
-
-function resolveDirectiveRuntimeId(params: {
-  agentCfg: NonNullable<OpenClawConfig["agents"]>["defaults"] | undefined;
-  sessionEntry?: SessionEntry;
-}): string | undefined {
-  return (
-    params.sessionEntry?.agentRuntimeOverride ??
-    params.sessionEntry?.agentHarnessId ??
-    params.agentCfg?.agentRuntime?.id
-  );
 }
 
 export async function persistInlineDirectives(params: {
@@ -113,6 +95,7 @@ export async function persistInlineDirectives(params: {
   messageProvider?: string;
   surface?: string;
   gatewayClientScopes?: string[];
+  commandAuthorized?: boolean;
   senderIsOwner?: boolean;
   markLiveSwitchPending?: boolean;
   thinkingCatalog?: ModelCatalogEntry[];
@@ -141,15 +124,19 @@ export async function persistInlineDirectives(params: {
   } = params;
   let { provider, model } = params;
   let thinkingRemap: PersistedThinkingLevelRemap | undefined;
-  const allowInternalExecPersistence = canPersistInternalExecDirective({
+  const allowInternalExecPersistence = canPersistSessionDirectiveDefaults({
     messageProvider: params.messageProvider,
     surface: params.surface,
     gatewayClientScopes: params.gatewayClientScopes,
+    commandAuthorized: params.commandAuthorized,
+    senderIsOwner: params.senderIsOwner,
   });
-  const allowInternalVerbosePersistence = canPersistInternalVerboseDirective({
+  const allowInternalVerbosePersistence = canPersistSessionDirectiveDefaults({
     messageProvider: params.messageProvider,
     surface: params.surface,
     gatewayClientScopes: params.gatewayClientScopes,
+    commandAuthorized: params.commandAuthorized,
+    senderIsOwner: params.senderIsOwner,
   });
   const thinkingCatalog =
     params.thinkingCatalog && params.thinkingCatalog.length > 0
@@ -176,9 +163,20 @@ export async function persistInlineDirectives(params: {
       directives.hasReasoningDirective && directives.reasoningLevel !== undefined;
     let updated = false;
 
-    if (directives.hasThinkDirective && directives.thinkLevel) {
+    if (directives.clearThinkLevel) {
+      if (sessionEntry.thinkingLevel) {
+        delete sessionEntry.thinkingLevel;
+        updated = true;
+      }
+    } else if (directives.hasThinkDirective && directives.thinkLevel) {
       sessionEntry.thinkingLevel = directives.thinkLevel;
       updated = true;
+    }
+    if (directives.clearFastMode) {
+      if (sessionEntry.fastMode !== undefined) {
+        delete sessionEntry.fastMode;
+        updated = true;
+      }
     }
     if (
       directives.hasVerboseDirective &&
@@ -245,6 +243,7 @@ export async function persistInlineDirectives(params: {
       directives.hasModelDirective && params.effectiveModelDirective
         ? params.effectiveModelDirective
         : undefined;
+    let modelUpdated = false;
     if (modelDirective) {
       const modelResolution = resolveModelSelectionFromDirective({
         directives: {
@@ -262,7 +261,7 @@ export async function persistInlineDirectives(params: {
         provider,
       });
       if (modelResolution.modelSelection) {
-        const { updated: modelUpdated } = applyModelOverrideToSessionEntry({
+        const appliedModelOverride = applyModelOverrideToSessionEntry({
           entry: sessionEntry,
           selection: modelResolution.modelSelection,
           profileOverride: modelResolution.profileOverride,
@@ -271,6 +270,7 @@ export async function persistInlineDirectives(params: {
         const runtimeOverride = resolveModelRuntimeOverride({
           rawRuntime: directives.rawModelRuntime,
           provider: modelResolution.modelSelection.provider,
+          cfg,
         });
         if (runtimeOverride?.kind === "clear") {
           if (sessionEntry.agentRuntimeOverride) {
@@ -278,11 +278,22 @@ export async function persistInlineDirectives(params: {
             updated = true;
           }
         } else if (runtimeOverride?.kind === "set") {
-          if (sessionEntry.agentRuntimeOverride !== runtimeOverride.runtime) {
-            sessionEntry.agentRuntimeOverride = runtimeOverride.runtime;
+          if (sessionEntry.agentRuntimeOverride) {
+            delete sessionEntry.agentRuntimeOverride;
             updated = true;
           }
+          enqueueSystemEvent(
+            `Ignored session runtime ${runtimeOverride.runtime}; configure provider or model runtime policy instead.`,
+            {
+              sessionKey,
+              contextKey: `model-runtime:${modelResolution.modelSelection.provider}:${runtimeOverride.runtime}:ignored-session-runtime`,
+            },
+          );
         } else if (runtimeOverride?.kind === "invalid") {
+          if (sessionEntry.agentRuntimeOverride) {
+            delete sessionEntry.agentRuntimeOverride;
+            updated = true;
+          }
           enqueueSystemEvent(
             `Ignored unsupported runtime ${runtimeOverride.runtime} for ${modelResolution.modelSelection.provider}.`,
             {
@@ -291,6 +302,7 @@ export async function persistInlineDirectives(params: {
             },
           );
         }
+        modelUpdated = appliedModelOverride.updated;
         provider = modelResolution.modelSelection.provider;
         model = modelResolution.modelSelection.model;
         const currentThinkingLevel = sessionEntry.thinkingLevel as ThinkLevel | undefined;
@@ -350,6 +362,14 @@ export async function persistInlineDirectives(params: {
           store[sessionKey] = sessionEntry;
         });
       }
+      if (modelDirective && modelUpdated) {
+        triggerSessionPatchHook({
+          cfg,
+          sessionEntry,
+          sessionKey,
+          patch: { key: sessionKey, model: modelDirective },
+        });
+      }
       enqueueModeSwitchEvents({
         enqueueSystemEvent,
         sessionEntry,
@@ -369,7 +389,13 @@ export async function persistInlineDirectives(params: {
       agentCfg,
       provider: resolveContextConfigProviderForRuntime({
         provider,
-        runtimeId: resolveDirectiveRuntimeId({ agentCfg, sessionEntry }),
+        runtimeId: resolveAgentHarnessPolicy({
+          provider,
+          modelId: model,
+          config: cfg,
+          agentId: activeAgentId,
+          sessionKey,
+        }).runtime,
       }),
       model,
     }),

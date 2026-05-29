@@ -105,6 +105,19 @@ function mockArchiveResponse(buffer: Uint8Array): void {
   });
 }
 
+function createCancelableBody() {
+  let canceled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new Uint8Array([1, 2, 3]));
+    },
+    cancel() {
+      canceled = true;
+    },
+  });
+  return { stream, wasCanceled: () => canceled };
+}
+
 function runCommandResult(params?: Partial<Record<"code" | "stdout" | "stderr", string | number>>) {
   return {
     code: 0,
@@ -166,18 +179,25 @@ beforeEach(() => {
 describe("installDownloadSpec extraction safety", () => {
   it("rejects targetDir escapes outside the per-skill tools root", async () => {
     const beforeFetchCalls = fetchWithSsrFGuardMock.mock.calls.length;
+    const entry = buildEntry("relative-traversal");
+    const toolsRoot = resolveSkillToolsRootDir(entry);
+    const escapedTargetDir = path.resolve(toolsRoot, "../outside");
 
-    const result = await installDownloadSkill({
-      name: "relative-traversal",
-      url: "https://example.invalid/good.zip",
-      archive: "zip",
-      targetDir: "../outside",
+    const result = await installDownloadSpec({
+      entry,
+      spec: buildDownloadSpec({
+        url: "https://example.invalid/good.zip",
+        archive: "zip",
+        targetDir: "../outside",
+      }),
+      timeoutMs: 30_000,
     });
 
     expect(result.ok).toBe(false);
     expect(result.stderr).toContain("Refusing to install outside the skill tools directory");
     expect(fetchWithSsrFGuardMock.mock.calls.length).toBe(beforeFetchCalls);
-    expect(stateDir.length).toBeGreaterThan(0);
+    await expect(fileExists(toolsRoot)).resolves.toBe(true);
+    await expect(fileExists(escapedTargetDir)).resolves.toBe(false);
   });
 
   it("allows relative targetDir inside the per-skill tools root", async () => {
@@ -202,6 +222,37 @@ describe("installDownloadSpec extraction safety", () => {
         "utf-8",
       ),
     ).toBe("payload");
+  });
+
+  it("cancels failed download response bodies before returning the error", async () => {
+    const { stream, wasCanceled } = createCancelableBody();
+    const release = vi.fn(async () => undefined);
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: {
+        ok: false,
+        status: 500,
+        statusText: "Server Error",
+        body: stream,
+      },
+      release,
+    });
+
+    const result = await installDownloadSpec({
+      entry: buildEntry("failed-download-body"),
+      spec: {
+        kind: "download",
+        id: "dl",
+        url: "https://example.invalid/broken.bin",
+        extract: false,
+        targetDir: "runtime",
+      },
+      timeoutMs: 30_000,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.stderr).toContain("Download failed (500 Server Error)");
+    expect(wasCanceled()).toBe(true);
+    expect(release).toHaveBeenCalledOnce();
   });
 
   it.runIf(process.platform !== "win32")(

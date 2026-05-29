@@ -1,4 +1,5 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { resolveOptionalIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import {
@@ -27,18 +28,10 @@ import {
   normalizeOptionalAccountId,
   ssrfPolicyFromDangerouslyAllowPrivateNetwork,
 } from "./config-runtime-api.js";
-import {
-  hasReadyMatrixEnvAuth,
-  resolveGlobalMatrixEnvConfig,
-  resolveMatrixEnvAuthReadiness,
-  resolveScopedMatrixEnvConfig,
-} from "./env-auth.js";
+import { resolveGlobalMatrixEnvConfig, resolveScopedMatrixEnvConfig } from "./env-auth.js";
 import { repairCurrentTokenStorageMetaDeviceId } from "./storage.js";
 import type { MatrixAuth, MatrixResolvedConfig } from "./types.js";
-import {
-  resolveValidatedMatrixHomeserverUrl,
-  validateMatrixHomeserverUrl,
-} from "./url-validation.js";
+import { resolveValidatedMatrixHomeserverUrl } from "./url-validation.js";
 
 type MatrixAuthClientDeps = {
   MatrixClient: typeof import("../sdk.js").MatrixClient;
@@ -420,7 +413,7 @@ function readMatrixAccountConfigField(
 }
 
 function clampMatrixInitialSyncLimit(value: unknown): number | undefined {
-  return typeof value === "number" ? Math.max(0, Math.floor(value)) : undefined;
+  return resolveOptionalIntegerOption(value, { min: 0 });
 }
 
 function buildMatrixNetworkFields(params: {

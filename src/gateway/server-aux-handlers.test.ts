@@ -61,6 +61,16 @@ async function invokeSecretsReload(params: {
   });
 }
 
+type RespondCall = [boolean, unknown, { message?: string } | undefined];
+
+function firstRespondCall(respond: ReturnType<typeof vi.fn>): RespondCall {
+  const call = respond.mock.calls[0];
+  if (!call) {
+    throw new Error("expected respond call");
+  }
+  return call as RespondCall;
+}
+
 // Other gateway test helpers (e.g. test-helpers.mocks.ts, test-helpers.server.ts)
 // set OPENCLAW_SKIP_CHANNELS / OPENCLAW_SKIP_PROVIDERS at module load. When a
 // shared vitest worker imports those helpers before this file's tests run,
@@ -273,10 +283,10 @@ describe("gateway aux handlers", () => {
     // The handler surfaces the partial-failure so the caller can retry/alert
     // instead of treating a swallowed restart error as a successful rotation.
     expect(respond.mock.calls).toHaveLength(1);
-    const [okFlag, successPayload, errorPayload] = respond.mock.calls[0];
+    const [okFlag, successPayload, errorPayload] = firstRespondCall(respond);
     expect(okFlag).toBe(false);
     expect(successPayload).toBeUndefined();
-    expect(String(errorPayload?.message ?? "")).toBe("secrets.reload failed");
+    expect(errorPayload?.message ?? "").toBe("secrets.reload failed");
     expect(getActiveSecretsRuntimeSnapshot()?.config).toEqual(
       asConfig({
         channels: {
@@ -343,19 +353,15 @@ describe("gateway aux handlers", () => {
     const rollbackLogs = logChannelsInfo.mock.calls
       .map(([msg]) => String(msg))
       .filter((msg) => msg.startsWith("rolling back "));
-    expect(rollbackLogs).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining("rolling back slack channel"),
-        expect.stringContaining("rolling back zalo channel"),
-      ]),
-    );
+    expect(rollbackLogs.toSorted((a, b) => a.localeCompare(b))).toEqual([
+      "rolling back slack channel after secrets reload failure",
+      "rolling back zalo channel after secrets reload failure",
+    ]);
     // startChannel was invoked for zalo on rollback even though the original
     // stopChannel(zalo) rejected.
-    expect(startChannel.mock.calls.map(([ch]) => ch)).toEqual(
-      expect.arrayContaining(["slack", "zalo"]),
-    );
+    expect(startChannel.mock.calls.map(([ch]) => ch)).toEqual(["slack", "slack", "zalo"]);
     expect(respond.mock.calls).toHaveLength(1);
-    expect(respond.mock.calls[0][0]).toBe(false);
+    expect(firstRespondCall(respond)[0]).toBe(false);
   });
 
   it("restores both current and required shared-gateway generation on reload failure", async () => {
@@ -407,7 +413,7 @@ describe("gateway aux handlers", () => {
     expect(sharedGatewaySessionGenerationState.current).toBe("gen-a");
     expect(sharedGatewaySessionGenerationState.required).toBe("gen-a");
     expect(respond.mock.calls).toHaveLength(1);
-    expect(respond.mock.calls[0][0]).toBe(false);
+    expect(firstRespondCall(respond)[0]).toBe(false);
   });
 
   it("fails reload when channel restarts are required but skip flags block them", async () => {
@@ -454,14 +460,16 @@ describe("gateway aux handlers", () => {
 
     expect(stopChannel).not.toHaveBeenCalled();
     expect(startChannel).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "UNAVAILABLE",
-        message: "secrets.reload failed",
-      }),
-    );
+    expect(respond.mock.calls).toEqual([
+      [
+        false,
+        undefined,
+        {
+          code: "UNAVAILABLE",
+          message: "secrets.reload failed",
+        },
+      ],
+    ]);
     expect(getActiveSecretsRuntimeSnapshot()?.config).toEqual(
       asConfig({
         channels: {

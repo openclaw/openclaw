@@ -26,7 +26,7 @@ export const REALTIME_VOICE_AGENT_CONSULT_TOOL: RealtimeVoiceTool = {
   type: "function",
   name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   description:
-    "Delegate the caller's request to the configured OpenClaw agent for normal tool-backed work, context, memory, or reasoning before speaking.",
+    "Delegate the caller's request to the configured OpenClaw agent for normal tool-backed work, actions, context, memory, or reasoning before speaking.",
   parameters: {
     type: "object",
     properties: {
@@ -111,6 +111,29 @@ export function resolveRealtimeVoiceAgentConsultToolsAllow(
     return [...SAFE_READ_ONLY_TOOLS];
   }
   return [];
+}
+
+export function buildRealtimeVoiceAgentConsultPolicyInstructions(config: {
+  toolPolicy: RealtimeVoiceAgentConsultToolPolicy;
+  consultPolicy?: "auto" | "substantive" | "always";
+}): string | undefined {
+  if (config.toolPolicy === "none" || !config.consultPolicy || config.consultPolicy === "auto") {
+    return undefined;
+  }
+  if (config.consultPolicy === "always") {
+    return [
+      "Consult behavior:",
+      "- Call openclaw_agent_consult before every substantive answer.",
+      "- You may answer directly only for greetings, acknowledgements, brief latency tests, or filler while waiting for the consult result.",
+      "- After the consult result arrives, speak that result concisely.",
+    ].join("\n");
+  }
+  return [
+    "Consult behavior:",
+    "- Answer directly for greetings, acknowledgements, simple conversational glue, and brief latency tests.",
+    "- Call openclaw_agent_consult before answering requests that need facts, memory, current information, tools, workspace state, or the user's OpenClaw-specific context.",
+    "- Keep spoken replies concise and natural.",
+  ].join("\n");
 }
 
 export function parseRealtimeVoiceAgentConsultArgs(args: unknown): RealtimeVoiceAgentConsultArgs {

@@ -1,4 +1,5 @@
-import type { FailoverReason } from "../agents/pi-embedded-helpers/types.js";
+import type { FailoverReason } from "../agents/embedded-agent-helpers/types.js";
+import type { EmbeddedAgentExecutionPhase } from "../agents/embedded-agent-runner/execution-phase.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { HookExternalContentSource } from "../security/external-content.js";
 import type { CronJobBase } from "./types-shared.js";
@@ -69,6 +70,13 @@ export type CronDeliveryTrace = {
   delivered?: boolean;
 };
 
+export type CronFailureNotificationDelivery = {
+  /** Whether the last failed run's failure notification reached the target channel. */
+  delivered?: boolean;
+  status: CronDeliveryStatus;
+  error?: string;
+};
+
 export type CronDeliveryPreview = {
   label: string;
   detail: string;
@@ -125,11 +133,27 @@ export type CronRunOutcome = {
   diagnostics?: CronRunDiagnostics;
 };
 
+export type CronAgentExecutionPhase = EmbeddedAgentExecutionPhase;
+
 export type CronAgentExecutionStarted = {
   jobId: string;
   agentId?: string;
   sessionId?: string;
   sessionKey?: string;
+  phase?: CronAgentExecutionPhase;
+  provider?: string;
+  model?: string;
+  backend?: string;
+  source?: string;
+  tool?: string;
+  toolCallId?: string;
+  itemId?: string;
+  /** @deprecated Use phase-specific execution milestones for watchdog progress. */
+  firstModelCallStarted?: boolean;
+};
+
+export type CronAgentExecutionPhaseUpdate = CronAgentExecutionStarted & {
+  phase: CronAgentExecutionPhase;
 };
 
 export type CronFailureAlert = {
@@ -203,6 +227,12 @@ export type CronJobState = {
   lastDeliveryError?: string;
   /** Whether the last run's output was delivered to the target channel. */
   lastDelivered?: boolean;
+  /** Whether the last failed run's failure notification was delivered to the target channel. */
+  lastFailureNotificationDelivered?: boolean;
+  /** Delivery outcome for the last failed run's failure notification. */
+  lastFailureNotificationDeliveryStatus?: CronDeliveryStatus;
+  /** Delivery-specific error for the last failed run's failure notification. */
+  lastFailureNotificationDeliveryError?: string;
 };
 
 export type CronJob = CronJobBase<

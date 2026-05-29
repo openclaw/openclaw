@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import type {
   RealtimeVoiceBridge,
@@ -36,12 +37,14 @@ export type RealtimeVoiceBridgeSession = {
 
 export type RealtimeVoiceBridgeSessionParams = {
   provider: RealtimeVoiceProviderPlugin;
+  cfg?: OpenClawConfig;
   providerConfig: RealtimeVoiceProviderConfig;
   audioFormat?: RealtimeVoiceAudioFormat;
   audioSink: RealtimeVoiceAudioSink;
   instructions?: string;
   initialGreetingInstructions?: string;
   autoRespondToAudio?: boolean;
+  interruptResponseOnInputAudio?: boolean;
   markStrategy?: RealtimeVoiceMarkStrategy;
   triggerGreetingOnReady?: boolean;
   tools?: RealtimeVoiceTool[];
@@ -80,10 +83,12 @@ export function createRealtimeVoiceBridgeSession(
   };
   const canSendAudio = () => params.audioSink.isOpen?.() ?? true;
   bridge = params.provider.createBridge({
+    cfg: params.cfg,
     providerConfig: params.providerConfig,
     audioFormat: params.audioFormat,
     instructions: params.instructions,
     autoRespondToAudio: params.autoRespondToAudio,
+    interruptResponseOnInputAudio: params.interruptResponseOnInputAudio,
     tools: params.tools,
     onAudio: (audio) => {
       if (canSendAudio()) {

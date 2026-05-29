@@ -14,6 +14,19 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
   return { ...original, fetchWithSsrFGuard: mockFetchGuard };
 });
 
+function requireFirstFetchCall() {
+  const [call] = mockFetchGuard.mock.calls;
+  if (!call) {
+    throw new Error("expected Mattermost probe fetch call");
+  }
+  return call[0] as {
+    url?: string;
+    init?: { headers?: unknown; signal?: unknown };
+    auditContext?: string;
+    policy?: unknown;
+  };
+}
+
 describe("probeMattermost", () => {
   beforeEach(() => {
     mockFetchGuard.mockReset();
@@ -43,22 +56,19 @@ describe("probeMattermost", () => {
 
     const result = await probeMattermost("https://mm.example.com/api/v4/", "bot-token");
 
-    expect(mockFetchGuard).toHaveBeenCalledWith({
-      url: "https://mm.example.com/api/v4/users/me",
-      init: expect.objectContaining({
-        headers: { Authorization: "Bearer bot-token" },
-      }),
-      auditContext: "mattermost-probe",
-      policy: undefined,
+    const fetchCall = requireFirstFetchCall();
+    expect(fetchCall?.url).toBe("https://mm.example.com/api/v4/users/me");
+    expect(fetchCall?.init?.headers).toStrictEqual({ Authorization: "Bearer bot-token" });
+    expect(fetchCall?.init?.signal).toBeInstanceOf(AbortSignal);
+    expect(fetchCall?.auditContext).toBe("mattermost-probe");
+    expect(fetchCall?.policy).toBeUndefined();
+    const { elapsedMs, ...stableResult } = result;
+    expect(stableResult).toStrictEqual({
+      ok: true,
+      status: 200,
+      bot: { id: "bot-1", username: "clawbot" },
     });
-    expect(result).toEqual(
-      expect.objectContaining({
-        ok: true,
-        status: 200,
-        bot: { id: "bot-1", username: "clawbot" },
-      }),
-    );
-    expect(result.elapsedMs).toBeGreaterThanOrEqual(0);
+    expect(elapsedMs).toBeGreaterThanOrEqual(0);
     expect(mockRelease).toHaveBeenCalledTimes(1);
   });
 
@@ -73,11 +83,8 @@ describe("probeMattermost", () => {
 
     await probeMattermost("https://mm.example.com", "bot-token", 2500, true);
 
-    expect(mockFetchGuard).toHaveBeenCalledWith(
-      expect.objectContaining({
-        policy: { allowPrivateNetwork: true },
-      }),
-    );
+    const fetchCall = requireFirstFetchCall();
+    expect(fetchCall?.policy).toStrictEqual({ allowPrivateNetwork: true });
   });
 
   it("returns API error details from JSON response", async () => {
@@ -90,13 +97,14 @@ describe("probeMattermost", () => {
       release: mockRelease,
     });
 
-    await expect(probeMattermost("https://mm.example.com", "bad-token")).resolves.toEqual(
-      expect.objectContaining({
-        ok: false,
-        status: 401,
-        error: "invalid auth token",
-      }),
-    );
+    const result = await probeMattermost("https://mm.example.com", "bad-token");
+    const { elapsedMs, ...stableResult } = result;
+    expect(stableResult).toStrictEqual({
+      ok: false,
+      status: 401,
+      error: "invalid auth token",
+    });
+    expect(elapsedMs).toBeGreaterThanOrEqual(0);
     expect(mockRelease).toHaveBeenCalledTimes(1);
   });
 
@@ -110,25 +118,27 @@ describe("probeMattermost", () => {
       release: mockRelease,
     });
 
-    await expect(probeMattermost("https://mm.example.com", "token")).resolves.toEqual(
-      expect.objectContaining({
-        ok: false,
-        status: 403,
-        error: "Forbidden",
-      }),
-    );
+    const result = await probeMattermost("https://mm.example.com", "token");
+    const { elapsedMs, ...stableResult } = result;
+    expect(stableResult).toStrictEqual({
+      ok: false,
+      status: 403,
+      error: "Forbidden",
+    });
+    expect(elapsedMs).toBeGreaterThanOrEqual(0);
     expect(mockRelease).toHaveBeenCalledTimes(1);
   });
 
   it("returns fetch error when request throws", async () => {
     mockFetchGuard.mockRejectedValueOnce(new Error("network down"));
 
-    await expect(probeMattermost("https://mm.example.com", "token")).resolves.toEqual(
-      expect.objectContaining({
-        ok: false,
-        status: null,
-        error: "network down",
-      }),
-    );
+    const result = await probeMattermost("https://mm.example.com", "token");
+    const { elapsedMs, ...stableResult } = result;
+    expect(stableResult).toStrictEqual({
+      ok: false,
+      status: null,
+      error: "network down",
+    });
+    expect(elapsedMs).toBeGreaterThanOrEqual(0);
   });
 });

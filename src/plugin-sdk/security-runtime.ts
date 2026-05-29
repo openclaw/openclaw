@@ -1,4 +1,7 @@
-// Public security/policy helpers for plugins that need shared trust and DM gating logic.
+/**
+ * @deprecated Broad public SDK barrel. Prefer focused security/SSRF/secret
+ * subpaths and avoid adding new imports here.
+ */
 
 import { root as fsRoot, type OpenResult } from "../infra/fs-safe.js";
 
@@ -8,13 +11,16 @@ export * from "../secrets/shared.js";
 export type * from "../secrets/target-registry-types.js";
 export * from "../security/channel-metadata.js";
 export * from "../security/context-visibility.js";
-export * from "../security/dm-policy-shared.js";
+export * from "./channel-access-compat.js";
 export {
   ACCESS_GROUP_ALLOW_FROM_PREFIX,
   expandAllowFromWithAccessGroups,
   parseAccessGroupAllowFromEntry,
   resolveAccessGroupAllowFromMatches,
+  resolveAccessGroupAllowFromState,
   type AccessGroupMembershipResolver,
+  type AccessGroupMembershipLookup,
+  type ResolvedAccessGroupAllowFromState,
 } from "./access-groups.js";
 export * from "../security/external-content.js";
 export * from "../security/safe-regex.js";
@@ -31,6 +37,7 @@ export {
   readRegularFileSync,
   resolveRegularFileAppendFlags,
   root,
+  statRegularFile,
   statRegularFileSync,
   writeExternalFileWithinRoot,
   withTimeout,
@@ -83,10 +90,13 @@ export { isNotFoundPathError, isPathInside } from "../infra/path-guards.js";
 export {
   assertAbsolutePathInput,
   canonicalPathFromExistingAncestor,
+  ensureAbsoluteDirectory,
   findExistingAncestor,
   resolveAbsolutePathForRead,
   resolveAbsolutePathForWrite,
   type AbsolutePathSymlinkPolicy,
+  type EnsureAbsoluteDirectoryOptions,
+  type EnsureAbsoluteDirectoryResult,
   type ResolvedAbsolutePath,
   type ResolvedWritableAbsolutePath,
 } from "../infra/fs-safe.js";

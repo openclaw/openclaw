@@ -36,7 +36,7 @@ openclaw daemon uninstall
 
 - `status`: `--url`, `--token`, `--password`, `--timeout`, `--no-probe`, `--require-rpc`, `--deep`, `--json`
 - `install`: `--port`, `--runtime <node|bun>`, `--token`, `--force`, `--json`
-- `restart`: `--safe`, `--force`, `--wait <duration>`, `--json`
+- `restart`: `--safe`, `--skip-deferral`, `--force`, `--wait <duration>`, `--json`
 - lifecycle (`uninstall|start|stop`): `--json`
 
 Notes:
@@ -45,6 +45,7 @@ Notes:
 - If a required auth SecretRef is unresolved in this command path, `daemon status --json` reports `rpc.authWarning` when probe connectivity/auth fails; pass `--token`/`--password` explicitly or resolve the secret source first.
 - If the probe succeeds, unresolved auth-ref warnings are suppressed to avoid false positives.
 - `status --deep` adds a best-effort system-level service scan. When it finds other gateway-like services, human output prints cleanup hints and warns that one gateway per machine is still the normal recommendation.
+- `status --deep` also runs config validation in plugin-aware mode and surfaces configured plugin manifest warnings (for example missing channel config metadata) so install and update smoke checks catch them. Default `status` keeps the fast read-only path that skips plugin validation.
 - On Linux systemd installs, `status` token-drift checks include both `Environment=` and `EnvironmentFile=` unit sources.
 - Drift checks resolve `gateway.auth.token` SecretRefs using merged runtime env (service command env first, then process env fallback).
 - If token auth is not effectively active (explicit `gateway.auth.mode` of `password`/`none`/`trusted-proxy`, or mode unset where password can win and no token candidate can win), token-drift checks skip config token resolution.
@@ -54,6 +55,7 @@ Notes:
 - On macOS, `install` keeps LaunchAgent plists owner-only and loads managed service environment values through an owner-only file and wrapper instead of serializing API keys or auth-profile env refs into `EnvironmentVariables`.
 - If you intentionally run multiple gateways on one host, isolate ports, config/state, and workspaces; see [/gateway#multiple-gateways-same-host](/gateway#multiple-gateways-same-host).
 - `restart --safe` asks the running Gateway to preflight active work and schedule one coalesced restart after active work drains. Plain `restart` keeps the existing service-manager behavior; `--force` remains the immediate override path.
+- `restart --safe --skip-deferral` runs the OpenClaw-aware safe restart but bypasses the active-work deferral gate so the Gateway emits the restart immediately even when blockers are reported. Operator escape hatch when a stuck task run pins the safe restart; requires `--safe`.
 
 ## Prefer
 

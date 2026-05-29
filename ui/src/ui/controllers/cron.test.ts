@@ -11,6 +11,7 @@ import {
   runCronJob,
   startCronEdit,
   startCronClone,
+  updateCronJobsFilter,
   validateCronForm,
   type CronState,
 } from "./cron.ts";
@@ -24,6 +25,8 @@ function createState(overrides: Partial<CronState> = {}): CronState {
     cronQuickCreateStep: "what",
     cronQuickCreateDraft: null,
     cronJobsLoadingMore: false,
+    cronJobsReloadPending: false,
+    cronJobsReloadPendingTableFilters: false,
     cronJobs: [],
     cronJobsTotal: 0,
     cronJobsHasMore: false,
@@ -58,6 +61,53 @@ function createState(overrides: Partial<CronState> = {}): CronState {
     ...overrides,
   };
 }
+
+function findRequestCall(
+  calls: ReadonlyArray<readonly [method: string, payload?: unknown]>,
+  method: string,
+): readonly [method: string, payload?: unknown] {
+  const call = calls.find(([callMethod]) => callMethod === method);
+  if (!call) {
+    throw new Error(`Expected ${method} request call`);
+  }
+  return call;
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label} to be a record`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
+  for (const [key, value] of Object.entries(fields)) {
+    expect(record[key]).toEqual(value);
+  }
+}
+
+function expectNestedRecordFields(
+  record: Record<string, unknown>,
+  key: string,
+  fields: Record<string, unknown>,
+) {
+  expectRecordFields(requireRecord(record[key], key), fields);
+}
+
+function requestPayload(call: readonly [method: string, payload?: unknown]) {
+  return requireRecord(call[1], `${call[0]} payload`);
+}
+
+function requestPatch(call: readonly [method: string, payload?: unknown]) {
+  return requireRecord(requestPayload(call).patch, `${call[0]} patch`);
+}
+
+type EmptyCronListResponse = {
+  jobs: [];
+  total: number;
+  hasMore: boolean;
+  nextOffset: null;
+};
 
 describe("cron controller", () => {
   it("loads model suggestions from the configured model view", async () => {
@@ -136,13 +186,17 @@ describe("cron controller", () => {
       },
     });
 
-    await addCronJob(state);
+    const saved = await addCronJob(state);
 
-    const addCall = request.mock.calls.find(([method]) => method === "cron.add");
-    expect(addCall).toBeDefined();
-    expect(addCall?.[1]).toMatchObject({
+    const addCall = findRequestCall(request.mock.calls, "cron.add");
+    expect(saved).toBe(true);
+    const payload = requestPayload(addCall);
+    expectRecordFields(payload, {
       name: "webhook job",
-      delivery: { mode: "webhook", to: "https://example.invalid/cron" },
+    });
+    expectNestedRecordFields(payload, "delivery", {
+      mode: "webhook",
+      to: "https://example.invalid/cron",
     });
   });
 
@@ -178,11 +232,14 @@ describe("cron controller", () => {
 
     await addCronJob(state);
 
-    const addCall = request.mock.calls.find(([method]) => method === "cron.add");
-    expect(addCall).toBeDefined();
-    expect(addCall?.[1]).toMatchObject({
+    const addCall = findRequestCall(request.mock.calls, "cron.add");
+    const payload = requestPayload(addCall);
+    expectRecordFields(payload, {
       sessionKey: "agent:ops:main",
-      delivery: { mode: "announce", accountId: "ops-bot" },
+    });
+    expectNestedRecordFields(payload, "delivery", {
+      mode: "announce",
+      accountId: "ops-bot",
     });
   });
 
@@ -218,13 +275,12 @@ describe("cron controller", () => {
 
     await addCronJob(state);
 
-    const addCall = request.mock.calls.find(([method]) => method === "cron.add");
-    expect(addCall).toBeDefined();
-    expect(addCall?.[1]).toMatchObject({
-      delivery: { mode: "announce" },
+    const addCall = findRequestCall(request.mock.calls, "cron.add");
+    expectRecordFields(requireRecord(requestPayload(addCall).delivery, "delivery"), {
+      mode: "announce",
     });
     expect(
-      (addCall?.[1] as { delivery?: { channel?: string } } | undefined)?.delivery?.channel,
+      (addCall[1] as { delivery?: { channel?: string } } | undefined)?.delivery?.channel,
     ).toBeUndefined();
   });
 
@@ -258,10 +314,10 @@ describe("cron controller", () => {
 
     await addCronJob(state);
 
-    const addCall = request.mock.calls.find(([method]) => method === "cron.add");
-    expect(addCall).toBeDefined();
-    expect(addCall?.[1]).toMatchObject({
-      payload: { kind: "agentTurn", lightContext: true },
+    const addCall = findRequestCall(request.mock.calls, "cron.add");
+    expectNestedRecordFields(requestPayload(addCall), "payload", {
+      kind: "agentTurn",
+      lightContext: true,
     });
   });
 
@@ -299,9 +355,8 @@ describe("cron controller", () => {
 
     await addCronJob(state);
 
-    const addCall = request.mock.calls.find(([method]) => method === "cron.add");
-    expect(addCall).toBeDefined();
-    expect((addCall?.[1] as { delivery?: unknown } | undefined)?.delivery).toEqual({
+    const addCall = findRequestCall(request.mock.calls, "cron.add");
+    expect((addCall[1] as { delivery?: unknown } | undefined)?.delivery).toEqual({
       mode: "none",
     });
   });
@@ -341,10 +396,9 @@ describe("cron controller", () => {
 
     await addCronJob(state);
 
-    const updateCall = request.mock.calls.find(([method]) => method === "cron.update");
-    expect(updateCall).toBeDefined();
+    const updateCall = findRequestCall(request.mock.calls, "cron.update");
     expect(
-      (updateCall?.[1] as { patch?: { delivery?: unknown } } | undefined)?.patch?.delivery,
+      (updateCall[1] as { patch?: { delivery?: unknown } } | undefined)?.patch?.delivery,
     ).toEqual({
       mode: "none",
     });
@@ -385,14 +439,13 @@ describe("cron controller", () => {
 
     await addCronJob(state);
 
-    const addCall = request.mock.calls.find(([method]) => method === "cron.add");
-    expect(addCall).toBeDefined();
-    expect(addCall?.[1]).toMatchObject({
+    const addCall = findRequestCall(request.mock.calls, "cron.add");
+    expectRecordFields(requestPayload(addCall), {
       name: "main job",
     });
     // Delivery is explicitly sent as { mode: "none" } to clear the announce delivery on the backend.
     // Previously this was sent as undefined, which left announce in place (bug #31075).
-    expect((addCall?.[1] as { delivery?: unknown } | undefined)?.delivery).toEqual({
+    expect((addCall[1] as { delivery?: unknown } | undefined)?.delivery).toEqual({
       mode: "none",
     });
     // After submit, form is reset to defaults (deliveryMode = "announce" from DEFAULT_CRON_FORM).
@@ -435,19 +488,18 @@ describe("cron controller", () => {
 
     await addCronJob(state);
 
-    const updateCall = request.mock.calls.find(([method]) => method === "cron.update");
-    expect(updateCall).toBeDefined();
-    expect(updateCall?.[1]).toMatchObject({
+    const updateCall = findRequestCall(request.mock.calls, "cron.update");
+    expectRecordFields(requestPayload(updateCall), {
       id: "job-1",
-      patch: {
-        name: "edited job",
-        description: "",
-        agentId: null,
-        deleteAfterRun: false,
-        schedule: { kind: "cron", expr: "0 8 * * *", staggerMs: 0 },
-        payload: { kind: "systemEvent", text: "updated" },
-        delivery: { mode: "none" },
-      },
+    });
+    expectRecordFields(requestPatch(updateCall), {
+      name: "edited job",
+      description: "",
+      agentId: null,
+      deleteAfterRun: false,
+      schedule: { kind: "cron", expr: "0 8 * * *", staggerMs: 0 },
+      payload: { kind: "systemEvent", text: "updated" },
+      delivery: { mode: "none" },
     });
     expect(state.cronEditingJobId).toBeNull();
   });
@@ -500,16 +552,13 @@ describe("cron controller", () => {
 
     await addCronJob(state);
 
-    const updateCall = request.mock.calls.find(([method]) => method === "cron.update");
-    expect(updateCall).toBeDefined();
-    expect(updateCall?.[1]).toMatchObject({
+    const updateCall = findRequestCall(request.mock.calls, "cron.update");
+    expectRecordFields(requestPayload(updateCall), {
       id: "job-clear-account-id",
-      patch: {
-        delivery: {
-          mode: "announce",
-          accountId: "",
-        },
-      },
+    });
+    expectRecordFields(requireRecord(requestPatch(updateCall).delivery, "delivery"), {
+      mode: "announce",
+      accountId: "",
     });
   });
 
@@ -584,16 +633,16 @@ describe("cron controller", () => {
     startCronEdit(state, job);
     await addCronJob(state);
 
-    const updateCall = request.mock.calls.find(([method]) => method === "cron.update");
-    expect(updateCall).toBeDefined();
-    expect(updateCall?.[1]).toMatchObject({
+    const updateCall = findRequestCall(request.mock.calls, "cron.update");
+    expectRecordFields(requestPayload(updateCall), {
       id: "job-implicit-delivery",
-      patch: {
-        delivery: { mode: "announce", to: "123" },
-      },
+    });
+    expectRecordFields(requireRecord(requestPatch(updateCall).delivery, "delivery"), {
+      mode: "announce",
+      to: "123",
     });
     expect(
-      (updateCall?.[1] as { patch?: { delivery?: { channel?: string } } } | undefined)?.patch
+      (updateCall[1] as { patch?: { delivery?: { channel?: string } } } | undefined)?.patch
         ?.delivery?.channel,
     ).toBeUndefined();
   });
@@ -633,10 +682,9 @@ describe("cron controller", () => {
     state.cronForm.deliveryChannel = "last";
     await addCronJob(state);
 
-    const updateCall = request.mock.calls.find(([method]) => method === "cron.update");
-    expect(updateCall).toBeDefined();
+    const updateCall = findRequestCall(request.mock.calls, "cron.update");
     expect(
-      (updateCall?.[1] as { patch?: { delivery?: { channel?: string } } } | undefined)?.patch
+      (updateCall[1] as { patch?: { delivery?: { channel?: string } } } | undefined)?.patch
         ?.delivery?.channel,
     ).toBe("last");
   });
@@ -675,20 +723,23 @@ describe("cron controller", () => {
 
     await addCronJob(state);
 
-    const updateCall = request.mock.calls.find(([method]) => method === "cron.update");
-    expect(updateCall).toBeDefined();
-    expect(updateCall?.[1]).toMatchObject({
+    const updateCall = findRequestCall(request.mock.calls, "cron.update");
+    expectRecordFields(requestPayload(updateCall), {
       id: "job-2",
-      patch: {
-        schedule: { kind: "cron", expr: "0 9 * * *", staggerMs: 30_000 },
-        payload: {
-          kind: "agentTurn",
-          message: "run it",
-          model: "opus",
-          thinking: "low",
-        },
-        delivery: { mode: "announce", bestEffort: true },
+    });
+    const patch = requestPatch(updateCall);
+    expectRecordFields(patch, {
+      schedule: { kind: "cron", expr: "0 9 * * *", staggerMs: 30_000 },
+      payload: {
+        kind: "agentTurn",
+        message: "run it",
+        model: "opus",
+        thinking: "low",
       },
+    });
+    expectNestedRecordFields(patch, "delivery", {
+      mode: "announce",
+      bestEffort: true,
     });
   });
 
@@ -735,16 +786,13 @@ describe("cron controller", () => {
 
     await addCronJob(state);
 
-    const updateCall = request.mock.calls.find(([method]) => method === "cron.update");
-    expect(updateCall).toBeDefined();
-    expect(updateCall?.[1]).toMatchObject({
+    const updateCall = findRequestCall(request.mock.calls, "cron.update");
+    expectRecordFields(requestPayload(updateCall), {
       id: "job-clear-light",
-      patch: {
-        payload: {
-          kind: "agentTurn",
-          lightContext: false,
-        },
-      },
+    });
+    expectRecordFields(requireRecord(requestPatch(updateCall).payload, "payload"), {
+      kind: "agentTurn",
+      lightContext: false,
     });
   });
 
@@ -779,20 +827,17 @@ describe("cron controller", () => {
 
     await addCronJob(state);
 
-    const updateCall = request.mock.calls.find(([method]) => method === "cron.update");
-    expect(updateCall).toBeDefined();
-    expect(updateCall?.[1]).toMatchObject({
+    const updateCall = findRequestCall(request.mock.calls, "cron.update");
+    expectRecordFields(requestPayload(updateCall), {
       id: "job-alert",
-      patch: {
-        failureAlert: {
-          after: 3,
-          cooldownMs: 120_000,
-          channel: "telegram",
-          to: "123456",
-          mode: "announce",
-          accountId: undefined,
-        },
-      },
+    });
+    expectRecordFields(requireRecord(requestPatch(updateCall).failureAlert, "failureAlert"), {
+      after: 3,
+      cooldownMs: 120_000,
+      channel: "telegram",
+      to: "123456",
+      mode: "announce",
+      accountId: undefined,
     });
   });
 
@@ -826,17 +871,14 @@ describe("cron controller", () => {
 
     await addCronJob(state);
 
-    const updateCall = request.mock.calls.find(([method]) => method === "cron.update");
-    expect(updateCall).toBeDefined();
-    expect(updateCall?.[1]).toMatchObject({
+    const updateCall = findRequestCall(request.mock.calls, "cron.update");
+    expectRecordFields(requestPayload(updateCall), {
       id: "job-alert-mode",
-      patch: {
-        failureAlert: {
-          after: 1,
-          mode: "webhook",
-          accountId: "bot-a",
-        },
-      },
+    });
+    expectRecordFields(requireRecord(requestPatch(updateCall).failureAlert, "failureAlert"), {
+      after: 1,
+      mode: "webhook",
+      accountId: "bot-a",
     });
   });
 
@@ -875,20 +917,17 @@ describe("cron controller", () => {
     startCronEdit(state, job);
     await addCronJob(state);
 
-    const updateCall = request.mock.calls.find(([method]) => method === "cron.update");
-    expect(updateCall).toBeDefined();
-    expect(updateCall?.[1]).toMatchObject({
+    const updateCall = findRequestCall(request.mock.calls, "cron.update");
+    expectRecordFields(requestPayload(updateCall), {
       id: "job-alert-implicit-channel",
-      patch: {
-        failureAlert: {
-          after: 2,
-          to: "123",
-          mode: "announce",
-        },
-      },
+    });
+    expectRecordFields(requireRecord(requestPatch(updateCall).failureAlert, "failureAlert"), {
+      after: 2,
+      to: "123",
+      mode: "announce",
     });
     expect(
-      (updateCall?.[1] as { patch?: { failureAlert?: { channel?: string } } } | undefined)?.patch
+      (updateCall[1] as { patch?: { failureAlert?: { channel?: string } } } | undefined)?.patch
         ?.failureAlert?.channel,
     ).toBeUndefined();
   });
@@ -929,10 +968,9 @@ describe("cron controller", () => {
     state.cronForm.failureAlertChannel = "last";
     await addCronJob(state);
 
-    const updateCall = request.mock.calls.find(([method]) => method === "cron.update");
-    expect(updateCall).toBeDefined();
+    const updateCall = findRequestCall(request.mock.calls, "cron.update");
     expect(
-      (updateCall?.[1] as { patch?: { failureAlert?: { channel?: string } } } | undefined)?.patch
+      (updateCall[1] as { patch?: { failureAlert?: { channel?: string } } } | undefined)?.patch
         ?.failureAlert?.channel,
     ).toBe("last");
   });
@@ -968,20 +1006,17 @@ describe("cron controller", () => {
 
     await addCronJob(state);
 
-    const updateCall = request.mock.calls.find(([method]) => method === "cron.update");
-    expect(updateCall).toBeDefined();
-    expect(updateCall?.[1]).toMatchObject({
+    const updateCall = findRequestCall(request.mock.calls, "cron.update");
+    expectRecordFields(requestPayload(updateCall), {
       id: "job-alert-no-cooldown",
-      patch: {
-        failureAlert: {
-          after: 3,
-          channel: "telegram",
-          to: "123456",
-        },
-      },
+    });
+    expectRecordFields(requireRecord(requestPatch(updateCall).failureAlert, "failureAlert"), {
+      after: 3,
+      channel: "telegram",
+      to: "123456",
     });
     expect(
-      (updateCall?.[1] as { patch?: { failureAlert?: { cooldownMs?: number } } })?.patch
+      (updateCall[1] as { patch?: { failureAlert?: { cooldownMs?: number } } })?.patch
         ?.failureAlert,
     ).not.toHaveProperty("cooldownMs");
   });
@@ -1013,12 +1048,11 @@ describe("cron controller", () => {
 
     await addCronJob(state);
 
-    const updateCall = request.mock.calls.find(([method]) => method === "cron.update");
-    expect(updateCall).toBeDefined();
-    expect(updateCall?.[1]).toMatchObject({
+    const updateCall = findRequestCall(request.mock.calls, "cron.update");
+    expectRecordFields(requestPayload(updateCall), {
       id: "job-no-alert",
-      patch: { failureAlert: false },
     });
+    expect(requestPatch(updateCall).failureAlert).toBe(false);
   });
 
   it("maps cron stagger, model, thinking, and best effort into form", () => {
@@ -1115,10 +1149,13 @@ describe("cron controller", () => {
         payloadText: "",
       },
     });
-    await addCronJob(state);
+    const saved = await addCronJob(state);
+    expect(saved).toBe(false);
     expect(request).not.toHaveBeenCalled();
-    expect(state.cronFieldErrors.name).toBeDefined();
-    expect(state.cronFieldErrors.payloadText).toBeDefined();
+    expectRecordFields(state.cronFieldErrors, {
+      name: "cron.errors.nameRequired",
+      payloadText: "cron.errors.agentMessageRequired",
+    });
   });
 
   it("canceling edit resets form to defaults and clears edit mode", () => {
@@ -1167,9 +1204,8 @@ describe("cron controller", () => {
     });
 
     const sourceJob = state.cronJobs[0];
-    expect(sourceJob).toBeDefined();
     if (!sourceJob) {
-      return;
+      throw new Error("Expected source cron job");
     }
     startCronClone(state, sourceJob);
 
@@ -1213,21 +1249,22 @@ describe("cron controller", () => {
     startCronClone(state, sourceJob);
     await addCronJob(state);
 
-    const addCall = request.mock.calls.find(([method]) => method === "cron.add");
+    const addCall = findRequestCall(request.mock.calls, "cron.add");
     const updateCall = request.mock.calls.find(([method]) => method === "cron.update");
-    expect(addCall).toBeDefined();
     expect(updateCall).toBeUndefined();
-    expect((addCall?.[1] as { name?: string } | undefined)?.name).toBe("Daily ping copy");
+    expect((addCall[1] as { name?: string } | undefined)?.name).toBe("Daily ping copy");
   });
 
   it("loads paged jobs with query/filter/sort params", async () => {
     const request = vi.fn(async (method: string, payload?: unknown) => {
       if (method === "cron.list") {
-        expect(payload).toMatchObject({
+        expectRecordFields(requireRecord(payload, "cron.list payload"), {
           limit: 50,
           offset: 0,
           query: "daily",
           enabled: "enabled",
+          scheduleKind: "cron",
+          lastRunStatus: "error",
           sortBy: "updatedAtMs",
           sortDir: "desc",
         });
@@ -1256,15 +1293,169 @@ describe("cron controller", () => {
       client: { request } as unknown as CronState["client"],
       cronJobsQuery: "daily",
       cronJobsEnabledFilter: "enabled",
+      cronJobsScheduleKindFilter: "cron",
+      cronJobsLastStatusFilter: "error",
       cronJobsSortBy: "updatedAtMs",
       cronJobsSortDir: "desc",
     });
 
-    await loadCronJobsPage(state);
+    await loadCronJobsPage(state, { tableFilters: true });
 
     expect(state.cronJobs).toHaveLength(1);
     expect(state.cronJobsTotal).toBe(1);
     expect(state.cronJobsHasMore).toBe(false);
+  });
+
+  it("keeps table-only filters out of shared cron jobs loads", async () => {
+    const request = vi.fn(async (method: string, payload?: unknown) => {
+      if (method === "cron.list") {
+        const listPayload = requireRecord(payload, "cron.list payload");
+        expect(listPayload).not.toHaveProperty("scheduleKind");
+        expect(listPayload).not.toHaveProperty("lastRunStatus");
+        return { jobs: [], total: 0, hasMore: false, nextOffset: null };
+      }
+      return {};
+    });
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronJobsScheduleKindFilter: "cron",
+      cronJobsLastStatusFilter: "error",
+    });
+
+    await loadCronJobsPage(state);
+
+    expect(request).toHaveBeenCalledWith(
+      "cron.list",
+      expect.not.objectContaining({
+        scheduleKind: expect.anything(),
+        lastRunStatus: expect.anything(),
+      }),
+    );
+  });
+
+  it("reloads cron jobs after filters change during an in-flight table load", async () => {
+    let resolveFirst!: (value: EmptyCronListResponse) => void;
+    const firstResponse = new Promise<EmptyCronListResponse>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const request = vi.fn(async (method: string, payload?: unknown) => {
+      if (method !== "cron.list") {
+        return {};
+      }
+      if (request.mock.calls.length === 1) {
+        return firstResponse;
+      }
+      expectRecordFields(requireRecord(payload, "pending cron.list payload"), {
+        scheduleKind: "cron",
+        lastRunStatus: "unknown",
+      });
+      return { jobs: [], total: 0, hasMore: false, nextOffset: null };
+    });
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+    });
+
+    const firstLoad = loadCronJobsPage(state, { tableFilters: true });
+    updateCronJobsFilter(state, {
+      cronJobsScheduleKindFilter: "cron",
+      cronJobsLastStatusFilter: "unknown",
+    });
+    await loadCronJobsPage(state, { tableFilters: true });
+    resolveFirst({ jobs: [], total: 0, hasMore: false, nextOffset: null });
+    await firstLoad;
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(state.cronJobsReloadPending).toBe(false);
+    expect(state.cronJobsReloadPendingTableFilters).toBe(false);
+  });
+
+  it("reloads cron jobs after filters change during an in-flight append load", async () => {
+    let resolveAppend!: (value: EmptyCronListResponse) => void;
+    const appendResponse = new Promise<EmptyCronListResponse>((resolve) => {
+      resolveAppend = resolve;
+    });
+    const request = vi.fn(async (method: string, payload?: unknown) => {
+      if (method !== "cron.list") {
+        return {};
+      }
+      if (request.mock.calls.length === 1) {
+        expectRecordFields(requireRecord(payload, "append cron.list payload"), {
+          offset: 1,
+        });
+        return appendResponse;
+      }
+      expectRecordFields(requireRecord(payload, "pending append cron.list payload"), {
+        offset: 0,
+        scheduleKind: "cron",
+        lastRunStatus: "unknown",
+      });
+      return { jobs: [], total: 0, hasMore: false, nextOffset: null };
+    });
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronJobs: [
+        {
+          id: "existing",
+          name: "Existing",
+          enabled: true,
+          createdAtMs: 0,
+          updatedAtMs: 0,
+          schedule: { kind: "every", everyMs: 60_000 },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "systemEvent", text: "ping" },
+        },
+      ],
+      cronJobsHasMore: true,
+      cronJobsNextOffset: 1,
+    });
+
+    const appendLoad = loadCronJobsPage(state, { append: true, tableFilters: true });
+    updateCronJobsFilter(state, {
+      cronJobsScheduleKindFilter: "cron",
+      cronJobsLastStatusFilter: "unknown",
+    });
+    await loadCronJobsPage(state, { tableFilters: true });
+    resolveAppend({ jobs: [], total: 0, hasMore: false, nextOffset: null });
+    await appendLoad;
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(state.cronJobsReloadPending).toBe(false);
+    expect(state.cronJobsReloadPendingTableFilters).toBe(false);
+  });
+
+  it("uses the latest queued cron jobs table-filter mode", async () => {
+    let resolveFirst!: (value: EmptyCronListResponse) => void;
+    const firstResponse = new Promise<EmptyCronListResponse>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const request = vi.fn(async (method: string, payload?: unknown) => {
+      if (method !== "cron.list") {
+        return {};
+      }
+      if (request.mock.calls.length === 1) {
+        return firstResponse;
+      }
+      const pendingPayload = requireRecord(payload, "latest pending cron.list payload");
+      expect(pendingPayload).not.toHaveProperty("scheduleKind");
+      expect(pendingPayload).not.toHaveProperty("lastRunStatus");
+      return { jobs: [], total: 0, hasMore: false, nextOffset: null };
+    });
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronJobsScheduleKindFilter: "cron",
+      cronJobsLastStatusFilter: "unknown",
+    });
+
+    const firstLoad = loadCronJobsPage(state);
+    await loadCronJobsPage(state, { tableFilters: true });
+    await loadCronJobsPage(state);
+    resolveFirst({ jobs: [], total: 0, hasMore: false, nextOffset: null });
+    await firstLoad;
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(state.cronJobsReloadPending).toBe(false);
+    expect(state.cronJobsReloadPendingTableFilters).toBe(false);
   });
 
   it("drops malformed cron jobs before they enter UI state", async () => {
@@ -1354,7 +1545,10 @@ describe("cron controller", () => {
   it("runs cron job in due mode when requested", async () => {
     const request = vi.fn(async (method: string, payload?: unknown) => {
       if (method === "cron.run") {
-        expect(payload).toMatchObject({ id: "job-due", mode: "due" });
+        expectRecordFields(requireRecord(payload, "cron.run payload"), {
+          id: "job-due",
+          mode: "due",
+        });
         return { ok: true };
       }
       if (method === "cron.runs") {

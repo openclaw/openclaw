@@ -56,6 +56,29 @@ type SessionsListResult = Awaited<
   ReturnType<ReturnType<typeof import("./sessions-list-tool.js").createSessionsListTool>["execute"]>
 >;
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireDetails(result: { details?: unknown }, label = "result details") {
+  return requireRecord(result.details, label);
+}
+
+function requireSessions(details: Record<string, unknown>) {
+  const sessions = details.sessions;
+  if (!Array.isArray(sessions)) {
+    throw new Error("expected details.sessions");
+  }
+  return sessions.map((session, index) => requireRecord(session, `session ${index}`));
+}
+
+function requireGatewayRequest(index = 0) {
+  return requireRecord(callGatewayMock.mock.calls[index]?.[0], `gateway request ${index}`);
+}
+
 beforeAll(async () => {
   ({ createSessionsListTool } = await import("./sessions-list-tool.js"));
   ({ createSessionsSendTool } = await import("./sessions-send-tool.js"));
@@ -80,6 +103,30 @@ const installRegistry = async () => {
           },
           capabilities: { chatTypes: ["direct", "channel", "thread"] },
           messaging: {
+            resolveSessionTarget: resolveSessionTargetStub,
+          },
+          config: {
+            listAccountIds: () => ["default"],
+            resolveAccount: () => ({}),
+          },
+        },
+      },
+      {
+        pluginId: "feishu",
+        source: "test",
+        plugin: {
+          id: "feishu",
+          meta: {
+            id: "feishu",
+            label: "Feishu",
+            selectionLabel: "Feishu",
+            docsPath: "/channels/feishu",
+            blurb: "Feishu test stub.",
+            preferSessionLookupForAnnounceTarget: true,
+          },
+          capabilities: { chatTypes: ["direct", "group"] },
+          messaging: {
+            resolveSessionConversation: resolveSessionConversationStub,
             resolveSessionTarget: resolveSessionTargetStub,
           },
           config: {
@@ -167,7 +214,7 @@ function expectWorkerTranscriptPath(
   params: { containsPath: string; sessionId: string },
 ) {
   const session = getFirstListedSession(result);
-  expect(session).toMatchObject({ key: "agent:worker:main" });
+  expect(session?.key).toBe("agent:worker:main");
   const transcriptPath = session?.transcriptPath ?? "";
   expect(path.normalize(transcriptPath)).toContain(path.normalize(params.containsPath));
   expect(transcriptPath).toMatch(new RegExp(`${params.sessionId}\\.jsonl$`));
@@ -328,9 +375,7 @@ describe("resolveAnnounceTarget", () => {
       threadId: "99",
     });
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
-    const first = callGatewayMock.mock.calls[0]?.[0] as { method?: string } | undefined;
-    expect(first).toBeDefined();
-    expect(first?.method).toBe("sessions.list");
+    expect(requireGatewayRequest().method).toBe("sessions.list");
   });
 
   it("falls back to origin provider and accountId from sessions.list when legacy route fields are absent", async () => {
@@ -387,6 +432,43 @@ describe("resolveAnnounceTarget", () => {
     });
   });
 
+  it("hydrates announce delivery from explicit external context over stale webchat session fields", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      sessions: [
+        {
+          key: "agent:main:feishu:direct:ou_user",
+          channel: "webchat",
+          lastChannel: "webchat",
+          lastTo: "session:dashboard",
+          route: {
+            channel: "webchat",
+            target: { to: "session:dashboard" },
+          },
+          deliveryContext: {
+            channel: "feishu",
+            to: "user:ou_user",
+          },
+          origin: {
+            provider: "feishu",
+            accountId: "work",
+            threadId: "thread-77",
+          },
+        },
+      ],
+    });
+
+    const target = await resolveAnnounceTarget({
+      sessionKey: "agent:main:feishu:direct:ou_user",
+      displayKey: "agent:main:feishu:direct:ou_user",
+    });
+    expect(target).toEqual({
+      channel: "feishu",
+      to: "user:ou_user",
+      accountId: "work",
+      threadId: "thread-77",
+    });
+  });
+
   it("preserves threaded Slack session keys when sessions.list lacks stored thread metadata", async () => {
     callGatewayMock.mockResolvedValueOnce({
       sessions: [
@@ -436,10 +518,9 @@ describe("sessions_list gating", () => {
   it("filters out other agents when tools.agentToAgent.enabled is false", async () => {
     const tool = createMainSessionsListTool();
     const result = await tool.execute("call1", {});
-    expect(result.details).toMatchObject({
-      count: 1,
-      sessions: [{ key: MAIN_AGENT_SESSION_KEY }],
-    });
+    const details = requireDetails(result);
+    expect(details.count).toBe(1);
+    expect(requireSessions(details)[0]?.key).toBe(MAIN_AGENT_SESSION_KEY);
   });
 
   it("keeps requester-owned cross-agent rows with tree visibility without a spawned lookup", async () => {
@@ -463,10 +544,11 @@ describe("sessions_list gating", () => {
 
     const result = await createMainSessionsListTool().execute("call1", {});
 
-    expect(result.details).toMatchObject({
-      count: 1,
-      sessions: [{ key: "agent:codex:acp:child-1", spawnedBy: MAIN_AGENT_SESSION_KEY }],
-    });
+    const details = requireDetails(result);
+    expect(details.count).toBe(1);
+    const session = requireSessions(details)[0];
+    expect(session?.key).toBe("agent:codex:acp:child-1");
+    expect(session?.spawnedBy).toBe(MAIN_AGENT_SESSION_KEY);
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
   });
 
@@ -491,11 +573,34 @@ describe("sessions_list gating", () => {
 
     const result = await createMainSessionsListTool().execute("call1", {});
 
-    expect(result.details).toMatchObject({
-      count: 1,
-      sessions: [{ key: "agent:codex:acp:child-1", parentSessionKey: MAIN_AGENT_SESSION_KEY }],
-    });
+    const details = requireDetails(result);
+    expect(details.count).toBe(1);
+    expect(details.visibility).toBeUndefined();
+    const session = requireSessions(details)[0];
+    expect(session?.key).toBe("agent:codex:acp:child-1");
+    expect(session?.parentSessionKey).toBe(MAIN_AGENT_SESSION_KEY);
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("includes visibility metadata when session visibility is restricted", async () => {
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      tools: {
+        agentToAgent: { enabled: true },
+        sessions: { visibility: "tree" },
+      },
+    });
+
+    const result = await createMainSessionsListTool().execute("call1", {});
+
+    const details = requireDetails(result);
+    expect(details.count).toBe(1);
+    expect(details.visibility).toMatchObject({
+      mode: "tree",
+      restricted: true,
+      warning:
+        "Session visibility is restricted (effective tools.sessions.visibility=tree). Results may omit sessions outside the current scope. The count field reflects only sessions within the current scope.",
+    });
   });
 
   it("keeps literal current keys for message previews", async () => {
@@ -654,9 +759,10 @@ describe("sessions_list channel derivation", () => {
     });
     const result = await executeMainSessionsList();
 
-    expect(result.details).toMatchObject({
-      sessions: [{ key: "agent:main:discord:group:ops", channel: "discord" }],
-    });
+    const details = requireDetails(result);
+    const session = requireSessions(details)[0];
+    expect(session?.key).toBe("agent:main:discord:group:ops");
+    expect(session?.channel).toBe("discord");
   });
 });
 
@@ -673,10 +779,22 @@ describe("sessions_send gating", () => {
       timeoutSeconds: 5,
     });
 
-    expect(result.details).toMatchObject({
-      status: "error",
-      error: "Either sessionKey or label is required",
-    });
+    const details = requireDetails(result);
+    expect(details.status).toBe("error");
+    expect(details.error).toBe("Either sessionKey or label is required");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it.each([1.5, -1, "1sec"])("rejects invalid timeoutSeconds value %s", async (timeoutSeconds) => {
+    const tool = createMainSessionsSendTool();
+
+    await expect(
+      tool.execute("call-invalid-timeout", {
+        sessionKey: MAIN_AGENT_SESSION_KEY,
+        message: "hi",
+        timeoutSeconds,
+      }),
+    ).rejects.toThrow("timeoutSeconds must be a non-negative integer");
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
@@ -690,14 +808,13 @@ describe("sessions_send gating", () => {
       timeoutSeconds: 5,
     });
 
-    expect(result.details).toMatchObject({
-      status: "error",
-    });
+    const details = requireDetails(result);
+    expect(details.status).toBe("error");
     expect((result.details as { error?: string } | undefined)?.error ?? "").toContain(
       "No session found with label",
     );
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
-    expect(callGatewayMock.mock.calls[0]?.[0]).toMatchObject({ method: "sessions.resolve" });
+    expect(requireGatewayRequest().method).toBe("sessions.resolve");
   });
 
   it("blocks cross-agent sends when tools.agentToAgent.enabled is false", async () => {
@@ -710,8 +827,8 @@ describe("sessions_send gating", () => {
     });
 
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
-    expect(callGatewayMock.mock.calls[0]?.[0]).toMatchObject({ method: "sessions.list" });
-    expect(result.details).toMatchObject({ status: "forbidden" });
+    expect(requireGatewayRequest().method).toBe("sessions.list");
+    expect(requireDetails(result).status).toBe("forbidden");
   });
 
   it("rejects direct thread session targets before dispatching an agent run", async () => {
@@ -731,10 +848,9 @@ describe("sessions_send gating", () => {
       timeoutSeconds: 0,
     });
 
-    expect(result.details).toMatchObject({
-      status: "error",
-      sessionKey: threadSessionKey,
-    });
+    const details = requireDetails(result);
+    expect(details.status).toBe("error");
+    expect(details.sessionKey).toBe(threadSessionKey);
     expect((result.details as { error?: string } | undefined)?.error ?? "").toContain(
       "cannot target a thread session",
     );
@@ -759,15 +875,14 @@ describe("sessions_send gating", () => {
       timeoutSeconds: 0,
     });
 
-    expect(result.details).toMatchObject({
-      status: "error",
-      sessionKey: threadSessionKey,
-    });
+    const details = requireDetails(result);
+    expect(details.status).toBe("error");
+    expect(details.sessionKey).toBe(threadSessionKey);
     expect((result.details as { error?: string } | undefined)?.error ?? "").toContain(
       "cannot target a thread session",
     );
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
-    expect(callGatewayMock.mock.calls[0]?.[0]).toMatchObject({ method: "sessions.resolve" });
+    expect(requireGatewayRequest().method).toBe("sessions.resolve");
   });
 
   it("does not reuse a stale assistant reply when no new reply appears", async () => {
@@ -807,10 +922,9 @@ describe("sessions_send gating", () => {
     });
 
     expect(historyCalls).toBe(2);
-    expect(result.details).toMatchObject({
-      status: "ok",
-      reply: undefined,
-      sessionKey: MAIN_AGENT_SESSION_KEY,
-    });
+    const details = requireDetails(result);
+    expect(details.status).toBe("ok");
+    expect(details.reply).toBeUndefined();
+    expect(details.sessionKey).toBe(MAIN_AGENT_SESSION_KEY);
   });
 });

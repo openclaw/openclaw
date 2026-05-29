@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import {
   describeInterpreterInlineEval,
   type InterpreterInlineEvalHit,
@@ -21,6 +20,7 @@ import { normalizeNullableString } from "../shared/string-coerce.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
 import { renderExecOutputText } from "./bash-tools.exec-output.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
+import type { AgentToolResult } from "./runtime/index.js";
 import { callGatewayTool } from "./tools/gateway.js";
 import { listNodes, resolveNodeIdFromList } from "./tools/nodes-utils.js";
 
@@ -153,6 +153,10 @@ export function buildNodeSystemRunInvoke(params: {
   cwd: string | undefined;
   agentId: string | undefined;
   sessionKey: string | undefined;
+  turnSourceChannel?: string;
+  turnSourceTo?: string;
+  turnSourceAccountId?: string;
+  turnSourceThreadId?: string | number;
   approved?: boolean;
   approvalDecision?: "allow-once" | "allow-always" | null;
   runId?: string;
@@ -162,6 +166,7 @@ export function buildNodeSystemRunInvoke(params: {
 }): Record<string, unknown> {
   const timeoutMs =
     params.target.runTimeoutSec > 0 ? Math.floor(params.target.runTimeoutSec * 1000) : 0;
+  const runId = params.runId ?? crypto.randomUUID();
   return {
     nodeId: params.target.nodeId,
     command: "system.run",
@@ -174,9 +179,17 @@ export function buildNodeSystemRunInvoke(params: {
       timeoutMs,
       agentId: params.agentId,
       sessionKey: params.sessionKey,
+      ...(params.turnSourceChannel != null ? { turnSourceChannel: params.turnSourceChannel } : {}),
+      ...(params.turnSourceTo != null ? { turnSourceTo: params.turnSourceTo } : {}),
+      ...(params.turnSourceAccountId != null
+        ? { turnSourceAccountId: params.turnSourceAccountId }
+        : {}),
+      ...(params.turnSourceThreadId != null
+        ? { turnSourceThreadId: params.turnSourceThreadId }
+        : {}),
       approved: params.approved,
       approvalDecision: params.approvalDecision ?? undefined,
-      runId: params.runId ?? undefined,
+      runId,
       suppressNotifyOnExit:
         params.suppressNotifyOnExit === true || params.notifyOnExit === false ? true : undefined,
     },
@@ -247,9 +260,10 @@ function buildLocalPreparedNodeRun(params: {
   request: ExecuteNodeHostCommandParams;
   target: NodeExecutionTarget;
 }): PreparedNodeRun {
+  const rawCommand = formatExecCommand(params.target.argv);
   const command = resolveSystemRunCommandRequest({
     command: params.target.argv,
-    rawCommand: params.request.command,
+    rawCommand,
   });
   if (!command.ok) {
     throw new Error(command.message);
@@ -258,7 +272,7 @@ function buildLocalPreparedNodeRun(params: {
     throw new Error("command required");
   }
   const commandText = formatExecCommand(command.argv);
-  const previewText = command.previewText?.trim();
+  const previewText = params.request.command.trim() || command.previewText?.trim();
   const commandPreview = previewText && previewText !== commandText ? previewText : null;
   const plan = {
     argv: [...command.argv],

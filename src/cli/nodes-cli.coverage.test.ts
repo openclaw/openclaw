@@ -112,11 +112,13 @@ describe("nodes-cli coverage", () => {
 
   it("does not register the removed run wrapper", async () => {
     await withSuppressedStderr(async () => {
-      await expect(
-        sharedProgram.parseAsync(["nodes", "run", "--node", "mac-1"], { from: "user" }),
-      ).rejects.toMatchObject({
-        code: "commander.unknownCommand",
-      });
+      let error: { code?: unknown } | undefined;
+      try {
+        await sharedProgram.parseAsync(["nodes", "run", "--node", "mac-1"], { from: "user" });
+      } catch (err) {
+        error = err as { code?: unknown };
+      }
+      expect(error?.code).toBe("commander.unknownCommand");
     });
   });
 
@@ -143,9 +145,11 @@ describe("nodes-cli coverage", () => {
       "overlay",
     ]);
 
-    expect(invoke).toBeTruthy();
-    expect(invoke?.params?.command).toBe("system.notify");
-    expect(invoke?.params?.params).toEqual({
+    if (!invoke) {
+      throw new Error("expected system.notify invocation");
+    }
+    expect(invoke.params?.command).toBe("system.notify");
+    expect(invoke.params?.params).toEqual({
       title: "Ping",
       body: "Gateway ready",
       sound: undefined,
@@ -171,13 +175,91 @@ describe("nodes-cli coverage", () => {
       "6000",
     ]);
 
-    expect(invoke).toBeTruthy();
-    expect(invoke?.params?.command).toBe("location.get");
-    expect(invoke?.params?.params).toEqual({
+    if (!invoke) {
+      throw new Error("expected location.get invocation");
+    }
+    expect(invoke.params?.command).toBe("location.get");
+    expect(invoke.params?.params).toEqual({
       maxAgeMs: 1000,
       desiredAccuracy: "precise",
       timeoutMs: 5000,
     });
-    expect(invoke?.params?.timeoutMs).toBe(6000);
+    expect(invoke.params?.timeoutMs).toBe(6000);
+  });
+
+  it.each([
+    {
+      args: ["nodes", "location", "get", "--node", "mac-1", "--max-age", "1000ms"],
+      flag: "--max-age",
+    },
+    {
+      args: ["nodes", "location", "get", "--node", "mac-1", "--location-timeout", "5s"],
+      flag: "--location-timeout",
+    },
+    {
+      args: ["nodes", "location", "get", "--node", "mac-1", "--invoke-timeout", "6s"],
+      flag: "--invoke-timeout",
+    },
+    {
+      args: ["nodes", "camera", "snap", "--node", "mac-1", "--max-width", "1024px"],
+      flag: "--max-width",
+    },
+    {
+      args: ["nodes", "camera", "snap", "--node", "mac-1", "--delay-ms", "20ms"],
+      flag: "--delay-ms",
+    },
+    {
+      args: ["nodes", "camera", "snap", "--node", "mac-1", "--invoke-timeout", "20s"],
+      flag: "--invoke-timeout",
+    },
+    {
+      args: ["nodes", "camera", "snap", "--node", "mac-1", "--quality", "0.8jpg"],
+      flag: "--quality",
+    },
+    {
+      args: ["nodes", "camera", "snap", "--node", "mac-1", "--quality", "1.1"],
+      flag: "--quality",
+    },
+    {
+      args: ["nodes", "camera", "clip", "--node", "mac-1", "--invoke-timeout", "90s"],
+      flag: "--invoke-timeout",
+    },
+    {
+      args: ["nodes", "screen", "record", "--node", "mac-1", "--screen", "1x"],
+      flag: "--screen",
+    },
+    {
+      args: ["nodes", "screen", "record", "--node", "mac-1", "--invoke-timeout", "120s"],
+      flag: "--invoke-timeout",
+    },
+    {
+      args: ["nodes", "screen", "record", "--node", "mac-1", "--fps", "10fps"],
+      flag: "--fps",
+    },
+    {
+      args: ["nodes", "screen", "record", "--node", "mac-1", "--fps", "0"],
+      flag: "--fps",
+    },
+    {
+      args: ["nodes", "notify", "--node", "mac-1", "--title", "Ping", "--invoke-timeout", "15s"],
+      flag: "--invoke-timeout",
+    },
+    {
+      args: [
+        "nodes",
+        "invoke",
+        "--node",
+        "mac-1",
+        "--command",
+        "canvas.eval",
+        "--invoke-timeout",
+        "15s",
+      ],
+      flag: "--invoke-timeout",
+    },
+  ])("rejects partial numeric option for $args", async ({ args, flag }) => {
+    await expect(sharedProgram.parseAsync(args, { from: "user" })).rejects.toThrow("__exit__:1");
+    expect(runtimeErrors.at(-1)).toContain(`${flag} must be`);
+    expect(lastNodeInvokeCall).toBeNull();
   });
 });

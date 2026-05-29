@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { MessageGroup } from "../types/chat-types.ts";
 import { buildChatItems, type BuildChatItemsProps } from "./build-chat-items.ts";
 
+const SENDER_METADATA_BLOCK =
+  'Sender (untrusted metadata):\n```json\n{"label":"openclaw-control-ui","id":"openclaw-control-ui"}\n```';
+
 function createProps(overrides: Partial<BuildChatItemsProps> = {}): BuildChatItemsProps {
   return {
     sessionKey: "main",
@@ -22,6 +25,23 @@ function messageGroups(props: Partial<BuildChatItemsProps>): MessageGroup[] {
 function firstMessageContent(group: MessageGroup): unknown[] {
   const message = group.messages[0]?.message as { content?: unknown };
   return Array.isArray(message.content) ? message.content : [];
+}
+
+function requireRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Expected a non-array record");
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireGroup(value: unknown): MessageGroup {
+  const record = requireRecord(value);
+  expect(record.kind).toBe("group");
+  return value as MessageGroup;
+}
+
+function messageRecord(group: MessageGroup, index = 0): Record<string, unknown> {
+  return requireRecord(group.messages[index]?.message);
 }
 
 describe("buildChatItems", () => {
@@ -58,7 +78,7 @@ describe("buildChatItems", () => {
 
     expect(groups).toHaveLength(1);
     expect(groups[0].messages).toHaveLength(1);
-    expect(groups[0].messages[0]).toMatchObject({ duplicateCount: 3 });
+    expect(groups[0].messages[0].duplicateCount).toBe(3);
   });
 
   it("suppresses assistant HEARTBEAT_OK acknowledgements before rendering history", () => {
@@ -74,9 +94,9 @@ describe("buildChatItems", () => {
     expect(groups).toHaveLength(2);
     expect(groups[0].role).toBe("user");
     expect(groups[1].role).toBe("assistant");
-    expect(groups[1].messages[0].message).toMatchObject({
-      content: [{ type: "text", text: "Visible reply" }],
-    });
+    expect(messageRecord(groups[1]).content).toStrictEqual([
+      { type: "text", text: "Visible reply" },
+    ]);
   });
 
   it("suppresses assistant HEARTBEAT_OK acknowledgements that carry hidden thinking blocks", () => {
@@ -115,12 +135,10 @@ describe("buildChatItems", () => {
 
     expect(groups).toHaveLength(1);
     expect(groups[0].messages).toHaveLength(1);
-    expect(groups[0].messages[0].message).toMatchObject({
-      content: [
-        { type: "thinking", thinking: "Useful hidden reasoning." },
-        { type: "text", text: "Visible reply" },
-      ],
-    });
+    expect(messageRecord(groups[0]).content).toStrictEqual([
+      { type: "thinking", thinking: "Useful hidden reasoning." },
+      { type: "text", text: "Visible reply" },
+    ]);
   });
 
   it("keeps HEARTBEAT_OK turns that carry visible non-text content", () => {
@@ -137,7 +155,7 @@ describe("buildChatItems", () => {
 
     expect(groups).toHaveLength(1);
     expect(groups[0].messages).toHaveLength(1);
-    expect(firstMessageContent(groups[0]).some((block) => isCanvasBlock(block))).toBe(true);
+    expect(canvasBlocksIn(groups[0])).toHaveLength(1);
   });
 
   it("suppresses active HEARTBEAT_OK streams before rendering", () => {
@@ -148,7 +166,144 @@ describe("buildChatItems", () => {
       }),
     );
 
-    expect(items).toEqual([]);
+    expect(items).toStrictEqual([]);
+  });
+
+  it("suppresses active sender metadata streams before rendering", () => {
+    const items = buildChatItems(
+      createProps({
+        stream: SENDER_METADATA_BLOCK,
+        streamStartedAt: 1,
+      }),
+    );
+
+    expect(items).toStrictEqual([]);
+  });
+
+  it("strips sender metadata from active stream text that has visible content", () => {
+    const items = buildChatItems(
+      createProps({
+        stream: `${SENDER_METADATA_BLOCK}\n\nVisible reply`,
+        streamStartedAt: 1,
+      }),
+    );
+
+    expect(items).toEqual([
+      {
+        kind: "stream",
+        key: "stream:main:1",
+        text: "Visible reply",
+        startedAt: 1,
+      },
+    ]);
+  });
+
+  it("deduplicates accumulated stream snapshots around tool cards", () => {
+    const items = buildChatItems(
+      createProps({
+        streamSegments: [
+          { text: "First thought.", ts: 1 },
+          { text: "First thought. After tool.", ts: 3 },
+        ],
+        toolMessages: [
+          { role: "toolResult", content: "Tool one", timestamp: 2 },
+          { role: "toolResult", content: "Tool two", timestamp: 4 },
+        ],
+        stream: "First thought. After tool. Final sentence.",
+        streamStartedAt: 5,
+      }),
+    );
+
+    expect(items.filter((item) => item.kind === "stream")).toMatchObject([
+      { text: "First thought." },
+      { text: "After tool." },
+      { text: "Final sentence." },
+    ]);
+  });
+
+  it("suppresses metadata-only history messages before grouping", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "user",
+          content: SENDER_METADATA_BLOCK,
+          senderLabel: "openclaw-control-ui",
+          timestamp: 1,
+        },
+      ],
+    });
+
+    expect(groups).toStrictEqual([]);
+  });
+
+  it("renders only the last 100 history messages and shows a hidden-count notice", () => {
+    const items = buildChatItems(
+      createProps({
+        messages: Array.from({ length: 105 }, (_, index) => ({
+          role: index % 2 === 0 ? "user" : "assistant",
+          content: `message ${index}`,
+          timestamp: index,
+        })),
+      }),
+    );
+
+    const groups = items.filter((item) => item.kind === "group");
+
+    const noticeGroup = requireGroup(items[0]);
+    expect(noticeGroup.messages).toHaveLength(1);
+    const noticeMessage = messageRecord(noticeGroup);
+    expect(noticeMessage.role).toBe("system");
+    expect(noticeMessage.content).toBe("Showing last 100 messages (5 hidden).");
+    expect(groups).toHaveLength(101);
+    expect(messageRecord(groups[1]).content).toBe("message 5");
+    expect(messageRecord(groups[groups.length - 1]).content).toBe("message 104");
+  });
+
+  it("budgets rendered history by tool-result content size", () => {
+    const largeOutput = "x".repeat(100_000);
+    const items = buildChatItems(
+      createProps({
+        messages: Array.from({ length: 6 }, (_, index) => ({
+          role: "assistant",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: `tool-${index}`,
+              content: largeOutput,
+            },
+          ],
+          timestamp: index,
+        })),
+      }),
+    );
+
+    const groups = items.filter((item) => item.kind === "group");
+    const noticeGroup = requireGroup(items[0]);
+    expect(messageRecord(noticeGroup).content).toBe("Showing last 2 messages (4 hidden).");
+    expect(groups).toHaveLength(2);
+    expect(groups[1].messages).toHaveLength(2);
+    expect(messageRecord(groups[1], 0).timestamp).toBe(4);
+    expect(messageRecord(groups[1], 1).timestamp).toBe(5);
+  });
+
+  it("does not crash when history contains malformed entries", () => {
+    const items = buildChatItems(
+      createProps({
+        messages: [
+          null,
+          undefined,
+          {
+            role: "assistant",
+            content: "still visible",
+            timestamp: 1,
+          },
+        ],
+      }),
+    );
+
+    const groups = items.filter((item) => item.kind === "group");
+    expect(groups).toHaveLength(1);
+    expect(messageRecord(groups[0]).content).toBe("still visible");
   });
 
   it("does not collapse duplicate text messages separated by another message", () => {
@@ -185,6 +340,74 @@ describe("buildChatItems", () => {
     expect(groups).toHaveLength(1);
     expect(groups[0].messages).toHaveLength(2);
     expect(groups[0].messages[0].duplicateCount).toBeUndefined();
+  });
+
+  it("orders live tool messages before newer history messages", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Newer history reply." }],
+          timestamp: 2_000,
+        },
+      ],
+      toolMessages: [
+        {
+          role: "tool",
+          toolCallId: "call-older-tool",
+          toolName: "shell",
+          content: "Older live tool output.",
+          timestamp: 1_000,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(2);
+    expect(groups.map((group) => group.role)).toEqual(["tool", "assistant"]);
+    expect(messageRecord(groups[0]).content).toBe("Older live tool output.");
+    expect(messageRecord(groups[1]).content).toStrictEqual([
+      { type: "text", text: "Newer history reply." },
+    ]);
+  });
+
+  it("orders completed stream segments before newer history messages", () => {
+    const items = buildChatItems(
+      createProps({
+        messages: [
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "Newer history reply." }],
+            timestamp: 2_000,
+          },
+        ],
+        streamSegments: [{ text: "Older streamed output.", ts: 1_000 }],
+      }),
+    );
+
+    expect(items).toHaveLength(2);
+    expect(items[0]).toMatchObject({
+      kind: "stream",
+      text: "Older streamed output.",
+      startedAt: 1_000,
+    });
+    expect(requireGroup(items[1]).role).toBe("assistant");
+  });
+
+  it("orders timestamped chat items before history messages without timestamps", () => {
+    const items = buildChatItems(
+      createProps({
+        messages: [{ role: "assistant", content: "Missing timestamp." }],
+        streamSegments: [{ text: "Timestamped stream.", ts: Number.MAX_SAFE_INTEGER }],
+      }),
+    );
+
+    expect(items).toHaveLength(2);
+    expect(items[0]).toMatchObject({
+      kind: "stream",
+      text: "Timestamped stream.",
+      startedAt: Number.MAX_SAFE_INTEGER,
+    });
+    expect(messageRecord(requireGroup(items[1])).content).toBe("Missing timestamp.");
   });
 
   it("attaches lifted canvas previews to the nearest assistant turn", () => {
@@ -227,8 +450,47 @@ describe("buildChatItems", () => {
       ],
     });
 
-    expect(firstMessageContent(groups[0]).some((block) => isCanvasBlock(block))).toBe(true);
-    expect(firstMessageContent(groups[1]).some((block) => isCanvasBlock(block))).toBe(false);
+    expect(canvasBlocksIn(groups[0])).toHaveLength(1);
+    expect(canvasBlocksIn(groups[1])).toStrictEqual([]);
+  });
+
+  it("preserves a metadata-only assistant anchor when lifting canvas previews", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          id: "assistant-metadata-anchor",
+          role: "assistant",
+          content: SENDER_METADATA_BLOCK,
+          timestamp: 1_000,
+        },
+      ],
+      toolMessages: [
+        {
+          id: "tool-canvas-for-empty-anchor",
+          role: "tool",
+          toolCallId: "call-canvas-empty-anchor",
+          toolName: "canvas_render",
+          content: JSON.stringify({
+            kind: "canvas",
+            view: {
+              backend: "canvas",
+              id: "cv_empty_anchor",
+              url: "/__openclaw__/canvas/documents/cv_empty_anchor/index.html",
+              title: "Empty anchor demo",
+              preferred_height: 320,
+            },
+            presentation: {
+              target: "assistant_message",
+            },
+          }),
+          timestamp: 1_001,
+        },
+      ],
+    });
+
+    expect(
+      groups.some((group) => firstMessageContent(group).some((block) => isCanvasBlock(block))),
+    ).toBe(true);
   });
 
   it("does not lift generic view handles from non-canvas payloads", () => {
@@ -267,7 +529,7 @@ describe("buildChatItems", () => {
       ],
     });
 
-    expect(firstMessageContent(groups[0]).some((block) => isCanvasBlock(block))).toBe(false);
+    expect(canvasBlocksIn(groups[0])).toStrictEqual([]);
   });
 
   it("lifts streamed canvas toolresult blocks into the assistant bubble", () => {
@@ -314,14 +576,15 @@ describe("buildChatItems", () => {
       ],
     });
 
-    const canvasBlocks = firstMessageContent(groups[0]).filter((block) => isCanvasBlock(block));
+    const assistantGroup = groups.find((group) => group.role === "assistant");
+    expect(assistantGroup).toBeDefined();
+
+    const canvasBlocks = canvasBlocksIn(assistantGroup as MessageGroup);
     expect(canvasBlocks).toHaveLength(1);
-    expect(canvasBlocks[0]).toMatchObject({
-      preview: {
-        viewId: "cv_streamed_artifact",
-        title: "Streamed demo",
-      },
-    });
+    const canvasBlock = requireRecord(canvasBlocks[0]);
+    const preview = requireRecord(canvasBlock.preview);
+    expect(preview.viewId).toBe("cv_streamed_artifact");
+    expect(preview.title).toBe("Streamed demo");
   });
 
   it("explains compaction boundaries and exposes the checkpoint action", () => {
@@ -341,18 +604,21 @@ describe("buildChatItems", () => {
     );
 
     expect(items).toHaveLength(1);
-    expect(items[0]).toMatchObject({
-      kind: "divider",
-      label: "Compacted history",
-      description:
-        "Earlier turns are preserved in a compaction checkpoint. Open session checkpoints to branch or restore that pre-compaction view.",
-      action: {
-        kind: "session-checkpoints",
-        label: "Open checkpoints",
-      },
-    });
+    const divider = requireRecord(items[0]);
+    expect(divider.kind).toBe("divider");
+    expect(divider.label).toBe("Compacted history");
+    expect(divider.description).toBe(
+      "The compacted transcript is preserved as a checkpoint. Open session checkpoints to branch or restore from that compacted view.",
+    );
+    const action = requireRecord(divider.action);
+    expect(action.kind).toBe("session-checkpoints");
+    expect(action.label).toBe("Open checkpoints");
   });
 });
+
+function canvasBlocksIn(group: MessageGroup): unknown[] {
+  return firstMessageContent(group).filter((block) => isCanvasBlock(block));
+}
 
 function isCanvasBlock(block: unknown): boolean {
   return (

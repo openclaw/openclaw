@@ -214,6 +214,14 @@ export const es: TranslationMap = {
     sessionDetails: "Detalles de la sesión",
     compactionHistory: "Historial de compactación",
     status: "Estado",
+    statusLive: "En vivo",
+    statusIdle: "Inactivo",
+    statusUnknown: "Desconocido",
+    statusRunning: "En ejecución",
+    statusDone: "Completado",
+    statusFailed: "Error",
+    statusKilled: "Finalizado",
+    statusTimeout: "Tiempo agotado",
     model: "Modelo",
     provider: "Proveedor",
     runtime: "Tiempo de ejecución",
@@ -340,6 +348,12 @@ export const es: TranslationMap = {
     eventLogSubtitle: "Latest gateway events.",
     noEvents: "No events yet.",
   },
+  quickSettings: {
+    security: {
+      browserEnabled: "Browser enabled",
+      toolProfile: "Tool profile",
+    },
+  },
   execApproval: {
     expiresIn: "expires in {time}",
     expired: "expired",
@@ -348,6 +362,8 @@ export const es: TranslationMap = {
     pending: "{count} pending",
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
+    allowAlwaysUnavailable:
+      "La política de aprobación efectiva requiere aprobación cada vez, por lo que Permitir siempre no está disponible.",
     deny: "Deny",
     labels: {
       host: "Host",
@@ -379,6 +395,7 @@ export const es: TranslationMap = {
   },
   tabs: {
     agents: "Agentes",
+    activity: "Actividad",
     overview: "Resumen",
     channels: "Canales",
     instances: "Instancias",
@@ -400,6 +417,7 @@ export const es: TranslationMap = {
   },
   subtitles: {
     agents: "Gestionar espacios de trabajo, herramientas e identidades de agentes.",
+    activity: "Resúmenes de actividad de herramientas locales del navegador.",
     overview: "Estado de la puerta de enlace, puntos de entrada y lectura rápida de salud.",
     channels: "Gestionar canales y ajustes.",
     instances: "Balizas de presencia de clientes y nodos conectados.",
@@ -418,6 +436,42 @@ export const es: TranslationMap = {
     debug: "Instantáneas de la puerta de enlace, eventos y llamadas RPC manuales.",
     logs: "Seguimiento en vivo de los registros de la puerta de enlace.",
     dreams: "Consolidación de la memoria durante el sueño.",
+  },
+  activity: {
+    title: "Actividad",
+    subtitle: "Actividad efímera de herramientas derivada de eventos de sesión en vivo.",
+    visibleCount: "{visible} de {total}",
+    filtersLabel: "Filtros de actividad",
+    search: "Buscar",
+    searchPlaceholder: "Filtrar por herramienta, resumen, ejecución, sesión",
+    toolFilter: "Herramienta",
+    allTools: "Todas las herramientas",
+    statusFilters: "Filtros de estado",
+    autoFollow: "Seguimiento automático",
+    expandAll: "Expandir todo",
+    collapseAll: "Contraer todo",
+    clear: "Borrar",
+    empty: "Aún no hay actividad de herramientas.",
+    emptyFiltered: "Ninguna actividad coincide con estos filtros.",
+    entrySummary: "{argumentSummary}",
+    argumentHiddenOne: "1 argumento oculto",
+    argumentsHidden: "{count} argumentos ocultos",
+    streamLabel: "Entradas de actividad de herramientas",
+    toolCallId: "Llamada de herramienta",
+    runId: "Ejecución",
+    session: "Sesión",
+    outputTruncated: "Vista previa censurada y truncada.",
+    noOutputPreview: "Sin vista previa de salida.",
+    status: {
+      running: "En ejecución",
+      done: "Completado",
+      error: "Error",
+    },
+    duration: {
+      ms: "{count} ms",
+      seconds: "{count} s",
+      minutes: "{minutes}m {seconds}s",
+    },
   },
   overview: {
     access: {
@@ -687,10 +741,6 @@ export const es: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle:
-        "Consulta adónde van los tokens, cuándo aumentan las sesiones y qué impulsa el costo.",
-    },
     common: {
       emptyValue: "—",
       unknown: "desconocido",
@@ -709,6 +759,16 @@ export const es: TranslationMap = {
       today: "Hoy",
       last7d: "7d",
       last30d: "30d",
+      last90d: "90 d",
+      last1y: "1 a",
+      all: "Todas",
+    },
+    scope: {
+      instance: "Instancia actual",
+      instanceHint: "Mostrar solo el id de sesión activo para cada sesión lógica.",
+      family: "Linaje histórico",
+      familyHint: "Agrupar los id de sesión conocidos rotados respaldados por transcripciones.",
+      familyIncluded: "El linaje histórico incluye {count} instancias de sesión.",
     },
     filters: {
       title: "Filtros",
@@ -932,6 +992,97 @@ export const es: TranslationMap = {
     showPassword: "Mostrar contraseña",
     hidePassword: "Ocultar contraseña",
     togglePasswordVisibility: "Alternar visibilidad de la contraseña",
+    failure: {
+      rawError: "Error sin procesar",
+      docsAuth: "Documentación de autenticación de Control UI",
+      docsPairing: "Documentación de emparejamiento de dispositivos",
+      docsInsecure: "Documentación de HTTP inseguro",
+      authRequired: {
+        title: "Autenticación requerida",
+        summary:
+          "Se puede acceder al Gateway, pero necesita un token o una contraseña coincidente antes de que este navegador pueda conectarse.",
+        stepPaste:
+          "Pega el token de openclaw dashboard --no-open o introduce la contraseña configurada.",
+        stepGenerate:
+          "Si no hay token configurado, ejecuta openclaw doctor --generate-gateway-token en el host del Gateway.",
+        stepConnect: "Haz clic en Connect de nuevo después de actualizar la credencial.",
+      },
+      authFailed: {
+        title: "La autenticación no coincide",
+        summary:
+          "La credencial proporcionada fue rechazada. La causa más común es un token obsoleto o copiado desde otra URL de Gateway.",
+        stepDashboard: "Ejecuta openclaw dashboard --no-open y abre la URL nueva o pega su token.",
+        stepReplace:
+          "Reemplaza valores obsoletos de token/contraseña; no reutilices un token de otra URL de Gateway.",
+        stepMode:
+          "Usa un solo modo de autenticación coincidente a la vez: token de gateway para modo token, contraseña para modo contraseña.",
+      },
+      rateLimited: {
+        title: "Demasiados intentos fallidos",
+        summary:
+          "El Gateway está limitando temporalmente los intentos de autenticación de este cliente.",
+        stepStop: "Deja de reintentar desde esta pestaña por un momento.",
+        stepWait:
+          "Espera a que el limitador de autenticación se enfríe y vuelve a conectar con la credencial corregida.",
+        stepCheckClients:
+          "Si este es un host compartido, revisa otros clientes por reintentos incorrectos repetidos.",
+      },
+      pairing: {
+        title: "Emparejamiento de dispositivo requerido",
+        scopeTitle: "Actualización de alcance pendiente",
+        roleTitle: "Actualización de rol pendiente",
+        metadataTitle: "Actualización del dispositivo pendiente",
+        summary:
+          "Este navegador necesita una aprobación única del host del Gateway antes de poder usar Control UI.",
+        upgradeSummary:
+          "Este navegador ya es conocido, pero el acceso solicitado cambió y necesita una aprobación nueva.",
+        stepList: "Ejecuta openclaw devices list en el host del Gateway.",
+        stepApproveId: "Aprueba esta solicitud: openclaw devices approve {requestId}.",
+        stepApprove: "Aprueba la solicitud pendiente de navegador/dispositivo desde esa lista.",
+        stepReconnect: "Vuelve a conectar después de completar la aprobación.",
+      },
+      insecure: {
+        title: "Se requiere un contexto seguro del navegador",
+        summary:
+          "Esta página se está ejecutando sobre HTTP simple, por lo que el navegador no puede crear la identidad de dispositivo que espera el Gateway.",
+        stepHttps:
+          "Usa HTTPS/Tailscale Serve, o abre http://127.0.0.1:18789 en el host del Gateway.",
+        stepLocalCompat:
+          "Para compatibilidad local solo con token, establece gateway.controlUi.allowInsecureAuth: true.",
+        stepAvoidDisable:
+          "Evita desactivar la autenticación de dispositivo para acceso HTTP remoto.",
+      },
+      origin: {
+        title: "Origen del navegador no permitido",
+        summary:
+          "El Gateway rechazó el origen de esta página antes de aceptar la conexión de Control UI.",
+        stepAllowedOrigins: "Agrega este origen del navegador a gateway.controlUi.allowedOrigins.",
+        stepFullOrigin: "Usa orígenes completos como http://localhost:5173, no patrones comodín.",
+        stepRestart: "Reinicia o recarga el Gateway después de cambiar los orígenes permitidos.",
+      },
+      protocol: {
+        title: "El protocolo no coincide",
+        summary:
+          "La Control UI servida y el Gateway en ejecución no coinciden en el protocolo de conexión admitido.",
+        stepDashboard:
+          "Vuelve a abrir el dashboard servido con openclaw dashboard para que UI y Gateway provengan de la misma instalación.",
+        stepDevUi:
+          "Si usas pnpm ui:dev, reconstruye o reinicia la UI de desarrollo contra el checkout actual.",
+        stepRestart:
+          "Reinicia el Gateway después de actualizar OpenClaw para que sirva el protocolo actual.",
+      },
+      network: {
+        title: "No se pudo conectar",
+        summary:
+          "El navegador no pudo completar la conexión al Gateway. Revisa el destino y el transporte antes de reintentar credenciales.",
+        stepGateway:
+          "Confirma que el Gateway esté en ejecución con openclaw status u openclaw gateway run.",
+        stepUrl:
+          "Revisa la URL de WebSocket y usa wss:// cuando el Gateway esté detrás de HTTPS/Tailscale Serve.",
+        stepDashboard:
+          "Vuelve a abrir el dashboard con openclaw dashboard --no-open para copiar la URL y los detalles de autenticación actuales.",
+      },
+    },
   },
   chat: {
     disconnected: "Desconectado de la puerta de enlace.",
@@ -939,6 +1090,10 @@ export const es: TranslationMap = {
     settings: "Configuración del chat",
     thinkingToggle: "Alternar salida de pensamiento/trabajo del asistente",
     toolCallsToggle: "Alternar llamadas a herramientas y resultados de herramientas",
+    autoScrollMode: "Modo de desplazamiento automático",
+    autoScrollAlways: "Siempre",
+    autoScrollNearBottom: "Cerca del final",
+    autoScrollOff: "Desactivado",
     focusToggle: "Alternar modo de enfoque (ocultar barra lateral + cabecera)",
     hideCronSessions: "Ocultar sesiones de cron",
     showCronSessions: "Mostrar sesiones de cron",
@@ -954,6 +1109,52 @@ export const es: TranslationMap = {
     updateNow: "Actualizar ahora",
     dismissUpdateBanner: "Descartar banner de actualización",
     switchedSession: "Se cambió a {session}",
+    welcome: {
+      ready: "Ready to chat",
+      hintBeforeShortcut: "Type a message below ·",
+      hintAfterShortcut: "for commands",
+      suggestions: {
+        whatCanYouDo: "What can you do?",
+        summarizeRecentSessions: "Summarize my recent sessions",
+        configureChannel: "Help me configure a channel",
+        checkSystemHealth: "Check system health",
+      },
+    },
+    runControls: {
+      newSession: "New session",
+      export: "Exportar",
+      exportChat: "Export chat",
+      queue: "Queue",
+      queueMessage: "Queue message",
+      stop: "Stop",
+      stopGenerating: "Stop generating",
+      send: "Send",
+      sendMessage: "Send message",
+    },
+    queue: {
+      retry: "Reintentar",
+      retrySend: "Reintentar envío",
+      retryQueuedMessage: "Reintentar mensaje en cola",
+    },
+    composer: {
+      placeholder: "Message {name} (Enter to send)",
+      placeholderWithAttachments: "Add a message or paste more images...",
+      placeholderDisconnected: "Connect to the gateway to start chatting...",
+      attachFile: "Attach file",
+      startTalk: "Start Talk",
+      stillListening: "Sigo escuchando",
+      talkTranscript: "Transcripción de voz",
+      stopTalk: "Stop Talk",
+    },
+    selectors: {
+      agentFilter: "Filtrar sesiones por agente",
+      session: "Chat session",
+      sessionSearch: "Buscar sesiones",
+      clearSessionSearch: "Borrar búsqueda de sesiones",
+      loadMoreSessions: "Cargar más sesiones",
+      model: "Chat model",
+      thinkingLevel: "Chat thinking level",
+    },
   },
   languages: {
     en: "Inglés (English)",
@@ -1063,6 +1264,9 @@ export const es: TranslationMap = {
       ascending: "Ascendente",
       descending: "Descendente",
       reset: "Restablecer",
+      emptyTitle: "No scheduled jobs yet.",
+      emptyHint: "Create one from a plain-language prompt; advanced fields can wait.",
+      emptyFilteredHint: "Clear or change filters to see scheduled jobs.",
       noMatching: "No hay tareas coincidentes.",
       loading: "Cargando...",
       loadMore: "Cargar más tareas",
@@ -1098,6 +1302,7 @@ export const es: TranslationMap = {
     form: {
       editJob: "Editar tarea",
       newJob: "Nueva tarea",
+      advancedJob: "Advanced job",
       updateSubtitle: "Actualiza la tarea programada seleccionada.",
       createSubtitle: "Crea una activación programada o ejecución de agente.",
       required: "Requerido",

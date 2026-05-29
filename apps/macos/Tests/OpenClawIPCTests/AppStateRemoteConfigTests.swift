@@ -51,7 +51,7 @@ struct AppStateRemoteConfigTests {
                 remoteTokenDirty: false))
 
         #expect(remote["url"] as? String == "ws://127.0.0.1:18789")
-        #expect((remote["transport"] as? String) == nil)
+        #expect(remote["transport"] as? String == "ssh")
         #expect(remote["sshTarget"] as? String == "alice@gateway.example")
     }
 
@@ -162,6 +162,29 @@ struct AppStateRemoteConfigTests {
     }
 
     @Test
+    func `app state init preserves legacy SSH tunnel config until transport is explicit`() async {
+        let configPath = TestIsolation.tempConfigPath()
+        await TestIsolation.withIsolatedState(
+            env: ["OPENCLAW_CONFIG_PATH": configPath],
+            defaults: [remoteTargetKey: nil])
+        {
+            OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "mode": "remote",
+                    "remote": [
+                        "url": "ws://127.0.0.1:18789",
+                        "sshTarget": "steipete@192.168.0.202",
+                    ],
+                ],
+            ])
+
+            let state = AppState(preview: true)
+            #expect(state.remoteTransport == .ssh)
+            #expect(state.remoteUrl == "ws://127.0.0.1:18789")
+        }
+    }
+
+    @Test
     func `synced gateway root preserves object token across mode and transport changes when untouched`() {
         let initialRoot: [String: Any] = [
             "gateway": [
@@ -258,5 +281,38 @@ struct AppStateRemoteConfigTests {
                 remoteToken: "   ",
                 remoteTokenDirty: true))
         #expect((cleared["token"] as? String) == nil)
+    }
+
+    @Test
+    func `synced gateway root preserves gateway auth across mode changes`() {
+        let initialRoot: [String: Any] = [
+            "gateway": [
+                "mode": "remote",
+                "auth": [
+                    "mode": "token",
+                    "token": "test-token", // pragma: allowlist secret
+                ],
+                "remote": [
+                    "transport": "direct",
+                    "url": "wss://old-gateway.example",
+                ],
+            ],
+        ]
+
+        let localRoot = AppState._testSyncedGatewayRoot(
+            currentRoot: initialRoot,
+            draft: .init(
+                connectionMode: .local,
+                remoteTransport: .ssh,
+                remoteTarget: "",
+                remoteIdentity: "",
+                remoteUrl: "",
+                remoteToken: "",
+                remoteTokenDirty: false))
+        let localGateway = localRoot["gateway"] as? [String: Any]
+        let auth = localGateway?["auth"] as? [String: Any]
+        #expect(localGateway?["mode"] as? String == "local")
+        #expect(auth?["mode"] as? String == "token")
+        #expect(auth?["token"] as? String == "test-token") // pragma: allowlist secret
     }
 }

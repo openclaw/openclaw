@@ -1,14 +1,28 @@
-import type { Api, Model } from "@mariozechner/pi-ai";
 import {
   fetchWithSsrFGuard,
   withTrustedEnvProxyGuardedFetchMode,
 } from "../infra/net/fetch-guard.js";
 import { shouldUseEnvHttpProxyForUrl } from "../infra/net/proxy-env.js";
 import {
+  mergeSsrFPolicies,
   ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist,
+  ssrfPolicyFromHttpBaseUrlAllowedOrigin,
   type SsrFPolicy,
 } from "../infra/net/ssrf.js";
+import type { Model } from "../llm/types.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveDebugProxySettings } from "../proxy-capture/env.js";
+import {
+  isCloudMetadataIpAddress,
+  isLinkLocalIpAddress,
+  parseCanonicalIpAddress,
+} from "../shared/net/ip.js";
+import { emitModelTransportDebug } from "./model-transport-debug.js";
+import { formatModelTransportDebugUrl } from "./model-transport-url.js";
+import {
+  ensureModelProviderLocalService,
+  type ProviderLocalServiceLease,
+} from "./provider-local-service.js";
 import {
   buildProviderRequestDispatcherPolicy,
   getModelProviderRequestTransport,
@@ -17,6 +31,11 @@ import {
 } from "./provider-request-config.js";
 
 const DEFAULT_MAX_SDK_RETRY_WAIT_SECONDS = 60;
+const log = createSubsystemLogger("provider-transport-fetch");
+const BLOCKED_EXACT_ORIGIN_TRUST_HOSTNAME_LABELS = new Set(["instance-data"]);
+const PLAIN_DECIMAL_NUMBER_RE = /^\d+(?:\.\d+)?$/;
+const RETRY_AFTER_HTTP_DATE_RE =
+  /^(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT|(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), \d{2}-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{2} \d{2}:\d{2}:\d{2} GMT|(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [ \d]\d \d{2}:\d{2}:\d{2} \d{4})$/;
 
 function hasReadableSseData(block: string): boolean {
   const dataLines = block
@@ -46,9 +65,60 @@ function findSseEventBoundary(buffer: string): { index: number; length: number }
   return best;
 }
 
-function sanitizeOpenAISdkSseResponse(response: Response): Response {
+function sanitizeOpenAISdkSseResponse(
+  response: Response,
+  options?: { synthesizeJsonAsSse?: boolean },
+): Response {
   const contentType = response.headers.get("content-type") ?? "";
-  if (!response.body || !/\btext\/event-stream\b/i.test(contentType)) {
+  if (!response.ok || !response.body) {
+    return response;
+  }
+  if (
+    options?.synthesizeJsonAsSse === true &&
+    (/\bapplication\/json\b/i.test(contentType) || /\+json\b/i.test(contentType))
+  ) {
+    const source = response.body;
+    const decoder = new TextDecoder();
+    const encoder = new TextEncoder();
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    let buffer = "";
+    const sseBody = new ReadableStream<Uint8Array>({
+      start() {
+        reader = source.getReader();
+      },
+      async pull(controller) {
+        try {
+          for (;;) {
+            const chunk = await reader?.read();
+            if (!chunk || chunk.done) {
+              buffer += decoder.decode();
+              const data = buffer.trim();
+              if (data) {
+                controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+              }
+              controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+              controller.close();
+              return;
+            }
+            buffer += decoder.decode(chunk.value, { stream: true });
+          }
+        } catch (error) {
+          controller.error(error);
+        }
+      },
+      async cancel(reason) {
+        await reader?.cancel(reason);
+      },
+    });
+    const headers = new Headers(response.headers);
+    headers.set("content-type", "text/event-stream; charset=utf-8");
+    return new Response(sseBody, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    });
+  }
+  if (!/\btext\/event-stream\b/i.test(contentType)) {
     return response;
   }
 
@@ -61,12 +131,13 @@ function sanitizeOpenAISdkSseResponse(response: Response): Response {
   const enqueueSanitized = (
     controller: ReadableStreamDefaultController<Uint8Array>,
     text: string,
-  ) => {
+  ): number => {
+    let enqueued = 0;
     buffer += text;
     for (;;) {
       const boundary = findSseEventBoundary(buffer);
       if (!boundary) {
-        return;
+        return enqueued;
       }
       const block = buffer.slice(0, boundary.index);
       const separator = buffer.slice(boundary.index, boundary.index + boundary.length);
@@ -75,6 +146,7 @@ function sanitizeOpenAISdkSseResponse(response: Response): Response {
       // messages. Drop those malformed keepalive-style blocks before it parses.
       if (hasReadableSseData(block)) {
         controller.enqueue(encoder.encode(`${block}${separator}`));
+        enqueued += 1;
       }
     }
   };
@@ -85,20 +157,28 @@ function sanitizeOpenAISdkSseResponse(response: Response): Response {
     },
     async pull(controller) {
       try {
-        const chunk = await reader?.read();
-        if (!chunk || chunk.done) {
-          const tail = decoder.decode();
-          if (tail) {
-            enqueueSanitized(controller, tail);
+        for (;;) {
+          const chunk = await reader?.read();
+          if (!chunk || chunk.done) {
+            const tail = decoder.decode();
+            if (tail) {
+              enqueueSanitized(controller, tail);
+            }
+            if (buffer && hasReadableSseData(buffer)) {
+              controller.enqueue(encoder.encode(buffer));
+            }
+            buffer = "";
+            controller.close();
+            return;
           }
-          if (buffer && hasReadableSseData(buffer)) {
-            controller.enqueue(encoder.encode(buffer));
+          const enqueued = enqueueSanitized(
+            controller,
+            decoder.decode(chunk.value, { stream: true }),
+          );
+          if (enqueued > 0) {
+            return;
           }
-          buffer = "";
-          controller.close();
-          return;
         }
-        enqueueSanitized(controller, decoder.decode(chunk.value, { stream: true }));
       } catch (error) {
         controller.error(error);
       }
@@ -115,11 +195,51 @@ function sanitizeOpenAISdkSseResponse(response: Response): Response {
   });
 }
 
+function shouldSanitizeOpenAISdkSseResponse(model: Model): boolean {
+  if (model.provider !== "openai") {
+    return true;
+  }
+  try {
+    return new URL(model.baseUrl).hostname.toLowerCase() !== "api.openai.com";
+  } catch {
+    return true;
+  }
+}
+
+async function requestBodyHasStreamTrue(
+  request: Request | undefined,
+  init: RequestInit | undefined,
+): Promise<boolean> {
+  const method = request?.method ?? init?.method;
+  if (method && method.toUpperCase() !== "POST") {
+    return false;
+  }
+  const headers = request?.headers ?? new Headers(init?.headers);
+  const contentType = headers.get("content-type") ?? "";
+  if (contentType && !/\bapplication\/json\b/i.test(contentType)) {
+    return false;
+  }
+
+  let text: string | undefined;
+  if (typeof init?.body === "string") {
+    text = init.body;
+  }
+  if (!text) {
+    return false;
+  }
+  try {
+    return (JSON.parse(text) as { stream?: unknown }).stream === true;
+  } catch {
+    return false;
+  }
+}
+
 function parseRetryAfterSeconds(headers: Headers): number | undefined {
   const retryAfterMs = headers.get("retry-after-ms");
   if (retryAfterMs) {
-    const milliseconds = Number.parseFloat(retryAfterMs);
-    if (Number.isFinite(milliseconds) && milliseconds >= 0) {
+    const trimmedRetryAfterMs = retryAfterMs.trim();
+    const milliseconds = Number(trimmedRetryAfterMs);
+    if (/^\d+(?:\.\d+)?$/.test(trimmedRetryAfterMs) && Number.isFinite(milliseconds)) {
       return milliseconds / 1000;
     }
   }
@@ -129,12 +249,17 @@ function parseRetryAfterSeconds(headers: Headers): number | undefined {
     return undefined;
   }
 
-  const seconds = Number.parseFloat(retryAfter);
-  if (Number.isFinite(seconds) && seconds >= 0) {
+  const seconds = Number(retryAfter.trim());
+  if (/^\d+$/.test(retryAfter.trim()) && Number.isFinite(seconds) && seconds >= 0) {
     return seconds;
   }
 
-  const retryAt = Date.parse(retryAfter);
+  const trimmedRetryAfter = retryAfter.trim();
+  if (!RETRY_AFTER_HTTP_DATE_RE.test(trimmedRetryAfter)) {
+    return undefined;
+  }
+
+  const retryAt = Date.parse(trimmedRetryAfter);
   if (Number.isNaN(retryAt)) {
     return undefined;
   }
@@ -152,7 +277,11 @@ function resolveMaxSdkRetryWaitSeconds(): number | undefined {
     return undefined;
   }
 
-  const seconds = Number.parseFloat(raw);
+  if (!PLAIN_DECIMAL_NUMBER_RE.test(raw)) {
+    return DEFAULT_MAX_SDK_RETRY_WAIT_SECONDS;
+  }
+
+  const seconds = Number(raw);
   if (Number.isFinite(seconds) && seconds > 0) {
     return seconds;
   }
@@ -184,9 +313,13 @@ function buildManagedResponse(
   response: Response,
   release: () => Promise<void>,
   refreshTimeout?: () => void,
+  localServiceLease?: ProviderLocalServiceLease,
 ): Response {
+  const finalizeLocalServiceLease = () => {
+    localServiceLease?.release();
+  };
   if (!response.body) {
-    void release();
+    void release().finally(finalizeLocalServiceLease);
     return response;
   }
   const source = response.body;
@@ -197,7 +330,11 @@ function buildManagedResponse(
       return;
     }
     released = true;
-    await release().catch(() => undefined);
+    try {
+      await release().catch(() => undefined);
+    } finally {
+      finalizeLocalServiceLease();
+    }
   };
   const wrappedBody = new ReadableStream<Uint8Array>({
     start() {
@@ -233,7 +370,7 @@ function buildManagedResponse(
   });
 }
 
-function resolveModelRequestPolicy(model: Model<Api>) {
+function resolveModelRequestPolicy(model: Model) {
   const debugProxy = resolveDebugProxySettings();
   let explicitDebugProxyUrl: string | undefined;
   if (debugProxy.enabled && debugProxy.proxyUrl) {
@@ -264,7 +401,7 @@ function resolveModelRequestPolicy(model: Model<Api>) {
 }
 
 export function resolveModelRequestTimeoutMs(
-  model: Model<Api>,
+  model: Model,
   timeoutMs: number | undefined,
 ): number | undefined {
   if (timeoutMs !== undefined) {
@@ -276,7 +413,21 @@ export function resolveModelRequestTimeoutMs(
     : undefined;
 }
 
-function resolveHttpHostname(value: unknown): string | undefined {
+function buildModelRequestSignal(
+  baseSignal: AbortSignal | undefined,
+  timeoutMs: number | undefined,
+): AbortSignal | undefined {
+  if (timeoutMs === undefined) {
+    return baseSignal;
+  }
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  if (!baseSignal) {
+    return timeoutSignal;
+  }
+  return AbortSignal.any([baseSignal, timeoutSignal]);
+}
+
+function resolveHttpOrigin(value: unknown): string | undefined {
   if (typeof value !== "string" || !value.trim()) {
     return undefined;
   }
@@ -285,40 +436,117 @@ function resolveHttpHostname(value: unknown): string | undefined {
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
       return undefined;
     }
-    return parsed.hostname.toLowerCase();
+    parsed.hostname = parsed.hostname.replace(/\.+$/, "");
+    return parsed.origin.toLowerCase();
   } catch {
     return undefined;
   }
 }
 
-function resolveModelTransportSsrFPolicy(params: {
-  model: Model<Api>;
-  url: string;
-  allowPrivateNetwork?: boolean;
-}): SsrFPolicy | undefined {
-  const baseUrl = (params.model as { baseUrl?: unknown }).baseUrl;
-  const baseHostname = resolveHttpHostname(baseUrl);
-  const requestHostname = resolveHttpHostname(params.url);
-  const fakeIpPolicy =
-    typeof baseUrl === "string" && baseHostname && requestHostname === baseHostname
-      ? ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist(baseUrl)
-      : undefined;
-
-  if (fakeIpPolicy) {
-    return {
-      ...fakeIpPolicy,
-      ...(params.allowPrivateNetwork ? { allowPrivateNetwork: true } : {}),
-    };
+function normalizeProviderOriginHostname(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value.trim()) {
+    return undefined;
   }
-
-  return params.allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined;
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return undefined;
+    }
+    const normalized = parsed.hostname.trim().toLowerCase().replace(/\.+$/, "");
+    return normalized || undefined;
+  } catch {
+    return undefined;
+  }
 }
 
-export function buildGuardedModelFetch(model: Model<Api>, timeoutMs?: number): typeof fetch {
+function canImplicitlyTrustConfiguredBaseUrlOrigin(value: unknown): value is string {
+  const hostname = normalizeProviderOriginHostname(value);
+  if (!hostname) {
+    return false;
+  }
+  const labels = hostname.split(".").filter(Boolean);
+  return (
+    !labels.some(
+      (label) =>
+        label.includes("metadata") || BLOCKED_EXACT_ORIGIN_TRUST_HOSTNAME_LABELS.has(label),
+    ) &&
+    !isLinkLocalIpAddress(hostname) &&
+    !isCloudMetadataIpAddress(hostname)
+  );
+}
+
+function canApplyFakeIpHostnamePolicy(value: unknown): value is string {
+  const hostname = normalizeProviderOriginHostname(value);
+  if (!hostname) {
+    return false;
+  }
+  const labels = hostname.split(".").filter(Boolean);
+  return (
+    !labels.some(
+      (label) =>
+        label.includes("metadata") || BLOCKED_EXACT_ORIGIN_TRUST_HOSTNAME_LABELS.has(label),
+    ) && !parseCanonicalIpAddress(hostname)
+  );
+}
+
+function resolveModelTransportSsrFPolicy(params: {
+  model: Model;
+  url: string;
+  allowPrivateNetwork?: boolean;
+  trustConfiguredBaseUrlOrigin?: boolean;
+}): SsrFPolicy | undefined {
+  const baseUrl = (params.model as { baseUrl?: unknown }).baseUrl;
+  const baseOrigin = resolveHttpOrigin(baseUrl);
+  const requestOrigin = resolveHttpOrigin(params.url);
+  const requestMatchesBaseOrigin =
+    typeof baseUrl === "string" && Boolean(baseOrigin) && requestOrigin === baseOrigin;
+  const baseUrlOriginPolicy =
+    requestMatchesBaseOrigin &&
+    params.trustConfiguredBaseUrlOrigin &&
+    canImplicitlyTrustConfiguredBaseUrlOrigin(baseUrl)
+      ? ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl)
+      : undefined;
+  // Fake-IP trust is hostname-scoped and orthogonal to exact-origin private-IP trust.
+  // It is for DNS hostnames only and does not allow literal private IPs by itself.
+  const fakeIpPolicy =
+    requestMatchesBaseOrigin && canApplyFakeIpHostnamePolicy(baseUrl)
+      ? ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist(baseUrl)
+      : undefined;
+  return mergeSsrFPolicies(
+    baseUrlOriginPolicy,
+    fakeIpPolicy,
+    params.allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined,
+  );
+}
+
+export function buildGuardedModelFetch(
+  model: Model,
+  timeoutMs?: number,
+  options?: { sanitizeSse?: boolean },
+): typeof fetch {
   const requestConfig = resolveModelRequestPolicy(model);
   const dispatcherPolicy = buildProviderRequestDispatcherPolicy(requestConfig);
   const requestTimeoutMs = resolveModelRequestTimeoutMs(model, timeoutMs);
+  const summarizeError = (error: unknown): string => {
+    if (!error || typeof error !== "object") {
+      return `type=${typeof error}`;
+    }
+    const record = error as Record<string, unknown>;
+    const cause =
+      record.cause && typeof record.cause === "object"
+        ? (record.cause as Record<string, unknown>)
+        : undefined;
+    const read = (value: unknown) => (typeof value === "string" ? value : typeof value);
+    return [
+      `name=${read(record.name)}`,
+      `code=${read(record.code)}`,
+      `causeName=${read(cause?.name)}`,
+      `causeCode=${read(cause?.code)}`,
+      `message=${error instanceof Error ? error.message : read(record.message)}`,
+    ].join(" ");
+  };
   return async (input, init) => {
+    let localServiceLease: ProviderLocalServiceLease | undefined;
     const request = input instanceof Request ? new Request(input, init) : undefined;
     const url =
       request?.url ??
@@ -333,6 +561,12 @@ export function buildGuardedModelFetch(model: Model<Api>, timeoutMs?: number): t
       model,
       url,
       allowPrivateNetwork: requestConfig.allowPrivateNetwork,
+      // Only operator-configured custom/local endpoints get exact-origin trust;
+      // known public/native providers keep the default rebinding checks.
+      trustConfiguredBaseUrlOrigin:
+        !requestConfig.privateNetworkExplicitlyDenied &&
+        (requestConfig.policy?.endpointClass === "custom" ||
+          requestConfig.policy?.endpointClass === "local"),
     });
     const requestInit =
       request &&
@@ -344,9 +578,13 @@ export function buildGuardedModelFetch(model: Model<Api>, timeoutMs?: number): t
         signal: request.signal,
         ...(request.body ? ({ duplex: "half" } as const) : {}),
       } satisfies RequestInit & { duplex?: "half" });
+    const baseInit = requestInit ?? init;
+    const synthesizeJsonAsSse = await requestBodyHasStreamTrue(request, baseInit);
+    const baseSignal = baseInit?.signal ?? undefined;
+    const localServiceSignal = buildModelRequestSignal(baseSignal, requestTimeoutMs);
     const guardedFetchOptions = {
       url,
-      init: requestInit ?? init,
+      init: baseInit,
       capture: {
         meta: {
           provider: model.provider,
@@ -356,17 +594,48 @@ export function buildGuardedModelFetch(model: Model<Api>, timeoutMs?: number): t
       },
       dispatcherPolicy,
       timeoutMs: requestTimeoutMs,
+      ...(baseSignal ? { signal: baseSignal } : {}),
       // Provider transport intentionally keeps the secure default and never
       // replays unsafe request bodies across cross-origin redirects.
       allowCrossOriginUnsafeRedirectReplay: false,
       ...(policy ? { policy } : {}),
     };
-    const result = await fetchWithSsrFGuard(
-      !dispatcherPolicy && shouldUseEnvHttpProxyForUrl(url)
-        ? withTrustedEnvProxyGuardedFetchMode(guardedFetchOptions)
-        : guardedFetchOptions,
+    let result: Awaited<ReturnType<typeof fetchWithSsrFGuard>>;
+    const fetchStartedAt = Date.now();
+    const useEnvProxy = !dispatcherPolicy && shouldUseEnvHttpProxyForUrl(url);
+    emitModelTransportDebug(
+      log,
+      `[model-fetch] start provider=${model.provider} api=${model.api} model=${model.id} ` +
+        `method=${baseInit?.method ?? "GET"} url=${formatModelTransportDebugUrl(url)} timeoutMs=${requestTimeoutMs} ` +
+        `proxy=${dispatcherPolicy ? "configured" : useEnvProxy ? "env" : "none"} ` +
+        `policy=${policy ? "custom" : "default"}`,
     );
+    try {
+      localServiceLease = await ensureModelProviderLocalService(
+        model,
+        baseInit?.headers,
+        localServiceSignal,
+      );
+      result = await fetchWithSsrFGuard(
+        useEnvProxy
+          ? withTrustedEnvProxyGuardedFetchMode(guardedFetchOptions)
+          : guardedFetchOptions,
+      );
+    } catch (error) {
+      log.warn(
+        `[model-fetch] error provider=${model.provider} api=${model.api} model=${model.id} ` +
+          `elapsedMs=${Date.now() - fetchStartedAt} ${summarizeError(error)}`,
+      );
+      localServiceLease?.release();
+      throw error;
+    }
     let response = result.response;
+    emitModelTransportDebug(
+      log,
+      `[model-fetch] response provider=${model.provider} api=${model.api} model=${model.id} ` +
+        `status=${response.status} elapsedMs=${Date.now() - fetchStartedAt} ` +
+        `contentType=${response.headers.get("content-type") ?? ""}`,
+    );
     if (shouldBypassLongSdkRetry(response)) {
       const headers = new Headers(response.headers);
       headers.set("x-should-retry", "false");
@@ -376,7 +645,14 @@ export function buildGuardedModelFetch(model: Model<Api>, timeoutMs?: number): t
         headers,
       });
     }
-    response = buildManagedResponse(response, result.release, result.refreshTimeout);
-    return sanitizeOpenAISdkSseResponse(response);
+    response = buildManagedResponse(
+      response,
+      result.release,
+      result.refreshTimeout,
+      localServiceLease,
+    );
+    return options?.sanitizeSse === false || !shouldSanitizeOpenAISdkSseResponse(model)
+      ? response
+      : sanitizeOpenAISdkSseResponse(response, { synthesizeJsonAsSse });
   };
 }

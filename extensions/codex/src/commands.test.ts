@@ -1,11 +1,18 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import {
+  clearRuntimeAuthProfileStoreSnapshots,
+  replaceRuntimeAuthProfileStoreSnapshots,
+  resolveDefaultAgentDir,
+  type AuthProfileStore,
+} from "openclaw/plugin-sdk/agent-runtime";
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
 import type { CodexComputerUseStatus } from "./app-server/computer-use.js";
 import type { CodexAppServerStartOptions } from "./app-server/config.js";
+import type { JsonValue } from "./app-server/protocol.js";
 import {
   readRecentCodexRateLimits,
   resetCodexRateLimitCacheForTests,
@@ -15,6 +22,11 @@ import {
   resetCodexDiagnosticsFeedbackStateForTests,
   type CodexCommandDeps,
 } from "./command-handlers.js";
+import type {
+  CodexPluginsConfigBlock,
+  CodexPluginConfigEntry,
+  CodexPluginsManagementIO,
+} from "./command-plugins-management.js";
 import { handleCodexCommand } from "./commands.js";
 
 let tempDir: string;
@@ -38,6 +50,30 @@ function createContext(
     getCurrentConversationBinding: async () => null,
     ...overrides,
   };
+}
+
+function createSandboxedContext(
+  args: string,
+  sessionFile?: string,
+  overrides: Partial<PluginCommandContext> = {},
+): PluginCommandContext {
+  return createContext(args, sessionFile, {
+    config: { agents: { defaults: { sandbox: { mode: "all" } } } },
+    sessionKey: "sandboxed-session",
+    ...overrides,
+  } as Partial<PluginCommandContext>);
+}
+
+function createNodeExecContext(
+  args: string,
+  sessionFile?: string,
+  overrides: Partial<PluginCommandContext> = {},
+): PluginCommandContext {
+  return createContext(args, sessionFile, {
+    config: { tools: { exec: { host: "node", node: "worker-1" } } },
+    sessionKey: "node-session",
+    ...overrides,
+  } as Partial<PluginCommandContext>);
 }
 
 function createDeps(overrides: Partial<CodexCommandDeps> = {}): Partial<CodexCommandDeps> {
@@ -67,18 +103,118 @@ function createDeps(overrides: Partial<CodexCommandDeps> = {}): Partial<CodexCom
   };
 }
 
+function inMemoryCodexPluginsIO(
+  initial: Record<string, CodexPluginConfigEntry> = {},
+  options: { enabled?: boolean } = { enabled: true },
+): CodexPluginsManagementIO & {
+  current: () => Record<string, CodexPluginConfigEntry>;
+  currentConfig: () => CodexPluginsConfigBlock;
+} {
+  const store: CodexPluginsConfigBlock = {
+    enabled: options.enabled,
+    plugins: JSON.parse(JSON.stringify(initial)),
+  };
+  return {
+    current: () => JSON.parse(JSON.stringify(store.plugins ?? {})),
+    currentConfig: () => JSON.parse(JSON.stringify(store)),
+    readConfig: () => Promise.resolve(JSON.parse(JSON.stringify(store))),
+    mutate: async (update) => {
+      update(store);
+    },
+  };
+}
+
 function readDiagnosticsConfirmationToken(
   result: PluginCommandResult,
   commandPrefix = "/codex diagnostics",
 ): string {
   const text = result.text ?? "";
   const token = new RegExp(`${escapeRegExp(commandPrefix)} confirm ([a-f0-9]{12})`).exec(text)?.[1];
-  expect(token).toBeTruthy();
-  return token as string;
+  if (!token) {
+    throw new Error(`expected ${commandPrefix} confirmation token in command output`);
+  }
+  return token;
 }
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function requireResultText(result: PluginCommandResult): string {
+  if (typeof result.text !== "string") {
+    throw new Error("expected command result text");
+  }
+  return result.text;
+}
+
+function expectResultTextContains(result: PluginCommandResult, expected: string): void {
+  expect(requireResultText(result)).toContain(expected);
+}
+
+function installAuthProfileStore(store: AuthProfileStore, config: PluginCommandContext["config"]) {
+  replaceRuntimeAuthProfileStoreSnapshots([
+    {
+      agentDir: resolveDefaultAgentDir(config),
+      store,
+    },
+  ]);
+}
+
+function codexRateLimitPayload(params: {
+  primaryUsedPercent: number;
+  secondaryUsedPercent: number;
+  primaryResetSeconds: number;
+  secondaryResetSeconds: number;
+  reached?: boolean;
+}) {
+  return {
+    rateLimitsByLimitId: {
+      codex: {
+        limitId: "codex",
+        limitName: "Codex",
+        primary: {
+          usedPercent: params.primaryUsedPercent,
+          windowDurationMins: 300,
+          resetsAt: params.primaryResetSeconds,
+        },
+        secondary: {
+          usedPercent: params.secondaryUsedPercent,
+          windowDurationMins: 10080,
+          resetsAt: params.secondaryResetSeconds,
+        },
+        credits: null,
+        planType: "plus",
+        rateLimitReachedType: params.reached ? "rate_limit_reached" : null,
+      },
+    },
+  };
+}
+
+function requireRecord(value: unknown, message: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(message);
+  }
+  return value as Record<string, unknown>;
+}
+
+function mockCall(mockFn: ReturnType<typeof vi.fn>, callIndex = 0): ReadonlyArray<unknown> {
+  const call = mockFn.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected mock call ${callIndex + 1}`);
+  }
+  return call;
+}
+
+function mockArg(mockFn: ReturnType<typeof vi.fn>, callIndex: number, argIndex: number) {
+  return mockCall(mockFn, callIndex)[argIndex];
+}
+
+function requireRequestParams(call: unknown[] | undefined): Record<string, unknown> {
+  return requireRecord(call?.[2], "expected request params object");
+}
+
+function requestParams(mockFn: ReturnType<typeof vi.fn>, callIndex = 0): Record<string, unknown> {
+  return requireRecord(mockArg(mockFn, callIndex, 2), "expected request params object");
 }
 
 function expectedDiagnosticsTargetBlock(params: {
@@ -101,12 +237,15 @@ function expectedDiagnosticsTargetBlock(params: {
 describe("codex command", () => {
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-command-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
   });
 
   afterEach(async () => {
     resetCodexDiagnosticsFeedbackStateForTests();
     resetCodexRateLimitCacheForTests();
     resetSharedCodexAppServerClientForTests();
+    clearRuntimeAuthProfileStoreSnapshots();
+    vi.unstubAllEnvs();
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
@@ -115,6 +254,57 @@ describe("codex command", () => {
 
     expect(result.text).toContain("Unknown Codex command: &lt;\uff20U123&gt;");
     expect(result.text).not.toContain("<@U123>");
+  });
+
+  it("keeps command loader failures on the Codex command surface", async () => {
+    const result = await handleCodexCommand(createContext("account"), {
+      loadSubcommandHandler: async () => {
+        throw new Error("<@U123> loader failed");
+      },
+    });
+
+    expect(result.text).toContain("Codex command failed: &lt;\uff20U123&gt; loader failed");
+    expect(result.text).not.toContain("<@U123>");
+  });
+
+  it("lists Codex sub-plugins through the /codex plugins command surface", async () => {
+    const codexPluginsManagementIo = inMemoryCodexPluginsIO({
+      "google-calendar": {
+        enabled: true,
+        marketplaceName: "openai-curated",
+        pluginName: "google-calendar",
+      },
+    });
+
+    const result = await handleCodexCommand(createContext("plugins list"), {
+      deps: createDeps({ codexPluginsManagementIo }),
+    });
+
+    expectResultTextContains(result, "ON   google-calendar");
+    expectResultTextContains(result, "openclaw.json");
+  });
+
+  it("enables and disables Codex sub-plugins through the /codex plugins command surface", async () => {
+    const codexPluginsManagementIo = inMemoryCodexPluginsIO({
+      "google-calendar": {
+        enabled: true,
+        marketplaceName: "openai-curated",
+        pluginName: "google-calendar",
+      },
+    });
+
+    const disabled = await handleCodexCommand(createContext("plugins disable google-calendar"), {
+      deps: createDeps({ codexPluginsManagementIo }),
+    });
+    expectResultTextContains(disabled, "google-calendar: disabled in openclaw.json");
+    expect(codexPluginsManagementIo.current()["google-calendar"]?.enabled).toBe(false);
+
+    const enabled = await handleCodexCommand(createContext("plugins enable google-calendar"), {
+      deps: createDeps({ codexPluginsManagementIo }),
+    });
+    expectResultTextContains(enabled, "google-calendar: enabled in openclaw.json");
+    expect(codexPluginsManagementIo.currentConfig().enabled).toBe(true);
+    expect(codexPluginsManagementIo.current()["google-calendar"]?.enabled).toBe(true);
   });
 
   it("attaches the current session to an existing Codex thread", async () => {
@@ -166,6 +356,344 @@ describe("codex command", () => {
     expect(writeCodexAppServerBinding).not.toHaveBeenCalled();
   });
 
+  it.each([
+    "bind",
+    "resume thread-123",
+    "steer keep going",
+    "steer keep going --help",
+    "model --help",
+    "model gpt-5.5",
+    "fast on",
+    "permissions yolo",
+    "compact",
+    "review",
+  ])("blocks /codex %s in sandboxed sessions before native Codex execution", async (args) => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const codexControlRequest = vi.fn();
+    const startCodexConversationThread = vi.fn();
+    const steerCodexConversationTurn = vi.fn();
+    const setCodexConversationModel = vi.fn();
+    const setCodexConversationFastMode = vi.fn();
+    const setCodexConversationPermissions = vi.fn();
+    const stopCodexConversationTurn = vi.fn();
+
+    const result = await handleCodexCommand(createSandboxedContext(args, sessionFile), {
+      deps: createDeps({
+        codexControlRequest,
+        startCodexConversationThread,
+        steerCodexConversationTurn,
+        setCodexConversationModel,
+        setCodexConversationFastMode,
+        setCodexConversationPermissions,
+        stopCodexConversationTurn,
+      }),
+    });
+
+    expect(result.text).toContain(
+      "Codex-native /codex " +
+        args.split(/\s+/u)[0] +
+        " is unavailable because OpenClaw sandboxing is active for this session.",
+    );
+    expect(codexControlRequest).not.toHaveBeenCalled();
+    expect(startCodexConversationThread).not.toHaveBeenCalled();
+    expect(steerCodexConversationTurn).not.toHaveBeenCalled();
+    expect(setCodexConversationModel).not.toHaveBeenCalled();
+    expect(setCodexConversationFastMode).not.toHaveBeenCalled();
+    expect(setCodexConversationPermissions).not.toHaveBeenCalled();
+    expect(stopCodexConversationTurn).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "bind",
+    "resume thread-123",
+    "steer keep going",
+    "model gpt-5.5",
+    "fast on",
+    "permissions yolo",
+    "compact",
+    "review",
+  ])("blocks /codex %s when exec host=node is active", async (args) => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const codexControlRequest = vi.fn();
+    const startCodexConversationThread = vi.fn();
+    const steerCodexConversationTurn = vi.fn();
+    const setCodexConversationModel = vi.fn();
+    const setCodexConversationFastMode = vi.fn();
+    const setCodexConversationPermissions = vi.fn();
+    const stopCodexConversationTurn = vi.fn();
+
+    const result = await handleCodexCommand(createNodeExecContext(args, sessionFile), {
+      deps: createDeps({
+        codexControlRequest,
+        startCodexConversationThread,
+        steerCodexConversationTurn,
+        setCodexConversationModel,
+        setCodexConversationFastMode,
+        setCodexConversationPermissions,
+        stopCodexConversationTurn,
+      }),
+    });
+
+    expect(result.text).toContain(
+      "Codex-native /codex " +
+        args.split(/\s+/u)[0] +
+        " is unavailable because OpenClaw exec host=node is active for this session.",
+    );
+    expect(codexControlRequest).not.toHaveBeenCalled();
+    expect(startCodexConversationThread).not.toHaveBeenCalled();
+    expect(steerCodexConversationTurn).not.toHaveBeenCalled();
+    expect(setCodexConversationModel).not.toHaveBeenCalled();
+    expect(setCodexConversationFastMode).not.toHaveBeenCalled();
+    expect(setCodexConversationPermissions).not.toHaveBeenCalled();
+    expect(stopCodexConversationTurn).not.toHaveBeenCalled();
+  });
+
+  it("blocks config-level exec host=node without a session key", async () => {
+    const startCodexConversationThread = vi.fn();
+
+    const result = await handleCodexCommand(
+      createContext("bind", path.join(tempDir, "session.jsonl"), {
+        config: { tools: { exec: { host: "node", node: "worker-1" } } },
+      }),
+      {
+        deps: createDeps({
+          startCodexConversationThread,
+        }),
+      },
+    );
+
+    expect(result.text).toContain(
+      "Codex-native /codex bind is unavailable because OpenClaw exec host=node is active for this session.",
+    );
+    expect(startCodexConversationThread).not.toHaveBeenCalled();
+  });
+
+  it("still returns pre-native usage for malformed sandboxed native Codex commands", async () => {
+    const startCodexConversationThread = vi.fn();
+    const setCodexConversationModel = vi.fn();
+
+    await expect(
+      handleCodexCommand(createSandboxedContext("bind --help"), {
+        deps: createDeps({ startCodexConversationThread }),
+      }),
+    ).resolves.toEqual({
+      text: "Usage: /codex bind [thread-id] [--cwd <path>] [--model <model>] [--provider <provider>]",
+    });
+    expect(startCodexConversationThread).not.toHaveBeenCalled();
+
+    await expect(
+      handleCodexCommand(createSandboxedContext("model gpt-5.5 --help"), {
+        deps: createDeps({ setCodexConversationModel }),
+      }),
+    ).resolves.toEqual({
+      text: "Usage: /codex model <model>",
+    });
+    expect(setCodexConversationModel).not.toHaveBeenCalled();
+
+    await expect(
+      handleCodexCommand(createSandboxedContext("resume"), { deps: createDeps() }),
+    ).resolves.toEqual({
+      text: "Usage: /codex resume <thread-id>",
+    });
+
+    const resolveCodexCliSessionForBindingOnNode = vi.fn();
+    await expect(
+      handleCodexCommand(createSandboxedContext("resume cli-1 --host node-1"), {
+        deps: createDeps({ resolveCodexCliSessionForBindingOnNode }),
+      }),
+    ).resolves.toEqual({
+      text: "Usage: /codex resume <session-id> --host <node> --bind here",
+    });
+    expect(resolveCodexCliSessionForBindingOnNode).not.toHaveBeenCalled();
+
+    await expect(
+      handleCodexCommand(createSandboxedContext("resume cli-1 --host node-1 --bind here extra"), {
+        deps: createDeps({ resolveCodexCliSessionForBindingOnNode }),
+      }),
+    ).resolves.toEqual({
+      text: "Usage: /codex resume <thread-id>\nUsage: /codex resume <session-id> --host <node> --bind here",
+    });
+    expect(resolveCodexCliSessionForBindingOnNode).not.toHaveBeenCalled();
+
+    await expect(
+      handleCodexCommand(createSandboxedContext("steer", path.join(tempDir, "session.jsonl")), {
+        deps: createDeps(),
+      }),
+    ).resolves.toEqual({
+      text: "Usage: /codex steer <message>",
+    });
+
+    await expect(
+      handleCodexCommand(createSandboxedContext("stop now"), {
+        deps: createDeps({ stopCodexConversationTurn: vi.fn() }),
+      }),
+    ).resolves.toEqual({
+      text: "Usage: /codex stop",
+    });
+  });
+
+  it("allows local Codex binding status forms in sandboxed sessions", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({
+        schemaVersion: 1,
+        threadId: "thread-status",
+        cwd: tempDir,
+        model: "gpt-5.5",
+        approvalPolicy: "never",
+        sandbox: "danger-full-access",
+        serviceTier: "priority",
+      }),
+    );
+
+    await expect(
+      handleCodexCommand(createSandboxedContext("model", sessionFile), { deps: createDeps() }),
+    ).resolves.toEqual({ text: "Codex model: gpt-5.5" });
+    await expect(
+      handleCodexCommand(createSandboxedContext("fast status", sessionFile), {
+        deps: createDeps(),
+      }),
+    ).resolves.toEqual({ text: "Codex fast mode: on." });
+    await expect(
+      handleCodexCommand(createSandboxedContext("permissions status", sessionFile), {
+        deps: createDeps(),
+      }),
+    ).resolves.toEqual({ text: "Codex permissions: full access." });
+  });
+
+  it("lists Codex CLI sessions from a requested node", async () => {
+    const listCodexCliSessionsOnNode = vi.fn(async () => ({
+      node: { nodeId: "mb-m5", displayName: "mb-m5" },
+      result: {
+        codexHome: "/Users/mariano/.codex",
+        sessions: [
+          {
+            sessionId: "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd",
+            cwd: "/repo",
+            updatedAt: "2026-05-13T06:30:00.000Z",
+            lastMessage: "fix the bridge",
+            messageCount: 2,
+          },
+        ],
+      },
+    }));
+
+    const result = await handleCodexCommand(createContext("sessions --host mb-m5 bridge"), {
+      deps: createDeps({ listCodexCliSessionsOnNode }),
+    });
+
+    expect(result.text).toContain("Codex CLI sessions on mb-m5 / mb-m5:");
+    expect(result.text).toContain("019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd");
+    expect(result.text).toContain(
+      "Bind: /codex resume 019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd --host mb-m5 --bind here",
+    );
+    expect(listCodexCliSessionsOnNode).toHaveBeenCalledWith({
+      requestedNode: "mb-m5",
+      filter: "bridge",
+      limit: undefined,
+    });
+  });
+
+  it("rejects partial Codex CLI session limits before node dispatch", async () => {
+    const listCodexCliSessionsOnNode = vi.fn();
+
+    const result = await handleCodexCommand(createContext("sessions --host mb-m5 --limit 5x"), {
+      deps: createDeps({ listCodexCliSessionsOnNode }),
+    });
+
+    expect(result.text).toBe("Usage: /codex sessions --host <node> [filter] [--limit <n>]");
+    expect(listCodexCliSessionsOnNode).not.toHaveBeenCalled();
+  });
+
+  it("rejects fractional Codex CLI session limits before node dispatch", async () => {
+    const listCodexCliSessionsOnNode = vi.fn();
+
+    const result = await handleCodexCommand(createContext("sessions --host mb-m5 --limit 5.5"), {
+      deps: createDeps({ listCodexCliSessionsOnNode }),
+    });
+
+    expect(result.text).toBe("Usage: /codex sessions --host <node> [filter] [--limit <n>]");
+    expect(listCodexCliSessionsOnNode).not.toHaveBeenCalled();
+  });
+
+  it("binds the current conversation to a Codex CLI node session", async () => {
+    const requestConversationBinding = vi.fn(async () => ({
+      status: "bound" as const,
+      binding: {
+        bindingId: "binding-1",
+        pluginId: "codex",
+        pluginRoot: "/plugin",
+        channel: "test",
+        accountId: "default",
+        conversationId: "conversation",
+        boundAt: 1,
+      },
+    }));
+    const resolveCodexCliSessionForBindingOnNode = vi.fn(async () => ({
+      node: { nodeId: "node-123", displayName: "mb-m5" },
+      session: {
+        sessionId: "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd",
+        cwd: "/repo",
+        messageCount: 2,
+      },
+    }));
+
+    await expect(
+      handleCodexCommand(
+        createNodeExecContext(
+          "resume 019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd --host mb-m5 --bind here",
+          undefined,
+          { requestConversationBinding },
+        ),
+        {
+          deps: createDeps({ resolveCodexCliSessionForBindingOnNode }),
+        },
+      ),
+    ).resolves.toEqual({
+      text: "Bound this conversation to Codex CLI session 019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd on node-123.",
+    });
+    expect(resolveCodexCliSessionForBindingOnNode).toHaveBeenCalledWith({
+      requestedNode: "mb-m5",
+      sessionId: "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd",
+    });
+    expect(requestConversationBinding).toHaveBeenCalledWith({
+      summary: "Codex CLI session 019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd on node-123",
+      detachHint: "/codex detach",
+      data: {
+        kind: "codex-cli-node-session",
+        version: 1,
+        nodeId: "node-123",
+        sessionId: "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd",
+        cwd: "/repo",
+      },
+    });
+  });
+
+  it("refuses to bind a Codex CLI node session that the node did not list", async () => {
+    const requestConversationBinding = vi.fn();
+    const resolveCodexCliSessionForBindingOnNode = vi.fn(async () => ({
+      node: { nodeId: "node-123", displayName: "mb-m5" },
+      session: undefined,
+    }));
+
+    await expect(
+      handleCodexCommand(
+        createContext(
+          "resume 019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd --host mb-m5 --bind here",
+          undefined,
+          { requestConversationBinding },
+        ),
+        {
+          deps: createDeps({ resolveCodexCliSessionForBindingOnNode }),
+        },
+      ),
+    ).resolves.toEqual({
+      text: "No Codex CLI session 019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd was found on mb-m5.",
+    });
+    expect(requestConversationBinding).not.toHaveBeenCalled();
+  });
+
   it("escapes resumed Codex thread ids before chat display", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const unsafe = "thread-123 <@U123> [trusted](https://evil)";
@@ -188,17 +716,18 @@ describe("codex command", () => {
 
   it("shows model ids from Codex app-server", async () => {
     const config = { auth: { order: { "openai-codex": ["openai-codex:work"] } } };
+    const listCodexAppServerModels = vi.fn(async (_options?: { config?: unknown }) => ({
+      models: [
+        {
+          id: "gpt-5.4",
+          model: "gpt-5.4",
+          inputModalities: ["text"],
+          supportedReasoningEfforts: ["medium"],
+        },
+      ],
+    }));
     const deps = createDeps({
-      listCodexAppServerModels: vi.fn(async () => ({
-        models: [
-          {
-            id: "gpt-5.4",
-            model: "gpt-5.4",
-            inputModalities: ["text"],
-            supportedReasoningEfforts: ["medium"],
-          },
-        ],
-      })),
+      listCodexAppServerModels,
     });
 
     await expect(
@@ -207,7 +736,8 @@ describe("codex command", () => {
       text: "Codex models:\n- gpt-5.4",
     });
     expect(deps.requestOptions).toHaveBeenCalledWith(undefined, 100, config);
-    expect(deps.listCodexAppServerModels).toHaveBeenCalledWith(expect.objectContaining({ config }));
+    const modelsRequest = mockArg(listCodexAppServerModels, 0, 0) as { config?: unknown };
+    expect(modelsRequest?.config).toBe(config);
   });
 
   it("shows when Codex app-server model output is truncated", async () => {
@@ -383,6 +913,62 @@ describe("codex command", () => {
     expect(result.text).not.toContain("@here");
   });
 
+  it("summarizes Codex status skill groups by enabled nested skills", async () => {
+    const deps = createDeps({
+      readCodexStatusProbes: vi.fn(async () => ({
+        models: { ok: true as const, value: { models: [] } },
+        account: { ok: true as const, value: {} },
+        limits: { ok: true as const, value: { rateLimits: null, rateLimitsByLimitId: null } },
+        mcps: { ok: true as const, value: { data: [] } },
+        skills: {
+          ok: true as const,
+          value: {
+            data: [
+              {
+                cwd: "/repo-a",
+                skills: [
+                  {
+                    name: "enabled-one",
+                    description: "",
+                    path: "/repo-a/.codex/skills/enabled-one/SKILL.md",
+                    scope: "repo" as const,
+                    enabled: true,
+                  },
+                  {
+                    name: "disabled-one",
+                    description: "",
+                    path: "/repo-a/.codex/skills/disabled-one/SKILL.md",
+                    scope: "repo" as const,
+                    enabled: false,
+                  },
+                ],
+                errors: [],
+              },
+              {
+                cwd: "/repo-b",
+                skills: [
+                  {
+                    name: "enabled-two",
+                    description: "",
+                    path: "/repo-b/.codex/skills/enabled-two/SKILL.md",
+                    scope: "repo" as const,
+                    enabled: true,
+                  },
+                ],
+                errors: [{ path: "/repo-b/bad/SKILL.md", message: "bad skill" }],
+              },
+            ],
+          },
+        },
+      })),
+    });
+
+    const result = await handleCodexCommand(createContext("status"), { deps });
+
+    expect(result.text).toContain("Skills: 2");
+    expect(result.text).not.toContain("Skills: 1");
+  });
+
   it("summarizes generated Codex rate-limit payloads", async () => {
     const limits = {
       ok: true as const,
@@ -426,12 +1012,75 @@ describe("codex command", () => {
         .mockResolvedValueOnce(limits),
     });
 
-    await expect(handleCodexCommand(createContext("status"), { deps })).resolves.toMatchObject({
-      text: expect.stringContaining("Rate limits: Codex: primary 42%"),
+    const statusResult = await handleCodexCommand(createContext("status"), { deps });
+    expectResultTextContains(statusResult, "Rate limits: Codex: primary 58% left");
+    const accountResult = await handleCodexCommand(createContext("account"), { deps });
+    expectResultTextContains(accountResult, "Codex is available.");
+  });
+
+  it("does not count empty Codex rate-limit buckets as returned limits", async () => {
+    const limits = {
+      ok: true as const,
+      value: {
+        rateLimits: [
+          {
+            limitId: "codex",
+            limitName: "Codex",
+            primary: null,
+            secondary: null,
+            credits: null,
+            planType: "plus",
+            rateLimitReachedType: null,
+          },
+        ],
+        rateLimitsByLimitId: {
+          premium: {
+            limitId: "premium",
+            limitName: "premium",
+            primary: null,
+            secondary: null,
+            credits: null,
+            planType: "pro",
+            rateLimitReachedType: null,
+          },
+          codex: {
+            limitId: "codex",
+            limitName: "Codex",
+            primary: null,
+            secondary: null,
+            credits: null,
+            planType: "plus",
+            rateLimitReachedType: null,
+          },
+        },
+      },
+    };
+    const deps = createDeps({
+      readCodexStatusProbes: vi.fn(async () => ({
+        models: { ok: false as const, error: "offline" },
+        account: { ok: false as const, error: "offline" },
+        limits,
+        mcps: { ok: true as const, value: { data: [], nextCursor: null } },
+        skills: { ok: true as const, value: { data: [] } },
+      })),
+      safeCodexControlRequest: vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true as const,
+          value: { account: { email: "codex@example.com" } },
+        })
+        .mockResolvedValueOnce(limits),
     });
-    await expect(handleCodexCommand(createContext("account"), { deps })).resolves.toMatchObject({
-      text: expect.stringContaining("Rate limits: Codex: primary 42%"),
-    });
+
+    const statusResult = await handleCodexCommand(createContext("status"), { deps });
+    expectResultTextContains(statusResult, "Rate limits: none returned");
+    expect(statusResult.text).not.toContain("Rate limits: 1");
+    expect(statusResult.text).not.toContain("premium");
+
+    const accountResult = await handleCodexCommand(createContext("account"), { deps });
+    expectResultTextContains(accountResult, "Rate limits: none returned");
+    expect(accountResult.text).not.toContain("Rate limits: 1");
+    expect(accountResult.text).not.toContain("premium");
   });
 
   it("rejects extra operands for read-only Codex commands", async () => {
@@ -512,10 +1161,14 @@ describe("codex command", () => {
     });
 
     expect(result.text).toContain("Account: codex@example.com");
-    expect(result.text).toContain("Rate limits: Codex: primary 50%, resets in");
-    expect(readRecentCodexRateLimits()).toMatchObject({
-      rateLimits: { limitId: "codex" },
-    });
+    expect(result.text).toContain("Codex is available.");
+    const cachedLimits = requireRecord(
+      readRecentCodexRateLimits(),
+      "expected cached Codex rate limits",
+    );
+    expect(requireRecord(cachedLimits.rateLimits, "expected rate limits object").limitId).toBe(
+      "codex",
+    );
     expect(safeCodexControlRequest).toHaveBeenCalledWith(undefined, CODEX_CONTROL_METHODS.account, {
       refreshToken: false,
     });
@@ -538,6 +1191,635 @@ describe("codex command", () => {
     expect(result.text).not.toContain("<@U123>");
     expect(result.text).not.toContain("[trusted](https://evil)");
     expect(result.text).not.toContain("@here");
+  });
+
+  it("summarizes blocked account rate limits as a human takeaway", async () => {
+    const resetsAt = Math.ceil(Date.now() / 1000) + 120;
+    const safeCodexControlRequest = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        value: {
+          account: { type: "chatgpt", email: "codex@example.com", planType: "pro" },
+          requiresOpenaiAuth: false,
+        },
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        value: {
+          rateLimitsByLimitId: {
+            codex: {
+              limitId: "codex",
+              limitName: "Codex",
+              primary: { usedPercent: 0, windowDurationMins: 300, resetsAt },
+              secondary: { usedPercent: 100, windowDurationMins: 10080, resetsAt: resetsAt + 3600 },
+              credits: null,
+              planType: "plus",
+              rateLimitReachedType: "rate_limit_reached",
+            },
+            "gpt-5.3-codex-spark": {
+              limitId: "gpt-5.3-codex-spark",
+              limitName: "GPT 5.3 Codex Spark",
+              primary: { usedPercent: 0, windowDurationMins: 300, resetsAt },
+              secondary: { usedPercent: 0, windowDurationMins: 10080, resetsAt: resetsAt + 3600 },
+              credits: null,
+              planType: "plus",
+              rateLimitReachedType: null,
+            },
+          },
+        },
+      });
+
+    const result = await handleCodexCommand(createContext("account"), {
+      deps: createDeps({ safeCodexControlRequest }),
+    });
+
+    expect(result.text).toContain("Codex is paused until ");
+    expect(result.text).toContain("Your weekly Codex usage limit is reached.");
+    expect(result.text).not.toContain("GPT 5.3 Codex Spark");
+    expect(result.text).not.toContain("Primary:");
+    expect(result.text).not.toContain("Secondary:");
+    expect(result.text).not.toContain("Bucket:");
+    expect(result.text).not.toContain("Why:");
+    expect(result.text).not.toContain("5-hour");
+    expect(result.text).not.toContain("100%");
+    expect(result.text).not.toContain("; GPT 5.3 Codex Spark");
+    expect(result.text).not.toContain("\uff08rate limit reached\uff09");
+  });
+
+  it("shows the active ChatGPT subscription and API-key backup ladder", async () => {
+    const config = {};
+    const now = Date.now();
+    const resetsAt = Math.ceil(now / 1000) + 120;
+    installAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          "openai:personal-email@gmail.com": {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "access-token",
+            refresh: "refresh-token",
+            expires: now + 60 * 60 * 1000,
+            email: "personal-email@gmail.com",
+          },
+          "openai:api-key-backup": {
+            type: "api_key",
+            provider: "openai",
+            key: "sk-test-backup",
+          },
+        },
+        order: {
+          openai: ["openai:personal-email@gmail.com", "openai:api-key-backup"],
+        },
+        lastGood: {
+          openai: "openai:personal-email@gmail.com",
+        },
+        usageStats: {
+          "openai:personal-email@gmail.com": {
+            lastUsed: now - 1_000,
+          },
+        },
+      },
+      config,
+    );
+
+    const safeCodexControlRequest = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        value: {
+          account: { type: "chatgpt", email: "personal-email@gmail.com", planType: "pro" },
+          requiresOpenaiAuth: false,
+        },
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        value: codexRateLimitPayload({
+          primaryUsedPercent: 12,
+          secondaryUsedPercent: 63,
+          primaryResetSeconds: resetsAt,
+          secondaryResetSeconds: resetsAt + 3600,
+        }),
+      });
+
+    const result = await handleCodexCommand(createContext("account", undefined, { config }), {
+      deps: createDeps({ safeCodexControlRequest }),
+    });
+
+    expect(result.text).toContain("Subscription  personal-email@gmail.com");
+    expect(result.text).toContain("\n  Weekly 63% \u00b7 Short-term 12%");
+    expect(result.text).toContain("Auth order");
+    expect(result.text).toContain(
+      "\n  1. personal-email@gmail.com   ChatGPT subscription   — active now",
+    );
+    expect(result.text).toContain("\n  2. api-key-backup   API key   — available if needed");
+    expect(result.text).not.toContain("Now using:");
+    expect(result.text).not.toContain("openai:api-key-backup");
+    expect(result.text).not.toContain("primary");
+    expect(result.text).not.toContain("secondary");
+  });
+
+  it("prefers the live ChatGPT account over stale API-key lastGood state", async () => {
+    const config = {};
+    const now = Date.now();
+    installAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          "openai:personal-email@gmail.com": {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "access-token",
+            refresh: "refresh-token",
+            expires: now + 60 * 60 * 1000,
+            email: "personal-email@gmail.com",
+          },
+          "openai:api-key-backup": {
+            type: "api_key",
+            provider: "openai",
+            key: "sk-test-backup",
+          },
+        },
+        order: {
+          openai: ["openai:personal-email@gmail.com", "openai:api-key-backup"],
+        },
+        lastGood: {
+          openai: "openai:api-key-backup",
+        },
+      },
+      config,
+    );
+
+    const safeCodexControlRequest = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        value: {
+          account: { type: "chatgpt", email: "personal-email@gmail.com", planType: "pro" },
+          requiresOpenaiAuth: false,
+        },
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        value: codexRateLimitPayload({
+          primaryUsedPercent: 12,
+          secondaryUsedPercent: 63,
+          primaryResetSeconds: Math.ceil(now / 1000) + 120,
+          secondaryResetSeconds: Math.ceil(now / 1000) + 3600,
+        }),
+      });
+
+    const result = await handleCodexCommand(createContext("account", undefined, { config }), {
+      deps: createDeps({ safeCodexControlRequest }),
+    });
+
+    expect(result.text).toContain(
+      "\n  1. personal-email@gmail.com   ChatGPT subscription   — active now",
+    );
+    expect(result.text).toContain("\n  2. api-key-backup   API key   — available if needed");
+    expect(result.text).not.toContain("Now using: api-key-backup");
+    expect(result.text).not.toContain("subscription unavailable");
+  });
+
+  it("shows Codex auth order before OpenAI fallback order", async () => {
+    const config = {
+      auth: {
+        order: {
+          openai: ["openai:api-key"],
+          "openai-codex": ["openai-codex:personal-email@gmail.com"],
+        },
+      },
+    };
+    const now = Date.now();
+    installAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          "openai:api-key": {
+            type: "api_key",
+            provider: "openai",
+            key: "sk-test",
+          },
+          "openai-codex:personal-email@gmail.com": {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "access-token",
+            refresh: "refresh-token",
+            expires: now + 60 * 60 * 1000,
+            email: "personal-email@gmail.com",
+          },
+        },
+        lastGood: {
+          "openai-codex": "openai-codex:personal-email@gmail.com",
+        },
+      },
+      config,
+    );
+
+    const safeCodexControlRequest = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        value: {
+          account: { type: "chatgpt", email: "personal-email@gmail.com", planType: "plus" },
+          requiresOpenaiAuth: false,
+        },
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        value: codexRateLimitPayload({
+          primaryUsedPercent: 10,
+          secondaryUsedPercent: 20,
+          primaryResetSeconds: Math.ceil(now / 1000) + 120,
+          secondaryResetSeconds: Math.ceil(now / 1000) + 3600,
+        }),
+      });
+
+    const result = await handleCodexCommand(createContext("account", undefined, { config }), {
+      deps: createDeps({ safeCodexControlRequest }),
+    });
+
+    expect(result.text).toContain(
+      "\n  1. personal-email@gmail.com   ChatGPT subscription   — active now",
+    );
+    expect(result.text).not.toContain("api-key");
+  });
+
+  it("explains when an API-key backup is active because the subscription is paused", async () => {
+    const config = {};
+    const now = Date.now();
+    const primaryResetSeconds = Math.ceil(now / 1000) + 5 * 60 * 60;
+    const secondaryResetSeconds = Math.ceil(now / 1000) + 23 * 60 * 60;
+    installAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          "openai:personal-email@gmail.com": {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "access-token",
+            refresh: "refresh-token",
+            expires: now + 60 * 60 * 1000,
+            email: "personal-email@gmail.com",
+          },
+          "openai:api-key-backup": {
+            type: "api_key",
+            provider: "openai",
+            key: "sk-test-backup",
+          },
+          "openai:work-email@gmail.com": {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "work-access-token",
+            refresh: "work-refresh-token",
+            expires: now + 60 * 60 * 1000,
+            email: "work-email@gmail.com",
+          },
+          "openai:work-api-key-backup": {
+            type: "api_key",
+            provider: "openai",
+            key: "sk-test-work-backup",
+          },
+        },
+        order: {
+          openai: [
+            "openai:personal-email@gmail.com",
+            "openai:api-key-backup",
+            "openai:work-email@gmail.com",
+            "openai:work-api-key-backup",
+          ],
+        },
+      },
+      config,
+    );
+
+    const safeCodexControlRequest = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        value: {
+          account: { type: "apiKey" },
+          requiresOpenaiAuth: true,
+        },
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        error: "chatgpt authentication required to read rate limits",
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        value: codexRateLimitPayload({
+          primaryUsedPercent: 0,
+          secondaryUsedPercent: 100,
+          primaryResetSeconds,
+          secondaryResetSeconds,
+          reached: true,
+        }),
+      });
+
+    const result = await handleCodexCommand(createContext("account", undefined, { config }), {
+      deps: createDeps({ safeCodexControlRequest }),
+    });
+
+    expect(result.text).toContain("Now using: api-key-backup");
+    expect(result.text).toContain("subscription rate-limited \u00b7 switches back in");
+    expect(result.text).toContain("Subscription  personal-email@gmail.com");
+    expect(result.text).toContain("\n  Weekly 100% \u00b7 Short-term 0% \u00b7 Resets in");
+    expect(result.text).toContain(
+      "\n  1. personal-email@gmail.com   ChatGPT subscription   — rate-limited",
+    );
+    expect(result.text).toContain(
+      "\n  2. api-key-backup   API key   — active now \u00b7 billed per token",
+    );
+    expect(result.text).toContain(
+      "\n  3. work-email@gmail.com   ChatGPT subscription   — available if needed",
+    );
+    expect(result.text).toContain("\n  4. work-api-key-backup   API key   — available if needed");
+    expect(result.text).not.toContain("Reason:");
+    expect(result.text).not.toContain("fallback active");
+    expect(result.text).not.toContain("not tracked");
+    expect(result.text).not.toContain("chatgpt authentication required");
+    expect(result.text).not.toContain("openai:");
+    expect(result.text).not.toContain("primary");
+    expect(result.text).not.toContain("secondary");
+    expect(safeCodexControlRequest).toHaveBeenNthCalledWith(
+      3,
+      undefined,
+      CODEX_CONTROL_METHODS.rateLimits,
+      undefined,
+      {
+        config,
+        authProfileId: "openai:personal-email@gmail.com",
+        isolated: true,
+      },
+    );
+  });
+
+  it("does not report a blocked last-good subscription as active", async () => {
+    const config = {};
+    const now = Date.now();
+    const primaryResetSeconds = Math.ceil(now / 1000) + 5 * 60 * 60;
+    const secondaryResetSeconds = Math.ceil(now / 1000) + 23 * 60 * 60;
+    installAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          "openai:personal-email@gmail.com": {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "access-token",
+            refresh: "refresh-token",
+            expires: now + 60 * 60 * 1000,
+            email: "personal-email@gmail.com",
+          },
+          "openai:api-key-backup": {
+            type: "api_key",
+            provider: "openai",
+            key: "sk-test-backup",
+          },
+        },
+        order: {
+          openai: ["openai:personal-email@gmail.com", "openai:api-key-backup"],
+        },
+        lastGood: {
+          openai: "openai:personal-email@gmail.com",
+        },
+        usageStats: {
+          "openai:personal-email@gmail.com": {
+            lastUsed: now - 1_000,
+            blockedUntil: now + 23 * 60 * 60 * 1000,
+          },
+        },
+      },
+      config,
+    );
+
+    const safeCodexControlRequest = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        value: {
+          account: { type: "unknown" },
+          requiresOpenaiAuth: true,
+        },
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        error: "chatgpt authentication required to read rate limits",
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        value: codexRateLimitPayload({
+          primaryUsedPercent: 0,
+          secondaryUsedPercent: 100,
+          primaryResetSeconds,
+          secondaryResetSeconds,
+          reached: true,
+        }),
+      });
+
+    const result = await handleCodexCommand(createContext("account", undefined, { config }), {
+      deps: createDeps({ safeCodexControlRequest }),
+    });
+
+    expect(result.text).toContain("Now using: api-key-backup");
+    expect(result.text).toContain("subscription rate-limited");
+    expect(result.text).toContain(
+      "\n  1. api-key-backup   API key   — active now \u00b7 billed per token",
+    );
+    expect(result.text).toContain(
+      "\n  2. personal-email@gmail.com   ChatGPT subscription   — rate-limited",
+    );
+    expect(result.text).not.toContain(
+      "personal-email@gmail.com   ChatGPT subscription   — active now",
+    );
+  });
+
+  it("respects explicit Codex auth order over stale lastGood after OAuth re-login", async () => {
+    const config = {};
+    const now = Date.now();
+    installAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          "openai-codex:default": {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "stale-access-token",
+            refresh: "stale-refresh-token",
+            expires: now + 2 * 24 * 60 * 60 * 1000,
+            email: "previous@example.com",
+          },
+          "openai-codex:fresh-email@example.com": {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "fresh-access-token",
+            refresh: "fresh-refresh-token",
+            expires: now + 9 * 24 * 60 * 60 * 1000,
+            email: "fresh-email@example.com",
+          },
+        },
+        order: {
+          "openai-codex": ["openai-codex:fresh-email@example.com", "openai-codex:default"],
+        },
+        lastGood: {
+          "openai-codex": "openai-codex:default",
+        },
+      },
+      config,
+    );
+
+    const safeCodexControlRequest = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        value: { account: { type: "unknown" }, requiresOpenaiAuth: true },
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        value: codexRateLimitPayload({
+          primaryUsedPercent: 5,
+          secondaryUsedPercent: 10,
+          primaryResetSeconds: Math.ceil(now / 1000) + 60 * 60,
+          secondaryResetSeconds: Math.ceil(now / 1000) + 6 * 60 * 60,
+        }),
+      });
+
+    const result = await handleCodexCommand(createContext("account", undefined, { config }), {
+      deps: createDeps({ safeCodexControlRequest }),
+    });
+
+    expect(result.text).toContain(
+      "\n  1. fresh-email@example.com   ChatGPT subscription   — active now",
+    );
+    expect(result.text).toContain(
+      "\n  2. previous@example.com   ChatGPT subscription   — available if needed",
+    );
+    expect(result.text).not.toContain("previous@example.com   ChatGPT subscription   — active now");
+    expect(result.text).not.toContain("openai-codex:");
+    expect(safeCodexControlRequest).toHaveBeenCalledTimes(2);
+  });
+
+  it("respects openai-alias explicit order over stale lastGood for API key profiles", async () => {
+    const config = {};
+    const now = Date.now();
+    installAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          "openai:fresh-key": {
+            type: "api_key",
+            provider: "openai",
+            key: "sk-fresh-111",
+          },
+          "openai:stale-key": {
+            type: "api_key",
+            provider: "openai",
+            key: "sk-stale-222",
+          },
+        },
+        order: {
+          openai: ["openai:fresh-key", "openai:stale-key"],
+        },
+        lastGood: {
+          openai: "openai:stale-key",
+        },
+      },
+      config,
+    );
+
+    const safeCodexControlRequest = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        value: { account: { type: "unknown" }, requiresOpenaiAuth: false },
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        error: "usage data unavailable",
+      });
+
+    const result = await handleCodexCommand(createContext("account", undefined, { config }), {
+      deps: createDeps({ safeCodexControlRequest }),
+    });
+
+    expect(result.text).toContain("\n  1. fresh-key   API key   — active now");
+    expect(result.text).not.toContain("stale-key   API key   — active now");
+    expect(safeCodexControlRequest).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not mark any profile active when all explicit-order token credentials are expired", async () => {
+    // Both profiles use type:"token" with expired expiry, so resolveAuthProfileEligibility
+    // returns eligible=false for both. resolveActiveProfileId must return undefined rather
+    // than marking an ineligible profile as active; the display shows "no working credential".
+    const config = {};
+    const now = Date.now();
+    installAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          "openai-codex:fresh@example.com": {
+            type: "token",
+            provider: "openai-codex",
+            token: "fresh-token",
+            expires: now - 1000,
+            email: "fresh@example.com",
+          },
+          "openai-codex:stale@example.com": {
+            type: "token",
+            provider: "openai-codex",
+            token: "stale-token",
+            expires: now - 2000,
+            email: "stale@example.com",
+          },
+        },
+        order: {
+          "openai-codex": ["openai-codex:fresh@example.com", "openai-codex:stale@example.com"],
+        },
+        lastGood: {
+          "openai-codex": "openai-codex:stale@example.com",
+        },
+      },
+      config,
+    );
+
+    const safeCodexControlRequest = vi
+      .fn()
+      // call 1: account info for the active/first profile
+      .mockResolvedValueOnce({
+        ok: true,
+        value: { account: { type: "unknown" }, requiresOpenaiAuth: true },
+      })
+      // call 2: rate limits for the active profile
+      .mockResolvedValueOnce({
+        ok: false,
+        error: "rate limits unavailable",
+      })
+      // call 3: readSubscriptionUsage — no activeProfileId means the subscription
+      // profile (fresh, type:"token") is fetched separately
+      .mockResolvedValueOnce({
+        ok: false,
+        error: "subscription limits unavailable",
+      });
+
+    const result = await handleCodexCommand(createContext("account", undefined, { config }), {
+      deps: createDeps({ safeCodexControlRequest }),
+    });
+
+    // With all credentials expired, no profile is active — the display shows
+    // "no working credential" and both profiles are labelled "sign-in expired".
+    // lastGood (stale) must not override the stated operator rank, and the
+    // first explicit-order entry must not be falsely marked active when ineligible.
+    expect(result.text).toContain("no working credential");
+    expect(result.text).toContain(
+      "\n  1. fresh@example.com   ChatGPT subscription   — sign-in expired",
+    );
+    expect(result.text).toContain(
+      "\n  2. stale@example.com   ChatGPT subscription   — sign-in expired",
+    );
+    expect(result.text).not.toContain("active now");
+    expect(safeCodexControlRequest).toHaveBeenCalledTimes(3);
   });
 
   it("escapes successful Codex account fallback summaries before chat display", async () => {
@@ -573,7 +1855,7 @@ describe("codex command", () => {
         deps: createDeps({ safeCodexControlRequest }),
       }),
     ).resolves.toEqual({
-      text: ["Account: Amazon Bedrock", "Rate limits: none returned"].join("\n"),
+      text: ["Account: Amazon Bedrock", "Rate limits: none returned"].join("\n\n"),
     });
   });
 
@@ -593,9 +1875,18 @@ describe("codex command", () => {
     ).resolves.toEqual({
       text: "Started Codex compaction for thread thread-123.",
     });
-    expect(codexControlRequest).toHaveBeenCalledWith(undefined, CODEX_CONTROL_METHODS.compact, {
-      threadId: "thread-123",
-    });
+    expect(codexControlRequest).toHaveBeenCalledWith(
+      undefined,
+      CODEX_CONTROL_METHODS.compact,
+      {
+        threadId: "thread-123",
+      },
+      {
+        agentDir: path.join(tempDir, "agents", "main", "agent"),
+        authProfileId: undefined,
+        config: {},
+      },
+    );
   });
 
   it("starts review with the generated app-server target shape", async () => {
@@ -613,10 +1904,19 @@ describe("codex command", () => {
     ).resolves.toEqual({
       text: "Started Codex review for thread thread-123.",
     });
-    expect(codexControlRequest).toHaveBeenCalledWith(undefined, CODEX_CONTROL_METHODS.review, {
-      threadId: "thread-123",
-      target: { type: "uncommittedChanges" },
-    });
+    expect(codexControlRequest).toHaveBeenCalledWith(
+      undefined,
+      CODEX_CONTROL_METHODS.review,
+      {
+        threadId: "thread-123",
+        target: { type: "uncommittedChanges" },
+      },
+      {
+        agentDir: path.join(tempDir, "agents", "main", "agent"),
+        authProfileId: undefined,
+        config: {},
+      },
+    );
   });
 
   it("rejects malformed compact and review commands before starting thread actions", async () => {
@@ -719,30 +2019,26 @@ describe("codex command", () => {
         "Computer Use is installed, but the computer-use plugin is disabled. Run /codex computer-use install or enable computerUse.autoInstall to re-enable it.",
     }));
 
-    await expect(
-      handleCodexCommand(createContext("computer-use status"), {
-        deps: createDeps({ readCodexComputerUseStatus }),
-      }),
-    ).resolves.toEqual({
-      text: expect.stringContaining("Plugin: computer-use (installed, disabled)"),
+    const result = await handleCodexCommand(createContext("computer-use status"), {
+      deps: createDeps({ readCodexComputerUseStatus }),
     });
+
+    expectResultTextContains(result, "Plugin: computer-use (installed, disabled)");
   });
 
   it("installs Codex Computer Use from command overrides", async () => {
     const installCodexComputerUse = vi.fn(async () => computerUseReadyStatus());
 
-    await expect(
-      handleCodexCommand(
-        createContext(
-          "computer-use install --source github:example/desktop-tools --marketplace desktop-tools",
-        ),
-        {
-          deps: createDeps({ installCodexComputerUse }),
-        },
+    const result = await handleCodexCommand(
+      createContext(
+        "computer-use install --source github:example/desktop-tools --marketplace desktop-tools",
       ),
-    ).resolves.toEqual({
-      text: expect.stringContaining("Computer Use: ready"),
-    });
+      {
+        deps: createDeps({ installCodexComputerUse }),
+      },
+    );
+
+    expectResultTextContains(result, "Computer Use: ready");
     expect(installCodexComputerUse).toHaveBeenCalledWith({
       pluginConfig: undefined,
       forceEnable: true,
@@ -756,13 +2052,11 @@ describe("codex command", () => {
   it("shows help when Computer Use option values are missing", async () => {
     const installCodexComputerUse = vi.fn(async () => computerUseReadyStatus());
 
-    await expect(
-      handleCodexCommand(createContext("computer-use install --source"), {
-        deps: createDeps({ installCodexComputerUse }),
-      }),
-    ).resolves.toEqual({
-      text: expect.stringContaining("Usage: /codex computer-use"),
+    const result = await handleCodexCommand(createContext("computer-use install --source"), {
+      deps: createDeps({ installCodexComputerUse }),
     });
+
+    expectResultTextContains(result, "Usage: /codex computer-use");
     expect(installCodexComputerUse).not.toHaveBeenCalled();
   });
 
@@ -770,13 +2064,11 @@ describe("codex command", () => {
     const readCodexComputerUseStatus = vi.fn(async () => computerUseReadyStatus());
     const installCodexComputerUse = vi.fn(async () => computerUseReadyStatus());
 
-    await expect(
-      handleCodexCommand(createContext("computer-use status install"), {
-        deps: createDeps({ readCodexComputerUseStatus, installCodexComputerUse }),
-      }),
-    ).resolves.toEqual({
-      text: expect.stringContaining("Usage: /codex computer-use"),
+    const result = await handleCodexCommand(createContext("computer-use status install"), {
+      deps: createDeps({ readCodexComputerUseStatus, installCodexComputerUse }),
     });
+
+    expectResultTextContains(result, "Usage: /codex computer-use");
     expect(readCodexComputerUseStatus).not.toHaveBeenCalled();
     expect(installCodexComputerUse).not.toHaveBeenCalled();
   });
@@ -831,7 +2123,7 @@ describe("codex command", () => {
         "This request expires in 5 minutes.",
       ].join("\n"),
     );
-    expect(request.interactive).toMatchObject({
+    expect(request.interactive).toEqual({
       blocks: [
         {
           type: "buttons",
@@ -841,7 +2133,11 @@ describe("codex command", () => {
               value: `/codex diagnostics confirm ${token}`,
               style: "danger",
             },
-            { label: "Cancel", value: `/codex diagnostics cancel ${token}` },
+            {
+              label: "Cancel",
+              value: `/codex diagnostics cancel ${token}`,
+              style: "secondary",
+            },
           ],
         },
       ],
@@ -924,11 +2220,11 @@ describe("codex command", () => {
     });
     expect(safeCodexControlRequest).not.toHaveBeenCalled();
 
-    await expect(
-      handleCodexCommand(createContext(`diagnostics confirm ${token}`, sessionFile), { deps }),
-    ).resolves.toMatchObject({
-      text: expect.stringContaining("Codex diagnostics sent to OpenAI servers:"),
-    });
+    const confirmResult = await handleCodexCommand(
+      createContext(`diagnostics confirm ${token}`, sessionFile),
+      { deps },
+    );
+    expectResultTextContains(confirmResult, "Codex diagnostics sent to OpenAI servers:");
     expect(safeCodexControlRequest).toHaveBeenCalledTimes(1);
   });
 
@@ -1032,7 +2328,7 @@ describe("codex command", () => {
       `${secondSessionFile}.codex-app-server.json`,
       JSON.stringify({ schemaVersion: 1, threadId: "thread-222", cwd: "/repo" }),
     );
-    const safeCodexControlRequest = vi.fn(async (_config, _method, requestParams) => ({
+    const safeCodexControlRequest = vi.fn(async (configForTest, _method, requestParams) => ({
       ok: true as const,
       value: {
         threadId:
@@ -1110,18 +2406,16 @@ describe("codex command", () => {
       ].join("\n"),
     });
     expect(safeCodexControlRequest).toHaveBeenCalledTimes(2);
-    expect(safeCodexControlRequest).toHaveBeenNthCalledWith(
-      1,
-      undefined,
-      CODEX_CONTROL_METHODS.feedback,
-      expect.objectContaining({ threadId: "thread-111", includeLogs: true }),
-    );
-    expect(safeCodexControlRequest).toHaveBeenNthCalledWith(
-      2,
-      undefined,
-      CODEX_CONTROL_METHODS.feedback,
-      expect.objectContaining({ threadId: "thread-222", includeLogs: true }),
-    );
+    expect(mockArg(safeCodexControlRequest, 0, 0)).toBeUndefined();
+    expect(mockArg(safeCodexControlRequest, 0, 1)).toBe(CODEX_CONTROL_METHODS.feedback);
+    const firstFeedbackParams = requestParams(safeCodexControlRequest);
+    expect(firstFeedbackParams.threadId).toBe("thread-111");
+    expect(firstFeedbackParams.includeLogs).toBe(true);
+    expect(mockArg(safeCodexControlRequest, 1, 0)).toBeUndefined();
+    expect(mockArg(safeCodexControlRequest, 1, 1)).toBe(CODEX_CONTROL_METHODS.feedback);
+    const secondFeedbackParams = requestParams(safeCodexControlRequest, 1);
+    expect(secondFeedbackParams.threadId).toBe("thread-222");
+    expect(secondFeedbackParams.includeLogs).toBe(true);
   });
 
   it("requires an owner for Codex diagnostics feedback uploads", async () => {
@@ -1249,9 +2543,8 @@ describe("codex command", () => {
     });
 
     releaseFirstConfirmBindingRead();
-    await expect(firstConfirm).resolves.toMatchObject({
-      text: expect.stringContaining("Codex diagnostics sent to OpenAI servers:"),
-    });
+    const firstConfirmResult = await firstConfirm;
+    expectResultTextContains(firstConfirmResult, "Codex diagnostics sent to OpenAI servers:");
     expect(safeCodexControlRequest).toHaveBeenCalledTimes(1);
   });
 
@@ -1302,10 +2595,12 @@ describe("codex command", () => {
       `${sessionFile}.codex-app-server.json`,
       JSON.stringify({ schemaVersion: 1, threadId: "thread-private", cwd: "/repo" }),
     );
-    const safeCodexControlRequest = vi.fn(async () => ({
-      ok: true as const,
-      value: { threadId: "thread-private" },
-    }));
+    const safeCodexControlRequest = vi.fn(
+      async (_pluginConfig: unknown, _method: string, _requestParams: unknown) => ({
+        ok: true as const,
+        value: { threadId: "thread-private" },
+      }),
+    );
     const deps = createDeps({ safeCodexControlRequest });
 
     const request = await handleCodexCommand(
@@ -1340,15 +2635,12 @@ describe("codex command", () => {
         "Included Codex logs and spawned Codex subthreads when available.",
       ].join("\n"),
     });
-    expect(safeCodexControlRequest).toHaveBeenCalledWith(
-      undefined,
-      CODEX_CONTROL_METHODS.feedback,
-      expect.objectContaining({
-        classification: "bug",
-        threadId: "thread-private",
-        includeLogs: true,
-      }),
-    );
+    expect(mockArg(safeCodexControlRequest, 0, 0)).toBeUndefined();
+    expect(mockArg(safeCodexControlRequest, 0, 1)).toBe(CODEX_CONTROL_METHODS.feedback);
+    const feedbackParams = requestParams(safeCodexControlRequest);
+    expect(feedbackParams.classification).toBe("bug");
+    expect(feedbackParams.threadId).toBe("thread-private");
+    expect(feedbackParams.includeLogs).toBe(true);
   });
 
   it("keeps diagnostics confirmation eviction scoped to account identity", async () => {
@@ -1403,10 +2695,12 @@ describe("codex command", () => {
       `${sessionFile}.codex-app-server.json`,
       JSON.stringify({ schemaVersion: 1, threadId: "thread-789", cwd: "/repo" }),
     );
-    const safeCodexControlRequest = vi.fn(async () => ({
-      ok: true as const,
-      value: { threadId: "thread-789" },
-    }));
+    const safeCodexControlRequest = vi.fn(
+      async (_pluginConfig: unknown, _method: string, _requestParams: unknown) => ({
+        ok: true as const,
+        value: { threadId: "thread-789" },
+      }),
+    );
     const note = "x".repeat(2050);
     const deps = createDeps({ safeCodexControlRequest });
 
@@ -1416,13 +2710,10 @@ describe("codex command", () => {
     const token = readDiagnosticsConfirmationToken(request);
     await handleCodexCommand(createContext(`diagnostics confirm ${token}`, sessionFile), { deps });
 
-    expect(safeCodexControlRequest).toHaveBeenCalledWith(
-      undefined,
-      CODEX_CONTROL_METHODS.feedback,
-      expect.objectContaining({
-        reason: "x".repeat(2048),
-      }),
-    );
+    expect(mockArg(safeCodexControlRequest, 0, 0)).toBeUndefined();
+    expect(mockArg(safeCodexControlRequest, 0, 1)).toBe(CODEX_CONTROL_METHODS.feedback);
+    const feedbackParams = requestParams(safeCodexControlRequest);
+    expect(feedbackParams.reason).toBe("x".repeat(2048));
   });
 
   it("escapes diagnostics notes before showing approval text", async () => {
@@ -1542,17 +2833,14 @@ describe("codex command", () => {
       { deps },
     );
     const firstToken = readDiagnosticsConfirmationToken(firstRequest);
-    await expect(
-      handleCodexCommand(
-        createContext(`diagnostics confirm ${firstToken}`, sessionFile, {
-          accountId: "account-1",
-          channelId: "channel-1",
-        }),
-        { deps },
-      ),
-    ).resolves.toMatchObject({
-      text: expect.stringContaining("Codex diagnostics sent to OpenAI servers:"),
-    });
+    const firstConfirmResult = await handleCodexCommand(
+      createContext(`diagnostics confirm ${firstToken}`, sessionFile, {
+        accountId: "account-1",
+        channelId: "channel-1",
+      }),
+      { deps },
+    );
+    expectResultTextContains(firstConfirmResult, "Codex diagnostics sent to OpenAI servers:");
 
     await fs.writeFile(
       `${sessionFile}.codex-app-server.json`,
@@ -1566,17 +2854,14 @@ describe("codex command", () => {
       { deps },
     );
     const secondToken = readDiagnosticsConfirmationToken(secondRequest);
-    await expect(
-      handleCodexCommand(
-        createContext(`diagnostics confirm ${secondToken}`, sessionFile, {
-          accountId: "account-2",
-          channelId: "channel-2",
-        }),
-        { deps },
-      ),
-    ).resolves.toMatchObject({
-      text: expect.stringContaining("Codex diagnostics sent to OpenAI servers:"),
-    });
+    const secondConfirmResult = await handleCodexCommand(
+      createContext(`diagnostics confirm ${secondToken}`, sessionFile, {
+        accountId: "account-2",
+        channelId: "channel-2",
+      }),
+      { deps },
+    );
+    expectResultTextContains(secondConfirmResult, "Codex diagnostics sent to OpenAI servers:");
 
     expect(safeCodexControlRequest).toHaveBeenCalledTimes(2);
   });
@@ -1603,14 +2888,11 @@ describe("codex command", () => {
       { deps },
     );
     const firstToken = readDiagnosticsConfirmationToken(firstRequest);
-    await expect(
-      handleCodexCommand(
-        createContext(`diagnostics confirm ${firstToken}`, sessionFile, firstScope),
-        { deps },
-      ),
-    ).resolves.toMatchObject({
-      text: expect.stringContaining("Codex diagnostics sent to OpenAI servers:"),
-    });
+    const firstConfirmResult = await handleCodexCommand(
+      createContext(`diagnostics confirm ${firstToken}`, sessionFile, firstScope),
+      { deps },
+    );
+    expectResultTextContains(firstConfirmResult, "Codex diagnostics sent to OpenAI servers:");
 
     await fs.writeFile(
       `${sessionFile}.codex-app-server.json`,
@@ -1625,14 +2907,11 @@ describe("codex command", () => {
       { deps },
     );
     const secondToken = readDiagnosticsConfirmationToken(secondRequest);
-    await expect(
-      handleCodexCommand(
-        createContext(`diagnostics confirm ${secondToken}`, sessionFile, secondScope),
-        { deps },
-      ),
-    ).resolves.toMatchObject({
-      text: expect.stringContaining("Codex diagnostics sent to OpenAI servers:"),
-    });
+    const secondConfirmResult = await handleCodexCommand(
+      createContext(`diagnostics confirm ${secondToken}`, sessionFile, secondScope),
+      { deps },
+    );
+    expectResultTextContains(secondConfirmResult, "Codex diagnostics sent to OpenAI servers:");
 
     expect(safeCodexControlRequest).toHaveBeenCalledTimes(2);
   });
@@ -1659,14 +2938,11 @@ describe("codex command", () => {
       { deps },
     );
     const firstToken = readDiagnosticsConfirmationToken(firstRequest);
-    await expect(
-      handleCodexCommand(
-        createContext(`diagnostics confirm ${firstToken}`, sessionFile, firstScope),
-        { deps },
-      ),
-    ).resolves.toMatchObject({
-      text: expect.stringContaining("Codex diagnostics sent to OpenAI servers:"),
-    });
+    const firstConfirmResult = await handleCodexCommand(
+      createContext(`diagnostics confirm ${firstToken}`, sessionFile, firstScope),
+      { deps },
+    );
+    expectResultTextContains(firstConfirmResult, "Codex diagnostics sent to OpenAI servers:");
 
     await fs.writeFile(
       `${sessionFile}.codex-app-server.json`,
@@ -1681,14 +2957,11 @@ describe("codex command", () => {
       { deps },
     );
     const secondToken = readDiagnosticsConfirmationToken(secondRequest);
-    await expect(
-      handleCodexCommand(
-        createContext(`diagnostics confirm ${secondToken}`, sessionFile, secondScope),
-        { deps },
-      ),
-    ).resolves.toMatchObject({
-      text: expect.stringContaining("Codex diagnostics sent to OpenAI servers:"),
-    });
+    const secondConfirmResult = await handleCodexCommand(
+      createContext(`diagnostics confirm ${secondToken}`, sessionFile, secondScope),
+      { deps },
+    );
+    expectResultTextContains(secondConfirmResult, "Codex diagnostics sent to OpenAI servers:");
 
     expect(safeCodexControlRequest).toHaveBeenCalledTimes(2);
   });
@@ -1869,17 +3142,118 @@ describe("codex command", () => {
     const codexControlRequest = vi
       .fn()
       .mockResolvedValueOnce({ data: [{ name: "<@U123> [mcp](https://evil)" }] })
-      .mockResolvedValueOnce({ data: [{ id: "skill_1 @here" }] });
+      .mockResolvedValueOnce({
+        data: [
+          {
+            cwd: "/repo",
+            skills: [
+              {
+                name: "skill_1 @here",
+                description: "",
+                path: "/repo/.codex/skills/skill_1/SKILL.md",
+                scope: "repo",
+                enabled: true,
+              },
+            ],
+            errors: [],
+          },
+        ],
+      });
     const deps = createDeps({ codexControlRequest });
 
     const mcp = await handleCodexCommand(createContext("mcp"), { deps });
     const skills = await handleCodexCommand(createContext("skills"), { deps });
 
     expect(mcp.text).toContain("&lt;\uff20U123&gt; \uff3bmcp\uff3d\uff08https://evil\uff09");
-    expect(skills.text).toContain("skill\uff3f1 \uff20here");
+    expect(skills.text).toContain("- `skill\uff3f1 \uff20here`");
     expect(`${mcp.text}\n${skills.text}`).not.toContain("<@U123>");
     expect(`${mcp.text}\n${skills.text}`).not.toContain("[mcp](https://evil)");
     expect(`${mcp.text}\n${skills.text}`).not.toContain("@here");
+  });
+
+  it("formats every Codex skill as a code-styled bullet and tolerates malformed entries", async () => {
+    const malformedSkillEntries: JsonValue[] = [
+      null,
+      { description: "missing name" },
+      {
+        name: "final-skill",
+        description: "Final skill",
+        path: "/repo-b/.codex/skills/final-skill/SKILL.md",
+        scope: "repo",
+        enabled: true,
+      },
+    ];
+    const codexControlRequest = vi.fn(async () => ({
+      data: [
+        {
+          cwd: "/repo-a",
+          skills: Array.from({ length: 26 }, (_, index) => ({
+            name: `skill-${index + 1}`,
+            description: `Skill ${index + 1}`,
+            path: `/repo-a/.codex/skills/skill-${index + 1}/SKILL.md`,
+            scope: "repo",
+            enabled: true,
+          })).concat({
+            name: "disabled-skill",
+            description: "Disabled skill",
+            path: "/repo-a/.codex/skills/disabled-skill/SKILL.md",
+            scope: "repo",
+            enabled: false,
+          }),
+          errors: [{ path: "/repo-a/bad/SKILL.md", message: "bad skill" }],
+        },
+        {
+          cwd: "/repo-b",
+          skills: malformedSkillEntries,
+          errors: [],
+        },
+        "malformed group",
+      ],
+    }));
+    const deps = createDeps({ codexControlRequest });
+
+    const result = await handleCodexCommand(createContext("skills"), { deps });
+
+    expect(result.text).toContain("- `skill-1`");
+    expect(result.text).toContain("- `skill-26`");
+    expect(result.text).toContain("- `&lt;unknown&gt;`");
+    expect(result.text).toContain("- `final-skill`");
+    expect(result.text).not.toContain("Workspace:");
+    expect(result.text).not.toContain("Error:");
+    expect(result.text).not.toContain("More skills available");
+    expect(result.text).not.toContain("Skill 1");
+    expect(result.text).not.toContain("/repo-a/.codex/skills");
+    expect(result.text).not.toContain("disabled-skill");
+  });
+
+  it("reports Codex skill load errors when no skills render", async () => {
+    const codexControlRequest = vi.fn(async () => ({
+      data: [
+        {
+          cwd: "/repo-a",
+          skills: [
+            {
+              name: "disabled-skill",
+              description: "Disabled skill",
+              path: "/repo-a/.codex/skills/disabled-skill/SKILL.md",
+              scope: "repo",
+              enabled: false,
+            },
+          ],
+          errors: [
+            { path: "/repo-a/bad/SKILL.md", message: "bad skill <@U123>" },
+            { path: "/repo-a/other/SKILL.md", message: "other bad skill @here" },
+          ],
+        },
+      ],
+    }));
+    const deps = createDeps({ codexControlRequest });
+
+    const result = await handleCodexCommand(createContext("skills"), { deps });
+
+    expect(result.text).toBe("Codex skills: none returned (2 load errors).");
+    expect(result.text).not.toContain("<@U123>");
+    expect(result.text).not.toContain("@here");
   });
 
   it("returns sanitized command failures instead of leaking app-server errors", async () => {
@@ -1935,7 +3309,7 @@ describe("codex command", () => {
       sessionFile,
       workspaceDir: "/repo",
     }));
-    const requestConversationBinding = vi.fn(async () => ({
+    const requestConversationBinding = vi.fn(async (_request?: { summary?: string }) => ({
       status: "bound" as const,
       binding: {
         bindingId: "binding-1",
@@ -1972,6 +3346,7 @@ describe("codex command", () => {
       config: {},
       sessionFile,
       workspaceDir: "/repo",
+      agentDir: path.join(tempDir, "agents", "main", "agent"),
       threadId: "thread-123",
       model: "gpt-5.4",
       modelProvider: "openai",
@@ -1997,7 +3372,7 @@ describe("codex command", () => {
       sessionFile,
       workspaceDir: "/repo with space",
     }));
-    const requestConversationBinding = vi.fn(async () => ({
+    const requestConversationBinding = vi.fn(async (_request?: { summary?: string }) => ({
       status: "bound" as const,
       binding: {
         bindingId: "binding-1",
@@ -2030,6 +3405,7 @@ describe("codex command", () => {
       config: {},
       sessionFile,
       workspaceDir: "/repo with space",
+      agentDir: path.join(tempDir, "agents", "main", "agent"),
       threadId: "thread-123",
       model: undefined,
       modelProvider: undefined,
@@ -2046,7 +3422,7 @@ describe("codex command", () => {
       sessionFile,
       workspaceDir: unsafeWorkspace,
     }));
-    const requestConversationBinding = vi.fn(async () => ({
+    const requestConversationBinding = vi.fn(async (_request?: { summary?: string }) => ({
       status: "bound" as const,
       binding: {
         bindingId: "binding-1",
@@ -2075,11 +3451,9 @@ describe("codex command", () => {
     expect(result.text).toContain("/repo \uff3btrusted\uff3d\uff08https://evil\uff09");
     expect(result.text).not.toContain("<@U123>");
     expect(result.text).not.toContain("[trusted](https://evil)");
-    expect(requestConversationBinding).toHaveBeenCalledWith(
-      expect.objectContaining({
-        summary:
-          "Codex app-server thread thread-123 &lt;\uff20U123&gt; in /repo \uff3btrusted\uff3d\uff08https://evil\uff09",
-      }),
+    const bindingRequest = mockArg(requestConversationBinding, 0, 0) as { summary?: string };
+    expect(bindingRequest?.summary).toBe(
+      "Codex app-server thread thread-123 &lt;\uff20U123&gt; in /repo \uff3btrusted\uff3d\uff08https://evil\uff09",
     );
   });
 
@@ -2279,6 +3653,28 @@ describe("codex command", () => {
     expect(stopCodexConversationTurn).toHaveBeenCalledWith({
       sessionFile,
       pluginConfig: undefined,
+      agentDir: path.join(tempDir, "agents", "main", "agent"),
+      config: {},
+    });
+  });
+
+  it("stops the active bound Codex turn in sandboxed sessions", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const stopCodexConversationTurn = vi.fn(async () => ({
+      stopped: true,
+      message: "Codex stop requested.",
+    }));
+
+    await expect(
+      handleCodexCommand(createSandboxedContext("stop", sessionFile), {
+        deps: createDeps({ stopCodexConversationTurn }),
+      }),
+    ).resolves.toEqual({ text: "Codex stop requested." });
+    expect(stopCodexConversationTurn).toHaveBeenCalledWith({
+      sessionFile,
+      pluginConfig: undefined,
+      agentDir: path.join(tempDir, "agents", "main", "agent"),
+      config: { agents: { defaults: { sandbox: { mode: "all" } } } },
     });
   });
 
@@ -2310,6 +3706,8 @@ describe("codex command", () => {
       sessionFile,
       pluginConfig: undefined,
       message: "focus tests first",
+      agentDir: path.join(tempDir, "agents", "main", "agent"),
+      config: {},
     });
   });
 
@@ -2340,16 +3738,22 @@ describe("codex command", () => {
       sessionFile,
       pluginConfig: undefined,
       model: "gpt-5.4",
+      agentDir: path.join(tempDir, "agents", "main", "agent"),
+      config: {},
     });
     expect(setCodexConversationFastMode).toHaveBeenCalledWith({
       sessionFile,
       pluginConfig: undefined,
       enabled: true,
+      agentDir: path.join(tempDir, "agents", "main", "agent"),
+      config: {},
     });
     expect(setCodexConversationPermissions).toHaveBeenCalledWith({
       sessionFile,
       pluginConfig: undefined,
       mode: "yolo",
+      agentDir: path.join(tempDir, "agents", "main", "agent"),
+      config: {},
     });
   });
 
@@ -2469,6 +3873,8 @@ describe("codex command", () => {
       sessionFile: hostSessionFile,
       pluginConfig: undefined,
       enabled: true,
+      agentDir: path.join(tempDir, "agents", "main", "agent"),
+      config: {},
     });
   });
 

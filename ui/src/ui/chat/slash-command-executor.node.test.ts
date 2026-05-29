@@ -20,222 +20,20 @@ function row(key: string, overrides?: Partial<GatewaySessionRow>): GatewaySessio
   };
 }
 
-describe("executeSlashCommand /kill", () => {
-  it("aborts every sub-agent session for /kill all", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "sessions.list") {
-        return {
-          sessions: [
-            row("main"),
-            row("agent:main:subagent:one", { spawnedBy: "main" }),
-            row("agent:main:subagent:parent", { spawnedBy: "main" }),
-            row("agent:main:subagent:parent:subagent:child", {
-              spawnedBy: "agent:main:subagent:parent",
-            }),
-            row("agent:other:main"),
-          ],
-        };
-      }
-      if (method === "chat.abort") {
-        return { ok: true, aborted: true };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
+function requireRequestCall(
+  request: ReturnType<typeof vi.fn>,
+  method: string,
+): { method: string; payload: Record<string, unknown> } {
+  const call = request.mock.calls.find(([calledMethod]) => calledMethod === method);
+  if (!call) {
+    throw new Error(`expected ${method} request`);
+  }
+  return { method: call[0] as string, payload: call[1] as Record<string, unknown> };
+}
 
-    const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
-      "agent:main:main",
-      "kill",
-      "all",
-    );
-
-    expect(result.content).toBe("Aborted 3 sub-agent sessions.");
-    expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
-    expect(request).toHaveBeenNthCalledWith(2, "chat.abort", {
-      sessionKey: "agent:main:subagent:one",
-    });
-    expect(request).toHaveBeenNthCalledWith(3, "chat.abort", {
-      sessionKey: "agent:main:subagent:parent",
-    });
-    expect(request).toHaveBeenNthCalledWith(4, "chat.abort", {
-      sessionKey: "agent:main:subagent:parent:subagent:child",
-    });
-  });
-
-  it("aborts matching sub-agent sessions for /kill <agentId>", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "sessions.list") {
-        return {
-          sessions: [
-            row("agent:main:subagent:one", { spawnedBy: "agent:main:main" }),
-            row("agent:main:subagent:two", { spawnedBy: "agent:main:main" }),
-            row("agent:other:subagent:three", { spawnedBy: "agent:other:main" }),
-          ],
-        };
-      }
-      if (method === "chat.abort") {
-        return { ok: true, aborted: true };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-
-    const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
-      "agent:main:main",
-      "kill",
-      "main",
-    );
-
-    expect(result.content).toBe("Aborted 2 matching sub-agent sessions for `main`.");
-    expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
-    expect(request).toHaveBeenNthCalledWith(2, "chat.abort", {
-      sessionKey: "agent:main:subagent:one",
-    });
-    expect(request).toHaveBeenNthCalledWith(3, "chat.abort", {
-      sessionKey: "agent:main:subagent:two",
-    });
-  });
-
-  it("does not exact-match a session key outside the current subagent subtree", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "sessions.list") {
-        return {
-          sessions: [
-            row("agent:main:subagent:parent", { spawnedBy: "agent:main:main" }),
-            row("agent:main:subagent:parent:subagent:child", {
-              spawnedBy: "agent:main:subagent:parent",
-            }),
-            row("agent:main:subagent:sibling", { spawnedBy: "agent:main:main" }),
-          ],
-        };
-      }
-      if (method === "chat.abort") {
-        return { ok: true, aborted: true };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-
-    const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
-      "agent:main:subagent:parent",
-      "kill",
-      "agent:main:subagent:sibling",
-    );
-
-    expect(result.content).toBe(
-      "No matching sub-agent sessions found for `agent:main:subagent:sibling`.",
-    );
-    expect(request).toHaveBeenCalledTimes(1);
-    expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
-  });
-
-  it("returns a no-op summary when matching sessions have no active runs", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "sessions.list") {
-        return {
-          sessions: [
-            row("agent:main:subagent:one", { spawnedBy: "agent:main:main" }),
-            row("agent:main:subagent:two", { spawnedBy: "agent:main:main" }),
-          ],
-        };
-      }
-      if (method === "chat.abort") {
-        return { ok: true, aborted: false };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-
-    const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
-      "agent:main:main",
-      "kill",
-      "all",
-    );
-
-    expect(result.content).toBe("No active sub-agent runs to abort.");
-    expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
-    expect(request).toHaveBeenNthCalledWith(2, "chat.abort", {
-      sessionKey: "agent:main:subagent:one",
-    });
-    expect(request).toHaveBeenNthCalledWith(3, "chat.abort", {
-      sessionKey: "agent:main:subagent:two",
-    });
-  });
-
-  it("treats the legacy main session key as the default agent scope", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "sessions.list") {
-        return {
-          sessions: [
-            row("main"),
-            row("agent:main:subagent:one", { spawnedBy: "agent:main:main" }),
-            row("agent:main:subagent:two", { spawnedBy: "agent:main:main" }),
-            row("agent:other:subagent:three", { spawnedBy: "agent:other:main" }),
-          ],
-        };
-      }
-      if (method === "chat.abort") {
-        return { ok: true, aborted: true };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-
-    const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
-      "main",
-      "kill",
-      "all",
-    );
-
-    expect(result.content).toBe("Aborted 2 sub-agent sessions.");
-    expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
-    expect(request).toHaveBeenNthCalledWith(2, "chat.abort", {
-      sessionKey: "agent:main:subagent:one",
-    });
-    expect(request).toHaveBeenNthCalledWith(3, "chat.abort", {
-      sessionKey: "agent:main:subagent:two",
-    });
-  });
-
-  it("does not abort unrelated same-agent subagents from another root session", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "sessions.list") {
-        return {
-          sessions: [
-            row("agent:main:main"),
-            row("agent:main:subagent:mine", { spawnedBy: "agent:main:main" }),
-            row("agent:main:subagent:mine:subagent:child", {
-              spawnedBy: "agent:main:subagent:mine",
-            }),
-            row("agent:main:subagent:other-root", {
-              spawnedBy: "agent:main:quietchat:dm:alice",
-            }),
-          ],
-        };
-      }
-      if (method === "chat.abort") {
-        return { ok: true, aborted: true };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-
-    const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
-      "agent:main:main",
-      "kill",
-      "all",
-    );
-
-    expect(result.content).toBe("Aborted 2 sub-agent sessions.");
-    expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
-    expect(request).toHaveBeenNthCalledWith(2, "chat.abort", {
-      sessionKey: "agent:main:subagent:mine",
-    });
-    expect(request).toHaveBeenNthCalledWith(3, "chat.abort", {
-      sessionKey: "agent:main:subagent:mine:subagent:child",
-    });
-  });
-});
+function expectNoRequestCall(request: ReturnType<typeof vi.fn>, method: string) {
+  expect(request.mock.calls.some(([calledMethod]) => calledMethod === method)).toBe(false);
+}
 
 describe("executeSlashCommand directives", () => {
   it("resolves the legacy main alias for bare /model", async () => {
@@ -584,7 +382,7 @@ describe("executeSlashCommand directives", () => {
     );
 
     expect(result.content).toBe(
-      "Current thinking level: low.\nOptions: off, minimal, low, medium, high.",
+      "Current thinking level: low.\nOptions: default, off, minimal, low, medium, high.",
     );
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
     expect(request).toHaveBeenNthCalledWith(2, "models.list", { view: "configured" });
@@ -631,6 +429,29 @@ describe("executeSlashCommand directives", () => {
     expect(request).toHaveBeenNthCalledWith(4, "sessions.patch", {
       key: "agent:main:main",
       thinkingLevel: "xhigh",
+    });
+  });
+
+  it("clears thinking override for /think default", async () => {
+    const request = vi.fn(async (method: string, payload?: unknown) => {
+      if (method === "sessions.patch") {
+        return { ok: true, ...((payload ?? {}) as object) };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "think",
+      "default",
+    );
+
+    expect(result.content).toBe("Thinking level reset to default.");
+    expect(result.action).toBe("refresh");
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "agent:main:main",
+      thinkingLevel: null,
     });
   });
 
@@ -709,7 +530,7 @@ describe("executeSlashCommand directives", () => {
     );
 
     expect(status.content).toBe(
-      "Current thinking level: adaptive.\nOptions: off, minimal, low, medium, adaptive, high, xhigh, maximum.",
+      "Current thinking level: adaptive.\nOptions: default, off, minimal, low, medium, adaptive, high, xhigh, maximum.",
     );
     expect(setXhigh.content).toBe("Thinking level set to **xhigh**.");
     expect(setMax.content).toBe("Thinking level set to **max**.");
@@ -788,7 +609,7 @@ describe("executeSlashCommand directives", () => {
     );
 
     expect(status.content).toBe(
-      "Current thinking level: off.\nOptions: off, minimal, low, medium, high, xhigh, max.",
+      "Current thinking level: off.\nOptions: default, off, minimal, low, medium, high, xhigh, max.",
     );
     expect(setMax.content).toBe("Thinking level set to **max**.");
   });
@@ -839,9 +660,9 @@ describe("executeSlashCommand directives", () => {
       "",
     );
 
-    // Should NOT show DeepSeek defaults (xhigh, max) for an Anthropic session
-    expect(status.content).not.toContain("xhigh");
-    expect(status.content).not.toContain("max");
+    expect(status.content).toBe(
+      "Current thinking level: high.\nOptions: default, off, minimal, low, medium, high.",
+    );
   });
 
   it("reports the current verbose level for bare /verbose", async () => {
@@ -882,7 +703,7 @@ describe("executeSlashCommand directives", () => {
       "",
     );
 
-    expect(result.content).toBe("Current fast mode: on.\nOptions: status, on, off.");
+    expect(result.content).toBe("Current fast mode: on.\nOptions: status, on, off, default.");
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
   });
 
@@ -900,6 +721,29 @@ describe("executeSlashCommand directives", () => {
     expect(request).toHaveBeenCalledWith("sessions.patch", {
       key: "agent:main:main",
       fastMode: true,
+    });
+  });
+
+  it("clears fast mode override for /fast default", async () => {
+    const request = vi.fn(async (method: string, payload?: unknown) => {
+      if (method === "sessions.patch") {
+        return { ok: true, ...((payload ?? {}) as object) };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "fast",
+      "default",
+    );
+
+    expect(result.content).toBe("Fast mode reset to default.");
+    expect(result.action).toBe("refresh");
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "agent:main:main",
+      fastMode: null,
     });
   });
 });
@@ -924,51 +768,10 @@ describe("executeSlashCommand /steer (soft inject)", () => {
     );
 
     expect(result.content).toBe("Steered.");
-    expect(request).toHaveBeenCalledWith(
-      "chat.send",
-      expect.objectContaining({
-        sessionKey: "agent:main:main",
-        message: "try a different approach",
-        deliver: false,
-      }),
-    );
-  });
-
-  it("injects into a matching subagent when the first word resolves to one", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "sessions.list") {
-        return {
-          sessions: [
-            row("agent:main:main"),
-            row("agent:main:subagent:researcher", {
-              spawnedBy: "agent:main:main",
-              status: "running",
-            }),
-          ],
-        };
-      }
-      if (method === "chat.send") {
-        return { status: "started", runId: "run-2", messageSeq: 1 };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-
-    const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
-      "agent:main:main",
-      "steer",
-      "researcher try a different approach",
-    );
-
-    expect(result.content).toBe("Steered `researcher`.");
-    expect(request).toHaveBeenCalledWith(
-      "chat.send",
-      expect.objectContaining({
-        sessionKey: "agent:main:subagent:researcher",
-        message: "try a different approach",
-        deliver: false,
-      }),
-    );
+    const chatSend = requireRequestCall(request, "chat.send");
+    expect(chatSend.payload.sessionKey).toBe("agent:main:main");
+    expect(chatSend.payload.message).toBe("try a different approach");
+    expect(chatSend.payload.deliver).toBe(false);
   });
 
   it("uses cached sessions to avoid an extra sessions.list round trip", async () => {
@@ -987,7 +790,7 @@ describe("executeSlashCommand /steer (soft inject)", () => {
       {
         sessionsResult: {
           sessions: [
-            row("agent:main:main"),
+            row("agent:main:main", { status: "running" }),
             row("agent:main:subagent:researcher", {
               spawnedBy: "agent:main:main",
               status: "running",
@@ -997,53 +800,12 @@ describe("executeSlashCommand /steer (soft inject)", () => {
       },
     );
 
-    expect(result.content).toBe("Steered `researcher`.");
+    expect(result.content).toBe("Steered.");
     expect(request).toHaveBeenCalledTimes(1);
-    expect(request).toHaveBeenCalledWith(
-      "chat.send",
-      expect.objectContaining({
-        sessionKey: "agent:main:subagent:researcher",
-        message: "try a different approach",
-        deliver: false,
-      }),
-    );
-  });
-
-  it("matches an explicit full subagent session key", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "sessions.list") {
-        return {
-          sessions: [
-            row("agent:main:main"),
-            row("agent:main:subagent:researcher", {
-              spawnedBy: "agent:main:main",
-              status: "running",
-            }),
-          ],
-        };
-      }
-      if (method === "chat.send") {
-        return { status: "started", runId: "run-2", messageSeq: 1 };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-
-    const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
-      "agent:main:main",
-      "steer",
-      "agent:main:subagent:researcher try a different approach",
-    );
-
-    expect(result.content).toBe("Steered `agent:main:subagent:researcher`.");
-    expect(request).toHaveBeenCalledWith(
-      "chat.send",
-      expect.objectContaining({
-        sessionKey: "agent:main:subagent:researcher",
-        message: "try a different approach",
-        deliver: false,
-      }),
-    );
+    const chatSend = requireRequestCall(request, "chat.send");
+    expect(chatSend.payload.sessionKey).toBe("agent:main:main");
+    expect(chatSend.payload.message).toBe("researcher try a different approach");
+    expect(chatSend.payload.deliver).toBe(false);
   });
 
   it("does not treat 'all' as a subagent wildcard", async () => {
@@ -1065,14 +827,10 @@ describe("executeSlashCommand /steer (soft inject)", () => {
     );
 
     expect(result.content).toBe("Steered.");
-    expect(request).toHaveBeenCalledWith(
-      "chat.send",
-      expect.objectContaining({
-        sessionKey: "agent:main:main",
-        message: "all good now",
-        deliver: false,
-      }),
-    );
+    const chatSend = requireRequestCall(request, "chat.send");
+    expect(chatSend.payload.sessionKey).toBe("agent:main:main");
+    expect(chatSend.payload.message).toBe("all good now");
+    expect(chatSend.payload.deliver).toBe(false);
   });
 
   it("does not match agent id as target — treats 'main' as message text", async () => {
@@ -1099,17 +857,13 @@ describe("executeSlashCommand /steer (soft inject)", () => {
     );
 
     expect(result.content).toBe("Steered.");
-    expect(request).toHaveBeenCalledWith(
-      "chat.send",
-      expect.objectContaining({
-        sessionKey: "agent:main:main",
-        message: "main refine the plan",
-        deliver: false,
-      }),
-    );
+    const chatSend = requireRequestCall(request, "chat.send");
+    expect(chatSend.payload.sessionKey).toBe("agent:main:main");
+    expect(chatSend.payload.message).toBe("main refine the plan");
+    expect(chatSend.payload.deliver).toBe(false);
   });
 
-  it("keeps ended subagent targets so steer does not fall back to the current session", async () => {
+  it("treats subagent-looking prefixes as current-session message text", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "sessions.list") {
         return {
@@ -1135,9 +889,11 @@ describe("executeSlashCommand /steer (soft inject)", () => {
       "researcher try again",
     );
 
-    expect(result.content).toBe("No active run matched `researcher`. Use `/redirect` instead.");
-    expect(request).toHaveBeenCalledWith("sessions.list", {});
-    expect(request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+    expect(result.content).toBe("Steered.");
+    const chatSend = requireRequestCall(request, "chat.send");
+    expect(chatSend.payload.sessionKey).toBe("agent:main:main");
+    expect(chatSend.payload.message).toBe("researcher try again");
+    expect(chatSend.payload.deliver).toBe(false);
   });
 
   it("returns a no-op summary when the current session has no active run", async () => {
@@ -1157,10 +913,10 @@ describe("executeSlashCommand /steer (soft inject)", () => {
 
     expect(result.content).toBe("No active run. Use the chat input or `/redirect` instead.");
     expect(request).toHaveBeenCalledWith("sessions.list", {});
-    expect(request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+    expectNoRequestCall(request, "chat.send");
   });
 
-  it("returns usage when no message is provided", async () => {
+  it("returns steer usage when no message is provided", async () => {
     const request = vi.fn();
 
     const result = await executeSlashCommand(
@@ -1170,11 +926,11 @@ describe("executeSlashCommand /steer (soft inject)", () => {
       "",
     );
 
-    expect(result.content).toBe("Usage: `/steer [id] <message>`");
+    expect(result.content).toBe("Usage: `/steer <message>`");
     expect(request).not.toHaveBeenCalled();
   });
 
-  it("returns error message on RPC failure", async () => {
+  it("returns steer error message on RPC failure", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "sessions.list") {
         return { sessions: [row("agent:main:main", { status: "running" })] };
@@ -1220,52 +976,8 @@ describe("executeSlashCommand /redirect (hard kill-and-restart)", () => {
     });
   });
 
-  it("redirects a matching subagent when the first word resolves to one", async () => {
+  it("treats subagent-looking redirect prefixes as current-session message text", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "sessions.list") {
-        return {
-          sessions: [
-            row("agent:main:main"),
-            row("agent:main:subagent:researcher", { spawnedBy: "agent:main:main" }),
-          ],
-        };
-      }
-      if (method === "sessions.steer") {
-        return { status: "started", runId: "run-2", messageSeq: 1 };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-
-    const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
-      "agent:main:main",
-      "redirect",
-      "researcher start over completely",
-    );
-
-    expect(result.content).toBe("Redirected `researcher`.");
-    // Subagent redirect must NOT set trackRunId — the run belongs to a
-    // different session so chat events would never clear chatRunId.
-    expect(result.trackRunId).toBeUndefined();
-    expect(request).toHaveBeenCalledWith("sessions.steer", {
-      key: "agent:main:subagent:researcher",
-      message: "start over completely",
-    });
-  });
-
-  it("redirects an ended subagent instead of falling back to the current session", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "sessions.list") {
-        return {
-          sessions: [
-            row("agent:main:main"),
-            row("agent:main:subagent:researcher", {
-              spawnedBy: "agent:main:main",
-              endedAt: Date.now() - 60_000,
-            }),
-          ],
-        };
-      }
       if (method === "sessions.steer") {
         return { status: "started", runId: "run-3", messageSeq: 1 };
       }
@@ -1279,15 +991,15 @@ describe("executeSlashCommand /redirect (hard kill-and-restart)", () => {
       "researcher start over completely",
     );
 
-    expect(result.content).toBe("Redirected `researcher`.");
-    expect(result.trackRunId).toBeUndefined();
+    expect(result.content).toBe("Redirected.");
+    expect(result.trackRunId).toBe("run-3");
     expect(request).toHaveBeenCalledWith("sessions.steer", {
-      key: "agent:main:subagent:researcher",
-      message: "start over completely",
+      key: "agent:main:main",
+      message: "researcher start over completely",
     });
   });
 
-  it("returns usage when no message is provided", async () => {
+  it("returns redirect usage when no message is provided", async () => {
     const request = vi.fn();
 
     const result = await executeSlashCommand(
@@ -1297,11 +1009,11 @@ describe("executeSlashCommand /redirect (hard kill-and-restart)", () => {
       "",
     );
 
-    expect(result.content).toBe("Usage: `/redirect [id] <message>`");
+    expect(result.content).toBe("Usage: `/redirect <message>`");
     expect(request).not.toHaveBeenCalled();
   });
 
-  it("returns error message on RPC failure", async () => {
+  it("returns redirect error message on RPC failure", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "sessions.list") {
         return { sessions: [row("agent:main:main")] };

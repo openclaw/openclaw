@@ -24,6 +24,7 @@ import {
   resolveWindowsConsoleEncoding,
 } from "../infra/windows-encoding.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { buildSystemRunApprovalPlan, handleSystemRunInvoke } from "./invoke-system-run.js";
 import type {
   ExecEventPayload,
@@ -257,7 +258,7 @@ function resolveExecutable(bin: string, env?: Record<string, string>) {
 }
 
 async function handleSystemWhich(params: SystemWhichParams, env?: Record<string, string>) {
-  const bins = params.bins.map((bin) => bin.trim()).filter(Boolean);
+  const bins = normalizeStringEntries(params.bins);
   const found: Record<string, string> = {};
   for (const bin of bins) {
     const path = resolveExecutable(bin, env);
@@ -508,7 +509,11 @@ function decodeParams<T>(raw?: string | null): T {
   if (!raw) {
     throw new Error("INVALID_REQUEST: paramsJSON required");
   }
-  return JSON.parse(raw) as T;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    throw new Error("INVALID_REQUEST: paramsJSON malformed JSON");
+  }
 }
 
 export function coerceNodeInvokePayload(payload: unknown): NodeInvokeRequestPayload | null {

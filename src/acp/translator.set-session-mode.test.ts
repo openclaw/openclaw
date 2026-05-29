@@ -45,12 +45,14 @@ describe("acp setSessionMode", () => {
     await expect(agent.setSessionMode(createSetSessionModeRequest("high"))).rejects.toThrow(
       "gateway rejected mode change",
     );
-    expect(calls).toContainEqual([
-      "sessions.patch",
-      {
-        key: "agent:main:main",
-        thinkingLevel: "high",
-      },
+    expect(calls).toStrictEqual([
+      [
+        "sessions.patch",
+        {
+          key: "agent:main:main",
+          thinkingLevel: "high",
+        },
+      ],
     ]);
   });
 
@@ -58,13 +60,25 @@ describe("acp setSessionMode", () => {
     const { calls, request } = createRequestRecorder(async () => ({ ok: true }));
     const agent = createAgentWithSession(request);
 
-    await expect(agent.setSessionMode(createSetSessionModeRequest("low"))).resolves.toEqual({});
-    expect(calls).toContainEqual([
-      "sessions.patch",
-      {
-        key: "agent:main:main",
-        thinkingLevel: "low",
-      },
+    await expect(agent.setSessionMode(createSetSessionModeRequest("low"))).resolves.toStrictEqual(
+      {},
+    );
+    expect(calls).toStrictEqual([
+      [
+        "sessions.patch",
+        {
+          key: "agent:main:main",
+          thinkingLevel: "low",
+        },
+      ],
+      [
+        "sessions.list",
+        {
+          includeDerivedTitles: true,
+          limit: 200,
+          search: "agent:main:main",
+        },
+      ],
     ]);
   });
 
@@ -72,7 +86,7 @@ describe("acp setSessionMode", () => {
     const { calls, request } = createRequestRecorder(async () => ({ ok: true }));
     const agent = createAgentWithSession(request);
 
-    await expect(agent.setSessionMode(createSetSessionModeRequest(""))).resolves.toEqual({});
-    expect(calls).toEqual([]);
+    await expect(agent.setSessionMode(createSetSessionModeRequest(""))).resolves.toStrictEqual({});
+    expect(calls).toStrictEqual([]);
   });
 });

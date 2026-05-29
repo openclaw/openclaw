@@ -41,6 +41,13 @@ describe("ollama provider models", () => {
       { name: "llama3:8b", contextWindow: 65536, capabilities: undefined },
       { name: "deepseek-r1:14b", contextWindow: undefined, capabilities: undefined },
     ]);
+    expect(
+      buildOllamaModelDefinition(
+        enriched[1].name,
+        enriched[1].contextWindow,
+        enriched[1].capabilities,
+      ).compat?.supportsTools,
+    ).toBe(true);
   });
 
   it("uses Modelfile num_ctx when it expands the discovered context window", async () => {
@@ -269,8 +276,22 @@ describe("ollama provider models", () => {
     expect(textModel.compat?.supportsTools).toBe(true);
     expect(textModel.compat?.supportsUsageInStreaming).toBe(true);
 
+    const deepseekCloudModel = buildOllamaModelDefinition("deepseek-v4-pro:cloud", 1048576, [
+      "completion",
+      "tools",
+    ]);
+    expect(deepseekCloudModel.reasoning).toBe(true);
+    expect(deepseekCloudModel.compat?.supportsTools).toBe(true);
+
+    const deepseekCloudModelWithoutCapabilities = buildOllamaModelDefinition(
+      "deepseek-v4-flash:cloud",
+      1048576,
+    );
+    expect(deepseekCloudModelWithoutCapabilities.reasoning).toBe(true);
+
     const noCapabilities = buildOllamaModelDefinition("unknown-model", 65536);
     expect(noCapabilities.input).toEqual(["text"]);
+    expect(noCapabilities.compat?.supportsTools).toBe(true);
     expect(noCapabilities.compat?.supportsUsageInStreaming).toBe(true);
   });
 

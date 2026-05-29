@@ -1,4 +1,5 @@
-import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { MessageMetadata } from "@slack/types";
+import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   chunkMarkdownTextWithMode,
   isSilentReplyText,
@@ -43,8 +44,12 @@ export async function deliverReplies(params: {
   replyThreadTs?: string;
   replyToMode: "off" | "first" | "all" | "batched";
   identity?: SlackSendIdentity;
+  metadata?: MessageMetadata;
 }) {
   for (const payload of params.replies) {
+    if (payload.isReasoning === true) {
+      continue;
+    }
     const threadTs = resolveDeliveredSlackReplyThreadTs({
       replyToMode: params.replyToMode,
       payloadReplyToId: payload.replyToId,
@@ -71,6 +76,7 @@ export async function deliverReplies(params: {
         accountId: params.accountId,
         ...(slackBlocks?.length ? { blocks: slackBlocks } : {}),
         ...(params.identity ? { identity: params.identity } : {}),
+        ...(params.metadata ? { metadata: params.metadata } : {}),
       });
       params.runtime.log?.(`delivered reply to ${params.target}`);
       continue;
@@ -95,6 +101,7 @@ export async function deliverReplies(params: {
           threadTs,
           accountId: params.accountId,
           ...(params.identity ? { identity: params.identity } : {}),
+          ...(params.metadata ? { metadata: params.metadata } : {}),
         });
       },
       sendMedia: async ({ mediaUrl, caption }) => {
@@ -105,6 +112,7 @@ export async function deliverReplies(params: {
           threadTs,
           accountId: params.accountId,
           ...(params.identity ? { identity: params.identity } : {}),
+          ...(params.metadata ? { metadata: params.metadata } : {}),
         });
       },
     });
@@ -206,6 +214,9 @@ export async function deliverSlackSlashReplies(params: {
   const messages: Array<{ text: string; blocks?: ReturnType<typeof readSlackReplyBlocks> }> = [];
   const chunkLimit = Math.min(params.textLimit, SLACK_TEXT_LIMIT);
   for (const payload of params.replies) {
+    if (payload.isReasoning === true) {
+      continue;
+    }
     const reply = resolveSendableOutboundReplyParts(payload);
     const slackBlocks = readSlackReplyBlocks(payload);
     const text =

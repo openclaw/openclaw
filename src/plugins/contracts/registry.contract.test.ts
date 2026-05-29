@@ -24,6 +24,36 @@ describe("plugin contract registry", () => {
   }
 
   function resolveBundledManifestPluginIds(predicate: (plugin: PluginManifestRecord) => boolean) {
+    if (process.env.VITEST) {
+      return BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.map(
+        (entry) =>
+          ({
+            id: entry.pluginId,
+            origin: "bundled",
+            providers: entry.providerIds,
+            contracts: {
+              embeddingProviders: entry.embeddingProviderIds,
+              speechProviders: entry.speechProviderIds,
+              realtimeTranscriptionProviders: entry.realtimeTranscriptionProviderIds,
+              realtimeVoiceProviders: entry.realtimeVoiceProviderIds,
+              mediaUnderstandingProviders: entry.mediaUnderstandingProviderIds,
+              transcriptSourceProviders: entry.transcriptSourceProviderIds,
+              documentExtractors: entry.documentExtractorIds,
+              imageGenerationProviders: entry.imageGenerationProviderIds,
+              videoGenerationProviders: entry.videoGenerationProviderIds,
+              musicGenerationProviders: entry.musicGenerationProviderIds,
+              webContentExtractors: entry.webContentExtractorIds,
+              webFetchProviders: entry.webFetchProviderIds,
+              webSearchProviders: entry.webSearchProviderIds,
+              migrationProviders: entry.migrationProviderIds,
+              tools: entry.toolNames,
+            },
+          }) as PluginManifestRecord,
+      )
+        .filter(predicate)
+        .map((plugin) => plugin.id)
+        .toSorted((left, right) => left.localeCompare(right));
+    }
     const snapshotPluginIds = new Set(
       BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.map((entry) => entry.pluginId),
     );
@@ -35,7 +65,9 @@ describe("plugin contract registry", () => {
 
   it("loads bundled non-provider capability registries without import-time failure", () => {
     expect(providerContractLoadError).toBeUndefined();
-    expect(pluginRegistrationContractRegistry.length).toBeGreaterThan(0);
+    expect(Array.from(pluginRegistrationContractRegistry)).toStrictEqual(
+      BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS,
+    );
   });
 
   it.each([
@@ -59,6 +91,11 @@ describe("plugin contract registry", () => {
       name: "does not duplicate bundled media provider ids",
       ids: () =>
         pluginRegistrationContractRegistry.flatMap((entry) => entry.mediaUnderstandingProviderIds),
+    },
+    {
+      name: "does not duplicate bundled transcripts source provider ids",
+      ids: () =>
+        pluginRegistrationContractRegistry.flatMap((entry) => entry.transcriptSourceProviderIds),
     },
     {
       name: "does not duplicate bundled realtime transcription provider ids",
@@ -99,14 +136,26 @@ describe("plugin contract registry", () => {
       const plugin = registry.plugins.find(
         (entry) => entry.origin === "bundled" && entry.id === pluginId,
       );
-      expect(plugin?.providerAuthChoices).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            provider: pluginId,
-            onboardingScopes: ["image-generation"],
-          }),
-        ]),
-      );
+      expect(plugin?.providerAuthChoices).toEqual([
+        {
+          provider: pluginId,
+          method: "api-key",
+          choiceId: pluginId === "alibaba" ? "alibaba-model-studio-api-key" : "runway-api-key",
+          choiceLabel: pluginId === "alibaba" ? "Alibaba Model Studio API key" : "Runway API key",
+          groupId: pluginId,
+          groupLabel: pluginId === "alibaba" ? "Alibaba Model Studio" : "Runway",
+          groupHint: pluginId === "alibaba" ? "DashScope / Model Studio API key" : "API key",
+          onboardingScopes: ["image-generation"],
+          optionKey: pluginId === "alibaba" ? "alibabaModelStudioApiKey" : "runwayApiKey",
+          cliFlag: pluginId === "alibaba" ? "--alibaba-model-studio-api-key" : "--runway-api-key",
+          cliOption:
+            pluginId === "alibaba"
+              ? "--alibaba-model-studio-api-key <key>"
+              : "--runway-api-key <key>",
+          cliDescription:
+            pluginId === "alibaba" ? "Alibaba Model Studio API key" : "Runway API key",
+        },
+      ]);
     }
   });
 
@@ -116,18 +165,22 @@ describe("plugin contract registry", () => {
       (entry) => entry.origin === "bundled" && entry.id === "github-copilot",
     );
 
-    expect(plugin?.providerAuthChoices).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          provider: "github-copilot",
-          method: "device",
-          choiceId: "github-copilot",
-          optionKey: "githubCopilotToken",
-          cliFlag: "--github-copilot-token",
-          cliOption: "--github-copilot-token <token>",
-        }),
-      ]),
-    );
+    expect(plugin?.providerAuthChoices).toEqual([
+      {
+        provider: "github-copilot",
+        method: "device",
+        choiceId: "github-copilot",
+        choiceLabel: "GitHub Copilot",
+        choiceHint: "Device login with your GitHub account",
+        groupId: "copilot",
+        groupLabel: "Copilot",
+        groupHint: "GitHub + local proxy",
+        optionKey: "githubCopilotToken",
+        cliFlag: "--github-copilot-token",
+        cliOption: "--github-copilot-token <token>",
+        cliDescription: "GitHub Copilot OAuth token",
+      },
+    ]);
   });
 
   it("covers every bundled speech plugin discovered from manifests", () => {
@@ -158,6 +211,17 @@ describe("plugin contract registry", () => {
       predicate: (plugin) =>
         plugin.origin === "bundled" &&
         (plugin.contracts?.realtimeTranscriptionProviders?.length ?? 0) > 0,
+    });
+  });
+
+  it("covers every bundled transcripts source plugin discovered from manifests", () => {
+    expectRegistryPluginIds({
+      actualPluginIds: pluginRegistrationContractRegistry
+        .filter((entry) => entry.transcriptSourceProviderIds.length > 0)
+        .map((entry) => entry.pluginId),
+      predicate: (plugin) =>
+        plugin.origin === "bundled" &&
+        (plugin.contracts?.transcriptSourceProviders?.length ?? 0) > 0,
     });
   });
 

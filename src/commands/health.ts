@@ -13,12 +13,19 @@ import { withProgress } from "../cli/progress.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
+import { listContextEngineQuarantines } from "../context-engine/registry.js";
+import {
+  buildGatewayConnectionDetails,
+  callGateway,
+  formatGatewayTransportErrorJson,
+} from "../gateway/call.js";
 import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
   evaluateChannelHealth,
 } from "../gateway/channel-health-policy.js";
+import { getGatewayModelPricingHealth } from "../gateway/model-pricing-cache-state.js";
+import { isGatewayModelPricingEnabled } from "../gateway/model-pricing-config.js";
 import type { ChannelRuntimeSnapshot } from "../gateway/server-channel-runtime.types.js";
 import { info } from "../globals.js";
 import { isTruthyEnvValue } from "../infra/env.js";
@@ -37,6 +44,7 @@ import type {
   AgentHealthSummary,
   ChannelAccountHealthSummary,
   ChannelHealthSummary,
+  ContextEngineHealthSummary,
   HealthSummary,
   PluginHealthErrorSummary,
   PluginHealthSummary,
@@ -66,6 +74,43 @@ const debugHealth = (...args: unknown[]) => {
   if (isTruthyEnvValue(process.env.OPENCLAW_DEBUG_HEALTH)) {
     console.warn("[health:debug]", ...args);
   }
+};
+
+const PUBLIC_IMESSAGE_FULL_DISK_ACCESS_ERROR =
+  "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.";
+
+const redactIMessageProbeErrorMessage = (message: string): string => {
+  const trimmed = message.trim();
+  if (!trimmed) {
+    return "";
+  }
+  return trimmed.replaceAll(
+    /\/Users\/[^/\s]+\/Library\/Messages\/chat\.db/g,
+    "~/Library/Messages/chat.db",
+  );
+};
+
+const buildNonSensitiveProbeFailure = (
+  channelId: string,
+  probe: unknown,
+): Record<string, unknown> | undefined => {
+  const record = asNullableRecord(probe);
+  if (channelId !== "imessage" || !record || record.ok !== false) {
+    return undefined;
+  }
+  if (typeof record.error !== "string") {
+    return undefined;
+  }
+
+  const error = redactIMessageProbeErrorMessage(record.error);
+  if (
+    !/\bimsg\b/i.test(error) ||
+    !error.includes("~/Library/Messages/chat.db") ||
+    !/\bFull Disk Access\b/i.test(error)
+  ) {
+    return undefined;
+  }
+  return { ok: false, error: PUBLIC_IMESSAGE_FULL_DISK_ACCESS_ERROR };
 };
 
 const formatDurationParts = (ms: number): string => {
@@ -111,6 +156,44 @@ function formatEventLoopHealthLine(summary: HealthSummary): string | null {
   }`;
 }
 
+export function formatModelPricingHealthLine(summary: HealthSummary): string | null {
+  const modelPricing = summary.modelPricing;
+  if (!modelPricing || modelPricing.state === "disabled") {
+    return null;
+  }
+  if (modelPricing.state === "ok") {
+    return null;
+  }
+  const detail = modelPricing.detail ? ` (${modelPricing.detail})` : "";
+  return `Model pricing: warning (optional pricing refresh degraded)${detail}`;
+}
+
+function buildContextEngineHealthSummary(): ContextEngineHealthSummary | undefined {
+  const quarantined: ContextEngineHealthSummary["quarantined"] = [];
+  for (const entry of listContextEngineQuarantines()) {
+    const summary: ContextEngineHealthSummary["quarantined"][number] = {
+      engineId: entry.engineId,
+      operation: entry.operation,
+      reason: entry.reason,
+      failedAt: entry.failedAt.getTime(),
+    };
+    if (entry.owner) {
+      summary.owner = entry.owner;
+    }
+    quarantined.push(summary);
+  }
+  return quarantined.length > 0 ? { quarantined } : undefined;
+}
+
+export function formatContextEngineHealthLine(summary: HealthSummary): string | null {
+  const quarantined = summary.contextEngines?.quarantined ?? [];
+  if (quarantined.length === 0) {
+    return null;
+  }
+  const engines = quarantined.map((entry) => entry.engineId).join(", ");
+  return `Context engine: warning (${quarantined.length} quarantined; downgraded to legacy: ${engines})`;
+}
+
 const resolveHeartbeatSummary = (cfg: OpenClawConfig, agentId: string) =>
   resolveHeartbeatSummaryForAgent(cfg, agentId);
 
@@ -148,7 +231,7 @@ const resolveAgentOrder = (cfg: OpenClawConfig) => {
 
 const buildSessionSummary = async (storePath: string) => {
   const { loadSessionStore } = await import("../config/sessions/store.js");
-  const store = loadSessionStore(storePath);
+  const store = loadSessionStore(storePath, { clone: false });
   const sessions = Object.entries(store)
     .filter(([key]) => key !== "global" && key !== "unknown")
     .map(([key, entry]) => ({ key, updatedAt: entry?.updatedAt ?? 0 }))
@@ -439,13 +522,15 @@ export async function getHealthSnapshot(params?: {
       const runtimeSnapshot =
         params?.runtimeSnapshot?.channelAccounts[plugin.id]?.[accountId] ??
         (accountId === defaultAccountId ? params?.runtimeSnapshot?.channels[plugin.id] : undefined);
+      const nonSensitiveProbeFailure = buildNonSensitiveProbeFailure(plugin.id, probe);
+      const snapshotProbe = includeSensitive ? probe : nonSensitiveProbeFailure;
       const snapshot: ChannelAccountSnapshot = await buildChannelAccountSnapshotFromAccount({
         plugin,
         cfg,
         accountId,
         account: snapshotAccount,
         runtime: runtimeSnapshot,
-        probe: includeSensitive ? probe : undefined,
+        probe: snapshotProbe,
         enabledFallback: enabled,
         configuredFallback: configured,
       });
@@ -485,7 +570,13 @@ export async function getHealthSnapshot(params?: {
         record.probe = probe;
       }
       if (!includeSensitive) {
-        delete record.probe;
+        const summaryProbeFailure = buildNonSensitiveProbeFailure(plugin.id, record.probe);
+        const safeProbeFailure = summaryProbeFailure ?? nonSensitiveProbeFailure;
+        if (safeProbeFailure) {
+          record.probe = safeProbeFailure;
+        } else {
+          delete record.probe;
+        }
       }
       if (record.lastProbeAt === undefined && lastProbeAt) {
         record.lastProbeAt = lastProbeAt;
@@ -508,12 +599,15 @@ export async function getHealthSnapshot(params?: {
   }
 
   const pluginHealth = buildPluginHealthSummary();
+  const contextEngineHealth = buildContextEngineHealthSummary();
   const summary: HealthSummary = {
     ok: true,
     ts: Date.now(),
     durationMs: Date.now() - start,
     ...(params?.eventLoop ? { eventLoop: params.eventLoop } : {}),
     ...(pluginHealth ? { plugins: pluginHealth } : {}),
+    ...(contextEngineHealth ? { contextEngines: contextEngineHealth } : {}),
+    modelPricing: getGatewayModelPricingHealth({ enabled: isGatewayModelPricingEnabled(cfg) }),
     channels,
     channelOrder,
     channelLabels,
@@ -543,22 +637,35 @@ export async function healthCommand(
 ) {
   const cfg = opts.config ?? (await readBestEffortHealthConfig());
   // Always query the running gateway; do not open a direct Baileys socket here.
-  const summary = await withProgress(
-    {
-      label: "Checking gateway health…",
-      indeterminate: true,
-      enabled: opts.json !== true,
-    },
-    async () =>
-      await callGateway<HealthSummary>({
-        method: "health",
-        params: opts.verbose ? { probe: true } : undefined,
-        timeoutMs: opts.timeoutMs,
-        config: cfg,
-        token: opts.token,
-        password: opts.password,
-      }),
-  );
+  let summary: HealthSummary;
+  try {
+    summary = await withProgress(
+      {
+        label: "Checking gateway health…",
+        indeterminate: true,
+        enabled: opts.json !== true,
+      },
+      async () =>
+        await callGateway<HealthSummary>({
+          method: "health",
+          params: opts.verbose ? { probe: true } : undefined,
+          timeoutMs: opts.timeoutMs,
+          config: cfg,
+          token: opts.token,
+          password: opts.password,
+        }),
+    );
+  } catch (error) {
+    if (opts.json) {
+      const payload = formatGatewayTransportErrorJson(error);
+      if (payload) {
+        writeRuntimeJson(runtime, payload);
+        runtime.exit(1);
+        return;
+      }
+    }
+    throw error;
+  }
   // Gateway reachability defines success; channel issues are reported but not fatal here.
   const fatal = false;
 
@@ -700,6 +807,14 @@ export async function healthCommand(
     const eventLoopLine = formatEventLoopHealthLine(summary);
     if (eventLoopLine) {
       runtime.log(styleHealthChannelLine(eventLoopLine, rich));
+    }
+    const modelPricingLine = formatModelPricingHealthLine(summary);
+    if (modelPricingLine) {
+      runtime.log(styleHealthChannelLine(modelPricingLine, rich));
+    }
+    const contextEngineLine = formatContextEngineHealthLine(summary);
+    if (contextEngineLine) {
+      runtime.log(styleHealthChannelLine(contextEngineLine, rich));
     }
     for (const plugin of displayPlugins) {
       const channelSummary = summary.channels?.[plugin.id];

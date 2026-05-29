@@ -8,6 +8,8 @@ import {
   buildHistoryContext,
   buildHistoryContextFromEntries,
   buildHistoryContextFromMap,
+  buildInboundHistoryFromEntries,
+  buildInboundHistoryFromMap,
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
   HISTORY_CONTEXT_MARKER,
@@ -179,6 +181,58 @@ describe("history helpers", () => {
     expect(result).toContain("current");
   });
 
+  it("builds structured inbound history with media metadata", () => {
+    const historyMap = new Map([
+      [
+        "group",
+        [
+          {
+            sender: "Older",
+            body: "zero",
+            timestamp: 0,
+          },
+          {
+            sender: "A",
+            body: "one",
+            timestamp: 1,
+            messageId: "m1",
+            media: [
+              {
+                path: "/tmp/image.png",
+                contentType: "image/png",
+                kind: "image" as const,
+              },
+            ],
+          },
+        ],
+      ],
+    ]);
+
+    expect(buildInboundHistoryFromMap({ historyMap, historyKey: "group", limit: 1 })).toEqual([
+      {
+        sender: "A",
+        body: "one",
+        timestamp: 1,
+        messageId: "m1",
+        media: [{ path: "/tmp/image.png", contentType: "image/png", kind: "image" }],
+      },
+    ]);
+    expect(
+      buildInboundHistoryFromMap({ historyMap, historyKey: "group", limit: 0 }),
+    ).toBeUndefined();
+    expect(
+      buildInboundHistoryFromEntries({ entries: historyMap.get("group") ?? [], limit: 1 }),
+    ).toEqual([
+      {
+        sender: "A",
+        body: "one",
+        timestamp: 1,
+        messageId: "m1",
+        media: [{ path: "/tmp/image.png", contentType: "image/png", kind: "image" }],
+      },
+    ]);
+  });
+
   it("records pending entries only when enabled", () => {
     const historyMap = new Map<string, { sender: string; body: string }[]>();
 
@@ -218,7 +272,7 @@ describe("history helpers", () => {
     expect(historyMap.get("group")?.map((entry) => entry.body)).toEqual(["one", "two"]);
 
     clearHistoryEntriesIfEnabled({ historyMap, historyKey: "group", limit: 2 });
-    expect(historyMap.get("group")).toEqual([]);
+    expect(historyMap.get("group")).toStrictEqual([]);
   });
 });
 
@@ -291,6 +345,22 @@ describe("shouldRunMemoryFlush", () => {
         softThresholdTokens: 2_000,
       }),
     ).toBe(true);
+  });
+
+  it("runs on consecutive compaction cycles when flush records the pre-increment count", () => {
+    const params = {
+      contextWindowTokens: 100_000,
+      reserveTokensFloor: 5_000,
+      softThresholdTokens: 2_000,
+    };
+
+    for (const entry of [
+      { totalTokens: 95_000, compactionCount: 1 },
+      { totalTokens: 95_000, compactionCount: 2, memoryFlushCompactionCount: 1 },
+      { totalTokens: 95_000, compactionCount: 3, memoryFlushCompactionCount: 2 },
+    ]) {
+      expect(shouldRunMemoryFlush({ entry, ...params })).toBe(true);
+    }
   });
 
   it("ignores stale cached totals", () => {
@@ -459,6 +529,34 @@ describe("incrementCompactionCount", () => {
     expect(stored[sessionKey].outputTokens).toBeUndefined();
   });
 
+  it("accepts zero tokensAfter as a fresh post-compaction total", async () => {
+    const entry = {
+      sessionId: "s1",
+      updatedAt: Date.now(),
+      compactionCount: 0,
+      totalTokens: 180_000,
+      inputTokens: 170_000,
+      outputTokens: 10_000,
+      totalTokensFresh: true,
+    } as SessionEntry;
+    const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
+
+    await incrementCompactionCount({
+      sessionEntry: entry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      tokensAfter: 0,
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].compactionCount).toBe(1);
+    expect(stored[sessionKey].totalTokens).toBe(0);
+    expect(stored[sessionKey].totalTokensFresh).toBe(true);
+    expect(stored[sessionKey].inputTokens).toBeUndefined();
+    expect(stored[sessionKey].outputTokens).toBeUndefined();
+  });
+
   it("prefers explicit compactionTokensAfter over last-call usage for run accounting", async () => {
     const entry = {
       sessionId: "s1",
@@ -484,6 +582,34 @@ describe("incrementCompactionCount", () => {
 
     const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].totalTokens).toBe(12_000);
+    expect(stored[sessionKey].totalTokensFresh).toBe(true);
+  });
+
+  it("preserves zero compactionTokensAfter for run accounting", async () => {
+    const entry = {
+      sessionId: "s1",
+      updatedAt: Date.now(),
+      compactionCount: 0,
+      totalTokens: 180_000,
+    } as SessionEntry;
+    const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
+
+    await incrementRunCompactionCount({
+      sessionEntry: entry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      compactionTokensAfter: 0,
+      lastCallUsage: {
+        input: 90_000,
+        output: 1_000,
+        total: 91_000,
+      },
+      contextTokensUsed: 200_000,
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].totalTokens).toBe(0);
     expect(stored[sessionKey].totalTokensFresh).toBe(true);
   });
 
@@ -536,7 +662,7 @@ describe("incrementCompactionCount", () => {
     const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].compactionCount).toBe(1);
     expect(stored[sessionKey].totalTokens).toBe(180_000);
-    expect(stored[sessionKey].totalTokensFresh).toBe(true);
+    expect(stored[sessionKey].totalTokensFresh).toBe(false);
   });
 
   it("updates sessionId and sessionFile when compaction rotated transcripts", async () => {
@@ -662,12 +788,13 @@ describe("incrementCompactionCount", () => {
     expect(stored[sessionKey].compactionCount).toBe(1);
   });
 
-  it("does not update totalTokens when tokensAfter is not provided", async () => {
+  it("marks totalTokens stale when tokensAfter is not provided", async () => {
     const entry = {
       sessionId: "s1",
       updatedAt: Date.now(),
       compactionCount: 0,
       totalTokens: 180_000,
+      totalTokensFresh: true,
     } as SessionEntry;
     const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
 
@@ -682,5 +809,6 @@ describe("incrementCompactionCount", () => {
     expect(stored[sessionKey].compactionCount).toBe(1);
     // totalTokens unchanged
     expect(stored[sessionKey].totalTokens).toBe(180_000);
+    expect(stored[sessionKey].totalTokensFresh).toBe(false);
   });
 });

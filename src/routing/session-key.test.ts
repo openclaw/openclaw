@@ -7,9 +7,15 @@ import {
   resolveThreadParentSessionKey,
 } from "../sessions/session-key-utils.js";
 import {
+  buildAgentPeerSessionKey,
+  buildGroupHistoryKey,
   classifySessionKeyShape,
   isValidAgentId,
   parseAgentSessionKey,
+  resolveEventSessionKey,
+  scopedHeartbeatWakeOptions,
+  isUnscopedSessionKeySentinel,
+  scopeLegacySessionKeyToAgent,
   toAgentStoreSessionKey,
 } from "./session-key.js";
 
@@ -26,6 +32,47 @@ describe("classifySessionKeyShape", () => {
     { input: "subagent:worker", expected: "legacy_or_alias" },
   ] as const)("classifies %j as $expected", ({ input, expected }) => {
     expect(classifySessionKeyShape(input)).toBe(expected);
+  });
+});
+
+describe("scopeLegacySessionKeyToAgent", () => {
+  it("scopes legacy aliases to the requested agent", () => {
+    expect(scopeLegacySessionKeyToAgent({ agentId: "Ops", sessionKey: "Incident-42" })).toBe(
+      "agent:ops:incident-42",
+    );
+  });
+
+  it("honors configured main-key aliases when scoping legacy keys", () => {
+    expect(
+      scopeLegacySessionKeyToAgent({ agentId: "ops", sessionKey: "main", mainKey: "work" }),
+    ).toBe("agent:ops:work");
+  });
+
+  it("preserves already agent-prefixed keys", () => {
+    expect(
+      scopeLegacySessionKeyToAgent({
+        agentId: "ops",
+        sessionKey: "agent:main:incident-42",
+      }),
+    ).toBe("agent:main:incident-42");
+  });
+
+  it("scopes global and unknown legacy aliases to the requested agent", () => {
+    expect(scopeLegacySessionKeyToAgent({ agentId: "ops", sessionKey: "global" })).toBe(
+      "agent:ops:global",
+    );
+    expect(scopeLegacySessionKeyToAgent({ agentId: "ops", sessionKey: "UNKNOWN" })).toBe(
+      "agent:ops:unknown",
+    );
+  });
+});
+
+describe("isUnscopedSessionKeySentinel", () => {
+  it("recognizes literal global and unknown sentinels", () => {
+    expect(isUnscopedSessionKeySentinel("global")).toBe(true);
+    expect(isUnscopedSessionKeySentinel("UNKNOWN")).toBe(true);
+    expect(isUnscopedSessionKeySentinel("agent:ops:global")).toBe(false);
+    expect(isUnscopedSessionKeySentinel("incident-42")).toBe(false);
   });
 });
 
@@ -61,6 +108,7 @@ describe("isCronSessionKey", () => {
   it.each([
     { key: "agent:main:cron:job-1", expected: true },
     { key: "agent:main:cron:job-1:run:run-1", expected: true },
+    { key: "agent:main:cron:job-1:run:run-1:subagent:worker", expected: true },
     { key: "agent:main:main", expected: false },
     { key: "agent:main:subagent:worker", expected: false },
     { key: "cron:job-1", expected: false },
@@ -75,6 +123,8 @@ describe("deriveSessionChatTypeFromKey", () => {
     { key: "agent:main:discord:direct:user1", expected: "direct" },
     { key: "agent:main:telegram:group:g1", expected: "group" },
     { key: "agent:main:discord:channel:c1", expected: "channel" },
+    { key: "agent:main:discord:guild-123:channel-456", expected: "channel" },
+    { key: "agent:main:whatsapp:123@g.us", expected: "group" },
     { key: "agent:main:telegram:dm:123456", expected: "direct" },
     { key: "telegram:dm:123456", expected: "direct" },
     { key: "agent:main:main", expected: "unknown" },
@@ -153,8 +203,173 @@ describe("session key canonicalization", () => {
           }),
         ).toBe("agent:main:main"),
     },
+    {
+      name: "preserves Signal group ids while lowercasing structural tokens",
+      run: () => {
+        const mixedGroupId = "VWATodkf2hc8zdOS76q9Tb0+5Bi522E03qLdaQ/9ypg=";
+        expect(parseAgentSessionKey(`Agent:Main:Signal:Group:${mixedGroupId}`)).toEqual({
+          agentId: "main",
+          rest: `signal:group:${mixedGroupId}`,
+        });
+        expect(
+          buildAgentPeerSessionKey({
+            agentId: "Main",
+            channel: "Signal",
+            peerKind: "group",
+            peerId: mixedGroupId,
+          }),
+        ).toBe(`agent:main:signal:group:${mixedGroupId}`);
+        expect(
+          buildGroupHistoryKey({
+            channel: "Signal",
+            peerKind: "group",
+            peerId: mixedGroupId,
+          }),
+        ).toBe(`signal:default:group:${mixedGroupId}`);
+      },
+    },
+    {
+      name: "keeps non-Signal opaque-looking group ids lowercase",
+      run: () =>
+        expect(
+          buildAgentPeerSessionKey({
+            agentId: "Main",
+            channel: "Telegram",
+            peerKind: "group",
+            peerId: "MiXeDGroup",
+          }),
+        ).toBe("agent:main:telegram:group:mixedgroup"),
+    },
   ] as const)("$name", ({ run }) => {
     expectSessionKeyCanonicalizationCase({ run });
+  });
+});
+
+describe("scopedHeartbeatWakeOptions", () => {
+  it("remaps ephemeral cron run sessions to agent main key", () => {
+    const result = scopedHeartbeatWakeOptions("agent:main:cron:backup:run:abc", {
+      reason: "exec:123:exit",
+    });
+    expect(result).toEqual({ reason: "exec:123:exit", sessionKey: "agent:main:main" });
+  });
+
+  it("preserves durable cron base sessions (not remapped)", () => {
+    const result = scopedHeartbeatWakeOptions("agent:main:cron:backup", {
+      reason: "exec:123:exit",
+    });
+    expect(result).toEqual({ reason: "exec:123:exit", sessionKey: "agent:main:cron:backup" });
+  });
+
+  it("preserves sessionKey for regular agent sessions", () => {
+    const result = scopedHeartbeatWakeOptions("agent:main:main", {
+      reason: "exec:123:exit",
+    });
+    expect(result).toEqual({ reason: "exec:123:exit", sessionKey: "agent:main:main" });
+  });
+
+  it("strips sessionKey for non-agent keys", () => {
+    const result = scopedHeartbeatWakeOptions("main", { reason: "test" });
+    expect(result).toEqual({ reason: "test" });
+    expect("sessionKey" in result).toBe(false);
+  });
+
+  it("strips sessionKey for global-scope sessions to preserve unscoped wake behavior", () => {
+    // In session.scope = "global" setups, resolveMainSessionKeyFromConfig() returns "global".
+    // Passing "global" as sessionKey into requestHeartbeatNow would create a targeted wake
+    // that can fail to resolve, breaking hook-triggered heartbeats. scopedHeartbeatWakeOptions
+    // must strip it to preserve the old unscoped behavior.
+    const result = scopedHeartbeatWakeOptions("global", { reason: "hook:wake" });
+    expect(result).toEqual({ reason: "hook:wake" });
+    expect("sessionKey" in result).toBe(false);
+  });
+
+  it("drops sessionKey but preserves agentId for cron-run keys when scope is global", () => {
+    // Global-scope agents drain the "global" queue automatically; a targeted
+    // wake on agent:<id>:main would be unresolvable. Carry the agent target
+    // so multi-agent global-scope setups still wake the originating agent.
+    const result = scopedHeartbeatWakeOptions(
+      "agent:ops:cron:job-1:run:xyz",
+      { reason: "exec-event" },
+      undefined,
+      "global",
+    );
+    expect(result).toEqual({ reason: "exec-event", agentId: "ops" });
+    expect("sessionKey" in result).toBe(false);
+  });
+
+  it("threads custom mainKey for cron-run keys under per-sender scope", () => {
+    const result = scopedHeartbeatWakeOptions(
+      "agent:main:cron:backup:run:abc",
+      { reason: "exec-event" },
+      "primary",
+      "per-sender",
+    );
+    expect(result).toEqual({ reason: "exec-event", sessionKey: "agent:main:primary" });
+  });
+});
+
+describe("resolveEventSessionKey", () => {
+  it("remaps ephemeral cron run session keys to agent main session key", () => {
+    expect(resolveEventSessionKey("agent:main:cron:backup:run:abc123")).toBe("agent:main:main");
+    expect(resolveEventSessionKey("agent:ops:cron:job-1:run:xyz")).toBe("agent:ops:main");
+  });
+
+  it("collapses cron-run descendant session keys to the agent main session key", () => {
+    expect(resolveEventSessionKey("agent:main:cron:backup:run:abc123:subagent:worker")).toBe(
+      "agent:main:main",
+    );
+    expect(resolveEventSessionKey("agent:ops:cron:job-1:run:xyz:thread:reply")).toBe(
+      "agent:ops:main",
+    );
+  });
+
+  it("preserves durable cron base session keys", () => {
+    expect(resolveEventSessionKey("agent:ops:cron:job-1")).toBe("agent:ops:cron:job-1");
+    expect(resolveEventSessionKey("agent:main:cron:backup")).toBe("agent:main:cron:backup");
+  });
+
+  it("respects custom mainKey for ephemeral cron session remapping", () => {
+    expect(resolveEventSessionKey("agent:main:cron:backup:run:abc123", "primary")).toBe(
+      "agent:main:primary",
+    );
+    expect(resolveEventSessionKey("agent:ops:cron:job-1:run:xyz", "primary")).toBe(
+      "agent:ops:primary",
+    );
+  });
+
+  it("passes through non-cron session keys unchanged", () => {
+    expect(resolveEventSessionKey("agent:main:main")).toBe("agent:main:main");
+    expect(resolveEventSessionKey("agent:main:discord:direct:user1")).toBe(
+      "agent:main:discord:direct:user1",
+    );
+  });
+
+  it("passes through non-agent keys unchanged", () => {
+    expect(resolveEventSessionKey("main")).toBe("main");
+    expect(resolveEventSessionKey("global")).toBe("global");
+  });
+
+  it("routes cron-run keys to the global queue when scope is global", () => {
+    // resolveHeartbeatSession drains the literal "global" queue for global-scope
+    // sessions; remapping to agent:<id>:main would strand the event.
+    expect(resolveEventSessionKey("agent:ops:cron:job-1:run:xyz", undefined, "global")).toBe(
+      "global",
+    );
+    expect(resolveEventSessionKey("agent:main:cron:backup:run:abc", "primary", "global")).toBe(
+      "global",
+    );
+    expect(
+      resolveEventSessionKey("agent:main:cron:backup:run:abc:subagent:worker", "primary", "global"),
+    ).toBe("global");
+  });
+
+  it("treats explicit per-sender scope identically to omitted scope", () => {
+    expect(
+      resolveEventSessionKey("agent:main:cron:backup:run:abc123", undefined, "per-sender"),
+    ).toBe("agent:main:main");
+    expect(
+      resolveEventSessionKey("agent:main:cron:backup:run:abc123", "primary", "per-sender"),
+    ).toBe("agent:main:primary");
   });
 });
 

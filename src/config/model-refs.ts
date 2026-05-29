@@ -1,3 +1,4 @@
+import { normalizeProviderId } from "../agents/provider-id.js";
 import { isRecord } from "../utils.js";
 
 export type ConfiguredModelRef = {
@@ -11,6 +12,7 @@ export const AGENT_MODEL_CONFIG_KEYS = [
   "imageGenerationModel",
   "videoGenerationModel",
   "musicGenerationModel",
+  "voiceModel",
   "pdfModel",
 ] as const;
 
@@ -95,10 +97,6 @@ export function collectConfiguredModelRefs(
     }
   }
   pushModelRef("hooks.gmail.model", isRecord(hooks.gmail) ? hooks.gmail.model : undefined);
-  collectModelConfig(
-    "tools.subagents.model",
-    isRecord(root.tools) && isRecord(root.tools.subagents) ? root.tools.subagents.model : undefined,
-  );
   pushModelRef(
     "messages.tts.summaryModel",
     isRecord(root.messages) && isRecord(root.messages.tts)
@@ -114,4 +112,20 @@ export function collectConfiguredModelRefs(
       : undefined,
   );
   return refs;
+}
+
+export function collectConfiguredModelRefValues(
+  config: unknown,
+  options?: { includeChannelModelOverrides?: boolean },
+): string[] {
+  return collectConfiguredModelRefs(config, options).map((ref) => ref.value);
+}
+
+export function extractProviderFromModelRef(value: string): string | null {
+  const trimmed = value.trim();
+  const slash = trimmed.indexOf("/");
+  if (slash <= 0) {
+    return null;
+  }
+  return normalizeProviderId(trimmed.slice(0, slash));
 }

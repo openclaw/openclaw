@@ -161,8 +161,8 @@ describe("MatrixVerificationManager", () => {
 
     const summary = manager.trackVerificationRequest(request);
 
-    expect(summary.id).toBeTruthy();
-    expect(summary.methods).toEqual([]);
+    expect(summary.id).toMatch(/^verification-\d+$/u);
+    expect(summary.methods).toStrictEqual([]);
     expect(summary.phaseName).toBe("requested");
   });
 
@@ -548,10 +548,13 @@ describe("MatrixVerificationManager", () => {
   });
 
   it("confirmVerificationSas awaits the verifier's verify promise before resolving", async () => {
-    let resolveVerify!: () => void;
+    let resolveVerify: (() => void) | undefined;
     const verifyPromise = new Promise<void>((res) => {
       resolveVerify = res;
     });
+    if (!resolveVerify) {
+      throw new Error("Expected verification resolver to be initialized");
+    }
     const verifyImpl = vi.fn(() => verifyPromise);
     const { confirm, verifier } = createSasVerifierFixture({
       decimal: [111, 222, 333],

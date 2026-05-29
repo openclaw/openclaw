@@ -2,10 +2,10 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-status";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-host-core";
-import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-host-status";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   callQaBrowserRequest,
   qaBrowserAct,
@@ -20,8 +20,10 @@ import {
   reportsMissingDiscoveryFiles,
 } from "./discovery-eval.js";
 import { extractQaToolPayload } from "./extract-tool-payload.js";
-import { hasModelSwitchContinuityEvidence } from "./model-switch-eval.js";
+import { assertNoGatewayLogSentinels, scanGatewayLogSentinels } from "./gateway-log-sentinel.js";
+import { hasModelSwitchContinuitySignal } from "./model-switch-eval.js";
 import { qaChannelPlugin } from "./runtime-api.js";
+import { runRuntimeToolFixture } from "./runtime-tool-fixture.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import { createQaScenarioRuntimeApi, type QaScenarioRuntimeEnv } from "./scenario-runtime-api.js";
 import {
@@ -37,6 +39,7 @@ import {
   readDoctorMemoryStatus,
   readEffectiveTools,
   readRawQaSessionStore,
+  readSessionTranscriptSummary,
   readSkillStatus,
   resolveGeneratedImagePath,
   runAgentPrompt,
@@ -163,6 +166,13 @@ function createQaSuiteScenarioDeps(params: QaSuiteScenarioDepsParams) {
     readEffectiveTools,
     readSkillStatus,
     readRawQaSessionStore,
+    readGatewayLogs: () => params.env.gateway.logs?.() ?? "",
+    markGatewayLogCursor: () => (params.env.gateway.logs?.() ?? "").length,
+    scanGatewayLogSentinels: (options?: Parameters<typeof scanGatewayLogSentinels>[1]) =>
+      scanGatewayLogSentinels(params.env.gateway.logs?.(), options),
+    assertNoGatewayLogSentinels: (options?: Parameters<typeof assertNoGatewayLogSentinels>[1]) =>
+      assertNoGatewayLogSentinels(params.env.gateway.logs?.(), options),
+    readSessionTranscriptSummary,
     runQaCli,
     extractMediaPathFromText,
     resolveGeneratedImagePath,
@@ -179,6 +189,17 @@ function createQaSuiteScenarioDeps(params: QaSuiteScenarioDepsParams) {
     runAgentPrompt,
     ensureImageGenerationConfigured,
     handleQaAction,
+    runRuntimeToolFixture: async (
+      envArg: QaSuiteScenarioFlowEnv,
+      configArg: Record<string, unknown>,
+    ) =>
+      runRuntimeToolFixture(envArg, configArg, {
+        createSession,
+        readEffectiveTools,
+        runAgentPrompt,
+        fetchJson,
+        ensureImageGenerationConfigured,
+      }),
     extractQaToolPayload,
     formatMemoryDreamingDay,
     resolveSessionTranscriptsDirForAgent,
@@ -192,7 +213,7 @@ function createQaSuiteScenarioDeps(params: QaSuiteScenarioDepsParams) {
     hasDiscoveryLabels,
     reportsDiscoveryScopeLeak,
     reportsMissingDiscoveryFiles,
-    hasModelSwitchContinuityEvidence,
+    hasModelSwitchContinuitySignal,
   };
 }
 

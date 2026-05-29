@@ -65,13 +65,17 @@ OpenClaw loads skills from these locations (highest precedence first):
 - Bundled (shipped with the install)
 - Extra skill folders: `skills.load.extraDirs`
 
+Skill roots can contain grouped folders such as
+`<workspace>/skills/personal/foo/SKILL.md`; the skill is still exposed by its
+flat frontmatter name, for example `foo`.
+
 Skills can be gated by config/env (see `skills` in [Gateway configuration](/gateway/configuration)).
 
 ## Runtime boundaries
 
-The embedded agent runtime is built on the Pi agent core (models, tools, and
-prompt pipeline). Session management, discovery, tool wiring, and channel
-delivery are OpenClaw-owned layers on top of that core.
+The embedded agent runtime is OpenClaw-owned: model discovery, tool wiring,
+prompt assembly, session management, and channel delivery share one integrated
+runtime surface.
 
 ## Sessions
 
@@ -84,17 +88,15 @@ Legacy session folders from other tools are not read.
 
 ## Steering while streaming
 
-When queue mode is `steer`, inbound messages are injected into the current run.
-Queued steering is delivered **after the current assistant turn finishes
-executing its tool calls**, before the next LLM call. Pi drains all pending
-steering messages together for `steer`; legacy `queue` drains one message per
-model boundary. Steering no longer skips remaining tool calls from the current
-assistant message.
+Inbound prompts that arrive mid-run are steered into the current run by default.
+Steering is delivered **after the current assistant turn finishes executing its
+tool calls**, before the next LLM call, and no longer skips remaining tool calls
+from the current assistant message.
 
-When queue mode is `followup` or `collect`, inbound messages are held until the
-current turn ends, then a new agent turn starts with the queued payloads. See
-[Queue](/concepts/queue) and [Steering queue](/concepts/queue-steering) for mode
-and boundary behavior.
+`/queue steer` is the default active-run behavior. `/queue followup` and
+`/queue collect` make messages wait for a later turn instead of steering.
+`/queue interrupt` aborts the active run instead. See [Queue](/concepts/queue)
+and [Steering queue](/concepts/queue-steering) for queue and boundary behavior.
 
 Block streaming sends completed assistant blocks as soon as they finish; it is
 **off by default** (`agents.defaults.blockStreamingDefault: "off"`).

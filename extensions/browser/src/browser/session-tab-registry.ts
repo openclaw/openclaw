@@ -1,7 +1,7 @@
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { browserCloseTab } from "./client.js";
 
 type TrackedSessionBrowserTab = {
@@ -308,11 +308,11 @@ export async function sweepTrackedBrowserTabs(params: {
   });
 }
 
-export function __resetTrackedSessionBrowserTabsForTests(): void {
+export function resetTrackedSessionBrowserTabsForTests(): void {
   trackedTabsBySession.clear();
 }
 
-export function __countTrackedSessionBrowserTabsForTests(sessionKey?: string): number {
+export function countTrackedSessionBrowserTabsForTests(sessionKey?: string): number {
   if (typeof sessionKey === "string" && sessionKey.trim()) {
     return trackedTabsBySession.get(normalizeSessionKey(sessionKey))?.size ?? 0;
   }

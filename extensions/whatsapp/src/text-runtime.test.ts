@@ -59,11 +59,11 @@ describe("markdownToWhatsApp", () => {
 
 describe("assertWebChannel", () => {
   it("accepts valid channel", () => {
-    expect(() => assertWebChannel("web")).not.toThrow();
+    expect(assertWebChannel("web")).toBeUndefined();
   });
 
   it("throws for invalid channel", () => {
-    expect(() => assertWebChannel("bad" as string)).toThrow();
+    expect(() => assertWebChannel("bad" as string)).toThrow("Web channel must be 'web'");
   });
 });
 

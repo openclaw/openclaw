@@ -19,24 +19,24 @@ afterEach(() => {
   resetPluginStateStoreForTests();
 });
 
+async function expectPluginStateStoreError(
+  promise: Promise<unknown>,
+  expected: { code: string },
+): Promise<void> {
+  let storeError: unknown;
+  try {
+    await promise;
+  } catch (error) {
+    storeError = error;
+  }
+  expect(storeError).toBeInstanceOf(PluginStateStoreError);
+  expect((storeError as PluginStateStoreError | undefined)?.code).toBe(expected.code);
+}
+
 // ---------------------------------------------------------------------------
 // Runtime smoke
 // ---------------------------------------------------------------------------
 describe("runtime smoke", () => {
-  it("creates and exercises a keyed store directly", async () => {
-    await withOpenClawTestState({ label: "e2e-smoke-load" }, async () => {
-      const store = createPluginStateKeyedStore<{ ready: boolean }>("fixture-plugin", {
-        namespace: "boot",
-        maxEntries: 10,
-      });
-      expect(store).toBeDefined();
-      expect(typeof store.register).toBe("function");
-      expect(typeof store.registerIfAbsent).toBe("function");
-      expect(typeof store.lookup).toBe("function");
-      expect(typeof store.consume).toBe("function");
-    });
-  });
-
   it("writes and reads a value", async () => {
     await withOpenClawTestState({ label: "e2e-smoke-rw" }, async () => {
       const store = createPluginStateKeyedStore<{ msg: string }>("fixture-plugin", {
@@ -188,7 +188,7 @@ describe("limits", () => {
       });
       // 65 535 chars → 65 537 bytes of JSON → over limit.
       const oversize = "x".repeat(65_535);
-      await expect(store.register("big", oversize)).rejects.toMatchObject({
+      await expectPluginStateStoreError(store.register("big", oversize), {
         code: "PLUGIN_STATE_LIMIT_EXCEEDED",
       });
     });
@@ -196,10 +196,9 @@ describe("limits", () => {
 
   it("enforces the per-plugin live-row cap", async () => {
     await withOpenClawTestState({ label: "e2e-limit-plugin" }, async () => {
-      // Spread MAX_ENTRIES_PER_PLUGIN rows across several namespaces so
-      // namespace eviction never fires (each namespace has generous room).
+      // Fill the plugin budget outside the namespace that attempts the write.
       const nsCount = 10;
-      const perNs = MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN / nsCount; // 100
+      const perNs = MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN / nsCount;
       seedPluginStateEntriesForTests(
         Array.from({ length: MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN }, (_, index) => {
           const ns = Math.floor(index / perNs);
@@ -213,12 +212,12 @@ describe("limits", () => {
         }),
       );
       const store = createPluginStateKeyedStore("fixture-plugin", {
-        namespace: "ns-0",
-        maxEntries: perNs + 1,
+        namespace: "overflow-ns",
+        maxEntries: 10,
       });
 
       // One more row tips over the plugin-wide limit.
-      await expect(store.register("overflow", { boom: true })).rejects.toMatchObject({
+      await expectPluginStateStoreError(store.register("overflow", { boom: true }), {
         code: "PLUGIN_STATE_LIMIT_EXCEEDED",
       });
     });
@@ -268,7 +267,7 @@ describe("failure safety", () => {
       });
       const error = await store.register("k", { ok: true }).catch((e: unknown) => e);
       expect(error).toBeInstanceOf(PluginStateStoreError);
-      expect(error).toMatchObject({ code: "PLUGIN_STATE_SCHEMA_UNSUPPORTED" });
+      expect((error as PluginStateStoreError).code).toBe("PLUGIN_STATE_SCHEMA_UNSUPPORTED");
     });
   });
 
@@ -278,7 +277,8 @@ describe("failure safety", () => {
       expect(result.ok).toBe(true);
       expect(result.dbPath).toContain("state.sqlite");
       expect(result.steps.length).toBeGreaterThanOrEqual(4);
-      expect(result.steps.every((s) => s.ok)).toBe(true);
+      const failedSteps = result.steps.filter((step) => !step.ok);
+      expect(failedSteps).toStrictEqual([]);
 
       // The probe's temporary stored value must not leak into the result.
       const serialised = JSON.stringify(result);

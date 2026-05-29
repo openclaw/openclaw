@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import path from "node:path";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { BrowserRouteContext } from "../server-context.js";
 import {
   readBody,
@@ -92,6 +92,31 @@ export function registerBrowserAgentDebugRoutes(
           });
           const url = await resolveTabUrl(tab.url);
           res.json({ ok: true, targetId: tab.targetId, ...(url ? { url } : {}), ...result });
+        },
+      });
+    }),
+  );
+
+  app.get(
+    "/dialogs",
+    asyncBrowserRoute(async (req, res) => {
+      const targetId = resolveTargetIdFromQuery(req.query);
+
+      await withPlaywrightRouteContext({
+        req,
+        res,
+        ctx,
+        targetId,
+        feature: "dialog state",
+        enforceCurrentUrlAllowed: true,
+        run: async ({ cdpUrl, tab, pw, resolveTabUrl }) => {
+          const browserState = await pw.getObservedBrowserStateViaPlaywright({
+            cdpUrl,
+            targetId: tab.targetId,
+            ssrfPolicy: ctx.state().resolved.ssrfPolicy,
+          });
+          const url = await resolveTabUrl(tab.url);
+          res.json({ ok: true, targetId: tab.targetId, ...(url ? { url } : {}), browserState });
         },
       });
     }),

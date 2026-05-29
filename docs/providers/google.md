@@ -13,7 +13,7 @@ Gemini Grounding.
 - Provider: `google`
 - Auth: `GEMINI_API_KEY` or `GOOGLE_API_KEY`
 - API: Google Gemini API
-- Runtime option: `agents.defaults.agentRuntime.id: "google-gemini-cli"`
+- Runtime option: provider/model `agentRuntime.id: "google-gemini-cli"`
   reuses Gemini CLI OAuth while keeping model refs canonical as `google/*`.
 
 ## Getting started
@@ -226,8 +226,8 @@ The bundled `google` plugin also registers video generation through the shared
 
 - Default video model: `google/veo-3.1-fast-generate-preview`
 - Modes: text-to-video, image-to-video, and single-video reference flows
-- Supports `aspectRatio`, `resolution`, and `audio`
-- Current duration clamp: **4 to 8 seconds**
+- Supports `aspectRatio` (`16:9`, `9:16`) and `resolution` (`720P`, `1080P`); audio output is not supported by Veo today
+- Supported durations: **4, 6, or 8 seconds** (other values snap to the nearest allowed value)
 
 To use Google as the default video provider:
 
@@ -303,7 +303,7 @@ To use Google as the default TTS provider:
       providers: {
         google: {
           model: "gemini-3.1-flash-tts-preview",
-          voiceName: "Kore",
+          speakerVoice: "Kore",
           audioProfile: "Speak professionally with a calm tone.",
         },
       },
@@ -367,7 +367,7 @@ Example Voice Call realtime config:
             providers: {
               google: {
                 model: "gemini-2.5-flash-native-audio-preview-12-2025",
-                voice: "Kore",
+                speakerVoice: "Kore",
                 activityHandling: "start-of-activity-interrupts",
                 turnCoverage: "only-activity",
               },
@@ -398,9 +398,10 @@ Gateway relay transport, which keeps provider credentials on the Gateway.
 
 For maintainer live verification, run
 `OPENAI_API_KEY=... GEMINI_API_KEY=... node --import tsx scripts/dev/realtime-talk-live-smoke.ts`.
-The Google leg mints the same constrained Live API token shape used by Control
-UI Talk, opens the browser WebSocket endpoint, sends the initial setup payload,
-and waits for `setupComplete`.
+The smoke also covers OpenAI backend/WebRTC paths; the Google leg mints the same
+constrained Live API token shape used by Control UI Talk, opens the browser
+WebSocket endpoint, sends the initial setup payload, and waits for
+`setupComplete`.
 
 ## Advanced configuration
 

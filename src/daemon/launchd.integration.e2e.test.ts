@@ -204,12 +204,7 @@ describeLaunchdIntegration("launchd integration", () => {
 
   it("restarts launchd service and keeps it running with a new pid", async () => {
     const launchEnv = launchEnvOrThrow(env);
-    try {
-      await initializeLaunchdRuntime(launchEnv, stdout);
-    } catch {
-      // Best-effort integration check only; skip when launchctl is unstable in CI.
-      return;
-    }
+    await initializeLaunchdRuntime(launchEnv, stdout);
     const before = await waitForRunningRuntime({ env: launchEnv });
     await restartLaunchAgent({ env: launchEnv, stdout });
     await expectRuntimePidReplaced({ env: launchEnv, previousPid: before.pid });
@@ -217,11 +212,7 @@ describeLaunchdIntegration("launchd integration", () => {
 
   it("keeps LaunchAgent supervision after a raw SIGTERM", async () => {
     const launchEnv = launchEnvOrThrow(env);
-    try {
-      await initializeLaunchdRuntime(launchEnv, stdout);
-    } catch {
-      return;
-    }
+    await initializeLaunchdRuntime(launchEnv, stdout);
 
     const before = await waitForRunningRuntime({ env: launchEnv });
     process.kill(before.pid, "SIGTERM");
@@ -230,11 +221,7 @@ describeLaunchdIntegration("launchd integration", () => {
 
   it("stops persistently without reinstall and starts later", async () => {
     const launchEnv = launchEnvOrThrow(env);
-    try {
-      await initializeLaunchdRuntime(launchEnv, stdout);
-    } catch {
-      return;
-    }
+    await initializeLaunchdRuntime(launchEnv, stdout);
 
     const before = await waitForRunningRuntime({ env: launchEnv });
     await stopLaunchAgent({ env: launchEnv, stdout });
@@ -247,11 +234,7 @@ describeLaunchdIntegration("launchd integration", () => {
 
   it("stops persistently without reinstall and restarts later", async () => {
     const launchEnv = launchEnvOrThrow(env);
-    try {
-      await initializeLaunchdRuntime(launchEnv, stdout);
-    } catch {
-      return;
-    }
+    await initializeLaunchdRuntime(launchEnv, stdout);
 
     const before = await waitForRunningRuntime({ env: launchEnv });
     await stopLaunchAgent({ env: launchEnv, stdout });
@@ -293,8 +276,10 @@ describeLaunchdIntegration("launchd integration", () => {
       setTimeout(resolve, 1_500);
     });
     const events = await fs.readFile(eventsPath, "utf8");
-    const lines = events.trim().split(/\r?\n/).filter(Boolean);
-    expect(lines.filter((line) => line.startsWith("start "))).toHaveLength(1);
-    expect(lines.some((line) => /^(SIGHUP|SIGINT|SIGTERM) /.test(line))).toBe(false);
+    const trimmedEvents = events.trim();
+    const lines = trimmedEvents.length > 0 ? trimmedEvents.split(/\r?\n/) : [];
+    expect(lines.reduce((count, line) => count + (line.startsWith("start ") ? 1 : 0), 0)).toBe(1);
+    const signalLines = lines.filter((line) => /^(SIGHUP|SIGINT|SIGTERM) /.test(line));
+    expect(signalLines).toStrictEqual([]);
   }, 60_000);
 });

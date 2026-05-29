@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer as createHttpServer } from "node:http";
 import { Socket, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -19,12 +19,16 @@ async function cleanupTestDirs(): Promise<void> {
 
 async function makeSettings() {
   testRoot = await mkdtemp(join(tmpdir(), "openclaw-debug-proxy-managed-proxy-"));
+  const certDir = join(testRoot, "certs");
+  await mkdir(certDir, { recursive: true });
+  await writeFile(join(certDir, "root-ca.pem"), "test root cert\n", "utf8");
+  await writeFile(join(certDir, "root-ca-key.pem"), "test root key\n", "utf8");
   return {
     enabled: true,
     required: false,
     dbPath: ":memory:",
     blobDir: join(testRoot, "blobs"),
-    certDir: join(testRoot, "certs"),
+    certDir,
     sessionId: "debug-proxy-managed-proxy-test",
     sourceProcess: "test",
   };
@@ -62,6 +66,24 @@ async function requestThroughProxy(proxyUrl: string, targetUrl: string): Promise
     socket.connect(Number(proxy.port), proxy.hostname, resolve);
   });
   socket.write(`GET ${target.href} HTTP/1.1\r\nHost: ${target.host}\r\nConnection: close\r\n\r\n`);
+  await new Promise<void>((resolve) => socket.once("end", resolve));
+  socket.destroy();
+  return data;
+}
+
+async function requestRawThroughProxy(proxyUrl: string, request: string): Promise<string> {
+  const proxy = new URL(proxyUrl);
+  const socket = new Socket();
+  let data = "";
+  socket.setEncoding("utf8");
+  socket.on("data", (chunk) => {
+    data += chunk;
+  });
+  await new Promise<void>((resolve, reject) => {
+    socket.once("error", reject);
+    socket.connect(Number(proxy.port), proxy.hostname, resolve);
+  });
+  socket.write(request);
   await new Promise<void>((resolve) => socket.once("end", resolve));
   socket.destroy();
   return data;
@@ -128,7 +150,7 @@ describe("debug proxy managed-proxy direct upstream policy", () => {
   });
 
   it("allows direct upstreams when managed proxy mode is inactive", () => {
-    expect(() => assertDebugProxyDirectUpstreamAllowed()).not.toThrow();
+    expect(assertDebugProxyDirectUpstreamAllowed()).toBeUndefined();
   });
 
   it("rejects direct upstreams while managed proxy mode is active", () => {
@@ -151,7 +173,7 @@ describe("debug proxy managed-proxy direct upstream policy", () => {
     process.env["OPENCLAW_PROXY_ACTIVE"] = "1";
     process.env["OPENCLAW_DEBUG_PROXY_ALLOW_DIRECT_CONNECT_WITH_MANAGED_PROXY"] = "1";
 
-    expect(() => assertDebugProxyDirectUpstreamAllowed()).not.toThrow();
+    expect(assertDebugProxyDirectUpstreamAllowed()).toBeUndefined();
   });
 
   it("rejects CONNECT upstreams before opening direct sockets while managed proxy mode is active", async () => {
@@ -182,6 +204,22 @@ describe("debug proxy managed-proxy direct upstream policy", () => {
     } finally {
       await server.stop();
       await origin.stop();
+    }
+  });
+
+  it("rejects malformed relative-form HTTP proxy targets before upstream handling", async () => {
+    const server = await startDebugProxyServer({ settings: await makeSettings() });
+    try {
+      const response = await requestRawThroughProxy(
+        server.proxyUrl,
+        "GET /capture HTTP/1.1\r\nHost: [\r\nConnection: close\r\n\r\n",
+      );
+
+      expect(response).toContain("400 Bad Request");
+      expect(response).toContain("Connection: close");
+      expect(response).toContain("Invalid proxy target URL");
+    } finally {
+      await server.stop();
     }
   });
 });

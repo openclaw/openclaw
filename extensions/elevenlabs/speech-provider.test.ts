@@ -42,9 +42,12 @@ describe("elevenlabs speech provider", () => {
   it("exposes the current ElevenLabs TTS model catalog", () => {
     const provider = buildElevenLabsSpeechProvider();
 
-    expect(provider.models).toEqual(
-      expect.arrayContaining(["eleven_v3", "eleven_multilingual_v2"]),
-    );
+    expect(provider.models).toEqual([
+      "eleven_v3",
+      "eleven_multilingual_v2",
+      "eleven_turbo_v2_5",
+      "eleven_monolingual_v1",
+    ]);
   });
 
   it("validates ElevenLabs voice ID length and character rules", () => {
@@ -76,15 +79,19 @@ describe("elevenlabs speech provider", () => {
       expect(url).toContain("/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM");
       expect(url).toContain("output_format=pcm_22050");
       const body = parseRequestBody(init);
-      expect(body).toMatchObject({
+      expect(body).toEqual({
         text: "hello",
         model_id: "eleven_v3",
         seed: 123,
         apply_text_normalization: "on",
         language_code: "en",
-        voice_settings: expect.objectContaining({
+        voice_settings: {
+          stability: 0.5,
+          similarity_boost: 0.75,
+          style: 0,
+          use_speaker_boost: true,
           speed: 1.2,
-        }),
+        },
       });
       return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
     });
@@ -112,6 +119,93 @@ describe("elevenlabs speech provider", () => {
     });
 
     expect(result?.outputFormat).toBe("pcm_22050");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops out-of-range voice settings before synthesis", async () => {
+    const provider = buildElevenLabsSpeechProvider();
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = parseRequestBody(init);
+      expect(body.voice_settings).toEqual({
+        stability: 0.5,
+        similarity_boost: 0.75,
+        style: 0,
+        use_speaker_boost: true,
+        speed: 1,
+      });
+      return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await provider.synthesizeTelephony?.({
+      text: "hello",
+      cfg: {} as never,
+      providerConfig: {
+        apiKey: "xi-test",
+        voiceSettings: {
+          stability: -1,
+          similarityBoost: 2,
+          style: Number.NaN,
+          speed: 3,
+        },
+      },
+      providerOverrides: {
+        voiceSettings: {
+          speed: 0.1,
+        },
+      },
+      timeoutMs: 1_000,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops malformed seed values before synthesis", async () => {
+    const provider = buildElevenLabsSpeechProvider();
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = parseRequestBody(init);
+      expect(body).not.toHaveProperty("seed");
+      return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await provider.synthesizeTelephony?.({
+      text: "hello",
+      cfg: {} as never,
+      providerConfig: {
+        apiKey: "xi-test",
+        seed: 1.5,
+      },
+      providerOverrides: {
+        seed: Number.POSITIVE_INFINITY,
+      },
+      timeoutMs: 1_000,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops malformed latency tier overrides before synthesis", async () => {
+    const provider = buildElevenLabsSpeechProvider();
+    const fetchMock = vi.fn(async (url: string) => {
+      expect(new URL(url).searchParams.has("optimize_streaming_latency")).toBe(false);
+      return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await provider.synthesize?.({
+      text: "hello",
+      target: "audio-file",
+      cfg: {} as never,
+      providerConfig: {
+        apiKey: "xi-test",
+      },
+      providerOverrides: {
+        latencyTier: 2.5,
+      },
+      timeoutMs: 1_000,
+    });
+
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

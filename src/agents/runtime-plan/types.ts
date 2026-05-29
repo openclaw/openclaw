@@ -1,5 +1,5 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { TSchema } from "typebox";
+import type { AgentTool } from "../runtime/index.js";
 
 export type AgentRuntimeTransport = "sse" | "websocket" | "auto";
 
@@ -29,6 +29,7 @@ export type AgentRuntimeFailoverReason =
   | "rate_limit"
   | "overloaded"
   | "billing"
+  | "server_error"
   | "timeout"
   | "model_not_found"
   | "session_expired"
@@ -46,7 +47,7 @@ export type AgentRuntimeModel = {
   provider?: string;
   baseUrl?: string;
   reasoning?: boolean;
-  input?: string[];
+  input?: readonly string[];
   cost?: {
     input: number;
     output: number;
@@ -59,20 +60,66 @@ export type AgentRuntimeModel = {
   compat?: unknown;
 };
 
+export type AgentRuntimeTextReplacement = {
+  from: string | RegExp;
+  to: string;
+};
+
+export type AgentRuntimeTextTransforms = {
+  input?: AgentRuntimeTextReplacement[];
+  output?: AgentRuntimeTextReplacement[];
+};
+
+export type AgentRuntimeProviderHandle = {
+  provider: string;
+  config?: AgentRuntimeConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  applyAutoEnable?: boolean;
+  bundledProviderVitestCompat?: boolean;
+};
+
 export type AgentRuntimeInteractiveButtonStyle = "primary" | "secondary" | "success" | "danger";
 
-export type AgentRuntimeInteractiveReplyButton = {
+/** Portable action control exposed to agent runtime reply payloads. */
+export type AgentRuntimeMessagePresentationButton = {
+  /** User-visible button label. */
   label: string;
+  /** Callback command or opaque value sent when pressed. */
   value?: string;
+  /** External URL opened by the button. */
   url?: string;
+  /** Channel-native web app URL for renderers that support embedded web apps. */
+  webApp?: { url: string };
+  /** Higher values are kept first when channel action limits require dropping controls. */
+  priority?: number;
+  /** Disabled action hint; channels without disabled-state support render fallback text. */
+  disabled?: boolean;
+  /** Optional visual style hint for renderers that support styled actions. */
   style?: AgentRuntimeInteractiveButtonStyle;
 };
 
-export type AgentRuntimeInteractiveReplyOption = {
+/** Portable select/menu option exposed to agent runtime reply payloads. */
+export type AgentRuntimeMessagePresentationOption = {
+  /** User-visible option label. */
   label: string;
+  /** Callback command or opaque value sent when selected. */
   value: string;
 };
 
+/**
+ * @deprecated Use AgentRuntimeMessagePresentationButton.
+ */
+export type AgentRuntimeInteractiveReplyButton = AgentRuntimeMessagePresentationButton;
+
+/**
+ * @deprecated Use AgentRuntimeMessagePresentationOption.
+ */
+export type AgentRuntimeInteractiveReplyOption = AgentRuntimeMessagePresentationOption;
+
+/**
+ * @deprecated Use AgentRuntimeMessagePresentationBlock.
+ */
 export type AgentRuntimeInteractiveReplyBlock =
   | {
       type: "text";
@@ -88,6 +135,9 @@ export type AgentRuntimeInteractiveReplyBlock =
       options: AgentRuntimeInteractiveReplyOption[];
     };
 
+/**
+ * @deprecated Use AgentRuntimeMessagePresentation.
+ */
 export type AgentRuntimeInteractiveReply = {
   blocks: AgentRuntimeInteractiveReplyBlock[];
 };
@@ -113,17 +163,20 @@ export type AgentRuntimeMessagePresentationBlock =
     }
   | {
       type: "buttons";
-      buttons: AgentRuntimeInteractiveReplyButton[];
+      buttons: AgentRuntimeMessagePresentationButton[];
     }
   | {
       type: "select";
       placeholder?: string;
-      options: AgentRuntimeInteractiveReplyOption[];
+      options: AgentRuntimeMessagePresentationOption[];
     };
 
 export type AgentRuntimeMessagePresentation = {
+  /** Optional short heading rendered before blocks when supported. */
   title?: string;
+  /** Optional severity/status tone for renderers that support toned presentations. */
   tone?: AgentRuntimeMessagePresentationTone;
+  /** Ordered portable blocks rendered or downgraded by channel adapters. */
   blocks: AgentRuntimeMessagePresentationBlock[];
 };
 
@@ -145,6 +198,9 @@ export type AgentRuntimeReplyPayload = {
   sensitiveMedia?: boolean;
   presentation?: AgentRuntimeMessagePresentation;
   delivery?: AgentRuntimeReplyPayloadDelivery;
+  /**
+   * @deprecated Use presentation.
+   */
   interactive?: AgentRuntimeInteractiveReply;
   btw?: {
     question: string;
@@ -154,9 +210,16 @@ export type AgentRuntimeReplyPayload = {
   replyToCurrent?: boolean;
   audioAsVoice?: boolean;
   spokenText?: string;
+  ttsSupplement?: {
+    spokenText: string;
+    visibleTextAlreadyDelivered?: boolean;
+  };
   isError?: boolean;
   isReasoning?: boolean;
+  isReasoningSnapshot?: boolean;
   isCompactionNotice?: boolean;
+  isFallbackNotice?: boolean;
+  isStatusNotice?: boolean;
   channelData?: Record<string, unknown>;
 };
 
@@ -246,17 +309,33 @@ export type AgentRuntimeAuthPlan = {
   authProfileProviderForAuth: string;
   harnessAuthProvider?: string;
   forwardedAuthProfileId?: string;
+  forwardedAuthProfileCandidateIds?: string[];
 };
 
 export type AgentRuntimePromptPlan = {
   provider: string;
   modelId: string;
+  textTransforms?: AgentRuntimeTextTransforms;
   resolveSystemPromptContribution(
     context: AgentRuntimeSystemPromptContributionContext,
   ): AgentRuntimeSystemPromptContribution | undefined;
+  transformSystemPrompt(
+    context: AgentRuntimeSystemPromptContributionContext & {
+      systemPrompt: string;
+    },
+  ): string;
+};
+
+// Keep the leaf runtime-plan contract decoupled from plugin metadata internals.
+export type AgentRuntimePreparedMetadataSnapshot = object;
+
+export type PreparedOpenClawToolPlanning = {
+  metadataSnapshot?: AgentRuntimePreparedMetadataSnapshot;
+  loadMetadataSnapshot?: () => AgentRuntimePreparedMetadataSnapshot;
 };
 
 export type AgentRuntimeToolPlan = {
+  preparedPlanning?: PreparedOpenClawToolPlanning;
   normalize<TSchemaType extends TSchema = TSchema, TResult = unknown>(
     tools: AgentTool<TSchemaType, TResult>[],
     params?: {
@@ -277,7 +356,10 @@ export type AgentRuntimeToolPlan = {
 
 export type AgentRuntimeDeliveryPlan = {
   isSilentPayload(
-    payload: Pick<AgentRuntimeReplyPayload, "text" | "mediaUrl" | "mediaUrls">,
+    payload: Pick<
+      AgentRuntimeReplyPayload,
+      "text" | "mediaUrl" | "mediaUrls" | "presentation" | "interactive" | "channelData"
+    >,
   ): boolean;
   resolveFollowupRoute(params: {
     payload: AgentRuntimeReplyPayload;
@@ -306,6 +388,7 @@ export type AgentRuntimeTransportPlan = {
 
 export type AgentRuntimePlan = {
   resolvedRef: AgentRuntimeResolvedRef;
+  providerRuntimeHandle?: AgentRuntimeProviderHandle;
   auth: AgentRuntimeAuthPlan;
   prompt: AgentRuntimePromptPlan;
   tools: AgentRuntimeToolPlan;
@@ -337,6 +420,7 @@ export type BuildAgentRuntimeDeliveryPlanParams = {
   agentDir?: string;
   provider: string;
   modelId: string;
+  providerRuntimeHandle?: AgentRuntimeProviderHandle;
 };
 
 export type BuildAgentRuntimePlanParams = {
@@ -351,9 +435,12 @@ export type BuildAgentRuntimePlanParams = {
   harnessRuntime?: string;
   allowHarnessAuthProfileForwarding?: boolean;
   authProfileProvider?: string;
+  authProfileMode?: string;
   sessionAuthProfileId?: string;
+  sessionAuthProfileCandidateIds?: string[];
   agentId?: string;
   thinkingLevel?: AgentRuntimeThinkLevel;
   extraParamsOverride?: Record<string, unknown>;
   resolvedTransport?: AgentRuntimeTransport;
+  providerRuntimeHandle?: AgentRuntimeProviderHandle;
 };

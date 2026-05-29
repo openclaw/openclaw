@@ -272,10 +272,16 @@ describe("parseCliJsonl", () => {
       "local-cli",
     );
 
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       text: "dialect says hello",
       sessionId: "session-dialect",
-      usage: { input: 5, output: 2 },
+      usage: {
+        input: 5,
+        output: 2,
+        cacheRead: undefined,
+        cacheWrite: undefined,
+        total: undefined,
+      },
     });
   });
 
@@ -313,6 +319,48 @@ describe("parseCliJsonl", () => {
         cacheWrite: 7,
         total: undefined,
       },
+    });
+  });
+
+  it("does not let cumulative Claude result usage overwrite assistant usage", () => {
+    const result = parseCliJsonl(
+      [
+        JSON.stringify({ type: "init", session_id: "session-stream" }),
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            id: "msg-1",
+            usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 100 },
+          },
+        }),
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            id: "msg-2",
+            usage: { input_tokens: 11, output_tokens: 6, cache_read_input_tokens: 125 },
+          },
+        }),
+        JSON.stringify({
+          type: "result",
+          session_id: "session-stream",
+          result: "done",
+          usage: { input_tokens: 30, output_tokens: 15, cache_read_input_tokens: 300 },
+        }),
+      ].join("\n"),
+      {
+        command: "claude",
+        output: "jsonl",
+        sessionIdFields: ["session_id"],
+      },
+      "claude-cli",
+    );
+
+    expect(result?.usage).toEqual({
+      input: 11,
+      output: 6,
+      cacheRead: 125,
+      cacheWrite: undefined,
+      total: undefined,
     });
   });
 
@@ -440,5 +488,53 @@ describe("createCliJsonlStreamingParser", () => {
     expect(deltas).toEqual([
       { text: "hello", delta: "hello", sessionId: "session-stream", usage: undefined },
     ]);
+  });
+
+  it("ignores cumulative usage from result events to avoid cache_read inflation", () => {
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "local-cli",
+      onAssistantDelta: () => {},
+    });
+
+    parser.push(
+      [
+        JSON.stringify({ type: "init", session_id: "session-stream" }),
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            id: "msg-1",
+            usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 100 },
+          },
+        }),
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            id: "msg-2",
+            usage: { input_tokens: 11, output_tokens: 6, cache_read_input_tokens: 125 },
+          },
+        }),
+        JSON.stringify({
+          type: "result",
+          result: "done",
+          usage: { input_tokens: 30, output_tokens: 15, cache_read_input_tokens: 300 },
+        }),
+      ].join("\n"),
+    );
+    parser.finish();
+
+    const output = parser.getOutput();
+    expect(output?.usage).toEqual({
+      input: 11,
+      output: 6,
+      cacheRead: 125,
+      cacheWrite: undefined,
+      total: undefined,
+    });
   });
 });

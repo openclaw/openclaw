@@ -32,13 +32,14 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { coerceSecretRef, normalizeSecretInputString } from "../../config/types.secrets.js";
 import { type SecretRefResolveCache, resolveSecretRefString } from "../../secrets/resolve.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { normalizeUniqueStringEntries } from "../../shared/string-normalization.js";
 import { redactSecrets } from "../status-all/format.js";
 import { DEFAULT_PROVIDER, formatMs } from "./shared.js";
 
 const PROBE_PROMPT = "Reply with OK. Do not use tools.";
 
 const embeddedRunnerModuleLoader = createLazyImportLoader(
-  () => import("../../agents/pi-embedded.js"),
+  () => import("../../agents/embedded-agent.js"),
 );
 
 function loadEmbeddedRunnerModule() {
@@ -152,6 +153,29 @@ function buildCandidateMap(modelCandidates: string[]): Map<string, string[]> {
   return map;
 }
 
+function catalogProbePriority(provider: string, modelId: string): number {
+  const id = modelId.trim().toLowerCase();
+  if (provider !== "anthropic") {
+    return 50;
+  }
+  if (/^claude-haiku-4-5-\d{8}$/.test(id)) {
+    return 0;
+  }
+  if (id === "claude-haiku-4-5") {
+    return 1;
+  }
+  if (id === "claude-sonnet-4-6" || id.startsWith("claude-sonnet-4-6-")) {
+    return 2;
+  }
+  if (id.startsWith("claude-sonnet-4-")) {
+    return 3;
+  }
+  if (id.startsWith("claude-3-")) {
+    return 100;
+  }
+  return 50;
+}
+
 function selectProbeModel(params: {
   provider: string;
   candidates: Map<string, string[]>;
@@ -162,7 +186,15 @@ function selectProbeModel(params: {
   if (direct && direct.length > 0) {
     return { provider, model: direct[0] };
   }
-  const fromCatalog = catalog.find((entry) => normalizeProviderId(entry.provider) === provider);
+  const fromCatalog = catalog
+    .map((entry, index) => ({ entry, index }))
+    .filter(({ entry }) => normalizeProviderId(entry.provider) === provider)
+    .toSorted((left, right) => {
+      const priority =
+        catalogProbePriority(provider, left.entry.id) -
+        catalogProbePriority(provider, right.entry.id);
+      return priority || left.index - right.index;
+    })[0]?.entry;
   if (fromCatalog) {
     return { provider, model: fromCatalog.id };
   }
@@ -272,7 +304,7 @@ export async function buildProbeTargets(params: {
   });
   const providerFilter = options.provider?.trim();
   const providerFilterKey = providerFilter ? normalizeProviderId(providerFilter) : null;
-  const profileFilter = new Set((options.profileIds ?? []).map((id) => id.trim()).filter(Boolean));
+  const profileFilter = new Set(normalizeUniqueStringEntries(options.profileIds));
   const refResolveCache: SecretRefResolveCache = {};
   const catalog = await loadModelCatalog({ config: cfg });
   const candidates = buildCandidateMap(modelCandidates);
@@ -477,8 +509,8 @@ async function probeTarget(params: {
     latencyMs: Date.now() - start,
   });
   try {
-    const { runEmbeddedPiAgent } = await loadEmbeddedRunnerModule();
-    await runEmbeddedPiAgent({
+    const { runEmbeddedAgent } = await loadEmbeddedRunnerModule();
+    await runEmbeddedAgent({
       sessionId,
       sessionFile,
       agentId,
@@ -490,6 +522,9 @@ async function probeTarget(params: {
       model: target.model.model,
       authProfileId: target.profileId,
       authProfileIdSource: target.profileId ? "user" : undefined,
+      ...(target.provider === "openai-codex"
+        ? { agentHarnessId: "openclaw", agentHarnessRuntimeOverride: "openclaw" }
+        : {}),
       timeoutMs,
       runId: `probe-${crypto.randomUUID()}`,
       lane: `auth-probe:${target.provider}:${target.profileId ?? target.source}`,
@@ -498,6 +533,7 @@ async function probeTarget(params: {
       verboseLevel: "off",
       streamParams: { maxTokens },
       disableTools: true,
+      modelRun: true,
       cleanupBundleMcpOnRunEnd: true,
     });
     return buildResult("ok");

@@ -1,3 +1,7 @@
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../packages/gateway-protocol/src/client-info.js";
 import { resolveSystemRunApprovalRuntimeContext } from "../infra/system-run-approval-context.js";
 import { resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
 import { asNullableRecord } from "../shared/record-coerce.js";
@@ -11,7 +15,6 @@ import {
   evaluateSystemRunApprovalMatch,
   toSystemRunApprovalMismatchError,
 } from "./node-invoke-system-run-approval-match.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "./protocol/client-info.js";
 
 type SystemRunParamsLike = {
   command?: unknown;
@@ -23,6 +26,10 @@ type SystemRunParamsLike = {
   needsScreenRecording?: unknown;
   agentId?: unknown;
   sessionKey?: unknown;
+  turnSourceChannel?: unknown;
+  turnSourceTo?: unknown;
+  turnSourceAccountId?: unknown;
+  turnSourceThreadId?: unknown;
   approved?: unknown;
   approvalDecision?: unknown;
   runId?: unknown;
@@ -75,12 +82,111 @@ function canBridgeNoDeviceApprovalFromBackend(params: {
   client: ApprovalClient | null;
 }): boolean {
   const requestedByClientId = normalizeNullableString(params.snapshot.requestedByClientId);
+  const request = params.snapshot.request;
   return (
     params.snapshot.requestedByDeviceId == null &&
     params.snapshot.requestedByDeviceTokenAuth !== true &&
+    !hasChatApprovalReplayBinding(request) &&
     requestedByClientId !== null &&
     BACKEND_BRIDGEABLE_NO_DEVICE_REQUEST_CLIENT_IDS.has(requestedByClientId) &&
     isTrustedBackendApprovalClient(params.client)
+  );
+}
+
+function hasChatApprovalReplayBinding(request: ExecApprovalRecord["request"]): boolean {
+  return (
+    normalizeComparableString(request.turnSourceChannel, { lowercase: true }) !== null ||
+    normalizeComparableString(request.turnSourceTo) !== null ||
+    normalizeComparableString(request.turnSourceAccountId) !== null ||
+    normalizeComparableString(request.turnSourceThreadId) !== null
+  );
+}
+
+function normalizeComparableString(
+  value: unknown,
+  opts: { lowercase?: boolean } = {},
+): string | null {
+  const normalized =
+    typeof value === "number" && Number.isFinite(value)
+      ? String(value)
+      : normalizeNullableString(value);
+  if (!normalized) {
+    return null;
+  }
+  return opts.lowercase ? normalized.toLowerCase() : normalized;
+}
+
+function matchesRequiredString(params: {
+  expected: unknown;
+  actual: unknown;
+  lowercase?: boolean;
+}): boolean {
+  const expected = normalizeComparableString(params.expected, { lowercase: params.lowercase });
+  if (!expected) {
+    return false;
+  }
+  return expected === normalizeComparableString(params.actual, { lowercase: params.lowercase });
+}
+
+function matchesOptionalString(params: {
+  expected: unknown;
+  actual: unknown;
+  lowercase?: boolean;
+}): boolean {
+  const expected = normalizeComparableString(params.expected, { lowercase: params.lowercase });
+  if (!expected) {
+    return true;
+  }
+  return expected === normalizeComparableString(params.actual, { lowercase: params.lowercase });
+}
+
+function canBridgeNoDeviceChatApprovalFromBackend(params: {
+  snapshot: ExecApprovalRecord;
+  rawParams: SystemRunParamsLike;
+  client: ApprovalClient | null;
+}): boolean {
+  if (
+    params.snapshot.requestedByDeviceId != null ||
+    params.snapshot.requestedByDeviceTokenAuth === true ||
+    !isTrustedBackendApprovalClient(params.client)
+  ) {
+    return false;
+  }
+
+  const request = params.snapshot.request;
+  const plan = request.systemRunPlan ?? null;
+  return (
+    matchesRequiredString({
+      expected: request.turnSourceChannel,
+      actual: params.rawParams.turnSourceChannel,
+      lowercase: true,
+    }) &&
+    // turnSourceTo is channel-specific: required for messaging channels with a
+    // recipient (e.g. telegram chat id), null for channels without a "to"
+    // concept (webchat, control-ui). matchesRequiredString returns false on
+    // null expected, which broke webchat node exec approval replay. Treat it
+    // as optional so null-on-both-sides matches; required fields below
+    // (turnSourceChannel, sessionKey) still gate cross-channel replays.
+    matchesOptionalString({
+      expected: request.turnSourceTo,
+      actual: params.rawParams.turnSourceTo,
+    }) &&
+    matchesRequiredString({
+      expected: plan?.sessionKey ?? request.sessionKey,
+      actual: params.rawParams.sessionKey,
+    }) &&
+    matchesOptionalString({
+      expected: plan?.agentId ?? request.agentId,
+      actual: params.rawParams.agentId,
+    }) &&
+    matchesOptionalString({
+      expected: request.turnSourceAccountId,
+      actual: params.rawParams.turnSourceAccountId,
+    }) &&
+    matchesOptionalString({
+      expected: request.turnSourceThreadId,
+      actual: params.rawParams.turnSourceThreadId,
+    })
   );
 }
 
@@ -224,7 +330,8 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
   } else if (
     snapshot.requestedByConnId &&
     snapshot.requestedByConnId !== (opts.client?.connId ?? null) &&
-    !canBridgeNoDeviceApprovalFromBackend({ snapshot, client: opts.client })
+    !canBridgeNoDeviceApprovalFromBackend({ snapshot, client: opts.client }) &&
+    !canBridgeNoDeviceChatApprovalFromBackend({ snapshot, rawParams: p, client: opts.client })
   ) {
     return systemRunApprovalGuardError({
       code: "APPROVAL_CLIENT_MISMATCH",

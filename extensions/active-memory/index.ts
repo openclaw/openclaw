@@ -11,7 +11,9 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultModelForAgent,
 } from "openclaw/plugin-sdk/agent-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { closeActiveMemorySearchManager } from "openclaw/plugin-sdk/memory-host-search";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
   resolveLivePluginConfigObject,
   resolvePluginConfigObject,
@@ -20,9 +22,11 @@ import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/p
 import { parseAgentSessionKey, parseThreadSessionSuffix } from "openclaw/plugin-sdk/routing";
 import { isPathInside, replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import {
-  resolveSessionStoreEntry,
-  updateSessionStore,
-} from "openclaw/plugin-sdk/session-store-runtime";
+  asOptionalRecord as asRecord,
+  normalizeOptionalString,
+  normalizeStringEntries,
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { tempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -42,7 +46,43 @@ const DEFAULT_QMD_SEARCH_MODE = "search" as const;
 const DEFAULT_TRANSCRIPT_DIR = "active-memory";
 const DEFAULT_CIRCUIT_BREAKER_MAX_TIMEOUTS = 3;
 const DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS = 60_000;
-const ACTIVE_MEMORY_TOOL_ALLOWLIST = ["memory_recall", "memory_search", "memory_get"] as const;
+const DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW = ["memory_search", "memory_get"] as const;
+const LANCEDB_ACTIVE_MEMORY_TOOLS_ALLOW = ["memory_recall"] as const;
+const MAX_ACTIVE_MEMORY_TOOLS_ALLOW = 32;
+const ACTIVE_MEMORY_RESERVED_TOOLS_ALLOW = new Set([
+  "*",
+  "agents_list",
+  "apply_patch",
+  "browser",
+  "canvas",
+  "cron",
+  "edit",
+  "exec",
+  "gateway",
+  "heartbeat_respond",
+  "heartbeat_response",
+  "image",
+  "image_generate",
+  "message",
+  "music_generate",
+  "nodes",
+  "pdf",
+  "process",
+  "read",
+  "session_status",
+  "sessions_history",
+  "sessions_list",
+  "sessions_send",
+  "sessions_spawn",
+  "sessions_yield",
+  "subagents",
+  "tts",
+  "update_plan",
+  "video_generate",
+  "web_fetch",
+  "web_search",
+  "write",
+]);
 const TOGGLE_STATE_FILE = "session-toggles.json";
 const DEFAULT_PARTIAL_TRANSCRIPT_MAX_CHARS = 32_000;
 const DEFAULT_TRANSCRIPT_READ_MAX_LINES = 2_000;
@@ -101,6 +141,7 @@ type ActiveRecallPluginConfig = {
     | "recall-heavy"
     | "precision-heavy"
     | "preference-only";
+  toolsAllow?: string[];
   promptOverride?: string;
   promptAppend?: string;
   timeoutMs?: number;
@@ -141,6 +182,7 @@ type ResolvedActiveRecallPluginConfig = {
     | "recall-heavy"
     | "precision-heavy"
     | "preference-only";
+  toolsAllow: string[];
   promptOverride?: string;
   promptAppend?: string;
   timeoutMs: number;
@@ -186,7 +228,7 @@ type ActiveMemorySearchDebug = {
 
 type ActiveRecallResult =
   | {
-      status: "empty" | "timeout" | "unavailable";
+      status: "empty" | "failed" | "no_relevant_memory" | "timeout" | "unavailable";
       elapsedMs: number;
       summary: string | null;
       searchDebug?: ActiveMemorySearchDebug;
@@ -218,12 +260,13 @@ type TranscriptReadLimits = {
 
 type RecallSubagentResult = {
   rawReply: string;
+  resultStatus?: "failed" | "unavailable";
   transcriptPath?: string;
   searchDebug?: ActiveMemorySearchDebug;
 };
 
 type TerminalMemorySearchResult = {
-  status: "empty";
+  status: "unavailable";
   searchDebug?: ActiveMemorySearchDebug;
 };
 
@@ -277,11 +320,6 @@ function withToggleStoreLock<T>(statePath: string, task: () => Promise<T>): Prom
   return withLock(task);
 }
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
 type ActiveMemoryThinkingLevel =
   | "off"
   | "minimal"
@@ -353,9 +391,9 @@ function parseOptionalPositiveInt(value: unknown, fallback: number): number {
     typeof value === "number"
       ? value
       : typeof value === "string"
-        ? Number.parseInt(value, 10)
+        ? parseStrictPositiveInteger(value)
         : Number.NaN;
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+  return parsed !== undefined && Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 function clampInt(value: number | undefined, fallback: number, min: number, max: number): number {
@@ -397,6 +435,46 @@ function normalizeChatIdList(value: unknown): string[] {
     out.push(trimmed);
   }
   return out;
+}
+
+function normalizeConfiguredToolsAllow(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "string") {
+      continue;
+    }
+    const trimmed = entry.trim();
+    if (!trimmed || isReservedActiveMemoryToolsAllowEntry(trimmed) || seen.has(trimmed)) {
+      continue;
+    }
+    seen.add(trimmed);
+    out.push(trimmed);
+    if (out.length >= MAX_ACTIVE_MEMORY_TOOLS_ALLOW) {
+      break;
+    }
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+function isReservedActiveMemoryToolsAllowEntry(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  return normalized.startsWith("group:") || ACTIVE_MEMORY_RESERVED_TOOLS_ALLOW.has(normalized);
+}
+
+function resolveDefaultToolsAllow(cfg: OpenClawConfig | undefined): string[] {
+  return cfg?.plugins?.slots?.memory === "memory-lancedb"
+    ? [...LANCEDB_ACTIVE_MEMORY_TOOLS_ALLOW]
+    : [...DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW];
+}
+
+function resolveToolsAllow(params: { pluginToolsAllow: unknown; cfg?: OpenClawConfig }): string[] {
+  return (
+    normalizeConfiguredToolsAllow(params.pluginToolsAllow) ?? resolveDefaultToolsAllow(params.cfg)
+  );
 }
 
 function normalizePromptConfigText(value: unknown): string | undefined {
@@ -445,6 +523,13 @@ function resolvePersistentTranscriptBaseDir(api: OpenClawPluginApi, agentId: str
   );
 }
 
+function requireTransientWorkspaceDir(tempDir: string | undefined): string {
+  if (!tempDir) {
+    throw new Error("Active memory transient workspace was not initialized.");
+  }
+  return tempDir;
+}
+
 function resolveCanonicalSessionKeyFromSessionId(params: {
   api: OpenClawPluginApi;
   agentId: string;
@@ -455,20 +540,15 @@ function resolveCanonicalSessionKeyFromSessionId(params: {
     return undefined;
   }
   try {
-    const storePath = params.api.runtime.agent.session.resolveStorePath(
-      params.api.config.session?.store,
-      {
-        agentId: params.agentId,
-      },
-    );
-    const store = params.api.runtime.agent.session.loadSessionStore(storePath, { clone: false });
     let bestMatch:
       | {
           sessionKey: string;
           updatedAt: number;
         }
       | undefined;
-    for (const [sessionKey, entry] of Object.entries(store)) {
+    for (const { sessionKey, entry } of params.api.runtime.agent.session.listSessionEntries({
+      agentId: params.agentId,
+    })) {
       if (!entry || typeof entry !== "object") {
         continue;
       }
@@ -493,11 +573,14 @@ function resolveCanonicalSessionKeyFromSessionId(params: {
   }
 }
 
-function normalizeOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+function formatRuntimeToolsAllowSource(toolsAllow: readonly string[]): string {
+  return `runtime toolsAllow: ${toolsAllow.join(", ")}`;
 }
 
-function isMissingRegisteredMemoryToolsError(error: unknown): boolean {
+function isMissingRegisteredMemoryToolsError(
+  error: unknown,
+  toolsAllow: readonly string[] = DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW,
+): boolean {
   if (!(error instanceof Error)) {
     return false;
   }
@@ -509,24 +592,12 @@ function isMissingRegisteredMemoryToolsError(error: unknown): boolean {
     return false;
   }
   const sources = message.slice(prefix.length, -suffix.length);
-  const runtimeSource = `runtime toolsAllow: ${ACTIVE_MEMORY_TOOL_ALLOWLIST.join(", ")}`;
+  const runtimeSource = formatRuntimeToolsAllowSource(toolsAllow);
   const sourceParts = sources
     .split(";")
     .map((source) => source.trim())
     .filter(Boolean);
-  if (!sourceParts.includes(runtimeSource)) {
-    return false;
-  }
-  return sourceParts.every((source) => {
-    if (source === runtimeSource) {
-      return true;
-    }
-    const entries = source
-      .slice(source.indexOf(":") + 1)
-      .split(",")
-      .map((entry) => entry.trim());
-    return entries.includes("*");
-  });
+  return sourceParts.includes(runtimeSource);
 }
 
 function resolveRecallRunChannelContext(params: {
@@ -540,16 +611,22 @@ function resolveRecallRunChannelContext(params: {
   messageChannel?: string;
   messageProvider?: string;
 } {
+  const isRunnableChannelName = (channel: string) =>
+    !channel.includes(":") && !channel.includes("/");
   const explicitChannel = normalizeOptionalString(params.channelId);
   const explicitProvider = normalizeOptionalString(params.messageProvider);
   // A channelId that contains ":" is a scoped conversation id (e.g. Telegram
-  // forum-topic "-100123:topic:77"), not a runnable channel name. Using it as
-  // the embedded recall run's channel causes bundled-plugin dirName validation
-  // to throw because ":" is not allowed in directory names (#76704).
+  // forum-topic "-100123:topic:77") or "/" (e.g. Google Chat "spaces/...") is
+  // not a runnable channel name. Using it as the embedded recall run's channel
+  // causes bundled-plugin dirName validation to throw (#76704, #78918).
   const runnableExplicitChannel =
-    explicitChannel && !explicitChannel.includes(":") ? explicitChannel : undefined;
+    explicitChannel && isRunnableChannelName(explicitChannel) ? explicitChannel : undefined;
+  // Non-webchat providers often pass a raw conversation id as channelId.
+  // Keep those ids for filtering, but run the recall sub-agent through the provider.
   const trustedExplicitChannel =
-    runnableExplicitChannel && runnableExplicitChannel !== explicitProvider
+    runnableExplicitChannel &&
+    runnableExplicitChannel !== explicitProvider &&
+    (!explicitProvider || explicitProvider === "webchat")
       ? runnableExplicitChannel
       : undefined;
   const resolveReturnValue = (params: {
@@ -562,8 +639,8 @@ function resolveRecallRunChannelContext(params: {
       messageChannel:
         trustedExplicitChannel ??
         trustedResolvedChannel ??
-        runnableExplicitChannel ??
         explicitProvider ??
+        runnableExplicitChannel ??
         params.resolvedChannel,
       messageProvider:
         trustedExplicitChannel ??
@@ -585,26 +662,19 @@ function resolveRecallRunChannelContext(params: {
   }
 
   try {
-    const storePath = params.api.runtime.agent.session.resolveStorePath(
-      params.api.config.session?.store,
-      {
-        agentId: params.agentId,
-      },
-    );
-    const store = params.api.runtime.agent.session.loadSessionStore(storePath, { clone: false });
-    const sessionEntry = resolveSessionStoreEntry({
-      store,
+    const sessionEntry = params.api.runtime.agent.session.getSessionEntry({
+      agentId: params.agentId,
       sessionKey: resolvedSessionKey,
-    }).existing;
+    });
     const rawStrongEntryChannel =
       normalizeOptionalString(sessionEntry?.lastChannel) ??
       normalizeOptionalString(sessionEntry?.channel);
-    // Channel IDs containing ":" are scoped conversation IDs (e.g. QQ c2c
-    // "c2c:10D4F7C2..."), not runnable channel names. The same guard that
+    // Channel IDs containing ":" or "/" are scoped conversation IDs, not
+    // runnable channel names. The same guard that
     // applies to explicit channelId (#76704) must also apply to channels
     // read from the session store (#77396).
     const strongEntryChannel =
-      rawStrongEntryChannel && !rawStrongEntryChannel.includes(":")
+      rawStrongEntryChannel && isRunnableChannelName(rawStrongEntryChannel)
         ? rawStrongEntryChannel
         : undefined;
     const weakEntryChannel = normalizeOptionalString(sessionEntry?.origin?.provider);
@@ -789,7 +859,10 @@ function requiresAdminToMutateActiveMemoryGlobal(gatewayClientScopes?: readonly 
 const ACTIVE_MEMORY_GLOBAL_MUTATION_ADMIN_REQUIRED_TEXT =
   "⚠️ /active-memory global enable/disable changes require operator.admin for gateway clients.";
 
-function normalizePluginConfig(pluginConfig: unknown): ResolvedActiveRecallPluginConfig {
+function normalizePluginConfig(
+  pluginConfig: unknown,
+  cfg?: OpenClawConfig,
+): ResolvedActiveRecallPluginConfig {
   const raw = (
     pluginConfig && typeof pluginConfig === "object" ? pluginConfig : {}
   ) as ActiveRecallPluginConfig;
@@ -802,9 +875,7 @@ function normalizePluginConfig(pluginConfig: unknown): ResolvedActiveRecallPlugi
     : [];
   return {
     enabled: raw.enabled !== false,
-    agents: Array.isArray(raw.agents)
-      ? raw.agents.map((agentId) => agentId.trim()).filter(Boolean)
-      : [],
+    agents: Array.isArray(raw.agents) ? normalizeStringEntries(raw.agents) : [],
     model: typeof raw.model === "string" && raw.model.trim() ? raw.model.trim() : undefined,
     modelFallback:
       typeof raw.modelFallback === "string" && raw.modelFallback.trim()
@@ -817,6 +888,7 @@ function normalizePluginConfig(pluginConfig: unknown): ResolvedActiveRecallPlugi
     deniedChatIds: normalizeChatIdList(raw.deniedChatIds),
     thinking: resolveThinkingLevel(raw.thinking),
     promptStyle: resolvePromptStyle(raw.promptStyle, raw.queryMode),
+    toolsAllow: resolveToolsAllow({ pluginToolsAllow: raw.toolsAllow, cfg }),
     promptOverride: normalizePromptConfigText(raw.promptOverride),
     promptAppend: normalizePromptConfigText(raw.promptAppend),
     timeoutMs: clampInt(
@@ -887,6 +959,39 @@ function applyActiveMemoryRuntimeConfigSnapshot(
       },
     },
   };
+}
+
+function resolveActiveMemoryCleanupConfig(api: OpenClawPluginApi): OpenClawConfig | undefined {
+  try {
+    return (
+      (api.runtime.config?.current?.() as OpenClawConfig | undefined) ??
+      (api.config as OpenClawConfig | undefined)
+    );
+  } catch {
+    return api.config as OpenClawConfig | undefined;
+  }
+}
+
+function scheduleMemorySearchCleanupAfterTimeout(
+  api: OpenClawPluginApi,
+  logPrefix: string,
+  agentId: string,
+): void {
+  const cfg = resolveActiveMemoryCleanupConfig(api);
+  setTimeout(() => {
+    void closeActiveMemorySearchManager({ cfg: cfg ?? api.config, agentId })
+      .then(() => {
+        api.logger.debug?.(`${logPrefix} released memory search managers after timeout`);
+      })
+      .catch((error: unknown) => {
+        const message = toSingleLineLogValue(
+          error instanceof Error ? error.message : String(error),
+        );
+        api.logger.warn?.(
+          `${logPrefix} failed to release memory search managers after timeout: ${message}`,
+        );
+      });
+  }, 0);
 }
 
 function resolveThinkingLevel(thinking: unknown): ActiveMemoryThinkingLevel {
@@ -988,11 +1093,11 @@ function buildRecallPrompt(params: {
     "Your job is to search memory and return only the most relevant memory context for that model.",
     "You receive a bounded search query plus conversation context, including the user's latest message.",
     "Use only the available memory tools.",
-    "Use the bounded search query as the memory_search or memory_recall query.",
+    "Use the bounded search query with the configured memory tools.",
+    `Configured memory tools: ${params.config.toolsAllow.join(", ")}.`,
     "Do not use channel metadata, provider metadata, debug output, or the full conversation context as the memory tool query.",
-    "Prefer memory_recall when available.",
-    "If memory_recall is unavailable, use memory_search and memory_get.",
-    "When searching for preference or habit recall, use a permissive recall limit or memory_search threshold before deciding that no useful memory exists.",
+    "If the available memory tools find nothing useful, reply with NONE.",
+    "When searching for preference or habit recall, use permissive search limits or thresholds before deciding that no useful memory exists.",
     "Do not answer the user directly.",
     `Prompt style: ${params.config.promptStyle}.`,
     ...buildPromptStyleLines(params.config.promptStyle),
@@ -1087,7 +1192,9 @@ function resolveChatType(ctx: {
   channelId?: string;
   mainKey?: string;
 }): ActiveMemoryChatType | undefined {
-  const sessionKey = ctx.sessionKey?.trim().toLowerCase();
+  const rawSessionKey = ctx.sessionKey?.trim();
+  const { baseSessionKey } = parseThreadSessionSuffix(rawSessionKey);
+  const sessionKey = (baseSessionKey ?? rawSessionKey)?.trim().toLowerCase();
   if (sessionKey) {
     if (sessionKey.startsWith("agent:") && sessionKey.split(":")[2] === "explicit") {
       return "explicit";
@@ -1314,7 +1421,11 @@ function toSingleLineLogValue(value: unknown): string {
 }
 
 function shouldCacheResult(result: ActiveRecallResult): boolean {
-  return result.status === "ok" || result.status === "empty";
+  return result.status === "ok" && result.summary.length > 0;
+}
+
+function isUnavailableMemorySearchDebug(debug?: ActiveMemorySearchDebug): boolean {
+  return Boolean(debug?.error);
 }
 
 function resolveStatusUpdateAgentId(ctx: { agentId?: string; sessionKey?: string }): string {
@@ -1403,11 +1514,11 @@ function buildPluginDebugLine(params: {
     warning && action && !cleaned
       ? `${warning} ${action}`
       : [warning, action && !cleaned ? action : ""]
-          .filter((value, index, values) => Boolean(value) && values.indexOf(value) === index)
+          .filter((value): value is string => Boolean(value))
           .join(" | ");
-  const messages = [warningAction, cleaned]
-    .filter((value, index, values) => Boolean(value) && values.indexOf(value) === index)
-    .join(" | ");
+  const messages = uniqueStrings(
+    [warningAction, cleaned].filter((value): value is string => Boolean(value)),
+  ).join(" | ");
   const trailing = messages;
   if (prefix && trailing) {
     return `${ACTIVE_MEMORY_DEBUG_PREFIX} ${prefix} | ${trailing}`;
@@ -1463,13 +1574,11 @@ async function persistPluginStatusLines(params: {
     return;
   }
   try {
-    const storePath = params.api.runtime.agent.session.resolveStorePath(
-      params.api.config.session?.store,
-      agentId ? { agentId } : undefined,
-    );
     if (!params.statusLine && !debugLine) {
-      const store = params.api.runtime.agent.session.loadSessionStore(storePath, { clone: false });
-      const existingEntry = resolveSessionStoreEntry({ store, sessionKey }).existing;
+      const existingEntry = params.api.runtime.agent.session.getSessionEntry({
+        agentId,
+        sessionKey,
+      });
       const hasActiveMemoryEntry = Array.isArray(existingEntry?.pluginDebugEntries)
         ? existingEntry.pluginDebugEntries.some((entry) => entry?.pluginId === "active-memory")
         : false;
@@ -1477,39 +1586,38 @@ async function persistPluginStatusLines(params: {
         return;
       }
     }
-    await updateSessionStore(storePath, (store) => {
-      const resolved = resolveSessionStoreEntry({ store, sessionKey });
-      const existing = resolved.existing;
-      if (!existing) {
-        return;
-      }
-      const previousEntries = Array.isArray(existing.pluginDebugEntries)
-        ? existing.pluginDebugEntries
-        : [];
-      const nextEntries = previousEntries.filter(
-        (entry): entry is PluginDebugEntry =>
-          Boolean(entry) &&
-          typeof entry === "object" &&
-          typeof entry.pluginId === "string" &&
-          entry.pluginId !== "active-memory",
-      );
-      const nextLines: string[] = [];
-      if (params.statusLine) {
-        nextLines.push(params.statusLine);
-      }
-      if (debugLine) {
-        nextLines.push(debugLine);
-      }
-      if (nextLines.length > 0) {
-        nextEntries.push({
-          pluginId: "active-memory",
-          lines: nextLines,
-        });
-      }
-      store[resolved.normalizedKey] = {
-        ...existing,
-        pluginDebugEntries: nextEntries.length > 0 ? nextEntries : undefined,
-      };
+    await params.api.runtime.agent.session.patchSessionEntry({
+      agentId,
+      sessionKey,
+      preserveActivity: true,
+      update: (existing) => {
+        const previousEntries = Array.isArray(existing.pluginDebugEntries)
+          ? existing.pluginDebugEntries
+          : [];
+        const nextEntries = previousEntries.filter(
+          (entry): entry is PluginDebugEntry =>
+            Boolean(entry) &&
+            typeof entry === "object" &&
+            typeof entry.pluginId === "string" &&
+            entry.pluginId !== "active-memory",
+        );
+        const nextLines: string[] = [];
+        if (params.statusLine) {
+          nextLines.push(params.statusLine);
+        }
+        if (debugLine) {
+          nextLines.push(debugLine);
+        }
+        if (nextLines.length > 0) {
+          nextEntries.push({
+            pluginId: "active-memory",
+            lines: nextLines,
+          });
+        }
+        return {
+          pluginDebugEntries: nextEntries.length > 0 ? nextEntries : undefined,
+        };
+      },
     });
   } catch (error) {
     params.api.logger.debug?.(
@@ -1655,15 +1763,10 @@ function extractTerminalMemorySearchResultFromSessionRecord(
   }
   const details = asRecord(message.details);
   const debug = extractActiveMemorySearchDebugFromSessionRecord(value);
-  const results = Array.isArray(details?.results) ? details.results : undefined;
   const disabled = details?.disabled === true;
-  const unavailable =
-    disabled || Boolean(debug?.warning) || Boolean(debug?.error) || Boolean(details?.error);
-  const debugHits =
-    typeof debug?.hits === "number" && Number.isFinite(debug.hits) ? debug.hits : undefined;
-  const zeroHitSearch = results !== undefined ? results.length === 0 : debugHits === 0;
-  if (unavailable || zeroHitSearch) {
-    return { status: "empty", searchDebug: debug };
+  const unavailable = disabled || Boolean(debug?.error) || Boolean(details?.error);
+  if (unavailable) {
+    return { status: "unavailable", searchDebug: debug };
   }
   return undefined;
 }
@@ -1952,21 +2055,23 @@ async function buildTimeoutRecallResult(params: {
     normalizeActiveSummary(rawReply ?? "") ?? "",
     params.maxSummaryChars,
   );
+  const searchDebug =
+    params.searchDebug ??
+    subagentPartialData.searchDebug ??
+    (params.sessionFile ? await readActiveMemorySearchDebug(params.sessionFile) : undefined);
   if (summary.length === 0) {
     return {
       status: "timeout",
       elapsedMs: params.elapsedMs,
       summary: null,
+      searchDebug,
     };
   }
   return {
     status: "timeout_partial",
     elapsedMs: params.elapsedMs,
     summary,
-    searchDebug:
-      params.searchDebug ??
-      subagentPartialData.searchDebug ??
-      (params.sessionFile ? await readActiveMemorySearchDebug(params.sessionFile) : undefined),
+    searchDebug,
   };
 }
 
@@ -2396,9 +2501,10 @@ async function runRecallSubagent(params: {
         params.config.transcriptDir,
       )
     : undefined;
-  const sessionFile = params.config.persistTranscripts
-    ? path.join(persistedDir!, `${subagentSessionId}.jsonl`)
-    : path.join(tempDir!, "session.jsonl");
+  const sessionFile =
+    persistedDir !== undefined
+      ? path.join(persistedDir, `${subagentSessionId}.jsonl`)
+      : path.join(requireTransientWorkspaceDir(tempDir), "session.jsonl");
   params.onSessionFile?.(sessionFile);
   if (persistedDir) {
     await fs.mkdir(persistedDir, { recursive: true, mode: 0o700 });
@@ -2421,7 +2527,7 @@ async function runRecallSubagent(params: {
   try {
     const embeddedConfig = applyActiveMemoryRuntimeConfigSnapshot(params.api.config, params.config);
     const embeddedTimeoutMs = params.config.timeoutMs + params.config.setupGraceTimeoutMs;
-    const result = await params.api.runtime.agent.runEmbeddedPiAgent({
+    const result = await params.api.runtime.agent.runEmbeddedAgent({
       sessionId: subagentSessionId,
       sessionKey: subagentSessionKey,
       agentId: params.agentId,
@@ -2437,7 +2543,7 @@ async function runRecallSubagent(params: {
       timeoutMs: embeddedTimeoutMs,
       runId: subagentSessionId,
       trigger: "manual",
-      toolsAllow: [...ACTIVE_MEMORY_TOOL_ALLOWLIST],
+      toolsAllow: [...params.config.toolsAllow],
       disableMessageTool: true,
       allowGatewaySubagentBinding: true,
       bootstrapContextMode: "lightweight",
@@ -2477,14 +2583,24 @@ async function runRecallSubagent(params: {
   } catch (error) {
     if (params.abortSignal?.aborted) {
       const partialReply = await readPartialAssistantText(sessionFile);
-      const searchDebug = partialReply ? await readActiveMemorySearchDebug(sessionFile) : undefined;
+      const searchDebug = await readActiveMemorySearchDebug(sessionFile);
       attachPartialTimeoutData(error, partialReply, searchDebug);
     }
-    if (!params.abortSignal?.aborted && isMissingRegisteredMemoryToolsError(error)) {
+    if (
+      !params.abortSignal?.aborted &&
+      isMissingRegisteredMemoryToolsError(error, params.config.toolsAllow)
+    ) {
       params.api.logger.debug?.(
-        `active-memory: no memory tools registered (memory-core or memory-lancedb required); skipping sub-agent`,
+        `active-memory: no configured memory tools available; skipping sub-agent`,
       );
-      return { rawReply: "NONE" };
+      return { rawReply: "NONE", resultStatus: "unavailable" };
+    }
+    if (!params.abortSignal?.aborted) {
+      const message = toSingleLineLogValue(error instanceof Error ? error.message : String(error));
+      params.api.logger.warn?.(
+        `active-memory: memory sub-agent failed, skipping recall: ${message}`,
+      );
+      return { rawReply: "NONE", resultStatus: "failed" };
     }
     throw error;
   } finally {
@@ -2650,6 +2766,7 @@ async function maybeResolveActiveRecall(params: {
         searchDebug: result.searchDebug,
       });
       recordCircuitBreakerTimeout(cbKey);
+      scheduleMemorySearchCleanupAfterTimeout(params.api, logPrefix, params.agentId);
       return result;
     }
 
@@ -2680,7 +2797,7 @@ async function maybeResolveActiveRecall(params: {
       return result;
     }
 
-    const { rawReply, transcriptPath, searchDebug } = raceResult;
+    const { rawReply, resultStatus, transcriptPath, searchDebug } = raceResult;
     const summary = truncateSummary(
       normalizeActiveSummary(rawReply) ?? "",
       params.config.maxSummaryChars,
@@ -2697,12 +2814,26 @@ async function maybeResolveActiveRecall(params: {
             summary,
             searchDebug,
           }
-        : {
-            status: "empty",
-            elapsedMs: Date.now() - startedAt,
-            summary: null,
-            searchDebug,
-          };
+        : resultStatus === "failed"
+          ? {
+              status: "failed",
+              elapsedMs: Date.now() - startedAt,
+              summary: null,
+              searchDebug,
+            }
+          : resultStatus === "unavailable" || isUnavailableMemorySearchDebug(searchDebug)
+            ? {
+                status: "unavailable",
+                elapsedMs: Date.now() - startedAt,
+                summary: null,
+                searchDebug,
+              }
+            : {
+                status: "no_relevant_memory",
+                elapsedMs: Date.now() - startedAt,
+                summary: null,
+                searchDebug,
+              };
     if (params.config.logging) {
       params.api.logger.info?.(
         `${logPrefix} done status=${result.status} elapsedMs=${String(result.elapsedMs)} summaryChars=${String(result.summary?.length ?? 0)}`,
@@ -2745,14 +2876,15 @@ async function maybeResolveActiveRecall(params: {
         searchDebug: result.searchDebug,
       });
       recordCircuitBreakerTimeout(cbKey);
+      scheduleMemorySearchCleanupAfterTimeout(params.api, logPrefix, params.agentId);
       return result;
     }
     const message = toSingleLineLogValue(error instanceof Error ? error.message : String(error));
     if (params.config.logging) {
-      params.api.logger.warn?.(`${logPrefix} failed error=${message}`);
+      params.api.logger.warn?.(`${logPrefix} failed error=${message}; skipping recall`);
     }
     const result: ActiveRecallResult = {
-      status: "unavailable",
+      status: "failed",
       elapsedMs: Date.now() - startedAt,
       summary: null,
     };
@@ -2775,7 +2907,17 @@ export default definePluginEntry({
   name: "Active Memory",
   description: "Proactively surfaces relevant memory before eligible conversational replies.",
   register(api: OpenClawPluginApi) {
-    let config = normalizePluginConfig(api.pluginConfig);
+    const readCurrentConfig = (): OpenClawConfig | undefined => {
+      try {
+        return (
+          (api.runtime.config?.current?.() as OpenClawConfig | undefined) ??
+          (api.config as OpenClawConfig | undefined)
+        );
+      } catch {
+        return api.config as OpenClawConfig | undefined;
+      }
+    };
+    let config = normalizePluginConfig(api.pluginConfig, readCurrentConfig());
     const warnDeprecatedModelFallbackPolicy = (pluginConfig: unknown) => {
       if (hasDeprecatedModelFallbackPolicy(pluginConfig)) {
         // Wording matters here: the previous text ("set config.modelFallback
@@ -2803,7 +2945,7 @@ export default definePluginEntry({
         "active-memory",
         api.pluginConfig as Record<string, unknown>,
       );
-      config = normalizePluginConfig(livePluginConfig ?? { enabled: false });
+      config = normalizePluginConfig(livePluginConfig ?? { enabled: false }, readCurrentConfig());
       if (livePluginConfig) {
         warnDeprecatedModelFallbackPolicy(livePluginConfig);
       }
@@ -2832,19 +2974,23 @@ export default definePluginEntry({
             };
           }
           if (action === "on" || action === "enable" || action === "enabled") {
-            const nextConfig = updateActiveMemoryGlobalEnabledInConfig(currentConfig, true);
-            await api.runtime.config.replaceConfigFile({
-              nextConfig,
+            await api.runtime.config.mutateConfigFile({
               afterWrite: { mode: "auto" },
+              mutate: (draft) => {
+                const nextConfig = updateActiveMemoryGlobalEnabledInConfig(draft, true);
+                Object.assign(draft, nextConfig);
+              },
             });
             refreshLiveConfigFromRuntime();
             return { text: "Active Memory: on globally." };
           }
           if (action === "off" || action === "disable" || action === "disabled") {
-            const nextConfig = updateActiveMemoryGlobalEnabledInConfig(currentConfig, false);
-            await api.runtime.config.replaceConfigFile({
-              nextConfig,
+            await api.runtime.config.mutateConfigFile({
               afterWrite: { mode: "auto" },
+              mutate: (draft) => {
+                const nextConfig = updateActiveMemoryGlobalEnabledInConfig(draft, false);
+                Object.assign(draft, nextConfig);
+              },
             });
             refreshLiveConfigFromRuntime();
             return { text: "Active Memory: off globally." };
@@ -2860,6 +3006,10 @@ export default definePluginEntry({
           return {
             text: "Active Memory: session toggle unavailable because this command has no session context.",
           };
+        }
+        const commandAgentId = resolveStatusUpdateAgentId({ sessionKey });
+        if (!isEnabledForAgent(config, commandAgentId)) {
+          return { text: "Active Memory: off for this session." };
         }
         if (action === "status") {
           const disabled = await isSessionActiveMemoryDisabled({ api, sessionKey });
@@ -3039,4 +3189,4 @@ const testing = {
   },
 };
 
-export { testing as __testing };
+export { testing, testing as __testing };

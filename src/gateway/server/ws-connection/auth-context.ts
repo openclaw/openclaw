@@ -17,6 +17,7 @@ type HandshakeConnectAuth = {
   bootstrapToken?: string;
   deviceToken?: string;
   password?: string;
+  approvalRuntimeToken?: string;
 };
 
 export type DeviceTokenCandidateSource = "explicit-device-token" | "shared-token-fallback";
@@ -32,14 +33,41 @@ export type ConnectAuthState = {
   deviceTokenCandidateSource?: DeviceTokenCandidateSource;
 };
 
-type VerifyDeviceTokenResult = { ok: boolean };
+type SharedGatewayAuthDeviceTokenIssuer = {
+  kind: "shared-gateway-auth";
+  generation: string;
+};
+
+type VerifyDeviceTokenResult = {
+  ok: boolean;
+  reason?: string;
+  issuer?: SharedGatewayAuthDeviceTokenIssuer;
+};
 type VerifyBootstrapTokenResult = { ok: boolean; reason?: string };
 
 export type ConnectAuthDecision = {
   authResult: GatewayAuthResult;
   authOk: boolean;
   authMethod: GatewayAuthResult["method"];
+  deviceTokenSharedGatewaySessionGeneration?: string;
 };
+
+function mapDeviceTokenAuthFailureReason(params: {
+  tokenCheckReason?: string;
+  candidateSource?: DeviceTokenCandidateSource;
+  fallbackReason?: string;
+}): string {
+  if (
+    params.tokenCheckReason === "scope-mismatch" ||
+    params.tokenCheckReason === "scope_mismatch"
+  ) {
+    return "scope_mismatch";
+  }
+  if (params.candidateSource === "explicit-device-token") {
+    return "device_token_mismatch";
+  }
+  return params.fallbackReason ?? "device_token_mismatch";
+}
 
 function resolveSharedConnectAuth(
   connectAuth: HandshakeConnectAuth | null | undefined,
@@ -155,6 +183,7 @@ export async function resolveConnectAuthDecision(params: {
   let authResult = params.state.authResult;
   let authOk = params.state.authOk;
   let authMethod = params.state.authMethod;
+  let deviceTokenSharedGatewaySessionGeneration: string | undefined;
 
   const bootstrapTokenCandidate = params.state.bootstrapTokenCandidate;
   if (params.hasDeviceIdentity && params.deviceId && params.publicKey && bootstrapTokenCandidate) {
@@ -209,6 +238,9 @@ export async function resolveConnectAuthDecision(params: {
     if (tokenCheck.ok) {
       authOk = true;
       authMethod = "device-token";
+      if (tokenCheck.issuer?.kind === "shared-gateway-auth") {
+        deviceTokenSharedGatewaySessionGeneration = tokenCheck.issuer.generation;
+      }
       params.rateLimiter?.reset(params.clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
       if (params.state.sharedAuthProvided) {
         params.rateLimiter?.reset(params.clientIp, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
@@ -216,14 +248,20 @@ export async function resolveConnectAuthDecision(params: {
     } else {
       authResult = {
         ok: false,
-        reason:
-          params.state.deviceTokenCandidateSource === "explicit-device-token"
-            ? "device_token_mismatch"
-            : (authResult.reason ?? "device_token_mismatch"),
+        reason: mapDeviceTokenAuthFailureReason({
+          tokenCheckReason: tokenCheck.reason,
+          candidateSource: params.state.deviceTokenCandidateSource,
+          fallbackReason: authResult.reason,
+        }),
       };
       params.rateLimiter?.recordFailure(params.clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
     }
   }
 
-  return { authResult, authOk, authMethod };
+  return {
+    authResult,
+    authOk,
+    authMethod,
+    deviceTokenSharedGatewaySessionGeneration,
+  };
 }

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { statusSummaryRuntime } from "./status.summary.runtime.js";
 
 describe("statusSummaryRuntime.resolveContextTokensForModel", () => {
-  it("matches provider context window overrides across canonical provider aliases", () => {
+  it("does not match provider context window overrides across provider id variants", () => {
     const contextTokens = statusSummaryRuntime.resolveContextTokensForModel({
       cfg: {
         models: {
@@ -18,7 +18,7 @@ describe("statusSummaryRuntime.resolveContextTokensForModel", () => {
       fallbackContextTokens: 999,
     });
 
-    expect(contextTokens).toBe(123_456);
+    expect(contextTokens).toBe(999);
   });
 
   it("prefers per-model contextTokens over contextWindow", () => {
@@ -51,14 +51,13 @@ describe("statusSummaryRuntime.classifySessionKey", () => {
 });
 
 describe("statusSummaryRuntime.resolveSessionRuntimeLabel", () => {
-  it("uses the shared /status runtime labels for persisted harness metadata", () => {
+  it("uses the shared /status runtime label for the implicit OpenAI Codex route", () => {
     expect(
       statusSummaryRuntime.resolveSessionRuntimeLabel({
         cfg: {} as never,
         entry: {
           sessionId: "session-1",
           updatedAt: 0,
-          agentRuntimeOverride: "codex",
         },
         provider: "openai",
         model: "gpt-5.5",
@@ -67,13 +66,15 @@ describe("statusSummaryRuntime.resolveSessionRuntimeLabel", () => {
     ).toBe("OpenAI Codex");
   });
 
-  it("preserves configured default CLI runtimes when sessions lack persisted harness metadata", () => {
+  it("preserves configured default model CLI runtimes", () => {
     expect(
       statusSummaryRuntime.resolveSessionRuntimeLabel({
         cfg: {
           agents: {
             defaults: {
-              agentRuntime: { id: "claude-cli" },
+              models: {
+                "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
+              },
             },
           },
         } as never,
@@ -88,18 +89,22 @@ describe("statusSummaryRuntime.resolveSessionRuntimeLabel", () => {
     ).toBe("Claude CLI");
   });
 
-  it("preserves configured agent runtimes before harness selection", () => {
+  it("preserves configured agent model runtimes before harness selection", () => {
     expect(
       statusSummaryRuntime.resolveSessionRuntimeLabel({
         cfg: {
           agents: {
             defaults: {
-              agentRuntime: { id: "pi" },
+              models: {
+                "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } },
+              },
             },
             list: [
               {
                 id: "research",
-                agentRuntime: { id: "codex" },
+                models: {
+                  "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+                },
               },
             ],
           },

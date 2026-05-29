@@ -66,6 +66,14 @@ function createPlugin(id: string): ChannelPlugin {
   return { id } as ChannelPlugin;
 }
 
+function firstMockArg(mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } }): unknown {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error("expected mock to have at least one call");
+  }
+  return call[0];
+}
+
 describe("resolveInstallableChannelPlugin", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -109,13 +117,13 @@ describe("resolveInstallableChannelPlugin", () => {
 
     expect(result.catalogEntry?.pluginId).toBe("telegram");
     expect(result.plugin?.id).toBe("telegram");
-    expect(mocks.loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "telegram",
-        pluginId: "telegram",
-        workspaceDir: "/tmp/workspace",
-      }),
-    );
+    expect(mocks.loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledTimes(1);
+    const snapshotRequest = firstMockArg(
+      mocks.loadChannelSetupPluginRegistrySnapshotForChannel,
+    ) as { channel?: string; pluginId?: string; workspaceDir?: string };
+    expect(snapshotRequest?.channel).toBe("telegram");
+    expect(snapshotRequest?.pluginId).toBe("telegram");
+    expect(snapshotRequest?.workspaceDir).toBe("/tmp/workspace");
   });
 
   it("keeps trusted workspace channel plugins eligible for setup resolution", async () => {
@@ -148,13 +156,13 @@ describe("resolveInstallableChannelPlugin", () => {
 
     expect(result.catalogEntry?.pluginId).toBe("evil-telegram-shadow");
     expect(result.plugin?.id).toBe("telegram");
-    expect(mocks.loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "telegram",
-        pluginId: "evil-telegram-shadow",
-        workspaceDir: "/tmp/workspace",
-      }),
-    );
+    expect(mocks.loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledTimes(1);
+    const snapshotRequest = firstMockArg(
+      mocks.loadChannelSetupPluginRegistrySnapshotForChannel,
+    ) as { channel?: string; pluginId?: string; workspaceDir?: string };
+    expect(snapshotRequest?.channel).toBe("telegram");
+    expect(snapshotRequest?.pluginId).toBe("evil-telegram-shadow");
+    expect(snapshotRequest?.workspaceDir).toBe("/tmp/workspace");
   });
 
   it("returns an existing plugin that lacks the requested capability without reinstalling", async () => {
@@ -238,11 +246,11 @@ describe("resolveInstallableChannelPlugin", () => {
       supports: (plugin) => Boolean(plugin.directory),
     });
 
-    expect(mocks.ensureChannelSetupPluginInstalled).toHaveBeenCalledWith(
-      expect.objectContaining({
-        entry: catalogEntry,
-      }),
-    );
+    expect(mocks.ensureChannelSetupPluginInstalled).toHaveBeenCalledTimes(1);
+    const installRequest = firstMockArg(mocks.ensureChannelSetupPluginInstalled) as {
+      entry?: ChannelPluginCatalogEntry;
+    };
+    expect(installRequest?.entry).toBe(catalogEntry);
     expect(result.pluginInstalled).toBe(true);
   });
 });

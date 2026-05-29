@@ -22,7 +22,7 @@ vi.mock("./accounts.js", () => ({
   }),
 }));
 
-vi.mock("./client.js", () => ({
+vi.mock("./client-adapter.js", () => ({
   signalRpcRequest: (...args: unknown[]) => rpcMock(...args),
 }));
 
@@ -39,6 +39,18 @@ const SIGNAL_TEST_CFG = {
   },
 };
 
+function requireRpcParams(): Record<string, unknown> {
+  const [call] = rpcMock.mock.calls;
+  if (!call) {
+    throw new Error("expected Signal RPC call");
+  }
+  const [, params] = call;
+  if (!params || typeof params !== "object" || Array.isArray(params)) {
+    throw new Error("expected Signal RPC params");
+  }
+  return params as Record<string, unknown>;
+}
+
 describe("sendReactionSignal", () => {
   beforeAll(async () => {
     ({ sendReactionSignal, removeReactionSignal } = await import("./send-reactions.js"));
@@ -53,8 +65,22 @@ describe("sendReactionSignal", () => {
       cfg: SIGNAL_TEST_CFG,
     });
 
-    const params = rpcMock.mock.calls[0]?.[1] as Record<string, unknown>;
-    expect(rpcMock).toHaveBeenCalledWith("sendReaction", expect.any(Object), expect.any(Object));
+    expect(rpcMock).toHaveBeenCalledWith(
+      "sendReaction",
+      {
+        emoji: "🔥",
+        targetTimestamp: 123,
+        targetAuthor: "123e4567-e89b-12d3-a456-426614174000",
+        recipients: ["123e4567-e89b-12d3-a456-426614174000"],
+        account: "+15550001111",
+      },
+      {
+        baseUrl: "http://signal.local",
+        timeoutMs: undefined,
+        apiMode: undefined,
+      },
+    );
+    const params = requireRpcParams();
     expect(params.recipients).toEqual(["123e4567-e89b-12d3-a456-426614174000"]);
     expect(params.groupIds).toBeUndefined();
     expect(params.targetAuthor).toBe("123e4567-e89b-12d3-a456-426614174000");
@@ -69,7 +95,7 @@ describe("sendReactionSignal", () => {
       targetAuthorUuid: "uuid:123e4567-e89b-12d3-a456-426614174000",
     });
 
-    const params = rpcMock.mock.calls[0]?.[1] as Record<string, unknown>;
+    const params = requireRpcParams();
     expect(params.recipients).toBeUndefined();
     expect(params.groupIds).toEqual(["group-id"]);
     expect(params.targetAuthor).toBe("123e4567-e89b-12d3-a456-426614174000");
@@ -78,7 +104,7 @@ describe("sendReactionSignal", () => {
   it("defaults targetAuthor to recipient for removals", async () => {
     await removeReactionSignal("+15551230000", 456, "❌", { cfg: SIGNAL_TEST_CFG });
 
-    const params = rpcMock.mock.calls[0]?.[1] as Record<string, unknown>;
+    const params = requireRpcParams();
     expect(params.recipients).toEqual(["+15551230000"]);
     expect(params.targetAuthor).toBe("+15551230000");
     expect(params.remove).toBe(true);

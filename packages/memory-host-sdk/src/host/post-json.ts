@@ -1,4 +1,5 @@
 import { withRemoteHttpResponse } from "./remote-http.js";
+import { readResponseTextSnippet } from "./response-snippet.js";
 import type { SsrFPolicy } from "./ssrf-policy.js";
 
 export async function postJson<T>(params: {
@@ -6,6 +7,7 @@ export async function postJson<T>(params: {
   headers: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
   fetchImpl?: typeof fetch;
+  signal?: AbortSignal;
   body: unknown;
   errorPrefix: string;
   attachStatus?: boolean;
@@ -15,6 +17,7 @@ export async function postJson<T>(params: {
     url: params.url,
     ssrfPolicy: params.ssrfPolicy,
     fetchImpl: params.fetchImpl,
+    signal: params.signal,
     init: {
       method: "POST",
       headers: params.headers,
@@ -22,7 +25,7 @@ export async function postJson<T>(params: {
     },
     onResponse: async (res) => {
       if (!res.ok) {
-        const text = await res.text();
+        const text = await readResponseTextSnippet(res);
         const err = new Error(`${params.errorPrefix}: ${res.status} ${text}`) as Error & {
           status?: number;
         };
@@ -31,7 +34,15 @@ export async function postJson<T>(params: {
         }
         throw err;
       }
-      return await params.parse(await res.json());
+      return await params.parse(await readJsonResponse(res, params.errorPrefix));
     },
   });
+}
+
+async function readJsonResponse(res: Response, errorPrefix: string): Promise<unknown> {
+  try {
+    return await res.json();
+  } catch (cause) {
+    throw new Error(`${errorPrefix}: malformed JSON response`, { cause });
+  }
 }

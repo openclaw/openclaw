@@ -1,4 +1,5 @@
 import {
+  clearPluginStateSqliteStoreForTests,
   closePluginStateSqliteStore,
   MAX_PLUGIN_STATE_VALUE_BYTES,
   pluginStateClear,
@@ -29,6 +30,8 @@ export type {
 export { PluginStateStoreError } from "./plugin-state-store.types.js";
 export {
   closePluginStateSqliteStore,
+  countPluginStateLiveEntries,
+  MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN,
   isPluginStateDatabaseOpen,
   probePluginStateStore,
   sweepExpiredPluginStateEntries,
@@ -295,7 +298,14 @@ export function createCorePluginStateKeyedStore<T>(
   return createKeyedStoreForPluginId<T>(options.ownerId, options);
 }
 
-export function resetPluginStateStoreForTests(): void {
-  closePluginStateSqliteStore();
+export function clearPluginStateStoreForTests(): void {
+  clearPluginStateSqliteStoreForTests();
+  namespaceOptionSignatures.clear();
+}
+
+export function resetPluginStateStoreForTests(options: { closeDatabase?: boolean } = {}): void {
+  if (options.closeDatabase !== false) {
+    closePluginStateSqliteStore();
+  }
   namespaceOptionSignatures.clear();
 }

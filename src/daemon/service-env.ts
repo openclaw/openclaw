@@ -222,7 +222,15 @@ function addNixProfileBinDirs(
 
 function resolveSystemPathDirs(platform: NodeJS.Platform): string[] {
   if (platform === "darwin") {
-    return ["/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"];
+    return [
+      "/opt/homebrew/bin",
+      "/opt/homebrew/sbin",
+      "/usr/local/bin",
+      "/usr/bin",
+      "/bin",
+      "/usr/sbin",
+      "/sbin",
+    ];
   }
   if (platform === "linux") {
     return ["/usr/local/bin", "/usr/bin", "/bin"];
@@ -383,6 +391,14 @@ export function buildMinimalServicePath(options: BuildServicePathOptions = {}): 
   return getMinimalServicePathPartsFromEnv({ ...options, env }).join(path.posix.delimiter);
 }
 
+function resolveGatewaySystemdUnitEnv(env: Record<string, string | undefined>): string {
+  const override = normalizeOptionalString(env.OPENCLAW_SYSTEMD_UNIT);
+  if (override) {
+    return override.endsWith(".service") ? override : `${override}.service`;
+  }
+  return `${resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE)}.service`;
+}
+
 export function buildServiceEnvironment(params: {
   env: Record<string, string | undefined>;
   port: number;
@@ -403,7 +419,7 @@ export function buildServiceEnvironment(params: {
   const wrapperPath = normalizeOptionalString(env.OPENCLAW_WRAPPER);
   const resolvedLaunchdLabel =
     launchdLabel || (platform === "darwin" ? resolveGatewayLaunchAgentLabel(profile) : undefined);
-  const systemdUnit = `${resolveGatewaySystemdServiceName(profile)}.service`;
+  const systemdUnit = resolveGatewaySystemdUnitEnv(env);
   return {
     ...buildCommonServiceEnvironment(env, sharedEnv),
     OPENCLAW_PROFILE: profile,
@@ -441,6 +457,7 @@ export function buildNodeServiceEnvironment(params: {
     OPENCLAW_LAUNCHD_LABEL: resolveNodeLaunchAgentLabel(),
     OPENCLAW_SYSTEMD_UNIT: resolveNodeSystemdServiceName(),
     OPENCLAW_WINDOWS_TASK_NAME: resolveNodeWindowsTaskName(),
+    OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1",
     OPENCLAW_TASK_SCRIPT_NAME: NODE_WINDOWS_TASK_SCRIPT_NAME,
     OPENCLAW_LOG_PREFIX: "node",
     OPENCLAW_SERVICE_MARKER: NODE_SERVICE_MARKER,

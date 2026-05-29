@@ -30,15 +30,6 @@ describe("resolveMentionGating", () => {
     expect(res.effectiveWasMentioned).toBe(false);
     expect(res.shouldSkip).toBe(true);
   });
-
-  it("does not skip when mention detection is unavailable", () => {
-    const res = resolveMentionGating({
-      requireMention: true,
-      canDetectMention: false,
-      wasMentioned: false,
-    });
-    expect(res.shouldSkip).toBe(false);
-  });
 });
 
 describe("resolveMentionGatingWithBypass", () => {
@@ -131,7 +122,7 @@ describe("resolveInboundMentionDecision", () => {
       },
     });
     expect(res.implicitMention).toBe(false);
-    expect(res.matchedImplicitMentionKinds).toEqual([]);
+    expect(res.matchedImplicitMentionKinds).toStrictEqual([]);
     expect(res.effectiveWasMentioned).toBe(false);
     expect(res.shouldSkip).toBe(true);
   });
@@ -217,24 +208,6 @@ describe("resolveInboundMentionDecision", () => {
     expect(res.shouldSkip).toBe(true);
   });
 
-  it("does not skip when mention detection is unavailable", () => {
-    const res = resolveInboundMentionDecision({
-      facts: {
-        canDetectMention: false,
-        wasMentioned: false,
-        implicitMentionKinds: [],
-      },
-      policy: {
-        isGroup: true,
-        requireMention: true,
-        allowTextCommands: true,
-        hasControlCommand: false,
-        commandAuthorized: false,
-      },
-    });
-    expect(res.shouldSkip).toBe(false);
-  });
-
   it("keeps the flat call shape for compatibility", () => {
     const res = resolveInboundMentionDecision({
       isGroup: true,
@@ -250,12 +223,46 @@ describe("resolveInboundMentionDecision", () => {
   });
 });
 
+describe("unavailable mention detection", () => {
+  it.each([
+    {
+      name: "raw gating",
+      check: () =>
+        resolveMentionGating({
+          requireMention: true,
+          canDetectMention: false,
+          wasMentioned: false,
+        }).shouldSkip,
+    },
+    {
+      name: "inbound decision",
+      check: () =>
+        resolveInboundMentionDecision({
+          facts: {
+            canDetectMention: false,
+            wasMentioned: false,
+            implicitMentionKinds: [],
+          },
+          policy: {
+            isGroup: true,
+            requireMention: true,
+            allowTextCommands: true,
+            hasControlCommand: false,
+            commandAuthorized: false,
+          },
+        }).shouldSkip,
+    },
+  ])("does not skip when mention detection is unavailable for $name", ({ check }) => {
+    expect(check()).toBe(false);
+  });
+});
+
 describe("implicitMentionKindWhen", () => {
   it("returns a one-item list when enabled", () => {
     expect(implicitMentionKindWhen("reply_to_bot", true)).toEqual(["reply_to_bot"]);
   });
 
   it("returns an empty list when disabled", () => {
-    expect(implicitMentionKindWhen("reply_to_bot", false)).toEqual([]);
+    expect(implicitMentionKindWhen("reply_to_bot", false)).toStrictEqual([]);
   });
 });

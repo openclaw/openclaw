@@ -8,6 +8,7 @@ import ai.openclaw.app.gateway.GatewayClientInfo
 import ai.openclaw.app.gateway.GatewayConnectOptions
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayTlsParams
+import ai.openclaw.app.gateway.isLocalCleartextGatewayHost
 import ai.openclaw.app.gateway.isLoopbackGatewayHost
 import android.os.Build
 
@@ -22,6 +23,7 @@ class ConnectionManager(
   private val readSmsAvailable: () -> Boolean,
   private val smsSearchPossible: () -> Boolean,
   private val callLogAvailable: () -> Boolean,
+  private val photosAvailable: () -> Boolean,
   private val hasRecordAudioPermission: () -> Boolean,
   private val manualTls: () -> Boolean,
 ) {
@@ -34,7 +36,12 @@ class ConnectionManager(
       val stableId = endpoint.stableId
       val stored = storedFingerprint?.trim().takeIf { !it.isNullOrEmpty() }
       val isManual = stableId.startsWith("manual|")
-      val cleartextAllowedHost = isLoopbackGatewayHost(endpoint.host)
+      val cleartextAllowedHost =
+        if (isManual) {
+          isLocalCleartextGatewayHost(endpoint.host)
+        } else {
+          isLoopbackGatewayHost(endpoint.host)
+        }
 
       if (isManual) {
         if (!manualTlsEnabled && cleartextAllowedHost) return null
@@ -96,6 +103,7 @@ class ConnectionManager(
       readSmsAvailable = readSmsAvailable(),
       smsSearchPossible = smsSearchPossible(),
       callLogAvailable = callLogAvailable(),
+      photosAvailable = photosAvailable(),
       voiceWakeEnabled = voiceWakeMode() != VoiceWakeMode.Off && hasRecordAudioPermission(),
       motionActivityAvailable = motionActivityAvailable(),
       motionPedometerAvailable = motionPedometerAvailable(),
@@ -160,7 +168,12 @@ class ConnectionManager(
   fun buildOperatorConnectOptions(): GatewayConnectOptions =
     GatewayConnectOptions(
       role = "operator",
-      scopes = listOf("operator.read", "operator.write", "operator.talk.secrets"),
+      scopes =
+        listOf(
+          "operator.approvals",
+          "operator.read",
+          "operator.write",
+        ),
       caps = emptyList(),
       commands = emptyList(),
       permissions = emptyMap(),

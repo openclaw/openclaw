@@ -70,8 +70,12 @@ describe("canvas a2ui copy", () => {
 
       await copyA2uiAssets({ srcDir, outDir });
 
-      await expect(fs.stat(path.join(outDir, "index.html"))).resolves.toBeTruthy();
-      await expect(fs.stat(path.join(outDir, "a2ui.bundle.js"))).resolves.toBeTruthy();
+      await expect(fs.readFile(path.join(outDir, "index.html"), "utf8")).resolves.toBe(
+        "<html></html>",
+      );
+      await expect(fs.readFile(path.join(outDir, "a2ui.bundle.js"), "utf8")).resolves.toBe(
+        "console.log(1);",
+      );
     });
   });
 });

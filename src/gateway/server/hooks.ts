@@ -92,7 +92,9 @@ export function createGatewayHooksRequestHandler(params: {
 
   const dispatchWakeHook = (value: { text: string; mode: "now" | "next-heartbeat" }) => {
     const sessionKey = resolveMainSessionKeyFromConfig();
-    enqueueSystemEvent(value.text, { sessionKey, trusted: false });
+    enqueueSystemEvent(value.text, {
+      sessionKey,
+    });
     if (value.mode === "now") {
       requestHeartbeat({ source: "hook", intent: "immediate", reason: "hook:wake" });
     }
@@ -177,7 +179,6 @@ export function createGatewayHooksRequestHandler(params: {
           const eventSessionKey = hookEventSessionKey ?? resolveMainSessionKeyFromConfig();
           enqueueSystemEvent(`${prefix}: ${summary}`.trim(), {
             sessionKey: eventSessionKey,
-            trusted: false,
           });
           if (value.wakeMode === "now") {
             requestHeartbeat({ source: "hook", intent: "immediate", reason: `hook:${jobId}` });
@@ -197,7 +198,6 @@ export function createGatewayHooksRequestHandler(params: {
         logHooks.warn(`hook agent failed: ${String(err)}`);
         enqueueSystemEvent(`Hook ${safeName} (error): ${String(err)}`, {
           sessionKey: hookEventSessionKey ?? resolveMainSessionKeyFromConfig(),
-          trusted: false,
         });
         if (value.wakeMode === "now") {
           requestHeartbeat({

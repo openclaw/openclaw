@@ -9,6 +9,7 @@
 
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   RealtimeTranscriptionProviderConfig,
   RealtimeTranscriptionProviderPlugin,
@@ -31,6 +32,8 @@ export interface MediaStreamConfig {
   transcriptionProvider: RealtimeTranscriptionProviderPlugin;
   /** Provider-owned config blob passed into the transcription session. */
   providerConfig: RealtimeTranscriptionProviderConfig;
+  /** Full runtime config, used by providers that can resolve OAuth profiles. */
+  cfg?: OpenClawConfig;
   /** Close sockets that never send a valid `start` frame within this window. */
   preStartTimeoutMs?: number;
   /** Max concurrent pre-start sockets. */
@@ -116,6 +119,15 @@ function normalizeWsMessageData(data: RawData): Buffer {
     return Buffer.concat(data);
   }
   return Buffer.from(data);
+}
+
+export function parseTwilioMediaMessage(data: RawData): TwilioMediaMessage {
+  const raw = normalizeWsMessageData(data);
+  try {
+    return JSON.parse(raw.toString("utf8")) as TwilioMediaMessage;
+  } catch (cause) {
+    throw new Error("Twilio media stream message was malformed JSON", { cause });
+  }
 }
 
 /**
@@ -216,8 +228,7 @@ export class MediaStreamHandler {
 
     ws.on("message", async (data: RawData) => {
       try {
-        const raw = normalizeWsMessageData(data);
-        const message = JSON.parse(raw.toString("utf8")) as TwilioMediaMessage;
+        const message = parseTwilioMediaMessage(data);
 
         switch (message.event) {
           case "connected":
@@ -314,6 +325,7 @@ export class MediaStreamHandler {
     }
 
     const sttSession = this.config.transcriptionProvider.createSession({
+      cfg: this.config.cfg,
       providerConfig: this.config.providerConfig,
       onPartial: (partial) => {
         const session = this.sessions.get(streamSid);

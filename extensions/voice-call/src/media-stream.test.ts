@@ -8,7 +8,7 @@ import type {
 import { createTalkSessionController, type TalkEvent } from "openclaw/plugin-sdk/realtime-voice";
 import { describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
-import { MediaStreamHandler, sanitizeLogText } from "./media-stream.js";
+import { MediaStreamHandler, parseTwilioMediaMessage, sanitizeLogText } from "./media-stream.js";
 import {
   connectWs,
   startUpgradeWsServer,
@@ -31,21 +31,20 @@ const createStubSttProvider = (): RealtimeTranscriptionProviderPlugin =>
     isConfigured: () => true,
   }) as unknown as RealtimeTranscriptionProviderPlugin;
 
-const flush = async (): Promise<void> => {
-  await new Promise((resolve) => setTimeout(resolve, 0));
-};
-
 const createDeferred = (): {
   promise: Promise<void>;
   resolve: () => void;
   reject: (error: Error) => void;
 } => {
-  let resolve!: () => void;
-  let reject!: (error: Error) => void;
+  let resolve: (() => void) | undefined;
+  let reject: ((error: Error) => void) | undefined;
   const promise = new Promise<void>((resolvePromise, rejectPromise) => {
     resolve = resolvePromise;
     reject = rejectPromise;
   });
+  if (!resolve || !reject) {
+    throw new Error("Expected deferred callbacks to be initialized");
+  }
   return { promise, resolve, reject };
 };
 
@@ -71,6 +70,29 @@ const startWsServer = async (
     },
   });
 
+const requireRecord = (value: unknown, label: string): Record<string, unknown> => {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`Expected ${label} to be a record`);
+  }
+  return value as Record<string, unknown>;
+};
+
+const requireFirstMockCall = <T extends unknown[]>(calls: readonly T[], label: string): T => {
+  const call = calls.at(0);
+  if (!call) {
+    throw new Error(`Expected ${label}`);
+  }
+  return call;
+};
+
+const requireTalkEvent = (events: TalkEvent[], type: TalkEvent["type"]) => {
+  const event = events.find((candidate) => candidate.type === type);
+  if (!event) {
+    throw new Error(`Expected ${type} Talk event`);
+  }
+  return requireRecord(event, `${type} Talk event`);
+};
+
 describe("MediaStreamHandler TTS queue", () => {
   it("serializes TTS playback and resolves in order", async () => {
     const handler = new MediaStreamHandler({
@@ -80,10 +102,13 @@ describe("MediaStreamHandler TTS queue", () => {
     const started: number[] = [];
     const finished: number[] = [];
 
-    let resolveFirst!: () => void;
+    let resolveFirst: (() => void) | undefined;
     const firstGate = new Promise<void>((resolve) => {
       resolveFirst = resolve;
     });
+    if (!resolveFirst) {
+      throw new Error("Expected first TTS gate resolver to be initialized");
+    }
 
     const first = handler.queueTts("stream-1", async () => {
       started.push(1);
@@ -95,7 +120,6 @@ describe("MediaStreamHandler TTS queue", () => {
       finished.push(2);
     });
 
-    await flush();
     expect(started).toEqual([1]);
 
     resolveFirst();
@@ -123,13 +147,11 @@ describe("MediaStreamHandler TTS queue", () => {
       queuedRan = true;
     });
 
-    await flush();
     expect(started).toEqual(["active"]);
 
     handler.clearTtsQueue("stream-1");
     await active;
     await withTimeout(queued);
-    await flush();
 
     expect(queuedRan).toBe(false);
   });
@@ -148,7 +170,6 @@ describe("MediaStreamHandler TTS queue", () => {
       queuedRan = true;
     });
 
-    await flush();
     (
       handler as unknown as {
         clearTtsState(streamSid: string): void;
@@ -162,6 +183,20 @@ describe("MediaStreamHandler TTS queue", () => {
 });
 
 describe("MediaStreamHandler security hardening", () => {
+  it("wraps malformed Twilio media stream JSON with an owned parser error", () => {
+    let error: unknown;
+    try {
+      parseTwilioMediaMessage(Buffer.from("{not json"));
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe("Twilio media stream message was malformed JSON");
+    expect(error).not.toBeInstanceOf(SyntaxError);
+    expect((error as Error).cause).toBeInstanceOf(SyntaxError);
+  });
+
   it("emits common Talk events for telephony STT/TTS sessions", async () => {
     let callbacks: RealtimeTranscriptionSessionCreateRequest | undefined;
     const sentAudio: Buffer[] = [];
@@ -201,9 +236,8 @@ describe("MediaStreamHandler security hardening", () => {
           start: { callSid: "CA-talk" },
         }),
       );
-      await flush();
       await vi.waitFor(() => {
-        expect(talkEvents.some((event) => event.type === "session.ready")).toBe(true);
+        expect(talkEvents.map((event) => event.type)).toContain("session.ready");
       });
 
       ws.send(
@@ -213,8 +247,9 @@ describe("MediaStreamHandler security hardening", () => {
           media: { payload: Buffer.from("hello").toString("base64") },
         }),
       );
-      await flush();
-      expect(Buffer.concat(sentAudio).toString()).toBe("hello");
+      await vi.waitFor(() => {
+        expect(Buffer.concat(sentAudio).toString()).toBe("hello");
+      });
 
       callbacks?.onSpeechStart?.();
       callbacks?.onPartial?.("hel");
@@ -227,14 +262,13 @@ describe("MediaStreamHandler security hardening", () => {
       const activePlayback = handler.queueTts("MZ-talk", async (signal) => {
         await waitForAbort(signal);
       });
-      await flush();
       handler.clearTtsQueue("MZ-talk", "barge-in");
       await activePlayback;
 
       ws.close();
       await waitForClose(ws);
       await vi.waitFor(() => {
-        expect(talkEvents.some((event) => event.type === "session.closed")).toBe(true);
+        expect(talkEvents.map((event) => event.type)).toContain("session.closed");
       });
 
       expect(talkEvents.map((event) => event.type)).toEqual([
@@ -254,30 +288,26 @@ describe("MediaStreamHandler security hardening", () => {
         "turn.cancelled",
         "session.closed",
       ]);
-      expect(talkEvents[0]).toEqual(
-        expect.objectContaining({
-          sessionId: "voice-call:CA-talk:MZ-talk",
-          mode: "stt-tts",
-          transport: "gateway-relay",
-          brain: "agent-consult",
-          provider: "openai",
-          seq: 1,
-        }),
-      );
-      expect(talkEvents.find((event) => event.type === "transcript.done")).toEqual(
-        expect.objectContaining({
-          final: true,
-          turnId: "MZ-talk:turn-1",
-          payload: expect.objectContaining({ text: "hello there", role: "user" }),
-        }),
-      );
-      expect(talkEvents.find((event) => event.type === "turn.cancelled")).toEqual(
-        expect.objectContaining({
-          final: true,
-          turnId: "MZ-talk:turn-2",
-          payload: expect.objectContaining({ reason: "barge-in" }),
-        }),
-      );
+      const startedEvent = requireRecord(talkEvents[0], "session started Talk event");
+      expect(startedEvent.sessionId).toBe("voice-call:CA-talk:MZ-talk");
+      expect(startedEvent.mode).toBe("stt-tts");
+      expect(startedEvent.transport).toBe("gateway-relay");
+      expect(startedEvent.brain).toBe("agent-consult");
+      expect(startedEvent.provider).toBe("openai");
+      expect(startedEvent.seq).toBe(1);
+
+      const transcriptDone = requireTalkEvent(talkEvents, "transcript.done");
+      expect(transcriptDone.final).toBe(true);
+      expect(transcriptDone.turnId).toBe("MZ-talk:turn-1");
+      const transcriptPayload = requireRecord(transcriptDone.payload, "transcript payload");
+      expect(transcriptPayload.text).toBe("hello there");
+      expect(transcriptPayload.role).toBe("user");
+
+      const cancelled = requireTalkEvent(talkEvents, "turn.cancelled");
+      expect(cancelled.final).toBe(true);
+      expect(cancelled.turnId).toBe("MZ-talk:turn-2");
+      const cancelledPayload = requireRecord(cancelled.payload, "cancelled payload");
+      expect(cancelledPayload.reason).toBe("barge-in");
     } finally {
       await server.close();
     }
@@ -399,7 +429,7 @@ describe("MediaStreamHandler security hardening", () => {
 
       expect(closed.code).toBe(1008);
       expect(closed.reason).toBe("Start timeout");
-      expect(shouldAcceptStreamCalls).toEqual([]);
+      expect(shouldAcceptStreamCalls).toStrictEqual([]);
     } finally {
       await server.close();
     }
@@ -557,17 +587,23 @@ describe("MediaStreamHandler security hardening", () => {
     expect(secondSocket.write).toHaveBeenCalledOnce();
     expect(secondSocket.destroy).toHaveBeenCalledOnce();
 
-    expect(upgradeCallback).not.toBeNull();
     const completeUpgrade = upgradeCallback as ((ws: WebSocket) => void) | null;
     if (!completeUpgrade) {
       throw new Error("Expected upgrade callback to be registered");
     }
     completeUpgrade({} as WebSocket);
-    expect(fakeWss.emit).toHaveBeenCalledWith(
-      "connection",
-      expect.anything(),
-      expect.objectContaining({ socket: { remoteAddress: "127.0.0.1" } }),
+    expect(fakeWss.emit).toHaveBeenCalledOnce();
+    const emitCall = requireFirstMockCall(
+      fakeWss.emit.mock.calls,
+      "websocket connection emit call",
     );
+    expect(emitCall[0]).toBe("connection");
+    if (!emitCall[1]) {
+      throw new Error("Expected websocket connection argument");
+    }
+    const request = requireRecord(emitCall[2], "connection request");
+    const socket = requireRecord(request.socket, "connection request socket");
+    expect(socket.remoteAddress).toBe("127.0.0.1");
   });
 
   it("releases in-flight reservations when ws rejects a malformed upgrade before the callback", async () => {
@@ -619,11 +655,16 @@ describe("MediaStreamHandler security hardening", () => {
   });
 
   it("clears pending state after valid start", async () => {
+    const shouldAcceptStream = vi.fn(
+      (_params: { callId: string; streamSid: string; token?: string }) => true,
+    );
     const handler = new MediaStreamHandler({
       transcriptionProvider: createStubSttProvider(),
       providerConfig: {},
-      preStartTimeoutMs: 40,
-      shouldAcceptStream: () => true,
+      maxPendingConnections: 1,
+      maxPendingConnectionsPerIp: 10,
+      preStartTimeoutMs: 5_000,
+      shouldAcceptStream,
     });
     const server = await startWsServer(handler);
 
@@ -637,9 +678,24 @@ describe("MediaStreamHandler security hardening", () => {
         }),
       );
 
-      await new Promise((resolve) => setTimeout(resolve, 80));
+      await vi.waitFor(() => {
+        expect(shouldAcceptStream).toHaveBeenCalledOnce();
+      });
+      const acceptedStreamCall = requireFirstMockCall(
+        shouldAcceptStream.mock.calls,
+        "accepted stream call",
+      );
+      const acceptedStream = requireRecord(acceptedStreamCall[0], "accepted stream params");
+      expect(acceptedStream.callId).toBe("CA123");
+      expect(acceptedStream.streamSid).toBe("MZ123");
+      expect(acceptedStream.token).toBe("token-123");
       expect(ws.readyState).toBe(WebSocket.OPEN);
 
+      const second = await connectWs(server.url);
+      expect(second.readyState).toBe(WebSocket.OPEN);
+
+      second.close();
+      await waitForClose(second);
       ws.close();
       await waitForClose(ws);
     } finally {
@@ -647,7 +703,7 @@ describe("MediaStreamHandler security hardening", () => {
     }
   });
 
-  it("keeps accepted streams alive while STT readiness exceeds the pre-start timeout", async () => {
+  it("defers transcription readiness until STT connect resolves", async () => {
     const sttReady = createDeferred();
     const sttConnectStarted = createDeferred();
     const transcriptionReady = createDeferred();
@@ -673,7 +729,6 @@ describe("MediaStreamHandler security hardening", () => {
         isConfigured: () => true,
       },
       providerConfig: {},
-      preStartTimeoutMs: 40,
       shouldAcceptStream: () => true,
       onConnect: () => {
         events.push("onConnect");
@@ -696,7 +751,6 @@ describe("MediaStreamHandler security hardening", () => {
       );
 
       await withTimeout(sttConnectStarted.promise);
-      await new Promise((resolve) => setTimeout(resolve, 80));
       expect(ws.readyState).toBe(WebSocket.OPEN);
       expect(events).toEqual(["onConnect", "stt-connect-start"]);
 
@@ -891,7 +945,7 @@ describe("MediaStreamHandler security hardening", () => {
       const closed = await waitForClose(ws);
 
       expect(closed.code).toBe(1009);
-      expect(shouldAcceptStreamCalls).toEqual([]);
+      expect(shouldAcceptStreamCalls).toStrictEqual([]);
     } finally {
       await server.close();
     }

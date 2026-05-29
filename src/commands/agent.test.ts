@@ -3,13 +3,15 @@ import path from "node:path";
 import { withTempHome as withTempHomeBase } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
 import "./agent-command.test-mocks.js";
-import { __testing as acpManagerTesting } from "../acp/control-plane/manager.js";
+import { testing as acpManagerTesting } from "../acp/control-plane/manager.js";
 import * as authProfileStoreModule from "../agents/auth-profiles/store.js";
 import * as attemptExecutionRuntime from "../agents/command/attempt-execution.runtime.js";
+import { runEmbeddedAgent } from "../agents/embedded-agent.js";
 import { loadManifestModelCatalog, loadModelCatalog } from "../agents/model-catalog.js";
 import * as modelSelectionModule from "../agents/model-selection.js";
-import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
+import { BASE_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
 import * as runtimeSnapshotModule from "../config/runtime-snapshot.js";
+import { loadSessionStore } from "../config/sessions/store-load.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -18,19 +20,29 @@ import {
   resetAgentEventsForTest,
   resetAgentRunContextForTest,
 } from "../infra/agent-events.js";
+import type { PluginProviderRegistration } from "../plugins/registry.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { agentCommand, agentCommandFromIngress } from "./agent.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { agentCommand, agentCommandFromIngress, testing as agentCommandTesting } from "./agent.js";
 import { createThrowingTestRuntime } from "./test-runtime-config-helpers.js";
 
 const configIoMocks = vi.hoisted(() => ({
   loadConfig: vi.fn(),
   readConfigFileSnapshotForWrite: vi.fn(),
 }));
+const pluginRegistryMocks = vi.hoisted(() => ({
+  ensurePluginRegistryLoaded: vi.fn(),
+}));
 
 vi.mock("../config/io.js", () => ({
   getRuntimeConfig: configIoMocks.loadConfig,
   loadConfig: configIoMocks.loadConfig,
   readConfigFileSnapshotForWrite: configIoMocks.readConfigFileSnapshotForWrite,
+}));
+
+vi.mock("../plugins/runtime/runtime-registry-loader.js", () => ({
+  ensurePluginRegistryLoaded: pluginRegistryMocks.ensurePluginRegistryLoaded,
 }));
 
 vi.mock("../agents/auth-profiles/store.js", () => {
@@ -83,7 +95,7 @@ vi.mock("../agents/command/attempt-execution.runtime.js", () => {
       const authProfileId =
         providerOverride === authProfileProvider ? sessionEntry?.authProfileOverride : undefined;
 
-      return await runEmbeddedPiAgent({
+      return await runEmbeddedAgent({
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
         agentId: params.sessionAgentId,
@@ -92,7 +104,6 @@ vi.mock("../agents/command/attempt-execution.runtime.js", () => {
         agentAccountId: runContext.accountId,
         messageTo: opts.replyTo ?? opts.to,
         messageThreadId: opts.threadId,
-        senderIsOwner: opts.senderIsOwner,
         sessionFile: params.sessionFile,
         workspaceDir: params.workspaceDir,
         config: params.cfg,
@@ -186,12 +197,15 @@ vi.mock("../config/sessions/transcript-resolve.runtime.js", () => {
   };
   const joinPath = (...parts: string[]): string => {
     const separator = parts.some((part) => part.includes("\\")) ? "\\" : "/";
-    return parts
-      .map((part, index) =>
-        index === 0 ? part.replace(/[\\/]+$/u, "") : part.replace(/^[\\/]+|[\\/]+$/gu, ""),
-      )
-      .filter(Boolean)
-      .join(separator);
+    const normalizedParts: string[] = [];
+    for (const [index, part] of parts.entries()) {
+      const normalized =
+        index === 0 ? part.replace(/[\\/]+$/u, "") : part.replace(/^[\\/]+|[\\/]+$/gu, "");
+      if (normalized.length > 0) {
+        normalizedParts.push(normalized);
+      }
+    }
+    return normalizedParts.join(separator);
   };
   const resolveSessionFile = (sessionId: string, agentId: string, sessionsDir?: string): string =>
     joinPath(sessionsDir ?? ".openclaw", "agents", agentId, "sessions", `${sessionId}.jsonl`);
@@ -246,7 +260,7 @@ function mockConfig(
   storePath: string,
   agentOverrides?: Partial<NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>>,
   telegramOverrides?: Partial<NonNullable<NonNullable<OpenClawConfig["channels"]>["telegram"]>>,
-  agentsList?: Array<{ id: string; default?: boolean }>,
+  agentsList?: NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>,
 ) {
   const cfg = {
     agents: {
@@ -289,7 +303,8 @@ function createDefaultAgentResult(params?: {
 }
 
 function getLastEmbeddedCall() {
-  return vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
+  const calls = vi.mocked(runEmbeddedAgent).mock.calls;
+  return calls[calls.length - 1]?.[0];
 }
 
 function expectLastRunProviderModel(provider: string, model: string): void {
@@ -311,14 +326,36 @@ function mockModelCatalogOnce(entries: ReturnType<typeof loadManifestModelCatalo
   vi.mocked(loadModelCatalog).mockResolvedValueOnce(entries);
 }
 
+function installThinkingTestProviders() {
+  const registry = createTestRegistry();
+  registry.providers = ["anthropic", "codex", "ollama", "openai", "openrouter"].map(
+    (providerId): PluginProviderRegistration => ({
+      pluginId: providerId,
+      source: "test",
+      provider: {
+        id: providerId,
+        label: providerId,
+        auth: [],
+        resolveThinkingProfile: () => ({
+          levels: BASE_THINKING_LEVELS.map((id) => ({ id })),
+          defaultLevel: "off",
+        }),
+      },
+    }),
+  );
+  setActivePluginRegistry(registry);
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
+  resetPluginRuntimeStateForTest();
+  installThinkingTestProviders();
   clearSessionStoreCacheForTest();
   resetAgentEventsForTest();
   resetAgentRunContextForTest();
   acpManagerTesting.resetAcpSessionManagerForTests();
   runtimeSnapshotModule.clearRuntimeConfigSnapshot();
-  vi.mocked(runEmbeddedPiAgent).mockResolvedValue(createDefaultAgentResult());
+  vi.mocked(runEmbeddedAgent).mockResolvedValue(createDefaultAgentResult());
   vi.mocked(loadManifestModelCatalog).mockReturnValue([]);
   vi.mocked(loadModelCatalog).mockResolvedValue([]);
   vi.mocked(modelSelectionModule.isCliProvider).mockImplementation(() => false);
@@ -329,30 +366,126 @@ beforeEach(() => {
 });
 
 describe("agentCommand", () => {
-  it("enforces ingress trust flags", async () => {
-    await expect(
-      // Runtime guard for non-TS callers; TS callsites are statically typed.
-      agentCommandFromIngress({ message: "hi", to: "+1555" } as never, runtime),
-    ).rejects.toThrow("senderIsOwner must be explicitly set for ingress agent runs.");
+  it("enables the Codex runtime plugin and provider owner for one-shot OpenAI model overrides", async () => {
+    await withTempHome(async (home) => {
+      const storePath = path.join(home, "sessions.json");
+      mockConfig(home, storePath, { models: undefined });
 
+      await agentCommand(
+        {
+          message: "hi",
+          agentId: "main",
+          model: "openai/gpt-5.2",
+          allowModelOverride: true,
+        },
+        runtime,
+      );
+
+      expect(pluginRegistryMocks.ensurePluginRegistryLoaded).toHaveBeenCalledTimes(1);
+      for (const [registryLoad] of pluginRegistryMocks.ensurePluginRegistryLoaded.mock.calls) {
+        expect(registryLoad?.scope).toBe("all");
+        expect(registryLoad?.config).toBeTypeOf("object");
+        expect(registryLoad?.activationSourceConfig).toBeTypeOf("object");
+        expect(registryLoad?.workspaceDir).toBe(path.join(home, "openclaw"));
+        expect(registryLoad?.onlyPluginIds).toEqual(["codex", "openai"]);
+      }
+      expectLastRunProviderModel("openai", "gpt-5.2");
+    });
+  });
+
+  it("does not enable Codex for one-shot OpenAI overrides when the provider forces OpenClaw", async () => {
+    await withTempHome(async (home) => {
+      const storePath = path.join(home, "sessions.json");
+      const cfg = mockConfig(home, storePath, { models: undefined });
+      cfg.models = {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            agentRuntime: { id: "openclaw" },
+            models: [],
+          },
+        },
+      };
+
+      await agentCommand(
+        {
+          message: "hi",
+          agentId: "main",
+          model: "openai/gpt-5.2",
+          allowModelOverride: true,
+        },
+        runtime,
+      );
+
+      expect(pluginRegistryMocks.ensurePluginRegistryLoaded).not.toHaveBeenCalled();
+      expectLastRunProviderModel("openai", "gpt-5.2");
+    });
+  });
+
+  it("enforces ingress model override authorization", async () => {
     await expect(
       // Runtime guard for non-TS callers; TS callsites are statically typed.
       agentCommandFromIngress(
         {
           message: "hi",
           to: "+1555",
-          senderIsOwner: false,
         } as never,
         runtime,
       ),
     ).rejects.toThrow("allowModelOverride must be explicitly set for ingress agent runs.");
   });
 
+  it("uses the selected agent thinkingDefault for fresh ingress runs", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(
+        home,
+        store,
+        {
+          thinkingDefault: "high",
+        },
+        undefined,
+        [{ id: "main", default: true, thinkingDefault: "off" }],
+      );
+
+      await agentCommandFromIngress(
+        {
+          message: "ping",
+          agentId: "main",
+          allowModelOverride: false,
+        },
+        runtime,
+      );
+
+      expect(getLastEmbeddedCall()?.thinkLevel).toBe("off");
+    });
+  });
+
+  it("installs a local gateway request scope for embedded agent dispatch", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store);
+      const { getPluginRuntimeGatewayRequestScope } =
+        await import("../plugins/runtime/gateway-request-scope.js");
+      vi.mocked(attemptExecutionRuntime.runAgentAttempt).mockImplementationOnce(async () => {
+        const scope = getPluginRuntimeGatewayRequestScope();
+        expect(scope?.context?.getRuntimeConfig()).toMatchObject({
+          session: { store },
+        });
+        return createDefaultAgentResult();
+      });
+
+      await agentCommand({ message: "ping", agentId: "main" }, runtime);
+
+      expect(getPluginRuntimeGatewayRequestScope()).toBeUndefined();
+    });
+  });
+
   it("persists local overrides", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
       mockConfig(home, store);
-      vi.mocked(runEmbeddedPiAgent).mockResolvedValue(
+      vi.mocked(runEmbeddedAgent).mockResolvedValue(
         createDefaultAgentResult({
           payloads: [{ text: "json-reply", mediaUrl: "http://x.test/a.jpg" }],
           durationMs: 42,
@@ -379,14 +512,14 @@ describe("agentCommand", () => {
       expect(entry.thinkingLevel).toBe("high");
       expect(entry.verboseLevel).toBe("on");
 
-      const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
+      const callArgs = getLastEmbeddedCall();
       expect(callArgs?.thinkLevel).toBe("high");
       expect(callArgs?.verboseLevel).toBe("on");
-      expect(callArgs?.senderIsOwner).toBe(true);
       expect(callArgs?.prompt).toBe("ping");
       expect(callArgs?.agentAccountId).toBe("kev");
 
-      const logged = (runtime.log as unknown as MockInstance).mock.calls.at(-1)?.[0] as string;
+      const logCalls = (runtime.log as unknown as MockInstance).mock.calls;
+      const logged = logCalls[logCalls.length - 1]?.[0] as string;
       const parsed = JSON.parse(logged) as {
         payloads: Array<{ text: string; mediaUrl?: string | null }>;
         meta: { durationMs: number };
@@ -402,7 +535,7 @@ describe("agentCommand", () => {
       const store = path.join(home, "sessions.json");
       mockConfig(home, store);
       const base = createDefaultAgentResult({ payloads: [{ text: "assistant-visible" }] });
-      vi.mocked(runEmbeddedPiAgent).mockResolvedValueOnce({
+      vi.mocked(runEmbeddedAgent).mockResolvedValueOnce({
         ...base,
         meta: {
           ...base.meta,
@@ -427,7 +560,7 @@ describe("agentCommand", () => {
       mockConfig(home, store);
       const sendMessageTelegram = vi.fn(async () => undefined);
       const base = createDefaultAgentResult({ payloads: [{ text: "assistant-visible" }] });
-      vi.mocked(runEmbeddedPiAgent).mockResolvedValueOnce({
+      vi.mocked(runEmbeddedAgent).mockResolvedValueOnce({
         ...base,
         meta: {
           ...base.meta,
@@ -443,18 +576,15 @@ describe("agentCommand", () => {
           channel: "telegram",
           messageChannel: "telegram",
           deliver: true,
-          senderIsOwner: false,
           allowModelOverride: false,
         },
         runtime,
         { sendMessageTelegram },
       );
 
-      expect(sendMessageTelegram).toHaveBeenCalledWith(
-        "+1222",
-        "assistant-visible",
-        expect.objectContaining({ verbose: false }),
-      );
+      expect(sendMessageTelegram).toHaveBeenCalledWith("+1222", "assistant-visible", {
+        verbose: false,
+      });
       expect(vi.mocked(attemptExecutionRuntime.persistCliTurnTranscript)).toHaveBeenCalledTimes(1);
       const persistArgs = vi.mocked(attemptExecutionRuntime.persistCliTurnTranscript).mock
         .calls[0]?.[0];
@@ -476,13 +606,9 @@ describe("agentCommand", () => {
       await agentCommand({ message: "ping", agentId: "main" }, runtime);
 
       const callArgs = getLastEmbeddedCall();
-      expect(callArgs).toEqual(
-        expect.objectContaining({
-          provider: "openai",
-          model: "gpt-5.5",
-          fastMode: true,
-        }),
-      );
+      expect(callArgs?.provider).toBe("openai");
+      expect(callArgs?.model).toBe("gpt-5.5");
+      expect(callArgs?.fastMode).toBe(true);
     });
   });
 
@@ -502,13 +628,11 @@ describe("agentCommand", () => {
 
       expect(loadModelCatalog).not.toHaveBeenCalled();
       expectLastRunProviderModel("openrouter", "openrouter/auto");
-      expect(modelSelectionModule.resolveThinkingDefault).toHaveBeenCalledWith(
-        expect.objectContaining({
-          provider: "openrouter",
-          model: "auto",
-          catalog: undefined,
-        }),
-      );
+      const thinkingDefaultCall = vi.mocked(modelSelectionModule.resolveThinkingDefault).mock
+        .calls[0]?.[0];
+      expect(thinkingDefaultCall?.provider).toBe("openrouter");
+      expect(thinkingDefaultCall?.model).toBe("openrouter/auto");
+      expect(thinkingDefaultCall?.catalog).toBeUndefined();
     });
   });
 
@@ -529,15 +653,11 @@ describe("agentCommand", () => {
       );
 
       const callArgs = getLastEmbeddedCall();
-      expect(callArgs).toEqual(
-        expect.objectContaining({
-          provider: "openrouter",
-          model: "openrouter/auto",
-          modelRun: true,
-          promptMode: "none",
-          disableTools: true,
-        }),
-      );
+      expect(callArgs?.provider).toBe("openrouter");
+      expect(callArgs?.model).toBe("openrouter/auto");
+      expect(callArgs?.modelRun).toBe(true);
+      expect(callArgs?.promptMode).toBe("none");
+      expect(callArgs?.disableTools).toBe(true);
     });
   });
 
@@ -582,16 +702,45 @@ describe("agentCommand", () => {
 
       expect(runTurn).not.toHaveBeenCalled();
       const callArgs = getLastEmbeddedCall();
-      expect(callArgs).toEqual(
-        expect.objectContaining({
-          provider: "openrouter",
-          model: "openrouter/auto",
-          prompt: "Reply with exactly OPENCLAW-MODEL-OK",
-          modelRun: true,
-          promptMode: "none",
-          disableTools: true,
-        }),
+      expect(callArgs?.provider).toBe("openrouter");
+      expect(callArgs?.model).toBe("openrouter/auto");
+      expect(callArgs?.prompt).toBe("Reply with exactly OPENCLAW-MODEL-OK");
+      expect(callArgs?.modelRun).toBe(true);
+      expect(callArgs?.promptMode).toBe("none");
+      expect(callArgs?.disableTools).toBe(true);
+    });
+  });
+
+  it("borrows session lookup data without returning cached mutable store objects", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const sessionKey = "agent:main:cache-borrow";
+      writeSessionStoreSeed(store, {
+        [sessionKey]: {
+          sessionId: "session-cache-borrow",
+          updatedAt: Date.now(),
+          thinkingLevel: "low",
+        },
+        "agent:main:other": {
+          sessionId: "session-other",
+          updatedAt: Date.now(),
+        },
+      });
+      mockConfig(home, store, { models: {} });
+
+      const prepared = await agentCommandTesting.prepareAgentCommandExecution(
+        {
+          message: "prepare only",
+          sessionKey,
+        },
+        runtime,
       );
+      const cached = loadSessionStore(store, { clone: false });
+
+      expect(prepared.sessionStore).not.toBe(cached);
+      expect(prepared.sessionEntry).not.toBe(cached[sessionKey]);
+      expect(prepared.sessionStore?.[sessionKey]).toBe(prepared.sessionEntry);
+      expect(prepared.sessionStore?.["agent:main:other"]).toBeUndefined();
     });
   });
 
@@ -612,7 +761,7 @@ describe("agentCommand", () => {
         runtime,
       );
 
-      const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
+      const callArgs = getLastEmbeddedCall();
       expect(callArgs?.sessionId).toBe("session-123");
       expect(callArgs?.sessionFile).toContain(
         `${path.dirname(resumeStore)}${path.sep}agents${path.sep}main${path.sep}sessions${path.sep}session-123.jsonl`,
@@ -636,7 +785,7 @@ describe("agentCommand", () => {
         });
       });
 
-      vi.mocked(runEmbeddedPiAgent).mockImplementationOnce(async (params) => {
+      vi.mocked(runEmbeddedAgent).mockImplementationOnce(async (params) => {
         const runId = (params as { runId?: string } | undefined)?.runId ?? "run";
         const data = { text: "hello", delta: "hello" };
         (
@@ -675,7 +824,7 @@ describe("agentCommand", () => {
         });
       });
 
-      vi.mocked(runEmbeddedPiAgent).mockImplementationOnce(async (params) => {
+      vi.mocked(runEmbeddedAgent).mockImplementationOnce(async (params) => {
         (
           params as {
             onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void;
@@ -727,7 +876,7 @@ describe("agentCommand", () => {
         { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
         { id: "gpt-5.4", name: "GPT-5.2", provider: "openai" },
       ]);
-      vi.mocked(runEmbeddedPiAgent)
+      vi.mocked(runEmbeddedAgent)
         .mockRejectedValueOnce(Object.assign(new Error("rate limited"), { status: 429 }))
         .mockResolvedValueOnce({
           payloads: [{ text: "ok" }],
@@ -746,7 +895,7 @@ describe("agentCommand", () => {
       );
 
       const attempts = vi
-        .mocked(runEmbeddedPiAgent)
+        .mocked(runEmbeddedAgent)
         .mock.calls.map((call) => ({ provider: call[0]?.provider, model: call[0]?.model }));
       expect(attempts).toEqual([
         { provider: "anthropic", model: "claude-opus-4-6" },
@@ -785,7 +934,7 @@ describe("agentCommand", () => {
         { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
         { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
       ]);
-      vi.mocked(runEmbeddedPiAgent).mockRejectedValueOnce(new Error("connect ECONNREFUSED"));
+      vi.mocked(runEmbeddedAgent).mockRejectedValueOnce(new Error("connect ECONNREFUSED"));
 
       await expect(
         agentCommand(
@@ -798,7 +947,7 @@ describe("agentCommand", () => {
       ).rejects.toThrow("connect ECONNREFUSED");
 
       const attempts = vi
-        .mocked(runEmbeddedPiAgent)
+        .mocked(runEmbeddedAgent)
         .mock.calls.map((call) => ({ provider: call[0]?.provider, model: call[0]?.model }));
       expect(attempts).toEqual([{ provider: "ollama", model: "qwen3.5:27b" }]);
     });
@@ -1034,6 +1183,59 @@ describe("agentCommand", () => {
       await expect(agentCommand({ message: "hi", agentId: "ghost" }, runtime)).rejects.toThrow(
         'Unknown agent id "ghost"',
       );
+    });
+  });
+
+  it("uses explicit session keys for embedded runs", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store, undefined, undefined, [{ id: "main" }, { id: "ops" }]);
+
+      await agentCommand({ message: "hi", sessionKey: "agent:ops:incident-42" }, runtime);
+
+      let callArgs = getLastEmbeddedCall();
+      expect(callArgs?.agentId).toBe("ops");
+      expect(callArgs?.sessionKey).toBe("agent:ops:incident-42");
+      expect(callArgs?.sessionFile).toContain(`${path.sep}agents${path.sep}ops${path.sep}sessions`);
+
+      await agentCommand({ message: "hi", agentId: "ops", sessionKey: "incident-42" }, runtime);
+
+      callArgs = getLastEmbeddedCall();
+      expect(callArgs?.agentId).toBe("ops");
+      expect(callArgs?.sessionKey).toBe("agent:ops:incident-42");
+
+      await agentCommand({ message: "hi", agentId: "ops", sessionKey: "global" }, runtime);
+
+      callArgs = getLastEmbeddedCall();
+      expect(callArgs?.agentId).toBe("ops");
+      expect(callArgs?.sessionKey).toBe("agent:ops:global");
+    });
+  });
+
+  it("scopes bare explicit session keys to the default agent for embedded runs", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store, undefined, undefined, [{ id: "ops", default: true }, { id: "main" }]);
+
+      await agentCommand({ message: "hi", sessionKey: "incident-42" }, runtime);
+
+      let callArgs = getLastEmbeddedCall();
+      expect(callArgs?.agentId).toBe("ops");
+      expect(callArgs?.sessionKey).toBe("agent:ops:incident-42");
+
+      await agentCommand({ message: "hi", sessionKey: "global" }, runtime);
+
+      callArgs = getLastEmbeddedCall();
+      expect(callArgs?.agentId).toBe("ops");
+      expect(callArgs?.sessionKey).toBe("global");
+      expect(callArgs?.sessionFile).toContain(`${path.sep}agents${path.sep}ops${path.sep}sessions`);
+
+      await agentCommand({ message: "hi", sessionKey: "unknown" }, runtime);
+
+      callArgs = getLastEmbeddedCall();
+      expect(callArgs?.agentId).toBe("ops");
+      expect(callArgs?.sessionKey).toBe("unknown");
+      expect(callArgs?.sessionFile).toContain(`${path.sep}agents${path.sep}ops${path.sep}sessions`);
     });
   });
 });

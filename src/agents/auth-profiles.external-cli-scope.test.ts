@@ -51,6 +51,7 @@ describe("external CLI auth scope", () => {
             fallbacks: ["openai/gpt-5.5"],
           },
           imageGenerationModel: "minimax-portal/image-01",
+          voiceModel: "elevenlabs/eleven_multilingual_v2",
           cliBackends: {
             "claude-cli": { command: "claude" },
           },
@@ -62,7 +63,9 @@ describe("external CLI auth scope", () => {
           {
             id: "worker",
             model: "opencode-go/kimi-k2.6",
-            agentRuntime: { id: "codex-app-server" },
+            models: {
+              "opencode-go/kimi-k2.6": { agentRuntime: { id: "codex-app-server" } },
+            },
             subagents: { model: { primary: "z.ai/glm-4.7" } },
           },
         ],
@@ -71,18 +74,16 @@ describe("external CLI auth scope", () => {
 
     const scope = resolveExternalCliAuthScopeFromConfig(cfg);
 
-    expect(scope?.providerIds).toEqual(
-      expect.arrayContaining([
-        "anthropic",
-        "openai",
-        "openai-codex",
-        "minimax-portal",
-        "codex-app-server",
-        "opencode-go",
-        "z.ai",
-        "zai",
-      ]),
-    );
+    expect(scope?.providerIds).toEqual([
+      "anthropic",
+      "codex-app-server",
+      "elevenlabs",
+      "minimax-portal",
+      "openai",
+      "openai-codex",
+      "opencode-go",
+      "z.ai",
+    ]);
     expect(scope?.providerIds).not.toContain("claude-cli");
     expect(scope?.profileIds).toContain("openai-codex:default");
   });
@@ -92,9 +93,11 @@ describe("external CLI auth scope", () => {
       agents: {
         defaults: {
           model: "openai/gpt-5.5",
-          agentRuntime: { id: "claude-cli" },
           cliBackends: {
             "claude-cli": { command: "claude" },
+          },
+          models: {
+            "openai/gpt-5.5": { agentRuntime: { id: "claude-cli" } },
           },
         },
       },

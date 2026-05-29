@@ -13,6 +13,23 @@ vi.mock("./channel-contract-api.js", () => ({
   loadChannelSecretContractApi,
 }));
 
+function requireLoadChannelSecretContractApiCall(): {
+  channelId?: unknown;
+  config?: unknown;
+  env?: unknown;
+  loadablePluginOrigins?: unknown;
+} {
+  const [call] = loadChannelSecretContractApi.mock.calls;
+  if (!call) {
+    throw new Error("expected loadChannelSecretContractApi call");
+  }
+  const [params] = call;
+  if (typeof params !== "object" || params === null || Array.isArray(params)) {
+    throw new Error("expected loadChannelSecretContractApi params to be an object");
+  }
+  return params;
+}
+
 describe("runtime channel config collectors", () => {
   beforeEach(() => {
     getBootstrapChannelSecrets.mockReset();
@@ -27,27 +44,27 @@ describe("runtime channel config collectors", () => {
       collectRuntimeConfigAssignments,
     });
     getBootstrapChannelSecrets.mockReturnValue(undefined);
-
-    collectChannelConfigAssignments({
-      config: {
-        channels: {
-          bluebubbles: {
-            accounts: {
-              ops: {},
-            },
+    const config = {
+      channels: {
+        imessage: {
+          accounts: {
+            ops: {},
           },
         },
-      } as OpenClawConfig,
+      },
+    } as OpenClawConfig;
+
+    collectChannelConfigAssignments({
+      config,
       defaults: undefined,
       context: {} as ResolverContext,
     });
 
-    expect(loadChannelSecretContractApi).toHaveBeenCalledWith({
-      channelId: "bluebubbles",
-      config: expect.any(Object),
-      env: undefined,
-      loadablePluginOrigins: undefined,
-    });
+    const loadCall = requireLoadChannelSecretContractApiCall();
+    expect(loadCall.channelId).toBe("imessage");
+    expect(loadCall.config).toBe(config);
+    expect(loadCall.env).toBeUndefined();
+    expect(loadCall.loadablePluginOrigins).toBeUndefined();
     expect(collectRuntimeConfigAssignments).toHaveBeenCalledOnce();
     expect(getBootstrapChannelSecrets).not.toHaveBeenCalled();
   });
@@ -60,23 +77,23 @@ describe("runtime channel config collectors", () => {
     getBootstrapChannelSecrets.mockReturnValue({
       collectRuntimeConfigAssignments,
     });
+    const config = {
+      channels: {
+        legacy: {},
+      },
+    } as OpenClawConfig;
 
     collectChannelConfigAssignments({
-      config: {
-        channels: {
-          legacy: {},
-        },
-      } as OpenClawConfig,
+      config,
       defaults: undefined,
       context: {} as ResolverContext,
     });
 
-    expect(loadChannelSecretContractApi).toHaveBeenCalledWith({
-      channelId: "legacy",
-      config: expect.any(Object),
-      env: undefined,
-      loadablePluginOrigins: undefined,
-    });
+    const loadCall = requireLoadChannelSecretContractApiCall();
+    expect(loadCall.channelId).toBe("legacy");
+    expect(loadCall.config).toBe(config);
+    expect(loadCall.env).toBeUndefined();
+    expect(loadCall.loadablePluginOrigins).toBeUndefined();
     expect(getBootstrapChannelSecrets).toHaveBeenCalledWith("legacy");
     expect(collectRuntimeConfigAssignments).toHaveBeenCalledOnce();
   });

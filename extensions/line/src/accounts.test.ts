@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resolveLineAccount,
@@ -196,10 +196,9 @@ describe("LINE accounts", () => {
         },
       };
 
-      const account = resolveLineAccount({ cfg });
-      expect(account.channelAccessToken).toBe("");
-      expect(account.channelSecret).toBe("");
-      expect(account.tokenSource).toBe("none");
+      expect(() => resolveLineAccount({ cfg })).toThrow(
+        /LINE credential file.*must not be a symlink/,
+      );
     });
   });
 

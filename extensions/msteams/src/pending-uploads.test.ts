@@ -8,6 +8,14 @@ import {
   storePendingUpload,
 } from "./pending-uploads.js";
 
+function requirePendingUpload(id: string) {
+  const upload = getPendingUpload(id);
+  if (!upload) {
+    throw new Error(`expected pending upload ${id}`);
+  }
+  return upload;
+}
+
 describe("pending-uploads", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -28,10 +36,13 @@ describe("pending-uploads", () => {
         conversationId: "conv-1",
       });
 
-      const upload = getPendingUpload(id);
-      expect(upload).toBeDefined();
-      expect(upload?.filename).toBe("file.txt");
-      expect(upload?.conversationId).toBe("conv-1");
+      const upload = requirePendingUpload(id);
+      expect(upload.id).toBe(id);
+      expect(upload.buffer.toString()).toBe("data");
+      expect(upload.filename).toBe("file.txt");
+      expect(upload.contentType).toBe("text/plain");
+      expect(upload.conversationId).toBe("conv-1");
+      expect(upload.createdAt).toBe(Date.now());
     });
 
     it("stores consentCardActivityId when provided", () => {
@@ -64,7 +75,7 @@ describe("pending-uploads", () => {
         conversationId: "conv-1",
       });
 
-      expect(getPendingUpload(id)).toBeDefined();
+      expect(requirePendingUpload(id).filename).toBe("file.txt");
       vi.advanceTimersByTime(5 * 60 * 1000 + 1);
       // After TTL the in-memory check also gates access
       expect(getPendingUpload(id)).toBeUndefined();
@@ -99,19 +110,20 @@ describe("pending-uploads", () => {
       expect(getPendingUploadCount()).toBe(0);
     });
 
-    it("is a no-op for undefined id", () => {
+    it("leaves existing uploads untouched for undefined id", () => {
       storePendingUpload({
         buffer: Buffer.from("data"),
         filename: "file.txt",
         conversationId: "conv-1",
       });
 
-      expect(() => removePendingUpload(undefined)).not.toThrow();
+      removePendingUpload(undefined);
       expect(getPendingUploadCount()).toBe(1);
     });
 
-    it("is a no-op for unknown id", () => {
-      expect(() => removePendingUpload("non-existent-id")).not.toThrow();
+    it("leaves the store empty for unknown ids", () => {
+      removePendingUpload("non-existent-id");
+      expect(getPendingUploadCount()).toBe(0);
     });
   });
 
@@ -144,8 +156,9 @@ describe("pending-uploads", () => {
       expect(getPendingUpload(id)?.consentCardActivityId).toBe("activity-xyz");
     });
 
-    it("is a no-op for unknown upload id", () => {
-      expect(() => setPendingUploadActivityId("non-existent", "activity-xyz")).not.toThrow();
+    it("leaves the store empty for unknown upload ids", () => {
+      setPendingUploadActivityId("non-existent", "activity-xyz");
+      expect(getPendingUploadCount()).toBe(0);
     });
   });
 

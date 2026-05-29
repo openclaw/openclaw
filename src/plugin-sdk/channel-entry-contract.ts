@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { emptyChannelConfigSchema } from "../channels/plugins/config-schema.js";
+import type { ChannelOutboundAdapter } from "../channels/plugins/types.adapters.js";
 import type { ChannelConfigSchema } from "../channels/plugins/types.config.js";
 import type { ChannelLegacyStateMigrationPlan } from "../channels/plugins/types.core.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
@@ -52,6 +53,7 @@ type DefineBundledChannelEntryOptions<TPlugin = ChannelPlugin> = {
   description: string;
   importMetaUrl: string;
   plugin: BundledEntryModuleRef;
+  outbound?: BundledEntryModuleRef;
   secrets?: BundledEntryModuleRef;
   configSchema?: ChannelEntryConfigSchema<TPlugin> | (() => ChannelEntryConfigSchema<TPlugin>);
   runtime?: BundledEntryModuleRef;
@@ -68,6 +70,7 @@ type DefineBundledChannelSetupEntryOptions = {
   runtime?: BundledEntryModuleRef;
   legacyStateMigrations?: BundledEntryModuleRef;
   legacySessionSurface?: BundledEntryModuleRef;
+  registerSetupRuntime?: (api: OpenClawPluginApi) => void;
   features?: BundledChannelSetupEntryFeatures;
 };
 
@@ -108,6 +111,9 @@ export type BundledChannelEntryContract<TPlugin = ChannelPlugin> = {
   features?: BundledChannelEntryFeatures;
   register: (api: OpenClawPluginApi) => void;
   loadChannelPlugin: (options?: BundledEntryModuleLoadOptions) => TPlugin;
+  loadChannelOutbound?: (
+    options?: BundledEntryModuleLoadOptions,
+  ) => ChannelOutboundAdapter | undefined;
   loadChannelSecrets?: (
     options?: BundledEntryModuleLoadOptions,
   ) => ChannelPlugin["secrets"] | undefined;
@@ -130,6 +136,7 @@ export type BundledChannelSetupEntryContract<TPlugin = ChannelPlugin> = {
     options?: BundledEntryModuleLoadOptions,
   ) => BundledChannelLegacySessionSurface;
   setChannelRuntime?: (runtime: PluginRuntime) => void;
+  registerSetupRuntime?: (api: OpenClawPluginApi) => void;
   features?: BundledChannelSetupEntryFeatures;
 };
 
@@ -139,6 +146,8 @@ export type BundledEntryModuleLoadOptions = {
 
 const nodeRequire = createRequire(import.meta.url);
 const moduleLoaders: PluginModuleLoaderCache = new Map();
+const entryBoundaryInfoCache = new Map<string, BundledEntryBoundaryInfo>();
+const resolvedModulePaths = new Map<string, string>();
 const loadedModuleExports = new Map<string, unknown>();
 const disableBundledEntrySourceFallbackEnv = "OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK";
 
@@ -169,6 +178,38 @@ type BundledEntryModuleCandidate = {
   boundaryRoot: string;
 };
 
+type BundledEntryBoundaryInfo = {
+  importerPath: string;
+  importerDir: string;
+  boundaryRoot: string;
+  packageRoot: string | null;
+};
+
+function resolveBundledEntryBoundaryInfo(importMetaUrl: string): BundledEntryBoundaryInfo {
+  const cacheKey = `${process.argv[1] ?? ""}\0${importMetaUrl}`;
+  const cached = entryBoundaryInfoCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+  const importerPath = fileURLToPath(importMetaUrl);
+  const importerDir = path.dirname(importerPath);
+  const boundaryRoot = path.dirname(importerPath);
+  const info = {
+    importerPath,
+    importerDir,
+    boundaryRoot,
+    packageRoot:
+      resolveLoaderPackageRoot({
+        modulePath: importerPath,
+        moduleUrl: importMetaUrl,
+        cwd: importerDir,
+        argv1: process.argv[1],
+      }) ?? null,
+  };
+  entryBoundaryInfoCache.set(cacheKey, info);
+  return info;
+}
+
 function addBundledEntryCandidates(
   candidates: BundledEntryModuleCandidate[],
   basePath: string,
@@ -188,9 +229,8 @@ function resolveBundledEntryModuleCandidates(
   importMetaUrl: string,
   specifier: string,
 ): BundledEntryModuleCandidate[] {
-  const importerPath = fileURLToPath(importMetaUrl);
-  const importerDir = path.dirname(importerPath);
-  const boundaryRoot = resolveEntryBoundaryRoot(importMetaUrl);
+  const { importerPath, importerDir, boundaryRoot, packageRoot } =
+    resolveBundledEntryBoundaryInfo(importMetaUrl);
   const candidates: BundledEntryModuleCandidate[] = [];
   const primaryResolved = path.resolve(importerDir, specifier);
   addBundledEntryCandidates(candidates, primaryResolved, boundaryRoot);
@@ -204,12 +244,6 @@ function resolveBundledEntryModuleCandidates(
     );
   }
 
-  const packageRoot = resolveLoaderPackageRoot({
-    modulePath: importerPath,
-    moduleUrl: importMetaUrl,
-    cwd: importerDir,
-    argv1: process.argv[1],
-  });
   if (!packageRoot) {
     return candidates;
   }
@@ -277,7 +311,17 @@ function formatBundledEntryModuleOpenFailure(params: {
   ].join(" ");
 }
 
+function createBundledEntryModulePathCacheKey(importMetaUrl: string, specifier: string): string {
+  const sourceFallbackDisabled = isTruthyEnvFlag(process.env[disableBundledEntrySourceFallbackEnv]);
+  return `${sourceFallbackDisabled ? "1" : "0"}\0${importMetaUrl}\0${specifier}`;
+}
+
 function resolveBundledEntryModulePath(importMetaUrl: string, specifier: string): string {
+  const cacheKey = createBundledEntryModulePathCacheKey(importMetaUrl, specifier);
+  const cached = resolvedModulePaths.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
   const candidates = resolveBundledEntryModuleCandidates(importMetaUrl, specifier);
   const fallbackCandidate = candidates[0] ?? {
     path: path.resolve(path.dirname(fileURLToPath(importMetaUrl)), specifier),
@@ -299,6 +343,7 @@ function resolveBundledEntryModulePath(importMetaUrl: string, specifier: string)
     });
     if (opened.ok) {
       fs.closeSync(opened.fd);
+      resolvedModulePaths.set(cacheKey, opened.path);
       return opened.path;
     }
     firstFailure ??= { candidate, failure: opened };
@@ -435,6 +480,7 @@ export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
   description,
   importMetaUrl,
   plugin,
+  outbound,
   secrets,
   configSchema,
   runtime,
@@ -449,6 +495,14 @@ export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
       : ((configSchema ?? emptyChannelConfigSchema()) as ChannelEntryConfigSchema<TPlugin>);
   const loadChannelPlugin = (options?: BundledEntryModuleLoadOptions) =>
     loadBundledEntryExportSync<TPlugin>(importMetaUrl, plugin, options);
+  const loadChannelOutbound = outbound
+    ? (options?: BundledEntryModuleLoadOptions) =>
+        loadBundledEntryExportSync<ChannelOutboundAdapter | undefined>(
+          importMetaUrl,
+          outbound,
+          options,
+        )
+    : undefined;
   const loadChannelSecrets = secrets
     ? (options?: BundledEntryModuleLoadOptions) =>
         loadBundledEntryExportSync<ChannelPlugin["secrets"] | undefined>(
@@ -511,6 +565,7 @@ export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
       profile("bundled-register:registerFull", () => registerFull?.(api));
     },
     loadChannelPlugin,
+    ...(loadChannelOutbound ? { loadChannelOutbound } : {}),
     ...(loadChannelSecrets ? { loadChannelSecrets } : {}),
     ...(loadChannelAccountInspector ? { loadChannelAccountInspector } : {}),
     ...(setChannelRuntime ? { setChannelRuntime } : {}),
@@ -524,6 +579,7 @@ export function defineBundledChannelSetupEntry<TPlugin = ChannelPlugin>({
   runtime,
   legacyStateMigrations,
   legacySessionSurface,
+  registerSetupRuntime,
   features,
 }: DefineBundledChannelSetupEntryOptions): BundledChannelSetupEntryContract<TPlugin> {
   // Bundled setup entries stay on a light path during setup-only/setup-runtime loads.
@@ -571,6 +627,7 @@ export function defineBundledChannelSetupEntry<TPlugin = ChannelPlugin>({
     ...(loadLegacyStateMigrationDetector ? { loadLegacyStateMigrationDetector } : {}),
     ...(loadLegacySessionSurface ? { loadLegacySessionSurface } : {}),
     ...(setChannelRuntime ? { setChannelRuntime } : {}),
+    ...(registerSetupRuntime ? { registerSetupRuntime } : {}),
     ...(features ? { features } : {}),
   };
 }

@@ -69,7 +69,7 @@ That makes the common Codex debugging loop short: notice the bad behavior in
 Telegram, Discord, or another channel, run `/diagnostics`, approve once, share
 the report with support, then run the printed `codex resume <thread-id>` command
 locally if you want to inspect the native Codex thread yourself. See
-[Codex harness](/plugins/codex-harness#inspect-a-codex-thread-from-the-cli) for
+[Codex harness](/plugins/codex-harness#inspect-codex-threads-locally) for
 that inspection workflow.
 
 ## What the export contains
@@ -188,6 +188,21 @@ diagnostic event collection:
 
 Disabling diagnostics reduces bug-report detail. It does not affect normal
 Gateway logging.
+
+Critical memory pressure snapshots are off by default. To keep diagnostics
+events and also capture the pre-OOM stability snapshot:
+
+```json5
+{
+  diagnostics: {
+    memoryPressureSnapshot: true,
+  },
+}
+```
+
+Use this only on hosts that can tolerate the extra file-system scan and snapshot
+write during critical memory pressure. Normal memory pressure events still
+record RSS, heap, threshold, and growth facts when the snapshot is off.
 
 ## Related
 

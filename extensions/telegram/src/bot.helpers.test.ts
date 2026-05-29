@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { resolveTelegramGroupAllowFromContext, resolveTelegramStreamMode } from "./bot/helpers.js";
 import { resolveTelegramDraftStreamingChunking } from "./draft-chunking.js";
@@ -50,7 +50,7 @@ describe("resolveTelegramGroupAllowFromContext", () => {
     });
 
     expect(context.effectiveGroupAllow.entries).toEqual(["12345"]);
-    expect(context.effectiveGroupAllow.invalidEntries).toEqual([]);
+    expect(context.effectiveGroupAllow.invalidEntries).toStrictEqual([]);
   });
 });
 

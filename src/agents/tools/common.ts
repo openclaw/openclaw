@@ -1,20 +1,21 @@
-import type {
-  AgentTool,
-  AgentToolResult,
-  AgentToolUpdateCallback,
-} from "@mariozechner/pi-agent-core";
 import type { TSchema } from "typebox";
 import { readLocalFileSafely } from "../../infra/fs-safe.js";
 import { detectMime } from "../../media/mime.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
+import {
+  asPositiveSafeInteger,
+  asSafeIntegerInRange,
+  parseStrictFiniteNumber,
+} from "../../shared/number-coercion.js";
+import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import type { ImageSanitizationLimits } from "../image-sanitization.js";
+import type { AgentTool, AgentToolResult, AgentToolUpdateCallback } from "../runtime/index.js";
 import { sanitizeToolResultImages } from "../tool-images.js";
 
 export type AgentToolWithMeta<TParameters extends TSchema, TResult> = AgentTool<
   TParameters,
   TResult
 > & {
-  ownerOnly?: boolean;
   displaySummary?: string;
 };
 
@@ -24,13 +25,12 @@ type ErasedAgentToolExecute = {
     toolCallId: string,
     params: unknown,
     signal?: AbortSignal,
-    onUpdate?: AgentToolUpdateCallback<unknown>,
+    onUpdate?: AgentToolUpdateCallback,
   ): Promise<AgentToolResult<unknown>>;
 };
 
-export type AnyAgentTool = Omit<AgentTool<TSchema, unknown>, "execute"> &
+export type AnyAgentTool = Omit<AgentTool, "execute"> &
   ErasedAgentToolExecute & {
-    ownerOnly?: boolean;
     displaySummary?: string;
   };
 
@@ -51,8 +51,6 @@ export type ActionGate<T extends Record<string, boolean | undefined>> = (
   key: keyof T,
   defaultValue?: boolean,
 ) => boolean;
-
-export const OWNER_ONLY_TOOL_ERROR = "Tool restricted to owner senders.";
 
 export class ToolInputError extends Error {
   readonly status: number = 400;
@@ -121,6 +119,23 @@ export function readStringParam(
   return value;
 }
 
+/**
+ * Normalize tool model override input.
+ * - empty/whitespace => undefined
+ * - "default" (case-insensitive) => undefined (sentinel: reset/fallback)
+ * - otherwise returns trimmed explicit model string
+ */
+export function normalizeToolModelOverride(value: string | undefined): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.toLowerCase() === "default") {
+    return undefined;
+  }
+  return trimmed;
+}
+
 export function readStringOrNumberParam(
   params: Record<string, unknown>,
   key: string,
@@ -146,9 +161,23 @@ export function readStringOrNumberParam(
 export function readNumberParam(
   params: Record<string, unknown>,
   key: string,
-  options: { required?: boolean; label?: string; integer?: boolean; strict?: boolean } = {},
+  options: {
+    required?: boolean;
+    label?: string;
+    integer?: boolean;
+    strict?: boolean;
+    positiveInteger?: boolean;
+    nonNegativeInteger?: boolean;
+  } = {},
 ): number | undefined {
-  const { required = false, label = key, integer = false, strict = false } = options;
+  const {
+    required = false,
+    label = key,
+    integer = false,
+    strict = false,
+    positiveInteger = false,
+    nonNegativeInteger = false,
+  } = options;
   const raw = readParamRaw(params, key);
   let value: number | undefined;
   if (typeof raw === "number" && Number.isFinite(raw)) {
@@ -156,8 +185,8 @@ export function readNumberParam(
   } else if (typeof raw === "string") {
     const trimmed = raw.trim();
     if (trimmed) {
-      const parsed = strict ? Number(trimmed) : Number.parseFloat(trimmed);
-      if (Number.isFinite(parsed)) {
+      const parsed = strict ? parseStrictFiniteNumber(trimmed) : Number.parseFloat(trimmed);
+      if (parsed !== undefined && Number.isFinite(parsed)) {
         value = parsed;
       }
     }
@@ -168,7 +197,90 @@ export function readNumberParam(
     }
     return undefined;
   }
+  if (positiveInteger) {
+    return asPositiveSafeInteger(value);
+  }
+  if (nonNegativeInteger) {
+    return asSafeIntegerInRange(value, { min: 0 });
+  }
   return integer ? Math.trunc(value) : value;
+}
+
+export function readPositiveIntegerParam(
+  params: Record<string, unknown>,
+  key: string,
+  options: {
+    message?: string;
+    max?: number;
+  } = {},
+): number | undefined {
+  const value = readNumberParam(params, key, {
+    positiveInteger: true,
+    strict: true,
+  });
+  if (value === undefined && readParamRaw(params, key) != null) {
+    throw new ToolInputError(options.message ?? `${key} must be a positive integer`);
+  }
+  if (value !== undefined && options.max !== undefined && value > options.max) {
+    throw new ToolInputError(options.message ?? `${key} must be a positive integer`);
+  }
+  return value;
+}
+
+export function readNonNegativeIntegerParam(
+  params: Record<string, unknown>,
+  key: string,
+  options: {
+    message?: string;
+    max?: number;
+  } = {},
+): number | undefined {
+  const value = readNumberParam(params, key, {
+    nonNegativeInteger: true,
+    strict: true,
+  });
+  if (value === undefined && readParamRaw(params, key) != null) {
+    throw new ToolInputError(options.message ?? `${key} must be a non-negative integer`);
+  }
+  if (value !== undefined && options.max !== undefined && value > options.max) {
+    throw new ToolInputError(options.message ?? `${key} must be a non-negative integer`);
+  }
+  return value;
+}
+
+export function readFiniteNumberParam(
+  params: Record<string, unknown>,
+  key: string,
+  options: {
+    message?: string;
+    min?: number;
+    max?: number;
+    minExclusive?: boolean;
+    maxExclusive?: boolean;
+  } = {},
+): number | undefined {
+  const value = readNumberParam(params, key, {
+    strict: true,
+  });
+  if (value === undefined) {
+    if (readParamRaw(params, key) != null) {
+      throw new ToolInputError(options.message ?? `${key} must be a finite number`);
+    }
+    return undefined;
+  }
+  if (options.min !== undefined) {
+    const below = options.minExclusive ? value <= options.min : value < options.min;
+    if (below) {
+      throw new ToolInputError(options.message ?? `${key} must be a finite number`);
+    }
+  }
+  if (options.max !== undefined) {
+    const above = options.maxExclusive ? value >= options.max : value > options.max;
+    if (above) {
+      throw new ToolInputError(options.message ?? `${key} must be a finite number`);
+    }
+  }
+  return value;
 }
 
 export function readStringArrayParam(
@@ -189,10 +301,7 @@ export function readStringArrayParam(
   const { required = false, label = key } = options;
   const raw = readParamRaw(params, key);
   if (Array.isArray(raw)) {
-    const values = raw
-      .filter((entry) => typeof entry === "string")
-      .map((entry) => entry.trim())
-      .filter(Boolean);
+    const values = normalizeStringEntries(raw.filter((entry) => typeof entry === "string"));
     if (values.length === 0) {
       if (required) {
         throw new ToolInputError(`${label} required`);
@@ -284,21 +393,6 @@ export function payloadTextResult<TDetails>(payload: TDetails): AgentToolResult<
 
 export function jsonResult(payload: unknown): AgentToolResult<unknown> {
   return textResult(JSON.stringify(payload, null, 2), payload);
-}
-
-export function wrapOwnerOnlyToolExecution(
-  tool: AnyAgentTool,
-  senderIsOwner: boolean,
-): AnyAgentTool {
-  if (tool.ownerOnly !== true || senderIsOwner || !tool.execute) {
-    return tool;
-  }
-  return {
-    ...tool,
-    execute: async () => {
-      throw new Error(OWNER_ONLY_TOOL_ERROR);
-    },
-  };
 }
 
 export async function imageResult(params: {

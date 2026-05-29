@@ -11,7 +11,7 @@ import {
   isRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MSTeamsAttachmentLike } from "./types.js";
 
 type InlineImageCandidate =
@@ -62,6 +62,7 @@ const DEFAULT_MEDIA_HOST_ALLOWLIST = [
   "media.ams.skype.com",
   // Bot Framework attachment URLs
   "trafficmanager.net",
+  "botframework.azure.cn",
   "blob.core.windows.net",
   "azureedge.net",
   "microsoft.com",
@@ -73,6 +74,7 @@ const DEFAULT_MEDIA_AUTH_HOST_ALLOWLIST = [
   // Bot Framework Service URL (smba.trafficmanager.net) used for outbound
   // replies and inbound attachment downloads (clipboard-pasted images).
   "smba.trafficmanager.net",
+  "botframework.azure.cn",
   "graph.microsoft.com",
   "graph.microsoft.us",
   "graph.microsoft.de",
@@ -307,8 +309,36 @@ export function extractHtmlFromAttachment(att: MSTeamsAttachmentLike): string | 
   return text;
 }
 
-function isLikelyBase64Payload(value: string): boolean {
-  return /^[A-Za-z0-9+/=\r\n]+$/.test(value);
+function canonicalizeInlineBase64Payload(value: string): string | undefined {
+  let cleaned = "";
+  let padding = 0;
+  let sawPadding = false;
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 0x20) {
+      continue;
+    }
+    if (code === 0x3d) {
+      padding += 1;
+      if (padding > 2) {
+        return undefined;
+      }
+      sawPadding = true;
+      cleaned += "=";
+      continue;
+    }
+    const isDataChar =
+      (code >= 0x41 && code <= 0x5a) ||
+      (code >= 0x61 && code <= 0x7a) ||
+      (code >= 0x30 && code <= 0x39) ||
+      code === 0x2b ||
+      code === 0x2f;
+    if (sawPadding || !isDataChar) {
+      return undefined;
+    }
+    cleaned += value[index];
+  }
+  return cleaned && cleaned.length % 4 === 0 ? cleaned : undefined;
 }
 
 function decodeDataImageWithLimits(
@@ -325,11 +355,12 @@ function decodeDataImageWithLimits(
     return { candidate: null, estimatedBytes: 0 };
   }
   const payload = match[3] ?? "";
-  if (!payload || !isLikelyBase64Payload(payload)) {
+  const canonicalPayload = canonicalizeInlineBase64Payload(payload);
+  if (!canonicalPayload) {
     return { candidate: null, estimatedBytes: 0 };
   }
 
-  const estimatedBytes = estimateBase64DecodedBytes(payload);
+  const estimatedBytes = estimateBase64DecodedBytes(canonicalPayload);
   if (estimatedBytes <= 0) {
     return { candidate: null, estimatedBytes: 0 };
   }
@@ -338,7 +369,7 @@ function decodeDataImageWithLimits(
   }
 
   try {
-    const data = Buffer.from(payload, "base64");
+    const data = Buffer.from(canonicalPayload, "base64");
     return {
       candidate: { kind: "data", data, contentType, placeholder: "<media:image>" },
       estimatedBytes,
@@ -540,6 +571,16 @@ export async function safeFetch(params: {
 
   if (!isUrlAllowed(currentUrl, params.allowHosts)) {
     throw new Error(`Initial download URL blocked: ${currentUrl}`);
+  }
+
+  // Authorization is only allowed on explicitly auth-allowlisted hosts, including
+  // the first hop. Redirect hops apply the same rule below before following.
+  if (
+    currentHeaders.has("authorization") &&
+    params.authorizationAllowHosts &&
+    !isUrlAllowed(currentUrl, params.authorizationAllowHosts)
+  ) {
+    currentHeaders.delete("authorization");
   }
 
   if (resolveFn) {

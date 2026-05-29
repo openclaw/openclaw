@@ -14,9 +14,15 @@ import {
   resolveAgentModelFallbacksOverride,
 } from "./agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
+import { findModelInCatalog } from "./model-catalog-lookup.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
-export { resolveThinkingDefault } from "./model-thinking-default.js";
+import { splitTrailingAuthProfile } from "./model-ref-profile.js";
+export {
+  resolveThinkingDefault,
+  resolveThinkingDefaultWithRuntimeCatalog,
+} from "./model-thinking-default.js";
 import {
+  type ModelManifestNormalizationContext,
   type ModelRef,
   findNormalizedProviderKey,
   findNormalizedProviderValue,
@@ -47,7 +53,7 @@ import {
   type ModelRefStatus,
 } from "./model-selection-shared.js";
 
-export type { ModelAliasIndex, ModelRef, ModelRefStatus };
+export type { ModelAliasIndex, ModelManifestNormalizationContext, ModelRef, ModelRefStatus };
 
 export type ThinkLevel =
   | "off"
@@ -200,15 +206,18 @@ export function resolveAllowlistModelKey(
   raw: string,
   defaultProvider: string,
   cfg?: OpenClawConfig,
+  manifestPlugins?: ModelManifestNormalizationContext["manifestPlugins"],
 ): string | null {
-  return resolveAllowlistModelKeyFromShared({ cfg, raw, defaultProvider });
+  return resolveAllowlistModelKeyFromShared({ cfg, raw, defaultProvider, manifestPlugins });
 }
 
-export function resolveDefaultModelForAgent(params: {
-  cfg: OpenClawConfig;
-  agentId?: string;
-  allowPluginNormalization?: boolean;
-}): ModelRef {
+export function resolveDefaultModelForAgent(
+  params: {
+    cfg: OpenClawConfig;
+    agentId?: string;
+    allowPluginNormalization?: boolean;
+  } & ModelManifestNormalizationContext,
+): ModelRef {
   const agentModelOverride = params.agentId
     ? resolveAgentEffectiveModelPrimary(params.cfg, params.agentId)
     : undefined;
@@ -233,7 +242,72 @@ export function resolveDefaultModelForAgent(params: {
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
     allowPluginNormalization: params.allowPluginNormalization,
+    manifestPlugins: params.manifestPlugins,
   });
+}
+
+export async function canonicalizeCaseOnlyCatalogModelRef(params: {
+  raw: string | undefined;
+  cfg?: OpenClawConfig;
+  defaultProvider: string;
+  loadCatalog: () => Promise<ModelCatalogEntry[]>;
+  aliasIndex?: ModelAliasIndex;
+  allowManifestNormalization?: boolean;
+  allowPluginNormalization?: boolean;
+  preserveAuthProfile?: boolean;
+}): Promise<string | undefined> {
+  const rawModel = normalizeOptionalString(params.raw);
+  if (!rawModel) {
+    return undefined;
+  }
+  const split = splitTrailingAuthProfile(rawModel);
+  if (shouldKeepProfileQualifiedModelRefRaw(split.profile, params.preserveAuthProfile)) {
+    return rawModel;
+  }
+  if (!isCaseOnlyProviderModelRef(split.model)) {
+    return rawModel;
+  }
+  const resolved = resolveModelRefFromString({
+    cfg: params.cfg,
+    raw: split.model,
+    defaultProvider: params.defaultProvider,
+    aliasIndex: params.aliasIndex,
+    allowManifestNormalization: params.allowManifestNormalization,
+    allowPluginNormalization: params.allowPluginNormalization,
+  });
+  if (!resolved) {
+    return rawModel;
+  }
+  const entry = findModelInCatalog(
+    await params.loadCatalog(),
+    resolved.ref.provider,
+    resolved.ref.model,
+  );
+  return entry ? formatCatalogModelRef(entry, split.profile) : rawModel;
+}
+
+function hasExplicitProviderModelRef(raw: string): boolean {
+  const slash = raw.indexOf("/");
+  return slash > 0 && slash < raw.length - 1;
+}
+
+function isCaseOnlyProviderModelRef(raw: string): boolean {
+  return hasExplicitProviderModelRef(raw) && raw !== raw.toLowerCase();
+}
+
+function shouldKeepProfileQualifiedModelRefRaw(
+  profile: string | undefined,
+  preserveAuthProfile: boolean | undefined,
+): boolean {
+  return Boolean(profile && preserveAuthProfile === false);
+}
+
+function formatCatalogModelRef(entry: ModelCatalogEntry, profile: string | undefined): string {
+  return appendAuthProfileSuffix(`${entry.provider}/${entry.id}`, profile);
+}
+
+function appendAuthProfileSuffix(modelRef: string, profile: string | undefined): string {
+  return profile ? `${modelRef}@${profile}` : modelRef;
 }
 
 function resolveAllowedFallbacks(params: { cfg: OpenClawConfig; agentId?: string }): string[] {
@@ -253,8 +327,8 @@ export function resolveSubagentConfiguredModelSelection(params: {
   const agentConfig = resolveAgentConfig(params.cfg, params.agentId);
   return (
     normalizeModelSelection(agentConfig?.subagents?.model) ??
-    normalizeModelSelection(agentConfig?.model) ??
-    normalizeModelSelection(params.cfg.agents?.defaults?.subagents?.model)
+    normalizeModelSelection(params.cfg.agents?.defaults?.subagents?.model) ??
+    normalizeModelSelection(agentConfig?.model)
   );
 }
 
@@ -302,13 +376,15 @@ export function resolveSubagentSpawnModelSelection(params: {
   return resolveModelThroughAliases(raw, aliasIndex);
 }
 
-export function buildAllowedModelSet(params: {
-  cfg: OpenClawConfig;
-  catalog: ModelCatalogEntry[];
-  defaultProvider: string;
-  defaultModel?: string;
-  agentId?: string;
-}): {
+export function buildAllowedModelSet(
+  params: {
+    cfg: OpenClawConfig;
+    catalog: ModelCatalogEntry[];
+    defaultProvider: string;
+    defaultModel?: string;
+    agentId?: string;
+  } & ModelManifestNormalizationContext,
+): {
   allowAny: boolean;
   allowedCatalog: ModelCatalogEntry[];
   allowedKeys: Set<string>;
@@ -322,16 +398,19 @@ export function buildAllowedModelSet(params: {
       cfg: params.cfg,
       agentId: params.agentId,
     }),
+    manifestPlugins: params.manifestPlugins,
   });
 }
 
-export function getModelRefStatus(params: {
-  cfg: OpenClawConfig;
-  catalog: ModelCatalogEntry[];
-  ref: ModelRef;
-  defaultProvider: string;
-  defaultModel?: string;
-}): ModelRefStatus {
+export function getModelRefStatus(
+  params: {
+    cfg: OpenClawConfig;
+    catalog: ModelCatalogEntry[];
+    ref: ModelRef;
+    defaultProvider: string;
+    defaultModel?: string;
+  } & ModelManifestNormalizationContext,
+): ModelRefStatus {
   return getModelRefStatusWithFallbackModels({
     cfg: params.cfg,
     catalog: params.catalog,
@@ -341,6 +420,7 @@ export function getModelRefStatus(params: {
     fallbackModels: resolveAllowedFallbacks({
       cfg: params.cfg,
     }),
+    manifestPlugins: params.manifestPlugins,
   });
 }
 
@@ -350,7 +430,7 @@ function getModelRefStatusForResolve(
     catalog: ModelCatalogEntry[];
     defaultProvider: string;
     defaultModel?: string;
-  },
+  } & ModelManifestNormalizationContext,
   ref: ModelRef,
 ): ModelRefStatus {
   return getModelRefStatus({
@@ -359,16 +439,19 @@ function getModelRefStatusForResolve(
     ref,
     defaultProvider: params.defaultProvider,
     defaultModel: params.defaultModel,
+    manifestPlugins: params.manifestPlugins,
   });
 }
 
-export function resolveAllowedModelRef(params: {
-  cfg: OpenClawConfig;
-  catalog: ModelCatalogEntry[];
-  raw: string;
-  defaultProvider: string;
-  defaultModel?: string;
-}):
+export function resolveAllowedModelRef(
+  params: {
+    cfg: OpenClawConfig;
+    catalog: ModelCatalogEntry[];
+    raw: string;
+    defaultProvider: string;
+    defaultModel?: string;
+  } & ModelManifestNormalizationContext,
+):
   | { ref: ModelRef; key: string }
   | {
       error: string;
@@ -381,12 +464,14 @@ export function resolveAllowedModelRef(params: {
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
     defaultProvider: params.defaultProvider,
+    manifestPlugins: params.manifestPlugins,
   });
 
   const openrouterCompatRef = resolveConfiguredOpenRouterCompatAlias({
     cfg: params.cfg,
     raw: trimmed,
     defaultProvider: params.defaultProvider,
+    manifestPlugins: params.manifestPlugins,
   });
   if (openrouterCompatRef) {
     const status = getModelRefStatusForResolve(params, openrouterCompatRef);
@@ -401,6 +486,7 @@ export function resolveAllowedModelRef(params: {
     raw: params.raw,
     defaultProvider: params.defaultProvider,
     aliasIndex,
+    manifestPlugins: params.manifestPlugins,
     getStatus: (ref) => getModelRefStatusForResolve(params, ref),
   });
 }

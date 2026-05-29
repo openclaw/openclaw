@@ -14,6 +14,7 @@ import {
 import { type ResolvedGatewayAuth } from "./auth-resolve.js";
 import {
   isLoopbackAddress,
+  resolveLocalInterfaceAddressMatch,
   resolveRequestClientIp,
   isTrustedProxyAddress,
   resolveClientIp,
@@ -124,13 +125,14 @@ export function hasForwardedRequestHeaders(req?: IncomingMessage): boolean {
   if (!req) {
     return false;
   }
+  const headers = req.headers ?? {};
 
   return Boolean(
-    req.headers?.forwarded ||
-    req.headers?.["x-forwarded-for"] ||
-    req.headers?.["x-forwarded-proto"] ||
-    req.headers?.["x-real-ip"] ||
-    req.headers?.["x-forwarded-host"],
+    headers.forwarded ||
+    headers["x-real-ip"] ||
+    Object.keys(headers).some((header) =>
+      normalizeLowercaseStringOrEmpty(header).startsWith("x-forwarded-"),
+    ),
   );
 }
 
@@ -280,8 +282,18 @@ function authorizeTrustedProxy(params: {
   if (!remoteAddr || !isTrustedProxyAddress(remoteAddr, trustedProxies)) {
     return { reason: "trusted_proxy_untrusted_source" };
   }
-  if (isLoopbackAddress(remoteAddr) && trustedProxyConfig.allowLoopback !== true) {
+  const remoteIsLoopback = isLoopbackAddress(remoteAddr);
+  if (remoteIsLoopback && trustedProxyConfig.allowLoopback !== true) {
     return { reason: "trusted_proxy_loopback_source" };
+  }
+  if (!remoteIsLoopback) {
+    const localInterfaceMatch = resolveLocalInterfaceAddressMatch(remoteAddr);
+    if (localInterfaceMatch === undefined) {
+      return { reason: "trusted_proxy_local_interface_check_failed" };
+    }
+    if (localInterfaceMatch) {
+      return { reason: "trusted_proxy_local_interface_source" };
+    }
   }
 
   const requiredHeaders = trustedProxyConfig.requiredHeaders ?? [];

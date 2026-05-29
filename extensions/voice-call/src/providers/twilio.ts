@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getHeader } from "../http-headers.js";
 import type { MediaStreamHandler } from "../media-stream.js";
 import { chunkAudio } from "../telephony-audio.js";
@@ -319,6 +319,14 @@ export class TwilioProvider implements VoiceCallProvider {
     return undefined;
   }
 
+  private static parseConfidence(value: string | null): number {
+    const trimmed = value?.trim();
+    if (!trimmed || !/^\d+(?:\.\d+)?$/.test(trimmed)) {
+      return 0.9;
+    }
+    return Number(trimmed);
+  }
+
   /**
    * Convert Twilio webhook params to normalized event format.
    */
@@ -353,7 +361,7 @@ export class TwilioProvider implements VoiceCallProvider {
         type: "call.speech",
         transcript: speechResult,
         isFinal: true,
-        confidence: Number.parseFloat(params.get("Confidence") || "0.9"),
+        confidence: TwilioProvider.parseConfidence(params.get("Confidence")),
       };
     }
 

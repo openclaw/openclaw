@@ -50,10 +50,11 @@ describe("doctor stale plugin config helpers", () => {
     vi.restoreAllMocks();
   });
 
-  it("finds stale plugins.allow and plugins.entries refs", () => {
+  it("finds stale plugin policy and entry refs", () => {
     const hits = scanStalePluginConfig({
       plugins: {
         allow: ["discord", "acpx"],
+        deny: ["openai", "missing-deny"],
         entries: {
           "voice-call": { enabled: true },
           acpx: { enabled: true },
@@ -68,6 +69,11 @@ describe("doctor stale plugin config helpers", () => {
         surface: "allow",
       },
       {
+        pluginId: "missing-deny",
+        pathLabel: "plugins.deny",
+        surface: "deny",
+      },
+      {
         pluginId: "acpx",
         pathLabel: "plugins.entries.acpx",
         surface: "entries",
@@ -75,10 +81,11 @@ describe("doctor stale plugin config helpers", () => {
     ]);
   });
 
-  it("removes stale plugin ids from allow and entries without changing valid refs", () => {
+  it("removes stale plugin ids from policy lists and entries without changing valid refs", () => {
     const result = maybeRepairStalePluginConfig({
       plugins: {
         allow: ["discord", "acpx", "voice-call"],
+        deny: ["openai", "missing-deny"],
         entries: {
           "voice-call": { enabled: true },
           acpx: { enabled: true },
@@ -88,9 +95,11 @@ describe("doctor stale plugin config helpers", () => {
 
     expect(result.changes).toEqual([
       "- plugins.allow: removed 1 stale plugin id (acpx)",
+      "- plugins.deny: removed 1 stale plugin id (missing-deny)",
       "- plugins.entries: removed 1 stale plugin entry (acpx)",
     ]);
     expect(result.config.plugins?.allow).toEqual(["discord", "voice-call"]);
+    expect(result.config.plugins?.deny).toEqual(["openai"]);
     expect(result.config.plugins?.entries).toEqual({
       "voice-call": { enabled: true },
     });
@@ -143,7 +152,7 @@ describe("doctor stale plugin config helpers", () => {
           },
         },
       } as OpenClawConfig),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("formats stale plugin warnings with a doctor hint", () => {
@@ -159,8 +168,8 @@ describe("doctor stale plugin config helpers", () => {
     });
 
     expect(warnings).toEqual([
-      expect.stringContaining('plugins.allow: stale plugin reference "acpx"'),
-      expect.stringContaining('Run "openclaw doctor --fix"'),
+      '- plugins.allow: stale plugin reference "acpx" was found.',
+      '- Run "openclaw doctor --fix" to remove stale plugin ids and dangling channel references.',
     ]);
   });
 
@@ -168,6 +177,7 @@ describe("doctor stale plugin config helpers", () => {
     const result = maybeRepairStalePluginConfig({
       plugins: {
         allow: ["telegram", "whatsapp", "acpx"],
+        deny: ["openai", "missing-deny"],
         entries: {
           telegram: { enabled: true },
           whatsapp: { enabled: true },
@@ -184,9 +194,11 @@ describe("doctor stale plugin config helpers", () => {
 
     expect(result.changes).toEqual([
       "- plugins.allow: removed 1 stale plugin id (acpx)",
+      "- plugins.deny: removed 1 stale plugin id (missing-deny)",
       "- plugins.entries: removed 1 stale plugin entry (acpx)",
     ]);
     expect(result.config.plugins?.allow).toEqual(["telegram", "whatsapp"]);
+    expect(result.config.plugins?.deny).toEqual(["openai"]);
     expect(result.config.plugins?.entries).toEqual({
       telegram: { enabled: true },
       whatsapp: { enabled: true },
@@ -230,7 +242,7 @@ describe("doctor stale plugin config helpers", () => {
         },
         list: [
           {
-            id: "pi",
+            id: "openclaw",
             heartbeat: {
               target: "missing-chat-plugin",
             },
@@ -264,7 +276,7 @@ describe("doctor stale plugin config helpers", () => {
       },
     });
     expect(result.config.agents?.defaults?.heartbeat).toEqual({ every: "30m" });
-    expect(result.config.agents?.list?.[0]?.heartbeat).toEqual({});
+    expect(result.config.agents?.list?.[0]?.heartbeat).toStrictEqual({});
     expect(result.config.agents?.list?.[1]?.heartbeat).toEqual({ target: "telegram" });
   });
 
@@ -277,7 +289,7 @@ describe("doctor stale plugin config helpers", () => {
       },
     } as OpenClawConfig;
 
-    expect(scanStalePluginConfig(cfg)).toEqual([]);
+    expect(scanStalePluginConfig(cfg)).toStrictEqual([]);
     expect(maybeRepairStalePluginConfig(cfg)).toEqual({ config: cfg, changes: [] });
   });
 
@@ -297,7 +309,7 @@ describe("doctor stale plugin config helpers", () => {
       },
     } as OpenClawConfig;
 
-    expect(scanStalePluginConfig(cfg)).toEqual([]);
+    expect(scanStalePluginConfig(cfg)).toStrictEqual([]);
     expect(maybeRepairStalePluginConfig(cfg)).toEqual({ config: cfg, changes: [] });
     expect(manifestRegistry.loadPluginManifestRegistry).not.toHaveBeenCalled();
   });
@@ -357,7 +369,7 @@ describe("doctor stale plugin config helpers", () => {
     ]);
 
     const result = maybeRepairStalePluginConfig(cfg);
-    expect(result.changes).toEqual([]);
+    expect(result.changes).toStrictEqual([]);
     expect(result.config).toEqual(cfg);
 
     const warnings = collectStalePluginConfigWarnings({

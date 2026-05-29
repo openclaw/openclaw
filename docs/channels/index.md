@@ -16,16 +16,21 @@ Text is supported everywhere; media and reactions vary by channel.
 - Slack multi-person DMs route as group chats, so group policy, mention
   behavior, and group-session rules apply to MPIM conversations.
 - WhatsApp setup is install-on-demand: onboarding can show the setup flow before
-  the plugin package is installed, and the Gateway loads the WhatsApp runtime
-  only when the channel is actually active.
+  the plugin package is installed, and the Gateway loads the external
+  ClawHub/npm plugin only when the channel is actually active.
+- Channels that accept bot-authored inbound messages can use shared
+  [bot loop protection](/channels/bot-loop-protection) to prevent bot pairs from
+  replying to each other indefinitely.
+- Supported always-on rooms can use [ambient room events](/channels/ambient-room-events)
+  so unmentioned room chatter becomes quiet context unless the agent sends with
+  the `message` tool.
 
 ## Supported channels
 
-- [BlueBubbles](/channels/bluebubbles) - Legacy iMessage bridge via the BlueBubbles macOS server REST API; deprecated for new OpenClaw setups but still supported for existing configs and richer private-API actions.
 - [Discord](/channels/discord) - Discord Bot API + Gateway; supports servers, channels, and DMs.
 - [Feishu](/channels/feishu) - Feishu/Lark bot via WebSocket (bundled plugin).
 - [Google Chat](/channels/googlechat) - Google Chat API app via HTTP webhook (downloadable plugin).
-- [iMessage](/channels/imessage) - Native macOS integration via the imsg CLI; preferred for new OpenClaw iMessage setups when host permissions and Messages access fit.
+- [iMessage](/channels/imessage) - Native macOS integration via the `imsg` bridge on a signed-in Mac (or SSH wrapper when the Gateway runs elsewhere), including private API actions for replies, tapbacks, effects, attachments, and group management. Preferred for new OpenClaw iMessage setups when host permissions and Messages access fit.
 - [IRC](/channels/irc) - Classic IRC servers; channels + DMs with pairing/allowlist controls.
 - [LINE](/channels/line) - LINE Messaging API bot (downloadable plugin).
 - [Matrix](/channels/matrix) - Matrix protocol (downloadable plugin).

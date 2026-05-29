@@ -3,7 +3,11 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { MsgContext } from "../templating.js";
 import { handleContextCommand } from "./commands-context-command.js";
-import { handleExportTrajectoryCommand, handleStatusCommand } from "./commands-info.js";
+import {
+  handleExportTrajectoryCommand,
+  handleSkillCommandUsage,
+  handleStatusCommand,
+} from "./commands-info.js";
 import { buildStatusReply } from "./commands-status.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { handleWhoamiCommand } from "./commands-whoami.js";
@@ -39,9 +43,14 @@ vi.mock("../../agents/agent-scope.js", async () => {
   };
 });
 
-vi.mock("../skill-commands.js", () => ({
-  listSkillCommandsForAgents: listSkillCommandsForAgentsMock,
-}));
+vi.mock("../skill-commands.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../skill-commands.js")>("../skill-commands.js");
+  return {
+    ...actual,
+    listSkillCommandsForAgents: listSkillCommandsForAgentsMock,
+  };
+});
 
 vi.mock("../status.js", async () => {
   const actual = await vi.importActual<typeof import("../status.js")>("../status.js");
@@ -50,6 +59,15 @@ vi.mock("../status.js", async () => {
     buildCommandsMessagePaginated: buildCommandsMessagePaginatedMock,
   };
 });
+
+function firstMockArg(mock: { mock: { calls: unknown[][] } }, label: string): unknown {
+  expect(mock.mock.calls).toHaveLength(1);
+  const [arg] = mock.mock.calls.at(0) ?? [];
+  if (!arg) {
+    throw new Error(`expected ${label} to receive arguments`);
+  }
+  return arg;
+}
 
 function buildInfoParams(
   commandBodyNormalized: string,
@@ -116,7 +134,7 @@ describe("info command handlers", () => {
     const params = buildInfoParams("/export-trajectory", {
       commands: { text: true },
     } as OpenClawConfig);
-    params.command.senderIsOwner = false;
+    params.command.isAuthorizedSender = false;
 
     const result = await handleExportTrajectoryCommand(params, true);
 
@@ -145,6 +163,73 @@ describe("info command handlers", () => {
     expect(result?.reply?.text).toContain("User id: 12345");
     expect(result?.reply?.text).toContain("Username: @TestUser");
     expect(result?.reply?.text).toContain("AllowFrom: 12345");
+  });
+
+  it("returns usage for bare /skill without continuing to the agent", async () => {
+    const params = buildInfoParams("/skill", {
+      commands: { text: true },
+    } as OpenClawConfig);
+    params.skillCommands = [
+      {
+        name: "demo_skill",
+        skillName: "demo-skill",
+        description: "Demo skill",
+      },
+    ];
+
+    const result = await handleSkillCommandUsage(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("Usage: /skill <name> [input]");
+    expect(result?.reply?.text).toContain("Available: demo-skill");
+  });
+
+  it("returns an unknown skill reply for unmatched /skill targets", async () => {
+    const params = buildInfoParams("/skill missing input", {
+      commands: { text: true },
+    } as OpenClawConfig);
+
+    const result = await handleSkillCommandUsage(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("Unknown skill: missing");
+    expect(result?.reply?.text).toContain("Usage: /skill <name> [input]");
+  });
+
+  it("lets valid /skill invocations continue to the skill command path", async () => {
+    const params = buildInfoParams("/skill demo_skill input", {
+      commands: { text: true },
+    } as OpenClawConfig);
+    params.skillCommands = [
+      {
+        name: "demo_skill",
+        skillName: "demo-skill",
+        description: "Demo skill",
+      },
+    ];
+
+    const result = await handleSkillCommandUsage(params, true);
+
+    expect(result).toBeNull();
+  });
+
+  it("loads skills asynchronously before deciding named /skill invocations", async () => {
+    const params = buildInfoParams("/skill demo_skill input", {
+      commands: { text: true },
+    } as OpenClawConfig);
+    params.loadSkillCommands = vi.fn(async () => [
+      {
+        name: "demo_skill",
+        skillName: "demo-skill",
+        description: "Demo skill",
+      },
+    ]);
+
+    const result = await handleSkillCommandUsage(params, true);
+
+    expect(result).toBeNull();
+    expect(params.loadSkillCommands).toHaveBeenCalledOnce();
+    expect(listSkillCommandsForAgentsMock).not.toHaveBeenCalled();
   });
 
   it("uses the canonical command sender identity for /whoami AllowFrom", async () => {
@@ -214,11 +299,11 @@ describe("info command handlers", () => {
 
     expect(statusResult?.shouldContinue).toBe(false);
 
-    expect(vi.mocked(buildStatusReply)).toHaveBeenCalledWith(
-      expect.objectContaining({
-        parentSessionKey: "discord:group:parent-room",
-      }),
-    );
+    const statusReplyParams = firstMockArg(
+      vi.mocked(buildStatusReply),
+      "buildStatusReply",
+    ) as Parameters<typeof buildStatusReply>[0];
+    expect(statusReplyParams.parentSessionKey).toBe("discord:group:parent-room");
   });
 
   it("preserves the shared session store path when routing /status", async () => {
@@ -231,11 +316,11 @@ describe("info command handlers", () => {
     const statusResult = await handleStatusCommand(params, true);
 
     expect(statusResult?.shouldContinue).toBe(false);
-    expect(vi.mocked(buildStatusReply)).toHaveBeenCalledWith(
-      expect.objectContaining({
-        storePath: "/tmp/target-session-store.json",
-      }),
-    );
+    const statusReplyParams = firstMockArg(
+      vi.mocked(buildStatusReply),
+      "buildStatusReply",
+    ) as Parameters<typeof buildStatusReply>[0];
+    expect(statusReplyParams.storePath).toBe("/tmp/target-session-store.json");
   });
 
   it("prefers the target session entry when routing /status", async () => {
@@ -259,15 +344,13 @@ describe("info command handlers", () => {
     const statusResult = await handleStatusCommand(params, true);
 
     expect(statusResult?.shouldContinue).toBe(false);
-    expect(vi.mocked(buildStatusReply)).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionEntry: expect.objectContaining({
-          sessionId: "target-session",
-          parentSessionKey: "target-parent",
-        }),
-        parentSessionKey: "target-parent",
-      }),
-    );
+    const statusReplyParams = firstMockArg(
+      vi.mocked(buildStatusReply),
+      "buildStatusReply",
+    ) as Parameters<typeof buildStatusReply>[0];
+    expect(statusReplyParams.sessionEntry?.sessionId).toBe("target-session");
+    expect(statusReplyParams.sessionEntry?.parentSessionKey).toBe("target-parent");
+    expect(statusReplyParams.parentSessionKey).toBe("target-parent");
   });
 
   it("forwards resolved fast mode to /status", async () => {
@@ -280,11 +363,11 @@ describe("info command handlers", () => {
     const statusResult = await handleStatusCommand(params, true);
 
     expect(statusResult?.shouldContinue).toBe(false);
-    expect(vi.mocked(buildStatusReply)).toHaveBeenCalledWith(
-      expect.objectContaining({
-        resolvedFastMode: true,
-      }),
-    );
+    const statusReplyParams = firstMockArg(
+      vi.mocked(buildStatusReply),
+      "buildStatusReply",
+    ) as Parameters<typeof buildStatusReply>[0];
+    expect(statusReplyParams.resolvedFastMode).toBe(true);
   });
 
   it("uses the canonical target session agent when listing /commands", async () => {
@@ -300,10 +383,10 @@ describe("info command handlers", () => {
     const result = await handleCommandsListCommand(params, true);
 
     expect(result?.shouldContinue).toBe(false);
-    expect(listSkillCommandsForAgentsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentIds: ["target"],
-      }),
-    );
+    const listParams = firstMockArg(
+      listSkillCommandsForAgentsMock,
+      "listSkillCommandsForAgents",
+    ) as { agentIds?: string[] };
+    expect(listParams.agentIds).toEqual(["target"]);
   });
 });

@@ -27,6 +27,7 @@ export type ThinkingCatalogEntry = {
   id: string;
   reasoning?: boolean;
   compat?: {
+    thinkingFormat?: string;
     supportedReasoningEfforts?: readonly string[] | null;
   } | null;
 };
@@ -81,6 +82,14 @@ export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined
     return "minimal";
   }
   return undefined;
+}
+
+export function isSessionDefaultDirectiveValue(raw?: string | null): boolean {
+  const key = normalizeOptionalLowercaseString(raw);
+  if (!key) {
+    return false;
+  }
+  return ["default", "inherit", "inherited", "clear", "reset", "unpin"].includes(key);
 }
 
 export function formatXHighModelHint(): string {

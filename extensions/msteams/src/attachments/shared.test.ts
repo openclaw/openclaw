@@ -35,6 +35,14 @@ function mockFetchWithRedirect(redirectMap: Record<string, string>, finalBody = 
   });
 }
 
+function fetchInitAt(fetchMock: ReturnType<typeof vi.fn>, index: number): unknown {
+  const call = fetchMock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected fetch call ${index}`);
+  }
+  return call[1];
+}
+
 async function expectSafeFetchStatus(params: {
   fetchMock: ReturnType<typeof vi.fn>;
   url: string;
@@ -68,6 +76,22 @@ describe("msteams attachment allowlists", () => {
       allowHosts: ["sharepoint.com"],
       authAllowHosts: ["graph.microsoft.com"],
     });
+  });
+
+  it("allows Azure China Bot Framework attachment URLs with auth by default", () => {
+    const policy = resolveAttachmentFetchPolicy();
+    const url = "https://msteams.botframework.azure.cn/teams/v3/attachments/att-1/views/original";
+    const headers = new Headers();
+
+    expect(isUrlAllowed(url, policy.allowHosts)).toBe(true);
+    applyAuthorizationHeaderForUrl({
+      headers,
+      url,
+      authAllowHosts: policy.authAllowHosts,
+      bearerToken: "token-1",
+    });
+
+    expect(headers.get("Authorization")).toBe("Bearer token-1");
   });
 
   it("requires https and host suffix match", () => {
@@ -150,7 +174,7 @@ describe("safeFetch", () => {
     });
     expect(fetchMock).toHaveBeenCalledOnce();
     // Should have used redirect: "manual"
-    expect(fetchMock.mock.calls[0][1]).toHaveProperty("redirect", "manual");
+    expect(fetchInitAt(fetchMock, 0)).toHaveProperty("redirect", "manual");
   });
 
   it("follows a redirect to an allowlisted host with public IP", async () => {
@@ -348,7 +372,7 @@ describe("safeFetch", () => {
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       const auth = new Headers(init?.headers).get("authorization") ?? "";
       seenAuth.push(`${url}|${auth}`);
-      if (url === "https://teams.sharepoint.com/file.pdf") {
+      if (url === "https://graph.microsoft.com/v1.0/me/photo") {
         return new Response(null, {
           status: 302,
           headers: { location: "https://cdn.sharepoint.com/storage/file.pdf" },
@@ -359,8 +383,8 @@ describe("safeFetch", () => {
 
     const headers = new Headers({ Authorization: "Bearer secret" });
     const res = await safeFetch({
-      url: "https://teams.sharepoint.com/file.pdf",
-      allowHosts: ["sharepoint.com"],
+      url: "https://graph.microsoft.com/v1.0/me/photo",
+      allowHosts: ["graph.microsoft.com", "sharepoint.com"],
       authorizationAllowHosts: ["graph.microsoft.com"],
       fetchFn: fetchMock as unknown as typeof fetch,
       requestInit: { headers },
@@ -369,6 +393,27 @@ describe("safeFetch", () => {
     expect(res.status).toBe(200);
     expect(seenAuth[0]).toContain("Bearer secret");
     expect(seenAuth[1]).toMatch(/\|$/);
+  });
+
+  it("strips authorization from the initial fetch outside auth allowlist", async () => {
+    const seenAuth: string[] = [];
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      seenAuth.push(new Headers(init?.headers).get("authorization") ?? "");
+      expect(url).toBe("https://attacker.trafficmanager.net/v3/attachments/att-1");
+      return new Response("ok", { status: 200 });
+    });
+
+    const res = await safeFetch({
+      url: "https://attacker.trafficmanager.net/v3/attachments/att-1",
+      allowHosts: ["trafficmanager.net"],
+      authorizationAllowHosts: ["smba.trafficmanager.net"],
+      fetchFn: fetchMock as unknown as typeof fetch,
+      requestInit: { headers: { Authorization: "Bearer secret" } },
+      resolveFn: publicResolve,
+    });
+
+    expect(res.status).toBe(200);
+    expect(seenAuth).toEqual([""]);
   });
 });
 
@@ -455,18 +500,16 @@ describe("Graph shared-link helpers", () => {
   it("tryBuildGraphSharesUrlForSharedLink rewrites SharePoint URLs", () => {
     const url = "https://contoso.sharepoint.com/personal/user/Documents/report.pdf";
     const result = tryBuildGraphSharesUrlForSharedLink(url);
-    expect(result).toBeDefined();
-    expect(result).toMatch(
-      /^https:\/\/graph\.microsoft\.com\/v1\.0\/shares\/u![A-Za-z0-9_-]+\/driveItem\/content$/,
+    expect(result).toBe(
+      `https://graph.microsoft.com/v1.0/shares/${encodeGraphShareId(url)}/driveItem/content`,
     );
   });
 
   it("tryBuildGraphSharesUrlForSharedLink rewrites OneDrive URLs", () => {
     const url = "https://1drv.ms/b/s!AkxYabcdefg";
     const result = tryBuildGraphSharesUrlForSharedLink(url);
-    expect(result).toBeDefined();
-    expect(result).toMatch(
-      /^https:\/\/graph\.microsoft\.com\/v1\.0\/shares\/u![A-Za-z0-9_-]+\/driveItem\/content$/,
+    expect(result).toBe(
+      `https://graph.microsoft.com/v1.0/shares/${encodeGraphShareId(url)}/driveItem/content`,
     );
   });
 
@@ -490,7 +533,7 @@ describe("msteams inline image limits", () => {
       },
     ];
     const out = extractInlineImageCandidates(attachments, { maxInlineBytes: 4 });
-    expect(out).toEqual([]);
+    expect(out).toStrictEqual([]);
   });
 
   it("accepts inline data images within limit", () => {
@@ -507,6 +550,17 @@ describe("msteams inline image limits", () => {
       expect(out[0].data.byteLength).toBeGreaterThan(0);
       expect(out[0].contentType).toBe("image/png");
     }
+  });
+
+  it("rejects inline data images with malformed base64 padding", () => {
+    const attachments = [
+      {
+        contentType: "text/html",
+        content: `<img src="data:image/png;base64,aGV=sbG8=" />`,
+      },
+    ];
+    const out = extractInlineImageCandidates(attachments, { maxInlineBytes: 10 });
+    expect(out).toStrictEqual([]);
   });
 
   it("enforces cumulative inline size limit across attachments", () => {

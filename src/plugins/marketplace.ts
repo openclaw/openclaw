@@ -619,6 +619,18 @@ function hasStreamingResponseBody(
   );
 }
 
+function parseMarketplaceContentLength(raw: string): number {
+  const trimmed = raw.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    throw new Error(`invalid content-length header: ${raw}`);
+  }
+  const size = Number(trimmed);
+  if (!Number.isSafeInteger(size)) {
+    throw new Error(`invalid content-length header: ${raw}`);
+  }
+  return size;
+}
+
 async function readMarketplaceChunkWithTimeout(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   chunkTimeoutMs: number,
@@ -755,8 +767,8 @@ async function downloadUrlToTempFile(
 
       const contentLength = response.headers.get("content-length");
       if (contentLength) {
-        const size = Number(contentLength);
-        if (Number.isFinite(size) && size > MAX_MARKETPLACE_ARCHIVE_BYTES) {
+        const size = parseMarketplaceContentLength(contentLength);
+        if (size > MAX_MARKETPLACE_ARCHIVE_BYTES) {
           throw new Error(
             `download too large: ${size} bytes (limit: ${MAX_MARKETPLACE_ARCHIVE_BYTES} bytes)`,
           );

@@ -1,3 +1,4 @@
+import type { AgentConfig } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CronJob } from "../types.js";
 import {
@@ -9,6 +10,7 @@ import {
   resolveAllowedModelRef,
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
+  resolveSubagentModelConfigSelectionResult,
 } from "./run-model-selection.runtime.js";
 
 type CronSessionModelOverrides = {
@@ -16,15 +18,12 @@ type CronSessionModelOverrides = {
   providerOverride?: string;
 };
 
+type CronModelSelectionSource = "default" | "subagent" | "agent" | "hook" | "payload" | "session";
+
 export type ResolveCronModelSelectionParams = {
   cfg: OpenClawConfig;
   cfgWithAgentDefaults: OpenClawConfig;
-  agentConfigOverride?: {
-    model?: unknown;
-    subagents?: {
-      model?: unknown;
-    };
-  };
+  agentConfigOverride?: Pick<AgentConfig, "model" | "subagents">;
   sessionEntry: CronSessionModelOverrides;
   payload: CronJob["payload"];
   isGmailHook: boolean;
@@ -36,16 +35,30 @@ export type ResolveCronModelSelectionResult =
       ok: true;
       provider: string;
       model: string;
+      modelSource: CronModelSelectionSource;
     }
   | {
       ok: false;
       error: string;
     };
 
-function formatCronPayloadModelRejection(modelOverride: string, error: string): string {
+function formatAllowedModelRefs(params: { cfg: OpenClawConfig }): string {
+  const configured = params.cfg.agents?.defaults?.models;
+  if (configured && typeof configured === "object" && Object.keys(configured).length > 0) {
+    return Object.keys(configured).toSorted().join(", ");
+  }
+  return "(none configured)";
+}
+
+function formatCronPayloadModelRejection(params: {
+  cfg: OpenClawConfig;
+  modelOverride: string;
+  error: string;
+}): string {
+  const { modelOverride, error } = params;
   if (error.startsWith("model not allowed:")) {
     const modelRef = error.slice("model not allowed:".length).trim();
-    return `cron payload.model '${modelOverride}' rejected by agents.defaults.models allowlist: ${modelRef}`;
+    return `cron payload.model '${modelOverride}' rejected by agents.defaults.models allowlist: ${modelRef} is not in [${formatAllowedModelRefs({ cfg: params.cfg })}]`;
   }
   return `cron payload.model '${modelOverride}' rejected: ${error}`;
 }
@@ -60,6 +73,7 @@ export async function resolveCronModelSelection(
   });
   let provider = resolvedDefault.provider;
   let model = resolvedDefault.model;
+  let modelSource: CronModelSelectionSource = "default";
 
   let catalog: Awaited<ReturnType<typeof loadModelCatalog>> | undefined;
   const loadCatalogOnce = async () => {
@@ -69,10 +83,14 @@ export async function resolveCronModelSelection(
     return catalog;
   };
 
-  const subagentModelRaw =
-    normalizeModelSelection(params.agentConfigOverride?.subagents?.model) ??
-    normalizeModelSelection(params.agentConfigOverride?.model) ??
-    normalizeModelSelection(params.cfg.agents?.defaults?.subagents?.model);
+  const subagentModelConfigSelection = resolveSubagentModelConfigSelectionResult({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    agentConfigOverride: params.agentConfigOverride,
+  });
+  const subagentModelRaw = normalizeModelSelection(subagentModelConfigSelection?.raw);
+  const subagentModelSource: CronModelSelectionSource =
+    subagentModelConfigSelection?.source === "agent" ? "agent" : "subagent";
   if (subagentModelRaw) {
     const resolvedSubagent = resolveAllowedModelRef({
       cfg: params.cfgWithAgentDefaults,
@@ -84,6 +102,7 @@ export async function resolveCronModelSelection(
     if (!("error" in resolvedSubagent)) {
       provider = resolvedSubagent.ref.provider;
       model = resolvedSubagent.ref.model;
+      modelSource = subagentModelSource;
     }
   }
 
@@ -106,6 +125,7 @@ export async function resolveCronModelSelection(
       provider = hooksGmailModelRef.provider;
       model = hooksGmailModelRef.model;
       hooksGmailModelApplied = true;
+      modelSource = "hook";
     }
   }
 
@@ -122,11 +142,16 @@ export async function resolveCronModelSelection(
     if ("error" in resolvedOverride) {
       return {
         ok: false,
-        error: formatCronPayloadModelRejection(modelOverride, resolvedOverride.error),
+        error: formatCronPayloadModelRejection({
+          cfg: params.cfgWithAgentDefaults,
+          modelOverride,
+          error: resolvedOverride.error,
+        }),
       };
     }
     provider = resolvedOverride.ref.provider;
     model = resolvedOverride.ref.model;
+    modelSource = "payload";
   }
 
   if (!modelOverride && !hooksGmailModelApplied) {
@@ -144,9 +169,10 @@ export async function resolveCronModelSelection(
       if (!("error" in resolvedSessionOverride)) {
         provider = resolvedSessionOverride.ref.provider;
         model = resolvedSessionOverride.ref.model;
+        modelSource = "session";
       }
     }
   }
 
-  return { ok: true, provider, model };
+  return { ok: true, provider, model, modelSource };
 }

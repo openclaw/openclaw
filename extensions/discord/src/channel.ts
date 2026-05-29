@@ -8,7 +8,7 @@ import type {
   ChannelMessageToolDiscovery,
 } from "openclaw/plugin-sdk/channel-contract";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
-import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/channel-message";
+import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/channel-outbound";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
   createChannelDirectoryAdapter,
@@ -20,8 +20,8 @@ import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveTargetsWithOptionalToken } from "openclaw/plugin-sdk/target-resolver-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
   listDiscordAccountIds,
   resolveDiscordAccount,
@@ -44,7 +44,6 @@ import {
   buildDiscordCrossContextPresentation,
   matchDiscordAcpConversation,
   normalizeDiscordAcpConversationId,
-  parseDiscordExplicitTarget,
   resolveDiscordAttachedOutboundTarget,
   resolveDiscordCommandConversation,
   resolveDiscordInboundConversation,
@@ -58,6 +57,7 @@ import {
   loadDiscordResolveChannelsModule,
   loadDiscordResolveUsersModule,
   loadDiscordSendModule,
+  loadDiscordTargetResolverModule,
   loadDiscordThreadBindingsManagerModule,
 } from "./channel.loaders.js";
 import { shouldSuppressLocalDiscordExecApprovalPrompt } from "./exec-approvals.js";
@@ -319,13 +319,44 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
         normalizeExplicitSessionKey: ({ sessionKey, ctx }) =>
           normalizeExplicitDiscordSessionKey(sessionKey, ctx),
         resolveSessionTarget: ({ id }) => normalizeDiscordMessagingTarget(`channel:${id}`),
-        parseExplicitTarget: ({ raw }) => parseDiscordExplicitTarget(raw),
-        inferTargetChatType: ({ to }) => parseDiscordExplicitTarget(to)?.chatType,
+        inferTargetChatType: ({ to }) => {
+          try {
+            const parsed = parseDiscordTarget(to, { defaultKind: "channel" });
+            if (!parsed) {
+              return undefined;
+            }
+            return parsed?.kind === "user" ? "direct" : "channel";
+          } catch {
+            return undefined;
+          }
+        },
         buildCrossContextPresentation: buildDiscordCrossContextPresentation,
         resolveOutboundSessionRoute: (params) => resolveDiscordOutboundSessionRoute(params),
         targetResolver: {
           looksLikeId: looksLikeDiscordTargetId,
           hint: "<channelId|user:ID|channel:ID>",
+          resolveTarget: async ({ cfg, accountId, input, normalized, preferredKind }) => {
+            const resolved = await (
+              await loadDiscordTargetResolverModule()
+            ).resolveDiscordTarget(
+              input,
+              { cfg, accountId },
+              preferredKind === "user"
+                ? { defaultKind: "user" }
+                : preferredKind === "channel" || preferredKind === "group"
+                  ? { defaultKind: "channel" }
+                  : {},
+            );
+            if (!resolved) {
+              return null;
+            }
+            return {
+              to: resolved.normalized,
+              kind: resolved.kind === "user" ? "user" : "channel",
+              display: resolved.raw,
+              source: resolved.normalized === normalized ? "normalized" : "directory",
+            };
+          },
         },
       },
       approvalCapability: getDiscordApprovalCapability(),
@@ -628,6 +659,11 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
       gateway: {
         startAccount: async (ctx) => {
           const account = ctx.account;
+          if (account.tokenStatus === "configured_unavailable") {
+            throw new Error(
+              `Discord bot token configured for account "${account.accountId}" is unavailable; resolve SecretRefs against the active runtime snapshot before using this account.`,
+            );
+          }
           const startupDelayMs = resolveDiscordStartupDelayMs(ctx.cfg, account.accountId);
           if (startupDelayMs > 0) {
             ctx.log?.info(

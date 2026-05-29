@@ -5,7 +5,7 @@ import {
   buildHostnameAllowlistPolicyFromSuffixAllowlist,
   fetchWithSsrFGuard,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-import { resolveUserPath } from "openclaw/plugin-sdk/text-runtime";
+import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 
 type ProxyRule = RegExp | URL | string;
@@ -556,7 +556,7 @@ export async function resolveValidatedGoogleChatCredentials(
   return null;
 }
 
-export const __testing = {
+export const testing = {
   resetGoogleAuthRuntimeForTests(): void {
     googleAuthRuntimePromise = null;
   },
@@ -565,3 +565,4 @@ export const __testing = {
   resolveGoogleAuthEnvProxyUrl,
   validateGoogleChatServiceAccountCredentials,
 };
+export { testing as __testing };

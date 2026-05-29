@@ -1,9 +1,10 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { renderQaMarkdownReport } from "openclaw/plugin-sdk/qa-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { renderQaMarkdownReport } from "../../report.js";
-import { __testing as liveTesting } from "./runtime.js";
+import { testing as liveTesting } from "./runtime.js";
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
@@ -97,6 +98,10 @@ describe("matrix live qa runtime", () => {
       expect(liveTesting.createMatrixQaRunDeadline().timeoutMs).toBe(12345);
       process.env.OPENCLAW_QA_MATRIX_TIMEOUT_MS = "nope";
       expect(liveTesting.createMatrixQaRunDeadline().timeoutMs).toBe(30 * 60_000);
+      process.env.OPENCLAW_QA_MATRIX_TIMEOUT_MS = "1e3";
+      expect(liveTesting.createMatrixQaRunDeadline().timeoutMs).toBe(30 * 60_000);
+      process.env.OPENCLAW_QA_MATRIX_TIMEOUT_MS = "1.5";
+      expect(liveTesting.createMatrixQaRunDeadline().timeoutMs).toBe(30 * 60_000);
     } finally {
       if (previous === undefined) {
         delete process.env.OPENCLAW_QA_MATRIX_TIMEOUT_MS;
@@ -104,6 +109,37 @@ describe("matrix live qa runtime", () => {
         process.env.OPENCLAW_QA_MATRIX_TIMEOUT_MS = previous;
       }
     }
+  });
+
+  it("does not start Matrix QA work after the hard run deadline expires", async () => {
+    const task = vi.fn(async () => "started");
+    vi.spyOn(Date, "now").mockReturnValue(1_001);
+
+    await expect(
+      liveTesting.withMatrixQaRunDeadline(
+        {
+          deadlineMs: 1_000,
+          timeoutMs: 30_000,
+        },
+        "Matrix scenario late",
+        task,
+      ),
+    ).rejects.toThrow(/Matrix scenario late not started because Matrix QA run timed out/u);
+    expect(task).not.toHaveBeenCalled();
+  });
+
+  it("passes the remaining Matrix QA run budget to the phase timeout", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(1_000);
+
+    expect(
+      liveTesting.remainingMatrixQaRunMs(
+        {
+          deadlineMs: 1_250,
+          timeoutMs: 30_000,
+        },
+        "Matrix canary",
+      ),
+    ).toBe(250);
   });
 
   it("normalizes the Matrix QA canary timeout env", () => {
@@ -115,6 +151,8 @@ describe("matrix live qa runtime", () => {
       expect(liveTesting.resolveMatrixQaCanaryTimeoutMs()).toBe(90_000);
       process.env.OPENCLAW_QA_MATRIX_CANARY_TIMEOUT_MS = "nope";
       expect(liveTesting.resolveMatrixQaCanaryTimeoutMs()).toBe(45_000);
+      process.env.OPENCLAW_QA_MATRIX_CANARY_TIMEOUT_MS = "0x1000";
+      expect(liveTesting.resolveMatrixQaCanaryTimeoutMs()).toBe(45_000);
     } finally {
       if (previous === undefined) {
         delete process.env.OPENCLAW_QA_MATRIX_CANARY_TIMEOUT_MS;
@@ -122,6 +160,43 @@ describe("matrix live qa runtime", () => {
         process.env.OPENCLAW_QA_MATRIX_CANARY_TIMEOUT_MS = previous;
       }
     }
+  });
+
+  it("uses a scenario provider override for the canary only when the whole run is pinned", () => {
+    const blockStreamingScenario = liveTesting.MATRIX_QA_SCENARIOS.find(
+      (scenario) => scenario.id === "matrix-room-block-streaming",
+    );
+    const threadScenario = liveTesting.MATRIX_QA_SCENARIOS.find(
+      (scenario) => scenario.id === "matrix-thread-follow-up",
+    );
+    expect(blockStreamingScenario).toBeDefined();
+    expect(threadScenario).toBeDefined();
+
+    const pinnedSchedule = liveTesting.scheduleMatrixQaScenariosInCatalogOrder([
+      blockStreamingScenario!,
+    ]);
+    expect(liveTesting.selectMatrixQaCanaryProviderMode(pinnedSchedule)).toBe("mock-openai");
+
+    const mixedSchedule = liveTesting.scheduleMatrixQaScenariosInCatalogOrder([
+      threadScenario!,
+      blockStreamingScenario!,
+    ]);
+    expect(liveTesting.selectMatrixQaCanaryProviderMode(mixedSchedule)).toBeUndefined();
+  });
+
+  it("preserves explicit model pins when a scenario keeps the suite provider", () => {
+    const defaultModels = {
+      alternateModel: "mock-openai/custom-alt",
+      primaryModel: "mock-openai/custom",
+      providerMode: "mock-openai" as const,
+    };
+
+    expect(
+      liveTesting.resolveMatrixQaGatewayModels({
+        defaultModels,
+        providerMode: "mock-openai",
+      }),
+    ).toEqual(defaultModels);
   });
 
   it("injects a temporary Matrix account into the QA gateway config", () => {
@@ -265,175 +340,155 @@ describe("matrix live qa runtime", () => {
   });
 
   it("records default and per-scenario Matrix config snapshots in the summary", () => {
-    expect(
-      liveTesting.buildMatrixQaSummary({
-        artifactPaths: {
-          observedEvents: "/tmp/observed.json",
-          report: "/tmp/report.md",
-          summary: "/tmp/summary.json",
-        },
-        checks: [{ name: "Matrix harness ready", status: "pass" }],
-        config: {
-          default: liveTesting.buildMatrixQaConfigSnapshot({
-            driverUserId: "@driver:matrix-qa.test",
-            observerUserId: "@observer:matrix-qa.test",
-            sutUserId: "@sut:matrix-qa.test",
-            topology: {
-              defaultRoomId: "!room:matrix-qa.test",
-              defaultRoomKey: "main",
-              rooms: [
-                {
-                  key: "main",
-                  kind: "group",
-                  memberRoles: ["driver", "observer", "sut"],
-                  memberUserIds: [
-                    "@driver:matrix-qa.test",
-                    "@observer:matrix-qa.test",
-                    "@sut:matrix-qa.test",
-                  ],
-                  name: "Matrix QA",
-                  requireMention: true,
-                  roomId: "!room:matrix-qa.test",
-                },
-              ],
-            },
-          }),
-          scenarios: [
-            {
-              id: "matrix-room-thread-reply-override",
-              title: "Matrix threadReplies always keeps room replies threaded",
-              config: liveTesting.buildMatrixQaConfigSnapshot({
-                driverUserId: "@driver:matrix-qa.test",
-                observerUserId: "@observer:matrix-qa.test",
-                overrides: {
-                  threadReplies: "always",
-                },
-                sutUserId: "@sut:matrix-qa.test",
-                topology: {
-                  defaultRoomId: "!room:matrix-qa.test",
-                  defaultRoomKey: "main",
-                  rooms: [
-                    {
-                      key: "main",
-                      kind: "group",
-                      memberRoles: ["driver", "observer", "sut"],
-                      memberUserIds: [
-                        "@driver:matrix-qa.test",
-                        "@observer:matrix-qa.test",
-                        "@sut:matrix-qa.test",
-                      ],
-                      name: "Matrix QA",
-                      requireMention: true,
-                      roomId: "!room:matrix-qa.test",
-                    },
-                  ],
-                },
-              }),
-            },
-          ],
-        },
-        finishedAt: "2026-04-10T10:05:00.000Z",
-        harness: {
-          baseUrl: "http://127.0.0.1:28008/",
-          composeFile: "/tmp/docker-compose.yml",
-          dmRoomIds: [],
-          image: "ghcr.io/matrix-construct/tuwunel:v1.5.1",
-          roomId: "!room:matrix-qa.test",
-          roomIds: ["!room:matrix-qa.test"],
-          serverName: "matrix-qa.test",
-        },
-        observedEventCount: 0,
-        scenarios: [],
-        startedAt: "2026-04-10T10:00:00.000Z",
-        sutAccountId: "sut",
-        timings: {
-          artifactWriteMs: 5,
-          canaryMs: 40,
-          harnessBootMs: 100,
-          initialGatewayBootMs: 200,
-          provisioningMs: 300,
-          scenarioGatewayBootMs: 50,
-          scenarioRestartGatewayMs: 60,
-          scenarioTransportInterruptMs: 70,
-          scenarios: [],
-          totalMs: 825,
-        },
-        userIds: {
-          driver: "@driver:matrix-qa.test",
-          observer: "@observer:matrix-qa.test",
-          sut: "@sut:matrix-qa.test",
-        },
-      }).config,
-    ).toMatchObject({
-      default: {
-        replyToMode: "off",
-        threadReplies: "inbound",
+    const summary = liveTesting.buildMatrixQaSummary({
+      artifactPaths: {
+        observedEvents: "/tmp/observed.json",
+        report: "/tmp/report.md",
+        summary: "/tmp/summary.json",
       },
-      scenarios: [
-        {
-          id: "matrix-room-thread-reply-override",
-          config: {
-            threadReplies: "always",
+      checks: [{ name: "Matrix harness ready", status: "pass" }],
+      config: {
+        default: liveTesting.buildMatrixQaConfigSnapshot({
+          driverUserId: "@driver:matrix-qa.test",
+          observerUserId: "@observer:matrix-qa.test",
+          sutUserId: "@sut:matrix-qa.test",
+          topology: {
+            defaultRoomId: "!room:matrix-qa.test",
+            defaultRoomKey: "main",
+            rooms: [
+              {
+                key: "main",
+                kind: "group",
+                memberRoles: ["driver", "observer", "sut"],
+                memberUserIds: [
+                  "@driver:matrix-qa.test",
+                  "@observer:matrix-qa.test",
+                  "@sut:matrix-qa.test",
+                ],
+                name: "Matrix QA",
+                requireMention: true,
+                roomId: "!room:matrix-qa.test",
+              },
+            ],
           },
-        },
-      ],
+        }),
+        scenarios: [
+          {
+            id: "matrix-room-thread-reply-override",
+            title: "Matrix threadReplies always keeps room replies threaded",
+            config: liveTesting.buildMatrixQaConfigSnapshot({
+              driverUserId: "@driver:matrix-qa.test",
+              observerUserId: "@observer:matrix-qa.test",
+              overrides: {
+                threadReplies: "always",
+              },
+              sutUserId: "@sut:matrix-qa.test",
+              topology: {
+                defaultRoomId: "!room:matrix-qa.test",
+                defaultRoomKey: "main",
+                rooms: [
+                  {
+                    key: "main",
+                    kind: "group",
+                    memberRoles: ["driver", "observer", "sut"],
+                    memberUserIds: [
+                      "@driver:matrix-qa.test",
+                      "@observer:matrix-qa.test",
+                      "@sut:matrix-qa.test",
+                    ],
+                    name: "Matrix QA",
+                    requireMention: true,
+                    roomId: "!room:matrix-qa.test",
+                  },
+                ],
+              },
+            }),
+          },
+        ],
+      },
+      finishedAt: "2026-04-10T10:05:00.000Z",
+      harness: {
+        baseUrl: "http://127.0.0.1:28008/",
+        composeFile: "/tmp/docker-compose.yml",
+        dmRoomIds: [],
+        image: "ghcr.io/matrix-construct/tuwunel:v1.5.1",
+        roomId: "!room:matrix-qa.test",
+        roomIds: ["!room:matrix-qa.test"],
+        serverName: "matrix-qa.test",
+      },
+      observedEventCount: 0,
+      scenarios: [],
+      startedAt: "2026-04-10T10:00:00.000Z",
+      sutAccountId: "sut",
+      timings: {
+        artifactWriteMs: 5,
+        canaryMs: 40,
+        harnessBootMs: 100,
+        initialGatewayBootMs: 200,
+        provisioningMs: 300,
+        scenarioGatewayBootMs: 50,
+        scenarioRestartGatewayMs: 60,
+        scenarioTransportInterruptMs: 70,
+        scenarios: [],
+        totalMs: 825,
+      },
+      userIds: {
+        driver: "@driver:matrix-qa.test",
+        observer: "@observer:matrix-qa.test",
+        sut: "@sut:matrix-qa.test",
+      },
     });
+    const config = summary.config;
+    expect(config.default.replyToMode).toBe("off");
+    expect(config.default.threadReplies).toBe("inbound");
+    expect(config.scenarios).toHaveLength(1);
+    expect(config.scenarios[0]?.id).toBe("matrix-room-thread-reply-override");
+    expect(config.scenarios[0]?.config.threadReplies).toBe("always");
   });
 
   it("preserves negative-scenario artifacts in the Matrix summary", () => {
-    expect(
-      liveTesting.buildMatrixQaSummary(
-        buildMatrixQaSummaryInput({
+    const summary = liveTesting.buildMatrixQaSummary(
+      buildMatrixQaSummaryInput({
+        scenarios: [
+          {
+            id: "matrix-mention-gating",
+            title: "Matrix room message without mention does not trigger",
+            status: "pass",
+            details: "no reply",
+            artifacts: {
+              actorUserId: "@driver:matrix-qa.test",
+              driverEventId: "$driver",
+              expectedNoReplyWindowMs: 8_000,
+              token: "MATRIX_QA_NOMENTION_TOKEN",
+              triggerBody: "reply with only this exact marker: MATRIX_QA_NOMENTION_TOKEN",
+            },
+          },
+        ],
+        timings: {
           scenarios: [
             {
+              durationMs: 80,
+              gatewayBootMs: 0,
+              gatewayRestartMs: 0,
               id: "matrix-mention-gating",
               title: "Matrix room message without mention does not trigger",
-              status: "pass",
-              details: "no reply",
-              artifacts: {
-                actorUserId: "@driver:matrix-qa.test",
-                driverEventId: "$driver",
-                expectedNoReplyWindowMs: 8_000,
-                token: "MATRIX_QA_NOMENTION_TOKEN",
-                triggerBody: "reply with only this exact marker: MATRIX_QA_NOMENTION_TOKEN",
-              },
+              transportInterruptMs: 0,
             },
           ],
-          timings: {
-            scenarios: [
-              {
-                durationMs: 80,
-                gatewayBootMs: 0,
-                gatewayRestartMs: 0,
-                id: "matrix-mention-gating",
-                title: "Matrix room message without mention does not trigger",
-                transportInterruptMs: 0,
-              },
-            ],
-            totalMs: 905,
-          },
-        }),
-      ),
-    ).toMatchObject({
-      counts: {
-        total: 2,
-        passed: 2,
-        failed: 0,
-      },
-      scenarios: [
-        {
-          id: "matrix-mention-gating",
-          artifacts: {
-            actorUserId: "@driver:matrix-qa.test",
-            expectedNoReplyWindowMs: 8_000,
-            triggerBody: "reply with only this exact marker: MATRIX_QA_NOMENTION_TOKEN",
-          },
+          totalMs: 905,
         },
-      ],
-      timings: {
-        totalMs: 905,
-      },
-    });
+      }),
+    );
+    expect(summary.counts.total).toBe(2);
+    expect(summary.counts.passed).toBe(2);
+    expect(summary.counts.failed).toBe(0);
+    expect(summary.scenarios[0]?.id).toBe("matrix-mention-gating");
+    expect(summary.scenarios[0]?.artifacts?.actorUserId).toBe("@driver:matrix-qa.test");
+    expect(summary.scenarios[0]?.artifacts?.expectedNoReplyWindowMs).toBe(8_000);
+    expect(summary.scenarios[0]?.artifacts?.triggerBody).toBe(
+      "reply with only this exact marker: MATRIX_QA_NOMENTION_TOKEN",
+    );
+    expect(summary.timings.totalMs).toBe(905);
   });
 
   it("keeps failing Matrix scenario details and timings complete in summary + report output", () => {
@@ -468,28 +523,14 @@ describe("matrix live qa runtime", () => {
       }),
     );
 
-    expect(summary).toMatchObject({
-      counts: {
-        total: 2,
-        passed: 1,
-        failed: 1,
-      },
-      scenarios: [
-        {
-          id: "matrix-reaction-not-a-reply",
-          status: "fail",
-          details: expect.stringContaining("reaction event: $reaction"),
-        },
-      ],
-      timings: {
-        scenarios: [
-          {
-            id: "matrix-reaction-not-a-reply",
-            durationMs: 8_000,
-          },
-        ],
-      },
-    });
+    expect(summary.counts.total).toBe(2);
+    expect(summary.counts.passed).toBe(1);
+    expect(summary.counts.failed).toBe(1);
+    expect(summary.scenarios[0]?.id).toBe("matrix-reaction-not-a-reply");
+    expect(summary.scenarios[0]?.status).toBe("fail");
+    expect(summary.scenarios[0]?.details).toContain("reaction event: $reaction");
+    expect(summary.timings.scenarios[0]?.id).toBe("matrix-reaction-not-a-reply");
+    expect(summary.timings.scenarios[0]?.durationMs).toBe(8_000);
 
     const report = renderQaMarkdownReport({
       title: "Matrix QA Report",
@@ -655,5 +696,33 @@ describe("matrix live qa runtime", () => {
     );
     await vi.advanceTimersByTimeAsync(300);
     await expectation;
+  });
+
+  it("caps Matrix readiness status RPCs and sleeps to the remaining timeout budget", async () => {
+    vi.useFakeTimers();
+    const gateway = {
+      call: vi.fn().mockResolvedValue({
+        channelAccounts: {
+          matrix: [{ accountId: "sut", running: true, connected: true, healthState: "degraded" }],
+        },
+      }),
+    };
+
+    const waitPromise = liveTesting.waitForMatrixChannelReady(gateway as never, "sut", {
+      timeoutMs: 250,
+      pollMs: 1_000,
+    });
+    const expectation = expect(waitPromise).rejects.toThrow(
+      'matrix account "sut" did not become ready',
+    );
+    await vi.advanceTimersByTimeAsync(250);
+
+    await expectation;
+    expect(gateway.call).toHaveBeenCalledTimes(1);
+    expect(gateway.call).toHaveBeenCalledWith(
+      "channels.status",
+      { probe: false, timeoutMs: 250 },
+      { timeoutMs: 250 },
+    );
   });
 });

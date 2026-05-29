@@ -1,8 +1,8 @@
 import { resolveCommandAuthorizedFromAuthorizers } from "openclaw/plugin-sdk/command-auth-native";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDiscordAccountAllowFrom, resolveDiscordAccountDmPolicy } from "../accounts.js";
 import type { AutocompleteInteraction } from "../internal/discord.js";
 import {
@@ -63,8 +63,39 @@ export function resolveDiscordNativeCommandAllowlistAccess(params: {
   return { configured: true, allowed: match.allowed } as const;
 }
 
-export function resolveDiscordGuildNativeCommandAuthorized(params: {
+export function resolveDiscordCommandOwnerAllowFrom(cfg: OpenClawConfig): string[] | undefined {
+  const raw = cfg.commands?.ownerAllowFrom;
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return undefined;
+  }
+  const entries: string[] = [];
+  for (const entry of raw) {
+    const trimmed = normalizeOptionalString(String(entry ?? "")) ?? "";
+    if (!trimmed) {
+      continue;
+    }
+    const separatorIndex = trimmed.indexOf(":");
+    if (separatorIndex > 0) {
+      const prefix = trimmed.slice(0, separatorIndex).toLowerCase();
+      if (prefix === "discord") {
+        const remainder = normalizeOptionalString(trimmed.slice(separatorIndex + 1)) ?? "";
+        if (remainder) {
+          entries.push(remainder);
+        }
+        continue;
+      }
+      if (prefix !== "user" && prefix !== "pk") {
+        continue;
+      }
+    }
+    entries.push(trimmed);
+  }
+  return entries.length > 0 ? entries : undefined;
+}
+
+export async function resolveDiscordGuildNativeCommandAuthorized(params: {
   cfg: OpenClawConfig;
+  accountId: string;
   discordConfig: DiscordConfig;
   useAccessGroups: boolean;
   commandsAllowFromAccess: ReturnType<typeof resolveDiscordNativeCommandAllowlistAccess>;
@@ -156,6 +187,7 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
   cfg: OpenClawConfig;
   discordConfig: DiscordConfig;
   accountId: string;
+  skipCommandOwnerAllowFrom?: boolean;
 }): Promise<boolean> {
   const { interaction, cfg, discordConfig, accountId } = params;
   const user = interaction.user;
@@ -270,11 +302,10 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
         tag: sender.tag,
       },
       allowNameMatching,
-      useAccessGroups,
       cfg,
       rest: interaction.client.rest,
     });
-    if (dmAccess.decision !== "allow") {
+    if (dmAccess.senderAccess.decision !== "allow") {
       return false;
     }
   }
@@ -289,9 +320,27 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
   if (!groupDmAccess.allowed) {
     return false;
   }
+  if (params.skipCommandOwnerAllowFrom !== true) {
+    const commandOwnerAllowFrom = resolveDiscordCommandOwnerAllowFrom(cfg);
+    const { ownerAllowed: commandOwnerOk } = resolveDiscordOwnerAccess({
+      allowFrom: commandOwnerAllowFrom,
+      sender: {
+        id: sender.id,
+        name: sender.name,
+        tag: sender.tag,
+      },
+      allowNameMatching,
+    });
+    const commandOwnerAllowAll = commandOwnerAllowFrom?.includes("*") === true;
+    const senderIsCommandOwner = commandOwnerOk || commandOwnerAllowAll;
+    if (commandOwnerAllowFrom && !senderIsCommandOwner && !commandsAllowFromAccess.allowed) {
+      return false;
+    }
+  }
   if (!isDirectMessage) {
     return resolveDiscordGuildNativeCommandAuthorized({
       cfg,
+      accountId,
       discordConfig,
       useAccessGroups,
       commandsAllowFromAccess,

@@ -263,24 +263,23 @@ listed here.
 | 4   | `normalizeTransport`              | Normalize provider-family `api` / `baseUrl` before generic model assembly                                      | Provider owns transport cleanup for custom provider ids in the same transport family                                                          |
 | 5   | `normalizeConfig`                 | Normalize `models.providers.<id>` before runtime/provider resolution                                           | Provider needs config cleanup that should live with the plugin; bundled Google-family helpers also backstop supported Google config entries   |
 | 6   | `applyNativeStreamingUsageCompat` | Apply native streaming-usage compat rewrites to config providers                                               | Provider needs endpoint-driven native streaming usage metadata fixes                                                                          |
-| 7   | `resolveConfigApiKey`             | Resolve env-marker auth for config providers before runtime auth loading                                       | Provider has provider-owned env-marker API-key resolution; `amazon-bedrock` also has a built-in AWS env-marker resolver here                  |
+| 7   | `resolveConfigApiKey`             | Resolve env-marker auth for config providers before runtime auth loading                                       | Providers expose their own env-marker API-key resolution hooks                                                                                |
 | 8   | `resolveSyntheticAuth`            | Surface local/self-hosted or config-backed auth without persisting plaintext                                   | Provider can operate with a synthetic/local credential marker                                                                                 |
 | 9   | `resolveExternalAuthProfiles`     | Overlay provider-owned external auth profiles; default `persistence` is `runtime-only` for CLI/app-owned creds | Provider reuses external auth credentials without persisting copied refresh tokens; declare `contracts.externalAuthProviders` in the manifest |
 | 10  | `shouldDeferSyntheticProfileAuth` | Lower stored synthetic profile placeholders behind env/config-backed auth                                      | Provider stores synthetic placeholder profiles that should not win precedence                                                                 |
 | 11  | `resolveDynamicModel`             | Sync fallback for provider-owned model ids not in the local registry yet                                       | Provider accepts arbitrary upstream model ids                                                                                                 |
 | 12  | `prepareDynamicModel`             | Async warm-up, then `resolveDynamicModel` runs again                                                           | Provider needs network metadata before resolving unknown ids                                                                                  |
 | 13  | `normalizeResolvedModel`          | Final rewrite before the embedded runner uses the resolved model                                               | Provider needs transport rewrites but still uses a core transport                                                                             |
-| 14  | `contributeResolvedModelCompat`   | Contribute compat flags for vendor models behind another compatible transport                                  | Provider recognizes its own models on proxy transports without taking over the provider                                                       |
-| 15  | `normalizeToolSchemas`            | Normalize tool schemas before the embedded runner sees them                                                    | Provider needs transport-family schema cleanup                                                                                                |
-| 16  | `inspectToolSchemas`              | Surface provider-owned schema diagnostics after normalization                                                  | Provider wants keyword warnings without teaching core provider-specific rules                                                                 |
-| 17  | `resolveReasoningOutputMode`      | Select native vs tagged reasoning-output contract                                                              | Provider needs tagged reasoning/final output instead of native fields                                                                         |
-| 18  | `prepareExtraParams`              | Request-param normalization before generic stream option wrappers                                              | Provider needs default request params or per-provider param cleanup                                                                           |
-| 19  | `createStreamFn`                  | Fully replace the normal stream path with a custom transport                                                   | Provider needs a custom wire protocol, not just a wrapper                                                                                     |
+| 14  | `normalizeToolSchemas`            | Normalize tool schemas before the embedded runner sees them                                                    | Provider needs transport-family schema cleanup                                                                                                |
+| 15  | `inspectToolSchemas`              | Surface provider-owned schema diagnostics after normalization                                                  | Provider wants keyword warnings without teaching core provider-specific rules                                                                 |
+| 16  | `resolveReasoningOutputMode`      | Select native vs tagged reasoning-output contract                                                              | Provider needs tagged reasoning/final output instead of native fields                                                                         |
+| 17  | `prepareExtraParams`              | Request-param normalization before generic stream option wrappers                                              | Provider needs default request params or per-provider param cleanup                                                                           |
+| 18  | `createStreamFn`                  | Fully replace the normal stream path with a custom transport                                                   | Provider needs a custom wire protocol, not just a wrapper                                                                                     |
 | 20  | `wrapStreamFn`                    | Stream wrapper after generic wrappers are applied                                                              | Provider needs request headers/body/model compat wrappers without a custom transport                                                          |
 | 21  | `resolveTransportTurnState`       | Attach native per-turn transport headers or metadata                                                           | Provider wants generic transports to send provider-native turn identity                                                                       |
 | 22  | `resolveWebSocketSessionPolicy`   | Attach native WebSocket headers or session cool-down policy                                                    | Provider wants generic WS transports to tune session headers or fallback policy                                                               |
 | 23  | `formatApiKey`                    | Auth-profile formatter: stored profile becomes the runtime `apiKey` string                                     | Provider stores extra auth metadata and needs a custom runtime token shape                                                                    |
-| 24  | `refreshOAuth`                    | OAuth refresh override for custom refresh endpoints or refresh-failure policy                                  | Provider does not fit the shared `pi-ai` refreshers                                                                                           |
+| 24  | `refreshOAuth`                    | OAuth refresh override for custom refresh endpoints or refresh-failure policy                                  | Provider does not fit the shared OpenClaw refreshers                                                                                          |
 | 25  | `buildAuthDoctorHint`             | Repair hint appended when OAuth refresh fails                                                                  | Provider needs provider-owned auth repair guidance after refresh failure                                                                      |
 | 26  | `matchesContextOverflowError`     | Provider-owned context-window overflow matcher                                                                 | Provider has raw overflow errors generic heuristics would miss                                                                                |
 | 27  | `classifyFailoverReason`          | Provider-owned failover reason classification                                                                  | Provider can map raw API/transport errors to rate-limit/overload/etc                                                                          |
@@ -499,6 +498,30 @@ const video = await api.runtime.mediaUnderstanding.describeVideoFile({
   filePath: "/tmp/inbound-video.mp4",
   cfg: api.config,
 });
+
+const extraction = await api.runtime.mediaUnderstanding.extractStructuredWithModel({
+  provider: "codex",
+  model: "gpt-5.5",
+  input: [
+    {
+      type: "image",
+      buffer: receiptImageBuffer,
+      fileName: "receipt.png",
+      mime: "image/png",
+    },
+    { type: "text", text: "Use the printed fields as the source of truth." },
+  ],
+  instructions: "Return entities and searchable tags.",
+  schemaName: "example.evidence",
+  jsonSchema: {
+    type: "object",
+    properties: {
+      entities: { type: "array", items: { type: "string" } },
+      tags: { type: "array", items: { type: "string" } },
+    },
+  },
+  cfg: api.config,
+});
 ```
 
 For audio transcription, plugins can use either the media-understanding runtime
@@ -517,6 +540,11 @@ Notes:
 
 - `api.runtime.mediaUnderstanding.*` is the preferred shared surface for
   image/audio/video understanding.
+- `extractStructuredWithModel(...)` is the plugin-facing seam for bounded
+  provider-owned image-first extraction. Include at least one image input;
+  text inputs are supplemental context.
+  product plugins own their routes and schemas while OpenClaw owns the
+  provider/runtime boundary.
 - Uses core media-understanding audio configuration (`tools.media.audio`) and provider fallback order.
 - Returns `{ text: undefined }` when no transcription output is produced (for example skipped/unsupported input).
 - `api.runtime.stt.transcribeAudioFile(...)` remains as a compatibility alias.
@@ -635,9 +663,9 @@ barrel when authoring new plugins. Core subpaths:
 | `openclaw/plugin-sdk/config-schema` | Root `openclaw.json` Zod schema (`OpenClawSchema`) |
 
 Channel plugins pick from a family of narrow seams — `channel-setup`,
-`setup-runtime`, `setup-adapter-runtime`, `setup-tools`, `channel-pairing`,
-`channel-contract`, `channel-feedback`, `channel-inbound`, `channel-lifecycle`,
-`channel-reply-pipeline`, `command-auth`, `secret-input`, `webhook-ingress`,
+`setup-runtime`, `setup-tools`, `channel-pairing`,
+`channel-contract`, `channel-feedback`, `channel-inbound`, `channel-outbound`,
+`command-auth`, `secret-input`, `webhook-ingress`,
 `channel-targets`, and `channel-actions`. Approval behavior should consolidate
 on one `approvalCapability` contract rather than mixing across unrelated
 plugin fields. See [Channel plugins](/plugins/sdk-channel-plugins).
@@ -645,12 +673,14 @@ plugin fields. See [Channel plugins](/plugins/sdk-channel-plugins).
 Runtime and config helpers live under matching focused `*-runtime` subpaths
 (`approval-runtime`, `agent-runtime`, `lazy-runtime`, `directory-runtime`,
 `text-runtime`, `runtime-store`, `system-event-runtime`, `heartbeat-runtime`,
-`channel-activity-runtime`, etc.). Prefer `config-types`,
+`channel-activity-runtime`, etc.). Prefer `config-contracts`,
 `plugin-config-runtime`, `runtime-config-snapshot`, and `config-mutation`
 instead of the broad `config-runtime` compatibility barrel.
 
 <Info>
-`openclaw/plugin-sdk/channel-runtime`, `openclaw/plugin-sdk/config-runtime`,
+`openclaw/plugin-sdk/channel-runtime`, `openclaw/plugin-sdk/channel-lifecycle`,
+small channel helper facades, `openclaw/plugin-sdk/outbound-runtime`,
+`openclaw/plugin-sdk/outbound-send-deps`, `openclaw/plugin-sdk/config-runtime`,
 and `openclaw/plugin-sdk/infra-runtime` are deprecated compatibility shims for
 older plugins. New code should import narrower generic primitives instead.
 </Info>
@@ -764,10 +794,21 @@ built-in implicit providers:
 Later providers win on key collision, so plugins can intentionally override a
 built-in provider entry with the same provider id.
 
+Plugins can also publish read-only model rows through
+`api.registerModelCatalogProvider({ provider, kinds, staticCatalog, liveCatalog
+})`. This is the forward path for list/help/picker surfaces and supports
+`text`, `image_generation`, `video_generation`, and `music_generation` rows.
+Provider plugins still own live endpoint calls, token exchange, and vendor
+response mapping; core owns the common row shape, source labels, and media tool
+help formatting. Media-generation provider registrations synthesize static
+catalog rows automatically from `defaultModel`, `models`, and `capabilities`.
+
 Compatibility:
 
-- `discovery` still works as a legacy alias
+- `discovery` still works as a legacy alias, but emits a deprecation warning
 - if both `catalog` and `discovery` are registered, OpenClaw uses `catalog`
+- `augmentModelCatalog` is deprecated; bundled providers should publish
+  supplemental rows through `registerModelCatalogProvider`
 
 ## Read-only channel inspection
 
@@ -1016,6 +1057,16 @@ export default function (api) {
 
 The factory `ctx` exposes optional `config`, `agentDir`, and `workspaceDir`
 values for construction-time initialization.
+
+`assemble()` may return `contextProjection` when the active harness has a
+persistent backend thread. Omit it for legacy per-turn projection. Return
+`{ mode: "thread_bootstrap", epoch }` when the assembled context should be
+injected once into a backend thread and reused until the epoch changes. Change
+the epoch after the engine's semantic context changes, such as after an
+engine-owned compaction pass. Hosts may preserve tool-call metadata, input
+shape, and redacted tool results in a thread-bootstrap projection so fresh
+backend threads retain tool continuity without copying raw secret-bearing
+payloads.
 
 If your engine does **not** own the compaction algorithm, keep `compact()`
 implemented and delegate it explicitly:

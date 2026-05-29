@@ -88,7 +88,7 @@ describe("device-pair notify persistence", () => {
     const persisted = JSON.parse(
       await fs.readFile(path.join(stateDir, "device-pair-notify.json"), "utf8"),
     ) as { subscribers: unknown[] };
-    expect(persisted.subscribers).toEqual([]);
+    expect(persisted.subscribers).toStrictEqual([]);
   });
 
   it("does not remove a different persisted subscriber when notify fields contain pipes", async () => {
@@ -149,11 +149,17 @@ describe("device-pair notify persistence", () => {
 
     const persisted = JSON.parse(
       await fs.readFile(path.join(stateDir, "device-pair-notify.json"), "utf8"),
-    ) as { subscribers: Array<{ to: string; accountId?: string }> };
-    expect(persisted.subscribers).toHaveLength(1);
-    expect(persisted.subscribers[0]).toMatchObject({
-      to: "chat|123",
-      accountId: "acct",
+    ) as unknown;
+    expect(persisted).toStrictEqual({
+      subscribers: [
+        {
+          to: "chat|123",
+          accountId: "acct",
+          mode: "persistent",
+          addedAtMs: 1,
+        },
+      ],
+      notifiedRequestIds: {},
     });
   });
 });

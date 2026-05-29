@@ -29,7 +29,6 @@ import {
 export { resolveProviderScopedAuthProfile, resolveRunAuthProfile };
 import {
   buildEmbeddedRunBaseParams as buildEmbeddedRunBaseParamsCore,
-  resolveModelFallbackOptions,
   resolveEnforceFinalTagWithResolver,
 } from "./agent-runner-run-params.js";
 export { resolveModelFallbackOptions } from "./agent-runner-run-params.js";
@@ -127,7 +126,7 @@ export function buildThreadingToolContext(params: {
     };
   }
   const provider = normalizeChannelId(rawProvider) ?? normalizeAnyChannelId(rawProvider);
-  // Fallback for unrecognized/plugin channels (e.g., BlueBubbles before plugin registry init)
+  // Fallback for unrecognized/plugin channels (e.g., iMessage before plugin registry init)
   const threading = provider ? getChannelPlugin(provider)?.threading : undefined;
   if (!threading?.buildToolContext) {
     return {
@@ -150,6 +149,7 @@ export function buildThreadingToolContext(params: {
         ReplyToId: sessionCtx.ReplyToId,
         ThreadLabel: sessionCtx.ThreadLabel,
         MessageThreadId: sessionCtx.MessageThreadId,
+        TransportThreadId: sessionCtx.TransportThreadId,
         NativeChannelId: sessionCtx.NativeChannelId,
       },
       hasRepliedRef,

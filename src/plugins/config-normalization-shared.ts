@@ -4,6 +4,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
+import { normalizeArrayBackedTrimmedStringList } from "../shared/string-normalization.js";
 import { defaultSlotIdForKey } from "./slots.js";
 
 export type NormalizedPluginsConfig = {
@@ -29,6 +30,12 @@ export type NormalizedPluginsConfig = {
         allowModelOverride?: boolean;
         allowedModels?: string[];
         hasAllowedModelsConfig?: boolean;
+      };
+      llm?: {
+        allowModelOverride?: boolean;
+        allowedModels?: string[];
+        hasAllowedModelsConfig?: boolean;
+        allowAgentIdOverride?: boolean;
       };
       config?: unknown;
     }
@@ -143,9 +150,9 @@ function normalizePluginEntries(
               (subagentRaw as { allowedModels?: unknown }).allowedModels,
             ),
             allowedModels: Array.isArray((subagentRaw as { allowedModels?: unknown }).allowedModels)
-              ? ((subagentRaw as { allowedModels?: unknown }).allowedModels as unknown[])
-                  .map((model) => normalizeOptionalString(model))
-                  .filter((model): model is string => Boolean(model))
+              ? normalizeArrayBackedTrimmedStringList(
+                  (subagentRaw as { allowedModels?: unknown }).allowedModels,
+                )
               : undefined,
           }
         : undefined;
@@ -164,12 +171,49 @@ function normalizePluginEntries(
               : {}),
           }
         : undefined;
+    const llmRaw = entry.llm;
+    const llm =
+      llmRaw && typeof llmRaw === "object" && !Array.isArray(llmRaw)
+        ? {
+            allowModelOverride: (llmRaw as { allowModelOverride?: unknown }).allowModelOverride,
+            hasAllowedModelsConfig: Array.isArray(
+              (llmRaw as { allowedModels?: unknown }).allowedModels,
+            ),
+            allowedModels: Array.isArray((llmRaw as { allowedModels?: unknown }).allowedModels)
+              ? normalizeArrayBackedTrimmedStringList(
+                  (llmRaw as { allowedModels?: unknown }).allowedModels,
+                )
+              : undefined,
+            allowAgentIdOverride: (llmRaw as { allowAgentIdOverride?: unknown })
+              .allowAgentIdOverride,
+          }
+        : undefined;
+    const normalizedLlm =
+      llm &&
+      (typeof llm.allowModelOverride === "boolean" ||
+        llm.hasAllowedModelsConfig ||
+        (Array.isArray(llm.allowedModels) && llm.allowedModels.length > 0) ||
+        typeof llm.allowAgentIdOverride === "boolean")
+        ? {
+            ...(typeof llm.allowModelOverride === "boolean"
+              ? { allowModelOverride: llm.allowModelOverride }
+              : {}),
+            ...(llm.hasAllowedModelsConfig ? { hasAllowedModelsConfig: true } : {}),
+            ...(Array.isArray(llm.allowedModels) && llm.allowedModels.length > 0
+              ? { allowedModels: llm.allowedModels }
+              : {}),
+            ...(typeof llm.allowAgentIdOverride === "boolean"
+              ? { allowAgentIdOverride: llm.allowAgentIdOverride }
+              : {}),
+          }
+        : undefined;
     normalized[normalizedKey] = {
       ...normalized[normalizedKey],
       enabled:
         typeof entry.enabled === "boolean" ? entry.enabled : normalized[normalizedKey]?.enabled,
       hooks: normalizedHooks ?? normalized[normalizedKey]?.hooks,
       subagent: normalizedSubagent ?? normalized[normalizedKey]?.subagent,
+      llm: normalizedLlm ?? normalized[normalizedKey]?.llm,
       config: "config" in entry ? entry.config : normalized[normalizedKey]?.config,
     };
   }

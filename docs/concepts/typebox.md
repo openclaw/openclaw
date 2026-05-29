@@ -53,8 +53,8 @@ Authoritative advertised **discovery** inventory lives in
 
 ## Where the schemas live
 
-- Source: `src/gateway/protocol/schema.ts`
-- Runtime validators (AJV): `src/gateway/protocol/index.ts`
+- Source: `packages/gateway-protocol/src/schema.ts`
+- Runtime validators (AJV): `packages/gateway-protocol/src/index.ts`
 - Advertised feature/discovery registry: `src/gateway/server-methods-list.ts`
 - Server handshake + method dispatch: `src/gateway/server.impl.ts`
 - Node client: `src/gateway/client.ts`
@@ -94,7 +94,7 @@ Connect (first message):
   "id": "c1",
   "method": "connect",
   "params": {
-    "minProtocol": 4,
+    "minProtocol": 3,
     "maxProtocol": 4,
     "client": {
       "id": "openclaw-macos",
@@ -195,7 +195,7 @@ Example: add a new `system.echo` request that returns `{ ok: true, text }`.
 
 1. **Schema (source of truth)**
 
-Add to `src/gateway/protocol/schema.ts`:
+Add to `packages/gateway-protocol/src/schema.ts`:
 
 ```ts
 export const SystemEchoParamsSchema = Type.Object(
@@ -223,7 +223,7 @@ export type SystemEchoResult = Static<typeof SystemEchoResultSchema>;
 
 2. **Validation**
 
-In `src/gateway/protocol/index.ts`, export an AJV validator:
+In `packages/gateway-protocol/src/index.ts`, export an AJV validator:
 
 ```ts
 export const validateSystemEchoParams = ajv.compile<SystemEchoParams>(SystemEchoParamsSchema);
@@ -266,14 +266,15 @@ The Swift generator emits:
 
 - `GatewayFrame` enum with `req`, `res`, `event`, and `unknown` cases
 - Strongly typed payload structs/enums
-- `ErrorCode` values and `GATEWAY_PROTOCOL_VERSION`
+- `ErrorCode` values, `GATEWAY_PROTOCOL_VERSION`, and `GATEWAY_MIN_PROTOCOL_VERSION`
 
 Unknown frame types are preserved as raw payloads for forward compatibility.
 
 ## Versioning + compatibility
 
-- `PROTOCOL_VERSION` lives in `src/gateway/protocol/version.ts`.
-- Clients send `minProtocol` + `maxProtocol`; the server rejects mismatches.
+- `PROTOCOL_VERSION` lives in `packages/gateway-protocol/src/version.ts`.
+- Clients send `minProtocol` + `maxProtocol`; the server rejects ranges that
+  do not include its current protocol.
 - The Swift models keep unknown frame types to avoid breaking older clients.
 
 ## Schema patterns and conventions

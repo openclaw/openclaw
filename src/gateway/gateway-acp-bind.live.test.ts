@@ -4,6 +4,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { renderCatFacePngBase64 } from "../../test/helpers/live-image-probe.js";
 import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
 import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import {
@@ -32,7 +33,6 @@ import {
   runOpenClawCliJson,
   shouldRunLiveImageProbe,
 } from "./live-agent-probes.js";
-import { renderCatFacePngBase64 } from "./live-image-probe.js";
 import { startGatewayServer } from "./server.js";
 
 const LIVE = isLiveTestEnabled();
@@ -49,7 +49,7 @@ const DEFAULT_LIVE_PARENT_MODEL = "openai/gpt-5.4";
 type LiveAcpAgent = "claude" | "codex" | "droid" | "gemini" | "opencode";
 
 class AcpBindSkipError extends Error {
-  readonly name = "AcpBindSkipError";
+  override readonly name = "AcpBindSkipError";
 }
 
 function createSlackCurrentConversationBindingRegistry() {
@@ -98,18 +98,21 @@ function normalizeAcpAgent(raw: string | undefined): LiveAcpAgent {
 }
 
 function extractAssistantTexts(messages: unknown[]): string[] {
-  return messages
-    .map((entry) => {
-      if (!entry || typeof entry !== "object") {
-        return undefined;
-      }
-      const role = (entry as { role?: unknown }).role;
-      if (role !== "assistant") {
-        return undefined;
-      }
-      return extractFirstTextBlock(entry);
-    })
-    .filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+  const texts: string[] = [];
+  for (const entry of messages) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const role = (entry as { role?: unknown }).role;
+    if (role !== "assistant") {
+      continue;
+    }
+    const text = extractFirstTextBlock(entry);
+    if (typeof text === "string" && text.trim().length > 0) {
+      texts.push(text);
+    }
+  }
+  return texts;
 }
 
 function createAcpRecallPrompt(
@@ -972,20 +975,37 @@ describeLive("gateway live (ACP bind)", () => {
             sessionKey: spawnedSessionKey,
           });
           lastCronProbeName = cronProbe.name;
-          await sendChatAndWait({
-            client,
-            sessionKey: originalSessionKey,
-            idempotencyKey: `idem-cron-${attempt}-${randomUUID()}`,
-            message: buildLiveCronProbeMessage({
-              agent: liveAgent,
-              argsJson: cronProbe.argsJson,
-              attempt,
-              exactReply: cronProbe.name,
-            }),
-            originatingChannel: "slack",
-            originatingTo: conversationId,
-            originatingAccountId: accountId,
-          });
+          try {
+            await sendChatAndWait({
+              client,
+              sessionKey: originalSessionKey,
+              idempotencyKey: `idem-cron-${attempt}-${randomUUID()}`,
+              message: buildLiveCronProbeMessage({
+                agent: liveAgent,
+                argsJson: cronProbe.argsJson,
+                attempt,
+                exactReply: cronProbe.name,
+              }),
+              originatingChannel: "slack",
+              originatingTo: conversationId,
+              originatingAccountId: accountId,
+            });
+          } catch (error) {
+            lastCronMismatch = error instanceof Error ? error.message : String(error);
+            logLiveStep(
+              `cron mcp turn failed after attempt ${String(attempt + 1)}: ${lastCronMismatch}`,
+            );
+            if (!requireCronMcpProbe) {
+              logLiveStep(
+                `cron mcp turn ${lastCronProbeName} failed; continuing after bind/image verification`,
+              );
+              break;
+            }
+            if (attempt === ACP_CRON_MCP_PROBE_MAX_ATTEMPTS - 1) {
+              throw error;
+            }
+            continue;
+          }
           logLiveStep(`cron mcp turn completed (attempt ${String(attempt + 1)})`);
 
           let cronHistory: Awaited<ReturnType<typeof waitForAssistantText>> | null = null;

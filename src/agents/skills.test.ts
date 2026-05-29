@@ -6,6 +6,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { captureEnv, withPathResolutionEnv } from "../test-utils/env.js";
 import { createFixtureSuite } from "../test-utils/fixture-suite.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
@@ -171,6 +172,7 @@ afterAll(async () => {
 
 afterEach(() => {
   clearRuntimeConfigSnapshot();
+  clearPluginMetadataLifecycleCaches();
 });
 
 describe("buildWorkspaceSkillCommandSpecs", () => {
@@ -244,6 +246,7 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
     expect(longCmd?.description.endsWith("…")).toBe(true);
     expect(shortCmd?.description).toBe("Short description");
     expect(cmd?.dispatch).toEqual({ kind: "tool", toolName: "sessions_send", argMode: "raw" });
+    expect(cmd?.skillSource).toBe("workspace");
   });
 
   it("inherits agents.defaults.skills when agentId is provided", async () => {
@@ -285,8 +288,8 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
       },
     } satisfies OpenClawConfig;
 
-    // Prime plugin discovery before the bundle exists so command loading proves
-    // it sees the current filesystem state instead of a stale cached snapshot.
+    // Prime plugin discovery before the bundle exists; clear the lifecycle cache
+    // below to model the install/reload boundary that exposes new plugin files.
     buildWorkspaceSkillCommandSpecs(workspaceDir, {
       ...resolveTestSkillDirs(workspaceDir),
       config,
@@ -312,25 +315,20 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
       ].join("\n"),
       "utf-8",
     );
+    clearPluginMetadataLifecycleCaches();
 
     const commands = buildWorkspaceSkillCommandSpecs(workspaceDir, {
       ...resolveTestSkillDirs(workspaceDir),
       config,
     });
 
-    expect(commands).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          name: "workflows_review",
-          skillName: "workflows:review",
-          description: "Review code with a structured checklist",
-          promptTemplate: "Review the branch carefully.",
-        }),
-      ]),
+    const command = commands.find((entry) => entry.skillName === "workflows:review");
+    expect(command?.name).toBe("workflows_review");
+    expect(command?.description).toBe("Review code with a structured checklist");
+    expect(command?.promptTemplate).toBe("Review the branch carefully.");
+    expect(command?.sourceFilePath).toContain(
+      path.join(pluginRoot, "commands", "workflows-review.md"),
     );
-    expect(
-      commands.find((entry) => entry.skillName === "workflows:review")?.sourceFilePath,
-    ).toContain(path.join(pluginRoot, "commands", "workflows-review.md"));
   });
 });
 
@@ -505,7 +503,7 @@ describe("buildWorkspaceSkillsPrompt", () => {
 });
 
 describe("applySkillEnvOverrides", () => {
-  it("sets and restores env vars", async () => {
+  it("sets and restores env vars", () => {
     const entries = envSkillEntries("env-skill", {
       primaryEnv: "ENV_KEY",
       requires: { env: ["ENV_KEY"] },
@@ -528,7 +526,7 @@ describe("applySkillEnvOverrides", () => {
     });
   });
 
-  it("keeps env keys tracked until all overlapping overrides restore", async () => {
+  it("keeps env keys tracked until all overlapping overrides restore", () => {
     const entries = envSkillEntries("env-skill", {
       primaryEnv: "ENV_KEY",
       requires: { env: ["ENV_KEY"] },
@@ -554,7 +552,7 @@ describe("applySkillEnvOverrides", () => {
     });
   });
 
-  it("applies env overrides from snapshots", async () => {
+  it("applies env overrides from snapshots", () => {
     const snapshot = envSkillSnapshot("env-skill", {
       primaryEnv: "ENV_KEY",
       requires: { env: ["ENV_KEY"] },
@@ -575,7 +573,7 @@ describe("applySkillEnvOverrides", () => {
     });
   });
 
-  it("prefers the active runtime snapshot over raw SecretRef skill config", async () => {
+  it("prefers the active runtime snapshot over raw SecretRef skill config", () => {
     const skillName = "env-skill";
     const entries = envSkillEntries(skillName, {
       primaryEnv: "ENV_KEY",
@@ -600,7 +598,7 @@ describe("applySkillEnvOverrides", () => {
     });
   });
 
-  it("prefers resolved caller skill config when the active runtime snapshot is still raw", async () => {
+  it("prefers resolved caller skill config when the active runtime snapshot is still raw", () => {
     const skillName = "env-skill";
     const entries = envSkillEntries(skillName, {
       primaryEnv: "ENV_KEY",
@@ -625,7 +623,7 @@ describe("applySkillEnvOverrides", () => {
     });
   });
 
-  it("does not resolve raw skill apiKey refs when the host already provides primaryEnv", async () => {
+  it("does not resolve raw skill apiKey refs when the host already provides primaryEnv", () => {
     const entries = envSkillEntries("env-skill", {
       primaryEnv: "ENV_KEY",
       requires: { env: ["ENV_KEY"] },
@@ -660,7 +658,7 @@ describe("applySkillEnvOverrides", () => {
     });
   });
 
-  it("blocks unsafe env overrides but allows declared secrets", async () => {
+  it("blocks unsafe env overrides but allows declared secrets", () => {
     const entries = envSkillEntries("unsafe-env-skill", {
       primaryEnv: "OPENAI_API_KEY",
       requires: { env: ["OPENAI_API_KEY", "NODE_OPTIONS"] },
@@ -694,40 +692,71 @@ describe("applySkillEnvOverrides", () => {
     });
   });
 
-  it("blocks dangerous host env overrides even when declared", async () => {
+  it("blocks dangerous host env overrides even when declared", () => {
     const entries = envSkillEntries("dangerous-env-skill", {
-      requires: { env: ["BASH_ENV", "SHELL"] },
+      requires: {
+        env: [
+          "BASH_ENV",
+          "SHELL",
+          "NODE_REDIRECT_WARNINGS",
+          "NODE_REPL_EXTERNAL_MODULE",
+          "NODE_REPL_HISTORY",
+          "NODE_V8_COVERAGE",
+        ],
+      },
     });
 
-    withClearedEnv(["BASH_ENV", "SHELL"], () => {
-      const restore = applySkillEnvOverrides({
-        skills: entries,
-        config: {
-          skills: {
-            entries: {
-              "dangerous-env-skill": {
-                env: {
-                  BASH_ENV: "/tmp/pwn.sh",
-                  SHELL: "/tmp/evil-shell",
+    withClearedEnv(
+      [
+        "BASH_ENV",
+        "SHELL",
+        "NODE_REDIRECT_WARNINGS",
+        "NODE_REPL_EXTERNAL_MODULE",
+        "NODE_REPL_HISTORY",
+        "NODE_V8_COVERAGE",
+      ],
+      () => {
+        const restore = applySkillEnvOverrides({
+          skills: entries,
+          config: {
+            skills: {
+              entries: {
+                "dangerous-env-skill": {
+                  env: {
+                    BASH_ENV: "/tmp/pwn.sh",
+                    SHELL: "/tmp/evil-shell",
+                    NODE_REDIRECT_WARNINGS: "/tmp/node-warnings.log",
+                    NODE_REPL_EXTERNAL_MODULE: "/tmp/pwn.js",
+                    NODE_REPL_HISTORY: "/tmp/node-repl-history",
+                    NODE_V8_COVERAGE: "/tmp/coverage",
+                  },
                 },
               },
             },
           },
-        },
-      });
+        });
 
-      try {
-        expect(process.env.BASH_ENV).toBeUndefined();
-        expect(process.env.SHELL).toBeUndefined();
-      } finally {
-        restore();
-        expect(process.env.BASH_ENV).toBeUndefined();
-        expect(process.env.SHELL).toBeUndefined();
-      }
-    });
+        try {
+          expect(process.env.BASH_ENV).toBeUndefined();
+          expect(process.env.SHELL).toBeUndefined();
+          expect(process.env.NODE_REDIRECT_WARNINGS).toBeUndefined();
+          expect(process.env.NODE_REPL_EXTERNAL_MODULE).toBeUndefined();
+          expect(process.env.NODE_REPL_HISTORY).toBeUndefined();
+          expect(process.env.NODE_V8_COVERAGE).toBeUndefined();
+        } finally {
+          restore();
+          expect(process.env.BASH_ENV).toBeUndefined();
+          expect(process.env.SHELL).toBeUndefined();
+          expect(process.env.NODE_REDIRECT_WARNINGS).toBeUndefined();
+          expect(process.env.NODE_REPL_EXTERNAL_MODULE).toBeUndefined();
+          expect(process.env.NODE_REPL_HISTORY).toBeUndefined();
+          expect(process.env.NODE_V8_COVERAGE).toBeUndefined();
+        }
+      },
+    );
   });
 
-  it("blocks override-only host env overrides in skill config", async () => {
+  it("blocks override-only host env overrides in skill config", () => {
     const entries = envSkillEntries("override-env-skill", {
       requires: { env: ["HTTPS_PROXY", "NODE_TLS_REJECT_UNAUTHORIZED", "DOCKER_HOST"] },
     });
@@ -763,7 +792,7 @@ describe("applySkillEnvOverrides", () => {
     });
   });
 
-  it("allows required env overrides from snapshots", async () => {
+  it("allows required env overrides from snapshots", () => {
     const snapshot = envSkillSnapshot("snapshot-env-skill", {
       requires: { env: ["OPENAI_API_KEY"] },
     });

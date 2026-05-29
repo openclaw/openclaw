@@ -144,13 +144,26 @@ troubleshooting, see the main [FAQ](/help/faq).
 
   </Accordion>
 
+  <Accordion title="If two providers expose the same model id, which one does /model use?">
+    `/model provider/model` selects that exact provider route for the session.
+
+    For example, `qianfan/deepseek-v4-flash` and `deepseek/deepseek-v4-flash` are different model refs even though both contain `deepseek-v4-flash`. OpenClaw should not silently switch from one provider to the other just because the bare model id matches.
+
+    A user-selected `/model` ref is also strict for fallback policy. If that selected provider/model is unavailable, the reply fails visibly instead of answering from `agents.defaults.model.fallbacks`. Configured fallback chains still apply to configured defaults, cron job primaries, and auto-selected fallback state.
+
+    If a run that started from a non-session override is allowed to use fallback, OpenClaw tries the requested provider/model first, then configured fallbacks, and only then the configured primary. That prevents duplicate bare model ids from jumping directly back to the default provider.
+
+    See [Models](/concepts/models) and [Model failover](/concepts/model-failover).
+
+  </Accordion>
+
   <Accordion title="Can I use GPT 5.5 for daily tasks and Codex 5.5 for coding?">
     Yes. Treat model choice and runtime choice separately:
 
     - **Native Codex coding agent:** set `agents.defaults.model.primary` to `openai/gpt-5.5`. Sign in with `openclaw models auth login --provider openai-codex` when you want ChatGPT/Codex subscription auth.
     - **Direct OpenAI API tasks outside the agent loop:** configure `OPENAI_API_KEY` for images, embeddings, speech, realtime, and other non-agent OpenAI API surfaces.
     - **OpenAI agent API-key auth:** use `/model openai/gpt-5.5` with an ordered `openai-codex` API-key profile.
-    - **Sub-agents:** route coding tasks to a Codex-only agent with its own model and `agentRuntime` default.
+    - **Sub-agents:** route coding tasks to a Codex-focused agent with its own `openai/gpt-5.5` model.
 
     See [Models](/concepts/models) and [Slash commands](/tools/slash-commands).
 
@@ -195,9 +208,9 @@ troubleshooting, see the main [FAQ](/help/faq).
     Add it with: openclaw config set agents.defaults.models '{"provider/model":{}}' --strict-json --merge
     ```
 
-    That error is returned **instead of** a normal reply. Fix: add the model to
-    `agents.defaults.models`, remove the allowlist, or pick a model from `/model list`.
-    If the command also included `--runtime codex`, add the model first and then retry
+    That error is returned **instead of** a normal reply. Fix: add the exact model to
+    `agents.defaults.models`, add a provider wildcard such as `"provider/*": {}` for dynamic provider catalogs, remove the allowlist, or pick a model from `/model list`.
+    If the command also included `--runtime codex`, update the allowlist first and then retry
     the same `/model provider/model --runtime codex` command.
 
   </Accordion>
@@ -269,14 +282,14 @@ troubleshooting, see the main [FAQ](/help/faq).
   <Accordion title="Are opus / sonnet / gpt built-in shortcuts?">
     Yes. OpenClaw ships a few default shorthands (only applied when the model exists in `agents.defaults.models`):
 
-    - `opus` → `anthropic/claude-opus-4-6`
+    - `opus` → `anthropic/claude-opus-4-8`
     - `sonnet` → `anthropic/claude-sonnet-4-6`
-    - `gpt` → `openai/gpt-5.5`
+    - `gpt` → `openai/gpt-5.4`
     - `gpt-mini` → `openai/gpt-5.4-mini`
     - `gpt-nano` → `openai/gpt-5.4-nano`
     - `gemini` → `google/gemini-3.1-pro-preview`
     - `gemini-flash` → `google/gemini-3-flash-preview`
-    - `gemini-flash-lite` → `google/gemini-3.1-flash-lite-preview`
+    - `gemini-flash-lite` → `google/gemini-3.1-flash-lite`
 
     If you set your own alias with the same name, your value wins.
 
@@ -293,7 +306,6 @@ troubleshooting, see the main [FAQ](/help/faq).
           models: {
             "anthropic/claude-opus-4-6": { alias: "opus" },
             "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
-            "anthropic/claude-haiku-4-5": { alias: "haiku" },
           },
         },
       },
@@ -524,7 +536,11 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
   <Accordion title="OAuth vs API key - what is the difference?">
     OpenClaw supports both:
 
-    - **OAuth** often leverages subscription access (where applicable).
+    - **OAuth / CLI login** often leverages subscription access where the
+      provider supports it. For Anthropic, OpenClaw's Claude CLI backend uses
+      Claude Code `claude -p`; Anthropic currently treats that as Agent
+      SDK/programmatic usage, with a separate monthly Agent SDK credit starting
+      June 15, 2026.
     - **API keys** use pay-per-token billing.
 
     The wizard explicitly supports Anthropic Claude CLI, OpenAI Codex OAuth, and API keys.

@@ -48,8 +48,11 @@ describe("fireworks provider plugin", () => {
     expect(provider.aliases).toEqual(["fireworks-ai"]);
     expect(provider.envVars).toEqual(["FIREWORKS_API_KEY"]);
     expect(provider.auth).toHaveLength(1);
-    expect(resolved?.provider.id).toBe("fireworks");
-    expect(resolved?.method.id).toBe("api-key");
+    if (!resolved) {
+      throw new Error("expected Fireworks api-key auth choice");
+    }
+    expect(resolved.provider.id).toBe("fireworks");
+    expect(resolved.method.id).toBe("api-key");
   });
 
   it("builds the Fireworks catalog", async () => {
@@ -58,22 +61,22 @@ describe("fireworks provider plugin", () => {
 
     expect(catalogProvider.api).toBe("openai-completions");
     expect(catalogProvider.baseUrl).toBe(FIREWORKS_BASE_URL);
-    expect(catalogProvider.models?.map((model) => model.id)).toEqual([
+    const models = catalogProvider.models;
+    if (!models) {
+      throw new Error("expected Fireworks catalog models");
+    }
+    expect(models.map((model) => model.id)).toEqual([
       FIREWORKS_K2_6_MODEL_ID,
       FIREWORKS_DEFAULT_MODEL_ID,
     ]);
-    expect(catalogProvider.models?.[0]).toMatchObject({
-      reasoning: false,
-      input: ["text", "image"],
-      contextWindow: FIREWORKS_K2_6_CONTEXT_WINDOW,
-      maxTokens: FIREWORKS_K2_6_MAX_TOKENS,
-    });
-    expect(catalogProvider.models?.[1]).toMatchObject({
-      reasoning: false,
-      input: ["text", "image"],
-      contextWindow: FIREWORKS_DEFAULT_CONTEXT_WINDOW,
-      maxTokens: FIREWORKS_DEFAULT_MAX_TOKENS,
-    });
+    expect(models[0]?.reasoning).toBe(false);
+    expect(models[0]?.input).toEqual(["text", "image"]);
+    expect(models[0]?.contextWindow).toBe(FIREWORKS_K2_6_CONTEXT_WINDOW);
+    expect(models[0]?.maxTokens).toBe(FIREWORKS_K2_6_MAX_TOKENS);
+    expect(models[1]?.reasoning).toBe(false);
+    expect(models[1]?.input).toEqual(["text", "image"]);
+    expect(models[1]?.contextWindow).toBe(FIREWORKS_DEFAULT_CONTEXT_WINDOW);
+    expect(models[1]?.maxTokens).toBe(FIREWORKS_DEFAULT_MAX_TOKENS);
   });
 
   it("resolves forward-compat Fireworks model ids from the default template", async () => {
@@ -86,13 +89,12 @@ describe("fireworks provider plugin", () => {
       }),
     );
 
-    expect(resolved).toMatchObject({
-      provider: "fireworks",
-      id: "accounts/fireworks/models/qwen3.6-plus",
-      api: "openai-completions",
-      baseUrl: FIREWORKS_BASE_URL,
-      reasoning: true,
-    });
+    expect(resolved?.provider).toBe("fireworks");
+    expect(resolved?.id).toBe("accounts/fireworks/models/qwen3.6-plus");
+    expect(resolved?.api).toBe("openai-completions");
+    expect(resolved?.baseUrl).toBe(FIREWORKS_BASE_URL);
+    expect(resolved?.reasoning).toBe(true);
+    expect(resolved?.input).toEqual(["text", "image"]);
   });
 
   it("disables reasoning metadata for Fireworks Kimi dynamic models", async () => {
@@ -105,11 +107,25 @@ describe("fireworks provider plugin", () => {
       }),
     );
 
-    expect(resolved).toMatchObject({
-      provider: "fireworks",
-      id: "accounts/fireworks/models/kimi-k2p5",
-      reasoning: false,
-    });
+    expect(resolved?.provider).toBe("fireworks");
+    expect(resolved?.id).toBe("accounts/fireworks/models/kimi-k2p5");
+    expect(resolved?.reasoning).toBe(false);
+    expect(resolved?.input).toEqual(["text", "image"]);
+  });
+
+  it("keeps Fireworks GLM dynamic models text-only", async () => {
+    const provider = await registerSingleProviderPlugin(fireworksPlugin);
+    const resolved = provider.resolveDynamicModel?.(
+      createProviderDynamicModelContext({
+        provider: "fireworks",
+        modelId: "accounts/fireworks/models/glm-5p1",
+        models: [createFireworksDefaultRuntimeModel({ reasoning: false })],
+      }),
+    );
+
+    expect(resolved?.provider).toBe("fireworks");
+    expect(resolved?.id).toBe("accounts/fireworks/models/glm-5p1");
+    expect(resolved?.input).toEqual(["text"]);
   });
 
   it("disables reasoning metadata for Fireworks Kimi k2.5 aliases", async () => {
@@ -122,11 +138,9 @@ describe("fireworks provider plugin", () => {
       }),
     );
 
-    expect(resolved).toMatchObject({
-      provider: "fireworks",
-      id: "accounts/fireworks/routers/kimi-k2.5-turbo",
-      reasoning: false,
-    });
+    expect(resolved?.provider).toBe("fireworks");
+    expect(resolved?.id).toBe("accounts/fireworks/routers/kimi-k2.5-turbo");
+    expect(resolved?.reasoning).toBe(false);
   });
 
   it("disables reasoning metadata for Fireworks Kimi k2.6 dynamic models", async () => {
@@ -139,11 +153,9 @@ describe("fireworks provider plugin", () => {
       }),
     );
 
-    expect(resolved).toMatchObject({
-      provider: "fireworks",
-      id: "accounts/fireworks/models/kimi-k2p6",
-      reasoning: false,
-    });
+    expect(resolved?.provider).toBe("fireworks");
+    expect(resolved?.id).toBe("accounts/fireworks/models/kimi-k2p6");
+    expect(resolved?.reasoning).toBe(false);
   });
 
   it("exposes off-only thinking policy for Fireworks Kimi models", async () => {

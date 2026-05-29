@@ -8,6 +8,10 @@ import type {
   MantisSlackDesktopSmokeOptions,
 } from "./slack-desktop-smoke.runtime.js";
 import type {
+  MantisTelegramDesktopBuilderOptions,
+  MantisTelegramDesktopHydrateMode,
+} from "./telegram-desktop-builder.runtime.js";
+import type {
   MantisVisualDriverOptions,
   MantisVisualTaskOptions,
   MantisVisualTaskVisionMode,
@@ -37,6 +41,11 @@ async function runDesktopBrowserSmoke(opts: MantisDesktopBrowserSmokeOptions) {
 async function runSlackDesktopSmoke(opts: MantisSlackDesktopSmokeOptions) {
   const runtime = await loadMantisCliRuntime();
   await runtime.runMantisSlackDesktopSmokeCommand(opts);
+}
+
+async function runTelegramDesktopBuilder(opts: MantisTelegramDesktopBuilderOptions) {
+  const runtime = await loadMantisCliRuntime();
+  await runtime.runMantisTelegramDesktopBuilderCommand(opts);
 }
 
 async function runVisualDriver(opts: MantisVisualDriverOptions) {
@@ -96,17 +105,20 @@ type MantisDesktopBrowserSmokeCommanderOptions = {
 
 type MantisSlackDesktopSmokeCommanderOptions = {
   altModel?: string;
+  approvalCheckpoints?: boolean;
   class?: string;
   crabboxBin?: string;
   credentialRole?: string;
   credentialSource?: string;
   fast?: boolean;
+  freshPr?: string;
   gatewaySetup?: boolean;
   hydrateMode?: MantisSlackDesktopHydrateMode;
   idleTimeout?: string;
   keepLease?: boolean;
   leaseId?: string;
   machineClass?: string;
+  market?: string;
   model?: string;
   outputDir?: string;
   provider?: string;
@@ -115,6 +127,25 @@ type MantisSlackDesktopSmokeCommanderOptions = {
   scenario?: string[];
   slackChannelId?: string;
   slackUrl?: string;
+  ttl?: string;
+};
+
+type MantisTelegramDesktopBuilderCommanderOptions = {
+  class?: string;
+  crabboxBin?: string;
+  credentialRole?: string;
+  credentialSource?: string;
+  gatewaySetup?: boolean;
+  hydrateMode?: MantisTelegramDesktopHydrateMode;
+  idleTimeout?: string;
+  keepLease?: boolean;
+  leaseId?: string;
+  machineClass?: string;
+  outputDir?: string;
+  provider?: string;
+  repoRoot?: string;
+  telegramProfileArchiveEnv?: string;
+  telegramProfileDir?: string;
   ttl?: string;
 };
 
@@ -288,12 +319,18 @@ export function registerMantisCli(qa: Command) {
     .option("--provider <provider>", "Crabbox provider")
     .option("--machine-class <class>", "Crabbox machine class")
     .option("--class <class>", "Alias for --machine-class")
+    .option("--market <market>", "Crabbox capacity market: spot or on-demand")
     .option("--lease-id <id>", "Reuse an existing Crabbox lease")
+    .option("--fresh-pr <spec>", "Use Crabbox fresh PR checkout instead of syncing the local tree")
     .option("--idle-timeout <duration>", "Crabbox idle timeout")
     .option("--ttl <duration>", "Crabbox maximum lease lifetime")
     .option("--keep-lease", "Keep a lease created by this run after a passing smoke")
     .option("--no-keep-lease", "Stop a lease created by this run after a passing smoke")
     .option("--gateway-setup", "Start a persistent OpenClaw Slack gateway inside the VNC VM")
+    .option(
+      "--approval-checkpoints",
+      "Run Slack approval scenarios with visual checkpoint screenshot acknowledgements",
+    )
     .option("--slack-url <url>", "Slack web URL to open in the visible browser")
     .option("--slack-channel-id <id>", "Slack channel id for gateway setup allowlist")
     .option("--provider-mode <mode>", "QA provider mode")
@@ -310,18 +347,24 @@ export function registerMantisCli(qa: Command) {
     .option("--credential-role <role>", "Credential role for convex auth")
     .option("--fast", "Enable provider fast mode where supported")
     .action(async (opts: MantisSlackDesktopSmokeCommanderOptions) => {
+      if (opts.approvalCheckpoints && opts.gatewaySetup) {
+        throw new Error("--approval-checkpoints cannot be used with --gateway-setup.");
+      }
       await runSlackDesktopSmoke({
         alternateModel: opts.altModel,
+        approvalCheckpoints: opts.approvalCheckpoints,
         crabboxBin: opts.crabboxBin,
         credentialRole: opts.credentialRole,
         credentialSource: opts.credentialSource,
         fastMode: opts.fast,
+        freshPr: opts.freshPr,
         gatewaySetup: opts.gatewaySetup,
         hydrateMode: opts.hydrateMode,
         idleTimeout: opts.idleTimeout,
         keepLease: opts.keepLease,
         leaseId: opts.leaseId,
         machineClass: opts.machineClass ?? opts.class,
+        market: opts.market,
         outputDir: opts.outputDir,
         primaryModel: opts.model,
         provider: opts.provider,
@@ -330,6 +373,54 @@ export function registerMantisCli(qa: Command) {
         scenarioIds: opts.scenario,
         slackChannelId: opts.slackChannelId,
         slackUrl: opts.slackUrl,
+        ttl: opts.ttl,
+      });
+    });
+
+  mantis
+    .command("telegram-desktop-builder")
+    .description(
+      "Lease or reuse a Crabbox VNC desktop, install Telegram Desktop, configure OpenClaw Telegram with a bot token, and capture screenshot/video artifacts",
+    )
+    .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
+    .option("--output-dir <path>", "Mantis Telegram desktop builder artifact directory")
+    .option("--crabbox-bin <path>", "Crabbox binary path")
+    .option("--provider <provider>", "Crabbox provider")
+    .option("--machine-class <class>", "Crabbox machine class")
+    .option("--class <class>", "Alias for --machine-class")
+    .option("--lease-id <id>", "Reuse an existing Crabbox lease")
+    .option("--idle-timeout <duration>", "Crabbox idle timeout")
+    .option("--ttl <duration>", "Crabbox maximum lease lifetime")
+    .option("--keep-lease", "Keep a lease created by this run after a passing builder run")
+    .option("--no-keep-lease", "Stop a lease created by this run after a passing builder run")
+    .option("--no-gateway-setup", "Install Telegram Desktop only; do not configure OpenClaw")
+    .option("--credential-source <source>", "Credential source for Telegram setup: env or convex")
+    .option("--credential-role <role>", "Credential role for convex auth")
+    .option("--hydrate-mode <mode>", "Remote hydrate mode: source or prehydrated")
+    .option(
+      "--telegram-profile-archive-env <name>",
+      "Env var containing a base64 .tgz Telegram Desktop profile archive",
+    )
+    .option(
+      "--telegram-profile-dir <remote-path>",
+      "Remote Telegram Desktop profile dir restored before app launch",
+    )
+    .action(async (opts: MantisTelegramDesktopBuilderCommanderOptions) => {
+      await runTelegramDesktopBuilder({
+        crabboxBin: opts.crabboxBin,
+        credentialRole: opts.credentialRole,
+        credentialSource: opts.credentialSource,
+        gatewaySetup: opts.gatewaySetup,
+        hydrateMode: opts.hydrateMode,
+        idleTimeout: opts.idleTimeout,
+        keepLease: opts.keepLease,
+        leaseId: opts.leaseId,
+        machineClass: opts.machineClass ?? opts.class,
+        outputDir: opts.outputDir,
+        provider: opts.provider,
+        repoRoot: opts.repoRoot,
+        telegramProfileArchiveEnv: opts.telegramProfileArchiveEnv,
+        telegramProfileDir: opts.telegramProfileDir,
         ttl: opts.ttl,
       });
     });

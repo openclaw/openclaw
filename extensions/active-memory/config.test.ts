@@ -1,5 +1,8 @@
 import fs from "node:fs";
-import { type JsonSchemaObject, validateJsonSchemaValue } from "openclaw/plugin-sdk/config-schema";
+import {
+  type JsonSchemaObject,
+  validateJsonSchemaValue,
+} from "openclaw/plugin-sdk/json-schema-runtime";
 import { describe, expect, it } from "vitest";
 
 const manifest = JSON.parse(
@@ -20,6 +23,34 @@ describe("active-memory manifest config schema", () => {
     });
 
     expect(result.ok).toBe(true);
+  });
+
+  it("accepts custom toolsAllow entries", () => {
+    const result = validateJsonSchemaValue({
+      schema: manifest.configSchema,
+      cacheKey: "active-memory.manifest.tools-allow",
+      value: {
+        enabled: true,
+        agents: ["main"],
+        toolsAllow: ["lcm_grep", "lcm_describe", "lcm_expand_query"],
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects wildcard and group toolsAllow entries", () => {
+    const result = validateJsonSchemaValue({
+      schema: manifest.configSchema,
+      cacheKey: "active-memory.manifest.tools-allow.reserved",
+      value: {
+        enabled: true,
+        agents: ["main"],
+        toolsAllow: ["*", "group:plugins"],
+      },
+    });
+
+    expect(result.ok).toBe(false);
   });
 
   it("accepts timeoutMs values at the runtime ceiling", () => {

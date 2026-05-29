@@ -1,4 +1,4 @@
-import type { Api, AssistantMessage, Context, Model } from "@mariozechner/pi-ai";
+import type { AssistantMessage, Context, Model } from "../llm/types.js";
 
 export const LIVE_MODEL_FILE_PROBE_TOKEN = "opal";
 
@@ -10,7 +10,7 @@ const PROBE_PNG_BASE64 =
 
 const KNOWN_EMPTY_EXTRA_PROBE_MODELS = new Set(["openrouter/amazon/nova-2-lite-v1"]);
 const KNOWN_EMPTY_FILE_PROBE_MODELS = new Set([
-  "google/gemini-3-pro-preview",
+  "google/gemini-3.1-pro-preview",
   "google/gemini-3.1-pro-preview-customtools",
   "opencode-go/glm-5",
   "opencode-go/glm-5.1",
@@ -44,7 +44,7 @@ const KNOWN_EMPTY_IMAGE_PROBE_MODELS = new Set([
   "openrouter/bytedance-seed/seed-1.6",
 ]);
 
-function modelKey(model: Pick<Model<Api>, "id" | "provider">): string {
+function modelKey(model: Pick<Model, "id" | "provider">): string {
   return `${model.provider}/${model.id}`;
 }
 
@@ -67,24 +67,22 @@ export function extractAssistantText(message: Pick<AssistantMessage, "content">)
     .join(" ");
 }
 
-export function modelSupportsImageInput(model: Pick<Model<Api>, "input">): boolean {
+export function modelSupportsImageInput(model: Pick<Model, "input">): boolean {
   return model.input.includes("image");
 }
 
-export function shouldSkipLiveModelExtraProbes(
-  model: Pick<Model<Api>, "id" | "provider">,
-): boolean {
+export function shouldSkipLiveModelExtraProbes(model: Pick<Model, "id" | "provider">): boolean {
   return KNOWN_EMPTY_EXTRA_PROBE_MODELS.has(modelKey(model));
 }
 
-export function shouldSkipLiveModelFileProbe(model: Pick<Model<Api>, "id" | "provider">): boolean {
+export function shouldSkipLiveModelFileProbe(model: Pick<Model, "id" | "provider">): boolean {
   if (model.provider === "opencode-go") {
     return true;
   }
   return KNOWN_EMPTY_FILE_PROBE_MODELS.has(modelKey(model));
 }
 
-export function shouldSkipLiveModelImageProbe(model: Pick<Model<Api>, "id" | "provider">): boolean {
+export function shouldSkipLiveModelImageProbe(model: Pick<Model, "id" | "provider">): boolean {
   return KNOWN_EMPTY_IMAGE_PROBE_MODELS.has(modelKey(model));
 }
 

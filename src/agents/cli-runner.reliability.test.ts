@@ -1,15 +1,19 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
+import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  __testing as replyRunTesting,
+  testing as replyRunTesting,
   createReplyOperation,
   replyRunRegistry,
 } from "../auto-reply/reply/reply-run-registry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import {
+  createUserTurnTranscriptRecorder,
+  type UserTurnTranscriptRecorder,
+} from "../sessions/user-turn-transcript.js";
 import { runPreparedCliAgent } from "./cli-runner.js";
 import {
   createManagedRun,
@@ -102,6 +106,23 @@ function createSessionFile(params?: { history?: Array<{ role: "user"; content: s
   return { dir, sessionFile, storePath };
 }
 
+function createCliUserTurnRecorder(params: {
+  text: string;
+  sessionFile: string;
+  sessionKey?: string;
+  workspaceDir: string;
+}) {
+  return createUserTurnTranscriptRecorder({
+    input: { text: params.text },
+    target: {
+      transcriptPath: params.sessionFile,
+      sessionId: "s1",
+      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+      cwd: params.workspaceDir,
+    },
+  });
+}
+
 function buildPreparedContext(params?: {
   sessionKey?: string;
   cliSessionId?: string;
@@ -145,8 +166,15 @@ function buildPreparedContext(params?: {
       env: {},
     },
     reusableCliSession: params?.cliSessionId ? { sessionId: params.cliSessionId } : {},
+    hadSessionFile: false,
+    contextEngineConfig: {},
     modelId: "gpt-5.4",
     normalizedModel: "gpt-5.4",
+    contextWindowInfo: {
+      tokens: 150_000,
+      referenceTokens: 200_000,
+      source: "agentContextTokens",
+    },
     systemPrompt: "You are a helpful assistant.",
     systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
     bootstrapPromptWarningLines: [],
@@ -155,6 +183,74 @@ function buildPreparedContext(params?: {
       : {}),
     authEpochVersion: 2,
   };
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireArray(value: unknown, label: string): Array<unknown> {
+  expect(Array.isArray(value), label).toBe(true);
+  return value as Array<unknown>;
+}
+
+function callArg(
+  mock: { mock: { calls: Array<Array<unknown>> } },
+  callIndex: number,
+  argIndex: number,
+  label: string,
+) {
+  const call = mock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`Expected mock call: ${label}`);
+  }
+  if (argIndex >= call.length) {
+    throw new Error(`Expected mock call argument ${argIndex}: ${label}`);
+  }
+  return call[argIndex];
+}
+
+function firstSystemEventCall(): Array<unknown> {
+  const call = enqueueSystemEventMock.mock.calls[0];
+  if (!call) {
+    throw new Error("expected system event call");
+  }
+  return call;
+}
+
+async function expectFailoverAttribution(
+  run: Promise<unknown>,
+  expected: { sessionId: string; lane: string },
+) {
+  try {
+    await run;
+    throw new Error("expected run to fail");
+  } catch (error) {
+    const failure = requireRecord(error, "failover error");
+    expect(failure.name).toBe("FailoverError");
+    expect(failure.sessionId).toBe(expected.sessionId);
+    expect(failure.lane).toBe(expected.lane);
+  }
+}
+
+function expectTextMessage(value: unknown, fields: { role: string; content: string }) {
+  const message = requireRecord(value, "message");
+  expect(message.role).toBe(fields.role);
+  expect(message.content).toBe(fields.content);
+  expect(message.timestamp).toBeTypeOf("number");
+}
+
+function readTranscriptMessages(sessionFile: string): unknown[] {
+  return fs
+    .readFileSync(sessionFile, "utf-8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as { message?: unknown })
+    .map((entry) => entry.message)
+    .filter(Boolean);
 }
 
 describe("runCliAgent reliability", () => {
@@ -201,7 +297,7 @@ describe("runCliAgent reliability", () => {
       }),
     );
 
-    await expect(
+    await expectFailoverAttribution(
       executePreparedCliRun(
         buildPreparedContext({
           cliSessionId: "thread-123",
@@ -210,11 +306,8 @@ describe("runCliAgent reliability", () => {
         }),
         "thread-123",
       ),
-    ).rejects.toMatchObject({
-      name: "FailoverError",
-      sessionId: "s1",
-      lane: "custom-lane",
-    });
+      { sessionId: "s1", lane: "custom-lane" },
+    );
   });
 
   it("enqueues a system event and heartbeat wake on no-output watchdog timeout for session runs", async () => {
@@ -243,10 +336,10 @@ describe("runCliAgent reliability", () => {
     ).rejects.toThrow("produced no output");
 
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
-    const [notice, opts] = enqueueSystemEventMock.mock.calls[0] ?? [];
+    const [notice, opts] = firstSystemEventCall();
     expect(String(notice)).toContain("produced no output");
     expect(String(notice)).toContain("interactive input or an approval prompt");
-    expect(opts).toMatchObject({ sessionKey: "agent:main:main" });
+    expect(requireRecord(opts, "system event options").sessionKey).toBe("agent:main:main");
     expect(requestHeartbeatMock).toHaveBeenCalledWith({
       source: "cli-watchdog",
       intent: "event",
@@ -340,17 +433,17 @@ describe("runCliAgent reliability", () => {
         expect(hookRunner.runLlmInput).toHaveBeenCalledTimes(1);
         expect(hookRunner.runAgentEnd).toHaveBeenCalledTimes(1);
       });
-      expect(hookRunner.runAgentEnd).toHaveBeenCalledWith(
-        expect.objectContaining({
-          success: false,
-          error: "rate limit exceeded",
-          messages: [
-            { role: "user", content: "earlier context", timestamp: expect.any(Number) },
-            { role: "user", content: "hi", timestamp: expect.any(Number) },
-          ],
-        }),
-        expect.any(Object),
+      const agentEndEvent = requireRecord(
+        callArg(hookRunner.runAgentEnd, 0, 0, "agent_end event"),
+        "agent_end event",
       );
+      expect(agentEndEvent.success).toBe(false);
+      expect(agentEndEvent.error).toBe("rate limit exceeded");
+      const messages = requireArray(agentEndEvent.messages, "agent_end messages");
+      expect(messages).toHaveLength(2);
+      expectTextMessage(messages[0], { role: "user", content: "earlier context" });
+      expectTextMessage(messages[1], { role: "user", content: "hi" });
+      expect(callArg(hookRunner.runAgentEnd, 0, 1, "agent_end context")).toBeTypeOf("object");
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -378,21 +471,20 @@ describe("runCliAgent reliability", () => {
     expect(result.meta.finalPromptText).toContain("Warning: prompt budget low.");
     expect(result.meta.finalPromptText).toContain("hi");
     expect(result.meta.finalAssistantRawText).toBe("hello from cli");
-    expect(result.meta.executionTrace).toMatchObject({
-      winnerProvider: "codex-cli",
-      winnerModel: "gpt-5.4",
-      fallbackUsed: false,
-      runner: "cli",
-      attempts: [{ provider: "codex-cli", model: "gpt-5.4", result: "success" }],
-    });
-    expect(result.meta.requestShaping).toMatchObject({
-      thinking: "low",
-    });
-    expect(result.meta.completion).toMatchObject({
-      finishReason: "stop",
-      stopReason: "completed",
-      refusal: false,
-    });
+    const executionTrace = requireRecord(result.meta.executionTrace, "execution trace");
+    expect(executionTrace.winnerProvider).toBe("codex-cli");
+    expect(executionTrace.winnerModel).toBe("gpt-5.4");
+    expect(executionTrace.fallbackUsed).toBe(false);
+    expect(executionTrace.runner).toBe("cli");
+    expect(executionTrace.attempts).toEqual([
+      { provider: "codex-cli", model: "gpt-5.4", result: "success" },
+    ]);
+    const requestShaping = requireRecord(result.meta.requestShaping, "request shaping");
+    expect(requestShaping.thinking).toBe("low");
+    const completion = requireRecord(result.meta.completion, "completion");
+    expect(completion.finishReason).toBe("stop");
+    expect(completion.stopReason).toBe("completed");
+    expect(completion.refusal).toBe(false);
   });
 
   it("seeds fresh CLI sessions from the OpenClaw transcript", async () => {
@@ -496,7 +588,8 @@ describe("runCliAgent reliability", () => {
     });
 
     finishRun?.();
-    await expect(run).resolves.toMatchObject({ text: "hello from cli" });
+    const result = await run;
+    expect(result.text).toBe("hello from cli");
     expect(replyRunRegistry.isStreaming("agent:main:main")).toBe(false);
     operation.complete();
   });
@@ -576,57 +669,463 @@ describe("runCliAgent reliability", () => {
         expect(hookRunner.runAgentEnd).toHaveBeenCalledTimes(1);
       });
 
-      expect(hookRunner.runLlmInput).toHaveBeenCalledWith(
-        expect.objectContaining({
-          runId: "run-2",
-          sessionId: "s1",
-          provider: "codex-cli",
-          model: "gpt-5.4",
-          prompt: "hi",
-          systemPrompt: "You are a helpful assistant.",
-          historyMessages: expect.any(Array),
-          imagesCount: 0,
-        }),
-        expect.objectContaining({
-          runId: "run-2",
+      const llmInputEvent = requireRecord(
+        callArg(hookRunner.runLlmInput, 0, 0, "llm_input event"),
+        "llm_input event",
+      );
+      expect(llmInputEvent.runId).toBe("run-2");
+      expect(llmInputEvent.sessionId).toBe("s1");
+      expect(llmInputEvent.provider).toBe("codex-cli");
+      expect(llmInputEvent.model).toBe("gpt-5.4");
+      expect(llmInputEvent.prompt).toBe("hi");
+      expect(llmInputEvent.systemPrompt).toBe("You are a helpful assistant.");
+      expect(Array.isArray(llmInputEvent.historyMessages)).toBe(true);
+      expect(llmInputEvent.imagesCount).toBe(0);
+
+      const llmInputContext = requireRecord(
+        callArg(hookRunner.runLlmInput, 0, 1, "llm_input context"),
+        "llm_input context",
+      );
+      expect(llmInputContext.runId).toBe("run-2");
+      expect(llmInputContext.agentId).toBe("main");
+      expect(llmInputContext.sessionKey).toBe("agent:main:main");
+      expect(llmInputContext.sessionId).toBe("s1");
+      expect(llmInputContext.workspaceDir).toBe(dir);
+      expect(llmInputContext.messageProvider).toBe("acp");
+      expect(llmInputContext.trigger).toBe("user");
+      expect(llmInputContext.channelId).toBe("telegram");
+
+      const llmOutputEvent = requireRecord(
+        callArg(hookRunner.runLlmOutput, 0, 0, "llm_output event"),
+        "llm_output event",
+      );
+      expect(llmOutputEvent.runId).toBe("run-2");
+      expect(llmOutputEvent.sessionId).toBe("s1");
+      expect(llmOutputEvent.provider).toBe("codex-cli");
+      expect(llmOutputEvent.model).toBe("gpt-5.4");
+      expect(llmOutputEvent.contextTokenBudget).toBe(150_000);
+      expect(llmOutputEvent.contextWindowSource).toBe("agentContextTokens");
+      expect(llmOutputEvent.contextWindowReferenceTokens).toBe(200_000);
+      expect(llmOutputEvent.assistantTexts).toEqual(["hello from cli"]);
+      const lastAssistant = requireRecord(llmOutputEvent.lastAssistant, "last assistant");
+      expect(lastAssistant.role).toBe("assistant");
+      expect(lastAssistant.content).toEqual([{ type: "text", text: "hello from cli" }]);
+      expect(lastAssistant.provider).toBe("codex-cli");
+      expect(lastAssistant.model).toBe("gpt-5.4");
+      const llmOutputContext = requireRecord(
+        callArg(hookRunner.runLlmOutput, 0, 1, "llm_output context"),
+        "llm_output context",
+      );
+      expect(llmOutputContext.contextTokenBudget).toBe(150_000);
+      expect(llmOutputContext.contextWindowSource).toBe("agentContextTokens");
+      expect(llmOutputContext.contextWindowReferenceTokens).toBe(200_000);
+
+      const agentEndEvent = requireRecord(
+        callArg(hookRunner.runAgentEnd, 0, 0, "agent_end event"),
+        "agent_end event",
+      );
+      expect(agentEndEvent.success).toBe(true);
+      const messages = requireArray(agentEndEvent.messages, "agent_end messages");
+      expect(messages).toHaveLength(2);
+      expectTextMessage(messages[0], { role: "user", content: "hi" });
+      const assistantMessage = requireRecord(messages[1], "assistant message");
+      expect(assistantMessage.role).toBe("assistant");
+      expect(assistantMessage.content).toEqual([{ type: "text", text: "hello from cli" }]);
+      expect(callArg(hookRunner.runAgentEnd, 0, 1, "agent_end context")).toBeTypeOf("object");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("waits for agent_end hooks before resolving successful CLI runs", async () => {
+    let releaseAgentEnd: () => void = () => undefined;
+    const agentEndSettled = new Promise<void>((resolve) => {
+      releaseAgentEnd = resolve;
+    });
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "agent_end"),
+      runLlmInput: vi.fn(async () => undefined),
+      runLlmOutput: vi.fn(async () => undefined),
+      runAgentEnd: vi.fn(() => agentEndSettled),
+    };
+    setHookRunnerForTest(hookRunner);
+
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "hello from cli",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    let resolved = false;
+    const run = runPreparedCliAgent(buildPreparedContext()).then((result) => {
+      resolved = true;
+      return result;
+    });
+
+    await vi.waitFor(() => {
+      expect(hookRunner.runAgentEnd).toHaveBeenCalledTimes(1);
+    });
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+
+    releaseAgentEnd();
+    await expect(run).resolves.toMatchObject({
+      payloads: [{ text: "hello from cli" }],
+    });
+    expect(resolved).toBe(true);
+  });
+
+  it("does not wait for agent_end hooks before resolving channel-backed CLI runs", async () => {
+    let releaseAgentEnd: () => void = () => undefined;
+    const agentEndSettled = new Promise<void>((resolve) => {
+      releaseAgentEnd = resolve;
+    });
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "agent_end"),
+      runLlmInput: vi.fn(async () => undefined),
+      runLlmOutput: vi.fn(async () => undefined),
+      runAgentEnd: vi.fn(() => agentEndSettled),
+    };
+    setHookRunnerForTest(hookRunner);
+
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "hello from cli",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    const context = buildPreparedContext();
+    let resolved = false;
+    const run = runPreparedCliAgent({
+      ...context,
+      params: {
+        ...context.params,
+        messageProvider: "acp",
+        messageChannel: "telegram",
+      },
+    }).then((result) => {
+      resolved = true;
+      return result;
+    });
+
+    await vi.waitFor(() => {
+      expect(hookRunner.runAgentEnd).toHaveBeenCalledTimes(1);
+    });
+    await vi.waitFor(() => {
+      expect(resolved).toBe(true);
+    });
+
+    await expect(run).resolves.toMatchObject({
+      payloads: [{ text: "hello from cli" }],
+    });
+    expect(callArg(hookRunner.runAgentEnd, 0, 2, "agent_end options")).toEqual({
+      unrefTimeout: true,
+    });
+
+    releaseAgentEnd();
+  });
+
+  it("persists approved CLI user turns before model execution", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "hello from cli",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+    const { dir, sessionFile } = createSessionFile();
+    const onUserMessagePersisted = vi.fn();
+
+    try {
+      const context = buildPreparedContext({
+        sessionKey: "agent:main:main",
+        runId: "run-persist-cli",
+      });
+      const result = await runPreparedCliAgent({
+        ...context,
+        params: {
+          ...context.params,
           agentId: "main",
-          sessionKey: "agent:main:main",
-          sessionId: "s1",
+          sessionFile,
           workspaceDir: dir,
-          messageProvider: "acp",
-          trigger: "user",
-          channelId: "telegram",
-        }),
-      );
-      expect(hookRunner.runLlmOutput).toHaveBeenCalledWith(
-        expect.objectContaining({
-          runId: "run-2",
-          sessionId: "s1",
-          provider: "codex-cli",
-          model: "gpt-5.4",
-          assistantTexts: ["hello from cli"],
-          lastAssistant: expect.objectContaining({
-            role: "assistant",
-            content: [{ type: "text", text: "hello from cli" }],
-            provider: "codex-cli",
-            model: "gpt-5.4",
+          prompt: "runtime prompt",
+          userTurnTranscriptRecorder: createCliUserTurnRecorder({
+            text: "display prompt",
+            sessionFile,
+            sessionKey: "agent:main:main",
+            workspaceDir: dir,
           }),
-        }),
-        expect.any(Object),
-      );
-      expect(hookRunner.runAgentEnd).toHaveBeenCalledWith(
+          onUserMessagePersisted,
+        },
+      });
+
+      expect(result.payloads).toEqual([{ text: "hello from cli" }]);
+      expect(onUserMessagePersisted).toHaveBeenCalledOnce();
+      expect(onUserMessagePersisted).toHaveBeenCalledWith(
         expect.objectContaining({
-          success: true,
-          messages: [
-            { role: "user", content: "hi", timestamp: expect.any(Number) },
-            expect.objectContaining({
-              role: "assistant",
-              content: [{ type: "text", text: "hello from cli" }],
-            }),
-          ],
+          role: "user",
+          content: "display prompt",
         }),
-        expect.any(Object),
       );
+
+      const messages = readTranscriptMessages(sessionFile);
+      expect(messages).toContainEqual(
+        expect.objectContaining({
+          role: "user",
+          content: "display prompt",
+        }),
+      );
+      expect(JSON.stringify(messages)).not.toContain("runtime prompt");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("passes cwd to approved CLI user-turn persistence", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "hello from cli",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+    const { dir, sessionFile } = createSessionFile();
+    const taskDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-persist-cwd-"));
+    let capturedTarget: unknown;
+    const recorder = {
+      message: undefined,
+      resolveMessage: vi.fn(async () => undefined),
+      markRuntimePersistencePending: vi.fn(),
+      markRuntimePersisted: vi.fn(),
+      markBlocked: vi.fn(),
+      hasPersisted: vi.fn(() => false),
+      isBlocked: vi.fn(() => false),
+      hasRuntimePersistencePending: vi.fn(() => false),
+      waitForRuntimePersistence: vi.fn(async () => undefined),
+      persistApproved: vi.fn(async (options?: { target?: unknown }) => {
+        capturedTarget =
+          typeof options?.target === "function" ? await options.target() : options?.target;
+        return {
+          sessionFile,
+          sessionEntry: undefined,
+          messageId: "message-1",
+          message: {
+            role: "user",
+            content: "display prompt",
+          },
+        };
+      }),
+      persistFallback: vi.fn(async () => undefined),
+    } as unknown as UserTurnTranscriptRecorder;
+
+    try {
+      const context = buildPreparedContext({
+        sessionKey: "agent:main:main",
+        runId: "run-persist-cli-cwd",
+      });
+      const result = await runPreparedCliAgent({
+        ...context,
+        params: {
+          ...context.params,
+          agentId: "main",
+          sessionFile,
+          workspaceDir: dir,
+          cwd: taskDir,
+          prompt: "runtime prompt",
+          userTurnTranscriptRecorder: recorder,
+        },
+      });
+
+      expect(result.payloads).toEqual([{ text: "hello from cli" }]);
+      expect(recorder.persistApproved).toHaveBeenCalledOnce();
+      expect(capturedTarget).toEqual(
+        expect.objectContaining({
+          transcriptPath: sessionFile,
+          sessionId: context.params.sessionId,
+          sessionKey: "agent:main:main",
+          cwd: taskDir,
+        }),
+      );
+    } finally {
+      fs.rmSync(taskDir, { recursive: true, force: true });
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses an existing user-turn recorder for approved CLI persistence", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "hello from cli",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+    const { dir, sessionFile } = createSessionFile();
+    const recorder = createUserTurnTranscriptRecorder({
+      input: {
+        text: "recorder display prompt",
+        media: [{ path: "/tmp/image.png", contentType: "image/png" }],
+        timestamp: 123,
+        idempotencyKey: "cli-recorder:user",
+      },
+      target: {
+        transcriptPath: sessionFile,
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        cwd: dir,
+      },
+      updateMode: "none",
+    });
+
+    try {
+      const context = buildPreparedContext({
+        sessionKey: "agent:main:main",
+        runId: "run-persist-cli-recorder",
+      });
+      const result = await runPreparedCliAgent({
+        ...context,
+        params: {
+          ...context.params,
+          agentId: "main",
+          sessionFile,
+          workspaceDir: dir,
+          prompt: "runtime prompt",
+          userTurnTranscriptRecorder: recorder,
+        },
+      });
+
+      expect(result.payloads).toEqual([{ text: "hello from cli" }]);
+      expect(recorder.hasPersisted()).toBe(true);
+
+      const messages = readTranscriptMessages(sessionFile);
+      expect(messages).toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: "recorder display prompt",
+          MediaPath: "/tmp/image.png",
+          MediaType: "image/png",
+          timestamp: 123,
+          idempotencyKey: "cli-recorder:user",
+        }),
+      ]);
+      expect(JSON.stringify(messages)).not.toContain("legacy display prompt");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not fail CLI execution when persistence notification fails", async () => {
+    supervisorSpawnMock.mockClear();
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "hello despite notification failure",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+    const { dir, sessionFile } = createSessionFile();
+
+    try {
+      const context = buildPreparedContext({
+        sessionKey: "agent:main:main",
+        runId: "run-persist-notify-fail",
+      });
+      const result = await runPreparedCliAgent({
+        ...context,
+        params: {
+          ...context.params,
+          agentId: "main",
+          sessionFile,
+          workspaceDir: dir,
+          prompt: "runtime prompt",
+          userTurnTranscriptRecorder: createCliUserTurnRecorder({
+            text: "display prompt",
+            sessionFile,
+            sessionKey: "agent:main:main",
+            workspaceDir: dir,
+          }),
+          onUserMessagePersisted: () => {
+            throw new Error("notification failed");
+          },
+        },
+      });
+
+      expect(result.payloads).toEqual([{ text: "hello despite notification failure" }]);
+      expect(supervisorSpawnMock).toHaveBeenCalledOnce();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not execute the CLI when approved user turn persistence fails", async () => {
+    supervisorSpawnMock.mockClear();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-persist-fail-"));
+    const blockedParent = path.join(dir, "not-a-directory");
+    fs.writeFileSync(blockedParent, "occupied", "utf-8");
+    const onUserMessagePersisted = vi.fn();
+
+    try {
+      const context = buildPreparedContext({
+        sessionKey: "agent:main:main",
+        runId: "run-persist-fails",
+      });
+
+      await expect(
+        runPreparedCliAgent({
+          ...context,
+          params: {
+            ...context.params,
+            agentId: "main",
+            sessionFile: path.join(blockedParent, "s1.jsonl"),
+            workspaceDir: dir,
+            prompt: "runtime prompt",
+            userTurnTranscriptRecorder: createCliUserTurnRecorder({
+              text: "display prompt",
+              sessionFile: path.join(blockedParent, "s1.jsonl"),
+              sessionKey: "agent:main:main",
+              workspaceDir: dir,
+            }),
+            onUserMessagePersisted,
+          },
+        }),
+      ).rejects.toThrow();
+
+      expect(supervisorSpawnMock).not.toHaveBeenCalled();
+      expect(onUserMessagePersisted).not.toHaveBeenCalled();
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -634,6 +1133,11 @@ describe("runCliAgent reliability", () => {
 
   it("blocks CLI runs before llm_input and model execution when before_agent_run blocks", async () => {
     supervisorSpawnMock.mockClear();
+    const onUserMessagePersisted = vi.fn();
+    let releaseAgentEnd: () => void = () => undefined;
+    const agentEndSettled = new Promise<void>((resolve) => {
+      releaseAgentEnd = resolve;
+    });
     const hookRunner = {
       hasHooks: vi.fn((hookName: string) =>
         ["before_agent_run", "llm_input", "agent_end"].includes(hookName),
@@ -647,7 +1151,7 @@ describe("runCliAgent reliability", () => {
         },
       })),
       runLlmInput: vi.fn(async () => undefined),
-      runAgentEnd: vi.fn(async () => undefined),
+      runAgentEnd: vi.fn(() => agentEndSettled),
     };
     setHookRunnerForTest(hookRunner);
     const { dir, sessionFile } = createSessionFile({
@@ -655,17 +1159,40 @@ describe("runCliAgent reliability", () => {
     });
 
     try {
-      const result = await runPreparedCliAgent({
-        ...buildPreparedContext({ sessionKey: "agent:main:main", runId: "run-blocked-cli" }),
+      let resolved = false;
+      const context = buildPreparedContext({
+        sessionKey: "agent:main:main",
+        runId: "run-blocked-cli",
+      });
+      const run = runPreparedCliAgent({
+        ...context,
         params: {
-          ...buildPreparedContext({ sessionKey: "agent:main:main", runId: "run-blocked-cli" })
-            .params,
+          ...context.params,
           agentId: "main",
           sessionFile,
           workspaceDir: dir,
           prompt: "secret prompt",
+          userTurnTranscriptRecorder: createCliUserTurnRecorder({
+            text: "secret prompt",
+            sessionFile,
+            sessionKey: "agent:main:main",
+            workspaceDir: dir,
+          }),
+          onUserMessagePersisted,
         },
+      }).then((result) => {
+        resolved = true;
+        return result;
       });
+
+      await vi.waitFor(() => {
+        expect(hookRunner.runAgentEnd).toHaveBeenCalledTimes(1);
+      });
+      await Promise.resolve();
+      expect(resolved).toBe(false);
+
+      releaseAgentEnd();
+      const result = await run;
 
       expect(result.payloads).toEqual([
         {
@@ -676,37 +1203,47 @@ describe("runCliAgent reliability", () => {
       expect(result.meta.livenessState).toBe("blocked");
       expect(supervisorSpawnMock).not.toHaveBeenCalled();
       expect(hookRunner.runLlmInput).not.toHaveBeenCalled();
-      expect(hookRunner.runBeforeAgentRun).toHaveBeenCalledWith(
-        expect.objectContaining({
-          prompt: "secret prompt",
-          messages: expect.arrayContaining([
-            expect.objectContaining({ role: "user", content: "earlier context" }),
-          ]),
-        }),
-        expect.objectContaining({
-          runId: "run-blocked-cli",
-          agentId: "main",
-          sessionKey: "agent:main:main",
-        }),
+      expect(onUserMessagePersisted).not.toHaveBeenCalled();
+      const beforeRunEvent = requireRecord(
+        callArg(hookRunner.runBeforeAgentRun, 0, 0, "before_agent_run event"),
+        "before_agent_run event",
       );
-      await vi.waitFor(() => {
-        expect(hookRunner.runAgentEnd).toHaveBeenCalledTimes(1);
-      });
-      expect(hookRunner.runAgentEnd).toHaveBeenCalledWith(
-        expect.objectContaining({
-          success: false,
-          error:
-            "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
-          messages: expect.arrayContaining([
-            expect.objectContaining({
-              role: "user",
-              content:
-                "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
-            }),
-          ]),
+      expect(beforeRunEvent.prompt).toBe("secret prompt");
+      const beforeRunMessages = requireArray(beforeRunEvent.messages, "before_agent_run messages");
+      expect(
+        beforeRunMessages.some((message) => {
+          const record = requireRecord(message, "before_agent_run message");
+          return record.role === "user" && record.content === "earlier context";
         }),
-        expect.any(Object),
+      ).toBe(true);
+      const beforeRunContext = requireRecord(
+        callArg(hookRunner.runBeforeAgentRun, 0, 1, "before_agent_run context"),
+        "before_agent_run context",
       );
+      expect(beforeRunContext.runId).toBe("run-blocked-cli");
+      expect(beforeRunContext.agentId).toBe("main");
+      expect(beforeRunContext.sessionKey).toBe("agent:main:main");
+      expect(resolved).toBe(true);
+      const agentEndEvent = requireRecord(
+        callArg(hookRunner.runAgentEnd, 0, 0, "agent_end event"),
+        "agent_end event",
+      );
+      expect(agentEndEvent.success).toBe(false);
+      expect(agentEndEvent.error).toBe(
+        "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
+      );
+      const agentEndMessages = requireArray(agentEndEvent.messages, "agent_end messages");
+      expect(
+        agentEndMessages.some((message) => {
+          const record = requireRecord(message, "agent_end message");
+          return (
+            record.role === "user" &&
+            record.content ===
+              "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)"
+          );
+        }),
+      ).toBe(true);
+      expect(callArg(hookRunner.runAgentEnd, 0, 1, "agent_end context")).toBeTypeOf("object");
       expect(JSON.stringify(hookRunner.runAgentEnd.mock.calls)).not.toContain("secret prompt");
 
       const lines = fs.readFileSync(sessionFile, "utf-8").trim().split("\n");
@@ -716,11 +1253,11 @@ describe("runCliAgent reliability", () => {
       );
       expect(JSON.stringify(blockedLine)).not.toContain("secret prompt");
       expect(JSON.stringify(blockedLine)).not.toContain("matched secret prompt");
-      expect(blockedLine.message.__openclaw.beforeAgentRunBlocked).toMatchObject({
-        blockedBy: "policy-plugin",
-      });
-      expect(blockedLine.message.__openclaw.beforeAgentRunBlocked).not.toHaveProperty("reason");
-      expect(Object.hasOwn(blockedLine.message.__openclaw, "beforeAgentRunBlocked")).toBe(true);
+      expect(blockedLine.message["__openclaw"].beforeAgentRunBlocked.blockedBy).toBe(
+        "policy-plugin",
+      );
+      expect(blockedLine.message["__openclaw"].beforeAgentRunBlocked).not.toHaveProperty("reason");
+      expect(Object.hasOwn(blockedLine.message["__openclaw"], "beforeAgentRunBlocked")).toBe(true);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -748,18 +1285,22 @@ describe("runCliAgent reliability", () => {
       }),
     );
 
-    const result = await runPreparedCliAgent(buildPreparedContext());
-
-    expect(result.payloads).toBeUndefined();
+    await expect(runPreparedCliAgent(buildPreparedContext())).rejects.toThrow(
+      "CLI backend returned an empty response.",
+    );
     expect(hookRunner.runLlmOutput).not.toHaveBeenCalled();
   });
 
   it("emits agent_end with failure details when the CLI run fails", async () => {
+    let releaseAgentEnd: () => void = () => undefined;
+    const agentEndSettled = new Promise<void>((resolve) => {
+      releaseAgentEnd = resolve;
+    });
     const hookRunner = {
       hasHooks: vi.fn((hookName: string) => ["llm_input", "agent_end"].includes(hookName)),
       runLlmInput: vi.fn(async () => undefined),
       runLlmOutput: vi.fn(async () => undefined),
-      runAgentEnd: vi.fn(async () => undefined),
+      runAgentEnd: vi.fn(() => agentEndSettled),
     };
     setHookRunnerForTest(hookRunner);
 
@@ -776,24 +1317,33 @@ describe("runCliAgent reliability", () => {
       }),
     );
 
-    await expect(runPreparedCliAgent(buildPreparedContext())).rejects.toThrow(
-      "rate limit exceeded",
-    );
+    let settled = false;
+    const run = runPreparedCliAgent(buildPreparedContext()).finally(() => {
+      settled = true;
+    });
 
     await vi.waitFor(() => {
       expect(hookRunner.runLlmInput).toHaveBeenCalledTimes(1);
       expect(hookRunner.runLlmOutput).not.toHaveBeenCalled();
       expect(hookRunner.runAgentEnd).toHaveBeenCalledTimes(1);
     });
+    await Promise.resolve();
+    expect(settled).toBe(false);
 
-    expect(hookRunner.runAgentEnd).toHaveBeenCalledWith(
-      expect.objectContaining({
-        success: false,
-        error: "rate limit exceeded",
-        messages: [{ role: "user", content: "hi", timestamp: expect.any(Number) }],
-      }),
-      expect.any(Object),
+    releaseAgentEnd();
+    await expect(run).rejects.toThrow("rate limit exceeded");
+    expect(settled).toBe(true);
+
+    const agentEndEvent = requireRecord(
+      callArg(hookRunner.runAgentEnd, 0, 0, "agent_end event"),
+      "agent_end event",
     );
+    expect(agentEndEvent.success).toBe(false);
+    expect(agentEndEvent.error).toBe("rate limit exceeded");
+    const messages = requireArray(agentEndEvent.messages, "agent_end messages");
+    expect(messages).toHaveLength(1);
+    expectTextMessage(messages[0], { role: "user", content: "hi" });
+    expect(callArg(hookRunner.runAgentEnd, 0, 1, "agent_end context")).toBeTypeOf("object");
   });
 
   it("does not emit duplicate llm_input when session-expired recovery succeeds", async () => {
@@ -839,41 +1389,45 @@ describe("runCliAgent reliability", () => {
     );
 
     try {
-      await expect(
-        runPreparedCliAgent({
+      const result = await runPreparedCliAgent({
+        ...buildPreparedContext({
+          sessionKey: "agent:main:main",
+          runId: "run-retry-success",
+          cliSessionId: "thread-123",
+          openClawHistoryPrompt:
+            "Continue this conversation using the OpenClaw transcript below.\n\nUser: recovered history\n\n<next_user_message>\nhi\n</next_user_message>",
+        }),
+        params: {
           ...buildPreparedContext({
             sessionKey: "agent:main:main",
             runId: "run-retry-success",
             cliSessionId: "thread-123",
-          }),
-          params: {
-            ...buildPreparedContext({
-              sessionKey: "agent:main:main",
-              runId: "run-retry-success",
-              cliSessionId: "thread-123",
-            }).params,
-            agentId: "main",
-            sessionFile,
-            workspaceDir: dir,
-          },
-        }),
-      ).resolves.toMatchObject({
-        payloads: [{ text: "recovered output" }],
+            openClawHistoryPrompt:
+              "Continue this conversation using the OpenClaw transcript below.\n\nUser: recovered history\n\n<next_user_message>\nhi\n</next_user_message>",
+          }).params,
+          agentId: "main",
+          sessionFile,
+          workspaceDir: dir,
+        },
       });
+
+      expect(result.payloads).toEqual([{ text: "recovered output" }]);
+      expect(result.meta.finalPromptText).toContain("User: recovered history");
 
       await vi.waitFor(() => {
         expect(hookRunner.runLlmInput).toHaveBeenCalledTimes(1);
         expect(hookRunner.runLlmOutput).toHaveBeenCalledTimes(1);
         expect(hookRunner.runAgentEnd).toHaveBeenCalledTimes(1);
       });
-      const llmInputCalls = hookRunner.runLlmInput.mock.calls as unknown as Array<Array<unknown>>;
-      const llmInputEvent = llmInputCalls[0]?.[0] as { historyMessages: unknown[] } | undefined;
-      expect(llmInputEvent).toBeDefined();
-      expect(llmInputEvent?.historyMessages).toHaveLength(MAX_CLI_SESSION_HISTORY_MESSAGES);
-      expect(llmInputEvent?.historyMessages[0]).toMatchObject({
-        role: "user",
-        content: `history-5`,
-      });
+      const llmInputEvent = requireRecord(
+        callArg(hookRunner.runLlmInput, 0, 0, "llm_input event"),
+        "llm_input event",
+      );
+      const historyMessages = requireArray(llmInputEvent.historyMessages, "history messages");
+      expect(historyMessages).toHaveLength(MAX_CLI_SESSION_HISTORY_MESSAGES);
+      const firstHistoryMessage = requireRecord(historyMessages[0], "first history message");
+      expect(firstHistoryMessage.role).toBe("user");
+      expect(firstHistoryMessage.content).toBe(`history-5`);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

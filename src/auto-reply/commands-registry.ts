@@ -7,22 +7,15 @@ import type { SkillCommandSpec } from "../agents/skills.js";
 import { getChannelPlugin, getLoadedChannelPlugin } from "../channels/plugins/index.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
-import {
-  isCommandEnabled,
-  listChatCommands,
-  listChatCommandsForConfig,
-} from "./commands-registry-list.js";
-import { normalizeCommandBody, resolveTextCommand } from "./commands-registry-normalize.js";
+import { listChatCommands, listChatCommandsForConfig } from "./commands-registry-list.js";
+import { normalizeCommandBody } from "./commands-registry-normalize.js";
 import { getChatCommands } from "./commands-registry.data.js";
 import type {
   ChatCommandDefinition,
   CommandArgChoiceContext,
   CommandArgDefinition,
-  CommandArgMenuSpec,
   CommandArgValues,
   CommandArgs,
-  CommandDetection,
-  CommandNormalizeOptions,
   NativeCommandSpec,
 } from "./commands-registry.types.js";
 import type { ThinkingCatalogEntry } from "./thinking.shared.js";
@@ -111,12 +104,15 @@ function listNativeSpecsFromCommands(
     .filter((command) => command.scope !== "text" && command.nativeName)
     .flatMap((command) => {
       const spec = toNativeCommandSpec(command, provider);
-      return resolveNativeNames(command, provider).map((name) => {
+      return resolveNativeNames(command, provider).map((name, index) => {
         const nativeSpec: NativeCommandSpec = {
           name,
           description: spec.description,
           acceptsArgs: spec.acceptsArgs,
         };
+        if (index > 0) {
+          nativeSpec.isAlias = true;
+        }
         if (spec.args) {
           nativeSpec.args = spec.args;
         }

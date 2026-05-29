@@ -1,7 +1,7 @@
 import { lstat, mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { defaultQaSuiteConcurrencyForTransport } from "./qa-transport-registry.js";
 import {
   collectQaSuiteGatewayConfigPatch,
@@ -13,6 +13,7 @@ import {
   resolveQaSuiteOutputDir,
   scenarioRequiresControlUi,
   selectQaSuiteScenarios,
+  shouldUseIsolatedQaSuiteScenarioWorkers,
 } from "./suite-planning.js";
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
 
@@ -33,6 +34,17 @@ describe("qa suite planning helpers", () => {
       expect(normalizeQaSuiteConcurrency(2.8, 10)).toBe(2);
       expect(normalizeQaSuiteConcurrency(20, 3)).toBe(3);
       expect(normalizeQaSuiteConcurrency(0, 3)).toBe(1);
+
+      process.env.OPENCLAW_QA_SUITE_CONCURRENCY = "3";
+      expect(normalizeQaSuiteConcurrency(undefined, 10)).toBe(3);
+
+      process.env.OPENCLAW_QA_SUITE_CONCURRENCY = "0";
+      expect(normalizeQaSuiteConcurrency(undefined, 10)).toBe(1);
+
+      for (const value of ["0x10", "1e2", "2.5"]) {
+        process.env.OPENCLAW_QA_SUITE_CONCURRENCY = value;
+        expect(normalizeQaSuiteConcurrency(undefined, 10)).toBe(10);
+      }
     } finally {
       if (previous === undefined) {
         delete process.env.OPENCLAW_QA_SUITE_CONCURRENCY;
@@ -80,15 +92,41 @@ describe("qa suite planning helpers", () => {
   it("maps suite work with bounded concurrency while preserving order", async () => {
     let active = 0;
     let maxActive = 0;
-    const result = await mapQaSuiteWithConcurrency([1, 2, 3, 4], 2, async (item) => {
+    let releaseStartedTasks = false;
+    let resolveBothStarted: () => void = () => {};
+    const bothStarted = new Promise<void>((resolve) => {
+      resolveBothStarted = resolve;
+    });
+    const taskReleases: Array<() => void> = [];
+    const releaseQueuedTasks = () => {
+      if (!releaseStartedTasks) {
+        return;
+      }
+      let releaseTask: (() => void) | undefined;
+      while ((releaseTask = taskReleases.shift())) {
+        releaseTask();
+      }
+    };
+
+    const resultPromise = mapQaSuiteWithConcurrency([1, 2, 3, 4], 2, async (item) => {
       active += 1;
       maxActive = Math.max(maxActive, active);
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      if (active === 2) {
+        resolveBothStarted();
+      }
+      await new Promise<void>((resolve) => {
+        taskReleases.push(resolve);
+        releaseQueuedTasks();
+      });
       active -= 1;
       return item * 10;
     });
 
+    await bothStarted;
     expect(maxActive).toBe(2);
+    releaseStartedTasks = true;
+    releaseQueuedTasks();
+    const result = await resultPromise;
     expect(result).toEqual([10, 20, 30, 40]);
   });
 
@@ -96,7 +134,11 @@ describe("qa suite planning helpers", () => {
     const sleeps: number[] = [];
     const releaseSleeps: Array<() => void> = [];
     const started: number[] = [];
-    const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+    const waitForStarted = async (expected: number[]) => {
+      await vi.waitFor(() => {
+        expect(started).toEqual(expected);
+      });
+    };
     const resultPromise = mapQaSuiteWithConcurrency(
       [1, 2, 3, 4],
       3,
@@ -115,17 +157,13 @@ describe("qa suite planning helpers", () => {
       },
     );
 
-    await tick();
-    expect(started).toEqual([1]);
+    await waitForStarted([1]);
     releaseSleeps.shift()?.();
-    await tick();
-    expect(started).toEqual([1, 2]);
+    await waitForStarted([1, 2]);
     releaseSleeps.shift()?.();
-    await tick();
-    expect(started).toEqual([1, 2, 3]);
+    await waitForStarted([1, 2, 3]);
     releaseSleeps.shift()?.();
-    await tick();
-    expect(started).toEqual([1, 2, 3, 4]);
+    await waitForStarted([1, 2, 3, 4]);
 
     const result = await resultPromise;
     expect(result).toEqual([1, 2, 3, 4]);
@@ -140,6 +178,18 @@ describe("qa suite planning helpers", () => {
         OPENCLAW_QA_SUITE_WORKER_START_STAGGER_MS: "0",
       }),
     ).toBe(0);
+    expect(
+      resolveQaSuiteWorkerStartStaggerMs(4, {
+        OPENCLAW_QA_SUITE_WORKER_START_STAGGER_MS: "25",
+      }),
+    ).toBe(25);
+    for (const value of ["0x10", "1e3", "10.5"]) {
+      expect(
+        resolveQaSuiteWorkerStartStaggerMs(4, {
+          OPENCLAW_QA_SUITE_WORKER_START_STAGGER_MS: value,
+        }),
+      ).toBe(1500);
+    }
   });
 
   it("keeps explicitly requested provider-specific scenarios", () => {
@@ -148,7 +198,7 @@ describe("qa suite planning helpers", () => {
       makeQaSuiteTestScenario("anthropic-only", {
         config: {
           requiredProvider: "anthropic",
-          requiredModel: "claude-opus-4-6",
+          requiredModel: "claude-opus-4-8",
         },
       }),
     ];
@@ -161,6 +211,23 @@ describe("qa suite planning helpers", () => {
         primaryModel: "openai/gpt-5.5",
       }).map((scenario) => scenario.id),
     ).toEqual(["anthropic-only"]);
+  });
+
+  it("keeps explicitly requested scenarios in request order", () => {
+    const scenarios = [
+      makeQaSuiteTestScenario("first"),
+      makeQaSuiteTestScenario("second"),
+      makeQaSuiteTestScenario("third"),
+    ];
+
+    expect(
+      selectQaSuiteScenarios({
+        scenarios,
+        scenarioIds: ["third", "first"],
+        providerMode: "live-frontier",
+        primaryModel: "openai/gpt-5.5",
+      }).map((scenario) => scenario.id),
+    ).toEqual(["third", "first"]);
   });
 
   it("collects unique scenario-declared bundled plugins in encounter order", () => {
@@ -259,6 +326,46 @@ describe("qa suite planning helpers", () => {
     });
   });
 
+  it("isolates multi-scenario serial runs when a scenario needs startup config", () => {
+    const scenarios = [
+      makeQaSuiteTestScenario("baseline"),
+      makeQaSuiteTestScenario("message-tool-mode", {
+        gatewayConfigPatch: {
+          messages: {
+            groupChat: {
+              visibleReplies: "message_tool",
+            },
+          },
+        },
+      }),
+    ];
+
+    expect(
+      shouldUseIsolatedQaSuiteScenarioWorkers({
+        scenarios,
+        concurrency: 1,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not isolate plain serial scenario runs", () => {
+    expect(
+      shouldUseIsolatedQaSuiteScenarioWorkers({
+        scenarios: [makeQaSuiteTestScenario("first"), makeQaSuiteTestScenario("second")],
+        concurrency: 1,
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps concurrent runs on isolated workers", () => {
+    expect(
+      shouldUseIsolatedQaSuiteScenarioWorkers({
+        scenarios: [makeQaSuiteTestScenario("first"), makeQaSuiteTestScenario("second")],
+        concurrency: 2,
+      }),
+    ).toBe(true);
+  });
+
   it("enables Control UI only for Control UI scenario workers", () => {
     expect(
       scenarioRequiresControlUi(
@@ -277,7 +384,7 @@ describe("qa suite planning helpers", () => {
         config: { requiredProvider: "openai", requiredModel: "gpt-5.5" },
       }),
       makeQaSuiteTestScenario("anthropic-only", {
-        config: { requiredProvider: "anthropic", requiredModel: "claude-opus-4-6" },
+        config: { requiredProvider: "anthropic", requiredModel: "claude-opus-4-8" },
       }),
       makeQaSuiteTestScenario("claude-subscription", {
         config: { requiredProvider: "claude-cli", authMode: "subscription" },
@@ -328,5 +435,31 @@ describe("qa suite planning helpers", () => {
         primaryModel: "openai/gpt-5.5",
       }).map((scenario) => scenario.id),
     ).toEqual(["generic", "live-only"]);
+  });
+
+  it("keeps live-only runtime parity scenarios out of implicit mock selections", () => {
+    const scenarios = [
+      makeQaSuiteTestScenario("generic"),
+      makeQaSuiteTestScenario("live-runtime", {
+        runtimeParityTier: "live-only",
+      }),
+    ];
+
+    expect(
+      selectQaSuiteScenarios({
+        scenarios,
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.5",
+      }).map((scenario) => scenario.id),
+    ).toEqual(["generic"]);
+
+    expect(
+      selectQaSuiteScenarios({
+        scenarios,
+        scenarioIds: ["live-runtime"],
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.5",
+      }).map((scenario) => scenario.id),
+    ).toEqual(["live-runtime"]);
   });
 });

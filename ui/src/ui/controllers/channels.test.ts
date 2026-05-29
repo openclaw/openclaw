@@ -3,13 +3,27 @@ import type { ChannelsStatusSnapshot } from "../types.ts";
 import { loadChannels, waitWhatsAppLogin, type ChannelsState } from "./channels.ts";
 
 function createDeferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
+  let resolve: ((value: T) => void) | undefined;
+  let reject: ((reason?: unknown) => void) | undefined;
   const promise = new Promise<T>((res, rej) => {
     resolve = res;
     reject = rej;
   });
+  if (!resolve || !reject) {
+    throw new Error("Expected deferred callbacks to be initialized");
+  }
   return { promise, resolve, reject };
+}
+
+function createChannelsSnapshot(label: string): ChannelsStatusSnapshot {
+  return {
+    ts: Date.now(),
+    channelOrder: ["test"],
+    channelLabels: { test: label },
+    channels: {},
+    channelAccounts: {},
+    channelDefaultAccountId: {},
+  };
 }
 
 function createState(): ChannelsState {
@@ -29,6 +43,14 @@ function createState(): ChannelsState {
   };
 }
 
+function requireClientRequest(state: ChannelsState) {
+  const request = state.client?.request;
+  if (!request) {
+    throw new Error("Expected channels controller client request");
+  }
+  return vi.mocked(request);
+}
+
 describe("channels controller WhatsApp wait", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -36,7 +58,7 @@ describe("channels controller WhatsApp wait", () => {
 
   it("passes the currently displayed QR and replaces it when the login QR rotates", async () => {
     const state = createState();
-    const request = vi.mocked(state.client!.request);
+    const request = requireClientRequest(state);
     request.mockResolvedValueOnce({
       connected: false,
       message: "QR refreshed. Scan the latest code in WhatsApp → Linked Devices.",
@@ -59,6 +81,34 @@ describe("channels controller WhatsApp wait", () => {
 });
 
 describe("loadChannels", () => {
+  it("keeps a stale slow probe from replacing a newer non-probe snapshot", async () => {
+    const state = createState();
+    const request = vi.mocked(state.client!.request);
+    const slowProbe = createDeferred<ChannelsStatusSnapshot | null>();
+    const fastRuntime = createDeferred<ChannelsStatusSnapshot | null>();
+    request.mockImplementation(async (_method: string, params?: unknown) => {
+      if ((params as { probe?: boolean } | undefined)?.probe) {
+        return slowProbe.promise;
+      }
+      return fastRuntime.promise;
+    });
+
+    const probeLoad = loadChannels(state, true, { softTimeoutMs: 1 });
+    await probeLoad;
+    const runtimeLoad = loadChannels(state, false);
+    expect(request).toHaveBeenCalledTimes(2);
+
+    fastRuntime.resolve(createChannelsSnapshot("fresh"));
+    await runtimeLoad;
+    expect(state.channelsSnapshot?.channelLabels.test).toBe("fresh");
+
+    slowProbe.resolve(createChannelsSnapshot("stale"));
+    await Promise.resolve();
+
+    expect(state.channelsSnapshot?.channelLabels.test).toBe("fresh");
+    expect(state.channelsLoading).toBe(false);
+  });
+
   it("returns after a soft timeout while preserving the stale snapshot", async () => {
     vi.useFakeTimers();
     try {
@@ -76,7 +126,7 @@ describe("loadChannels", () => {
         ts: 2,
       };
       const deferred = createDeferred<ChannelsStatusSnapshot | null>();
-      const request = vi.mocked(state.client!.request);
+      const request = requireClientRequest(state);
       request.mockReturnValueOnce(deferred.promise);
       state.channelsSnapshot = previous;
       state.channelsLastSuccess = 10;
@@ -95,7 +145,7 @@ describe("loadChannels", () => {
 
       expect(state.channelsLoading).toBe(false);
       expect(state.channelsSnapshot).toBe(next);
-      expect(state.channelsLastSuccess).toEqual(expect.any(Number));
+      expect(state.channelsLastSuccess).toBeGreaterThan(10);
     } finally {
       vi.useRealTimers();
     }

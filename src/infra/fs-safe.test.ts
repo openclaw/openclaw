@@ -13,15 +13,30 @@ import {
   FsSafeError,
   readLocalFileSafely,
   root as openRoot,
+  writeExternalFileWithinRoot,
 } from "./fs-safe.js";
 
 const tempDirs = createTrackedTempDirs();
 
 afterEach(async () => {
   __setFsSafeTestHooksForTest(undefined);
+  vi.restoreAllMocks();
   vi.unstubAllEnvs();
   await tempDirs.cleanup();
 });
+
+async function expectRejectCode(promise: Promise<unknown>, expected: string | RegExp) {
+  const err = await promise.catch((caught: unknown) => caught);
+  if (err === undefined) {
+    throw new Error("Expected promise to reject");
+  }
+  const code = (err as NodeJS.ErrnoException).code;
+  if (typeof expected === "string") {
+    expect(code).toBe(expected);
+  } else {
+    expect(code).toMatch(expected);
+  }
+}
 
 async function runWriteOpenRace(params: {
   slotPath: string;
@@ -37,11 +52,9 @@ async function runWriteOpenRace(params: {
       try {
         await params.runWrite();
       } catch (err) {
-        expect(err).toMatchObject({
-          code: expect.stringMatching(
-            /outside-workspace|path-mismatch|path-alias|invalid-path|not-file/,
-          ),
-        });
+        expect((err as NodeJS.ErrnoException).code).toMatch(
+          /outside-workspace|path-mismatch|path-alias|invalid-path|not-file/,
+        );
       }
     },
   });
@@ -120,12 +133,25 @@ describe("fs-safe", () => {
 
   it("rejects directories", async () => {
     const dir = await tempDirs.make("openclaw-fs-safe-");
-    await expect(readLocalFileSafely({ filePath: dir })).rejects.toMatchObject({
-      code: "not-file",
-    });
+    await expectRejectCode(readLocalFileSafely({ filePath: dir }), "not-file");
     const err = await readLocalFileSafely({ filePath: dir }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(FsSafeError);
     expect((err as FsSafeError).message).not.toMatch(/EISDIR/i);
+  });
+
+  it("writes external command output within an allowed root", async () => {
+    const dir = await tempDirs.make("openclaw-fs-safe-output-");
+
+    const result = await writeExternalFileWithinRoot({
+      rootDir: dir,
+      path: "artifact.txt",
+      write: async (tempPath) => {
+        await fs.writeFile(tempPath, "artifact");
+      },
+    });
+
+    expect(result.path).toBe(path.join(dir, "artifact.txt"));
+    await expect(fs.readFile(path.join(dir, "artifact.txt"), "utf8")).resolves.toBe("artifact");
   });
 
   it("enforces maxBytes", async () => {
@@ -133,9 +159,7 @@ describe("fs-safe", () => {
     const file = path.join(dir, "big.bin");
     await fs.writeFile(file, Buffer.alloc(8));
 
-    await expect(readLocalFileSafely({ filePath: file, maxBytes: 4 })).rejects.toMatchObject({
-      code: "too-large",
-    });
+    await expectRejectCode(readLocalFileSafely({ filePath: file, maxBytes: 4 }), "too-large");
   });
 
   it.runIf(process.platform !== "win32")("rejects symlinks", async () => {
@@ -145,9 +169,7 @@ describe("fs-safe", () => {
     await fs.writeFile(target, "target");
     await fs.symlink(target, link);
 
-    await expect(readLocalFileSafely({ filePath: link })).rejects.toMatchObject({
-      code: "symlink",
-    });
+    await expectRejectCode(readLocalFileSafely({ filePath: link }), "symlink");
   });
 
   it.runIf(process.platform !== "win32")(
@@ -161,6 +183,15 @@ describe("fs-safe", () => {
       await fs.writeFile(originalPath, "inside");
       await fs.writeFile(outsidePath, "outside");
 
+      const originalRealpath = fs.realpath.bind(fs);
+      const realpathSpy = vi.spyOn(fs, "realpath");
+      realpathSpy.mockImplementation(async (target) => {
+        if (typeof target === "string" && target.startsWith("/dev/fd/")) {
+          return movedPath;
+        }
+        return await originalRealpath(target);
+      });
+
       const handle = await fs.open(originalPath, "r");
       try {
         await fs.rename(originalPath, movedPath);
@@ -168,8 +199,35 @@ describe("fs-safe", () => {
 
         const resolved = await resolveOpenedFileRealPathForHandle(handle, originalPath);
 
-        await expect(fs.realpath(movedPath)).resolves.toBe(resolved);
+        expect(resolved).toBe(movedPath);
         await expect(handle.readFile({ encoding: "utf8" })).resolves.toBe("inside");
+      } finally {
+        await handle.close().catch(() => {});
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "falls back to the io path when /dev/fd realpath does not resolve to the opened file",
+    async () => {
+      const root = await tempDirs.make("openclaw-fs-safe-root-");
+      const filePath = path.join(root, "inside.txt");
+      await fs.writeFile(filePath, "inside");
+
+      const originalRealpath = fs.realpath.bind(fs);
+      const realpathSpy = vi.spyOn(fs, "realpath");
+      realpathSpy.mockImplementation(async (target) => {
+        if (typeof target === "string" && target.startsWith("/dev/fd/")) {
+          return "/dev/fd/inside.txt";
+        }
+        return await originalRealpath(target);
+      });
+
+      const handle = await fs.open(filePath, "r");
+      try {
+        await expect(resolveOpenedFileRealPathForHandle(handle, filePath)).resolves.toBe(
+          await originalRealpath(filePath),
+        );
       } finally {
         await handle.close().catch(() => {});
       }
@@ -182,9 +240,10 @@ describe("fs-safe", () => {
     const file = path.join(outside, "outside.txt");
     await fs.writeFile(file, "outside");
 
-    await expect(
+    await expectRejectCode(
       (await openRoot(root)).open(path.join("..", path.basename(outside), "outside.txt")),
-    ).rejects.toMatchObject({ code: "outside-workspace" });
+      "outside-workspace",
+    );
   });
 
   it("rejects directory path within root without leaking EISDIR (issue #31186)", async () => {
@@ -192,9 +251,7 @@ describe("fs-safe", () => {
     await fs.mkdir(path.join(root, "memory"), { recursive: true });
 
     const rootFs = await openRoot(root);
-    await expect(rootFs.open("memory")).rejects.toMatchObject({
-      code: expect.stringMatching(/invalid-path|not-file/),
-    });
+    await expectRejectCode(rootFs.open("memory"), /invalid-path|not-file/);
 
     const err = await rootFs.open("memory").catch((e: unknown) => e);
     expect(err).toBeInstanceOf(FsSafeError);
@@ -230,9 +287,7 @@ describe("fs-safe", () => {
     await fs.writeFile(target, "outside");
     await fs.symlink(target, link);
 
-    await expect((await openRoot(root)).open("link.txt")).rejects.toMatchObject({
-      code: "symlink",
-    });
+    await expectRejectCode((await openRoot(root)).open("link.txt"), "symlink");
   });
 
   it.runIf(process.platform !== "win32")(
@@ -253,11 +308,12 @@ describe("fs-safe", () => {
         },
       });
 
-      await expect(
+      await expectRejectCode(
         (await openRoot(root)).read("link.txt", {
           symlinks: "follow-within-root",
         }),
-      ).rejects.toMatchObject({ code: "path-mismatch" });
+        "path-mismatch",
+      );
     },
   );
 
@@ -275,13 +331,13 @@ describe("fs-safe", () => {
     });
 
     await expect((await openRoot(root)).open("inside.txt")).rejects.toThrow("after-open boom");
-    expect(openedHandle).toBeDefined();
-    await expect(openedHandle?.readFile({ encoding: "utf8" })).rejects.toMatchObject({
-      code: "EBADF",
-    });
+    if (openedHandle === undefined) {
+      throw new Error("expected opened file handle");
+    }
+    await expectRejectCode(openedHandle.readFile({ encoding: "utf8" }), "EBADF");
   });
 
-  it("rejects setting fs-safe test hooks outside test mode", async () => {
+  it("rejects setting fs-safe test hooks outside test mode", () => {
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("VITEST", undefined);
 
@@ -298,9 +354,7 @@ describe("fs-safe", () => {
     await withOutsideHardlinkAlias({
       aliasPath: hardlinkPath,
       run: async () => {
-        await expect((await openRoot(root)).open("link.txt")).rejects.toMatchObject({
-          code: "hardlink",
-        });
+        await expectRejectCode((await openRoot(root)).open("link.txt"), "hardlink");
       },
     });
   });
@@ -347,7 +401,7 @@ describe("fs-safe", () => {
 
     await (await openRoot(root)).remove("nested/out.txt");
 
-    await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expectRejectCode(fs.stat(targetPath), "ENOENT");
   });
 
   it("creates directories within root safely", async () => {
@@ -370,9 +424,8 @@ describe("fs-safe", () => {
 
       await (await openRoot(root)).mkdir(path.join("alias", "nested", "deeper"));
 
-      await expect(fs.stat(path.join(realDir, "nested", "deeper"))).resolves.toMatchObject({
-        isDirectory: expect.any(Function),
-      });
+      const stat = await fs.stat(path.join(realDir, "nested", "deeper"));
+      expect(stat.isDirectory()).toBe(true);
     },
   );
 
@@ -388,9 +441,7 @@ describe("fs-safe", () => {
 
       await (await openRoot(root)).remove(path.join("alias", "target.txt"));
 
-      await expect(fs.stat(path.join(realDir, "target.txt"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
+      await expectRejectCode(fs.stat(path.join(realDir, "target.txt")), "ENOENT");
     },
   );
 
@@ -400,14 +451,13 @@ describe("fs-safe", () => {
     const sourcePath = path.join(sourceDir, "big.bin");
     await fs.writeFile(sourcePath, Buffer.alloc(8));
 
-    await expect(
+    await expectRejectCode(
       (await openRoot(root)).copyIn("nested/big.bin", sourcePath, {
         maxBytes: 4,
       }),
-    ).rejects.toMatchObject({ code: "too-large" });
-    await expect(fs.stat(path.join(root, "nested", "big.bin"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+      "too-large",
+    );
+    await expectRejectCode(fs.stat(path.join(root, "nested", "big.bin")), "ENOENT");
   });
 
   it("writes a file within root from another local source path safely", async () => {
@@ -422,9 +472,7 @@ describe("fs-safe", () => {
   });
   it("rejects write traversal outside root", async () => {
     const root = await tempDirs.make("openclaw-fs-safe-root-");
-    await expect((await openRoot(root)).write("../escape.txt", "x")).rejects.toMatchObject({
-      code: "outside-workspace",
-    });
+    await expectRejectCode((await openRoot(root)).write("../escape.txt", "x"), "outside-workspace");
   });
 
   it.runIf(process.platform !== "win32")("rejects writing through hardlink aliases", async () => {
@@ -433,9 +481,7 @@ describe("fs-safe", () => {
     await withOutsideHardlinkAlias({
       aliasPath: hardlinkPath,
       run: async (outsideFile) => {
-        await expect((await openRoot(root)).write("alias.txt", "pwned")).rejects.toMatchObject({
-          code: "path-alias",
-        });
+        await expectRejectCode((await openRoot(root)).write("alias.txt", "pwned"), "path-alias");
         await expect(fs.readFile(outsideFile, "utf8")).resolves.toBe("outside");
       },
     });
@@ -447,11 +493,12 @@ describe("fs-safe", () => {
     await withOutsideHardlinkAlias({
       aliasPath: hardlinkPath,
       run: async (outsideFile) => {
-        await expect(
+        await expectRejectCode(
           (await openRoot(root)).append("alias.txt", "pwned", {
             prependNewlineIfNeeded: true,
           }),
-        ).rejects.toMatchObject({ code: "path-alias" });
+          "path-alias",
+        );
         await expect(fs.readFile(outsideFile, "utf8")).resolves.toBe("outside");
       },
     });
@@ -509,11 +556,10 @@ describe("fs-safe", () => {
         symlinkTarget: outside,
         timing: "before-realpath",
         run: async () => {
-          await expect(
+          await expectRejectCode(
             (await openRoot(root)).remove(path.join("slot", "target.txt")),
-          ).rejects.toMatchObject({
-            code: expect.stringMatching(/path-alias|not-found/),
-          });
+            /path-alias|not-found/,
+          );
         },
       });
 
@@ -540,15 +586,14 @@ describe("fs-safe", () => {
         symlinkTarget: outside,
         timing: "before-realpath",
         run: async () => {
-          await expect(
+          await expectRejectCode(
             (await openRoot(root)).mkdir(path.join("slot", "nested", "deep")),
-          ).rejects.toMatchObject({
-            code: "path-alias",
-          });
+            "path-alias",
+          );
         },
       });
 
-      await expect(fs.stat(path.join(outside, "nested"))).rejects.toMatchObject({ code: "ENOENT" });
+      await expectRejectCode(fs.stat(path.join(outside, "nested")), "ENOENT");
     },
   );
 
@@ -577,9 +622,7 @@ describe("fs-safe", () => {
     const missing = path.join(dir, "missing.txt");
 
     await expect(readLocalFileSafely({ filePath: missing })).rejects.toBeInstanceOf(FsSafeError);
-    await expect(readLocalFileSafely({ filePath: missing })).rejects.toMatchObject({
-      code: "not-found",
-    });
+    await expectRejectCode(readLocalFileSafely({ filePath: missing }), "not-found");
   });
 });
 
@@ -620,8 +663,9 @@ describe("tilde expansion in file tools", () => {
     }
 
     const outsideRoot = await tempDirs.make("openclaw-tilde-outside-");
-    await expect((await openRoot(outsideRoot)).open("~/escape.txt")).rejects.toMatchObject({
-      code: expect.stringMatching(/outside-workspace|not-found|invalid-path/),
-    });
+    await expectRejectCode(
+      (await openRoot(outsideRoot)).open("~/escape.txt"),
+      /outside-workspace|not-found|invalid-path/,
+    );
   });
 });

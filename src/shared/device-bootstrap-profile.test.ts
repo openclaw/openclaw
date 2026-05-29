@@ -1,6 +1,8 @@
 import { describe, expect, test } from "vitest";
 import {
   BOOTSTRAP_HANDOFF_OPERATOR_SCOPES,
+  PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  isPairingSetupBootstrapProfile,
   normalizeDeviceBootstrapHandoffProfile,
   resolveBootstrapProfileScopesForRole,
   resolveBootstrapProfileScopesForRoles,
@@ -15,26 +17,34 @@ describe("device bootstrap profile", () => {
         "operator.approvals",
         "operator.pairing",
         "operator.read",
+        "operator.talk.secrets",
         "operator.write",
       ]),
-    ).toEqual(["operator.approvals", "operator.read", "operator.write"]);
+    ).toEqual(["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"]);
 
     expect(
       resolveBootstrapProfileScopesForRole("node", ["node.exec", "operator.approvals"]),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   test("bounds bootstrap handoff scopes across profile roles", () => {
     expect(
       resolveBootstrapProfileScopesForRoles(
         ["node", "operator"],
-        ["node.exec", "operator.admin", "operator.approvals", "operator.read", "operator.write"],
+        [
+          "node.exec",
+          "operator.admin",
+          "operator.approvals",
+          "operator.read",
+          "operator.talk.secrets",
+          "operator.write",
+        ],
       ),
-    ).toEqual(["operator.approvals", "operator.read", "operator.write"]);
+    ).toEqual(["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"]);
 
     expect(
       resolveBootstrapProfileScopesForRoles(["node"], ["node.exec", "operator.admin"]),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   test("normalizes issued handoff profiles to the bootstrap allowlist", () => {
@@ -47,16 +57,46 @@ describe("device bootstrap profile", () => {
           "operator.approvals",
           "operator.pairing",
           "operator.read",
+          "operator.talk.secrets",
           "operator.write",
         ],
       }),
     ).toEqual({
       roles: ["node", "operator"],
-      scopes: ["operator.approvals", "operator.read", "operator.write"],
+      scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
     });
   });
 
-  test("bootstrap handoff operator allowlist stays aligned with pairing setup profile", () => {
+  test("default setup profile carries node plus bounded operator handoff", () => {
+    expect(PAIRING_SETUP_BOOTSTRAP_PROFILE).toEqual({
+      roles: ["node", "operator"],
+      scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
+    });
+  });
+
+  test("recognizes only the current setup profile", () => {
+    expect(isPairingSetupBootstrapProfile(PAIRING_SETUP_BOOTSTRAP_PROFILE)).toBe(true);
+    expect(
+      isPairingSetupBootstrapProfile({
+        roles: ["node", "operator"],
+        scopes: ["operator.approvals", "operator.read", "operator.write"],
+      }),
+    ).toBe(false);
+    expect(
+      isPairingSetupBootstrapProfile({
+        roles: ["node", "operator"],
+        scopes: ["operator.approvals", "operator.pairing", "operator.read", "operator.write"],
+      }),
+    ).toBe(false);
+    expect(
+      isPairingSetupBootstrapProfile({
+        roles: ["node", "operator"],
+        scopes: ["operator.admin", "operator.approvals", "operator.read", "operator.write"],
+      }),
+    ).toBe(false);
+  });
+
+  test("bootstrap handoff operator allowlist stays bounded", () => {
     expect([...BOOTSTRAP_HANDOFF_OPERATOR_SCOPES]).toEqual([
       "operator.approvals",
       "operator.read",

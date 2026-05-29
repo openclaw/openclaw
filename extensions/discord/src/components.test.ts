@@ -1,4 +1,4 @@
-import { MessageFlags } from "discord-api-types/v10";
+import { ButtonStyle, MessageFlags } from "discord-api-types/v10";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 let clearDiscordComponentEntries: typeof import("./components-registry.js").clearDiscordComponentEntries;
@@ -7,8 +7,14 @@ let resolveDiscordComponentEntry: typeof import("./components-registry.js").reso
 let resolveDiscordComponentEntryWithPersistence: typeof import("./components-registry.js").resolveDiscordComponentEntryWithPersistence;
 let resolveDiscordModalEntry: typeof import("./components-registry.js").resolveDiscordModalEntry;
 let resolveDiscordModalEntryWithPersistence: typeof import("./components-registry.js").resolveDiscordModalEntryWithPersistence;
+let buildDiscordComponentCustomId: typeof import("./components.js").buildDiscordComponentCustomId;
 let buildDiscordComponentMessage: typeof import("./components.js").buildDiscordComponentMessage;
 let buildDiscordComponentMessageFlags: typeof import("./components.js").buildDiscordComponentMessageFlags;
+let buildDiscordModalCustomId: typeof import("./components.js").buildDiscordModalCustomId;
+let parseDiscordComponentCustomId: typeof import("./components.js").parseDiscordComponentCustomId;
+let parseDiscordComponentCustomIdForInteraction: typeof import("./components.js").parseDiscordComponentCustomIdForInteraction;
+let parseDiscordModalCustomId: typeof import("./components.js").parseDiscordModalCustomId;
+let parseDiscordModalCustomIdForInteraction: typeof import("./components.js").parseDiscordModalCustomIdForInteraction;
 let readDiscordComponentSpec: typeof import("./components.js").readDiscordComponentSpec;
 
 beforeAll(async () => {
@@ -20,11 +26,57 @@ beforeAll(async () => {
     resolveDiscordModalEntry,
     resolveDiscordModalEntryWithPersistence,
   } = await import("./components-registry.js"));
-  ({ buildDiscordComponentMessage, buildDiscordComponentMessageFlags, readDiscordComponentSpec } =
-    await import("./components.js"));
+  ({
+    buildDiscordComponentCustomId,
+    buildDiscordComponentMessage,
+    buildDiscordComponentMessageFlags,
+    buildDiscordModalCustomId,
+    parseDiscordComponentCustomId,
+    parseDiscordComponentCustomIdForInteraction,
+    parseDiscordModalCustomId,
+    parseDiscordModalCustomIdForInteraction,
+    readDiscordComponentSpec,
+  } = await import("./components.js"));
 });
 
 describe("discord components", () => {
+  it("round-trips custom id values that contain separators", () => {
+    const componentId = "button=a;two space%3B";
+    const modalId = "modal=x;y space%3D";
+
+    const componentCustomId = buildDiscordComponentCustomId({ componentId, modalId });
+    expect(componentCustomId).not.toContain(componentId);
+    expect(componentCustomId).toContain("space");
+    expect(parseDiscordComponentCustomId(componentCustomId)).toEqual({ componentId, modalId });
+    expect(parseDiscordComponentCustomIdForInteraction(componentCustomId).data).toMatchObject({
+      cid: componentId,
+      mid: modalId,
+    });
+
+    const modalCustomId = buildDiscordModalCustomId(modalId);
+    expect(modalCustomId).not.toContain(modalId);
+    expect(modalCustomId).toContain("space");
+    expect(parseDiscordModalCustomId(modalCustomId)).toBe(modalId);
+    expect(parseDiscordModalCustomIdForInteraction(modalCustomId).data).toMatchObject({
+      mid: modalId,
+    });
+  });
+
+  it("keeps legacy percent-like custom id values raw", () => {
+    expect(buildDiscordComponentCustomId({ componentId: "button_v1" })).toBe(
+      "occomp:cid=button_v1",
+    );
+    expect(buildDiscordComponentCustomId({ componentId: "button=v1" })).toBe(
+      "occomp:cid=button=v1",
+    );
+    expect(buildDiscordModalCustomId("modal_v1")).toBe("ocmodal:mid=modal_v1");
+    expect(buildDiscordModalCustomId("modal=v1")).toBe("ocmodal:mid=modal=v1");
+    expect(parseDiscordComponentCustomId("occomp:cid=button%3Bv1")).toEqual({
+      componentId: "button%3Bv1",
+    });
+    expect(parseDiscordModalCustomId("ocmodal:mid=modal%3Dv1")).toBe("modal%3Dv1");
+  });
+
   it("builds v2 containers with modal trigger", () => {
     const spec = readDiscordComponentSpec({
       text: "Choose a path",
@@ -60,6 +112,41 @@ describe("discord components", () => {
     expect(result.modals[0]?.allowedUsers).toEqual(["discord:user-1"]);
   });
 
+  it("serializes disabled link buttons", () => {
+    const spec = readDiscordComponentSpec({
+      blocks: [
+        {
+          type: "actions",
+          buttons: [
+            {
+              label: "Open docs",
+              style: "link",
+              url: "https://example.com/docs",
+              disabled: true,
+            },
+          ],
+        },
+      ],
+    });
+    if (!spec) {
+      throw new Error("Expected component spec to be parsed");
+    }
+
+    const result = buildDiscordComponentMessage({ spec });
+    const serialized = result.components[0]?.serialize() as
+      | { components?: Array<{ components?: Array<Record<string, unknown>> }> }
+      | undefined;
+    const button = serialized?.components?.[0]?.components?.[0];
+
+    expect(button).toMatchObject({
+      label: "Open docs",
+      style: ButtonStyle.Link,
+      url: "https://example.com/docs",
+      disabled: true,
+    });
+    expect(result.entries).toHaveLength(0);
+  });
+
   it("requires options for modal select fields", () => {
     expect(() =>
       readDiscordComponentSpec({
@@ -69,6 +156,95 @@ describe("discord components", () => {
         },
       }),
     ).toThrow("options");
+  });
+
+  it("rejects malformed component count and length limits", () => {
+    expect(() =>
+      readDiscordComponentSpec({
+        blocks: [
+          {
+            type: "actions",
+            select: {
+              type: "string",
+              minValues: -1,
+              options: [{ label: "One", value: "one" }],
+            },
+          },
+        ],
+      }),
+    ).toThrow("components.blocks[0].select.minValues");
+
+    expect(() =>
+      readDiscordComponentSpec({
+        modal: {
+          title: "Details",
+          fields: [{ type: "text", label: "Name", maxLength: 0 }],
+        },
+      }),
+    ).toThrow("components.modal.fields[0].maxLength");
+
+    expect(() =>
+      readDiscordComponentSpec({
+        modal: {
+          title: "Details",
+          fields: [
+            {
+              type: "select",
+              label: "Priority",
+              minValues: 0,
+              options: [{ label: "High", value: "high" }],
+            },
+          ],
+        },
+      }),
+    ).toThrow("components.modal.fields[0].minValues");
+
+    expect(() =>
+      readDiscordComponentSpec({
+        modal: {
+          title: "Details",
+          fields: [
+            {
+              type: "checkbox",
+              label: "Choices",
+              maxValues: 25,
+              options: [{ label: "One", value: "one" }],
+            },
+          ],
+        },
+      }),
+    ).toThrow("components.modal.fields[0].maxValues");
+
+    expect(() =>
+      readDiscordComponentSpec({
+        blocks: [
+          {
+            type: "actions",
+            select: {
+              type: "string",
+              maxValues: 0,
+              options: [{ label: "One", value: "one" }],
+            },
+          },
+        ],
+      }),
+    ).toThrow("components.blocks[0].select.maxValues");
+
+    expect(() =>
+      readDiscordComponentSpec({
+        modal: {
+          title: "Details",
+          fields: [
+            {
+              type: "radio",
+              label: "Choice",
+              minValues: 1,
+              options: [{ label: "One", value: "one" }],
+            },
+          ],
+        },
+      }),
+    ).toThrow("components.modal.fields[0].minValues/maxValues");
   });
 
   it("requires attachment references for file blocks", () => {
@@ -135,11 +311,14 @@ describe("discord component registry", () => {
     });
     const confirm = result.entries.find((entry) => entry.label === "Confirm");
     const cancel = result.entries.find((entry) => entry.label === "Cancel");
-    expect(confirm?.consumptionGroupId).toBeTruthy();
-    expect(cancel?.consumptionGroupId).toBe(confirm?.consumptionGroupId);
-    expect(confirm?.consumptionGroupEntryIds).toEqual(
-      expect.arrayContaining([confirm?.id, cancel?.id]),
-    );
+    if (!confirm?.consumptionGroupId) {
+      throw new Error("expected confirm entry to carry a consumption group id");
+    }
+    if (!cancel) {
+      throw new Error("expected cancel entry");
+    }
+    expect(cancel.consumptionGroupId).toBe(confirm.consumptionGroupId);
+    expect(confirm.consumptionGroupEntryIds).toEqual([confirm.id, cancel.id]);
 
     registerDiscordComponentEntries({
       entries: result.entries,
@@ -167,12 +346,12 @@ describe("discord component registry", () => {
       modals: [],
     });
 
-    expect(second.resolveDiscordComponentEntry({ id: "btn_shared", consume: false })).toMatchObject(
-      {
-        id: "btn_shared",
-        label: "Shared",
-      },
-    );
+    const sharedEntry = second.resolveDiscordComponentEntry({ id: "btn_shared", consume: false });
+    expect(sharedEntry?.id).toBe("btn_shared");
+    expect(sharedEntry?.kind).toBe("button");
+    expect(sharedEntry?.label).toBe("Shared");
+    expect(typeof sharedEntry?.createdAt).toBe("number");
+    expect(typeof sharedEntry?.expiresAt).toBe("number");
 
     second.clearDiscordComponentEntries();
   });
@@ -213,31 +392,55 @@ describe("discord component registry", () => {
       logging: { getChildLogger: () => ({ warn: vi.fn() }) },
     } as never);
 
-    registerDiscordComponentEntries({
-      entries: [{ id: "btn_1", kind: "button", label: "Confirm" }],
-      modals: [{ id: "mdl_1", title: "Details", fields: [] }],
-      ttlMs: 1000,
-    });
+    const now = 1_700_000_000_000;
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      registerDiscordComponentEntries({
+        entries: [{ id: "btn_1", kind: "button", label: "Confirm" }],
+        modals: [{ id: "mdl_1", title: "Details", fields: [] }],
+        ttlMs: 1000,
+      });
+    } finally {
+      dateNowSpy.mockRestore();
+    }
 
     await vi.waitFor(() => expect(componentRegister).toHaveBeenCalledTimes(1));
     expect(componentRegister).toHaveBeenCalledWith(
       "btn_1",
-      { version: 1, entry: expect.objectContaining({ id: "btn_1" }) },
+      {
+        version: 1,
+        entry: {
+          id: "btn_1",
+          kind: "button",
+          label: "Confirm",
+          createdAt: now,
+          expiresAt: now + 1000,
+        },
+      },
       { ttlMs: 1000 },
     );
     expect(modalRegister).toHaveBeenCalledWith(
       "mdl_1",
-      { version: 1, entry: expect.objectContaining({ id: "mdl_1" }) },
+      {
+        version: 1,
+        entry: {
+          id: "mdl_1",
+          title: "Details",
+          fields: [],
+          createdAt: now,
+          expiresAt: now + 1000,
+        },
+      },
       { ttlMs: 1000 },
     );
 
     clearDiscordComponentEntries();
     await expect(
       resolveDiscordComponentEntryWithPersistence({ id: "btn_persisted", consume: false }),
-    ).resolves.toMatchObject({ id: "btn_persisted" });
+    ).resolves.toStrictEqual({ id: "btn_persisted", kind: "button", label: "Persisted" });
     await expect(
       resolveDiscordModalEntryWithPersistence({ id: "mdl_persisted", consume: false }),
-    ).resolves.toMatchObject({ id: "mdl_persisted" });
+    ).resolves.toStrictEqual({ id: "mdl_persisted", title: "Persisted", fields: [] });
     expect(componentLookup).toHaveBeenCalledWith("btn_persisted");
     expect(modalLookup).toHaveBeenCalledWith("mdl_persisted");
     expect(openKeyedStore).toHaveBeenCalledTimes(4);
@@ -278,8 +481,12 @@ describe("discord component registry", () => {
     clearDiscordComponentEntries();
     await expect(
       resolveDiscordComponentEntryWithPersistence({ id: "btn_confirm" }),
-    ).resolves.toMatchObject({
+    ).resolves.toStrictEqual({
       id: "btn_confirm",
+      kind: "button",
+      label: "Confirm",
+      consumptionGroupId: "grp_1",
+      consumptionGroupEntryIds: ["btn_confirm", "btn_cancel"],
     });
 
     await vi.waitFor(() => expect(componentDelete).toHaveBeenCalledWith("btn_cancel"));
@@ -288,11 +495,14 @@ describe("discord component registry", () => {
 
   it("falls back to the in-memory registry when persistent state cannot open", async () => {
     const warn = vi.fn();
+    const cause = new TypeError("disk busy");
     const { setDiscordRuntime } = await import("./runtime.js");
     setDiscordRuntime({
       state: {
         openKeyedStore: vi.fn(() => {
-          throw new Error("sqlite unavailable");
+          const error = new Error("sqlite unavailable") as Error & { cause?: unknown };
+          error.cause = cause;
+          throw error;
         }),
       },
       logging: { getChildLogger: () => ({ warn }) },
@@ -303,10 +513,22 @@ describe("discord component registry", () => {
       modals: [],
     });
 
-    expect(resolveDiscordComponentEntry({ id: "btn_fallback", consume: false })).toMatchObject({
-      id: "btn_fallback",
-      label: "Fallback",
-    });
-    expect(warn).toHaveBeenCalled();
+    const fallbackEntry = resolveDiscordComponentEntry({ id: "btn_fallback", consume: false });
+    expect(fallbackEntry?.id).toBe("btn_fallback");
+    expect(fallbackEntry?.kind).toBe("button");
+    expect(fallbackEntry?.label).toBe("Fallback");
+    expect(typeof fallbackEntry?.createdAt).toBe("number");
+    expect(typeof fallbackEntry?.expiresAt).toBe("number");
+    expect(warn).toHaveBeenCalledWith(
+      "Discord persistent component registry state failed",
+      expect.objectContaining({
+        error: "Error: sqlite unavailable",
+        errorName: "Error",
+        errorMessage: "sqlite unavailable",
+        errorCause: "TypeError: disk busy",
+        errorCauseName: "TypeError",
+        errorCauseMessage: "disk busy",
+      }),
+    );
   });
 });

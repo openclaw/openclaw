@@ -10,6 +10,7 @@ import {
   readGatewayRestartHandoffSync,
   writeGatewayRestartHandoffSync,
 } from "./restart-handoff.js";
+import type { GatewayRestartHandoff } from "./restart-handoff.js";
 
 const tempDirs: string[] = [];
 
@@ -26,6 +27,16 @@ function handoffPath(env: NodeJS.ProcessEnv): string {
   return path.join(env.OPENCLAW_STATE_DIR ?? "", GATEWAY_SUPERVISOR_RESTART_HANDOFF_FILENAME);
 }
 
+function expectWrittenHandoff(
+  opts: Parameters<typeof writeGatewayRestartHandoffSync>[0],
+): GatewayRestartHandoff {
+  const handoff = writeGatewayRestartHandoffSync(opts);
+  if (handoff === null) {
+    throw new Error("Expected gateway restart handoff to be written");
+  }
+  return handoff;
+}
+
 describe("gateway restart handoff", () => {
   afterEach(() => {
     for (const dir of tempDirs.splice(0)) {
@@ -36,7 +47,7 @@ describe("gateway restart handoff", () => {
   it("writes a supervisor handoff for an exited gateway process", () => {
     const env = createHandoffEnv();
 
-    const handoff = writeGatewayRestartHandoffSync({
+    const handoff = expectWrittenHandoff({
       env,
       pid: 12_345,
       processInstanceId: "gateway-instance-1",
@@ -46,66 +57,106 @@ describe("gateway restart handoff", () => {
       createdAt: 1_000,
     });
 
-    expect(handoff).toMatchObject({
-      kind: GATEWAY_SUPERVISOR_RESTART_HANDOFF_KIND,
-      version: 1,
+    expect(handoff.kind).toBe(GATEWAY_SUPERVISOR_RESTART_HANDOFF_KIND);
+    expect(handoff.version).toBe(1);
+    expect(handoff.pid).toBe(12_345);
+    expect(handoff.processInstanceId).toBe("gateway-instance-1");
+    expect(handoff.reason).toBe("plugin source changed");
+    expect(handoff.source).toBe("plugin-change");
+    expect(handoff.restartKind).toBe("full-process");
+    expect(handoff.supervisorMode).toBe("launchd");
+    expect(handoff.createdAt).toBe(1_000);
+    expect(handoff.expiresAt).toBe(61_000);
+    expect(fs.statSync(handoffPath(env)).mode & 0o777).toBe(0o600);
+    const persisted = readGatewayRestartHandoffSync(env, 1_500);
+    expect(persisted?.pid).toBe(12_345);
+    expect(persisted?.reason).toBe("plugin source changed");
+  });
+
+  it("persists restart trace timing for supervised process handoff", () => {
+    const env = createHandoffEnv();
+
+    const handoff = expectWrittenHandoff({
+      env,
       pid: 12_345,
-      processInstanceId: "gateway-instance-1",
-      reason: "plugin source changed",
-      source: "plugin-change",
       restartKind: "full-process",
       supervisorMode: "launchd",
       createdAt: 1_000,
-      expiresAt: 61_000,
+      restartTrace: {
+        startedAt: 10_000,
+        lastAt: 10_250,
+      },
     });
-    expect(fs.statSync(handoffPath(env)).mode & 0o777).toBe(0o600);
-    expect(readGatewayRestartHandoffSync(env, 1_500)).toMatchObject({
+
+    expect(handoff.restartTrace).toStrictEqual({
+      startedAt: 10_000,
+      lastAt: 10_250,
+    });
+    expect(readGatewayRestartHandoffSync(env, 1_500)?.restartTrace).toStrictEqual({
+      startedAt: 10_000,
+      lastAt: 10_250,
+    });
+  });
+
+  it("keeps restart trace timing for slow but valid drains", () => {
+    const env = createHandoffEnv();
+
+    const handoff = expectWrittenHandoff({
+      env,
       pid: 12_345,
-      reason: "plugin source changed",
+      restartKind: "full-process",
+      supervisorMode: "launchd",
+      createdAt: 1_000,
+      restartTrace: {
+        startedAt: 10_000,
+        lastAt: 310_000,
+      },
+    });
+
+    expect(handoff.restartTrace).toStrictEqual({
+      startedAt: 10_000,
+      lastAt: 310_000,
+    });
+    expect(readGatewayRestartHandoffSync(env, 1_500)?.restartTrace).toStrictEqual({
+      startedAt: 10_000,
+      lastAt: 310_000,
     });
   });
 
   it("consumes a fresh handoff by exited pid instead of current process pid", () => {
     const env = createHandoffEnv();
 
-    expect(
-      writeGatewayRestartHandoffSync({
-        env,
-        pid: process.pid + 1,
-        reason: "update.run",
-        restartKind: "update-process",
-        supervisorMode: "systemd",
-        createdAt: 2_000,
-      }),
-    ).not.toBeNull();
-
-    expect(
-      consumeGatewayRestartHandoffForExitedProcessSync({
-        env,
-        exitedPid: process.pid + 1,
-        now: 2_001,
-      }),
-    ).toMatchObject({
+    expectWrittenHandoff({
+      env,
       pid: process.pid + 1,
-      source: "gateway-update",
+      reason: "update.run",
       restartKind: "update-process",
       supervisorMode: "systemd",
+      createdAt: 2_000,
     });
+
+    const consumed = consumeGatewayRestartHandoffForExitedProcessSync({
+      env,
+      exitedPid: process.pid + 1,
+      now: 2_001,
+    });
+    expect(consumed?.pid).toBe(process.pid + 1);
+    expect(consumed?.source).toBe("gateway-update");
+    expect(consumed?.restartKind).toBe("update-process");
+    expect(consumed?.supervisorMode).toBe("systemd");
     expect(fs.existsSync(handoffPath(env))).toBe(false);
   });
 
   it("rejects handoffs for a different exited pid and clears them", () => {
     const env = createHandoffEnv();
 
-    expect(
-      writeGatewayRestartHandoffSync({
-        env,
-        pid: 111,
-        restartKind: "full-process",
-        supervisorMode: "external",
-        createdAt: 1_000,
-      }),
-    ).not.toBeNull();
+    expectWrittenHandoff({
+      env,
+      pid: 111,
+      restartKind: "full-process",
+      supervisorMode: "external",
+      createdAt: 1_000,
+    });
 
     expect(
       consumeGatewayRestartHandoffForExitedProcessSync({
@@ -120,16 +171,14 @@ describe("gateway restart handoff", () => {
   it("rejects a handoff when the supplied process instance does not match", () => {
     const env = createHandoffEnv();
 
-    expect(
-      writeGatewayRestartHandoffSync({
-        env,
-        pid: 111,
-        processInstanceId: "gateway-instance-1",
-        restartKind: "full-process",
-        supervisorMode: "external",
-        createdAt: 1_000,
-      }),
-    ).not.toBeNull();
+    expectWrittenHandoff({
+      env,
+      pid: 111,
+      processInstanceId: "gateway-instance-1",
+      restartKind: "full-process",
+      supervisorMode: "external",
+      createdAt: 1_000,
+    });
 
     expect(
       consumeGatewayRestartHandoffForExitedProcessSync({
@@ -168,16 +217,14 @@ describe("gateway restart handoff", () => {
   it("rejects expired and oversized handoff files", () => {
     const env = createHandoffEnv();
 
-    expect(
-      writeGatewayRestartHandoffSync({
-        env,
-        pid: 111,
-        restartKind: "full-process",
-        supervisorMode: "external",
-        createdAt: 1_000,
-        ttlMs: 1_000,
-      }),
-    ).not.toBeNull();
+    expectWrittenHandoff({
+      env,
+      pid: 111,
+      restartKind: "full-process",
+      supervisorMode: "external",
+      createdAt: 1_000,
+      ttlMs: 1_000,
+    });
     expect(readGatewayRestartHandoffSync(env, 2_001)).toBeNull();
 
     fs.writeFileSync(handoffPath(env), "x".repeat(8192), { encoding: "utf8", mode: 0o600 });
@@ -231,14 +278,12 @@ describe("gateway restart handoff", () => {
       return;
     }
 
-    expect(
-      writeGatewayRestartHandoffSync({
-        env,
-        pid: 12_345,
-        restartKind: "full-process",
-        supervisorMode: "external",
-      }),
-    ).not.toBeNull();
+    expectWrittenHandoff({
+      env,
+      pid: 12_345,
+      restartKind: "full-process",
+      supervisorMode: "external",
+    });
 
     expect(fs.readFileSync(targetPath, "utf8")).toBe("keep");
     expect(fs.lstatSync(handoffPath(env)).isSymbolicLink()).toBe(false);
@@ -246,8 +291,8 @@ describe("gateway restart handoff", () => {
       consumeGatewayRestartHandoffForExitedProcessSync({
         env,
         exitedPid: 12_345,
-      }),
-    ).toMatchObject({ pid: 12_345 });
+      })?.pid,
+    ).toBe(12_345);
   });
 
   it("formats a concise diagnostic line for status surfaces", () => {

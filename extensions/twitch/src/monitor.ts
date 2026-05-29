@@ -5,10 +5,10 @@
  * resolves agent routes, and handles replies.
  */
 
-import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { checkTwitchAccessControl } from "./access-control.js";
 import { getOrCreateClientManager } from "./client-manager-registry.js";
 import { getTwitchRuntime } from "./runtime.js";
@@ -50,7 +50,7 @@ async function processTwitchMessage(params: {
   const { message, account, accountId, config, runtime, core, statusSink } = params;
   const cfg = config as OpenClawConfig;
 
-  await core.channel.turn.run({
+  await core.channel.inbound.run({
     channel: "twitch",
     accountId,
     raw: message,
@@ -63,7 +63,7 @@ async function processTwitchMessage(params: {
         textForCommands: incoming.message,
         raw: incoming,
       }),
-      resolveTurn: (input) => {
+      resolveTurn: async (input) => {
         const route = core.channel.routing.resolveAgentRoute({
           cfg,
           channel: "twitch",
@@ -82,7 +82,7 @@ async function processTwitchMessage(params: {
           envelope: core.channel.reply.resolveEnvelopeFormatOptions(cfg),
           body: input.rawText,
         });
-        const ctxPayload = core.channel.turn.buildContext({
+        const ctxPayload = core.channel.inbound.buildContext({
           channel: "twitch",
           accountId,
           messageId: input.id,
@@ -97,10 +97,6 @@ async function processTwitchMessage(params: {
             kind: "group",
             id: message.channel,
             label: message.channel,
-            routePeer: {
-              kind: "group",
-              id: message.channel,
-            },
           },
           route: {
             agentId: route.agentId,
@@ -109,14 +105,12 @@ async function processTwitchMessage(params: {
           },
           reply: {
             to: `twitch:channel:${message.channel}`,
-            originatingTo: `twitch:channel:${message.channel}`,
           },
           message: {
             body,
             rawBody: input.rawText,
             bodyForAgent: input.textForAgent,
             commandBody: input.textForCommands,
-            envelopeFrom: fromLabel,
           },
         });
         const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {
@@ -268,34 +262,34 @@ export async function monitorTwitchProvider(
       return;
     }
 
-    // Access control check
-    const botUsername = normalizeLowercaseStringOrEmpty(account.username);
-    if (normalizeLowercaseStringOrEmpty(message.username) === botUsername) {
-      return; // Ignore own messages
-    }
+    void (async () => {
+      const botUsername = normalizeLowercaseStringOrEmpty(account.username);
+      if (normalizeLowercaseStringOrEmpty(message.username) === botUsername) {
+        return;
+      }
 
-    const access = checkTwitchAccessControl({
-      message,
-      account,
-      botUsername,
-    });
+      const access = await checkTwitchAccessControl({
+        message,
+        account,
+        botUsername,
+      });
 
-    if (!access.allowed) {
-      return;
-    }
+      if (stopped || !access.allowed) {
+        return;
+      }
 
-    statusSink?.({ lastInboundAt: Date.now() });
+      statusSink?.({ lastInboundAt: Date.now() });
 
-    // Fire-and-forget: process message without blocking
-    void processTwitchMessage({
-      message,
-      account,
-      accountId,
-      config,
-      runtime,
-      core,
-      statusSink,
-    }).catch((err) => {
+      await processTwitchMessage({
+        message,
+        account,
+        accountId,
+        config,
+        runtime,
+        core,
+        statusSink,
+      });
+    })().catch((err) => {
       runtime.error?.(`Message processing failed: ${String(err)}`);
     });
   });

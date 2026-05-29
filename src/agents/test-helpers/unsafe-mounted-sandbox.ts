@@ -3,8 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import type { SandboxContext } from "../sandbox.js";
 import type { SandboxFsBridge, SandboxResolvedPath } from "../sandbox/fs-bridge.js";
+import { createAgentToolsSandboxContext } from "./agent-tools-sandbox-context.js";
 import { createSandboxFsBridgeFromResolver } from "./host-sandbox-fs-bridge.js";
-import { createPiToolsSandboxContext } from "./pi-tools-sandbox-context.js";
 
 function createUnsafeMountedBridge(params: {
   root: string;
@@ -49,6 +49,7 @@ function createUnsafeMountedBridge(params: {
 export function createUnsafeMountedSandbox(params: {
   sandboxRoot: string;
   agentRoot: string;
+  workspaceAccess?: "none" | "ro" | "rw";
   workspaceContainerRoot?: string;
 }): SandboxContext {
   const bridge = createUnsafeMountedBridge({
@@ -56,10 +57,10 @@ export function createUnsafeMountedSandbox(params: {
     agentHostRoot: params.agentRoot,
     workspaceContainerRoot: params.workspaceContainerRoot,
   });
-  return createPiToolsSandboxContext({
+  return createAgentToolsSandboxContext({
     workspaceDir: params.sandboxRoot,
     agentWorkspaceDir: params.agentRoot,
-    workspaceAccess: "rw",
+    workspaceAccess: params.workspaceAccess ?? "rw",
     fsBridge: bridge,
     tools: { allow: [], deny: [] },
   });
@@ -67,13 +68,18 @@ export function createUnsafeMountedSandbox(params: {
 
 export async function withUnsafeMountedSandboxHarness(
   run: (ctx: { sandboxRoot: string; agentRoot: string; sandbox: SandboxContext }) => Promise<void>,
+  options?: { workspaceAccess?: "none" | "ro" | "rw" },
 ) {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sbx-mounts-"));
   const sandboxRoot = path.join(stateDir, "sandbox");
   const agentRoot = path.join(stateDir, "agent");
   await fs.mkdir(sandboxRoot, { recursive: true });
   await fs.mkdir(agentRoot, { recursive: true });
-  const sandbox = createUnsafeMountedSandbox({ sandboxRoot, agentRoot });
+  const sandbox = createUnsafeMountedSandbox({
+    sandboxRoot,
+    agentRoot,
+    workspaceAccess: options?.workspaceAccess,
+  });
   try {
     await run({ sandboxRoot, agentRoot, sandbox });
   } finally {

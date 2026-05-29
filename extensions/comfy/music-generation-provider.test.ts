@@ -1,7 +1,7 @@
 import { expectExplicitMusicGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildComfyMusicGenerationProvider } from "./music-generation-provider.js";
-import { _setComfyFetchGuardForTesting } from "./workflow-runtime.js";
+import { setComfyFetchGuardForTesting } from "./workflow-runtime.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
@@ -9,7 +9,7 @@ const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
 
 describe("comfy music-generation provider", () => {
   afterEach(() => {
-    _setComfyFetchGuardForTesting(null);
+    setComfyFetchGuardForTesting(null);
     vi.clearAllMocks();
   });
 
@@ -22,7 +22,7 @@ describe("comfy music-generation provider", () => {
   });
 
   it("runs a music workflow and returns audio outputs", async () => {
-    _setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
+    setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce({
         response: new Response(JSON.stringify({ prompt_id: "music-job-1" }), {
@@ -82,10 +82,11 @@ describe("comfy music-generation provider", () => {
       } as never,
     });
 
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       model: "workflow",
       tracks: [
         {
+          buffer: Buffer.from("music-bytes"),
           mimeType: "audio/mpeg",
           fileName: "song.mp3",
         },
@@ -96,6 +97,5 @@ describe("comfy music-generation provider", () => {
         inputImageCount: 0,
       },
     });
-    expect(result.tracks[0]?.buffer).toEqual(Buffer.from("music-bytes"));
   });
 });

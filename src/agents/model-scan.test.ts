@@ -57,8 +57,7 @@ describe("scanOpenRouterModels", () => {
     ]);
 
     const [byPricing] = results;
-    expect(byPricing).toBeTruthy();
-    if (!byPricing) {
+    if (byPricing === undefined) {
       throw new Error("Expected pricing-based model result.");
     }
     expect(byPricing.supportsToolsMeta).toBe(true);
@@ -103,7 +102,7 @@ describe("scanOpenRouterModels", () => {
     ).rejects.toThrow(/catalog aborted/);
   });
 
-  it("matches provider filters across canonical provider aliases", async () => {
+  it("does not match provider filters across provider id variants", async () => {
     const fetchImpl = createFetchFixture({
       data: [
         {
@@ -131,6 +130,6 @@ describe("scanOpenRouterModels", () => {
       providerFilter: "z-ai",
     });
 
-    expect(results.map((entry) => entry.id)).toEqual(["z.ai/glm-5"]);
+    expect(results.map((entry) => entry.id)).toEqual([]);
   });
 });

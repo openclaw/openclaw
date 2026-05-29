@@ -109,6 +109,11 @@ export type SystemRunApprovalPlan = {
   mutableFileOperand?: SystemRunApprovalFileOperand | null;
 };
 
+export type ExecApprovalCommandSpan = {
+  startIndex: number;
+  endIndex: number;
+};
+
 export type ExecApprovalRequestPayload = {
   command: string;
   commandPreview?: string | null;
@@ -124,6 +129,7 @@ export type ExecApprovalRequestPayload = {
   ask?: string | null;
   warningText?: string | null;
   commandAnalysis?: CommandExplanationSummary | null;
+  commandSpans?: ExecApprovalCommandSpan[];
   allowedDecisions?: readonly ExecApprovalDecision[];
   agentId?: string | null;
   resolvedPath?: string | null;
@@ -752,6 +758,31 @@ export function ensureExecApprovals(): ExecApprovalsFile {
   return updated;
 }
 
+function readExecApprovalsForNoPersistence(filePath: string): ExecApprovalsFile {
+  const dir = path.dirname(filePath);
+  assertNoExecApprovalsSymlinkParents(dir, resolveRequiredHomeDir());
+  assertSafeExecApprovalsDestination(filePath);
+
+  let raw: string;
+  try {
+    raw = fs.readFileSync(filePath, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw err;
+    }
+    return normalizeExecApprovals({ version: 1, agents: {} });
+  }
+  try {
+    const parsed = JSON.parse(raw) as ExecApprovalsFile;
+    if (parsed?.version === 1) {
+      return normalizeExecApprovals(parsed);
+    }
+  } catch {
+    // Empty or invalid persisted approvals have no usable stricter policy.
+  }
+  return normalizeExecApprovals({ version: 1, agents: {} });
+}
+
 function isExecSecurity(value: unknown): value is ExecSecurity {
   return value === "allowlist" || value === "full" || value === "deny";
 }
@@ -884,12 +915,32 @@ export type ExecApprovalsDefaultOverrides = {
   ask?: ExecAsk;
   askFallback?: ExecSecurity;
   autoAllowSkills?: boolean;
+  requireSocket?: boolean;
 };
 
 export function resolveExecApprovals(
   agentId?: string,
   overrides?: ExecApprovalsDefaultOverrides,
 ): ExecApprovalsResolved {
+  const filePath = resolveExecApprovalsPath();
+  if (!overrides?.requireSocket) {
+    const file = readExecApprovalsForNoPersistence(filePath);
+    const resolved = resolveExecApprovalsFromFile({
+      file,
+      agentId,
+      overrides,
+      path: filePath,
+      socketPath: resolveExecApprovalsSocketPath(),
+      token: "",
+    });
+    if (
+      resolved.agent.security === "full" &&
+      resolved.agent.ask === "off" &&
+      !file.socket?.token?.trim()
+    ) {
+      return resolved;
+    }
+  }
   const file = ensureExecApprovals();
   return resolveExecApprovalsFromFile({
     file,

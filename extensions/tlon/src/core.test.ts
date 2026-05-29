@@ -26,7 +26,16 @@ const tlonTestPlugin = {
     }: {
       cfg: OpenClawConfig;
       allowFrom: Array<string | number> | undefined | null;
-    }) => (allowFrom ?? []).map((entry) => normalizeShip(String(entry))).filter(Boolean),
+    }) => {
+      const entries: string[] = [];
+      for (const entry of allowFrom ?? []) {
+        const normalized = normalizeShip(String(entry));
+        if (normalized) {
+          entries.push(normalized);
+        }
+      }
+      return entries;
+    },
   },
   setup: {
     resolveAccountId: ({ accountId }: { cfg: OpenClawConfig; accountId?: string | null }) =>
@@ -53,7 +62,7 @@ describe("tlon core", () => {
         cfg: {} as OpenClawConfig,
         accountId: "default",
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("resolves dm allowlist from the default account", () => {

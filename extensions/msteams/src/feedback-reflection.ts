@@ -1,20 +1,9 @@
-/**
- * Background reflection triggered by negative user feedback (thumbs-down).
- *
- * Flow:
- * 1. User thumbs-down -> invoke handler acks immediately
- * 2. This module runs in the background (fire-and-forget)
- * 3. Reads recent session context
- * 4. Sends a synthetic reflection prompt to the agent
- * 5. Stores the derived learning in session
- * 6. Optionally sends a proactive follow-up to the user
- */
-
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   dispatchReplyFromConfigWithSettledDispatcher,
   type OpenClawConfig,
 } from "../runtime-api.js";
+import { resolveMSTeamsSdkCloudOptions } from "./cloud.js";
 import type { StoredConversationReference } from "./conversation-store.js";
 import { formatUnknownError } from "./errors.js";
 import { buildReflectionPrompt, parseReflectionResponse } from "./feedback-reflection-prompt.js";
@@ -26,12 +15,13 @@ import {
   recordReflectionTime,
   storeSessionLearning,
 } from "./feedback-reflection-store.js";
-import type { MSTeamsAdapter } from "./messenger.js";
 import { buildConversationReference } from "./messenger.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
 import { getMSTeamsRuntime } from "./runtime.js";
+import { sendMSTeamsActivityWithReference } from "./sdk-proactive.js";
+import type { MSTeamsApp } from "./sdk.js";
 
-type FeedbackEvent = {
+export type FeedbackEvent = {
   type: "custom";
   event: "feedback";
   ts: number;
@@ -65,9 +55,9 @@ export function buildFeedbackEvent(params: {
   };
 }
 
-type RunFeedbackReflectionParams = {
+export type RunFeedbackReflectionParams = {
   cfg: OpenClawConfig;
-  adapter: MSTeamsAdapter;
+  app: MSTeamsApp;
   appId: string;
   conversationRef: StoredConversationReference;
   sessionKey: string;
@@ -151,20 +141,18 @@ function createReflectionCaptureDispatcher(params: {
 }
 
 async function sendReflectionFollowUp(params: {
-  adapter: MSTeamsAdapter;
-  appId: string;
+  cfg: OpenClawConfig;
+  app: MSTeamsApp;
   conversationRef: StoredConversationReference;
   userMessage: string;
 }): Promise<void> {
   const baseRef = buildConversationReference(params.conversationRef);
-  const proactiveRef = { ...baseRef, activityId: undefined };
-
-  await params.adapter.continueConversation(params.appId, proactiveRef, async (ctx) => {
-    await ctx.sendActivity({
-      type: "message",
-      text: params.userMessage,
-    });
-  });
+  await sendMSTeamsActivityWithReference(
+    params.app,
+    baseRef,
+    { type: "message", text: params.userMessage },
+    { serviceUrlBoundary: resolveMSTeamsSdkCloudOptions(params.cfg.channels?.msteams) },
+  );
 }
 
 /**
@@ -262,8 +250,8 @@ export async function runFeedbackReflection(params: RunFeedbackReflectionParams)
 
   try {
     await sendReflectionFollowUp({
-      adapter: params.adapter,
-      appId: params.appId,
+      cfg,
+      app: params.app,
       conversationRef: params.conversationRef,
       userMessage: parsedReflection.userMessage!,
     });

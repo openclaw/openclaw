@@ -5,6 +5,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadSessionStore, type SessionEntry } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
 import {
+  INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  INTERNAL_RUNTIME_CONTEXT_END,
+} from "./internal-runtime-context.js";
+import {
+  markRestartAbortedMainSessions,
   markRestartAbortedMainSessionsFromLocks,
   recoverRestartAbortedMainSessions,
 } from "./main-session-restart-recovery.js";
@@ -61,7 +66,174 @@ function cleanedLock(sessionsDir: string, sessionId: string): SessionLockInspect
   return cleanedLockForPath(path.join(sessionsDir, `${sessionId}.jsonl.lock`));
 }
 
+function firstGatewayParams(): Record<string, unknown> {
+  const call = vi.mocked(callGateway).mock.calls[0];
+  if (!call) {
+    throw new Error("expected gateway call");
+  }
+  const params = call[0].params;
+  if (!params || typeof params !== "object" || Array.isArray(params)) {
+    throw new Error("expected gateway params");
+  }
+  return params as Record<string, unknown>;
+}
+
 describe("main-session-restart-recovery", () => {
+  it("marks only matching running main sessions by active session key", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+      },
+      "agent:main:completed": {
+        sessionId: "completed-session",
+        updatedAt: Date.now() - 10_000,
+        status: "done",
+      },
+      "agent:main:subagent:child": {
+        sessionId: "child-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        spawnDepth: 1,
+      },
+      "cron:nightly": {
+        sessionId: "cron-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+      },
+      "agent:main:other": {
+        sessionId: "other-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+      },
+    });
+
+    const result = await markRestartAbortedMainSessions({
+      stateDir: tmpDir,
+      sessionKeys: ["agent:main:main", "agent:main:completed", "agent:main:subagent:child"],
+    });
+
+    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
+    expect(result).toEqual({ marked: 1, skipped: 1 });
+    expect(store["agent:main:main"]?.abortedLastRun).toBe(true);
+    expect(store["agent:main:completed"]?.abortedLastRun).toBeUndefined();
+    expect(store["agent:main:subagent:child"]?.abortedLastRun).toBeUndefined();
+    expect(store["cron:nightly"]?.abortedLastRun).toBeUndefined();
+    expect(store["agent:main:other"]?.abortedLastRun).toBeUndefined();
+  });
+
+  it("marks active sessions in a configured custom session store", async () => {
+    const storePath = path.join(tmpDir, "custom", "sessions.json");
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:main:issue-82433": {
+            sessionId: "custom-session",
+            updatedAt: Date.now() - 10_000,
+            status: "running",
+          },
+        } satisfies Record<string, SessionEntry>,
+        null,
+        2,
+      ),
+    );
+    await writeTranscript(path.dirname(storePath), "custom-session", [
+      { role: "user", content: "continue this custom-store turn" },
+      { role: "toolResult", content: "custom result" },
+    ]);
+
+    const result = await markRestartAbortedMainSessions({
+      cfg: { session: { store: storePath } },
+      stateDir: tmpDir,
+      sessionKeys: ["agent:main:issue-82433"],
+    });
+
+    const store = loadSessionStore(storePath);
+    expect(result).toEqual({ marked: 1, skipped: 0 });
+    expect(store["agent:main:issue-82433"]?.abortedLastRun).toBe(true);
+
+    const recovery = await recoverRestartAbortedMainSessions({
+      cfg: { session: { store: storePath } },
+      stateDir: tmpDir,
+    });
+
+    expect(recovery).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+  });
+
+  it("uses active session ids to avoid marking stale duplicate keys in another store", async () => {
+    const defaultSessionsDir = await makeSessionsDir();
+    await writeStore(defaultSessionsDir, {
+      "agent:main:issue-82433": {
+        sessionId: "stale-default-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+      },
+    });
+
+    const storePath = path.join(tmpDir, "custom-duplicate-key", "sessions.json");
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:main:issue-82433": {
+            sessionId: "active-custom-session",
+            updatedAt: Date.now() - 10_000,
+            status: "running",
+          },
+        } satisfies Record<string, SessionEntry>,
+        null,
+        2,
+      ),
+    );
+
+    const result = await markRestartAbortedMainSessions({
+      cfg: { session: { store: storePath } },
+      stateDir: tmpDir,
+      sessionIds: ["active-custom-session"],
+      sessionKeys: ["agent:main:issue-82433"],
+    });
+
+    const defaultStore = loadSessionStore(path.join(defaultSessionsDir, "sessions.json"));
+    const customStore = loadSessionStore(storePath);
+    expect(result).toEqual({ marked: 1, skipped: 0 });
+    expect(defaultStore["agent:main:issue-82433"]?.abortedLastRun).toBeUndefined();
+    expect(customStore["agent:main:issue-82433"]?.abortedLastRun).toBe(true);
+  });
+
+  it("marks custom-store sessions by session id when no session key is available", async () => {
+    const storePath = path.join(tmpDir, "custom-by-id", "sessions.json");
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:main:custom-by-id": {
+            sessionId: "custom-session-id-only",
+            updatedAt: Date.now() - 10_000,
+            status: "running",
+          },
+        } satisfies Record<string, SessionEntry>,
+        null,
+        2,
+      ),
+    );
+
+    const result = await markRestartAbortedMainSessions({
+      cfg: { session: { store: storePath } },
+      stateDir: tmpDir,
+      sessionIds: ["custom-session-id-only"],
+    });
+
+    const store = loadSessionStore(storePath);
+    expect(result).toEqual({ marked: 1, skipped: 0 });
+    expect(store["agent:main:custom-by-id"]?.abortedLastRun).toBe(true);
+  });
+
   it("marks only main running sessions whose transcript lock was cleaned", async () => {
     const sessionsDir = await makeSessionsDir();
     await writeStore(sessionsDir, {
@@ -235,11 +407,10 @@ describe("main-session-restart-recovery", () => {
 
     expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
     expect(callGateway).toHaveBeenCalledOnce();
-    expect(vi.mocked(callGateway).mock.calls[0]?.[0].params).toMatchObject({
-      sessionKey: "agent:main:main",
-      deliver: false,
-      lane: "main",
-    });
+    const resumeParams = firstGatewayParams();
+    expect(resumeParams.sessionKey).toBe("agent:main:main");
+    expect(resumeParams.deliver).toBe(false);
+    expect(resumeParams.lane).toBe("main");
     const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
     expect(store["agent:main:main"]?.abortedLastRun).toBe(false);
   });
@@ -302,17 +473,62 @@ describe("main-session-restart-recovery", () => {
 
     expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
     expect(callGateway).toHaveBeenCalledOnce();
-    const callParams = vi.mocked(callGateway).mock.calls[0]?.[0].params as { message?: string };
-    expect(callParams.message).toContain(pendingPayload);
+    expect(firstGatewayParams().message).toContain(pendingPayload);
+
+    const beforeStoreRead = Date.now();
+    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
+    const entry = store["agent:main:main"];
+    expect(entry?.abortedLastRun).toBe(false);
+    expect(entry?.pendingFinalDelivery).toBe(true);
+    expect(entry?.pendingFinalDeliveryText).toBe(pendingPayload);
+    expect(entry?.pendingFinalDeliveryAttemptCount).toBe(1);
+    expect(entry?.pendingFinalDeliveryLastError).toBeNull();
+    expect(entry?.pendingFinalDeliveryCreatedAt).toBeLessThanOrEqual(beforeStoreRead);
+    expect(entry?.pendingFinalDeliveryLastAttemptAt).toBeLessThanOrEqual(beforeStoreRead);
+    expect(entry?.pendingFinalDeliveryLastAttemptAt ?? 0).toBeGreaterThanOrEqual(
+      entry?.pendingFinalDeliveryCreatedAt ?? Number.POSITIVE_INFINITY,
+    );
+  });
+
+  it("sanitizes durable pending final delivery payloads before resume prompts", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const pendingPayload = [
+      "The final answer is 42.",
+      INTERNAL_RUNTIME_CONTEXT_BEGIN,
+      "internal recovery detail",
+      INTERNAL_RUNTIME_CONTEXT_END,
+      "",
+      "Conversation info (untrusted metadata):",
+      "```json",
+      '{"message_id":"msg-1"}',
+      "```",
+    ].join("\n");
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        pendingFinalDelivery: true,
+        pendingFinalDeliveryText: pendingPayload,
+        pendingFinalDeliveryCreatedAt: Date.now() - 5_000,
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "calculate the answer" },
+      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "calc" }] },
+      { role: "toolResult", content: "42" },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    expect(firstGatewayParams().message).toContain("The final answer is 42.");
+    expect(firstGatewayParams().message).not.toContain(INTERNAL_RUNTIME_CONTEXT_BEGIN);
+    expect(firstGatewayParams().message).not.toContain("Conversation info");
 
     const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
-    expect(store["agent:main:main"]?.abortedLastRun).toBe(false);
-    expect(store["agent:main:main"]?.pendingFinalDelivery).toBe(true);
-    expect(store["agent:main:main"]?.pendingFinalDeliveryText).toBe(pendingPayload);
-    expect(store["agent:main:main"]?.pendingFinalDeliveryCreatedAt).toBeDefined();
-    expect(store["agent:main:main"]?.pendingFinalDeliveryAttemptCount).toBe(1);
-    expect(store["agent:main:main"]?.pendingFinalDeliveryLastAttemptAt).toBeDefined();
-    expect(store["agent:main:main"]?.pendingFinalDeliveryLastError).toBeNull();
+    expect(store["agent:main:main"]?.pendingFinalDeliveryText).toBe("The final answer is 42.");
   });
 
   it("does not scan ordinary running sessions without the restart-aborted marker", async () => {
@@ -357,5 +573,55 @@ describe("main-session-restart-recovery", () => {
     const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
     expect(store["agent:main:main"]?.status).toBe("failed");
     expect(store["agent:main:main"]?.abortedLastRun).toBe(true);
+  });
+
+  it("sends a visible notice before failing an unresumable chat-bound main session", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:demo-channel:room-1": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        deliveryContext: {
+          channel: "demo-channel",
+          to: "room-1",
+          accountId: "default",
+          threadId: "thread-1",
+        },
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "do the thing" },
+      { role: "assistant", content: "partial answer" },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 0, failed: 1, skipped: 0 });
+    expect(callGateway).toHaveBeenCalledOnce();
+    const gatewayCall = vi.mocked(callGateway).mock.calls[0]?.[0] as
+      | { method?: string; params?: Record<string, unknown> }
+      | undefined;
+    expect(gatewayCall?.method).toBe("message.action");
+    expect(gatewayCall?.params).toMatchObject({
+      channel: "demo-channel",
+      action: "send",
+      accountId: "default",
+      sessionKey: "agent:main:demo-channel:room-1",
+      sessionId: "main-session",
+    });
+    expect(gatewayCall?.params?.params).toMatchObject({
+      to: "room-1",
+      threadId: "thread-1",
+      bestEffort: true,
+    });
+    expect(String((gatewayCall?.params?.params as Record<string, unknown>)?.message)).toContain(
+      "couldn't safely resume",
+    );
+
+    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
+    expect(store["agent:main:demo-channel:room-1"]?.status).toBe("failed");
+    expect(store["agent:main:demo-channel:room-1"]?.abortedLastRun).toBe(true);
   });
 });

@@ -4,6 +4,7 @@ import {
   buildRealtimeVoiceAgentConsultPrompt,
   collectRealtimeVoiceAgentConsultVisibleText,
   parseRealtimeVoiceAgentConsultArgs,
+  REALTIME_VOICE_AGENT_CONSULT_TOOL,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   resolveRealtimeVoiceAgentConsultToolPolicy,
   resolveRealtimeVoiceAgentConsultTools,
@@ -28,13 +29,17 @@ describe("realtime voice agent consult tool", () => {
   });
 
   it("accepts provider question aliases from realtime tool calls", () => {
-    expect(parseRealtimeVoiceAgentConsultArgs({ prompt: "  Check the repo. " })).toMatchObject({
+    expect(parseRealtimeVoiceAgentConsultArgs({ prompt: "  Check the repo. " })).toStrictEqual({
+      context: undefined,
       question: "Check the repo.",
+      responseStyle: undefined,
     });
     expect(
       parseRealtimeVoiceAgentConsultArgs({ query: "  Send a Discord message. " }),
-    ).toMatchObject({
+    ).toStrictEqual({
+      context: undefined,
       question: "Send a Discord message.",
+      responseStyle: undefined,
     });
   });
 
@@ -51,13 +56,16 @@ describe("realtime voice agent consult tool", () => {
       questionSourceLabel: "participant",
     });
 
-    expect(prompt).toContain(
-      "Live voice request from the participant during a private Google Meet",
+    expect(prompt).toBe(
+      [
+        "Live voice request from the participant during a private Google Meet.",
+        "Act as the configured OpenClaw agent on behalf of this user. Use available tools when the request asks you to do work.",
+        "When finished, return only the concise result the realtime voice agent should speak back.",
+        "Do not include markdown, tool logs, or private reasoning. Include citations only when the spoken answer needs them.",
+        "Recent voice transcript for context:\nParticipant: Can you check the repo?\nAgent: I'll verify.",
+        "User request:\nDo we support realtime tools?",
+      ].join("\n\n"),
     );
-    expect(prompt).toContain("Act as the configured OpenClaw agent on behalf of this user");
-    expect(prompt).toContain("Participant: Can you check the repo?");
-    expect(prompt).toContain("Agent: I'll verify.");
-    expect(prompt).toContain("User request:\nDo we support realtime tools?");
   });
 
   it("filters reasoning and error payloads from visible consult output", () => {
@@ -76,10 +84,10 @@ describe("realtime voice agent consult tool", () => {
     expect(resolveRealtimeVoiceAgentConsultToolPolicy("bad", "safe-read-only")).toBe(
       "safe-read-only",
     );
-    expect(resolveRealtimeVoiceAgentConsultTools("safe-read-only")).toEqual([
-      expect.objectContaining({ name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME }),
+    expect(resolveRealtimeVoiceAgentConsultTools("safe-read-only")).toStrictEqual([
+      REALTIME_VOICE_AGENT_CONSULT_TOOL,
     ]);
-    expect(resolveRealtimeVoiceAgentConsultTools("none")).toEqual([]);
+    expect(resolveRealtimeVoiceAgentConsultTools("none")).toStrictEqual([]);
     expect(resolveRealtimeVoiceAgentConsultToolsAllow("safe-read-only")).toEqual([
       "read",
       "web_search",
@@ -89,7 +97,7 @@ describe("realtime voice agent consult tool", () => {
       "memory_get",
     ]);
     expect(resolveRealtimeVoiceAgentConsultToolsAllow("owner")).toBeUndefined();
-    expect(resolveRealtimeVoiceAgentConsultToolsAllow("none")).toEqual([]);
+    expect(resolveRealtimeVoiceAgentConsultToolsAllow("none")).toStrictEqual([]);
   });
 
   it("keeps the shared consult tool ahead of custom realtime tools and dedupes by name", () => {
@@ -103,10 +111,7 @@ describe("realtime voice agent consult tool", () => {
 
     expect(
       resolveRealtimeVoiceAgentConsultTools("safe-read-only", [duplicateConsultTool, customTool]),
-    ).toEqual([
-      expect.objectContaining({ name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME }),
-      customTool,
-    ]);
+    ).toStrictEqual([REALTIME_VOICE_AGENT_CONSULT_TOOL, customTool]);
     expect(resolveRealtimeVoiceAgentConsultTools("none", [customTool])).toEqual([customTool]);
   });
 });

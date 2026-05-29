@@ -23,7 +23,7 @@ describe("memory embedding policy", () => {
     const batches = buildMemoryEmbeddingBatches([chunk(line), chunk(line)], 8000);
 
     expect(batches).toHaveLength(2);
-    expect(batches.every((batch) => batch.length === 1)).toBe(true);
+    expect(batches.map((batch) => batch.length)).toEqual([1, 1]);
   });
 
   it("keeps small files in a single embedding batch", () => {
@@ -71,7 +71,7 @@ describe("memory embedding policy", () => {
     expect(waits).toEqual([500, 1000]);
   });
 
-  it("retries transient socket/network embedding errors", async () => {
+  it("retries transient socket/network embedding errors", () => {
     const messages = [
       "TypeError: fetch failed | other side closed",
       "undici error: UND_ERR_SOCKET",

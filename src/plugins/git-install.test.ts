@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { redactSensitiveUrlLikeString } from "../shared/net/redact-sensitive-url.js";
 
 const runCommandWithTimeoutMock = vi.fn();
@@ -33,33 +33,95 @@ function expectedGitRepoDir(params: { gitDir: string; normalizedSpec: string }):
   return path.join(params.gitDir, `git-${hash}`, "repo");
 }
 
+function expectParsedGitSpec(spec: string) {
+  const parsed = parseGitPluginSpec(spec);
+  if (!parsed) {
+    throw new Error(`Expected ${spec} to parse as a git plugin spec`);
+  }
+  return parsed;
+}
+
+function firstCommandRun(): unknown[] | undefined {
+  return runCommandWithTimeoutMock.mock.calls[0];
+}
+
+function commandArgvAt(index: number): string[] {
+  const call = runCommandWithTimeoutMock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected command run #${index + 1}`);
+  }
+  return call[0] as string[];
+}
+
+function firstInstallOptions():
+  | {
+      expectedPluginId?: string;
+      packageDir?: string;
+      installPolicyRequest?: { kind?: string; requestedSpecifier?: string };
+    }
+  | undefined {
+  return installPluginFromInstalledPackageDirMock.mock.calls[0]?.[0] as
+    | {
+        expectedPluginId?: string;
+        packageDir?: string;
+        installPolicyRequest?: { kind?: string; requestedSpecifier?: string };
+      }
+    | undefined;
+}
+
 describe("parseGitPluginSpec", () => {
   it("normalizes GitHub shorthand and ref selectors", () => {
-    expect(parseGitPluginSpec("git:github.com/acme/demo@v1.2.3")).toMatchObject({
-      url: "https://github.com/acme/demo.git",
-      ref: "v1.2.3",
-      label: "acme/demo",
-      normalizedSpec: "git:https://github.com/acme/demo.git@v1.2.3",
-    });
-    expect(parseGitPluginSpec("git:acme/demo#main")).toMatchObject({
-      url: "https://github.com/acme/demo.git",
-      ref: "main",
-    });
+    const explicitRef = expectParsedGitSpec("git:github.com/acme/demo@v1.2.3");
+    expect(explicitRef.url).toBe("https://github.com/acme/demo.git");
+    expect(explicitRef.ref).toBe("v1.2.3");
+    expect(explicitRef.label).toBe("acme/demo");
+    expect(explicitRef.normalizedSpec).toBe("git:https://github.com/acme/demo.git@v1.2.3");
+
+    const slashRef = expectParsedGitSpec("git:acme/demo@feature/foo");
+    expect(slashRef.url).toBe("https://github.com/acme/demo.git");
+    expect(slashRef.ref).toBe("feature/foo");
+    expect(slashRef.label).toBe("acme/demo");
+
+    const hashRef = expectParsedGitSpec("git:acme/demo#main");
+    expect(hashRef.url).toBe("https://github.com/acme/demo.git");
+    expect(hashRef.ref).toBe("main");
+  });
+
+  it("does not treat URL credentials as ref selectors", () => {
+    const parsed = expectParsedGitSpec("git:https://token:secret@github.com/acme/demo.git");
+    expect(parsed.url).toBe("https://token:secret@github.com/acme/demo.git");
+    expect(parsed.ref).toBeUndefined();
+    expect(parsed.label).toBe("github.com/acme/demo");
   });
 
   it("keeps scp-style clone URLs without treating git@ as a ref", () => {
-    expect(parseGitPluginSpec("git:git@github.com:acme/demo.git@release")).toMatchObject({
-      url: "git@github.com:acme/demo.git",
-      ref: "release",
-      label: "git@github.com:acme/demo.git",
-    });
+    const parsed = expectParsedGitSpec("git:git@github.com:acme/demo.git@feature/foo");
+    expect(parsed.url).toBe("git@github.com:acme/demo.git");
+    expect(parsed.ref).toBe("feature/foo");
+    expect(parsed.label).toBe("git@github.com:acme/demo");
   });
 });
 
 describe("installPluginFromGitSpec", () => {
-  beforeEach(() => {
+  const tempDirs: string[] = [];
+
+  beforeEach(async () => {
     runCommandWithTimeoutMock.mockReset();
     installPluginFromInstalledPackageDirMock.mockReset();
+    const globalConfigRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-git-install-npmrc-"),
+    );
+    tempDirs.push(globalConfigRoot);
+    const globalConfig = path.join(globalConfigRoot, "global-npmrc");
+    await fs.writeFile(globalConfig, "", "utf8");
+    vi.stubEnv("NPM_CONFIG_GLOBALCONFIG", globalConfig);
+  });
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    await Promise.all(
+      tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
+    );
   });
 
   it("clones, checks out refs, installs from the clone, and returns commit metadata", async () => {
@@ -86,28 +148,19 @@ describe("installPluginFromGitSpec", () => {
       expectedPluginId: "demo",
     });
 
-    expect(result).toMatchObject({
-      ok: true,
-      pluginId: "demo",
-      git: {
-        url: "https://github.com/acme/demo.git",
-        ref: "v1.2.3",
-        commit: "abc123",
-      },
-    });
-    expect(runCommandWithTimeoutMock.mock.calls[0][0]).toEqual([
-      "git",
-      "clone",
-      "https://github.com/acme/demo.git",
-      expect.stringContaining("/repo"),
-    ]);
-    expect(runCommandWithTimeoutMock.mock.calls[1][0]).toEqual([
-      "git",
-      "checkout",
-      "--detach",
-      "v1.2.3",
-    ]);
-    expect(runCommandWithTimeoutMock.mock.calls[3][0]).toEqual([
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error(result.error);
+    }
+    expect(result.pluginId).toBe("demo");
+    expect(result.git.url).toBe("https://github.com/acme/demo.git");
+    expect(result.git.ref).toBe("v1.2.3");
+    expect(result.git.commit).toBe("abc123");
+    const cloneArgv = commandArgvAt(0);
+    expect(cloneArgv.slice(0, 3)).toEqual(["git", "clone", "https://github.com/acme/demo.git"]);
+    expect(cloneArgv[3]).toContain("/repo");
+    expect(commandArgvAt(1)).toEqual(["git", "switch", "--detach", "--", "v1.2.3"]);
+    expect(commandArgvAt(3)).toEqual([
       "npm",
       "install",
       "--omit=dev",
@@ -116,15 +169,12 @@ describe("installPluginFromGitSpec", () => {
       "--no-audit",
       "--no-fund",
     ]);
-    expect(installPluginFromInstalledPackageDirMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        expectedPluginId: "demo",
-        packageDir: expect.stringContaining("/repo"),
-        installPolicyRequest: {
-          kind: "plugin-git",
-          requestedSpecifier: "git:github.com/acme/demo@v1.2.3",
-        },
-      }),
+    const installOptions = firstInstallOptions();
+    expect(installOptions?.expectedPluginId).toBe("demo");
+    expect(installOptions?.packageDir).toContain("/repo");
+    expect(installOptions?.installPolicyRequest?.kind).toBe("plugin-git");
+    expect(installOptions?.installPolicyRequest?.requestedSpecifier).toBe(
+      "git:github.com/acme/demo@v1.2.3",
     );
   });
 
@@ -146,16 +196,21 @@ describe("installPluginFromGitSpec", () => {
       },
     );
 
-    await installPluginFromGitSpec({ spec: "git:github.com/acme/demo" });
+    const result = await installPluginFromGitSpec({ spec: "git:github.com/acme/demo" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error(result.error);
+    }
 
-    expect(runCommandWithTimeoutMock.mock.calls[0][0]).toEqual([
+    const cloneArgv = commandArgvAt(0);
+    expect(cloneArgv.slice(0, 5)).toEqual([
       "git",
       "clone",
       "--depth",
       "1",
       "https://github.com/acme/demo.git",
-      expect.stringContaining("/repo"),
     ]);
+    expect(cloneArgv[5]).toContain("/repo");
   });
 
   it("uses a credential-free managed repo path for authenticated git URLs", async () => {
@@ -222,6 +277,30 @@ describe("installPluginFromGitSpec", () => {
       expect(result.error).not.toContain("other");
       expect(result.error).not.toContain("credential");
     }
+    expect(installPluginFromInstalledPackageDirMock).not.toHaveBeenCalled();
+  });
+
+  it("separates requested refs from git options", async () => {
+    runCommandWithTimeoutMock
+      .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
+      .mockResolvedValueOnce({
+        code: 128,
+        stdout: "",
+        stderr: "fatal: invalid reference: --ignore-skip-worktree-bits",
+      });
+
+    const result = await installPluginFromGitSpec({
+      spec: "git:github.com/acme/demo@--ignore-skip-worktree-bits",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(commandArgvAt(1)).toEqual([
+      "git",
+      "switch",
+      "--detach",
+      "--",
+      "--ignore-skip-worktree-bits",
+    ]);
     expect(installPluginFromInstalledPackageDirMock).not.toHaveBeenCalled();
   });
 

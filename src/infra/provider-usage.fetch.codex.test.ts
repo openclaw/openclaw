@@ -23,6 +23,15 @@ describe("fetchCodexUsage", () => {
     expect(result.windows).toHaveLength(0);
   });
 
+  it("returns a stable error for malformed successful usage JSON", async () => {
+    const mockFetch = createProviderUsageFetch(async () => makeResponse(200, "{not json"));
+
+    const result = await fetchCodexUsage("token", undefined, 5000, mockFetch);
+
+    expect(result.error).toBe("Malformed usage response");
+    expect(result.windows).toHaveLength(0);
+  });
+
   it("parses windows, reset times, and plan balance", async () => {
     const mockFetch = createProviderUsageFetch(async (_url, init) => {
       const headers = (init?.headers as Record<string, string> | undefined) ?? {};
@@ -135,7 +144,7 @@ describe("fetchCodexUsage", () => {
 
     const result = await fetchCodexUsage("token", undefined, 5000, mockFetch);
     expect(result.plan).toBe("$7.50");
-    expect(result.windows).toEqual([]);
+    expect(result.windows).toStrictEqual([]);
   });
 
   it("falls back invalid credit strings to a zero balance", async () => {

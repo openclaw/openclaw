@@ -213,6 +213,14 @@ export const ar: TranslationMap = {
     sessionDetails: "تفاصيل الجلسة",
     compactionHistory: "سجل الضغط",
     status: "الحالة",
+    statusLive: "مباشر",
+    statusIdle: "خامل",
+    statusUnknown: "غير معروف",
+    statusRunning: "قيد التشغيل",
+    statusDone: "مكتمل",
+    statusFailed: "فشل",
+    statusKilled: "تم الإنهاء",
+    statusTimeout: "انتهت المهلة",
     model: "النموذج",
     provider: "المزود",
     runtime: "وقت التشغيل",
@@ -339,6 +347,12 @@ export const ar: TranslationMap = {
     eventLogSubtitle: "أحدث أحداث Gateway.",
     noEvents: "لا توجد أحداث بعد.",
   },
+  quickSettings: {
+    security: {
+      browserEnabled: "Browser enabled",
+      toolProfile: "Tool profile",
+    },
+  },
   execApproval: {
     expiresIn: "تنتهي خلال {time}",
     expired: "منتهية الصلاحية",
@@ -347,6 +361,8 @@ export const ar: TranslationMap = {
     pending: "{count} قيد الانتظار",
     allowOnce: "السماح مرة واحدة",
     alwaysAllow: "السماح دائمًا",
+    allowAlwaysUnavailable:
+      "تتطلب سياسة الموافقة السارية الحصول على الموافقة في كل مرة، لذا فإن خيار السماح دائمًا غير متاح.",
     deny: "رفض",
     labels: {
       host: "المضيف",
@@ -378,6 +394,7 @@ export const ar: TranslationMap = {
   },
   tabs: {
     agents: "الوكلاء",
+    activity: "النشاط",
     overview: "نظرة عامة",
     channels: "القنوات",
     instances: "المثيلات",
@@ -399,6 +416,7 @@ export const ar: TranslationMap = {
   },
   subtitles: {
     agents: "مساحات العمل، والأدوات، والهويات.",
+    activity: "ملخصات نشاط الأدوات المحلية في المتصفح.",
     overview: "الحالة، ونقاط الدخول، والصحة.",
     channels: "القنوات والإعدادات.",
     instances: "العملاء والعقد المتصلة.",
@@ -417,6 +435,42 @@ export const ar: TranslationMap = {
     debug: "اللقطات، والأحداث، وRPC.",
     logs: "سجلات Gateway المباشرة.",
     dreams: "حلم الذاكرة، والدمج، والتأمل.",
+  },
+  activity: {
+    title: "النشاط",
+    subtitle: "نشاط أدوات مؤقت مشتق من أحداث الجلسة المباشرة.",
+    visibleCount: "{visible} من {total}",
+    filtersLabel: "عوامل تصفية النشاط",
+    search: "بحث",
+    searchPlaceholder: "التصفية حسب الأداة أو الملخص أو التشغيل أو الجلسة",
+    toolFilter: "الأداة",
+    allTools: "كل الأدوات",
+    statusFilters: "عوامل تصفية الحالة",
+    autoFollow: "المتابعة التلقائية",
+    expandAll: "توسيع الكل",
+    collapseAll: "طي الكل",
+    clear: "مسح",
+    empty: "لا يوجد نشاط أدوات بعد.",
+    emptyFiltered: "لا يوجد نشاط يطابق عوامل التصفية هذه.",
+    entrySummary: "{argumentSummary}",
+    argumentHiddenOne: "تم إخفاء وسيطة واحدة",
+    argumentsHidden: "تم إخفاء {count} وسيطات",
+    streamLabel: "إدخالات نشاط الأدوات",
+    toolCallId: "استدعاء الأداة",
+    runId: "شغّل",
+    session: "الجلسة",
+    outputTruncated: "تم تنقيح المعاينة واقتطاعها.",
+    noOutputPreview: "لا توجد معاينة للمخرجات.",
+    status: {
+      running: "قيد التشغيل",
+      done: "مكتمل",
+      error: "خطأ",
+    },
+    duration: {
+      ms: "{count} ms",
+      seconds: "{count} s",
+      minutes: "{minutes}m {seconds}s",
+    },
   },
   overview: {
     access: {
@@ -678,9 +732,6 @@ export const ar: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle: "اطّلع على أين تذهب الرموز، ومتى ترتفع الجلسات، وما الذي يحدد التكلفة.",
-    },
     common: {
       emptyValue: "—",
       unknown: "غير معروف",
@@ -699,6 +750,16 @@ export const ar: TranslationMap = {
       today: "اليوم",
       last7d: "7 أيام",
       last30d: "30 يومًا",
+      last90d: "90d",
+      last1y: "1y",
+      all: "الكل",
+    },
+    scope: {
+      instance: "المثيل الحالي",
+      instanceHint: "اعرض فقط معرّف الجلسة النشطة لكل جلسة منطقية.",
+      family: "السلالة التاريخية",
+      familyHint: "اجمع معرّفات الجلسات المعروفة والمدعومة بالنصوص المنسوخة التي تم تدويرها.",
+      familyIncluded: "تتضمن السلالة التاريخية {count} من مثيلات الجلسات.",
     },
     filters: {
       title: "عوامل التصفية",
@@ -919,6 +980,88 @@ export const ar: TranslationMap = {
     showPassword: "إظهار كلمة المرور",
     hidePassword: "إخفاء كلمة المرور",
     togglePasswordVisibility: "تبديل ظهور كلمة المرور",
+    failure: {
+      rawError: "الخطأ الخام",
+      docsAuth: "وثائق مصادقة Control UI",
+      docsPairing: "وثائق إقران الجهاز",
+      docsInsecure: "وثائق HTTP غير الآمن",
+      authRequired: {
+        title: "المصادقة مطلوبة",
+        summary:
+          "يمكن الوصول إلى Gateway، لكنه يحتاج إلى رمز مميز أو كلمة مرور مطابقة قبل أن يتمكن هذا المتصفح من الاتصال.",
+        stepPaste: "الصق الرمز المميز من openclaw dashboard --no-open أو أدخل كلمة المرور المكونة.",
+        stepGenerate:
+          "إذا لم يتم تكوين رمز مميز، فشغل openclaw doctor --generate-gateway-token على مضيف Gateway.",
+        stepConnect: "انقر على Connect مرة أخرى بعد تحديث بيانات الاعتماد.",
+      },
+      authFailed: {
+        title: "بيانات المصادقة غير مطابقة",
+        summary:
+          "تم رفض بيانات الاعتماد المقدمة. السبب الأكثر شيوعا هو رمز مميز قديم أو رمز منسوخ من عنوان Gateway آخر.",
+        stepDashboard:
+          "شغل openclaw dashboard --no-open وافتح عنوان URL الجديد أو الصق رمزه المميز.",
+        stepReplace:
+          "استبدل قيم الرمز المميز/كلمة المرور القديمة؛ لا تعد استخدام رمز من عنوان Gateway آخر.",
+        stepMode:
+          "استخدم وضع مصادقة مطابقا واحدا في كل مرة: رمز gateway لوضع الرمز، أو كلمة المرور لوضع كلمة المرور.",
+      },
+      rateLimited: {
+        title: "محاولات فاشلة كثيرة جدا",
+        summary: "يقيد Gateway مؤقتا محاولات المصادقة لهذا العميل.",
+        stepStop: "توقف عن إعادة المحاولة من هذه علامة التبويب للحظة.",
+        stepWait: "انتظر حتى يهدأ محدد المصادقة، ثم أعد الاتصال ببيانات الاعتماد المصححة.",
+        stepCheckClients:
+          "إذا كان هذا مضيفا مشتركا، فتحقق من العملاء الآخرين بحثا عن محاولات سيئة متكررة.",
+      },
+      pairing: {
+        title: "إقران الجهاز مطلوب",
+        scopeTitle: "ترقية النطاق معلقة",
+        roleTitle: "ترقية الدور معلقة",
+        metadataTitle: "تحديث الجهاز معلق",
+        summary: "يحتاج هذا المتصفح إلى موافقة لمرة واحدة من مضيف Gateway قبل استخدام Control UI.",
+        upgradeSummary:
+          "هذا المتصفح معروف بالفعل، لكن الوصول المطلوب تغير ويحتاج إلى موافقة جديدة.",
+        stepList: "شغل openclaw devices list على مضيف Gateway.",
+        stepApproveId: "وافق على هذا الطلب: openclaw devices approve {requestId}.",
+        stepApprove: "وافق على طلب المتصفح/الجهاز المعلق من تلك القائمة.",
+        stepReconnect: "أعد الاتصال بعد اكتمال الموافقة.",
+      },
+      insecure: {
+        title: "سياق متصفح آمن مطلوب",
+        summary:
+          "تعمل هذه الصفحة عبر HTTP عادي، لذلك لا يستطيع المتصفح إنشاء هوية الجهاز التي يتوقعها Gateway.",
+        stepHttps: "استخدم HTTPS/Tailscale Serve، أو افتح http://127.0.0.1:18789 على مضيف Gateway.",
+        stepLocalCompat:
+          "للتوافق المحلي بوضع الرمز فقط، عين gateway.controlUi.allowInsecureAuth: true.",
+        stepAvoidDisable: "تجنب تعطيل مصادقة الجهاز للوصول عبر HTTP عن بعد.",
+      },
+      origin: {
+        title: "أصل المتصفح غير مسموح",
+        summary: "رفض Gateway أصل هذه الصفحة قبل قبول اتصال Control UI.",
+        stepAllowedOrigins: "أضف أصل هذا المتصفح إلى gateway.controlUi.allowedOrigins.",
+        stepFullOrigin: "استخدم أصولا كاملة مثل http://localhost:5173، وليس أنماط أحرف بدل.",
+        stepRestart: "أعد تشغيل Gateway أو أعد تحميله بعد تغيير الأصول المسموح بها.",
+      },
+      protocol: {
+        title: "عدم تطابق البروتوكول",
+        summary: "لا يتفق Control UI المقدم مع Gateway العامل على بروتوكول الاتصال المدعوم.",
+        stepDashboard:
+          "أعد فتح لوحة المعلومات المقدمة باستخدام openclaw dashboard حتى يأتي UI وGateway من التثبيت نفسه.",
+        stepDevUi:
+          "إذا كنت تستخدم pnpm ui:dev، فأعد بناء أو تشغيل واجهة التطوير مقابل checkout الحالي.",
+        stepRestart: "أعد تشغيل Gateway بعد تحديث OpenClaw حتى يقدم البروتوكول الحالي.",
+      },
+      network: {
+        title: "تعذر الاتصال",
+        summary:
+          "لم يتمكن المتصفح من إكمال اتصال Gateway. تحقق من الهدف والنقل قبل إعادة تجربة بيانات الاعتماد.",
+        stepGateway: "تأكد من أن Gateway يعمل باستخدام openclaw status أو openclaw gateway run.",
+        stepUrl:
+          "تحقق من عنوان WebSocket واستخدم wss:// عندما يكون Gateway خلف HTTPS/Tailscale Serve.",
+        stepDashboard:
+          "أعد فتح لوحة المعلومات باستخدام openclaw dashboard --no-open لنسخ عنوان URL وتفاصيل المصادقة الحالية.",
+      },
+    },
   },
   chat: {
     disconnected: "تم قطع الاتصال بـ Gateway.",
@@ -926,6 +1069,10 @@ export const ar: TranslationMap = {
     settings: "إعدادات الدردشة",
     thinkingToggle: "تبديل مخرجات تفكير/عمل المساعد",
     toolCallsToggle: "تبديل استدعاءات الأدوات ونتائج الأدوات",
+    autoScrollMode: "وضع التمرير التلقائي",
+    autoScrollAlways: "دائمًا",
+    autoScrollNearBottom: "قرب الأسفل",
+    autoScrollOff: "إيقاف",
     focusToggle: "تبديل وضع التركيز (إخفاء الشريط الجانبي + رأس الصفحة)",
     hideCronSessions: "إخفاء جلسات cron",
     showCronSessions: "إظهار جلسات cron",
@@ -941,6 +1088,52 @@ export const ar: TranslationMap = {
     updateNow: "التحديث الآن",
     dismissUpdateBanner: "إغلاق لافتة التحديث",
     switchedSession: "تم التبديل إلى {session}",
+    welcome: {
+      ready: "Ready to chat",
+      hintBeforeShortcut: "Type a message below ·",
+      hintAfterShortcut: "for commands",
+      suggestions: {
+        whatCanYouDo: "What can you do?",
+        summarizeRecentSessions: "Summarize my recent sessions",
+        configureChannel: "Help me configure a channel",
+        checkSystemHealth: "Check system health",
+      },
+    },
+    runControls: {
+      newSession: "New session",
+      export: "تصدير",
+      exportChat: "Export chat",
+      queue: "Queue",
+      queueMessage: "Queue message",
+      stop: "Stop",
+      stopGenerating: "Stop generating",
+      send: "Send",
+      sendMessage: "Send message",
+    },
+    queue: {
+      retry: "إعادة المحاولة",
+      retrySend: "إعادة الإرسال",
+      retryQueuedMessage: "إعادة محاولة الرسالة في قائمة الانتظار",
+    },
+    composer: {
+      placeholder: "Message {name} (Enter to send)",
+      placeholderWithAttachments: "Add a message or paste more images...",
+      placeholderDisconnected: "Connect to the gateway to start chatting...",
+      attachFile: "Attach file",
+      startTalk: "Start Talk",
+      stillListening: "لا يزال يستمع",
+      talkTranscript: "نص الحديث",
+      stopTalk: "Stop Talk",
+    },
+    selectors: {
+      agentFilter: "تصفية الجلسات حسب الوكيل",
+      session: "Chat session",
+      sessionSearch: "البحث في الجلسات",
+      clearSessionSearch: "مسح البحث في الجلسات",
+      loadMoreSessions: "تحميل المزيد من الجلسات",
+      model: "Chat model",
+      thinkingLevel: "Chat thinking level",
+    },
   },
   languages: {
     en: "English (الإنجليزية)",
@@ -1049,6 +1242,9 @@ export const ar: TranslationMap = {
       ascending: "تصاعدي",
       descending: "تنازلي",
       reset: "إعادة تعيين",
+      emptyTitle: "No scheduled jobs yet.",
+      emptyHint: "Create one from a plain-language prompt; advanced fields can wait.",
+      emptyFilteredHint: "Clear or change filters to see scheduled jobs.",
       noMatching: "لا توجد مهام مطابقة.",
       loading: "جارٍ التحميل...",
       loadMore: "تحميل المزيد من المهام",
@@ -1084,6 +1280,7 @@ export const ar: TranslationMap = {
     form: {
       editJob: "تعديل المهمة",
       newJob: "مهمة جديدة",
+      advancedJob: "Advanced job",
       updateSubtitle: "حدّث المهمة المجدولة المحددة.",
       createSubtitle: "أنشئ تنبيهًا مجدولًا أو تشغيل وكيل.",
       required: "مطلوب",

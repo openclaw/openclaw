@@ -90,7 +90,7 @@
       "kind": "object-property",
       "name": "description",
       "path": "ui/src/ui/chat/build-chat-items.ts",
-      "text": "Earlier turns are preserved in a compaction checkpoint. Open session checkpoints to branch or restore that pre-compaction view."
+      "text": "The compacted transcript is preserved as a checkpoint. Open session checkpoints to branch or restore from that compacted view."
     },
     {
       "count": 1,
@@ -143,27 +143,6 @@
     },
     {
       "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/chat/chat-welcome.ts",
-      "text": "for commands"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/chat/chat-welcome.ts",
-      "text": "Ready to chat"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/chat/chat-welcome.ts",
-      "text": "Type a message below ·"
-    },
-    {
-      "count": 1,
       "kind": "html-attribute",
       "name": "aria-label",
       "path": "ui/src/ui/chat/context-notice.ts",
@@ -189,6 +168,13 @@
       "name": "aria-label",
       "path": "ui/src/ui/chat/grouped-render.ts",
       "text": "Open in canvas"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/chat/grouped-render.ts",
+      "text": "Tool returned an error"
     },
     {
       "count": 1,
@@ -219,6 +205,13 @@
       "text": "Context"
     },
     {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/chat/grouped-render.ts",
+      "text": "Error"
+    },
+    {
       "count": 2,
       "kind": "html-text",
       "name": "text",
@@ -237,6 +230,13 @@
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/ui/chat/grouped-render.ts",
+      "text": "Tool output"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/chat/grouped-render.ts",
       "text": "Unknown date"
     },
     {
@@ -245,90 +245,6 @@
       "name": "title",
       "path": "ui/src/ui/chat/grouped-render.ts",
       "text": "Unknown date"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "aria-label",
-      "path": "ui/src/ui/chat/run-controls.ts",
-      "text": "Export chat"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "aria-label",
-      "path": "ui/src/ui/chat/run-controls.ts",
-      "text": "New session"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "aria-label",
-      "path": "ui/src/ui/chat/run-controls.ts",
-      "text": "Queue message"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "aria-label",
-      "path": "ui/src/ui/chat/run-controls.ts",
-      "text": "Stop generating"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "title",
-      "path": "ui/src/ui/chat/run-controls.ts",
-      "text": "Export"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "title",
-      "path": "ui/src/ui/chat/run-controls.ts",
-      "text": "New session"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "title",
-      "path": "ui/src/ui/chat/run-controls.ts",
-      "text": "Queue"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "title",
-      "path": "ui/src/ui/chat/run-controls.ts",
-      "text": "Stop"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "aria-label",
-      "path": "ui/src/ui/chat/session-controls.ts",
-      "text": "Chat model"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "aria-label",
-      "path": "ui/src/ui/chat/session-controls.ts",
-      "text": "Chat session"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "aria-label",
-      "path": "ui/src/ui/chat/session-controls.ts",
-      "text": "Chat thinking level"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "aria-label",
-      "path": "ui/src/ui/chat/session-controls.ts",
-      "text": "Filter sessions by agent"
     },
     {
       "count": 1,
@@ -403,16 +319,23 @@
     {
       "count": 1,
       "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/chat/tool-cards.ts",
+      "text": "Tool returned an error"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
       "name": "title",
       "path": "ui/src/ui/chat/tool-cards.ts",
       "text": "Open in the side panel"
     },
     {
-      "count": 1,
+      "count": 2,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/chat/tool-cards.ts",
-      "text": "Completed"
+      "text": "Error"
     },
     {
       "count": 1,
@@ -429,7 +352,7 @@
       "text": "Tool input"
     },
     {
-      "count": 2,
+      "count": 1,
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/ui/chat/tool-cards.ts",
@@ -1462,13 +1385,6 @@
       "kind": "html-attribute",
       "name": "aria-label",
       "path": "ui/src/ui/views/chat.ts",
-      "text": "Attach file"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "aria-label",
-      "path": "ui/src/ui/views/chat.ts",
       "text": "Close search"
     },
     {
@@ -1521,18 +1437,25 @@
       "text": "Slash commands"
     },
     {
+      "count": 2,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Talk options"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Auto"
+    },
+    {
       "count": 1,
       "kind": "html-attribute",
       "name": "placeholder",
       "path": "ui/src/ui/views/chat.ts",
       "text": "Search messages..."
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "title",
-      "path": "ui/src/ui/views/chat.ts",
-      "text": "Attach file"
     },
     {
       "count": 1,
@@ -1553,6 +1476,13 @@
       "kind": "html-attribute",
       "name": "title",
       "path": "ui/src/ui/views/chat.ts",
+      "text": "Talk options"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "title",
+      "path": "ui/src/ui/views/chat.ts",
       "text": "Unpin"
     },
     {
@@ -1563,11 +1493,39 @@
       "text": "&times;"
     },
     {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Advanced"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Auto"
+    },
+    {
       "count": 2,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/chat.ts",
       "text": "close"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Custom"
+    },
+    {
+      "count": 3,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Default"
     },
     {
       "count": 2,
@@ -1584,6 +1542,13 @@
       "text": "Esc"
     },
     {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Exact VAD"
+    },
+    {
       "count": 2,
       "kind": "html-text",
       "name": "text",
@@ -1595,7 +1560,63 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/chat.ts",
+      "text": "Gateway relay"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Google"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "High"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/chat.ts",
       "text": "instant"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Lead-in"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Low"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Medium"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Minimal"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Model"
     },
     {
       "count": 2,
@@ -1616,6 +1637,41 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/chat.ts",
+      "text": "OpenAI"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Pause before send"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Provider"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Provider WebSocket"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Reasoning"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/chat.ts",
       "text": "run"
     },
     {
@@ -1626,11 +1682,39 @@
       "text": "select"
     },
     {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Sensitivity"
+    },
+    {
       "count": 2,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/chat.ts",
       "text": "Tab"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Transport"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Voice"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "WebRTC"
     },
     {
       "count": 1,
@@ -2491,6 +2575,13 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/config-quick.ts",
+      "text": "Text size"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/config-quick.ts",
       "text": "Theme"
     },
     {
@@ -2568,6 +2659,20 @@
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/ui/views/config-quick.ts",
+      "text": "L"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/config-quick.ts",
+      "text": "M"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/config-quick.ts",
       "text": "None"
     },
     {
@@ -2582,7 +2687,28 @@
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/ui/views/config-quick.ts",
+      "text": "S"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/config-quick.ts",
       "text": "Slight"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/config-quick.ts",
+      "text": "XL"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/config-quick.ts",
+      "text": "XXL"
     },
     {
       "count": 1,
@@ -2828,6 +2954,13 @@
       "name": "text",
       "path": "ui/src/ui/views/config.ts",
       "text": "Subscribe to receive browser push notifications from your gateway."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/config.ts",
+      "text": "Text size"
     },
     {
       "count": 1,
@@ -3248,13 +3381,6 @@
       "name": "placeholder",
       "path": "ui/src/ui/views/cron.ts",
       "text": "default"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/cron.ts",
-      "text": "+ New"
     },
     {
       "count": 1,
@@ -4297,7 +4423,21 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/skills.ts",
+      "text": "ClawHub link invalid"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/skills.ts",
       "text": "Close"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/skills.ts",
+      "text": "Full security report"
     },
     {
       "count": 1,
@@ -4332,6 +4472,20 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/skills.ts",
+      "text": "Overview"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/skills.ts",
+      "text": "Refreshing…"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/skills.ts",
       "text": "Save key"
     },
     {
@@ -4347,6 +4501,13 @@
       "name": "text",
       "path": "ui/src/ui/views/skills.ts",
       "text": "Searching…"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/skills.ts",
+      "text": "Skill Card"
     },
     {
       "count": 1,

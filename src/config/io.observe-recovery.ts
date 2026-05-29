@@ -43,6 +43,7 @@ export type ObserveRecoveryDeps = {
       mkdir(path: string, options?: { recursive?: boolean; mode?: number }): Promise<unknown>;
       readdir(path: string): Promise<string[]>;
       rmdir(path: string): Promise<unknown>;
+      unlink(path: string): Promise<unknown>;
       appendFile(
         path: string,
         data: string,
@@ -73,6 +74,7 @@ export type ObserveRecoveryDeps = {
     mkdirSync(path: string, options?: { recursive?: boolean; mode?: number }): unknown;
     readdirSync(path: string): string[];
     rmdirSync(path: string): unknown;
+    unlinkSync(path: string): unknown;
     appendFileSync(
       path: string,
       data: string,
@@ -678,12 +680,14 @@ export async function maybeRecoverSuspiciousConfigRead(params: {
     }),
   );
 
-  healthState = setConfigHealthEntry(
-    healthState,
-    params.configPath,
-    createLastObservedSuspiciousEntry(entry, suspiciousSignature),
-  );
-  await writeConfigHealthState(params.deps, healthState);
+  if (restoredFromBackup) {
+    healthState = setConfigHealthEntry(
+      healthState,
+      params.configPath,
+      createLastObservedSuspiciousEntry(entry, suspiciousSignature),
+    );
+    await writeConfigHealthState(params.deps, healthState);
+  }
   return { raw: backupRaw, parsed: backupParsed };
 }
 
@@ -788,12 +792,14 @@ export function maybeRecoverSuspiciousConfigReadSync(params: {
     }),
   );
 
-  healthState = setConfigHealthEntry(
-    healthState,
-    params.configPath,
-    createLastObservedSuspiciousEntry(entry, suspiciousSignature),
-  );
-  writeConfigHealthStateSync(params.deps, healthState);
+  if (restoredFromBackup) {
+    healthState = setConfigHealthEntry(
+      healthState,
+      params.configPath,
+      createLastObservedSuspiciousEntry(entry, suspiciousSignature),
+    );
+    writeConfigHealthStateSync(params.deps, healthState);
+  }
   return { raw: backupRaw, parsed: backupParsed };
 }
 
@@ -855,7 +861,7 @@ export async function recoverConfigFromLastKnownGood(params: {
   if (!shouldAttemptLastKnownGoodRecovery(snapshot)) {
     if (isPluginLocalInvalidConfigSnapshot(snapshot)) {
       deps.logger.warn(
-        `Config last-known-good recovery skipped: invalidity is scoped to plugin entries (${params.reason})`,
+        `Config last-known-good recovery skipped: invalidity is scoped to stale plugin config (${params.reason})`,
       );
     }
     return false;

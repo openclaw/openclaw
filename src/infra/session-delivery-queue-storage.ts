@@ -27,6 +27,10 @@ type SessionDeliveryContext = {
   threadId?: string | number;
 };
 
+type SessionDeliveryRetryPolicy = {
+  maxRetries?: number;
+};
+
 export type SessionDeliveryRoute = {
   channel: string;
   to: string;
@@ -37,22 +41,23 @@ export type SessionDeliveryRoute = {
 };
 
 export type QueuedSessionDeliveryPayload =
-  | {
+  | ({
       kind: "systemEvent";
       sessionKey: string;
       text: string;
       deliveryContext?: SessionDeliveryContext;
       idempotencyKey?: string;
-    }
-  | {
+    } & SessionDeliveryRetryPolicy)
+  | ({
       kind: "agentTurn";
       sessionKey: string;
       message: string;
       messageId: string;
+      expectedSessionId?: string;
       route?: SessionDeliveryRoute;
       deliveryContext?: SessionDeliveryContext;
       idempotencyKey?: string;
-    };
+    } & SessionDeliveryRetryPolicy);
 
 export type QueuedSessionDelivery = QueuedSessionDeliveryPayload & {
   id: string;

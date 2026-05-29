@@ -5,7 +5,7 @@ import type {
   OpenClawConfig,
   TelegramAccountConfig,
   TelegramExecApprovalConfig,
-} from "openclaw/plugin-sdk/config-types";
+} from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   getTelegramExecApprovalApprovers,
@@ -193,7 +193,7 @@ describe("telegram exec approvals", () => {
       },
     );
 
-    expect(getTelegramExecApprovalApprovers({ cfg })).toEqual([]);
+    expect(getTelegramExecApprovalApprovers({ cfg })).toStrictEqual([]);
     expect(isTelegramExecApprovalClientEnabled({ cfg })).toBe(false);
     expect(isTelegramExecApprovalApprover({ cfg, senderId: "12345" })).toBe(false);
     expect(isTelegramExecApprovalApprover({ cfg, senderId: "67890" })).toBe(false);
