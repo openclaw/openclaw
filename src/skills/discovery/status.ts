@@ -241,7 +241,7 @@ type BuildSkillStatusContext = {
   config?: OpenClawConfig;
   prefs: SkillsInstallPreferences;
   eligibility?: SkillEligibilityContext;
-  allowBundled: string[] | undefined;
+  allowBundled: ReadonlySet<string> | undefined;
   agentSkillFilter?: string[];
   workspaceDir: string;
   clawhubLockRead: ClawHubSkillsLockfileStatusRead;
