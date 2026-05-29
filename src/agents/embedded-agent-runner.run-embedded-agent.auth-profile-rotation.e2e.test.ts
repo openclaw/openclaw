@@ -1125,6 +1125,80 @@ describe("runEmbeddedAgent auth profile rotation", () => {
     });
   });
 
+  it("caps same-profile overloaded assistant retries for user-pinned profiles", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeAuthStore(agentDir);
+      const overloadedError =
+        '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}';
+      runEmbeddedAttemptMock
+        .mockResolvedValueOnce(makeErrorAttempt({ errorMessage: overloadedError }))
+        .mockResolvedValueOnce(makeErrorAttempt({ errorMessage: overloadedError }));
+
+      await expectFailoverError(
+        runEmbeddedAgentInline({
+          sessionId: "session:test",
+          sessionKey: "agent:test:user-overloaded-assistant-cap",
+          sessionFile: path.join(workspaceDir, "session.jsonl"),
+          workspaceDir,
+          agentDir,
+          config: makeConfig(),
+          prompt: "hello",
+          provider: "openai",
+          model: "mock-1",
+          authProfileId: "openai:p1",
+          authProfileIdSource: "user",
+          timeoutMs: 5_000,
+          runId: "run:user-overloaded-assistant-cap",
+        }),
+        {
+          profileId: "openai:p1",
+          reason: "overloaded",
+          provider: "openai",
+          model: "mock-1",
+        },
+      );
+
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
+      expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
+      expect(sleepWithAbortMock).toHaveBeenCalledWith(1_000, undefined);
+      await expectProfileP2UsageUnchanged(agentDir);
+    });
+  });
+
+  it("caps same-profile overloaded prompt retries for user-pinned profiles", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeAuthStore(agentDir);
+      const overloadedError =
+        '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}';
+      runEmbeddedAttemptMock
+        .mockResolvedValueOnce(makeAttempt({ promptError: new Error(overloadedError) }))
+        .mockResolvedValueOnce(makeAttempt({ promptError: new Error(overloadedError) }));
+
+      await expect(
+        runEmbeddedAgentInline({
+          sessionId: "session:test",
+          sessionKey: "agent:test:user-overloaded-prompt-cap",
+          sessionFile: path.join(workspaceDir, "session.jsonl"),
+          workspaceDir,
+          agentDir,
+          config: makeConfig(),
+          prompt: "hello",
+          provider: "openai",
+          model: "mock-1",
+          authProfileId: "openai:p1",
+          authProfileIdSource: "user",
+          timeoutMs: 5_000,
+          runId: "run:user-overloaded-prompt-cap",
+        }),
+      ).rejects.toThrow("overloaded_error");
+
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
+      expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
+      expect(sleepWithAbortMock).toHaveBeenCalledWith(1_000, undefined);
+      await expectProfileP2UsageUnchanged(agentDir);
+    });
+  });
+
   it("surfaces rate limits without rotating for user-pinned profiles", async () => {
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
       await writeAuthStore(agentDir);
