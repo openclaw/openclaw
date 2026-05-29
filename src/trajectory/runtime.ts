@@ -260,6 +260,31 @@ function trimJsonlWindow(lines: string[], maxBytes: number): number {
   return bytes;
 }
 
+function compareTrajectoryWindowLines(left: string, right: string): number {
+  const leftEvent = parseTrajectoryWindowLine(left);
+  const rightEvent = parseTrajectoryWindowLine(right);
+  const byTs = leftEvent.ts - rightEvent.ts;
+  if (byTs !== 0) {
+    return byTs;
+  }
+  return leftEvent.seq - rightEvent.seq;
+}
+
+function parseTrajectoryWindowLine(line: string): { ts: number; seq: number } {
+  try {
+    const parsed = JSON.parse(line) as { ts?: unknown; sourceSeq?: unknown; seq?: unknown };
+    const ts = typeof parsed.ts === "string" ? Date.parse(parsed.ts) : Number.POSITIVE_INFINITY;
+    const sourceSeq = typeof parsed.sourceSeq === "number" ? parsed.sourceSeq : undefined;
+    const seq = typeof parsed.seq === "number" ? parsed.seq : undefined;
+    return {
+      ts: Number.isFinite(ts) ? ts : Number.POSITIVE_INFINITY,
+      seq: sourceSeq ?? seq ?? Number.POSITIVE_INFINITY,
+    };
+  } catch {
+    return { ts: Number.POSITIVE_INFINITY, seq: Number.POSITIVE_INFINITY };
+  }
+}
+
 function readTrajectoryWindowLines(filePath: string, maxBytes: number): string[] {
   try {
     const raw = readRegularFileSync({
@@ -294,6 +319,7 @@ async function replaceTrajectoryWindow(params: {
   });
   const lines = readTrajectoryWindowLines(params.filePath, params.maxFileBytes);
   lines.push(...params.appendedLines);
+  lines.sort(compareTrajectoryWindowLines);
   trimJsonlWindow(lines, params.maxFileBytes);
   await writeSiblingTempFile({
     dir,

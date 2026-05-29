@@ -226,6 +226,7 @@ describe("trajectory runtime", () => {
     const raw = fs.readFileSync(runtimeFile, "utf8");
     expect(raw).toContain("old-recorder");
     expect(raw).toContain("new-recorder");
+    expect(raw.indexOf("old-recorder")).toBeLessThan(raw.indexOf("new-recorder"));
   });
 
   it.runIf(process.platform !== "win32")(
