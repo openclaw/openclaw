@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ReplyPayload } from "../auto-reply/reply-payload.js";
+import {
+  getReplyPayloadMetadata,
+  setReplyPayloadMetadata,
+  type ReplyPayload,
+} from "../auto-reply/reply-payload.js";
 import type { PluginHookReplyPayload } from "./hook-types.js";
 import { createHookRunnerWithRegistry } from "./hooks.test-helpers.js";
 
@@ -177,6 +181,43 @@ describe("reply_payload_sending hook runner", () => {
     expect(handler).toHaveBeenCalledTimes(1);
     expect((result?.payload as ReplyPayload | undefined)?.trustedLocalMedia).toBe(true);
     expect(result?.payload).toMatchObject({ text: "plugin changed" });
+  });
+
+  it("preserves internal reply metadata across plugin edits", async () => {
+    const handler = vi
+      .fn()
+      .mockImplementation(async (event: { payload: PluginHookReplyPayload }) => ({
+        payload: { ...event.payload, text: "plugin changed" },
+      }));
+    const { runner } = createHookRunnerWithRegistry([
+      { hookName: "reply_payload_sending", handler },
+    ]);
+    const payload = setReplyPayloadMetadata({ text: "hello" } satisfies ReplyPayload, {
+      assistantMessageIndex: 7,
+      sourceReplyTranscriptMirror: {
+        sessionKey: "agent:test:session",
+        text: "hello",
+        idempotencyKey: "mirror-1",
+      },
+    });
+
+    const result = await runner.runReplyPayloadSending(
+      {
+        ...replyPayloadSendingEvent,
+        payload,
+      },
+      replyPayloadSendingCtx,
+    );
+
+    expect(result?.payload).toMatchObject({ text: "plugin changed" });
+    expect(getReplyPayloadMetadata(result?.payload as ReplyPayload)).toEqual({
+      assistantMessageIndex: 7,
+      sourceReplyTranscriptMirror: {
+        sessionKey: "agent:test:session",
+        text: "hello",
+        idempotencyKey: "mirror-1",
+      },
+    });
   });
 
   it("drops trusted local media when plugins change media refs", async () => {

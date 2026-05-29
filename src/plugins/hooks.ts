@@ -5,7 +5,7 @@
  * error handling and priority ordering.
  */
 
-import type { ReplyPayload } from "../auto-reply/reply-payload.js";
+import { copyReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
 import { formatHookErrorForLog } from "../hooks/fire-and-forget.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { concatOptionalTextSegments } from "../shared/text/join-segments.js";
@@ -343,9 +343,10 @@ export function createHookRunner(
   ): ReplyPayload => {
     const { trustedLocalMedia: _trustedLocalMedia, ...safePayload } = next as ReplyPayload;
     const clonedPayload = structuredClone(safePayload);
-    return preservesTrustedMediaRefs(previous, clonedPayload)
+    const acceptedPayload = preservesTrustedMediaRefs(previous, clonedPayload)
       ? { ...clonedPayload, trustedLocalMedia: true }
       : clonedPayload;
+    return copyReplyPayloadMetadata(previous, acceptedPayload);
   };
 
   const mergeBeforeModelResolve = (
