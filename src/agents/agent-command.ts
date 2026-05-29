@@ -1,3 +1,4 @@
+import { resolveInlineAgentImageAttachments } from "../auto-reply/reply/agent-turn-attachments.js";
 import { sanitizePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
 import {
   formatThinkingLevels,
@@ -638,10 +639,12 @@ async function agentCommandInternal(
           throw agentPolicyError;
         }
 
+        const acpImageAttachments = resolveInlineAgentImageAttachments(opts.images);
         await acpManager.runTurn({
           cfg,
           sessionKey,
           text: body,
+          attachments: acpImageAttachments.length > 0 ? acpImageAttachments : undefined,
           mode: "prompt",
           requestId: runId,
           signal: opts.abortSignal,
@@ -1575,13 +1578,19 @@ async function agentCommandInternal(
     try {
       await fallbackTrajectoryRecorder?.flush();
 
+      const rotatedSessionFile = result.meta.agentMeta?.sessionFile;
+      const effectiveSessionId = rotatedSessionFile
+        ? (result.meta.agentMeta?.sessionId ?? sessionId)
+        : sessionId;
+      const effectiveSessionFile = rotatedSessionFile ?? attemptSessionFile;
+
       // Update token+model fields in the session store.
       if (sessionStore && sessionKey && !suppressVisibleSessionEffects) {
         const { updateSessionStoreAfterAgentRun } = await loadSessionStoreRuntime();
         await updateSessionStoreAfterAgentRun({
           cfg,
           contextTokensOverride: agentCfg?.contextTokens,
-          sessionId,
+          sessionId: effectiveSessionId,
           sessionKey,
           storePath,
           sessionStore,
@@ -1612,20 +1621,20 @@ async function agentCommandInternal(
           const transcriptSessionEntry: SessionEntry | undefined = suppressVisibleSessionEffects
             ? {
                 ...(sessionEntry ?? {
-                  sessionId,
+                  sessionId: effectiveSessionId,
                   updatedAt: Date.now(),
                   sessionStartedAt: Date.now(),
                 }),
-                sessionId,
-                sessionFile: attemptSessionFile,
+                sessionId: effectiveSessionId,
+                sessionFile: effectiveSessionFile,
               }
             : sessionEntry;
           sessionEntry = await attemptExecutionRuntime.persistCliTurnTranscript({
             body,
             transcriptBody,
             result,
-            sessionId,
-            sessionKey: sessionKey ?? sessionId,
+            sessionId: effectiveSessionId,
+            sessionKey: sessionKey ?? effectiveSessionId,
             sessionEntry: transcriptSessionEntry,
             sessionStore: suppressVisibleSessionEffects ? undefined : sessionStore,
             storePath: suppressVisibleSessionEffects ? undefined : storePath,
@@ -1649,8 +1658,8 @@ async function agentCommandInternal(
             await loadCliCompactionRuntime()
           ).runCliTurnCompactionLifecycle({
             cfg,
-            sessionId,
-            sessionKey: sessionKey ?? sessionId,
+            sessionId: effectiveSessionId,
+            sessionKey: sessionKey ?? effectiveSessionId,
             sessionEntry,
             sessionStore,
             storePath,
@@ -1721,7 +1730,7 @@ async function agentCommandInternal(
                 clone: false,
               });
               const freshEntry = freshStore[sessionKey];
-              if (!freshEntry || freshEntry.sessionId !== sessionId) {
+              if (!freshEntry || freshEntry.sessionId !== effectiveSessionId) {
                 return undefined;
               }
               sessionStore[sessionKey] = freshEntry;
@@ -1742,7 +1751,7 @@ async function agentCommandInternal(
         resolveFreshSessionEntryForDelivery
           ? {
               ...deliveryParams,
-              expectedSessionIdForFreshDelivery: sessionId,
+              expectedSessionIdForFreshDelivery: effectiveSessionId,
               resolveFreshSessionEntryForDelivery,
             }
           : deliveryParams,

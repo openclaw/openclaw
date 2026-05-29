@@ -1,4 +1,5 @@
 import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   resolveRetryConfig,
   retryAsync,
@@ -146,7 +147,7 @@ function resolveDiscordRequestSignal(options: DiscordApiRequestOptions) {
   if (options.signal || typeof options.timeoutMs !== "number") {
     return options.signal;
   }
-  return AbortSignal.timeout(options.timeoutMs);
+  return AbortSignal.timeout(resolveTimerTimeoutMs(options.timeoutMs, 1));
 }
 
 export async function requestDiscord<T>(

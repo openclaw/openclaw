@@ -1,4 +1,5 @@
 import * as fetchModule from "openclaw/plugin-sdk/fetch-runtime";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import {
   containerCheck,
@@ -290,6 +291,29 @@ describe("containerRestRequest", () => {
     expect(mockFetch).toHaveBeenCalled();
     if (requireFetchCall()[1].signal === undefined) {
       throw new Error("expected fetch call to include an abort signal");
+    }
+  });
+
+  it("caps oversized REST request timeouts before arming abort timers", async () => {
+    const timeoutSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockReturnValue(0 as unknown as ReturnType<typeof setTimeout>);
+    try {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        status: 200,
+        text: async () => "{}",
+      });
+
+      await containerRestRequest("/v1/about", {
+        baseUrl: "http://localhost:8080",
+        timeoutMs: Number.MAX_SAFE_INTEGER,
+      });
+
+      expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+      expect(requireFetchCall()[1].signal).toBeInstanceOf(AbortSignal);
+    } finally {
+      timeoutSpy.mockRestore();
     }
   });
 });

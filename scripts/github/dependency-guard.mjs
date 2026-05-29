@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 
 import { appendFile, readFile } from "node:fs/promises";
+import { readBoundedResponseText } from "../lib/bounded-response.mjs";
 
 export const dependencyChangeMarker = "<!-- openclaw:dependency-guard -->";
 export const dependencyGraphGuardMarker = "<!-- openclaw:dependency-graph-guard -->";
 export const dependencyChangedLabel = "dependencies-changed";
 export const allowDependenciesCommand = "/allow-dependencies-change";
+export const GITHUB_ERROR_BODY_MAX_BYTES = 64 * 1024;
 
 const maxListedFiles = 25;
 const securityTeamSlug = process.env.OPENCLAW_SECURITY_TEAM_SLUG ?? "openclaw-secops";
@@ -88,63 +90,47 @@ function shellQuote(value) {
   return `'${sanitizeDisplayValue(value).replaceAll("'", "'\\''")}'`;
 }
 
+function* dependencyOverrideCandidates({ comments, expectedSha, newerThan }) {
+  if (!expectedSha) {
+    return;
+  }
+  const commandPattern = /^\/allow-dependencies-change(?:\s+(.+))?$/gimu;
+  for (const comment of comments.toReversed()) {
+    const body = comment.body ?? "";
+    for (const match of body.matchAll(commandPattern)) {
+      const reason = match[1]?.trim();
+      const login = comment.user?.login;
+      if (!login || !isCommentNewerThan(comment, newerThan)) {
+        continue;
+      }
+      yield {
+        login,
+        reason: reason ? sanitizeDisplayValue(reason) : null,
+        sha: expectedSha,
+        url: comment.html_url,
+      };
+    }
+  }
+}
+
 export function findDependencyOverrideCommand({
   comments,
   expectedSha,
   isSecurityMember,
   newerThan,
 }) {
-  if (!expectedSha) {
-    return null;
-  }
-  const commandPattern = /^\/allow-dependencies-change(?:\s+(.+))?$/gimu;
-  for (const comment of comments.toReversed()) {
-    const body = comment.body ?? "";
-    for (const match of body.matchAll(commandPattern)) {
-      const reason = match[1]?.trim();
-      const login = comment.user?.login;
-      if (!login || !isCommentNewerThan(comment, newerThan)) {
-        continue;
-      }
-      if (isSecurityMember(login)) {
-        return {
-          login,
-          reason: reason ? sanitizeDisplayValue(reason) : null,
-          sha: expectedSha,
-          url: comment.html_url,
-        };
-      }
+  for (const candidate of dependencyOverrideCandidates({ comments, expectedSha, newerThan })) {
+    if (isSecurityMember(candidate.login)) {
+      return candidate;
     }
   }
   return null;
 }
 
-export async function findDependencyOverrideCommandAsync({
-  comments,
-  expectedSha,
-  isSecurityMember,
-  newerThan,
-}) {
-  if (!expectedSha) {
-    return null;
-  }
-  const commandPattern = /^\/allow-dependencies-change(?:\s+(.+))?$/gimu;
-  for (const comment of comments.toReversed()) {
-    const body = comment.body ?? "";
-    for (const match of body.matchAll(commandPattern)) {
-      const reason = match[1]?.trim();
-      const login = comment.user?.login;
-      if (!login || !isCommentNewerThan(comment, newerThan)) {
-        continue;
-      }
-      if (await isSecurityMember(login)) {
-        return {
-          login,
-          reason: reason ? sanitizeDisplayValue(reason) : null,
-          sha: expectedSha,
-          url: comment.html_url,
-        };
-      }
+export async function findDependencyOverrideCommandAsync(input) {
+  for (const candidate of dependencyOverrideCandidates(input)) {
+    if (await input.isSecurityMember(candidate.login)) {
+      return candidate;
     }
   }
   return null;
@@ -312,7 +298,17 @@ export function renderBlockedDependencyComment({
   ].join("\n");
 }
 
-function githubApi(token) {
+function githubErrorBodyTooLarge(maxBytes) {
+  return new Error(`GitHub error response body exceeded ${maxBytes} bytes`);
+}
+
+export async function readBoundedGitHubErrorText(response, maxBytes = GITHUB_ERROR_BODY_MAX_BYTES) {
+  return await readBoundedResponseText(response, "GitHub error", maxBytes, {
+    createTooLargeError: () => githubErrorBodyTooLarge(maxBytes),
+  });
+}
+
+export function githubApi(token) {
   const baseHeaders = {
     accept: "application/vnd.github+json",
     authorization: `Bearer ${token}`,
@@ -328,9 +324,13 @@ function githubApi(token) {
       return null;
     }
     if (!response.ok) {
-      const error = new Error(
-        `${response.status} ${response.statusText}: ${await response.text()}`,
-      );
+      let errorText;
+      try {
+        errorText = await readBoundedGitHubErrorText(response);
+      } catch (bodyError) {
+        errorText = bodyError instanceof Error ? bodyError.message : String(bodyError);
+      }
+      const error = new Error(`${response.status} ${response.statusText}: ${errorText}`);
       error.status = response.status;
       throw error;
     }

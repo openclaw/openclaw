@@ -116,6 +116,10 @@ function formatEventLabel(event: WorkboardEvent): string {
         : t("workboard.eventMoved");
     case "linked":
       return t("workboard.eventLinked");
+    case "claimed":
+      return t("workboard.eventClaimed");
+    case "heartbeat":
+      return t("workboard.eventHeartbeat");
     case "execution_updated":
       return t("workboard.eventExecutionUpdated");
     case "attempt_started":
@@ -128,6 +132,12 @@ function formatEventLabel(event: WorkboardEvent): string {
       return t("workboard.eventLinkAdded");
     case "proof_added":
       return t("workboard.eventProofAdded");
+    case "artifact_added":
+      return t("workboard.eventArtifactAdded");
+    case "diagnostic":
+      return t("workboard.eventDiagnostic");
+    case "notification":
+      return t("workboard.eventNotification");
     case "archived":
       return t("workboard.eventArchived");
     case "unarchived":
@@ -179,6 +189,13 @@ function renderMetadataBadges(card: WorkboardCard) {
     metadata.proof?.length
       ? t("workboard.badgeProof", { count: String(metadata.proof.length) })
       : null,
+    metadata.artifacts?.length
+      ? t("workboard.badgeArtifacts", { count: String(metadata.artifacts.length) })
+      : null,
+    metadata.claim ? t("workboard.badgeClaimed", { owner: metadata.claim.ownerId }) : null,
+    metadata.diagnostics?.length
+      ? t("workboard.badgeDiagnostics", { count: String(metadata.diagnostics.length) })
+      : null,
     metadata.stale ? t("workboard.badgeStale") : null,
   ].filter((badge): badge is string => Boolean(badge));
   if (badges.length === 0) {
@@ -218,6 +235,20 @@ function matchesFilter(
       proof.url,
       proof.note,
     ]),
+    ...(card.metadata?.artifacts ?? []).flatMap((artifact) => [
+      artifact.label,
+      artifact.url,
+      artifact.path,
+      artifact.mimeType,
+    ]),
+    card.metadata?.claim?.ownerId,
+    ...(card.metadata?.diagnostics ?? []).flatMap((diagnostic) => [
+      diagnostic.kind,
+      diagnostic.severity,
+      diagnostic.title,
+      diagnostic.detail,
+    ]),
+    ...(card.metadata?.notifications ?? []).map((notification) => notification.message),
     ...card.labels,
   ]
     .filter((value): value is string => typeof value === "string")

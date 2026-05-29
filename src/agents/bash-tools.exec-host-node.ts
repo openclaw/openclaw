@@ -190,7 +190,7 @@ export async function executeNodeHostCommand(
     ) {
       const reviewer = params.autoReviewer ?? defaultExecAutoReviewer;
       const decision = await reviewer({
-        command: params.command,
+        command: prepared.rawCommand,
         argv: autoReviewArgv,
         cwd: prepared.cwd,
         envKeys: Object.keys(params.requestedEnv ?? {}).toSorted(),
@@ -209,8 +209,8 @@ export async function executeNodeHostCommand(
           inlineEval: inlineEvalHit !== null,
         },
         agent: {
-          id: params.agentId,
-          sessionKey: params.sessionKey,
+          id: prepared.agentId,
+          sessionKey: prepared.sessionKey,
         },
       });
       if (decision.decision === "allow-once") {

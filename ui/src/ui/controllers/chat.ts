@@ -639,7 +639,7 @@ export function appendUserChatMessage(
   ];
 }
 
-export async function sendDetachedChatMessage(
+async function sendChatMessageWithGeneratedRunId(
   state: ChatState,
   message: string,
   attachments?: ChatAttachment[],
@@ -663,28 +663,20 @@ export async function sendDetachedChatMessage(
   }
 }
 
+export async function sendDetachedChatMessage(
+  state: ChatState,
+  message: string,
+  attachments?: ChatAttachment[],
+): Promise<string | null> {
+  return sendChatMessageWithGeneratedRunId(state, message, attachments);
+}
+
 export async function sendSteerChatMessage(
   state: ChatState,
   message: string,
   attachments?: ChatAttachment[],
 ): Promise<string | null> {
-  if (!state.client || !state.connected) {
-    return null;
-  }
-  const msg = message.trim();
-  const hasAttachments = attachments && attachments.length > 0;
-  if (!msg && !hasAttachments) {
-    return null;
-  }
-  state.lastError = null;
-  const runId = generateUUID();
-  try {
-    const ack = await requestChatSend(state, { message: msg, attachments, runId });
-    return ack.runId;
-  } catch (err) {
-    state.lastError = formatConnectError(err);
-    return null;
-  }
+  return sendChatMessageWithGeneratedRunId(state, message, attachments);
 }
 
 export async function abortChatRun(state: ChatState): Promise<boolean> {

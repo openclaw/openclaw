@@ -25,12 +25,17 @@ export const WORKBOARD_EVENT_KINDS = [
   "edited",
   "moved",
   "linked",
+  "claimed",
+  "heartbeat",
   "execution_updated",
   "attempt_started",
   "attempt_updated",
   "comment_added",
   "link_added",
   "proof_added",
+  "artifact_added",
+  "diagnostic",
+  "notification",
   "archived",
   "unarchived",
   "stale",
@@ -45,6 +50,7 @@ export const WORKBOARD_ATTEMPT_STATUSES = [
 export const WORKBOARD_LINK_TYPES = ["blocks", "blocked_by", "relates_to"] as const;
 export const WORKBOARD_PROOF_STATUSES = ["passed", "failed", "skipped", "unknown"] as const;
 export const WORKBOARD_TEMPLATE_IDS = ["bugfix", "docs", "release", "pr_review", "plugin"] as const;
+export const WORKBOARD_DIAGNOSTIC_SEVERITIES = ["warning", "error", "critical"] as const;
 
 export const WORKBOARD_ENGINE_MODELS = {
   codex: "openai/gpt-5.5",
@@ -61,6 +67,7 @@ export type WorkboardAttemptStatus = (typeof WORKBOARD_ATTEMPT_STATUSES)[number]
 export type WorkboardLinkType = (typeof WORKBOARD_LINK_TYPES)[number];
 export type WorkboardProofStatus = (typeof WORKBOARD_PROOF_STATUSES)[number];
 export type WorkboardTemplateId = (typeof WORKBOARD_TEMPLATE_IDS)[number];
+export type WorkboardDiagnosticSeverity = (typeof WORKBOARD_DIAGNOSTIC_SEVERITIES)[number];
 
 export type WorkboardExecution = {
   id: string;
@@ -130,11 +137,51 @@ export type WorkboardStaleState = {
   reason: string;
 };
 
+export type WorkboardClaim = {
+  ownerId: string;
+  token?: string;
+  claimedAt: number;
+  lastHeartbeatAt: number;
+  expiresAt?: number;
+};
+
+export type WorkboardArtifact = {
+  id: string;
+  createdAt: number;
+  label?: string;
+  url?: string;
+  path?: string;
+  mimeType?: string;
+};
+
+export type WorkboardDiagnostic = {
+  kind: string;
+  severity: WorkboardDiagnosticSeverity;
+  title: string;
+  detail: string;
+  firstSeenAt: number;
+  lastSeenAt: number;
+  count: number;
+};
+
+export type WorkboardNotification = {
+  id: string;
+  kind: string;
+  createdAt: number;
+  message: string;
+  sessionKey?: string;
+  runId?: string;
+};
+
 export type WorkboardMetadata = {
   attempts?: WorkboardRunAttempt[];
   comments?: WorkboardComment[];
   links?: WorkboardLink[];
   proof?: WorkboardProof[];
+  artifacts?: WorkboardArtifact[];
+  claim?: WorkboardClaim;
+  diagnostics?: WorkboardDiagnostic[];
+  notifications?: WorkboardNotification[];
   templateId?: WorkboardTemplateId;
   archivedAt?: number;
   stale?: WorkboardStaleState;
@@ -449,6 +496,82 @@ function normalizeMetadata(value: unknown): WorkboardMetadata | undefined {
         ];
       })
     : [];
+  const artifacts = Array.isArray(value.artifacts)
+    ? value.artifacts.flatMap((entry): WorkboardArtifact[] => {
+        if (
+          !isRecord(entry) ||
+          typeof entry.id !== "string" ||
+          typeof entry.createdAt !== "number"
+        ) {
+          return [];
+        }
+        return [
+          {
+            id: entry.id,
+            createdAt: entry.createdAt,
+            ...(typeof entry.label === "string" ? { label: entry.label } : {}),
+            ...(typeof entry.url === "string" ? { url: entry.url } : {}),
+            ...(typeof entry.path === "string" ? { path: entry.path } : {}),
+            ...(typeof entry.mimeType === "string" ? { mimeType: entry.mimeType } : {}),
+          },
+        ];
+      })
+    : [];
+  const claim = isRecord(value.claim)
+    ? {
+        ownerId: typeof value.claim.ownerId === "string" ? value.claim.ownerId : "",
+        ...(typeof value.claim.token === "string" ? { token: value.claim.token } : {}),
+        claimedAt: typeof value.claim.claimedAt === "number" ? value.claim.claimedAt : 0,
+        lastHeartbeatAt:
+          typeof value.claim.lastHeartbeatAt === "number" ? value.claim.lastHeartbeatAt : 0,
+        ...(typeof value.claim.expiresAt === "number" ? { expiresAt: value.claim.expiresAt } : {}),
+      }
+    : undefined;
+  const diagnostics = Array.isArray(value.diagnostics)
+    ? value.diagnostics.flatMap((entry): WorkboardDiagnostic[] => {
+        if (!isRecord(entry) || typeof entry.kind !== "string" || typeof entry.title !== "string") {
+          return [];
+        }
+        return [
+          {
+            kind: entry.kind,
+            severity: WORKBOARD_DIAGNOSTIC_SEVERITIES.includes(
+              entry.severity as WorkboardDiagnosticSeverity,
+            )
+              ? (entry.severity as WorkboardDiagnosticSeverity)
+              : "warning",
+            title: entry.title,
+            detail: typeof entry.detail === "string" ? entry.detail : entry.title,
+            firstSeenAt: typeof entry.firstSeenAt === "number" ? entry.firstSeenAt : Date.now(),
+            lastSeenAt: typeof entry.lastSeenAt === "number" ? entry.lastSeenAt : Date.now(),
+            count: typeof entry.count === "number" ? entry.count : 1,
+          },
+        ];
+      })
+    : [];
+  const notifications = Array.isArray(value.notifications)
+    ? value.notifications.flatMap((entry): WorkboardNotification[] => {
+        if (
+          !isRecord(entry) ||
+          typeof entry.id !== "string" ||
+          typeof entry.kind !== "string" ||
+          typeof entry.message !== "string" ||
+          typeof entry.createdAt !== "number"
+        ) {
+          return [];
+        }
+        return [
+          {
+            id: entry.id,
+            kind: entry.kind,
+            message: entry.message,
+            createdAt: entry.createdAt,
+            ...(typeof entry.sessionKey === "string" ? { sessionKey: entry.sessionKey } : {}),
+            ...(typeof entry.runId === "string" ? { runId: entry.runId } : {}),
+          },
+        ];
+      })
+    : [];
   const stale = isRecord(value.stale)
     ? {
         detectedAt:
@@ -467,6 +590,10 @@ function normalizeMetadata(value: unknown): WorkboardMetadata | undefined {
     ...(comments.length ? { comments } : {}),
     ...(links.length ? { links } : {}),
     ...(proof.length ? { proof } : {}),
+    ...(artifacts.length ? { artifacts } : {}),
+    ...(claim?.ownerId && claim.claimedAt ? { claim } : {}),
+    ...(diagnostics.length ? { diagnostics } : {}),
+    ...(notifications.length ? { notifications } : {}),
     ...(WORKBOARD_TEMPLATE_IDS.includes(value.templateId as WorkboardTemplateId)
       ? { templateId: value.templateId as WorkboardTemplateId }
       : {}),

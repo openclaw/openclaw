@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 
 const FAKE_STARTTIME = 12345;
 let testing: typeof import("./session-write-lock.js").testing;
@@ -602,9 +603,9 @@ describe("acquireSessionWriteLock", () => {
   it("clamps max hold for effectively no-timeout runs", () => {
     expect(
       resolveSessionLockMaxHoldFromTimeout({
-        timeoutMs: 2_147_000_000,
+        timeoutMs: MAX_TIMER_TIMEOUT_MS,
       }),
-    ).toBe(2_147_000_000);
+    ).toBe(MAX_TIMER_TIMEOUT_MS);
   });
 
   it("cleans stale .jsonl lock files in sessions directories", async () => {

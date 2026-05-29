@@ -20,7 +20,9 @@ const state = vi.hoisted(() => ({
   acpRunTurnMock: vi.fn((..._args: unknown[]): unknown => undefined),
   buildAcpResultMock: vi.fn(),
   createAcpVisibleTextAccumulatorMock: vi.fn(),
+  persistCliTurnTranscriptMock: vi.fn(),
   persistAcpTurnTranscriptMock: vi.fn(),
+  runCliTurnCompactionLifecycleMock: vi.fn(),
   resolveAcpAgentPolicyErrorMock: vi.fn(),
   resolveAcpDispatchPolicyErrorMock: vi.fn(),
   resolveAcpExplicitTurnPolicyErrorMock: vi.fn(),
@@ -68,6 +70,7 @@ vi.mock("./command/attempt-execution.runtime.js", () => ({
   emitAcpLifecycleError: vi.fn(),
   emitAcpLifecycleStart: vi.fn(),
   emitAcpRuntimeEvent: vi.fn(),
+  persistCliTurnTranscript: (...args: unknown[]) => state.persistCliTurnTranscriptMock(...args),
   persistAcpTurnTranscript: (...args: unknown[]) => state.persistAcpTurnTranscriptMock(...args),
   persistSessionEntry: vi.fn(),
   prependInternalEventContext: (body: string) => body,
@@ -87,6 +90,11 @@ vi.mock("./command/attempt-execution.shared.js", async () => {
 
 vi.mock("./command/delivery.runtime.js", () => ({
   deliverAgentCommandResult: (...args: unknown[]) => state.deliverAgentCommandResultMock(...args),
+}));
+
+vi.mock("./command/cli-compaction.js", () => ({
+  runCliTurnCompactionLifecycle: (...args: unknown[]) =>
+    state.runCliTurnCompactionLifecycleMock(...args),
 }));
 
 vi.mock("./command/run-context.js", () => ({
@@ -824,7 +832,13 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       payloads: params.payloadText ? [{ text: params.payloadText }] : [],
       meta: { durationMs: 0, stopReason: "end_turn" },
     }));
+    state.persistCliTurnTranscriptMock.mockImplementation(
+      async (params: { sessionEntry?: unknown }) => params.sessionEntry,
+    );
     state.persistAcpTurnTranscriptMock.mockImplementation(
+      async (params: { sessionEntry?: unknown }) => params.sessionEntry,
+    );
+    state.runCliTurnCompactionLifecycleMock.mockImplementation(
       async (params: { sessionEntry?: unknown }) => params.sessionEntry,
     );
     state.authProfileStoreMock = { profiles: {} };
@@ -950,6 +964,81 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
     expect(state.persistSessionEntryMock).not.toHaveBeenCalled();
     expect(state.updateSessionStoreAfterAgentRunMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses rotated session identity for all post-run session persistence", async () => {
+    setupSingleAttemptFallback();
+    setupSessionTouchStore();
+    const rotatedEntry: SessionEntry = {
+      sessionId: "rotated-session",
+      sessionFile: "/tmp/rotated-session.jsonl",
+      updatedAt: 2,
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
+    };
+    const result = makeSuccessResult("openai", "gpt-5.4") as ReturnType<
+      typeof makeSuccessResult
+    > & {
+      meta: Record<string, unknown> & { agentMeta: Record<string, unknown> };
+    };
+    result.meta.executionTrace = {
+      runner: "embedded",
+      fallbackUsed: false,
+      winnerProvider: "openai",
+      winnerModel: "gpt-5.4",
+    };
+    result.meta.finalAssistantVisibleText = "ok";
+    result.meta.agentMeta = {
+      ...result.meta.agentMeta,
+      sessionId: "rotated-session",
+      sessionFile: "/tmp/rotated-session.jsonl",
+    };
+    state.runAgentAttemptMock.mockResolvedValue(result);
+    state.updateSessionStoreAfterAgentRunMock.mockImplementation(async () => {
+      state.sessionStoreMock = { "agent:main:main": rotatedEntry };
+    });
+    state.persistCliTurnTranscriptMock.mockResolvedValue(rotatedEntry);
+    state.runCliTurnCompactionLifecycleMock.mockResolvedValue(rotatedEntry);
+
+    await runBasicAgentCommand();
+
+    expectRecordFields(mockCallArg(state.updateSessionStoreAfterAgentRunMock), {
+      sessionId: "rotated-session",
+    });
+    expectRecordFields(mockCallArg(state.persistCliTurnTranscriptMock), {
+      sessionId: "rotated-session",
+      sessionKey: "agent:main:main",
+    });
+    expectRecordFields(mockCallArg(state.runCliTurnCompactionLifecycleMock), {
+      sessionId: "rotated-session",
+      sessionKey: "agent:main:main",
+    });
+    expectRecordFields(mockCallArg(state.deliverAgentCommandResultMock), {
+      expectedSessionIdForFreshDelivery: "rotated-session",
+    });
+  });
+
+  it("does not treat backend CLI session id as OpenClaw session identity", async () => {
+    setupSingleAttemptFallback();
+    setupSessionTouchStore();
+    const result = makeSuccessResult("openai", "gpt-5.4") as ReturnType<
+      typeof makeSuccessResult
+    > & {
+      meta: Record<string, unknown> & { agentMeta: Record<string, unknown> };
+    };
+    result.meta.agentMeta = {
+      ...result.meta.agentMeta,
+      sessionId: "backend-cli-session",
+    };
+    state.runAgentAttemptMock.mockResolvedValue(result);
+
+    await runBasicAgentCommand();
+
+    expectRecordFields(mockCallArg(state.updateSessionStoreAfterAgentRunMock), {
+      sessionId: "session-1",
+    });
+    expectRecordFields(mockCallArg(state.deliverAgentCommandResultMock), {
+      expectedSessionIdForFreshDelivery: "session-1",
+    });
   });
 
   it("persists explicit overrides even when ingress skips the initial touch", async () => {

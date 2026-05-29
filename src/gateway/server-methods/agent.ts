@@ -65,6 +65,7 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
+import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { formatUncaughtError, readErrorName } from "../../infra/errors.js";
@@ -143,6 +144,7 @@ import {
   loadGatewaySessionRow,
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
+  resolveGatewaySessionStoreTarget,
   resolveGatewayModelSupportsImages,
   resolveSessionModelRef,
 } from "../session-utils.js";
@@ -1092,10 +1094,12 @@ export const agentHandlers: GatewayRequestHandlers = {
       if (normalizedAttachments.length > 0) {
         let baseProvider: string | undefined;
         let baseModel: string | undefined;
+        let requestedSessionEntry: SessionEntry | undefined;
         if (requestedSessionKeyRaw) {
           const { cfg: sessCfg, entry: sessEntry } = loadSessionEntry(requestedSessionKeyRaw, {
             clone: false,
           });
+          requestedSessionEntry = sessEntry;
           const sessionAgentId = resolveAgentIdFromSessionKey(requestedSessionKeyRaw);
           const modelRef = resolveSessionModelRef(sessCfg, sessEntry, sessionAgentId);
           baseProvider = modelRef.provider;
@@ -1103,11 +1107,17 @@ export const agentHandlers: GatewayRequestHandlers = {
         }
         const effectiveProvider = providerOverride || baseProvider;
         const effectiveModel = modelOverride || baseModel;
-        const supportsInlineImages = await resolveGatewayModelSupportsImages({
-          loadGatewayModelCatalog: context.loadGatewayModelCatalog,
-          provider: effectiveProvider,
-          model: effectiveModel,
-        });
+        const isConfirmedAcpSession =
+          request.acpTurnSource === "manual_spawn" &&
+          isAcpSessionKey(requestedSessionKeyRaw) &&
+          requestedSessionEntry?.acp != null;
+        const supportsInlineImages = isConfirmedAcpSession
+          ? true
+          : await resolveGatewayModelSupportsImages({
+              loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+              provider: effectiveProvider,
+              model: effectiveModel,
+            });
 
         try {
           const parsed = await parseMessageWithAttachments(message, normalizedAttachments, {
@@ -1336,6 +1346,9 @@ export const agentHandlers: GatewayRequestHandlers = {
           clone: false,
         });
         cfgForAgent = cfg;
+        const sessionMaintenanceConfig = resolveMaintenanceConfigFromInput(
+          cfg.session?.maintenance,
+        );
         const now = Date.now();
         const resetPolicy = resolveSessionResetPolicy({
           sessionCfg: cfg.session,
@@ -1565,14 +1578,34 @@ export const agentHandlers: GatewayRequestHandlers = {
         if (storePath && !suppressVisibleSessionEffects) {
           const requestedStoreKey = requestedSessionKey;
           let deniedBySendPolicy = false;
+          let singleEntryPersistence:
+            | {
+                sessionKey: string;
+                entry: SessionEntry;
+              }
+            | undefined;
           const persisted = await updateSessionStore(
             storePath,
             (store) => {
-              const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+              const storeKeysBeforeMigration = new Set(Object.keys(store));
+              const preMigrationTarget = resolveGatewaySessionStoreTarget({
                 cfg,
                 key: requestedStoreKey,
                 store,
               });
+              const hadLegacyStoreKey = preMigrationTarget.storeKeys.some(
+                (storeKey) =>
+                  storeKey !== preMigrationTarget.canonicalKey &&
+                  Object.prototype.hasOwnProperty.call(store, storeKey),
+              );
+              const { target, primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+                cfg,
+                key: requestedStoreKey,
+                store,
+              });
+              const prunedStoreKey = [...storeKeysBeforeMigration].some(
+                (storeKey) => !Object.prototype.hasOwnProperty.call(store, storeKey),
+              );
               const freshEntry = store[primaryKey];
               patchBuild = buildSessionPatch(freshEntry);
               const effectivePatch =
@@ -1597,9 +1630,21 @@ export const agentHandlers: GatewayRequestHandlers = {
                 return merged;
               }
               store[primaryKey] = merged;
+              const canonicalKeyChanged = target.canonicalKey !== preMigrationTarget.canonicalKey;
+              singleEntryPersistence =
+                freshEntry && !hadLegacyStoreKey && !canonicalKeyChanged && !prunedStoreKey
+                  ? {
+                      sessionKey: primaryKey,
+                      entry: merged,
+                    }
+                  : undefined;
               return merged;
             },
-            { takeCacheOwnership: true },
+            {
+              takeCacheOwnership: true,
+              maintenanceConfig: sessionMaintenanceConfig,
+              resolveSingleEntryPersistence: () => singleEntryPersistence,
+            },
           );
           if (persisted) {
             sessionEntry = persisted;

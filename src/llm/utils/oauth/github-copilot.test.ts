@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "../../../shared/number-coercion.js";
 import { refreshGitHubCopilotToken, testing } from "./github-copilot.js";
 
 function stubHangingFetch(timeoutMs: number): void {
@@ -92,6 +93,16 @@ describe("GitHub Copilot OAuth model policy", () => {
 
     await expect(testing.startDeviceFlow("github.com", { timeoutMs: 5 })).rejects.toThrow(
       "GitHub Copilot device code request timed out after 5ms",
+    );
+  });
+
+  it("caps oversized request timeouts before creating abort signals", async () => {
+    stubHangingFetch(MAX_TIMER_TIMEOUT_MS);
+
+    await expect(
+      testing.startDeviceFlow("github.com", { timeoutMs: Number.MAX_SAFE_INTEGER }),
+    ).rejects.toThrow(
+      `GitHub Copilot device code request timed out after ${MAX_TIMER_TIMEOUT_MS}ms`,
     );
   });
 
