@@ -1101,7 +1101,50 @@ describe("resolveSlackThreadHistory", () => {
     vi.restoreAllMocks();
   });
 
-  it("paginates and returns the latest N messages across pages", async () => {
+  it("uses one bounded window before the current message for initial thread history", async () => {
+    const replies = vi.fn().mockResolvedValueOnce({
+      messages: [
+        { text: "msg-255", user: "U1", ts: "255.000" },
+        { text: "msg-256", user: "U1", ts: "256.000" },
+        { text: "msg-257", user: "U1", ts: "257.000" },
+        { text: "msg-258", user: "U1", ts: "258.000" },
+        { text: "msg-259", user: "U1", ts: "259.000" },
+        { text: "current message", user: "U1", ts: "260.000" },
+      ],
+      response_metadata: { next_cursor: "cursor-2" },
+    });
+    const client = {
+      conversations: { replies },
+    } as unknown as Parameters<typeof resolveSlackThreadHistory>[0]["client"];
+
+    const result = await resolveSlackThreadHistory({
+      channelId: "C1",
+      threadTs: "1.000",
+      client,
+      currentMessageTs: "260.000",
+      limit: 5,
+    });
+
+    expect(replies).toHaveBeenCalledTimes(1);
+    const call = requireRecord(
+      requireMockCall(replies, 0, "conversations.replies")[0],
+      "replies params",
+    );
+    expect(call.channel).toBe("C1");
+    expect(call.ts).toBe("1.000");
+    expect(call.limit).toBe(5);
+    expect(call.latest).toBe("260.000");
+    expect(call.inclusive).toBe(false);
+    expect(result.map((entry) => entry.ts)).toEqual([
+      "255.000",
+      "256.000",
+      "257.000",
+      "258.000",
+      "259.000",
+    ]);
+  });
+
+  it("paginates and returns the latest N messages across pages without a current message", async () => {
     const replies = vi
       .fn()
       .mockResolvedValueOnce({
@@ -1128,7 +1171,6 @@ describe("resolveSlackThreadHistory", () => {
       channelId: "C1",
       threadTs: "1.000",
       client,
-      currentMessageTs: "260.000",
       limit: 5,
     });
 
@@ -1151,11 +1193,11 @@ describe("resolveSlackThreadHistory", () => {
     expect(secondCall.inclusive).toBe(true);
     expect(secondCall.cursor).toBe("cursor-2");
     expect(result.map((entry) => entry.ts)).toEqual([
-      "255.000",
       "256.000",
       "257.000",
       "258.000",
       "259.000",
+      "260.000",
     ]);
   });
 
