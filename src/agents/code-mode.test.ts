@@ -1,6 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setPluginToolMeta } from "../plugins/tools.js";
 import {
+  clearCodeModeNamespacesForPlugin,
+  clearCodeModeNamespacesForTest,
+  type CodeModeNamespaceRegistration,
+  listCodeModeNamespaces,
+  registerCodeModeNamespaceForPlugin,
+} from "./code-mode-namespaces.js";
+import {
   applyCodeModeCatalog,
   CODE_MODE_EXEC_TOOL_NAME,
   CODE_MODE_WAIT_TOOL_NAME,
@@ -51,20 +58,30 @@ function pluginToolWithExecute(
   return tool;
 }
 
+function registerTestNamespace(
+  registration: CodeModeNamespaceRegistration & { pluginId?: string },
+): void {
+  const { pluginId = "fake-code-mode", ...namespace } = registration;
+  registerCodeModeNamespaceForPlugin(pluginId, namespace);
+}
+
 function resultDetails(result: { details?: unknown }): Record<string, unknown> {
   expect(result.details).toBeDefined();
   expect(typeof result.details).toBe("object");
   return result.details as Record<string, unknown>;
 }
 
-function createCodeModeHarness(params: { catalogRef?: ToolSearchCatalogRef } = {}) {
+function createCodeModeHarness(
+  params: { agentId?: string; catalogRef?: ToolSearchCatalogRef } = {},
+) {
   const catalogRef = params.catalogRef ?? createToolSearchCatalogRef();
   const config = { tools: { codeMode: true } } as never;
   const ctx = {
     config,
     runtimeConfig: config,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
     sessionId: "session-code-mode",
-    sessionKey: "agent:main:main",
+    sessionKey: params.agentId ? `agent:${params.agentId}:main` : "agent:main:main",
     runId: "run-code-mode",
     catalogRef,
   };
@@ -102,6 +119,7 @@ describe("Code Mode", () => {
     testing.activeRuns.clear();
     testing.resumingRunIds.clear();
     testing.setTypescriptRuntimeForTest(null);
+    clearCodeModeNamespacesForTest();
   });
 
   it("resolves object config defaults", () => {
@@ -274,6 +292,312 @@ describe("Code Mode", () => {
     );
   });
 
+  it("adds registered namespace docs to the model-visible exec schema", () => {
+    registerTestNamespace({
+      id: "tickets",
+      pluginId: "fake-code-mode",
+      globalName: "Tickets",
+      description: "Ticket lookup helpers.",
+      prompt: (ctx) => `Tickets.currentAgent() returns ${ctx.agentId}.`,
+      requiredToolNames: ["fake_noop"],
+      createScope: () => ({
+        currentAgent: () => "ops",
+      }),
+    });
+
+    const { config, catalogRef, tools } = createCodeModeHarness();
+    const compacted = applyCodeModeCatalog({
+      tools: [...tools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    expect(compacted.tools[0]?.description).toContain("Registered namespace globals");
+    expect(compacted.tools[0]?.description).toContain("Tickets: Ticket lookup helpers.");
+    expect(compacted.tools[0]?.description).toContain("Tickets.currentAgent() returns undefined.");
+  });
+
+  it("validates namespace registrations before exposing globals", () => {
+    expect(() =>
+      registerTestNamespace({
+        id: "missing-tools",
+        pluginId: "fake-code-mode",
+        globalName: "MissingTools",
+        requiredToolNames: [],
+        createScope: () => ({}),
+      }),
+    ).toThrow("requiredToolNames must include at least one tool name");
+
+    registerTestNamespace({
+      id: "tickets",
+      pluginId: "fake-code-mode",
+      globalName: "Tickets",
+      requiredToolNames: ["fake_noop"],
+      createScope: () => ({}),
+    });
+
+    expect(() =>
+      registerTestNamespace({
+        id: "tickets-alias",
+        pluginId: "fake-code-mode",
+        globalName: "Tickets",
+        requiredToolNames: ["fake_noop"],
+        createScope: () => ({}),
+      }),
+    ).toThrow('globalName "Tickets" is already registered by "tickets"');
+    expect(() =>
+      registerTestNamespace({
+        id: "tickets",
+        pluginId: "other-plugin",
+        globalName: "OtherTickets",
+        requiredToolNames: ["fake_other"],
+        createScope: () => ({}),
+      }),
+    ).toThrow('namespace id "tickets" is already registered');
+    expect(() =>
+      registerTestNamespace({
+        id: "bad",
+        pluginId: "fake-code-mode",
+        globalName: "tools",
+        requiredToolNames: ["fake_noop"],
+        createScope: () => ({}),
+      }),
+    ).toThrow('globalName "tools" is reserved');
+    expect(() =>
+      registerTestNamespace({
+        id: "bad",
+        pluginId: "fake-code-mode",
+        globalName: "__openclawHostRequest",
+        requiredToolNames: ["fake_noop"],
+        createScope: () => ({}),
+      }),
+    ).toThrow('globalName "__openclawHostRequest" is reserved');
+    expect(() =>
+      registerTestNamespace({
+        id: "bad",
+        pluginId: "fake-code-mode",
+        globalName: "not-valid-name",
+        requiredToolNames: ["fake_noop"],
+        createScope: () => ({}),
+      }),
+    ).toThrow("globalName must be a JavaScript identifier");
+    expect(() =>
+      registerTestNamespace({
+        id: "bad",
+        pluginId: "fake-code-mode",
+        globalName: "NaN",
+        requiredToolNames: ["fake_noop"],
+        createScope: () => ({}),
+      }),
+    ).toThrow('globalName "NaN" collides with a global');
+  });
+
+  it("clears namespace registrations by owning plugin", () => {
+    registerTestNamespace({
+      id: "left",
+      pluginId: "left-plugin",
+      globalName: "Left",
+      requiredToolNames: ["fake_left"],
+      createScope: () => ({}),
+    });
+    registerTestNamespace({
+      id: "right",
+      pluginId: "right-plugin",
+      globalName: "Right",
+      requiredToolNames: ["fake_right"],
+      createScope: () => ({}),
+    });
+
+    clearCodeModeNamespacesForPlugin("left-plugin");
+
+    expect(listCodeModeNamespaces().map((entry) => entry.id)).toEqual(["right"]);
+  });
+
+  it("rejects unsafe namespace scope shapes before worker execution", async () => {
+    registerTestNamespace({
+      id: "bad-path",
+      pluginId: "fake-code-mode",
+      globalName: "BadPath",
+      requiredToolNames: ["fake_noop"],
+      createScope: () => ({
+        constructor: () => "blocked",
+      }),
+    });
+    const { config, catalogRef, tools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...tools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    await expect(
+      tools[0].execute("code-call-bad-path", {
+        code: "return 1;",
+      }),
+    ).rejects.toThrow("Invalid code mode namespace path segment: constructor");
+
+    clearCodeModeNamespacesForTest();
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    registerTestNamespace({
+      id: "circular",
+      pluginId: "fake-code-mode",
+      globalName: "Circular",
+      requiredToolNames: ["fake_noop"],
+      createScope: () => circular,
+    });
+
+    await expect(
+      tools[0].execute("code-call-circular", {
+        code: "return 1;",
+      }),
+    ).rejects.toThrow("Circular code mode namespace scope at self");
+  });
+
+  it("hides namespaces when their required tools are absent from the run catalog", async () => {
+    registerTestNamespace({
+      id: "hidden",
+      pluginId: "fake-code-mode",
+      globalName: "Hidden",
+      requiredToolNames: ["fake_hidden"],
+      createScope: () => ({
+        read: () => "secret",
+      }),
+    });
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = await runUntilCompleted({
+      execTool: codeModeTools[0],
+      waitTool: codeModeTools[1],
+      code: 'return { global: typeof Hidden, mapped: "Hidden" in namespaces };',
+    });
+
+    expect(details.status).toBe("completed");
+    expect(details.value).toEqual({ global: "undefined", mapped: false });
+  });
+
+  it("does not expose namespaces for same-named tools owned by another plugin", async () => {
+    registerTestNamespace({
+      id: "hidden",
+      pluginId: "fake-code-mode",
+      globalName: "Hidden",
+      description: "Hidden helpers.",
+      requiredToolNames: ["fake_hidden"],
+      createScope: () => ({
+        read: () => "secret",
+      }),
+    });
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const compacted = applyCodeModeCatalog({
+      tools: [...codeModeTools, pluginTool("fake_hidden", "Spoofed noop", "other-plugin")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    expect(compacted.tools[0]?.description).not.toContain("Hidden: Hidden helpers.");
+
+    const details = await runUntilCompleted({
+      execTool: codeModeTools[0],
+      waitTool: codeModeTools[1],
+      code: 'return { global: typeof Hidden, mapped: "Hidden" in namespaces };',
+    });
+
+    expect(details.status).toBe("completed");
+    expect(details.value).toEqual({ global: "undefined", mapped: false });
+  });
+
+  it("allows shared namespace objects without treating them as circular", async () => {
+    const shared = {
+      read: () => "shared",
+    };
+    registerTestNamespace({
+      id: "shared",
+      pluginId: "fake-code-mode",
+      globalName: "Shared",
+      requiredToolNames: ["fake_noop"],
+      createScope: () => ({
+        left: shared,
+        right: shared,
+      }),
+    });
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = await runUntilCompleted({
+      execTool: codeModeTools[0],
+      waitTool: codeModeTools[1],
+      code: "return [await Shared.left.read(), await Shared.right.read()];",
+    });
+
+    expect(details.status).toBe("completed");
+    expect(details.value).toEqual(["shared", "shared"]);
+  });
+
+  it("rejects forged namespace bridge paths that were not serialized", async () => {
+    const hidden = vi.fn(() => "hidden");
+    const scope = {
+      exposed: () => "visible",
+    };
+    Object.defineProperty(scope, "hidden", {
+      value: hidden,
+      enumerable: false,
+    });
+    registerTestNamespace({
+      id: "leaky",
+      pluginId: "fake-code-mode",
+      globalName: "Leaky",
+      requiredToolNames: ["fake_noop"],
+      createScope: () => scope,
+    });
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = await runUntilCompleted({
+      execTool: codeModeTools[0],
+      waitTool: codeModeTools[1],
+      code: `
+        globalThis.__openclawHostRequest("namespace", JSON.stringify(["leaky", ["hidden"], []]));
+        await yield_control("pause");
+        return await Leaky.exposed();
+      `,
+    });
+
+    expect(details.status).toBe("completed");
+    expect(details.value).toBe("visible");
+    expect(hidden).not.toHaveBeenCalled();
+  });
+
   it("removes legacy Tool Search controls from the visible code mode surface", () => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     const compacted = applyCodeModeCatalog({
@@ -369,6 +693,146 @@ describe("Code Mode", () => {
     });
     expect(details.output).toEqual([{ type: "text", text: "created" }]);
     expect(ticket.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("exposes registered namespace globals through the QuickJS bridge", async () => {
+    registerTestNamespace({
+      id: "tickets",
+      pluginId: "fake-code-mode",
+      globalName: "Tickets",
+      description: "Ticket helpers.",
+      requiredToolNames: ["fake_noop"],
+      createScope: (ctx) => ({
+        agentId: ctx.agentId,
+        issues: {
+          prefix: "ISS",
+          async list(this: { prefix: string }, input: { state: string }) {
+            return [{ title: `${this.prefix}:${input.state}:${ctx.agentId}` }];
+          },
+        },
+      }),
+    });
+    const {
+      config,
+      catalogRef,
+      tools: codeModeTools,
+    } = createCodeModeHarness({
+      agentId: "ops",
+    });
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
+      config,
+      agentId: "ops",
+      sessionId: "session-code-mode",
+      sessionKey: "agent:ops:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = await runUntilCompleted({
+      execTool: codeModeTools[0],
+      waitTool: codeModeTools[1],
+      code: `
+        const direct = await Tickets.issues.list({ state: "open" });
+        const mapped = await namespaces.Tickets.issues.list({ state: "closed" });
+        return { direct, mapped, agentId: Tickets.agentId };
+      `,
+    });
+
+    expect(details.status).toBe("completed");
+    expect(details.value).toEqual({
+      direct: [{ title: "ISS:open:ops" }],
+      mapped: [{ title: "ISS:closed:ops" }],
+      agentId: "ops",
+    });
+  });
+
+  it("passes the run context to namespace scope factories", async () => {
+    registerTestNamespace({
+      id: "context",
+      pluginId: "fake-code-mode",
+      globalName: "Context",
+      requiredToolNames: ["fake_noop"],
+      createScope: (ctx) => ({
+        read: () => ({
+          agentId: ctx.agentId,
+          runId: ctx.runId,
+          sessionKey: ctx.sessionKey,
+        }),
+      }),
+    });
+    const catalogRef = createToolSearchCatalogRef();
+    const config = { tools: { codeMode: true } } as never;
+    const codeModeTools = createCodeModeTools({
+      config,
+      runtimeConfig: config,
+      agentId: "ops",
+      sessionId: "session-code-mode",
+      sessionKey: "agent:ops:main",
+      runId: "run-context",
+      catalogRef,
+    });
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
+      config,
+      agentId: "ops",
+      sessionId: "session-code-mode",
+      sessionKey: "agent:ops:main",
+      runId: "run-context",
+      catalogRef,
+    });
+
+    const details = await runUntilCompleted({
+      execTool: codeModeTools[0],
+      waitTool: codeModeTools[1],
+      code: "return await Context.read();",
+    });
+
+    expect(details.status).toBe("completed");
+    expect(details.value).toEqual({
+      agentId: "ops",
+      runId: "run-context",
+      sessionKey: "agent:ops:main",
+    });
+  });
+
+  it("lets guest code catch namespace call failures", async () => {
+    registerTestNamespace({
+      id: "broken",
+      pluginId: "fake-code-mode",
+      globalName: "Broken",
+      requiredToolNames: ["fake_noop"],
+      createScope: () => ({
+        fail: () => {
+          throw new Error("namespace exploded");
+        },
+      }),
+    });
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = await runUntilCompleted({
+      execTool: codeModeTools[0],
+      waitTool: codeModeTools[1],
+      code: `
+        try {
+          await Broken.fail();
+          return "unexpected";
+        } catch (error) {
+          return error.message;
+        }
+      `,
+    });
+
+    expect(details.status).toBe("completed");
+    expect(details.value).toBe("namespace exploded");
   });
 
   it("marks yield suspensions and resumes the snapshot with wait", async () => {
@@ -539,6 +1003,7 @@ describe("Code Mode", () => {
       tools: {
         codeMode: {
           enabled: true,
+          timeoutMs: 500,
         },
       },
     } as never;

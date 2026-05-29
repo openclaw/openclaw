@@ -1,4 +1,5 @@
 import path from "node:path";
+import { clearCodeModeNamespacesForPlugin } from "../agents/code-mode-namespaces.js";
 import {
   getRegisteredAgentHarness,
   registerAgentHarness as registerGlobalAgentHarness,
@@ -3173,6 +3174,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
 
     clearPluginCommandsForPlugin(pluginId);
     clearPluginInteractiveHandlersForPlugin(pluginId);
+    clearCodeModeNamespacesForPlugin(pluginId);
     clearContextEnginesForOwner(`plugin:${pluginId}`);
 
     const hookRollbackEntries = pluginHookRollback.get(pluginId) ?? [];

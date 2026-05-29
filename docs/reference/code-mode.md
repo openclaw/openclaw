@@ -380,6 +380,7 @@ The guest runtime exposes a small global API:
 ```typescript
 declare const ALL_TOOLS: ToolCatalogEntry[];
 declare const tools: ToolCatalog;
+declare const namespaces: Record<string, unknown>;
 
 declare function text(value: unknown): void;
 declare function json(value: unknown): void;
@@ -432,6 +433,49 @@ const hits = await tools.web_search({ query: "OpenClaw code mode" });
 
 The guest runtime must not expose host objects directly. Inputs and outputs cross
 the bridge as JSON-compatible values with explicit size caps.
+
+## Internal namespaces
+
+Core-owned integrations can register domain-specific namespace globals for code
+mode through the internal namespace registry. Code mode still exposes only
+`exec` and `wait` to the model; namespace calls are an ergonomic layer inside
+the QuickJS guest. There is no public plugin SDK namespace API yet: external
+plugin namespaces need a loader-owned contract so plugin identity and cached
+tool descriptors cannot drift from the host functions that back the namespace.
+
+Guest code can then use either the direct global or the `namespaces` map:
+
+```javascript
+const open = await Issues.list({ state: "open" });
+const alsoOpen = await namespaces.Issues.list({ state: "open" });
+return { count: open.length, alsoCount: alsoOpen.length };
+```
+
+Namespace ownership is bound by the internal registration caller.
+`requiredToolNames` binds a namespace to the run-scoped tool catalog: code mode
+exposes the namespace only when every required tool is visible to that run and
+owned by the same plugin id. For example, a future GitHub namespace should live
+behind a GitHub-owned loader contract that owns GitHub auth, REST or GraphQL
+clients, rate limits, write approvals, and tests. Core code mode only owns the
+sandbox and bridge.
+
+Namespace rules:
+
+- `globalName` must be a JavaScript identifier and cannot collide with built-in
+  code-mode globals such as `tools`, `namespaces`, `text`, `json`, or
+  `yield_control`.
+- scope objects are created per code-mode run from the current run context
+  (`agentId`, session, run id, config, and catalog refs)
+- scope values are serialized into the guest as JSON-compatible values
+- scope functions execute on the host through the same suspend/resume bridge as
+  nested tool calls
+- host objects are never injected directly into QuickJS
+- namespace calls do not bypass plugin-owned auth, approval, or policy code
+
+Namespaces complement the generic `tools.search` / `tools.call` catalog. Use
+the catalog for arbitrary enabled tools; use namespaces for plugin-owned,
+documented domain APIs where concise code is more reliable than repeated schema
+lookups.
 
 ## Output API
 
