@@ -6,8 +6,13 @@ const AGENTS_ADD_CONFIG_ONLY_FLAGS = [
   "--workspace",
   "--model",
   "--agent-dir",
-  "--bind",
   "--non-interactive",
+] as const;
+
+const AGENTS_ADD_PLUGIN_AWARE_FLAGS = [
+  // agents.bindings.ts may need loaded channel plugins to resolve omitted
+  // binding account scopes, so --bind keeps the existing preload behavior.
+  "--bind",
 ] as const;
 
 function hasAgentsAddConfigOnlyArgFlag(argv: string[], flag: string): boolean {
@@ -16,6 +21,14 @@ function hasAgentsAddConfigOnlyArgFlag(argv: string[], flag: string): boolean {
 
 function hasAgentsAddConfigOnlyFlags(argv: string[]): boolean {
   return AGENTS_ADD_CONFIG_ONLY_FLAGS.some((flag) => hasAgentsAddConfigOnlyArgFlag(argv, flag));
+}
+
+function hasAgentsAddPluginAwareFlags(argv: string[]): boolean {
+  return AGENTS_ADD_PLUGIN_AWARE_FLAGS.some((flag) => hasAgentsAddConfigOnlyArgFlag(argv, flag));
+}
+
+function shouldLoadPluginsForAgentsAdd(argv: string[]): boolean {
+  return hasAgentsAddPluginAwareFlags(argv) || !hasAgentsAddConfigOnlyFlags(argv);
 }
 
 export type CliCommandPluginLoadPolicy =
@@ -95,7 +108,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     commandPath: ["agents", "add"],
     exact: true,
     policy: {
-      loadPlugins: ({ argv }) => !hasAgentsAddConfigOnlyFlags(argv),
+      loadPlugins: ({ argv }) => shouldLoadPluginsForAgentsAdd(argv),
     },
   },
   {

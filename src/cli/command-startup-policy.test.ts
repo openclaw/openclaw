@@ -215,6 +215,24 @@ describe("command-startup-policy", () => {
         jsonOutputMode: true,
       }),
     ).toBe(false);
+    expect(
+      shouldLoadPluginsForCommandPath({
+        argv: [
+          "node",
+          "openclaw",
+          "agents",
+          "add",
+          "alpha",
+          "--workspace",
+          "/tmp/workspace",
+          "--bind",
+          "matrix",
+          "--json",
+        ],
+        commandPath: ["agents", "add"],
+        jsonOutputMode: true,
+      }),
+    ).toBe(true);
   });
 
   it("matches banner suppression policy", () => {

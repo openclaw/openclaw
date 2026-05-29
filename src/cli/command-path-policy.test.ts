@@ -221,6 +221,24 @@ describe("command-path-policy", () => {
         jsonOutputMode: true,
       }),
     ).toBe(false);
+    expect(
+      agentsAddPolicy.loadPlugins({
+        argv: [
+          "node",
+          "openclaw",
+          "agents",
+          "add",
+          "alpha",
+          "--workspace",
+          "/tmp/agent-workspace",
+          "--bind",
+          "matrix",
+          "--json",
+        ],
+        commandPath: ["agents", "add"],
+        jsonOutputMode: true,
+      }),
+    ).toBe(true);
   });
 
   it("resolves mixed startup-only rules", () => {

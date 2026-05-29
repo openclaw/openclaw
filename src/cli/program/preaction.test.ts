@@ -582,6 +582,42 @@ describe("registerPreActionHooks", () => {
     });
   });
 
+  it("keeps agents add bindings on plugin-aware startup", async () => {
+    await runPreAction({
+      parseArgv: [
+        "agents",
+        "add",
+        "alpha",
+        "--workspace",
+        "/tmp/agent-workspace",
+        "--bind",
+        "matrix",
+        "--json",
+      ],
+      processArgv: [
+        "node",
+        "openclaw",
+        "agents",
+        "add",
+        "alpha",
+        "--workspace",
+        "/tmp/agent-workspace",
+        "--bind",
+        "matrix",
+        "--json",
+      ],
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["agents", "add"],
+      suppressDoctorStdout: true,
+    });
+    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
+      scope: "all",
+    });
+  });
+
   it("does not preload plugins for remote agent JSON output", async () => {
     await runPreAction({
       parseArgv: ["agent"],

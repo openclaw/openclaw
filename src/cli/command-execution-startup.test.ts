@@ -139,6 +139,23 @@ describe("command-execution-startup", () => {
         jsonOutputMode: false,
       }).startupPolicy.loadPlugins,
     ).toBe(false);
+    expect(
+      mod.resolveCliExecutionStartupContext({
+        argv: [
+          "node",
+          "openclaw",
+          "agents",
+          "add",
+          "alpha",
+          "--workspace",
+          "/tmp/agent-workspace",
+          "--bind",
+          "matrix",
+          "--json",
+        ],
+        jsonOutputMode: true,
+      }).startupPolicy.loadPlugins,
+    ).toBe(true);
   });
 
   it("routes logs to stderr and emits banner only when allowed", async () => {
