@@ -2228,10 +2228,22 @@ function getProviderThinkingModelCompat(model: Model): ProviderThinkingModelComp
   if (!compat || typeof compat !== "object") {
     return undefined;
   }
-  if ("thinkingFormat" in compat || "supportedReasoningEfforts" in compat) {
-    return compat as ProviderThinkingModelCompat;
-  }
-  return undefined;
+  const record = compat as Record<string, unknown>;
+  const thinkingFormat =
+    typeof record.thinkingFormat === "string" ? record.thinkingFormat : undefined;
+  const supportedReasoningEfforts =
+    Array.isArray(record.supportedReasoningEfforts) &&
+    record.supportedReasoningEfforts.every((value) => typeof value === "string")
+      ? record.supportedReasoningEfforts
+      : record.supportedReasoningEfforts === null
+        ? null
+        : undefined;
+  return thinkingFormat || supportedReasoningEfforts !== undefined
+    ? {
+        ...(thinkingFormat ? { thinkingFormat } : {}),
+        ...(supportedReasoningEfforts !== undefined ? { supportedReasoningEfforts } : {}),
+      }
+    : undefined;
 }
 
 function resolveGatewayLiveThinkingLevel(params: { raw?: string; smoke: boolean }): string {
