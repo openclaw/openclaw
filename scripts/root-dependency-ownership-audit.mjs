@@ -32,6 +32,14 @@ const ROOT_OWNED_EXTENSION_RUNTIME_DEPENDENCIES = new Map([
     "@silvia-odwyer/photon-node",
     "keep at root; the internal media understanding runtime is shipped with packaged image-processing surfaces even though the bundled plugin also declares it",
   ],
+  [
+    "@matrix-org/matrix-sdk-crypto-wasm",
+    "keep at root; the Matrix crypto runtime is externally bundled (neverBundle) via the tsdown build config and must be resolvable at runtime from root node_modules",
+  ],
+  [
+    "matrix-js-sdk",
+    "keep at root; the Matrix bot SDK is externally bundled (neverBundle) via the tsdown build config and must be resolvable at runtime from root node_modules",
+  ],
 ]);
 
 function readJson(filePath) {
