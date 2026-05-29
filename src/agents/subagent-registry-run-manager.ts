@@ -344,7 +344,7 @@ export function createSubagentRunManager(params: {
           notBeforeMs: observedStartedAt ?? entry.startedAt ?? entry.createdAt,
         });
         if (completion) {
-          const completionStartedAt = observedStartedAt;
+          const completionStartedAt = observedStartedAt ?? completion.startedAt;
           const completionAfterDeadline =
             completionStartedAt === undefined
               ? undefined

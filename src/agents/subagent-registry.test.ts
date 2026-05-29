@@ -1202,6 +1202,56 @@ describe("subagent registry seam flow", () => {
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
   });
 
+  it("uses session-store start time when agent.wait times out without a start", async () => {
+    const createdAt = Date.parse("2026-03-24T11:59:00Z");
+    const sessionStartedAt = createdAt + 10_000;
+    vi.setSystemTime(createdAt);
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        vi.setSystemTime(createdAt + 61_000);
+        return { status: "timeout" };
+      }
+      return {};
+    });
+    mocks.loadSessionStore.mockReturnValue({
+      "agent:main:subagent:child": {
+        sessionId: "sess-child",
+        status: "done",
+        startedAt: sessionStartedAt,
+        updatedAt: createdAt + 65_000,
+        endedAt: createdAt + 65_000,
+      },
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-session-store-start-after-wait-timeout",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "use session store observed start",
+      cleanup: "keep",
+      runTimeoutSeconds: 60,
+    });
+
+    await waitForFast(() => {
+      const run = mod
+        .listSubagentRunsForRequester("agent:main:main")
+        .find((entry) => entry.runId === "run-session-store-start-after-wait-timeout");
+      expect(run?.endedAt).toBe(createdAt + 65_000);
+      expectRecordFields(
+        run?.outcome,
+        {
+          status: "ok",
+          startedAt: sessionStartedAt,
+          endedAt: createdAt + 65_000,
+          elapsedMs: 55_000,
+        },
+        "session store observed start beats stale registry start",
+      );
+    });
+    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+  });
+
   it("caps restored waits to the remaining explicit run timeout", async () => {
     const startedAt = Date.parse("2026-03-24T11:59:00Z");
     const runTimeoutSeconds = 60;

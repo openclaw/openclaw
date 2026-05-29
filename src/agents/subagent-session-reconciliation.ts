@@ -18,6 +18,7 @@ import {
 export type SubagentSessionStoreCache = Map<string, Record<string, SessionEntry>>;
 
 export type SubagentSessionCompletion = {
+  startedAt?: number;
   endedAt: number;
   outcome: SubagentRunOutcome;
   reason: SubagentLifecycleEndedReason;
@@ -82,6 +83,7 @@ export function resolveCompletionFromSessionEntry(
   opts?: { notBeforeMs?: number },
 ): SubagentSessionCompletion | null {
   const status = sessionEntry?.status;
+  const startedAt = finiteTimestamp(sessionEntry?.startedAt);
   const endedAt =
     finiteTimestamp(sessionEntry?.endedAt) ??
     finiteTimestamp(sessionEntry?.updatedAt) ??
@@ -92,6 +94,7 @@ export function resolveCompletionFromSessionEntry(
       return null;
     }
     return {
+      startedAt,
       endedAt,
       outcome: { status: "ok" },
       reason: SUBAGENT_ENDED_REASON_COMPLETE,
@@ -102,6 +105,7 @@ export function resolveCompletionFromSessionEntry(
       return null;
     }
     return {
+      startedAt,
       endedAt,
       outcome: { status: "timeout" },
       reason: SUBAGENT_ENDED_REASON_COMPLETE,
@@ -112,6 +116,7 @@ export function resolveCompletionFromSessionEntry(
       return null;
     }
     return {
+      startedAt,
       endedAt,
       outcome: { status: "error", error: "session completed before registry settled" },
       reason: SUBAGENT_ENDED_REASON_ERROR,
@@ -122,6 +127,7 @@ export function resolveCompletionFromSessionEntry(
       return null;
     }
     return {
+      startedAt,
       endedAt,
       outcome: { status: "error", error: "subagent run terminated" },
       reason: SUBAGENT_ENDED_REASON_KILLED,
@@ -132,6 +138,7 @@ export function resolveCompletionFromSessionEntry(
       return null;
     }
     return {
+      startedAt,
       endedAt,
       outcome: { status: "ok" },
       reason: SUBAGENT_ENDED_REASON_COMPLETE,
