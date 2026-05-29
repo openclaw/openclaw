@@ -70,6 +70,8 @@ describe("createAgentSession tool defaults", () => {
       name: "custom_lookup",
       label: "Custom Lookup",
       description: "Looks up a test value.",
+      promptSnippet: "Lookup test values",
+      promptGuidelines: ["Use custom_lookup for test values."],
       parameters: Type.Object({}),
       execute: async () => ({
         content: [{ type: "text", text: "ok" }],
@@ -123,6 +125,21 @@ describe("createAgentSession tool defaults", () => {
 
     expect(session.getActiveToolNames()).toEqual(["custom_lookup"]);
     expect(session.systemPrompt).toBe(systemPrompt);
+
+    const exactPromptOptions = (
+      session as unknown as {
+        baseSystemPromptOptions: {
+          selectedTools?: string[];
+          toolSnippets?: Record<string, string>;
+          promptGuidelines?: string[];
+        };
+      }
+    ).baseSystemPromptOptions;
+    expect(exactPromptOptions.selectedTools).toEqual(["custom_lookup"]);
+    expect(exactPromptOptions.toolSnippets).toEqual({
+      custom_lookup: "Lookup test values",
+    });
+    expect(exactPromptOptions.promptGuidelines).toEqual(["Use custom_lookup for test values."]);
   });
 
   it("runs session message persistence under the configured write lock", async () => {

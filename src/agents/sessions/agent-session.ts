@@ -283,6 +283,12 @@ interface ToolDefinitionEntry {
   sourceInfo: SourceInfo;
 }
 
+type ActiveToolPromptMetadata = {
+  validToolNames: string[];
+  toolSnippets: Record<string, string>;
+  promptGuidelines: string[];
+};
+
 type CompactionReason = "manual" | "threshold" | "overflow";
 
 type CompactionWorkOutcome =
@@ -892,13 +898,16 @@ export class AgentSession {
 
   /** Set an exact base prompt owned by the current runtime. */
   setBaseSystemPrompt(systemPrompt: string): void {
+    const { validToolNames, toolSnippets, promptGuidelines } = this.collectActiveToolPromptMetadata(
+      this.getActiveToolNames(),
+    );
     this.exactBaseSystemPrompt = systemPrompt;
     this.baseSystemPrompt = systemPrompt;
     this.baseSystemPromptOptions = {
       cwd: this.cwd,
-      selectedTools: this.getActiveToolNames(),
-      toolSnippets: {},
-      promptGuidelines: [],
+      selectedTools: validToolNames,
+      toolSnippets,
+      promptGuidelines,
       customPrompt: systemPrompt,
     };
     this.agent.state.systemPrompt = systemPrompt;
@@ -984,7 +993,7 @@ export class AgentSession {
     return Array.from(unique);
   }
 
-  private rebuildSystemPrompt(toolNames: string[]): string {
+  private collectActiveToolPromptMetadata(toolNames: string[]): ActiveToolPromptMetadata {
     const validToolNames = toolNames.filter((name) => this.toolRegistry.has(name));
     const toolSnippets: Record<string, string> = {};
     const promptGuidelines: string[] = [];
@@ -999,6 +1008,13 @@ export class AgentSession {
         promptGuidelines.push(...toolGuidelines);
       }
     }
+
+    return { validToolNames, toolSnippets, promptGuidelines };
+  }
+
+  private rebuildSystemPrompt(toolNames: string[]): string {
+    const { validToolNames, toolSnippets, promptGuidelines } =
+      this.collectActiveToolPromptMetadata(toolNames);
 
     if (this.exactBaseSystemPrompt !== undefined) {
       this.baseSystemPromptOptions = {
