@@ -228,6 +228,30 @@ describe("trajectory runtime", () => {
     expect(raw).toContain("new-recorder");
   });
 
+  it.runIf(process.platform !== "win32")(
+    "refuses runtime capture through symlinked parent directories",
+    async () => {
+      const tmpDir = makeTempDir();
+      const targetDir = path.join(tmpDir, "target");
+      const linkDir = path.join(tmpDir, "link");
+      fs.mkdirSync(targetDir);
+      fs.symlinkSync(targetDir, linkDir);
+      const recorder = createTrajectoryRuntimeRecorder({
+        sessionId: "session-1",
+        sessionFile: path.join(linkDir, "session.jsonl"),
+        maxRuntimeFileBytes: 2_400,
+      });
+
+      const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
+      runtimeRecorder.recordEvent("prompt.submitted", {
+        prompt: "hello",
+      });
+      await runtimeRecorder.flush();
+
+      expect(fs.existsSync(path.join(targetDir, "session.trajectory.jsonl"))).toBe(false);
+    },
+  );
+
   it("describes queued writer state for cleanup timeout logs", () => {
     const recorder = createTrajectoryRuntimeRecorder({
       sessionId: "session-1",

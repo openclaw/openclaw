@@ -6,7 +6,7 @@ import type {
   QueuedFileWriterDiagnostics,
 } from "../agents/queued-file-writer.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { writeSiblingTempFile } from "../infra/fs-safe-advanced.js";
+import { assertNoSymlinkParents, writeSiblingTempFile } from "../infra/fs-safe-advanced.js";
 import { readRegularFileSync } from "../infra/fs-safe.js";
 import { redactSecrets } from "../logging/redact.js";
 import { parseBooleanValue } from "../utils/boolean.js";
@@ -283,10 +283,18 @@ async function replaceTrajectoryWindow(params: {
   appendedLines: string[];
 }): Promise<void> {
   const dir = path.dirname(params.filePath);
+  await fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
+  await assertNoSymlinkParents({
+    rootDir: path.parse(path.resolve(dir)).root,
+    targetPath: path.resolve(dir),
+    allowMissing: false,
+    allowRootChildSymlink: true,
+    requireDirectories: true,
+    messagePrefix: "Refusing to write trajectory under",
+  });
   const lines = readTrajectoryWindowLines(params.filePath, params.maxFileBytes);
   lines.push(...params.appendedLines);
   trimJsonlWindow(lines, params.maxFileBytes);
-  await fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
   await writeSiblingTempFile({
     dir,
     chmodDir: false,
