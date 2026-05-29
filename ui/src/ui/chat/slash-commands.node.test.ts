@@ -134,6 +134,19 @@ describe("parseSlashCommand", () => {
     expectParsedSlash("/focus", { key: "focus", executeLocal: true }, "");
   });
 
+  it("keeps rename/title as local aliases for session titles", () => {
+    const rename = requireCommandByKey("rename");
+    expectRecordFields(rename, "rename command", {
+      name: "rename",
+      aliases: ["title"],
+      args: "<title>",
+      category: "session",
+      executeLocal: true,
+    });
+    expectParsedSlash("/rename sprint planning", { key: "rename" }, "sprint planning");
+    expectParsedSlash("/title:sprint planning", { key: "rename" }, "sprint planning");
+  });
+
   it("refreshes runtime commands from commands.list so docks, plugins, and direct skills appear", async () => {
     const request = async (method: string) => {
       expect(method).toBe("commands.list");

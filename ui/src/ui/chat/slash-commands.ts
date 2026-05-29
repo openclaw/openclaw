@@ -64,6 +64,7 @@ const COMMAND_ICON_OVERRIDES: Partial<Record<string, IconName>> = {
   skill: "zap",
   commands: "book",
   new: "plus",
+  rename: "edit",
   reset: "refresh",
   compact: "loader",
   stop: "stop",
@@ -84,6 +85,7 @@ const COMMAND_ICON_OVERRIDES: Partial<Record<string, IconName>> = {
 const LOCAL_COMMANDS = new Set([
   "help",
   "new",
+  "rename",
   "reset",
   "stop",
   "compact",
@@ -138,6 +140,7 @@ const CATEGORY_OVERRIDES: Partial<Record<string, SlashCommandCategory>> = {
   stop: "session",
   reset: "session",
   new: "session",
+  rename: "session",
   compact: "session",
   focus: "session",
   unfocus: "session",

@@ -104,6 +104,51 @@ describe("executeSlashCommand directives", () => {
     });
   });
 
+  it("renames the current session via sessions.patch", async () => {
+    const request = vi.fn(async (method: string, payload?: unknown) => {
+      if (method === "sessions.patch") {
+        return { ok: true, path: "/tmp/sessions.json", key: "main", entry: payload };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "main",
+      "rename",
+      "Launch notes",
+    );
+
+    expect(result.content).toBe("Session renamed to `Launch notes`.");
+    expect(result.action).toBe("refresh");
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "main",
+      label: "Launch notes",
+    });
+  });
+
+  it("rejects empty and too-long session rename titles before patching", async () => {
+    const request = vi.fn();
+
+    const empty = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "main",
+      "rename",
+      "   ",
+    );
+    const tooLongTitle = "x".repeat(513);
+    const tooLong = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "main",
+      "rename",
+      tooLongTitle,
+    );
+
+    expect(empty.content).toBe("Usage: `/rename <title>`");
+    expect(tooLong.content).toBe("Session title is too long (513/512 characters).");
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("uses the local model catalog to qualify raw /model overrides when the patch response omits provider", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "sessions.patch") {

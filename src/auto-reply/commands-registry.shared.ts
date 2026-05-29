@@ -714,6 +714,24 @@ export function buildBuiltinChatCommands(
       tier: "essential",
     }),
     defineChatCommand({
+      key: "rename",
+      nativeName: "rename",
+      nativeAliases: ["title"],
+      description: "Rename the current session.",
+      textAliases: ["/rename", "/title"],
+      category: "session",
+      tier: "essential",
+      args: [
+        {
+          name: "title",
+          description: "Session title",
+          type: "string",
+          required: true,
+          captureRemaining: true,
+        },
+      ],
+    }),
+    defineChatCommand({
       key: "compact",
       nativeName: "compact",
       description: "Compact the session context.",

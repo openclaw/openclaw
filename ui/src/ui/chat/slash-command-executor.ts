@@ -30,6 +30,8 @@ import type {
 import { generateUUID } from "../uuid.ts";
 import { SLASH_COMMANDS } from "./slash-commands.ts";
 
+const SESSION_TITLE_MAX_LENGTH = 512;
+
 export type SlashCommandResult = {
   /** Markdown-formatted result to display in chat. */
   content: string;
@@ -96,6 +98,8 @@ export async function executeSlashCommand(
       return executeHelp();
     case "new":
       return { content: "Starting new session...", action: "new-session" };
+    case "rename":
+      return await executeRename(client, sessionKey, args);
     case "reset":
       return { content: "Resetting session...", action: "reset" };
     case "stop":
@@ -130,6 +134,35 @@ export async function executeSlashCommand(
 }
 
 // ── Command Implementations ──
+
+async function executeRename(
+  client: GatewayBrowserClient,
+  sessionKey: string,
+  args: string,
+): Promise<SlashCommandResult> {
+  const title = args.trim();
+  if (!title) {
+    return { content: "Usage: `/rename <title>`" };
+  }
+  if (title.length > SESSION_TITLE_MAX_LENGTH) {
+    return {
+      content: `Session title is too long (${title.length}/${SESSION_TITLE_MAX_LENGTH} characters).`,
+    };
+  }
+
+  try {
+    await client.request<SessionsPatchResult>("sessions.patch", {
+      key: sessionKey,
+      label: title,
+    });
+    return {
+      content: `Session renamed to \`${title}\`.`,
+      action: "refresh",
+    };
+  } catch (err) {
+    return { content: `Failed to rename session: ${String(err)}` };
+  }
+}
 
 function executeHelp(): SlashCommandResult {
   const lines = ["**Available Commands**\n"];
