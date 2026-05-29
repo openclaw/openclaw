@@ -1415,8 +1415,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
     });
 
     await new Promise((resolve) => setTimeout(resolve, 30));
-    // These raw response deltas can arrive before app-server has emitted an
-    // item/tool-call notification, so they must refresh the completion guard.
+    // This covers the future-compatible path for raw response deltas if Codex
+    // app-server exposes them directly; current Codex primarily emits
+    // rawResponseItem/completed for the raw-event surface.
     await notify({
       method: "response.custom_tool_call_input.delta",
       params: {
@@ -1448,6 +1449,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     let handleRequest:
       | ((request: { id: string; method: string; params?: unknown }) => Promise<unknown>)
       | undefined;
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     const request = vi.fn(async (method: string) => {
       if (method === "thread/start") {
         return threadStartResult("thread-1");
@@ -1538,6 +1540,17 @@ describe("runCodexAppServerAttempt turn watches", () => {
     expect(result.promptError).toBe(
       "codex app-server turn idle timed out waiting for turn/completed",
     );
+    const completionWarnCall = warn.mock.calls.find(
+      ([message]) => message === "codex app-server turn idle timed out waiting for completion",
+    );
+    const completionWarnData = completionWarnCall?.[1] as
+      | {
+          lastActivityReason?: string;
+          lastNotificationMethod?: string;
+        }
+      | undefined;
+    expect(completionWarnData?.lastActivityReason).toBe("notification:rawResponseItem/completed");
+    expect(completionWarnData?.lastNotificationMethod).toBe("rawResponseItem/completed");
   });
 
   it("times out post-native-tool raw assistant progress after the post-tool timeout", async () => {

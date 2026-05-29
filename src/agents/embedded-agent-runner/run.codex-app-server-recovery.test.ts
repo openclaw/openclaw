@@ -36,6 +36,8 @@ function codexTurnCompletionIdleTimeoutAttempt(
 ): EmbeddedRunAttemptResult {
   return makeAttemptResult({
     assistantTexts: [],
+    aborted: true,
+    timedOut: true,
     promptError: new Error("codex app-server turn idle timed out waiting for turn/completed"),
     promptErrorSource: "prompt",
     codexAppServerFailure: {
@@ -173,12 +175,7 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
   it("returns a timeout payload after a replay-safe turn/completed idle timeout retry is exhausted", async () => {
     mockedRunEmbeddedAttempt
       .mockResolvedValueOnce(codexTurnCompletionIdleTimeoutAttempt())
-      .mockResolvedValueOnce(
-        codexTurnCompletionIdleTimeoutAttempt({
-          aborted: true,
-          timedOut: true,
-        }),
-      );
+      .mockResolvedValueOnce(codexTurnCompletionIdleTimeoutAttempt());
 
     const result = await runEmbeddedAgent({
       ...overflowBaseRunParams,
@@ -194,6 +191,34 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
     expect(result.meta.timeoutPhase).toBe("provider");
     expect(result.meta.providerStarted).toBe(true);
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
+  });
+
+  it("surfaces non-stdio turn/completed idle timeouts instead of throwing", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      codexTurnCompletionIdleTimeoutAttempt({
+        codexAppServerFailure: {
+          kind: "turn_completion_idle_timeout",
+          transport: "websocket",
+          threadId: "thread-1",
+          turnId: "turn-1",
+          replaySafe: true,
+        },
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "codex",
+      model: "gpt-5.5",
+      runId: "run-codex-turn-completion-idle-timeout-websocket",
+    });
+
+    expect(result.payloads?.[0]).toMatchObject({
+      isError: true,
+      text: "Request timed out before a response was generated. Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
+    });
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
     expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
   });
 

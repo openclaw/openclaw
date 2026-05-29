@@ -2381,8 +2381,8 @@ export async function runEmbeddedAgent(
           const hasRecoverableCodexAppServerTimeoutOutcome = Boolean(
             attempt.codexAppServerFailure && attempt.promptTimeoutOutcome,
           );
-          let shouldSurfaceRetryExhaustedCodexCompletionTimeout = false;
-          if (promptError && !aborted && promptErrorSource !== "compaction") {
+          let shouldSurfaceCodexCompletionTimeout = false;
+          if (promptError && promptErrorSource !== "compaction" && attempt.codexAppServerFailure) {
             // Retry replay-safe Codex app-server failures.
             const codexAppServerRecoveryRetry = resolveCodexAppServerRecoveryRetry({
               attempt,
@@ -2398,15 +2398,15 @@ export async function runEmbeddedAgent(
               );
               continue;
             }
-            // A second completion-idle timeout has used its replay chance; surface the timeout.
-            shouldSurfaceRetryExhaustedCodexCompletionTimeout =
-              codexAppServerRecoveryRetry.reason === "retry_exhausted" &&
+            // Completion-idle timeouts are timeout outcomes even when the
+            // app-server transport is not retryable, or the retry was exhausted.
+            shouldSurfaceCodexCompletionTimeout =
               attempt.codexAppServerFailure?.kind === "turn_completion_idle_timeout" &&
               attempt.timedOut;
             if (
               attempt.codexAppServerFailure &&
               !hasRecoverableCodexAppServerTimeoutOutcome &&
-              !shouldSurfaceRetryExhaustedCodexCompletionTimeout
+              !shouldSurfaceCodexCompletionTimeout
             ) {
               throw promptError;
             }
@@ -2417,7 +2417,7 @@ export async function runEmbeddedAgent(
             !aborted &&
             promptErrorSource !== "compaction" &&
             !hasRecoverableCodexAppServerTimeoutOutcome &&
-            !shouldSurfaceRetryExhaustedCodexCompletionTimeout
+            !shouldSurfaceCodexCompletionTimeout
           ) {
             // Normalize wrapped errors (e.g. abort-wrapped RESOURCE_EXHAUSTED) into
             // FailoverError so rate-limit classification works even for nested shapes.

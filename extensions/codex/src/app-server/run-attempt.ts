@@ -1284,11 +1284,14 @@ export async function runCodexAppServerAttempt(
       (correlation.matchesActiveTurn === true ||
         (isUnscopedCodexNotification(correlation) &&
           canAttributeUnscopedNativeResponseDeltaToThisTurn(client)));
-    if (correlation.matchesActiveTurn !== false || nativeResponseStreamDeltaMatchesActiveTurn) {
-      // Raw response deltas can stream large custom tool inputs before Codex
-      // emits the app-server item/tool call notification we usually track.
-      // Only unscoped deltas from a single-lease client are attributable here;
-      // concurrent leased turns receive the same broadcast notification.
+    const notificationMatchesActiveTurn =
+      correlation.matchesActiveTurn === true ||
+      (!isNativeResponseStreamDelta && correlation.matchesActiveTurn !== false) ||
+      nativeResponseStreamDeltaMatchesActiveTurn;
+    if (notificationMatchesActiveTurn) {
+      // If a future Codex app-server exposes raw response deltas, treat them as
+      // activity only when scoped to this turn or attributable to a single lease.
+      // Today the durable app-server raw-event surface is rawResponseItem/completed.
       turnWatches.noteNotificationReceived(
         notification.method,
         isNativeResponseStreamDelta
