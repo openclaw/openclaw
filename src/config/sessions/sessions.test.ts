@@ -24,7 +24,12 @@ import {
   updateSessionStoreEntry,
 } from "./store.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
-import { mergeSessionEntry, mergeSessionEntryWithPolicy, type SessionEntry } from "./types.js";
+import {
+  mergeSessionEntry,
+  mergeSessionEntryWithPolicy,
+  setSessionRuntimeModel,
+  type SessionEntry,
+} from "./types.js";
 
 type WriteTextAtomicCall = Parameters<typeof jsonFiles.writeTextAtomic>;
 
@@ -820,6 +825,40 @@ describe("session store writer queue", () => {
     expect(store[key]?.model).toBeUndefined();
   });
 
+  it("normalizes OpenAI Codex OAuth provider IDs out of persisted session routes", async () => {
+    const key = "agent:main:telegram:direct:1316000566";
+    const { storePath } = await makeTmpStore({
+      [key]: {
+        sessionId: "sess-openai-codex-oauth",
+        updatedAt: 100,
+        modelProvider: "openai-codex",
+        model: "gpt-5.5",
+      },
+    });
+
+    await updateSessionStore(storePath, async (store) => {
+      const entry = store[key];
+      entry.updatedAt = Date.now();
+    });
+
+    const store = loadSessionStore(storePath);
+    expect(store[key]?.modelProvider).toBe("openai");
+    expect(store[key]?.model).toBe("gpt-5.5");
+  });
+
+  it("normalizes OpenAI Codex OAuth provider IDs at runtime model write boundary", () => {
+    const entry: SessionEntry = { sessionId: "sess-runtime-write", updatedAt: 100 };
+
+    const updated = setSessionRuntimeModel(entry, {
+      provider: "openai-codex",
+      model: "gpt-5.5",
+    });
+
+    expect(updated).toBe(true);
+    expect(entry.modelProvider).toBe("openai");
+    expect(entry.model).toBe("gpt-5.5");
+  });
+
   it("preserves ACP metadata when replacing a session entry wholesale", async () => {
     const key = "agent:codex:acp:binding:discord:default:feedface";
     const acp = {
@@ -849,7 +888,7 @@ describe("session store writer queue", () => {
 
     const store = loadSessionStore(storePath);
     expect(store[key]?.acp).toEqual(acp);
-    expect(store[key]?.modelProvider).toBe("openai-codex");
+    expect(store[key]?.modelProvider).toBe("openai");
     expect(store[key]?.model).toBe("gpt-5.4");
   });
 

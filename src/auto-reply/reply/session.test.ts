@@ -3505,7 +3505,7 @@ describe("persistSessionUsageUpdate", () => {
     });
 
     const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
-    expect(stored[sessionKey].modelProvider).toBe("openai-codex");
+    expect(stored[sessionKey].modelProvider).toBe("openai");
     expect(stored[sessionKey].model).toBe("gpt-5.4");
     expect(stored[sessionKey].inputTokens).toBe(1_200);
     expect(stored[sessionKey].outputTokens).toBe(100);
@@ -3569,7 +3569,7 @@ describe("persistSessionUsageUpdate", () => {
     });
 
     const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
-    expect(stored[sessionKey].modelProvider).toBe("openai-codex");
+    expect(stored[sessionKey].modelProvider).toBe("openai");
     expect(stored[sessionKey].model).toBe("gpt-5.5");
     expect(stored[sessionKey].contextTokens).toBe(200_000);
     expect(stored[sessionKey].inputTokens).toBe(1_234);

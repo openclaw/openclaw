@@ -452,14 +452,19 @@ export function normalizeSessionRuntimeModelFields(entry: SessionEntry): Session
     return next;
   }
 
-  if (entry.model !== normalizedModel) {
+  const routeModel = normalizeSessionRouteModel(normalizedModel);
+  const routeProvider = normalizedProvider
+    ? normalizeSessionRouteProvider({ provider: normalizedProvider, model: routeModel })
+    : undefined;
+
+  if (entry.model !== routeModel) {
     if (next === entry) {
       next = { ...next };
     }
-    next.model = normalizedModel;
+    next.model = routeModel;
   }
 
-  if (!normalizedProvider) {
+  if (!routeProvider) {
     if (entry.modelProvider !== undefined) {
       if (next === entry) {
         next = { ...next };
@@ -469,21 +474,50 @@ export function normalizeSessionRuntimeModelFields(entry: SessionEntry): Session
     return next;
   }
 
-  if (entry.modelProvider !== normalizedProvider) {
+  if (entry.modelProvider !== routeProvider) {
     if (next === entry) {
       next = { ...next };
     }
-    next.modelProvider = normalizedProvider;
+    next.modelProvider = routeProvider;
   }
   return next;
+}
+
+const OPENAI_PROVIDER_ID = "openai";
+const OPENAI_CODEX_PROVIDER_ID = "openai-codex";
+const OPENAI_CODEX_MODEL_REF_PREFIX = `${OPENAI_CODEX_PROVIDER_ID}/`;
+const OPENAI_MODEL_REF_PREFIX = `${OPENAI_PROVIDER_ID}/`;
+
+function isOpenAIGptModelId(model: string): boolean {
+  return model.toLowerCase().startsWith("gpt-");
+}
+
+function normalizeSessionRouteModel(model: string): string {
+  return model.startsWith(OPENAI_CODEX_MODEL_REF_PREFIX)
+    ? `${OPENAI_MODEL_REF_PREFIX}${model.slice(OPENAI_CODEX_MODEL_REF_PREFIX.length)}`
+    : model;
+}
+
+export function normalizeSessionRouteProvider(runtime: {
+  provider: string;
+  model: string;
+}): string {
+  if (
+    runtime.provider === OPENAI_CODEX_PROVIDER_ID &&
+    (isOpenAIGptModelId(runtime.model) || runtime.model.startsWith(OPENAI_MODEL_REF_PREFIX))
+  ) {
+    return OPENAI_PROVIDER_ID;
+  }
+  return runtime.provider;
 }
 
 export function setSessionRuntimeModel(
   entry: SessionEntry,
   runtime: { provider: string; model: string },
 ): boolean {
-  const provider = runtime.provider.trim();
-  const model = runtime.model.trim();
+  const rawProvider = runtime.provider.trim();
+  const model = normalizeSessionRouteModel(runtime.model.trim());
+  const provider = normalizeSessionRouteProvider({ provider: rawProvider, model });
   if (!provider || !model) {
     return false;
   }
