@@ -161,7 +161,7 @@ describe("embedded-agent runner run registry", () => {
     });
   });
 
-  it("rejects message-tool-only steering for active runs created without that mode", () => {
+  it("continues message-tool-only steering for active runs created without that mode", () => {
     const queueMessage = vi.fn(async () => {});
     setActiveEmbeddedRun("session-automatic-source-reply", {
       ...createRunHandle(),
@@ -178,12 +178,16 @@ describe("embedded-agent runner run registry", () => {
     );
 
     expect(outcome).toEqual({
-      queued: false,
+      queued: true,
       sessionId: "session-automatic-source-reply",
-      reason: "source_reply_delivery_mode_mismatch",
+      target: "embedded_run",
       gatewayHealth: "live",
+      enqueuedAtMs: expect.any(Number),
     });
-    expect(queueMessage).not.toHaveBeenCalled();
+    expect(queueMessage).toHaveBeenCalledWith("continue", {
+      steeringMode: "all",
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
   });
 
   it("defaults active embedded steering to all pending messages", () => {

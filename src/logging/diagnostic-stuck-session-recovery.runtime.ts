@@ -244,9 +244,12 @@ export async function recoverStuckDiagnosticSession(
       }
     }
 
-    const queuedCount = sessionLane ? getCommandLaneSnapshot(sessionLane).queuedCount : 0;
+    const laneToReset = sessionLane ?? undefined;
+    const queuedCount = laneToReset ? getCommandLaneSnapshot(laneToReset).queuedCount : 0;
     const released =
-      sessionLane && (!activeSessionId || !aborted || !drained) ? resetCommandLane(sessionLane) : 0;
+      laneToReset && (!activeSessionId || !aborted || !drained || queuedCount > 0)
+        ? resetCommandLane(laneToReset)
+        : 0;
 
     const clearStaleQueuedSession = !aborted && released === 0 && (params.queueDepth ?? 0) > 0;
 
