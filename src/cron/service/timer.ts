@@ -74,6 +74,7 @@ const DEFAULT_MAX_MISSED_JOBS_PER_RESTART = 5;
 const DEFAULT_STARTUP_DEFERRED_MISSED_AGENT_JOB_DELAY_MS = 2 * 60_000;
 const DEFAULT_FAILURE_ALERT_AFTER = 2;
 const DEFAULT_FAILURE_ALERT_COOLDOWN_MS = 60 * 60_000; // 1 hour
+const BLOCKED_SUMMARY_PREFIX_RE = /^\s*Blocked\s*:/i;
 
 type ResolvedFailureAlert = {
   after: number;
@@ -144,6 +145,21 @@ type CronAgentWatchdog = {
   activeExecution: () => CronAgentExecutionStarted | undefined;
   dispose: () => void;
 };
+
+function classifyCronAgentRunOutcome<T extends CronRunOutcome>(result: T): T {
+  if (
+    result.status === "ok" &&
+    typeof result.summary === "string" &&
+    BLOCKED_SUMMARY_PREFIX_RE.test(result.summary)
+  ) {
+    return {
+      ...result,
+      status: "error",
+      error: result.summary.trim(),
+    };
+  }
+  return result;
+}
 
 export async function executeJobCoreWithTimeout(
   state: CronServiceState,
@@ -1831,7 +1847,7 @@ async function executeDetachedCronJob(
     };
   }
 
-  return {
+  return classifyCronAgentRunOutcome({
     status: res.status,
     error: res.error,
     summary: res.summary,
@@ -1844,7 +1860,7 @@ async function executeDetachedCronJob(
     model: res.model,
     provider: res.provider,
     usage: res.usage,
-  };
+  });
 }
 
 /**

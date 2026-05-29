@@ -128,6 +128,46 @@ describe("cron service timer regressions", () => {
     timeoutSpy.mockRestore();
   });
 
+  it("classifies blocked isolated summaries as failed cron runs", async () => {
+    const store = timerRegressionFixtures.makeStorePath();
+    const now = Date.parse("2026-02-06T10:05:00.000Z");
+    const job = createDueIsolatedJob({ id: "blocked-summary", nowMs: now, nextRunAtMs: now - 1 });
+    const events: CronEvent[] = [];
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({
+        status: "ok" as const,
+        summary: "Blocked: shell execution unavailable, so the backup script could not be started.",
+      })),
+      onEvent: (evt) => {
+        events.push(evt);
+      },
+    });
+    state.store = { version: 1, jobs: [job] };
+
+    await executeJob(state, job, now, { forced: true });
+
+    expect(job.state.lastRunStatus).toBe("error");
+    expect(job.state.lastError).toBe(
+      "Blocked: shell execution unavailable, so the backup script could not be started.",
+    );
+    expect(
+      events.some(
+        (evt) =>
+          evt.jobId === job.id &&
+          evt.action === "finished" &&
+          evt.status === "error" &&
+          evt.error ===
+            "Blocked: shell execution unavailable, so the backup script could not be started.",
+      ),
+    ).toBe(true);
+  });
+
   it("#24355: one-shot job retries then succeeds", async () => {
     const scheduledAt = Date.parse("2026-02-06T10:00:00.000Z");
 
