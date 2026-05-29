@@ -400,16 +400,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
 
     const completedEvent = getEvent(events, 1);
     expect(completedEvent.type).toBe("model.call.completed");
-    expect(completedEvent.responseStreamBytes).toBe(
-      Buffer.byteLength(
-        JSON.stringify({ type: "text_delta", contentIndex: 0, delta: "a" }),
-        "utf8",
-      ) +
-        Buffer.byteLength(
-          JSON.stringify({ type: "text_delta", contentIndex: 0, delta: "bc" }),
-          "utf8",
-        ),
-    );
+    expect(completedEvent.responseStreamBytes).toBe(Buffer.byteLength("abc", "utf8"));
     expect(serializedPartial).not.toHaveBeenCalled();
   });
 
@@ -457,7 +448,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     const completedEvent = getEvent(events, 1);
     expect(completedEvent.type).toBe("model.call.completed");
     expect(completedEvent.responseStreamBytes).toBe(
-      Buffer.byteLength(JSON.stringify({ type: "text_delta", delta: "ok" }), "utf8"),
+      Buffer.byteLength("ok", "utf8"),
     );
   });
 
