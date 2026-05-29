@@ -400,6 +400,8 @@ describe("tavily tools", () => {
   it("accepts positive numeric timeout overrides and floors them", () => {
     expect(resolveTavilySearchTimeoutSeconds(19.9)).toBe(19);
     expect(resolveTavilyExtractTimeoutSeconds(42.7)).toBe(42);
+    expect(resolveTavilySearchTimeoutSeconds(0.5)).toBe(1);
+    expect(resolveTavilyExtractTimeoutSeconds(0.5)).toBe(1);
     expect(resolveTavilySearchTimeoutSeconds(0)).toBe(DEFAULT_TAVILY_SEARCH_TIMEOUT_SECONDS);
     expect(resolveTavilyExtractTimeoutSeconds(Number.NaN)).toBe(
       DEFAULT_TAVILY_EXTRACT_TIMEOUT_SECONDS,
