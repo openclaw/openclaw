@@ -138,6 +138,11 @@ describe("setupOfficialPluginInstalls", () => {
           hint: "OpenClaw diff viewer plugin",
         },
         {
+          value: "copilot",
+          label: "GitHub Copilot agent runtime",
+          hint: "OpenClaw GitHub Copilot agent runtime plugin",
+        },
+        {
           value: "google-meet",
           label: "Google Meet",
           hint: "OpenClaw Google Meet participant plugin",
@@ -156,6 +161,11 @@ describe("setupOfficialPluginInstalls", () => {
           value: "openshell",
           label: "OpenShell Sandbox",
           hint: "OpenClaw OpenShell sandbox backend",
+        },
+        {
+          value: "pixverse",
+          label: "PixVerse",
+          hint: "OpenClaw PixVerse video generation provider plugin",
         },
         {
           value: "voice-call",

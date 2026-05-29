@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as jsonFiles from "../infra/json-files.js";
+import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import {
   getSerializedSessionStore,
@@ -740,7 +741,7 @@ describe("Session Store Cache", () => {
     await updateSessionStoreEntry({
       storePath,
       sessionKey: "session:1",
-      update: () => ({ displayName: "After", updatedAt: 123 }),
+      update: async () => ({ displayName: "After", updatedAt: 123 }),
       takeCacheOwnership: true,
     });
 
@@ -769,7 +770,7 @@ describe("Session Store Cache", () => {
     await updateSessionStoreEntry({
       storePath,
       sessionKey: "session:1",
-      update: () => ({ displayName: "After" }),
+      update: async () => ({ displayName: "After" }),
       takeCacheOwnership: true,
     });
 
@@ -788,12 +789,20 @@ describe("Session Store Cache", () => {
     await updateSessionStoreEntry({
       storePath,
       sessionKey: "session:1",
-      update: () => ({
+      update: async () => ({
         displayName: "After",
         skillsSnapshot: {
           prompt: "short prompt",
           skills: [{ name: "alpha" }],
-          resolvedSkills: [{ name: "alpha", body: "transient" }],
+          resolvedSkills: [
+            createCanonicalFixtureSkill({
+              name: "alpha",
+              description: "alpha skill",
+              filePath: "/skills/alpha/SKILL.md",
+              baseDir: "/skills/alpha",
+              source: "transient",
+            }),
+          ],
         } as SessionEntry["skillsSnapshot"],
       }),
       takeCacheOwnership: true,
