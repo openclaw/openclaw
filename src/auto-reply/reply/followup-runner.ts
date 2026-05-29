@@ -9,11 +9,11 @@ import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-bu
 import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
+import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection-cli.js";
-import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import {
   buildAgentRuntimeDeliveryPlan,
   buildAgentRuntimeOutcomePlan,
@@ -50,6 +50,7 @@ import {
   refreshQueuedFollowupSession,
   type FollowupRun,
 } from "./queue.js";
+import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
@@ -57,7 +58,7 @@ import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-r
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
-type EmbeddedAgentRunResult = Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
+type EmbeddedAgentRunResult = Awaited<ReturnType<typeof runEmbeddedAgent>>;
 
 type FollowupAgentEvent = { stream: string; data: Record<string, unknown> };
 
@@ -266,7 +267,7 @@ export function createFollowupRunner(params: {
     payloads: ReplyPayload[],
     queued: FollowupRun,
     resolvedRun: { provider: string; modelId: string },
-    options: { mirror?: boolean } = {},
+    options: { kind?: ReplyDispatchKind; mirror?: boolean; runId?: string } = {},
   ) => {
     // Check if we should route to originating channel.
     const { originatingChannel, originatingTo } = queued;
@@ -298,6 +299,16 @@ export function createFollowupRunner(params: {
 
     let crossChannelRouteFailureNeedsNotice = false;
     let routedAnyCrossChannelPayloadToOrigin = false;
+    const replyKind = options.kind ?? "final";
+    const sendDispatcherPayload = async (payload: ReplyPayload) => {
+      if (!opts?.onBlockReply) {
+        return;
+      }
+      if (deliveryPlan.isSilentPayload(payload)) {
+        return;
+      }
+      await opts.onBlockReply(payload);
+    };
     for (const payload of sendablePayloads) {
       const providerRoute = deliveryPlan.resolveFollowupRoute({
         payload,
@@ -339,6 +350,8 @@ export function createFollowupRunner(params: {
           threadId: queued.originatingThreadId,
           cfg: runtimeConfig,
           mirror: options.mirror,
+          replyKind,
+          runId: options.runId,
         });
         if (!result.ok) {
           const errorMsg = result.error ?? "unknown error";
@@ -351,7 +364,7 @@ export function createFollowupRunner(params: {
           });
           if (opts?.onBlockReply) {
             if (origin && origin === provider) {
-              await opts.onBlockReply(payload);
+              await sendDispatcherPayload(payload);
             } else {
               crossChannelRouteFailureNeedsNotice = true;
             }
@@ -369,8 +382,8 @@ export function createFollowupRunner(params: {
             routedAnyCrossChannelPayloadToOrigin = true;
           }
         }
-      } else if (deliveryRoute === "dispatcher" && opts?.onBlockReply) {
-        await opts.onBlockReply(payload);
+      } else if (deliveryRoute === "dispatcher") {
+        await sendDispatcherPayload(payload);
       }
     }
     if (
@@ -378,7 +391,7 @@ export function createFollowupRunner(params: {
       !routedAnyCrossChannelPayloadToOrigin &&
       opts?.onBlockReply
     ) {
-      await opts.onBlockReply({
+      await sendDispatcherPayload({
         text:
           "Follow-up completed, but OpenClaw could not deliver it to the originating " +
           "channel. The reply content was not forwarded to this channel to avoid " +
@@ -532,7 +545,7 @@ export function createFollowupRunner(params: {
         });
       }
       let autoCompactionCount = 0;
-      let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
+      let runResult: Awaited<ReturnType<typeof runEmbeddedAgent>>;
       let fallbackProvider = run.provider;
       let fallbackModel = run.model;
       activeSessionEntry = await runPreflightCompactionIfNeeded({
@@ -681,19 +694,17 @@ export function createFollowupRunner(params: {
               entry: activeSessionEntry,
             });
             const cliExecutionProvider =
-              sessionRuntimeOverride === "pi"
-                ? provider
-                : ((sessionRuntimeOverride && isCliProvider(sessionRuntimeOverride, runtimeConfig)
-                    ? sessionRuntimeOverride
-                    : undefined) ??
-                  resolveCliRuntimeExecutionProvider({
-                    provider,
-                    cfg: runtimeConfig,
-                    agentId: run.agentId,
-                    modelId: model,
-                    authProfileId: selectedAuthProfile.authProfileId,
-                  }) ??
-                  provider);
+              (sessionRuntimeOverride && isCliProvider(sessionRuntimeOverride, runtimeConfig)
+                ? sessionRuntimeOverride
+                : undefined) ??
+              resolveCliRuntimeExecutionProvider({
+                provider,
+                cfg: runtimeConfig,
+                agentId: run.agentId,
+                modelId: model,
+                authProfileId: selectedAuthProfile.authProfileId,
+              }) ??
+              provider;
             let attemptCompactionCount = 0;
             const userTurnTranscriptRecorder =
               effectiveQueued.userTurnTranscriptRecorder ?? opts?.userTurnTranscriptRecorder;
@@ -719,6 +730,17 @@ export function createFollowupRunner(params: {
                   emitLifecycleTerminal: false,
                   onAgentRunStart: () => opts?.onAgentRunStart?.(runId),
                   suppressAssistantBridge: run.silentExpected,
+                  onToolEvent: async ({ name, phase, args }) => {
+                    await forwardFollowupProgressEvent({
+                      evt: {
+                        stream: "tool",
+                        data: { name, phase, args },
+                      },
+                      opts,
+                      detailMode: toolProgressDetail,
+                      emitChannelProgress: shouldEmitToolResultProgress(),
+                    });
+                  },
                   runParams: {
                     replyOperation,
                     sessionId: run.sessionId,
@@ -727,6 +749,7 @@ export function createFollowupRunner(params: {
                     trigger: opts?.isHeartbeat === true ? "heartbeat" : "user",
                     sessionFile: run.sessionFile,
                     workspaceDir: run.workspaceDir,
+                    cwd: run.cwd,
                     config: runtimeConfig,
                     prompt: queued.prompt,
                     transcriptPrompt: queued.transcriptPrompt,
@@ -792,7 +815,7 @@ export function createFollowupRunner(params: {
                 return result;
               }
               pendingDeferredCliTerminal = undefined;
-              const result = await runEmbeddedPiAgent({
+              const result = await runEmbeddedAgent({
                 allowGatewaySubagentBinding: true,
                 replyOperation,
                 sessionId: run.sessionId,
@@ -819,6 +842,7 @@ export function createFollowupRunner(params: {
                 sessionFile: run.sessionFile,
                 agentDir: run.agentDir,
                 workspaceDir: run.workspaceDir,
+                cwd: run.cwd,
                 config: runtimeConfig,
                 skillsSnapshot: run.skillsSnapshot,
                 prompt: queued.prompt,
@@ -880,7 +904,7 @@ export function createFollowupRunner(params: {
                         provider,
                         modelId: model,
                       },
-                      { mirror: false },
+                      { kind: "tool", mirror: false, runId },
                     );
                     if (payload.isError === true) {
                       markVisibleToolErrorProgress();
@@ -987,6 +1011,7 @@ export function createFollowupRunner(params: {
           cfg: runtimeConfig,
           usage,
           lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
+          compactionTokensAfter: runResult.meta?.agentMeta?.compactionTokensAfter,
           promptTokens,
           isHeartbeat: opts?.isHeartbeat === true,
           preserveUserFacingSessionModelState: preserveUserFacingSessionState,
@@ -1067,10 +1092,15 @@ export function createFollowupRunner(params: {
         return;
       }
 
-      await sendFollowupPayloads(deliveryPayloads, effectiveQueued, {
-        provider: providerUsed,
-        modelId: modelUsed,
-      });
+      await sendFollowupPayloads(
+        deliveryPayloads,
+        effectiveQueued,
+        {
+          provider: providerUsed,
+          modelId: modelUsed,
+        },
+        { runId },
+      );
     } finally {
       for (const end of endDeliveryCorrelations.toReversed()) {
         try {

@@ -7,6 +7,11 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import {
+  parseNonNegativeInt,
+  parsePositiveInt,
+  parsePositiveNumber,
+} from "./lib/numeric-options.mjs";
+import {
   buildGauntletPrebuildEnv,
   collectGatewayCpuObservations,
   collectMetricObservations,
@@ -219,30 +224,6 @@ function readOptionalNonNegativeIntEnv(name) {
   return raw ? parseNonNegativeInt(raw, name) : undefined;
 }
 
-function parsePositiveInt(raw, label) {
-  const value = Number(raw);
-  if (!Number.isInteger(value) || value < 1) {
-    throw new Error(`${label} must be a positive integer`);
-  }
-  return value;
-}
-
-function parseNonNegativeInt(raw, label) {
-  const value = Number(raw);
-  if (!Number.isInteger(value) || value < 0) {
-    throw new Error(`${label} must be a non-negative integer`);
-  }
-  return value;
-}
-
-function parsePositiveNumber(raw, label) {
-  const value = Number(raw);
-  if (!Number.isFinite(value) || value <= 0) {
-    throw new Error(`${label} must be a positive number`);
-  }
-  return value;
-}
-
 export function createGauntletPrebuildCommand(repoRoot) {
   return {
     command: process.execPath,
@@ -453,13 +434,18 @@ export function runMeasuredCommandLive(params) {
     let stderr = "";
     let stdoutBytes = 0;
     let stderrBytes = 0;
+    let stdoutRelayBytes = 0;
+    let stderrRelayBytes = 0;
     let stdoutTruncated = false;
     let stderrTruncated = false;
+    let stdoutRelayTruncated = false;
+    let stderrRelayTruncated = false;
     let spawnError = null;
     let timedOut = false;
     let settled = false;
     let forceKillTimeout = null;
     const maxBufferBytes = params.maxBufferBytes ?? COMMAND_OUTPUT_MAX_BUFFER_BYTES;
+    const maxRelayBytes = params.consoleOutputMaxBytes ?? maxBufferBytes;
     const timeoutKillGraceMs = params.timeoutKillGraceMs ?? 5_000;
     const spawnOptions = mode === "none" ? (params.spawnOptions ?? {}) : {};
     const useProcessGroup =
@@ -534,13 +520,47 @@ export function runMeasuredCommandLive(params) {
         appendTruncation();
       }
     };
-    const appendOutput = (streamName, chunk) => {
-      const text = chunk.toString("utf8");
-      if (streamName === "stdout") {
-        process.stdout.write(text);
-      } else {
-        process.stderr.write(text);
+    const relayOutput = (streamName, chunk) => {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      const currentBytes = streamName === "stdout" ? stdoutRelayBytes : stderrRelayBytes;
+      const alreadyTruncated =
+        streamName === "stdout" ? stdoutRelayTruncated : stderrRelayTruncated;
+      if (alreadyTruncated) {
+        return;
       }
+      const write =
+        streamName === "stdout"
+          ? process.stdout.write.bind(process.stdout)
+          : process.stderr.write.bind(process.stderr);
+      const markTruncated = () => {
+        write(`\n[${streamName} relay truncated after ${maxRelayBytes} bytes]\n`);
+        if (streamName === "stdout") {
+          stdoutRelayTruncated = true;
+        } else {
+          stderrRelayTruncated = true;
+        }
+      };
+      const remainingBytes = maxRelayBytes - currentBytes;
+      if (remainingBytes <= 0) {
+        markTruncated();
+        return;
+      }
+      const relayedBuffer =
+        buffer.length > remainingBytes ? buffer.subarray(0, remainingBytes) : buffer;
+      if (relayedBuffer.length > 0) {
+        write(relayedBuffer.toString("utf8"));
+      }
+      if (streamName === "stdout") {
+        stdoutRelayBytes += relayedBuffer.length;
+      } else {
+        stderrRelayBytes += relayedBuffer.length;
+      }
+      if (buffer.length > remainingBytes) {
+        markTruncated();
+      }
+    };
+    const appendOutput = (streamName, chunk) => {
+      relayOutput(streamName, chunk);
       appendCapturedOutput(streamName, chunk);
     };
     child.stdout?.on("data", (chunk) => appendOutput("stdout", chunk));

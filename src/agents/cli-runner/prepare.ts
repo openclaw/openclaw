@@ -21,6 +21,7 @@ import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-con
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { uniqueStrings } from "../../shared/string-normalization.js";
+import { resolveUserPath } from "../../utils.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { externalCliDiscoveryForProviderAuth } from "../auth-profiles/external-cli-discovery.js";
 import { loadAuthProfileStoreForRuntime } from "../auth-profiles/store.js";
@@ -42,19 +43,18 @@ import { claudeCliSessionTranscriptHasContent } from "../command/attempt-executi
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { resolveContextTokensForModel } from "../context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
-import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
 import {
   resolveBootstrapMaxChars,
   resolveBootstrapPromptTruncationWarningMode,
   resolveBootstrapTotalMaxChars,
-} from "../pi-embedded-helpers.js";
-import { resolvePromptBuildHookResult } from "../pi-embedded-runner/run/attempt.prompt-helpers.js";
-import { resolveAttemptPrependSystemContext } from "../pi-embedded-runner/run/attempt.prompt-helpers.js";
-import { composeSystemPromptWithHookContext } from "../pi-embedded-runner/run/attempt.thread-helpers.js";
-import { buildCurrentInboundPrompt } from "../pi-embedded-runner/run/runtime-context-prompt.js";
+} from "../embedded-agent-helpers.js";
+import { resolvePromptBuildHookResult } from "../embedded-agent-runner/run/attempt.prompt-helpers.js";
+import { resolveAttemptPrependSystemContext } from "../embedded-agent-runner/run/attempt.prompt-helpers.js";
+import { composeSystemPromptWithHookContext } from "../embedded-agent-runner/run/attempt.thread-helpers.js";
+import { buildCurrentInboundPrompt } from "../embedded-agent-runner/run/runtime-context-prompt.js";
+import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { resolveSkillsPromptForRun } from "../skills.js";
-import { resolveSystemPromptOverride } from "../system-prompt-override.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt } from "../system-prompt.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
@@ -89,7 +89,9 @@ const prepareDeps = {
 };
 
 const CLAUDE_CLI_CONTEXT_MODEL_ALIASES: Record<string, string> = {
-  opus: "claude-opus-4-7",
+  opus: "claude-opus-4-8",
+  "opus-4.8": "claude-opus-4-8",
+  "opus-4-8": "claude-opus-4-8",
   "opus-4.7": "claude-opus-4-7",
   "opus-4-7": "claude-opus-4-7",
   "opus-4.6": "claude-opus-4-6",
@@ -143,6 +145,8 @@ export async function prepareCliRunContext(
     );
   }
   const workspaceDir = resolvedWorkspace;
+  const cwd = params.cwd ? resolveUserPath(params.cwd) : workspaceDir;
+  const cwdHash = hashCliSessionText(cwd);
 
   const backendResolved = resolveCliBackendConfig(params.provider, params.config, {
     agentId: params.agentId,
@@ -382,6 +386,7 @@ export async function prepareCliRunContext(
           authEpochVersion: CLI_AUTH_EPOCH_VERSION,
           extraSystemPromptHash,
           promptToolNamesHash,
+          cwdHash,
           mcpConfigHash: preparedBackendFinal.mcpConfigHash,
           mcpResumeHash: preparedBackendFinal.mcpResumeHash,
         })
@@ -412,7 +417,7 @@ export async function prepareCliRunContext(
   const openClawReferences = await prepareDeps.resolveOpenClawReferencePaths({
     workspaceDir,
     argv1: process.argv[1],
-    cwd: process.cwd(),
+    cwd,
     moduleUrl: import.meta.url,
   });
   const skillsPrompt = resolveSkillsPromptForRun({
@@ -422,28 +427,24 @@ export async function prepareCliRunContext(
     agentId: sessionAgentId,
   });
   const systemPromptSkillsPrompt = claudeSkillsPlugin.args.length > 0 ? "" : skillsPrompt;
-  const builtSystemPrompt =
-    resolveSystemPromptOverride({
-      config: params.config,
-      agentId: sessionAgentId,
-    }) ??
-    buildCliAgentSystemPrompt({
-      workspaceDir,
-      config: params.config,
-      defaultThinkLevel: params.thinkLevel,
-      extraSystemPrompt,
-      sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-      silentReplyPromptMode: params.silentReplyPromptMode,
-      ownerNumbers: params.ownerNumbers,
-      heartbeatPrompt,
-      docsPath: openClawReferences.docsPath ?? undefined,
-      sourcePath: openClawReferences.sourcePath ?? undefined,
-      skillsPrompt: systemPromptSkillsPrompt,
-      tools: promptTools,
-      contextFiles,
-      modelDisplay,
-      agentId: sessionAgentId,
-    });
+  const builtSystemPrompt = buildCliAgentSystemPrompt({
+    workspaceDir,
+    cwd,
+    config: params.config,
+    defaultThinkLevel: params.thinkLevel,
+    extraSystemPrompt,
+    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+    silentReplyPromptMode: params.silentReplyPromptMode,
+    ownerNumbers: params.ownerNumbers,
+    heartbeatPrompt,
+    docsPath: openClawReferences.docsPath ?? undefined,
+    sourcePath: openClawReferences.sourcePath ?? undefined,
+    skillsPrompt: systemPromptSkillsPrompt,
+    tools: promptTools,
+    contextFiles,
+    modelDisplay,
+    agentId: sessionAgentId,
+  });
   const transformedSystemPrompt =
     backendResolved.transformSystemPrompt?.({
       config: params.config,
@@ -600,6 +601,7 @@ export async function prepareCliRunContext(
       effectiveAuthProfileId,
       started,
       workspaceDir,
+      cwd,
       backendResolved,
       preparedBackend: preparedBackendFinal,
       reusableCliSession,
@@ -620,6 +622,7 @@ export async function prepareCliRunContext(
       authEpochVersion: CLI_AUTH_EPOCH_VERSION,
       extraSystemPromptHash,
       promptToolNamesHash,
+      cwdHash,
     };
   } catch (err) {
     try {

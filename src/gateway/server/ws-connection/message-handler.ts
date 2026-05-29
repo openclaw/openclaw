@@ -3,6 +3,37 @@ import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import type { RawData, WebSocket } from "ws";
+import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../../../packages/gateway-protocol/src/client-info.js";
+import {
+  buildPairingConnectCloseReason,
+  buildPairingConnectErrorDetails,
+  buildPairingConnectErrorMessage,
+  ConnectErrorDetailCodes,
+  type ConnectPairingRequiredReason,
+  resolveDeviceAuthConnectErrorDetailCode,
+  resolveAuthConnectErrorDetailCode,
+} from "../../../../packages/gateway-protocol/src/connect-error-details.js";
+import {
+  type ConnectParams,
+  ErrorCodes,
+  type ErrorShape,
+  errorShape,
+  formatValidationErrors,
+  MIN_PROBE_PROTOCOL_VERSION,
+  PROTOCOL_VERSION,
+  validateConnectParams,
+  validateRequestFrame,
+} from "../../../../packages/gateway-protocol/src/index.js";
+import {
+  gatewayStartupUnavailableDetails,
+  GATEWAY_STARTUP_CLOSE_CODE,
+  GATEWAY_STARTUP_CLOSE_REASON,
+  GATEWAY_STARTUP_PENDING_CLOSE_CAUSE,
+  GATEWAY_STARTUP_RETRY_AFTER_MS,
+} from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { getRuntimeConfig } from "../../../config/io.js";
 import { resolveStateDir } from "../../../config/paths.js";
 import {
@@ -88,34 +119,6 @@ import {
   resolvePluginNodeCapabilityTtlMs,
   setClientPluginNodeCapability,
 } from "../../plugin-node-capability.js";
-import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../protocol/client-info.js";
-import {
-  buildPairingConnectCloseReason,
-  buildPairingConnectErrorDetails,
-  buildPairingConnectErrorMessage,
-  ConnectErrorDetailCodes,
-  type ConnectPairingRequiredReason,
-  resolveDeviceAuthConnectErrorDetailCode,
-  resolveAuthConnectErrorDetailCode,
-} from "../../protocol/connect-error-details.js";
-import {
-  type ConnectParams,
-  ErrorCodes,
-  type ErrorShape,
-  errorShape,
-  formatValidationErrors,
-  MIN_PROBE_PROTOCOL_VERSION,
-  PROTOCOL_VERSION,
-  validateConnectParams,
-  validateRequestFrame,
-} from "../../protocol/index.js";
-import {
-  gatewayStartupUnavailableDetails,
-  GATEWAY_STARTUP_CLOSE_CODE,
-  GATEWAY_STARTUP_CLOSE_REASON,
-  GATEWAY_STARTUP_PENDING_CLOSE_CAUSE,
-  GATEWAY_STARTUP_RETRY_AFTER_MS,
-} from "../../protocol/startup-unavailable.js";
 import { parseGatewayRole } from "../../role-policy.js";
 import {
   MAX_BUFFERED_BYTES,
@@ -152,6 +155,11 @@ import {
   shouldAllowSilentLocalPairing,
   shouldSkipLocalBackendSelfPairing,
 } from "./handshake-auth-helpers.js";
+import {
+  buildHandshakeAuthLogKey,
+  HandshakeAuthLogLimiter,
+  shouldLimitMissingCredentialAuthLog,
+} from "./handshake-auth-log-limiter.js";
 import { isUnauthorizedRoleError, UnauthorizedFloodGuard } from "./unauthorized-flood-guard.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
@@ -162,6 +170,7 @@ const DEVICE_CREDENTIAL_INVALIDATING_METHODS = new Set([
   "device.token.rotate",
   "device.token.revoke",
 ]);
+const unauthorizedHandshakeLogLimiter = new HandshakeAuthLogLimiter();
 
 /** Match production release versions (YYYY.M.D or YYYY.M.D-beta.N). */
 const RELEASED_VERSION_RE = /^\d{4}\.\d+\.\d+/;
@@ -759,9 +768,29 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             scopeCount: scopes.length,
             hasDeviceIdentity: Boolean(device),
           });
-          logWsControl.warn(
-            `unauthorized conn=${connId} peer=${formatForLog(peerLabel)} remote=${remoteAddr ?? "?"} client=${formatForLog(clientLabel)} ${connectParams.client.mode} v${formatForLog(connectParams.client.version)} role=${role} scopes=${scopes.length} auth=${authProvided} device=${device ? "yes" : "no"} platform=${formatForLog(connectParams.client.platform)} instance=${formatForLog(connectParams.client.instanceId ?? "n/a")} host=${formatForLog(requestHost ?? "n/a")} origin=${formatForLog(requestOrigin ?? "n/a")} ua=${formatForLog(requestUserAgent ?? "n/a")} reason=${failedAuth.reason ?? "unknown"}`,
-          );
+          const authLogDecision = shouldLimitMissingCredentialAuthLog({
+            reason: failedAuth.reason,
+            authProvided,
+          })
+            ? unauthorizedHandshakeLogLimiter.register(
+                buildHandshakeAuthLogKey({
+                  reason: failedAuth.reason,
+                  remoteAddr,
+                  client: clientLabel,
+                  mode: connectParams.client.mode,
+                  authProvided,
+                }),
+              )
+            : { shouldLog: true, suppressedSinceLastLog: 0 };
+          if (authLogDecision.shouldLog) {
+            const suppressedText =
+              authLogDecision.suppressedSinceLastLog > 0
+                ? ` suppressed=${authLogDecision.suppressedSinceLastLog}`
+                : "";
+            logWsControl.warn(
+              `unauthorized conn=${connId} peer=${formatForLog(peerLabel)} remote=${remoteAddr ?? "?"} client=${formatForLog(clientLabel)} ${connectParams.client.mode} v${formatForLog(connectParams.client.version)} role=${role} scopes=${scopes.length} auth=${authProvided} device=${device ? "yes" : "no"} platform=${formatForLog(connectParams.client.platform)} instance=${formatForLog(connectParams.client.instanceId ?? "n/a")} host=${formatForLog(requestHost ?? "n/a")} origin=${formatForLog(requestOrigin ?? "n/a")} ua=${formatForLog(requestUserAgent ?? "n/a")} reason=${failedAuth.reason ?? "unknown"}${suppressedText}`,
+            );
+          }
           const authMessage = formatGatewayAuthFailureMessage({
             authMode: resolvedAuth.mode,
             authProvided,
@@ -941,7 +970,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           }
         }
 
-        ({ authResult, authOk, authMethod } = await resolveConnectAuthDecision({
+        const authDecision = await resolveConnectAuthDecision({
           state: {
             authResult,
             authOk,
@@ -967,8 +996,15 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
               role,
               scopes,
             }),
-          verifyDeviceToken,
-        }));
+          verifyDeviceToken: async (params) =>
+            await verifyDeviceToken({
+              ...params,
+              requiredSharedGatewaySessionGeneration: getRequiredSharedGatewaySessionGeneration?.(),
+            }),
+        });
+        ({ authResult, authOk, authMethod } = authDecision);
+        const deviceTokenSharedGatewaySessionGeneration =
+          authDecision.deviceTokenSharedGatewaySessionGeneration;
         pairingLocality = resolvePairingLocality({
           connectParams,
           isLocalClient,
@@ -991,16 +1027,21 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           rejectUnauthorized(authResult);
           return;
         }
-        if (authMethod === "token" || authMethod === "password" || authMethod === "trusted-proxy") {
-          const sharedGatewaySessionGeneration = resolveSharedGatewaySessionGeneration(
-            resolvedAuth,
-            trustedProxies,
-          );
+        const usesSharedGatewayAuth =
+          authMethod === "token" || authMethod === "password" || authMethod === "trusted-proxy";
+        const sharedGatewaySessionGeneration = usesSharedGatewayAuth
+          ? resolveSharedGatewaySessionGeneration(resolvedAuth, trustedProxies)
+          : undefined;
+        const sessionUsesSharedGatewayAuth =
+          usesSharedGatewayAuth || deviceTokenSharedGatewaySessionGeneration !== undefined;
+        const sessionSharedGatewaySessionGeneration =
+          sharedGatewaySessionGeneration ?? deviceTokenSharedGatewaySessionGeneration;
+        if (sessionUsesSharedGatewayAuth) {
           const requiredSharedGatewaySessionGeneration =
             getRequiredSharedGatewaySessionGeneration?.();
           if (
             requiredSharedGatewaySessionGeneration !== undefined &&
-            sharedGatewaySessionGeneration !== requiredSharedGatewaySessionGeneration
+            sessionSharedGatewaySessionGeneration !== requiredSharedGatewaySessionGeneration
           ) {
             setCloseCause("gateway-auth-rotated", {
               authGenerationStale: true,
@@ -1466,9 +1507,23 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         }
 
         const shouldIssueDeviceToken = !trustedProxyAuthOk;
+        const sharedGatewayAuthIssuer =
+          sessionSharedGatewaySessionGeneration &&
+          (deviceTokenSharedGatewaySessionGeneration !== undefined ||
+            (usesSharedGatewayAuth && (isBrowserOperatorUi || isWebchat)))
+            ? {
+                kind: "shared-gateway-auth" as const,
+                generation: sessionSharedGatewaySessionGeneration,
+              }
+            : undefined;
         const deviceToken =
           shouldIssueDeviceToken && device && hasServerApprovedDeviceTokenBaseline
-            ? await ensureDeviceToken({ deviceId: device.id, role, scopes })
+            ? await ensureDeviceToken({
+                deviceId: device.id,
+                role,
+                scopes,
+                issuer: sharedGatewayAuthIssuer,
+              })
             : null;
         const bootstrapDeviceTokens: Array<{
           deviceToken: string;
@@ -1593,11 +1648,6 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             });
           }
         }
-        const usesSharedGatewayAuth =
-          authMethod === "token" || authMethod === "password" || authMethod === "trusted-proxy";
-        const sharedGatewaySessionGeneration = usesSharedGatewayAuth
-          ? resolveSharedGatewaySessionGeneration(resolvedAuth, trustedProxies)
-          : undefined;
         const isTrustedApprovalRuntime =
           scopes.includes(APPROVALS_SCOPE) &&
           connectParams.client.id === GATEWAY_CLIENT_IDS.GATEWAY_CLIENT &&
@@ -1609,8 +1659,8 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           connect: connectParams,
           connId,
           isDeviceTokenAuth: authMethod === "device-token",
-          usesSharedGatewayAuth,
-          sharedGatewaySessionGeneration,
+          usesSharedGatewayAuth: sessionUsesSharedGatewayAuth,
+          sharedGatewaySessionGeneration: sessionSharedGatewaySessionGeneration,
           presenceKey,
           clientIp: reportedClientIp,
           ...(isTrustedApprovalRuntime ? { internal: { approvalRuntime: true } } : {}),

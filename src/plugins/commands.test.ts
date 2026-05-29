@@ -385,7 +385,7 @@ describe("registerPluginCommand", () => {
       expected: {
         ok: false,
         error:
-          "Agent prompt guidance 1 surface 1 must be one of: pi_main, codex_app_server, cli_backend, acp_backend, subagent",
+          "Agent prompt guidance 1 surface 1 must be one of: openclaw_main, pi_main, codex_app_server, cli_backend, acp_backend, subagent",
       },
     },
     {
@@ -465,7 +465,7 @@ describe("registerPluginCommand", () => {
         "  Use /demo_cmd everywhere.  ",
         {
           text: "  Use /demo_cmd for main agent routing.  ",
-          surfaces: ["pi_main"],
+          surfaces: ["openclaw_main"],
         },
         {
           text: "Use /demo_cmd for subagents.",
@@ -480,6 +480,10 @@ describe("registerPluginCommand", () => {
       "Use /demo_cmd everywhere.",
       "Use /demo_cmd for main agent routing.",
       "Use /demo_cmd for subagents.",
+    ]);
+    expect(listRegisteredPluginAgentPromptGuidance({ surface: "openclaw_main" })).toEqual([
+      "Use /demo_cmd everywhere.",
+      "Use /demo_cmd for main agent routing.",
     ]);
     expect(listRegisteredPluginAgentPromptGuidance({ surface: "pi_main" })).toEqual([
       "Use /demo_cmd everywhere.",
@@ -731,6 +735,109 @@ describe("registerPluginCommand", () => {
     });
 
     expect(observedOwnerStatus).toBeUndefined();
+  });
+
+  it("ignores owner status opt-in from direct plugin command registration", async () => {
+    let observedOwnerStatus: boolean | undefined;
+    registerPluginCommand("demo-plugin", {
+      name: "voice",
+      description: "Voice command",
+      exposeSenderIsOwner: true,
+      handler: async (ctx) => {
+        observedOwnerStatus = ctx.senderIsOwner;
+        return { text: "ok" };
+      },
+    });
+    const match = requirePluginCommandMatch("/voice");
+
+    await executePluginCommand({
+      command: match.command,
+      channel: "telegram",
+      isAuthorizedSender: true,
+      senderIsOwner: true,
+      commandBody: "/voice",
+      config: {},
+    });
+
+    expect(observedOwnerStatus).toBeUndefined();
+  });
+
+  it("ignores owner status opt-in from external plugin registry commands", async () => {
+    const pluginRegistry = createPluginRegistry({
+      logger: {
+        info() {},
+        warn() {},
+        error() {},
+        debug() {},
+      },
+      runtime: {} as PluginRuntime,
+      activateGlobalSideEffects: true,
+    });
+    let observedOwnerStatus: boolean | undefined;
+    pluginRegistry.registerCommand(
+      {
+        ...createBundledPluginRecord("external-plugin"),
+        origin: "workspace",
+        source: "/workspace/external-plugin/index.ts",
+        rootDir: "/workspace/external-plugin",
+      },
+      {
+        name: "external",
+        description: "External command",
+        exposeSenderIsOwner: true,
+        handler: async (ctx) => {
+          observedOwnerStatus = ctx.senderIsOwner;
+          return { text: "ok" };
+        },
+      },
+    );
+    const match = requirePluginCommandMatch("/external");
+
+    await executePluginCommand({
+      command: match.command,
+      channel: "telegram",
+      isAuthorizedSender: true,
+      senderIsOwner: true,
+      commandBody: "/external",
+      config: {},
+    });
+
+    expect(observedOwnerStatus).toBeUndefined();
+  });
+
+  it("exposes owner status to trusted bundled plugin commands that opt in", async () => {
+    const pluginRegistry = createPluginRegistry({
+      logger: {
+        info() {},
+        warn() {},
+        error() {},
+        debug() {},
+      },
+      runtime: {} as PluginRuntime,
+      activateGlobalSideEffects: true,
+    });
+    let observedOwnerStatus: boolean | undefined;
+    pluginRegistry.registerCommand(createBundledPluginRecord("phone-control"), {
+      name: "phone",
+      description: "Phone command",
+      exposeSenderIsOwner: true,
+      handler: async (ctx) => {
+        observedOwnerStatus = ctx.senderIsOwner;
+        return { text: "ok" };
+      },
+    });
+    const match = requirePluginCommandMatch("/phone");
+
+    await executePluginCommand({
+      command: match.command,
+      channel: "telegram",
+      isAuthorizedSender: true,
+      senderIsOwner: true,
+      commandBody: "/phone",
+      config: {},
+    });
+
+    expect(observedOwnerStatus).toBe(true);
   });
 
   it("allows command owners to run scoped plugin commands without gateway scopes", async () => {

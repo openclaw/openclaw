@@ -55,7 +55,7 @@ import {
 
 const DEFAULT_VITEST_CONFIG = "test/vitest/vitest.unit.config.ts";
 const AGENTS_CORE_VITEST_CONFIG = "test/vitest/vitest.agents-core.config.ts";
-const AGENTS_PI_EMBEDDED_VITEST_CONFIG = "test/vitest/vitest.agents-pi-embedded.config.ts";
+const AGENTS_EMBEDDED_AGENT_VITEST_CONFIG = "test/vitest/vitest.agents-embedded-agent.config.ts";
 const AGENTS_SUPPORT_VITEST_CONFIG = "test/vitest/vitest.agents-support.config.ts";
 const AGENTS_TOOLS_VITEST_CONFIG = "test/vitest/vitest.agents-tools.config.ts";
 const AGENTS_VITEST_CONFIG = "test/vitest/vitest.agents.config.ts";
@@ -140,7 +140,7 @@ const FULL_SUITE_CONFIG_WEIGHT = new Map([
   [GATEWAY_METHODS_VITEST_CONFIG, 177],
   [COMMANDS_VITEST_CONFIG, 175],
   [AGENTS_CORE_VITEST_CONFIG, 170],
-  [AGENTS_PI_EMBEDDED_VITEST_CONFIG, 169],
+  [AGENTS_EMBEDDED_AGENT_VITEST_CONFIG, 169],
   [AGENTS_SUPPORT_VITEST_CONFIG, 168],
   [AGENTS_TOOLS_VITEST_CONFIG, 167],
   [EXTENSION_CODEX_VITEST_CONFIG, 168],
@@ -181,6 +181,7 @@ const FULL_SUITE_CONFIG_WEIGHT = new Map([
   [DAEMON_VITEST_CONFIG, 36],
   [BOUNDARY_VITEST_CONFIG, 34],
   ["test/vitest/vitest.tooling.config.ts", 32],
+  ["test/vitest/vitest.tooling-isolated.config.ts", 1],
   [UNIT_SECURITY_VITEST_CONFIG, 30],
   [UNIT_SUPPORT_VITEST_CONFIG, 28],
   [EXTENSION_ZALO_VITEST_CONFIG, 24],
@@ -234,7 +235,9 @@ const RUNTIME_CONFIG_VITEST_CONFIG = "test/vitest/vitest.runtime-config.config.t
 const SECRETS_VITEST_CONFIG = "test/vitest/vitest.secrets.config.ts";
 const SHARED_CORE_VITEST_CONFIG = "test/vitest/vitest.shared-core.config.ts";
 const TASKS_VITEST_CONFIG = "test/vitest/vitest.tasks.config.ts";
+const TOOLING_ISOLATED_VITEST_CONFIG = "test/vitest/vitest.tooling-isolated.config.ts";
 const TOOLING_VITEST_CONFIG = "test/vitest/vitest.tooling.config.ts";
+const TOOLING_ISOLATED_TEST_TARGET = "test/scripts/openclaw-e2e-instance.test.ts";
 const TUI_VITEST_CONFIG = "test/vitest/vitest.tui.config.ts";
 const TUI_PTY_VITEST_CONFIG = "test/vitest/vitest.tui-pty.config.ts";
 const UI_VITEST_CONFIG = "test/vitest/vitest.ui.config.ts";
@@ -248,12 +251,11 @@ const CHANGED_ARGS_PATTERN = /^--changed(?:=(.+))?$/u;
 const VITEST_CONFIG_BY_KIND = {
   acp: ACP_VITEST_CONFIG,
   agentCore: AGENTS_CORE_VITEST_CONFIG,
-  agentPiEmbedded: AGENTS_PI_EMBEDDED_VITEST_CONFIG,
+  agentEmbedded: AGENTS_EMBEDDED_AGENT_VITEST_CONFIG,
   agentSupport: AGENTS_SUPPORT_VITEST_CONFIG,
   agentTools: AGENTS_TOOLS_VITEST_CONFIG,
   agent: AGENTS_VITEST_CONFIG,
   agentsCore: AGENTS_CORE_VITEST_CONFIG,
-  agentsPiEmbedded: AGENTS_PI_EMBEDDED_VITEST_CONFIG,
   agentsSupport: AGENTS_SUPPORT_VITEST_CONFIG,
   agentsTools: AGENTS_TOOLS_VITEST_CONFIG,
   autoReplyCore: AUTO_REPLY_CORE_VITEST_CONFIG,
@@ -326,6 +328,7 @@ const VITEST_CONFIG_BY_KIND = {
   secrets: SECRETS_VITEST_CONFIG,
   sharedCore: SHARED_CORE_VITEST_CONFIG,
   tasks: TASKS_VITEST_CONFIG,
+  toolingIsolated: TOOLING_ISOLATED_VITEST_CONFIG,
   tooling: TOOLING_VITEST_CONFIG,
   tui: TUI_VITEST_CONFIG,
   tuiPty: TUI_PTY_VITEST_CONFIG,
@@ -358,6 +361,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/check-changed.mjs", ["test/scripts/changed-lanes.test.ts"]],
   ["scripts/check-deadcode-unused-files.mjs", ["test/scripts/check-deadcode-unused-files.test.ts"]],
   ["scripts/ci-docker-pull-retry.sh", ["test/scripts/ci-docker-pull-retry.test.ts"]],
+  ["scripts/control-ui-i18n.ts", ["test/scripts/control-ui-i18n.test.ts"]],
   [
     "scripts/deadcode-unused-files.allowlist.mjs",
     ["test/scripts/check-deadcode-unused-files.test.ts"],
@@ -393,6 +397,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/docker-e2e-timings.mjs", ["test/scripts/docker-e2e-helper-cli.test.ts"]],
   ["scripts/kova-ci-summary.mjs", ["test/scripts/kova-ci-summary.test.ts"]],
   ["scripts/test-extension-batch.mjs", ["test/scripts/test-extension.test.ts"]],
+  ["scripts/zai-fallback-repro.ts", ["test/scripts/zai-fallback-repro.test.ts"]],
   ["scripts/lib/extension-test-plan.mjs", ["test/scripts/test-extension.test.ts"]],
   ["scripts/lib/vitest-batch-runner.mjs", ["test/scripts/test-extension.test.ts"]],
   ["scripts/lib/ci-node-test-plan.mjs", ["test/scripts/ci-node-test-plan.test.ts"]],
@@ -418,6 +423,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/test-projects.test-support.mjs", ["test/scripts/test-projects.test.ts"]],
   ["scripts/bundled-plugin-assets.mjs", ["test/scripts/bundled-plugin-assets.test.ts"]],
   ["scripts/bundle-a2ui.mjs", ["test/scripts/bundled-plugin-assets.test.ts"]],
+  ["scripts/build-diffs-viewer-runtime.mjs", ["test/scripts/build-diffs-viewer-runtime.test.ts"]],
   ["extensions/canvas/scripts/bundle-a2ui.mjs", ["extensions/canvas/scripts/bundle-a2ui.test.ts"]],
   ["extensions/canvas/scripts/copy-a2ui.mjs", ["extensions/canvas/scripts/copy-a2ui.test.ts"]],
 ]);
@@ -429,6 +435,7 @@ const TOOLING_TEST_TARGETS = new Map([
     ["test/scripts/check-deadcode-unused-files.test.ts"],
   ],
   ["test/scripts/ci-docker-pull-retry.test.ts", ["test/scripts/ci-docker-pull-retry.test.ts"]],
+  ["test/scripts/control-ui-i18n.test.ts", ["test/scripts/control-ui-i18n.test.ts"]],
   ["test/scripts/docker-build-helper.test.ts", ["test/scripts/docker-build-helper.test.ts"]],
   ["test/scripts/docker-e2e-helper-cli.test.ts", ["test/scripts/docker-e2e-helper-cli.test.ts"]],
   ["test/scripts/kova-ci-summary.test.ts", ["test/scripts/kova-ci-summary.test.ts"]],
@@ -456,6 +463,7 @@ const TOOLING_TEST_TARGETS = new Map([
     "test/scripts/vitest-local-scheduling.test.ts",
     ["test/scripts/vitest-local-scheduling.test.ts"],
   ],
+  ["test/scripts/zai-fallback-repro.test.ts", ["test/scripts/zai-fallback-repro.test.ts"]],
 ]);
 const GROUP_VISIBLE_REPLY_TEST_TARGETS = [
   "src/auto-reply/reply/dispatch-acp.test.ts",
@@ -1580,6 +1588,9 @@ function classifyTarget(arg, cwd) {
   if (isBoundaryTestFile(relative)) {
     return "boundary";
   }
+  if (relative === TOOLING_ISOLATED_TEST_TARGET) {
+    return "toolingIsolated";
+  }
   if (
     relative.startsWith("test/") ||
     relative.startsWith("src/scripts/") ||
@@ -1768,6 +1779,21 @@ export function buildVitestRunPlans(
     current.push(targetArg);
     groupedTargets.set(kind, current);
   }
+  const toolingTargets = groupedTargets.get("tooling") ?? [];
+  if (
+    !watchMode &&
+    toolingTargets.some((targetArg) =>
+      includePatternMatchesAnyFile(toScopedIncludePattern(targetArg, cwd), [
+        TOOLING_ISOLATED_TEST_TARGET,
+      ]),
+    )
+  ) {
+    const current = groupedTargets.get("toolingIsolated") ?? [];
+    if (!current.includes(TOOLING_ISOLATED_TEST_TARGET)) {
+      current.push(TOOLING_ISOLATED_TEST_TARGET);
+      groupedTargets.set("toolingIsolated", current);
+    }
+  }
 
   if (watchMode && groupedTargets.size > 1) {
     throw new Error(
@@ -1780,6 +1806,7 @@ export function buildVitestRunPlans(
     "unitFast",
     "default",
     "boundary",
+    "toolingIsolated",
     "tooling",
     "contractsChannelSurface",
     "contractsChannelConfig",
@@ -1817,12 +1844,11 @@ export function buildVitestRunPlans(
     "autoReplyReply",
     "autoReplyTopLevel",
     "agentCore",
-    "agentPiEmbedded",
+    "agentEmbedded",
     "agentSupport",
     "agentTools",
     "agent",
     "agentsCore",
-    "agentsPiEmbedded",
     "agentsSupport",
     "agentsTools",
     "plugin",
@@ -2150,7 +2176,8 @@ export function shouldAcquireLocalHeavyCheckLock(runSpecs, env = process.env) {
 
   return !(
     runSpecs.length === 1 &&
-    runSpecs[0]?.config === TOOLING_VITEST_CONFIG &&
+    (runSpecs[0]?.config === TOOLING_VITEST_CONFIG ||
+      runSpecs[0]?.config === TOOLING_ISOLATED_VITEST_CONFIG) &&
     runSpecs[0]?.watchMode === false &&
     Array.isArray(runSpecs[0]?.includePatterns) &&
     runSpecs[0].includePatterns.length > 0
