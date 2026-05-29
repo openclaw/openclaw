@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ExecAllowlistEntry } from "../infra/exec-approvals.types.js";
 import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../utils/timer-delay.js";
 
 type StrictInlineEvalBoundary =
@@ -74,7 +75,7 @@ const requiresExecApprovalMock = vi.hoisted(() => vi.fn(() => true));
 const hasDurableExecApprovalMock = vi.hoisted(() => vi.fn(() => false));
 const resolveExecHostApprovalContextMock = vi.hoisted(() =>
   vi.fn(() => ({
-    approvals: { allowlist: [], file: { version: 1, agents: {} } },
+    approvals: { allowlist: [] as ExecAllowlistEntry[], file: { version: 1, agents: {} } },
     hostSecurity: "full",
     hostAsk: "off",
     askFallback: "deny",
