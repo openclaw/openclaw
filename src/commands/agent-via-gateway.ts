@@ -146,7 +146,7 @@ function loadReplyPayloadModule() {
   return replyPayloadModulePromise;
 }
 
-export const agentViaGatewayTesting = {
+const testing = {
   resetLazyImportsForTests(): void {
     embeddedAgentCommandPromise = undefined;
     agentSessionModulePromise = undefined;
@@ -163,6 +163,8 @@ export const agentViaGatewayTesting = {
     gatewayAbortRetryDelaysMsForTests = delays;
   },
 };
+
+export { testing as __testing };
 
 function protectJsonStdout(opts: Pick<AgentCliOpts, "json">): void {
   if (opts.json === true) {
