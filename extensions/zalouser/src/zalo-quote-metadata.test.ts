@@ -17,7 +17,7 @@ describe("Zalo quote metadata extraction (#86851)", () => {
             msg: "Previous bot message content",
           },
         },
-      } as Parameters<typeof zaloTesting.toInboundMessage>[0],
+      } as unknown as Parameters<typeof zaloTesting.toInboundMessage>[0],
       "555444333",
     );
 
@@ -36,7 +36,7 @@ describe("Zalo quote metadata extraction (#86851)", () => {
         content: "plain message",
         ts: 1_764_000_000_000,
       },
-    } as Parameters<typeof zaloTesting.toInboundMessage>[0]);
+    } as unknown as Parameters<typeof zaloTesting.toInboundMessage>[0]);
 
     expect(message?.quotedGlobalMsgId).toBeUndefined();
     expect(message?.quotedOwnerId).toBeUndefined();
