@@ -182,6 +182,12 @@ Meeting scheduling should check existing calendar events and relevant email thre
 
 When a public short post points to a long-form news/feed article, it should link to the exact verified article anchor. The model should verify the full per-article anchor in the live page HTML before posting. If character limits are tight, shorten prose or hashtags; do not truncate, guess, or replace the article anchor with a feed-top URL.
 
+## GitHub publication preflight rule
+
+For Zorg/OpenClaw-owned GitHub publication, release, or documentation jobs, the assistant must reuse the repository's known working path before pushing. For `Zorg_MemoryDB`, use a clean current `origin/main` worktree when the live workspace is divergent, verify `package.json` and `pnpm-lock.yaml` agree, run `corepack pnpm install --frozen-lockfile` when package metadata is present or touched, and run `corepack pnpm check:docs` before docs/release pushes.
+
+After pushing, verify the pushed commit with `gh run list/view --repo StefRush2099/Zorg_MemoryDB`. Do not report publication complete while relevant required GitHub Actions are failing, queued, or still in progress; inspect failed logs and repair only the exact failed scope.
+
 <!-- SCORCHED_MEMORY_RECALL_RULE -->
 
 ## Absolute Priority 0: Exhaustive Memory Before Response
