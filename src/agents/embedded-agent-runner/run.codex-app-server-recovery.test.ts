@@ -170,6 +170,38 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
   });
 
+  it("returns a timeout payload after a replay-safe turn/completed idle timeout retry is exhausted", async () => {
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        codexTurnCompletionIdleTimeoutAttempt({
+          aborted: true,
+          timedOut: true,
+        }),
+      )
+      .mockResolvedValueOnce(
+        codexTurnCompletionIdleTimeoutAttempt({
+          aborted: true,
+          timedOut: true,
+        }),
+      );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "codex",
+      model: "gpt-5.5",
+      runId: "run-codex-turn-completion-idle-timeout-retry-exhausted",
+    });
+
+    expect(result.payloads?.[0]).toMatchObject({
+      isError: true,
+      text: "Request timed out before a response was generated. Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
+    });
+    expect(result.meta.timeoutPhase).toBe("provider");
+    expect(result.meta.providerStarted).toBe(true);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
+  });
+
   it("does not hand Codex app-server idle timeouts to model fallback", async () => {
     mockedClassifyFailoverReason.mockReturnValue("timeout");
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(

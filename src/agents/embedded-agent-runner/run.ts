@@ -2381,6 +2381,7 @@ export async function runEmbeddedAgent(
           const hasRecoverableCodexAppServerTimeoutOutcome = Boolean(
             attempt.codexAppServerFailure && attempt.promptTimeoutOutcome,
           );
+          let shouldSurfaceRetryExhaustedCodexCompletionTimeout = false;
           if (promptError && !aborted && promptErrorSource !== "compaction") {
             // Retry replay-safe Codex app-server failures.
             const codexAppServerRecoveryRetry = resolveCodexAppServerRecoveryRetry({
@@ -2397,7 +2398,16 @@ export async function runEmbeddedAgent(
               );
               continue;
             }
-            if (attempt.codexAppServerFailure && !hasRecoverableCodexAppServerTimeoutOutcome) {
+            // A second completion-idle timeout has used its replay chance; surface the timeout.
+            shouldSurfaceRetryExhaustedCodexCompletionTimeout =
+              codexAppServerRecoveryRetry.reason === "retry_exhausted" &&
+              attempt.codexAppServerFailure?.kind === "turn_completion_idle_timeout" &&
+              attempt.timedOut;
+            if (
+              attempt.codexAppServerFailure &&
+              !hasRecoverableCodexAppServerTimeoutOutcome &&
+              !shouldSurfaceRetryExhaustedCodexCompletionTimeout
+            ) {
               throw promptError;
             }
           }
@@ -2406,7 +2416,8 @@ export async function runEmbeddedAgent(
             promptError &&
             !aborted &&
             promptErrorSource !== "compaction" &&
-            !hasRecoverableCodexAppServerTimeoutOutcome
+            !hasRecoverableCodexAppServerTimeoutOutcome &&
+            !shouldSurfaceRetryExhaustedCodexCompletionTimeout
           ) {
             // Normalize wrapped errors (e.g. abort-wrapped RESOURCE_EXHAUSTED) into
             // FailoverError so rate-limit classification works even for nested shapes.
