@@ -716,6 +716,39 @@ async function uninstallManagedGateway(env) {
   );
 }
 
+async function waitForManagedGatewayStatus(env, token) {
+  const started = Date.now();
+  let lastResult;
+  while (Date.now() - started < READY_TIMEOUT_MS) {
+    lastResult = await runOpenClaw(
+      [
+        "gateway",
+        "status",
+        "--deep",
+        "--require-rpc",
+        "--json",
+        "--token",
+        token,
+        "--timeout",
+        String(RPC_TIMEOUT_MS),
+      ],
+      env,
+      { timeoutMs: RPC_TIMEOUT_MS + 10000, allowFailure: true },
+    );
+    if (lastResult.code === 0) {
+      return parseJsonOutput(lastResult.stdout);
+    }
+    await delay(500);
+  }
+  throw new Error(
+    scrub(
+      `managed gateway did not become RPC-ready\n${
+        lastResult?.stderr || lastResult?.stdout || "<no output>"
+      }`,
+    ),
+  );
+}
+
 async function runWithProof(name, description, fn) {
   const started = Date.now();
   try {
@@ -959,22 +992,7 @@ async function p8ManagedServiceEnvProof() {
           "managed service proof unexpectedly resolved the plugin SecretRef during install",
         );
       }
-      const status = await runOpenClaw(
-        [
-          "gateway",
-          "status",
-          "--deep",
-          "--require-rpc",
-          "--json",
-          "--token",
-          TOKEN_V1,
-          "--timeout",
-          "60000",
-        ],
-        managerEnv,
-        { timeoutMs: 90000 },
-      );
-      parseJsonOutput(status.stdout);
+      await waitForManagedGatewayStatus(managerEnv, TOKEN_V1);
       const callsBeforeProbe = readJson(envCtx.env.PROOF_SECRET_STORE_PATH).calls;
       const probe = await expectGatewayCallOk(
         envWithout(envCtx.env, ["PROOF_SECRET_STORE_PATH"]),
