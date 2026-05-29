@@ -529,6 +529,23 @@ describe("normalizeCronJobCreate", () => {
     expect(payload.timeoutSeconds).toBe(0.03);
   });
 
+  it("drops negative agentTurn timeoutSeconds instead of converting it to no-timeout", () => {
+    const nested = normalizeCronJobCreate({
+      name: "negative nested timeout",
+      schedule: { kind: "every", everyMs: 60_000 },
+      payload: { kind: "agentTurn", message: "hello", timeoutSeconds: -5 },
+    }) as unknown as Record<string, unknown>;
+    const flattened = normalizeCronJobCreate({
+      name: "negative flat timeout",
+      schedule: { kind: "every", everyMs: 60_000 },
+      payload: { kind: "agentTurn", message: "hello" },
+      timeoutSeconds: -5,
+    }) as unknown as Record<string, unknown>;
+
+    expect(nested.payload).not.toHaveProperty("timeoutSeconds");
+    expect(flattened.payload).not.toHaveProperty("timeoutSeconds");
+  });
+
   it("preserves empty toolsAllow lists for create jobs", () => {
     const normalized = normalizeCronJobCreate({
       name: "empty-tools",

@@ -314,6 +314,7 @@ export async function connectTestGatewayClient(params: {
   maxAttemptTimeoutMs?: number;
   clientDisplayName?: string | null;
   requestTimeoutMs?: number;
+  tickWatchTimeoutMs?: number;
   onEvent?: (evt: EventFrame) => void;
   onRetry?: (attempt: number, error: Error) => void;
 }): Promise<GatewayClient> {
@@ -354,6 +355,7 @@ async function connectClientOnce(params: {
   deviceIdentity?: DeviceIdentity;
   clientDisplayName?: string | null;
   requestTimeoutMs?: number;
+  tickWatchTimeoutMs?: number;
   onEvent?: (evt: EventFrame) => void;
 }): Promise<GatewayClient> {
   return await new Promise<GatewayClient>((resolve, reject) => {
@@ -398,6 +400,9 @@ async function connectClientOnce(params: {
     }
     if (params.requestTimeoutMs !== undefined) {
       clientOptions.requestTimeoutMs = params.requestTimeoutMs;
+    }
+    if (params.tickWatchTimeoutMs !== undefined) {
+      clientOptions.tickWatchTimeoutMs = params.tickWatchTimeoutMs;
     }
 
     client = new GatewayClient(clientOptions);

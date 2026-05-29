@@ -1,4 +1,4 @@
-import { createDedupeCache } from "../infra/dedupe.js";
+import { createDedupeCache, resolveDedupeNonNegativeInteger } from "../infra/dedupe.js";
 import type { FileLockOptions } from "./file-lock.js";
 import { withFileLock } from "./file-lock.js";
 import { readJsonFileWithFallback, writeJsonFileAtomically } from "./json-store.js";
@@ -148,9 +148,9 @@ function isRecentTimestamp(seenAt: number | undefined, ttlMs: number, now: numbe
 
 /** Create a dedupe helper that combines in-memory fast checks with a lock-protected disk store. */
 export function createPersistentDedupe(options: PersistentDedupeOptions): PersistentDedupe {
-  const ttlMs = Math.max(0, Math.floor(options.ttlMs));
-  const memoryMaxSize = Math.max(0, Math.floor(options.memoryMaxSize));
-  const fileMaxEntries = Math.max(1, Math.floor(options.fileMaxEntries));
+  const ttlMs = resolveDedupeNonNegativeInteger(options.ttlMs, 0);
+  const memoryMaxSize = resolveDedupeNonNegativeInteger(options.memoryMaxSize, 0);
+  const fileMaxEntries = Math.max(1, resolveDedupeNonNegativeInteger(options.fileMaxEntries, 1));
   const lockOptions = mergeLockOptions(options.lockOptions);
   const memory = createDedupeCache({ ttlMs, maxSize: memoryMaxSize });
   const inflight = new Map<string, Promise<boolean>>();
@@ -324,15 +324,15 @@ function createReleasedClaimError(scopedKey: string): Error {
 
 /** Create a claim/commit/release dedupe guard backed by memory and optional persistent storage. */
 export function createClaimableDedupe(options: ClaimableDedupeOptions): ClaimableDedupe {
-  const ttlMs = Math.max(0, Math.floor(options.ttlMs));
-  const memoryMaxSize = Math.max(0, Math.floor(options.memoryMaxSize));
+  const ttlMs = resolveDedupeNonNegativeInteger(options.ttlMs, 0);
+  const memoryMaxSize = resolveDedupeNonNegativeInteger(options.memoryMaxSize, 0);
   const memory = createDedupeCache({ ttlMs, maxSize: memoryMaxSize });
   const persistent =
     options.resolveFilePath != null
       ? createPersistentDedupe({
           ttlMs,
           memoryMaxSize,
-          fileMaxEntries: Math.max(1, Math.floor(options.fileMaxEntries)),
+          fileMaxEntries: Math.max(1, resolveDedupeNonNegativeInteger(options.fileMaxEntries, 1)),
           resolveFilePath: options.resolveFilePath,
           lockOptions: options.lockOptions,
           onDiskError: options.onDiskError,

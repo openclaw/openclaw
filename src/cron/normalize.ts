@@ -391,8 +391,11 @@ function copyTopLevelAgentTurnFields(next: UnknownRecord, payload: UnknownRecord
   copyString("model");
   copyString("thinking");
 
-  if (typeof payload.timeoutSeconds !== "number" && typeof next.timeoutSeconds === "number") {
-    payload.timeoutSeconds = next.timeoutSeconds;
+  if (typeof payload.timeoutSeconds !== "number" && "timeoutSeconds" in next) {
+    const timeoutSeconds = parseOptionalField(TimeoutSecondsFieldSchema, next.timeoutSeconds);
+    if (timeoutSeconds !== undefined) {
+      payload.timeoutSeconds = timeoutSeconds;
+    }
   }
   if (!Array.isArray(payload.fallbacks) && Array.isArray(next.fallbacks)) {
     const fallbacks = normalizeTrimmedStringArray(next.fallbacks);

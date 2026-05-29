@@ -43,6 +43,7 @@ import { listAllChannelSupportedActions, listChannelSupportedActions } from "../
 import {
   channelTargetSchema,
   channelTargetsSchema,
+  optionalNonNegativeIntegerSchema,
   optionalPositiveIntegerSchema,
   stringEnum,
 } from "../schema/typebox.js";
@@ -306,8 +307,8 @@ function buildReactionSchema() {
 
 function buildFetchSchema() {
   return {
-    limit: Type.Optional(Type.Number()),
-    pageSize: Type.Optional(Type.Number()),
+    limit: optionalPositiveIntegerSchema(),
+    pageSize: optionalPositiveIntegerSchema(),
     pageToken: Type.Optional(Type.String()),
     before: Type.Optional(Type.String()),
     after: Type.Optional(Type.String()),
@@ -333,13 +334,15 @@ function buildPollSchema() {
       ),
     ),
     pollOptionIndex: Type.Optional(
-      Type.Number({
+      Type.Integer({
+        minimum: 1,
         description: "1-based poll option number.",
       }),
     ),
     pollOptionIndexes: Type.Optional(
       Type.Array(
-        Type.Number({
+        Type.Integer({
+          minimum: 1,
           description: "1-based poll option numbers for multiselect.",
         }),
       ),
@@ -402,7 +405,7 @@ function buildStickerSchema() {
 function buildThreadSchema() {
   return {
     threadName: Type.Optional(Type.String()),
-    autoArchiveMin: Type.Optional(Type.Number()),
+    autoArchiveMin: optionalPositiveIntegerSchema(),
     appliedTags: Type.Optional(Type.Array(Type.String())),
   };
 }
@@ -417,7 +420,7 @@ function buildEventSchema() {
     desc: Type.Optional(Type.String()),
     location: Type.Optional(Type.String()),
     image: Type.Optional(Type.String({ description: "Event cover image URL/path." })),
-    durationMin: Type.Optional(Type.Number()),
+    durationMin: optionalNonNegativeIntegerSchema(),
     until: Type.Optional(Type.String()),
   };
 }
@@ -425,7 +428,7 @@ function buildEventSchema() {
 function buildModerationSchema() {
   return {
     reason: Type.Optional(Type.String()),
-    deleteDays: Type.Optional(Type.Number()),
+    deleteDays: optionalNonNegativeIntegerSchema({ maximum: 7 }),
   };
 }
 
@@ -465,15 +468,16 @@ function buildChannelManagementSchema() {
   return {
     name: Type.Optional(Type.String()),
     channelType: Type.Optional(
-      Type.Number({
+      Type.Integer({
+        minimum: 0,
         description: "Numeric channel type, e.g. Discord. Avoids JSON Schema `type` collision.",
       }),
     ),
     parentId: Type.Optional(Type.String()),
     topic: Type.Optional(Type.String()),
-    position: Type.Optional(Type.Number()),
+    position: optionalNonNegativeIntegerSchema(),
     nsfw: Type.Optional(Type.Boolean()),
-    rateLimitPerUser: Type.Optional(Type.Number()),
+    rateLimitPerUser: optionalNonNegativeIntegerSchema(),
     categoryId: Type.Optional(Type.String()),
     clearParent: Type.Optional(
       Type.Boolean({

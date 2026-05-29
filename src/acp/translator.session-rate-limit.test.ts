@@ -209,6 +209,26 @@ describe("acp session creation rate limit", () => {
 
     sessionStore.clearAllSessionsForTest();
   });
+
+  it("falls back for non-finite session creation rate limit overrides", async () => {
+    const sessionStore = createInMemorySessionStore();
+    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(), {
+      sessionStore,
+      sessionCreateRateLimit: {
+        maxRequests: Number.NaN,
+        windowMs: Number.NaN,
+      },
+    });
+
+    await expect(agent.newSession(createNewSessionRequest())).resolves.toMatchObject({
+      sessionId: expect.any(String),
+    });
+    await expect(agent.newSession(createNewSessionRequest())).resolves.toMatchObject({
+      sessionId: expect.any(String),
+    });
+
+    sessionStore.clearAllSessionsForTest();
+  });
 });
 
 describe("acp unsupported bridge session setup", () => {
