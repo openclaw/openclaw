@@ -133,8 +133,8 @@ describe("setupOfficialPluginInstalls", () => {
           label: "Diagnostics Prometheus",
           hint: "OpenClaw diagnostics Prometheus exporter",
         },
-      ],
-    });
+      ]),
+    );
     expect(ensureOnboardingPluginInstalled).toHaveBeenCalledExactlyOnceWith({
       cfg: {},
       entry: {
