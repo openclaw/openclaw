@@ -55,7 +55,11 @@ type AnthropicTransportModel = Model<"anthropic-messages"> & {
 };
 
 type AnthropicTransportOptions = AnthropicOptions &
-  Pick<SimpleStreamOptions, "reasoning" | "thinkingBudgets">;
+  Pick<SimpleStreamOptions, "reasoning" | "thinkingBudgets"> & {
+    // Stop sequences ride the OpenClaw transport stream-param channel (same as
+    // the gateway sampling overrides), not the canonical StreamOptions contract.
+    stop?: string[];
+  };
 type AnthropicAdaptiveEffort = NonNullable<AnthropicOptions["effort"]> | "xhigh";
 type AnthropicMessagesClient = {
   messages: {
@@ -841,6 +845,9 @@ function buildAnthropicParams(
   if (options?.temperature !== undefined && !options.thinkingEnabled) {
     params.temperature = options.temperature;
   }
+  if (options?.stop !== undefined && options.stop.length > 0) {
+    params.stop_sequences = options.stop;
+  }
   if (context.tools) {
     params.tools = convertAnthropicTools(context.tools, isOAuthToken);
   }
@@ -890,6 +897,7 @@ function resolveAnthropicTransportOptions(
     resolvePositiveAnthropicMaxTokens(model.maxTokens) ?? baseMaxTokens;
   const resolved: AnthropicTransportOptions = {
     temperature: options?.temperature,
+    stop: options?.stop,
     maxTokens: baseMaxTokens,
     signal: options?.signal,
     apiKey,

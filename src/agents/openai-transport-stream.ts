@@ -115,6 +115,7 @@ type BaseStreamOptions = {
   temperature?: number;
   topP?: number;
   maxTokens?: number;
+  stop?: string[];
   signal?: AbortSignal;
   apiKey?: string;
   cacheRetention?: "none" | "short" | "long";
@@ -3590,6 +3591,9 @@ export function buildOpenAICompletionsParams(
   }
   if (options?.seed !== undefined) {
     params.seed = options.seed;
+  }
+  if (options?.stop !== undefined && options.stop.length > 0) {
+    params.stop = options.stop;
   }
   if (supportsModelTools(model)) {
     if (context.tools) {
