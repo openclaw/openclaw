@@ -64,11 +64,38 @@ function firstMockCall<T extends unknown[]>(mock: { mock: { calls: T[] } }): T |
 
 describe("push-apns.relay", () => {
   describe("resolveApnsRelayConfigFromEnv", () => {
-    it("defaults to the hosted relay when no relay base URL is configured", () => {
-      expectRelayConfig(resolveApnsRelayConfigFromEnv({} as NodeJS.ProcessEnv), {
-        baseUrl: DEFAULT_APNS_RELAY_BASE_URL,
-        timeoutMs: 10_000,
-      });
+    it("defaults to the hosted relay when the registration was minted by the hosted relay", () => {
+      expectRelayConfig(
+        resolveApnsRelayConfigFromEnv({} as NodeJS.ProcessEnv, undefined, {
+          registrationRelayOrigin: `${DEFAULT_APNS_RELAY_BASE_URL}/`,
+        }),
+        {
+          baseUrl: DEFAULT_APNS_RELAY_BASE_URL,
+          timeoutMs: 10_000,
+        },
+      );
+    });
+
+    it("fails closed when relay registration origin is unknown and no relay URL is configured", () => {
+      const resolved = resolveApnsRelayConfigFromEnv({} as NodeJS.ProcessEnv);
+
+      expect(resolved.ok).toBe(false);
+      if (!resolved.ok) {
+        expect(resolved.error).toContain("relay registrations without the hosted relay origin");
+      }
+    });
+
+    it("rejects config that does not match the registration relay origin", () => {
+      const resolved = resolveApnsRelayConfigFromEnv(
+        {} as NodeJS.ProcessEnv,
+        { push: { apns: { relay: { baseUrl: DEFAULT_APNS_RELAY_BASE_URL } } } },
+        { registrationRelayOrigin: "https://relay.example.com" },
+      );
+
+      expect(resolved.ok).toBe(false);
+      if (!resolved.ok) {
+        expect(resolved.error).toContain("origin mismatch");
+      }
     });
 
     it("lets env overrides win and clamps tiny timeout values", () => {
