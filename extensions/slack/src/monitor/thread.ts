@@ -124,9 +124,10 @@ type SlackRepliesPage = {
  * Fetches the most recent messages in a Slack thread (excluding the current message).
  * Used to populate thread context when a new thread session starts.
  *
- * When the current message timestamp is known, asks Slack for a bounded window
- * before that message so long threads do not require walking every reply page.
- * Falls back to cursor pagination when no current message timestamp is available.
+ * When the current message timestamp is known, bounds the requested range before
+ * that message while still following cursors. Slack returns the earliest messages
+ * in a time range first, so cursor pagination is required to retain the newest
+ * messages before the current reply on long threads.
  */
 export async function resolveSlackThreadHistory(params: {
   channelId: string;
@@ -142,8 +143,7 @@ export async function resolveSlackThreadHistory(params: {
 
   // Slack recommends no more than 200 per page.
   const fetchLimit = 200;
-  const useBoundedLatestWindow = Boolean(params.currentMessageTs) && maxMessages <= fetchLimit;
-  const requestLimit = useBoundedLatestWindow ? maxMessages : fetchLimit;
+  const hasCurrentMessageBoundary = Boolean(params.currentMessageTs);
   const retained: SlackRepliesPageMessage[] = [];
   let cursor: string | undefined;
 
@@ -152,9 +152,9 @@ export async function resolveSlackThreadHistory(params: {
       const response = (await params.client.conversations.replies({
         channel: params.channelId,
         ts: params.threadTs,
-        limit: requestLimit,
-        inclusive: !useBoundedLatestWindow,
-        ...(useBoundedLatestWindow && params.currentMessageTs
+        limit: fetchLimit,
+        inclusive: !hasCurrentMessageBoundary,
+        ...(hasCurrentMessageBoundary && params.currentMessageTs
           ? { latest: params.currentMessageTs }
           : {}),
         ...(cursor ? { cursor } : {}),
@@ -174,12 +174,8 @@ export async function resolveSlackThreadHistory(params: {
         retained.splice(0, retained.length - maxMessages);
       }
 
-      if (useBoundedLatestWindow) {
-        cursor = undefined;
-      } else {
-        const next = response.response_metadata?.next_cursor;
-        cursor = typeof next === "string" && next.trim().length > 0 ? next.trim() : undefined;
-      }
+      const next = response.response_metadata?.next_cursor;
+      cursor = typeof next === "string" && next.trim().length > 0 ? next.trim() : undefined;
     } while (cursor);
 
     return retained.map((msg) => ({

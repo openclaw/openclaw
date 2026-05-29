@@ -1101,17 +1101,14 @@ describe("resolveSlackThreadHistory", () => {
     vi.restoreAllMocks();
   });
 
-  it("uses one bounded window before the current message for initial thread history", async () => {
+  it("bounds thread history before the current message while retaining the newest entries", async () => {
     const replies = vi.fn().mockResolvedValueOnce({
-      messages: [
-        { text: "msg-255", user: "U1", ts: "255.000" },
-        { text: "msg-256", user: "U1", ts: "256.000" },
-        { text: "msg-257", user: "U1", ts: "257.000" },
-        { text: "msg-258", user: "U1", ts: "258.000" },
-        { text: "msg-259", user: "U1", ts: "259.000" },
-        { text: "current message", user: "U1", ts: "260.000" },
-      ],
-      response_metadata: { next_cursor: "cursor-2" },
+      messages: Array.from({ length: 10 }, (_, i) => ({
+        text: `msg-${i + 250}`,
+        user: "U1",
+        ts: `${i + 250}.000`,
+      })),
+      response_metadata: { next_cursor: "" },
     });
     const client = {
       conversations: { replies },
@@ -1132,9 +1129,65 @@ describe("resolveSlackThreadHistory", () => {
     );
     expect(call.channel).toBe("C1");
     expect(call.ts).toBe("1.000");
-    expect(call.limit).toBe(5);
+    expect(call.limit).toBe(200);
     expect(call.latest).toBe("260.000");
     expect(call.inclusive).toBe(false);
+    expect(result.map((entry) => entry.ts)).toEqual([
+      "255.000",
+      "256.000",
+      "257.000",
+      "258.000",
+      "259.000",
+    ]);
+  });
+
+  it("paginates with a current message boundary to retain newest replies in long threads", async () => {
+    const replies = vi
+      .fn()
+      .mockResolvedValueOnce({
+        messages: Array.from({ length: 200 }, (_, i) => ({
+          text: `msg-${i + 1}`,
+          user: "U1",
+          ts: `${i + 1}.000`,
+        })),
+        response_metadata: { next_cursor: "cursor-2" },
+      })
+      .mockResolvedValueOnce({
+        messages: Array.from({ length: 59 }, (_, i) => ({
+          text: `msg-${i + 201}`,
+          user: "U1",
+          ts: `${i + 201}.000`,
+        })),
+        response_metadata: { next_cursor: "" },
+      });
+    const client = {
+      conversations: { replies },
+    } as unknown as Parameters<typeof resolveSlackThreadHistory>[0]["client"];
+
+    const result = await resolveSlackThreadHistory({
+      channelId: "C1",
+      threadTs: "1.000",
+      client,
+      currentMessageTs: "260.000",
+      limit: 5,
+    });
+
+    expect(replies).toHaveBeenCalledTimes(2);
+    const firstCall = requireRecord(
+      requireMockCall(replies, 0, "conversations.replies")[0],
+      "first replies params",
+    );
+    expect(firstCall.latest).toBe("260.000");
+    expect(firstCall.limit).toBe(200);
+    expect(firstCall.inclusive).toBe(false);
+    const secondCall = requireRecord(
+      requireMockCall(replies, 1, "conversations.replies")[0],
+      "second replies params",
+    );
+    expect(secondCall.latest).toBe("260.000");
+    expect(secondCall.limit).toBe(200);
+    expect(secondCall.inclusive).toBe(false);
+    expect(secondCall.cursor).toBe("cursor-2");
     expect(result.map((entry) => entry.ts)).toEqual([
       "255.000",
       "256.000",
