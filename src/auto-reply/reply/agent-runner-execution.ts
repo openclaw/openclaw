@@ -1999,10 +1999,10 @@ export async function runAgentTurnWithFallback(params: {
             );
 
             if (isCliProvider(cliExecutionProvider, runtimeConfig)) {
-              const isRoomEventCliRun = params.followupRun.currentInboundEventKind === "room_event";
-              const cliSessionBinding = isRoomEventCliRun
-                ? undefined
-                : getCliSessionBinding(params.getActiveSessionEntry(), cliExecutionProvider);
+              const cliSessionBinding = getCliSessionBinding(
+                params.getActiveSessionEntry(),
+                cliExecutionProvider,
+              );
               const authProfile = resolveRunAuthProfile(candidateRun, cliExecutionProvider, {
                 config: runtimeConfig,
               });
@@ -2097,23 +2097,6 @@ export async function runAgentTurnWithFallback(params: {
                     abortSignal: runAbortSignal,
                     replyOperation: params.replyOperation,
                   },
-                  transformResult: (rawResult) =>
-                    isRoomEventCliRun && rawResult.meta.agentMeta
-                      ? (() => {
-                          const { cliSessionBinding: _cliSessionBinding, ...agentMeta } =
-                            rawResult.meta.agentMeta;
-                          return {
-                            ...rawResult,
-                            meta: {
-                              ...rawResult.meta,
-                              agentMeta: {
-                                ...agentMeta,
-                                sessionId: "",
-                              },
-                            },
-                          };
-                        })()
-                      : rawResult,
                 }),
               );
               bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(

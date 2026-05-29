@@ -1876,7 +1876,7 @@ describe("runAgentTurnWithFallback", () => {
     expect(callParams.onUserMessagePersisted).toEqual(expect.any(Function));
   });
 
-  it("does not reuse or persist CLI sessions for room-event turns", async () => {
+  it("reuses CLI sessions for room-event turns", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
       result: await params.run("codex-cli", "gpt-5.4"),
@@ -1916,14 +1916,19 @@ describe("runAgentTurnWithFallback", () => {
     expect(result.kind).toBe("success");
     expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
       currentInboundEventKind: "room_event",
-      cliSessionId: undefined,
-      cliSessionBinding: undefined,
+      cliSessionId: "existing-cli-session",
+      cliSessionBinding: {
+        sessionId: "existing-cli-session",
+      },
     });
     if (result.kind !== "success") {
       throw new Error("expected success");
     }
-    expect(result.runResult.meta?.agentMeta?.sessionId).toBe("");
-    expect(result.runResult.meta?.agentMeta?.cliSessionBinding).toBeUndefined();
+    expect(result.runResult.meta?.agentMeta?.sessionId).toBe("transient-cli-session");
+    expect(result.runResult.meta?.agentMeta?.cliSessionBinding).toEqual({
+      sessionId: "transient-cli-session",
+      authProfileId: "profile",
+    });
   });
 
   it("bridges CLI assistant agent events into onPartialReply for live preview (#76869)", async () => {

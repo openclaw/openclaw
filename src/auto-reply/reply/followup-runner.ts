@@ -713,10 +713,10 @@ export function createFollowupRunner(params: {
             };
             try {
               if (isCliProvider(cliExecutionProvider, runtimeConfig)) {
-                const isRoomEventCliRun = queued.currentInboundEventKind === "room_event";
-                const cliSessionBinding = isRoomEventCliRun
-                  ? undefined
-                  : getCliSessionBinding(activeSessionEntry, cliExecutionProvider);
+                const cliSessionBinding = getCliSessionBinding(
+                  activeSessionEntry,
+                  cliExecutionProvider,
+                );
                 const cliLifecycleStartedAt = Date.now();
                 pendingDeferredCliTerminal = {
                   provider,
@@ -791,23 +791,6 @@ export function createFollowupRunner(params: {
                     disableTools: opts?.disableTools,
                     abortSignal: runAbortSignal,
                   },
-                  transformResult: (rawResult) =>
-                    isRoomEventCliRun && rawResult.meta.agentMeta
-                      ? (() => {
-                          const { cliSessionBinding: _cliSessionBinding, ...agentMeta } =
-                            rawResult.meta.agentMeta;
-                          return {
-                            ...rawResult,
-                            meta: {
-                              ...rawResult.meta,
-                              agentMeta: {
-                                ...agentMeta,
-                                sessionId: "",
-                              },
-                            },
-                          };
-                        })()
-                      : rawResult,
                 });
                 bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
                   result.meta?.systemPromptReport,
