@@ -4,8 +4,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 RUN --mount=type=cache,id=openclaw-sandbox-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
   --mount=type=cache,id=openclaw-sandbox-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
-  apt-get update \
-  && apt-get install -y --no-install-recommends \
+  apt-get -o Acquire::Retries=5 update \
+  && apt-get -o Acquire::Retries=5 install -y --no-install-recommends --fix-missing \
     bash \
     ca-certificates \
     curl \
