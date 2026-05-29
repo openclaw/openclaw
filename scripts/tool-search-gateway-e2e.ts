@@ -154,7 +154,6 @@ export async function fetchJson(
       controller.abort(error);
       reject(error);
     }, timeoutMs);
-    timeout.unref?.();
   });
 
   let response: Response;
