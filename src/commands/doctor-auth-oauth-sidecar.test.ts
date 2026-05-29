@@ -12,9 +12,18 @@ import type { DoctorPrompter } from "./doctor-prompter.js";
 
 const states: OpenClawTestState[] = [];
 
-function makePrompter(shouldRepair: boolean): DoctorPrompter {
+function makePrompter(
+  shouldRepair: boolean,
+  options: {
+    interactiveReset?: boolean;
+    nonInteractive?: boolean;
+  } = {},
+): DoctorPrompter {
+  const nonInteractive = options.nonInteractive === true;
+  const canPrompt = !nonInteractive;
   return {
     confirm: vi.fn(async () => shouldRepair),
+    confirmInteractiveOnly: vi.fn(async () => options.interactiveReset ?? shouldRepair),
     confirmAutoFix: vi.fn(async () => shouldRepair),
     confirmAggressiveAutoFix: vi.fn(async () => shouldRepair),
     confirmRuntimeRepair: vi.fn(async () => shouldRepair),
@@ -24,8 +33,8 @@ function makePrompter(shouldRepair: boolean): DoctorPrompter {
     repairMode: {
       shouldRepair,
       shouldForce: false,
-      nonInteractive: false,
-      canPrompt: true,
+      nonInteractive,
+      canPrompt,
       updateInProgress: false,
     },
   };
@@ -243,6 +252,212 @@ describe("maybeRepairLegacyOAuthSidecarProfiles", () => {
     expect(result.changes).toStrictEqual([]);
     expect(result.warnings).toStrictEqual([
       `Could not decrypt legacy OAuth sidecar for ${profileId} in ${authPath}; re-authenticate this profile.`,
+    ]);
+    expect(fs.existsSync(sidecarPath)).toBe(true);
+    expect(JSON.parse(fs.readFileSync(authPath, "utf8"))).toEqual(auth);
+  });
+
+  it("prompts for undecryptable legacy sidecars on non-main agents and preserves files when declined", async () => {
+    const state = await makeTestState("wrong-seed");
+    const profileId = "openai-codex:worker";
+    const ref = {
+      source: "openclaw-credentials" as const,
+      provider: "openai-codex" as const,
+      id: "11111111111111111111111111111111",
+    };
+    const auth = {
+      version: 1,
+      profiles: {
+        [profileId]: {
+          type: "oauth",
+          provider: "openai-codex",
+          oauthRef: ref,
+        },
+      },
+    };
+    const authPath = await state.writeAuthProfiles(auth, "worker");
+    const sidecarPath = await state.writeJson(
+      path.join("credentials", "auth-profiles", `${ref.id}.json`),
+      {
+        version: 1,
+        profileId,
+        provider: "openai-codex",
+        encrypted: encryptLegacySidecarMaterial({
+          ref,
+          profileId,
+          provider: "openai-codex",
+          seed: "right-seed",
+          material: {
+            access: "access-token",
+            refresh: "refresh-token",
+          },
+        }),
+      },
+    );
+    const prompter = makePrompter(false, { interactiveReset: false });
+
+    const result = await maybeRepairLegacyOAuthSidecarProfiles({
+      cfg: {},
+      prompter,
+      emitNotes: false,
+    });
+
+    expect(prompter.confirmInteractiveOnly).toHaveBeenCalledWith({
+      message: "Reset auth config for affected non-main agents so they use main auth?",
+      initialValue: false,
+    });
+    expect(result.detected).toEqual([authPath]);
+    expect(result.changes).toStrictEqual([]);
+    expect(result.warnings).toStrictEqual([]);
+    expect(fs.existsSync(sidecarPath)).toBe(true);
+    expect(JSON.parse(fs.readFileSync(authPath, "utf8"))).toEqual(auth);
+  });
+
+  it("backs up affected non-main auth config and sidecars when undecryptable reset is accepted", async () => {
+    const state = await makeTestState("wrong-seed");
+    const workerProfileId = "openai-codex:worker";
+    const workerRef = {
+      source: "openclaw-credentials" as const,
+      provider: "openai-codex" as const,
+      id: "22222222222222222222222222222222",
+    };
+    const mainProfileId = "openai-codex:main";
+    const mainRef = {
+      source: "openclaw-credentials" as const,
+      provider: "openai-codex" as const,
+      id: "33333333333333333333333333333333",
+    };
+    const workerAuth = {
+      version: 1,
+      profiles: {
+        [workerProfileId]: {
+          type: "oauth",
+          provider: "openai-codex",
+          oauthRef: workerRef,
+        },
+      },
+    };
+    const mainAuth = {
+      version: 1,
+      profiles: {
+        [mainProfileId]: {
+          type: "oauth",
+          provider: "openai-codex",
+          oauthRef: mainRef,
+        },
+      },
+    };
+    const mainAuthPath = await state.writeAuthProfiles(mainAuth, "main");
+    const workerAuthPath = await state.writeAuthProfiles(workerAuth, "worker");
+    const mainSidecarPath = await state.writeJson(
+      path.join("credentials", "auth-profiles", `${mainRef.id}.json`),
+      {
+        version: 1,
+        profileId: mainProfileId,
+        provider: "openai-codex",
+        encrypted: encryptLegacySidecarMaterial({
+          ref: mainRef,
+          profileId: mainProfileId,
+          provider: "openai-codex",
+          seed: "right-seed",
+          material: {
+            access: "main-access-token",
+            refresh: "main-refresh-token",
+          },
+        }),
+      },
+    );
+    const workerSidecarPath = await state.writeJson(
+      path.join("credentials", "auth-profiles", `${workerRef.id}.json`),
+      {
+        version: 1,
+        profileId: workerProfileId,
+        provider: "openai-codex",
+        encrypted: encryptLegacySidecarMaterial({
+          ref: workerRef,
+          profileId: workerProfileId,
+          provider: "openai-codex",
+          seed: "right-seed",
+          material: {
+            access: "worker-access-token",
+            refresh: "worker-refresh-token",
+          },
+        }),
+      },
+    );
+
+    const result = await maybeRepairLegacyOAuthSidecarProfiles({
+      cfg: {},
+      prompter: makePrompter(false, { interactiveReset: true }),
+      now: () => 111,
+      emitNotes: false,
+    });
+
+    expect(result.detected).toEqual([mainAuthPath, workerAuthPath]);
+    expect(result.changes).toStrictEqual([
+      `Moved auth config for agent worker aside so it can use main auth (backup: ${workerAuthPath}.bak.111).`,
+      `Moved legacy OAuth sidecar aside (backup: ${workerSidecarPath}.bak.111).`,
+      "Re-run openclaw doctor to validate auth after the reset.",
+    ]);
+    expect(result.warnings).toStrictEqual([]);
+    expect(fs.existsSync(workerAuthPath)).toBe(false);
+    expect(JSON.parse(fs.readFileSync(`${workerAuthPath}.bak.111`, "utf8"))).toEqual(workerAuth);
+    expect(fs.existsSync(workerSidecarPath)).toBe(false);
+    expect(JSON.parse(fs.readFileSync(`${workerSidecarPath}.bak.111`, "utf8")).profileId).toBe(
+      workerProfileId,
+    );
+    expect(JSON.parse(fs.readFileSync(mainAuthPath, "utf8"))).toEqual(mainAuth);
+    expect(fs.existsSync(mainSidecarPath)).toBe(true);
+  });
+
+  it("warns without mutating undecryptable non-main sidecars during non-interactive runs", async () => {
+    const state = await makeTestState("wrong-seed");
+    const profileId = "openai-codex:worker";
+    const ref = {
+      source: "openclaw-credentials" as const,
+      provider: "openai-codex" as const,
+      id: "44444444444444444444444444444444",
+    };
+    const auth = {
+      version: 1,
+      profiles: {
+        [profileId]: {
+          type: "oauth",
+          provider: "openai-codex",
+          oauthRef: ref,
+        },
+      },
+    };
+    const authPath = await state.writeAuthProfiles(auth, "worker");
+    const sidecarPath = await state.writeJson(
+      path.join("credentials", "auth-profiles", `${ref.id}.json`),
+      {
+        version: 1,
+        profileId,
+        provider: "openai-codex",
+        encrypted: encryptLegacySidecarMaterial({
+          ref,
+          profileId,
+          provider: "openai-codex",
+          seed: "right-seed",
+          material: {
+            access: "access-token",
+            refresh: "refresh-token",
+          },
+        }),
+      },
+    );
+
+    const result = await maybeRepairLegacyOAuthSidecarProfiles({
+      cfg: {},
+      prompter: makePrompter(false, { nonInteractive: true }),
+      emitNotes: false,
+    });
+
+    expect(result.detected).toEqual([authPath]);
+    expect(result.changes).toStrictEqual([]);
+    expect(result.warnings).toStrictEqual([
+      "Could not decrypt legacy OAuth sidecar for one or more non-main agents. Non-interactive doctor/update runs never reset per-agent auth files. Run openclaw doctor in an interactive terminal and answer yes to the auth reset prompt if these agents should fall back to main auth.",
     ]);
     expect(fs.existsSync(sidecarPath)).toBe(true);
     expect(JSON.parse(fs.readFileSync(authPath, "utf8"))).toEqual(auth);

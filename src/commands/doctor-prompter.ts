@@ -18,6 +18,7 @@ type DoctorRuntimeRepairConfirmParams = DoctorConfirmParams & {
 
 export type DoctorPrompter = {
   confirm: (params: Parameters<typeof confirm>[0]) => Promise<boolean>;
+  confirmInteractiveOnly?: (params: Parameters<typeof confirm>[0]) => Promise<boolean>;
   confirmAutoFix: (params: Parameters<typeof confirm>[0]) => Promise<boolean>;
   confirmAggressiveAutoFix: (params: Parameters<typeof confirm>[0]) => Promise<boolean>;
   confirmRuntimeRepair: (params: DoctorRuntimeRepairConfirmParams) => Promise<boolean>;
@@ -53,6 +54,18 @@ export function createDoctorPrompter(params: {
 
   return {
     confirm: confirmDefault,
+    confirmInteractiveOnly: async (p) => {
+      if (repairMode.nonInteractive || !repairMode.canPrompt) {
+        return false;
+      }
+      return guardCancel(
+        await confirm({
+          ...p,
+          message: stylePromptMessage(p.message),
+        }),
+        params.runtime,
+      );
+    },
     confirmAutoFix: confirmDefault,
     confirmAggressiveAutoFix: async (p) => {
       if (shouldAutoApproveDoctorFix(repairMode, { requiresForce: true })) {

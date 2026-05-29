@@ -1,6 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
-import { listAgentIds, resolveAgentDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
+import {
+  listAgentIds,
+  resolveAgentDir,
+  resolveDefaultAgentDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
 import {
   isLegacyOAuthRef,
@@ -25,8 +30,10 @@ import type { DoctorPrompter } from "./doctor-prompter.js";
 const LEGACY_OAUTH_SECRET_DIRNAME = "auth-profiles";
 
 type AuthProfileRepairCandidate = {
+  agentId?: string;
   agentDir?: string;
   authPath: string;
+  isMain: boolean;
 };
 
 type LegacyOAuthSidecarProfile = {
@@ -44,6 +51,12 @@ type LegacyOAuthUnreferencedSidecar = {
   sidecarPath: string;
 };
 
+type UndecryptableLegacyOAuthSidecarProfile = {
+  store: LegacyOAuthSidecarStore;
+  profile: LegacyOAuthSidecarProfile;
+  sidecarPath: string;
+};
+
 export type LegacyOAuthSidecarRepairResult = {
   detected: string[];
   changes: string[];
@@ -54,15 +67,29 @@ function readNonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
+function resolveMainAuthStorePath(env: NodeJS.ProcessEnv): string {
+  return path.join(resolveStateDir(env), "agents", "main", "agent", "auth-profiles.json");
+}
+
 function addCandidate(
   candidates: Map<string, AuthProfileRepairCandidate>,
   agentDir: string | undefined,
+  env: NodeJS.ProcessEnv,
+  agentId?: string,
 ): void {
   const authPath = resolveAuthStorePath(agentDir);
-  candidates.set(path.resolve(authPath), { agentDir, authPath });
+  const resolvedAuthPath = path.resolve(authPath);
+  candidates.set(resolvedAuthPath, {
+    agentId,
+    agentDir,
+    authPath,
+    isMain: agentId === "main" || resolvedAuthPath === path.resolve(resolveMainAuthStorePath(env)),
+  });
 }
 
-function listExistingAgentDirsFromState(env: NodeJS.ProcessEnv): string[] {
+function listExistingAgentDirsFromState(
+  env: NodeJS.ProcessEnv,
+): Array<{ agentId: string; agentDir: string }> {
   const root = path.join(resolveStateDir(env), "agents");
   let entries: fs.Dirent[];
   try {
@@ -72,10 +99,10 @@ function listExistingAgentDirsFromState(env: NodeJS.ProcessEnv): string[] {
   }
   return entries
     .filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
-    .map((entry) => path.join(root, entry.name, "agent"))
-    .filter((agentDir) => {
+    .map((entry) => ({ agentId: entry.name, agentDir: path.join(root, entry.name, "agent") }))
+    .filter((entry) => {
       try {
-        return fs.statSync(agentDir).isDirectory();
+        return fs.statSync(entry.agentDir).isDirectory();
       } catch {
         return false;
       }
@@ -87,16 +114,16 @@ function listAuthProfileRepairCandidates(
   env: NodeJS.ProcessEnv,
 ): AuthProfileRepairCandidate[] {
   const candidates = new Map<string, AuthProfileRepairCandidate>();
-  addCandidate(candidates, resolveDefaultAgentDir(cfg, env));
+  addCandidate(candidates, resolveDefaultAgentDir(cfg, env), env, resolveDefaultAgentId(cfg));
   const envAgentDir = readNonEmptyString(env.OPENCLAW_AGENT_DIR);
   if (envAgentDir) {
-    addCandidate(candidates, envAgentDir);
+    addCandidate(candidates, envAgentDir, env);
   }
   for (const agentId of listAgentIds(cfg)) {
-    addCandidate(candidates, resolveAgentDir(cfg, agentId, env));
+    addCandidate(candidates, resolveAgentDir(cfg, agentId, env), env, agentId);
   }
-  for (const agentDir of listExistingAgentDirsFromState(env)) {
-    addCandidate(candidates, agentDir);
+  for (const entry of listExistingAgentDirsFromState(env)) {
+    addCandidate(candidates, entry.agentDir, env, entry.agentId);
   }
   return [...candidates.values()];
 }
@@ -186,9 +213,186 @@ function backupLegacyOAuthSidecarStore(authPath: string, now: () => number): str
   return backupPath;
 }
 
+function movePathAside(pathname: string, now: () => number): string {
+  const baseBackupPath = `${pathname}.bak.${now()}`;
+  let backupPath = baseBackupPath;
+  let suffix = 1;
+  while (fs.existsSync(backupPath)) {
+    backupPath = `${baseBackupPath}.${suffix}`;
+    suffix += 1;
+  }
+  fs.renameSync(pathname, backupPath);
+  return backupPath;
+}
+
+function findUndecryptableLegacyOAuthSidecarProfiles(params: {
+  stores: LegacyOAuthSidecarStore[];
+  env: NodeJS.ProcessEnv;
+  allowKeychainPrompt: boolean;
+}): UndecryptableLegacyOAuthSidecarProfile[] {
+  const undecryptable: UndecryptableLegacyOAuthSidecarProfile[] = [];
+  for (const store of params.stores) {
+    for (const profile of store.profiles) {
+      const material = loadLegacyOAuthSidecarMaterial({
+        ...profile,
+        env: params.env,
+        allowKeychainPrompt: params.allowKeychainPrompt,
+      });
+      if (material) {
+        continue;
+      }
+      undecryptable.push({
+        store,
+        profile,
+        sidecarPath: resolveLegacyOAuthSidecarPath(profile.ref, params.env),
+      });
+    }
+  }
+  return undecryptable;
+}
+
+function formatAgentLabel(store: LegacyOAuthSidecarStore): string {
+  return store.agentId ? `agent ${store.agentId}` : "custom agent";
+}
+
+function formatUndecryptableProfileLine(entry: UndecryptableLegacyOAuthSidecarProfile): string {
+  return `- ${formatAgentLabel(entry.store)}: ${shortenHomePath(entry.store.authPath)} (${entry.profile.profileId}; sidecar ${shortenHomePath(entry.sidecarPath)})`;
+}
+
+function uniqueUndecryptableStores(
+  entries: UndecryptableLegacyOAuthSidecarProfile[],
+): LegacyOAuthSidecarStore[] {
+  const seen = new Set<string>();
+  const stores: LegacyOAuthSidecarStore[] = [];
+  for (const entry of entries) {
+    const key = path.resolve(entry.store.authPath);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    stores.push(entry.store);
+  }
+  return stores;
+}
+
+async function confirmInteractiveOnly(
+  prompter: Pick<DoctorPrompter, "confirmAutoFix"> &
+    Partial<Pick<DoctorPrompter, "confirm" | "confirmInteractiveOnly" | "repairMode">>,
+  params: Parameters<DoctorPrompter["confirm"]>[0],
+): Promise<boolean> {
+  if (prompter.repairMode?.canPrompt === false || prompter.repairMode?.nonInteractive === true) {
+    return false;
+  }
+  if (prompter.confirmInteractiveOnly) {
+    return prompter.confirmInteractiveOnly(params);
+  }
+  return prompter.confirm ? prompter.confirm(params) : prompter.confirmAutoFix(params);
+}
+
+function buildNonInteractiveResetWarning(): string {
+  return [
+    "Could not decrypt legacy OAuth sidecar for one or more non-main agents.",
+    "Non-interactive doctor/update runs never reset per-agent auth files.",
+    `Run ${formatCliCommand("openclaw doctor")} in an interactive terminal and answer yes to the auth reset prompt if these agents should fall back to main auth.`,
+  ].join(" ");
+}
+
+async function maybeResetUndecryptableNonMainAuth(params: {
+  entries: UndecryptableLegacyOAuthSidecarProfile[];
+  stores: LegacyOAuthSidecarStore[];
+  result: LegacyOAuthSidecarRepairResult;
+  prompter: Pick<DoctorPrompter, "confirmAutoFix"> &
+    Partial<Pick<DoctorPrompter, "confirm" | "confirmInteractiveOnly" | "repairMode">>;
+  now: () => number;
+  emitNotes: boolean;
+}): Promise<boolean> {
+  const affected = params.entries.filter((entry) => !entry.store.isMain);
+  if (affected.length === 0) {
+    return false;
+  }
+
+  if (params.emitNotes) {
+    note(
+      [
+        "Could not decrypt legacy OAuth sidecar auth for these non-main agents:",
+        ...affected.map(formatUndecryptableProfileLine),
+        "Custom per-agent auth may be intentional. Choose no to preserve these files unchanged.",
+      ].join("\n"),
+      "Auth profiles",
+    );
+  }
+
+  const shouldReset = await confirmInteractiveOnly(params.prompter, {
+    message: "Reset auth config for affected non-main agents so they use main auth?",
+    initialValue: false,
+  });
+
+  if (!shouldReset) {
+    if (
+      params.prompter.repairMode?.nonInteractive === true ||
+      params.prompter.repairMode?.canPrompt === false
+    ) {
+      params.result.warnings.push(buildNonInteractiveResetWarning());
+    }
+    return false;
+  }
+
+  const resetStores = uniqueUndecryptableStores(affected);
+  const resetAuthPaths = new Set(resetStores.map((store) => path.resolve(store.authPath)));
+  const remainingRefIds = new Set(
+    params.stores
+      .filter((store) => !resetAuthPaths.has(path.resolve(store.authPath)))
+      .flatMap((store) => store.profiles.map((profile) => profile.ref.id)),
+  );
+  const affectedSidecars = new Map<string, string>();
+  for (const entry of affected) {
+    if (!remainingRefIds.has(entry.profile.ref.id)) {
+      affectedSidecars.set(entry.profile.ref.id, entry.sidecarPath);
+    }
+  }
+
+  for (const store of resetStores) {
+    try {
+      const backupPath = movePathAside(store.authPath, params.now);
+      params.result.changes.push(
+        `Moved auth config for ${formatAgentLabel(store)} aside so it can use main auth (backup: ${shortenHomePath(backupPath)}).`,
+      );
+    } catch (err) {
+      params.result.warnings.push(
+        `Failed to move auth config for ${formatAgentLabel(store)} at ${shortenHomePath(store.authPath)}: ${String(err)}`,
+      );
+    }
+  }
+
+  for (const sidecarPath of affectedSidecars.values()) {
+    if (!fs.existsSync(sidecarPath)) {
+      continue;
+    }
+    try {
+      const backupPath = movePathAside(sidecarPath, params.now);
+      params.result.changes.push(
+        `Moved legacy OAuth sidecar aside (backup: ${shortenHomePath(backupPath)}).`,
+      );
+    } catch (err) {
+      params.result.warnings.push(
+        `Failed to move legacy OAuth sidecar ${shortenHomePath(sidecarPath)}: ${String(err)}`,
+      );
+    }
+  }
+
+  if (params.result.changes.length > 0) {
+    params.result.changes.push(
+      `Re-run ${formatCliCommand("openclaw doctor")} to validate auth after the reset.`,
+    );
+    clearRuntimeAuthProfileStoreSnapshots();
+  }
+  return params.result.changes.length > 0;
+}
+
 export async function maybeRepairLegacyOAuthSidecarProfiles(params: {
   cfg: OpenClawConfig;
-  prompter: Pick<DoctorPrompter, "confirmAutoFix">;
+  prompter: Pick<DoctorPrompter, "confirmAutoFix"> &
+    Partial<Pick<DoctorPrompter, "confirm" | "confirmInteractiveOnly" | "repairMode">>;
   now?: () => number;
   emitNotes?: boolean;
   env?: NodeJS.ProcessEnv;
@@ -196,11 +400,11 @@ export async function maybeRepairLegacyOAuthSidecarProfiles(params: {
   const now = params.now ?? Date.now;
   const emitNotes = params.emitNotes !== false;
   const env = params.env ?? process.env;
-  const stores = listAuthProfileRepairCandidates(params.cfg, env)
+  let stores = listAuthProfileRepairCandidates(params.cfg, env)
     .map(resolveLegacyOAuthSidecarStore)
     .filter((entry): entry is LegacyOAuthSidecarStore => entry !== null);
-  const referencedRefIds = new Set(stores.flatMap((entry) => entry.profiles.map((p) => p.ref.id)));
-  const unreferencedSidecars = listUnreferencedLegacyOAuthSidecars(referencedRefIds, env);
+  let referencedRefIds = new Set(stores.flatMap((entry) => entry.profiles.map((p) => p.ref.id)));
+  let unreferencedSidecars = listUnreferencedLegacyOAuthSidecars(referencedRefIds, env);
 
   const result: LegacyOAuthSidecarRepairResult = {
     detected: [
@@ -212,6 +416,36 @@ export async function maybeRepairLegacyOAuthSidecarProfiles(params: {
   };
   if (stores.length === 0 && unreferencedSidecars.length === 0) {
     return result;
+  }
+
+  const undecryptableProfiles = findUndecryptableLegacyOAuthSidecarProfiles({
+    stores,
+    env,
+    allowKeychainPrompt: params.prompter.repairMode?.nonInteractive !== true,
+  });
+  const resetApplied = await maybeResetUndecryptableNonMainAuth({
+    entries: undecryptableProfiles,
+    stores,
+    result,
+    prompter: params.prompter,
+    now,
+    emitNotes,
+  });
+  if (resetApplied) {
+    stores = listAuthProfileRepairCandidates(params.cfg, env)
+      .map(resolveLegacyOAuthSidecarStore)
+      .filter((entry): entry is LegacyOAuthSidecarStore => entry !== null);
+    referencedRefIds = new Set(stores.flatMap((entry) => entry.profiles.map((p) => p.ref.id)));
+    unreferencedSidecars = listUnreferencedLegacyOAuthSidecars(referencedRefIds, env);
+    if (stores.length === 0 && unreferencedSidecars.length === 0) {
+      if (emitNotes && result.changes.length > 0) {
+        note(result.changes.map((change) => `- ${change}`).join("\n"), "Doctor changes");
+      }
+      if (emitNotes && result.warnings.length > 0) {
+        note(result.warnings.map((warning) => `- ${warning}`).join("\n"), "Doctor warnings");
+      }
+      return result;
+    }
   }
 
   if (emitNotes) {
@@ -238,6 +472,9 @@ export async function maybeRepairLegacyOAuthSidecarProfiles(params: {
     initialValue: true,
   });
   if (!shouldRepair) {
+    if (emitNotes && result.warnings.length > 0) {
+      note(result.warnings.map((warning) => `- ${warning}`).join("\n"), "Doctor warnings");
+    }
     return result;
   }
 
