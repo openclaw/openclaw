@@ -61,6 +61,18 @@ Tables/views/functions:
 
 Privacy boundary: live contact rows, phone numbers, email addresses, raw People API JSON, credentials, and sync outputs are private operator data and must not be published in public docs, examples, issues, or release notes. Public repos may include only schema, scripts, and sanitized operational guidance.
 
+### Google Contact Notes Update Path
+
+People/contact research jobs should use the real Google People API path instead of reporting that no safe note-write path exists. The safe sequence is:
+
+1. Refresh the private CRM inventory with `scripts/sync_google_contacts_to_memory_db.py`.
+2. Use `zorg_contacts_crm`, `zorg_contact_points_crm`, `zorg_contact_canonical_crm`, and `zorg_contact_canonical_members` to choose a positively identified contact.
+3. Store public/professional research summaries and source URLs in DB memory/CRM first.
+4. When a concise Google Contacts biography marker is appropriate, append it with `scripts/update_google_contact_biography_note.py` by `--canonical-id`, `--email`, or `--resource-name`.
+5. Re-run the Google Contacts sync and verify the marker appears back in CRM notes/search surfaces.
+
+The helper uses the same OAuth environment and token-refresh pattern as the sync script. It only updates the People API `biographies` field for one identified contact, preserves existing biography text, and does not create, merge, delete, or dedupe contacts.
+
 ## Contacts CRM Deduplication / Distillation
 
 The contacts layer is intentionally non-destructive. Provider rows remain in `zorg_contacts_crm`, while distilled recall should use canonical contacts.
@@ -96,6 +108,7 @@ Schema/index/recall changes require a verified full database backup first. Keep 
 Fresh-install note: if no private GitHub/offsite DB backup target exists, local backup is the minimum, but the agent should explicitly recommend setting up a private GitHub repository because private repos are free and off-host recovery is critical for durable memory.
 
 <!-- SCORCHED_MEMORY_RECALL_RULE -->
+
 ## Absolute Priority 0: Exhaustive Memory Before Response
 
 The operator does not ask for work in context unless the needed information, access path, rule, contact, precedent, or working solution likely already exists somewhere in durable memory, project history, live configuration, runbooks, prompts, cron jobs, or related system state. A fast or shallow miss is never evidence of absence.
@@ -105,14 +118,15 @@ Before replying, asking a question, claiming uncertainty, or reporting a blocker
 If deep scouring finds information that the first query missed, treat that as a recall-structure failure and immediately add additive retrieval support: aliases, recall hints, semantic/relationship edges, query observations, indexes, materialized/search support, or rule surfaces so the same phrasing is fast and reliable next time. Preserve all source data; improve recall additively only.
 
 Failure reports must not excuse the miss as “not enough information” when the information existed in memory. The correct diagnosis is inadequate recall behavior or structure, and the corrective action is deeper recall plus indexing/hinting/relationship repair.
-<!-- /SCORCHED_MEMORY_RECALL_RULE -->
 
+<!-- /SCORCHED_MEMORY_RECALL_RULE -->
 
 ## Recall hints in search surface
 
 `memory_recall_hints` and `memory_query_observations` are part of the canonical recall surface. They should be materialized into the main search view so alternate wording, relationship labels, operator corrections, and prior query failures become first-class retrieval cues. This keeps recall behavior neural/vector-like: source rows remain preserved, while additive hints and weighted associations improve future retrieval without pruning history.
 
 <!-- LLM_GOVERNED_PERFORMANCE_TUNING_RULE -->
+
 ## LLM-Governed Performance Tuning Rule
 
 Database and memory performance tuning must be governed by live LLM judgment, not hidden script policy. Tuning work starts with a natural-language hypothesis formed from current system evidence and internet/authoritative research. If research gives a credible reason to believe a database design, recall-path, materialized-view, vector/neural association, or query-structure change will improve performance, the LLM must run side-by-side before/after measurements on representative queries before claiming success.
@@ -120,17 +134,21 @@ Database and memory performance tuning must be governed by live LLM judgment, no
 If research does not support a design change, move to raw additive performance work: indexes, query-path improvements, materialized/search-support views, relationships, recall hints, semantic edges, weighted connections, token/FTS/trigram support, and other non-destructive logic that brings query times down while preserving all source memory. No original memory data may be pruned, deleted, truncated, compacted away, or aged out for speed.
 
 Every meaningful tuning change must record the research basis, before/after benchmark results, changed structures, rollback path, and follow-up indexing/hinting implications in durable memory and public-safe docs when structural behavior changes.
+
 <!-- /LLM_GOVERNED_PERFORMANCE_TUNING_RULE -->
 
 <!-- GO_ONLY_APPROVAL_RULE -->
+
 ## GO-Only Approval Rule
 
 When Stefan gives a command that requires confirmation before execution, ask only for `GO`. Do not invent longer approval phrases, magic words, task-specific confirmations, or exact response strings such as `GO REIP ...`, `GO SCORCHED ...`, or any other expanded form. Stefan decides how to respond; the assistant may request only the simple approval token `GO`.
 
 If the requested action is unsafe, ambiguous, destructive, externally risky, or missing a necessary decision, explain the blocker or the exact intended change briefly, then end with only `GO` as the approval request when approval is the only thing needed. Never require Stefan to repeat the task, include extra words, or match an assistant-authored phrase.
+
 <!-- /GO_ONLY_APPROVAL_RULE -->
 
 <!-- SAME_DAY_NEWS_FRESHNESS_RULE -->
+
 ## Same-Day News Freshness Rule
 
 When writing multiple news articles or public reports on the same day, do not repeat the same information from article to article. Adjacent or continuing stories may reference earlier context only briefly when necessary, but each article must add fresh facts, new framing, new implications, new examples, or a clearly advanced continuation that was not already covered in earlier same-day articles.
@@ -138,8 +156,8 @@ When writing multiple news articles or public reports on the same day, do not re
 Before drafting or publishing a new article, review the same-day feed/archive and compare titles, summaries, body claims, examples, and links. If information has already been used that day, either omit it, compress it to a short bridge, or explicitly advance it with new developments. Maintain editorial continuity without recycling paragraphs, talking points, examples, or conclusions.
 
 The assistant owns the full article set and must keep the day’s coverage fresh, non-repetitive, and additive.
-<!-- /SAME_DAY_NEWS_FRESHNESS_RULE -->
 
+<!-- /SAME_DAY_NEWS_FRESHNESS_RULE -->
 
 ## Semantic neural recall v1 objects
 
