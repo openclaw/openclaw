@@ -2,7 +2,7 @@ import { callGateway } from "../gateway/call.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeBlockedLivenessWaitStatus } from "../shared/agent-liveness.js";
 import { parseFiniteNumber } from "../shared/number-coercion.js";
-import { AGENT_RUN_ABORTED_ERROR, isAbortedAgentStopReason } from "./run-termination.js";
+import { buildAgentRunTerminalOutcome } from "./agent-run-terminal-outcome.js";
 import {
   normalizeAgentRunTimeoutPhase,
   normalizeProviderStarted,
@@ -66,13 +66,23 @@ function normalizeAgentWaitResult(
   wait?: RawAgentWaitResponse,
 ): AgentWaitResult {
   const stopReason = typeof wait?.stopReason === "string" ? wait.stopReason : undefined;
-  const abortedStopReason = isAbortedAgentStopReason(stopReason);
-  const error =
-    abortedStopReason && typeof wait?.error !== "string" ? AGENT_RUN_ABORTED_ERROR : wait?.error;
+  const terminalOutcome =
+    status === "pending"
+      ? undefined
+      : buildAgentRunTerminalOutcome({
+          status,
+          error: wait?.error,
+          stopReason,
+          livenessState: wait?.livenessState,
+          timeoutPhase: wait?.timeoutPhase,
+          providerStarted: wait?.providerStarted,
+          startedAt: wait?.startedAt,
+          endedAt: wait?.endedAt,
+        });
   const normalized = normalizeBlockedLivenessWaitStatus({
-    status: abortedStopReason ? "error" : status,
+    status: terminalOutcome?.status ?? status,
     livenessState: wait?.livenessState,
-    error,
+    error: terminalOutcome?.error,
   });
   return {
     status: normalized.status,

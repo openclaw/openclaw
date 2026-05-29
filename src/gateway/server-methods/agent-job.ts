@@ -1,11 +1,9 @@
-import { AGENT_RUN_ABORTED_ERROR, isAbortedAgentStopReason } from "../../agents/run-termination.js";
 import {
-  normalizeAgentRunTimeoutPhase,
-  normalizeProviderStarted,
-  type AgentRunTimeoutPhase,
-} from "../../agents/run-timeout-attribution.js";
+  buildAgentRunTerminalOutcome,
+  mergeAgentRunTerminalOutcome,
+  type AgentRunTerminalOutcome,
+} from "../../agents/agent-run-terminal-outcome.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
-import { formatBlockedLivenessError, isBlockedLivenessState } from "../../shared/agent-liveness.js";
 import { setSafeTimeout } from "../../utils/timer-delay.js";
 
 const AGENT_RUN_CACHE_TTL_MS = 10 * 60_000;
@@ -40,7 +38,7 @@ type AgentRunSnapshot = {
   livenessState?: string;
   yielded?: boolean;
   pendingError?: boolean;
-  timeoutPhase?: AgentRunTimeoutPhase;
+  timeoutPhase?: AgentRunTerminalOutcome["timeoutPhase"];
   providerStarted?: boolean;
   ts: number;
 };
@@ -63,7 +61,40 @@ function pruneAgentRunCache(now = Date.now()) {
 
 function recordAgentRunSnapshot(entry: AgentRunSnapshot) {
   pruneAgentRunCache(entry.ts);
+  const existing = agentRunCache.get(entry.runId);
+  if (existing && shouldPreserveTerminalSnapshot(existing, entry)) {
+    agentRunCache.set(entry.runId, {
+      ...existing,
+      ts: entry.ts,
+    });
+    return;
+  }
   agentRunCache.set(entry.runId, entry);
+}
+
+function shouldPreserveTerminalSnapshot(
+  existing: AgentRunSnapshot,
+  incoming: AgentRunSnapshot,
+): boolean {
+  const existingOutcome = terminalOutcomeFromSnapshot(existing);
+  const incomingOutcome = terminalOutcomeFromSnapshot(incoming);
+  if (!existingOutcome) {
+    return false;
+  }
+  if (!incomingOutcome) {
+    return false;
+  }
+  const terminalOutcome = mergeAgentRunTerminalOutcome(existingOutcome, incomingOutcome);
+  return terminalOutcome === existingOutcome;
+}
+
+function terminalOutcomeFromSnapshot(
+  snapshot: AgentRunSnapshot,
+): AgentRunTerminalOutcome | undefined {
+  if (snapshot.pendingError) {
+    return undefined;
+  }
+  return buildAgentRunTerminalOutcome(snapshot);
 }
 
 function clearPendingAgentRunError(runId: string) {
@@ -85,6 +116,10 @@ function clearPendingAgentRunTimeout(runId: string) {
 }
 
 function schedulePendingAgentRunError(snapshot: AgentRunSnapshot) {
+  const pendingTimeout = pendingAgentRunTimeouts.get(snapshot.runId);
+  if (pendingTimeout && shouldPreserveTerminalSnapshot(pendingTimeout.snapshot, snapshot)) {
+    return;
+  }
   clearPendingAgentRunTimeout(snapshot.runId);
   clearPendingAgentRunError(snapshot.runId);
   const dueAt = Date.now() + AGENT_RUN_ERROR_RETRY_GRACE_MS;
@@ -166,25 +201,30 @@ function createSnapshotFromLifecycleEvent(params: {
   const error = typeof data?.error === "string" ? data.error : undefined;
   const stopReason = typeof data?.stopReason === "string" ? data.stopReason : undefined;
   const livenessState = typeof data?.livenessState === "string" ? data.livenessState : undefined;
-  const blocked = isBlockedLivenessState(livenessState);
-  const abortedStopReason = isAbortedAgentStopReason(stopReason);
-  const status =
-    phase === "error" || blocked || abortedStopReason ? "error" : data?.aborted ? "timeout" : "ok";
-  const resolvedError = abortedStopReason && !error ? AGENT_RUN_ABORTED_ERROR : error;
-  const timeoutPhase =
-    status === "timeout" ? normalizeAgentRunTimeoutPhase(data?.timeoutPhase) : undefined;
-  const providerStarted = normalizeProviderStarted(data?.providerStarted);
-  return {
-    runId,
+  const status = phase === "error" ? "error" : data?.aborted ? "timeout" : "ok";
+  const terminalOutcome = buildAgentRunTerminalOutcome({
     status,
+    error,
+    stopReason,
+    livenessState,
+    timeoutPhase: data?.timeoutPhase,
+    providerStarted: data?.providerStarted,
     startedAt,
     endedAt,
-    error: blocked ? formatBlockedLivenessError(resolvedError) : resolvedError,
+  });
+  return {
+    runId,
+    status: terminalOutcome.status,
+    startedAt,
+    endedAt,
+    error: terminalOutcome.error,
     stopReason,
     livenessState,
     ...(data?.yielded === true ? { yielded: true } : {}),
-    ...(timeoutPhase ? { timeoutPhase } : {}),
-    ...(providerStarted !== undefined ? { providerStarted } : {}),
+    ...(terminalOutcome.timeoutPhase ? { timeoutPhase: terminalOutcome.timeoutPhase } : {}),
+    ...(terminalOutcome.providerStarted !== undefined
+      ? { providerStarted: terminalOutcome.providerStarted }
+      : {}),
     ts: Date.now(),
   };
 }
@@ -277,6 +317,7 @@ export async function waitForAgentJob(params: {
     let settled = false;
     let pendingErrorTimer: NodeJS.Timeout | undefined;
     let pendingTimeoutTimer: NodeJS.Timeout | undefined;
+    let pendingTimeoutSnapshot: AgentRunSnapshot | undefined;
     let onAbort: (() => void) | undefined;
     let removeWaiter = () => {};
 
@@ -294,6 +335,7 @@ export async function waitForAgentJob(params: {
       }
       clearTimeout(pendingTimeoutTimer);
       pendingTimeoutTimer = undefined;
+      pendingTimeoutSnapshot = undefined;
     };
 
     const finish = (entry: AgentRunSnapshot | null) => {
@@ -317,6 +359,13 @@ export async function waitForAgentJob(params: {
       snapshot: AgentRunSnapshot,
       delayMs: number,
     ) => {
+      if (
+        kind === "error" &&
+        pendingTimeoutSnapshot &&
+        shouldPreserveTerminalSnapshot(pendingTimeoutSnapshot, snapshot)
+      ) {
+        return;
+      }
       clearPendingErrorTimer();
       clearPendingTimeoutTimer();
       const timerRef = setSafeTimeout(() => {
@@ -333,6 +382,7 @@ export async function waitForAgentJob(params: {
         pendingErrorTimer = timerRef;
       } else {
         pendingTimeoutTimer = timerRef;
+        pendingTimeoutSnapshot = snapshot;
       }
     };
 

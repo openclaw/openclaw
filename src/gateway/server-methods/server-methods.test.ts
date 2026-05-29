@@ -146,6 +146,106 @@ describe("waitForAgentJob", () => {
     }
   });
 
+  it("keeps a recorded hard timeout when a later lifecycle error arrives", async () => {
+    vi.useFakeTimers();
+    try {
+      const runId = `run-timeout-late-error-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const firstWait = waitForAgentJob({ runId, timeoutMs: 20_000 });
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 100 },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          startedAt: 100,
+          endedAt: 200,
+          aborted: true,
+          timeoutPhase: "provider",
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      expectRecordFields(await firstWait, {
+        status: "timeout",
+        startedAt: 100,
+        endedAt: 200,
+        timeoutPhase: "provider",
+      });
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "error",
+          startedAt: 100,
+          endedAt: 250,
+          error: "late rejection",
+        },
+      });
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      const secondWait = await waitForAgentJob({ runId, timeoutMs: 1_000 });
+      expectRecordFields(secondWait, {
+        status: "timeout",
+        startedAt: 100,
+        endedAt: 200,
+        timeoutPhase: "provider",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a pending hard timeout when a late lifecycle error arrives during grace", async () => {
+    vi.useFakeTimers();
+    try {
+      const runId = `run-pending-timeout-late-error-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const waitPromise = waitForAgentJob({ runId, timeoutMs: 20_000 });
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 100 },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          startedAt: 100,
+          endedAt: 200,
+          aborted: true,
+          timeoutPhase: "provider",
+        },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "error",
+          startedAt: 100,
+          endedAt: 250,
+          error: "late rejection",
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      expectRecordFields(await waitPromise, {
+        status: "timeout",
+        startedAt: 100,
+        endedAt: 200,
+        timeoutPhase: "provider",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps non-aborted lifecycle end events as ok", async () => {
     const snapshot = await runLifecycleScenario({
       runIdPrefix: "run-ok",
