@@ -14,7 +14,8 @@ import {
 } from "../../shared/string-coerce.js";
 import { resolveUserPath } from "../../utils.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
-import { ToolInputError } from "./common.js";
+import { optionalFiniteNumberSchema } from "../schema/typebox.js";
+import { readFiniteNumberParam, ToolInputError } from "./common.js";
 import { coerceImageModelConfig, type ImageModelConfig } from "./image-tool.helpers.js";
 import {
   applyImageModelConfigDefaults,
@@ -73,7 +74,7 @@ export const PdfToolSchema = Type.Object({
   ),
   password: Type.Optional(Type.String({ description: "Password for encrypted PDFs." })),
   model: Type.Optional(Type.String()),
-  maxBytesMb: Type.Optional(Type.Number()),
+  maxBytesMb: optionalFiniteNumberSchema({ exclusiveMinimum: 0 }),
 });
 
 // ---------------------------------------------------------------------------
@@ -354,11 +355,12 @@ export function createPdfTool(options?: {
         record,
         DEFAULT_PROMPT,
       );
-      const maxBytesMbRaw = typeof record.maxBytesMb === "number" ? record.maxBytesMb : undefined;
       const maxBytesMb =
-        typeof maxBytesMbRaw === "number" && Number.isFinite(maxBytesMbRaw) && maxBytesMbRaw > 0
-          ? maxBytesMbRaw
-          : configuredMaxBytesMb;
+        readFiniteNumberParam(record, "maxBytesMb", {
+          min: 0,
+          minExclusive: true,
+          message: "maxBytesMb must be greater than 0",
+        }) ?? configuredMaxBytesMb;
       const maxBytes = Math.floor(maxBytesMb * 1024 * 1024);
 
       // Parse page range

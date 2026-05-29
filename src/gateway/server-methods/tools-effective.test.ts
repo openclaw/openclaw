@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { McpToolCatalog, SessionMcpRuntime } from "../../agents/agent-bundle-mcp-types.js";
 import { setPluginToolMeta } from "../../plugins/tools.js";
-import { ErrorCodes } from "../protocol/index.js";
 import { testing, toolsEffectiveHandlers } from "./tools-effective.js";
 
 const runtimeMocks = vi.hoisted(() => ({

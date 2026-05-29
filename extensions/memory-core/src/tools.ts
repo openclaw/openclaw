@@ -3,7 +3,7 @@ import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-s
 import {
   asToolParamsRecord,
   jsonResult,
-  readNumberParam,
+  readFiniteNumberParam,
   readPositiveIntegerParam,
   readStringParam,
   type MemoryCorpusSearchResult,
@@ -257,7 +257,7 @@ export function createMemorySearchTool(options: {
         const rawParams = asToolParamsRecord(params);
         const query = readStringParam(rawParams, "query", { required: true });
         const maxResults = readPositiveIntegerParam(rawParams, "maxResults");
-        const minScore = readNumberParam(rawParams, "minScore");
+        const minScore = readFiniteNumberParam(rawParams, "minScore");
         const requestedCorpus = readStringParam(rawParams, "corpus") as
           | "memory"
           | "wiki"

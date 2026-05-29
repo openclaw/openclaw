@@ -248,6 +248,41 @@ export function readNonNegativeIntegerParam(
   return value;
 }
 
+export function readFiniteNumberParam(
+  params: Record<string, unknown>,
+  key: string,
+  options: {
+    message?: string;
+    min?: number;
+    max?: number;
+    minExclusive?: boolean;
+    maxExclusive?: boolean;
+  } = {},
+): number | undefined {
+  const value = readNumberParam(params, key, {
+    strict: true,
+  });
+  if (value === undefined) {
+    if (readParamRaw(params, key) != null) {
+      throw new ToolInputError(options.message ?? `${key} must be a finite number`);
+    }
+    return undefined;
+  }
+  if (options.min !== undefined) {
+    const below = options.minExclusive ? value <= options.min : value < options.min;
+    if (below) {
+      throw new ToolInputError(options.message ?? `${key} must be a finite number`);
+    }
+  }
+  if (options.max !== undefined) {
+    const above = options.maxExclusive ? value >= options.max : value > options.max;
+    if (above) {
+      throw new ToolInputError(options.message ?? `${key} must be a finite number`);
+    }
+  }
+  return value;
+}
+
 export function readStringArrayParam(
   params: Record<string, unknown>,
   key: string,

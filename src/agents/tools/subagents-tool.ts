@@ -1,6 +1,6 @@
 import { Type } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
-import { optionalStringEnum } from "../schema/typebox.js";
+import { optionalPositiveIntegerSchema, optionalStringEnum } from "../schema/typebox.js";
 import {
   DEFAULT_RECENT_MINUTES,
   listControlledSubagentRuns,
@@ -16,7 +16,7 @@ type SubagentAction = (typeof SUBAGENT_ACTIONS)[number];
 
 const SubagentsToolSchema = Type.Object({
   action: optionalStringEnum(SUBAGENT_ACTIONS),
-  recentMinutes: Type.Optional(Type.Integer({ minimum: 1 })),
+  recentMinutes: optionalPositiveIntegerSchema(),
 });
 
 export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAgentTool {

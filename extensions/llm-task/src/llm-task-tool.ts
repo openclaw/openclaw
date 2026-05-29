@@ -1,11 +1,15 @@
 import path from "node:path";
 import { buildModelAliasIndex, resolveModelRefFromString } from "openclaw/plugin-sdk/agent-runtime";
 import {
+  optionalFiniteNumberSchema,
+  optionalPositiveIntegerSchema,
+} from "openclaw/plugin-sdk/channel-actions";
+import {
   type JsonSchemaObject,
   validateJsonSchemaValue,
 } from "openclaw/plugin-sdk/json-schema-runtime";
+import { readFiniteNumberParam, readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import {
-  asFiniteNumber,
   asPositiveSafeInteger,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -127,9 +131,11 @@ export const llmTaskToolDefinition = {
     model: Type.Optional(Type.String({ description: "Model id override." })),
     thinking: Type.Optional(Type.String({ description: "Thinking level override." })),
     authProfileId: Type.Optional(Type.String({ description: "Auth profile override." })),
-    temperature: Type.Optional(Type.Number({ description: "Best-effort temperature override." })),
-    maxTokens: Type.Optional(Type.Number({ description: "Best-effort maxTokens override." })),
-    timeoutMs: Type.Optional(Type.Number({ description: "Timeout for the LLM run." })),
+    temperature: optionalFiniteNumberSchema({ description: "Best-effort temperature override." }),
+    maxTokens: optionalPositiveIntegerSchema({
+      description: "Best-effort maxTokens override.",
+    }),
+    timeoutMs: optionalPositiveIntegerSchema({ description: "Timeout for the LLM run." }),
   }),
 };
 
@@ -224,14 +230,15 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
       }
 
       const timeoutMs =
-        asPositiveSafeInteger(params.timeoutMs) ??
+        readPositiveIntegerParam(params as Record<string, unknown>, "timeoutMs") ??
         asPositiveSafeInteger(pluginCfg.timeoutMs) ??
         30_000;
 
       const streamParams = {
-        temperature: asFiniteNumber(params.temperature),
+        temperature: readFiniteNumberParam(params as Record<string, unknown>, "temperature"),
         maxTokens:
-          asPositiveSafeInteger(params.maxTokens) ?? asPositiveSafeInteger(pluginCfg.maxTokens),
+          readPositiveIntegerParam(params as Record<string, unknown>, "maxTokens") ??
+          asPositiveSafeInteger(pluginCfg.maxTokens),
       };
 
       const input = params.input;

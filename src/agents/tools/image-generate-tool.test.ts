@@ -1300,7 +1300,7 @@ describe("createImageGenerateTool", () => {
     expect(details.outputFormat).toBe("jpeg");
   });
 
-  it("rejects malformed OpenAI output compression", async () => {
+  it.each([60.5, "60px", null])("rejects malformed OpenAI output compression %s", async (value) => {
     const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
       provider: "openai",
       model: "gpt-image-2",
@@ -1327,7 +1327,7 @@ describe("createImageGenerateTool", () => {
         prompt: "Cheap preview",
         outputFormat: "jpeg",
         openai: {
-          outputCompression: 60.5,
+          outputCompression: value,
         },
       }),
     ).rejects.toThrow("openai.outputCompression must be between 0 and 100");
@@ -1501,7 +1501,7 @@ describe("createImageGenerateTool", () => {
     );
   });
 
-  it("rejects fractional image counts", async () => {
+  it.each([2.5, "2cats", null])("rejects malformed image count %s", async (count) => {
     const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
       provider: "google",
       model: "gemini-3.1-flash-image-preview",
@@ -1526,7 +1526,7 @@ describe("createImageGenerateTool", () => {
     await expect(
       tool.execute("call-fractional-count", {
         prompt: "A cat wearing sunglasses",
-        count: 2.5,
+        count,
       }),
     ).rejects.toThrow("count must be between 1 and 4");
     expect(generateImage).not.toHaveBeenCalled();

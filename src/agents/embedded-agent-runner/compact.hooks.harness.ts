@@ -110,6 +110,7 @@ function createMockCompactionSession() {
         set messages(messages: unknown[]) {
           session.messages = [...messages];
         },
+        systemPrompt: undefined as string | undefined,
       },
     },
     compact: vi.fn(async () => {
@@ -117,6 +118,9 @@ function createMockCompactionSession() {
       return await sessionCompactImpl();
     }),
     setActiveToolsByName: vi.fn(),
+    setBaseSystemPrompt: vi.fn((systemPrompt: string) => {
+      session.agent.state.systemPrompt = systemPrompt;
+    }),
     abortCompaction: sessionAbortCompactionMock,
     dispose: vi.fn(),
   };
@@ -469,7 +473,8 @@ export async function loadCompactHooksHarness(): Promise<{
     resolveProviderSystemPromptContribution: vi.fn(() => undefined),
     resolveProviderTextTransforms: vi.fn(() => undefined),
     transformProviderSystemPrompt: vi.fn(
-      (params: { systemPrompt?: string }) => params.systemPrompt,
+      (params: { systemPrompt?: string; context?: { systemPrompt?: string } }) =>
+        params.context?.systemPrompt ?? params.systemPrompt,
     ),
   }));
 
@@ -854,9 +859,12 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("./system-prompt.js", () => ({
-    applySystemPromptOverrideToSession: vi.fn(),
+    applySystemPromptToSession: vi.fn(
+      (session: { setBaseSystemPrompt: (systemPrompt: string) => void }, systemPrompt: string) => {
+        session.setBaseSystemPrompt(systemPrompt);
+      },
+    ),
     buildEmbeddedSystemPrompt: buildEmbeddedSystemPromptMock,
-    createSystemPromptOverride: vi.fn(() => () => ""),
   }));
 
   vi.doMock("./utils.js", async () => {

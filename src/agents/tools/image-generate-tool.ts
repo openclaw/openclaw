@@ -45,7 +45,12 @@ import {
   recordRecentMediaGenerationTaskStartForSession,
 } from "../media-generation-task-status-shared.js";
 import { optionalStringEnum } from "../schema/string-enum.js";
-import { ToolInputError, readNumberParam, readStringParam } from "./common.js";
+import {
+  ToolInputError,
+  readNonNegativeIntegerParam,
+  readPositiveIntegerParam,
+  readStringParam,
+} from "./common.js";
 import {
   completeImageGenerationTaskRun,
   createImageGenerationTaskRun,
@@ -236,11 +241,13 @@ function resolveAction(args: Record<string, unknown>): "generate" | "list" | "st
 }
 
 function resolveRequestedCount(args: Record<string, unknown>): number {
-  const count = readNumberParam(args, "count", { positiveInteger: true });
+  if (readSnakeCaseParamRaw(args, "count") === null) {
+    throw new ToolInputError(`count must be between 1 and ${MAX_COUNT}`);
+  }
+  const count = readPositiveIntegerParam(args, "count", {
+    message: `count must be between 1 and ${MAX_COUNT}`,
+  });
   if (count === undefined) {
-    if (readSnakeCaseParamRaw(args, "count") !== undefined) {
-      throw new ToolInputError(`count must be between 1 and ${MAX_COUNT}`);
-    }
     return DEFAULT_COUNT;
   }
   if (count < 1 || count > MAX_COUNT) {
@@ -343,14 +350,13 @@ function normalizeOpenAIOptions(args: Record<string, unknown>): ImageGenerationO
   const raw = readRecordParam(args, "openai");
   const background = normalizeOpenAIBackground(readStringParam(raw, "background"));
   const moderation = normalizeOpenAIModeration(readStringParam(raw, "moderation"));
-  const outputCompression = readNumberParam(raw, "outputCompression", { nonNegativeInteger: true });
-  const user = readStringParam(raw, "user");
-  if (
-    outputCompression === undefined &&
-    readSnakeCaseParamRaw(raw, "outputCompression") !== undefined
-  ) {
+  if (readSnakeCaseParamRaw(raw, "outputCompression") === null) {
     throw new ToolInputError("openai.outputCompression must be between 0 and 100");
   }
+  const outputCompression = readNonNegativeIntegerParam(raw, "outputCompression", {
+    message: "openai.outputCompression must be between 0 and 100",
+  });
+  const user = readStringParam(raw, "user");
   if (outputCompression !== undefined && (outputCompression < 0 || outputCompression > 100)) {
     throw new ToolInputError("openai.outputCompression must be between 0 and 100");
   }

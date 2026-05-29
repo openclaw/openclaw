@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createActionGate,
+  readFiniteNumberParam,
   readNonNegativeIntegerParam,
   readPositiveIntegerParam,
   readNumberParam,
@@ -125,6 +126,28 @@ describe("readNumberParam", () => {
         message: "deleteDays must be an integer from 0 to 7",
       }),
     ).toThrow("deleteDays must be an integer from 0 to 7");
+  });
+
+  it("throws for invalid present bounded finite number params", () => {
+    expect(readFiniteNumberParam({ quality: "0.75" }, "quality")).toBe(0.75);
+    expect(readFiniteNumberParam({ quality: null }, "quality")).toBeUndefined();
+    expect(() => readFiniteNumberParam({ quality: "0.8jpg" }, "quality")).toThrow(
+      "quality must be a finite number",
+    );
+    expect(() =>
+      readFiniteNumberParam({ quality: 1.1 }, "quality", {
+        min: 0,
+        max: 1,
+        message: "quality must be between 0 and 1",
+      }),
+    ).toThrow("quality must be between 0 and 1");
+    expect(() =>
+      readFiniteNumberParam({ fps: 0 }, "fps", {
+        min: 0,
+        minExclusive: true,
+        message: "fps must be greater than 0",
+      }),
+    ).toThrow("fps must be greater than 0");
   });
 });
 
