@@ -3,7 +3,11 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveStateDir } from "../config/paths.js";
-import { hydrateSessionStoreSkillPromptRefs } from "../config/sessions/skill-prompt-blobs.js";
+import {
+  ensureSessionStorePromptBlobsForPersistence,
+  hydrateSessionStoreSkillPromptRefs,
+  projectSessionStoreForPersistence,
+} from "../config/sessions/skill-prompt-blobs.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -451,15 +455,17 @@ export async function noteSessionSnapshotHealth(params?: {
   if (params?.shouldRepair) {
     let repairedStores = 0;
     let totalReplacements = 0;
+    let leftoverFindings = 0;
 
     for (const [storePath, findings] of findingsByStore) {
       try {
+        // Load store with hydration (same as scanner uses)
+        const store = loadSessionStoreForSnapshotScan(storePath);
         const raw = fs.readFileSync(storePath, "utf-8");
-        const sessions = JSON.parse(raw) as Record<string, Record<string, unknown>>;
 
         let storeCount = 0;
         for (const finding of findings) {
-          const session = sessions[finding.sessionKey];
+          const session = store[finding.sessionKey] as Record<string, unknown> | undefined;
           if (!session) {
             continue;
           }
@@ -471,11 +477,29 @@ export async function noteSessionSnapshotHealth(params?: {
           const backupPath = `${storePath}.bak.${Date.now()}`;
           await writeTextAtomic(backupPath, raw, { mode: 0o600 });
 
+          // Convert hydrated prompts back to promptRef blobs where needed
+          const { store: persisted, promptBlobs } = projectSessionStoreForPersistence({
+            storePath,
+            store: store as Record<string, SessionEntry>,
+          });
+
+          // Write prompt blob files
+          await ensureSessionStorePromptBlobsForPersistence({ storePath, promptBlobs });
+
           // Atomic write to prevent partial writes or corruption
-          const fixed = JSON.stringify(sessions, null, 2);
+          const fixed = JSON.stringify(persisted, null, 2);
           await writeTextAtomic(storePath, fixed, { mode: 0o600 });
           totalReplacements += storeCount;
           repairedStores++;
+
+          // Rescan to report leftover findings
+          const repairedStore = loadSessionStoreForSnapshotScan(storePath);
+          const leftovers = scanSessionStoreForStaleRuntimeSnapshotPaths({
+            store: repairedStore,
+            bundledSkillsDir,
+            env: params?.env,
+          });
+          leftoverFindings += leftovers.length;
         }
       } catch (err) {
         note(
@@ -486,10 +510,15 @@ export async function noteSessionSnapshotHealth(params?: {
     }
 
     if (repairedStores > 0) {
-      note(
-        `- Repaired ${totalReplacements} stale path${totalReplacements === 1 ? "" : "s"} across ${repairedStores} store${repairedStores === 1 ? "" : "s"}.`,
-        "Session snapshots",
-      );
+      const msg = `- Repaired ${totalReplacements} stale path${totalReplacements === 1 ? "" : "s"} across ${repairedStores} store${repairedStores === 1 ? "" : "s"}.`;
+      if (leftoverFindings > 0) {
+        note(
+          `${msg}\n  ${leftoverFindings} stale path${leftoverFindings === 1 ? "" : "s"} still remain (possibly non-bundled or non-repairable).`,
+          "Session snapshots",
+        );
+      } else {
+        note(msg, "Session snapshots");
+      }
       return;
     }
   }
