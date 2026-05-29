@@ -77,10 +77,11 @@ function cadenceTag(cadence: MemoryAuditCadence): string {
 function buildAuditInstruction(cadence: MemoryAuditCadence): string {
   return [
     `Run the OpenClaw ${cadence} memory audit.`,
-    "Use memory_audit_collect to inspect durable memory surfaces.",
+    "Use memory_audit_collect to inspect writable memory targets, daily memory files, and session logs.",
     "Use memory_audit_stage to stage only high-value add, edit, delete, or move recommendations.",
+    "Use add when promoting facts found in read-only daily memory or session-log evidence.",
     "Do not edit memory files directly; a human applies or rejects staged recommendations.",
-    "Prefer removing junk, correcting stale memories, and moving facts to the right surface over adding more memory.",
+    "Prefer removing junk, correcting stale memories, and moving facts to AGENTS.md, MEMORY.md, USER.md, TOOLS.md, or shared memory over adding more memory.",
   ].join(" ");
 }
 

@@ -584,7 +584,7 @@ export function createMemoryAuditCollectTool(options: {
     label: "Memory Audit Collect",
     name: "memory_audit_collect",
     description:
-      "Collect durable memory surfaces for a human-approved memory quality audit. Use this before staging add, edit, delete, or move recommendations.",
+      "Collect writable memory targets plus read-only daily memory and session-log evidence for a human-approved memory quality audit. Use this before staging add, edit, delete, or move recommendations.",
     parameters: MemoryAuditCollectSchema,
     execute: async (_toolCallId, params) => {
       const latestCtx = resolveAuditToolContext(options) ?? ctx;
@@ -621,7 +621,7 @@ export function createMemoryAuditStageTool(options: {
     label: "Memory Audit Stage",
     name: "memory_audit_stage",
     description:
-      "Stage one human-approved memory audit recommendation. Supports add, edit, delete, and move actions across MEMORY.md, USER.md, TOOLS.md, and shared memory.",
+      "Stage one human-approved memory audit recommendation. Supports add, edit, delete, and move actions across AGENTS.md, MEMORY.md, USER.md, TOOLS.md, and shared memory. Use add to promote facts found in read-only daily memory or session logs.",
     parameters: MemoryAuditStageSchema,
     execute: async (_toolCallId, params) => {
       const latestCtx = resolveAuditToolContext(options) ?? ctx;

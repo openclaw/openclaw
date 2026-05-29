@@ -171,7 +171,14 @@ export type DoctorMemoryAuditSuggestionPayload = {
   confidence: number;
   target: {
     surfaceId: string;
-    kind: "agent-memory" | "user-profile" | "tool-notes" | "shared-memory";
+    kind:
+      | "agent-instructions"
+      | "agent-memory"
+      | "user-profile"
+      | "tool-notes"
+      | "shared-memory"
+      | "daily-memory"
+      | "session-log";
     path: string;
     workspaceDir: string;
     agentId?: string;

@@ -3,10 +3,13 @@ import type { ConfigSnapshot } from "../types.ts";
 
 export type MemoryAuditAction = "add" | "edit" | "delete" | "move";
 export type MemoryAuditSurfaceKind =
+  | "agent-instructions"
   | "agent-memory"
   | "user-profile"
   | "tool-notes"
-  | "shared-memory";
+  | "shared-memory"
+  | "daily-memory"
+  | "session-log";
 export type MemoryAuditSuggestionStatus = "pending" | "applied" | "rejected" | "conflict";
 
 export type MemoryAuditSuggestionTarget = {
@@ -353,10 +356,13 @@ function normalizeAction(value: unknown): MemoryAuditAction | null {
 }
 
 function normalizeKind(value: unknown): MemoryAuditSurfaceKind | null {
-  return value === "agent-memory" ||
+  return value === "agent-instructions" ||
+    value === "agent-memory" ||
     value === "user-profile" ||
     value === "tool-notes" ||
-    value === "shared-memory"
+    value === "shared-memory" ||
+    value === "daily-memory" ||
+    value === "session-log"
     ? value
     : null;
 }

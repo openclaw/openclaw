@@ -5,21 +5,30 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
+  resolveSessionAgentId,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   formatMemoryDreamingDay,
   resolveMemoryDreamingWorkspaces,
 } from "openclaw/plugin-sdk/memory-core-host-status";
+import {
+  resolveSessionFilePath,
+  type SessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
+import { loadCombinedSessionStoreForGateway } from "openclaw/plugin-sdk/session-transcript-hit";
 
 export const MEMORY_AUDIT_SUGGESTIONS_RELATIVE_PATH = "memory/audit/suggestions.jsonl";
 export const MEMORY_AUDIT_REPORTS_RELATIVE_DIR = "memory/audit/reports";
 
 export type MemoryAuditAction = "add" | "edit" | "delete" | "move";
 export type MemoryAuditSurfaceKind =
+  | "agent-instructions"
   | "agent-memory"
   | "user-profile"
   | "tool-notes"
-  | "shared-memory";
+  | "shared-memory"
+  | "daily-memory"
+  | "session-log";
 export type MemoryAuditSuggestionStatus = "pending" | "applied" | "rejected" | "conflict";
 
 export type MemoryAuditSurface = {
@@ -29,6 +38,7 @@ export type MemoryAuditSurface = {
   workspaceDir: string;
   path: string;
   agentId?: string;
+  writable: boolean;
   exists: boolean;
   lineCount: number;
   updatedAtMs?: number;
@@ -111,7 +121,12 @@ type StageInput = {
 const DEFAULT_BLOCK_LIMIT = 60;
 const MAX_BLOCK_LIMIT = 200;
 const MAX_LINES_PER_BLOCK = 8;
-const SURFACE_PATHS: Readonly<Record<Exclude<MemoryAuditSurfaceKind, "shared-memory">, string>> = {
+const MAX_DAILY_MEMORY_SURFACES = 14;
+const MAX_SESSION_LOG_SURFACES = 20;
+const WRITABLE_SURFACE_PATHS: Readonly<
+  Record<Exclude<MemoryAuditSurfaceKind, "shared-memory" | "daily-memory" | "session-log">, string>
+> = {
+  "agent-instructions": "AGENTS.md",
   "agent-memory": "MEMORY.md",
   "user-profile": "USER.md",
   "tool-notes": "TOOLS.md",
@@ -128,12 +143,19 @@ function normalizeAction(value: unknown): MemoryAuditAction | undefined {
 }
 
 function normalizeKind(value: unknown): MemoryAuditSurfaceKind | undefined {
-  return value === "agent-memory" ||
+  return value === "agent-instructions" ||
+    value === "agent-memory" ||
     value === "user-profile" ||
     value === "tool-notes" ||
-    value === "shared-memory"
+    value === "shared-memory" ||
+    value === "daily-memory" ||
+    value === "session-log"
     ? value
     : undefined;
+}
+
+function isWritableSurfaceKind(kind: MemoryAuditSurfaceKind): boolean {
+  return kind !== "daily-memory" && kind !== "session-log";
 }
 
 function clampConfidence(value: unknown): number {
@@ -184,7 +206,7 @@ function surfaceId(params: {
   return hashText([params.workspaceDir, params.kind, params.path, params.agentId ?? ""].join("\0"));
 }
 
-async function statMarkdownFile(filePath: string): Promise<{
+async function statTextFile(filePath: string): Promise<{
   exists: boolean;
   text: string;
   lineCount: number;
@@ -224,7 +246,8 @@ function buildSurface(params: {
   path: string;
   label: string;
   agentId?: string;
-  stat: Awaited<ReturnType<typeof statMarkdownFile>>;
+  writable?: boolean;
+  stat: Awaited<ReturnType<typeof statTextFile>>;
 }): MemoryAuditSurface {
   return {
     id: surfaceId(params),
@@ -233,10 +256,158 @@ function buildSurface(params: {
     workspaceDir: params.workspaceDir,
     path: params.path,
     ...(params.agentId ? { agentId: params.agentId } : {}),
+    writable: params.writable ?? isWritableSurfaceKind(params.kind),
     exists: params.stat.exists,
     lineCount: params.stat.lineCount,
     updatedAtMs: params.stat.updatedAtMs,
   };
+}
+
+async function collectDailyMemorySurfaces(params: {
+  workspaceDir: string;
+  agentIds: string[];
+}): Promise<MemoryAuditSurface[]> {
+  const memoryDir = path.join(params.workspaceDir, "memory");
+  const entries = await fs.readdir(memoryDir, { withFileTypes: true }).catch(() => []);
+  const candidates = await Promise.all(
+    entries
+      .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".md"))
+      .map(async (entry) => {
+        const relPath = `memory/${entry.name}`;
+        const stat = await statTextFile(path.join(params.workspaceDir, relPath));
+        return { relPath, stat };
+      }),
+  );
+  return candidates
+    .filter((candidate) => candidate.stat.exists)
+    .toSorted((a, b) => (b.stat.updatedAtMs ?? 0) - (a.stat.updatedAtMs ?? 0))
+    .slice(0, MAX_DAILY_MEMORY_SURFACES)
+    .map(({ relPath, stat }) =>
+      buildSurface({
+        kind: "daily-memory",
+        workspaceDir: params.workspaceDir,
+        path: relPath,
+        label: `daily ${relPath}`,
+        agentId: params.agentIds.length === 1 ? params.agentIds[0] : undefined,
+        writable: false,
+        stat,
+      }),
+    );
+}
+
+function extractTranscriptText(line: string): string | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object" || !("message" in parsed)) {
+    return null;
+  }
+  const message = (parsed as { message?: unknown }).message;
+  if (!message || typeof message !== "object") {
+    return null;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (typeof content === "string") {
+    return content.trim() || null;
+  }
+  if (!Array.isArray(content)) {
+    return null;
+  }
+  const text = content
+    .map((part) => {
+      if (!part || typeof part !== "object") {
+        return "";
+      }
+      const value =
+        (part as { text?: unknown; content?: unknown }).text ??
+        (part as { text?: unknown; content?: unknown }).content;
+      return typeof value === "string" ? value.trim() : "";
+    })
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+  return text || null;
+}
+
+function buildBlocksForSessionSurface(
+  surface: MemoryAuditSurface,
+  text: string,
+): MemoryAuditBlock[] {
+  const blocks: MemoryAuditBlock[] = [];
+  const lines = text.split(/\r?\n/);
+  for (const [index, line] of lines.entries()) {
+    const selected = extractTranscriptText(line);
+    if (!selected) {
+      continue;
+    }
+    blocks.push({
+      surface,
+      startLine: index + 1,
+      endLine: index + 1,
+      text: selected,
+      hash: hashText(selected),
+    });
+  }
+  return blocks;
+}
+
+async function collectSessionLogSurfaces(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+}): Promise<MemoryAuditSurface[]> {
+  const { store, storePath } = loadCombinedSessionStoreForGateway(params.cfg, {
+    agentId: params.agentId,
+  });
+  const sessionsDir = storePath === "(multiple)" ? undefined : path.dirname(storePath);
+  const seenFiles = new Set<string>();
+  const candidates: Array<{
+    key: string;
+    entry: SessionEntry;
+    filePath: string;
+  }> = [];
+  for (const [key, entry] of Object.entries(store)) {
+    if (!entry.sessionId) {
+      continue;
+    }
+    const ownerAgentId = resolveSessionAgentId({ sessionKey: key, config: params.cfg });
+    if (ownerAgentId !== params.agentId) {
+      continue;
+    }
+    const filePath = resolveSessionFilePath(entry.sessionId, entry, {
+      agentId: params.agentId,
+      ...(sessionsDir ? { sessionsDir } : {}),
+    });
+    if (seenFiles.has(filePath)) {
+      continue;
+    }
+    seenFiles.add(filePath);
+    candidates.push({ key, entry, filePath });
+  }
+  const newest = candidates
+    .toSorted((a, b) => (b.entry.updatedAt ?? 0) - (a.entry.updatedAt ?? 0))
+    .slice(0, MAX_SESSION_LOG_SURFACES);
+  const surfaces: MemoryAuditSurface[] = [];
+  for (const candidate of newest) {
+    const stat = await statTextFile(candidate.filePath);
+    if (!stat.exists) {
+      continue;
+    }
+    surfaces.push(
+      buildSurface({
+        kind: "session-log",
+        workspaceDir: path.dirname(candidate.filePath),
+        path: path.basename(candidate.filePath),
+        label: `${params.agentId} session ${candidate.key}`,
+        agentId: params.agentId,
+        writable: false,
+        stat,
+      }),
+    );
+  }
+  return surfaces;
 }
 
 export async function collectMemoryAuditSurfaces(params: {
@@ -247,9 +418,14 @@ export async function collectMemoryAuditSurfaces(params: {
   for (const workspace of workspaces) {
     for (const agentId of workspace.agentIds) {
       const agentWorkspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
-      for (const kind of ["agent-memory", "user-profile", "tool-notes"] as const) {
-        const relPath = SURFACE_PATHS[kind];
-        const fileStat = await statMarkdownFile(path.join(agentWorkspaceDir, relPath));
+      for (const kind of [
+        "agent-instructions",
+        "agent-memory",
+        "user-profile",
+        "tool-notes",
+      ] as const) {
+        const relPath = WRITABLE_SURFACE_PATHS[kind];
+        const fileStat = await statTextFile(path.join(agentWorkspaceDir, relPath));
         surfaces.push(
           buildSurface({
             kind,
@@ -261,12 +437,19 @@ export async function collectMemoryAuditSurfaces(params: {
           }),
         );
       }
+      surfaces.push(...(await collectSessionLogSurfaces({ cfg: params.cfg, agentId })));
     }
+    surfaces.push(
+      ...(await collectDailyMemorySurfaces({
+        workspaceDir: workspace.workspaceDir,
+        agentIds: workspace.agentIds,
+      })),
+    );
   }
   const primary = workspaces[0]?.workspaceDir;
   if (primary) {
     const relPath = "shared-memory.md";
-    const fileStat = await statMarkdownFile(path.join(primary, relPath));
+    const fileStat = await statTextFile(path.join(primary, relPath));
     surfaces.push(
       buildSurface({
         kind: "shared-memory",
@@ -277,7 +460,12 @@ export async function collectMemoryAuditSurfaces(params: {
       }),
     );
   }
-  return surfaces.toSorted((a, b) => a.label.localeCompare(b.label));
+  return surfaces.toSorted((a, b) => {
+    if (a.writable !== b.writable) {
+      return a.writable ? -1 : 1;
+    }
+    return a.label.localeCompare(b.label);
+  });
 }
 
 function buildBlocksForSurface(surface: MemoryAuditSurface, text: string): MemoryAuditBlock[] {
@@ -324,15 +512,21 @@ export async function collectMemoryAuditContext(params: {
       continue;
     }
     const text = await fs.readFile(path.join(surface.workspaceDir, surface.path), "utf8");
-    blocks.push(...buildBlocksForSurface(surface, text));
+    blocks.push(
+      ...(surface.kind === "session-log"
+        ? buildBlocksForSessionSurface(surface, text)
+        : buildBlocksForSurface(surface, text)),
+    );
     if (blocks.length >= limit) {
       break;
     }
   }
   const summaries = await Promise.all(
-    [...new Set(surfaces.map((surface) => surface.workspaceDir))].map((workspaceDir) =>
-      readMemoryAuditSuggestions({ workspaceDir }),
-    ),
+    [
+      ...new Set(
+        surfaces.filter((surface) => surface.writable).map((surface) => surface.workspaceDir),
+      ),
+    ].map((workspaceDir) => readMemoryAuditSuggestions({ workspaceDir })),
   );
   return {
     auditAgentId: params.auditAgentId,
@@ -410,6 +604,9 @@ function resolveTarget(params: {
     ? params.surfaces.find((surface) => surface.id === params.input?.surfaceId)
     : undefined;
   if (byId) {
+    if (!byId.writable) {
+      throw new Error("memory audit target must be a writable memory surface");
+    }
     return targetFromSurface(byId);
   }
   const kind = normalizeKind(params.input?.kind) ?? params.sourceSurface?.kind ?? "agent-memory";
@@ -424,13 +621,18 @@ function resolveTarget(params: {
     throw new Error("memory audit target workspace unavailable");
   }
   const fallbackPath =
-    kind === "user-profile"
-      ? "USER.md"
-      : kind === "tool-notes"
-        ? "TOOLS.md"
-        : kind === "shared-memory"
-          ? "shared-memory.md"
-          : "MEMORY.md";
+    kind === "agent-instructions"
+      ? "AGENTS.md"
+      : kind === "user-profile"
+        ? "USER.md"
+        : kind === "tool-notes"
+          ? "TOOLS.md"
+          : kind === "shared-memory"
+            ? "shared-memory.md"
+            : "MEMORY.md";
+  if (!isWritableSurfaceKind(kind)) {
+    throw new Error("memory audit target must be a writable memory surface");
+  }
   const relPath = normalizeRelativeMarkdownPath(params.input?.path, fallbackPath);
   return {
     surfaceId: surfaceId({ workspaceDir, kind, path: relPath, agentId }),
@@ -479,6 +681,9 @@ export async function stageMemoryAuditSuggestions(params: {
       : undefined;
     if (action !== "add" && !sourceSurface) {
       continue;
+    }
+    if (sourceSurface && !sourceSurface.writable && action !== "add") {
+      throw new Error("memory audit can only add recommendations from read-only evidence surfaces");
     }
     const text = normalizeMarkdownLine(input.text ?? "");
     if ((action === "add" || action === "edit" || action === "move") && !text) {
@@ -530,6 +735,9 @@ function readRangeHash(lines: string[], startLine: number, endLine: number): str
 }
 
 async function appendToTarget(target: MemoryAuditSuggestionTarget, text: string) {
+  if (!isWritableSurfaceKind(target.kind)) {
+    throw new Error("memory audit target must be a writable memory surface");
+  }
   const targetPath = path.join(target.workspaceDir, target.path);
   await fs.mkdir(path.dirname(targetPath), { recursive: true });
   const existing = await fs.readFile(targetPath, "utf8").catch((err: unknown) => {

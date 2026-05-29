@@ -165,6 +165,46 @@ describe("memory audit view", () => {
     expect(text(container)).toContain("84%");
   });
 
+  it("renders new audit source and target kind labels", () => {
+    const container = renderInto(
+      buildProps({
+        suggestions: {
+          agentId: "hex",
+          workspaces: ["/workspace/hex"],
+          total: 1,
+          pending: 1,
+          applied: 0,
+          rejected: 0,
+          conflict: 0,
+          suggestions: [
+            buildSuggestion({
+              source: {
+                surfaceId: "session-log:hex",
+                kind: "session-log",
+                path: "thread-1.jsonl",
+                workspaceDir: "/sessions/hex",
+                agentId: "hex",
+                startLine: 2,
+                endLine: 2,
+                hash: "def456",
+              },
+              target: {
+                surfaceId: "agent-instructions:hex",
+                kind: "agent-instructions",
+                path: "AGENTS.md",
+                workspaceDir: "/workspace/hex",
+                agentId: "hex",
+              },
+            }),
+          ],
+        },
+      }),
+    );
+
+    expect(text(container)).toContain("Agent instructions");
+    expect(text(container)).toContain("thread-1.jsonl:2-2");
+  });
+
   it("calls apply and reject handlers for pending suggestions", () => {
     const onApply = vi.fn();
     const onReject = vi.fn();

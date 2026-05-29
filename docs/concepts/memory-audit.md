@@ -8,21 +8,28 @@ title: "Memory Audit"
 
 # Memory Audit
 
-Memory Audit is a separate memory quality pass from Dreaming.
-Dreaming promotes short-term candidates into durable memory; Memory Audit reviews
-durable memory after the fact and stages recommendations for a human to apply or
-reject.
+Memory Audit is a human-reviewed alternative for memory quality work.
+Dreaming promotes short-term candidates into durable memory automatically;
+Memory Audit uses an audit agent to inspect memory and session evidence, stage
+recommendations, and leave the final apply or reject decision to a human.
 
-The audit agent can inspect durable memory surfaces:
+The audit agent can inspect writable target surfaces:
 
+- `AGENTS.md`
 - `MEMORY.md`
 - `USER.md`
 - `TOOLS.md`
 - `shared-memory.md`
 
+It also inspects read-only evidence sources:
+
+- recent daily memory files under `memory/*.md`
+- recent session transcript logs
+
 Recommendations are stored as pending records in `memory/audit/suggestions.jsonl`.
-Staging a recommendation does **not** edit memory files. Durable writes happen
-only when an operator applies a pending suggestion through the Gateway.
+Staging a recommendation does **not** edit memory files. Daily memory files and
+session logs are source evidence only; applying a recommendation can promote
+facts from them into the writable targets above.
 
 ## Actions
 
@@ -81,9 +88,9 @@ Defaults:
 - Session target: `session:memory-audit`
 
 The managed cron jobs ask the configured audit agent to run
-`memory_audit_collect`, inspect durable surfaces, and call `memory_audit_stage`
-for high-value recommendations. The prompt explicitly tells the agent not to edit
-memory files directly.
+`memory_audit_collect`, inspect writable targets plus daily/session evidence,
+and call `memory_audit_stage` for high-value recommendations. The prompt
+explicitly tells the agent not to edit memory files directly.
 
 The session target controls where the audit run happens. Report delivery is
 separate: `delivery.mode` can be `none`, `announce`, or `webhook`. Dashboard
@@ -95,13 +102,13 @@ accounts from the connected Gateway.
 Dreaming and Memory Audit are intentionally independent:
 
 - Dreaming runs the promotion pipeline.
-- Memory Audit reviews existing durable memory.
+- Memory Audit reviews existing durable memory plus daily and session evidence.
 - Dreaming can write durable promotions during its deep phase.
 - Memory Audit only stages recommendations until a human applies one.
 
 Use Dreaming when you want automatic short-term-to-long-term consolidation. Use
-Memory Audit when you want a review queue for cleanup, correction, and moving
-facts to the right surface.
+Memory Audit when you want a review queue that can clean up bad durable memory
+and promote useful facts from daily notes or session logs into the right target.
 
 ## Files
 

@@ -1248,10 +1248,13 @@ export const it: TranslationMap = {
       conflict: "Conflict",
     },
     kind: {
+      "agent-instructions": "Agent instructions",
       "agent-memory": "Agent memory",
       "user-profile": "User profile",
       "tool-notes": "Tool notes",
       "shared-memory": "Shared memory",
+      "daily-memory": "Daily memory",
+      "session-log": "Session log",
     },
   },
   languages: {
