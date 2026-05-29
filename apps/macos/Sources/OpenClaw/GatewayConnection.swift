@@ -514,12 +514,16 @@ extension GatewayConnection {
         var params: [String: AnyCodable] = [
             "message": AnyCodable(trimmed),
             "sessionKey": AnyCodable(sessionKey),
-            "thinking": AnyCodable(invocation.thinking ?? "default"),
             "deliver": AnyCodable(invocation.deliver),
             "to": AnyCodable(invocation.to ?? ""),
             "channel": AnyCodable(invocation.channel.rawValue),
             "idempotencyKey": AnyCodable(invocation.idempotencyKey),
         ]
+        if let thinking = invocation.thinking?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !thinking.isEmpty
+        {
+            params["thinking"] = AnyCodable(thinking)
+        }
         if let timeout = invocation.timeoutSeconds {
             params["timeout"] = AnyCodable(timeout)
         }

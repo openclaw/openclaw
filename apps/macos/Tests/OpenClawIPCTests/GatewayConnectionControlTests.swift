@@ -174,6 +174,7 @@ private func makeTestGatewayConnection() -> (GatewayConnection, FakeWebSocketSes
         let json = try JSONSerialization.jsonObject(with: payloadData) as? [String: Any]
         let params = json?["params"] as? [String: Any]
         #expect(params?["voiceWakeTrigger"] as? String == "")
+        #expect(params?["thinking"] == nil)
     }
 
     private static func messageData(_ message: URLSessionWebSocketTask.Message) -> Data? {
