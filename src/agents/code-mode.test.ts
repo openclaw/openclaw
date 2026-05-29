@@ -221,6 +221,21 @@ describe("Code Mode", () => {
     expect(compacted.catalogToolCount).toBe(2);
   });
 
+  it("tells models to return the final code value", () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const compacted = applyCodeModeCatalog({
+      tools: [...codeModeTools, pluginTool("fake_create_ticket", "Create a fake ticket")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const execTool = compacted.tools.find((tool) => tool.name === CODE_MODE_EXEC_TOOL_NAME);
+    expect(execTool?.description).toContain("Use `return` to pass the final value back");
+  });
+
   it("hides normal tools when only the active agent enables code mode", () => {
     const catalogRef = createToolSearchCatalogRef();
     const config = {
