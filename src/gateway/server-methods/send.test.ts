@@ -28,7 +28,8 @@ const mocks = vi.hoisted(() => ({
   getChannelPlugin: vi.fn(),
   loadOpenClawPlugins: vi.fn(),
   applyPluginAutoEnable: vi.fn(),
-  getActiveSecretsRuntimeConfigSnapshot: vi.fn(),
+  getRuntimeConfigSnapshot: vi.fn(),
+  getRuntimeConfigSourceSnapshot: vi.fn(),
 }));
 
 vi.mock("../../config/config.js", async () => {
@@ -80,9 +81,16 @@ vi.mock("../../config/plugin-auto-enable.js", () => ({
     mocks.applyPluginAutoEnable({ config, env }),
 }));
 
-vi.mock("../../secrets/runtime-state.js", () => ({
-  getActiveSecretsRuntimeConfigSnapshot: mocks.getActiveSecretsRuntimeConfigSnapshot,
-}));
+vi.mock("../../config/runtime-snapshot.js", async () => {
+  const actual = await vi.importActual<typeof import("../../config/runtime-snapshot.js")>(
+    "../../config/runtime-snapshot.js",
+  );
+  return {
+    ...actual,
+    getRuntimeConfigSnapshot: mocks.getRuntimeConfigSnapshot,
+    getRuntimeConfigSourceSnapshot: mocks.getRuntimeConfigSourceSnapshot,
+  };
+});
 
 vi.mock("../../plugins/loader.js", () => ({
   loadOpenClawPlugins: mocks.loadOpenClawPlugins,
@@ -285,7 +293,8 @@ describe("gateway send mirroring", () => {
       changes: [],
       autoEnabledReasons: {},
     }));
-    mocks.getActiveSecretsRuntimeConfigSnapshot.mockReturnValue(null);
+    mocks.getRuntimeConfigSnapshot.mockReturnValue(null);
+    mocks.getRuntimeConfigSourceSnapshot.mockReturnValue(null);
     mocks.resolveOutboundTarget.mockReturnValue({ ok: true, to: "resolved" });
     mocks.resolveOutboundSessionRoute.mockImplementation(
       async ({ agentId, channel }: { agentId?: string; channel?: string }) => ({
@@ -309,7 +318,7 @@ describe("gateway send mirroring", () => {
     });
   });
 
-  it("uses the active resolved runtime config for message.action without cloning full secrets state", async () => {
+  it("uses the resolved runtime config for message.action when the source snapshot matches", async () => {
     const sourceConfig = {
       channels: {
         discord: {
@@ -341,10 +350,8 @@ describe("gateway send mirroring", () => {
       changes: [],
       autoEnabledReasons: {},
     }));
-    mocks.getActiveSecretsRuntimeConfigSnapshot.mockReturnValue({
-      config: runtimeConfig,
-      sourceConfig,
-    });
+    mocks.getRuntimeConfigSnapshot.mockReturnValue(runtimeConfig);
+    mocks.getRuntimeConfigSourceSnapshot.mockReturnValue(sourceConfig);
 
     const context = {
       ...makeContext(),
@@ -365,13 +372,14 @@ describe("gateway send mirroring", () => {
       isWebchatConnect: () => false,
     });
 
-    expect(mocks.getActiveSecretsRuntimeConfigSnapshot).toHaveBeenCalledTimes(1);
+    expect(mocks.getRuntimeConfigSnapshot).toHaveBeenCalledTimes(1);
+    expect(mocks.getRuntimeConfigSourceSnapshot).toHaveBeenCalledTimes(1);
     expect(lastDispatchChannelMessageActionCall()?.cfg).toBe(runtimeConfig);
     const response = firstRespondCall(respond);
     expect(response?.[0]).toBe(true);
   });
 
-  it("matches message.action runtime config against the pre-auto-enable source config", async () => {
+  it("matches message.action runtime config against the canonical pre-auto-enable source config", async () => {
     const sourceConfig = {
       channels: {
         discord: {
@@ -404,17 +412,6 @@ describe("gateway send mirroring", () => {
       },
       plugins: { allow: ["discord"] },
     };
-    const runtimeConfig = {
-      channels: {
-        discord: {
-          accounts: {
-            drclaw: {
-              token: "resolved-token",
-            },
-          },
-        },
-      },
-    };
     const autoEnabledRuntimeConfig = {
       channels: {
         discord: {
@@ -439,10 +436,8 @@ describe("gateway send mirroring", () => {
         changes: [{ path: "channels.discord.enabled", value: true }],
         autoEnabledReasons: {},
       });
-    mocks.getActiveSecretsRuntimeConfigSnapshot.mockReturnValue({
-      config: runtimeConfig,
-      sourceConfig,
-    });
+    mocks.getRuntimeConfigSnapshot.mockReturnValue(autoEnabledRuntimeConfig);
+    mocks.getRuntimeConfigSourceSnapshot.mockReturnValue(sourceConfig);
 
     const context = {
       ...makeContext(),
@@ -469,14 +464,14 @@ describe("gateway send mirroring", () => {
       env: undefined,
     });
     expect(mocks.applyPluginAutoEnable).toHaveBeenNthCalledWith(2, {
-      config: runtimeConfig,
+      config: autoEnabledRuntimeConfig,
       env: undefined,
     });
     const response = firstRespondCall(respond);
     expect(response?.[0]).toBe(true);
   });
 
-  it("keeps the post-auto-enable request config for message.action when the active snapshot source does not match", async () => {
+  it("keeps the post-auto-enable request config for message.action when the runtime source snapshot does not match", async () => {
     const sourceConfig = {
       channels: {
         discord: {
@@ -514,22 +509,20 @@ describe("gateway send mirroring", () => {
       changes: [{ path: "channels.discord.enabled", value: true }],
       autoEnabledReasons: {},
     });
-    mocks.getActiveSecretsRuntimeConfigSnapshot.mockReturnValue({
-      config: {
-        channels: {
-          discord: {
-            accounts: {
-              drclaw: { token: "stale-runtime-token" },
-            },
+    mocks.getRuntimeConfigSnapshot.mockReturnValue({
+      channels: {
+        discord: {
+          accounts: {
+            drclaw: { token: "stale-runtime-token" },
           },
         },
       },
-      sourceConfig: {
-        channels: {
-          discord: {
-            accounts: {
-              other: { token: "different-source" },
-            },
+    });
+    mocks.getRuntimeConfigSourceSnapshot.mockReturnValue({
+      channels: {
+        discord: {
+          accounts: {
+            other: { token: "different-source" },
           },
         },
       },
@@ -556,7 +549,7 @@ describe("gateway send mirroring", () => {
     expect(lastDispatchChannelMessageActionCall()?.cfg).toBe(autoEnabledRequestConfig);
   });
 
-  it("does not read the active secrets runtime config snapshot for send requests", async () => {
+  it("does not read the runtime config snapshot for send requests", async () => {
     mockDeliverySuccess("m-no-runtime-config-read");
 
     await runSend({
@@ -566,7 +559,8 @@ describe("gateway send mirroring", () => {
       idempotencyKey: "idem-send-no-runtime-config-read",
     });
 
-    expect(mocks.getActiveSecretsRuntimeConfigSnapshot).not.toHaveBeenCalled();
+    expect(mocks.getRuntimeConfigSnapshot).not.toHaveBeenCalled();
+    expect(mocks.getRuntimeConfigSourceSnapshot).not.toHaveBeenCalled();
   });
 
   it("dedupes concurrent message.action requests while inflight", async () => {

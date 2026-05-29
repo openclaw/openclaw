@@ -11,7 +11,11 @@ import { sendDurableMessageBatch } from "../../channels/message/runtime.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import { createOutboundSendDeps } from "../../cli/deps.js";
-import { selectApplicableRuntimeConfig } from "../../config/runtime-snapshot.js";
+import {
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshot,
+  selectApplicableRuntimeConfig,
+} from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
@@ -30,7 +34,6 @@ import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { extractToolPayload } from "../../infra/outbound/tool-payload.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { normalizePollInput } from "../../polls.js";
-import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
 import {
   normalizeSessionKeyPreservingOpaquePeerIds,
   parseThreadSessionSuffix,
@@ -221,16 +224,17 @@ function resolveMessageActionRuntimeConfig(params: {
   cfg: OpenClawConfig;
   sourceCfg: OpenClawConfig;
 }): OpenClawConfig {
-  const activeRuntime = getActiveSecretsRuntimeConfigSnapshot();
-  if (!activeRuntime) {
+  const runtimeConfig = getRuntimeConfigSnapshot();
+  const runtimeSourceConfig = getRuntimeConfigSourceSnapshot();
+  if (!runtimeConfig || !runtimeSourceConfig) {
     return params.cfg;
   }
   const selected = selectApplicableRuntimeConfig({
     inputConfig: params.sourceCfg,
-    runtimeConfig: activeRuntime.config,
-    runtimeSourceConfig: activeRuntime.sourceConfig,
+    runtimeConfig,
+    runtimeSourceConfig,
   });
-  if (selected === activeRuntime.config && selected !== params.cfg) {
+  if (selected === runtimeConfig && selected !== params.cfg) {
     return resolveGatewayPluginConfig({ config: selected });
   }
   return params.cfg;
