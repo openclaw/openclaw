@@ -1,4 +1,4 @@
-import { ErrorCodes, type ErrorShape } from "../../protocol/index.js";
+import { ErrorCodes, type ErrorShape } from "../../../../packages/gateway-protocol/src/index.js";
 
 export type UnauthorizedFloodGuardOptions = {
   closeAfter?: number;

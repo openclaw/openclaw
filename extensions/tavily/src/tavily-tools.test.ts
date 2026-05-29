@@ -109,6 +109,33 @@ describe("tavily tools", () => {
     });
   });
 
+  it("normalizes generic Tavily search count before dispatch", async () => {
+    const provider = createTavilyWebSearchProvider();
+    const tool = provider.createTool({
+      config: { test: true },
+    } as never);
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    await tool.execute({
+      query: "weather sf",
+      count: "7",
+    });
+
+    expect(runTavilySearch).toHaveBeenCalledWith({
+      cfg: { test: true },
+      query: "weather sf",
+      maxResults: 7,
+    });
+    await expect(
+      tool.execute({
+        query: "weather sf",
+        count: "7.5",
+      }),
+    ).rejects.toThrow("count must be an integer from 1 to 20");
+  });
+
   it("normalizes optional parameters before invoking Tavily", async () => {
     runTavilySearch.mockImplementationOnce(async (params: Record<string, unknown>) => ({
       ok: true,

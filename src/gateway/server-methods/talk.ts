@@ -1,3 +1,13 @@
+import {
+  ErrorCodes,
+  errorShape,
+  formatValidationErrors,
+  type TalkSpeakParams,
+  validateTalkCatalogParams,
+  validateTalkConfigParams,
+  validateTalkModeParams,
+  validateTalkSpeakParams,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { redactConfigObject } from "../../config/redact-snapshot.js";
 import {
@@ -29,16 +39,6 @@ import {
   type TtsDirectiveOverrides,
 } from "../../tts/tts.js";
 import { ADMIN_SCOPE, TALK_SECRETS_SCOPE } from "../operator-scopes.js";
-import {
-  ErrorCodes,
-  errorShape,
-  formatValidationErrors,
-  type TalkSpeakParams,
-  validateTalkCatalogParams,
-  validateTalkConfigParams,
-  validateTalkModeParams,
-  validateTalkSpeakParams,
-} from "../protocol/index.js";
 import { formatForLog } from "../ws-log.js";
 import { asRecord } from "./record-shared.js";
 import { talkClientHandlers } from "./talk-client.js";

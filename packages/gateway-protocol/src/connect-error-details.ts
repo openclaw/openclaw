@@ -1,5 +1,22 @@
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { normalizeArrayBackedTrimmedStringList } from "../../shared/string-normalization.js";
+function normalizeOptionalString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
+
+function normalizeArrayBackedTrimmedStringList(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const values = value
+    .map((entry) => normalizeOptionalString(entry))
+    .filter((entry): entry is string => Boolean(entry));
+  // Pairing details omit absent lists. Emitting empty arrays makes clients think
+  // the gateway intentionally supplied scope/role context when it did not.
+  return values.length > 0 ? values : undefined;
+}
 
 export const ConnectErrorDetailCodes = {
   AUTH_REQUIRED: "AUTH_REQUIRED",

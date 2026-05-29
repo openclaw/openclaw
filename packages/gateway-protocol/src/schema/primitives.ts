@@ -1,15 +1,16 @@
 import { Type } from "typebox";
-import { ENV_SECRET_REF_ID_RE } from "../../../config/types.secrets.js";
+import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../client-info.js";
 import {
   EXEC_SECRET_REF_ID_JSON_SCHEMA_PATTERN,
   FILE_SECRET_REF_ID_ABSOLUTE_JSON_SCHEMA_PATTERN,
   FILE_SECRET_REF_ID_INVALID_ESCAPE_JSON_SCHEMA_PATTERN,
   SECRET_PROVIDER_ALIAS_PATTERN,
   SINGLE_VALUE_FILE_REF_ID,
-} from "../../../secrets/ref-contract.js";
-import { INPUT_PROVENANCE_KIND_VALUES } from "../../../sessions/input-provenance.js";
-import { SESSION_LABEL_MAX_LENGTH } from "../../../sessions/session-label.js";
-import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../client-info.js";
+} from "../secret-ref-contract.js";
+
+const ENV_SECRET_REF_ID_RE = /^[A-Z][A-Z0-9_]{0,127}$/;
+const INPUT_PROVENANCE_KIND_VALUES = ["external_user", "inter_session", "internal_system"] as const;
+const SESSION_LABEL_MAX_LENGTH = 512;
 
 export const NonEmptyString = Type.String({ minLength: 1 });
 export const CHAT_SEND_SESSION_KEY_MAX_LENGTH = 512;

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { describe, expect, it } from "vitest";
-import { buildTalkConfigResponse } from "../../config/talk.js";
+import { buildTalkConfigResponse } from "../../../src/config/talk.js";
 import { validateTalkConfigResult } from "./index.js";
 
 type ExpectedSelection = {

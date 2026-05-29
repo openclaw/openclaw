@@ -123,12 +123,5 @@ export function buildEmbeddedSystemPrompt(params: {
 }
 
 export function applySystemPromptToSession(session: AgentSession, systemPrompt: string) {
-  const prompt = systemPrompt.trim();
-  session.agent.state.systemPrompt = prompt;
-  const mutableSession = session as unknown as {
-    _baseSystemPrompt?: string;
-    _rebuildSystemPrompt?: (toolNames: string[]) => string;
-  };
-  mutableSession["_baseSystemPrompt"] = prompt;
-  mutableSession["_rebuildSystemPrompt"] = () => prompt;
+  session.setBaseSystemPrompt(systemPrompt.trim());
 }

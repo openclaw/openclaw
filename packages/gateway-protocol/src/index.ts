@@ -1,6 +1,4 @@
 import { Compile, type Validator as TypeBoxValidator } from "typebox/compile";
-import { uniqueStrings } from "../../shared/string-normalization.js";
-import type { SessionsPatchResult } from "../session-utils.types.js";
 import {
   type AgentEvent,
   AgentEventSchema,
@@ -1265,4 +1263,27 @@ export type {
   UpdateStatusParams,
   UpdateRunParams,
   ChatInjectParams,
+};
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values)];
+}
+
+// The protocol package cannot import core session types. This local structural
+// result mirrors the wire contract and keeps the package independent of src/.
+type SessionsPatchResult = {
+  ok: true;
+  path: string;
+  key: string;
+  entry: Record<string, unknown>;
+  resolved?: {
+    modelProvider?: string;
+    model?: string;
+    agentRuntime?: GatewayAgentRuntime;
+  };
+};
+
+type GatewayAgentRuntime = {
+  id: string;
+  fallback?: "openclaw" | "none";
+  source: "env" | "agent" | "defaults" | "model" | "provider" | "implicit" | "session-key";
 };

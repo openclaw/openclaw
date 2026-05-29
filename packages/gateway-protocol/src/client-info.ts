@@ -1,4 +1,10 @@
-import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
+function normalizeOptionalLowercaseString(raw?: string | null): string | undefined {
+  if (typeof raw !== "string") {
+    return undefined;
+  }
+  const normalized = raw.trim().toLowerCase();
+  return normalized || undefined;
+}
 
 export const GATEWAY_CLIENT_IDS = {
   WEBCHAT_UI: "webchat-ui",

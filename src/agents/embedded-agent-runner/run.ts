@@ -781,17 +781,26 @@ export async function runEmbeddedAgent(
         pluginHarnessOwnsTransport &&
         provider === OPENAI_CODEX_PROVIDER_ID &&
         effectiveModel.api === "openai-codex-responses";
+      const openClawNativeCodexResponsesNeedsAuthBootstrap =
+        !pluginHarnessOwnsTransport &&
+        provider === OPENAI_CODEX_PROVIDER_ID &&
+        effectiveModel.api === "openai-codex-responses";
       let piExternalCliAuthScope = pluginHarnessOwnsTransport
         ? { ignoreAutoPreferredProfile: false }
-        : resolveExternalCliAuthOverlayScopeFromSelection({
-            provider,
-            cfg: params.config,
-            agentId: params.agentId,
-            modelId,
-            workspaceDir: resolvedWorkspace,
-            userLockedAuthProfileId:
-              params.authProfileIdSource === "user" ? params.authProfileId : undefined,
-          });
+        : openClawNativeCodexResponsesNeedsAuthBootstrap
+          ? {
+              providerIds: [OPENAI_CODEX_PROVIDER_ID],
+              ignoreAutoPreferredProfile: false,
+            }
+          : resolveExternalCliAuthOverlayScopeFromSelection({
+              provider,
+              cfg: params.config,
+              agentId: params.agentId,
+              modelId,
+              workspaceDir: resolvedWorkspace,
+              userLockedAuthProfileId:
+                params.authProfileIdSource === "user" ? params.authProfileId : undefined,
+            });
       let noExternalAuthStore: AuthProfileStore | undefined;
       if (
         !pluginHarnessOwnsTransport &&
@@ -1317,7 +1326,7 @@ export async function runEmbeddedAgent(
         agentDir,
         workspaceDir: resolvedWorkspace,
       });
-      const contextEnginePluginId = resolveContextEngineOwnerPluginId(contextEngine);
+      const resolveContextEnginePluginId = () => resolveContextEngineOwnerPluginId(contextEngine);
       startupStages.mark("context-engine");
       notifyExecutionPhase("context_engine", { provider, model: modelId });
       try {
@@ -1913,7 +1922,7 @@ export async function runEmbeddedAgent(
                     config: params.config,
                     sessionKey: params.sessionKey,
                     agentId: sessionAgentId,
-                    contextEnginePluginId,
+                    contextEnginePluginId: resolveContextEnginePluginId(),
                     purpose: "context-engine.timeout-compaction",
                   }),
                   onCompactionHookMessages,
@@ -2102,7 +2111,7 @@ export async function runEmbeddedAgent(
                     config: params.config,
                     sessionKey: params.sessionKey,
                     agentId: sessionAgentId,
-                    contextEnginePluginId,
+                    contextEnginePluginId: resolveContextEnginePluginId(),
                     purpose: "context-engine.overflow-compaction",
                   }),
                   onCompactionHookMessages,

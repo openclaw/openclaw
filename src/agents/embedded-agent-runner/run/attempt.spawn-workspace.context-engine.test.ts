@@ -320,6 +320,22 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(activeToolNames).toEqual([["healthy_lookup"]]);
   });
 
+  it("keeps the embedded system prompt after active tool selection", async () => {
+    let seenSystemPrompt: string | undefined;
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      sessionMessages: [seedMessage],
+      sessionPrompt: async (activeSession) => {
+        seenSystemPrompt = activeSession.agent.state.systemPrompt;
+      },
+    });
+
+    expect(seenSystemPrompt).toBe("system prompt");
+  });
+
   it("enforces code-mode payload surface from active-agent config during an embedded attempt", async () => {
     const observedOptions: Array<Record<string, unknown>> = [];
     const payloads: Array<Record<string, unknown>> = [];

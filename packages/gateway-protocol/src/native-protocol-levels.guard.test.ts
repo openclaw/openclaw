@@ -26,7 +26,7 @@ function extractInteger(
   const match = pattern.exec(content);
   if (!match) {
     throw new Error(
-      `${relativePath}: missing ${label}; keep native Gateway protocol levels in sync with src/gateway/protocol/version.ts.`,
+      `${relativePath}: missing ${label}; keep native Gateway protocol levels in sync with packages/gateway-protocol/src/version.ts.`,
     );
   }
   return Number.parseInt(match[1], 10);
@@ -37,7 +37,7 @@ function assertLevelsMatch(relativePath: string, actual: ProtocolLevels): void {
     return;
   }
   throw new Error(
-    `${relativePath}: Gateway protocol level mismatch: expected min=${expectedLevels.min} max=${expectedLevels.max} from src/gateway/protocol/version.ts, got min=${actual.min} max=${actual.max}. Update the native constants/generated artifacts before shipping.`,
+    `${relativePath}: Gateway protocol level mismatch: expected min=${expectedLevels.min} max=${expectedLevels.max} from packages/gateway-protocol/src/version.ts, got min=${actual.min} max=${actual.max}. Update the native constants/generated artifacts before shipping.`,
   );
 }
 
@@ -57,7 +57,7 @@ describe("native Gateway protocol levels", () => {
   it("match the TypeScript source of truth", async () => {
     if (MIN_CLIENT_PROTOCOL_VERSION > PROTOCOL_VERSION) {
       throw new Error(
-        `src/gateway/protocol/version.ts: MIN_CLIENT_PROTOCOL_VERSION (${MIN_CLIENT_PROTOCOL_VERSION}) must not exceed PROTOCOL_VERSION (${PROTOCOL_VERSION}).`,
+        `packages/gateway-protocol/src/version.ts: MIN_CLIENT_PROTOCOL_VERSION (${MIN_CLIENT_PROTOCOL_VERSION}) must not exceed PROTOCOL_VERSION (${PROTOCOL_VERSION}).`,
       );
     }
 

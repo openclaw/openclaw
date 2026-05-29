@@ -453,6 +453,50 @@ describe("bundled plugin install/uninstall probe", () => {
     expect(result.stderr).toContain("Available: admin-http-rpc");
   });
 
+  it("rejects loose packaged plugin list limit env values", () => {
+    const root = makePackageRoot();
+
+    const timeout = runProbe(root, {
+      OPENCLAW_BUNDLED_PLUGIN_LIST_TIMEOUT_MS: "100ms",
+    });
+    expect(timeout.status).toBe(1);
+    expect(timeout.stderr).toContain("invalid OPENCLAW_BUNDLED_PLUGIN_LIST_TIMEOUT_MS: 100ms");
+
+    const maxBuffer = runProbe(root, {
+      OPENCLAW_BUNDLED_PLUGIN_LIST_MAX_BUFFER_BYTES: "64bytes",
+    });
+    expect(maxBuffer.status).toBe(1);
+    expect(maxBuffer.stderr).toContain(
+      "invalid OPENCLAW_BUNDLED_PLUGIN_LIST_MAX_BUFFER_BYTES: 64bytes",
+    );
+  });
+
+  it("rejects loose bundled plugin sweep shard env values", () => {
+    const root = makePackageRoot();
+    writePluginManifest(root, "dist-runtime/extensions/admin-http-rpc", {
+      id: "admin-http-rpc",
+    });
+    writePluginsList(root, [
+      {
+        id: "admin-http-rpc",
+        origin: "bundled",
+        rootDir: path.join(root, "dist-runtime", "extensions", "admin-http-rpc"),
+      },
+    ]);
+
+    const total = runProbe(root, {
+      OPENCLAW_BUNDLED_PLUGIN_SWEEP_TOTAL: "2shards",
+    });
+    expect(total.status).toBe(1);
+    expect(total.stderr).toContain("invalid OPENCLAW_BUNDLED_PLUGIN_SWEEP_TOTAL: 2shards");
+
+    const index = runProbe(root, {
+      OPENCLAW_BUNDLED_PLUGIN_SWEEP_INDEX: "0of2",
+    });
+    expect(index.status).toBe(1);
+    expect(index.stderr).toContain("invalid OPENCLAW_BUNDLED_PLUGIN_SWEEP_INDEX: 0of2");
+  });
+
   it("bounds plugin list selection when the CLI hangs", () => {
     const root = makePackageRoot();
     fs.writeFileSync(

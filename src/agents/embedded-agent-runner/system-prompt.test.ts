@@ -1,63 +1,24 @@
-import type { AgentSession } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearMemoryPluginState, registerMemoryPromptSection } from "../../plugins/memory-state.js";
+import type { AgentSession } from "../sessions/index.js";
 import { applySystemPromptToSession, buildEmbeddedSystemPrompt } from "./system-prompt.js";
 
 vi.mock("../../tts/tts.js", () => ({
   buildTtsSystemPromptHint: vi.fn(() => undefined),
 }));
 
-type MutableSession = {
-  _baseSystemPrompt?: string;
-  _rebuildSystemPrompt?: (toolNames: string[]) => string;
-};
-
-type MockSession = MutableSession & {
-  agent: {
-    state: {
-      systemPrompt?: string;
-    };
-  };
-};
-
-function createMockSession(): {
-  session: MockSession;
-} {
-  const session = {
-    agent: { state: {} },
-  } as MockSession;
-  return { session };
-}
-
-function applyAndGetMutableSession(prompt: Parameters<typeof applySystemPromptToSession>[1]) {
-  const { session } = createMockSession();
-  applySystemPromptToSession(session as unknown as AgentSession, prompt);
-  return {
-    mutable: session,
-  };
-}
-
 describe("applySystemPromptToSession", () => {
-  it("applies the string to the session system prompt", () => {
-    const prompt = "You are a helpful assistant with custom context.";
-    const { mutable } = applyAndGetMutableSession(prompt);
+  it("applies the trimmed prompt through the session base prompt setter", () => {
+    const setBaseSystemPrompt = vi.fn();
 
-    expect(mutable.agent.state.systemPrompt).toBe(prompt);
-    expect(mutable["_baseSystemPrompt"]).toBe(prompt);
-  });
+    applySystemPromptToSession(
+      { setBaseSystemPrompt } as unknown as AgentSession,
+      "  embedded prompt  ",
+    );
 
-  it("trims whitespace", () => {
-    const { mutable } = applyAndGetMutableSession("  padded prompt  ");
-
-    expect(mutable.agent.state.systemPrompt).toBe("padded prompt");
-  });
-
-  it("sets _rebuildSystemPrompt that returns the prompt", () => {
-    const { mutable } = applyAndGetMutableSession("rebuild test");
-    expect(mutable["_rebuildSystemPrompt"]?.(["tool1"])).toBe("rebuild test");
+    expect(setBaseSystemPrompt).toHaveBeenCalledWith("embedded prompt");
   });
 });
-
 describe("buildEmbeddedSystemPrompt", () => {
   afterEach(() => {
     clearMemoryPluginState();

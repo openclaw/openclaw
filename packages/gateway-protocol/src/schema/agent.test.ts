@@ -1,7 +1,21 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
-import type { AgentInternalEvent } from "../../../agents/internal-events.js";
 import { AgentParamsSchema } from "./agent.js";
+
+type AgentInternalEvent = {
+  type: "task_completion";
+  source: string;
+  childSessionKey: string;
+  childSessionId: string;
+  announceType: string;
+  taskLabel: string;
+  status: "ok" | "error";
+  statusLabel: string;
+  result: string;
+  attachments?: unknown[];
+  mediaUrls?: string[];
+  replyInstruction?: string;
+};
 
 function makeAgentParamsWithInternalEvent(event: AgentInternalEvent) {
   return {

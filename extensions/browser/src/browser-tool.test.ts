@@ -204,6 +204,26 @@ vi.mock("./browser-tool.runtime.js", () => {
     listNodes: nodesUtilsMocks.listNodes,
     normalizeOptionalString: (value: unknown) => readStringValue(value)?.trim() || undefined,
     persistBrowserProxyFiles: vi.fn(async () => new Map<string, string>()),
+    readPositiveIntegerParam: (
+      params: Record<string, unknown>,
+      key: string,
+      options?: { message?: string },
+    ) => {
+      const raw = params[key];
+      if (raw == null) {
+        return undefined;
+      }
+      const value =
+        typeof raw === "number"
+          ? raw
+          : typeof raw === "string" && /^\d+$/.test(raw.trim())
+            ? Number(raw.trim())
+            : undefined;
+      if (value === undefined || !Number.isInteger(value) || value <= 0) {
+        throw new Error(options?.message ?? `${key} must be a positive integer`);
+      }
+      return value;
+    },
     readStringParam,
     readStringValue,
     resolveExistingPathsWithinRoot: vi.fn(async ({ requestedPaths }) => ({
@@ -554,6 +574,37 @@ describe("browser tool snapshot maxChars", () => {
     expect(opts.timeoutMs).toBe(60_000);
   });
 
+  it("parses string top-level timeoutMs values", async () => {
+    setResolvedBrowserProfiles({
+      user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
+    });
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "open",
+      profile: "user",
+      url: "https://example.com",
+      timeoutMs: "60000",
+    });
+
+    const opts = lastMockCallArg<{ profile?: string; timeoutMs?: number }>(
+      browserClientMocks.browserOpenTab,
+      2,
+    );
+    expect(opts.timeoutMs).toBe(60_000);
+  });
+
+  it("rejects fractional top-level timeoutMs values", async () => {
+    const tool = createBrowserTool();
+
+    await expect(
+      tool.execute?.("call-1", {
+        action: "profiles",
+        timeoutMs: 12.5,
+      }),
+    ).rejects.toThrow("timeoutMs must be a positive integer.");
+    expect(browserClientMocks.browserProfiles).not.toHaveBeenCalled();
+  });
+
   it("passes top-level timeoutMs through to close without targetId", async () => {
     setResolvedBrowserProfiles({
       user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
@@ -837,6 +888,22 @@ describe("browser tool snapshot maxChars", () => {
       1,
     );
     expect(opts.targetId).toBe("tab-1");
+    expect(opts.timeoutMs).toBe(12_345);
+  });
+
+  it("parses string screenshot timeoutMs values", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "screenshot",
+      target: "host",
+      targetId: "tab-1",
+      timeoutMs: "12345",
+    });
+
+    const opts = lastMockCallArg<{ targetId?: string; timeoutMs?: number }>(
+      browserActionsMocks.browserScreenshotAction,
+      1,
+    );
     expect(opts.timeoutMs).toBe(12_345);
   });
 
@@ -1304,6 +1371,40 @@ describe("browser tool act compatibility", () => {
     expect(request.params?.path).toBe("/act");
     expect(request.params?.body).toEqual({ kind: "wait", timeMs: 20_000, timeoutMs: 45_000 });
     expect(request.params?.timeoutMs).toBe(45_000 + 5_000);
+  });
+
+  it("honors string act request timeouts when sizing node proxy calls", async () => {
+    mockSingleBrowserProxyNode();
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "act",
+      target: "node",
+      request: { kind: "wait", timeMs: "20000", timeoutMs: "45000" },
+    });
+
+    const { options, request } = lastNodeInvokeCall();
+    expect(options.timeoutMs).toBe(55_000);
+    expect(request.params?.path).toBe("/act");
+    expect(request.params?.body).toEqual({
+      kind: "wait",
+      timeMs: "20000",
+      timeoutMs: "45000",
+    });
+    expect(request.params?.timeoutMs).toBe(50_000);
+  });
+
+  it("rejects fractional act request timeouts before node proxy calls", async () => {
+    mockSingleBrowserProxyNode();
+    const tool = createBrowserTool();
+
+    await expect(
+      tool.execute?.("call-1", {
+        action: "act",
+        target: "node",
+        request: { kind: "wait", timeMs: "20000", timeoutMs: "45000.5" },
+      }),
+    ).rejects.toThrow("timeoutMs must be a positive integer.");
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
   });
 });
 

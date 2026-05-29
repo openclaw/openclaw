@@ -1124,6 +1124,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
         // Rebuild the compaction session on retry so provider wrappers, payload
         // shaping, and the embedded system prompt all reflect the fallback level.
         attemptedThinking.add(thinkLevel);
+        const systemPromptText = buildSystemPromptText(thinkLevel);
         let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
         try {
           const createdSession = await createAgentSession({
@@ -1140,8 +1141,8 @@ async function compactEmbeddedAgentSessionDirectOnce(
             resourceLoader,
           });
           session = createdSession.session;
-          applySystemPromptToSession(session, buildSystemPromptText(thinkLevel));
           session.setActiveToolsByName(sessionToolAllowlist);
+          applySystemPromptToSession(session, systemPromptText);
           // Compaction builds the same embedded system prompt, so it must flow
           // through the same transport/payload shaping stack as normal turns.
           prepareCompactionSessionAgent({

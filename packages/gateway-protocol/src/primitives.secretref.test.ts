@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   INVALID_EXEC_SECRET_REF_IDS,
   VALID_EXEC_SECRET_REF_IDS,
-} from "../../test-utils/secret-ref-test-vectors.js";
+} from "../../../src/test-utils/secret-ref-test-vectors.js";
 import { SecretInputSchema, SecretRefSchema } from "./schema/primitives.js";
 
 describe("gateway protocol SecretRef schema", () => {

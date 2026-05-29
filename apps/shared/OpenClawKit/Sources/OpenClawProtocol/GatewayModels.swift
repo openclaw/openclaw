@@ -2379,6 +2379,7 @@ public struct SessionsCompactParams: Codable, Sendable {
 public struct SessionsUsageParams: Codable, Sendable {
     public let key: String?
     public let agentid: String?
+    public let agentscope: String?
     public let startdate: String?
     public let enddate: String?
     public let mode: AnyCodable?
@@ -2392,6 +2393,7 @@ public struct SessionsUsageParams: Codable, Sendable {
     public init(
         key: String?,
         agentid: String? = nil,
+        agentscope: String? = nil,
         startdate: String?,
         enddate: String?,
         mode: AnyCodable?,
@@ -2404,6 +2406,7 @@ public struct SessionsUsageParams: Codable, Sendable {
     {
         self.key = key
         self.agentid = agentid
+        self.agentscope = agentscope
         self.startdate = startdate
         self.enddate = enddate
         self.mode = mode
@@ -2418,6 +2421,7 @@ public struct SessionsUsageParams: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case key
         case agentid = "agentId"
+        case agentscope = "agentScope"
         case startdate = "startDate"
         case enddate = "endDate"
         case mode

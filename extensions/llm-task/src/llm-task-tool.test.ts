@@ -296,30 +296,19 @@ describe("llm-task tool (json-only)", () => {
     expect(call.disableTools).toBe(true);
   });
 
-  it("drops malformed numeric run options before dispatch", async () => {
-    mockEmbeddedRunJson({ ok: true });
-    const tool = createLlmTaskTool(
-      fakeApi({
-        pluginConfig: {
-          maxTokens: Number.POSITIVE_INFINITY,
-          timeoutMs: 4096.5,
-        },
-      }),
+  it("rejects malformed numeric run options before dispatch", async () => {
+    const tool = createLlmTaskTool(fakeApi());
+
+    await expect(tool.execute("id", { prompt: "x", temperature: Number.NaN })).rejects.toThrow(
+      "temperature must be a finite number",
     );
-
-    await tool.execute("id", {
-      prompt: "x",
-      temperature: Number.NaN,
-      maxTokens: 0,
-      timeoutMs: -1,
-    });
-
-    const call = (runEmbeddedAgent as any).mock.calls[0]?.[0];
-    expect(call.timeoutMs).toBe(30_000);
-    expect(call.streamParams).toEqual({
-      temperature: undefined,
-      maxTokens: undefined,
-    });
+    await expect(tool.execute("id", { prompt: "x", maxTokens: 0 })).rejects.toThrow(
+      "maxTokens must be a positive integer",
+    );
+    await expect(tool.execute("id", { prompt: "x", timeoutMs: "4096.5" })).rejects.toThrow(
+      "timeoutMs must be a positive integer",
+    );
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
   it("passes valid numeric run options before dispatch", async () => {
@@ -329,6 +318,22 @@ describe("llm-task tool (json-only)", () => {
       temperature: 0.2,
       maxTokens: 512,
       timeoutMs: 10_000,
+    });
+
+    expect(call.timeoutMs).toBe(10_000);
+    expect(call.streamParams).toEqual({
+      temperature: 0.2,
+      maxTokens: 512,
+    });
+  });
+
+  it("normalizes numeric string run options before dispatch", async () => {
+    mockEmbeddedRunJson({ ok: true });
+    const call = await executeEmbeddedRun({
+      prompt: "x",
+      temperature: "0.2",
+      maxTokens: "512",
+      timeoutMs: "10000",
     });
 
     expect(call.timeoutMs).toBe(10_000);

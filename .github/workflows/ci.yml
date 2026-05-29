@@ -1960,3 +1960,53 @@ jobs:
               exit 1
               ;;
           esac
+
+  ci-timings-summary:
+    permissions:
+      actions: read
+      contents: read
+    name: ci-timings-summary
+    needs:
+      - preflight
+      - security-fast
+      - pnpm-store-warmup
+      - build-artifacts
+      - checks-fast-core
+      - checks-fast-plugin-contracts-shard
+      - checks-fast-channel-contracts-shard
+      - checks-node-compat
+      - checks-node-core-test-nondist-shard
+      - check-shard
+      - check-additional-shard
+      - check-docs
+      - skills-python
+      - checks-windows
+      - macos-node
+      - macos-swift
+      - android
+    if: ${{ !cancelled() && always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout timing summary helper
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || needs.preflight.outputs.checkout_revision || github.sha }}
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          submodules: false
+
+      - name: Write CI timing summary
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/ci-run-timings.mjs "$GITHUB_RUN_ID" --limit 25 > ci-timings-summary.txt
+          cat ci-timings-summary.txt >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload CI timing summary
+        uses: actions/upload-artifact@v7
+        with:
+          name: ci-timings-summary
+          path: ci-timings-summary.txt
+          retention-days: 14

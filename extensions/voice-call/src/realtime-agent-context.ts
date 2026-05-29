@@ -5,10 +5,6 @@ import { normalizeOptionalString as normalizeString } from "openclaw/plugin-sdk/
 import type { VoiceCallConfig } from "./config.js";
 import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
 
-type AgentEntryLike = {
-  id?: unknown;
-};
-
 type VoiceIdentityLike = {
   name?: unknown;
   emoji?: unknown;
@@ -16,15 +12,6 @@ type VoiceIdentityLike = {
   creature?: unknown;
   vibe?: unknown;
 };
-
-function readAgentEntries(cfg: CoreConfig): AgentEntryLike[] {
-  const agents = (cfg as { agents?: { list?: unknown } }).agents;
-  return Array.isArray(agents?.list)
-    ? agents.list.filter((entry): entry is AgentEntryLike =>
-        Boolean(entry && typeof entry === "object"),
-      )
-    : [];
-}
 
 function limitText(text: string, maxChars: number): string {
   if (text.length <= maxChars) {

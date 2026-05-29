@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { TALK_TEST_PROVIDER_ID } from "../../test-utils/talk-test-provider.js";
+import { TALK_TEST_PROVIDER_ID } from "../../../src/test-utils/talk-test-provider.js";
 import * as protocol from "./index.js";
 import {
   formatValidationErrors,

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
-import { ErrorCodes } from "../protocol/index.js";
 import { talkHandlers } from "./talk.js";
 
 const mocks = vi.hoisted(() => ({
