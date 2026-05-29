@@ -1,4 +1,8 @@
-import { setCliSessionBinding, setCliSessionId } from "../../agents/cli-session.js";
+import {
+  clearCliSession,
+  setCliSessionBinding,
+  setCliSessionId,
+} from "../../agents/cli-session.js";
 import {
   deriveSessionTotalTokens,
   hasNonzeroUsage,
@@ -20,12 +24,26 @@ function applyCliSessionIdToSessionPatch(
     providerUsed?: string;
     cliSessionId?: string;
     cliSessionBinding?: import("../../config/sessions.js").CliSessionBinding;
+    clearCliSessionBinding?: boolean;
   },
   entry: SessionEntry,
   patch: Partial<SessionEntry>,
 ): Partial<SessionEntry> {
   const cliProvider = params.providerUsed ?? entry.modelProvider;
-  if (params.cliSessionBinding && cliProvider) {
+  if (!cliProvider) {
+    return patch;
+  }
+  if (params.clearCliSessionBinding === true) {
+    const nextEntry = { ...entry, ...patch };
+    clearCliSession(nextEntry, cliProvider);
+    return {
+      ...patch,
+      cliSessionIds: nextEntry.cliSessionIds,
+      cliSessionBindings: nextEntry.cliSessionBindings,
+      claudeCliSessionId: nextEntry.claudeCliSessionId,
+    };
+  }
+  if (params.cliSessionBinding) {
     const nextEntry = { ...entry, ...patch };
     setCliSessionBinding(nextEntry, cliProvider, params.cliSessionBinding);
     return {
@@ -35,7 +53,7 @@ function applyCliSessionIdToSessionPatch(
       claudeCliSessionId: nextEntry.claudeCliSessionId,
     };
   }
-  if (params.cliSessionId && cliProvider) {
+  if (params.cliSessionId) {
     const nextEntry = { ...entry, ...patch };
     setCliSessionId(nextEntry, cliProvider, params.cliSessionId);
     return {
@@ -95,6 +113,7 @@ export async function persistSessionUsageUpdate(params: {
   systemPromptReport?: SessionSystemPromptReport;
   cliSessionId?: string;
   cliSessionBinding?: import("../../config/sessions.js").CliSessionBinding;
+  clearCliSessionBinding?: boolean;
   compactionTokensAfter?: number;
   preserveFreshTotalTokensOnStaleUsage?: boolean;
   preserveUserFacingSessionModelState?: boolean;
