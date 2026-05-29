@@ -478,14 +478,21 @@ describe("waitForAgentRunsToDrain", () => {
     callGatewayMock.mockResolvedValue({ status: "ok" });
     let activeRunIds = ["run-1"];
 
-    const result = await waitForAgentRunsToDrain({
-      timeoutMs: Number.NaN,
-      getPendingRunIds: () => {
-        const current = activeRunIds;
-        activeRunIds = [];
-        return current;
-      },
-    });
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    let result: Awaited<ReturnType<typeof waitForAgentRunsToDrain>>;
+    try {
+      result = await waitForAgentRunsToDrain({
+        timeoutMs: Number.NaN,
+        getPendingRunIds: () => {
+          const current = activeRunIds;
+          activeRunIds = [];
+          return current;
+        },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
 
     expect(result.timedOut).toBe(false);
     expect(Number.isFinite(result.deadlineAtMs)).toBe(true);
