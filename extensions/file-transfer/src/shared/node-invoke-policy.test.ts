@@ -161,6 +161,77 @@ describe("file-transfer node invoke policy", () => {
     });
   });
 
+  it("normalizes string maxBytes before invoking the node", async () => {
+    const policy = createFileTransferNodeInvokePolicy();
+    const { ctx, invokeNode } = createCtx({
+      params: { path: "/tmp/file.txt", maxBytes: "1024" },
+      pluginConfig: {
+        nodes: {
+          "node-1": {
+            allowReadPaths: ["/tmp/**"],
+          },
+        },
+      },
+    });
+
+    const result = await policy.handle(ctx);
+
+    expect(result.ok).toBe(true);
+    expect(invokeNode).toHaveBeenNthCalledWith(1, {
+      params: {
+        path: "/tmp/file.txt",
+        maxBytes: 1024,
+        followSymlinks: false,
+        preflightOnly: true,
+      },
+    });
+  });
+
+  it("rejects malformed maxBytes before invoking the node", async () => {
+    const policy = createFileTransferNodeInvokePolicy();
+    const { ctx, invokeNode } = createCtx({
+      params: { path: "/tmp/file.txt", maxBytes: "1024.5" },
+    });
+
+    const result = await policy.handle(ctx);
+
+    expectResultFields(result, {
+      ok: false,
+      code: "INVALID_PARAMS",
+      message: "maxBytes must be a positive integer",
+    });
+    expect(invokeNode).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed maxBytes before requesting approval", async () => {
+    const policy = createFileTransferNodeInvokePolicy();
+    const approvals = {
+      request: vi.fn(async () => ({ id: "approval-1", decision: "allow-always" as const })),
+    };
+    const { ctx, invokeNode } = createCtx({
+      params: { path: "/tmp/new.txt", maxBytes: "1024.5" },
+      pluginConfig: {
+        nodes: {
+          "node-1": {
+            ask: "on-miss",
+            allowReadPaths: ["/allowed/**"],
+          },
+        },
+      },
+      approvals,
+    });
+
+    const result = await policy.handle(ctx);
+
+    expectResultFields(result, {
+      ok: false,
+      code: "INVALID_PARAMS",
+      message: "maxBytes must be a positive integer",
+    });
+    expect(approvals.request).not.toHaveBeenCalled();
+    expect(invokeNode).not.toHaveBeenCalled();
+  });
+
   it("denies raw node.invoke before the node when plugin policy is missing", async () => {
     const policy = createFileTransferNodeInvokePolicy();
     const { ctx, invokeNode } = createCtx({ pluginConfig: {} });

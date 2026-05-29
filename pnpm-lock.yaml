@@ -134,9 +134,6 @@ importers:
       ignore:
         specifier: 7.0.5
         version: 7.0.5
-      ipaddr.js:
-        specifier: 2.4.0
-        version: 2.4.0
       jiti:
         specifier: 2.7.0
         version: 2.7.0
@@ -545,8 +542,39 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/codex-supervisor:
+    dependencies:
+      '@modelcontextprotocol/sdk':
+        specifier: 1.29.0
+        version: 1.29.0(zod@4.4.3)
+      typebox:
+        specifier: 1.1.38
+        version: 1.1.38
+      ws:
+        specifier: 8.21.0
+        version: 8.21.0
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/comfy:
     devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
+  extensions/copilot:
+    devDependencies:
+      '@github/copilot':
+        specifier: 1.0.48
+        version: 1.0.48
+      '@github/copilot-sdk':
+        specifier: 1.0.0-beta.4
+        version: 1.0.0-beta.4
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
@@ -1100,20 +1128,14 @@ importers:
         specifier: 4.13.1
         version: 4.13.1
       '@microsoft/teams.api':
-        specifier: 2.0.11
-        version: 2.0.11
+        specifier: 2.0.12
+        version: 2.0.12
       '@microsoft/teams.apps':
-        specifier: 2.0.11
-        version: 2.0.11
+        specifier: 2.0.12
+        version: 2.0.12
       express:
         specifier: 5.2.1
         version: 5.2.1
-      jsonwebtoken:
-        specifier: 9.0.3
-        version: 9.0.3
-      jwks-rsa:
-        specifier: 4.0.1
-        version: 4.0.1
       typebox:
         specifier: 1.1.38
         version: 1.1.38
@@ -1121,9 +1143,9 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
-      '@types/jsonwebtoken':
-        specifier: 9.0.10
-        version: 9.0.10
+      jose:
+        specifier: 6.2.3
+        version: 6.2.3
       openclaw:
         specifier: workspace:*
         version: link:../..
@@ -1442,12 +1464,6 @@ importers:
         specifier: workspace:*
         version: link:../..
 
-  extensions/speech-core:
-    devDependencies:
-      '@openclaw/plugin-sdk':
-        specifier: workspace:*
-        version: link:../../packages/plugin-sdk
-
   extensions/stepfun:
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -1749,13 +1765,47 @@ importers:
         specifier: 2.9.0
         version: 2.9.0
 
+  packages/gateway-client:
+    dependencies:
+      '@openclaw/gateway-protocol':
+        specifier: workspace:*
+        version: link:../gateway-protocol
+      ipaddr.js:
+        specifier: 2.4.0
+        version: 2.4.0
+      ws:
+        specifier: 8.21.0
+        version: 8.21.0
+
+  packages/gateway-protocol:
+    dependencies:
+      typebox:
+        specifier: 1.1.38
+        version: 1.1.38
+
   packages/memory-host-sdk: {}
+
+  packages/net-policy:
+    dependencies:
+      ipaddr.js:
+        specifier: 2.4.0
+        version: 2.4.0
 
   packages/plugin-package-contract: {}
 
   packages/plugin-sdk: {}
 
-  packages/sdk: {}
+  packages/sdk:
+    dependencies:
+      '@openclaw/gateway-client':
+        specifier: workspace:*
+        version: link:../gateway-client
+
+  packages/speech-core:
+    dependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   ui:
     dependencies:
@@ -2533,6 +2583,50 @@ packages:
       '@noble/hashes':
         optional: true
 
+  '@github/copilot-darwin-arm64@1.0.48':
+    resolution: {integrity: sha512-82MLoMQwPVVFM8EYssihFxSEPUYtZADE8rMzQ3jG9HgRg2qjQSfnHQS1mKe64dlXswZUK/onw6/8kjnW5I4pPg==}
+    cpu: [arm64]
+    os: [darwin]
+    hasBin: true
+
+  '@github/copilot-darwin-x64@1.0.48':
+    resolution: {integrity: sha512-1VQ5r5F0h8GwboXmZTcutqcJT+iCpPXAF27QqodmpKEvW9aYfG8g9X2kFJOzDZoX+SA3Uaka9qXdYKF2xT6Uog==}
+    cpu: [x64]
+    os: [darwin]
+    hasBin: true
+
+  '@github/copilot-linux-arm64@1.0.48':
+    resolution: {integrity: sha512-PmsGnb0DZlI+Bf53l9HM1PAHHkUcMyB4y8v/7tnC/jDOV5dGF124n0HnDNfJLOLiJGiQGodthIif6QtPaAxpeA==}
+    cpu: [arm64]
+    os: [linux]
+    hasBin: true
+
+  '@github/copilot-linux-x64@1.0.48':
+    resolution: {integrity: sha512-b2cc4euSlke9fYHXXsS2EL9UYbctN0h4lZvtAcKUDY+RCnpYAQOVBZK+c1R9dQrtsT6Z/yUv7PuFPSs8qdtc2Q==}
+    cpu: [x64]
+    os: [linux]
+    hasBin: true
+
+  '@github/copilot-sdk@1.0.0-beta.4':
+    resolution: {integrity: sha512-DcVMN2FWODxamFS9nTls8AW3QsyMnj6JDVBNRVBXaTY9kEhGHCjt8lp7sJp95/vyl52hvEb4/68Oh6SdFU9O/Q==}
+    engines: {node: '>=20.0.0'}
+
+  '@github/copilot-win32-arm64@1.0.48':
+    resolution: {integrity: sha512-VEEOwddtpJ3DTbXGhnK6K8im4ofl9m08q1m/K++sNvWV8wkkOSOQBTiPdyUsuU/TXAoFhb8tZMIJv+6NnMBtMw==}
+    cpu: [arm64]
+    os: [win32]
+    hasBin: true
+
+  '@github/copilot-win32-x64@1.0.48':
+    resolution: {integrity: sha512-93BzvXLPHTyy1gWBXQY/IWIHor4IAwZuuo7/obG80/Qa6U0WeaN9slz/FBJvrsgVNrrRfEID5Xm3At+S6Kj67Q==}
+    cpu: [x64]
+    os: [win32]
+    hasBin: true
+
+  '@github/copilot@1.0.48':
+    resolution: {integrity: sha512-U5SzyTEq376UU9A4Sd3TEKz+Y2nRUd90cLO4Hc1otaB8yFSy9Ur2UVGcI2/wCoodL3a39k6WbdgNzFxr0gWFRQ==}
+    hasBin: true
+
   '@google/genai@2.6.0':
     resolution: {integrity: sha512-HjoW3mPuEn7pnuKABJl9VbDoWDSF4nbwYKYvYYor7YjPeDxrrBxHzu2d1Prcd+BAuC4w+85UP6y7ZdcrQAoO7g==}
     engines: {node: '>=20.0.0'}
@@ -2899,24 +2993,24 @@ packages:
   '@mdx-js/mdx@3.1.1':
     resolution: {integrity: sha512-f6ZO2ifpwAQIpzGWaBQT2TXxPv6z3RBzQKpVftEWN78Vl/YweF1uwussDx8ECAXVtr3Rs89fKyG9YlzUs9DyGQ==}
 
-  '@microsoft/teams.api@2.0.11':
-    resolution: {integrity: sha512-/QvOQkqSM73O9SrDLURyJZClnOAi6fJTX6qhhka/fPZbPU4ID4BIDvee7dSRbLx7lM+nSa370uLFzHHzXp5TWQ==}
+  '@microsoft/teams.api@2.0.12':
+    resolution: {integrity: sha512-LQSCwRONUl09pdszTdgsRLQ0ZZcdq16goaBckzM/zKGuQkfSIT3u+3V1X2FVeND4sGt0wn+E/v29cZfhJAW4ZA==}
     engines: {node: '>=20'}
 
-  '@microsoft/teams.apps@2.0.11':
-    resolution: {integrity: sha512-DSk09njNbFi5pc8GOAd3/Auqy52ZmsBJqu0wRXV2VQp/L+M8e9L2SXhmyIs164jhnwD0w3DYXPOjjZKHdu1M2A==}
+  '@microsoft/teams.apps@2.0.12':
+    resolution: {integrity: sha512-AZWxhnuBLlUvrz1Jm1DtoB/ZfvIiML8e3PGGmJm9MXnxd6mwv8ZcL9Po8Or96KDF6E+DICRbpXBO7I3b+B+X5A==}
     engines: {node: '>=20'}
 
-  '@microsoft/teams.cards@2.0.11':
-    resolution: {integrity: sha512-4ErBqR4A4abpKSXsiCssRh2ZTpE3jsYHcWXLwL+fKnJo96GzlfSUV1Zg78dl7xWxe388SlqQ3Z4r3m/v413Mew==}
+  '@microsoft/teams.cards@2.0.12':
+    resolution: {integrity: sha512-FVSSuOpvjpWSsoYwJI05eB4irPlaBkepgmWGFe1dhqTC2In9GWvkfNPJieyvmeDydj1jqHwwrjrkHO3MdGjiCw==}
     engines: {node: '>=20'}
 
-  '@microsoft/teams.common@2.0.11':
-    resolution: {integrity: sha512-XuGTRlYfLOQxJZuZI6IUhbTRQjgXZAgW59LlGnFJ/nb00G8GnJwdCrFbis+bQa+h7dP5SdLIi1ZybVGYomKgqA==}
+  '@microsoft/teams.common@2.0.12':
+    resolution: {integrity: sha512-gFFeWXXABOkarUViYIM4DJxNxNSTcXHv7Ds6poNyb3HODsY3kZV3EmYaDanP7KDqqXbUPlgB3LPV9bYRgcL9JQ==}
     engines: {node: '>=20'}
 
-  '@microsoft/teams.graph@2.0.11':
-    resolution: {integrity: sha512-Txc0N6dENmEluOCwGzCerz+3G/uomfzCElla1OR7nUNICIcY8p1A2babcIAA8AZiuAKPSkck0U1w5RTu7jZgVQ==}
+  '@microsoft/teams.graph@2.0.12':
+    resolution: {integrity: sha512-dMioF/l/bb/cDZDZed8/7CeIZJEsREE4GwSn9V9h1/KiY004bLnjePVeLjpMt4QRoUmPn+GVokhEXztIFTYZzA==}
     engines: {node: '>=20'}
 
   '@mistralai/mistralai@2.2.5':
@@ -5406,10 +5500,6 @@ packages:
     resolution: {integrity: sha512-BqTyEDV+lS8F2trk3A+qJnxV5Q9EqKCBJOPti3W97r7qTympCZjb7h2X6f2kc+0K3rsSTY1/6YG2eaXKoj497w==}
     engines: {node: '>=14'}
 
-  jwks-rsa@4.0.1:
-    resolution: {integrity: sha512-poXwUA8S4cP9P5N8tZS3xnUDJH8WmwSGfKK9gIaRPdjLHyJtd9iX/cngX9CUIe0Caof5JhK2EbN7N5lnnaf9NA==}
-    engines: {node: ^20.19.0 || ^22.12.0 || >= 23.0.0}
-
   jws@4.0.1:
     resolution: {integrity: sha512-EKI/M/yqPncGUUh44xz0PxSidXFr/+r0pA70+gIYhjv+et7yxM+s29Y+VGDkovRofQem0fs7Uvf4+YmAdyRduA==}
 
@@ -5596,9 +5686,6 @@ packages:
 
   lru-memoizer@2.3.0:
     resolution: {integrity: sha512-GXn7gyHAMhO13WSKrIiNfztwxodVsP8IoZ3XfrJV4yH2x0/OeTO/FIaAHTY5YekdGgW94njfuKmyyt1E0mR6Ug==}
-
-  lru-memoizer@3.0.0:
-    resolution: {integrity: sha512-m83w/cYXLdUIboKSPxzPAGfYnk+vqeDYXuoSrQRw1q+yVEd8IXhvMufN8Q5TIPe7e2jyX4SRNrDJI2Skw1yznQ==}
 
   lru_map@0.4.1:
     resolution: {integrity: sha512-I+lBvqMMFfqaV8CJCISjI3wbjmwVu/VyOoU7+qtu9d7ioW5klMgsTTiUOUp+DJvfTTzKXoPbyC6YfgkNcyPSOg==}
@@ -6431,6 +6518,11 @@ packages:
     engines: {node: '>=10'}
     hasBin: true
 
+  semver@7.8.1:
+    resolution: {integrity: sha512-rkVq3IXh+4FDGch+KwzX3aV9W3kO54GyEgpvBzSyctDA6Xtd7RJQV1xmXbeQp5v7+VzLOfVqiutSE6GICgPFvg==}
+    engines: {node: '>=10'}
+    hasBin: true
+
   send@1.2.1:
     resolution: {integrity: sha512-1gnZf7DFcoIcajTjTwjwuDjzuz4PPcY2StKPlsGAQ1+YH20IRVrBaXSWmdjowTJ6u8Rc01PoYOGHXfP1mYcZNQ==}
     engines: {node: '>= 18'}
@@ -6978,6 +7070,10 @@ packages:
   void-elements@3.1.0:
     resolution: {integrity: sha512-Dhxzh5HZuiHQhbvTW9AMetFfBHDMYpo23Uo9btPXgdYP+3T5S+p+jgNy7spra+veYhBP2dCSgxR/i2Y02h5/6w==}
     engines: {node: '>=0.10.0'}
+
+  vscode-jsonrpc@8.2.1:
+    resolution: {integrity: sha512-kdjOSJ2lLIn7r1rtrMbbNCHjyMPfRnowdKjBQ+mGq6NAW5QY2bEZC/khaC5OR8svbbjvLEaIXkOq45e2X9BIbQ==}
+    engines: {node: '>=14.0.0'}
 
   w3c-xmlserializer@5.0.0:
     resolution: {integrity: sha512-o8qghlI8NZHU1lLPrpi2+Uq7abh4GGPpYANlalzWxyWteJOCsr/P+oPBA49TOLu5FTZO4d3F9MnWJfiMo4BkmA==}
@@ -8115,6 +8211,39 @@ snapshots:
     optionalDependencies:
       '@noble/hashes': 2.0.1
 
+  '@github/copilot-darwin-arm64@1.0.48':
+    optional: true
+
+  '@github/copilot-darwin-x64@1.0.48':
+    optional: true
+
+  '@github/copilot-linux-arm64@1.0.48':
+    optional: true
+
+  '@github/copilot-linux-x64@1.0.48':
+    optional: true
+
+  '@github/copilot-sdk@1.0.0-beta.4':
+    dependencies:
+      '@github/copilot': 1.0.48
+      vscode-jsonrpc: 8.2.1
+      zod: 4.4.3
+
+  '@github/copilot-win32-arm64@1.0.48':
+    optional: true
+
+  '@github/copilot-win32-x64@1.0.48':
+    optional: true
+
+  '@github/copilot@1.0.48':
+    optionalDependencies:
+      '@github/copilot-darwin-arm64': 1.0.48
+      '@github/copilot-darwin-x64': 1.0.48
+      '@github/copilot-linux-arm64': 1.0.48
+      '@github/copilot-linux-x64': 1.0.48
+      '@github/copilot-win32-arm64': 1.0.48
+      '@github/copilot-win32-x64': 1.0.48
+
   '@google/genai@2.6.0(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))':
     dependencies:
       google-auth-library: 10.6.2
@@ -8468,21 +8597,21 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@microsoft/teams.api@2.0.11':
+  '@microsoft/teams.api@2.0.12':
     dependencies:
-      '@microsoft/teams.cards': 2.0.11
-      '@microsoft/teams.common': 2.0.11
+      '@microsoft/teams.cards': 2.0.12
+      '@microsoft/teams.common': 2.0.12
       jwt-decode: 4.0.0
       qs: 6.15.2
     transitivePeerDependencies:
       - debug
 
-  '@microsoft/teams.apps@2.0.11':
+  '@microsoft/teams.apps@2.0.12':
     dependencies:
       '@azure/msal-node': 3.8.10
-      '@microsoft/teams.api': 2.0.11
-      '@microsoft/teams.common': 2.0.11
-      '@microsoft/teams.graph': 2.0.11
+      '@microsoft/teams.api': 2.0.12
+      '@microsoft/teams.common': 2.0.12
+      '@microsoft/teams.graph': 2.0.12
       axios: 1.16.0
       cors: 2.8.6
       express: 5.2.1
@@ -8493,17 +8622,17 @@ snapshots:
       - debug
       - supports-color
 
-  '@microsoft/teams.cards@2.0.11': {}
+  '@microsoft/teams.cards@2.0.12': {}
 
-  '@microsoft/teams.common@2.0.11':
+  '@microsoft/teams.common@2.0.12':
     dependencies:
       axios: 1.16.0
     transitivePeerDependencies:
       - debug
 
-  '@microsoft/teams.graph@2.0.11':
+  '@microsoft/teams.graph@2.0.12':
     dependencies:
-      '@microsoft/teams.common': 2.0.11
+      '@microsoft/teams.common': 2.0.12
       qs: 6.15.2
     transitivePeerDependencies:
       - debug
@@ -11077,7 +11206,7 @@ snapshots:
       lodash.isstring: 4.0.1
       lodash.once: 4.1.1
       ms: 2.1.3
-      semver: 7.8.0
+      semver: 7.8.1
 
   jstransformer@1.0.0:
     dependencies:
@@ -11104,16 +11233,6 @@ snapshots:
       jose: 4.15.9
       limiter: 1.1.5
       lru-memoizer: 2.3.0
-    transitivePeerDependencies:
-      - supports-color
-
-  jwks-rsa@4.0.1:
-    dependencies:
-      '@types/jsonwebtoken': 9.0.10
-      debug: 4.4.3
-      jose: 6.2.3
-      limiter: 1.1.5
-      lru-memoizer: 3.0.0
     transitivePeerDependencies:
       - supports-color
 
@@ -11266,11 +11385,6 @@ snapshots:
     dependencies:
       lodash.clonedeep: 4.5.0
       lru-cache: 6.0.0
-
-  lru-memoizer@3.0.0:
-    dependencies:
-      lodash.clonedeep: 4.5.0
-      lru-cache: 11.5.0
 
   lru_map@0.4.1: {}
 
@@ -12351,6 +12465,8 @@ snapshots:
 
   semver@7.8.0: {}
 
+  semver@7.8.1: {}
+
   send@1.2.1:
     dependencies:
       debug: 4.4.3
@@ -12898,6 +13014,8 @@ snapshots:
       - msw
 
   void-elements@3.1.0: {}
+
+  vscode-jsonrpc@8.2.1: {}
 
   w3c-xmlserializer@5.0.0:
     dependencies:

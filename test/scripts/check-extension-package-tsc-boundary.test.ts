@@ -375,21 +375,16 @@ describe("check-extension-package-tsc-boundary", () => {
     child.stderr = createMockPipe();
     child.kill = () => true;
 
-    const failure = await runNodeStepAsync(
-      "noisy-plugin",
-      ["--eval", "process.exit(2)"],
-      20_000,
-      {
-        spawnImpl() {
-          setImmediate(() => {
-            child.stdout.emit("data", `stdout-begin-${"x".repeat(300_000)}-stdout-end`);
-            child.stderr.emit("data", `stderr-begin-${"y".repeat(300_000)}-stderr-end`);
-            child.emit("close", 2);
-          });
-          return child;
-        },
+    const failure = await runNodeStepAsync("noisy-plugin", ["--eval", "process.exit(2)"], 20_000, {
+      spawnImpl() {
+        setImmediate(() => {
+          child.stdout.emit("data", `stdout-begin-${"x".repeat(300_000)}-stdout-end`);
+          child.stderr.emit("data", `stderr-begin-${"y".repeat(300_000)}-stderr-end`);
+          child.emit("close", 2);
+        });
+        return child;
       },
-    ).then(
+    }).then(
       () => {
         throw new Error("expected noisy-plugin step to fail");
       },

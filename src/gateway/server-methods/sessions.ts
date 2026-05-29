@@ -1,6 +1,31 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
+import {
+  ErrorCodes,
+  errorShape,
+  type SessionOperationEvent,
+  validateSessionsAbortParams,
+  validateSessionsCleanupParams,
+  validateSessionsCompactParams,
+  validateSessionsCompactionBranchParams,
+  validateSessionsCompactionGetParams,
+  validateSessionsCompactionListParams,
+  validateSessionsCompactionRestoreParams,
+  validateSessionsCreateParams,
+  validateSessionsDeleteParams,
+  validateSessionsDescribeParams,
+  validateSessionsListParams,
+  validateSessionsMessagesSubscribeParams,
+  validateSessionsMessagesUnsubscribeParams,
+  validateSessionsPatchParams,
+  validateSessionsPluginPatchParams,
+  validateSessionsPreviewParams,
+  validateSessionsResetParams,
+  validateSessionsResolveParams,
+  validateSessionsSendParams,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { resolveModelAgentRuntimeMetadata } from "../../agents/agent-runtime-metadata.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
@@ -49,31 +74,6 @@ import {
   readStringValue,
 } from "../../shared/string-coerce.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
-import { GATEWAY_CLIENT_IDS } from "../protocol/client-info.js";
-import {
-  ErrorCodes,
-  errorShape,
-  type SessionOperationEvent,
-  validateSessionsAbortParams,
-  validateSessionsCleanupParams,
-  validateSessionsCompactParams,
-  validateSessionsCompactionBranchParams,
-  validateSessionsCompactionGetParams,
-  validateSessionsCompactionListParams,
-  validateSessionsCompactionRestoreParams,
-  validateSessionsCreateParams,
-  validateSessionsDeleteParams,
-  validateSessionsDescribeParams,
-  validateSessionsListParams,
-  validateSessionsMessagesSubscribeParams,
-  validateSessionsMessagesUnsubscribeParams,
-  validateSessionsPatchParams,
-  validateSessionsPluginPatchParams,
-  validateSessionsPreviewParams,
-  validateSessionsResetParams,
-  validateSessionsResolveParams,
-  validateSessionsSendParams,
-} from "../protocol/index.js";
 import { resolveSessionKeyForRun } from "../server-session-key.js";
 import {
   forkCompactionCheckpointTranscriptAsync,
@@ -701,7 +701,11 @@ function collectTrackedActiveSessionRunKeys(
     return keys;
   }
   for (const active of context.chatAbortControllers.values()) {
-    if (typeof active.sessionKey === "string" && active.sessionKey.trim()) {
+    if (
+      active.projectSessionActive !== false &&
+      typeof active.sessionKey === "string" &&
+      active.sessionKey.trim()
+    ) {
       keys.add(active.sessionKey);
     }
   }

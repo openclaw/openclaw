@@ -70,6 +70,7 @@ export async function cleanupEmbeddedAttemptResources(params: {
   runId?: string;
   sessionId?: string;
 }): Promise<void> {
+  let sessionLockReleaseError: unknown;
   try {
     try {
       params.removeToolResultContextGuard?.();
@@ -97,22 +98,31 @@ export async function cleanupEmbeddedAttemptResources(params: {
         /* best-effort */
       }
     }
-    try {
-      params.session?.dispose();
-    } catch {
-      /* best-effort */
-    }
-    try {
-      await params.bundleMcpRuntime?.dispose();
-    } catch {
-      /* best-effort */
-    }
-    try {
-      await params.bundleLspRuntime?.dispose();
-    } catch {
-      /* best-effort */
-    }
   } finally {
-    await params.sessionLock.release();
+    try {
+      await params.sessionLock.release();
+    } catch (err) {
+      sessionLockReleaseError = err;
+    }
+  }
+
+  try {
+    params.session?.dispose();
+  } catch {
+    /* best-effort */
+  }
+  try {
+    await params.bundleMcpRuntime?.dispose();
+  } catch {
+    /* best-effort */
+  }
+  try {
+    await params.bundleLspRuntime?.dispose();
+  } catch {
+    /* best-effort */
+  }
+
+  if (sessionLockReleaseError) {
+    throw sessionLockReleaseError;
   }
 }

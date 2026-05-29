@@ -60,15 +60,21 @@ Options:
 `.trim();
 }
 
-function readNumber(value, label) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed < 0) {
-    throw new Error(`${label} must be a non-negative number`);
+const NON_NEGATIVE_INTEGER_PATTERN = /^(0|[1-9]\d*)$/u;
+
+export function readNumber(value, label) {
+  const raw = String(value).trim();
+  if (!NON_NEGATIVE_INTEGER_PATTERN.test(raw)) {
+    throw new Error(`${label} must be a non-negative integer`);
   }
-  return Math.floor(parsed);
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error(`${label} must be a safe integer`);
+  }
+  return parsed;
 }
 
-function readPositiveNumber(value, label) {
+export function readPositiveNumber(value, label) {
   const parsed = readNumber(value, label);
   if (parsed <= 0) {
     throw new Error(`${label} must be greater than 0`);
@@ -76,18 +82,26 @@ function readPositiveNumber(value, label) {
   return parsed;
 }
 
-function parseArgs(argv) {
+function readNumberEnv(name, fallback) {
+  const raw = process.env[name];
+  return raw == null || raw.trim() === "" ? fallback : readNumber(raw, name);
+}
+
+function readPositiveNumberEnv(name, fallback) {
+  const raw = process.env[name];
+  return raw == null || raw.trim() === "" ? fallback : readPositiveNumber(raw, name);
+}
+
+export function parseArgs(argv) {
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const options = {
-    fileCount: Number(process.env.OPENCLAW_MEMORY_FD_REPRO_FILES || DEFAULT_FILE_COUNT),
+    fileCount: undefined,
     mode: process.env.OPENCLAW_MEMORY_FD_REPRO_MODE || "fixed",
-    maxWorkspaceRegFds: Number(
-      process.env.OPENCLAW_MEMORY_FD_REPRO_MAX_WORKSPACE_REG_FDS || DEFAULT_MAX_WORKSPACE_REG_FDS,
-    ),
+    maxWorkspaceRegFds: undefined,
     minLeakedFds: undefined,
-    invokeTimeoutMs: Number(process.env.OPENCLAW_MEMORY_FD_REPRO_TIMEOUT_MS || 30_000),
-    sampleDelayMs: Number(process.env.OPENCLAW_MEMORY_FD_REPRO_SAMPLE_DELAY_MS || 1_000),
-    settleDelayMs: Number(process.env.OPENCLAW_MEMORY_FD_REPRO_SETTLE_DELAY_MS || 5_000),
+    invokeTimeoutMs: undefined,
+    sampleDelayMs: undefined,
+    settleDelayMs: undefined,
     outputDir: path.resolve(".artifacts", "memory-fd-repro", stamp),
     keep: process.env.OPENCLAW_MEMORY_FD_REPRO_KEEP === "1",
     allowNonDarwin: process.env.OPENCLAW_MEMORY_FD_REPRO_ALLOW_NON_DARWIN === "1",
@@ -157,6 +171,14 @@ function parseArgs(argv) {
   if (!["fixed", "leak", "report"].includes(options.mode)) {
     throw new Error('--mode must be "fixed", "leak", or "report"');
   }
+  options.fileCount ??= readPositiveNumberEnv("OPENCLAW_MEMORY_FD_REPRO_FILES", DEFAULT_FILE_COUNT);
+  options.maxWorkspaceRegFds ??= readNumberEnv(
+    "OPENCLAW_MEMORY_FD_REPRO_MAX_WORKSPACE_REG_FDS",
+    DEFAULT_MAX_WORKSPACE_REG_FDS,
+  );
+  options.invokeTimeoutMs ??= readPositiveNumberEnv("OPENCLAW_MEMORY_FD_REPRO_TIMEOUT_MS", 30_000);
+  options.sampleDelayMs ??= readNumberEnv("OPENCLAW_MEMORY_FD_REPRO_SAMPLE_DELAY_MS", 1_000);
+  options.settleDelayMs ??= readNumberEnv("OPENCLAW_MEMORY_FD_REPRO_SETTLE_DELAY_MS", 5_000);
   if (!Number.isFinite(options.fileCount) || options.fileCount <= 0) {
     throw new Error("file count must be greater than 0");
   }

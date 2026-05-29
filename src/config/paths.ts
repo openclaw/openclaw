@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { resolveHomeRelativePath, resolveRequiredHomeDir } from "../infra/home-dir.js";
-import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
+import { parseTcpPort } from "../infra/tcp-port.js";
 import type { OpenClawConfig } from "./types.js";
 
 /**
@@ -306,14 +306,14 @@ function parseGatewayPortEnvValue(raw: string | undefined): number | null {
     return null;
   }
   if (/^\d+$/.test(trimmed)) {
-    return parseStrictPositiveInteger(trimmed) ?? null;
+    return parseTcpPort(trimmed);
   }
 
   // Docker Compose publish strings can leak into host CLI env loading via repo `.env`,
   // for example `127.0.0.1:18789` or `[::1]:18789`. Accept only explicit host:port forms.
   const bracketedIpv6Match = trimmed.match(/^\[[^\]]+\]:(\d+)$/);
   if (bracketedIpv6Match?.[1]) {
-    return parseStrictPositiveInteger(bracketedIpv6Match[1]) ?? null;
+    return parseTcpPort(bracketedIpv6Match[1]);
   }
 
   const firstColon = trimmed.indexOf(":");
@@ -325,7 +325,7 @@ function parseGatewayPortEnvValue(raw: string | undefined): number | null {
   if (!/^\d+$/.test(suffix)) {
     return null;
   }
-  return parseStrictPositiveInteger(suffix) ?? null;
+  return parseTcpPort(suffix);
 }
 
 export function resolveGatewayPort(

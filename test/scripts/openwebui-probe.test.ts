@@ -224,7 +224,9 @@ describe("scripts/e2e/openwebui-probe.mjs", () => {
 
       expect(result.error).toBeUndefined();
       expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("Open WebUI models attempt 1 response body exceeded 32 bytes");
+      expect(result.stderr).toContain(
+        "Open WebUI models attempt 1 response body exceeded 32 bytes",
+      );
       expect(result.stderr).not.toContain("y".repeat(96));
     } finally {
       server.close();

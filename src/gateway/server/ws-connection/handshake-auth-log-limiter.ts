@@ -1,3 +1,5 @@
+import { resolveIntegerOption } from "../../../shared/number-coercion.js";
+
 export type HandshakeAuthLogDecision = {
   shouldLog: boolean;
   suppressedSinceLastLog: number;
@@ -14,8 +16,8 @@ export class HandshakeAuthLogLimiter {
   private readonly entries = new Map<string, HandshakeAuthLogState>();
 
   constructor(options?: { intervalMs?: number; maxEntries?: number }) {
-    this.intervalMs = Math.max(1, Math.floor(options?.intervalMs ?? 30_000));
-    this.maxEntries = Math.max(1, Math.floor(options?.maxEntries ?? 256));
+    this.intervalMs = resolveIntegerOption(options?.intervalMs, 30_000, { min: 1 });
+    this.maxEntries = resolveIntegerOption(options?.maxEntries, 256, { min: 1 });
   }
 
   register(key: string, nowMs = Date.now()): HandshakeAuthLogDecision {

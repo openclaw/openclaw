@@ -581,7 +581,52 @@ function rewriteBundledRuntimeArtifactRelativePath(relativePath: string): string
   return relativePath.replace(/\.[^.]+$/u, ".js");
 }
 
-function resolvePreferredBuiltBundledRuntimeArtifact(params: {
+function listPackageLocalRuntimeArtifactOutputExtensions(sourceExt: string): string[] {
+  switch (sourceExt) {
+    case ".mts":
+    case ".mjs":
+      return [".mjs", ".js", ".cjs"];
+    case ".cts":
+    case ".cjs":
+      return [".cjs", ".js", ".mjs"];
+    default:
+      return [".js", ".mjs", ".cjs"];
+  }
+}
+
+function listPackageLocalRuntimeArtifactRelativePathBases(relativePath: string): string[] {
+  const ext = path.extname(relativePath).toLowerCase();
+  const withoutExt = ext ? relativePath.slice(0, -ext.length) : relativePath;
+  if (!withoutExt.startsWith(`src${path.sep}`) && !withoutExt.startsWith("src/")) {
+    return [withoutExt];
+  }
+  return [withoutExt.slice(4), withoutExt];
+}
+
+function listPackageLocalDistRuntimeArtifactRelativePaths(relativePath: string): string[] {
+  const ext = path.extname(relativePath).toLowerCase();
+  const candidates = new Set<string>();
+  for (const base of listPackageLocalRuntimeArtifactRelativePathBases(relativePath)) {
+    for (const outputExt of listPackageLocalRuntimeArtifactOutputExtensions(ext)) {
+      candidates.add(`${base}${outputExt}`);
+    }
+  }
+  return [...candidates];
+}
+
+function shouldPreferPackageLocalDistRuntimeArtifact(source: string): boolean {
+  switch (path.extname(source).toLowerCase()) {
+    case ".ts":
+    case ".tsx":
+    case ".mts":
+    case ".cts":
+      return true;
+    default:
+      return false;
+  }
+}
+
+function resolvePreferredBuiltRuntimeArtifact(params: {
   source: string;
   rootDir: string;
   origin: PluginOrigin;
@@ -589,7 +634,30 @@ function resolvePreferredBuiltBundledRuntimeArtifact(params: {
 }): { source: string; rootDir: string } {
   const rootDir = safeRealpathOrResolve(params.rootDir);
   const source = safeRealpathOrResolve(params.source);
-  if (!params.preferBuiltPluginArtifacts || params.origin !== "bundled") {
+  if (!params.preferBuiltPluginArtifacts) {
+    return { source, rootDir };
+  }
+  if (params.origin !== "bundled") {
+    const relativeSource = path.relative(rootDir, source);
+    if (
+      shouldPreferPackageLocalDistRuntimeArtifact(relativeSource) &&
+      relativeSource !== "" &&
+      !relativeSource.startsWith("..") &&
+      !path.isAbsolute(relativeSource)
+    ) {
+      const artifactRoot = path.join(rootDir, "dist");
+      for (const artifactRelativePath of listPackageLocalDistRuntimeArtifactRelativePaths(
+        relativeSource,
+      )) {
+        const artifactSource = path.join(artifactRoot, artifactRelativePath);
+        if (fs.existsSync(artifactSource)) {
+          return {
+            source: safeRealpathOrResolve(artifactSource),
+            rootDir,
+          };
+        }
+      }
+    }
     return { source, rootDir };
   }
   const extensionsDir = path.dirname(rootDir);
@@ -1925,14 +1993,14 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         });
       };
       const pluginRoot = safeRealpathOrResolve(candidate.rootDir);
-      const runtimeCandidateEntry = resolvePreferredBuiltBundledRuntimeArtifact({
+      const runtimeCandidateEntry = resolvePreferredBuiltRuntimeArtifact({
         source: candidate.source,
         rootDir: pluginRoot,
         origin: candidate.origin,
         preferBuiltPluginArtifacts,
       });
       const runtimeSetupEntry = manifestRecord.setupSource
-        ? resolvePreferredBuiltBundledRuntimeArtifact({
+        ? resolvePreferredBuiltRuntimeArtifact({
             source: manifestRecord.setupSource,
             rootDir: pluginRoot,
             origin: candidate.origin,

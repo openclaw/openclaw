@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import fs from "node:fs/promises";
 import path from "node:path";
+import { readBoundedResponseText } from "./lib/bounded-response-text.mjs";
 
 const groupId = process.env.OPENCLAW_QA_TELEGRAM_GROUP_ID;
 const driverToken = process.env.OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN;
@@ -9,23 +10,16 @@ const outputDir = process.env.OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR ?? ".artifacts/rt
 const telegramApiBaseUrl = (
   process.env.OPENCLAW_QA_TELEGRAM_API_BASE_URL ?? "https://api.telegram.org"
 ).replace(/\/+$/u, "");
-const timeoutMs = Number(process.env.OPENCLAW_QA_TELEGRAM_SCENARIO_TIMEOUT_MS ?? "180000");
-const canaryTimeoutMs = Number(
-  process.env.OPENCLAW_QA_TELEGRAM_CANARY_TIMEOUT_MS ?? String(timeoutMs),
-);
-const warmSampleCount = Number(process.env.OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES ?? "20");
-const sampleTimeoutMs = Number(process.env.OPENCLAW_NPM_TELEGRAM_SAMPLE_TIMEOUT_MS ?? "30000");
-const botApiTimeoutMs = readPositiveInt(
-  process.env.OPENCLAW_NPM_TELEGRAM_BOT_API_TIMEOUT_MS,
-  30000,
-);
-const botApiBodyMaxBytes = readPositiveInt(
-  process.env.OPENCLAW_NPM_TELEGRAM_BOT_API_BODY_MAX_BYTES,
+const timeoutMs = readPositiveIntEnv("OPENCLAW_QA_TELEGRAM_SCENARIO_TIMEOUT_MS", 180000);
+const canaryTimeoutMs = readPositiveIntEnv("OPENCLAW_QA_TELEGRAM_CANARY_TIMEOUT_MS", timeoutMs);
+const warmSampleCount = readPositiveIntEnv("OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES", 20);
+const sampleTimeoutMs = readPositiveIntEnv("OPENCLAW_NPM_TELEGRAM_SAMPLE_TIMEOUT_MS", 30000);
+const botApiTimeoutMs = readPositiveIntEnv("OPENCLAW_NPM_TELEGRAM_BOT_API_TIMEOUT_MS", 30000);
+const botApiBodyMaxBytes = readPositiveIntEnv(
+  "OPENCLAW_NPM_TELEGRAM_BOT_API_BODY_MAX_BYTES",
   1024 * 1024,
 );
-const maxWarmFailures = Number(
-  process.env.OPENCLAW_NPM_TELEGRAM_MAX_FAILURES ?? String(warmSampleCount),
-);
+const maxWarmFailures = readPositiveIntEnv("OPENCLAW_NPM_TELEGRAM_MAX_FAILURES", warmSampleCount);
 const successMarker = process.env.OPENCLAW_NPM_TELEGRAM_SUCCESS_MARKER ?? "OPENCLAW_E2E_OK";
 const scenarioIds = new Set(
   (process.env.OPENCLAW_NPM_TELEGRAM_SCENARIOS ?? "telegram-mentioned-message-reply")
@@ -39,64 +33,20 @@ if (!groupId || !driverToken || !sutToken) {
     "missing Telegram env: OPENCLAW_QA_TELEGRAM_GROUP_ID, OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN, OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN",
   );
 }
-if (!Number.isInteger(warmSampleCount) || warmSampleCount < 1) {
-  throw new Error(
-    `OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES must be a positive integer; got: ${warmSampleCount}`,
-  );
-}
-if (!Number.isInteger(sampleTimeoutMs) || sampleTimeoutMs < 1) {
-  throw new Error(
-    `OPENCLAW_NPM_TELEGRAM_SAMPLE_TIMEOUT_MS must be a positive integer; got: ${sampleTimeoutMs}`,
-  );
-}
-if (!Number.isInteger(maxWarmFailures) || maxWarmFailures < 1) {
-  throw new Error(
-    `OPENCLAW_NPM_TELEGRAM_MAX_FAILURES must be a positive integer; got: ${maxWarmFailures}`,
-  );
-}
-
-function readPositiveInt(raw, fallback) {
-  const parsed = Number.parseInt(String(raw || ""), 10);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+function readPositiveIntEnv(name, fallback) {
+  const text = String(process.env[name] ?? fallback).trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`invalid ${name}: ${text}`);
+  }
+  const value = Number(text);
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`invalid ${name}: ${text}`);
+  }
+  return value;
 }
 
 function taggedError(message, code) {
   return Object.assign(new Error(message), { code });
-}
-
-async function readBoundedResponseText(response, label, byteLimit, timeoutPromise) {
-  const contentLength = response.headers.get("content-length");
-  if (contentLength) {
-    const parsedLength = Number(contentLength);
-    if (Number.isSafeInteger(parsedLength) && parsedLength > byteLimit) {
-      await response.body?.cancel().catch(() => {});
-      throw taggedError(`${label} response body exceeded ${byteLimit} bytes`, "ETOOBIG");
-    }
-  }
-  if (!response.body) {
-    return "";
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let byteCount = 0;
-  let text = "";
-  try {
-    while (true) {
-      const { done, value } = await Promise.race([reader.read(), timeoutPromise]);
-      if (done) {
-        return text + decoder.decode();
-      }
-      byteCount += value.byteLength;
-      if (byteCount > byteLimit) {
-        await reader.cancel().catch(() => {});
-        throw taggedError(`${label} response body exceeded ${byteLimit} bytes`, "ETOOBIG");
-      }
-      text += decoder.decode(value, { stream: true });
-    }
-  } finally {
-    reader.releaseLock();
-  }
 }
 
 function parseJsonPayload(rawPayload, label) {

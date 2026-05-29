@@ -139,6 +139,7 @@ const meta: ChannelMeta = {
   blurb: "飞书/Lark enterprise messaging.",
   aliases: ["lark"],
   order: 70,
+  preferSessionLookupForAnnounceTarget: true,
 };
 
 const loadFeishuChannelRuntime = createLazyRuntimeNamedExport(

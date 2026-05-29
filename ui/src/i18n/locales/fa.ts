@@ -1128,9 +1128,9 @@ export const fa: TranslationMap = {
       sendMessage: "Send message",
     },
     queue: {
-      retry: "Retry",
-      retrySend: "Retry send",
-      retryQueuedMessage: "Retry queued message",
+      retry: "تلاش مجدد",
+      retrySend: "ارسال مجدد",
+      retryQueuedMessage: "تلاش مجدد برای پیام در صف",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",

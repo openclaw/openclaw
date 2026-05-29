@@ -680,6 +680,89 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     ).toBeUndefined();
   });
 
+  it("forwards unscoped tool auth profiles to Copilot plugin harnesses", async () => {
+    const { clearAgentHarnesses, registerAgentHarness } = await import("../harness/registry.js");
+    const pluginRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
+      makeAttemptResult({ assistantTexts: ["ok"] }),
+    );
+    const runtimePlan = makeForwardedRuntimePlan({
+      resolvedRef: {
+        provider: "github-copilot",
+        modelId: "gpt-4o",
+        harnessId: "copilot",
+      },
+      auth: {
+        harnessAuthProvider: "github-copilot",
+        forwardedAuthProfileId: "github-copilot:work",
+      },
+    });
+    clearAgentHarnesses();
+    registerAgentHarness({
+      id: "copilot",
+      label: "Copilot",
+      supports: (ctx) =>
+        ctx.provider === "github-copilot"
+          ? { supported: true, priority: 100 }
+          : { supported: false },
+      runAttempt: pluginRunAttempt,
+    });
+    mockedBuildAgentRuntimePlan.mockReturnValueOnce(runtimePlan);
+    mockedGetApiKeyForModel.mockRejectedValueOnce(new Error("generic auth should be skipped"));
+    const copilotAuthStore = {
+      version: 1,
+      profiles: {
+        "github-copilot:work": {
+          type: "oauth" as const,
+          provider: "github-copilot",
+          access: "access",
+          refresh: "refresh",
+          expires: Date.now() + 60_000,
+        },
+        "anthropic:work": {
+          type: "api_key" as const,
+          provider: "anthropic",
+          key: "sk-ant",
+        },
+      },
+    };
+    mockedEnsureAuthProfileStoreWithoutExternalProfiles.mockReturnValueOnce(copilotAuthStore);
+
+    try {
+      await runEmbeddedAgent({
+        ...overflowBaseRunParams,
+        provider: "github-copilot",
+        model: "gpt-4o",
+        config: {
+          models: {
+            providers: {
+              "github-copilot": {
+                agentRuntime: { id: "copilot" },
+                baseUrl: "https://api.githubcopilot.com",
+                models: [],
+              },
+            },
+          },
+        },
+        authProfileId: "github-copilot:work",
+        authProfileIdSource: "user",
+        runId: "copilot-plugin-harness-forwards-tool-auth-store",
+      });
+    } finally {
+      clearAgentHarnesses();
+    }
+
+    expect(mockedGetApiKeyForModel).not.toHaveBeenCalled();
+    expect(pluginRunAttempt).toHaveBeenCalledTimes(1);
+    const harnessParams = mockCallArg(pluginRunAttempt) as {
+      authProfileStore?: { profiles?: Record<string, unknown> };
+      toolAuthProfileStore?: unknown;
+    };
+    const forwardedAuthStore = expectRecordFields(harnessParams.authProfileStore, {});
+    const authProfiles = expectRecordFields(forwardedAuthStore.profiles, {});
+    expect(Object.keys(authProfiles)).toEqual(["github-copilot:work"]);
+    expect(harnessParams.toolAuthProfileStore).toBe(copilotAuthStore);
+  });
+
   it("forwards optional attempt params and the runtime plan into one attempt call", async () => {
     const internalEvents: AgentInternalEvent[] = [];
     const forwardingCase = makeForwardingCase(internalEvents);

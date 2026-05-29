@@ -781,17 +781,26 @@ export async function runEmbeddedAgent(
         pluginHarnessOwnsTransport &&
         provider === OPENAI_CODEX_PROVIDER_ID &&
         effectiveModel.api === "openai-codex-responses";
+      const openClawNativeCodexResponsesNeedsAuthBootstrap =
+        !pluginHarnessOwnsTransport &&
+        provider === OPENAI_CODEX_PROVIDER_ID &&
+        effectiveModel.api === "openai-codex-responses";
       let piExternalCliAuthScope = pluginHarnessOwnsTransport
         ? { ignoreAutoPreferredProfile: false }
-        : resolveExternalCliAuthOverlayScopeFromSelection({
-            provider,
-            cfg: params.config,
-            agentId: params.agentId,
-            modelId,
-            workspaceDir: resolvedWorkspace,
-            userLockedAuthProfileId:
-              params.authProfileIdSource === "user" ? params.authProfileId : undefined,
-          });
+        : openClawNativeCodexResponsesNeedsAuthBootstrap
+          ? {
+              providerIds: [OPENAI_CODEX_PROVIDER_ID],
+              ignoreAutoPreferredProfile: false,
+            }
+          : resolveExternalCliAuthOverlayScopeFromSelection({
+              provider,
+              cfg: params.config,
+              agentId: params.agentId,
+              modelId,
+              workspaceDir: resolvedWorkspace,
+              userLockedAuthProfileId:
+                params.authProfileIdSource === "user" ? params.authProfileId : undefined,
+            });
       let noExternalAuthStore: AuthProfileStore | undefined;
       if (
         !pluginHarnessOwnsTransport &&
@@ -1110,6 +1119,8 @@ export async function runEmbeddedAgent(
               : lastProfileId,
           )
         : attemptAuthProfileStore;
+      const harnessBuildsOpenClawTools =
+        agentHarness.id === "codex" || agentHarness.id === "copilot";
       const { sessionAgentId } = resolveSessionAgentIds({
         sessionKey: params.sessionKey,
         config: params.config,
@@ -1317,7 +1328,7 @@ export async function runEmbeddedAgent(
         agentDir,
         workspaceDir: resolvedWorkspace,
       });
-      const contextEnginePluginId = resolveContextEngineOwnerPluginId(contextEngine);
+      const resolveContextEnginePluginId = () => resolveContextEngineOwnerPluginId(contextEngine);
       startupStages.mark("context-engine");
       notifyExecutionPhase("context_engine", { provider, model: modelId });
       try {
@@ -1596,9 +1607,9 @@ export async function runEmbeddedAgent(
             initialReplayState: accumulatedReplayState,
             authStorage,
             authProfileStore: runAttemptAuthProfileStore,
-            // Codex builds OpenClaw tools inside its harness. Keep transport
-            // auth scoped while letting tool construction see plugin creds.
-            toolAuthProfileStore: agentHarness.id === "codex" ? attemptAuthProfileStore : undefined,
+            // These harnesses build OpenClaw tools internally. Keep transport auth
+            // scoped while letting tool construction see plugin/provider creds.
+            toolAuthProfileStore: harnessBuildsOpenClawTools ? attemptAuthProfileStore : undefined,
             modelRegistry,
             agentId: workspaceResolution.agentId,
             beforeAgentStartResult,
@@ -1913,7 +1924,7 @@ export async function runEmbeddedAgent(
                     config: params.config,
                     sessionKey: params.sessionKey,
                     agentId: sessionAgentId,
-                    contextEnginePluginId,
+                    contextEnginePluginId: resolveContextEnginePluginId(),
                     purpose: "context-engine.timeout-compaction",
                   }),
                   onCompactionHookMessages,
@@ -2102,7 +2113,7 @@ export async function runEmbeddedAgent(
                     config: params.config,
                     sessionKey: params.sessionKey,
                     agentId: sessionAgentId,
-                    contextEnginePluginId,
+                    contextEnginePluginId: resolveContextEnginePluginId(),
                     purpose: "context-engine.overflow-compaction",
                   }),
                   onCompactionHookMessages,
