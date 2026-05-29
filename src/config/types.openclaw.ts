@@ -1,4 +1,5 @@
 import type { SilentReplyPolicyShape } from "../shared/silent-reply-policy.js";
+import type { TranscriptsConfig } from "../transcripts/config.js";
 import type { AccessGroupsConfig } from "./types.access-groups.js";
 import type { AcpConfig } from "./types.acp.js";
 import type { AgentBinding, AgentsConfig } from "./types.agents.js";
@@ -21,7 +22,7 @@ import type {
   CommandsConfig,
   MessagesConfig,
 } from "./types.messages.js";
-import type { ModelsConfig } from "./types.models.js";
+import type { ModelsConfig, ModelsConfigInput } from "./types.models.js";
 import type { NodeHostConfig } from "./types.node-host.js";
 import type { PluginsConfig } from "./types.plugins.js";
 import type { SecretsConfig } from "./types.secrets.js";
@@ -142,6 +143,7 @@ export type OpenClawConfig = {
   web?: WebConfig;
   channels?: ChannelsConfig;
   cron?: CronConfig;
+  transcripts?: TranscriptsConfig;
   commitments?: CommitmentsConfig;
   hooks?: HooksConfig;
   discovery?: DiscoveryConfig;
@@ -151,6 +153,10 @@ export type OpenClawConfig = {
   mcp?: McpConfig;
   /** Network-level SSRF protection via an operator-managed forward proxy. */
   proxy?: ProxyConfig;
+};
+
+export type OpenClawConfigInput = Omit<OpenClawConfig, "models"> & {
+  models?: ModelsConfigInput;
 };
 
 declare const openClawConfigStateBrand: unique symbol;

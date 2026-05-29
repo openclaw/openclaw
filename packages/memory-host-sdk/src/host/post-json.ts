@@ -1,4 +1,5 @@
 import { withRemoteHttpResponse } from "./remote-http.js";
+import { readResponseTextSnippet } from "./response-snippet.js";
 import type { SsrFPolicy } from "./ssrf-policy.js";
 
 export async function postJson<T>(params: {
@@ -24,7 +25,7 @@ export async function postJson<T>(params: {
     },
     onResponse: async (res) => {
       if (!res.ok) {
-        const text = await res.text();
+        const text = await readResponseTextSnippet(res);
         const err = new Error(`${params.errorPrefix}: ${res.status} ${text}`) as Error & {
           status?: number;
         };

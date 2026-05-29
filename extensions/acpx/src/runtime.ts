@@ -18,8 +18,11 @@ import {
   type AcpRuntimeTurn,
   type AcpRuntimeTurnResult,
 } from "acpx/runtime";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { AcpRuntimeError, type AcpRuntime, type AcpRuntimeErrorCode } from "../runtime-api.js";
+import { splitCommandParts } from "./command-line.js";
 import {
   createAcpxProcessLeaseId,
   hashAcpxProcessCommand,
@@ -159,7 +162,7 @@ function readRecordAgentPid(record: unknown): number | undefined {
     typeof rawPid === "number"
       ? rawPid
       : typeof rawPid === "string"
-        ? Number.parseInt(rawPid, 10)
+        ? parseStrictPositiveInteger(rawPid)
         : undefined;
   return numericPid && Number.isInteger(numericPid) && numericPid > 0 ? numericPid : undefined;
 }
@@ -188,7 +191,7 @@ function selectCurrentSessionLease(params: {
   sessionKeys: string[];
   rootPid?: number;
 }): AcpxProcessLease | undefined {
-  const sessionKeys = new Set(params.sessionKeys.map((entry) => entry.trim()).filter(Boolean));
+  const sessionKeys = new Set(normalizeStringEntries(params.sessionKeys));
   const candidates = params.leases.filter((lease) => sessionKeys.has(lease.sessionKey));
   if (params.rootPid) {
     return candidates.find((lease) => lease.rootPid === params.rootPid);
@@ -341,53 +344,6 @@ function readAgentCommandFromRecord(record: AcpLoadedSessionRecord): string | un
 
 function readAgentPidFromRecord(record: AcpLoadedSessionRecord): number | undefined {
   return readRecordAgentPid(record);
-}
-
-function splitCommandParts(value: string): string[] {
-  const parts: string[] = [];
-  let current = "";
-  let quote: "'" | '"' | null = null;
-  let escaping = false;
-
-  for (const ch of value) {
-    if (escaping) {
-      current += ch;
-      escaping = false;
-      continue;
-    }
-    if (ch === "\\" && quote !== "'") {
-      escaping = true;
-      continue;
-    }
-    if (quote) {
-      if (ch === quote) {
-        quote = null;
-      } else {
-        current += ch;
-      }
-      continue;
-    }
-    if (ch === "'" || ch === '"') {
-      quote = ch;
-      continue;
-    }
-    if (/\s/.test(ch)) {
-      if (current) {
-        parts.push(current);
-        current = "";
-      }
-      continue;
-    }
-    current += ch;
-  }
-
-  if (escaping) {
-    current += "\\";
-  }
-  if (current) {
-    parts.push(current);
-  }
-  return parts;
 }
 
 function basename(value: string): string {

@@ -207,6 +207,21 @@ describe("memory tools", () => {
     expect(getMemorySearchManagerMockCalls()).toBe(0);
   });
 
+  it("rejects fractional memory_get ranges before reading files", async () => {
+    setMemoryBackend("builtin");
+    const tool = createMemoryGetToolOrThrow();
+
+    await expect(
+      tool.execute("call_fractional_range", {
+        path: "memory/2026-02-19.md",
+        from: 1.5,
+        lines: 2,
+      }),
+    ).rejects.toThrow("from must be a positive integer");
+    expect(getReadAgentMemoryFileMockCalls()).toBe(0);
+    expect(getMemorySearchManagerMockCalls()).toBe(0);
+  });
+
   it("returns truncation metadata and a continuation notice for partial memory_get results", async () => {
     setMemoryBackend("builtin");
     setMemoryReadFileImpl(async (params: MemoryReadParams) => ({
@@ -247,7 +262,22 @@ describe("memory tools", () => {
         },
       ]);
 
-      const tool = createMemorySearchToolOrThrow();
+      const tool = createMemorySearchToolOrThrow({
+        config: asOpenClawConfig({
+          agents: { list: [{ id: "main", default: true }] },
+          plugins: {
+            entries: {
+              "memory-core": {
+                config: {
+                  dreaming: {
+                    enabled: true,
+                  },
+                },
+              },
+            },
+          },
+        }),
+      });
       await tool.execute("call_recall_persist", { query: "glacier backup" });
 
       const storePath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");

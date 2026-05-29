@@ -3,6 +3,10 @@ import { UPDATE_POST_CORE_CONVERGENCE_ENV } from "../../commands/doctor/shared/u
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "../../plugins/config-state.js";
+import { resolveDefaultPluginNpmDir } from "../../plugins/install-paths.js";
+import { listManagedPluginNpmRoots } from "../../plugins/npm-project-roots.js";
+import { relinkOpenClawPeerDependenciesInManagedNpmRoot } from "../../plugins/plugin-peer-link.js";
+import { pruneStaleLocalBundledPluginInstallRecords } from "../../plugins/stale-local-bundled-plugin-install-records.js";
 import {
   resolveTrustedSourceLinkedOfficialClawHubSpec,
   resolveTrustedSourceLinkedOfficialNpmSpec,
@@ -42,6 +46,42 @@ const REPAIR_GUIDANCE = "Run `openclaw doctor --fix` to retry plugin repair.";
 const inspectGuidance = (pluginId: string) =>
   `Run \`openclaw plugins inspect ${pluginId} --runtime --json\` for details.`;
 
+async function repairManagedNpmOpenClawPeerLinks(params: {
+  env: NodeJS.ProcessEnv;
+}): Promise<{ changes: string[]; warnings: PostCoreConvergenceWarning[] }> {
+  try {
+    const npmRoots = await listManagedPluginNpmRoots(resolveDefaultPluginNpmDir(params.env));
+    const results = await Promise.all(
+      npmRoots.map((npmRoot) =>
+        relinkOpenClawPeerDependenciesInManagedNpmRoot({
+          npmRoot,
+          logger: {},
+        }),
+      ),
+    );
+    const repaired = results.reduce((total, result) => total + result.repaired, 0);
+    return {
+      changes:
+        repaired > 0
+          ? [`Repaired OpenClaw host peer link(s) for ${repaired} managed npm plugin package(s).`]
+          : [],
+      warnings: [],
+    };
+  } catch (err) {
+    const message = `Failed to repair managed npm OpenClaw host peer links: ${err instanceof Error ? err.message : String(err)}`;
+    return {
+      changes: [],
+      warnings: [
+        {
+          reason: message,
+          message,
+          guidance: [REPAIR_GUIDANCE],
+        },
+      ],
+    };
+  }
+}
+
 /**
  * Mandatory post-core convergence pass. Runs AFTER the core package files
  * are swapped and the in-update doctor pass has already returned, but BEFORE
@@ -66,11 +106,17 @@ export async function runPostCorePluginConvergence(params: {
     OPENCLAW_COMPATIBILITY_HOST_VERSION: VERSION,
     [UPDATE_POST_CORE_CONVERGENCE_ENV]: "1",
   };
+  const prunedBaseline = params.baselineInstallRecords
+    ? pruneStaleLocalBundledPluginInstallRecords({
+        installRecords: params.baselineInstallRecords,
+        env,
+      })
+    : null;
 
   const repair = await repairMissingConfiguredPluginInstalls({
     cfg: params.cfg,
     env,
-    ...(params.baselineInstallRecords ? { baselineRecords: params.baselineInstallRecords } : {}),
+    ...(prunedBaseline ? { baselineRecords: prunedBaseline.records } : {}),
   });
 
   const warnings: PostCoreConvergenceWarning[] = repair.warnings.map((message) => ({
@@ -78,6 +124,8 @@ export async function runPostCorePluginConvergence(params: {
     message,
     guidance: [REPAIR_GUIDANCE],
   }));
+  const peerLinkRepair = await repairManagedNpmOpenClawPeerLinks({ env });
+  warnings.push(...peerLinkRepair.warnings);
 
   const records: Record<string, PluginInstallRecord> = repair.records;
   // Filter the smoke-check input to active records ONLY: configured /
@@ -99,7 +147,13 @@ export async function runPostCorePluginConvergence(params: {
   }
 
   return {
-    changes: repair.changes,
+    changes: [
+      ...(prunedBaseline?.stale.map(
+        (record) => `Removed stale local bundled plugin install record "${record.pluginId}".`,
+      ) ?? []),
+      ...repair.changes,
+      ...peerLinkRepair.changes,
+    ],
     warnings,
     errored: warnings.length > 0,
     smokeFailures: smoke.failures,

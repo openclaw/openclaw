@@ -4,7 +4,7 @@ import type {
   SessionsListParams,
   SessionsPatchParams,
   SessionsPatchResult,
-} from "../gateway/protocol/index.js";
+} from "../../packages/gateway-protocol/src/index.js";
 import type { ResponseUsageMode, SessionInfo, SessionScope } from "./tui-types.js";
 
 export type ChatSendOptions = {
@@ -108,7 +108,7 @@ export type TuiBackend = {
   onDisconnected?: (reason: string) => void;
   onGap?: (info: { expected: number; received: number }) => void;
   start: () => void;
-  stop: () => void;
+  stop: () => void | Promise<void>;
   sendChat: (opts: ChatSendOptions) => Promise<{ runId: string }>;
   abortChat: (opts: {
     sessionKey: string;

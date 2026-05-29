@@ -15,7 +15,7 @@ import { extractReadableContent } from "../../web-fetch/content-extractors.runti
 import { resolveWebProviderConfig } from "../../web/provider-runtime-shared.js";
 import { stringEnum } from "../schema/string-enum.js";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult, readNumberParam, readStringParam } from "./common.js";
+import { jsonResult, readPositiveIntegerParam, readStringParam } from "./common.js";
 import {
   extractBasicHtmlContent,
   htmlToMarkdown,
@@ -24,7 +24,6 @@ import {
   type ExtractMode,
 } from "./web-fetch-utils.js";
 import {
-  CacheEntry,
   DEFAULT_CACHE_TTL_MINUTES,
   DEFAULT_TIMEOUT_SECONDS,
   normalizeCacheKey,
@@ -34,6 +33,7 @@ import {
   resolveTimeoutSeconds,
   writeCache,
 } from "./web-shared.js";
+import type { CacheEntry } from "./web-shared.js";
 import { resolveWebFetchToolRuntimeContext } from "./web-tool-runtime-context.js";
 
 const EXTRACT_MODES = ["markdown", "text"] as const;
@@ -59,7 +59,7 @@ const WebFetchSchema = Type.Object({
     }),
   ),
   maxChars: Type.Optional(
-    Type.Number({
+    Type.Integer({
       description: "Max chars returned; truncates.",
       minimum: 100,
     }),
@@ -674,7 +674,7 @@ export function createWebFetchTool(options?: {
       const params = args as Record<string, unknown>;
       const url = readStringParam(params, "url", { required: true });
       const extractMode = readStringParam(params, "extractMode") === "text" ? "text" : "markdown";
-      const maxChars = readNumberParam(params, "maxChars", { integer: true });
+      const maxChars = readPositiveIntegerParam(params, "maxChars");
       const maxCharsCap = resolveFetchMaxCharsCap(executionFetch);
       const result = await runWebFetch({
         url,

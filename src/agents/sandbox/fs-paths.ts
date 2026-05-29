@@ -2,6 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import { isPathInside } from "../../infra/path-guards.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
+import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { resolveSandboxInputPath, resolveSandboxPath } from "../sandbox-paths.js";
 import type { SandboxFsBridgeContext } from "./backend-handle.types.js";
 import { splitSandboxBindSpec } from "./bind-spec.js";
@@ -12,12 +13,13 @@ import {
   normalizeContainerPath,
   relativePathEscapesContainerRoot,
 } from "./path-utils.js";
+import { resolveReadOnlyWorkspaceSkillMounts } from "./workspace-mounts.js";
 
 export type SandboxFsMount = {
   hostRoot: string;
   containerRoot: string;
   writable: boolean;
-  source: "workspace" | "agent" | "bind";
+  source: "workspace" | "agent" | "bind" | "protectedSkill";
 };
 
 export type SandboxResolvedFsPath = {
@@ -50,12 +52,7 @@ export function parseSandboxBindMount(spec: string): ParsedBindMount | null {
     return null;
   }
   const optionsToken = normalizeOptionalLowercaseString(parsed.options) ?? "";
-  const optionParts = optionsToken
-    ? optionsToken
-        .split(",")
-        .map((entry) => entry.trim())
-        .filter(Boolean)
-    : [];
+  const optionParts = optionsToken ? normalizeStringEntries(optionsToken.split(",")) : [];
   const writable = !optionParts.includes("ro");
   return {
     hostRoot: path.resolve(hostToken),
@@ -83,6 +80,20 @@ export function buildSandboxFsMounts(sandbox: SandboxFsBridgeContext): SandboxFs
       containerRoot: SANDBOX_AGENT_WORKSPACE_MOUNT,
       writable: sandbox.workspaceAccess === "rw",
       source: "agent",
+    });
+  }
+
+  for (const mount of resolveReadOnlyWorkspaceSkillMounts({
+    workspaceDir: sandbox.workspaceDir,
+    agentWorkspaceDir: sandbox.agentWorkspaceDir,
+    workdir: sandbox.containerWorkdir,
+    workspaceAccess: sandbox.workspaceAccess,
+  })) {
+    mounts.push({
+      hostRoot: path.resolve(mount.hostPath),
+      containerRoot: normalizeContainerPath(mount.containerPath),
+      writable: false,
+      source: "protectedSkill",
     });
   }
 
@@ -246,8 +257,9 @@ function compareMountsByContainerPath(a: SandboxFsMount, b: SandboxFsMount): num
   if (byLength !== 0) {
     return byLength;
   }
-  // Keep resolver ordering aligned with docker mount precedence: custom binds can
-  // intentionally shadow default workspace mounts at the same container path.
+  // Keep resolver ordering aligned with docker mount precedence for default
+  // workspace mounts, but never let bridge policy classify protected skills
+  // as writable.
   return mountSourcePriority(b.source) - mountSourcePriority(a.source);
 }
 
@@ -260,6 +272,9 @@ function compareMountsByHostPath(a: SandboxFsMount, b: SandboxFsMount): number {
 }
 
 function mountSourcePriority(source: SandboxFsMount["source"]): number {
+  if (source === "protectedSkill") {
+    return 3;
+  }
   if (source === "bind") {
     return 2;
   }
