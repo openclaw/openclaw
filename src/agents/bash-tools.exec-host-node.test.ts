@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_EXEC_DENYLIST_ENTRIES } from "../infra/exec-denylist.js";
 import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../utils/timer-delay.js";
 
 type StrictInlineEvalBoundary =
@@ -20,6 +21,31 @@ type MockExecApprovalAllowlistEntry = {
   pattern: string;
   source?: string;
   commandText?: string;
+};
+type MockExecApprovalDenylistEntry = {
+  pattern: string;
+  flags?: string;
+};
+type MockExecApprovalsFileResult = {
+  allowlist: MockExecApprovalAllowlistEntry[];
+  denylist?: MockExecApprovalDenylistEntry[];
+  file: { version: number; agents: Record<string, unknown> };
+  agent: {
+    security: "deny" | "denylist" | "allowlist" | "full";
+    ask: "off" | "on-miss" | "always";
+    askFallback: "deny" | "denylist" | "allowlist" | "full";
+    autoAllowSkills: boolean;
+  };
+};
+type MockExecHostApprovalContext = {
+  approvals: {
+    allowlist: unknown[];
+    denylist?: MockExecApprovalDenylistEntry[];
+    file: { version: number; agents: Record<string, unknown> };
+  };
+  hostSecurity: "deny" | "denylist" | "allowlist" | "full";
+  hostAsk: "off" | "on-miss" | "always";
+  askFallback: "deny" | "denylist" | "allowlist" | "full";
 };
 
 const INLINE_EVAL_HIT = {
@@ -59,26 +85,31 @@ const evaluateShellAllowlistMock = vi.hoisted(() =>
   ),
 );
 const resolveExecApprovalsFromFileMock = vi.hoisted(() =>
-  vi.fn(() => ({
-    allowlist: [] as MockExecApprovalAllowlistEntry[],
-    file: { version: 1, agents: {} },
-    agent: {
-      security: "full",
-      ask: "off",
-      askFallback: "deny",
-      autoAllowSkills: false,
-    },
-  })),
+  vi.fn(
+    (): MockExecApprovalsFileResult => ({
+      allowlist: [] as MockExecApprovalAllowlistEntry[],
+      denylist: [],
+      file: { version: 1, agents: {} },
+      agent: {
+        security: "full",
+        ask: "off",
+        askFallback: "deny",
+        autoAllowSkills: false,
+      },
+    }),
+  ),
 );
 const requiresExecApprovalMock = vi.hoisted(() => vi.fn(() => true));
 const hasDurableExecApprovalMock = vi.hoisted(() => vi.fn(() => false));
 const resolveExecHostApprovalContextMock = vi.hoisted(() =>
-  vi.fn(() => ({
-    approvals: { allowlist: [], file: { version: 1, agents: {} } },
-    hostSecurity: "full",
-    hostAsk: "off",
-    askFallback: "deny",
-  })),
+  vi.fn(
+    (): MockExecHostApprovalContext => ({
+      approvals: { allowlist: [], denylist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "full",
+      hostAsk: "off",
+      askFallback: "deny",
+    }),
+  ),
 );
 const createAndRegisterDefaultExecApprovalRequestMock = vi.hoisted(() => vi.fn());
 const resolveApprovalDecisionOrUndefinedMock = vi.hoisted(() =>
@@ -294,7 +325,6 @@ describe("executeNodeHostCommand", () => {
     listNodesMock.mockResolvedValue([
       {
         nodeId: "node-1",
-        caps: ["system.run.request-policy.v1"],
         commands: ["system.run", "system.run.prepare"],
         platform: process.platform,
       },
@@ -317,6 +347,7 @@ describe("executeNodeHostCommand", () => {
     resolveExecApprovalsFromFileMock.mockReset();
     resolveExecApprovalsFromFileMock.mockReturnValue({
       allowlist: [],
+      denylist: [],
       file: { version: 1, agents: {} },
       agent: {
         security: "full",
@@ -331,11 +362,12 @@ describe("executeNodeHostCommand", () => {
     hasDurableExecApprovalMock.mockReturnValue(false);
     resolveExecHostApprovalContextMock.mockReset();
     resolveExecHostApprovalContextMock.mockReturnValue({
-      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      approvals: { allowlist: [], denylist: [], file: { version: 1, agents: {} } },
       hostSecurity: "full",
       hostAsk: "off",
       askFallback: "deny",
     });
+    logWarnMock.mockReset();
     createAndRegisterDefaultExecApprovalRequestMock.mockReset();
     createAndRegisterDefaultExecApprovalRequestMock.mockImplementation(async (args?: unknown) => {
       const register =
@@ -376,7 +408,6 @@ describe("executeNodeHostCommand", () => {
     detectInterpreterInlineEvalArgvMock.mockReset();
     detectInterpreterInlineEvalArgvMock.mockReturnValue(null);
     registerExecApprovalRequestForHostOrThrowMock.mockReset();
-    logWarnMock.mockReset();
   });
 
   it("forwards prepared systemRunPlan on async node invoke after approval", async () => {
@@ -1367,6 +1398,177 @@ describe("executeNodeHostCommand", () => {
     ).toBe(false);
   });
 
+  it("does not require request-policy support when denylist fallback cannot run", async () => {
+    requiresExecApprovalMock.mockReturnValue(false);
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], denylist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "full",
+      hostAsk: "off",
+      askFallback: "denylist",
+    });
+
+    await executeNodeHostCommand({
+      command: "bun ./script.ts",
+      workdir: "/tmp/work",
+      env: {},
+      security: "full",
+      ask: "off",
+      requestedNode: "node-1",
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+      agentId: "requested-agent",
+      sessionKey: "requested-session",
+    });
+
+    const runParams = requireRunParams(requireGatewayCommand("system.run"));
+    expect(runParams).not.toHaveProperty("requestedSecurity");
+    expect(runParams).not.toHaveProperty("requestedAsk");
+  });
+
+  it("prechecks denylist fallback before node approval can allow a denied command", async () => {
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: {
+        allowlist: [],
+        denylist: [{ pattern: "curl", flags: "i" }],
+        file: { version: 1, agents: {} },
+      },
+      hostSecurity: "full",
+      hostAsk: "always",
+      askFallback: "denylist",
+    });
+    listNodesMock.mockResolvedValueOnce([
+      {
+        nodeId: "node-1",
+        commands: ["system.run", "system.run.prepare"],
+        caps: ["system.run.request-policy.v1"],
+        connected: true,
+        platform: process.platform,
+      },
+    ]);
+
+    const result = await executeNodeHostCommand({
+      command: "curl https://example.test",
+      workdir: "/tmp/work",
+      env: {},
+      security: "full",
+      ask: "always",
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+      agentId: "requested-agent",
+      sessionKey: "requested-session",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "denied",
+      reason: "denylist",
+      host: "node",
+      nodeId: "node-1",
+    });
+    expect(logWarnMock).toHaveBeenCalledWith(
+      expect.stringContaining("exec denylist: denied command"),
+    );
+    expect(logWarnMock).toHaveBeenCalledWith(expect.stringContaining("host=node"));
+    expect(registerExecApprovalRequestForHostOrThrowMock).not.toHaveBeenCalled();
+    expect(requireGatewayCommand("system.run.prepare")).toBeDefined();
+    expect(
+      callGatewayToolMock.mock.calls.some(
+        ([, , params]) => (params as MockNodeInvokeParams | undefined)?.command === "system.run",
+      ),
+    ).toBe(false);
+  });
+
+  it("prechecks explicit denylist rules for allowlist mode on older nodes", async () => {
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: {
+        allowlist: [],
+        denylist: [{ pattern: "curl", flags: "i" }],
+        file: { version: 1, agents: {} },
+      },
+      hostSecurity: "allowlist",
+      hostAsk: "always",
+      askFallback: "deny",
+    });
+    listNodesMock.mockResolvedValueOnce([
+      {
+        nodeId: "node-1",
+        commands: ["system.run", "system.run.prepare"],
+        connected: true,
+        platform: process.platform,
+      },
+    ]);
+
+    const result = await executeNodeHostCommand({
+      command: "curl https://example.test",
+      workdir: "/tmp/work",
+      env: {},
+      security: "allowlist",
+      ask: "always",
+      requestedNode: "node-1",
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+      agentId: "requested-agent",
+      sessionKey: "requested-session",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "denied",
+      reason: "denylist",
+      host: "node",
+      nodeId: "node-1",
+    });
+    expect(logWarnMock).toHaveBeenCalledWith(
+      expect.stringContaining("exec denylist: denied command"),
+    );
+    expect(logWarnMock).toHaveBeenCalledWith(expect.stringContaining("host=node"));
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+    expect(registerExecApprovalRequestForHostOrThrowMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves allowlist approval behavior on older nodes for managed default deny rules", async () => {
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: {
+        allowlist: [],
+        denylist: [...DEFAULT_EXEC_DENYLIST_ENTRIES],
+        file: { version: 1, agents: {} },
+      },
+      hostSecurity: "allowlist",
+      hostAsk: "always",
+      askFallback: "deny",
+    });
+    listNodesMock.mockResolvedValueOnce([
+      {
+        nodeId: "node-1",
+        commands: ["system.run", "system.run.prepare"],
+        connected: true,
+        platform: process.platform,
+      },
+    ]);
+
+    const result = await executeNodeHostCommand({
+      command: "curl https://example.test",
+      workdir: "/tmp/work",
+      env: {},
+      security: "allowlist",
+      ask: "always",
+      requestedNode: "node-1",
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+      agentId: "requested-agent",
+      sessionKey: "requested-session",
+    });
+
+    expect(result.details).toMatchObject({ status: "approval-pending" });
+    expect(logWarnMock).not.toHaveBeenCalledWith(
+      expect.stringContaining("exec denylist: denied command"),
+    );
+    expect(requireGatewayCommand("system.run.prepare")).toBeDefined();
+    expect(registerExecApprovalRequestForHostOrThrowMock).toHaveBeenCalled();
+  });
+
   it("auto-reviews strict inline-eval commands before asking a human", async () => {
     const inlinePlan = {
       argv: ["/bin/sh", "-lc", "python3 -c 'print(1)'"],
@@ -1699,7 +1901,6 @@ describe("executeNodeHostCommand", () => {
     listNodesMock.mockResolvedValueOnce([
       {
         nodeId: "node-1",
-        caps: ["system.run.request-policy.v1"],
         commands: ["system.run", "system.which", "system.notify"],
         platform: "darwin",
       },
@@ -1800,257 +2001,6 @@ describe("executeNodeHostCommand", () => {
       "exec host=node requires a connected node (node-1 is currently disconnected)",
     );
     expect(callGatewayToolMock).not.toHaveBeenCalled();
-  });
-
-  it("fails closed when non-default exec policy targets an older node", async () => {
-    listNodesMock.mockResolvedValueOnce([
-      {
-        nodeId: "node-1",
-        commands: ["system.run", "system.run.prepare"],
-        connected: true,
-        platform: process.platform,
-      },
-    ]);
-
-    await expect(
-      executeNodeHostCommand({
-        command: "curl https://example.test",
-        workdir: "/tmp/work",
-        env: {},
-        security: "denylist",
-        ask: "off",
-        requestedNode: "node-1",
-        defaultTimeoutSec: 30,
-        approvalRunningNoticeMs: 0,
-        warnings: [],
-        agentId: "requested-agent",
-        sessionKey: "requested-session",
-      }),
-    ).rejects.toThrow("supports requested exec policy enforcement");
-    expect(callGatewayToolMock).not.toHaveBeenCalled();
-  });
-
-  it("fails closed when host approvals tighten default node policy on an older node", async () => {
-    resolveExecHostApprovalContextMock.mockReturnValueOnce({
-      approvals: { allowlist: [], file: { version: 1, agents: {} } },
-      hostSecurity: "denylist",
-      hostAsk: "off",
-      askFallback: "deny",
-    });
-    listNodesMock.mockResolvedValueOnce([
-      {
-        nodeId: "node-1",
-        commands: ["system.run", "system.run.prepare"],
-        connected: true,
-        platform: process.platform,
-      },
-    ]);
-
-    await expect(
-      executeNodeHostCommand({
-        command: "curl https://example.test",
-        workdir: "/tmp/work",
-        env: {},
-        security: "full",
-        ask: "off",
-        requestedNode: "node-1",
-        defaultTimeoutSec: 30,
-        approvalRunningNoticeMs: 0,
-        warnings: [],
-        agentId: "requested-agent",
-        sessionKey: "requested-session",
-      }),
-    ).rejects.toThrow("supports requested exec policy enforcement");
-    expect(callGatewayToolMock).not.toHaveBeenCalled();
-  });
-
-  it("keeps gateway-enforced approval modes working on older nodes", async () => {
-    resolveExecHostApprovalContextMock.mockReturnValueOnce({
-      approvals: { allowlist: [], file: { version: 1, agents: {} } },
-      hostSecurity: "allowlist",
-      hostAsk: "always",
-      askFallback: "deny",
-    });
-    listNodesMock.mockResolvedValueOnce([
-      {
-        nodeId: "node-1",
-        commands: ["system.run", "system.run.prepare"],
-        connected: true,
-        platform: process.platform,
-      },
-    ]);
-
-    await executeNodeHostCommand({
-      command: "bun ./script.ts",
-      workdir: "/tmp/work",
-      env: {},
-      security: "allowlist",
-      ask: "always",
-      requestedNode: "node-1",
-      defaultTimeoutSec: 30,
-      approvalRunningNoticeMs: 0,
-      warnings: [],
-      agentId: "requested-agent",
-      sessionKey: "requested-session",
-    });
-
-    const runParams = requireRunParams(requireGatewayCommand("system.run"));
-    expect(runParams).not.toHaveProperty("requestedSecurity");
-    expect(runParams).not.toHaveProperty("requestedAsk");
-  });
-
-  it("does not require request-policy support when denylist fallback cannot run", async () => {
-    requiresExecApprovalMock.mockReturnValue(false);
-    resolveExecHostApprovalContextMock.mockReturnValueOnce({
-      approvals: { allowlist: [], denylist: [], file: { version: 1, agents: {} } },
-      hostSecurity: "full",
-      hostAsk: "off",
-      askFallback: "denylist",
-    });
-    listNodesMock.mockResolvedValueOnce([
-      {
-        nodeId: "node-1",
-        commands: ["system.run", "system.run.prepare"],
-        connected: true,
-        platform: process.platform,
-      },
-    ]);
-
-    await executeNodeHostCommand({
-      command: "bun ./script.ts",
-      workdir: "/tmp/work",
-      env: {},
-      security: "full",
-      ask: "off",
-      requestedNode: "node-1",
-      defaultTimeoutSec: 30,
-      approvalRunningNoticeMs: 0,
-      warnings: [],
-      agentId: "requested-agent",
-      sessionKey: "requested-session",
-    });
-
-    const runParams = requireRunParams(requireGatewayCommand("system.run"));
-    expect(runParams).not.toHaveProperty("requestedSecurity");
-    expect(runParams).not.toHaveProperty("requestedAsk");
-  });
-
-  it("prechecks denylist fallback before node approval can allow a denied command", async () => {
-    resolveExecHostApprovalContextMock.mockReturnValue({
-      approvals: {
-        allowlist: [],
-        denylist: [{ pattern: "curl", flags: "i" }],
-        file: { version: 1, agents: {} },
-      },
-      hostSecurity: "full",
-      hostAsk: "always",
-      askFallback: "denylist",
-    });
-
-    const result = await executeNodeHostCommand({
-      command: "curl https://example.test",
-      workdir: "/tmp/work",
-      env: {},
-      security: "full",
-      ask: "always",
-      defaultTimeoutSec: 30,
-      approvalRunningNoticeMs: 0,
-      warnings: [],
-      agentId: "requested-agent",
-      sessionKey: "requested-session",
-    });
-
-    expect(result.details).toMatchObject({
-      status: "denied",
-      reason: "denylist",
-      host: "node",
-      nodeId: "node-1",
-    });
-    expect(logWarnMock).toHaveBeenCalledWith(
-      expect.stringContaining("exec denylist: denied command"),
-    );
-    expect(logWarnMock).toHaveBeenCalledWith(expect.stringContaining("host=node"));
-    expect(registerExecApprovalRequestForHostOrThrowMock).not.toHaveBeenCalled();
-    expect(requireGatewayCommand("system.run.prepare")).toBeDefined();
-    expect(
-      callGatewayToolMock.mock.calls.some(
-        ([, , params]) => (params as MockNodeInvokeParams | undefined)?.command === "system.run",
-      ),
-    ).toBe(false);
-  });
-
-  it("prechecks denylist precedence for allowlist mode on older nodes", async () => {
-    resolveExecHostApprovalContextMock.mockReturnValue({
-      approvals: {
-        allowlist: [],
-        denylist: [{ pattern: "curl", flags: "i" }],
-        file: { version: 1, agents: {} },
-      },
-      hostSecurity: "allowlist",
-      hostAsk: "always",
-      askFallback: "deny",
-    });
-    listNodesMock.mockResolvedValueOnce([
-      {
-        nodeId: "node-1",
-        commands: ["system.run", "system.run.prepare"],
-        connected: true,
-        platform: process.platform,
-      },
-    ]);
-
-    const result = await executeNodeHostCommand({
-      command: "curl https://example.test",
-      workdir: "/tmp/work",
-      env: {},
-      security: "allowlist",
-      ask: "always",
-      requestedNode: "node-1",
-      defaultTimeoutSec: 30,
-      approvalRunningNoticeMs: 0,
-      warnings: [],
-      agentId: "requested-agent",
-      sessionKey: "requested-session",
-    });
-
-    expect(result.details).toMatchObject({
-      status: "denied",
-      reason: "denylist",
-      host: "node",
-      nodeId: "node-1",
-    });
-    expect(logWarnMock).toHaveBeenCalledWith(
-      expect.stringContaining("exec denylist: denied command"),
-    );
-    expect(logWarnMock).toHaveBeenCalledWith(expect.stringContaining("host=node"));
-    expect(callGatewayToolMock).not.toHaveBeenCalled();
-    expect(registerExecApprovalRequestForHostOrThrowMock).not.toHaveBeenCalled();
-  });
-
-  it("forwards host-tightened policy to node system run", async () => {
-    resolveExecHostApprovalContextMock.mockReturnValueOnce({
-      approvals: { allowlist: [], file: { version: 1, agents: {} } },
-      hostSecurity: "denylist",
-      hostAsk: "off",
-      askFallback: "deny",
-    });
-
-    await executeNodeHostCommand({
-      command: "curl https://example.test",
-      workdir: "/tmp/work",
-      env: {},
-      security: "full",
-      ask: "off",
-      requestedNode: "node-1",
-      defaultTimeoutSec: 30,
-      approvalRunningNoticeMs: 0,
-      warnings: [],
-      agentId: "requested-agent",
-      sessionKey: "requested-session",
-    });
-
-    const runParams = requireRunParams(requireGatewayCommand("system.run"));
-    expect(runParams).toMatchObject({ requestedSecurity: "denylist", requestedAsk: "off" });
   });
 
   it("returns a non-empty placeholder for silent node exec results", async () => {
@@ -2282,47 +2232,5 @@ describe("executeNodeHostCommand", () => {
       );
     });
     expect(callGatewayToolMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("lets node enforce denylist fallback policy after approval timeout", async () => {
-    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue(null);
-    createExecApprovalDecisionStateMock.mockReturnValue({
-      baseDecision: { timedOut: true },
-      approvedByAsk: true,
-      deniedReason: null,
-    });
-    resolveExecHostApprovalContextMock.mockReturnValue({
-      approvals: { allowlist: [], file: { version: 1, agents: {} } },
-      hostSecurity: "full",
-      hostAsk: "always",
-      askFallback: "denylist",
-    });
-
-    const result = await executeNodeHostCommand({
-      command: "bun ./script.ts",
-      workdir: "/tmp/work",
-      env: {},
-      security: "full",
-      ask: "always",
-      defaultTimeoutSec: 30,
-      approvalRunningNoticeMs: 0,
-      warnings: [],
-      agentId: "requested-agent",
-      sessionKey: "requested-session",
-    });
-
-    expect(result.details?.status).toBe("approval-pending");
-    await vi.waitFor(() => {
-      expect(createExecApprovalDecisionStateMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          askFallback: "denylist",
-          denylistFallbackPrechecked: true,
-        }),
-      );
-    });
-    await vi.waitFor(() => {
-      const runParams = requireRunParams(requireGatewayCommand("system.run"));
-      expect(runParams).toMatchObject({ requestedSecurity: "denylist", requestedAsk: "off" });
-    });
   });
 });
