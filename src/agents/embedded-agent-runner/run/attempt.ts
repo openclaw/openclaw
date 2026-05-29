@@ -2776,6 +2776,8 @@ export async function runEmbeddedAttempt(
               await updateSessionStoreEntry({
                 storePath,
                 sessionKey: params.sessionKey,
+                skipMaintenance: true,
+                takeCacheOwnership: true,
                 update: async (entry) => {
                   if (entry.quotaSuspension?.state !== "resuming") {
                     return null;

@@ -15,6 +15,7 @@ import {
   resolveEffectiveAgentSkillsLimits,
 } from "../discovery/agent-filter.js";
 import { normalizeSkillFilter } from "../discovery/filter.js";
+import { filterPromptVisibleSkillEntries } from "../discovery/skill-index.js";
 import type {
   OpenClawSkillMetadata,
   ParsedSkillFrontmatter,
@@ -23,7 +24,7 @@ import type {
   SkillSnapshot,
 } from "../types.js";
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
-import { shouldIncludeSkill } from "./config.js";
+import { resolveBundledAllowlist, shouldIncludeSkill } from "./config.js";
 import { resolveOpenClawMetadata, resolveSkillInvocationPolicy } from "./frontmatter.js";
 import { loadSkillsFromDirSafe, readSkillFrontmatterSafe } from "./local-loader.js";
 import { resolvePluginSkillDirs } from "./plugin-skills.js";
@@ -106,32 +107,27 @@ function compactPathForConsoleMessage(filePath: string): string {
   return compactHomePath(filePath, resolveCompactHomePrefixes());
 }
 
-function isSkillVisibleInAvailableSkillsPrompt(entry: SkillEntry): boolean {
-  if (entry.exposure) {
-    return entry.exposure.includeInAvailableSkillsPrompt ?? true;
-  }
-  if (entry.invocation) {
-    return !entry.invocation.disableModelInvocation;
-  }
-  return !entry.skill.disableModelInvocation;
-}
-
 function filterSkillEntries(
   entries: SkillEntry[],
   config?: OpenClawConfig,
   skillFilter?: string[],
   eligibility?: SkillEligibilityContext,
 ): SkillEntry[] {
-  let filtered = entries.filter((entry) => shouldIncludeSkill({ entry, config, eligibility }));
+  const bundledAllowlist = resolveBundledAllowlist(config);
+  let filtered = entries.filter((entry) =>
+    shouldIncludeSkill({ entry, config, bundledAllowlist, eligibility }),
+  );
   // If skillFilter is provided, only include skills in the filter list.
   if (skillFilter !== undefined) {
     const normalized = normalizeSkillFilter(skillFilter) ?? [];
     const label = normalized.length > 0 ? normalized.join(", ") : "(none)";
     skillsLogger.debug(`Applying skill filter: ${label}`);
-    filtered =
-      normalized.length > 0
-        ? filtered.filter((entry) => normalized.includes(entry.skill.name))
-        : [];
+    if (normalized.length > 0) {
+      const allowed = new Set(normalized);
+      filtered = filtered.filter((entry) => allowed.has(entry.skill.name));
+    } else {
+      filtered = [];
+    }
     skillsLogger.debug(
       `After skill filter: ${filtered.map((entry) => entry.skill.name).join(", ") || "(none)"}`,
     );
@@ -1213,8 +1209,8 @@ function loadSkillEntries(
         exposure: {
           includeInRuntimeRegistry: true,
           // Freshly loaded entries preserve the documented disable-model-invocation
-          // contract, while legacy entries without exposure metadata still use the
-          // fallback in isSkillVisibleInAvailableSkillsPrompt().
+          // contract, while legacy entries without exposure metadata still use
+          // the centralized prompt visibility fallback.
           includeInAvailableSkillsPrompt: !invocation.disableModelInvocation,
           userInvocable: invocation.userInvocable ?? true,
         },
@@ -1392,7 +1388,7 @@ function resolveWorkspaceSkillPromptState(
     effectiveSkillFilter,
     opts?.eligibility,
   );
-  const promptEntries = eligible.filter((entry) => isSkillVisibleInAvailableSkillsPrompt(entry));
+  const promptEntries = filterPromptVisibleSkillEntries(eligible);
   const remoteNote = opts?.eligibility?.remote?.note?.trim();
   const resolvedSkills = promptEntries.map((entry) => entry.skill);
   // Derive prompt-facing skills with compacted paths (e.g. ~/...) once.

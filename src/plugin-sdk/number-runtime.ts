@@ -2,6 +2,7 @@
 
 export {
   asFiniteNumberInRange,
+  asSafeIntegerInRange,
   parseFiniteNumber,
   clampTimerTimeoutMs,
   resolveTimerTimeoutMs,

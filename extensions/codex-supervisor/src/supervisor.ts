@@ -482,7 +482,9 @@ export class CodexSupervisor {
       }
     }
     if (endpointIds.size === 1) {
-      return Array.from(endpointIds)[0]!;
+      for (const endpointId of endpointIds) {
+        return endpointId;
+      }
     }
     if (endpointIds.size > 1) {
       throw new Error(`Codex thread id is ambiguous across endpoints: ${params.threadId}`);

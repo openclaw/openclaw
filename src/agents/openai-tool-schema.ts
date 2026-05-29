@@ -45,7 +45,7 @@ function resolveStrictOpenAISchemaCacheKey(
   ]);
 }
 
-function readCachedStrictOpenAISchema(schema: object, key: string): unknown | undefined {
+function readCachedStrictOpenAISchema(schema: object, key: string): unknown {
   return strictOpenAISchemaCache.get(schema)?.find((entry) => entry.key === key)?.value;
 }
 
