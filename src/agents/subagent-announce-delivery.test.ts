@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { OutboundDeliveryError } from "../infra/outbound/deliver-types.js";
 import {
   testing as sessionBindingServiceTesting,
   registerSessionBindingAdapter,
@@ -2191,14 +2192,8 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     );
   });
 
-  it("falls back to announce-agent when primary direct generated media delivery fails", async () => {
-    const callGateway = createGatewayMock({
-      result: {
-        payloads: [],
-        didSendViaMessagingTool: false,
-        messagingToolSentMediaUrls: ["/tmp/generated-night-drive.mp3"],
-      },
-    });
+  it("stops after failed primary direct generated media delivery", async () => {
+    const callGateway = createGatewayMock();
     const sendMessage = vi.fn(async () => {
       throw new Error("temporary channel upload failure");
     }) as unknown as typeof runtimeSendMessage;
@@ -2224,18 +2219,11 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
 
     expectRecordFields(result, {
-      delivered: true,
+      delivered: false,
       path: "direct",
+      error: "generated media direct delivery failed: temporary channel upload failure",
     });
-    expect(callGateway).toHaveBeenCalledTimes(1);
-    expectGatewayAgentParams(callGateway, {
-      deliver: false,
-      channel: "discord",
-      accountId: "acct-1",
-      to: "dm:U123",
-      threadId: undefined,
-      sourceReplyDeliveryMode: "message_tool_only",
-    });
+    expect(callGateway).not.toHaveBeenCalled();
     expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 
@@ -2827,39 +2815,17 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     );
   });
 
-  it("directly delivers missing generated media after active requester wake failure", async () => {
-    const callGateway = createGatewayMock({
-      result: {
-        payloads: [],
-        messagingToolSentTargets: [
-          {
-            tool: "message",
-            provider: "slack",
-            accountId: "acct-1",
-            to: "channel:C123",
-            text: "The first image is ready.",
-            mediaUrls: ["/tmp/generated-robot-1.png"],
-          },
-        ],
-      },
-    });
+  it("does not hand off after primary direct media delivery partially fails", async () => {
+    const callGateway = createGatewayMock();
     const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeSequenceMock([
       "transcript_commit_wait_unsupported",
       "no_active_run",
     ]);
-    let sendAttempts = 0;
     const sendMessage = vi.fn(async () => {
-      sendAttempts += 1;
-      if (sendAttempts === 1) {
-        throw new Error("temporary channel upload failure");
-      }
-      return {
-        channel: "slack",
-        to: "channel:C123",
-        via: "direct" as const,
-        mediaUrl: null,
-        result: { messageId: "msg-1" },
-      };
+      throw new OutboundDeliveryError("partial_failed", {
+        cause: new Error("second media upload failed"),
+        results: [{ channel: "slack", messageId: "msg-partial" }],
+      });
     }) as unknown as typeof runtimeSendMessage;
     const result = await deliverSlackChannelAnnouncement({
       callGateway,
@@ -2890,13 +2856,14 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
 
     expectRecordFields(result, {
-      delivered: true,
+      delivered: false,
       path: "direct",
+      error: "generated media direct delivery failed: partial_failed",
     });
-    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(2);
-    expect(callGateway).toHaveBeenCalledTimes(1);
-    expect(sendMessage).toHaveBeenNthCalledWith(
-      1,
+    expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: "slack",
         accountId: "acct-1",
@@ -2906,20 +2873,9 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         idempotencyKey: "announce-channel-media-active-wake-failed:generated-media-direct",
       }),
     );
-    expect(sendMessage).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        channel: "slack",
-        accountId: "acct-1",
-        to: "channel:C123",
-        content: "The generated image is ready.",
-        mediaUrls: ["/tmp/generated-robot-2.png"],
-        idempotencyKey: "announce-channel-media-active-wake-failed:generated-media-direct",
-      }),
-    );
   });
 
-  it("directly delivers generated media after active wake failure when requester handoff locks", async () => {
+  it("stops before requester handoff when primary direct media delivery fails", async () => {
     const callGateway = vi.fn(async () => {
       throw new Error(
         "SessionWriteLockTimeoutError: session file locked (timeout 60000ms): pid=43",
@@ -2971,13 +2927,14 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
 
     expectRecordFields(result, {
-      delivered: true,
+      delivered: false,
       path: "direct",
+      error: "generated media direct delivery failed: temporary channel upload failure",
     });
-    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(2);
-    expect(callGateway).toHaveBeenCalledTimes(1);
-    expect(sendMessage).toHaveBeenCalledTimes(2);
-    expect(sendMessage).toHaveBeenLastCalledWith(
+    expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: "slack",
         accountId: "acct-1",
@@ -2989,7 +2946,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     );
   });
 
-  it("keeps generic requester handoff errors visible after active wake failure", async () => {
+  it("stops before generic requester handoff after failed primary direct delivery", async () => {
     const callGateway = vi.fn(async () => {
       throw new Error("requester handoff exploded after dispatch");
     }) as unknown as typeof runtimeCallGateway;
@@ -3031,10 +2988,10 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expectRecordFields(result, {
       delivered: false,
       path: "direct",
-      error: "requester handoff exploded after dispatch",
+      error: "generated media direct delivery failed: temporary channel upload failure",
     });
-    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalled();
-    expect(callGateway).toHaveBeenCalledTimes(1);
+    expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
+    expect(callGateway).not.toHaveBeenCalled();
     expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 
@@ -3341,7 +3298,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     );
   });
 
-  it("preserves pending announce delivery when primary generated media direct delivery fails", async () => {
+  it("stops before pending announce fallback when primary generated media direct delivery fails", async () => {
     const callGateway = createGatewayMock({
       runId: "video_generate:task-123:ok",
       status: "accepted",
@@ -3376,10 +3333,11 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
 
     expectRecordFields(result, {
-      delivered: true,
+      delivered: false,
       path: "direct",
+      error: "generated media direct delivery failed: temporary channel upload failure",
     });
-    expect(callGateway).toHaveBeenCalledTimes(1);
+    expect(callGateway).not.toHaveBeenCalled();
     expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 

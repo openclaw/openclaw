@@ -823,6 +823,7 @@ async function deliverGeneratedMediaCompletionDirect(params: {
       delivered: false,
       path: "direct",
       error: `generated media direct delivery failed: ${summarizeDeliveryError(err)}`,
+      terminal: true,
     };
   }
 }
@@ -1132,7 +1133,9 @@ async function sendSubagentAnnounceDirectly(params: {
     });
     if (agentMediatedCompletion && expectedMediaUrls.length > 0) {
       const generatedMediaDelivery = await tryGeneratedMediaPrimaryDirectDelivery();
-      if (generatedMediaDelivery?.delivered) {
+      // Do not fall through to requester-agent handoff after an attempted media send:
+      // platform sends can fail after posting some media, and the handoff can duplicate it.
+      if (generatedMediaDelivery) {
         return generatedMediaDelivery;
       }
     }
