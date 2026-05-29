@@ -116,11 +116,11 @@ Use direct npm only after node --version reports **v22.19.0 or newer** and
 global npm permissions are already working. Direct npm starts inside npm itself,
 so it is not the supported first command on old hosts such as Node v12 systems.
 
-~~~bash
+```bash
 node --version
 npm install -g --install-links=true git+https://github.com/StefRush2099/Zorg_MemoryDB.git
 # or: pnpm add -g git+https://github.com/StefRush2099/Zorg_MemoryDB.git
-~~~
+```
 
 If a direct npm attempt on an old host already produced EBADENGINE warnings,
 run the recommended installer above, then retry direct npm only after Node has
