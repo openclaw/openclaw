@@ -85,6 +85,30 @@ export type PluginHookInboundClaimEvent = {
   metadata?: Record<string, unknown>;
 };
 
+export type PluginHookInboundObservedEvent = {
+  content: string;
+  body?: string;
+  bodyForAgent?: string;
+  timestamp?: number;
+  channel: string;
+  accountId?: string;
+  conversationId?: string;
+  senderId?: string;
+  senderName?: string;
+  senderUsername?: string;
+  threadId?: string | number;
+  messageId?: string;
+  trace?: DiagnosticTraceContext;
+  traceId?: string;
+  spanId?: string;
+  parentSpanId?: string;
+  isGroup: boolean;
+  wasMentioned?: boolean;
+  skipped?: boolean;
+  skipReason?: string;
+  metadata?: Record<string, unknown>;
+};
+
 export type PluginHookMessageReceivedEvent = {
   from: string;
   content: string;

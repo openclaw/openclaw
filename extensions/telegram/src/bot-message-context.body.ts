@@ -19,8 +19,11 @@ import {
   createInternalHookEvent,
   fireAndForgetHook,
   toInternalMessageReceivedContext,
+  toPluginInboundObservedEvent,
+  toPluginMessageContext,
   triggerInternalHook,
 } from "openclaw/plugin-sdk/hook-runtime";
+import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -59,6 +62,64 @@ function loadStickerVisionRuntime(): Promise<StickerVisionRuntime> {
 function loadMediaUnderstandingRuntime(): Promise<MediaUnderstandingRuntime> {
   mediaUnderstandingRuntimePromise ??= import("./media-understanding.runtime.js");
   return mediaUnderstandingRuntimePromise;
+}
+
+function emitSkippedInboundObserved(params: {
+  accountId?: string;
+  chatId: number | string;
+  historyKey?: string;
+  msg: TelegramContext["message"];
+  originatingTo?: string;
+  rawBody: string;
+  resolvedThreadId?: number;
+  senderId: string;
+  senderUsername: string;
+  wasMentioned: boolean;
+}): void {
+  const hookRunner = getGlobalHookRunner();
+  if (!hookRunner?.hasHooks("inbound_observed")) {
+    return;
+  }
+  const groupId = `telegram:${params.chatId}`;
+  const conversationId = params.originatingTo ?? groupId;
+  const timestamp =
+    typeof params.msg.date === "number" && Number.isFinite(params.msg.date)
+      ? params.msg.date * 1000
+      : undefined;
+  const canonical = {
+    from: `telegram:group:${params.historyKey ?? params.chatId}`,
+    to: conversationId,
+    content: params.rawBody,
+    body: params.rawBody,
+    bodyForAgent: params.rawBody,
+    timestamp,
+    channelId: "telegram",
+    accountId: params.accountId,
+    conversationId,
+    messageId:
+      typeof params.msg.message_id === "number" ? String(params.msg.message_id) : undefined,
+    senderId: params.senderId || undefined,
+    senderName: buildSenderName(params.msg),
+    senderUsername: params.senderUsername || undefined,
+    provider: "telegram",
+    surface: "telegram",
+    threadId: params.resolvedThreadId,
+    originatingChannel: "telegram",
+    originatingTo: conversationId,
+    isGroup: true,
+    groupId,
+  };
+  fireAndForgetHook(
+    hookRunner.runInboundObserved(
+      toPluginInboundObservedEvent(canonical, {
+        skipped: true,
+        skipReason: "requireMention:no-mention",
+        wasMentioned: params.wasMentioned,
+      }),
+      toPluginMessageContext(canonical),
+    ),
+    "telegram: inbound_observed plugin hook failed",
+  );
 }
 
 export type TelegramInboundBodyResult = {
@@ -361,6 +422,18 @@ export async function resolveTelegramInboundBody(params: {
   const effectiveWasMentioned = mentionDecision.effectiveWasMentioned;
   if (isGroup && requireMention && canDetectMention && mentionDecision.shouldSkip) {
     logger.info({ chatId, reason: "no-mention" }, "skipping group message");
+    emitSkippedInboundObserved({
+      accountId,
+      chatId,
+      historyKey,
+      resolvedThreadId,
+      msg,
+      originatingTo,
+      senderId,
+      senderUsername,
+      rawBody,
+      wasMentioned: effectiveWasMentioned,
+    });
     createChannelHistoryWindow({ historyMap: groupHistories }).record({
       historyKey: historyKey ?? "",
       limit: historyLimit,

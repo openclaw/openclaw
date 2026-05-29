@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { normalizeAllowFrom } from "./bot-access.js";
 
-const { transcribeFirstAudioMock, triggerInternalHookMock } = vi.hoisted(() => ({
+const { hookRunnerMock, transcribeFirstAudioMock, triggerInternalHookMock } = vi.hoisted(() => ({
+  hookRunnerMock: {
+    hasHooks: vi.fn((_hookName?: string) => false),
+    runInboundObserved: vi.fn(async () => undefined),
+  },
   transcribeFirstAudioMock: vi.fn(),
   triggerInternalHookMock: vi.fn<(event: unknown) => Promise<void>>(async () => undefined),
 }));
@@ -22,6 +26,10 @@ vi.mock("openclaw/plugin-sdk/hook-runtime", async () => {
     triggerInternalHook: (event: unknown) => triggerInternalHookMock(event),
   };
 });
+
+vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
+  getGlobalHookRunner: () => hookRunnerMock,
+}));
 
 const { resolveTelegramInboundBody } = await import("./bot-message-context.body.js");
 
@@ -299,6 +307,58 @@ describe("resolveTelegramInboundBody", () => {
     expect(result).toBeNull();
   });
 
+  it("emits inbound_observed for skipped requireMention group messages", async () => {
+    hookRunnerMock.hasHooks.mockImplementation((hookName) => hookName === "inbound_observed");
+    hookRunnerMock.runInboundObserved.mockClear();
+    const logger = { info: vi.fn() };
+
+    const result = await resolveTelegramBody({
+      cfg: {
+        channels: { telegram: {} },
+        messages: { groupChat: { mentionPatterns: ["\\bbot\\b"] } },
+      } as never,
+      msg: {
+        message_id: 123,
+        date: 1_700_000_000,
+        chat: { id: -1001234567890, type: "supergroup", title: "Test Group" },
+        from: { id: 46, first_name: "Eve" },
+        text: "quiet group message",
+        entities: [],
+      } as never,
+      allMedia: [],
+      isGroup: true,
+      chatId: -1001234567890,
+      senderId: "46",
+      senderUsername: "",
+      routeAgentId: undefined,
+      effectiveGroupAllow: normalizeAllowFrom([]),
+      effectiveDmAllow: normalizeAllowFrom([]),
+      groupConfig: { requireMention: true } as never,
+      requireMention: true,
+      logger,
+    });
+
+    expect(result).toBeNull();
+    expect(hookRunnerMock.runInboundObserved).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        content: "quiet group message",
+        conversationId: "telegram:-1001234567890",
+        isGroup: true,
+        messageId: "123",
+        senderId: "46",
+        skipped: true,
+        skipReason: "requireMention:no-mention",
+      }),
+      expect.objectContaining({
+        channelId: "telegram",
+        conversationId: "telegram:-1001234567890",
+        messageId: "123",
+      }),
+    );
+    hookRunnerMock.hasHooks.mockImplementation(() => false);
+  });
+
   it("still transcribes when commands.useAccessGroups is false", async () => {
     transcribeFirstAudioMock.mockReset();
     transcribeFirstAudioMock.mockResolvedValueOnce("hey bot please help");
@@ -437,6 +497,8 @@ describe("resolveTelegramInboundBody", () => {
   });
 
   it("preserves forum topic origin targets for skipped-message hooks", async () => {
+    hookRunnerMock.hasHooks.mockImplementation((hookName) => hookName === "inbound_observed");
+    hookRunnerMock.runInboundObserved.mockClear();
     triggerInternalHookMock.mockClear();
 
     const result = await resolveTelegramBody({
@@ -482,7 +544,32 @@ describe("resolveTelegramInboundBody", () => {
         to: "telegram:-1001234567890:topic:99",
       }),
     );
+    expect(hookRunnerMock.runInboundObserved).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        content: "ambient chatter",
+        conversationId: "telegram:-1001234567890:topic:99",
+        isGroup: true,
+        messageId: "14",
+        senderId: "46",
+        skipped: true,
+        skipReason: "requireMention:no-mention",
+        threadId: 99,
+        metadata: expect.objectContaining({
+          groupId: "telegram:-1001234567890",
+          originatingTo: "telegram:-1001234567890:topic:99",
+          threadId: 99,
+          to: "telegram:-1001234567890:topic:99",
+        }),
+      }),
+      expect.objectContaining({
+        channelId: "telegram",
+        conversationId: "telegram:-1001234567890:topic:99",
+        messageId: "14",
+      }),
+    );
     expect(triggerInternalHookMock).toHaveBeenCalledOnce();
+    hookRunnerMock.hasHooks.mockImplementation(() => false);
   });
 
   it("escapes transcript text before embedding it in the audio framing", async () => {

@@ -41,6 +41,7 @@ import type {
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
   PluginHookInboundClaimResult,
+  PluginHookInboundObservedEvent,
   PluginHookLlmInputEvent,
   PluginHookLlmOutputEvent,
   PluginHookBeforeResetEvent,
@@ -115,6 +116,7 @@ export type {
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
   PluginHookInboundClaimResult,
+  PluginHookInboundObservedEvent,
   PluginHookAfterCompactionEvent,
   PluginHookMessageContext,
   PluginHookMessageReceivedEvent,
@@ -965,6 +967,17 @@ export function createHookRunner(
   // =========================================================================
 
   /**
+   * Run inbound_observed hook.
+   * Read-only visibility for channel inbound events before later dispatch gates.
+   */
+  async function runInboundObserved(
+    event: PluginHookInboundObservedEvent,
+    ctx: PluginHookMessageContext,
+  ): Promise<void> {
+    return runVoidHook("inbound_observed", event, ctx);
+  }
+
+  /**
    * Run inbound_claim hook.
    * Allows plugins to claim an inbound event before commands/agent dispatch.
    */
@@ -1516,6 +1529,7 @@ export function createHookRunner(
     // Lifecycle gate hooks
     runBeforeAgentRun,
     // Message hooks
+    runInboundObserved,
     runInboundClaim,
     runInboundClaimForPlugin,
     runInboundClaimForPluginOutcome,

@@ -21,6 +21,7 @@ import type { InputGateDecision } from "./hook-decision-types.js";
 import type {
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
+  PluginHookInboundObservedEvent,
   PluginHookMessageContext,
   PluginHookMessageReceivedEvent,
   PluginHookMessageSendingEvent,
@@ -58,6 +59,7 @@ export type {
 export type {
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
+  PluginHookInboundObservedEvent,
   PluginHookMessageContext,
   PluginHookMessageReceivedEvent,
   PluginHookMessageSendingEvent,
@@ -80,6 +82,7 @@ export type PluginHookName =
   | "before_compaction"
   | "after_compaction"
   | "before_reset"
+  | "inbound_observed"
   | "inbound_claim"
   | "message_received"
   | "message_sending"
@@ -120,6 +123,7 @@ export const PLUGIN_HOOK_NAMES = [
   "before_compaction",
   "after_compaction",
   "before_reset",
+  "inbound_observed",
   "inbound_claim",
   "message_received",
   "message_sending",
@@ -966,6 +970,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookInboundClaimEvent,
     ctx: PluginHookInboundClaimContext,
   ) => Promise<PluginHookInboundClaimResult | void> | PluginHookInboundClaimResult | void;
+  inbound_observed: (
+    event: PluginHookInboundObservedEvent,
+    ctx: PluginHookMessageContext,
+  ) => Promise<void> | void;
   before_dispatch: (
     event: PluginHookBeforeDispatchEvent,
     ctx: PluginHookBeforeDispatchContext,

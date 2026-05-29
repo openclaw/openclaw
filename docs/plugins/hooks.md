@@ -126,6 +126,7 @@ observation-only.
 **Messages and delivery**
 
 - **`inbound_claim`** - claim an inbound message before agent routing (synthetic replies)
+- `inbound_observed` - observe inbound content accepted or skipped by a channel
 - `message_received` - observe inbound content, sender, thread, and metadata
 - **`message_sending`** - rewrite outbound content or cancel delivery
 - `message_sent` - observe outbound delivery success or failure
@@ -381,6 +382,14 @@ generation.
 
 Use message hooks for channel-level routing and delivery policy:
 
+- `inbound_observed`: observe inbound content that the channel runtime has
+  accepted for visibility but has not necessarily dispatched to an agent
+  session. This hook is read-only and fire-and-forget. It is intended for
+  passive archive, audit, and metrics plugins that need visibility into inbound
+  channel events without changing routing or reply behavior. Skipped messages
+  can include `skipped: true` and a stable `skipReason`, such as
+  `requireMention:no-mention`, when a channel drops the message before agent
+  dispatch.
 - `message_received`: observe inbound content, sender, `threadId`, `messageId`,
   `senderId`, optional run/session correlation, and metadata.
 - `message_sending`: rewrite `content` or return `{ cancel: true }`.
@@ -401,6 +410,8 @@ metadata.
 
 Decision rules:
 
+- `inbound_observed` is observation-only. Handler failures are logged and do
+  not create a session, trigger a reply, or change dispatch decisions.
 - `message_sending` with `cancel: true` is terminal.
 - `message_sending` with `cancel: false` is treated as no decision.
 - Rewritten `content` continues to lower-priority hooks unless a later hook
