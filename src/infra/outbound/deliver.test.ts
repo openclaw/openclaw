@@ -36,6 +36,9 @@ const hookMocks = vi.hoisted(() => ({
     runMessageSending: vi.fn<(event: unknown, ctx: unknown) => Promise<unknown>>(
       async () => undefined,
     ),
+    runReplyPayloadSending: vi.fn<(event: unknown, ctx: unknown) => Promise<unknown>>(
+      async (event) => ({ payload: (event as { payload?: unknown }).payload }),
+    ),
     runMessageSent: vi.fn<(event: unknown, ctx: unknown) => Promise<void>>(async () => {}),
   },
 }));
@@ -294,6 +297,10 @@ describe("deliverOutboundPayloads", () => {
     hookMocks.runner.hasHooks.mockReturnValue(false);
     hookMocks.runner.runMessageSending.mockClear();
     hookMocks.runner.runMessageSending.mockResolvedValue(undefined);
+    hookMocks.runner.runReplyPayloadSending.mockClear();
+    hookMocks.runner.runReplyPayloadSending.mockImplementation(async (event) => ({
+      payload: (event as { payload?: unknown }).payload,
+    }));
     hookMocks.runner.runMessageSent.mockClear();
     hookMocks.runner.runMessageSent.mockResolvedValue(undefined);
     internalHookMocks.createInternalHookEvent.mockClear();
@@ -1553,11 +1560,17 @@ describe("deliverOutboundPayloads", () => {
     expect(requireMockCallArg(sendText, "sendText").text).toBe("visible");
   });
 
-  it("skips message_sending hooks when caller already applied them before enqueue", async () => {
+  it("runs reply payload hooks before the final message_sending policy pass", async () => {
     hookMocks.runner.hasHooks.mockImplementation(
-      (hookName?: string) => hookName === "message_sending",
+      (hookName?: string) => hookName === "reply_payload_sending" || hookName === "message_sending",
     );
-    hookMocks.runner.runMessageSending.mockResolvedValue({ content: "should-not-run" });
+    hookMocks.runner.runReplyPayloadSending.mockImplementationOnce(async (event) => {
+      const payload = (event as { payload: { text?: string } }).payload;
+      return {
+        payload: { ...payload, text: `${payload.text} + payload-hook` },
+      };
+    });
+    hookMocks.runner.runMessageSending.mockResolvedValue({ content: "redacted" });
     const sendText = vi.fn().mockResolvedValue({
       channel: "matrix",
       messageId: "sent",
@@ -1568,15 +1581,35 @@ describe("deliverOutboundPayloads", () => {
       cfg: {},
       channel: "matrix",
       to: "!room",
-      payloads: [{ text: "already redacted" }],
+      payloads: [{ text: "secret" }],
       deps: { matrix: sendText },
-      skipMessageSendingHooks: true,
+      replyPayloadSendingHook: {
+        kind: "final",
+        channel: "matrix",
+        context: { channelId: "matrix", conversationId: "!room" },
+      },
     });
 
-    expect(hookMocks.runner.runMessageSending).not.toHaveBeenCalled();
-    expect(requireMatrixSendCall(sendText)[1]).toBe("already redacted");
+    expect(hookMocks.runner.runReplyPayloadSending).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({ text: "secret" }),
+        kind: "final",
+        channel: "matrix",
+      }),
+      expect.objectContaining({ channelId: "matrix", conversationId: "!room" }),
+    );
+    expect(hookMocks.runner.runMessageSending).toHaveBeenCalledWith(
+      expect.objectContaining({ content: "secret + payload-hook" }),
+      expect.objectContaining({ channelId: "matrix", conversationId: "!room" }),
+    );
+    expect(requireMatrixSendCall(sendText)[1]).toBe("redacted");
     expect(queueMocks.enqueueDelivery).toHaveBeenCalledWith(
-      expect.objectContaining({ skipMessageSendingHooks: true }),
+      expect.objectContaining({
+        replyPayloadSendingHook: expect.objectContaining({
+          kind: "final",
+          channel: "matrix",
+        }),
+      }),
     );
   });
 

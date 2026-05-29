@@ -1,4 +1,5 @@
 import { resolveChunkMode, resolveTextChunkLimit } from "../../auto-reply/chunk.js";
+import { runReplyPayloadSendingHook } from "../../auto-reply/reply/reply-payload-sending-hook.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { createRenderedMessageBatchPlan } from "../../channels/message/rendered-batch.js";
 import type {
@@ -64,6 +65,7 @@ import {
   failDelivery,
   markDeliveryPlatformOutcomeUnknown,
   markDeliveryPlatformSendAttemptStarted,
+  type QueuedReplyPayloadSendingHook,
   type QueuedRenderedMessageBatchPlan,
   withActiveDeliveryClaim,
 } from "./delivery-queue.js";
@@ -641,7 +643,7 @@ type DeliverOutboundPayloadsCoreParams = {
   mediaAccess?: OutboundMediaAccess;
   gifPlayback?: boolean;
   forceDocument?: boolean;
-  skipMessageSendingHooks?: boolean;
+  replyPayloadSendingHook?: QueuedReplyPayloadSendingHook;
   abortSignal?: AbortSignal;
   bestEffort?: boolean;
   onError?: (err: unknown, payload: NormalizedOutboundPayload) => void;
@@ -1164,6 +1166,35 @@ async function applyMessageSendingHook(params: {
   }
 }
 
+async function applyReplyPayloadSendingHook(params: {
+  hook: QueuedReplyPayloadSendingHook | undefined;
+  payload: ReplyPayload;
+}): Promise<{
+  cancelled: boolean;
+  payload: ReplyPayload;
+  changed: boolean;
+}> {
+  if (!params.hook) {
+    return { cancelled: false, payload: params.payload, changed: false };
+  }
+  const nextPayload = await runReplyPayloadSendingHook({
+    payload: params.payload,
+    kind: params.hook.kind,
+    ...(params.hook.channel ? { channel: params.hook.channel } : {}),
+    ...(params.hook.sessionKey ? { sessionKey: params.hook.sessionKey } : {}),
+    ...(params.hook.runId ? { runId: params.hook.runId } : {}),
+    context: params.hook.context,
+  });
+  if (!nextPayload) {
+    return { cancelled: true, payload: params.payload, changed: false };
+  }
+  return {
+    cancelled: false,
+    payload: nextPayload,
+    changed: nextPayload !== params.payload,
+  };
+}
+
 function toOutboundDeliveryError(params: {
   error: unknown;
   results: readonly OutboundDeliveryResult[];
@@ -1240,7 +1271,7 @@ export async function deliverOutboundPayloadsInternal(
         bestEffort: params.bestEffort,
         gifPlayback: params.gifPlayback,
         forceDocument: params.forceDocument,
-        skipMessageSendingHooks: params.skipMessageSendingHooks,
+        replyPayloadSendingHook: params.replyPayloadSendingHook,
         silent: params.silent,
         mirror: params.mirror,
         session: params.session,
@@ -1474,6 +1505,16 @@ async function deliverOutboundPayloadsCore(
       recordPayloadOutcome(suppressedPayloadOutcome({ index, reason: "no_visible_payload" }));
     });
   }
+  const deliveredMirrorPayloads: NormalizedOutboundPayload[] = [];
+  const recordDeliveredMirrorPayload = (
+    payloadSummary: NormalizedOutboundPayload,
+    deliveredResults: readonly OutboundDeliveryResult[],
+  ): void => {
+    if (!params.mirror || !params.replyPayloadSendingHook || deliveredResults.length === 0) {
+      return;
+    }
+    deliveredMirrorPayloads.push(payloadSummary);
+  };
   const hookRunner = getGlobalHookRunner();
   // Canonical session key forwarded to internal lifecycle hooks
   // (`message:sent` event, `message_sending` plugin hook ctx, etc.). Mirror
@@ -1496,10 +1537,7 @@ async function deliverOutboundPayloadsCore(
     mirrorIsGroup,
     mirrorGroupId,
   });
-  const hasMessageSendingHooks =
-    params.skipMessageSendingHooks === true
-      ? false
-      : (hookRunner?.hasHooks("message_sending") ?? false);
+  const hasMessageSendingHooks = hookRunner?.hasHooks("message_sending") ?? false;
   const diagnosticSessionKey = sessionKeyForDeliveryDiagnostics(params);
   if (hasMessageSentHooks && params.session?.agentId && !sessionKeyForInternalHooks) {
     log.warn(
@@ -1557,11 +1595,27 @@ async function deliverOutboundPayloadsCore(
     try {
       throwIfAborted(abortSignal);
 
+      const replyHookResult = await applyReplyPayloadSendingHook({
+        hook: params.replyPayloadSendingHook,
+        payload,
+      });
+      if (replyHookResult.cancelled) {
+        recordPayloadOutcome(
+          suppressedPayloadOutcome({
+            index: payloadIndex,
+            reason: "cancelled_by_reply_payload_sending_hook",
+          }),
+        );
+        continue;
+      }
+      let deliveryPayload = replyHookResult.payload;
+      payloadSummary = buildPayloadSummary(deliveryPayload);
+
       // Run message_sending plugin hook (may modify content or cancel)
       const hookResult = await applyMessageSendingHook({
         hookRunner,
         enabled: hasMessageSendingHooks,
-        payload,
+        payload: deliveryPayload,
         payloadSummary,
         to,
         channel,
@@ -1587,8 +1641,9 @@ async function deliverOutboundPayloadsCore(
         );
         continue;
       }
+      deliveryPayload = hookResult.payload;
       const renderedPayload = stripInternalRuntimeScaffoldingFromPayload(
-        await renderPresentationForDelivery(handler, hookResult.payload),
+        await renderPresentationForDelivery(handler, deliveryPayload),
       );
       const normalizedEffectivePayload = handler.normalizePayload
         ? handler.normalizePayload(renderedPayload)
@@ -1604,7 +1659,9 @@ async function deliverOutboundPayloadsCore(
             index: payloadIndex,
             reason: hookResult.contentRewritten
               ? "empty_after_message_sending_hook"
-              : "no_visible_payload",
+              : replyHookResult.changed
+                ? "empty_after_reply_payload_sending_hook"
+                : "no_visible_payload",
           }),
         );
         continue;
@@ -1654,6 +1711,7 @@ async function deliverOutboundPayloadsCore(
         }
         results.push(delivery);
         recordPayloadOutcome({ index: payloadIndex, status: "sent", results: [delivery] });
+        recordDeliveredMirrorPayload(payloadSummary, [delivery]);
         await maybePinDeliveredMessage({
           handler,
           payload: effectivePayload,
@@ -1694,6 +1752,7 @@ async function deliverOutboundPayloadsCore(
             status: "sent",
             results: deliveredResults,
           });
+          recordDeliveredMirrorPayload(payloadSummary, deliveredResults);
         } else {
           recordPayloadOutcome(
             suppressedPayloadOutcome({
@@ -1750,6 +1809,7 @@ async function deliverOutboundPayloadsCore(
             status: "sent",
             results: deliveredResults,
           });
+          recordDeliveredMirrorPayload(payloadSummary, deliveredResults);
         } else {
           recordPayloadOutcome(
             suppressedPayloadOutcome({
@@ -1823,6 +1883,7 @@ async function deliverOutboundPayloadsCore(
           status: "sent",
           results: deliveredResults,
         });
+        recordDeliveredMirrorPayload(payloadSummary, deliveredResults);
       } else {
         recordPayloadOutcome(
           suppressedPayloadOutcome({
@@ -1863,9 +1924,19 @@ async function deliverOutboundPayloadsCore(
     }
   }
   if (params.mirror && results.length > 0) {
+    const deliveredMirror =
+      deliveredMirrorPayloads.length > 0
+        ? {
+            text: deliveredMirrorPayloads
+              .map((payload) => payload.hookContent ?? payload.text)
+              .filter((text) => text.trim())
+              .join("\n"),
+            mediaUrls: deliveredMirrorPayloads.flatMap((payload) => payload.mediaUrls),
+          }
+        : params.mirror;
     const mirrorText = resolveMirroredTranscriptText({
-      text: params.mirror.text,
-      mediaUrls: params.mirror.mediaUrls,
+      text: deliveredMirror.text,
+      mediaUrls: deliveredMirror.mediaUrls,
     });
     if (mirrorText) {
       const { appendAssistantMessageToSessionTranscript } = await loadTranscriptRuntime();

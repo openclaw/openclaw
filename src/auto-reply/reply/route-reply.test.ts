@@ -271,21 +271,7 @@ describe("routeReply", () => {
     expect(lastDeliveryPayload().text).toBe(`${SILENT_REPLY_TOKEN} -- (why am I here?)`);
   });
 
-  it("runs reply payload hooks before routed delivery", async () => {
-    mocks.hookRunner = {
-      hasHooks: vi.fn((hookName: string) => hookName === "reply_payload_sending"),
-      runMessageSending: vi.fn(),
-      runReplyPayloadSending: vi.fn(async ({ payload }) => ({
-        payload: {
-          ...payload,
-          text: `${payload.text} + hooked`,
-          presentation: {
-            blocks: [{ type: "buttons", buttons: [{ label: "Proceed", value: "action:proceed" }] }],
-          },
-        },
-      })),
-    };
-
+  it("passes replayable reply payload hook context to routed delivery", async () => {
     const res = await routeReply({
       payload: { text: "hello" },
       channel: "telegram",
@@ -299,21 +285,13 @@ describe("routeReply", () => {
     });
 
     expect(res.ok).toBe(true);
-    expect(lastDeliveryPayload()).toMatchObject({
-      text: "hello + hooked",
-      presentation: {
-        blocks: [{ type: "buttons", buttons: [{ label: "Proceed", value: "action:proceed" }] }],
-      },
-    });
-    expect(mocks.hookRunner.runReplyPayloadSending).toHaveBeenCalledWith(
-      {
-        payload: expect.objectContaining({ text: "hello" }),
-        kind: "block",
-        channel: "telegram",
-        sessionKey: "agent:test",
-        runId: "run-1",
-      },
-      {
+    expect(lastDeliveryPayload()).toMatchObject({ text: "hello" });
+    expect(lastDelivery().replyPayloadSendingHook).toMatchObject({
+      kind: "block",
+      channel: "telegram",
+      sessionKey: "agent:test",
+      runId: "run-1",
+      context: {
         channelId: "telegram",
         accountId: "acct-1",
         conversationId: "chat-1",
@@ -321,25 +299,11 @@ describe("routeReply", () => {
         senderId: "sender-1",
         runId: "run-1",
       },
-    );
-    expect(lastDelivery().skipMessageSendingHooks).toBe(true);
+    });
+    expect(lastDelivery()).not.toHaveProperty("skipMessageSendingHooks");
   });
 
-  it("runs reply payload hooks after routed message hooks", async () => {
-    mocks.hookRunner = {
-      hasHooks: vi.fn(
-        (hookName: string) =>
-          hookName === "message_sending" || hookName === "reply_payload_sending",
-      ),
-      runMessageSending: vi.fn(async () => ({ content: "redacted" })),
-      runReplyPayloadSending: vi.fn(async ({ payload }) => ({
-        payload: {
-          ...payload,
-          channelData: { copiedText: payload.text },
-        },
-      })),
-    };
-
+  it("leaves message_sending enforcement to routed durable delivery", async () => {
     const res = await routeReply({
       payload: { text: "secret" },
       channel: "telegram",
@@ -349,32 +313,39 @@ describe("routeReply", () => {
     });
 
     expect(res.ok).toBe(true);
-    expect(mocks.hookRunner.runMessageSending).toHaveBeenCalledWith(
-      expect.objectContaining({
-        content: "secret",
-        metadata: expect.objectContaining({ channel: "telegram", accountId: "acct-1" }),
+    expect(lastDelivery()).toMatchObject({
+      channel: "telegram",
+      to: "chat-1",
+      accountId: "acct-1",
+      payloads: [expect.objectContaining({ text: "secret" })],
+      replyPayloadSendingHook: expect.objectContaining({
+        kind: "final",
+        channel: "telegram",
+        context: expect.objectContaining({
+          channelId: "telegram",
+          accountId: "acct-1",
+          conversationId: "chat-1",
+        }),
       }),
-      expect.objectContaining({ channelId: "telegram", conversationId: "chat-1" }),
-    );
-    expect(mocks.hookRunner.runReplyPayloadSending).toHaveBeenCalledWith(
-      expect.objectContaining({
-        payload: expect.objectContaining({ text: "redacted" }),
-      }),
-      expect.anything(),
-    );
-    expect(lastDeliveryPayload()).toMatchObject({
-      text: "redacted",
-      channelData: { copiedText: "redacted" },
     });
-    expect(lastDelivery().skipMessageSendingHooks).toBe(true);
+    expect(lastDelivery()).not.toHaveProperty("skipMessageSendingHooks");
   });
 
-  it("suppresses routed delivery when reply payload hooks cancel", async () => {
-    mocks.hookRunner = {
-      hasHooks: vi.fn((hookName: string) => hookName === "reply_payload_sending"),
-      runMessageSending: vi.fn(),
-      runReplyPayloadSending: vi.fn(async () => ({ cancel: true, reason: "blocked" })),
-    };
+  it("returns routed reply hook suppression reasons from durable delivery", async () => {
+    mocks.deliverOutboundPayloads.mockImplementationOnce(
+      async ({
+        onPayloadDeliveryOutcome,
+      }: {
+        onPayloadDeliveryOutcome?: (outcome: unknown) => void;
+      }) => {
+        onPayloadDeliveryOutcome?.({
+          index: 0,
+          status: "suppressed",
+          reason: "cancelled_by_reply_payload_sending_hook",
+        });
+        return [];
+      },
+    );
 
     const res = await routeReply({
       payload: { text: "hello" },
@@ -388,17 +359,63 @@ describe("routeReply", () => {
       suppressed: true,
       reason: "cancelled_by_reply_payload_sending_hook",
     });
-    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expect(lastDelivery().replyPayloadSendingHook).toMatchObject({
+      kind: "final",
+      channel: "telegram",
+      context: {
+        channelId: "telegram",
+        conversationId: "chat-1",
+      },
+    });
+  });
+
+  it("suppresses routed delivery when reply payload hooks cancel", async () => {
+    mocks.deliverOutboundPayloads.mockImplementationOnce(
+      async ({
+        onPayloadDeliveryOutcome,
+      }: {
+        onPayloadDeliveryOutcome?: (outcome: unknown) => void;
+      }) => {
+        onPayloadDeliveryOutcome?.({
+          index: 0,
+          status: "suppressed",
+          reason: "cancelled_by_reply_payload_sending_hook",
+        });
+        return [];
+      },
+    );
+
+    const res = await routeReply({
+      payload: { text: "hello" },
+      channel: "telegram",
+      to: "chat-1",
+      cfg: {} as never,
+    });
+
+    expect(res).toEqual({
+      ok: true,
+      suppressed: true,
+      reason: "cancelled_by_reply_payload_sending_hook",
+    });
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
   });
 
   it("suppresses routed delivery when reply payload hooks empty the payload", async () => {
-    mocks.hookRunner = {
-      hasHooks: vi.fn((hookName: string) => hookName === "reply_payload_sending"),
-      runMessageSending: vi.fn(),
-      runReplyPayloadSending: vi.fn(async ({ payload }) => ({
-        payload: { ...payload, text: "" },
-      })),
-    };
+    mocks.deliverOutboundPayloads.mockImplementationOnce(
+      async ({
+        onPayloadDeliveryOutcome,
+      }: {
+        onPayloadDeliveryOutcome?: (outcome: unknown) => void;
+      }) => {
+        onPayloadDeliveryOutcome?.({
+          index: 0,
+          status: "suppressed",
+          reason: "empty_after_reply_payload_sending_hook",
+        });
+        return [];
+      },
+    );
 
     const res = await routeReply({
       payload: { text: "hello" },
@@ -412,7 +429,7 @@ describe("routeReply", () => {
       suppressed: true,
       reason: "empty_after_reply_payload_sending_hook",
     });
-    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
   });
 
   it("passes policySessionKey through to outbound delivery targets", async () => {

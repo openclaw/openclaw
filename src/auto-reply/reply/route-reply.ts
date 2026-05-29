@@ -16,7 +16,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
-import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
@@ -25,7 +24,6 @@ import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
 import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
-import { runReplyPayloadSendingHook } from "./reply-payload-sending-hook.js";
 import {
   formatBtwTextForExternalDelivery,
   shouldSuppressReasoningPayload,
@@ -37,56 +35,6 @@ const messageRuntimeLoader = createLazyImportLoader(
 
 function loadDeliverRuntime() {
   return messageRuntimeLoader.load();
-}
-
-async function runRoutedMessageSendingHook(params: {
-  payload: ReplyPayload;
-  text: string;
-  mediaUrls: string[];
-  channelId: string;
-  to: string;
-  accountId?: string;
-  replyToId?: string | null;
-  threadId?: string | number | null;
-}): Promise<ReplyPayload | null> {
-  const hookRunner = getGlobalHookRunner();
-  if (!hookRunner?.hasHooks("message_sending")) {
-    return params.payload;
-  }
-  try {
-    const hookContent =
-      params.payload.spokenText && !params.text ? params.payload.spokenText : params.text;
-    const result = await hookRunner.runMessageSending(
-      {
-        to: params.to,
-        content: hookContent,
-        replyToId: params.replyToId ?? undefined,
-        threadId: params.threadId ?? undefined,
-        metadata: {
-          channel: params.channelId,
-          accountId: params.accountId,
-          mediaUrls: params.mediaUrls,
-        },
-      },
-      {
-        channelId: params.channelId,
-        accountId: params.accountId ?? undefined,
-        conversationId: params.to,
-      },
-    );
-    if (result?.cancel) {
-      return null;
-    }
-    if (result?.content == null) {
-      return params.payload;
-    }
-    if (params.payload.spokenText && !params.text) {
-      return { ...params.payload, spokenText: result.content };
-    }
-    return { ...params.payload, text: result.content };
-  } catch {
-    return params.payload;
-  }
 }
 
 export type RouteReplyParams = {
@@ -257,77 +205,6 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       ? (replyTransport.threadId ?? null)
       : (threadId ?? null);
 
-  const messageHookPayload = await runRoutedMessageSendingHook({
-    payload: externalPayload,
-    text,
-    mediaUrls,
-    channelId,
-    to,
-    ...(accountId ? { accountId } : {}),
-    replyToId: resolvedReplyToId ?? null,
-    threadId: resolvedThreadId,
-  });
-  if (!messageHookPayload) {
-    return { ok: true };
-  }
-  externalPayload = messageHookPayload;
-
-  const hookedPayload = await runReplyPayloadSendingHook({
-    payload: externalPayload,
-    kind: params.replyKind,
-    channel: channelId,
-    sessionKey: params.sessionKey,
-    runId: params.runId,
-    context: {
-      channelId,
-      ...(accountId ? { accountId } : {}),
-      conversationId: to,
-      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-      ...(params.requesterSenderId ? { senderId: params.requesterSenderId } : {}),
-      ...(params.runId ? { runId: params.runId } : {}),
-    },
-  });
-  if (!hookedPayload) {
-    return {
-      ok: true,
-      suppressed: true,
-      reason: "cancelled_by_reply_payload_sending_hook",
-    };
-  }
-  externalPayload = hookedPayload;
-
-  text = externalPayload.text ?? "";
-  mediaUrls = [];
-  for (const url of externalPayload.mediaUrls ?? []) {
-    if (url) {
-      mediaUrls.push(url);
-    }
-  }
-  if (mediaUrls.length === 0 && externalPayload.mediaUrl) {
-    mediaUrls = [externalPayload.mediaUrl];
-  }
-  hasChannelData = messaging?.hasStructuredReplyPayload?.({
-    payload: externalPayload,
-  });
-  if (
-    !hasReplyPayloadContent(
-      {
-        ...externalPayload,
-        text,
-        mediaUrls,
-      },
-      {
-        hasChannelData,
-      },
-    )
-  ) {
-    return {
-      ok: true,
-      suppressed: true,
-      reason: "empty_after_reply_payload_sending_hook",
-    };
-  }
-
   try {
     // Provider docking: this is an execution boundary (we're about to send).
     // Keep the module cheap to import by loading outbound plumbing lazily.
@@ -351,7 +228,20 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       to,
       accountId: accountId ?? undefined,
       payloads: [externalPayload],
-      skipMessageSendingHooks: true,
+      replyPayloadSendingHook: {
+        kind: params.replyKind,
+        channel: channelId,
+        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+        ...(params.runId ? { runId: params.runId } : {}),
+        context: {
+          channelId,
+          ...(accountId ? { accountId } : {}),
+          conversationId: to,
+          ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+          ...(params.requesterSenderId ? { senderId: params.requesterSenderId } : {}),
+          ...(params.runId ? { runId: params.runId } : {}),
+        },
+      },
       replyToId: resolvedReplyToId ?? null,
       threadId: resolvedThreadId,
       session: outboundSession,
@@ -370,6 +260,17 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
     });
     if (send.status === "failed" || send.status === "partial_failed") {
       throw send.error;
+    }
+    if (
+      send.status === "suppressed" &&
+      (send.reason === "cancelled_by_reply_payload_sending_hook" ||
+        send.reason === "empty_after_reply_payload_sending_hook")
+    ) {
+      return {
+        ok: true,
+        suppressed: true,
+        reason: send.reason,
+      };
     }
     const results = send.status === "sent" ? send.results : [];
 
