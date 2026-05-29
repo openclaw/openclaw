@@ -6,6 +6,21 @@ import {
 } from "./account-throttler.js";
 
 type TelegramPreviousCall = Parameters<ReturnType<typeof createTelegramAccountThrottler>>[0];
+type TelegramTransform = ReturnType<typeof createTelegramAccountThrottler>;
+
+function callLooseSendMessage(
+  throttler: TelegramTransform,
+  prev: TelegramPreviousCall,
+  payload: Record<string, unknown>,
+) {
+  const loose = throttler as (
+    prev: TelegramPreviousCall,
+    method: "sendMessage",
+    payload: unknown,
+    signal: undefined,
+  ) => ReturnType<TelegramTransform>;
+  return loose(prev, "sendMessage", payload, undefined);
+}
 
 function deferred<T>() {
   let resolve: (value: T) => void;
@@ -169,26 +184,23 @@ describe("getOrCreateAccountThrottler", () => {
       return { ok: true, result: request.text ?? "" };
     }) as unknown as TelegramPreviousCall;
 
-    const first = throttler(
-      prev,
-      "sendMessage",
-      { chat_id: "-100123", message_thread_id: "+10", text: "first" },
-      undefined,
-    );
+    const first = callLooseSendMessage(throttler, prev, {
+      chat_id: "-100123",
+      message_thread_id: "+10",
+      text: "first",
+    });
     await vi.waitFor(() => expect(entered).toEqual(["+10:first"]));
 
-    const sameTopic = throttler(
-      prev,
-      "sendMessage",
-      { chat_id: "-100123", message_thread_id: "+10", text: "second" },
-      undefined,
-    );
-    const otherTopic = throttler(
-      prev,
-      "sendMessage",
-      { chat_id: "-100123", message_thread_id: "0x20", text: "hex" },
-      undefined,
-    );
+    const sameTopic = callLooseSendMessage(throttler, prev, {
+      chat_id: "-100123",
+      message_thread_id: "+10",
+      text: "second",
+    });
+    const otherTopic = callLooseSendMessage(throttler, prev, {
+      chat_id: "-100123",
+      message_thread_id: "0x20",
+      text: "hex",
+    });
 
     firstGate.resolve();
     await vi.waitFor(() => expect(entered.length).toBeGreaterThanOrEqual(2));
