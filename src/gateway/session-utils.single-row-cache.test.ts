@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveStorePath, saveSessionStore, type SessionEntry } from "../config/sessions.js";
+import {
+  resolveStorePath,
+  saveSessionStore,
+  updateSessionStore,
+  type SessionEntry,
+} from "../config/sessions.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 
@@ -182,6 +187,63 @@ describe("single gateway session row child-session cache", () => {
           createdAt: now + 25,
         },
       ]);
+      expect(loadGatewaySessionRow(oldParent, { now: now + 50 })?.childSessions).toBeUndefined();
+      expect(loadGatewaySessionRow(newParent, { now: now + 50 })?.childSessions).toEqual([child]);
+      expect(subagentRegistryReadMock.buildSubagentRunReadIndex).not.toHaveBeenCalled();
+    });
+  });
+
+  test("rebuilds store child candidates after same-object session store writes", async () => {
+    await withStateDirEnv("openclaw-single-row-cache-write-version-", async () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          list: [
+            {
+              id: "main",
+              default: true,
+              workspace: "/tmp/openclaw-single-row-cache-write-version",
+            },
+          ],
+          defaults: { model: { primary: "openai/gpt-5.4" } },
+        },
+      } as OpenClawConfig;
+      setRuntimeConfigSnapshot(cfg, cfg);
+      const now = Math.floor(Date.now() / 1_000) * 1_000 + 100;
+      const oldParent = "agent:main:subagent:parent-old";
+      const newParent = "agent:main:subagent:parent-new";
+      const child = "agent:main:subagent:child";
+      const storePath = resolveStorePath(cfg.session?.store, { agentId: "main" });
+      const store: Record<string, SessionEntry> = {
+        [oldParent]: {
+          sessionId: "parent-old",
+          updatedAt: now,
+        },
+        [newParent]: {
+          sessionId: "parent-new",
+          updatedAt: now,
+        },
+        [child]: {
+          sessionId: "child",
+          parentSessionKey: oldParent,
+          updatedAt: now,
+          status: "running",
+        },
+      };
+      await saveSessionStore(storePath, store);
+
+      expect(loadGatewaySessionRow(oldParent, { now })?.childSessions).toEqual([child]);
+      await updateSessionStore(
+        storePath,
+        (cachedStore) => {
+          const childEntry = cachedStore[child];
+          if (childEntry) {
+            childEntry.parentSessionKey = newParent;
+            childEntry.updatedAt = now + 25;
+          }
+        },
+        { skipMaintenance: true, takeCacheOwnership: true },
+      );
+
       expect(loadGatewaySessionRow(oldParent, { now: now + 50 })?.childSessions).toBeUndefined();
       expect(loadGatewaySessionRow(newParent, { now: now + 50 })?.childSessions).toEqual([child]);
       expect(subagentRegistryReadMock.buildSubagentRunReadIndex).not.toHaveBeenCalled();

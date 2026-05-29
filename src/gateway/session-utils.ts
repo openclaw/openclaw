@@ -47,6 +47,7 @@ import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
   buildGroupDisplayName,
+  getSessionStoreCacheVersion,
   loadSessionStore,
   resolveAllAgentSessionStoreTargetsSync,
   resolveAgentMainSessionKey,
@@ -444,6 +445,7 @@ type SessionListRowContext = {
 
 type SingleRowChildSessionCandidateCacheEntry = {
   store: Record<string, SessionEntry>;
+  storeVersion: number;
   childSessionCandidatesByParentKey: Map<string, string[]>;
 };
 
@@ -492,13 +494,15 @@ function getSingleRowChildSessionCandidates(params: {
   storePath: string;
   store: Record<string, SessionEntry>;
 }): Map<string, string[]> {
+  const storeVersion = getSessionStoreCacheVersion(params.storePath);
   const cached = singleRowChildSessionCandidateCache.get(params.storePath);
-  if (cached && cached.store === params.store) {
+  if (cached && cached.store === params.store && cached.storeVersion === storeVersion) {
     return cached.childSessionCandidatesByParentKey;
   }
   const childSessionCandidatesByParentKey = buildStoreChildSessionCandidateIndex(params.store);
   rememberSingleRowChildSessionCandidateCacheEntry(params.storePath, {
     store: params.store,
+    storeVersion,
     childSessionCandidatesByParentKey,
   });
   return childSessionCandidatesByParentKey;
