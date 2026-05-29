@@ -225,6 +225,7 @@ export function buildMinimaxSpeechProvider(): SpeechProviderPlugin {
     id: "minimax",
     label: "MiniMax",
     autoSelectOrder: 40,
+    defaultModel: MINIMAX_TTS_MODELS[0],
     models: MINIMAX_TTS_MODELS,
     voices: MINIMAX_TTS_VOICES,
     resolveConfig: ({ rawConfig, cfg }) => normalizeMinimaxProviderConfig(rawConfig, cfg),

@@ -1184,24 +1184,24 @@ describe("package artifact reuse", () => {
     ]);
   });
 
-  it("serializes CI Telegram bot consumers across release and QA workflows", () => {
-    const sharedTelegramCredential = {
-      group: "openclaw-telegram-ci-credential",
-      "cancel-in-progress": false,
-    };
+  it("lets CI Telegram consumers wait on Convex leases instead of GitHub concurrency", () => {
+    const telegramJobs = [
+      [NPM_TELEGRAM_WORKFLOW, "run_package_telegram_e2e", "Run package Telegram E2E"],
+      [RELEASE_CHECKS_WORKFLOW, "qa_live_telegram_release_checks", "Run Telegram live lane"],
+      [QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_telegram", "Run Telegram live lane"],
+      [
+        ".github/workflows/mantis-telegram-live.yml",
+        "run_telegram_live",
+        "Run Telegram live scenario and capture desktop evidence",
+      ],
+    ] as const;
 
-    expect(workflowJob(NPM_TELEGRAM_WORKFLOW, "run_package_telegram_e2e").concurrency).toEqual(
-      sharedTelegramCredential,
-    );
-    expect(
-      workflowJob(RELEASE_CHECKS_WORKFLOW, "qa_live_telegram_release_checks").concurrency,
-    ).toEqual(sharedTelegramCredential);
-    expect(workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_telegram").concurrency).toEqual(
-      sharedTelegramCredential,
-    );
-    expect(
-      workflowJob(".github/workflows/mantis-telegram-live.yml", "run_telegram_live").concurrency,
-    ).toEqual(sharedTelegramCredential);
+    for (const [workflowPath, jobName, stepName] of telegramJobs) {
+      const job = workflowJob(workflowPath, jobName);
+      expect(job.concurrency).toBeUndefined();
+      const step = workflowStep(job, stepName);
+      expect(step.env?.OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS).toBe("1800000");
+    }
   });
 
   it("keeps release QA and repo E2E lanes off scarce 32-core runners", () => {

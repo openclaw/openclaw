@@ -397,6 +397,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerModelCatalogProvider,
     registerSynthesizedTextModelCatalogProvider,
     registerSynthesizedMediaModelCatalogProvider,
+    registerSynthesizedVoiceModelCatalogProvider,
   } = createModelCatalogRegistrationHandlers({
     registry,
     pushDiagnostic,
@@ -1242,39 +1243,63 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   };
 
   const registerSpeechProvider = (record: PluginRecord, provider: SpeechProviderPlugin) => {
-    registerUniqueProviderLike({
+    const registered = registerUniqueProviderLike({
       record,
       provider,
       kindLabel: "speech provider",
       registrations: registry.speechProviders,
       ownedIds: record.speechProviderIds,
     });
+    if (registered) {
+      registerSynthesizedVoiceModelCatalogProvider({
+        record,
+        provider,
+        capabilities: { tts: true },
+        modes: ["tts"],
+      });
+    }
   };
 
   const registerRealtimeTranscriptionProvider = (
     record: PluginRecord,
     provider: RealtimeTranscriptionProviderPlugin,
   ) => {
-    registerUniqueProviderLike({
+    const registered = registerUniqueProviderLike({
       record,
       provider,
       kindLabel: "realtime transcription provider",
       registrations: registry.realtimeTranscriptionProviders,
       ownedIds: record.realtimeTranscriptionProviderIds,
     });
+    if (registered) {
+      registerSynthesizedVoiceModelCatalogProvider({
+        record,
+        provider,
+        capabilities: { realtime_transcription: true },
+        modes: ["realtime_transcription"],
+      });
+    }
   };
 
   const registerRealtimeVoiceProvider = (
     record: PluginRecord,
     provider: RealtimeVoiceProviderPlugin,
   ) => {
-    registerUniqueProviderLike({
+    const registered = registerUniqueProviderLike({
       record,
       provider,
       kindLabel: "realtime voice provider",
       registrations: registry.realtimeVoiceProviders,
       ownedIds: record.realtimeVoiceProviderIds,
     });
+    if (registered) {
+      registerSynthesizedVoiceModelCatalogProvider({
+        record,
+        provider,
+        capabilities: { realtime_voice: true },
+        modes: ["realtime_voice"],
+      });
+    }
   };
 
   const registerMediaUnderstandingProvider = (

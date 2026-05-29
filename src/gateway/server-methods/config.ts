@@ -1,5 +1,17 @@
 import { execFile } from "node:child_process";
 import {
+  ErrorCodes,
+  errorShape,
+  formatValidationErrors,
+  validateConfigApplyParams,
+  validateConfigGetParams,
+  validateConfigPatchParams,
+  validateConfigSchemaLookupParams,
+  validateConfigSchemaLookupResult,
+  validateConfigSchemaParams,
+  validateConfigSetParams,
+} from "../../../packages/gateway-protocol/src/index.js";
+import {
   createConfigIO,
   parseConfigJson5,
   readConfigFileSnapshot,
@@ -34,18 +46,6 @@ import {
   resolveControlPlaneActor,
   summarizeChangedPaths,
 } from "../control-plane-audit.js";
-import {
-  ErrorCodes,
-  errorShape,
-  formatValidationErrors,
-  validateConfigApplyParams,
-  validateConfigGetParams,
-  validateConfigPatchParams,
-  validateConfigSchemaLookupParams,
-  validateConfigSchemaLookupResult,
-  validateConfigSchemaParams,
-  validateConfigSetParams,
-} from "../protocol/index.js";
 import { resolveBaseHashParam } from "./base-hash.js";
 import {
   commitGatewayConfigWrite,

@@ -1,5 +1,4 @@
 import {
-  readNumberParam,
   readPositiveIntegerParam,
   readStringArrayParam,
   readStringParam,
@@ -350,9 +349,12 @@ export async function executePerplexitySearch(
   const rawDateAfter = readStringParam(args, "date_after");
   const rawDateBefore = readStringParam(args, "date_before");
   const domainFilter = readStringArrayParam(args, "domain_filter");
-  const maxTokens = readNumberParam(args, "max_tokens", { positiveInteger: true });
-  const maxTokensPerPage = readNumberParam(args, "max_tokens_per_page", {
-    positiveInteger: true,
+  const maxTokens = readPositiveIntegerParam(args, "max_tokens", {
+    max: 1_000_000,
+    message: "max_tokens must be a positive integer.",
+  });
+  const maxTokensPerPage = readPositiveIntegerParam(args, "max_tokens_per_page", {
+    message: "max_tokens_per_page must be a positive integer.",
   });
 
   if (!structured) {

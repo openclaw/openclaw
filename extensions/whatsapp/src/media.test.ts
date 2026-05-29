@@ -362,13 +362,15 @@ describe("local media root guard", () => {
   });
 
   it("rejects Windows network paths before filesystem checks", async () => {
+    const realTmpRoot = resolvePreferredOpenClawTmpDir();
+
     await withMockedWindowsPlatform(async () => {
       const realpathSpy = vi.spyOn(fs, "realpath");
 
       await withRestoredMocks([realpathSpy], async () => {
         await expectLocalMediaAccessCode(
           loadWebMedia("\\\\attacker\\share\\evil.png", 1024 * 1024, {
-            localRoots: [resolvePreferredOpenClawTmpDir()],
+            localRoots: [realTmpRoot],
           }),
           "network-path-not-allowed",
         );

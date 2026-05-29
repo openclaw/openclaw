@@ -9,6 +9,7 @@ import type {
 } from "../plugins/types.js";
 export {
   jsonResult,
+  readNonNegativeIntegerParam,
   readNumberParam,
   readPositiveIntegerParam,
   readStringArrayParam,
@@ -61,6 +62,7 @@ export {
   readCache,
   readResponseText,
   resolveCacheTtlMs,
+  resolvePositiveTimeoutSeconds,
   resolveTimeoutSeconds,
   writeCache,
 } from "../agents/tools/web-shared.js";

@@ -545,6 +545,25 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/codex-supervisor:
+    dependencies:
+      '@modelcontextprotocol/sdk':
+        specifier: 1.29.0
+        version: 1.29.0(zod@4.4.3)
+      typebox:
+        specifier: 1.1.38
+        version: 1.1.38
+      ws:
+        specifier: 8.21.0
+        version: 8.21.0
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/comfy:
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -1436,12 +1455,6 @@ importers:
         specifier: workspace:*
         version: link:../..
 
-  extensions/speech-core:
-    devDependencies:
-      '@openclaw/plugin-sdk':
-        specifier: workspace:*
-        version: link:../../packages/plugin-sdk
-
   extensions/stepfun:
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -1743,6 +1756,24 @@ importers:
         specifier: 2.9.0
         version: 2.9.0
 
+  packages/gateway-client:
+    dependencies:
+      '@openclaw/gateway-protocol':
+        specifier: workspace:*
+        version: link:../gateway-protocol
+      ipaddr.js:
+        specifier: 2.4.0
+        version: 2.4.0
+      ws:
+        specifier: 8.21.0
+        version: 8.21.0
+
+  packages/gateway-protocol:
+    dependencies:
+      typebox:
+        specifier: 1.1.38
+        version: 1.1.38
+
   packages/memory-host-sdk: {}
 
   packages/plugin-package-contract: {}
@@ -1750,6 +1781,12 @@ importers:
   packages/plugin-sdk: {}
 
   packages/sdk: {}
+
+  packages/speech-core:
+    dependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   ui:
     dependencies:

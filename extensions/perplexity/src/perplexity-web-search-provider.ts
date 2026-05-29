@@ -59,13 +59,13 @@ function createPerplexityParameters(transport?: string): Record<string, unknown>
       description: "Native Perplexity Search API only. Domain filter (max 20).",
     };
     properties.max_tokens = {
-      type: "number",
+      type: "integer",
       description: "Native Perplexity Search API only. Total content budget across all results.",
       minimum: 1,
       maximum: 1000000,
     };
     properties.max_tokens_per_page = {
-      type: "number",
+      type: "integer",
       description: "Native Perplexity Search API only. Max tokens extracted per page.",
       minimum: 1,
     };

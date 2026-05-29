@@ -243,6 +243,10 @@ export function cloneSessionStoreSnapshot(
   return deepFreeze(cloned);
 }
 
+export function cloneSessionStoreSnapshotEntry(entry: SessionEntry): SessionStoreSnapshotEntry {
+  return deepFreeze(cloneSessionStoreRecord({ entry }).entry);
+}
+
 export function getSessionStoreTtl(): number {
   return resolveCacheTtlMs({
     envValue: process.env.OPENCLAW_SESSION_CACHE_TTL_MS,

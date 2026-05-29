@@ -482,9 +482,6 @@ jobs:
     needs: [authorize_actor, validate_selected_ref]
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 60
-    concurrency:
-      group: openclaw-telegram-ci-credential
-      cancel-in-progress: false
     environment: qa-live-shared
     steps:
       - name: Checkout selected ref
@@ -533,6 +530,7 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+          OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "1800000"
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
           OPENCLAW_QA_TELEGRAM_CAPTURE_CONTENT: "1"
           INPUT_SCENARIO: ${{ github.event_name == 'workflow_dispatch' && inputs.scenario || '' }}

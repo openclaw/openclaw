@@ -1,3 +1,4 @@
+import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import {
   createWebSearchProviderContractFields,
   type WebSearchProviderPlugin,
@@ -34,7 +35,7 @@ const GenericFirecrawlSearchSchema = {
   properties: {
     query: { type: "string", description: "Search query string." },
     count: {
-      type: "number",
+      type: "integer",
       description: "Number of results to return (1-10).",
       minimum: 1,
       maximum: 10,
@@ -72,7 +73,10 @@ export function createFirecrawlWebSearchProvider(): WebSearchProviderPlugin {
         return await runFirecrawlSearch({
           cfg: ctx.config,
           query: typeof args.query === "string" ? args.query : "",
-          count: typeof args.count === "number" ? args.count : undefined,
+          count: readPositiveIntegerParam(args, "count", {
+            message: "count must be an integer from 1 to 10",
+            max: 10,
+          }),
         });
       },
     }),

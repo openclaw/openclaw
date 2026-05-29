@@ -2,7 +2,10 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
-import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-status";
+import {
+  DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
+  formatMemoryDreamingDay,
+} from "openclaw/plugin-sdk/memory-core-host-status";
 import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
 import { privateFileStore } from "openclaw/plugin-sdk/security-runtime";
 import {
@@ -30,6 +33,7 @@ export const DEFAULT_PROMOTION_MIN_SCORE = 0.75;
 export const DEFAULT_PROMOTION_MIN_RECALL_COUNT = 3;
 export const DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES = 2;
 const PROMOTION_MARKER_PREFIX = "openclaw-memory-promotion:";
+const PROMOTED_SNIPPET_CHARS_PER_TOKEN_ESTIMATE = 4;
 const MAX_QUERY_HASHES = 32;
 const MAX_RECALL_DAYS = 16;
 const SHORT_TERM_RECALL_MAX_ENTRIES = 512;
@@ -222,6 +226,13 @@ type ApplyShortTermPromotionsOptions = {
    * `DEFAULT_MEMORY_FILE_MAX_CHARS`. See #73691.
    */
   memoryFileMaxChars?: number;
+  /**
+   * Maximum visible size of each promoted short-term snippet in MEMORY.md, in
+   * estimated tokens. This keeps daily journal ranges from being copied
+   * wholesale into long-term memory while preserving the candidate's provenance
+   * metadata.
+   */
+  maxPromotedSnippetTokens?: number;
 };
 
 type ApplyShortTermPromotionsResult = {
@@ -1743,21 +1754,62 @@ function buildPromotionSection(
   candidates: PromotionCandidate[],
   nowMs: number,
   timezone?: string,
+  maxPromotedSnippetTokens = DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
 ): string {
   const sectionDate = formatMemoryDreamingDay(nowMs, timezone);
   const lines = ["", `## Promoted From Short-Term Memory (${sectionDate})`, ""];
 
   for (const candidate of candidates) {
     const source = `${candidate.path}:${candidate.startLine}-${candidate.endLine}`;
-    const snippet = candidate.snippet || "(no snippet captured)";
+    const metadata = `[score=${candidate.score.toFixed(3)} recalls=${candidate.recallCount} avg=${candidate.avgScore.toFixed(3)} source=${source}]`;
     lines.push(`<!-- ${PROMOTION_MARKER_PREFIX}${candidate.key} -->`);
+    // Cap only the visible MEMORY.md text. The recall store keeps the full
+    // rehydrated snippet so ranking, provenance, and dream narratives remain
+    // tied to the source entry instead of this presentation budget.
     lines.push(
-      `- ${snippet.replace(/^- +/, "")} [score=${candidate.score.toFixed(3)} recalls=${candidate.recallCount} avg=${candidate.avgScore.toFixed(3)} source=${source}]`,
+      `- ${formatPromotedSnippetForMemory(candidate.snippet, maxPromotedSnippetTokens)} ${metadata}`,
     );
   }
 
   lines.push("");
   return lines.join("\n");
+}
+
+function resolvePromotedSnippetCharLimit(maxTokens: number): number {
+  const tokenLimit = toFiniteNonNegativeInt(
+    maxTokens,
+    DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
+  );
+  // This is an inexpensive display-size guard, not a tokenizer contract.
+  return tokenLimit * PROMOTED_SNIPPET_CHARS_PER_TOKEN_ESTIMATE;
+}
+
+function truncatePromotedSnippet(snippet: string, maxTokens: number): string {
+  const limit = resolvePromotedSnippetCharLimit(maxTokens);
+  if (limit === 0 || snippet.length <= limit) {
+    return snippet;
+  }
+  const hardLimit = snippet.slice(0, limit);
+  const sentenceBoundary = Math.max(
+    hardLimit.lastIndexOf(". "),
+    hardLimit.lastIndexOf("! "),
+    hardLimit.lastIndexOf("? "),
+  );
+  const wordBoundary = hardLimit.lastIndexOf(" ");
+  const cutAt =
+    sentenceBoundary >= Math.floor(limit * 0.55)
+      ? sentenceBoundary + 1
+      : wordBoundary >= Math.floor(limit * 0.65)
+        ? wordBoundary
+        : limit;
+  return `${hardLimit.slice(0, cutAt).trimEnd()}...`;
+}
+
+function formatPromotedSnippetForMemory(rawSnippet: string, maxTokens: number): string {
+  const normalized = normalizeSnippet(rawSnippet || "(no snippet captured)")
+    .replace(/^[-*+] +/, "")
+    .trim();
+  return truncatePromotedSnippet(normalized || "(no snippet captured)", maxTokens);
 }
 
 function withTrailingNewline(content: string): string {
@@ -1769,7 +1821,10 @@ function withTrailingNewline(content: string): string {
 
 function extractPromotionMarkers(memoryText: string): Set<string> {
   const markers = new Set<string>();
-  const matches = memoryText.matchAll(/<!--\s*openclaw-memory-promotion:([^\n]+?)\s*-->/gi);
+  // Marker keys include source paths, so spaces are valid. Capture until the
+  // comment close; otherwise a path like "memory/project alpha/..." is missed
+  // and the same candidate can be appended again.
+  const matches = memoryText.matchAll(/<!--\s*openclaw-memory-promotion:([^\n]*?)\s*-->/gi);
   for (const match of matches) {
     const key = match[1]?.trim();
     if (key) {
@@ -1873,7 +1928,12 @@ export async function applyShortTermPromotions(
 
     let compactedDates: string[] = [];
     if (toAppend.length > 0) {
-      const section = buildPromotionSection(toAppend, nowMs, options.timezone);
+      const section = buildPromotionSection(
+        toAppend,
+        nowMs,
+        options.timezone,
+        options.maxPromotedSnippetTokens,
+      );
       const budgetChars =
         typeof options.memoryFileMaxChars === "number" &&
         Number.isFinite(options.memoryFileMaxChars)

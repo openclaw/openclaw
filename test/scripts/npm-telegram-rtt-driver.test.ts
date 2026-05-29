@@ -7,6 +7,20 @@ import { describe, expect, it } from "vitest";
 
 const DRIVER_SCRIPT = "scripts/e2e/npm-telegram-rtt-driver.mjs";
 
+function runDriver(env: Record<string, string>) {
+  return spawnSync(process.execPath, [DRIVER_SCRIPT], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      OPENCLAW_QA_TELEGRAM_API_BASE_URL: "http://127.0.0.1:9",
+      OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN: "driver-token",
+      OPENCLAW_QA_TELEGRAM_GROUP_ID: "-100123",
+      OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN: "sut-token",
+      ...env,
+    },
+  });
+}
+
 async function waitForFile(filePath: string, timeoutMs = 3000): Promise<string> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
@@ -84,6 +98,30 @@ function startOversizedJsonServer(portPath: string) {
 }
 
 describe("npm Telegram RTT driver", () => {
+  it("rejects loose numeric env values instead of parsing prefixes", () => {
+    for (const [name, value] of [
+      ["OPENCLAW_QA_TELEGRAM_SCENARIO_TIMEOUT_MS", "180000ms"],
+      ["OPENCLAW_QA_TELEGRAM_CANARY_TIMEOUT_MS", "1e3"],
+      ["OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES", "20samples"],
+      ["OPENCLAW_NPM_TELEGRAM_SAMPLE_TIMEOUT_MS", "30000ms"],
+      ["OPENCLAW_NPM_TELEGRAM_BOT_API_TIMEOUT_MS", "100ms"],
+      ["OPENCLAW_NPM_TELEGRAM_BOT_API_BODY_MAX_BYTES", "1mb"],
+      ["OPENCLAW_NPM_TELEGRAM_MAX_FAILURES", "2failures"],
+    ]) {
+      const result = runDriver({ [name]: value });
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(`invalid ${name}: ${value}`);
+    }
+  });
+
+  it("rejects zero where positive numeric env values are required", () => {
+    const result = runDriver({ OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES: "0" });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("invalid OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES: 0");
+  });
+
   it("bounds stalled Telegram Bot API response bodies", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-telegram-rtt-driver-"));
     const portPath = path.join(root, "port.txt");

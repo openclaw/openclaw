@@ -889,6 +889,32 @@ describe("Code Mode", () => {
     expect(details.code).toBe("timeout");
   });
 
+  it("normalizes QuickJS interrupt timeout errors", () => {
+    expect(
+      testing.normalizeCodeModeWorkerResult({
+        status: "failed",
+        code: "timeout",
+        error: "interrupted",
+        output: [],
+      }),
+    ).toMatchObject({
+      code: "timeout",
+      error: "code mode timeout exceeded",
+    });
+
+    expect(
+      testing.normalizeCodeModeWorkerResult({
+        status: "failed",
+        code: "internal_error",
+        error: "interrupted",
+        output: [],
+      }),
+    ).toMatchObject({
+      code: "internal_error",
+      error: "interrupted",
+    });
+  });
+
   it("classifies missing worker runtime as unavailable", async () => {
     const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
     const missingWorkerUrl = new URL("./missing-code-mode.worker.js", import.meta.url);

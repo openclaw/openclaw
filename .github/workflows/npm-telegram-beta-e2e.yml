@@ -111,9 +111,6 @@ jobs:
     runs-on: blacksmith-32vcpu-ubuntu-2404
     continue-on-error: ${{ inputs.advisory }}
     timeout-minutes: 60
-    concurrency:
-      group: openclaw-telegram-ci-credential
-      cancel-in-progress: false
     environment: qa-live-shared
     permissions:
       actions: read
@@ -221,6 +218,7 @@ jobs:
           OPENCLAW_NPM_TELEGRAM_CREDENTIAL_ROLE: ci
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+          OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "1800000"
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
           OPENCLAW_QA_TELEGRAM_CAPTURE_CONTENT: "1"
           INPUT_SCENARIO: ${{ inputs.scenario }}

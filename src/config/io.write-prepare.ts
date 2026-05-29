@@ -331,6 +331,7 @@ const AGENT_MODEL_CONFIG_KEYS = [
   "imageGenerationModel",
   "videoGenerationModel",
   "musicGenerationModel",
+  "voiceModel",
   "pdfModel",
 ] as const;
 

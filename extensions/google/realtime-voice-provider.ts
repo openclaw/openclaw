@@ -221,7 +221,7 @@ function normalizeProviderConfig(
       path: "plugins.entries.voice-call.config.realtime.providers.google.apiKey",
     }),
     model: trimToUndefined(raw?.model),
-    voice: trimToUndefined(raw?.voice),
+    voice: trimToUndefined(raw?.speakerVoice) ?? trimToUndefined(raw?.voice),
     temperature: asFiniteNumber(raw?.temperature),
     apiVersion: trimToUndefined(raw?.apiVersion),
     prefixPaddingMs: asNonNegativeInteger(raw?.prefixPaddingMs),

@@ -2,7 +2,8 @@ import { optionalStringEnum } from "openclaw/plugin-sdk/channel-actions";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   jsonResult,
-  readNumberParam,
+  readNonNegativeIntegerParam,
+  readPositiveIntegerParam,
   readStringParam,
 } from "openclaw/plugin-sdk/provider-web-search";
 import { Type } from "typebox";
@@ -60,11 +61,9 @@ export function createFirecrawlScrapeTool(api: OpenClawPluginApi) {
       const url = readStringParam(rawParams, "url", { required: true });
       const extractMode =
         readStringParam(rawParams, "extractMode") === "text" ? "text" : "markdown";
-      const maxChars = readNumberParam(rawParams, "maxChars", { positiveInteger: true });
-      const maxAgeMs = readNumberParam(rawParams, "maxAgeMs", { nonNegativeInteger: true });
-      const timeoutSeconds = readNumberParam(rawParams, "timeoutSeconds", {
-        positiveInteger: true,
-      });
+      const maxChars = readPositiveIntegerParam(rawParams, "maxChars");
+      const maxAgeMs = readNonNegativeIntegerParam(rawParams, "maxAgeMs");
+      const timeoutSeconds = readPositiveIntegerParam(rawParams, "timeoutSeconds");
       const proxyRaw = readStringParam(rawParams, "proxy");
       const proxy =
         proxyRaw === "basic" || proxyRaw === "stealth" || proxyRaw === "auto"

@@ -173,6 +173,42 @@ export const sharedVitestConfig = {
         find: "@openclaw/whatsapp/api.js",
         replacement: path.join(repoRoot, "extensions", "whatsapp", "api.ts"),
       },
+      {
+        find: "@openclaw/gateway-protocol/client-info",
+        replacement: path.join(repoRoot, "packages", "gateway-protocol", "src", "client-info.ts"),
+      },
+      {
+        find: "@openclaw/gateway-protocol/connect-error-details",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "gateway-protocol",
+          "src",
+          "connect-error-details.ts",
+        ),
+      },
+      {
+        find: "@openclaw/gateway-protocol/schema",
+        replacement: path.join(repoRoot, "packages", "gateway-protocol", "src", "schema.ts"),
+      },
+      {
+        find: "@openclaw/gateway-protocol/startup-unavailable",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "gateway-protocol",
+          "src",
+          "startup-unavailable.ts",
+        ),
+      },
+      {
+        find: "@openclaw/gateway-protocol/version",
+        replacement: path.join(repoRoot, "packages", "gateway-protocol", "src", "version.ts"),
+      },
+      {
+        find: "@openclaw/gateway-protocol",
+        replacement: path.join(repoRoot, "packages", "gateway-protocol", "src", "index.ts"),
+      },
       ...sourcePluginSdkSubpaths.map((subpath) => ({
         find: `openclaw/plugin-sdk/${subpath}`,
         replacement: path.join(repoRoot, "src", "plugin-sdk", `${subpath}.ts`),
@@ -403,7 +439,7 @@ export const sharedVitestConfig = {
         "src/webchat/**",
         "src/gateway/server.ts",
         "src/gateway/client.ts",
-        "src/gateway/protocol/**",
+        "packages/gateway-protocol/src/**",
         "src/infra/tailscale.ts",
       ],
     },

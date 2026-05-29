@@ -261,9 +261,6 @@ jobs:
     if: ${{ needs.resolve_request.outputs.should_run == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 180
-    concurrency:
-      group: openclaw-telegram-ci-credential
-      cancel-in-progress: false
     environment: qa-live-shared
     outputs:
       comparison_status: ${{ steps.run_mantis.outputs.comparison_status }}
@@ -380,6 +377,7 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+          OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "1800000"
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
           OPENCLAW_QA_TELEGRAM_CAPTURE_CONTENT: "1"
           CRABBOX_COORDINATOR: ${{ secrets.CRABBOX_COORDINATOR }}

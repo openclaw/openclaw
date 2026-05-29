@@ -1,3 +1,4 @@
+import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import {
   createWebSearchProviderContractFields,
   type WebSearchProviderPlugin,
@@ -19,7 +20,7 @@ const GenericTavilySearchSchema = {
   properties: {
     query: { type: "string", description: "Search query string." },
     count: {
-      type: "number",
+      type: "integer",
       description: "Number of results to return (1-20).",
       minimum: 1,
       maximum: 20,
@@ -56,7 +57,10 @@ export function createTavilyWebSearchProvider(): WebSearchProviderPlugin {
         return await runTavilySearch({
           cfg: ctx.config,
           query: typeof args.query === "string" ? args.query : "",
-          maxResults: typeof args.count === "number" ? args.count : undefined,
+          maxResults: readPositiveIntegerParam(args, "count", {
+            message: "count must be an integer from 1 to 20",
+            max: 20,
+          }),
         });
       },
     }),
