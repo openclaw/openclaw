@@ -36,7 +36,7 @@ export default definePluginEntry({
       id: PROVIDER_ID,
       label: "OpenCode Zen",
       docsPath: "/providers/models",
-      envVars: ["OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"],
+      envVars: ["OPENCODE_ZEN_API_KEY", "OPENCODE_API_KEY"],
       auth: [
         createProviderApiKeyAuthMethod({
           providerId: PROVIDER_ID,
@@ -45,19 +45,19 @@ export default definePluginEntry({
           hint: OPENCODE_SHARED_HINT,
           optionKey: "opencodeZenApiKey",
           flagName: "--opencode-zen-api-key",
-          envVar: "OPENCODE_API_KEY",
-          promptMessage: "Enter OpenCode API key",
+          envVar: "OPENCODE_ZEN_API_KEY",
+          promptMessage: "Enter OpenCode Zen API key",
           profileIds: [...OPENCODE_SHARED_PROFILE_IDS],
           defaultModel: OPENCODE_ZEN_DEFAULT_MODEL,
           applyConfig: (cfg) => applyOpencodeZenConfig(cfg),
           expectedProviders: ["opencode", "opencode-go"],
           noteMessage: [
-            "OpenCode uses one API key across the Zen and Go catalogs.",
+            "OpenCode Zen uses OPENCODE_ZEN_API_KEY (or OPENCODE_API_KEY as fallback).",
             "Zen provides access to Claude, GPT, Gemini, and more models.",
             "Get your API key at: https://opencode.ai/auth",
             "Choose the Zen catalog when you want the curated multi-model proxy.",
           ].join("\n"),
-          noteTitle: "OpenCode",
+          noteTitle: "OpenCode Zen",
           wizard: {
             choiceId: "opencode-zen",
             choiceLabel: "OpenCode Zen catalog",

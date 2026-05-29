@@ -22,7 +22,7 @@
     "providers": [
       {
         "id": "opencode",
-        "envVars": ["OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"]
+        "envVars": ["OPENCODE_ZEN_API_KEY", "OPENCODE_API_KEY"]
       }
     ]
   },
