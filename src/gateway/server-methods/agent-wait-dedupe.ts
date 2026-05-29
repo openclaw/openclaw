@@ -293,6 +293,8 @@ export function setGatewayDedupeEntry(params: {
     ? terminalOutcomeFromWaitSnapshot(incomingSnapshot)
     : undefined;
   if (existingOutcome && isStickyAgentRunTerminalOutcome(existingOutcome) && !incomingOutcome) {
+    // Accepted/in-flight rewrites are not evidence against a terminal hard
+    // timeout or explicit cancellation already stored for this run id.
     return;
   }
   if (existingOutcome && incomingOutcome && isStickyAgentRunTerminalOutcome(existingOutcome)) {

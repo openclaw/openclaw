@@ -80,8 +80,12 @@ export function buildAgentRunTerminalOutcome(
   const providerStarted = normalizeProviderStarted(input.providerStarted);
   const rawError = asNonEmptyString(input.error);
   const aborted = isAbortedAgentStopReason(stopReason);
+  // ACP/model `stop` can be a normal successful finish. Treat rpc/stop as
+  // cancellation only for non-success terminal payloads from abort paths.
   const cancelled = input.status !== "ok" && isCancellationStopReason(stopReason);
   const blocked = isBlockedLivenessState(livenessState);
+  // Queue and gateway-draining timeouts are wait-layer uncertainty. Only
+  // provider-started or provider-phase timeouts are sticky child-run facts.
   const hardTimeout =
     input.status === "timeout" &&
     (isHardAgentRunTimeoutPhase(timeoutPhase) || providerStarted === true);
@@ -148,6 +152,8 @@ export function mergeAgentRunTerminalOutcome(
   if (current.reason === "cancelled") {
     return current;
   }
+  // A hard timeout owns the run unless later evidence proves completion ended
+  // before that timeout; late abort/error cleanup must not downgrade it.
   if (isHardAgentRunTimeoutOutcome(current)) {
     return completedBeforeOrAtTimeout({ completed: incoming, timeout: current })
       ? incoming

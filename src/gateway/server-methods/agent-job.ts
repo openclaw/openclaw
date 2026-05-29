@@ -92,6 +92,8 @@ function terminalOutcomeFromSnapshot(
   snapshot: AgentRunSnapshot,
 ): AgentRunTerminalOutcome | undefined {
   if (snapshot.pendingError) {
+    // Pending errors are still inside retry grace; a lifecycle start can cancel
+    // them, so they must not participate in sticky terminal precedence.
     return undefined;
   }
   return buildAgentRunTerminalOutcome(snapshot);
@@ -118,6 +120,8 @@ function clearPendingAgentRunTimeout(runId: string) {
 function schedulePendingAgentRunError(snapshot: AgentRunSnapshot) {
   const pendingTimeout = pendingAgentRunTimeouts.get(snapshot.runId);
   if (pendingTimeout && shouldPreserveTerminalSnapshot(pendingTimeout.snapshot, snapshot)) {
+    // A late rejection can race in before the timeout grace publishes. Keep the
+    // pending hard timeout so waiters observe the original terminal cause.
     return;
   }
   clearPendingAgentRunTimeout(snapshot.runId);
@@ -364,6 +368,8 @@ export async function waitForAgentJob(params: {
         pendingTimeoutSnapshot &&
         shouldPreserveTerminalSnapshot(pendingTimeoutSnapshot, snapshot)
       ) {
+        // Mirror the shared pending map: while this waiter holds a hard timeout
+        // in grace, late errors are diagnostic noise, not a new terminal result.
         return;
       }
       clearPendingErrorTimer();
