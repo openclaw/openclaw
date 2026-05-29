@@ -168,7 +168,7 @@ function normalizeProxyFetchInput(
     };
   }
   if (isRequestLike(input)) {
-    return { input: input.url, init: toRequestLikeInit(input as typeof input, init) };
+    return { input: input.url, init: toRequestLikeInit(input, init) };
   }
   return { input: input as string | URL, init };
 }
@@ -192,7 +192,7 @@ export function makeProxyFetch(proxyUrl: string): typeof fetch {
   };
   const proxyFetch = ((input: RequestInfo | URL, init?: RequestInit) => {
     const normalized = normalizeProxyFetchInput(input, init);
-    return undiciFetch(normalized.input as string | URL, {
+    return undiciFetch(normalized.input, {
       ...(normalizeInitForUndici(normalized.init, UndiciFormData) as Record<string, unknown>),
       dispatcher: resolveAgent(),
     }) as unknown as Promise<Response>;
@@ -237,7 +237,7 @@ export function resolveProxyFetchFromEnv(
     const agent = new EnvHttpProxyAgent(proxyOptions);
     return ((input: RequestInfo | URL, init?: RequestInit) => {
       const normalized = normalizeProxyFetchInput(input, init);
-      return undiciFetch(normalized.input as string | URL, {
+      return undiciFetch(normalized.input, {
         ...(normalizeInitForUndici(normalized.init, UndiciFormData) as Record<string, unknown>),
         dispatcher: agent,
       }) as unknown as Promise<Response>;
