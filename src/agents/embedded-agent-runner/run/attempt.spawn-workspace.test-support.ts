@@ -927,6 +927,7 @@ export function resetEmbeddedAttemptHarness(
   }
   hoisted.createAgentSessionMock.mockReset();
   hoisted.sessionManagerOpenMock.mockReset().mockReturnValue(hoisted.sessionManager);
+  hoisted.defaultResourceLoaderInitMock.mockReset();
   hoisted.resolveSandboxContextMock.mockReset();
   hoisted.ensureGlobalUndiciEnvProxyDispatcherMock.mockReset();
   hoisted.ensureGlobalUndiciDispatcherStreamTimeoutsMock.mockReset();
