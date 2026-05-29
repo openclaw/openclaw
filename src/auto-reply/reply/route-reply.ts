@@ -193,63 +193,6 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
     return { ok: false, error: "Reply routing aborted" };
   }
 
-  const hookedPayload = await runReplyPayloadSendingHook({
-    payload: externalPayload,
-    kind: params.replyKind,
-    channel: channelId,
-    sessionKey: params.sessionKey,
-    runId: params.runId,
-    context: {
-      channelId,
-      ...(accountId ? { accountId } : {}),
-      conversationId: to,
-      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-      ...(params.requesterSenderId ? { senderId: params.requesterSenderId } : {}),
-      ...(params.runId ? { runId: params.runId } : {}),
-    },
-  });
-  if (!hookedPayload) {
-    return {
-      ok: true,
-      suppressed: true,
-      reason: "cancelled_by_reply_payload_sending_hook",
-    };
-  }
-  externalPayload = hookedPayload;
-
-  text = externalPayload.text ?? "";
-  mediaUrls = [];
-  for (const url of externalPayload.mediaUrls ?? []) {
-    if (url) {
-      mediaUrls.push(url);
-    }
-  }
-  if (mediaUrls.length === 0 && externalPayload.mediaUrl) {
-    mediaUrls = [externalPayload.mediaUrl];
-  }
-  replyToId = externalPayload.replyToId;
-  hasChannelData = messaging?.hasStructuredReplyPayload?.({
-    payload: externalPayload,
-  });
-  if (
-    !hasReplyPayloadContent(
-      {
-        ...externalPayload,
-        text,
-        mediaUrls,
-      },
-      {
-        hasChannelData,
-      },
-    )
-  ) {
-    return {
-      ok: true,
-      suppressed: true,
-      reason: "empty_after_reply_payload_sending_hook",
-    };
-  }
-
   const replyTransport =
     threading?.resolveReplyTransport?.({
       cfg,
@@ -286,6 +229,26 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       to,
       accountId: accountId ?? undefined,
       payloads: [externalPayload],
+      beforePayloadDelivery: {
+        cancelledReason: "cancelled_by_reply_payload_sending_hook",
+        emptyReason: "empty_after_reply_payload_sending_hook",
+        run: async ({ payload: deliveryPayload }) =>
+          await runReplyPayloadSendingHook({
+            payload: deliveryPayload,
+            kind: params.replyKind,
+            channel: channelId,
+            sessionKey: params.sessionKey,
+            runId: params.runId,
+            context: {
+              channelId,
+              ...(accountId ? { accountId } : {}),
+              conversationId: to,
+              ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+              ...(params.requesterSenderId ? { senderId: params.requesterSenderId } : {}),
+              ...(params.runId ? { runId: params.runId } : {}),
+            },
+          }),
+      },
       replyToId: resolvedReplyToId ?? null,
       threadId: resolvedThreadId,
       session: outboundSession,
@@ -304,6 +267,17 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
     });
     if (send.status === "failed" || send.status === "partial_failed") {
       throw send.error;
+    }
+    if (
+      send.status === "suppressed" &&
+      (send.reason === "cancelled_by_reply_payload_sending_hook" ||
+        send.reason === "empty_after_reply_payload_sending_hook")
+    ) {
+      return {
+        ok: true,
+        suppressed: true,
+        reason: send.reason,
+      };
     }
     const results = send.status === "sent" ? send.results : [];
 

@@ -645,6 +645,18 @@ type DeliverOutboundPayloadsCoreParams = {
   bestEffort?: boolean;
   onError?: (err: unknown, payload: NormalizedOutboundPayload) => void;
   onPayload?: (payload: NormalizedOutboundPayload) => void;
+  beforePayloadDelivery?: {
+    run: (params: {
+      payload: ReplyPayload;
+      payloadSummary: NormalizedOutboundPayload;
+      index: number;
+      channel: Exclude<OutboundChannel, "none">;
+      to: string;
+      accountId?: string;
+    }) => Promise<ReplyPayload | null> | ReplyPayload | null;
+    cancelledReason: OutboundPayloadDeliverySuppressionReason;
+    emptyReason: OutboundPayloadDeliverySuppressionReason;
+  };
   onPayloadDeliveryOutcome?: (outcome: OutboundPayloadDeliveryOutcome) => void;
   /** Session/agent context used for hooks and media local-root scoping. */
   session?: OutboundSessionContext;
@@ -1582,8 +1594,31 @@ async function deliverOutboundPayloadsCore(
         );
         continue;
       }
+      let deliveryPayload = hookResult.payload;
+      let beforePayloadDeliveryChanged = false;
+      if (params.beforePayloadDelivery) {
+        const nextPayload = await params.beforePayloadDelivery.run({
+          payload: deliveryPayload,
+          payloadSummary: hookResult.payloadSummary,
+          index: payloadIndex,
+          channel,
+          to,
+          ...(accountId ? { accountId } : {}),
+        });
+        if (!nextPayload) {
+          recordPayloadOutcome(
+            suppressedPayloadOutcome({
+              index: payloadIndex,
+              reason: params.beforePayloadDelivery.cancelledReason,
+            }),
+          );
+          continue;
+        }
+        beforePayloadDeliveryChanged = nextPayload !== deliveryPayload;
+        deliveryPayload = nextPayload;
+      }
       const renderedPayload = stripInternalRuntimeScaffoldingFromPayload(
-        await renderPresentationForDelivery(handler, hookResult.payload),
+        await renderPresentationForDelivery(handler, deliveryPayload),
       );
       const normalizedEffectivePayload = handler.normalizePayload
         ? handler.normalizePayload(renderedPayload)
@@ -1599,7 +1634,9 @@ async function deliverOutboundPayloadsCore(
             index: payloadIndex,
             reason: hookResult.contentRewritten
               ? "empty_after_message_sending_hook"
-              : "no_visible_payload",
+              : beforePayloadDeliveryChanged
+                ? params.beforePayloadDelivery!.emptyReason
+                : "no_visible_payload",
           }),
         );
         continue;

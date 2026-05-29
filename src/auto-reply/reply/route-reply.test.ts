@@ -10,6 +10,7 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
+import type { ReplyPayload } from "../reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 
 const mocks = vi.hoisted(() => ({
@@ -149,6 +150,77 @@ function lastDeliveryPayload(index = 0): Record<string, unknown> {
   return payload as Record<string, unknown>;
 }
 
+function hasMockDeliveryContent(payload: ReplyPayload): boolean {
+  return Boolean(
+    payload.text?.trim() ||
+    payload.mediaUrl ||
+    payload.mediaUrls?.some((url) => url.trim()) ||
+    payload.presentation ||
+    payload.interactive ||
+    payload.channelData ||
+    payload.audioAsVoice,
+  );
+}
+
+function mockDurableDeliveryApplyingBeforePayloadHook(): ReplyPayload[] {
+  const deliveredPayloads: ReplyPayload[] = [];
+  mocks.deliverOutboundPayloads.mockImplementationOnce(
+    async (delivery: {
+      channel: string;
+      to: string;
+      accountId?: string;
+      payloads: ReplyPayload[];
+      beforePayloadDelivery?: {
+        run: (params: {
+          payload: ReplyPayload;
+          payloadSummary: { text: string; mediaUrls: string[] };
+          index: number;
+          channel: string;
+          to: string;
+          accountId?: string;
+        }) => Promise<ReplyPayload | null> | ReplyPayload | null;
+        cancelledReason: string;
+        emptyReason: string;
+      };
+      onPayloadDeliveryOutcome?: (outcome: unknown) => void;
+    }) => {
+      const payload = delivery.payloads[0];
+      expect(payload).toBeDefined();
+      const nextPayload = delivery.beforePayloadDelivery
+        ? await delivery.beforePayloadDelivery.run({
+            payload,
+            payloadSummary: { text: payload.text ?? "", mediaUrls: payload.mediaUrls ?? [] },
+            index: 0,
+            channel: delivery.channel,
+            to: delivery.to,
+            ...(delivery.accountId ? { accountId: delivery.accountId } : {}),
+          })
+        : payload;
+      if (!nextPayload) {
+        delivery.onPayloadDeliveryOutcome?.({
+          index: 0,
+          status: "suppressed",
+          reason: delivery.beforePayloadDelivery?.cancelledReason,
+        });
+        return [];
+      }
+      if (!hasMockDeliveryContent(nextPayload)) {
+        delivery.onPayloadDeliveryOutcome?.({
+          index: 0,
+          status: "suppressed",
+          reason: delivery.beforePayloadDelivery?.emptyReason,
+        });
+        return [];
+      }
+      deliveredPayloads.push(nextPayload);
+      const result = { channel: delivery.channel, messageId: "hooked-message" };
+      delivery.onPayloadDeliveryOutcome?.({ index: 0, status: "sent", results: [result] });
+      return [result];
+    },
+  );
+  return deliveredPayloads;
+}
+
 async function expectSlackNoDelivery(
   payload: Parameters<typeof routeReply>[0]["payload"],
   overrides: Partial<Parameters<typeof routeReply>[0]> = {},
@@ -271,6 +343,7 @@ describe("routeReply", () => {
   });
 
   it("runs reply payload hooks before routed delivery", async () => {
+    const deliveredPayloads = mockDurableDeliveryApplyingBeforePayloadHook();
     mocks.hookRunner = {
       hasHooks: vi.fn((hookName: string) => hookName === "reply_payload_sending"),
       runReplyPayloadSending: vi.fn(async ({ payload }) => ({
@@ -297,7 +370,7 @@ describe("routeReply", () => {
     });
 
     expect(res.ok).toBe(true);
-    expect(lastDeliveryPayload()).toMatchObject({
+    expect(deliveredPayloads[0]).toMatchObject({
       text: "hello + hooked",
       presentation: {
         blocks: [{ type: "buttons", buttons: [{ label: "Proceed", value: "action:proceed" }] }],
@@ -323,6 +396,7 @@ describe("routeReply", () => {
   });
 
   it("suppresses routed delivery when reply payload hooks cancel", async () => {
+    mockDurableDeliveryApplyingBeforePayloadHook();
     mocks.hookRunner = {
       hasHooks: vi.fn((hookName: string) => hookName === "reply_payload_sending"),
       runReplyPayloadSending: vi.fn(async () => ({ cancel: true, reason: "blocked" })),
@@ -340,10 +414,11 @@ describe("routeReply", () => {
       suppressed: true,
       reason: "cancelled_by_reply_payload_sending_hook",
     });
-    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
   });
 
   it("suppresses routed delivery when reply payload hooks empty the payload", async () => {
+    mockDurableDeliveryApplyingBeforePayloadHook();
     mocks.hookRunner = {
       hasHooks: vi.fn((hookName: string) => hookName === "reply_payload_sending"),
       runReplyPayloadSending: vi.fn(async ({ payload }) => ({
@@ -363,7 +438,7 @@ describe("routeReply", () => {
       suppressed: true,
       reason: "empty_after_reply_payload_sending_hook",
     });
-    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
   });
 
   it("passes policySessionKey through to outbound delivery targets", async () => {

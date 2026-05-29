@@ -1553,6 +1553,62 @@ describe("deliverOutboundPayloads", () => {
     expect(requireMockCallArg(sendText, "sendText").text).toBe("visible");
   });
 
+  it("runs beforePayloadDelivery after message_sending rewrites payload text", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "message_sending",
+    );
+    hookMocks.runner.runMessageSending.mockResolvedValue({ content: "redacted" });
+    const beforePayloadDelivery = vi.fn(({ payload }: { payload: DeliverOutboundPayload }) => ({
+      ...payload,
+      channelData: { copiedText: payload.text },
+    }));
+    const sendPayload = vi.fn().mockResolvedValue({
+      channel: "matrix" as const,
+      messageId: "payload",
+      roomId: "!room",
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              sendText: vi.fn(),
+              sendMedia: vi.fn(),
+              sendPayload,
+            },
+          }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room",
+      payloads: [{ text: "secret" }],
+      beforePayloadDelivery: {
+        run: beforePayloadDelivery,
+        cancelledReason: "cancelled_by_reply_payload_sending_hook",
+        emptyReason: "empty_after_reply_payload_sending_hook",
+      },
+    });
+
+    expect(beforePayloadDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({ text: "redacted" }),
+        payloadSummary: expect.objectContaining({ text: "redacted" }),
+      }),
+    );
+    expect(requireMockCallArg(sendPayload, "sendPayload").payload).toMatchObject({
+      text: "redacted",
+      channelData: { copiedText: "redacted" },
+    });
+  });
+
   it("strips internal runtime scaffolding before adapter payload normalization copies text", async () => {
     hookMocks.runner.hasHooks.mockImplementation(
       (hookName?: string) => hookName === "message_sending",
