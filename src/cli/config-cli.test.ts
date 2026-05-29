@@ -2922,6 +2922,38 @@ describe("config cli", () => {
       expect(written.agents?.list?.[1]?.id).toBe("renamed");
       expect(written.agents?.list?.[0]?.id).toBe("main");
     });
+
+    it("preserves escaped dots inside path segments", async () => {
+      const resolved = {
+        channels: {
+          discord: {
+            guilds: {
+              "prod.guild": { channels: ["alerts"] },
+              staging: { channels: ["chat"] },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "channels.discord.guilds.prod\\.guild.channels",
+        '["alerts","ops"]',
+        "--strict-json",
+      ]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const written = firstWrittenConfig() as {
+        channels?: { discord?: { guilds?: Record<string, { channels?: string[] }> } };
+      };
+      expect(written.channels?.discord?.guilds?.["prod.guild"]?.channels).toEqual([
+        "alerts",
+        "ops",
+      ]);
+      expect(written.channels?.discord?.guilds?.staging?.channels).toEqual(["chat"]);
+    });
   });
 
   describe("config unset - issue #6070", () => {
