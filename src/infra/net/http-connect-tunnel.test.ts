@@ -353,6 +353,7 @@ describe("openHttpConnectTunnel", () => {
 
   it("caps oversized CONNECT timeouts before arming the watchdog", async () => {
     vi.useFakeTimers();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const proxySocket = new FakeSocket();
     setNextNetSocket(proxySocket);
     const { openHttpConnectTunnel } = await import("./http-connect-tunnel.js");
@@ -366,11 +367,12 @@ describe("openHttpConnectTunnel", () => {
     const rejected = expect(tunnel).rejects.toThrow(
       `Proxy CONNECT failed via http://proxy.example:8080: Proxy CONNECT timed out after ${MAX_TIMER_TIMEOUT_MS}ms`,
     );
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
 
     await vi.advanceTimersByTimeAsync(1);
     expect(proxySocket.destroyed).toBe(false);
 
-    await vi.advanceTimersByTimeAsync(MAX_TIMER_TIMEOUT_MS - 1);
+    await vi.advanceTimersToNextTimerAsync();
     await rejected;
     expect(proxySocket.destroyed).toBe(true);
   });

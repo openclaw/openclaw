@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   BUILD_ALL_PROFILES,
+  BUILD_ALL_PROFILE_STEP_ENV,
   BUILD_ALL_STEPS,
   formatBuildAllDuration,
   formatBuildAllTimingSummary,
@@ -193,6 +194,19 @@ describe("resolveBuildAllSteps", () => {
       "write-cli-startup-metadata",
       "write-cli-compat",
     ]);
+  });
+
+  it("skips bundled tsdown declarations for CI artifacts", () => {
+    const tsdown = resolveBuildAllSteps("ciArtifacts").find((step) => step.label === "tsdown");
+
+    expect(BUILD_ALL_PROFILE_STEP_ENV.ciArtifacts.tsdown).toEqual({
+      OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
+    });
+    expect(
+      resolveBuildAllStep(tsdown!, { env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0" } }).options.env,
+    ).toMatchObject({
+      OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
+    });
   });
 
   it("uses a minimal built runtime profile for gateway watch regression", () => {

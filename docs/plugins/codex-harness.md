@@ -575,10 +575,15 @@ goes quiet without `turn/completed`, OpenClaw best-effort interrupts the native
 turn and releases the session lane. Post-tool raw assistant progress keeps
 waiting for `turn/completed` while a completion-idle guard stays armed; the guard
 uses `appServer.postToolRawAssistantCompletionIdleTimeoutMs` when configured and
-falls back to the assistant completion idle timeout otherwise. Timeout
-diagnostics include the last app-server notification method and, for raw
-assistant response items, the item type, role, id, and a bounded assistant text
-preview.
+defaults to five minutes otherwise. Replay-safe stdio app-server failures,
+including turn-completion idle timeouts without assistant, tool, active-item, or
+side-effect evidence, are retried once on a fresh app-server attempt. Unsafe
+timeouts still retire the stuck app-server client and release the OpenClaw
+session lane. They also clear the stale native thread binding and surface a
+recoverable timeout message for user or maintainer judgment instead of being
+replayed automatically. Timeout diagnostics include the last app-server
+notification method and, for raw assistant response items, the item type, role,
+id, and a bounded assistant text preview.
 
 Environment overrides remain available for local testing:
 

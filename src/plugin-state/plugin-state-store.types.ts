@@ -35,7 +35,6 @@ export type OpenKeyedStoreOptions = {
 export type PluginStateStoreErrorCode =
   | "PLUGIN_STATE_SQLITE_UNAVAILABLE"
   | "PLUGIN_STATE_OPEN_FAILED"
-  | "PLUGIN_STATE_SCHEMA_UNSUPPORTED"
   | "PLUGIN_STATE_WRITE_FAILED"
   | "PLUGIN_STATE_READ_FAILED"
   | "PLUGIN_STATE_CORRUPT"
@@ -88,6 +87,6 @@ export type PluginStateStoreProbeStep = {
 
 export type PluginStateStoreProbeResult = {
   ok: boolean;
-  dbPath: string;
+  databasePath: string;
   steps: PluginStateStoreProbeStep[];
 };

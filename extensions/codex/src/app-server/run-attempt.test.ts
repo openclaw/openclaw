@@ -3997,9 +3997,9 @@ describe("runCodexAppServerAttempt", () => {
     params.spawnedBy = "agent:main:session-parent";
     params.timeoutMs = 1;
 
-    await expect(runCodexAppServerAttempt(params, { startupTimeoutFloorMs: 1 })).rejects.toThrow(
-      "codex app-server startup timed out",
-    );
+    await expect(
+      runCodexAppServerAttempt(params, { startupTimeoutMs: 1, startupTimeoutFloorMs: 1 }),
+    ).rejects.toThrow("codex app-server startup timed out");
     const calledWithFailedClient = clearSpy.mock.calls.some(([arg]) => arg === failedClient);
     expect(calledWithFailedClient).toBe(true);
     clearSpy.mockRestore();
