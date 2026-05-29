@@ -136,6 +136,10 @@ async function drainQueuedEntry(opts: {
     opts.onFailed?.(entry, errMsg);
     return moveSessionDeliveryToFailedWithEnoent(entry.id, opts.stateDir);
   }
+  // Tracks whether deliver(entry) returned. Once it has, the turn re-run and
+  // platform send may already have happened, so a later failure (marker write
+  // or ack) must not clear the marker and replay the entry.
+  let delivered = false;
   try {
     // Persist the send marker before invoking deliver so that a crash anywhere
     // between here and the ack below leaves durable evidence that the delivery
@@ -144,6 +148,7 @@ async function drainQueuedEntry(opts: {
     // sendDurableMessageBatch).
     await markSessionDeliveryPlatformSendAttemptStarted(entry.id, opts.stateDir);
     await opts.deliver(entry);
+    delivered = true;
     // Send returned but the entry is not yet acked: outcome is unknown until ack
     // succeeds. Mirror the outbound queue's unknown_after_send marker.
     await markSessionDeliveryPlatformOutcomeUnknown(entry.id, opts.stateDir);
@@ -154,20 +159,24 @@ async function drainQueuedEntry(opts: {
     const errMsg = formatErrorMessage(err);
     opts.onFailed?.(entry, errMsg);
     try {
-      // Distinguish a pre-send failure (nothing reached the platform) from a
-      // sent-before-error failure (some payloads were already delivered). The
-      // delivery seam advances the marker to unknown_after_send when the send
-      // partially happened (sendDurableMessageBatch -> partial_failed). In that
-      // case we must not clear the marker or replay, because the turn re-run and
-      // reply may already have gone out: refuse a blind replay and fail-safe to
-      // failed/, exactly like an entry recovered with a marker (and like the
-      // outbound queue, which never clears the marker once the send has started).
+      // If deliver returned, the turn ran and the reply may already have been
+      // sent; a failure in the marker write or ack after that point must not
+      // requeue the entry. Likewise, if the delivery seam advanced the marker to
+      // unknown_after_send (sendDurableMessageBatch -> partial_failed, a
+      // sent-before-error throw), the send partially happened. In both cases we
+      // refuse a blind replay and fail-safe to failed/, exactly like an entry
+      // recovered with a marker (and like the outbound queue, which never clears
+      // the marker once the platform send has started).
+      if (delivered) {
+        return await moveSessionDeliveryToFailedWithEnoent(entry.id, opts.stateDir);
+      }
       const current = await loadPendingSessionDelivery(entry.id, opts.stateDir);
       if (current?.recoveryState === "unknown_after_send") {
         return await moveSessionDeliveryToFailedWithEnoent(entry.id, opts.stateDir);
       }
-      // Pre-send failure: the attempt is over and safe to replay, so clear the
-      // send-attempt marker set before deliver and keep the entry retryable.
+      // Pre-send failure: deliver threw before anything reached the platform, so
+      // the attempt is over and safe to replay. Clear the send-attempt marker set
+      // before deliver and keep the entry retryable.
       await clearSessionDeliveryRecoveryState(entry.id, opts.stateDir);
       await failSessionDelivery(entry.id, errMsg, opts.stateDir);
       return "failed";

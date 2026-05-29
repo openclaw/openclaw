@@ -256,6 +256,65 @@ describe("session-delivery queue recovery", () => {
     });
   });
 
+  it("does not re-deliver when the outcome-marker write fails after a successful delivery", async () => {
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      const id = await enqueueSessionDelivery(
+        {
+          kind: "agentTurn",
+          sessionKey: "agent:main:main",
+          message: "continue",
+          messageId: "restart-sentinel:agent:main:main:agentTurn:789",
+          route: { channel: "telegram", to: "chat-1", chatType: "direct" },
+        },
+        tempDir,
+      );
+
+      let deliverCount = 0;
+      // deliver succeeds: the turn ran and the reply was sent.
+      const deliver = vi.fn(async () => {
+        deliverCount += 1;
+      });
+      const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+      const drainOnce = () =>
+        drainPendingSessionDeliveries({
+          drainKey: "test-marker-write-failure",
+          logLabel: "test marker write failure",
+          deliver,
+          stateDir: tempDir,
+          log,
+          selectEntry: (entry) => ({ match: entry.id === id, bypassBackoff: true }),
+        });
+
+      // PASS 1: deliver succeeds, but persisting unknown_after_send fails, so the
+      // entry is left at send_attempt_started even though the send already
+      // happened. The recovery (which imports the storage helper directly) must
+      // still treat this as non-replayable. Spy the storage module so the helper
+      // recovery calls is the one that throws.
+      const storageMod = await import("./session-delivery-queue-storage.js");
+      const markSpy = vi
+        .spyOn(storageMod, "markSessionDeliveryPlatformOutcomeUnknown")
+        .mockImplementationOnce(async () => {
+          throw new Error("simulated marker write failure after delivery");
+        });
+      await drainOnce();
+      markSpy.mockRestore();
+
+      // The already-delivered entry must not stay replayable: it is moved to
+      // failed/, not requeued.
+      expect(await loadPendingSessionDeliveries(tempDir)).toStrictEqual([]);
+
+      // PASS 2: restart recovery re-entry.
+      await drainOnce();
+
+      // Before the fix: the catch saw send_attempt_started, cleared it, and
+      // requeued, so PASS 2 blind-replays -> deliverCount === 2. After the fix:
+      // tracking that deliver() returned makes the post-delivery failure
+      // non-replayable -> deliverCount === 1.
+      expect(deliverCount).toBe(1);
+    });
+  });
+
   it("uses the persisted retryCount for the first backoff tier", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-23T00:00:00.000Z"));
