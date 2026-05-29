@@ -352,6 +352,41 @@ export const SessionsCompactionRestoreResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const BusyMessageOutcomeKindSchema = Type.Union([
+  Type.Literal("active_run_steer_accepted"),
+  Type.Literal("active_run_steer_rejected"),
+  Type.Literal("followup_enqueued"),
+  Type.Literal("collect_enqueued"),
+  Type.Literal("interrupt_started"),
+  Type.Literal("dropped"),
+]);
+
+export const BusyMessageQueueFailureReasonSchema = Type.Union([
+  Type.Literal("no_active_run"),
+  Type.Literal("not_streaming"),
+  Type.Literal("compacting"),
+  Type.Literal("source_reply_delivery_mode_mismatch"),
+  Type.Literal("transcript_commit_wait_unsupported"),
+  Type.Literal("runtime_rejected"),
+]);
+
+export const BusyMessageOutcomeSourceSchema = Type.Union([
+  Type.Literal("inbound"),
+  Type.Literal("slash_steer"),
+  Type.Literal("talk"),
+]);
+
+export const LastBusyMessageOutcomeSchema = Type.Object(
+  {
+    kind: BusyMessageOutcomeKindSchema,
+    label: NonEmptyString,
+    reason: Type.Optional(BusyMessageQueueFailureReasonSchema),
+    recordedAtMs: Type.Integer({ minimum: 0 }),
+    source: Type.Optional(BusyMessageOutcomeSourceSchema),
+  },
+  { additionalProperties: false },
+);
+
 export const SessionsUsageParamsSchema = Type.Object(
   {
     /** Specific session key to analyze; if omitted returns sessions for the effective agent. */

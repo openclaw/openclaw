@@ -161,6 +161,7 @@ const SESSION_EVENT_ROW_FIELDS = [
   "inputTokens",
   "kind",
   "label",
+  "lastBusyMessageOutcome",
   "latestCompactionCheckpoint",
   "model",
   "modelProvider",

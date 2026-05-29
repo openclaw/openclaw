@@ -1170,6 +1170,50 @@ describe("chat queue", () => {
     expect(inactiveContainer.querySelector(".chat-queue__steer")).toBeNull();
   });
 
+  it("renders backend follow-up outcome badge with tooltip", () => {
+    const container = renderQueue({
+      queue: [
+        {
+          id: "followup-1",
+          text: "while busy",
+          createdAt: 1,
+          busyOutcome: {
+            kind: "followup_enqueued",
+            label: "Queued as follow-up",
+            recordedAtMs: 2,
+          },
+        },
+      ],
+    });
+
+    const badge = container.querySelector(".chat-queue__badge--followup");
+    expect(badge?.textContent?.trim()).toBe("Queued follow-up");
+    expect(badge?.getAttribute("title")).toBe("Queued as follow-up");
+  });
+
+  it("renders steer fallback badge with structured reason tooltip", () => {
+    const container = renderQueue({
+      queue: [
+        {
+          id: "fallback-1",
+          text: "tighten the plan",
+          createdAt: 1,
+          busyOutcome: {
+            kind: "active_run_steer_rejected",
+            label: "Active run rejected steering",
+            reason: "not_streaming",
+            recordedAtMs: 2,
+          },
+        },
+      ],
+    });
+
+    const badge = container.querySelector(".chat-queue__badge--fallback");
+    expect(badge?.textContent?.trim()).toBe("Steer fallback");
+    expect(badge?.getAttribute("title")).toContain("not_streaming");
+    expect(container.querySelector(".chat-queue__steer")).toBeNull();
+  });
+
   it("renders failed send state with retry and remove affordances", () => {
     const onQueueRetry = vi.fn();
     const container = renderQueue({

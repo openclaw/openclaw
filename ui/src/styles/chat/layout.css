@@ -1067,6 +1067,25 @@
   line-height: 1.2;
 }
 
+.chat-queue__badge--steered {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+}
+
+.chat-queue__badge--followup {
+  background: color-mix(in srgb, var(--info, var(--accent)) 12%, transparent);
+  color: var(--info, var(--accent));
+}
+
+.chat-queue__badge--fallback {
+  background: color-mix(in srgb, var(--warn, var(--accent)) 14%, transparent);
+  color: var(--warn, var(--accent));
+}
+
+.chat-queue__item--fallback {
+  border-color: color-mix(in srgb, var(--warn, var(--accent)) 28%, var(--border));
+}
+
 .slash-menu {
   position: absolute;
   bottom: 100%;

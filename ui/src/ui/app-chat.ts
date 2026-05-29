@@ -7,6 +7,7 @@ import {
   getChatAttachmentDataUrl,
   releaseChatAttachmentPayloads,
 } from "./chat/attachment-payload-store.ts";
+import { applySessionBusyOutcomesToChatQueue } from "./chat/busy-message-outcome.ts";
 import {
   handleChatDraftChange,
   handleChatInputHistoryKey,
@@ -127,6 +128,13 @@ export function createChatSessionsLoadOverrides(
   }
   return overrides;
 }
+
+async function loadSessionsAndSyncBusyOutcomes(host: ChatHost, overrides?: LoadSessionsOverrides) {
+  await loadSessions(host as unknown as SessionsState, overrides);
+  applySessionBusyOutcomesToChatQueue(host);
+}
+
+export { applySessionBusyOutcomesToChatQueue };
 export {
   handleChatDraftChange,
   handleChatInputHistoryKey,
@@ -490,7 +498,7 @@ async function sendQueuedChatMessage(
     }
     if (prepared.refreshSessions) {
       if (ack.status === "ok") {
-        void loadSessions(host as unknown as SessionsState, {
+        void loadSessionsAndSyncBusyOutcomes(host, {
           ...createChatSessionsLoadOverrides(host),
         });
       } else {
@@ -765,6 +773,9 @@ export async function steerQueuedChatMessage(host: ChatHost, id: string) {
     return;
   }
   releaseChatAttachmentPayloads(attachments);
+  void loadSessionsAndSyncBusyOutcomes(host, {
+    ...createChatSessionsLoadOverrides(host),
+  });
   setLastActiveSessionKey(
     host as unknown as Parameters<typeof setLastActiveSessionKey>[0],
     host.sessionKey,
@@ -1189,7 +1200,7 @@ export async function refreshChat(
     requestUpdate();
   });
   const secondaryRefresh = Promise.allSettled([
-    loadSessions(host as unknown as SessionsState, {
+    loadSessionsAndSyncBusyOutcomes(host, {
       ...createChatSessionsLoadOverrides(host),
     }),
     refreshChatAvatar(host),
