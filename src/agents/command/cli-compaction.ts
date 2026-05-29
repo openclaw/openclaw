@@ -183,7 +183,7 @@ function isIntentionalNativeAutoCompactionSkip(
 ): boolean {
   return (
     result?.ok === true &&
-    result.compacted === false &&
+    !result.compacted &&
     result.reason === CODEX_APP_SERVER_OWNS_AUTO_COMPACTION_REASON
   );
 }
