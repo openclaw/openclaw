@@ -1165,7 +1165,7 @@ describe("TelegramPollingSession", () => {
     });
   });
 
-  it("keeps claims owned by another live process blocked", async () => {
+  it("recovers restart-stale claims that reused the current process pid", async () => {
     await withTempSpool(async (tempDir) => {
       const interruptedUpdate = topicUpdate(42, 10, "active topic 10 turn");
       await writeSpooledTestUpdates(tempDir, [
@@ -1190,7 +1190,7 @@ describe("TelegramPollingSession", () => {
           receivedAt: interrupted.receivedAt,
           update: interruptedUpdate,
           claim: {
-            processId: "other-process",
+            processId: "previous-gateway-instance",
             processPid: process.pid,
             claimedAt: Date.now(),
           },
@@ -1204,10 +1204,10 @@ describe("TelegramPollingSession", () => {
         shouldRecover: (claim) => !isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess(claim),
       });
 
-      expect(recovered).toBe(0);
-      expect(await pendingUpdateIds(tempDir)).toEqual([43]);
+      expect(recovered).toBe(1);
+      expect(await pendingUpdateIds(tempDir)).toEqual([42, 43]);
       expect((await fs.readdir(tempDir)).toSorted()).toEqual([
-        "0000000000000042.json.processing",
+        "0000000000000042.json",
         "0000000000000043.json",
       ]);
     });
