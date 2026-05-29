@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseTarVerboseMetadata } from "./skills-install-tar-verbose.js";
+import { parseTarVerboseMetadata } from "./install-tar-verbose.js";
 
 describe("parseTarVerboseMetadata", () => {
   it("parses BSD and GNU tar verbose sizes", () => {
