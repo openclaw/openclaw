@@ -139,6 +139,22 @@ function resolveKnownContextWindow(modelId: string): number | undefined {
   return undefined;
 }
 
+function isKnownClaudeOpus47OrNewerModelId(modelId: string): boolean {
+  const stripped = modelId.replace(/^(?:us|eu|ap|apac|au|jp|global)\./, "");
+  return [modelId, stripped].some((candidate) =>
+    /(?:^|[/.:])anthropic\.claude-opus-4[.-][78](?:$|[-.:/])/i.test(candidate),
+  );
+}
+
+function resolveKnownThinkingLevelMap(
+  modelId: string,
+): ModelDefinitionConfig["thinkingLevelMap"] | undefined {
+  if (!isKnownClaudeOpus47OrNewerModelId(modelId)) {
+    return undefined;
+  }
+  return { xhigh: "xhigh", max: "max" };
+}
+
 const DEFAULT_COST = {
   input: 0,
   output: 0,
@@ -247,6 +263,9 @@ function mapInputModalities(summary: BedrockModelSummary): Array<"text" | "image
 }
 
 function inferReasoningSupport(summary: BedrockModelSummary): boolean {
+  if (isKnownClaudeOpus47OrNewerModelId(summary.modelId ?? "")) {
+    return true;
+  }
   const haystack = normalizeLowercaseStringOrEmpty(
     `${summary.modelId ?? ""} ${summary.modelName ?? ""}`,
   );
@@ -305,6 +324,7 @@ function toModelDefinition(
   defaults: { contextWindow: number; maxTokens: number },
 ): ModelDefinitionConfig {
   const id = summary.modelId?.trim() ?? "";
+  const thinkingLevelMap = resolveKnownThinkingLevelMap(id);
   return {
     id,
     name: summary.modelName?.trim() || id,
@@ -313,6 +333,7 @@ function toModelDefinition(
     cost: DEFAULT_COST,
     contextWindow: resolveKnownContextWindow(id) ?? defaults.contextWindow,
     maxTokens: defaults.maxTokens,
+    ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
   };
 }
 
@@ -424,11 +445,16 @@ function resolveInferenceProfiles(
     const baseModel = baseModelId
       ? foundationModels.get(normalizeLowercaseStringOrEmpty(baseModelId))
       : undefined;
+    const knownThinkingLevelMap = resolveKnownThinkingLevelMap(
+      baseModelId ?? profile.inferenceProfileId,
+    );
 
     discovered.push({
       id: profile.inferenceProfileId,
       name: profile.inferenceProfileName?.trim() || profile.inferenceProfileId,
-      reasoning: baseModel?.reasoning ?? false,
+      reasoning:
+        baseModel?.reasoning ??
+        isKnownClaudeOpus47OrNewerModelId(baseModelId ?? profile.inferenceProfileId),
       input: baseModel?.input ?? ["text"],
       cost: baseModel?.cost ?? DEFAULT_COST,
       contextWindow:
@@ -436,6 +462,9 @@ function resolveInferenceProfiles(
         resolveKnownContextWindow(baseModelId ?? profile.inferenceProfileId ?? "") ??
         defaults.contextWindow,
       maxTokens: baseModel?.maxTokens ?? defaults.maxTokens,
+      ...(baseModel?.thinkingLevelMap || knownThinkingLevelMap
+        ? { thinkingLevelMap: baseModel?.thinkingLevelMap ?? knownThinkingLevelMap }
+        : {}),
     });
   }
   return discovered;

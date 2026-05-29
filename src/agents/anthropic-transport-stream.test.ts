@@ -1913,4 +1913,27 @@ describe("anthropic transport stream", () => {
     expect(payload.thinking).toEqual({ type: "adaptive" });
     expect(payload.output_config).toEqual({ effort: "max" });
   });
+
+  it("clamps max thinking effort for Claude models without native max support", async () => {
+    const model = makeAnthropicTransportModel({
+      id: "claude-sonnet-4-6",
+      name: "Claude Sonnet 4.6",
+      maxTokens: 8192,
+    });
+
+    await runTransportStream(
+      model,
+      {
+        messages: [{ role: "user", content: "Think as much as supported." }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+        reasoning: "max",
+      } as AnthropicStreamOptions,
+    );
+
+    const payload = latestAnthropicRequest().payload;
+    expect(payload.thinking).toEqual({ type: "adaptive" });
+    expect(payload.output_config).toEqual({ effort: "high" });
+  });
 });

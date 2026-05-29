@@ -231,11 +231,19 @@ describe("bedrock discovery", () => {
 
     expectModelFields(
       models.find((model) => model.id === "anthropic.claude-opus-4.8-v1:0"),
-      { contextWindow: 1_000_000 },
+      {
+        contextWindow: 1_000_000,
+        reasoning: true,
+        thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+      },
     );
     expectModelFields(
       models.find((model) => model.id === "us.anthropic.claude-opus-4.8-v1:0"),
-      { contextWindow: 1_000_000 },
+      {
+        contextWindow: 1_000_000,
+        reasoning: true,
+        thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+      },
     );
   });
 

@@ -230,6 +230,18 @@ describe("createAnthropicVertexStreamFn", () => {
     expect(transportOptions.effort).toBe("max");
   });
 
+  it("clamps max reasoning for adaptive models without native max support", () => {
+    const { deps, streamAnthropicMock } = createStreamDeps();
+    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
+    const model = makeModel({ id: "claude-sonnet-4-6", maxTokens: 128000 });
+
+    void streamFn(model, { messages: [] }, { reasoning: "max" });
+
+    const transportOptions = streamTransportOptions(streamAnthropicMock);
+    expect(transportOptions.thinkingEnabled).toBe(true);
+    expect(transportOptions.effort).toBe("high");
+  });
+
   it("applies Anthropic cache-boundary shaping before forwarding payload hooks", async () => {
     const { deps, streamAnthropicMock } = createStreamDeps();
     const onPayload = vi.fn(async (payload: unknown) => payload);

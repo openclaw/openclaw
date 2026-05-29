@@ -72,7 +72,7 @@ function mapAnthropicAdaptiveEffort(
       : isClaudeOpus46Model(modelId)
         ? "max"
         : "high",
-    max: "max",
+    max: isClaudeOpus47OrNewerModel(modelId) ? "max" : "high",
   };
   return effortMap[reasoning] ?? "high";
 }

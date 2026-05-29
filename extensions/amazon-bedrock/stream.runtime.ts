@@ -508,7 +508,7 @@ function mapThinkingLevelToEffort(
     case "high":
       return "high";
     case "max":
-      return "max";
+      return supportsNativeXhighEffort(model) ? "max" : "high";
     default:
       return "high";
   }
@@ -952,5 +952,6 @@ export const testing = {
   convertMessages,
   getConfiguredBedrockRegion,
   hasConfiguredBedrockProfile,
+  mapThinkingLevelToEffort,
   shouldUseExplicitBedrockEndpoint,
 };
