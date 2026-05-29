@@ -1,6 +1,7 @@
 import type { AcpTurnAttachment as AgentTurnAttachment } from "../../acp/control-plane/manager.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
+import { canonicalizeBase64 } from "../../media/base64.js";
 import type { MediaAttachment } from "../../media-understanding/types.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -159,6 +160,29 @@ export async function resolveAgentAttachments(params: {
   return (await resolveAgentTurnAttachments(params)).attachments;
 }
 
+/**
+ * Ensure inline image attachment data is ASCII base64 before it is forwarded
+ * to a provider as `source.base64`. The current-turn path
+ * (resolveAgentTurnAttachments above) encodes file buffers via
+ * `buffer.toString("base64")`, but inline and replayed-history image
+ * attachments handed in by channel plugins may carry a raw latin1/binary byte
+ * string in `data`. Anthropic rejects any request whose `image.source.base64`
+ * contains non-ASCII characters, and because history images are re-hydrated on
+ * every turn, a single poisoned block silently breaks every subsequent turn in
+ * a long-lived session.
+ *
+ * The guard is idempotent: valid base64 is always ASCII, so canonicalizeBase64
+ * returns it unchanged (whitespace-normalized) and correct payloads pass
+ * through untouched; only non-base64 payloads are re-encoded from latin1 bytes.
+ */
+function ensureAsciiBase64(data: string): string {
+  const canonical = canonicalizeBase64(data);
+  if (canonical !== undefined) {
+    return canonical;
+  }
+  return Buffer.from(data, "latin1").toString("base64");
+}
+
 export function resolveInlineAgentImageAttachments(
   images: Array<{ data: string; mimeType: string }> | undefined,
 ): AgentTurnAttachment[] {
@@ -166,9 +190,9 @@ export function resolveInlineAgentImageAttachments(
     return [];
   }
   return images
+    .filter((image) => image.mimeType.startsWith("image/") && image.data.trim().length > 0)
     .map((image) => ({
       mediaType: image.mimeType,
-      data: image.data,
-    }))
-    .filter((image) => image.mediaType.startsWith("image/") && image.data.trim().length > 0);
+      data: ensureAsciiBase64(image.data),
+    }));
 }
