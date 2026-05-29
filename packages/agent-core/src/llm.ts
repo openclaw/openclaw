@@ -1,1 +1,1 @@
-export * from "../../llm-core/src/index.js";
+export * from "@openclaw/llm-core";

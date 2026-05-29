@@ -1,1 +1,1 @@
-export * from "../../llm-core/src/validation.js";
+export { validateToolArguments, validateToolCall } from "@openclaw/llm-core";

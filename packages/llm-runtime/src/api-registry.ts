@@ -6,7 +6,7 @@ import type {
   SimpleStreamOptions,
   StreamFunction,
   StreamOptions,
-} from "../../llm-core/src/index.js";
+} from "@openclaw/llm-core";
 
 export type ApiStreamFunction = (
   model: Model,

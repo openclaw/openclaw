@@ -1,5 +1,5 @@
+import { createAssistantMessageEventStream, type Model } from "@openclaw/llm-core";
 import { afterEach, describe, expect, it } from "vitest";
-import { createAssistantMessageEventStream, type Model } from "../../llm-core/src/index.js";
 import { getApiProvider, registerApiProvider, unregisterApiProviders } from "./api-registry.js";
 
 const TEST_SOURCE_ID = "test:llm-runtime-api-registry";

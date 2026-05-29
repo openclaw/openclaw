@@ -7,7 +7,7 @@ import type {
   ProviderStreamOptions,
   SimpleStreamOptions,
   StreamOptions,
-} from "../../llm-core/src/index.js";
+} from "@openclaw/llm-core";
 import { getApiProvider } from "./api-registry.js";
 
 function resolveApiProvider(api: Api) {

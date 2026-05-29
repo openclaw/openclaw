@@ -413,6 +413,8 @@ function buildLlmRuntimeDistEntries(): Record<string, string> {
 
 function shouldExternalizeAgentCoreDependency(id: string): boolean {
   return (
+    id === "@openclaw/llm-core" ||
+    id.startsWith("@openclaw/llm-core/") ||
     id === "ignore" ||
     id === "openclaw" ||
     id.startsWith("openclaw/") ||
