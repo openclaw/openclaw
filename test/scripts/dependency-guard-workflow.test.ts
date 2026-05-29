@@ -13,6 +13,7 @@ type WorkflowStep = {
 };
 
 type WorkflowJob = {
+  if?: string;
   name?: string;
   steps?: WorkflowStep[];
 };
@@ -20,6 +21,11 @@ type WorkflowJob = {
 type Workflow = {
   jobs?: Record<string, WorkflowJob>;
   name?: string;
+  on?: {
+    pull_request_target?: {
+      types?: string[];
+    };
+  };
   permissions?: Record<string, string>;
 };
 
@@ -34,6 +40,21 @@ describe("dependency guard workflow", () => {
     expect(parsed.name).toBe("Dependency Guard");
     expect(parsed.jobs).toHaveProperty("dependency-guard");
     expect(parsed.jobs?.["dependency-guard"]?.name).toBeUndefined();
+  });
+
+  it("allows one temporary label trigger for required-check backfill", () => {
+    const parsed = readWorkflow();
+    const job = parsed.jobs?.["dependency-guard"];
+
+    expect(parsed.on?.pull_request_target?.types).toEqual([
+      "opened",
+      "reopened",
+      "synchronize",
+      "ready_for_review",
+      "labeled",
+    ]);
+    expect(job?.if).toContain("github.event.action != 'labeled'");
+    expect(job?.if).toContain("github.event.label.name == 'dependency-guard-backfill'");
   });
 
   it("uses a metadata-only pull_request_target workflow with minimal write permissions", () => {
