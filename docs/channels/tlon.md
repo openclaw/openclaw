@@ -10,7 +10,7 @@ respond to DMs and group chat messages. Group replies require an @ mention by de
 be further restricted via allowlists.
 
 Status: bundled plugin. DMs, group mentions, thread replies, rich text formatting, and
-image uploads are supported. Reactions and polls are not yet supported.
+image uploads are supported. Reactions are available via a bundled skill; polls are not yet supported.
 
 ## Bundled plugin
 
