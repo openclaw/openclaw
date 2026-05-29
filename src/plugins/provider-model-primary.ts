@@ -13,7 +13,9 @@ function humanizeModelId(modelId: string): string {
   return modelId
     .split("-")
     .map((word) => {
-      if (/^\d/.test(word)) { return word; }
+      if (/^\d/.test(word)) {
+        return word;
+      }
       return word.charAt(0).toUpperCase() + word.slice(1);
     })
     .join(" ");
@@ -59,8 +61,15 @@ export function applyPrimaryModel(cfg: OpenClawConfig, model: string): OpenClawC
     const modelName = humanizeModelId(modelId);
     const existingProviders =
       (result.models as Record<string, unknown> | undefined)?.providers ?? {};
-    const existingProvider =
-      (existingProviders as Record<string, Record<string, unknown>>)[providerName] ?? {};
+    const existingProvider = (existingProviders as Record<string, Record<string, unknown>>)[
+      providerName
+    ];
+    if (!existingProvider) {
+      // Only auto-register models for providers that already have config.
+      // Creating a provider entry without baseUrl for an unknown custom
+      // provider would produce invalid config.
+      return result;
+    }
     const existingProviderModels = Array.isArray(existingProvider.models)
       ? (existingProvider.models as Array<{ id?: string }>)
       : [];

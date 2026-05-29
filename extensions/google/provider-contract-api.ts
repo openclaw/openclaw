@@ -109,21 +109,32 @@ export function createGoogleVertexProvider(): ProviderPlugin {
               },
             ],
             defaultModel: VERTEX_DEFAULT_MODEL,
-            configPatch: {
-              env: {
-                GOOGLE_CLOUD_PROJECT: project,
-                GOOGLE_CLOUD_LOCATION: location,
-              },
-              models: {
-                providers: {
-                  "google-vertex": {
-                    models: [
-                      { id: "gemini-flash-latest", name: "Gemini Flash (latest)" },
-                    ],
+            configPatch: (() => {
+              const existingVertexConfig = (
+                ctx.config.models as Record<string, unknown> | undefined
+              )?.providers as Record<string, Record<string, unknown>> | undefined;
+              const existingModels = Array.isArray(existingVertexConfig?.["google-vertex"]?.models)
+                ? (existingVertexConfig["google-vertex"].models as Array<{ id?: string }>)
+                : [];
+              const defaultModelId = "gemini-flash-latest";
+              const hasDefault = existingModels.some((m) => m.id === defaultModelId);
+              const mergedModels = hasDefault
+                ? existingModels
+                : [...existingModels, { id: defaultModelId, name: "Gemini Flash (latest)" }];
+              return {
+                env: {
+                  GOOGLE_CLOUD_PROJECT: project,
+                  GOOGLE_CLOUD_LOCATION: location,
+                },
+                models: {
+                  providers: {
+                    "google-vertex": {
+                      models: mergedModels,
+                    },
                   },
                 },
-              },
-            } as unknown as Partial<OpenClawConfig>,
+              } as unknown as Partial<OpenClawConfig>;
+            })(),
             notes: [
               `Project: ${project}, Location: ${location}`,
               "Credentials will be resolved via Application Default Credentials (ADC).",
