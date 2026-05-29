@@ -99,6 +99,35 @@ function isGlobalSessionKey(value: string | null | undefined): boolean {
   return (value ?? "").trim().toLowerCase() === "global";
 }
 
+function resolveSelectedGlobalAliasAgentId(
+  state: SessionsState,
+  key: string | null | undefined,
+): string | null {
+  const parsed = parseAgentSessionKey(key);
+  if (!parsed?.agentId) {
+    return null;
+  }
+  const rest = parsed.rest.toLowerCase();
+  if (rest === "global") {
+    return normalizeAgentId(parsed.agentId);
+  }
+  if (rest !== "main") {
+    return null;
+  }
+  const row = state.sessionsResult?.sessions.find((session) => session.key === key);
+  return row?.kind === "global" ? normalizeAgentId(parsed.agentId) : null;
+}
+
+function resolveSelectedSessionMessageSubscriptionAgentId(
+  state: SessionsState,
+  key: string,
+): string | null {
+  if (isGlobalSessionKey(key)) {
+    return resolveSelectedGlobalAgentId(state);
+  }
+  return resolveSelectedGlobalAliasAgentId(state, key);
+}
+
 function resolveSelectedGlobalAgentId(state: SessionsState): string {
   const parsed = parseAgentSessionKey(state.sessionKey);
   if (parsed?.agentId) {
@@ -158,16 +187,18 @@ function sessionsChangedGlobalAgentMatches(
 }
 
 function buildSelectedSessionMessageSubscriptionParams(state: SessionsState, key: string) {
+  const agentId = resolveSelectedSessionMessageSubscriptionAgentId(state, key);
   return {
     key,
-    ...(isGlobalSessionKey(key) ? { agentId: resolveSelectedGlobalAgentId(state) } : {}),
+    ...(agentId ? { agentId } : {}),
   };
 }
 
 function buildSelectedSessionRequestParams(state: SessionsState, key: string) {
+  const agentId = resolveSelectedSessionMessageSubscriptionAgentId(state, key);
   return {
     key,
-    ...(isGlobalSessionKey(key) ? { agentId: resolveSelectedGlobalAgentId(state) } : {}),
+    ...(agentId ? { agentId } : {}),
   };
 }
 
@@ -192,8 +223,8 @@ function isCurrentSelectedSessionMessageSubscriptionSync(
     state.client === params.client &&
     state.connected &&
     state.sessionKey.trim() === params.requestedKey &&
-    (!isGlobalSessionKey(params.requestedKey) ||
-      resolveSelectedGlobalAgentId(state) === (params.requestedAgentId ?? null))
+    resolveSelectedSessionMessageSubscriptionAgentId(state, params.requestedKey) ===
+      (params.requestedAgentId ?? null)
   );
 }
 
@@ -677,11 +708,9 @@ export async function syncSelectedSessionMessageSubscription(
   );
   const previousCanonicalKey = normalizeSubscriptionKey(state.chatSessionMessageSubscriptionKey);
   const previousSelectedKey = previousRequestedKey ?? previousCanonicalKey;
-  const nextSubscriptionAgentId = isGlobalSessionKey(nextKey)
-    ? resolveSelectedGlobalAgentId(state)
-    : null;
+  const nextSubscriptionAgentId = resolveSelectedSessionMessageSubscriptionAgentId(state, nextKey);
   const selectedAgentChanged =
-    isGlobalSessionKey(nextKey) &&
+    nextSubscriptionAgentId !== null &&
     previousSelectedKey === nextKey &&
     (state.chatSessionMessageSubscriptionAgentId ?? null) !== nextSubscriptionAgentId;
   const selectedKeyChanged = previousSelectedKey !== null && previousSelectedKey !== nextKey;

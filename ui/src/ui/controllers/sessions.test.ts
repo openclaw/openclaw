@@ -154,6 +154,48 @@ describe("syncSelectedSessionMessageSubscription", () => {
     expect(state.chatSessionMessageSubscriptionAgentId).toBe("work");
   });
 
+  it("keeps agent-scoped global alias subscriptions scoped for unsubscribe", async () => {
+    const request = vi.fn(async (method: string) =>
+      method === "sessions.messages.subscribe" ? { key: "global" } : { subscribed: false },
+    );
+    const state = createState(request, {
+      sessionKey: "agent:work:main",
+      assistantAgentId: "main",
+      sessionsResult: {
+        ts: 1,
+        path: "/tmp/sessions.json",
+        count: 2,
+        sessions: [
+          { key: "agent:work:main", kind: "global", updatedAt: 2 },
+          { key: "agent:ops:main", kind: "global", updatedAt: 1 },
+        ],
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        totalCount: 2,
+        limit: 50,
+        offset: 0,
+        hasMore: false,
+      },
+    } as Partial<SessionsState & { sessionKey: string }>) as SessionsState & { sessionKey: string };
+
+    await syncSelectedSessionMessageSubscription(state);
+    state.sessionKey = "agent:ops:main";
+    await syncSelectedSessionMessageSubscription(state);
+
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.messages.subscribe", {
+      key: "agent:work:main",
+      agentId: "work",
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.messages.unsubscribe", {
+      key: "global",
+      agentId: "work",
+    });
+    expect(request).toHaveBeenNthCalledWith(3, "sessions.messages.subscribe", {
+      key: "agent:ops:main",
+      agentId: "ops",
+    });
+    expect(state.chatSessionMessageSubscriptionAgentId).toBe("ops");
+  });
+
   it("uses the hello default agent for global subscriptions before agents load", async () => {
     const request = vi.fn(async () => ({ key: "global" }));
     const state = createState(request, {
