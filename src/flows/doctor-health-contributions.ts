@@ -234,6 +234,12 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
     unresolvedRefReason = resolvedToken.unresolvedRefReason;
   }
   if (gatewayTokenRef) {
+    // Skip warning when gateway is confirmed healthy — the SecretRef resolves fine
+    // at Gateway runtime even if the CLI doctor cannot resolve it in audit mode.
+    // This avoids a false positive when the gateway is actually working normally.
+    if (ctx.healthOk === true) {
+      return;
+    }
     const reason = buildGatewayTokenSecretRefUnavailableMessage({
       cfg: ctx.cfg,
       ref: gatewayTokenRef,
