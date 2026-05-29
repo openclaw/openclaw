@@ -28,7 +28,7 @@ describe("sanitizeEnvVars", () => {
     expect(result.blocked).toStrictEqual(["MY_TOKEN", "MY_SECRET"]);
   });
 
-  it("adds warnings for suspicious values", () => {
+  it("does not warn for long base64-like values on non-sensitive env names", () => {
     const base64Like =
       "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYQ==";
     const result = sanitizeEnvVars({
@@ -39,7 +39,30 @@ describe("sanitizeEnvVars", () => {
 
     expect(result.allowed).toEqual({ USER: "alice", SAFE_TEXT: base64Like });
     expect(result.blocked).toContain("NULL");
-    expect(result.warnings).toContain("SAFE_TEXT: Value looks like base64-encoded credential data");
+    expect(result.warnings).toStrictEqual([]);
+  });
+
+  it("adds warnings for structurally base64 credential-looking values on sensitive env names", () => {
+    const base64Like =
+      "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYQ==";
+    const result = sanitizeExplicitSandboxEnvVars({
+      CONFIG_TOKEN: base64Like,
+      AWS_SECRET_ACCESS_KEY: base64Like,
+      BUILD_ID: "0123456789abcdef".repeat(8),
+    });
+
+    expect(result.allowed).toEqual({
+      CONFIG_TOKEN: base64Like,
+      AWS_SECRET_ACCESS_KEY: base64Like,
+      BUILD_ID: "0123456789abcdef".repeat(8),
+    });
+    expect(result.blocked).toStrictEqual([]);
+    expect(result.warnings).toContain(
+      "CONFIG_TOKEN: Value looks like base64-encoded credential data",
+    );
+    expect(result.warnings).toContain(
+      "AWS_SECRET_ACCESS_KEY: Value looks like base64-encoded credential data",
+    );
   });
 
   it("supports strict mode with explicit allowlist", () => {

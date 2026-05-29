@@ -42,14 +42,28 @@ export type EnvSanitizationOptions = {
   customAllowedPatterns?: ReadonlyArray<RegExp>;
 };
 
-export function validateEnvVarValue(value: string): string | undefined {
+function looksLikeStructuredBase64(value: string): boolean {
+  if (value.length < 128 || value.length % 4 !== 0) {
+    return false;
+  }
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(value)) {
+    return false;
+  }
+  return !value.slice(0, -2).includes("=");
+}
+
+function isSensitiveEnvVarName(key: string): boolean {
+  return matchesAnyPattern(key, BLOCKED_ENV_VAR_PATTERNS);
+}
+
+export function validateEnvVarValue(value: string, key?: string): string | undefined {
   if (value.includes("\0")) {
     return "Contains null bytes";
   }
   if (value.length > 32768) {
     return "Value exceeds maximum length";
   }
-  if (/^[A-Za-z0-9+/=]{80,}$/.test(value)) {
+  if (key && isSensitiveEnvVarName(key) && looksLikeStructuredBase64(value)) {
     return "Value looks like base64-encoded credential data";
   }
   return undefined;
@@ -86,7 +100,7 @@ export function sanitizeEnvVars(
       continue;
     }
 
-    const warning = validateEnvVarValue(value);
+    const warning = validateEnvVarValue(value, key);
     if (warning) {
       if (warning === "Contains null bytes") {
         blocked.push(key);
@@ -114,7 +128,7 @@ export function sanitizeExplicitSandboxEnvVars(
       continue;
     }
 
-    const warning = validateEnvVarValue(value);
+    const warning = validateEnvVarValue(value, key);
     if (warning) {
       if (warning === "Contains null bytes") {
         blocked.push(key);
