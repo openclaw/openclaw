@@ -680,8 +680,8 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     });
   });
 
-  it("preserves direct OpenAI API-key compaction when no Codex auth is configured", async () => {
-    resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "codex" });
+  it("preserves direct OpenAI API-key compaction when OpenClaw runtime is active", async () => {
+    resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "openclaw" });
     resolveModelMock.mockImplementation((provider = "openai", modelId = "fake") => ({
       model: { provider, api: "responses", id: modelId, input: [] },
       error: null,
@@ -702,7 +702,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
             openai: { models: [{ id: "gpt-5.5", contextWindow: 1_000_000 }] },
           },
         },
-        agents: { defaults: { embeddedHarness: { runtime: "codex" } } },
+        agents: { defaults: { embeddedHarness: { runtime: "openclaw" } } },
       } as never,
     });
 

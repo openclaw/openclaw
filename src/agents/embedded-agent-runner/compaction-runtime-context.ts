@@ -9,11 +9,9 @@ import {
 } from "../bash-process-references.js";
 import type { ExecElevatedDefaults } from "../bash-tools.js";
 import {
-  OPENAI_CODEX_PROVIDER_ID,
   openAIProviderUsesCodexRuntimeByDefault,
   resolveSelectedOpenAIRuntimeProvider,
 } from "../openai-codex-routing.js";
-import { findNormalizedProviderValue } from "../provider-id.js";
 
 export type EmbeddedCompactionRuntimeContext = {
   sessionKey?: string;
@@ -133,9 +131,7 @@ function shouldUseCodexRuntimeProviderForCompaction(params: {
   if (!openAIProviderUsesCodexRuntimeByDefault(params)) {
     return false;
   }
-  return Boolean(
-    findNormalizedProviderValue(params.config?.models?.providers, OPENAI_CODEX_PROVIDER_ID),
-  );
+  return true;
 }
 
 export function buildEmbeddedCompactionRuntimeContext(params: {

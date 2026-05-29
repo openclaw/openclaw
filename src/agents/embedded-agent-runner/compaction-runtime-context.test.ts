@@ -243,13 +243,12 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.authProfileId).toBeUndefined();
   });
 
-  it("routes Codex-runtime OpenAI compaction through the Codex runtime provider", () => {
+  it("routes Codex-runtime OpenAI compaction through the plugin-backed Codex provider", () => {
     const result = resolveEmbeddedCompactionTarget({
       config: {
         models: {
           providers: {
             openai: { models: [{ id: "gpt-5.5" }] },
-            "openai-codex": { models: [{ id: "gpt-5.5" }] },
           },
         },
       } as unknown as OpenClawConfig,
@@ -265,7 +264,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.authProfileId).toBeUndefined();
   });
 
-  it("preserves direct OpenAI compaction when no Codex runtime provider is configured", () => {
+  it("preserves direct OpenAI compaction for the OpenClaw runtime", () => {
     const result = resolveEmbeddedCompactionTarget({
       config: {
         models: {
@@ -276,7 +275,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       } as unknown as OpenClawConfig,
       provider: "openai",
       modelId: "gpt-5.5",
-      harnessRuntime: "codex",
+      harnessRuntime: "openclaw",
       defaultProvider: "openai",
       defaultModel: "gpt-5.5",
     });
