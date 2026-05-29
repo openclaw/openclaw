@@ -389,7 +389,7 @@ describe("xAI OAuth", () => {
         }),
       );
     vi.stubGlobal("fetch", fetchImpl);
-    const note = vi.fn(async () => {});
+    const note = vi.fn<(message: string, title?: string) => Promise<void>>(async () => undefined);
     const openUrl = vi.fn(async () => {});
     const log = vi.fn();
     const runtime = { ...createRuntimeEnv(), log };
@@ -478,7 +478,7 @@ describe("xAI OAuth", () => {
         }),
       );
     vi.stubGlobal("fetch", fetchImpl);
-    const note = vi.fn(async () => {});
+    const note = vi.fn<(message: string, title?: string) => Promise<void>>(async () => undefined);
     const ctx: ProviderAuthContext = {
       config: {},
       isRemote: true,
