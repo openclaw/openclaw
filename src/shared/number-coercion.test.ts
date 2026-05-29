@@ -6,6 +6,7 @@ import {
   parseFiniteNumber,
   resolveIntegerOption,
   resolveNonNegativeIntegerOption,
+  resolveOptionalIntegerOption,
   parseStrictFiniteNumber,
   parseStrictInteger,
   parseStrictNonNegativeInteger,
@@ -75,5 +76,13 @@ describe("number-coercion", () => {
     expect(resolveIntegerOption(-4, 1, { min: 0 })).toBe(0);
     expect(resolveIntegerOption(40, 1, { max: 10 })).toBe(10);
     expect(resolveNonNegativeIntegerOption(Number.NaN, 3.9)).toBe(3);
+  });
+
+  test("optional integer option helper rejects non-finite values", () => {
+    expect(resolveOptionalIntegerOption(7.9, { min: 1, max: 10 })).toBe(7);
+    expect(resolveOptionalIntegerOption(Number.NaN, { min: 1 })).toBeUndefined();
+    expect(resolveOptionalIntegerOption(Number.POSITIVE_INFINITY, { min: 1 })).toBeUndefined();
+    expect(resolveOptionalIntegerOption(-4, { min: 0 })).toBe(0);
+    expect(resolveOptionalIntegerOption(40, { max: 10 })).toBe(10);
   });
 });
