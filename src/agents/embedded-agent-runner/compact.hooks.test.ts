@@ -1,5 +1,5 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import {
   applyExtraParamsToAgentMock,
   applyAgentCompactionSettingsFromConfigMock,
