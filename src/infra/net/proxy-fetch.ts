@@ -80,9 +80,7 @@ const STRIP_HEADERS = new Set([
   "upgrade",
 ]);
 
-function isRequestLike(
-  input: unknown,
-): input is {
+function isRequestLike(input: unknown): input is {
   url: string;
   method?: string;
   headers?: HeadersInit;
@@ -99,7 +97,9 @@ function isRequestLike(
 }
 
 function stripRequestHeaders(src: HeadersInit | undefined): Headers | undefined {
-  if (src === undefined) return undefined;
+  if (src === undefined) {
+    return undefined;
+  }
   const h = new Headers(src);
   for (const key of Array.from(h.keys())) {
     if (STRIP_HEADERS.has(key.toLowerCase())) {
@@ -120,18 +120,28 @@ function toRequestLikeInit(
   init?: RequestInit,
 ): RequestInit | undefined {
   const merged: Record<string, unknown> = { ...init };
-  if (merged.body === undefined && input.body !== undefined) merged.body = input.body;
+  if (merged.body === undefined && input.body !== undefined) {
+    merged.body = input.body;
+  }
   const signal = init?.signal ?? input.signal;
-  if (signal !== undefined) merged.signal = signal;
+  if (signal !== undefined) {
+    merged.signal = signal;
+  }
   // Per the Fetch spec, when init.headers is supplied it entirely replaces the
   // Request's own headers (matching `new Request(req, { headers })` behaviour
   // in Node/undici which discards req.headers when init.headers is present).
   // Only fall back to input.headers when init provides no headers at all.
   const headers = stripRequestHeaders(init?.headers !== undefined ? init.headers : input.headers);
-  if (headers) merged.headers = headers;
+  if (headers) {
+    merged.headers = headers;
+  }
   const method = typeof init?.method === "string" ? init.method : input.method;
-  if (typeof method === "string" && method) merged.method = method;
-  if (merged.body != null && merged.duplex === undefined) merged.duplex = "half";
+  if (typeof method === "string" && method) {
+    merged.method = method;
+  }
+  if (merged.body != null && merged.duplex === undefined) {
+    merged.duplex = "half";
+  }
   return Object.keys(merged).length > 0 ? (merged as RequestInit) : undefined;
 }
 
