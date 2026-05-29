@@ -12,4 +12,9 @@ describe("resolveSlackTimestampMs", () => {
     expect(resolveSlackTimestampMs("1e3")).toBeUndefined();
     expect(resolveSlackTimestampMs("Infinity")).toBeUndefined();
   });
+
+  it("rejects timestamps that would produce unsafe millisecond values", () => {
+    expect(resolveSlackTimestampMs("9007199254741")).toBeUndefined();
+    expect(resolveSlackTimestampMs("9007199254740993")).toBeUndefined();
+  });
 });

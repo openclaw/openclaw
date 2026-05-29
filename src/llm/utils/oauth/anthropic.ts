@@ -6,6 +6,7 @@
  */
 
 import type { Server } from "node:http";
+import { parseStrictPositiveInteger } from "../../../infra/parse-finite-number.js";
 import {
   buildOAuthRequestSignal,
   createOAuthLoginCancelledError,
@@ -120,6 +121,63 @@ function formatErrorDetails(error: unknown): string {
 
 function formatTokenResponseParseContext(responseBody: string): string {
   return `bodyBytes=${Buffer.byteLength(responseBody, "utf8")}`;
+}
+
+function resolveTokenExpiresAt(value: unknown): number | undefined {
+  const expiresInSeconds = parseStrictPositiveInteger(value);
+  if (expiresInSeconds === undefined) {
+    return undefined;
+  }
+
+  const lifetimeMs = expiresInSeconds * 1000;
+  const expiresAt = Date.now() + lifetimeMs - 5 * 60 * 1000;
+  return Number.isSafeInteger(lifetimeMs) && Number.isSafeInteger(expiresAt)
+    ? expiresAt
+    : undefined;
+}
+
+function parseTokenCredentials(
+  responseBody: string,
+  options: {
+    invalidJsonMessage: string;
+    invalidFieldsMessage: string;
+  },
+): OAuthCredentials {
+  let data: unknown;
+  try {
+    data = JSON.parse(responseBody);
+  } catch (error) {
+    throw new Error(
+      `${options.invalidJsonMessage} url=${TOKEN_URL}; ${formatTokenResponseParseContext(responseBody)}; details=${formatErrorDetails(error)}`,
+      { cause: error },
+    );
+  }
+
+  if (!data || typeof data !== "object") {
+    throw new Error(
+      `${options.invalidFieldsMessage} url=${TOKEN_URL}; ${formatTokenResponseParseContext(responseBody)}`,
+    );
+  }
+
+  const record = data as Record<string, unknown>;
+  const expires = resolveTokenExpiresAt(record.expires_in);
+  if (
+    typeof record.access_token !== "string" ||
+    !record.access_token ||
+    typeof record.refresh_token !== "string" ||
+    !record.refresh_token ||
+    expires === undefined
+  ) {
+    throw new Error(
+      `${options.invalidFieldsMessage} url=${TOKEN_URL}; ${formatTokenResponseParseContext(responseBody)}`,
+    );
+  }
+
+  return {
+    refresh: record.refresh_token,
+    access: record.access_token,
+    expires,
+  };
 }
 
 async function startCallbackServer(expectedState: string): Promise<CallbackServerInfo> {
@@ -256,25 +314,10 @@ async function exchangeAuthorizationCode(
     );
   }
 
-  let tokenData: { access_token: string; refresh_token: string; expires_in: number };
-  try {
-    tokenData = JSON.parse(responseBody) as {
-      access_token: string;
-      refresh_token: string;
-      expires_in: number;
-    };
-  } catch (error) {
-    throw new Error(
-      `Token exchange returned invalid JSON. url=${TOKEN_URL}; ${formatTokenResponseParseContext(responseBody)}; details=${formatErrorDetails(error)}`,
-      { cause: error },
-    );
-  }
-
-  return {
-    refresh: tokenData.refresh_token,
-    access: tokenData.access_token,
-    expires: Date.now() + tokenData.expires_in * 1000 - 5 * 60 * 1000,
-  };
+  return parseTokenCredentials(responseBody, {
+    invalidJsonMessage: "Token exchange returned invalid JSON.",
+    invalidFieldsMessage: "Token exchange returned invalid token fields.",
+  });
 }
 
 /**
@@ -430,26 +473,10 @@ export async function refreshAnthropicToken(refreshToken: string): Promise<OAuth
     );
   }
 
-  let data: { access_token: string; refresh_token: string; expires_in: number; scope?: string };
-  try {
-    data = JSON.parse(responseBody) as {
-      access_token: string;
-      refresh_token: string;
-      expires_in: number;
-      scope?: string;
-    };
-  } catch (error) {
-    throw new Error(
-      `Anthropic token refresh returned invalid JSON. url=${TOKEN_URL}; ${formatTokenResponseParseContext(responseBody)}; details=${formatErrorDetails(error)}`,
-      { cause: error },
-    );
-  }
-
-  return {
-    refresh: data.refresh_token,
-    access: data.access_token,
-    expires: Date.now() + data.expires_in * 1000 - 5 * 60 * 1000,
-  };
+  return parseTokenCredentials(responseBody, {
+    invalidJsonMessage: "Anthropic token refresh returned invalid JSON.",
+    invalidFieldsMessage: "Anthropic token refresh returned invalid token fields.",
+  });
 }
 
 export const anthropicOAuthProvider: OAuthProviderInterface = {

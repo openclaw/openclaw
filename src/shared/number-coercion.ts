@@ -133,3 +133,50 @@ export function parseStrictNonNegativeInteger(value: unknown): number | undefine
   const parsed = parseStrictInteger(value);
   return parsed !== undefined && parsed >= 0 ? parsed : undefined;
 }
+
+export function positiveSecondsToSafeMilliseconds(value: unknown): number | undefined {
+  const seconds = parseStrictPositiveInteger(value);
+  if (seconds === undefined) {
+    return undefined;
+  }
+  const milliseconds = seconds * 1000;
+  return Number.isSafeInteger(milliseconds) ? milliseconds : undefined;
+}
+
+export function nonNegativeSecondsToSafeMilliseconds(value: unknown): number | undefined {
+  const seconds = parseStrictNonNegativeInteger(value);
+  if (seconds === undefined) {
+    return undefined;
+  }
+  const milliseconds = seconds * 1000;
+  return Number.isSafeInteger(milliseconds) ? milliseconds : undefined;
+}
+
+export function resolveExpiresAtMsFromDurationSeconds(
+  value: unknown,
+  opts: { nowMs?: number; bufferMs?: number; minRemainingMs?: number } = {},
+): number | undefined {
+  const durationMs = positiveSecondsToSafeMilliseconds(value);
+  if (durationMs === undefined) {
+    return undefined;
+  }
+  const nowMs = opts.nowMs ?? Date.now();
+  const expiresAt = nowMs + durationMs - (opts.bufferMs ?? 0);
+  if (!Number.isSafeInteger(expiresAt)) {
+    return undefined;
+  }
+  const minRemainingMs = opts.minRemainingMs;
+  return minRemainingMs === undefined ? expiresAt : Math.max(expiresAt, nowMs + minRemainingMs);
+}
+
+export function resolveExpiresAtMsFromEpochSeconds(
+  value: unknown,
+  opts: { bufferMs?: number } = {},
+): number | undefined {
+  const epochMs = positiveSecondsToSafeMilliseconds(value);
+  if (epochMs === undefined) {
+    return undefined;
+  }
+  const expiresAt = epochMs - (opts.bufferMs ?? 0);
+  return Number.isSafeInteger(expiresAt) ? expiresAt : undefined;
+}

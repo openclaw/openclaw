@@ -1,4 +1,4 @@
-import type { SkillStatusEntry, SkillStatusReport } from "../agents/skills-status.js";
+import type { SkillStatusEntry, SkillStatusReport } from "../skills/discovery/status.js";
 import { sanitizeForLog, stripAnsi } from "../terminal/ansi.js";
 import { decorativeEmoji, decorativePrefix } from "../terminal/decorative-emoji.js";
 import { getTerminalTableWidth, renderTable } from "../terminal/table.js";

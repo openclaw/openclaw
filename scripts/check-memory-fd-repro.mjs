@@ -25,6 +25,7 @@ const ISSUE_MEMORY_FILE_COUNT = ISSUE_FILE_COUNTS.reduce((sum, [, count]) => sum
 const DEFAULT_FILE_COUNT = 512;
 const DEFAULT_MAX_WORKSPACE_REG_FDS = process.platform === "darwin" ? 8 : 64;
 export const GATEWAY_READY_OUTPUT_MAX_CHARS = 128 * 1024;
+export const MEMORY_SEARCH_RESPONSE_MAX_BYTES = 256 * 1024;
 
 const SKIP_GATEWAY_ENV = {
   NODE_ENV: "test",
@@ -431,6 +432,55 @@ export async function stopGatewayWithRuntime({
   }
 }
 
+function responseBodyTooLargeError(label, maxBytes) {
+  return new Error(`${label} response body exceeded ${maxBytes} bytes`);
+}
+
+export async function readBoundedResponseText(response, label, maxBytes) {
+  const contentLength = Number(response.headers.get("content-length") ?? "");
+  if (Number.isSafeInteger(contentLength) && contentLength > maxBytes) {
+    await response.body?.cancel().catch(() => undefined);
+    throw responseBodyTooLargeError(label, maxBytes);
+  }
+
+  if (!response.body) {
+    return "";
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const chunks = [];
+  let totalBytes = 0;
+  let canceled = false;
+
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        const tail = decoder.decode();
+        if (tail) {
+          chunks.push(tail);
+        }
+        break;
+      }
+
+      totalBytes += value.byteLength;
+      if (totalBytes > maxBytes) {
+        canceled = true;
+        await reader.cancel().catch(() => undefined);
+        throw responseBodyTooLargeError(label, maxBytes);
+      }
+      chunks.push(decoder.decode(value, { stream: true }));
+    }
+  } finally {
+    if (!canceled) {
+      reader.releaseLock();
+    }
+  }
+
+  return chunks.join("");
+}
+
 async function invokeMemorySearch({ port, token, timeoutMs }) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -453,7 +503,11 @@ async function invokeMemorySearch({ port, token, timeoutMs }) {
       }),
       signal: controller.signal,
     });
-    const text = await res.text();
+    const text = await readBoundedResponseText(
+      res,
+      "memory_search",
+      MEMORY_SEARCH_RESPONSE_MAX_BYTES,
+    );
     return {
       ok: res.ok,
       status: res.status,

@@ -25,6 +25,12 @@ import {
   transformProviderSystemPrompt,
 } from "../../plugins/provider-runtime.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-key.js";
+import { resolveSkillsPromptForRun } from "../../skills/loading/workspace.js";
+import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
+import {
+  applySkillEnvOverrides,
+  applySkillEnvOverridesFromSnapshot,
+} from "../../skills/runtime/env-overrides.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
@@ -101,11 +107,6 @@ import {
 } from "../session-write-lock.js";
 import { createAgentSession, estimateTokens, SessionManager } from "../sessions/index.js";
 import { detectRuntimeShell } from "../shell-utils.js";
-import {
-  applySkillEnvOverrides,
-  applySkillEnvOverridesFromSnapshot,
-  resolveSkillsPromptForRun,
-} from "../skills.js";
 import { filterRuntimeCompatibleTools } from "../tool-schema-projection.js";
 import { logRuntimeToolSchemaQuarantine } from "../tool-schema-quarantine.js";
 import {
@@ -148,9 +149,8 @@ import { resolveModelAsync } from "./model.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "./replay-history.js";
 import { createEmbeddedAgentResourceLoader } from "./resource-loader.js";
 import { resolveAttemptSpawnWorkspaceDir } from "./run/attempt.thread-helpers.js";
-import { buildEmbeddedSandboxInfo } from "./sandbox-info.js";
+import { buildEmbeddedSandboxInfo, resolveEmbeddedSandboxInfoExecPolicy } from "./sandbox-info.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "./session-manager-cache.js";
-import { resolveEmbeddedRunSkillEntries } from "./skills-runtime.js";
 import {
   resolveEmbeddedAgentBaseStreamFn,
   resolveEmbeddedAgentStreamFn,
@@ -741,6 +741,8 @@ async function compactEmbeddedAgentSessionDirectOnce(
     const runAbortController = new AbortController();
     const toolsRaw = createOpenClawCodingTools({
       exec: {
+        ...params.execOverrides,
+        config: params.config,
         elevated: params.bashElevated,
       },
       sandbox,
@@ -914,7 +916,18 @@ async function compactEmbeddedAgentSessionDirectOnce(
         }),
       }),
     };
-    const sandboxInfo = buildEmbeddedSandboxInfo(sandbox, params.bashElevated);
+    const sandboxInfoExecPolicy = resolveEmbeddedSandboxInfoExecPolicy({
+      config: params.config,
+      agentId: sessionAgentId,
+      sessionKey: params.sessionKey,
+      sandboxAvailable: sandbox?.enabled === true,
+      execOverrides: params.execOverrides,
+    });
+    const sandboxInfo = buildEmbeddedSandboxInfo(
+      sandbox,
+      params.bashElevated,
+      sandboxInfoExecPolicy,
+    );
     const reasoningTagHint = isReasoningTagProvider(provider, {
       config: params.config,
       workspaceDir: effectiveWorkspace,

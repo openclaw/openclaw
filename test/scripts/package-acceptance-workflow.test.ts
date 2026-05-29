@@ -608,7 +608,7 @@ describe("package artifact reuse", () => {
       /suite_id: native-live-src-gateway-profiles-openai[\s\S]*?timeout_minutes: 60[\s\S]*?profiles: beta minimum stable full/u,
     );
     expect(workflow).toContain(
-      "command: OPENCLAW_LIVE_GATEWAY_THINKING=off OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai OPENCLAW_LIVE_GATEWAY_MODELS=openai/gpt-5.5",
+      "command: OPENCLAW_LIVE_GATEWAY_THINKING=off OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai OPENCLAW_LIVE_GATEWAY_MODELS=openai/gpt-5.5 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=180000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=600000",
     );
     expect(workflow).toContain(
       "OPENCLAW_LIVE_GATEWAY_MODELS=google/gemini-3.1-pro-preview node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles",
@@ -1386,6 +1386,16 @@ describe("package artifact reuse", () => {
     expect(pluginNpmWorkflow).toContain("Validate release publish approval run");
     expect(clawHubWorkflow).toContain("Validate release publish approval run");
     expect(openclawNpmWorkflow).toContain("Validate release publish approval run");
+    expect(pluginNpmWorkflow).toContain("Check npm package version");
+    expect(pluginNpmWorkflow).toContain("already_published=true");
+    expect(pluginNpmWorkflow).toContain(
+      "steps.npm_package_version.outputs.already_published != 'true'",
+    );
+    expect(clawHubWorkflow).toContain("Check ClawHub package version");
+    expect(clawHubWorkflow).toContain("already_published=true");
+    expect(clawHubWorkflow).toContain(
+      "steps.clawhub_package_version.outputs.already_published != 'true'",
+    );
     expect(pluginNpmWorkflow).toContain("Direct Plugin NPM Release dispatch");
     expect(clawHubWorkflow).toContain("Direct Plugin ClawHub Release dispatch");
     expect(openclawNpmWorkflow).toContain("Direct OpenClaw npm publish");
