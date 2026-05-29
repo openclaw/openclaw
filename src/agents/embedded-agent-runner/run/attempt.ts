@@ -71,7 +71,7 @@ import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../../sessions/input-provenance.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
 import { resolveSkillRoute } from "../../../skills/loading/router-integration.js";
-import { resolveSkillsPromptForRun } from "../../../skills/loading/workspace.js";
+import { resolveSkillsPromptStateForRun } from "../../../skills/loading/workspace.js";
 import { resolveEmbeddedRunSkillEntries } from "../../../skills/runtime/embedded-run-entries.js";
 import {
   applySkillEnvOverrides,
@@ -1114,7 +1114,7 @@ export async function runEmbeddedAttempt(
       skillsPromptWorkspaceDir: effectiveSkillsPromptWorkspace,
     });
 
-    const skillsPrompt = resolveSkillsPromptForRun({
+    const skillsPromptState = resolveSkillsPromptStateForRun({
       skillsSnapshot: skillsSnapshotForRun,
       entries: promptSkillEntries,
       config: params.config,
@@ -1122,23 +1122,25 @@ export async function runEmbeddedAttempt(
       agentId: sessionAgentId,
       eligibility: skillsEligibility,
     });
+    const skillsPrompt = skillsPromptState.prompt;
+    const isRawModelRun = params.modelRun === true || params.promptMode === "none";
 
     // Pre-filter: call configured skill router before building the system prompt.
     // When a router matches, its narrowed result replaces the full skills catalog.
     const skillRouterConfig = params.config?.skills?.router;
-    const skillRoute = await resolveSkillRoute({
-      routerName: skillRouterConfig?.name,
-      routerConfig: skillRouterConfig?.config,
-      resolvedSkills: skillsSnapshotForRun?.resolvedSkills,
-      entries: skillEntries,
-      query: params.prompt,
-    });
+    const skillRoute = isRawModelRun
+      ? undefined
+      : await resolveSkillRoute({
+          routerName: skillRouterConfig?.name,
+          routerConfig: skillRouterConfig?.config,
+          resolvedSkills: skillsPromptState.resolvedSkills,
+          query: params.prompt,
+        });
 
     prepStages.mark("skills");
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
     const contextInjectionMode = resolveContextInjectionMode(params.config, sessionAgentId);
-    const isRawModelRun = params.modelRun === true || params.promptMode === "none";
     if (isRawModelRun && log.isEnabled("debug")) {
       log.debug(
         `raw model run enabled: modelRun=${params.modelRun === true} promptMode=${params.promptMode ?? "unset"}`,

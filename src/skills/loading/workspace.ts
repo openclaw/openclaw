@@ -1518,20 +1518,40 @@ export function resolveSkillsPromptForRun(params: {
   agentId?: string;
   eligibility?: SkillEligibilityContext;
 }): string {
-  const snapshotPrompt = params.skillsSnapshot?.prompt?.trim();
-  if (snapshotPrompt) {
-    return snapshotPrompt;
-  }
+  return resolveSkillsPromptStateForRun(params).prompt;
+}
+
+export function resolveSkillsPromptStateForRun(params: {
+  skillsSnapshot?: SkillSnapshot;
+  entries?: SkillEntry[];
+  config?: OpenClawConfig;
+  workspaceDir: string;
+  agentId?: string;
+}): { prompt: string; resolvedSkills: Skill[] } {
+  const snapshotPrompt = params.skillsSnapshot?.prompt?.trim() ?? "";
+  const snapshotResolvedSkills = params.skillsSnapshot?.resolvedSkills;
   if (params.entries && params.entries.length > 0) {
-    const prompt = buildWorkspaceSkillsPrompt(params.workspaceDir, {
+    const state = resolveWorkspaceSkillPromptState(params.workspaceDir, {
       entries: params.entries,
       config: params.config,
       agentId: params.agentId,
       eligibility: params.eligibility,
     });
-    return prompt.trim() ? prompt : "";
+    if (!snapshotPrompt) {
+      return {
+        prompt: state.prompt.trim() ? state.prompt : "",
+        resolvedSkills: state.resolvedSkills,
+      };
+    }
+    return {
+      prompt: snapshotPrompt,
+      resolvedSkills: snapshotResolvedSkills ?? state.resolvedSkills,
+    };
   }
-  return "";
+  return {
+    prompt: snapshotPrompt,
+    resolvedSkills: snapshotResolvedSkills ?? [],
+  };
 }
 
 export function loadWorkspaceSkillEntries(
