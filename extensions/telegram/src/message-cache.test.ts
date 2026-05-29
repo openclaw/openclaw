@@ -405,6 +405,30 @@ describe("telegram message cache", () => {
     expect(recent.map((entry) => entry.messageId)).toEqual(["9122", "9123", "9124"]);
   });
 
+  it("does not use unsafe message ids as recent-before cutoffs", async () => {
+    const cache = createTelegramMessageCache();
+    await cache.record({
+      accountId: "default",
+      chatId: 7,
+      msg: {
+        chat: { id: 7, type: "private", first_name: "Nora" },
+        message_id: 9124,
+        date: 1736380700,
+        text: "State message",
+        from: { id: 1, is_bot: false, first_name: "Nora" },
+      } as Message,
+    });
+
+    const recent = await cache.recentBefore({
+      accountId: "default",
+      chatId: 7,
+      messageId: "9007199254740992",
+      limit: 10,
+    });
+
+    expect(recent).toEqual([]);
+  });
+
   it("reads legacy sidecar records as a persistent-store fallback", async () => {
     const storePath = `/tmp/openclaw-telegram-message-cache-state-migrate-${process.pid}-${Date.now()}.json`;
     const persistedPath = resolveTelegramMessageCachePath(storePath);

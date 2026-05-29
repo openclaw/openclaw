@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import type { Message } from "grammy/types";
 import { formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { appendRegularFileSync, replaceFileAtomicSync } from "openclaw/plugin-sdk/security-runtime";
@@ -238,6 +239,10 @@ function isString(value: unknown): value is string {
 function readOptionalString(record: Record<string, unknown>, key: string): string | undefined {
   const value = record[key];
   return isString(value) ? value : undefined;
+}
+
+function parseSafeMessageId(value: string | undefined): number | undefined {
+  return value === undefined ? undefined : parseStrictPositiveInteger(value);
 }
 
 function isTelegramSourceMessage(value: unknown): value is Message {
@@ -788,14 +793,14 @@ export function createTelegramMessageCache(params?: {
       if (!messageId || limit <= 0) {
         return [];
       }
-      const targetId = Number(messageId);
-      if (!Number.isFinite(targetId)) {
+      const targetId = parseSafeMessageId(messageId);
+      if (targetId === undefined) {
         return [];
       }
       return (await listChatMessages({ accountId, chatId, threadId }))
         .filter((entry) => {
-          const entryId = Number(entry.messageId);
-          return Number.isFinite(entryId) && entryId < targetId;
+          const entryId = parseSafeMessageId(entry.messageId);
+          return entryId !== undefined && entryId < targetId;
         })
         .slice(-limit);
     },
@@ -820,9 +825,9 @@ function compareCachedMessageNodes(
   left: TelegramCachedMessageNode,
   right: TelegramCachedMessageNode,
 ) {
-  const leftId = Number(left.messageId);
-  const rightId = Number(right.messageId);
-  if (Number.isFinite(leftId) && Number.isFinite(rightId)) {
+  const leftId = parseSafeMessageId(left.messageId);
+  const rightId = parseSafeMessageId(right.messageId);
+  if (leftId !== undefined && rightId !== undefined) {
     return leftId - rightId;
   }
   return (left.messageId ?? "").localeCompare(right.messageId ?? "");
@@ -845,9 +850,9 @@ function isAfterSessionBoundary(
   if (!boundary) {
     return true;
   }
-  const nodeId = Number(node.messageId);
-  const boundaryId = Number(boundary.messageId);
-  if (Number.isFinite(nodeId) && Number.isFinite(boundaryId)) {
+  const nodeId = parseSafeMessageId(node.messageId);
+  const boundaryId = parseSafeMessageId(boundary.messageId);
+  if (nodeId !== undefined && boundaryId !== undefined) {
     return nodeId > boundaryId;
   }
   if (

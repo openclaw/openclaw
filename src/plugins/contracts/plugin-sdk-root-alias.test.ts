@@ -145,9 +145,7 @@ function loadRootAliasWithStubs(options?: {
     if (id === "node:os") {
       return {
         tmpdir: () =>
-          context.process.env.TMPDIR ??
-          options?.defaultTmpDir ??
-          "/tmp/openclaw-root-alias-test",
+          context.process.env.TMPDIR ?? options?.defaultTmpDir ?? "/tmp/openclaw-root-alias-test",
       };
     }
     if (id === "jiti") {

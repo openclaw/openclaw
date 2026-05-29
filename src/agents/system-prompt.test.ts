@@ -866,6 +866,7 @@ describe("buildAgentSystemPrompt", () => {
       "Anything requiring more work than a direct reply should go through `sessions_spawn`",
     );
     expect(preferPrompt).toContain("objective, expected output, relevant files/inputs");
+    expect(preferPrompt).toContain("keep it lowercase with underscores or hyphens");
     expect(preferPrompt).toContain("Treat child outputs as reports/evidence");
     expect(preferPrompt).toContain(
       "Use `subagents(action=list)` only when explicitly asked for sub-agent status",

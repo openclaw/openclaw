@@ -4250,8 +4250,9 @@ describe("runAgentTurnWithFallback", () => {
     });
   });
 
-  it("prefers onCompactionEnd callback over default notice when notifyUser is enabled", async () => {
+  it("fires both notifyUser notices alongside onCompactionStart / onCompactionEnd callbacks (#87107)", async () => {
     const onBlockReply = vi.fn();
+    const onCompactionStart = vi.fn();
     const onCompactionEnd = vi.fn();
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
       await params.onAgentEvent?.({ stream: "compaction", data: { phase: "start" } });
@@ -4281,7 +4282,7 @@ describe("runAgentTurnWithFallback", () => {
         Provider: "whatsapp",
         MessageSid: "msg",
       } as unknown as TemplateContext,
-      opts: { onBlockReply, onCompactionEnd },
+      opts: { onBlockReply, onCompactionStart, onCompactionEnd },
       typingSignals: createMockTypingSignaler(),
       blockReplyPipeline: null,
       blockStreamingEnabled: false,
@@ -4298,12 +4299,17 @@ describe("runAgentTurnWithFallback", () => {
     });
 
     expect(result.kind).toBe("success");
+    // Internal callbacks (Control UI etc.) and the user-channel notifyUser
+    // notices are independent audiences; both must fire when opted in.
+    expect(onCompactionStart).toHaveBeenCalledTimes(1);
     expect(onCompactionEnd).toHaveBeenCalledTimes(1);
-    // The start notice still fires (no onCompactionStart callback provided),
-    // but the completion notice is suppressed in favor of the callback.
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(onBlockReply).toHaveBeenCalledTimes(2);
     expectBlockReplyCall(onBlockReply, 0, {
       text: "🧹 Compacting context...",
+      isCompactionNotice: true,
+    });
+    expectBlockReplyCall(onBlockReply, 1, {
+      text: "🧹 Compaction complete",
       isCompactionNotice: true,
     });
   });

@@ -370,10 +370,18 @@ describe("loadWorkspaceSkillEntries", () => {
       description: "Hidden prompt entry",
       frontmatterExtra: "disable-model-invocation: true",
     });
+    const bomSkillDir = path.join(workspaceDir, "skills", "bom-skill");
+    await fs.mkdir(bomSkillDir, { recursive: true });
+    await fs.writeFile(
+      path.join(bomSkillDir, "SKILL.md"),
+      "\uFEFF---\nname: bom-skill\ndescription: BOM-prefixed skill\n---\n\n# BOM skill\n",
+      "utf8",
+    );
 
     const entries = loadTestWorkspaceSkillEntries(workspaceDir);
 
     expect(entries.map((entry) => entry.skill.name)).toContain("fallback-name");
+    expect(entries.map((entry) => entry.skill.name)).toContain("bom-skill");
     const hiddenEntry = entries.find((entry) => entry.skill.name === "hidden-skill");
 
     expect(hiddenEntry?.invocation?.disableModelInvocation).toBe(true);

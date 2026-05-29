@@ -1,4 +1,3 @@
-import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
   BrowserProfileUnavailableError,
   BrowserTabNotFoundError,
@@ -12,6 +11,7 @@ import {
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import { resolveTargetIdFromTabs } from "../target-id.js";
 import { browserNavigationPolicyForProfile, resolveProfileContext } from "./agent.shared.js";
+import { readRouteNonNegativeInteger } from "./route-numeric.js";
 import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
 import { asyncBrowserRoute, jsonError, toStringOrEmpty } from "./utils.js";
 
@@ -122,12 +122,18 @@ function readTabIndex(
     }
     return undefined;
   }
-  const index = parseStrictNonNegativeInteger(record.index);
-  if (index === undefined) {
+  if (record.index == null) {
     jsonError(res, 400, "index must be a non-negative integer");
     return null;
   }
-  return index;
+  try {
+    return readRouteNonNegativeInteger(record.index, "index", {
+      invalidMessage: "index must be a non-negative integer",
+    });
+  } catch (error) {
+    jsonError(res, 400, error instanceof Error ? error.message : String(error));
+    return null;
+  }
 }
 
 async function runTabTargetMutation(params: {
