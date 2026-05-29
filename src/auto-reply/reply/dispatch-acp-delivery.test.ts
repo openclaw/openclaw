@@ -796,4 +796,32 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(coordinator.hasFailedVisibleTextDelivery()).toBe(false);
     expect(coordinator.getRoutedCounts().block).toBe(1);
   });
+
+  it("treats hook-suppressed routed ACP block text as handled", async () => {
+    deliveryMocks.routeReply.mockResolvedValueOnce({
+      ok: true,
+      suppressed: true,
+      reason: "cancelled_by_reply_payload_sending_hook",
+    });
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig(),
+      ctx: buildTestCtx({
+        Provider: "visiblechat",
+        Surface: "visiblechat",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher: createDispatcher(),
+      inboundAudio: false,
+      shouldRouteToOriginating: true,
+      originatingChannel: "visiblechat",
+      originatingTo: "channel:thread-1",
+    });
+
+    const delivered = await coordinator.deliver("block", { text: "hello" }, { skipTts: true });
+
+    expect(delivered).toBe(true);
+    expect(coordinator.hasDeliveredVisibleText()).toBe(true);
+    expect(coordinator.hasFailedVisibleTextDelivery()).toBe(false);
+    expect(coordinator.getRoutedCounts().block).toBe(0);
+  });
 });
