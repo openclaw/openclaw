@@ -57,6 +57,7 @@ export type {
   PluginAgentTurnPrepareEvent,
   PluginAgentTurnPrepareResult,
   PluginControlUiDescriptor,
+  PluginControlUiEntryPoint,
   PluginHeartbeatPromptContributionEvent,
   PluginHeartbeatPromptContributionResult,
   PluginJsonValue,

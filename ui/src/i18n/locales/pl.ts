@@ -390,6 +390,7 @@ export const pl: TranslationMap = {
     control: "Sterowanie",
     agent: "Agent",
     settings: "Ustawienia",
+    plugins: "Wtyczki",
     expand: "Rozwiń pasek boczny",
     collapse: "Zwiń pasek boczny",
     resize: "Zmień rozmiar paska bocznego",

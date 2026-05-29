@@ -30,6 +30,29 @@ export type ChannelUiMetaEntry = {
   systemImage?: string;
 };
 
+export type PluginControlUiEntryPoint = {
+  id: string;
+  pluginId: string;
+  pluginName?: string;
+  surface: "app-nav";
+  label: string;
+  path: string;
+  openMode?: "in-app" | "same-window" | "new-window";
+  description?: string;
+  requiredScopes?: string[];
+};
+
+export type PluginsUiEntryPointsResult = {
+  ok: true;
+  entryPoints: PluginControlUiEntryPoint[];
+};
+
+export type PluginsUiEntryPointLaunchResult = {
+  ok: true;
+  path: string;
+  expiresInMs: number;
+};
+
 export const CRON_CHANNEL_LAST = "last";
 
 export type ChannelAccountSnapshot = {

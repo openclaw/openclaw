@@ -110,6 +110,8 @@ describe("host-hook fixture plugin contract", () => {
     expect(registry.registry.sessionExtensions ?? []).toHaveLength(1);
     expect(registry.registry.toolMetadata ?? []).toHaveLength(1);
     expect(registry.registry.controlUiDescriptors ?? []).toHaveLength(1);
+    expect(registry.registry.controlUiEntryPoints ?? []).toHaveLength(1);
+    expect(registry.registry.controlUiEntryPoints?.[0]?.entryPoint.openMode).toBe("in-app");
     expect(registry.registry.runtimeLifecycles ?? []).toHaveLength(1);
     expect(registry.registry.agentEventSubscriptions ?? []).toHaveLength(1);
     expect(registry.registry.sessionSchedulerJobs ?? []).toHaveLength(1);
@@ -685,6 +687,104 @@ describe("host-hook fixture plugin contract", () => {
         message: "control UI descriptor schema must be JSON-compatible: bad-schema",
       },
     ]);
+  });
+
+  it("rejects Control UI entry points outside their plugin-owned gateway path", () => {
+    const badPaths = [
+      "https://example.com/session",
+      "//example.com/session",
+      "javascript:alert(1)",
+      "data:text/html,hi",
+      "/plugins/other-plugin/",
+      "/plugins/entry-fixture/?session=agent:main:main",
+      "/plugins/entry-fixture/#session",
+      "/plugins/entry-fixture/%2F%2Fexample.com",
+    ];
+    for (const [index, badPath] of badPaths.entries()) {
+      const { config, registry } = createPluginRegistryFixture();
+      registerTestPlugin({
+        registry,
+        config,
+        record: createPluginRecord({
+          id: "entry-fixture",
+          name: "Entry Fixture",
+        }),
+        register(api) {
+          api.registerControlUiEntryPoint({
+            id: `bad-entry-${index}`,
+            surface: "app-nav",
+            label: "Bad entry",
+            path: badPath,
+          });
+        },
+      });
+
+      expect(registry.registry.controlUiEntryPoints ?? []).toHaveLength(0);
+      expect(registry.registry.diagnostics).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            pluginId: "entry-fixture",
+            message:
+              "control UI entry point registration requires id, surface, label, plugin-owned path, and valid optional fields",
+          }),
+        ]),
+      );
+    }
+  });
+
+  it("accepts explicit Control UI entry point open modes", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "entry-fixture",
+        name: "Entry Fixture",
+      }),
+      register(api) {
+        api.registerControlUiEntryPoint({
+          id: "new-window-entry",
+          surface: "app-nav",
+          label: "New window",
+          path: "/plugins/entry-fixture/",
+          openMode: "new-window",
+        });
+      },
+    });
+
+    expect(registry.registry.controlUiEntryPoints?.[0]?.entryPoint.openMode).toBe("new-window");
+  });
+
+  it("rejects invalid Control UI entry point open modes", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "entry-fixture",
+        name: "Entry Fixture",
+      }),
+      register(api) {
+        api.registerControlUiEntryPoint({
+          id: "bad-open-mode",
+          surface: "app-nav",
+          label: "Bad open mode",
+          path: "/plugins/entry-fixture/",
+          openMode: "foreign-tab" as never,
+        });
+      },
+    });
+
+    expect(registry.registry.controlUiEntryPoints ?? []).toHaveLength(0);
+    expect(registry.registry.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pluginId: "entry-fixture",
+          message:
+            "control UI entry point registration requires id, surface, label, plugin-owned path, and valid optional fields",
+        }),
+      ]),
+    );
   });
 
   it("projects registered session extensions into gateway session rows", () => {

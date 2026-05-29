@@ -390,6 +390,7 @@ export const uk: TranslationMap = {
     control: "Керування",
     agent: "Агент",
     settings: "Налаштування",
+    plugins: "Плагіни",
     expand: "Розгорнути бічну панель",
     collapse: "Згорнути бічну панель",
     resize: "Змінити розмір бічної панелі",

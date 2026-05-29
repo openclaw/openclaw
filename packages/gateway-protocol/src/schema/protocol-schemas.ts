@@ -215,12 +215,17 @@ import {
 } from "./plugin-approvals.js";
 import {
   PluginControlUiDescriptorSchema,
+  PluginControlUiEntryPointSchema,
   PluginsSessionActionFailureResultSchema,
   PluginsSessionActionParamsSchema,
   PluginsSessionActionResultSchema,
   PluginsSessionActionSuccessResultSchema,
   PluginsUiDescriptorsParamsSchema,
   PluginsUiDescriptorsResultSchema,
+  PluginsUiEntryPointLaunchParamsSchema,
+  PluginsUiEntryPointLaunchResultSchema,
+  PluginsUiEntryPointsParamsSchema,
+  PluginsUiEntryPointsResultSchema,
 } from "./plugins.js";
 import { PushTestParamsSchema, PushTestResultSchema } from "./push.js";
 import {
@@ -497,12 +502,17 @@ export const ProtocolSchemas = {
   PluginApprovalRequestParams: PluginApprovalRequestParamsSchema,
   PluginApprovalResolveParams: PluginApprovalResolveParamsSchema,
   PluginControlUiDescriptor: PluginControlUiDescriptorSchema,
+  PluginControlUiEntryPoint: PluginControlUiEntryPointSchema,
   PluginsSessionActionFailureResult: PluginsSessionActionFailureResultSchema,
   PluginsSessionActionParams: PluginsSessionActionParamsSchema,
   PluginsSessionActionResult: PluginsSessionActionResultSchema,
   PluginsSessionActionSuccessResult: PluginsSessionActionSuccessResultSchema,
   PluginsUiDescriptorsParams: PluginsUiDescriptorsParamsSchema,
   PluginsUiDescriptorsResult: PluginsUiDescriptorsResultSchema,
+  PluginsUiEntryPointLaunchParams: PluginsUiEntryPointLaunchParamsSchema,
+  PluginsUiEntryPointLaunchResult: PluginsUiEntryPointLaunchResultSchema,
+  PluginsUiEntryPointsParams: PluginsUiEntryPointsParamsSchema,
+  PluginsUiEntryPointsResult: PluginsUiEntryPointsResultSchema,
   DevicePairListParams: DevicePairListParamsSchema,
   DevicePairApproveParams: DevicePairApproveParamsSchema,
   DevicePairRejectParams: DevicePairRejectParamsSchema,

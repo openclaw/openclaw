@@ -388,6 +388,7 @@ export const ar: TranslationMap = {
     control: "التحكم",
     agent: "الوكيل",
     settings: "الإعدادات",
+    plugins: "المكونات الإضافية",
     expand: "توسيع الشريط الجانبي",
     collapse: "طي الشريط الجانبي",
     resize: "تغيير حجم الشريط الجانبي",

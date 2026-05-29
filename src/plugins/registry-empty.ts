@@ -45,6 +45,7 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     trustedToolPolicies: [],
     toolMetadata: [],
     controlUiDescriptors: [],
+    controlUiEntryPoints: [],
     runtimeLifecycles: [],
     agentEventSubscriptions: [],
     sessionSchedulerJobs: [],

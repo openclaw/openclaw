@@ -13,6 +13,7 @@ type PluginApiFacadeSource = Pick<
   | "getRunContext"
   | "registerAgentEventSubscription"
   | "registerControlUiDescriptor"
+  | "registerControlUiEntryPoint"
   | "registerRuntimeLifecycle"
   | "registerSessionAction"
   | "registerSessionExtension"
@@ -40,6 +41,7 @@ export function attachPluginApiFacades<T extends object>(
     controls: {
       registerSessionAction: (...args) => api.registerSessionAction(...args),
       registerControlUiDescriptor: (...args) => api.registerControlUiDescriptor(...args),
+      registerControlUiEntryPoint: (...args) => api.registerControlUiEntryPoint(...args),
     },
   };
   api.agent = {

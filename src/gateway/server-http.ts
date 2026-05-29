@@ -30,6 +30,12 @@ import {
   normalizePluginNodeCapabilityScopedUrl,
   type PluginNodeCapabilitySurface,
 } from "./plugin-node-capability.js";
+import {
+  consumePluginUiEntryPointLaunchToken,
+  PLUGIN_UI_ENTRY_CONTEXT_TOKENS_HEADER,
+  PLUGIN_UI_ENTRY_SESSION_KEY_HEADER,
+  resolvePluginUiEntryPointSessionCookie,
+} from "./plugin-ui-entry-launch-tokens.js";
 import type { HooksRequestHandler } from "./server/hooks-request-handler.js";
 import {
   isProtectedPluginRoutePathFromContext,
@@ -50,6 +56,25 @@ type PluginHttpRequestHandler = (
     gatewayRequestOperatorScopes?: readonly string[];
   },
 ) => Promise<boolean>;
+
+function applyPluginUiEntryContextHeaders(
+  req: IncomingMessage,
+  context?: { sessionKey?: string; contextTokens?: number },
+): void {
+  delete req.headers[PLUGIN_UI_ENTRY_SESSION_KEY_HEADER];
+  delete req.headers[PLUGIN_UI_ENTRY_CONTEXT_TOKENS_HEADER];
+  const sessionKey = context?.sessionKey?.trim();
+  if (sessionKey) {
+    req.headers[PLUGIN_UI_ENTRY_SESSION_KEY_HEADER] = sessionKey;
+  }
+  if (typeof context?.contextTokens === "number" && Number.isFinite(context.contextTokens)) {
+    req.headers[PLUGIN_UI_ENTRY_CONTEXT_TOKENS_HEADER] = String(Math.floor(context.contextTokens));
+  }
+}
+
+function applyPluginUiEntryScopeHeader(req: IncomingMessage, scopes: readonly string[]): void {
+  req.headers["x-openclaw-scopes"] = scopes.join(",");
+}
 
 type PluginHttpUpgradeHandler = (
   req: IncomingMessage,
@@ -417,6 +442,7 @@ function buildPluginRequestStages(params: {
     {
       name: "plugin-auth",
       run: async () => {
+        applyPluginUiEntryContextHeaders(params.req);
         const pathContext =
           params.pluginPathContext ?? resolvePluginRoutePathContext(params.requestPath);
         if (
@@ -427,6 +453,39 @@ function buildPluginRequestStages(params: {
           return false;
         }
         if ((await params.getGatewayAuthBypassPaths()).has(params.requestPath)) {
+          return false;
+        }
+        const launchAuth = consumePluginUiEntryPointLaunchToken({
+          req: params.req,
+          path: params.requestPath,
+        });
+        if (launchAuth.ok) {
+          pluginGatewayAuthSatisfied = true;
+          pluginGatewayRequestAuth = {
+            authMethod: "device-token",
+            trustDeclaredOperatorScopes: true,
+          };
+          pluginRequestOperatorScopes = launchAuth.scopes;
+          applyPluginUiEntryScopeHeader(params.req, launchAuth.scopes);
+          applyPluginUiEntryContextHeaders(params.req, launchAuth);
+          if (launchAuth.setCookieHeader) {
+            params.res.setHeader("Set-Cookie", launchAuth.setCookieHeader);
+          }
+          return false;
+        }
+        const sessionAuth = resolvePluginUiEntryPointSessionCookie({
+          req: params.req,
+          path: params.requestPath,
+        });
+        if (sessionAuth.ok) {
+          pluginGatewayAuthSatisfied = true;
+          pluginGatewayRequestAuth = {
+            authMethod: "device-token",
+            trustDeclaredOperatorScopes: true,
+          };
+          pluginRequestOperatorScopes = sessionAuth.scopes;
+          applyPluginUiEntryScopeHeader(params.req, sessionAuth.scopes);
+          applyPluginUiEntryContextHeaders(params.req, sessionAuth);
           return false;
         }
         const { authorizeGatewayHttpRequestOrReply } = await getHttpAuthUtilsModule();

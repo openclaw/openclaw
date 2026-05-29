@@ -13,6 +13,7 @@ import {
   renderChatControls,
   renderChatMobileToggle,
   renderChatSessionSelect,
+  renderPluginUiEntryPoint,
   renderTab,
   resolveAssistantAttachmentAuthToken,
   resolveDashboardHeaderContext,
@@ -396,6 +397,23 @@ function resolveDreamingNextCycle(
     }
   }
   return formatDreamNextCycle(nextRunAtMs);
+}
+
+function renderPluginUiEntryPointFrame(
+  entryPoint: NonNullable<AppViewState["activePluginUiEntryPoint"]>,
+  src: string,
+) {
+  return html`
+    <section class="plugin-ui-entry-frame-shell">
+      <iframe
+        class="plugin-ui-entry-frame"
+        src=${src}
+        title=${entryPoint.label}
+        sandbox="allow-scripts allow-forms allow-popups"
+        referrerpolicy="no-referrer"
+      ></iframe>
+    </section>
+  `;
 }
 
 let clawhubSearchTimer: ReturnType<typeof setTimeout> | null = null;
@@ -913,7 +931,13 @@ export function renderApp(state: AppViewState) {
   const sessionsCount = state.sessionsResult?.count ?? null;
   const cronNext = state.cronStatus?.nextWakeAtMs ?? null;
   const chatDisabledReason = state.connected ? null : t("chat.disconnected");
-  const isChat = state.tab === "chat";
+  const activePluginUiEntryPoint = state.activePluginUiEntryPoint ?? null;
+  const activePluginUiEntryPointSrc = state.activePluginUiEntryPointSrc ?? null;
+  const isPluginUiEntryPointActive = Boolean(
+    activePluginUiEntryPoint && activePluginUiEntryPointSrc,
+  );
+  const displayTab = isPluginUiEntryPointActive ? null : state.tab;
+  const isChat = displayTab === "chat";
   const chatFocus = isChat && (state.settings.chatFocusMode || state.onboarding);
   const chatHeaderHidden = isChat && (chatFocus || state.chatHeaderControlsHidden);
   const navDrawerOpen = state.navDrawerOpen && !chatFocus && !state.onboarding;
@@ -1706,6 +1730,9 @@ export function renderApp(state: AppViewState) {
               .tab=${state.tab}
               .basePath=${state.basePath}
               .agentLabel=${dashboardHeaderContext.agentLabel}
+              .currentLabel=${activePluginUiEntryPoint?.pluginName ??
+              activePluginUiEntryPoint?.label ??
+              ""}
               @navigate=${(event: CustomEvent<Tab>) => {
                 state.setTab(event.detail);
               }}
@@ -1803,6 +1830,29 @@ export function renderApp(state: AppViewState) {
                     </section>
                   `;
                 })}
+                ${(() => {
+                  const pluginUiEntryPoints = state.pluginUiEntryPoints ?? [];
+                  return pluginUiEntryPoints.length > 0
+                    ? html`
+                        <section class="nav-section">
+                          ${!navCollapsed
+                            ? html`
+                                <div class="nav-section__label nav-section__label--static">
+                                  <span class="nav-section__label-text">${t("nav.plugins")}</span>
+                                </div>
+                              `
+                            : nothing}
+                          <div class="nav-section__items">
+                            ${pluginUiEntryPoints.map((entryPoint) =>
+                              renderPluginUiEntryPoint(state, entryPoint, {
+                                collapsed: navCollapsed,
+                              }),
+                            )}
+                          </div>
+                        </section>
+                      `
+                    : nothing;
+                })()}
               </nav>
             </div>
             <div class="sidebar-shell__footer">
@@ -1881,7 +1931,7 @@ export function renderApp(state: AppViewState) {
               </button>
             </div>`
           : nothing}
-        ${state.tab === "config"
+        ${displayTab === "config"
           ? nothing
           : html`<section
               class=${chatHeaderHidden
@@ -1893,11 +1943,19 @@ export function renderApp(state: AppViewState) {
               <div>
                 ${isChat
                   ? renderChatSessionSelect(state)
-                  : html`<div class="page-title">${titleForTab(state.tab)}</div>`}
-                ${isChat ? nothing : html`<div class="page-sub">${subtitleForTab(state.tab)}</div>`}
+                  : html`<div class="page-title">
+                      ${activePluginUiEntryPoint?.label ?? titleForTab(state.tab)}
+                    </div>`}
+                ${isChat
+                  ? nothing
+                  : html`<div class="page-sub">
+                      ${activePluginUiEntryPoint?.description ??
+                      activePluginUiEntryPoint?.pluginName ??
+                      subtitleForTab(state.tab)}
+                    </div>`}
               </div>
               <div class="page-meta">
-                ${state.tab === "dreams"
+                ${displayTab === "dreams"
                   ? html`
                       <div class="dreaming-header-controls">
                         <button
@@ -1930,7 +1988,10 @@ export function renderApp(state: AppViewState) {
                 ${isChat ? renderChatControls(state) : nothing}
               </div>
             </section>`}
-        ${state.tab === "overview"
+        ${isPluginUiEntryPointActive && activePluginUiEntryPoint && activePluginUiEntryPointSrc
+          ? renderPluginUiEntryPointFrame(activePluginUiEntryPoint, activePluginUiEntryPointSrc)
+          : nothing}
+        ${displayTab === "overview"
           ? renderOverview({
               connected: state.connected,
               hello: state.hello,
@@ -1972,7 +2033,7 @@ export function renderApp(state: AppViewState) {
               onRefreshLogs: () => state.loadOverview({ refresh: true }),
             })
           : nothing}
-        ${state.tab === "activity"
+        ${displayTab === "activity"
           ? renderLazyView(lazyActivity, (m) =>
               m.renderActivity({
                 entries: state.activityEntries,
@@ -2021,7 +2082,7 @@ export function renderApp(state: AppViewState) {
               }),
             )
           : nothing}
-        ${state.tab === "instances"
+        ${displayTab === "instances"
           ? renderLazyView(lazyInstances, (m) =>
               m.renderInstances({
                 loading: state.presenceLoading,
@@ -2032,7 +2093,7 @@ export function renderApp(state: AppViewState) {
               }),
             )
           : nothing}
-        ${state.tab === "sessions"
+        ${displayTab === "sessions"
           ? renderLazyView(lazySessions, (m) =>
               m.renderSessions({
                 loading: state.sessionsLoading,
@@ -2171,8 +2232,8 @@ export function renderApp(state: AppViewState) {
             )
           : nothing}
         ${renderUsageTab(state)}
-        ${state.tab === "cron" ? renderCronQuickCreateForTab(state, requestHostUpdate) : nothing}
-        ${state.tab === "cron"
+        ${displayTab === "cron" ? renderCronQuickCreateForTab(state, requestHostUpdate) : nothing}
+        ${displayTab === "cron"
           ? renderLazyView(lazyCron, (m) =>
               m.renderCron({
                 basePath: state.basePath,
@@ -2302,7 +2363,7 @@ export function renderApp(state: AppViewState) {
               }),
             )
           : nothing}
-        ${state.tab === "agents"
+        ${displayTab === "agents"
           ? renderLazyView(lazyAgents, (m) =>
               m.renderAgents({
                 basePath: state.basePath ?? "",
@@ -2614,7 +2675,7 @@ export function renderApp(state: AppViewState) {
               }),
             )
           : nothing}
-        ${state.tab === "skills"
+        ${displayTab === "skills"
           ? renderLazyView(lazySkills, (m) =>
               m.renderSkills({
                 connected: state.connected,
@@ -2676,7 +2737,7 @@ export function renderApp(state: AppViewState) {
               }),
             )
           : nothing}
-        ${state.tab === "nodes"
+        ${displayTab === "nodes"
           ? renderLazyView(lazyNodes, (m) =>
               m.renderNodes({
                 loading: state.nodesLoading,
@@ -2754,7 +2815,7 @@ export function renderApp(state: AppViewState) {
               }),
             )
           : nothing}
-        ${state.tab === "chat"
+        ${displayTab === "chat"
           ? renderMeasured(
               state,
               "chat",
@@ -2909,10 +2970,10 @@ export function renderApp(state: AppViewState) {
                 }),
             )
           : nothing}
-        ${isSettingsTab(state.tab) && state.tab !== "debug" && state.tab !== "logs"
+        ${displayTab && isSettingsTab(displayTab) && displayTab !== "debug" && displayTab !== "logs"
           ? renderSettingsWorkspace(state, renderConfigTabForActiveTab())
-          : renderConfigTabForActiveTab()}
-        ${state.tab === "debug"
+          : nothing}
+        ${displayTab === "debug"
           ? renderSettingsWorkspace(
               state,
               renderLazyView(lazyDebug, (m) =>
@@ -2936,7 +2997,7 @@ export function renderApp(state: AppViewState) {
               ),
             )
           : nothing}
-        ${state.tab === "logs"
+        ${displayTab === "logs"
           ? renderSettingsWorkspace(
               state,
               renderLazyView(lazyLogs, (m) =>
@@ -2961,7 +3022,7 @@ export function renderApp(state: AppViewState) {
               ),
             )
           : nothing}
-        ${state.tab === "dreams"
+        ${displayTab === "dreams"
           ? renderDreaming({
               active: dreamingOn,
               shortTermCount: state.dreamingStatus?.shortTermCount ?? 0,

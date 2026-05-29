@@ -388,6 +388,7 @@ export const ko: TranslationMap = {
     control: "Control",
     agent: "에이전트",
     settings: "설정",
+    plugins: "플러그인",
     expand: "사이드바 펼치기",
     collapse: "사이드바 접기",
     resize: "사이드바 크기 조절",

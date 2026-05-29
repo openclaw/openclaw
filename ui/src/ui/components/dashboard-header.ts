@@ -10,6 +10,7 @@ export class DashboardHeader extends LitElement {
   @property() tab: Tab = "overview";
   @property() basePath = "";
   @property() agentLabel = "";
+  @property() currentLabel = "";
 
   private readonly handleOverviewClick = (event: MouseEvent) => {
     if (
@@ -29,7 +30,7 @@ export class DashboardHeader extends LitElement {
   };
 
   override render() {
-    const label = titleForTab(this.tab);
+    const label = this.currentLabel.trim() || titleForTab(this.tab);
     const agentLabel = this.agentLabel.trim();
 
     return html`
