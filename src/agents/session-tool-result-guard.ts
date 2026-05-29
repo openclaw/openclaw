@@ -618,6 +618,19 @@ export function installSessionToolResultGuard(
       }),
     };
   };
+  const appendMessageAndEmitTranscriptUpdate = (message: AgentMessage): string => {
+    const { entryId, messageSeq, sessionFile } = appendMessageAndCacheTranscriptSeq(message);
+    if (sessionFile) {
+      emitSessionTranscriptUpdate({
+        sessionFile,
+        sessionKey: opts?.sessionKey,
+        message,
+        messageId: entryId,
+        ...(messageSeq !== undefined ? { messageSeq } : {}),
+      });
+    }
+    return entryId;
+  };
 
   /**
    * Run the before_message_write hook. Returns the (possibly modified) message,
@@ -656,7 +669,7 @@ export function installSessionToolResultGuard(
           }),
         );
         if (flushed) {
-          appendMessageAndCacheTranscriptSeq(
+          appendMessageAndEmitTranscriptUpdate(
             capToolResultForPersistence(flushed, maxToolResultChars, redactionConfig),
           );
         }
@@ -710,9 +723,9 @@ export function installSessionToolResultGuard(
       if (!persisted) {
         return undefined;
       }
-      return appendMessageAndCacheTranscriptSeq(
+      return appendMessageAndEmitTranscriptUpdate(
         capToolResultForPersistence(persisted, maxToolResultChars, redactionConfig),
-      ).entryId;
+      );
     }
 
     // Skip tool call extraction for aborted/errored assistant messages.
@@ -771,20 +784,7 @@ export function installSessionToolResultGuard(
       suppressNextUserMessagePersistence = false;
       return undefined;
     }
-    const {
-      entryId: result,
-      messageSeq,
-      sessionFile,
-    } = appendMessageAndCacheTranscriptSeq(finalMessage);
-    if (sessionFile) {
-      emitSessionTranscriptUpdate({
-        sessionFile,
-        sessionKey: opts?.sessionKey,
-        message: finalMessage,
-        messageId: typeof result === "string" ? result : undefined,
-        ...(messageSeq !== undefined ? { messageSeq } : {}),
-      });
-    }
+    const result = appendMessageAndEmitTranscriptUpdate(finalMessage);
 
     if (toolCalls.length > 0) {
       pendingState.trackToolCalls(toolCalls);
