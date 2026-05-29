@@ -19,6 +19,7 @@ class GatewayConfigResolverTest {
         port = 443,
         tls = true,
         displayUrl = "https://gateway.example",
+        transportUrl = "wss://gateway.example",
       ),
       parsed,
     )
@@ -48,6 +49,7 @@ class GatewayConfigResolverTest {
         port = 443,
         tls = true,
         displayUrl = "https://gateway.example",
+        transportUrl = "wss://gateway.example",
       ),
       parsed,
     )
@@ -63,6 +65,7 @@ class GatewayConfigResolverTest {
         port = 18789,
         tls = false,
         displayUrl = "http://127.0.0.1:18789",
+        transportUrl = "ws://127.0.0.1:18789",
       ),
       parsed,
     )
@@ -78,6 +81,7 @@ class GatewayConfigResolverTest {
         port = 18789,
         tls = false,
         displayUrl = "http://localhost:18789",
+        transportUrl = "ws://localhost:18789",
       ),
       parsed,
     )
@@ -93,15 +97,21 @@ class GatewayConfigResolverTest {
         port = 18789,
         tls = false,
         displayUrl = "http://10.0.2.2:18789",
+        transportUrl = "ws://10.0.2.2:18789",
       ),
       parsed,
     )
   }
 
   @Test
-  fun parseGatewayEndpointRejectsPrivateLanCleartextWsUrls() {
+  fun parseGatewayEndpointAllowsPrivateLanCleartextWsUrls() {
     val parsed = parseGatewayEndpoint("ws://192.168.1.20:18789")
-    assertNull(parsed)
+
+    assertEquals("192.168.1.20", parsed?.host)
+    assertEquals(18789, parsed?.port)
+    assertEquals(false, parsed?.tls)
+    assertEquals("http://192.168.1.20:18789", parsed?.displayUrl)
+    assertEquals("ws://192.168.1.20:18789", parsed?.transportUrl)
   }
 
   @Test
@@ -119,6 +129,7 @@ class GatewayConfigResolverTest {
     assertEquals(18789, parsed?.port)
     assertEquals(false, parsed?.tls)
     assertEquals("http://[::1]:18789", parsed?.displayUrl)
+    assertEquals("ws://[::1]:18789", parsed?.transportUrl)
   }
 
   @Test
@@ -129,6 +140,7 @@ class GatewayConfigResolverTest {
     assertEquals(18789, parsed?.port)
     assertEquals(false, parsed?.tls)
     assertEquals("http://[::ffff:127.0.0.1]:18789", parsed?.displayUrl)
+    assertEquals("ws://[::ffff:127.0.0.1]:18789", parsed?.transportUrl)
   }
 
   @Test
@@ -146,9 +158,14 @@ class GatewayConfigResolverTest {
   }
 
   @Test
-  fun parseGatewayEndpointRejectsLinkLocalIpv6ZoneCleartextWsUrls() {
+  fun parseGatewayEndpointAllowsLinkLocalIpv6ZoneCleartextWsUrls() {
     val parsed = parseGatewayEndpoint("ws://[fe80::1%25eth0]")
-    assertNull(parsed)
+
+    assertEquals("fe80::1%25eth0", parsed?.host)
+    assertEquals(18789, parsed?.port)
+    assertEquals(false, parsed?.tls)
+    assertEquals("http://[fe80::1%25eth0]:18789", parsed?.displayUrl)
+    assertEquals("ws://[fe80::1%25eth0]:18789", parsed?.transportUrl)
   }
 
   @Test
@@ -159,6 +176,7 @@ class GatewayConfigResolverTest {
     assertEquals(443, parsed?.port)
     assertEquals(true, parsed?.tls)
     assertEquals("https://[fe80::1%25wlan0]", parsed?.displayUrl)
+    assertEquals("wss://[fe80::1%25wlan0]", parsed?.transportUrl)
   }
 
   @Test
@@ -185,6 +203,7 @@ class GatewayConfigResolverTest {
         port = 80,
         tls = false,
         displayUrl = "http://localhost:80",
+        transportUrl = "ws://localhost:80",
       ),
       parsed,
     )
@@ -277,10 +296,11 @@ class GatewayConfigResolverTest {
   }
 
   @Test
-  fun parseGatewayEndpointResultFlagsInsecureLanCleartextGateway() {
+  fun parseGatewayEndpointResultAllowsPrivateLanCleartextGateway() {
     val parsed = parseGatewayEndpointResult("ws://192.168.1.20:18789")
-    assertNull(parsed.config)
-    assertEquals(GatewayEndpointValidationError.INSECURE_REMOTE_URL, parsed.error)
+
+    assertEquals("192.168.1.20", parsed.config?.host)
+    assertNull(parsed.error)
   }
 
   @Test
@@ -421,7 +441,7 @@ class GatewayConfigResolverTest {
   }
 
   @Test
-  fun resolveGatewayConnectConfigRejectsPrivateLanManualCleartextEndpoint() {
+  fun resolveGatewayConnectConfigAcceptsPrivateLanManualCleartextEndpoint() {
     val resolved =
       resolveGatewayConnectConfig(
         useSetupCode = false,
@@ -437,14 +457,16 @@ class GatewayConfigResolverTest {
         fallbackPassword = "",
       )
 
-    assertNull(resolved)
+    assertEquals("192.168.31.100", resolved?.host)
+    assertEquals(18789, resolved?.port)
+    assertEquals(false, resolved?.tls)
   }
 
   @Test
   fun composeGatewayManualUrlDefaultsPortTo443WhenTlsAndPortBlank() {
     val url = composeGatewayManualUrl("mydevice.tail1234.ts.net", "", tls = true)
 
-    assertEquals("https://mydevice.tail1234.ts.net:443", url)
+    assertEquals("wss://mydevice.tail1234.ts.net:443", url)
   }
 
   @Test

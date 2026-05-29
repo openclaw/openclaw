@@ -269,7 +269,7 @@ class GatewayBootstrapAuthTest {
     }
 
   @Test
-  fun connect_showsSecureEndpointGuidanceWhenTlsProbeFails() {
+  fun connect_continuesWhenTlsProbeFailsWithoutPinnedFingerprint() {
     val app = RuntimeEnvironment.getApplication()
     val runtime =
       NodeRuntime(
@@ -285,7 +285,7 @@ class GatewayBootstrapAuthTest {
     )
 
     assertEquals(
-      "Failed: this host requires wss:// or Tailscale Serve. No TLS endpoint detected.",
+      "Connecting…",
       waitForStatusText(runtime),
     )
     assertNull(runtime.pendingGatewayTrust.value)

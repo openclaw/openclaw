@@ -1179,7 +1179,7 @@ class NodeRuntime(
         val fp =
           tlsProbe.fingerprintSha256 ?: run {
             if (expectedFingerprint == null) {
-              _statusText.value = gatewayTlsProbeFailureMessage(tlsProbe.failure)
+              connectAfterTlsCheck(endpoint = endpoint, auth = auth, connectAttemptId = connectAttemptId)
             } else {
               connectAfterTlsCheck(endpoint = endpoint, auth = auth, connectAttemptId = connectAttemptId)
             }

@@ -1,6 +1,6 @@
 package ai.openclaw.app.ui
 
-import ai.openclaw.app.gateway.isLoopbackGatewayHost
+import ai.openclaw.app.gateway.isPrivateLanGatewayHost
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -15,6 +15,7 @@ internal data class GatewayEndpointConfig(
   val port: Int,
   val tls: Boolean,
   val displayUrl: String,
+  val transportUrl: String = displayUrl,
 )
 
 internal data class GatewaySetupCode(
@@ -56,9 +57,9 @@ internal data class GatewayScannedSetupCodeResult(
 
 private val gatewaySetupJson = Json { ignoreUnknownKeys = true }
 private const val remoteGatewaySecurityRule =
-  "Tailscale and public mobile nodes require wss:// or Tailscale Serve. ws:// is allowed only for localhost and the Android emulator."
+  "Tailscale and public mobile nodes require wss:// or Tailscale Serve. ws:// is allowed for private LAN, localhost, and the Android emulator."
 private const val remoteGatewaySecurityFix =
-  "Use localhost/the Android emulator, or enable Tailscale Serve / expose a wss:// gateway URL."
+  "Use a private LAN host/address, or enable Tailscale Serve / expose a wss:// gateway URL."
 
 internal fun resolveGatewayConnectConfig(
   useSetupCode: Boolean,
@@ -147,7 +148,7 @@ internal fun parseGatewayEndpointResult(rawInput: String): GatewayEndpointParseR
     return GatewayEndpointParseResult(error = GatewayEndpointValidationError.INVALID_URL)
   }
   val tls = scheme == "wss" || scheme == "https"
-  if (!tls && !isLoopbackGatewayHost(host)) {
+  if (!tls && !isPrivateLanGatewayHost(host)) {
     return GatewayEndpointParseResult(error = GatewayEndpointValidationError.INSECURE_REMOTE_URL)
   }
   val defaultPort = if (tls) 443 else 18789
@@ -160,9 +161,21 @@ internal fun parseGatewayEndpointResult(rawInput: String): GatewayEndpointParseR
     } else {
       "${if (tls) "https" else "http"}://$displayHost:$port"
     }
+  val transportUrl =
+    if (tls && port == 443) {
+      "wss://$displayHost"
+    } else {
+      "${if (tls) "wss" else "ws"}://$displayHost:$port"
+    }
 
   return GatewayEndpointParseResult(
-    config = GatewayEndpointConfig(host = host, port = port, tls = tls, displayUrl = displayUrl),
+    config = GatewayEndpointConfig(
+      host = host,
+      port = port,
+      tls = tls,
+      displayUrl = displayUrl,
+      transportUrl = transportUrl,
+    ),
   )
 }
 
@@ -246,7 +259,7 @@ internal fun composeGatewayManualUrl(
       portTrimmed.toIntOrNull() ?: return null
     }
   if (port !in 1..65535) return null
-  val scheme = if (tls) "https" else "http"
+  val scheme = if (tls) "wss" else "ws"
   return "$scheme://$host:$port"
 }
 

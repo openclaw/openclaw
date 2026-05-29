@@ -134,7 +134,7 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
   val setupResolvedEndpoint = remember(setupCode) { decodeGatewaySetupCode(setupCode)?.url?.let { parseGatewayEndpoint(it)?.displayUrl } }
   val manualResolvedEndpoint =
     remember(manualHostInput, manualPortInput, manualTlsInput) {
-      composeGatewayManualUrl(manualHostInput, manualPortInput, manualTlsInput)?.let { parseGatewayEndpoint(it)?.displayUrl }
+      composeGatewayManualUrl(manualHostInput, manualPortInput, manualTlsInput)?.let { parseGatewayEndpoint(it)?.transportUrl }
     }
 
   val activeEndpoint =
