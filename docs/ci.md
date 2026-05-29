@@ -45,6 +45,8 @@ GitHub may mark superseded jobs as `cancelled` when a newer push lands on the sa
 
 Use `pnpm ci:timings`, `pnpm ci:timings:recent`, or `node scripts/ci-run-timings.mjs <run-id>` to summarize wall time, queue time, slowest jobs, failures, and the `pnpm-store-warmup` fanout barrier from GitHub Actions. CI also uploads the same run summary as a `ci-timings-summary` artifact. For build timing, check the `build-artifacts` job's `Build dist` step: `pnpm build:ci-artifacts` prints `[build-all] phase timings:` and includes `ui:build`; the job also uploads the `startup-memory` artifact.
 
+For pull request runs, the terminal timing-summary job runs the helper from the trusted base revision before passing `GH_TOKEN` to `gh run view`. That keeps the tokened query out of branch-controlled code while still summarizing the pull request's current CI run.
+
 ## Real behavior proof
 
 External contributor PRs run a `Real behavior proof` gate from

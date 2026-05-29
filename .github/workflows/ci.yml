@@ -1988,10 +1988,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Checkout
+      - name: Checkout timing summary helper
         uses: actions/checkout@v6
         with:
-          ref: ${{ needs.preflight.outputs.checkout_revision || github.sha }}
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || needs.preflight.outputs.checkout_revision || github.sha }}
           fetch-depth: 1
           fetch-tags: false
           persist-credentials: false

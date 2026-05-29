@@ -74,6 +74,15 @@ describe("ci workflow guards", () => {
     expect(timingJob.if).toContain("always()");
     expect(timingJob.if).toContain("!cancelled()");
 
+    const checkoutStep = timingJob.steps.find(
+      (step) => step.name === "Checkout timing summary helper",
+    );
+    expect(checkoutStep.uses).toBe("actions/checkout@v6");
+    expect(checkoutStep.with.ref).toBe(
+      "${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || needs.preflight.outputs.checkout_revision || github.sha }}",
+    );
+    expect(checkoutStep.with["persist-credentials"]).toBe(false);
+
     const writeStep = timingJob.steps.find((step) => step.name === "Write CI timing summary");
     expect(writeStep.env).toMatchObject({ GH_TOKEN: "${{ github.token }}" });
     expect(writeStep.run).toContain(
