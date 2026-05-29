@@ -1341,8 +1341,18 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registrations: Array<PluginOwnedProviderRegistration<T>>;
     ownedIds: string[];
   }): boolean => {
-    const id = params.provider.id.trim();
     const { record, kindLabel } = params;
+    const idValue = readHostHookField(params.provider, "id");
+    if (!idValue.ok) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `${kindLabel} registration has unreadable field: id`,
+      });
+      return false;
+    }
+    const id = normalizeOptionalString(idValue.value) ?? "";
     const missingLabel = `${kindLabel} registration missing id`;
     const duplicateLabel = `${kindLabel} already registered: ${id}`;
     if (!id) {

@@ -28,6 +28,13 @@ function createCatalogModel(id: string, name: string) {
   };
 }
 
+function diagnosticSummaries(diagnostics: readonly unknown[]) {
+  return diagnostics.map((entry) => {
+    const diagnostic = entry as { pluginId?: string; message?: string };
+    return { pluginId: diagnostic.pluginId, message: diagnostic.message };
+  });
+}
+
 describe("plugin registry provider-like registrations", () => {
   it("captures unified model catalog provider registrations", () => {
     const pluginRegistry = createTestRegistry();
@@ -364,5 +371,100 @@ describe("plugin registry provider-like registrations", () => {
 
     expect(record.speechProviderIds).toEqual(["kitchen-sink-speech-provider"]);
     expect(pluginRegistry.registry.speechProviders).toHaveLength(1);
+  });
+
+  it("preserves provider instances while guarding provider-like ids", async () => {
+    class StatefulSpeechProvider {
+      #calls = 0;
+      id = "stateful-speech-provider";
+      label = "Stateful Speech";
+
+      isConfigured() {
+        return true;
+      }
+
+      async synthesize() {
+        this.#calls += 1;
+        return {
+          audioBuffer: Buffer.alloc(0),
+          fileExtension: "mp3",
+          outputFormat: "audio/mpeg",
+          voiceCompatible: true,
+        };
+      }
+
+      get calls() {
+        return this.#calls;
+      }
+    }
+    const pluginRegistry = createTestRegistry();
+    const record = createPluginRecord({
+      id: "stateful-provider-owner",
+      name: "Stateful Provider Owner",
+      source: "/tmp/stateful-provider-owner/index.js",
+      origin: "global",
+      enabled: true,
+      configSchema: false,
+    });
+    const provider = new StatefulSpeechProvider();
+
+    pluginRegistry.registerSpeechProvider(record, provider);
+
+    const storedProvider = pluginRegistry.registry.speechProviders[0]?.provider;
+    expect(storedProvider).toBe(provider);
+    await expect(storedProvider?.synthesize({} as never)).resolves.toEqual({
+      audioBuffer: Buffer.alloc(0),
+      fileExtension: "mp3",
+      outputFormat: "audio/mpeg",
+      voiceCompatible: true,
+    });
+    expect(provider.calls).toBe(1);
+  });
+
+  it("rejects unreadable provider-like ids without aborting sibling providers", () => {
+    const pluginRegistry = createTestRegistry();
+    const record = createPluginRecord({
+      id: "fuzzplugin-provider",
+      name: "Fuzz Plugin Provider",
+      source: "/tmp/fuzzplugin-provider/index.js",
+      origin: "global",
+      enabled: true,
+      configSchema: false,
+    });
+    const provider = {
+      label: "Broken Speech Provider",
+      isConfigured: () => true,
+      get id() {
+        throw new Error("fuzzplugin provider id getter failed");
+      },
+      synthesize: async () => ({
+        audioBuffer: Buffer.alloc(0),
+        fileExtension: "mp3",
+        outputFormat: "audio/mpeg",
+        voiceCompatible: true,
+      }),
+    } as never;
+
+    pluginRegistry.registerSpeechProvider(record, provider);
+    pluginRegistry.registerSpeechProvider(record, {
+      id: "mockplugin-speech-provider",
+      label: "Mock Plugin Speech",
+      isConfigured: () => true,
+      synthesize: async () => ({
+        audioBuffer: Buffer.alloc(0),
+        fileExtension: "mp3",
+        outputFormat: "audio/mpeg",
+        voiceCompatible: true,
+      }),
+    });
+
+    expect(record.speechProviderIds).toEqual(["mockplugin-speech-provider"]);
+    expect(pluginRegistry.registry.speechProviders.map((entry) => entry.provider.id)).toEqual([
+      "mockplugin-speech-provider",
+    ]);
+    expect(diagnosticSummaries(pluginRegistry.registry.diagnostics)).toContainEqual({
+      pluginId: "fuzzplugin-provider",
+      message: "speech provider registration has unreadable field: id",
+    });
   });
 });
