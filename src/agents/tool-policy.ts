@@ -190,8 +190,9 @@ export function analyzeAllowlistByToolType(
       hasOnlyPluginEntries = false;
       continue;
     }
+    const KNOWN_SYNTHETIC_PLUGIN_IDS = new Set(["bundle-mcp"]);
     const isPluginEntry =
-      entry === "group:plugins" || pluginIds.has(entry) || pluginTools.has(entry);
+      entry === "group:plugins" || pluginIds.has(entry) || pluginTools.has(entry) || KNOWN_SYNTHETIC_PLUGIN_IDS.has(entry);
     const expanded = expandToolGroups([entry]);
     const isCoreEntry = expanded.some((tool) => coreTools.has(tool));
     if (!isPluginEntry) {
