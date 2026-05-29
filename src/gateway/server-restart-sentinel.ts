@@ -31,6 +31,7 @@ import {
   loadPendingSessionDelivery,
   markSessionDeliveryPlatformOutcomeUnknown,
   recoverPendingSessionDeliveries,
+  SessionDeliverySendUncertainError,
   type QueuedSessionDelivery,
   type QueuedSessionDeliveryPayload,
   type SessionDeliveryRecoveryLogger,
@@ -371,13 +372,21 @@ async function deliverQueuedSessionDelivery(params: {
         if (send.status === "partial_failed") {
           // Some payloads were already delivered to the platform before this
           // failure (send.sentBeforeError === true). Persist the
-          // unknown_after_send marker on the queue entry before throwing so the
-          // recovery layer refuses a blind replay of an already-sent turn
-          // instead of clearing the marker and re-running the turn / re-sending
-          // the reply. Mirrors the outbound queue, which keeps the send-attempt
-          // marker once the platform send has started.
-          await markSessionDeliveryPlatformOutcomeUnknown(params.entry.id);
-          throw send.error;
+          // unknown_after_send marker (best-effort, so a later crash before the
+          // next recovery still refuses replay) and throw a typed
+          // sent-before-error signal. Throwing the signal - rather than relying
+          // solely on the marker write - means recovery refuses a blind replay
+          // even if this marker write fails. Mirrors the outbound queue, which
+          // keeps the send-attempt marker once the platform send has started.
+          try {
+            await markSessionDeliveryPlatformOutcomeUnknown(params.entry.id);
+          } catch (markErr) {
+            log.warn(
+              `restart continuation: failed to persist unknown_after_send marker for ${params.entry.id}; recovery still refuses replay via the sent-before-error signal: ${String(markErr)}`,
+              { sessionKey: canonicalKey },
+            );
+          }
+          throw new SessionDeliverySendUncertainError(send.error);
         }
         if (send.status === "failed") {
           throw send.error;

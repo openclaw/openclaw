@@ -185,6 +185,9 @@ vi.mock("../infra/session-delivery-queue.js", () => ({
   drainPendingSessionDeliveries: mocks.drainPendingSessionDeliveries,
   recoverPendingSessionDeliveries: mocks.recoverPendingSessionDeliveries,
   markSessionDeliveryPlatformOutcomeUnknown: mocks.markSessionDeliveryPlatformOutcomeUnknown,
+  SessionDeliverySendUncertainError: class SessionDeliverySendUncertainError extends Error {
+    readonly code = "session-delivery-send-uncertain";
+  },
 }));
 
 vi.mock("../config/sessions.js", () => ({

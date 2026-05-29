@@ -11,6 +11,40 @@ import {
   type QueuedSessionDelivery,
 } from "./session-delivery-queue-storage.js";
 
+const SESSION_DELIVERY_SEND_UNCERTAIN_CODE = "session-delivery-send-uncertain";
+
+/**
+ * Thrown by the delivery seam when a platform send already partially happened
+ * (sendDurableMessageBatch returned `partial_failed`, i.e. `sentBeforeError`).
+ * It signals recovery to refuse a blind replay even if the durable
+ * `unknown_after_send` marker write failed: the signal travels with the thrown
+ * error rather than depending on a disk write that can itself fail.
+ */
+export class SessionDeliverySendUncertainError extends Error {
+  readonly code = SESSION_DELIVERY_SEND_UNCERTAIN_CODE;
+  constructor(cause?: unknown) {
+    super("session delivery platform send outcome uncertain (sent before error)", { cause });
+    this.name = "SessionDeliverySendUncertainError";
+  }
+}
+
+/** True if `err` is (or wraps) a {@link SessionDeliverySendUncertainError}. */
+export function isSessionDeliverySendUncertainError(err: unknown): boolean {
+  for (let cur: unknown = err, depth = 0; cur != null && depth < 5; depth += 1) {
+    if (cur instanceof SessionDeliverySendUncertainError) {
+      return true;
+    }
+    if (
+      typeof cur === "object" &&
+      (cur as { code?: unknown }).code === SESSION_DELIVERY_SEND_UNCERTAIN_CODE
+    ) {
+      return true;
+    }
+    cur = (cur as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
 type SessionDeliveryRecoverySummary = {
   recovered: number;
   failed: number;
@@ -159,15 +193,15 @@ async function drainQueuedEntry(opts: {
     const errMsg = formatErrorMessage(err);
     opts.onFailed?.(entry, errMsg);
     try {
-      // If deliver returned, the turn ran and the reply may already have been
-      // sent; a failure in the marker write or ack after that point must not
-      // requeue the entry. Likewise, if the delivery seam advanced the marker to
-      // unknown_after_send (sendDurableMessageBatch -> partial_failed, a
-      // sent-before-error throw), the send partially happened. In both cases we
-      // refuse a blind replay and fail-safe to failed/, exactly like an entry
-      // recovered with a marker (and like the outbound queue, which never clears
-      // the marker once the platform send has started).
-      if (delivered) {
+      // Refuse a blind replay whenever the platform send may already have
+      // happened: (a) deliver returned, so the turn ran and the reply may be out
+      // and a later marker-write/ack failure must not requeue it; (b) the
+      // delivery seam threw a sent-before-error signal (sendDurableMessageBatch
+      // -> partial_failed) - this travels with the error so it holds even if the
+      // unknown_after_send marker write itself failed; (c) the durable marker
+      // reads back as unknown_after_send. Fail-safe to failed/, like the outbound
+      // queue, which never clears its marker once the send has started.
+      if (delivered || isSessionDeliverySendUncertainError(err)) {
         return await moveSessionDeliveryToFailedWithEnoent(entry.id, opts.stateDir);
       }
       const current = await loadPendingSessionDelivery(entry.id, opts.stateDir);

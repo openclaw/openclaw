@@ -16,5 +16,6 @@ export {
   drainPendingSessionDeliveries,
   isSessionDeliveryEligibleForRetry,
   recoverPendingSessionDeliveries,
+  SessionDeliverySendUncertainError,
 } from "./session-delivery-queue-recovery.js";
 export type { SessionDeliveryRecoveryLogger } from "./session-delivery-queue-recovery.js";

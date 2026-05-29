@@ -8,6 +8,7 @@ import {
   loadPendingSessionDeliveries,
   markSessionDeliveryPlatformOutcomeUnknown,
   recoverPendingSessionDeliveries,
+  SessionDeliverySendUncertainError,
 } from "./session-delivery-queue.js";
 
 describe("session-delivery queue recovery", () => {
@@ -219,12 +220,14 @@ describe("session-delivery queue recovery", () => {
       // Model the production delivery seam on a partial_failed send: some
       // payloads already reached the platform (sentBeforeError), so
       // deliverQueuedSessionDelivery persists the unknown_after_send marker and
-      // then throws. Recovery must refuse a blind replay rather than clearing the
-      // marker and re-running the turn / re-sending the already-sent reply.
+      // throws a SessionDeliverySendUncertainError. Recovery must refuse a blind
+      // replay rather than clearing the marker and re-sending the already-sent reply.
       const deliver = vi.fn(async () => {
         deliverCount += 1;
         await markSessionDeliveryPlatformOutcomeUnknown(id, tempDir);
-        throw new Error("partial_failed: reply chunk sent before error");
+        throw new SessionDeliverySendUncertainError(
+          new Error("partial_failed: reply chunk sent before error"),
+        );
       });
       const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 
@@ -252,6 +255,61 @@ describe("session-delivery queue recovery", () => {
       // Before the fix: the catch cleared the marker and requeued, so PASS 2
       // blind-replays -> deliverCount === 2. After the fix: the marker is
       // preserved and recovery refuses the blind replay -> deliverCount === 1.
+      expect(deliverCount).toBe(1);
+    });
+  });
+
+  it("does not re-deliver a partially sent entry even if persisting the unknown marker fails", async () => {
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      const id = await enqueueSessionDelivery(
+        {
+          kind: "agentTurn",
+          sessionKey: "agent:main:main",
+          message: "continue",
+          messageId: "restart-sentinel:agent:main:main:agentTurn:654",
+          route: { channel: "telegram", to: "chat-1", chatType: "direct" },
+        },
+        tempDir,
+      );
+
+      let deliverCount = 0;
+      // Model a partial_failed send whose unknown_after_send marker write ALSO
+      // fails: the delivery seam still throws the sent-before-error signal, but
+      // the entry is left at send_attempt_started (the marker was not advanced).
+      // Recovery must refuse the blind replay from the thrown signal alone, not
+      // from the (missing) durable marker.
+      const deliver = vi.fn(async () => {
+        deliverCount += 1;
+        // No markSessionDeliveryPlatformOutcomeUnknown call here: the marker write failed.
+        throw new SessionDeliverySendUncertainError(
+          new Error("partial_failed with marker write failure"),
+        );
+      });
+      const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+      const drainOnce = () =>
+        drainPendingSessionDeliveries({
+          drainKey: "test-sent-before-error-marker-fail",
+          logLabel: "test sent-before-error marker fail",
+          deliver,
+          stateDir: tempDir,
+          log,
+          selectEntry: (entry) => ({ match: entry.id === id, bypassBackoff: true }),
+        });
+
+      // PASS 1: delivery partially sends but the marker write failed, so the
+      // entry is left at send_attempt_started.
+      await drainOnce();
+      // It must still be moved to failed/, not requeued.
+      expect(await loadPendingSessionDeliveries(tempDir)).toStrictEqual([]);
+
+      // PASS 2: restart recovery re-entry.
+      await drainOnce();
+
+      // Before the fix: the catch saw only send_attempt_started (the marker write
+      // failed) and requeued, so PASS 2 blind-replays -> deliverCount === 2.
+      // After the fix: the thrown sent-before-error signal makes it
+      // non-replayable -> deliverCount === 1.
       expect(deliverCount).toBe(1);
     });
   });
