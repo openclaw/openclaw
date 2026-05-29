@@ -1,3 +1,4 @@
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   clickChromeMcpElement,
@@ -41,7 +42,7 @@ import {
 import { resolveTargetIdAfterNavigate } from "./agent.snapshot-target.js";
 import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
 import type { BrowserRouteRegistrar } from "./types.js";
-import { asyncBrowserRoute, jsonError, toNumber, toStringOrEmpty } from "./utils.js";
+import { asyncBrowserRoute, jsonError, toStringOrEmpty } from "./utils.js";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -345,6 +346,14 @@ function getExistingSessionUnsupportedMessage(action: BrowserActRequest): string
       return null;
   }
   throw new Error("Unsupported browser act kind");
+}
+
+function readRoutePositiveInteger(value: unknown, fieldName: string): number | undefined {
+  const parsed = parseStrictPositiveInteger(value);
+  if (parsed === undefined && value != null) {
+    throw new Error(`${fieldName} must be a positive integer.`);
+  }
+  return parsed;
 }
 
 export function registerBrowserAgentActRoutes(
@@ -697,8 +706,14 @@ export function registerBrowserAgentActRoutes(
       const body = readBody(req);
       const targetId = resolveTargetIdFromBody(body);
       const url = toStringOrEmpty(body.url);
-      const timeoutMs = toNumber(body.timeoutMs);
-      const maxChars = toNumber(body.maxChars);
+      let timeoutMs: number | undefined;
+      let maxChars: number | undefined;
+      try {
+        timeoutMs = readRoutePositiveInteger(body.timeoutMs, "timeoutMs");
+        maxChars = readRoutePositiveInteger(body.maxChars, "maxChars");
+      } catch (err) {
+        return jsonError(res, 400, formatErrorMessage(err));
+      }
       if (!url) {
         return jsonError(res, 400, "url is required");
       }

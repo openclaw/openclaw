@@ -453,6 +453,25 @@ describe("browser control server", () => {
     slowTimeoutMs,
   );
 
+  it("rejects loose response body numeric options before dispatch", async () => {
+    const base = await startServerAndBase();
+    const beforeCalls = pwMocks.responseBodyViaPlaywright.mock.calls.length;
+
+    const timeoutRes = await postJson<{ error?: string }>(`${base}/response/body`, {
+      url: "**/api/data",
+      timeoutMs: "1e3",
+    });
+    expect(timeoutRes.error).toContain("timeoutMs must be a positive integer.");
+
+    const maxCharsRes = await postJson<{ error?: string }>(`${base}/response/body`, {
+      url: "**/api/data",
+      maxChars: "0x10",
+    });
+    expect(maxCharsRes.error).toContain("maxChars must be a positive integer.");
+
+    expect(pwMocks.responseBodyViaPlaywright).toHaveBeenCalledTimes(beforeCalls);
+  });
+
   it("agent contract: hooks + response + downloads + screenshot", async () => {
     const base = await startServerAndBase();
 
