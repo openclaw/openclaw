@@ -322,6 +322,7 @@ export type AppViewState = {
   usageStartDate: string;
   usageEndDate: string;
   usageScope: "instance" | "family";
+  usageAgentId: string | null;
   usageSelectedSessions: string[];
   usageSelectedDays: string[];
   usageSelectedHours: number[];

@@ -40,9 +40,15 @@ type BrowserActRequest = Parameters<typeof browserAct>[1];
 type BrowserActRequestWithTimeout = BrowserActRequest & { timeoutMs?: number };
 
 function normalizePositiveTimeoutMs(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : undefined;
+  return readPositiveIntegerParam({ value }, "value", {
+    message: "timeoutMs must be a positive integer.",
+  });
+}
+
+function normalizeNonNegativeDurationMs(value: unknown): number | undefined {
+  return readNonNegativeIntegerParam({ value }, "value", {
+    message: "timeMs must be a non-negative integer.",
+  });
 }
 
 function supportsBrowserActTimeout(request: BrowserActRequest): boolean {
@@ -114,7 +120,7 @@ function resolveActProxyTimeoutMs(request: BrowserActRequest): number | undefine
     candidateTimeouts.push(explicitTimeout + BROWSER_ACT_REQUEST_TIMEOUT_SLACK_MS);
   }
   if (request.kind === "wait") {
-    const waitDuration = normalizePositiveTimeoutMs(request.timeMs);
+    const waitDuration = normalizeNonNegativeDurationMs(request.timeMs);
     if (waitDuration !== undefined) {
       candidateTimeouts.push(waitDuration + BROWSER_ACT_REQUEST_TIMEOUT_SLACK_MS);
     }

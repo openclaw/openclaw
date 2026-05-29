@@ -358,6 +358,8 @@ export const SessionsUsageParamsSchema = Type.Object(
     key: Type.Optional(NonEmptyString),
     /** Agent scope for list-style usage queries. */
     agentId: Type.Optional(NonEmptyString),
+    /** Explicit all-agent scope for list-style usage queries. */
+    agentScope: Type.Optional(Type.Literal("all")),
     /** Start date for range filter (YYYY-MM-DD). */
     startDate: Type.Optional(Type.String({ pattern: "^\\d{4}-\\d{2}-\\d{2}$" })),
     /** End date for range filter (YYYY-MM-DD). */

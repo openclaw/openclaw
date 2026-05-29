@@ -4,6 +4,7 @@ import type { SessionsListParams, SessionsResolveParams } from "../../gateway/pr
 import type { ReadSessionMessagesAsyncOptions } from "../../gateway/session-utils.fs.js";
 import type { SessionsListResult } from "../../gateway/session-utils.types.js";
 import type { SessionsResolveResult } from "../../gateway/sessions-resolve.js";
+import { readPositiveIntegerParam } from "./common.js";
 
 type EmbeddedCallGateway = <T = Record<string, unknown>>(opts: CallGatewayOptions) => Promise<T>;
 
@@ -108,7 +109,7 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
   const rt = await getRuntime();
 
   const sessionKey = typeof params.sessionKey === "string" ? params.sessionKey : "";
-  const limit = typeof params.limit === "number" ? params.limit : undefined;
+  const limit = readPositiveIntegerParam(params, "limit");
 
   const { cfg, storePath, entry } = rt.loadSessionEntry(sessionKey);
   const sessionId = entry?.sessionId as string | undefined;

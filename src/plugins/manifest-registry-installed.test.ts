@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   readPersistedInstalledPluginIndex,
   writePersistedInstalledPluginIndex,
@@ -283,6 +283,39 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     expect(third.plugins[0]?.packageDependencies).toEqual({
       "runtime-dep": "1.0.0",
     });
+  });
+
+  it("reuses installed package json path validation across registry loads", () => {
+    const rootDir = makeTempDir();
+    writePlugin(rootDir, "installed", "installed-");
+    const index = createIndexWithPackageJson(rootDir);
+    const env = {
+      OPENCLAW_VERSION: "2026.4.25",
+      VITEST: "true",
+    };
+
+    loadPluginManifestRegistryForInstalledIndex({
+      index,
+      env,
+      includeDisabled: true,
+    });
+    const realpathSpy = vi.spyOn(fs, "realpathSync");
+    let packagePathCalls: unknown[][] = [];
+    try {
+      loadPluginManifestRegistryForInstalledIndex({
+        index,
+        env,
+        includeDisabled: true,
+      });
+      const packageJsonPath = path.join(rootDir, "package.json");
+      packagePathCalls = realpathSpy.mock.calls.filter(
+        ([filePath]) => filePath === packageJsonPath,
+      );
+    } finally {
+      realpathSpy.mockRestore();
+    }
+
+    expect(packagePathCalls).toStrictEqual([]);
   });
 
   it("loads manifest metadata only for plugins present in the installed index", () => {

@@ -28,7 +28,9 @@ import {
 } from "./status-dependencies.js";
 
 const installedManifestRegistryIndexFingerprintCache = new WeakMap<InstalledPluginIndex, string>();
+const installedPackageJsonPathCache = new Map<string, string | null>();
 const installedPackageMetadataCache = new Map<string, InstalledPackageMetadata>();
+const MAX_INSTALLED_PACKAGE_JSON_PATH_CACHE_ENTRIES = 256;
 const MAX_INSTALLED_PACKAGE_METADATA_CACHE_ENTRIES = 256;
 
 type InstalledPackageMetadata = {
@@ -38,6 +40,7 @@ type InstalledPackageMetadata = {
 };
 
 export function clearInstalledManifestRegistryProcessCaches(): void {
+  installedPackageJsonPathCache.clear();
   installedPackageMetadataCache.clear();
 }
 
@@ -88,18 +91,25 @@ function resolvePackageJsonPath(
   if (!record.packageJson?.path) {
     return undefined;
   }
+  const cacheKey = buildInstalledPackageJsonPathCacheKey(record);
+  if (cacheKey) {
+    const cached = installedPackageJsonPathCache.get(cacheKey);
+    if (cached !== undefined) {
+      return cached ?? undefined;
+    }
+  }
   const rootDir = resolveInstalledPluginRootDir(record);
   const realRootDir = safeRealpathSync(rootDir, realpathCache) ?? path.resolve(rootDir);
   const packageJsonPath = path.resolve(realRootDir, record.packageJson.path);
   const relative = path.relative(realRootDir, packageJsonPath);
   if (!isRelativePathInsideOrEqual(relative)) {
-    return undefined;
+    return rememberInstalledPackageJsonPath(cacheKey, undefined);
   }
   const packageJsonRealPath = safeRealpathSync(packageJsonPath, realpathCache);
   if (!packageJsonRealPath || !isPathInside(realRootDir, packageJsonRealPath)) {
-    return undefined;
+    return rememberInstalledPackageJsonPath(cacheKey, undefined);
   }
-  return packageJsonPath;
+  return rememberInstalledPackageJsonPath(cacheKey, packageJsonPath);
 }
 
 function safeFileSignature(filePath: string | undefined): string | undefined {
@@ -137,6 +147,36 @@ function rememberInstalledPackageMetadata(
     installedPackageMetadataCache.delete(oldest);
   }
   return metadata;
+}
+
+function rememberInstalledPackageJsonPath(
+  key: string | undefined,
+  packageJsonPath: string | undefined,
+): string | undefined {
+  if (!key) {
+    return packageJsonPath;
+  }
+  installedPackageJsonPathCache.set(key, packageJsonPath ?? null);
+  while (installedPackageJsonPathCache.size > MAX_INSTALLED_PACKAGE_JSON_PATH_CACHE_ENTRIES) {
+    const oldest = installedPackageJsonPathCache.keys().next().value;
+    if (oldest === undefined) {
+      break;
+    }
+    installedPackageJsonPathCache.delete(oldest);
+  }
+  return packageJsonPath;
+}
+
+function buildInstalledPackageJsonPathCacheKey(
+  record: InstalledPluginIndexRecord,
+): string | undefined {
+  if (!record.packageJson?.path || !record.packageJson.hash) {
+    return undefined;
+  }
+  return hashJson({
+    rootDir: path.resolve(resolveInstalledPluginRootDir(record)),
+    packageJson: record.packageJson,
+  });
 }
 
 function buildInstalledPackageMetadataCacheKey(params: {

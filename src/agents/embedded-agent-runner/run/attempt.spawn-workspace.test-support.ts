@@ -524,7 +524,7 @@ vi.mock("../system-prompt.js", async () => {
     ...actual,
     applySystemPromptToSession: (session: MutableSession, systemPrompt: string) => {
       hoisted.systemPromptTexts.push(systemPrompt);
-      session.agent.state.systemPrompt = systemPrompt;
+      session.setBaseSystemPrompt(systemPrompt);
     },
     buildEmbeddedSystemPrompt: (params: unknown) => {
       hoisted.embeddedSystemPromptInputs.push(params);
@@ -855,6 +855,7 @@ export type MutableSession = {
     prompt: string,
     options?: { images?: unknown[]; preflightResult?: (submitted: boolean) => void },
   ) => Promise<void>;
+  setBaseSystemPrompt: (systemPrompt: string) => void;
   sendCustomMessage: (
     message: {
       customType: string;
@@ -1063,6 +1064,9 @@ export function createDefaultEmbeddedSession(params?: {
       },
     },
     setActiveToolsByName: () => {},
+    setBaseSystemPrompt: (systemPrompt) => {
+      session.agent.state.systemPrompt = systemPrompt;
+    },
     prompt: async (prompt, options) => {
       await session.agent.prompt?.(prompt, options);
       if (params?.prompt) {
