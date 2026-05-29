@@ -39,15 +39,19 @@ async function jsonlFileHasAssistantMessage(filePath: string | undefined): Promi
     const fh = await fs.open(filePath, "r");
     try {
       const rl = readline.createInterface({ input: fh.createReadStream({ encoding: "utf-8" }) });
-      let recordCount = 0;
+      const recentLines: string[] = [];
       for await (const line of rl) {
         if (!line.trim()) {
           continue;
         }
-        recordCount++;
-        if (recordCount > SESSION_FILE_MAX_RECORDS) {
-          break;
+        recentLines.push(line);
+        if (recentLines.length > SESSION_FILE_MAX_RECORDS) {
+          recentLines.shift();
         }
+      }
+
+      let hasAssistantAfterLatestUser = false;
+      for (const line of recentLines) {
         let obj: unknown;
         try {
           obj = JSON.parse(line);
@@ -55,11 +59,22 @@ async function jsonlFileHasAssistantMessage(filePath: string | undefined): Promi
           continue;
         }
         const rec = obj as Record<string, unknown> | null;
-        if ((rec?.message as Record<string, unknown> | undefined)?.role === "assistant") {
-          return true;
+        const messageRole = (rec?.message as Record<string, unknown> | undefined)?.role;
+        const role =
+          rec?.type === "message"
+            ? messageRole
+            : rec?.type === "user" || rec?.type === "assistant"
+              ? rec.type
+              : undefined;
+        if (role === "user") {
+          hasAssistantAfterLatestUser = false;
+          continue;
+        }
+        if (role === "assistant") {
+          hasAssistantAfterLatestUser = true;
         }
       }
-      return false;
+      return hasAssistantAfterLatestUser;
     } finally {
       await fh.close();
     }
