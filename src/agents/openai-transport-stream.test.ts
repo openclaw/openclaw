@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import type { Api, Model } from "@earendil-works/pi-ai";
+import type { Api, Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildOpenAIResponsesParams,
@@ -447,7 +447,7 @@ describe("openai transport stream", () => {
     ).toThrow(/Code mode payload tool surface violation/);
   });
 
-  it("adds OpenClaw attribution to native OpenAI transport headers and protects it from pi", () => {
+  it("adds OpenClaw attribution to native OpenAI transport headers and protects it from provider overrides", () => {
     vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
     const headers = testing.buildOpenAIClientHeaders(
       {
@@ -457,8 +457,8 @@ describe("openai transport stream", () => {
         provider: "openai",
         baseUrl: "https://api.openai.com/v1",
         headers: {
-          originator: "pi",
-          "User-Agent": "pi",
+          originator: "openclaw",
+          "User-Agent": "openclaw",
           "X-Provider": "model",
         },
         reasoning: true,
@@ -469,8 +469,8 @@ describe("openai transport stream", () => {
       } satisfies Model<"openai-responses">,
       { systemPrompt: "", messages: [] } as never,
       {
-        originator: "pi",
-        "User-Agent": "pi",
+        originator: "openclaw",
+        "User-Agent": "openclaw",
         "X-Caller": "request",
       },
     );
@@ -494,8 +494,8 @@ describe("openai transport stream", () => {
         provider: "openai-codex",
         baseUrl: "https://chatgpt.com/backend-api",
         headers: {
-          originator: "pi",
-          "User-Agent": "pi",
+          originator: "openclaw",
+          "User-Agent": "openclaw",
         },
         reasoning: true,
         input: ["text"],
@@ -2208,6 +2208,150 @@ describe("openai transport stream", () => {
     expect(params.max_output_tokens).toBe(65_536);
   });
 
+  it("prefers promptCacheKey over sessionId for Responses prompt-cache affinity", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        sessionId: "run-session",
+        promptCacheKey: "cron-cache-key",
+      },
+    ) as { prompt_cache_key?: string };
+
+    expect(params.prompt_cache_key).toBe("cron-cache-key");
+  });
+
+  it("clamps Responses promptCacheKey before sending it upstream", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        promptCacheKey: "x".repeat(80),
+        sessionId: "session-123",
+      },
+    ) as { prompt_cache_key?: string };
+
+    expect(params.prompt_cache_key).toBe("x".repeat(64));
+  });
+
+  it("omits Responses prompt_cache_key when caching is disabled", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        sessionId: "run-session",
+        promptCacheKey: "cron-cache-key",
+        cacheRetention: "none",
+      },
+    ) as { prompt_cache_key?: string };
+
+    expect(params.prompt_cache_key).toBeUndefined();
+  });
+
+  it("adds fallback instructions for raw native Codex responses probes", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 400000,
+        maxTokens: 128000,
+      } satisfies Model<"openai-codex-responses">,
+      {
+        systemPrompt: "",
+        messages: [{ role: "user", content: "Reply OK", timestamp: 1 }],
+        tools: [],
+      } as never,
+      {
+        maxTokens: 16,
+        sessionId: "session-123",
+      },
+    ) as Record<string, unknown>;
+
+    expect(params.instructions).toBe("Follow the user request.");
+    expect(params.max_output_tokens).toBeUndefined();
+    expect(params.prompt_cache_retention).toBeUndefined();
+  });
+
+  it("does not add fallback instructions for custom Codex-compatible responses backends", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        baseUrl: "https://proxy.example.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 400000,
+        maxTokens: 128000,
+      } satisfies Model<"openai-codex-responses">,
+      {
+        systemPrompt: "",
+        messages: [{ role: "user", content: "Reply OK", timestamp: 1 }],
+        tools: [],
+      } as never,
+      {
+        maxTokens: 16,
+        sessionId: "session-123",
+      },
+    ) as Record<string, unknown>;
+
+    expect(params.instructions).toBeUndefined();
+    expect(params.max_output_tokens).toBe(16);
+  });
+
   it("uses top-level instructions for Codex responses and preserves prompt cache identity", () => {
     const params = buildOpenAIResponsesParams(
       {
@@ -2273,7 +2417,7 @@ describe("openai transport stream", () => {
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 200000,
         maxTokens: 8192,
-      } satisfies Model<Api>,
+      } satisfies Model,
       {
         systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
         messages: [{ role: "user", content: "Hello", timestamp: 1 }],
@@ -3197,7 +3341,7 @@ describe("openai transport stream", () => {
     ]);
   });
 
-  it("does not infer high reasoning when Pi passes thinking off", () => {
+  it("does not infer high reasoning when the runtime passes thinking off", () => {
     const params = buildOpenAIResponsesParams(
       {
         id: "gpt-5.4",
@@ -4596,10 +4740,10 @@ describe("openai transport stream", () => {
         messages: [],
         tools: [],
       } as never,
-      { sessionId: "session-123" },
+      { sessionId: "session-123", promptCacheKey: "cron-cache-key" },
     ) as { prompt_cache_key?: string };
 
-    expect(params.prompt_cache_key).toBe("session-123");
+    expect(params.prompt_cache_key).toBe("cron-cache-key");
   });
 
   it("omits prompt_cache_key for completions when caching is disabled or not opted in", () => {
@@ -4627,7 +4771,7 @@ describe("openai transport stream", () => {
         compat: { supportsPromptCacheKey: true },
       } as unknown as Model<"openai-completions">,
       context,
-      { sessionId: "session-123", cacheRetention: "none" },
+      { sessionId: "session-123", promptCacheKey: "cron-cache-key", cacheRetention: "none" },
     ) as { prompt_cache_key?: string };
     const notOptedIn = buildOpenAICompletionsParams(baseModel, context, {
       sessionId: "session-123",
@@ -4635,6 +4779,67 @@ describe("openai transport stream", () => {
 
     expect(disabled.prompt_cache_key).toBeUndefined();
     expect(notOptedIn.prompt_cache_key).toBeUndefined();
+  });
+
+  it("emits prompt_cache_retention=24h for completions when cacheRetention is long", () => {
+    const model = {
+      id: "custom-model",
+      name: "Custom Model",
+      api: "openai-completions",
+      provider: "custom-cpa",
+      baseUrl: "https://proxy.example.com/v1",
+      compat: { supportsPromptCacheKey: true },
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 32768,
+      maxTokens: 8192,
+    } as unknown as Model<"openai-completions">;
+    const context = {
+      systemPrompt: "system",
+      messages: [],
+      tools: [],
+    } as never;
+
+    const longRetention = buildOpenAICompletionsParams(model, context, {
+      sessionId: "session-123",
+      cacheRetention: "long",
+    }) as { prompt_cache_key?: string; prompt_cache_retention?: string };
+
+    expect(longRetention.prompt_cache_key).toBe("session-123");
+    expect(longRetention.prompt_cache_retention).toBe("24h");
+  });
+
+  it("omits prompt_cache_retention for completions when cacheRetention is short or unset", () => {
+    const model = {
+      id: "custom-model",
+      name: "Custom Model",
+      api: "openai-completions",
+      provider: "custom-cpa",
+      baseUrl: "https://proxy.example.com/v1",
+      compat: { supportsPromptCacheKey: true },
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 32768,
+      maxTokens: 8192,
+    } as unknown as Model<"openai-completions">;
+    const context = {
+      systemPrompt: "system",
+      messages: [],
+      tools: [],
+    } as never;
+
+    const shortRetention = buildOpenAICompletionsParams(model, context, {
+      sessionId: "session-123",
+      cacheRetention: "short",
+    });
+    const defaultRetention = buildOpenAICompletionsParams(model, context, {
+      sessionId: "session-123",
+    });
+
+    expect(shortRetention).not.toHaveProperty("prompt_cache_retention");
+    expect(defaultRetention).not.toHaveProperty("prompt_cache_retention");
   });
 
   it("sorts Chat Completions tools by function name for stable prompt-cache payloads", () => {
@@ -8006,6 +8211,51 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
     );
 
     expect(assistant.reasoning_content).toBe("Need to answer politely.");
+  });
+
+  // Regression for #87575: OpenCode Zen exposes DeepSeek V4 with a `-free`
+  // tier suffix that does not change the upstream replay contract. Without
+  // matching the base id we stripped reasoning_content from the follow-up
+  // request and DeepSeek rejected the assistant turn with HTTP 400.
+  it.each([
+    [
+      "OpenCode Zen DeepSeek V4 Flash Free",
+      {
+        id: "deepseek-v4-flash-free",
+        name: "DeepSeek V4 Flash Free",
+        api: "openai-completions" as const,
+        provider: "opencode",
+        baseUrl: "https://opencode.ai/zen/v1",
+        reasoning: true,
+        input: ["text"] as ("text" | "image")[],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 65_536,
+        maxTokens: 8192,
+      },
+    ],
+    [
+      "OpenRouter MiMo V2 Pro Free",
+      {
+        ...customMiMoProxyModel,
+        id: "xiaomi/mimo-v2-pro-free",
+      },
+    ],
+    [
+      "OpenRouter Kimi K2 Thinking Free",
+      {
+        ...customKimiProxyModel,
+        id: "moonshotai/kimi-k2-thinking-free",
+      },
+    ],
+  ] as const)("preserves reasoning_content replay despite the %s tier suffix", (_label, model) => {
+    const assistant = getAssistantMessage(
+      buildReplayParams(model as Model<"openai-completions">, "reasoning_content"),
+    );
+
+    expect(assistant.reasoning_content).toBe("Need to answer politely.");
+    expect(assistant).not.toHaveProperty("reasoning_details");
+    expect(assistant).not.toHaveProperty("reasoning");
+    expect(assistant).not.toHaveProperty("reasoning_text");
   });
 
   it("preserves OpenRouter array reasoning_details from tool-call signatures", () => {

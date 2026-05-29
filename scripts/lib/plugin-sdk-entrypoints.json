@@ -39,12 +39,14 @@
   "cron-store-runtime",
   "config-schema",
   "json-schema-runtime",
+  "json-unsafe-integers",
   "reply-runtime",
   "reply-dedupe",
   "reply-dispatch-runtime",
   "reply-reference",
   "reply-chunking",
   "reply-payload",
+  "reply-payload-testing",
   "agent-media-payload",
   "inbound-reply-dispatch",
   "inbound-envelope",
@@ -193,6 +195,7 @@
   "channel-ingress-runtime",
   "channel-message",
   "channel-message-runtime",
+  "channel-outbound",
   "channel-pairing",
   "channel-pairing-paths",
   "channel-policy",
@@ -316,5 +319,8 @@
   "webhook-path",
   "web-media",
   "zalouser",
-  "zod"
+  "zod",
+  "agent-core",
+  "agent-sessions",
+  "llm"
 ]

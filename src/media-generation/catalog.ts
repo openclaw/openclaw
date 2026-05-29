@@ -5,18 +5,20 @@ import type {
 } from "../model-catalog/types.js";
 import { normalizeUniqueSingleOrTrimmedStringList } from "../shared/string-normalization.js";
 
-export type MediaGenerationCatalogKind = Exclude<UnifiedModelCatalogKind, "text">;
+export type MediaGenerationCatalogKind = Extract<
+  UnifiedModelCatalogKind,
+  "image_generation" | "video_generation" | "music_generation"
+>;
 
 export type MediaGenerationCatalogSource = Extract<
   UnifiedModelCatalogSource,
   "static" | "live" | "cache" | "configured"
 >;
 
-export type MediaGenerationCatalogEntry<TCapabilities = unknown> =
-  UnifiedModelCatalogEntry<TCapabilities> & {
-    kind: MediaGenerationCatalogKind;
-    source: MediaGenerationCatalogSource;
-  };
+export type MediaGenerationCatalogEntry<TCapabilities> = UnifiedModelCatalogEntry<TCapabilities> & {
+  kind: MediaGenerationCatalogKind;
+  source: MediaGenerationCatalogSource;
+};
 
 export type MediaGenerationCatalogProvider<TCapabilities = unknown> = {
   id: string;

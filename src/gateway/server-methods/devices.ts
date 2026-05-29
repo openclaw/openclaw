@@ -1,4 +1,15 @@
 import {
+  ErrorCodes,
+  errorShape,
+  formatValidationErrors,
+  validateDevicePairApproveParams,
+  validateDevicePairListParams,
+  validateDevicePairRemoveParams,
+  validateDevicePairRejectParams,
+  validateDeviceTokenRevokeParams,
+  validateDeviceTokenRotateParams,
+} from "../../../packages/gateway-protocol/src/index.js";
+import {
   approveDevicePairing,
   formatDevicePairingForbiddenMessage,
   getPairedDevice,
@@ -13,17 +24,6 @@ import {
   rotateDeviceToken,
   summarizeDeviceTokens,
 } from "../../infra/device-pairing.js";
-import {
-  ErrorCodes,
-  errorShape,
-  formatValidationErrors,
-  validateDevicePairApproveParams,
-  validateDevicePairListParams,
-  validateDevicePairRemoveParams,
-  validateDevicePairRejectParams,
-  validateDeviceTokenRevokeParams,
-  validateDeviceTokenRotateParams,
-} from "../protocol/index.js";
 import type { GatewayClient, GatewayRequestHandlers } from "./types.js";
 
 const DEVICE_TOKEN_ROTATION_DENIED_MESSAGE = "device token rotation denied";
@@ -222,7 +222,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
     }
     const { requestId } = params as { requestId: string };
     const authz = resolveDeviceSessionAuthz(client);
-    if (authz.callerDeviceId && !authz.isAdminCaller) {
+    if (!authz.isAdminCaller) {
       const pending = await getPendingDevicePairing(requestId);
       if (!pending) {
         respond(
@@ -232,7 +232,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      if (pending.deviceId.trim() !== authz.callerDeviceId) {
+      if (authz.callerDeviceId && pending.deviceId.trim() !== authz.callerDeviceId) {
         context.logGateway.warn(
           `device pairing approval denied request=${requestId} reason=device-ownership-mismatch`,
         );

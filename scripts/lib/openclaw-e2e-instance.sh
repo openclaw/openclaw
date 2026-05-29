@@ -54,6 +54,13 @@ openclaw_e2e_maybe_timeout() {
   if [ -z "$timeout_bin" ]; then
     if command -v node >/dev/null 2>&1; then
       echo "timeout command not found; using Node watchdog for OpenClaw E2E command timeout $timeout_value" >&2
+      if [[ "$1" != */* ]]; then
+        local resolved_command
+        resolved_command="$(command -v "$1" 2>/dev/null || true)"
+        if [ -n "$resolved_command" ]; then
+          set -- "$resolved_command" "${@:2}"
+        fi
+      fi
       node - "$timeout_value" "$@" <<'NODE'
 const [, , timeoutValue, command, ...args] = process.argv;
 const parseTimeoutMs = (value) => {
@@ -80,9 +87,21 @@ try {
 }
 const child = spawn(command, args, {
   detached: process.platform !== "win32",
+  env: process.env,
   stdio: "inherit",
 });
 let timedOut = false;
+let parentSignal = null;
+let parentSignalTimer = null;
+const signalExitCodes = new Map([
+  ["SIGHUP", 129],
+  ["SIGINT", 130],
+  ["SIGTERM", 143],
+]);
+const killGraceMs = Number.parseInt(
+  process.env.OPENCLAW_E2E_TIMEOUT_KILL_GRACE_MS || "30000",
+  10,
+);
 const killTarget = process.platform === "win32" ? child.pid : -child.pid;
 const killChild = (signal) => {
   if (!child.pid) {
@@ -100,17 +119,34 @@ const timer = setTimeout(() => {
   timedOut = true;
   console.error(`OpenClaw E2E command timed out after ${timeoutValue}`);
   killChild("SIGTERM");
-  setTimeout(() => killChild("SIGKILL"), 30_000).unref();
+  setTimeout(() => killChild("SIGKILL"), killGraceMs).unref();
 }, timeoutMs);
 const forwardSignal = (signal) => {
+  if (parentSignal) {
+    killChild("SIGKILL");
+    process.exit(signalExitCodes.get(signal) ?? 1);
+  }
+  parentSignal = signal;
+  clearTimeout(timer);
   killChild(signal);
+  parentSignalTimer = setTimeout(() => {
+    killChild("SIGKILL");
+    process.exit(signalExitCodes.get(signal) ?? 1);
+  }, killGraceMs);
+  parentSignalTimer.unref();
 };
 process.once("SIGINT", forwardSignal);
 process.once("SIGTERM", forwardSignal);
-child.on("exit", (code, signal) => {
+child.on("close", (code, signal) => {
   clearTimeout(timer);
+  if (parentSignalTimer) {
+    clearTimeout(parentSignalTimer);
+  }
   if (timedOut) {
     process.exit(124);
+  }
+  if (parentSignal) {
+    process.exit(signalExitCodes.get(parentSignal) ?? 1);
   }
   if (code !== null) {
     process.exit(code);
@@ -165,7 +201,11 @@ openclaw_e2e_install_package() {
       echo "npm install timed out after $timeout_value for $label" >&2
     fi
     echo "npm install failed for $label" >&2
-    cat "$log_file" >&2 || true
+    if [ -f "$log_file" ]; then
+      while IFS= read -r line || [ -n "$line" ]; do
+        printf '%s\n' "$line" >&2
+      done <"$log_file"
+    fi
     exit 1
   fi
 }
@@ -212,7 +252,6 @@ openclaw_e2e_write_state_env() {
     printf 'export OPENCLAW_STATE_DIR=%q\n' "$OPENCLAW_STATE_DIR"
     printf 'export OPENCLAW_CONFIG_PATH=%q\n' "$OPENCLAW_CONFIG_PATH"
     printf 'export OPENCLAW_AGENT_DIR=%q\n' "${OPENCLAW_AGENT_DIR-}"
-    printf 'export PI_CODING_AGENT_DIR=%q\n' "${PI_CODING_AGENT_DIR-}"
   } >"$target"
 }
 openclaw_e2e_install_trash_shim() {

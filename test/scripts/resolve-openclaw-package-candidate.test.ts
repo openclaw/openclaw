@@ -9,6 +9,8 @@ import {
   parseArgs,
   readArtifactPackageCandidateMetadata,
   readPackageBuildSourceSha,
+  resolveNpmPackageCandidatePackRunner,
+  runCommandForTest,
   validateOpenClawPackageSpec,
 } from "../../scripts/resolve-openclaw-package-candidate.mjs";
 
@@ -98,6 +100,65 @@ describe("resolve-openclaw-package-candidate", () => {
       trustedSourceId: "",
       trustedSourcePolicy: ".github/package-trusted-sources.json",
     });
+  });
+
+  it("resolves npm package candidates through the Windows npm.cmd toolchain shim", () => {
+    const execPath = "C:\\nodejs\\node.exe";
+    const npmCmdPath = path.win32.resolve(path.win32.dirname(execPath), "npm.cmd");
+
+    const runner = resolveNpmPackageCandidatePackRunner(
+      "openclaw@2026.5.26-beta.1",
+      "C:\\openclaw\\.artifacts\\docker-e2e-package",
+      {
+        comSpec: "C:\\Windows\\System32\\cmd.exe",
+        env: {},
+        execPath,
+        existsSync: (candidate) => candidate === npmCmdPath,
+        platform: "win32",
+      },
+    );
+
+    expect(runner).toEqual({
+      command: "C:\\Windows\\System32\\cmd.exe",
+      args: [
+        "/d",
+        "/s",
+        "/c",
+        `${npmCmdPath} pack openclaw@2026.5.26-beta.1 --ignore-scripts --json --pack-destination C:\\openclaw\\.artifacts\\docker-e2e-package`,
+      ],
+      shell: false,
+      windowsVerbatimArguments: true,
+    });
+  });
+
+  it("bounds captured command stderr tails on failures", async () => {
+    await expect(
+      runCommandForTest(
+        process.execPath,
+        [
+          "-e",
+          [
+            "const fs = require('node:fs');",
+            "fs.writeSync(2, 'old ' + 'x'.repeat(9 * 1024 * 1024));",
+            "fs.writeSync(2, 'recent failure');",
+            "process.exit(7);",
+          ].join(""),
+        ],
+        { capture: true },
+      ),
+    ).rejects.toThrow(
+      /failed with 7\n\[output truncated \d+ chars; showing tail\][\s\S]*recent failure/u,
+    );
+  });
+
+  it("rejects truncated captured stdout instead of parsing partial command output", async () => {
+    await expect(
+      runCommandForTest(
+        process.execPath,
+        ["-e", "require('node:fs').writeSync(1, 'x'.repeat(9 * 1024 * 1024));"],
+        { capture: true },
+      ),
+    ).rejects.toThrow(/produced more than \d+ captured stdout chars/u);
   });
 
   it("loads named trusted package URL source policies", async () => {

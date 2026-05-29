@@ -4,7 +4,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import { createContext, Script } from "node:vm";
-import { validateJsonSchemaValue, type JsonSchemaObject } from "openclaw/plugin-sdk/config-schema";
+import {
+  validateJsonSchemaValue,
+  type JsonSchemaObject,
+} from "openclaw/plugin-sdk/json-schema-runtime";
 import type { RealtimeTranscriptionProviderPlugin } from "openclaw/plugin-sdk/realtime-transcription";
 import type { RealtimeVoiceProviderPlugin } from "openclaw/plugin-sdk/realtime-voice";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -814,6 +817,18 @@ describe("google-meet plugin", () => {
     });
   });
 
+  it.each(["0x10", "1e3"])("ignores non-decimal env numeric fallbacks: %s", (expiresAt) => {
+    const config = resolveGoogleMeetConfigWithEnv(
+      {},
+      {
+        OPENCLAW_GOOGLE_MEET_ACCESS_TOKEN: "access-token",
+        OPENCLAW_GOOGLE_MEET_ACCESS_TOKEN_EXPIRES_AT: expiresAt,
+      },
+    );
+
+    expect(config.oauth).toEqual({ accessToken: "access-token" });
+  });
+
   it("requires explicit Meet URLs", () => {
     expect(normalizeMeetUrl("https://meet.google.com/abc-defg-hij")).toBe(
       "https://meet.google.com/abc-defg-hij",
@@ -1616,11 +1631,29 @@ describe("google-meet plugin", () => {
       accessToken: "token",
       expiresAt: Date.now() + 120_000,
       conferenceRecord: "rec-1",
-      pageSize: 3,
+      pageSize: "3",
     });
 
     expect(result.details.attendance).toHaveLength(1);
     expect(result.details.attendance?.[0]?.displayName).toBe("Alice");
+  });
+
+  it("rejects fractional attendance page sizes", async () => {
+    stubMeetArtifactsApi();
+    const { tools } = setup();
+    const tool = tools[0] as {
+      execute: (id: string, params: unknown) => Promise<{ details: { error?: string } }>;
+    };
+
+    const result = await tool.execute("id", {
+      action: "attendance",
+      accessToken: "token",
+      expiresAt: Date.now() + 120_000,
+      conferenceRecord: "rec-1",
+      pageSize: "3.5",
+    });
+
+    expect(result.details.error).toBe("pageSize must be a positive integer");
   });
 
   it("writes export bundles through the tool", async () => {
@@ -3596,7 +3629,7 @@ describe("google-meet plugin", () => {
     const result = await tool.execute("id", {
       action: "test_listen",
       url: "https://meet.google.com/abc-defg-hij",
-      timeoutMs: 100,
+      timeoutMs: "100",
     });
 
     const startCall = nodesInvoke.mock.calls.find(([rawCall]) => {
@@ -3614,6 +3647,17 @@ describe("google-meet plugin", () => {
     expect(startParams.mode).toBe("transcribe");
     expect(result.details.listenVerified).toBe(true);
     expect(result.details.transcriptLines).toBe(1);
+  });
+
+  it("rejects fractional test-listen gateway timeouts", async () => {
+    const { methods } = setup({ defaultTransport: "chrome-node" });
+
+    await expect(
+      invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.testListen", {
+        url: "https://meet.google.com/abc-defg-hij",
+        timeoutMs: "100.5",
+      }),
+    ).rejects.toThrow("timeoutMs must be a positive integer");
   });
 
   it("does not start a second realtime response for test speech", async () => {
@@ -4116,7 +4160,7 @@ describe("google-meet plugin", () => {
         resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
         ensureAgentWorkspace: vi.fn(async () => {}),
         session: createMockSessionRuntime(sessionStore),
-        runEmbeddedPiAgent: vi.fn(async () => ({
+        runEmbeddedAgent: vi.fn(async () => ({
           payloads: [{ text: "Use the Portugal launch data." }],
           meta: {},
         })),
@@ -4149,7 +4193,7 @@ describe("google-meet plugin", () => {
     const audioChunk = mockCallArg(sendAudio, 0) as Buffer;
     expect(Buffer.isBuffer(audioChunk)).toBe(true);
     expect(audioChunk.byteLength).toBeGreaterThan(0);
-    expect(runtime.agent.runEmbeddedPiAgent).toHaveBeenCalled();
+    expect(runtime.agent.runEmbeddedAgent).toHaveBeenCalled();
     expect(runtime.tts.textToSpeechTelephony).toHaveBeenCalledWith({
       text: "Use the Portugal launch data.",
       cfg: {},
@@ -4278,7 +4322,7 @@ describe("google-meet plugin", () => {
         resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
         ensureAgentWorkspace: vi.fn(async () => {}),
         session: createMockSessionRuntime(sessionStore),
-        runEmbeddedPiAgent: vi.fn(async (_request: unknown) => ({
+        runEmbeddedAgent: vi.fn(async (_request: unknown) => ({
           payloads: [{ text: "Use the Portugal launch data." }],
           meta: {},
         })),
@@ -4408,9 +4452,9 @@ describe("google-meet plugin", () => {
     ]) {
       expect(talkEventTypes).toContain(type);
     }
-    expect(runtime.agent.runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
+    expect(runtime.agent.runEmbeddedAgent).toHaveBeenCalledTimes(1);
     const agentRequest = requireRecord(
-      mockCallArg(runtime.agent.runEmbeddedPiAgent, 0),
+      mockCallArg(runtime.agent.runEmbeddedAgent, 0),
       "embedded agent request",
     );
     expect(agentRequest.messageProvider).toBe("google-meet");
@@ -4499,7 +4543,7 @@ describe("google-meet plugin", () => {
           resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
           ensureAgentWorkspace: vi.fn(async () => {}),
           session: createMockSessionRuntime(sessionStore),
-          runEmbeddedPiAgent: vi.fn(async (_request: unknown) => ({
+          runEmbeddedAgent: vi.fn(async (_request: unknown) => ({
             payloads: [{ text: "The launch is still on track." }],
             meta: {},
           })),
@@ -4529,10 +4573,10 @@ describe("google-meet plugin", () => {
 
       await vi.advanceTimersByTimeAsync(GOOGLE_MEET_AGENT_TRANSCRIPT_DEBOUNCE_MS);
       await vi.waitFor(() => {
-        expect(runtime.agent.runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
+        expect(runtime.agent.runEmbeddedAgent).toHaveBeenCalledTimes(1);
       });
       const consultArgs = requireRecord(
-        (runtime.agent.runEmbeddedPiAgent.mock.calls as unknown[][])[0]?.[0],
+        (runtime.agent.runEmbeddedAgent.mock.calls as unknown[][])[0]?.[0],
         "default talk-back agent request",
       );
       expect(consultArgs.agentId).toBe("jay");
@@ -4771,7 +4815,7 @@ describe("google-meet plugin", () => {
         resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
         ensureAgentWorkspace: vi.fn(async () => {}),
         session: createMockSessionRuntime(sessionStore),
-        runEmbeddedPiAgent: vi.fn(async () => ({
+        runEmbeddedAgent: vi.fn(async () => ({
           payloads: [{ text: "Use the launch update." }],
           meta: {},
         })),

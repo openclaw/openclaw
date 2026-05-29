@@ -1,6 +1,7 @@
 import {
   ACT_MAX_BATCH_ACTIONS,
   ACT_MAX_CLICK_DELAY_MS,
+  ACT_MAX_VIEWPORT_DIMENSION,
   ACT_MAX_WAIT_TIME_MS,
   normalizeActBoundedNonNegativeMs,
 } from "../act-policy.js";
@@ -260,6 +261,9 @@ export function normalizeActRequest(
       const height = toNumber(body.height);
       if (width === undefined || height === undefined || width <= 0 || height <= 0) {
         throw new Error("resize requires positive width and height");
+      }
+      if (width > ACT_MAX_VIEWPORT_DIMENSION || height > ACT_MAX_VIEWPORT_DIMENSION) {
+        throw new Error(`resize width and height must not exceed ${ACT_MAX_VIEWPORT_DIMENSION}`);
       }
       const targetId = toStringOrEmpty(body.targetId) || undefined;
       return {

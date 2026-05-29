@@ -220,6 +220,22 @@ describe("waitForAgentRun", () => {
     expect(result).toEqual({ status: "pending" });
   });
 
+  it("preserves pending error diagnostics on wait timeouts", async () => {
+    callGatewayMock.mockResolvedValue({
+      status: "timeout",
+      error: "429 RESOURCE_EXHAUSTED",
+      pendingError: true,
+    });
+
+    const result = await waitForAgentRun({ runId: "run-pending-error", timeoutMs: 500 });
+
+    expect(result).toEqual({
+      status: "timeout",
+      error: "429 RESOURCE_EXHAUSTED",
+      pendingError: true,
+    });
+  });
+
   it("normalizes wait timeouts before sending agent.wait", async () => {
     callGatewayMock.mockResolvedValue({ status: "ok" });
 
@@ -230,6 +246,22 @@ describe("waitForAgentRun", () => {
       method: "agent.wait",
       params: {
         runId: "run-clamped",
+        timeoutMs: 1,
+      },
+      timeoutMs: 2_001,
+    });
+  });
+
+  it("defaults non-finite wait timeouts before sending agent.wait", async () => {
+    callGatewayMock.mockResolvedValue({ status: "ok" });
+
+    const result = await waitForAgentRun({ runId: "run-nan", timeoutMs: Number.NaN });
+
+    expect(result).toEqual({ status: "ok" });
+    expect(callGatewayMock).toHaveBeenCalledWith({
+      method: "agent.wait",
+      params: {
+        runId: "run-nan",
         timeoutMs: 1,
       },
       timeoutMs: 2_001,
@@ -440,5 +472,23 @@ describe("waitForAgentRunsToDrain", () => {
     expect(requests).toHaveLength(2);
     expectAgentWaitRequest(requireRequestAt(requests, 0), "run-1", 1_000);
     expectAgentWaitRequest(requireRequestAt(requests, 1), "run-2", 1_000);
+  });
+
+  it("defaults non-finite drain timeouts before computing the deadline", async () => {
+    callGatewayMock.mockResolvedValue({ status: "ok" });
+    let activeRunIds = ["run-1"];
+
+    const result = await waitForAgentRunsToDrain({
+      timeoutMs: Number.NaN,
+      getPendingRunIds: () => {
+        const current = activeRunIds;
+        activeRunIds = [];
+        return current;
+      },
+    });
+
+    expect(result.timedOut).toBe(false);
+    expect(Number.isFinite(result.deadlineAtMs)).toBe(true);
+    expectAgentWaitRequest(requireRequestAt(gatewayWaitRequests(), 0), "run-1", 1);
   });
 });

@@ -1504,6 +1504,25 @@ describe("config cli", () => {
       });
     });
 
+    it("rejects exponent-style provider builder integer options", async () => {
+      await expect(
+        runConfigCommand([
+          "config",
+          "set",
+          "secrets.providers.runner",
+          "--provider-source",
+          "exec",
+          "--provider-command",
+          "op",
+          "--provider-timeout-ms",
+          "1e3",
+        ]),
+      ).rejects.toThrow("--provider-timeout-ms must be a positive integer.");
+
+      expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    });
+
     it("runs resolvability checks in builder dry-run mode without writing", async () => {
       const resolved: OpenClawConfig = {
         gateway: { port: 18789 },
@@ -2802,6 +2821,28 @@ describe("config cli", () => {
       ).rejects.toThrow("Invalid path segment: prototype");
 
       expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    });
+
+    it("rejects impractical array indexes for config set", async () => {
+      const resolved = { agents: { list: [] } } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      await expect(
+        runConfigCommand(["config", "set", "agents.list.4294967294.id", '"main"']),
+      ).rejects.toThrow('Expected numeric index for array segment "4294967294"');
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    });
+
+    it("rejects signed array indexes for config set", async () => {
+      const resolved = { agents: { list: [{ id: "main" }] } } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      await expect(
+        runConfigCommand(["config", "set", "agents.list.+0.id", '"other"']),
+      ).rejects.toThrow('Expected numeric index for array segment "+0"');
+
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
     });
   });

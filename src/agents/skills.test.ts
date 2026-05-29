@@ -6,6 +6,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { captureEnv, withPathResolutionEnv } from "../test-utils/env.js";
 import { createFixtureSuite } from "../test-utils/fixture-suite.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
@@ -171,6 +172,7 @@ afterAll(async () => {
 
 afterEach(() => {
   clearRuntimeConfigSnapshot();
+  clearPluginMetadataLifecycleCaches();
 });
 
 describe("buildWorkspaceSkillCommandSpecs", () => {
@@ -286,8 +288,8 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
       },
     } satisfies OpenClawConfig;
 
-    // Prime plugin discovery before the bundle exists so command loading proves
-    // it sees the current filesystem state instead of a stale cached snapshot.
+    // Prime plugin discovery before the bundle exists; clear the lifecycle cache
+    // below to model the install/reload boundary that exposes new plugin files.
     buildWorkspaceSkillCommandSpecs(workspaceDir, {
       ...resolveTestSkillDirs(workspaceDir),
       config,
@@ -313,6 +315,7 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
       ].join("\n"),
       "utf-8",
     );
+    clearPluginMetadataLifecycleCaches();
 
     const commands = buildWorkspaceSkillCommandSpecs(workspaceDir, {
       ...resolveTestSkillDirs(workspaceDir),
@@ -691,35 +694,66 @@ describe("applySkillEnvOverrides", () => {
 
   it("blocks dangerous host env overrides even when declared", () => {
     const entries = envSkillEntries("dangerous-env-skill", {
-      requires: { env: ["BASH_ENV", "SHELL"] },
+      requires: {
+        env: [
+          "BASH_ENV",
+          "SHELL",
+          "NODE_REDIRECT_WARNINGS",
+          "NODE_REPL_EXTERNAL_MODULE",
+          "NODE_REPL_HISTORY",
+          "NODE_V8_COVERAGE",
+        ],
+      },
     });
 
-    withClearedEnv(["BASH_ENV", "SHELL"], () => {
-      const restore = applySkillEnvOverrides({
-        skills: entries,
-        config: {
-          skills: {
-            entries: {
-              "dangerous-env-skill": {
-                env: {
-                  BASH_ENV: "/tmp/pwn.sh",
-                  SHELL: "/tmp/evil-shell",
+    withClearedEnv(
+      [
+        "BASH_ENV",
+        "SHELL",
+        "NODE_REDIRECT_WARNINGS",
+        "NODE_REPL_EXTERNAL_MODULE",
+        "NODE_REPL_HISTORY",
+        "NODE_V8_COVERAGE",
+      ],
+      () => {
+        const restore = applySkillEnvOverrides({
+          skills: entries,
+          config: {
+            skills: {
+              entries: {
+                "dangerous-env-skill": {
+                  env: {
+                    BASH_ENV: "/tmp/pwn.sh",
+                    SHELL: "/tmp/evil-shell",
+                    NODE_REDIRECT_WARNINGS: "/tmp/node-warnings.log",
+                    NODE_REPL_EXTERNAL_MODULE: "/tmp/pwn.js",
+                    NODE_REPL_HISTORY: "/tmp/node-repl-history",
+                    NODE_V8_COVERAGE: "/tmp/coverage",
+                  },
                 },
               },
             },
           },
-        },
-      });
+        });
 
-      try {
-        expect(process.env.BASH_ENV).toBeUndefined();
-        expect(process.env.SHELL).toBeUndefined();
-      } finally {
-        restore();
-        expect(process.env.BASH_ENV).toBeUndefined();
-        expect(process.env.SHELL).toBeUndefined();
-      }
-    });
+        try {
+          expect(process.env.BASH_ENV).toBeUndefined();
+          expect(process.env.SHELL).toBeUndefined();
+          expect(process.env.NODE_REDIRECT_WARNINGS).toBeUndefined();
+          expect(process.env.NODE_REPL_EXTERNAL_MODULE).toBeUndefined();
+          expect(process.env.NODE_REPL_HISTORY).toBeUndefined();
+          expect(process.env.NODE_V8_COVERAGE).toBeUndefined();
+        } finally {
+          restore();
+          expect(process.env.BASH_ENV).toBeUndefined();
+          expect(process.env.SHELL).toBeUndefined();
+          expect(process.env.NODE_REDIRECT_WARNINGS).toBeUndefined();
+          expect(process.env.NODE_REPL_EXTERNAL_MODULE).toBeUndefined();
+          expect(process.env.NODE_REPL_HISTORY).toBeUndefined();
+          expect(process.env.NODE_V8_COVERAGE).toBeUndefined();
+        }
+      },
+    );
   });
 
   it("blocks override-only host env overrides in skill config", () => {

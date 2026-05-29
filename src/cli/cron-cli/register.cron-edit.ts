@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import type { CronJob } from "../../cron/types.js";
 import { danger } from "../../globals.js";
+import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import { sanitizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
@@ -102,6 +103,7 @@ export function registerCronEditCommand(cron: Command) {
       .option("--announce", "Fallback-deliver final text to a chat")
       .option("--deliver", "Deprecated (use --announce). Fallback-delivers final text to a chat.")
       .option("--no-deliver", "Disable runner fallback delivery")
+      .option("--webhook <url>", "POST the finished payload to a webhook URL")
       .option("--channel <channel>", `Delivery channel (${getCronChannelOptions()})`)
       .option(
         "--to <dest>",
@@ -154,8 +156,14 @@ export function registerCronEditCommand(cron: Command) {
               "Isolated jobs cannot use --system-event; use --message or --session main.",
             );
           }
-          if (opts.announce && typeof opts.deliver === "boolean") {
-            throw new Error("Choose --announce or --no-deliver (not multiple).");
+          const hasWebhookDelivery = typeof opts.webhook === "string";
+          const deliveryModeFlagCount = [
+            Boolean(opts.announce),
+            typeof opts.deliver === "boolean",
+            hasWebhookDelivery,
+          ].filter(Boolean).length;
+          if (deliveryModeFlagCount > 1) {
+            throw new Error("Choose at most one of --announce, --no-deliver, or --webhook.");
           }
           const patch: Record<string, unknown> = {};
           if (typeof opts.name === "string") {
@@ -247,13 +255,17 @@ export function registerCronEditCommand(cron: Command) {
           if (rawTimeoutSeconds !== undefined && !hasTimeoutSeconds) {
             throw new Error("Invalid --timeout-seconds (must be a positive integer).");
           }
-          const hasDeliveryModeFlag = opts.announce || typeof opts.deliver === "boolean";
+          const hasDeliveryModeFlag =
+            opts.announce || typeof opts.deliver === "boolean" || hasWebhookDelivery;
           const threadId = parseCronThreadIdOption(opts.threadId);
           const hasDeliveryThreadId = typeof threadId === "number";
           const hasDeliveryTarget =
             typeof opts.channel === "string" || typeof opts.to === "string" || hasDeliveryThreadId;
           const hasDeliveryAccount = typeof opts.account === "string";
           const hasBestEffort = typeof opts.bestEffortDeliver === "boolean";
+          if (hasWebhookDelivery && (hasDeliveryTarget || hasDeliveryAccount)) {
+            throw new Error("--webhook cannot be combined with chat delivery options.");
+          }
           const hasAgentTurnPayloadField =
             typeof opts.message === "string" ||
             Boolean(model) ||
@@ -265,10 +277,11 @@ export function registerCronEditCommand(cron: Command) {
             opts.clearTools;
           const hasAgentTurnPatch =
             hasAgentTurnPayloadField ||
-            hasDeliveryModeFlag ||
+            Boolean(opts.announce) ||
+            opts.deliver === true ||
             hasDeliveryTarget ||
             hasDeliveryAccount ||
-            hasBestEffort;
+            (hasBestEffort && !hasWebhookDelivery);
           if (hasSystemEventPatch && hasAgentTurnPatch) {
             throw new Error("Choose at most one payload change");
           }
@@ -300,7 +313,11 @@ export function registerCronEditCommand(cron: Command) {
           if (hasDeliveryModeFlag || hasDeliveryTarget || hasDeliveryAccount || hasBestEffort) {
             const delivery: Record<string, unknown> = {};
             if (hasDeliveryModeFlag) {
-              delivery.mode = opts.announce || opts.deliver === true ? "announce" : "none";
+              delivery.mode = hasWebhookDelivery
+                ? "webhook"
+                : opts.announce || opts.deliver === true
+                  ? "announce"
+                  : "none";
             } else if (
               opts.bestEffortDeliver === true ||
               (hasAgentTurnPayloadField && hasBestEffort)
@@ -312,7 +329,10 @@ export function registerCronEditCommand(cron: Command) {
               const channel = opts.channel.trim();
               delivery.channel = channel ? channel : undefined;
             }
-            if (typeof opts.to === "string") {
+            if (hasWebhookDelivery) {
+              const webhook = normalizeOptionalString(opts.webhook) ?? "";
+              delivery.to = webhook ? webhook : undefined;
+            } else if (typeof opts.to === "string") {
               const to = opts.to.trim();
               delivery.to = to ? to : undefined;
             }
@@ -363,8 +383,8 @@ export function registerCronEditCommand(cron: Command) {
           } else if (failureAlertFlag === true || hasFailureAlertFields) {
             const failureAlert: Record<string, unknown> = {};
             if (hasFailureAlertAfter) {
-              const after = Number.parseInt(String(opts.failureAlertAfter), 10);
-              if (!Number.isFinite(after) || after <= 0) {
+              const after = parseStrictPositiveInteger(opts.failureAlertAfter);
+              if (after === undefined) {
                 throw new Error("Invalid --failure-alert-after (must be a positive integer).");
               }
               failureAlert.after = after;

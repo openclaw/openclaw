@@ -766,6 +766,7 @@ describe("updateNpmInstalledPlugins", () => {
       "version",
       "dist.integrity",
       "dist.shasum",
+      "openclaw",
       "--json",
     ]);
     if (npmViewCall()?.[1] === undefined) {

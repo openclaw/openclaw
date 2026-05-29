@@ -1,5 +1,5 @@
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
+import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { describe, expect, it } from "vitest";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 import { castAgentMessage } from "./test-helpers/agent-message-fixtures.js";
@@ -173,7 +173,7 @@ describe("installSessionToolResultGuard", () => {
     expectPersistedRoles(sm, ["assistant", "toolResult"]);
   });
 
-  it("applies pi-style count-based truncation wording when persisting oversized tool results", () => {
+  it("applies count-based truncation wording when persisting oversized tool results", () => {
     const sm = SessionManager.inMemory();
     installSessionToolResultGuard(sm);
 
@@ -196,6 +196,19 @@ describe("installSessionToolResultGuard", () => {
 
     const text = getToolResultText(getPersistedMessages(sm));
     expect(text.length).toBeLessThanOrEqual(120);
+    expect(text).toContain("truncated");
+  });
+
+  it("falls back to the default tool-result cap for non-finite configured caps", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm, {
+      maxToolResultChars: Number.NaN,
+    });
+
+    appendToolResultText(sm, "x".repeat(80_000));
+
+    const text = getToolResultText(getPersistedMessages(sm));
+    expect(text.length).toBeLessThanOrEqual(16_000);
     expect(text).toContain("truncated");
   });
 

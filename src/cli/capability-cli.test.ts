@@ -134,6 +134,7 @@ const mocks = vi.hoisted(() => ({
   listMemoryEmbeddingProviders: vi.fn(() => [
     { id: "openai", defaultModel: "text-embedding-3-small", transport: "remote" },
   ]),
+  listEmbeddingProviders: vi.fn(() => []),
   registerBuiltInMemoryEmbeddingProviders: vi.fn(),
   buildMediaUnderstandingRegistry: vi.fn(() => new Map()),
   convertHeicToJpeg: vi.fn(async () => Buffer.from("jpeg-normalized")),
@@ -192,6 +193,11 @@ vi.mock("../runtime.js", () => ({
 
 vi.mock("../secrets/provider-env-vars.js", () => ({
   getProviderEnvVars: mocks.getProviderEnvVars,
+  resolveProviderAuthLookupMaps: () => ({
+    aliasMap: {},
+    envCandidateMap: {},
+    authEvidenceMap: {},
+  }),
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -303,6 +309,11 @@ vi.mock("../plugins/memory-embedding-providers.js", () => ({
     mocks.listMemoryEmbeddingProviders as unknown as typeof import("../plugins/memory-embedding-providers.js").listMemoryEmbeddingProviders,
   registerMemoryEmbeddingProvider:
     mocks.registerMemoryEmbeddingProvider as unknown as typeof import("../plugins/memory-embedding-providers.js").registerMemoryEmbeddingProvider,
+}));
+
+vi.mock("../plugins/embedding-provider-runtime.js", () => ({
+  listEmbeddingProviders:
+    mocks.listEmbeddingProviders as unknown as typeof import("../plugins/embedding-provider-runtime.js").listEmbeddingProviders,
 }));
 
 vi.mock("../plugin-sdk/memory-core-bundled-runtime.js", () => ({
@@ -494,6 +505,12 @@ describe("capability cli", () => {
     mocks.convertHeicToJpeg.mockClear();
     mocks.createEmbeddingProvider.mockClear();
     mocks.registerMemoryEmbeddingProvider.mockClear();
+    mocks.listMemoryEmbeddingProviders
+      .mockReset()
+      .mockReturnValue([
+        { id: "openai", defaultModel: "text-embedding-3-small", transport: "remote" },
+      ]);
+    mocks.listEmbeddingProviders.mockReset().mockReturnValue([]);
     mocks.registerBuiltInMemoryEmbeddingProviders.mockClear();
     mocks.isWebSearchProviderConfigured.mockReset().mockReturnValue(false);
     mocks.isWebFetchProviderConfigured.mockReset().mockReturnValue(false);
@@ -707,7 +724,7 @@ describe("capability cli", () => {
     const preparedParams = firstPreparedModelParams();
     expect(preparedParams?.agentId).toBe("main");
     expect(preparedParams?.allowMissingApiKeyModes).toEqual(["aws-sdk"]);
-    expect(preparedParams?.skipPiDiscovery).toBe(true);
+    expect(preparedParams?.skipAgentDiscovery).toBe(true);
     const call = firstCompletionCall();
     expect(call?.context?.messages?.[0]?.role).toBe("user");
     expect(call?.context?.messages?.[0]?.content).toBe("hello");
@@ -720,7 +737,7 @@ describe("capability cli", () => {
     const params = firstPreparedModelParams();
     expect(params?.modelRef).toBe("mistral/mistral-medium-3-5");
     expect(params?.allowBundledStaticCatalogFallback).toBe(true);
-    expect(params?.skipPiDiscovery).toBe(true);
+    expect(params?.skipAgentDiscovery).toBe(true);
   });
 
   it("does not enable bundled static catalog fallback without an explicit provider/model override", async () => {
@@ -1891,6 +1908,74 @@ describe("capability cli", () => {
     expectRuntimeErrorContains("Video asset at index 0 has neither buffer nor url");
   });
 
+  it("rejects partial image generate count before provider dispatch", async () => {
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: ["capability", "image", "generate", "--prompt", "portrait", "--count", "2x"],
+      }),
+    ).rejects.toThrow("exit 1");
+    expectRuntimeErrorContains("--count must be a positive integer");
+    expect(mocks.generateImage).not.toHaveBeenCalled();
+  });
+
+  it("rejects partial image generate timeout before provider dispatch", async () => {
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: ["capability", "image", "generate", "--prompt", "portrait", "--timeout-ms", "1000ms"],
+      }),
+    ).rejects.toThrow("exit 1");
+    expectRuntimeErrorContains("Invalid --timeout. Use a positive millisecond value");
+    expect(mocks.generateImage).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "image generate",
+      ["capability", "image", "generate", "--prompt", "portrait", "--timeout-ms", "1000ms"],
+    ],
+    [
+      "image edit",
+      [
+        "capability",
+        "image",
+        "edit",
+        "--file",
+        "photo.png",
+        "--prompt",
+        "crop it",
+        "--timeout-ms",
+        "1000ms",
+      ],
+    ],
+    [
+      "image describe",
+      ["capability", "image", "describe", "--file", "photo.png", "--timeout-ms", "1000ms"],
+    ],
+    [
+      "image describe-many",
+      ["capability", "image", "describe-many", "--file", "photo.png", "--timeout-ms", "1000ms"],
+    ],
+    [
+      "video generate",
+      ["capability", "video", "generate", "--prompt", "clip", "--timeout-ms", "1000ms"],
+    ],
+  ])("rejects malformed %s timeout before provider dispatch", async (_name, argv) => {
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv,
+      }),
+    ).rejects.toThrow("exit 1");
+
+    expectRuntimeErrorContains("Invalid --timeout. Use a positive millisecond value");
+    expect(mocks.generateImage).not.toHaveBeenCalled();
+    expect(mocks.generateVideo).not.toHaveBeenCalled();
+    expect(mocks.describeImageFile).not.toHaveBeenCalled();
+    expect(mocks.describeImageFileWithModel).not.toHaveBeenCalled();
+  });
+
   it("routes audio transcribe through transcription, not realtime", async () => {
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,
@@ -2470,6 +2555,19 @@ describe("capability cli", () => {
     );
   });
 
+  it("rejects partial web search limit before provider dispatch", async () => {
+    const webSearchRuntime = await import("../web-search/runtime.js");
+    vi.mocked(webSearchRuntime.runWebSearch).mockClear();
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: ["capability", "web", "search", "--query", "ping", "--limit", "3x"],
+      }),
+    ).rejects.toThrow("exit 1");
+    expectRuntimeErrorContains("--limit must be a positive integer");
+    expect(webSearchRuntime.runWebSearch).not.toHaveBeenCalled();
+  });
+
   it("uses the infer web search provider override when resolving SecretRefs", async () => {
     const unresolvedConfig = {
       tools: { web: { search: { provider: "exa", enabled: true } } },
@@ -2780,6 +2878,105 @@ describe("capability cli", () => {
         selected: true,
         id: "gemini",
         defaultModel: "gemini-embedding-001",
+        transport: "remote",
+        autoSelectPriority: undefined,
+      },
+    ]);
+  });
+
+  it("includes generic embedding providers in embedding provider state", async () => {
+    mocks.loadConfig.mockReturnValue({});
+    mocks.resolveMemorySearchConfig.mockReturnValue({
+      provider: "openai-compatible",
+      model: "text-embedding-bge-m3",
+    } as never);
+    mocks.listMemoryEmbeddingProviders.mockReturnValue([
+      { id: "openai", defaultModel: "text-embedding-3-small", transport: "remote" },
+    ]);
+    mocks.listEmbeddingProviders.mockReturnValue([
+      { id: "openai-compatible", transport: "remote" },
+    ] as never);
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "embedding", "providers", "--json"],
+    });
+
+    expect(mocks.runtime.writeJson).toHaveBeenCalledWith([
+      {
+        available: true,
+        configured: false,
+        selected: false,
+        id: "openai",
+        defaultModel: "text-embedding-3-small",
+        transport: "remote",
+        autoSelectPriority: undefined,
+      },
+      {
+        available: true,
+        configured: true,
+        selected: true,
+        id: "openai-compatible",
+        defaultModel: undefined,
+        transport: "remote",
+        autoSelectPriority: undefined,
+      },
+    ]);
+  });
+
+  it("includes selected custom generic embedding provider aliases", async () => {
+    mocks.loadConfig.mockReturnValue({
+      models: {
+        providers: {
+          "tenant-embeddings": {
+            api: "openai-responses",
+            baseUrl: "http://127.0.0.1:1234/v1",
+            models: [],
+          },
+        },
+      },
+    });
+    mocks.resolveMemorySearchConfig.mockReturnValue({
+      provider: "tenant-embeddings",
+      model: "text-embedding-bge-m3",
+    } as never);
+    mocks.listMemoryEmbeddingProviders.mockReturnValue([
+      { id: "openai", defaultModel: "text-embedding-3-small", transport: "remote" },
+    ]);
+    mocks.listEmbeddingProviders.mockReturnValue([
+      { id: "openai-compatible", transport: "remote" },
+    ] as never);
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "embedding", "providers", "--json"],
+    });
+
+    expect(mocks.runtime.writeJson).toHaveBeenCalledWith([
+      {
+        available: true,
+        configured: false,
+        selected: false,
+        id: "openai",
+        defaultModel: "text-embedding-3-small",
+        transport: "remote",
+        autoSelectPriority: undefined,
+      },
+      {
+        available: true,
+        configured: false,
+        selected: false,
+        id: "openai-compatible",
+        defaultModel: undefined,
+        transport: "remote",
+        autoSelectPriority: undefined,
+      },
+      {
+        available: true,
+        configured: true,
+        selected: true,
+        id: "tenant-embeddings",
+        defaultModel: "text-embedding-bge-m3",
         transport: "remote",
         autoSelectPriority: undefined,
       },

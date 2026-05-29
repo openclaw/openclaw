@@ -9,11 +9,13 @@ export const KNIP_UNUSED_FILE_ALLOWLIST = [];
 // package bridge files. Ignore these when reported, but do not require them
 // to be reported.
 export const KNIP_OPTIONAL_UNUSED_FILE_ALLOWLIST = [
-  "extensions/acpx/src/runtime-internals/error-format.mjs",
   "extensions/acpx/src/runtime-internals/mcp-command-line.mjs",
   "extensions/acpx/src/runtime-internals/mcp-proxy.mjs",
   "extensions/canvas/src/host/a2ui-app/bootstrap.js",
   "extensions/canvas/src/host/a2ui-app/rolldown.config.mjs",
+  "extensions/copilot/src/doctor-probes.ts",
+  "extensions/copilot/src/telemetry-bridge.ts",
+  "extensions/copilot/src/user-input-bridge.ts",
   "extensions/diffs/src/viewer-client.ts",
   "extensions/diffs/src/viewer-payload.ts",
   "extensions/matrix/src/plugin-entry.runtime.js",

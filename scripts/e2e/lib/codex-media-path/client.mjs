@@ -1,18 +1,21 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import fs from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import { WebSocket } from "ws";
 import { PROTOCOL_VERSION } from "../../../../dist/gateway/protocol/index.js";
 import { renderBitmapTextPngBase64 } from "../../../../test/helpers/live-image-probe.ts";
+import { createJsonlRequestTailer } from "./jsonl-request-tail.mjs";
+import { readPositiveIntEnv } from "./limits.mjs";
+import { waitForWebSocketOpen } from "./open-websocket.mjs";
 
 const port = process.env.PORT;
 const token = process.env.OPENCLAW_GATEWAY_TOKEN;
 const appServerLog =
   process.env.OPENCLAW_CODEX_MEDIA_PATH_APP_SERVER_LOG ??
   "/tmp/openclaw-codex-media-path-app-server.jsonl";
-const timeoutSeconds = Number.parseInt(
-  process.env.OPENCLAW_CODEX_MEDIA_PATH_TIMEOUT_SECONDS ?? "180",
-  10,
+const timeoutSeconds = readPositiveIntEnv("OPENCLAW_CODEX_MEDIA_PATH_TIMEOUT_SECONDS", 180);
+const logTailMaxBytes = readPositiveIntEnv(
+  "OPENCLAW_CODEX_MEDIA_PATH_LOG_TAIL_MAX_BYTES",
+  2 * 1024 * 1024,
 );
 
 if (!port || !token) {
@@ -29,16 +32,9 @@ function sha256Base64(data) {
   return createHash("sha256").update(Buffer.from(data, "base64")).digest("hex");
 }
 
-function readLoggedRequests() {
-  if (!fs.existsSync(appServerLog)) {
-    return [];
-  }
-  return fs
-    .readFileSync(appServerLog, "utf8")
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => JSON.parse(line));
-}
+const loggedRequests = createJsonlRequestTailer(appServerLog, {
+  maxReadBytes: logTailMaxBytes,
+});
 
 async function waitFor(label, predicate, timeoutMs) {
   const started = Date.now();
@@ -67,20 +63,8 @@ function wsDataToString(data) {
 
 async function connectGateway() {
   const ws = new WebSocket(`ws://127.0.0.1:${port}`);
-  await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("gateway ws open timeout")), 45_000);
-    timer.unref?.();
-    ws.once("open", () => {
-      clearTimeout(timer);
-      resolve();
-    });
-    ws.once("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
-  });
+  await waitForWebSocketOpen(ws, 45_000, "gateway ws open timeout");
 
-  const events = [];
   const pending = new Map();
   ws.on("message", (data) => {
     let frame;
@@ -90,10 +74,6 @@ async function connectGateway() {
       return;
     }
     if (frame?.type === "event" && typeof frame.event === "string") {
-      events.push({
-        event: frame.event,
-        payload: frame.payload && typeof frame.payload === "object" ? frame.payload : {},
-      });
       return;
     }
     if (frame?.type !== "res" || typeof frame.id !== "string") {
@@ -163,7 +143,6 @@ async function connectGateway() {
   await request("sessions.subscribe", {}, { timeoutMs: 60_000 });
 
   return {
-    events,
     request,
     async close() {
       if (ws.readyState === WebSocket.CLOSED) {
@@ -220,7 +199,7 @@ try {
   const turnRequest = await waitFor(
     "Codex turn/start image input",
     () =>
-      readLoggedRequests().find((request) => {
+      loggedRequests.read().find((request) => {
         if (request.method !== "turn/start") {
           return undefined;
         }

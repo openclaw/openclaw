@@ -10,6 +10,7 @@ const START_OPTIONS_KEY_SECRET_SYMBOL = Symbol.for("openclaw.codexAppServerStart
 const START_OPTIONS_KEY_SECRET = getStartOptionsKeySecret();
 const UNIX_CODEX_REQUIREMENTS_PATH = "/etc/codex/requirements.toml";
 const WINDOWS_CODEX_REQUIREMENTS_SUFFIX = "\\OpenAI\\Codex\\requirements.toml";
+const PLAIN_DECIMAL_NUMBER_RE = /^[+-]?(?:(?:\d+\.?\d*)|(?:\.\d+))$/;
 
 type CodexAppServerTransportMode = "stdio" | "websocket";
 type CodexAppServerPolicyMode = "yolo" | "guardian";
@@ -20,6 +21,7 @@ type CodexAppServerDefaultPolicy = {
   sandbox?: CodexAppServerSandboxMode;
 };
 export type CodexAppServerApprovalPolicy = "never" | "on-request" | "on-failure" | "untrusted";
+export type CodexAppServerApprovalPolicySource = "config" | "env" | "requirements" | "implicit";
 export type CodexAppServerEffectiveApprovalPolicy =
   | CodexAppServerApprovalPolicy
   | {
@@ -112,6 +114,7 @@ export type CodexAppServerRuntimeOptions = {
   turnCompletionIdleTimeoutMs: number;
   postToolRawAssistantCompletionIdleTimeoutMs?: number;
   approvalPolicy: CodexAppServerEffectiveApprovalPolicy;
+  approvalPolicySource?: CodexAppServerApprovalPolicySource;
   sandbox: CodexAppServerSandboxMode;
   approvalsReviewer: CodexAppServerApprovalsReviewer;
   serviceTier?: CodexServiceTier;
@@ -414,6 +417,21 @@ export function resolveCodexAppServerRuntimeOptions(
     );
   }
 
+  const configApprovalPolicy = resolveApprovalPolicy(config.approvalPolicy);
+  const envApprovalPolicy = resolveApprovalPolicy(env.OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY);
+  const approvalPolicy =
+    configApprovalPolicy ??
+    envApprovalPolicy ??
+    defaultPolicy?.approvalPolicy ??
+    (policyMode === "guardian" ? "on-request" : "never");
+  const approvalPolicySource: CodexAppServerApprovalPolicySource = configApprovalPolicy
+    ? "config"
+    : envApprovalPolicy
+      ? "env"
+      : defaultPolicy?.approvalPolicy
+        ? "requirements"
+        : "implicit";
+
   return {
     start: {
       transport,
@@ -439,11 +457,8 @@ export function resolveCodexAppServerRuntimeOptions(
           ),
         }
       : {}),
-    approvalPolicy:
-      resolveApprovalPolicy(config.approvalPolicy) ??
-      resolveApprovalPolicy(env.OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY) ??
-      defaultPolicy?.approvalPolicy ??
-      (policyMode === "guardian" ? "on-request" : "never"),
+    approvalPolicy,
+    approvalPolicySource,
     sandbox:
       resolveSandbox(config.sandbox) ??
       resolveSandbox(env.OPENCLAW_CODEX_APP_SERVER_SANDBOX) ??
@@ -1021,10 +1036,11 @@ function readBooleanEnv(value: string | undefined): boolean | undefined {
 }
 
 function readNumberEnv(value: string | undefined): number | undefined {
-  if (value === undefined) {
+  const trimmed = value?.trim();
+  if (!trimmed || !PLAIN_DECIMAL_NUMBER_RE.test(trimmed)) {
     return undefined;
   }
-  const parsed = Number(value);
+  const parsed = Number(trimmed);
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 

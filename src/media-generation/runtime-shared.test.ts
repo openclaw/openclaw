@@ -241,6 +241,16 @@ describe("media-generation runtime shared normalization", () => {
     expect(deriveAspectRatioFromSize("1024x1536")).toBe("2:3");
   });
 
+  it("rejects unsafe size dimensions before deriving ratios", () => {
+    expect(deriveAspectRatioFromSize("9007199254740993x3")).toBeUndefined();
+    expect(
+      resolveClosestSize({
+        requestedSize: "9007199254740993x3",
+        supportedSizes: ["1024x1024", "1536x1024"],
+      }),
+    ).toBeUndefined();
+  });
+
   it("maps unsupported sizes to the closest supported size", () => {
     expect(
       resolveClosestSize({
@@ -266,6 +276,26 @@ describe("media-generation runtime shared normalization", () => {
         supportedResolutions: ["1K", "4K"],
       }),
     ).toBe("1K");
+  });
+
+  it("maps video-style resolutions by numeric distance", () => {
+    expect(
+      resolveClosestResolution({
+        requestedResolution: "480P",
+        supportedResolutions: ["360P", "540P", "720P"],
+        order: ["360P", "480P", "540P", "720P"],
+      }),
+    ).toBe("540P");
+  });
+
+  it("does not map across image and video resolution units", () => {
+    expect(
+      resolveClosestResolution({
+        requestedResolution: "4K",
+        supportedResolutions: ["768P", "1080P"],
+        order: ["360P", "480P", "540P", "720P", "768P", "1080P"],
+      }),
+    ).toBeUndefined();
   });
 
   it("clamps durations to the closest supported max", () => {

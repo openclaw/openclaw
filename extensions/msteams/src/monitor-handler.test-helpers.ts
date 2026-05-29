@@ -1,10 +1,11 @@
+import type { PreparedInboundReply } from "openclaw/plugin-sdk/channel-inbound";
 import { vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
-import type { MSTeamsAdapter } from "./messenger.js";
 import type { MSTeamsActivityHandler, MSTeamsMessageHandlerDeps } from "./monitor-handler.js";
 import type { MSTeamsPollStore } from "./polls.js";
 import { setMSTeamsRuntime } from "./runtime.js";
+import type { MSTeamsApp } from "./sdk.js";
 
 type RuntimeRoutePeer = { peer: { kind: string; id: string } };
 
@@ -25,28 +26,26 @@ type MSTeamsTestRuntimeOptions = {
 };
 
 export function installMSTeamsTestRuntime(options: MSTeamsTestRuntimeOptions = {}): void {
-  const runPrepared = vi.fn(
-    async (turn: Parameters<PluginRuntime["channel"]["turn"]["runPrepared"]>[0]) => {
-      await turn.recordInboundSession({
-        storePath: turn.storePath,
-        sessionKey: turn.ctxPayload.SessionKey ?? turn.routeSessionKey,
-        ctx: turn.ctxPayload,
-        groupResolution: turn.record?.groupResolution,
-        createIfMissing: turn.record?.createIfMissing,
-        updateLastRoute: turn.record?.updateLastRoute,
-        onRecordError: turn.record?.onRecordError ?? (() => undefined),
-      });
-      const dispatchResult = await turn.runDispatch();
-      return {
-        admission: { kind: "dispatch" as const },
-        dispatched: true,
-        ctxPayload: turn.ctxPayload,
-        routeSessionKey: turn.routeSessionKey,
-        dispatchResult,
-      };
-    },
-  );
-  const run = vi.fn(async (params: Parameters<PluginRuntime["channel"]["turn"]["run"]>[0]) => {
+  const runPrepared = vi.fn(async (turn: PreparedInboundReply<unknown>) => {
+    await turn.recordInboundSession({
+      storePath: turn.storePath,
+      sessionKey: turn.ctxPayload.SessionKey ?? turn.routeSessionKey,
+      ctx: turn.ctxPayload,
+      groupResolution: turn.record?.groupResolution,
+      createIfMissing: turn.record?.createIfMissing,
+      updateLastRoute: turn.record?.updateLastRoute,
+      onRecordError: turn.record?.onRecordError ?? (() => undefined),
+    });
+    const dispatchResult = await turn.runDispatch();
+    return {
+      admission: { kind: "dispatch" as const },
+      dispatched: true,
+      ctxPayload: turn.ctxPayload,
+      routeSessionKey: turn.routeSessionKey,
+      dispatchResult,
+    };
+  });
+  const run = vi.fn(async (params: Parameters<PluginRuntime["channel"]["inbound"]["run"]>[0]) => {
     const input = await params.adapter.ingest(params.raw);
     if (!input) {
       return { admission: { kind: "drop" as const, reason: "ingest-null" }, dispatched: false };
@@ -126,9 +125,8 @@ export function installMSTeamsTestRuntime(options: MSTeamsTestRuntimeOptions = {
         recordInboundSession: options.recordInboundSession ?? vi.fn(async () => undefined),
         ...(options.resolveStorePath ? { resolveStorePath: options.resolveStorePath } : {}),
       },
-      turn: {
-        run: run as unknown as PluginRuntime["channel"]["turn"]["run"],
-        runPrepared: runPrepared as unknown as PluginRuntime["channel"]["turn"]["runPrepared"],
+      inbound: {
+        run: run as unknown as PluginRuntime["channel"]["inbound"]["run"],
       },
     },
   } as unknown as PluginRuntime);
@@ -156,12 +154,17 @@ export function createMSTeamsMessageHandlerDeps(params?: {
   cfg?: OpenClawConfig;
   runtime?: RuntimeEnv;
 }): MSTeamsMessageHandlerDeps {
-  const adapter: MSTeamsAdapter = {
-    continueConversation: async () => {},
-    process: async () => {},
-    updateActivity: async () => {},
-    deleteActivity: async () => {},
-  };
+  const app = {
+    tokenManager: {
+      getBotToken: async () => ({ toString: () => "bot-token" }),
+      getGraphToken: async () => ({ toString: () => "graph-token" }),
+    },
+    api: {},
+    graph: {},
+    send: async () => ({ id: "sent" }),
+    initialize: async () => {},
+    on: () => {},
+  } as unknown as MSTeamsApp;
   const conversationStore: MSTeamsConversationStore = {
     upsert: async () => {},
     get: async () => null,
@@ -180,7 +183,7 @@ export function createMSTeamsMessageHandlerDeps(params?: {
     cfg: params?.cfg ?? {},
     runtime: (params?.runtime ?? { error: vi.fn() }) as RuntimeEnv,
     appId: "test-app-id",
-    adapter,
+    app,
     tokenProvider: {
       getAccessToken: async () => "token",
     },

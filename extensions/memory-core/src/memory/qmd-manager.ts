@@ -126,6 +126,12 @@ type McporterState = {
   daemonStart: Promise<void> | null;
 };
 
+function normalizePositiveInteger(value: number | undefined, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(1, Math.floor(value))
+    : fallback;
+}
+
 type QmdEmbedQueueState = {
   tail: Promise<void>;
 };
@@ -1198,8 +1204,7 @@ export class QmdMemoryManager implements MemorySearchManager {
         }
         const args = this.buildSearchArgs(qmdSearchCommand, trimmed, limit);
         args.push(...this.buildCollectionFilterArgs(collectionGroups[0] ?? collectionNames));
-        const result = await this.runQmd(args, { timeoutMs: this.qmd.limits.timeoutMs });
-        return parseQmdQueryJson(result.stdout, result.stderr);
+        return await this.runQmdSearch(args, qmdSearchCommand);
       } catch (err) {
         if (allowMissingCollectionRepair && this.isMissingCollectionSearchError(err)) {
           throw err;
@@ -1228,10 +1233,7 @@ export class QmdMemoryManager implements MemorySearchManager {
             fallbackArgs.push(
               ...this.buildCollectionFilterArgs(collectionGroups[0] ?? collectionNames),
             );
-            const fallback = await this.runQmd(fallbackArgs, {
-              timeoutMs: this.qmd.limits.timeoutMs,
-            });
-            return parseQmdQueryJson(fallback.stdout, fallback.stderr);
+            return await this.runQmdSearch(fallbackArgs, "query");
           } catch (fallbackErr) {
             log.warn(`qmd query fallback failed: ${String(fallbackErr)}`);
             throw fallbackErr instanceof Error ? fallbackErr : new Error(String(fallbackErr));
@@ -1337,18 +1339,19 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
     const contextLimits = this.contextLimits;
     if (params.from !== undefined || params.lines !== undefined) {
-      const requestedCount = Math.max(
-        1,
+      const startLine = normalizePositiveInteger(params.from, 1);
+      const requestedCount = normalizePositiveInteger(
         params.lines ?? contextLimits?.memoryGetDefaultLines ?? DEFAULT_MEMORY_READ_LINES,
+        DEFAULT_MEMORY_READ_LINES,
       );
-      const partial = await this.readPartialText(absPath, params.from, requestedCount);
+      const partial = await this.readPartialText(absPath, startLine, requestedCount);
       if (partial.missing) {
         return { text: "", path: relPath };
       }
       return buildMemoryReadResultFromSlice({
         selectedLines: partial.selectedLines,
         relPath,
-        startLine: Math.max(1, params.from ?? 1),
+        startLine,
         moreSourceLinesRemain: partial.moreSourceLinesRemain,
         maxChars: contextLimits?.memoryGetMaxChars,
         suggestReadFallback: isDefaultMemoryPath(relPath),
@@ -1907,6 +1910,46 @@ export class QmdMemoryManager implements MemorySearchManager {
     });
   }
 
+  private async runQmdSearch(
+    args: string[],
+    command: "query" | "search" | "vsearch",
+  ): Promise<QmdQueryResult[]> {
+    try {
+      const result = await this.runQmd(args, { timeoutMs: this.qmd.limits.timeoutMs });
+      return parseQmdQueryJson(result.stdout, result.stderr);
+    } catch (err) {
+      const recovered = this.parseFailedQmdSearchJson(err, command);
+      if (recovered) {
+        return recovered;
+      }
+      throw err instanceof Error ? err : new Error(String(err));
+    }
+  }
+
+  private parseFailedQmdSearchJson(
+    err: unknown,
+    command: "query" | "search" | "vsearch",
+  ): QmdQueryResult[] | null {
+    if (
+      !isQmdCliCommandError(err) ||
+      this.isMissingCollectionSearchError(err) ||
+      this.isUnsupportedQmdOptionError(err) ||
+      this.isSqliteBusyError(err) ||
+      !isQmdNativeAbortAfterOutput(err)
+    ) {
+      return null;
+    }
+    try {
+      const parsed = parseQmdQueryJson(err.stdout, err.stderr);
+      log.warn(
+        `qmd ${command} exited non-zero after producing valid JSON; using captured search results (${formatQmdSearchExit(err)})`,
+      );
+      return parsed;
+    } catch {
+      return null;
+    }
+  }
+
   /**
    * QMD 1.1+ unified all search modes under a single "query" MCP tool
    * that accepts a `searches` array with typed sub-queries (lex, vec, hyde).
@@ -2169,8 +2212,8 @@ export class QmdMemoryManager implements MemorySearchManager {
   ): Promise<
     { missing: true } | { missing: false; selectedLines: string[]; moreSourceLinesRemain: boolean }
   > {
-    const start = Math.max(1, from ?? 1);
-    const count = Math.max(1, lines ?? Number.POSITIVE_INFINITY);
+    const start = normalizePositiveInteger(from, 1);
+    const count = normalizePositiveInteger(lines, Number.MAX_SAFE_INTEGER);
     let handle;
     try {
       handle = await fs.open(absPath);
@@ -2986,8 +3029,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     for (const collectionNames of collectionGroups) {
       const args = this.buildSearchArgs(command, query, limit);
       args.push(...this.buildCollectionFilterArgs(collectionNames));
-      const result = await this.runQmd(args, { timeoutMs: this.qmd.limits.timeoutMs });
-      const parsed = parseQmdQueryJson(result.stdout, result.stderr);
+      const parsed = await this.runQmdSearch(args, command);
       for (const entry of parsed) {
         const defaultCollection = collectionNames.length === 1 ? collectionNames[0] : undefined;
         const normalizedHints = this.normalizeDocHints({
@@ -3156,4 +3198,53 @@ function resolveQmdManagerRuntimeConfig(
 
 function normalizeQmdSemanticQuery(query: string): string {
   return query.replace(/(\w)-(?=\w)/g, "$1 ");
+}
+
+function formatQmdSearchExit(err: { code: number | null; signal: NodeJS.Signals | null }): string {
+  if (err.code === null) {
+    return `signal ${err.signal ?? "unknown"}`;
+  }
+  return `code ${err.code}`;
+}
+
+function isQmdCliCommandError(err: unknown): err is {
+  code: number | null;
+  signal: NodeJS.Signals | null;
+  stdout: string;
+  stderr: string;
+} {
+  if (!(err instanceof Error)) {
+    return false;
+  }
+  const candidate = err as {
+    code?: unknown;
+    signal?: unknown;
+    stdout?: unknown;
+    stderr?: unknown;
+  };
+  return (
+    (typeof candidate.code === "number" || candidate.code === null) &&
+    (typeof candidate.signal === "string" || candidate.signal === null) &&
+    typeof candidate.stdout === "string" &&
+    typeof candidate.stderr === "string"
+  );
+}
+
+function isQmdNativeAbortAfterOutput(err: {
+  code: number | null;
+  signal: NodeJS.Signals | null;
+  stderr: string;
+}): boolean {
+  const aborted = err.code === 134 || err.signal === "SIGABRT";
+  if (!aborted) {
+    return false;
+  }
+  const stderr = normalizeLowercaseStringOrEmpty(err.stderr);
+  return (
+    stderr.includes("ggml-metal") ||
+    stderr.includes("node-llama-cpp") ||
+    stderr.includes("llama.cpp") ||
+    stderr.includes("abort trap") ||
+    stderr.includes("assertion failed")
+  );
 }

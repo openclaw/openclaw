@@ -31,4 +31,38 @@ describe("callBrowserRequest", () => {
     const extra = call?.[3];
     expect(extra).toEqual({ progress: true, scopes: ["operator.admin"] });
   });
+
+  it("rejects partial parent timeout values before gateway dispatch", async () => {
+    await expect(
+      callBrowserRequest({ json: true, timeout: "60000ms" }, { method: "GET", path: "/status" }),
+    ).rejects.toThrow("--timeout must be a positive integer.");
+    expect(gatewayMocks.callGatewayFromCli).not.toHaveBeenCalled();
+  });
+
+  it("caps explicit request timeouts to Node's safe timer range", async () => {
+    await callBrowserRequest(
+      { json: true },
+      { method: "GET", path: "/status" },
+      { timeoutMs: 3_000_000_000 },
+    );
+
+    const call = gatewayMocks.callGatewayFromCli.mock.calls[0] as unknown as
+      | CallGatewayFromCliArgs
+      | undefined;
+    expect(call?.[1]).toMatchObject({ timeout: "2147483647" });
+    expect(call?.[2]).toMatchObject({ timeoutMs: 2_147_483_647 });
+  });
+
+  it("caps parent timeout values to Node's safe timer range", async () => {
+    await callBrowserRequest(
+      { json: true, timeout: "3000000000" },
+      { method: "GET", path: "/status" },
+    );
+
+    const call = gatewayMocks.callGatewayFromCli.mock.calls[0] as unknown as
+      | CallGatewayFromCliArgs
+      | undefined;
+    expect(call?.[1]).toMatchObject({ timeout: "2147483647" });
+    expect(call?.[2]).toMatchObject({ timeoutMs: 2_147_483_647 });
+  });
 });
