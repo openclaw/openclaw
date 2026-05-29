@@ -8,7 +8,7 @@ import type { RecordInboundSession } from "../session.types.js";
 import type { ChannelTurnResult, DispatchedChannelTurnResult } from "./kernel.js";
 import {
   clearChannelBotPairLoopGuardForTests,
-  createNoopChannelTurnDeliveryAdapter,
+  createNoopChannelEventDeliveryAdapter,
   dispatchAssembledChannelTurn,
   hasFinalChannelTurnDispatch,
   hasVisibleChannelTurnDispatch,
@@ -399,6 +399,78 @@ describe("channel turn kernel", () => {
 
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
     expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it("preserves durable partial-send visibility when generic delivery throws", async () => {
+    const error = new Error("second chunk failed");
+    sendDurableMessageBatch.mockResolvedValueOnce({
+      status: "partial_failed",
+      results: [{ channel: "telegram", messageId: "tg-1" }],
+      receipt: {
+        primaryPlatformMessageId: "tg-1",
+        platformMessageIds: ["tg-1"],
+        parts: [{ platformMessageId: "tg-1", kind: "text", index: 0 }],
+        sentAt: 1,
+      },
+      error,
+      sentBeforeError: true,
+    });
+    const deliver = vi.fn(async () => ({ messageIds: ["legacy-1"], visibleReplySent: true }));
+    const dispatchReplyWithBufferedBlockDispatcher = createDispatch();
+
+    await expect(
+      dispatchAssembledChannelTurn({
+        cfg,
+        channel: "telegram",
+        accountId: "acct",
+        agentId: "main",
+        routeSessionKey: "agent:main:telegram:peer",
+        storePath: "/tmp/sessions.json",
+        ctxPayload: createCtx({ To: "123", OriginatingTo: "123" }),
+        recordInboundSession: createRecordInboundSession(),
+        dispatchReplyWithBufferedBlockDispatcher,
+        delivery: { deliver, durable: { replyToMode: "first" } },
+      }),
+    ).rejects.toMatchObject({
+      sentBeforeError: true,
+      visibleReplySent: true,
+    });
+
+    expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it("preserves visible delivery when post-delivery observers throw", async () => {
+    const error = new Error("observer failed");
+    const deliver = vi.fn(async () => ({ messageIds: ["local-1"], visibleReplySent: true }));
+    const dispatchReplyWithBufferedBlockDispatcher = createDispatch();
+
+    await expect(
+      dispatchAssembledChannelTurn({
+        cfg,
+        channel: "telegram",
+        accountId: "acct",
+        agentId: "main",
+        routeSessionKey: "agent:main:telegram:peer",
+        storePath: "/tmp/sessions.json",
+        ctxPayload: createCtx({ To: "123", OriginatingTo: "123" }),
+        recordInboundSession: createRecordInboundSession(),
+        dispatchReplyWithBufferedBlockDispatcher,
+        delivery: {
+          deliver,
+          durable: false,
+          onDelivered: () => {
+            throw error;
+          },
+        },
+      }),
+    ).rejects.toMatchObject({
+      sentBeforeError: true,
+      visibleReplySent: true,
+    });
+    expect(error).toMatchObject({
+      sentBeforeError: true,
+      visibleReplySent: true,
+    });
   });
 
   it("returns custom delivery result to the buffered dispatcher", async () => {
@@ -1094,7 +1166,7 @@ describe("channel turn kernel", () => {
             ctxPayload: createCtx(),
             recordInboundSession: createRecordInboundSession(),
             dispatchReplyWithBufferedBlockDispatcher,
-            delivery: createNoopChannelTurnDeliveryAdapter(),
+            delivery: createNoopChannelEventDeliveryAdapter(),
             record: {
               onRecordError: vi.fn(),
             },

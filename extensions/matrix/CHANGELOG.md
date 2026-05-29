@@ -1,10 +1,62 @@
 # Changelog
 
+## 2026.5.28
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.5.27
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.5.26
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.5.24
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.5.22
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.5.21
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.5.20
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.5.19
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
 ## 2026.5.17
 
 ### Changes
 
 - Version alignment with core OpenClaw release numbers.
+
+### Fixes
+
+- Matrix/E2EE: stop requesting MSC4222 `state_after` sync responses so homeservers with incomplete state-after data do not leave fresh encrypted rooms without outbound room encryptors. Fixes #82515. Thanks @nickdecooman.
 
 ## 2026.5.16
 

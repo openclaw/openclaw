@@ -16,7 +16,7 @@ vi.mock("./runtime-entry.js", () => ({
 
 import plugin from "./index.js";
 import { createVoiceCallRuntime } from "./runtime-entry.js";
-import { __testing as voiceCallCliTesting } from "./src/cli.js";
+import { testing as voiceCallCliTesting } from "./src/cli.js";
 
 const noopLogger = {
   info: vi.fn(),
@@ -652,6 +652,49 @@ describe("voice-call plugin", () => {
       details: { error?: unknown };
     };
     expect(String(result.details.error)).toContain("sid required");
+  });
+
+  it("CLI rejects invalid numeric options", async () => {
+    const program = new Command();
+    await registerVoiceCallCli(program);
+
+    await expect(
+      program.parseAsync(["voicecall", "expose", "--port", "nope", "--mode", "off"], {
+        from: "user",
+      }),
+    ).rejects.toThrow(/Invalid numeric value for --port/);
+    await expect(
+      program.parseAsync(["voicecall", "expose", "--port", "Infinity", "--mode", "off"], {
+        from: "user",
+      }),
+    ).rejects.toThrow(/Invalid numeric value for --port/);
+    await expect(
+      program.parseAsync(["voicecall", "expose", "--port", "3334.9", "--mode", "off"], {
+        from: "user",
+      }),
+    ).rejects.toThrow(/Invalid numeric value for --port/);
+
+    const tmpFile = path.join(os.tmpdir(), `voicecall-invalid-${Date.now()}.jsonl`);
+    fs.writeFileSync(tmpFile, "{}\n", "utf8");
+    try {
+      await expect(
+        program.parseAsync(["voicecall", "latency", "--file", tmpFile, "--last", "later"], {
+          from: "user",
+        }),
+      ).rejects.toThrow(/Invalid numeric value for --last/);
+      await expect(
+        program.parseAsync(["voicecall", "latency", "--file", tmpFile, "--last", "Infinity"], {
+          from: "user",
+        }),
+      ).rejects.toThrow(/Invalid numeric value for --last/);
+      await expect(
+        program.parseAsync(["voicecall", "latency", "--file", tmpFile, "--last", "1.5"], {
+          from: "user",
+        }),
+      ).rejects.toThrow(/Invalid numeric value for --last/);
+    } finally {
+      fs.unlinkSync(tmpFile);
+    }
   });
 
   it("CLI latency summarizes turn metrics from JSONL", async () => {

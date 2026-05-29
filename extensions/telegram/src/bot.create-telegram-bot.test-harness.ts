@@ -1,5 +1,6 @@
-import { rmSync } from "node:fs";
-import { buildChannelTurnContext } from "openclaw/plugin-sdk/channel-inbound";
+import { existsSync, readdirSync, rmSync } from "node:fs";
+import path from "node:path";
+import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { MockFn } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
@@ -33,9 +34,18 @@ type ReplyPayloadLike = {
   replyToId?: string;
 };
 
-const { sessionStorePath } = vi.hoisted(() => ({
-  sessionStorePath: `/tmp/openclaw-telegram-${process.pid}-${process.env.VITEST_POOL_ID ?? "0"}.json`,
-}));
+const { sessionStorePath } = vi.hoisted(() => {
+  const tempRoot =
+    process.platform === "win32"
+      ? (process.env.TEMP ?? process.env.TMP ?? "C:\\Windows\\Temp")
+      : (process.env.TMPDIR ?? "/tmp");
+  const separator = process.platform === "win32" ? "\\" : "/";
+  return {
+    sessionStorePath: `${tempRoot.replace(/[\\/]+$/u, "")}${separator}openclaw-telegram-${
+      process.pid
+    }-${process.env.VITEST_POOL_ID ?? "0"}.json`,
+  };
+});
 
 const { loadWebMedia } = vi.hoisted((): { loadWebMedia: AnyMock } => ({
   loadWebMedia: vi.fn(),
@@ -388,7 +398,7 @@ export const telegramBotDepsForTest: TelegramBotDeps = {
   resolveInboundLastRouteSessionKey: ({ route, sessionKey }) =>
     route.lastRoutePolicy === "main" ? route.mainSessionKey : sessionKey,
   resolvePinnedMainDmOwnerFromAllowlist: () => null,
-  buildChannelTurnContext,
+  buildChannelInboundEventContext,
   readChannelAllowFromStore:
     readChannelAllowFromStore as TelegramBotDeps["readChannelAllowFromStore"],
   upsertChannelPairingRequest:
@@ -477,11 +487,25 @@ export function makeForumGroupMessageCtx(params?: {
   });
 }
 
+function clearTelegramDispatchDedupeFilesForTest(): void {
+  const dir = path.dirname(sessionStorePath);
+  if (!existsSync(dir)) {
+    return;
+  }
+  const prefix = `${path.basename(sessionStorePath)}.telegram-message-dispatch-`;
+  for (const entry of readdirSync(dir)) {
+    if (entry.startsWith(prefix)) {
+      rmSync(path.join(dir, entry), { force: true });
+    }
+  }
+}
+
 beforeEach(() => {
   getRuntimeConfig.mockReset();
   getRuntimeConfig.mockReturnValue(DEFAULT_TELEGRAM_TEST_CONFIG);
   sessionStoreEntries.value = {};
   rmSync(`${sessionStorePath}.telegram-messages.json`, { force: true });
+  clearTelegramDispatchDedupeFilesForTest();
   loadSessionStoreMock.mockReset();
   loadSessionStoreMock.mockImplementation(() => sessionStoreEntries.value);
   resolveStorePathMock.mockReset();

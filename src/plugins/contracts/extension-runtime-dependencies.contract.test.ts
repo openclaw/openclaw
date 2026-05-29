@@ -1,8 +1,13 @@
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { builtinModules } from "node:module";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
+import {
+  listGitTrackedFiles,
+  toRepoPath,
+  toRepoRelativePath,
+} from "../../test-utils/repo-files.js";
 
 const EXTENSION_ROOT = "extensions";
 const REPO_ROOT = path.resolve(import.meta.dirname, "../../..");
@@ -16,8 +21,7 @@ const OPTIONAL_UNDECLARED_RUNTIME_IMPORTS = new Map<string, Set<string>>([
   ],
   [
     "extensions/discord",
-    // Prefer the pure-JS opusscript decoder, but keep the optional native decoder
-    // fallback for users who install it themselves.
+    // @discordjs/voice still probes the native addon in its dependency report path.
     new Set(["@discordjs/opus"]),
   ],
 ]);
@@ -57,16 +61,12 @@ type PackageManifest = {
 };
 const trackedFilesByRoot = new Map<string, readonly string[] | null>();
 
-function toPosixPath(filePath: string): string {
-  return filePath.split(path.sep).join("/");
-}
-
 function readPackageManifest(filePath: string): PackageManifest {
   return JSON.parse(fs.readFileSync(path.resolve(REPO_ROOT, filePath), "utf8")) as PackageManifest;
 }
 
 function listTrackedFiles(root: string): string[] | null {
-  const relativeRoot = toPosixPath(path.relative(REPO_ROOT, path.resolve(REPO_ROOT, root)));
+  const relativeRoot = toRepoRelativePath(REPO_ROOT, path.resolve(REPO_ROOT, root));
   if (!relativeRoot || relativeRoot.startsWith("..")) {
     return null;
   }
@@ -74,20 +74,12 @@ function listTrackedFiles(root: string): string[] | null {
     const files = trackedFilesByRoot.get(relativeRoot);
     return files ? [...files] : null;
   }
-  const result = spawnSync("git", ["ls-files", "--", relativeRoot], {
-    cwd: REPO_ROOT,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  if (result.status !== 0) {
+  const trackedFiles = listGitTrackedFiles({ repoRoot: REPO_ROOT, pathspecs: relativeRoot });
+  if (!trackedFiles) {
     trackedFilesByRoot.set(relativeRoot, null);
     return null;
   }
-  const files = result.stdout
-    .split("\n")
-    .map((line) => line.trim().replaceAll("\\", "/"))
-    .filter((line) => line.length > 0)
-    .toSorted();
+  const files = trackedFiles.toSorted();
   trackedFilesByRoot.set(relativeRoot, files);
   return [...files];
 }
@@ -115,7 +107,7 @@ function listPackageManifests(root: string): string[] {
 }
 
 function shouldSkipRuntimeFile(filePath: string): boolean {
-  const normalized = toPosixPath(filePath);
+  const normalized = toRepoPath(filePath);
   if (
     normalized.includes("/node_modules/") ||
     normalized.includes("/dist/") ||
@@ -244,7 +236,6 @@ function allDependencyNames(manifest: PackageManifest): string[] {
 function isDiscordPackageDependency(dependencyName: string): boolean {
   return (
     dependencyName === "discord-api-types" ||
-    dependencyName === "opusscript" ||
     dependencyName.startsWith("@discordjs/") ||
     dependencyName.startsWith("@snazzah/")
   );
@@ -259,7 +250,7 @@ describe("Discord dependency ownership", () => {
   });
 
   for (const manifestPath of listPackageManifests(EXTENSION_ROOT)) {
-    const extensionDir = toPosixPath(path.dirname(manifestPath));
+    const extensionDir = toRepoPath(path.dirname(manifestPath));
 
     if (extensionDir === "extensions/discord") {
       continue;
@@ -276,17 +267,13 @@ describe("Discord dependency ownership", () => {
 
 describe("extension runtime dependency manifests", () => {
   it("lists extension dependency inputs from git without walking extension dirs", () => {
-    const readDir = vi.spyOn(fs, "readdirSync");
-    try {
+    expectNoReaddirSyncDuring(() => {
       const manifests = listPackageManifests(EXTENSION_ROOT);
       const runtimeFiles = listRuntimeFiles("extensions/discord");
 
       expect(manifests.length).toBeGreaterThan(0);
       expect(runtimeFiles.length).toBeGreaterThan(0);
-      expect(readDir).not.toHaveBeenCalled();
-    } finally {
-      readDir.mockRestore();
-    }
+    });
   });
 
   it("keeps json5 in memory-core for packaged runtime config parsing", () => {
@@ -297,7 +284,7 @@ describe("extension runtime dependency manifests", () => {
   });
 
   for (const manifestPath of listPackageManifests(EXTENSION_ROOT)) {
-    const extensionDir = toPosixPath(path.dirname(manifestPath));
+    const extensionDir = toRepoPath(path.dirname(manifestPath));
 
     it(`${extensionDir} declares every runtime package import`, () => {
       const manifest = readPackageManifest(manifestPath);
@@ -318,7 +305,7 @@ describe("extension runtime dependency manifests", () => {
             continue;
           }
           const files = missing.get(packageName) ?? [];
-          files.push(toPosixPath(filePath));
+          files.push(toRepoPath(filePath));
           missing.set(packageName, files);
         }
       }

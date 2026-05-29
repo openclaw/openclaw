@@ -17,9 +17,10 @@ import {
   resolveBrowserOpenCommand,
 } from "../infra/browser-open.js";
 import { detectBinary } from "../infra/detect-binary.js";
-import { runCommandWithTimeout } from "../process/exec.js";
+import { movePathToTrash } from "../infra/fs-safe.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import { visibleWidth } from "../terminal/ansi.js";
 import { decorativeEmoji, supportsDecorativeEmoji } from "../terminal/decorative-emoji.js";
 import { stylePromptTitle } from "../terminal/prompt-style.js";
@@ -45,30 +46,76 @@ export function summarizeExistingConfig(config: OpenClawConfig): string {
   const rows: string[] = [];
   const defaults = config.agents?.defaults;
   if (defaults?.workspace) {
-    rows.push(shortenHomeInString(`workspace: ${defaults.workspace}`));
+    rows.push(shortenHomeInString(`Workspace: ${defaults.workspace}`));
   }
   if (defaults?.model) {
     const model = resolveAgentModelPrimaryValue(defaults.model);
     if (model) {
-      rows.push(shortenHomeInString(`model: ${model}`));
+      rows.push(shortenHomeInString(`Model: ${model}`));
     }
   }
-  if (config.gateway?.mode) {
-    rows.push(shortenHomeInString(`gateway.mode: ${config.gateway.mode}`));
-  }
-  if (typeof config.gateway?.port === "number") {
-    rows.push(shortenHomeInString(`gateway.port: ${config.gateway.port}`));
-  }
-  if (config.gateway?.bind) {
-    rows.push(shortenHomeInString(`gateway.bind: ${config.gateway.bind}`));
-  }
-  if (config.gateway?.remote?.url) {
-    rows.push(shortenHomeInString(`gateway.remote.url: ${config.gateway.remote.url}`));
+  const gatewaySummary = summarizeGatewayConfig(config);
+  if (gatewaySummary) {
+    rows.push(shortenHomeInString(gatewaySummary));
   }
   if (config.skills?.install?.nodeManager) {
-    rows.push(shortenHomeInString(`skills.nodeManager: ${config.skills.install.nodeManager}`));
+    rows.push(shortenHomeInString(`Node manager: ${config.skills.install.nodeManager}`));
   }
   return rows.length ? rows.join("\n") : "No key settings detected.";
+}
+
+function summarizeGatewayConfig(config: OpenClawConfig): string | null {
+  const gateway = config.gateway;
+  if (
+    !gateway?.mode &&
+    typeof gateway?.port !== "number" &&
+    !gateway?.bind &&
+    !gateway?.remote?.url
+  ) {
+    return null;
+  }
+  const mode = normalizeOptionalString(gateway.mode);
+  const bind = formatGatewayBind(gateway.bind);
+  const remoteUrl = normalizeOptionalString(gateway.remote?.url);
+  const useRemoteUrl = remoteUrl !== undefined && mode !== "local";
+  const endpoint =
+    useRemoteUrl && remoteUrl
+      ? remoteUrl
+      : typeof gateway.port === "number"
+        ? `:${gateway.port}`
+        : undefined;
+  const words: string[] = [];
+  if (mode) {
+    words.push(mode);
+  }
+  if (bind) {
+    words.push(mode ? `via ${bind}` : bind);
+  }
+  if (mode === "remote" && !remoteUrl) {
+    words.push("(missing remote URL)");
+    return `Gateway: ${words.join(" ")}`;
+  }
+  if (endpoint) {
+    words.push(`${useRemoteUrl ? "at" : "on"} ${endpoint}`);
+  }
+  return `Gateway: ${words.length > 0 ? words.join(" ") : "configured"}`;
+}
+
+function formatGatewayBind(value: string | undefined): string | undefined {
+  switch (value) {
+    case "lan":
+      return "LAN";
+    case "loopback":
+      return "loopback";
+    case "tailnet":
+      return "tailnet";
+    case "auto":
+      return "auto";
+    case "custom":
+      return "custom";
+    default:
+      return normalizeOptionalString(value);
+  }
 }
 
 export function normalizeGatewayTokenInput(value: unknown): string {
@@ -153,6 +200,8 @@ export function formatControlUiSshHint(params: {
     "Then open:",
     localUrl,
     authedUrl,
+    "BYOH note: lan, tailnet, and custom bind are currently IPv4-only.",
+    "If your host is IPv6-only, use an IPv4 sidecar or proxy in front of the Gateway.",
     "Docs:",
     "https://docs.openclaw.ai/gateway/remote",
     "https://docs.openclaw.ai/web/control-ui",
@@ -209,11 +258,34 @@ export async function moveToTrash(pathname: string, runtime: RuntimeEnv): Promis
     return;
   }
   try {
-    await runCommandWithTimeout(["trash", pathname], { timeoutMs: 5000 });
+    const targetPath = path.resolve(pathname);
+    const sourcePath = await resolveMoveToTrashSourcePath(targetPath);
+    await movePathToTrash(sourcePath, {
+      allowedRoots: await resolveMoveToTrashAllowedRoots(sourcePath),
+    });
     runtime.log(`Moved to Trash: ${shortenHomePath(pathname)}`);
   } catch {
     runtime.log(`Failed to move to Trash (manual delete): ${shortenHomePath(pathname)}`);
   }
+}
+
+async function resolveMoveToTrashSourcePath(targetPath: string): Promise<string> {
+  return path.join(await fs.realpath(path.dirname(targetPath)), path.basename(targetPath));
+}
+
+async function resolveMoveToTrashAllowedRoots(targetPath: string): Promise<string[]> {
+  const allowedRoots = [path.dirname(targetPath)];
+  const stat = await fs.lstat(targetPath);
+  if (stat.isSymbolicLink()) {
+    try {
+      // fs-safe resolves valid symlinks before allow-root checks; include the
+      // resolved parent so deleting a configured symlink moves the link itself.
+      allowedRoots.push(path.dirname(await fs.realpath(targetPath)));
+    } catch {
+      // Broken symlinks are handled lexically by fs-safe.
+    }
+  }
+  return uniqueStrings(allowedRoots);
 }
 
 export async function handleReset(scope: ResetScope, workspaceDir: string, runtime: RuntimeEnv) {

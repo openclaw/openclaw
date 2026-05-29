@@ -1,5 +1,6 @@
 import type { UnifiedModelCatalogEntry } from "../model-catalog/types.js";
 import { createProviderApiKeyAuthMethod } from "../plugins/provider-api-key-auth.js";
+import { projectProviderCatalogResultToUnifiedTextRows } from "../plugins/provider-catalog-unified-text.js";
 import type {
   ProviderPlugin,
   ProviderCatalogContext,
@@ -9,6 +10,7 @@ import type {
   UnifiedModelCatalogProviderContext,
   ProviderPluginWizardSetup,
 } from "../plugins/types.js";
+import { normalizeStringEntries, uniqueStrings } from "../shared/string-normalization.js";
 import { definePluginEntry } from "./plugin-entry.js";
 import type {
   OpenClawPluginApi,
@@ -101,40 +103,11 @@ function resolveEnvVars(params: {
   envVars?: string[];
   auth?: SingleProviderPluginApiKeyAuthOptions[];
 }): string[] | undefined {
-  const combined = [
+  const combined = normalizeStringEntries([
     ...(params.envVars ?? []),
     ...(params.auth ?? []).map((entry) => entry.envVar).filter(Boolean),
-  ]
-    .map((value) => value.trim())
-    .filter(Boolean);
-  return combined.length > 0 ? [...new Set(combined)] : undefined;
-}
-
-function projectProviderCatalogResultToUnifiedTextRows(params: {
-  providerId: string;
-  result: ProviderCatalogResult;
-  source: UnifiedModelCatalogEntry["source"];
-}): UnifiedModelCatalogEntry[] {
-  if (!params.result) {
-    return [];
-  }
-  const providers =
-    "provider" in params.result
-      ? { [params.providerId]: params.result.provider }
-      : params.result.providers;
-  const rows: UnifiedModelCatalogEntry[] = [];
-  for (const [providerId, providerConfig] of Object.entries(providers)) {
-    for (const model of providerConfig.models ?? []) {
-      rows.push({
-        kind: "text",
-        provider: providerId,
-        model: model.id,
-        ...(model.name ? { label: model.name } : {}),
-        source: params.source,
-      });
-    }
-  }
-  return rows;
+  ]);
+  return combined.length > 0 ? uniqueStrings(combined) : undefined;
 }
 
 async function runUnifiedTextCatalog(params: {

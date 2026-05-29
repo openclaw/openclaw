@@ -20,7 +20,7 @@
 
   // Parse URL parameters for deep linking: leafId and targetId
   // Check for injected params (when loaded in iframe via srcdoc) or use window.location
-  const injectedParams = document.querySelector('meta[name="pi-url-params"]');
+  const injectedParams = document.querySelector('meta[name="openclaw-url-params"]');
   const searchString = injectedParams
     ? injectedParams.content
     : window.location.search.substring(1);
@@ -1241,7 +1241,7 @@
    */
   function buildShareUrl(entryId) {
     // Check for injected base URL (used when loaded in iframe via srcdoc)
-    const baseUrlMeta = document.querySelector('meta[name="pi-share-base-url"]');
+    const baseUrlMeta = document.querySelector('meta[name="openclaw-share-base-url"]');
     const baseUrl = baseUrlMeta ? baseUrlMeta.content : window.location.href.split("?")[0];
 
     const url = new URL(window.location.href);
@@ -1309,7 +1309,7 @@
    * Render the copy-link button HTML for a message.
    */
   function renderCopyLinkButton(entryId) {
-    return `<button class="copy-link-btn" data-entry-id="${entryId}" title="Copy link to this message">
+    return `<button class="copy-link-btn" data-entry-id="${escapeHtmlAttr(entryId)}" title="Copy link to this message">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
             <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
@@ -1320,7 +1320,7 @@
   function renderEntry(entry) {
     const ts = formatTimestamp(entry.timestamp);
     const tsHtml = ts ? `<div class="message-timestamp">${ts}</div>` : "";
-    const entryId = `entry-${entry.id}`;
+    const entryId = `entry-${escapeHtmlAttr(entry.id)}`;
     const copyBtnHtml = renderCopyLinkButton(entry.id);
 
     if (entry.type === "message") {

@@ -1,13 +1,13 @@
 import fs from "node:fs";
 import http from "node:http";
+import { readPositiveIntEnv } from "./lib/env-limits.mjs";
 
-const port = Number(process.env.MOCK_PORT ?? process.env.OPENCLAW_MOCK_OPENAI_PORT);
+const port =
+  process.env.MOCK_PORT != null
+    ? readPositiveIntEnv("MOCK_PORT")
+    : readPositiveIntEnv("OPENCLAW_MOCK_OPENAI_PORT");
 const successMarker = process.env.SUCCESS_MARKER ?? "OPENCLAW_E2E_OK";
 const requestLog = process.env.MOCK_REQUEST_LOG;
-
-if (!Number.isInteger(port) || port <= 0) {
-  throw new Error("missing valid MOCK_PORT or OPENCLAW_MOCK_OPENAI_PORT");
-}
 
 function readBody(req) {
   return new Promise((resolve, reject) => {
@@ -27,22 +27,37 @@ function writeJson(res, status, body) {
 }
 
 function responseEvents(text) {
+  const itemId = "msg_e2e_1";
   return [
     {
       type: "response.output_item.added",
       item: {
         type: "message",
-        id: "msg_e2e_1",
+        id: itemId,
         role: "assistant",
         content: [],
         status: "in_progress",
       },
     },
     {
+      type: "response.output_text.delta",
+      item_id: itemId,
+      output_index: 0,
+      content_index: 0,
+      delta: text,
+    },
+    {
+      type: "response.output_text.done",
+      item_id: itemId,
+      output_index: 0,
+      content_index: 0,
+      text,
+    },
+    {
       type: "response.output_item.done",
       item: {
         type: "message",
-        id: "msg_e2e_1",
+        id: itemId,
         role: "assistant",
         status: "completed",
         content: [{ type: "output_text", text, annotations: [] }],
@@ -51,7 +66,17 @@ function responseEvents(text) {
     {
       type: "response.completed",
       response: {
+        id: "resp_e2e",
         status: "completed",
+        output: [
+          {
+            type: "message",
+            id: itemId,
+            role: "assistant",
+            status: "completed",
+            content: [{ type: "output_text", text, annotations: [] }],
+          },
+        ],
         usage: {
           input_tokens: 11,
           output_tokens: 7,

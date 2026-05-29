@@ -1,5 +1,6 @@
-import type { ImageContent } from "@earendil-works/pi-ai";
+import type { ImageContent } from "../llm/types.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
+import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
 import type { ReplyPayload } from "./reply-payload.js";
 import type { TypingController } from "./reply/typing.js";
 
@@ -56,6 +57,8 @@ export type GetReplyOptions = {
   imageOrder?: PromptImageOrderEntry[];
   /** Notifies when an agent run actually starts (useful for webchat command handling). */
   onAgentRunStart?: (runId: string) => void;
+  /** Shared lifecycle owner for the current user-turn transcript append. */
+  userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
   onReplyStart?: () => Promise<void> | void;
   /** Called when the typing controller cleans up (e.g., run ended with NO_REPLY). */
   onTypingCleanup?: () => void;
@@ -75,6 +78,8 @@ export type GetReplyOptions = {
   bootstrapContextMode?: "full" | "lightweight";
   /** If true, suppress tool error warning payloads for this run. */
   suppressToolErrorWarnings?: boolean;
+  /** Dynamic form used when verbose progress visibility can change mid-run. */
+  shouldSuppressToolErrorWarnings?: () => boolean | undefined;
   /** If true, run the model without OpenClaw tools for this turn. */
   disableTools?: boolean;
   /** If true, include the heartbeat response tool for structured heartbeat outcomes. */
@@ -100,6 +105,8 @@ export type GetReplyOptions = {
   onToolResult?: (payload: ReplyPayload) => Promise<void> | void;
   /** Called when a tool phase starts/updates, before summary payloads are emitted. */
   onToolStart?: (payload: {
+    itemId?: string;
+    toolCallId?: string;
     name?: string;
     phase?: string;
     args?: Record<string, unknown>;
@@ -177,8 +184,9 @@ export type GetReplyOptions = {
   onModelSelected?: (ctx: ModelSelectedContext) => void;
   /**
    * Controls whether normal assistant replies are automatically delivered to
-   * the source conversation. `message_tool_only` keeps final/block/preview
-   * output private; visible channel output must come from the message tool.
+   * the source conversation. `message_tool_only` prefers message-tool visible
+   * delivery and keeps normal final text, block output, and preview output
+   * private unless dispatch explicitly marks a source reply as deliverable.
    */
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   /** Starts delivery tracking when this turn later drains as a queued followup. */
@@ -196,8 +204,4 @@ export type GetReplyOptions = {
   hasRepliedRef?: { value: boolean };
   /** Override agent timeout in seconds (0 = no timeout). Threads through to resolveAgentTimeoutMs. */
   timeoutOverrideSeconds?: number;
-  /** Capability-checked one-turn model override for inline image input. */
-  modelOverride?: string;
-  /** Capability-checked runtime fallbacks for the one-turn image model override. */
-  modelOverrideFallbacks?: string[];
 };

@@ -103,14 +103,14 @@ async function runPollAction(params: {
   cfg: OpenClawConfig;
   actionParams: Record<string, unknown>;
   toolContext?: Record<string, unknown>;
-  inboundTurnKind?: "user_request" | "room_event";
+  inboundEventKind?: "user_request" | "room_event";
 }) {
   await runMessageAction({
     cfg: params.cfg,
     action: "poll",
     params: params.actionParams as never,
     toolContext: params.toolContext as never,
-    inboundTurnKind: params.inboundTurnKind,
+    inboundEventKind: params.inboundEventKind,
   });
   const call = firstMockArg(mocks.executePollAction, "executePollAction") as {
     resolveCorePoll?: () => {
@@ -118,7 +118,7 @@ async function runPollAction(params: {
       maxSelections?: number;
       threadId?: string;
     };
-    ctx?: { inboundTurnKind?: string; params?: Record<string, unknown> };
+    ctx?: { inboundEventKind?: string; params?: Record<string, unknown> };
   };
   return {
     ...call.resolveCorePoll?.(),
@@ -191,7 +191,25 @@ describe("runMessageAction poll handling", () => {
     expect(call?.ctx?.params?.threadId).toBe("42");
   });
 
-  it("passes inbound turn kind to poll execution", async () => {
+  it.each([0, -1, 1.5, "1.5", "soon"])(
+    "rejects invalid pollDurationHours value %s",
+    async (pollDurationHours) => {
+      await expect(
+        runPollAction({
+          cfg: pollerConfig,
+          actionParams: {
+            channel: "poller",
+            target: "poller:123",
+            pollQuestion: "Lunch?",
+            pollOption: ["Pizza", "Sushi"],
+            pollDurationHours,
+          },
+        }),
+      ).rejects.toThrow(/pollDurationHours must be a positive integer/i);
+    },
+  );
+
+  it("passes inbound event kind to poll execution", async () => {
     const call = await runPollAction({
       cfg: pollerConfig,
       actionParams: {
@@ -200,10 +218,10 @@ describe("runMessageAction poll handling", () => {
         pollQuestion: "Lunch?",
         pollOption: ["Pizza", "Sushi"],
       },
-      inboundTurnKind: "room_event",
+      inboundEventKind: "room_event",
     });
 
-    expect(call?.ctx?.inboundTurnKind).toBe("room_event");
+    expect(call?.ctx?.inboundEventKind).toBe("room_event");
   });
 
   it("expands maxSelections when pollMulti is enabled", async () => {

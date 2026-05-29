@@ -4,11 +4,15 @@ import { hasKind } from "./slots.js";
 export type PluginCapabilityKind =
   | "cli-backend"
   | "text-inference"
+  | "embedding"
   | "speech"
   | "realtime-transcription"
   | "realtime-voice"
   | "media-understanding"
+  | "transcript-source"
   | "image-generation"
+  | "video-generation"
+  | "music-generation"
   | "web-search"
   | "agent-harness"
   | "context-engine"
@@ -39,11 +43,15 @@ function buildPluginCapabilityEntries(
   return [
     { kind: "cli-backend" as const, ids: plugin.cliBackendIds ?? [] },
     { kind: "text-inference" as const, ids: plugin.providerIds },
+    { kind: "embedding" as const, ids: plugin.embeddingProviderIds },
     { kind: "speech" as const, ids: plugin.speechProviderIds },
     { kind: "realtime-transcription" as const, ids: plugin.realtimeTranscriptionProviderIds },
     { kind: "realtime-voice" as const, ids: plugin.realtimeVoiceProviderIds },
     { kind: "media-understanding" as const, ids: plugin.mediaUnderstandingProviderIds },
+    { kind: "transcript-source" as const, ids: plugin.transcriptSourceProviderIds },
     { kind: "image-generation" as const, ids: plugin.imageGenerationProviderIds },
+    { kind: "video-generation" as const, ids: plugin.videoGenerationProviderIds },
+    { kind: "music-generation" as const, ids: plugin.musicGenerationProviderIds },
     { kind: "web-search" as const, ids: plugin.webSearchProviderIds },
     { kind: "agent-harness" as const, ids: plugin.agentHarnessIds },
     {

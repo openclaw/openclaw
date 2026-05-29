@@ -29,6 +29,7 @@ export type MatrixQaScenarioContext = {
   observerUserId: string;
   gatewayRuntimeEnv?: NodeJS.ProcessEnv;
   gatewayStateDir?: string;
+  gatewayWorkspaceDir?: string;
   gatewayCall?: (
     method: string,
     params?: Record<string, unknown>,
@@ -64,9 +65,10 @@ const NO_REPLY_WINDOW_MS = 8_000;
 const NO_REPLY_WINDOW_ENV = "OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS";
 
 export function resolveMatrixQaNoReplyWindowMs(timeoutMs: number) {
-  const raw = process.env[NO_REPLY_WINDOW_ENV];
-  const parsed = raw === undefined ? NO_REPLY_WINDOW_MS : Number(raw);
-  const windowMs = Number.isFinite(parsed) && parsed >= 1 ? Math.floor(parsed) : NO_REPLY_WINDOW_MS;
+  const raw = process.env[NO_REPLY_WINDOW_ENV]?.trim();
+  const parsed =
+    raw === undefined ? NO_REPLY_WINDOW_MS : /^\d+$/.test(raw) ? Number(raw) : Number.NaN;
+  const windowMs = Number.isSafeInteger(parsed) && parsed >= 1 ? parsed : NO_REPLY_WINDOW_MS;
   return Math.min(windowMs, timeoutMs);
 }
 
@@ -90,11 +92,25 @@ export function buildMatrixPartialStreamingPrompt(sutUserId: string, text: strin
   return `${sutUserId} Partial streaming QA check: reply exactly \`${text}\`.`;
 }
 
-export function buildMatrixToolProgressPrompt(sutUserId: string, text: string) {
+export const MATRIX_QA_TOOL_PROGRESS_TASK_FILENAME = "QA_KICKOFF_TASK.md";
+export const MATRIX_QA_TOOL_PROGRESS_MENTION_FILENAME =
+  "matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt";
+
+export function buildMatrixToolProgressTaskContent(text: string) {
   return [
-    `${sutUserId} Tool progress QA check: use the read tool exactly once on \`QA_KICKOFF_TASK.md\` before answering.`,
+    "Matrix tool progress QA task.",
+    "Reply with only this exact marker and no other text:",
+    text,
+  ].join("\n");
+}
+
+export function buildMatrixToolProgressPrompt(sutUserId: string) {
+  return [
+    `${sutUserId} Tool progress QA check: call the read tool exactly once on \`${MATRIX_QA_TOOL_PROGRESS_TASK_FILENAME}\` before answering.`,
+    `The QA harness must observe that read tool call; the only valid final marker is inside that file.`,
+    `Do not guess or send any marker before the tool result returns.`,
     `Do not read \`HEARTBEAT.md\` for this check.`,
-    `After that read completes, reply with only this exact marker and no other text: \`${text}\`.`,
+    `After that read completes, reply with only the exact marker from the file and no other text.`,
   ].join(" ");
 }
 
@@ -107,8 +123,10 @@ export function buildMatrixToolProgressErrorPrompt(sutUserId: string, text: stri
 
 export function buildMatrixToolProgressMentionSafetyPrompt(sutUserId: string, text: string) {
   return [
-    `${sutUserId} Tool progress QA check: read \`matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt\` before answering.`,
-    `After the read completes, reply exactly \`${text}\`.`,
+    `${sutUserId} Tool progress QA check: read the missing workspace file \`${MATRIX_QA_TOOL_PROGRESS_MENTION_FILENAME}\` before answering.`,
+    `The QA harness must observe that failed read in a Matrix tool-progress preview.`,
+    `Do not guess or send any marker before the tool result returns.`,
+    `After that read fails, reply exactly \`${text}\`.`,
   ].join(" ");
 }
 
@@ -118,9 +136,12 @@ export function buildMatrixBlockStreamingPrompt(
   secondText: string,
 ) {
   return [
-    `${sutUserId} Block streaming QA check: reply with exactly this two-line body and no extra text:`,
-    firstText,
-    secondText,
+    `${sutUserId} Block streaming QA check: complete this whole sequence in one turn.`,
+    `Step 1: send an assistant text block containing only this exact marker: \`${firstText}\`.`,
+    "That first marker block must be emitted before any tool call.",
+    "Step 2: after the first marker block, use the read tool exactly once on `QA_KICKOFF_TASK.md`.",
+    `Step 3: after that read completes, send a final assistant text block containing only this exact marker: \`${secondText}\`.`,
+    "Never put both markers in the same assistant text block.",
   ].join("\n");
 }
 

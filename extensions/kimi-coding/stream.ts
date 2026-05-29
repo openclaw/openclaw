@@ -1,5 +1,9 @@
-import type { StreamFn } from "@earendil-works/pi-agent-core";
-import { streamSimple } from "@earendil-works/pi-ai";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import {
+  streamSimple,
+  type AssistantMessage,
+  type AssistantMessageEvent,
+} from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { streamWithPayloadPatch } from "openclaw/plugin-sdk/provider-stream-shared";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -18,6 +22,9 @@ type KimiToolCallBlock = {
 };
 
 type KimiThinkingType = "enabled" | "disabled";
+interface MutableAssistantMessageEventStream extends AsyncIterable<AssistantMessageEvent> {
+  result: () => Promise<AssistantMessage>;
+}
 type KimiThinkingConfig = {
   type: KimiThinkingType;
   budget_tokens?: number;
@@ -302,39 +309,54 @@ function rewriteKimiTaggedToolCallsInMessage(message: unknown): void {
   }
 }
 
-function wrapStreamMessageObjects(
-  stream: ReturnType<typeof streamSimple>,
+function transformKimiStreamEvent(
+  value: unknown,
   transformMessage: (message: unknown) => void,
-): ReturnType<typeof streamSimple> {
-  const originalResult = stream.result.bind(stream);
-  stream.result = async () => {
-    const message = await originalResult();
+): void {
+  const event =
+    value && typeof value === "object"
+      ? (value as { partial?: unknown; message?: unknown })
+      : undefined;
+  if (!event) {
+    return;
+  }
+  for (const message of [event.partial, event.message]) {
     transformMessage(message);
-    return message;
-  };
+  }
+}
 
-  const originalAsyncIterator = stream[Symbol.asyncIterator].bind(stream);
-  (stream as { [Symbol.asyncIterator]: typeof originalAsyncIterator })[Symbol.asyncIterator] =
-    function () {
-      const iterator = originalAsyncIterator();
-      return {
-        async next() {
-          const result = await iterator.next();
-          if (!result.done && result.value && typeof result.value === "object") {
-            const event = result.value as { partial?: unknown; message?: unknown };
-            transformMessage(event.partial);
-            transformMessage(event.message);
-          }
-          return result;
-        },
-        async return(value?: unknown) {
-          return iterator.return?.(value) ?? { done: true as const, value: undefined };
-        },
-        async throw(error?: unknown) {
-          return iterator.throw?.(error) ?? { done: true as const, value: undefined };
-        },
-      };
+function wrapStreamMessageObjects(
+  stream: MutableAssistantMessageEventStream,
+  transformMessage: (message: unknown) => void,
+): MutableAssistantMessageEventStream {
+  const readFinalMessage = stream.result.bind(stream);
+  Object.assign(stream, {
+    async result() {
+      const message = await readFinalMessage();
+      transformMessage(message);
+      return message;
+    },
+  });
+
+  const createIterator = stream[Symbol.asyncIterator].bind(stream);
+  stream[Symbol.asyncIterator] = () => {
+    const iterator = createIterator();
+    return {
+      async next() {
+        const step = await iterator.next();
+        if (!step.done) {
+          transformKimiStreamEvent(step.value, transformMessage);
+        }
+        return step;
+      },
+      async return(value?: unknown) {
+        return iterator.return?.(value) ?? { done: true as const, value: undefined };
+      },
+      async throw(error?: unknown) {
+        return iterator.throw?.(error) ?? { done: true as const, value: undefined };
+      },
     };
+  };
   return stream;
 }
 

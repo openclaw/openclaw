@@ -15,7 +15,6 @@ import { detectMime } from "../media/mime.js";
 import { buildRandomTempFilePath } from "../plugin-sdk/temp-path.js";
 import { normalizeAttachmentPath } from "./attachments.normalize.js";
 import { MediaUnderstandingSkipError } from "./errors.js";
-import { fetchWithTimeout } from "./shared.js";
 import type { MediaAttachment } from "./types.js";
 
 type MediaBufferResult = {
@@ -55,6 +54,14 @@ type AttachmentCacheEntry = {
 
 let defaultLocalPathRoots: readonly string[] | undefined;
 
+function concreteMime(mime: string | undefined): string | undefined {
+  const normalized = mime?.trim();
+  if (!normalized || normalized.endsWith("/*")) {
+    return undefined;
+  }
+  return normalized;
+}
+
 function getDefaultLocalPathRoots(): readonly string[] {
   defaultLocalPathRoots ??= mergeInboundPathRoots(getDefaultMediaLocalRoots());
   return defaultLocalPathRoots;
@@ -66,16 +73,6 @@ export type MediaAttachmentCacheOptions = {
   ssrfPolicy?: SsrFPolicy;
   workspaceDir?: string;
 };
-
-function resolveRequestUrl(input: RequestInfo | URL): string {
-  if (typeof input === "string") {
-    return input;
-  }
-  if (input instanceof URL) {
-    return input.toString();
-  }
-  return input.url;
-}
 
 export class MediaAttachmentCache {
   private readonly entries = new Map<number, AttachmentCacheEntry>();
@@ -139,7 +136,7 @@ export class MediaAttachmentCache {
           entry.buffer = buffer;
           entry.bufferMime =
             entry.bufferMime ??
-            entry.attachment.mime ??
+            concreteMime(entry.attachment.mime) ??
             (await detectMime({
               buffer,
               filePath,
@@ -171,18 +168,16 @@ export class MediaAttachmentCache {
     }
 
     try {
-      const fetchImpl = (input: RequestInfo | URL, init?: RequestInit) =>
-        fetchWithTimeout(resolveRequestUrl(input), init ?? {}, params.timeoutMs, globalThis.fetch);
       const fetched = await readRemoteMediaBuffer({
         url,
-        fetchImpl,
+        timeoutMs: params.timeoutMs,
         maxBytes: params.maxBytes,
         ssrfPolicy: this.ssrfPolicy,
         retry: REMOTE_MEDIA_FETCH_RETRY,
       });
       entry.buffer = fetched.buffer;
       entry.bufferMime =
-        entry.attachment.mime ??
+        concreteMime(entry.attachment.mime) ??
         fetched.contentType ??
         (await detectMime({
           buffer: fetched.buffer,

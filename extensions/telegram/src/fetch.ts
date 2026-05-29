@@ -3,6 +3,8 @@ import * as dns from "node:dns";
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
+  createHttp1EnvHttpProxyAgent,
+  createHttp1ProxyAgent,
   createPinnedLookup,
   hasEnvHttpProxyAgentConfigured,
   resolveEnvHttpProxyAgentOptions,
@@ -16,7 +18,7 @@ import {
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { Agent, EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch } from "undici";
+import { Agent, fetch as undiciFetch } from "undici";
 import { normalizeTelegramApiRoot } from "./api-root.js";
 import {
   resolveTelegramAutoSelectFamilyDecision,
@@ -68,7 +70,10 @@ type RequestInitWithDispatcher = RequestInit & {
   dispatcher?: unknown;
 };
 
-type TelegramDispatcher = Agent | EnvHttpProxyAgent | ProxyAgent;
+type TelegramDispatcher =
+  | Agent
+  | ReturnType<typeof createHttp1EnvHttpProxyAgent>
+  | ReturnType<typeof createHttp1ProxyAgent>;
 
 type TelegramDispatcherMode = "direct" | "env-proxy" | "explicit-proxy";
 
@@ -108,6 +113,7 @@ type LookupFunction = (
 
 const FALLBACK_RETRY_ERROR_CODES = [
   "ETIMEDOUT",
+  "ENETDOWN",
   "ENETUNREACH",
   "EHOSTUNREACH",
   "UND_ERR_CONNECT_TIMEOUT",
@@ -153,6 +159,8 @@ function createDnsResultOrderLookup(
   };
 }
 
+const TELEGRAM_KEEPALIVE_INITIAL_DELAY_MS = 30_000;
+
 function buildTelegramConnectOptions(params: {
   autoSelectFamily: boolean | null;
   dnsResultOrder: TelegramDnsResultOrder | null;
@@ -161,14 +169,21 @@ function buildTelegramConnectOptions(params: {
   autoSelectFamily?: boolean;
   autoSelectFamilyAttemptTimeout?: number;
   family?: number;
+  keepAlive?: boolean;
+  keepAliveInitialDelay?: number;
   lookup?: LookupFunction;
-} | null {
+} {
   const connect: {
     autoSelectFamily?: boolean;
     autoSelectFamilyAttemptTimeout?: number;
     family?: number;
+    keepAlive?: boolean;
+    keepAliveInitialDelay?: number;
     lookup?: LookupFunction;
-  } = {};
+  } = {
+    keepAlive: true,
+    keepAliveInitialDelay: TELEGRAM_KEEPALIVE_INITIAL_DELAY_MS,
+  };
 
   if (params.forceIpv4) {
     connect.family = 4;
@@ -183,7 +198,7 @@ function buildTelegramConnectOptions(params: {
     connect.lookup = lookup;
   }
 
-  return Object.keys(connect).length > 0 ? connect : null;
+  return connect;
 }
 
 function shouldBypassEnvProxyForTelegramApi(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -246,18 +261,12 @@ function resolveTelegramDispatcherPolicy(params: {
   const explicitProxyUrl = params.proxyUrl?.trim();
   if (explicitProxyUrl) {
     return {
-      policy: connect
-        ? {
-            mode: "explicit-proxy",
-            proxyUrl: explicitProxyUrl,
-            allowPrivateProxy: true,
-            proxyTls: { ...connect },
-          }
-        : {
-            mode: "explicit-proxy",
-            proxyUrl: explicitProxyUrl,
-            allowPrivateProxy: true,
-          },
+      policy: {
+        mode: "explicit-proxy",
+        proxyUrl: explicitProxyUrl,
+        allowPrivateProxy: true,
+        proxyTls: { ...connect },
+      },
       mode: "explicit-proxy",
     };
   }
@@ -265,7 +274,8 @@ function resolveTelegramDispatcherPolicy(params: {
     return {
       policy: {
         mode: "env-proxy",
-        ...(connect ? { connect: { ...connect }, proxyTls: { ...connect } } : {}),
+        connect: { ...connect },
+        proxyTls: { ...connect },
       },
       mode: "env-proxy",
     };
@@ -273,7 +283,7 @@ function resolveTelegramDispatcherPolicy(params: {
   return {
     policy: {
       mode: "direct",
-      ...(connect ? { connect: { ...connect } } : {}),
+      connect: { ...connect },
     },
     mode: "direct",
   };
@@ -310,10 +320,10 @@ function createTelegramDispatcher(policy: PinnedDispatcherPolicy): {
       uri: policy.proxyUrl,
       ...poolOptions,
       ...(requestTlsOptions ? { requestTls: requestTlsOptions } : {}),
-    } satisfies ConstructorParameters<typeof ProxyAgent>[0];
+    } satisfies Parameters<typeof createHttp1ProxyAgent>[0];
     try {
       return {
-        dispatcher: new ProxyAgent(proxyOptions),
+        dispatcher: createHttp1ProxyAgent(proxyOptions),
         mode: "explicit-proxy",
         effectivePolicy: policy,
       };
@@ -331,10 +341,10 @@ function createTelegramDispatcher(policy: PinnedDispatcherPolicy): {
       ...resolveEnvHttpProxyAgentOptions(),
       ...(connectOptions ? { connect: connectOptions } : {}),
       ...(proxyTlsOptions ? { proxyTls: proxyTlsOptions } : {}),
-    } satisfies ConstructorParameters<typeof EnvHttpProxyAgent>[0];
+    } satisfies Parameters<typeof createHttp1EnvHttpProxyAgent>[0];
     try {
       return {
-        dispatcher: new EnvHttpProxyAgent(proxyOptions),
+        dispatcher: createHttp1EnvHttpProxyAgent(proxyOptions),
         mode: "env-proxy",
         effectivePolicy: policy,
       };

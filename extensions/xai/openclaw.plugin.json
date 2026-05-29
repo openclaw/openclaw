@@ -10,8 +10,6 @@
     "providers": {
       "xai": {
         "aliases": {
-          "grok-4-fast-reasoning": "grok-4-fast",
-          "grok-4-1-fast-reasoning": "grok-4-1-fast",
           "grok-4.20-experimental-beta-0304-reasoning": "grok-4.20-beta-latest-reasoning",
           "grok-4.20-experimental-beta-0304-non-reasoning": "grok-4.20-beta-latest-non-reasoning",
           "grok-4.20-reasoning": "grok-4.20-beta-latest-reasoning",
@@ -23,7 +21,7 @@
   "providerEndpoints": [
     {
       "endpointClass": "xai-native",
-      "hosts": ["api.x.ai", "api.grok.x.ai"]
+      "hosts": ["api.x.ai"]
     }
   ],
   "providerRequest": {
@@ -34,8 +32,13 @@
     }
   },
   "syntheticAuthRefs": ["xai"],
-  "providerAuthEnvVars": {
-    "xai": ["XAI_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "xai",
+        "envVars": ["XAI_API_KEY"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {
@@ -45,7 +48,7 @@
       "choiceLabel": "xAI API key",
       "groupId": "xai",
       "groupLabel": "xAI (Grok)",
-      "groupHint": "API key or SuperGrok OAuth",
+      "groupHint": "API key or browser OAuth",
       "onboardingFeatured": true,
       "optionKey": "xaiApiKey",
       "cliFlag": "--xai-api-key",
@@ -56,18 +59,29 @@
       "provider": "xai",
       "method": "oauth",
       "choiceId": "xai-oauth",
-      "choiceLabel": "xAI Grok OAuth",
-      "choiceHint": "SuperGrok subscription",
+      "choiceLabel": "xAI OAuth",
+      "choiceHint": "Browser sign-in for eligible xAI accounts",
       "groupId": "xai",
       "groupLabel": "xAI (Grok)",
-      "groupHint": "API key or SuperGrok OAuth",
+      "groupHint": "API key or browser OAuth",
+      "onboardingFeatured": true
+    },
+    {
+      "provider": "xai",
+      "method": "device-code",
+      "choiceId": "xai-device-code",
+      "choiceLabel": "xAI device code",
+      "choiceHint": "Remote-friendly browser sign-in without a localhost callback",
+      "groupId": "xai",
+      "groupLabel": "xAI (Grok)",
+      "groupHint": "API key or browser OAuth",
       "onboardingFeatured": true
     }
   ],
   "uiHints": {
     "webSearch.apiKey": {
       "label": "Grok Search API Key",
-      "help": "xAI API key for Grok web search (fallback: XAI_API_KEY env var).",
+      "help": "Optional xAI API key for Grok web search; xAI OAuth or XAI_API_KEY can satisfy it.",
       "sensitive": true
     },
     "webSearch.model": {

@@ -20,6 +20,8 @@ on:
       - "docs/**"
   pull_request:
     types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
+    paths-ignore:
+      - "CHANGELOG.md"
 
 permissions:
   contents: read
@@ -38,7 +40,7 @@ jobs:
     permissions:
       contents: read
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
     outputs:
       checkout_revision: ${{ steps.checkout_ref.outputs.sha }}
@@ -58,14 +60,11 @@ jobs:
       plugin_contracts_matrix: ${{ steps.manifest.outputs.plugin_contracts_matrix }}
       channel_contracts_matrix: ${{ steps.manifest.outputs.channel_contracts_matrix }}
       run_checks: ${{ steps.manifest.outputs.run_checks }}
-      checks_matrix: ${{ steps.manifest.outputs.checks_matrix }}
       run_checks_node_core_nondist: ${{ steps.manifest.outputs.run_checks_node_core_nondist }}
       checks_node_core_nondist_matrix: ${{ steps.manifest.outputs.checks_node_core_nondist_matrix }}
       run_checks_node_core_dist: ${{ steps.manifest.outputs.run_checks_node_core_dist }}
-      checks_node_core_dist_matrix: ${{ steps.manifest.outputs.checks_node_core_dist_matrix }}
       run_check: ${{ steps.manifest.outputs.run_check }}
       run_check_additional: ${{ steps.manifest.outputs.run_check_additional }}
-      run_build_smoke: ${{ steps.manifest.outputs.run_build_smoke }}
       run_check_docs: ${{ steps.manifest.outputs.run_check_docs }}
       run_control_ui_i18n: ${{ steps.manifest.outputs.run_control_ui_i18n }}
       run_checks_windows: ${{ steps.manifest.outputs.run_checks_windows }}
@@ -77,13 +76,50 @@ jobs:
       android_matrix: ${{ steps.manifest.outputs.android_matrix }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ inputs.target_ref || github.sha }}
-          fetch-depth: 1
-          fetch-tags: false
-          persist-credentials: false
-          submodules: false
+        env:
+          CHECKOUT_REPO: ${{ github.repository }}
+          CHECKOUT_REF: ${{ inputs.target_ref || github.sha }}
+          CHECKOUT_FALLBACK_REF: ${{ github.sha }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          git init "$GITHUB_WORKSPACE"
+          git -C "$GITHUB_WORKSPACE" config gc.auto 0
+          git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
+          fetch_checkout_ref() {
+            local ref="$1"
+            local fetch_status
+            for attempt in 1 2 3; do
+              timeout --signal=TERM --kill-after=10s 30s git -C "$GITHUB_WORKSPACE" \
+                -c protocol.version=2 \
+                fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
+                "+${ref}:refs/remotes/origin/checkout" && return 0
+              fetch_status="$?"
+              if [ "$fetch_status" != "124" ] && [ "$fetch_status" != "137" ]; then
+                return "$fetch_status"
+              fi
+              if [ "$attempt" = "3" ]; then
+                return "$fetch_status"
+              fi
+              echo "::warning::checkout fetch for '$ref' timed out on attempt $attempt; retrying"
+              sleep 5
+            done
+          }
+          if fetch_checkout_ref "$CHECKOUT_REF"; then
+            :
+          else
+            fetch_status="$?"
+            if [ "$fetch_status" = "124" ] || [ "$fetch_status" = "137" ]; then
+              echo "::error::checkout fetch for '$CHECKOUT_REF' timed out"
+              exit "$fetch_status"
+            fi
+            if [ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ] || [ "$CHECKOUT_REF" = "$CHECKOUT_FALLBACK_REF" ]; then
+              exit "$fetch_status"
+            fi
+            echo "::warning::workflow_dispatch target_ref '$CHECKOUT_REF' is unavailable; falling back to head SHA '$CHECKOUT_FALLBACK_REF'"
+            fetch_checkout_ref "$CHECKOUT_FALLBACK_REF"
+          fi
+          git -C "$GITHUB_WORKSPACE" checkout --detach refs/remotes/origin/checkout
 
       - name: Resolve checkout SHA
         id: checkout_ref
@@ -132,6 +168,7 @@ jobs:
           OPENCLAW_CI_RUN_CONTROL_UI_I18N: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_control_ui_i18n || 'false' }}
           OPENCLAW_CI_CHECKOUT_REVISION: ${{ steps.checkout_ref.outputs.sha }}
           OPENCLAW_CI_REPOSITORY: ${{ github.repository }}
+          OPENCLAW_CI_EVENT_NAME: ${{ github.event_name }}
         run: |
           node --input-type=module <<'EOF'
           import { appendFileSync } from "node:fs";
@@ -173,6 +210,7 @@ jobs:
           const isCanonicalRepository = process.env.OPENCLAW_CI_REPOSITORY === "openclaw/openclaw";
           const docsOnly = parseBoolean(process.env.OPENCLAW_CI_DOCS_ONLY);
           const docsChanged = parseBoolean(process.env.OPENCLAW_CI_DOCS_CHANGED);
+          const eventName = process.env.OPENCLAW_CI_EVENT_NAME ?? "";
           const runNode = parseBoolean(process.env.OPENCLAW_CI_RUN_NODE) && !docsOnly;
           const runNodeFastOnly =
             runNode && parseBoolean(process.env.OPENCLAW_CI_RUN_NODE_FAST_ONLY);
@@ -197,7 +235,8 @@ jobs:
           const checksFastCoreTasks = [];
           if (runNodeFull) {
             checksFastCoreTasks.push(
-              { check_name: "checks-fast-bundled", runtime: "node", task: "bundled" },
+              { check_name: "checks-fast-bundled-protocol", runtime: "node", task: "bundled-protocol" },
+              { check_name: "checks-fast-bun-launcher", runtime: "bun", task: "bun-launcher" },
             );
           } else {
             if (runNodeFastCiRouting) {
@@ -246,21 +285,12 @@ jobs:
               runNodeFull ? createChannelContractTestShards() : [],
             ),
             run_checks: runNodeFull,
-            checks_matrix: createMatrix(
-              runNodeFull
-                ? [
-                    { check_name: "checks-node-channels", runtime: "node", task: "channels" },
-                  ]
-                : [],
-            ),
             run_checks_node_core_nondist: nodeTestNonDistShards.length > 0,
             checks_node_core_nondist_matrix: createMatrix(nodeTestNonDistShards),
             run_checks_node_core_dist: nodeTestDistShards.length > 0,
-            checks_node_core_dist_matrix: createMatrix(nodeTestDistShards),
             run_check: runNodeFull,
             run_check_additional: runNodeFull,
-            run_build_smoke: runNodeFull,
-            run_check_docs: docsChanged,
+            run_check_docs: docsChanged && eventName !== "push",
             run_control_ui_i18n: runControlUiI18n,
             run_skills_python_job: runSkillsPython,
             run_checks_windows: runWindows,
@@ -295,25 +325,62 @@ jobs:
           }
           EOF
 
-  # Run the fast security/SCM checks in parallel with scope detection so the
+  # Run dependency-free security checks in parallel with scope detection so the
   # main Node jobs do not have to wait for Python/pre-commit setup.
-  security-scm-fast:
+  security-fast:
     permissions:
       contents: read
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
     env:
       PRE_COMMIT_HOME: .cache/pre-commit-security-fast
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ inputs.target_ref || github.sha }}
-          fetch-depth: 1
-          fetch-tags: false
-          persist-credentials: false
-          submodules: false
+        env:
+          CHECKOUT_REPO: ${{ github.repository }}
+          CHECKOUT_REF: ${{ inputs.target_ref || github.sha }}
+          CHECKOUT_FALLBACK_REF: ${{ github.sha }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          git init "$GITHUB_WORKSPACE"
+          git -C "$GITHUB_WORKSPACE" config gc.auto 0
+          git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
+          fetch_checkout_ref() {
+            local ref="$1"
+            local fetch_status
+            for attempt in 1 2 3; do
+              timeout --signal=TERM --kill-after=10s 30s git -C "$GITHUB_WORKSPACE" \
+                -c protocol.version=2 \
+                fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
+                "+${ref}:refs/remotes/origin/checkout" && return 0
+              fetch_status="$?"
+              if [ "$fetch_status" != "124" ] && [ "$fetch_status" != "137" ]; then
+                return "$fetch_status"
+              fi
+              if [ "$attempt" = "3" ]; then
+                return "$fetch_status"
+              fi
+              echo "::warning::checkout fetch for '$ref' timed out on attempt $attempt; retrying"
+              sleep 5
+            done
+          }
+          if fetch_checkout_ref "$CHECKOUT_REF"; then
+            :
+          else
+            fetch_status="$?"
+            if [ "$fetch_status" = "124" ] || [ "$fetch_status" = "137" ]; then
+              echo "::error::checkout fetch for '$CHECKOUT_REF' timed out"
+              exit "$fetch_status"
+            fi
+            if [ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ] || [ "$CHECKOUT_REF" = "$CHECKOUT_FALLBACK_REF" ]; then
+              exit "$fetch_status"
+            fi
+            echo "::warning::workflow_dispatch target_ref '$CHECKOUT_REF' is unavailable; falling back to head SHA '$CHECKOUT_FALLBACK_REF'"
+            fetch_checkout_ref "$CHECKOUT_FALLBACK_REF"
+          fi
+          git -C "$GITHUB_WORKSPACE" checkout --detach refs/remotes/origin/checkout
 
       - name: Ensure security base commit
         if: github.event_name != 'workflow_dispatch'
@@ -343,22 +410,20 @@ jobs:
           fi
           echo "PRE_COMMIT_CONFIG_PATH=$trusted_config" >> "$GITHUB_ENV"
 
-      - name: Setup Python
+      - name: Resolve Python runtime
         id: setup-python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-
-      - name: Restore pre-commit cache
-        uses: actions/cache@v5
-        with:
-          path: .cache/pre-commit-security-fast
-          key: pre-commit-security-fast-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('.pre-commit-config.yaml') }}
-          restore-keys: |
-            pre-commit-security-fast-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-
+        run: |
+          set -euo pipefail
+          python3 --version
+          version="$(python3 - <<'PY'
+          import platform
+          print(platform.python_version())
+          PY
+          )"
+          echo "python-version=${version}" >> "$GITHUB_OUTPUT"
 
       - name: Install pre-commit
-        run: python -m pip install --disable-pip-version-check pre-commit==4.2.0
+        run: python3 -m pip install --disable-pip-version-check pre-commit==4.2.0
 
       - name: Detect committed private keys
         run: pre-commit run --config "${PRE_COMMIT_CONFIG_PATH:-.pre-commit-config.yaml}" --all-files detect-private-key
@@ -390,59 +455,76 @@ jobs:
           printf 'Auditing workflow files:\n%s\n' "${workflow_files[@]}"
           pre-commit run --config "${PRE_COMMIT_CONFIG_PATH:-.pre-commit-config.yaml}" zizmor --files "${workflow_files[@]}"
 
-  security-dependency-audit:
-    permissions:
-      contents: read
-    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ inputs.target_ref || github.sha }}
-          fetch-depth: 1
-          fetch-tags: false
-          persist-credentials: false
-          submodules: false
-
       - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: "24.x"
-          check-latest: false
+        env:
+          REQUESTED_NODE_VERSION: "24.x"
+        run: |
+          set -euo pipefail
+          source .github/actions/setup-pnpm-store-cache/ensure-node.sh
+          openclaw_ensure_node "$REQUESTED_NODE_VERSION"
 
       - name: Audit production dependencies
         run: node scripts/pre-commit/pnpm-audit-prod.mjs --audit-level=high
 
-  security-fast:
-    permissions: {}
-    needs: [security-scm-fast, security-dependency-audit]
-    if: ${{ !cancelled() && always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
+  # Warm the lockfile- and pnpm-pinned store once before Linux Node shards fan out.
+  # On a cold key this job owns the save, so later shards restore the exact key.
+  pnpm-store-warmup:
+    permissions:
+      contents: read
+    needs: [preflight]
+    if: needs.preflight.outputs.run_node == 'true' || needs.preflight.outputs.run_check_docs == 'true'
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    timeout-minutes: 20
     steps:
-      - name: Verify fast security jobs
+      - name: Checkout
+        shell: bash
         env:
-          DEPENDENCY_AUDIT_RESULT: ${{ needs.security-dependency-audit.result }}
-          SCM_RESULT: ${{ needs.security-scm-fast.result }}
+          CHECKOUT_REPO: ${{ github.repository }}
+          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
         run: |
           set -euo pipefail
-          failed=0
 
-          for result in \
-            "security-scm-fast=${SCM_RESULT}" \
-            "security-dependency-audit=${DEPENDENCY_AUDIT_RESULT}"
-          do
-            job="${result%%=*}"
-            status="${result#*=}"
-            if [ "$status" != "success" ]; then
-              echo "::error::${job} ended with ${status}"
-              failed=1
+          workdir="$GITHUB_WORKSPACE"
+          reset_checkout_dir() {
+            mkdir -p "$workdir"
+            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+          }
+
+          checkout_attempt() {
+            local attempt="$1"
+
+            reset_checkout_dir
+            git init "$workdir" >/dev/null
+            git config --global --add safe.directory "$workdir"
+            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
+            git -C "$workdir" config gc.auto 0
+
+            timeout --signal=TERM --kill-after=10s 30s git -C "$workdir" \
+              -c protocol.version=2 \
+              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
+              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
+
+            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
+            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
+            echo "checkout attempt ${attempt}/5 succeeded"
+          }
+
+          for attempt in 1 2 3 4 5; do
+            if checkout_attempt "$attempt"; then
+              exit 0
             fi
+            echo "checkout attempt ${attempt}/5 failed"
+            sleep $((attempt * 5))
           done
 
-          exit "$failed"
+          echo "checkout failed after 5 attempts" >&2
+          exit 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          save-actions-cache: "true"
 
   # Build dist once for Node-relevant changes and share it with downstream jobs.
   # Keep this overlapping with the fast correctness lanes so green PRs get heavy
@@ -450,7 +532,7 @@ jobs:
   build-artifacts:
     permissions:
       contents: read
-    needs: [preflight]
+    needs: [preflight, pnpm-store-warmup]
     if: needs.preflight.outputs.run_build_artifacts == 'true'
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
@@ -464,13 +546,10 @@ jobs:
         env:
           CHECKOUT_REPO: ${{ github.repository }}
           CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
-          CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
           workdir="$GITHUB_WORKSPACE"
-          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
-
           reset_checkout_dir() {
             mkdir -p "$workdir"
             find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
@@ -482,12 +561,11 @@ jobs:
             reset_checkout_dir
             git init "$workdir" >/dev/null
             git config --global --add safe.directory "$workdir"
-            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
+            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 30s git -C "$workdir" \
+            timeout --signal=TERM --kill-after=10s 30s git -C "$workdir" \
               -c protocol.version=2 \
-              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
 
@@ -523,9 +601,6 @@ jobs:
         env:
           NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm build:ci-artifacts
-
-      - name: Build Control UI
-        run: pnpm ui:build
 
       - name: Check Control UI i18n
         if: needs.preflight.outputs.run_control_ui_i18n == 'true'
@@ -569,7 +644,24 @@ jobs:
         run: pnpm test:build:singleton
 
       - name: Check CLI startup memory
-        run: pnpm test:startup:memory
+        shell: bash
+        run: |
+          set +e
+          pnpm test:startup:memory
+          status=$?
+          if [[ -f .artifacts/startup-memory/summary.md ]]; then
+            cat .artifacts/startup-memory/summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$status"
+
+      - name: Upload startup memory report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: startup-memory
+          path: .artifacts/startup-memory/
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Run built artifact checks
         id: built_artifact_checks
@@ -602,6 +694,20 @@ jobs:
             pids+=("$!")
           }
 
+          if [ "$RUN_GATEWAY_WATCH" = "true" ]; then
+            gateway_watch_log="${RUNNER_TEMP}/gateway-watch.log"
+            echo "starting gateway-watch: node scripts/check-gateway-watch-regression.mjs --skip-build --ready-timeout-ms 5000"
+            if node scripts/check-gateway-watch-regression.mjs --skip-build --ready-timeout-ms 5000 >"$gateway_watch_log" 2>&1; then
+              result="success"
+            else
+              result="failure"
+            fi
+            echo "::group::gateway-watch log"
+            cat "$gateway_watch_log"
+            echo "::endgroup::"
+            results["gateway-watch"]="$result"
+          fi
+
           if [ "$RUN_CHANNELS" = "true" ]; then
             start_check "channels" env \
               NODE_OPTIONS=--max-old-space-size=8192 \
@@ -614,10 +720,6 @@ jobs:
               NODE_OPTIONS=--max-old-space-size=8192 \
               OPENCLAW_VITEST_MAX_WORKERS=2 \
               node scripts/run-vitest.mjs run --config test/vitest/vitest.full-core-support-boundary.config.ts
-          fi
-
-          if [ "$RUN_GATEWAY_WATCH" = "true" ]; then
-            start_check "gateway-watch" node scripts/check-gateway-watch-regression.mjs --skip-build --ready-timeout-ms 5000
           fi
 
           for index in "${!pids[@]}"; do
@@ -641,6 +743,15 @@ jobs:
             echo "${name}-result=${results[$name]}" >> "$GITHUB_OUTPUT"
           done
 
+          failures=0
+          for name in channels core-support-boundary gateway-watch; do
+            if [ "${results[$name]}" = "failure" ]; then
+              echo "::error title=${name} failed::${name} failed"
+              failures=1
+            fi
+          done
+          exit "$failures"
+
       - name: Upload gateway watch regression artifacts
         if: always() && needs.preflight.outputs.run_check_additional == 'true'
         uses: actions/upload-artifact@v7
@@ -653,7 +764,7 @@ jobs:
     permissions:
       contents: read
     name: ${{ matrix.check_name }}
-    needs: [preflight]
+    needs: [preflight, pnpm-store-warmup]
     if: needs.preflight.outputs.run_checks_fast_core == 'true'
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 60
@@ -666,13 +777,10 @@ jobs:
         env:
           CHECKOUT_REPO: ${{ github.repository }}
           CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
-          CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
           workdir="$GITHUB_WORKSPACE"
-          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
-
           reset_checkout_dir() {
             mkdir -p "$workdir"
             find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
@@ -684,12 +792,11 @@ jobs:
             reset_checkout_dir
             git init "$workdir" >/dev/null
             git config --global --add safe.directory "$workdir"
-            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
+            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 30s git -C "$workdir" \
+            timeout --signal=TERM --kill-after=10s 30s git -C "$workdir" \
               -c protocol.version=2 \
-              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
 
@@ -712,7 +819,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
-          install-bun: "false"
+          install-bun: ${{ matrix.task == 'bun-launcher' && 'true' || 'false' }}
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         env:
@@ -722,14 +829,9 @@ jobs:
         run: |
           set -euo pipefail
           case "$TASK" in
-            bundled)
+            bundled-protocol)
               pnpm test:bundled
-              ;;
-            contracts-channels)
-              pnpm test:contracts:channels
-              ;;
-            contracts-plugins)
-              pnpm test:contracts:plugins
+              pnpm protocol:check
               ;;
             contracts-plugins-ci-routing)
               pnpm test:contracts:plugins
@@ -737,6 +839,9 @@ jobs:
               ;;
             ci-routing)
               pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope.test.ts test/scripts/test-projects.test.ts
+              ;;
+            bun-launcher)
+              OPENCLAW_TEST_BUN_LAUNCHER=1 pnpm test test/openclaw-launcher.e2e.test.ts
               ;;
             *)
               echo "Unsupported checks-fast task: $TASK" >&2
@@ -748,7 +853,7 @@ jobs:
     permissions:
       contents: read
     name: ${{ matrix.checkName }}
-    needs: [preflight]
+    needs: [preflight, pnpm-store-warmup]
     if: needs.preflight.outputs.run_plugin_contracts_shards == 'true'
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 60
@@ -761,13 +866,10 @@ jobs:
         env:
           CHECKOUT_REPO: ${{ github.repository }}
           CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
-          CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
           workdir="$GITHUB_WORKSPACE"
-          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
-
           reset_checkout_dir() {
             mkdir -p "$workdir"
             find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
@@ -779,12 +881,11 @@ jobs:
             reset_checkout_dir
             git init "$workdir" >/dev/null
             git config --global --add safe.directory "$workdir"
-            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
+            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 30s git -C "$workdir" \
+            timeout --signal=TERM --kill-after=10s 30s git -C "$workdir" \
               -c protocol.version=2 \
-              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
 
@@ -828,33 +929,11 @@ jobs:
           EOF
           OPENCLAW_VITEST_INCLUDE_FILE="$include_file" pnpm test:contracts:plugins
 
-  checks-fast-plugin-contracts:
-    permissions:
-      contents: read
-    name: checks-fast-contracts-plugins
-    needs: [preflight, checks-fast-plugin-contracts-shard]
-    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_plugin_contracts_shards == 'true' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-      - name: Verify plugin contract shards
-        env:
-          SHARD_RESULT: ${{ needs.checks-fast-plugin-contracts-shard.result }}
-        run: |
-          if [ "$SHARD_RESULT" = "cancelled" ]; then
-            echo "Plugin contract shards were cancelled, usually because a newer commit superseded this run." >&2
-            exit 1
-          fi
-          if [ "$SHARD_RESULT" != "success" ]; then
-            echo "Plugin contract shards failed: $SHARD_RESULT" >&2
-            exit 1
-          fi
-
   checks-fast-channel-contracts-shard:
     permissions:
       contents: read
     name: ${{ matrix.checkName }}
-    needs: [preflight]
+    needs: [preflight, pnpm-store-warmup]
     if: needs.preflight.outputs.run_checks_fast == 'true'
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 60
@@ -867,13 +946,10 @@ jobs:
         env:
           CHECKOUT_REPO: ${{ github.repository }}
           CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
-          CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
           workdir="$GITHUB_WORKSPACE"
-          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
-
           reset_checkout_dir() {
             mkdir -p "$workdir"
             find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
@@ -885,12 +961,11 @@ jobs:
             reset_checkout_dir
             git init "$workdir" >/dev/null
             git config --global --add safe.directory "$workdir"
-            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
+            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 30s git -C "$workdir" \
+            timeout --signal=TERM --kill-after=10s 30s git -C "$workdir" \
               -c protocol.version=2 \
-              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
 
@@ -934,125 +1009,6 @@ jobs:
           EOF
           OPENCLAW_VITEST_INCLUDE_FILE="$include_file" pnpm test:contracts:channels
 
-  checks-fast-channel-contracts:
-    permissions:
-      contents: read
-    name: checks-fast-contracts-channels
-    needs: [preflight, checks-fast-channel-contracts-shard]
-    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_checks_fast == 'true' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-      - name: Verify channel contract shards
-        env:
-          SHARD_RESULT: ${{ needs.checks-fast-channel-contracts-shard.result }}
-        run: |
-          if [ "$SHARD_RESULT" = "cancelled" ]; then
-            echo "Channel contract shards were cancelled, usually because a newer commit superseded this run." >&2
-            exit 1
-          fi
-          if [ "$SHARD_RESULT" != "success" ]; then
-            echo "Channel contract shards failed: $SHARD_RESULT" >&2
-            exit 1
-          fi
-
-  checks-fast-protocol:
-    permissions:
-      contents: read
-    name: "checks-fast-protocol"
-    needs: [preflight]
-    if: needs.preflight.outputs.run_checks_fast == 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - name: Checkout
-        shell: bash
-        env:
-          CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
-          CHECKOUT_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-
-          workdir="$GITHUB_WORKSPACE"
-          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
-
-          reset_checkout_dir() {
-            mkdir -p "$workdir"
-            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-          }
-
-          checkout_attempt() {
-            local attempt="$1"
-
-            reset_checkout_dir
-            git init "$workdir" >/dev/null
-            git config --global --add safe.directory "$workdir"
-            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
-            git -C "$workdir" config gc.auto 0
-
-            timeout --signal=TERM 30s git -C "$workdir" \
-              -c protocol.version=2 \
-              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
-              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
-              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
-
-            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
-            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
-            echo "checkout attempt ${attempt}/5 succeeded"
-          }
-
-          for attempt in 1 2 3 4 5; do
-            if checkout_attempt "$attempt"; then
-              exit 0
-            fi
-            echo "checkout attempt ${attempt}/5 failed"
-            sleep $((attempt * 5))
-          done
-
-          echo "checkout failed after 5 attempts" >&2
-          exit 1
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          install-bun: "false"
-
-      - name: Run protocol check
-        run: pnpm protocol:check
-
-  checks:
-    permissions:
-      contents: read
-    name: ${{ matrix.check_name }}
-    needs: [preflight, build-artifacts]
-    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_checks == 'true' && needs.build-artifacts.result == 'success' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJson(needs.preflight.outputs.checks_matrix) }}
-    steps:
-      - name: Verify ${{ matrix.task }} (${{ matrix.runtime }})
-        env:
-          TASK: ${{ matrix.task }}
-          CHANNELS_RESULT: ${{ needs.build-artifacts.outputs['channels-result'] }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          case "$TASK" in
-            channels)
-              if [ "$CHANNELS_RESULT" != "success" ]; then
-                echo "Channel tests failed in build-artifacts: $CHANNELS_RESULT" >&2
-                exit 1
-              fi
-              ;;
-            *)
-              echo "Unsupported checks task: $TASK" >&2
-              exit 1
-              ;;
-          esac
-
   checks-node-compat:
     permissions:
       contents: read
@@ -1067,13 +1023,10 @@ jobs:
         env:
           CHECKOUT_REPO: ${{ github.repository }}
           CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
-          CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
           workdir="$GITHUB_WORKSPACE"
-          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
-
           reset_checkout_dir() {
             mkdir -p "$workdir"
             find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
@@ -1085,12 +1038,11 @@ jobs:
             reset_checkout_dir
             git init "$workdir" >/dev/null
             git config --global --add safe.directory "$workdir"
-            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
+            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 30s git -C "$workdir" \
+            timeout --signal=TERM --kill-after=10s 30s git -C "$workdir" \
               -c protocol.version=2 \
-              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
 
@@ -1113,8 +1065,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
-          node-version: "22.18.0"
-          cache-key-suffix: "node22-pnpm11"
+          node-version: "22.19.0"
           install-bun: "false"
 
       - name: Configure Node test resources
@@ -1134,9 +1085,9 @@ jobs:
     permissions:
       contents: read
     name: ${{ matrix.check_name }}
-    needs: [preflight]
+    needs: [preflight, pnpm-store-warmup]
     if: needs.preflight.outputs.run_checks_node_core_nondist == 'true'
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (matrix.runner || 'ubuntu-24.04') || 'ubuntu-24.04') }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (matrix.runner || 'blacksmith-8vcpu-ubuntu-2404') || 'ubuntu-24.04') }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -1147,13 +1098,10 @@ jobs:
         env:
           CHECKOUT_REPO: ${{ github.repository }}
           CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
-          CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
           workdir="$GITHUB_WORKSPACE"
-          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
-
           reset_checkout_dir() {
             mkdir -p "$workdir"
             find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
@@ -1165,12 +1113,11 @@ jobs:
             reset_checkout_dir
             git init "$workdir" >/dev/null
             git config --global --add safe.directory "$workdir"
-            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
+            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 30s git -C "$workdir" \
+            timeout --signal=TERM --kill-after=10s 30s git -C "$workdir" \
               -c protocol.version=2 \
-              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
 
@@ -1194,7 +1141,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: "${{ matrix.node_version || '24.x' }}"
-          cache-key-suffix: "${{ matrix.cache_key_suffix || 'node24-pnpm11' }}"
           install-bun: "false"
 
       - name: Configure Node test resources
@@ -1240,79 +1186,22 @@ jobs:
           }
           EOF
 
-  checks-node-core-test-dist-shard:
-    permissions:
-      contents: read
-    name: ${{ matrix.check_name }}
-    needs: [preflight, build-artifacts]
-    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_checks_node_core_dist == 'true' && needs.build-artifacts.result == 'success' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJson(needs.preflight.outputs.checks_node_core_dist_matrix) }}
-    steps:
-      - name: Verify Node test shard
-        env:
-          CORE_SUPPORT_BOUNDARY_RESULT: ${{ needs.build-artifacts.outputs['core-support-boundary-result'] }}
-          SHARD_NAME: ${{ matrix.shard_name }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          case "$SHARD_NAME" in
-            core-support-boundary)
-              if [ "$CORE_SUPPORT_BOUNDARY_RESULT" != "success" ]; then
-                echo "Core support boundary shard failed in build-artifacts: $CORE_SUPPORT_BOUNDARY_RESULT" >&2
-                exit 1
-              fi
-              ;;
-            *)
-              echo "Unsupported built-artifact shard: $SHARD_NAME" >&2
-              exit 1
-              ;;
-          esac
-
-  checks-node-core-test:
-    permissions:
-      contents: read
-    name: checks-node-core
-    needs: [preflight, checks-node-core-test-nondist-shard, checks-node-core-test-dist-shard]
-    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_checks == 'true' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-      - name: Verify node test shards
-        env:
-          DIST_SHARD_RESULT: ${{ needs.checks-node-core-test-dist-shard.result }}
-          NONDIST_SHARD_RESULT: ${{ needs.checks-node-core-test-nondist-shard.result }}
-          RUN_DIST_SHARDS: ${{ needs.preflight.outputs.run_checks_node_core_dist }}
-          RUN_NONDIST_SHARDS: ${{ needs.preflight.outputs.run_checks_node_core_nondist }}
-        run: |
-          if [ "$RUN_NONDIST_SHARDS" = "true" ] && [ "$NONDIST_SHARD_RESULT" != "success" ]; then
-            echo "Node non-dist test shards failed: $NONDIST_SHARD_RESULT" >&2
-            exit 1
-          fi
-          if [ "$RUN_DIST_SHARDS" = "true" ] && [ "$DIST_SHARD_RESULT" != "success" ]; then
-            echo "Node dist test shards failed: $DIST_SHARD_RESULT" >&2
-            exit 1
-          fi
-
   # Types, lint, and format check shards.
   check-shard:
     permissions:
       contents: read
     name: ${{ matrix.check_name }}
-    needs: [preflight]
-    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_check == 'true' }}
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && matrix.runner || 'ubuntu-24.04') }}
+    needs: [preflight, pnpm-store-warmup]
+    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_check == 'true' && needs.pnpm-store-warmup.result == 'success' }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04') }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         include:
-          - check_name: check-preflight-guards
-            task: preflight-guards
-            runner: ubuntu-24.04
+          - check_name: check-guards
+            task: guards
+            runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-prod-types
             task: prod-types
             runner: blacksmith-4vcpu-ubuntu-2404
@@ -1321,29 +1210,20 @@ jobs:
             runner: blacksmith-16vcpu-ubuntu-2404
           - check_name: check-dependencies
             task: dependencies
-            runner: ubuntu-24.04
-          - check_name: check-policy-guards
-            task: policy-guards
-            runner: ubuntu-24.04
+            runner: blacksmith-8vcpu-ubuntu-2404
           - check_name: check-test-types
             task: test-types
             runner: blacksmith-4vcpu-ubuntu-2404
-          - check_name: check-strict-smoke
-            task: strict-smoke
-            runner: ubuntu-24.04
     steps:
       - name: Checkout
         shell: bash
         env:
           CHECKOUT_REPO: ${{ github.repository }}
           CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
-          CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
           workdir="$GITHUB_WORKSPACE"
-          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
-
           reset_checkout_dir() {
             mkdir -p "$workdir"
             find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
@@ -1355,12 +1235,11 @@ jobs:
             reset_checkout_dir
             git init "$workdir" >/dev/null
             git config --global --add safe.directory "$workdir"
-            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
+            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 30s git -C "$workdir" \
+            timeout --signal=TERM --kill-after=10s 30s git -C "$workdir" \
               -c protocol.version=2 \
-              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
 
@@ -1393,12 +1272,19 @@ jobs:
         run: |
           set -euo pipefail
           case "$TASK" in
-            preflight-guards)
+            guards)
               pnpm check:no-conflict-markers
               pnpm tool-display:check
               pnpm check:host-env-policy:swift
               pnpm dup:check:coverage
+              pnpm deps:shrinkwrap:check
               pnpm deps:patches:check
+              pnpm lint:webhook:no-low-level-body-read
+              pnpm lint:auth:no-pairing-store-group
+              pnpm lint:auth:pairing-account-scope
+              pnpm check:import-cycles
+              # build-artifacts already runs the tsdown/runtime build for the same Node-relevant changes.
+              NODE_OPTIONS=--max-old-space-size=8192 pnpm build:plugin-sdk:strict-smoke
               ;;
             prod-types)
               pnpm tsgo:prod
@@ -1415,18 +1301,8 @@ jobs:
                 pnpm deadcode:ci
               fi
               ;;
-            policy-guards)
-              pnpm lint:webhook:no-low-level-body-read
-              pnpm lint:auth:no-pairing-store-group
-              pnpm lint:auth:pairing-account-scope
-              pnpm check:import-cycles
-              ;;
             test-types)
               pnpm check:test-types
-              ;;
-            strict-smoke)
-              # build-artifacts already runs the tsdown/runtime build for the same Node-relevant changes.
-              pnpm build:plugin-sdk:strict-smoke
               ;;
             *)
               echo "Unsupported check task: $TASK" >&2
@@ -1442,30 +1318,12 @@ jobs:
           path: .artifacts/deadcode
           if-no-files-found: ignore
 
-  check:
-    permissions:
-      contents: read
-    name: "check"
-    needs: [preflight, check-shard]
-    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_check == 'true' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-      - name: Verify check shards
-        env:
-          SHARD_RESULT: ${{ needs.check-shard.result }}
-        run: |
-          if [ "$SHARD_RESULT" != "success" ]; then
-            echo "Check shards failed: $SHARD_RESULT" >&2
-            exit 1
-          fi
-
   check-additional-shard:
     permissions:
       contents: read
     name: ${{ matrix.check_name }}
-    needs: [preflight]
-    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_check_additional == 'true' }}
+    needs: [preflight, pnpm-store-warmup]
+    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_check_additional == 'true' && needs.pnpm-store-warmup.result == 'success' }}
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
     strategy:
@@ -1475,15 +1333,9 @@ jobs:
           - check_name: check-additional-boundaries-a
             group: boundaries
             boundary_shard: 1/4
-          - check_name: check-additional-boundaries-b
+          - check_name: check-additional-boundaries-bcd
             group: boundaries
-            boundary_shard: 2/4
-          - check_name: check-additional-boundaries-c
-            group: boundaries
-            boundary_shard: 3/4
-          - check_name: check-additional-boundaries-d
-            group: boundaries
-            boundary_shard: 4/4
+            boundary_shard: 2/4,3/4,4/4
           - check_name: check-additional-extension-channels
             group: extension-channels
           - check_name: check-additional-extension-bundled
@@ -1498,13 +1350,10 @@ jobs:
         env:
           CHECKOUT_REPO: ${{ github.repository }}
           CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
-          CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
           workdir="$GITHUB_WORKSPACE"
-          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
-
           reset_checkout_dir() {
             mkdir -p "$workdir"
             find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
@@ -1516,12 +1365,11 @@ jobs:
             reset_checkout_dir
             git init "$workdir" >/dev/null
             git config --global --add safe.directory "$workdir"
-            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
+            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 30s git -C "$workdir" \
+            timeout --signal=TERM --kill-after=10s 30s git -C "$workdir" \
               -c protocol.version=2 \
-              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
 
@@ -1637,59 +1485,13 @@ jobs:
 
           exit "$failures"
 
-  check-additional:
-    permissions:
-      contents: read
-    name: "check-additional"
-    needs: [preflight, check-additional-shard, build-artifacts]
-    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_check_additional == 'true' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-      - name: Verify additional check shards
-        env:
-          SHARD_RESULT: ${{ needs.check-additional-shard.result }}
-          BUILD_ARTIFACTS_RESULT: ${{ needs.build-artifacts.result }}
-          GATEWAY_RESULT: ${{ needs.build-artifacts.outputs.gateway-watch-result }}
-        run: |
-          if [ "$SHARD_RESULT" != "success" ]; then
-            echo "Additional check shards failed: $SHARD_RESULT" >&2
-            exit 1
-          fi
-          if [ "$BUILD_ARTIFACTS_RESULT" != "success" ]; then
-            echo "Build artifact job failed: $BUILD_ARTIFACTS_RESULT" >&2
-            exit 1
-          fi
-          if [ "$GATEWAY_RESULT" != "success" ]; then
-            echo "Gateway topology check failed: $GATEWAY_RESULT" >&2
-            exit 1
-          fi
-
-  build-smoke:
-    permissions:
-      contents: read
-    name: "build-smoke"
-    needs: [preflight, build-artifacts]
-    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_build_smoke == 'true' && (github.event_name != 'push' || needs.build-artifacts.result == 'success') }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-      - name: Verify build smoke
-        env:
-          BUILD_ARTIFACTS_RESULT: ${{ needs.build-artifacts.result }}
-        run: |
-          if [ "$BUILD_ARTIFACTS_RESULT" != "success" ]; then
-            echo "Build smoke checks failed in build-artifacts: $BUILD_ARTIFACTS_RESULT" >&2
-            exit 1
-          fi
-
   # Validate docs (format, lint, broken links) only when docs files changed.
   check-docs:
     permissions:
       contents: read
-    needs: [preflight]
+    needs: [preflight, pnpm-store-warmup]
     if: needs.preflight.outputs.run_check_docs == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -1697,13 +1499,10 @@ jobs:
         env:
           CHECKOUT_REPO: ${{ github.repository }}
           CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
-          CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
           workdir="$GITHUB_WORKSPACE"
-          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
-
           reset_checkout_dir() {
             mkdir -p "$workdir"
             find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
@@ -1715,12 +1514,11 @@ jobs:
             reset_checkout_dir
             git init "$workdir" >/dev/null
             git config --global --add safe.directory "$workdir"
-            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
+            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 30s git -C "$workdir" \
+            timeout --signal=TERM --kill-after=10s 30s git -C "$workdir" \
               -c protocol.version=2 \
-              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
 
@@ -1746,12 +1544,46 @@ jobs:
           install-bun: "false"
 
       - name: Checkout ClawHub docs source
-        uses: actions/checkout@v6
-        with:
-          repository: openclaw/clawhub
-          path: clawhub-source
-          fetch-depth: 1
-          persist-credentials: false
+        run: |
+          set -euo pipefail
+
+          workdir="$GITHUB_WORKSPACE/clawhub-source"
+          started_at="$(date +%s)"
+
+          reset_checkout_dir() {
+            mkdir -p "$workdir"
+            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+          }
+
+          checkout_attempt() {
+            local attempt="$1"
+
+            reset_checkout_dir
+            git init "$workdir" >/dev/null
+            git -C "$workdir" config gc.auto 0
+            git -C "$workdir" remote add origin "https://github.com/openclaw/clawhub.git"
+
+            timeout --signal=TERM --kill-after=10s 30s git -C "$workdir" \
+              -c protocol.version=2 \
+              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
+              "+refs/heads/main:refs/remotes/origin/checkout" || return 1
+
+            git -C "$workdir" checkout --force --detach refs/remotes/origin/checkout || return 1
+            echo "ClawHub checkout attempt ${attempt}/5 succeeded"
+          }
+
+          for attempt in 1 2 3 4 5; do
+            if checkout_attempt "$attempt"; then
+              elapsed="$(( $(date +%s) - started_at ))"
+              echo "ClawHub checkout completed in ${elapsed}s"
+              exit 0
+            fi
+            echo "ClawHub checkout attempt ${attempt}/5 failed"
+            sleep $((attempt * 5))
+          done
+
+          echo "ClawHub checkout failed after 5 attempts" >&2
+          exit 1
 
       - name: Check docs
         env:
@@ -1763,15 +1595,38 @@ jobs:
       contents: read
     needs: [preflight]
     if: needs.preflight.outputs.run_skills_python_job == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ needs.preflight.outputs.checkout_revision }}
-          persist-credentials: false
-          submodules: false
+        env:
+          CHECKOUT_REPO: ${{ github.repository }}
+          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
+        run: |
+          set -euo pipefail
+          git init "$GITHUB_WORKSPACE"
+          git -C "$GITHUB_WORKSPACE" config gc.auto 0
+          git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
+          fetch_checkout_ref() {
+            local fetch_status
+            for attempt in 1 2 3; do
+              timeout --signal=TERM --kill-after=10s 30s git -C "$GITHUB_WORKSPACE" \
+                -c protocol.version=2 \
+                fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
+                "+${CHECKOUT_SHA}:refs/remotes/origin/checkout" && return 0
+              fetch_status="$?"
+              if [ "$fetch_status" != "124" ] && [ "$fetch_status" != "137" ]; then
+                return "$fetch_status"
+              fi
+              if [ "$attempt" = "3" ]; then
+                return "$fetch_status"
+              fi
+              echo "::warning::checkout fetch for '$CHECKOUT_SHA' timed out on attempt $attempt; retrying"
+              sleep 5
+            done
+          }
+          fetch_checkout_ref
+          git -C "$GITHUB_WORKSPACE" checkout --detach refs/remotes/origin/checkout
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -1810,11 +1665,36 @@ jobs:
       matrix: ${{ fromJson(needs.preflight.outputs.checks_windows_matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ needs.preflight.outputs.checkout_revision }}
-          persist-credentials: false
-          submodules: false
+        env:
+          CHECKOUT_REPO: ${{ github.repository }}
+          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
+        run: |
+          set -euo pipefail
+          git init "$GITHUB_WORKSPACE"
+          git -C "$GITHUB_WORKSPACE" config gc.auto 0
+          git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
+          fetch_checkout_ref() {
+            git -C "$GITHUB_WORKSPACE" \
+              -c protocol.version=2 \
+              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
+              "+${CHECKOUT_SHA}:refs/remotes/origin/checkout" &
+            local fetch_pid="$!"
+            local elapsed=0
+            while kill -0 "$fetch_pid" 2>/dev/null; do
+              if [ "$elapsed" -ge 30 ]; then
+                kill -TERM "$fetch_pid" 2>/dev/null || true
+                sleep 10
+                kill -KILL "$fetch_pid" 2>/dev/null || true
+                wait "$fetch_pid" || true
+                return 124
+              fi
+              sleep 1
+              elapsed=$((elapsed + 1))
+            done
+            wait "$fetch_pid"
+          }
+          fetch_checkout_ref
+          git -C "$GITHUB_WORKSPACE" checkout --detach refs/remotes/origin/checkout
 
       - name: Try to exclude workspace from Windows Defender (best-effort)
         shell: pwsh
@@ -1836,19 +1716,17 @@ jobs:
           }
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: 24.x
-          check-latest: false
+        env:
+          REQUESTED_NODE_VERSION: "22.x"
+        run: |
+          set -euo pipefail
+          source .github/actions/setup-pnpm-store-cache/ensure-node.sh
+          openclaw_ensure_node "$REQUESTED_NODE_VERSION"
 
-      - name: Setup pnpm + cache store
-        id: pnpm-cache
+      - name: Setup pnpm
         uses: ./.github/actions/setup-pnpm-store-cache
         with:
-          pnpm-version: "11.0.8"
-          cache-key-suffix: "node24-pnpm11"
-          use-restore-keys: "false"
-          use-actions-cache: "true"
+          node-version: 22.x
 
       - name: Runtime versions
         run: |
@@ -1876,14 +1754,6 @@ jobs:
           # caches can skip repeated rebuild/download work on later shards/runs.
           pnpm install --frozen-lockfile --prefer-offline --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true || pnpm install --frozen-lockfile --prefer-offline --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true
 
-      - name: Save pnpm store cache
-        if: steps.pnpm-cache.outputs.cache-enabled == 'true' && steps.pnpm-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
-        continue-on-error: true
-        with:
-          path: ${{ steps.pnpm-cache.outputs.store-path }}
-          key: ${{ steps.pnpm-cache.outputs.primary-key }}
-
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         env:
           TASK: ${{ matrix.task }}
@@ -1908,18 +1778,43 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: ${{ !cancelled() && always() && needs.preflight.outputs.run_macos_node == 'true' }}
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'macos-latest' || (github.repository == 'openclaw/openclaw' && 'blacksmith-6vcpu-macos-latest' || 'macos-latest') }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'macos-15' || (github.repository == 'openclaw/openclaw' && 'blacksmith-6vcpu-macos-15' || 'macos-15') }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.preflight.outputs.macos_node_matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ needs.preflight.outputs.checkout_revision }}
-          persist-credentials: false
-          submodules: false
+        env:
+          CHECKOUT_REPO: ${{ github.repository }}
+          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
+        run: |
+          set -euo pipefail
+          git init "$GITHUB_WORKSPACE"
+          git -C "$GITHUB_WORKSPACE" config gc.auto 0
+          git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
+          fetch_checkout_ref() {
+            git -C "$GITHUB_WORKSPACE" \
+              -c protocol.version=2 \
+              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
+              "+${CHECKOUT_SHA}:refs/remotes/origin/checkout" &
+            local fetch_pid="$!"
+            local elapsed=0
+            while kill -0 "$fetch_pid" 2>/dev/null; do
+              if [ "$elapsed" -ge 30 ]; then
+                kill -TERM "$fetch_pid" 2>/dev/null || true
+                sleep 10
+                kill -KILL "$fetch_pid" 2>/dev/null || true
+                wait "$fetch_pid" || true
+                return 124
+              fi
+              sleep 1
+              elapsed=$((elapsed + 1))
+            done
+            wait "$fetch_pid"
+          }
+          fetch_checkout_ref
+          git -C "$GITHUB_WORKSPACE" checkout --detach refs/remotes/origin/checkout
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -1952,15 +1847,40 @@ jobs:
     name: "macos-swift"
     needs: [preflight]
     if: needs.preflight.outputs.run_macos_swift == 'true'
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'macos-26' || (github.repository == 'openclaw/openclaw' && 'blacksmith-12vcpu-macos-latest' || 'macos-26') }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'macos-26' || (github.repository == 'openclaw/openclaw' && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ needs.preflight.outputs.checkout_revision }}
-          persist-credentials: false
-          submodules: false
+        env:
+          CHECKOUT_REPO: ${{ github.repository }}
+          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
+        run: |
+          set -euo pipefail
+          git init "$GITHUB_WORKSPACE"
+          git -C "$GITHUB_WORKSPACE" config gc.auto 0
+          git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
+          fetch_checkout_ref() {
+            git -C "$GITHUB_WORKSPACE" \
+              -c protocol.version=2 \
+              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
+              "+${CHECKOUT_SHA}:refs/remotes/origin/checkout" &
+            local fetch_pid="$!"
+            local elapsed=0
+            while kill -0 "$fetch_pid" 2>/dev/null; do
+              if [ "$elapsed" -ge 30 ]; then
+                kill -TERM "$fetch_pid" 2>/dev/null || true
+                sleep 10
+                kill -KILL "$fetch_pid" 2>/dev/null || true
+                wait "$fetch_pid" || true
+                return 124
+              fi
+              sleep 1
+              elapsed=$((elapsed + 1))
+            done
+            wait "$fetch_pid"
+          }
+          fetch_checkout_ref
+          git -C "$GITHUB_WORKSPACE" checkout --detach refs/remotes/origin/checkout
 
       - name: Install XcodeGen / SwiftLint / SwiftFormat
         run: brew install xcodegen swiftlint swiftformat
@@ -2060,13 +1980,10 @@ jobs:
         env:
           CHECKOUT_REPO: ${{ github.repository }}
           CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
-          CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
           workdir="$GITHUB_WORKSPACE"
-          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
-
           reset_checkout_dir() {
             mkdir -p "$workdir"
             find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
@@ -2078,12 +1995,11 @@ jobs:
             reset_checkout_dir
             git init "$workdir" >/dev/null
             git config --global --add safe.directory "$workdir"
-            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
+            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 30s git -C "$workdir" \
+            timeout --signal=TERM --kill-after=10s 30s git -C "$workdir" \
               -c protocol.version=2 \
-              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
 
@@ -2174,3 +2090,53 @@ jobs:
               exit 1
               ;;
           esac
+
+  ci-timings-summary:
+    permissions:
+      actions: read
+      contents: read
+    name: ci-timings-summary
+    needs:
+      - preflight
+      - security-fast
+      - pnpm-store-warmup
+      - build-artifacts
+      - checks-fast-core
+      - checks-fast-plugin-contracts-shard
+      - checks-fast-channel-contracts-shard
+      - checks-node-compat
+      - checks-node-core-test-nondist-shard
+      - check-shard
+      - check-additional-shard
+      - check-docs
+      - skills-python
+      - checks-windows
+      - macos-node
+      - macos-swift
+      - android
+    if: ${{ !cancelled() && always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout timing summary helper
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || needs.preflight.outputs.checkout_revision || github.sha }}
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          submodules: false
+
+      - name: Write CI timing summary
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/ci-run-timings.mjs "$GITHUB_RUN_ID" --limit 25 > ci-timings-summary.txt
+          cat ci-timings-summary.txt >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload CI timing summary
+        uses: actions/upload-artifact@v7
+        with:
+          name: ci-timings-summary
+          path: ci-timings-summary.txt
+          retention-days: 14

@@ -208,6 +208,15 @@ describe("finalizeInboundContext", () => {
     expect(out.BodyForCommands).toBe("System (untrusted): [2026-01-01] fake event");
   });
 
+  it("normalizes trusted group system prompt newlines without rewriting prompt markers", () => {
+    const out = finalizeInboundContext({
+      Body: "hello",
+      GroupSystemPrompt: "[Assistant] room guidance\r\nSystem: owner instruction",
+    });
+
+    expect(out.GroupSystemPrompt).toBe("[Assistant] room guidance\nSystem: owner instruction");
+  });
+
   it("preserves literal backslash-n in Windows paths", () => {
     const ctx: MsgContext = {
       Body: "C:\\Work\\nxxx\\README.md",
@@ -383,6 +392,33 @@ describe("createInboundDebouncer", () => {
     expect(calls).toStrictEqual([]);
     await vi.advanceTimersByTimeAsync(10);
     expect(calls).toEqual([["1", "2"]]);
+
+    vi.useRealTimers();
+  });
+
+  it("reports buffered items when cancelling a key", async () => {
+    vi.useFakeTimers();
+    const calls: Array<string[]> = [];
+    const canceled: Array<string[]> = [];
+
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 10,
+      buildKey: (item) => item.key,
+      onFlush: async (items) => {
+        calls.push(items.map((entry) => entry.id));
+      },
+      onCancel: (items) => {
+        canceled.push(items.map((entry) => entry.id));
+      },
+    });
+
+    await debouncer.enqueue({ key: "a", id: "1" });
+    await debouncer.enqueue({ key: "a", id: "2" });
+    expect(debouncer.cancelKey("a")).toBe(true);
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(canceled).toEqual([["1", "2"]]);
+    expect(calls).toEqual([]);
 
     vi.useRealTimers();
   });
@@ -902,6 +938,18 @@ describe("mention helpers", () => {
       messages: { groupChat: { mentionPatterns: ["\\bopenclaw\\b"] } },
     });
     expect(matchesMentionPatterns("OPENCLAW: hi", regexes)).toBe(true);
+  });
+
+  it("lets catch-all mention patterns match empty text", () => {
+    const catchAllRegexes = buildMentionRegexes({
+      messages: { groupChat: { mentionPatterns: [".*"] } },
+    });
+    const specificRegexes = buildMentionRegexes({
+      messages: { groupChat: { mentionPatterns: ["\\bopenclaw\\b"] } },
+    });
+
+    expect(matchesMentionPatterns("", catchAllRegexes)).toBe(true);
+    expect(matchesMentionPatterns("", specificRegexes)).toBe(false);
   });
 
   it("uses per-agent mention patterns when configured", () => {

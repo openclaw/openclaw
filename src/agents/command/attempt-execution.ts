@@ -1,5 +1,5 @@
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { formatAcpErrorChain } from "../../acp/runtime/errors.js";
+import type { AcpRuntimeEvent } from "../../acp/runtime/types.js";
 import { normalizeReplyPayload } from "../../auto-reply/reply/normalize-reply.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
@@ -10,9 +10,15 @@ import {
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
+import { readErrorName } from "../../infra/errors.js";
+import { redactSensitiveText } from "../../logging/redact.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import {
+  appendUserTurnTranscriptMessage,
+  type PersistedUserTurnMessage,
+} from "../../sessions/user-turn-transcript.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
@@ -20,17 +26,16 @@ import { ensureAuthProfileStore } from "../auth-profiles/store.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../bootstrap-budget.js";
 import { runCliAgent } from "../cli-runner.js";
 import { getCliSessionBinding, setCliSessionBinding } from "../cli-session.js";
+import { runEmbeddedAgent, type EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { FailoverError } from "../failover-error.js";
+import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
 import { resolveAvailableAgentHarnessPolicy } from "../harness/selection.js";
 import { resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js";
 import { isCliProvider } from "../model-selection.js";
-import { resolveOpenAIRuntimeProviderForPi } from "../openai-codex-routing.js";
-import { runEmbeddedPiAgent, type EmbeddedPiRunResult } from "../pi-embedded.js";
+import { resolveOpenAIRuntimeProvider } from "../openai-codex-routing.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
-import {
-  acquireSessionWriteLock,
-  resolveSessionWriteLockAcquireTimeoutMs,
-} from "../session-write-lock.js";
+import type { AgentMessage } from "../runtime/index.js";
+import { acquireSessionWriteLock, resolveSessionWriteLockOptions } from "../session-write-lock.js";
 import { buildWorkspaceSkillSnapshot } from "../skills.js";
 import { buildUsageWithNoCost } from "../stream-message-shared.js";
 import {
@@ -49,6 +54,20 @@ export {
 } from "./attempt-execution.helpers.js";
 
 const log = createSubsystemLogger("agents/agent-command");
+
+function shouldClearReusedCliSessionAfterError(err: unknown): boolean {
+  if (readErrorName(err) === "AbortError") {
+    return true;
+  }
+  return err instanceof FailoverError && err.reason !== "session_expired";
+}
+
+function resolveClearedCliSessionReason(err: unknown): string {
+  if (err instanceof FailoverError) {
+    return err.reason;
+  }
+  return readErrorName(err) || "error";
+}
 
 function normalizeTranscriptMirrorText(value: string): string {
   return value.trim().replace(/\s+/gu, " ");
@@ -80,6 +99,7 @@ type TranscriptUsage = {
 type PersistTextTurnTranscriptParams = {
   body: string;
   transcriptBody?: string;
+  userMessage?: PersistedUserTurnMessage;
   finalText: string;
   sessionId: string;
   sessionKey: string;
@@ -116,6 +136,7 @@ function resolveProfileAuthFromStore(params: { agentDir: string; profileId: stri
   }
   const credential = ensureAuthProfileStore(params.agentDir, {
     allowKeychainPrompt: false,
+    externalCliProfileIds: [profileId],
   }).profiles[profileId];
   return { provider: credential?.provider, mode: credential?.type };
 }
@@ -162,6 +183,7 @@ function resolveHarnessAuthProfileSelection(params: {
 
   const store = ensureAuthProfileStore(params.agentDir, {
     allowKeychainPrompt: false,
+    externalCliProviderIds: [harnessAuthProvider],
   });
   const authProfileId = resolveAuthProfileOrder({
     cfg: params.config,
@@ -211,21 +233,28 @@ async function persistTextTurnTranscript(
   });
   const lock = await acquireSessionWriteLock({
     sessionFile,
-    timeoutMs: resolveSessionWriteLockAcquireTimeoutMs(params.config),
+    ...resolveSessionWriteLockOptions(params.config),
     allowReentrant: true,
   });
   try {
-    if (promptText) {
-      await appendSessionTranscriptMessage({
+    const userMessage = params.userMessage;
+    if (userMessage || promptText) {
+      await appendUserTurnTranscriptMessage({
         transcriptPath: sessionFile,
         sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
         cwd: params.sessionCwd,
         config: params.config,
-        message: {
-          role: "user",
-          content: promptText,
-          timestamp: Date.now(),
-        },
+        beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+        ...(userMessage
+          ? { message: userMessage }
+          : {
+              input: {
+                text: promptText,
+                timestamp: Date.now(),
+              },
+            }),
+        updateMode: "none",
       });
     }
 
@@ -266,7 +295,7 @@ async function persistTextTurnTranscript(
   return sessionEntry;
 }
 
-function resolveCliTranscriptReplyText(result: EmbeddedPiRunResult): string {
+function resolveCliTranscriptReplyText(result: EmbeddedAgentRunResult): string {
   const visibleText = result.meta.finalAssistantVisibleText?.trim();
   if (visibleText) {
     return visibleText;
@@ -310,7 +339,8 @@ export async function persistAcpTurnTranscript(params: {
 export async function persistCliTurnTranscript(params: {
   body: string;
   transcriptBody?: string;
-  result: EmbeddedPiRunResult;
+  userMessage?: PersistedUserTurnMessage;
+  result: EmbeddedAgentRunResult;
   sessionId: string;
   sessionKey: string;
   sessionEntry: SessionEntry | undefined;
@@ -330,6 +360,7 @@ export async function persistCliTurnTranscript(params: {
   return await persistTextTurnTranscript({
     body: gapFill ? "" : params.body,
     transcriptBody: gapFill ? undefined : params.transcriptBody,
+    ...(!gapFill && params.userMessage ? { userMessage: params.userMessage } : {}),
     finalText: replyText,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
@@ -361,13 +392,14 @@ export function runAgentAttempt(params: {
   sessionAgentId: string;
   sessionFile: string;
   workspaceDir: string;
+  cwd?: string;
   body: string;
   isFallbackRetry: boolean;
   resolvedThinkLevel: ThinkLevel;
   fastMode?: boolean;
   timeoutMs: number;
   runId: string;
-  opts: AgentCommandOpts & { senderIsOwner: boolean };
+  opts: AgentCommandOpts;
   runContext: ReturnType<typeof resolveAgentRunContext>;
   spawnedBy: string | undefined;
   messageChannel: ReturnType<typeof resolveMessageChannel>;
@@ -379,6 +411,7 @@ export function runAgentAttempt(params: {
     data?: Record<string, unknown>;
     sessionKey?: string;
   }) => void;
+  deferTerminalLifecycleEnd?: boolean;
   authProfileProvider: string;
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
@@ -412,7 +445,7 @@ export function runAgentAttempt(params: {
   );
   const bootstrapPromptWarningSignature =
     bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
-  const requestedAgentHarnessId = isRawModelRun ? "pi" : undefined;
+  const requestedAgentHarnessId = isRawModelRun ? "openclaw" : undefined;
   const cliExecutionProvider = isRawModelRun
     ? params.providerOverride
     : (resolveCliRuntimeExecutionProvider({
@@ -420,9 +453,10 @@ export function runAgentAttempt(params: {
         cfg: params.cfg,
         agentId: params.sessionAgentId,
         modelId: params.modelOverride,
+        authProfileId: params.sessionEntry?.authProfileOverride,
       }) ?? params.providerOverride);
   const agentHarnessPolicy = isRawModelRun
-    ? ({ runtime: "pi" } as const)
+    ? ({ runtime: "openclaw" } as const)
     : resolveAvailableAgentHarnessPolicy({
         provider: params.providerOverride,
         modelId: params.modelOverride,
@@ -454,7 +488,7 @@ export function runAgentAttempt(params: {
     allowHarnessAuthProfileForwarding: !isCliProvider(cliExecutionProvider, params.cfg),
   });
   const authProfileId = runtimeAuthPlan.forwardedAuthProfileId;
-  const embeddedPiProvider = resolveOpenAIRuntimeProviderForPi({
+  const embeddedAgentProvider = resolveOpenAIRuntimeProvider({
     provider: params.providerOverride,
     harnessRuntime: agentHarnessPolicy.runtime,
     agentHarnessId: requestedAgentHarnessId,
@@ -463,6 +497,11 @@ export function runAgentAttempt(params: {
     config: params.cfg,
     workspaceDir: params.workspaceDir,
   });
+  const embeddedAgentHarnessOverride =
+    requestedAgentHarnessId ??
+    (agentHarnessPolicy.runtime === "openclaw" && embeddedAgentProvider !== params.providerOverride
+      ? "openclaw"
+      : undefined);
   if (!isRawModelRun && isCliProvider(cliExecutionProvider, params.cfg)) {
     const cliSessionBinding = getCliSessionBinding(params.sessionEntry, cliExecutionProvider);
     const resolveReusableCliSessionBinding = async () => {
@@ -497,10 +536,12 @@ export function runAgentAttempt(params: {
       runCliAgent({
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
+        sessionEntry: params.sessionEntry,
         agentId: params.sessionAgentId,
         trigger: "user",
         sessionFile: params.sessionFile,
         workspaceDir: params.workspaceDir,
+        cwd: params.cwd,
         config: params.cfg,
         prompt: effectivePrompt,
         provider: cliExecutionProvider,
@@ -582,12 +623,32 @@ export function runAgentAttempt(params: {
             return result;
           });
         }
+        if (
+          isClaudeCliProvider(cliExecutionProvider) &&
+          shouldClearReusedCliSessionAfterError(err) &&
+          activeCliSessionBinding?.sessionId &&
+          params.sessionKey &&
+          params.sessionStore &&
+          params.storePath
+        ) {
+          log.warn(
+            `CLI session cleared after failed reused turn: provider=${sanitizeForLog(cliExecutionProvider)} sessionKey=${params.sessionKey} reason=${sanitizeForLog(resolveClearedCliSessionReason(err))}`,
+          );
+
+          params.sessionEntry =
+            (await clearCliSessionInStore({
+              provider: cliExecutionProvider,
+              sessionKey: params.sessionKey,
+              sessionStore: params.sessionStore,
+              storePath: params.storePath,
+            })) ?? params.sessionEntry;
+        }
         throw err;
       }
     });
   }
 
-  return runEmbeddedPiAgent({
+  return runEmbeddedAgent({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     agentId: params.sessionAgentId,
@@ -608,14 +669,16 @@ export function runAgentAttempt(params: {
     senderIsOwner: params.opts.senderIsOwner,
     sessionFile: params.sessionFile,
     workspaceDir: params.workspaceDir,
+    cwd: params.cwd,
     config: params.cfg,
-    agentHarnessId: requestedAgentHarnessId,
+    agentHarnessId: embeddedAgentHarnessOverride,
+    agentHarnessRuntimeOverride: embeddedAgentHarnessOverride,
     skillsSnapshot: params.skillsSnapshot,
     prompt: effectivePrompt,
     images: params.isFallbackRetry ? undefined : params.opts.images,
     imageOrder: params.isFallbackRetry ? undefined : params.opts.imageOrder,
     clientTools: params.opts.clientTools,
-    provider: embeddedPiProvider,
+    provider: embeddedAgentProvider,
     model: params.modelOverride,
     modelFallbacksOverride: params.modelFallbacksOverride,
     authProfileId,
@@ -635,6 +698,7 @@ export function runAgentAttempt(params: {
     internalEvents: params.opts.internalEvents,
     inputProvenance: params.opts.inputProvenance,
     sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode,
+    disableMessageTool: params.opts.disableMessageTool,
     streamParams: params.opts.streamParams,
     agentDir: params.agentDir,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
@@ -643,6 +707,7 @@ export function runAgentAttempt(params: {
     promptMode: params.opts.promptMode,
     disableTools: params.opts.modelRun === true,
     onAgentEvent: params.onAgentEvent,
+    deferTerminalLifecycleEnd: params.deferTerminalLifecycleEnd,
     suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
     onUserMessagePersisted: params.onUserMessagePersisted,
     bootstrapPromptWarningSignaturesSeen,
@@ -677,6 +742,93 @@ export function emitAcpLifecycleStart(params: { runId: string; startedAt: number
     data: {
       phase: "start",
       startedAt: params.startedAt,
+    },
+  });
+}
+
+const ACP_PROXY_ENV_KEYS = [
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "ALL_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "all_proxy",
+] as const;
+
+function resolvePresentProxyEnvKeys(env: NodeJS.ProcessEnv = process.env): string[] {
+  return ACP_PROXY_ENV_KEYS.filter((key) => {
+    const value = env[key];
+    return typeof value === "string" && value.trim().length > 0;
+  });
+}
+
+function sanitizeAcpDiagnosticText(value: string): string {
+  return redactSensitiveText(value).replace(/\s+/g, " ").trim().slice(0, 240);
+}
+
+function acpRuntimeEventDiagnostics(event: AcpRuntimeEvent): Record<string, unknown> {
+  if (event.type === "status") {
+    return {
+      eventType: event.type,
+      text: sanitizeAcpDiagnosticText(event.text),
+      ...(event.tag ? { tag: event.tag } : {}),
+    };
+  }
+  if (event.type === "tool_call") {
+    return {
+      eventType: event.type,
+      text: sanitizeAcpDiagnosticText(event.text),
+      ...(event.tag ? { tag: event.tag } : {}),
+      ...(event.status ? { status: sanitizeAcpDiagnosticText(event.status) } : {}),
+      ...(event.title ? { title: sanitizeAcpDiagnosticText(event.title) } : {}),
+      ...(event.toolCallId ? { toolCallId: sanitizeAcpDiagnosticText(event.toolCallId) } : {}),
+    };
+  }
+  if (event.type === "error") {
+    return {
+      eventType: event.type,
+      message: sanitizeAcpDiagnosticText(event.message),
+      ...(event.code ? { code: sanitizeAcpDiagnosticText(event.code) } : {}),
+      ...(typeof event.retryable === "boolean" ? { retryable: event.retryable } : {}),
+    };
+  }
+  if (event.type === "done") {
+    return {
+      eventType: event.type,
+      ...(event.stopReason ? { stopReason: sanitizeAcpDiagnosticText(event.stopReason) } : {}),
+    };
+  }
+  return {
+    eventType: event.type,
+    stream: event.stream ?? "output",
+  };
+}
+
+export function emitAcpPromptSubmitted(params: { runId: string; sessionKey?: string; at: number }) {
+  emitAgentEvent({
+    runId: params.runId,
+    stream: "acp",
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    data: {
+      phase: "prompt_submitted",
+      at: params.at,
+      proxyEnvKeys: resolvePresentProxyEnvKeys(),
+    },
+  });
+}
+
+export function emitAcpRuntimeEvent(params: {
+  runId: string;
+  event: AcpRuntimeEvent;
+  sessionKey?: string;
+}) {
+  emitAgentEvent({
+    runId: params.runId,
+    stream: "acp",
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    data: {
+      phase: "runtime_event",
+      ...acpRuntimeEventDiagnostics(params.event),
     },
   });
 }

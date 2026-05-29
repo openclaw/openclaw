@@ -100,6 +100,22 @@ describe("openclaw path CLI", () => {
       expect(out.match.valueText).toBe("1.0");
     });
 
+    it("CLI-R04 finds a leaf in yaml and prints it", async () => {
+      const filePath = join(workspaceDir, "workflow.yaml");
+      writeFileSync(filePath, "name: inbox-triage\nsteps:\n  - id: fetch\n", "utf-8");
+      const rt = createTestRuntime();
+      await pathResolveCommand(
+        "oc://workflow.yaml/steps/0/id",
+        { cwd: workspaceDir, json: true },
+        rt,
+      );
+      expect(rt.exitCode).toBe(0);
+      const out = JSON.parse(stdoutText(rt));
+      expect(out.resolved).toBe(true);
+      expect(out.match.kind).toBe("leaf");
+      expect(out.match.valueText).toBe("fetch");
+    });
+
     it("CLI-R02 returns 1 for not-found path", async () => {
       const filePath = join(workspaceDir, "gateway.jsonc");
       writeFileSync(filePath, '{ "version": "1.0" }', "utf-8");
@@ -239,6 +255,43 @@ describe("openclaw path CLI", () => {
       expect(readFileSync(filePath, "utf-8")).toBe(before);
     });
 
+    it("CLI-S08 sets slash-deep JSONC paths and parsed JSON values", async () => {
+      const filePath = join(workspaceDir, "openclaw.json");
+      writeFileSync(
+        filePath,
+        '{ "agents": { "list": [{ "tools": { "exec": { "security": "deny" } } }] }, "gateway": { "auth": { "token": "${TOKEN}" } } }\n',
+        "utf-8",
+      );
+      const rt = createTestRuntime();
+
+      await pathSetCommand(
+        "oc://openclaw.json/gateway/auth/token",
+        '{"source":"file","provider":"secrets","id":"/test"}',
+        { cwd: workspaceDir, json: true, valueJson: true },
+        rt,
+      );
+
+      expect(rt.exitCode).toBe(0);
+      expect(JSON.parse(readFileSync(filePath, "utf8")).gateway.auth.token).toEqual({
+        source: "file",
+        provider: "secrets",
+        id: "/test",
+      });
+
+      const rt2 = createTestRuntime();
+      await pathSetCommand(
+        "oc://openclaw.json/agents/list/0/tools/exec/security",
+        "allowlist",
+        { cwd: workspaceDir, json: true },
+        rt2,
+      );
+
+      expect(rt2.exitCode).toBe(0);
+      expect(JSON.parse(readFileSync(filePath, "utf8")).agents.list[0].tools.exec.security).toBe(
+        "allowlist",
+      );
+    });
+
     it("CLI-S03 sentinel-bearing value is refused at emit", async () => {
       const filePath = join(workspaceDir, "gateway.jsonc");
       writeFileSync(filePath, '{ "token": "x" }', "utf-8");
@@ -272,6 +325,23 @@ describe("openclaw path CLI", () => {
       await pathSetCommand(undefined, undefined, { json: true }, rt);
       expect(rt.exitCode).toBe(2);
       expect(stderrText(rt)).toContain("requires");
+    });
+
+    it("CLI-S05 malformed yaml returns structured parse-error", async () => {
+      const filePath = join(workspaceDir, "workflow.yaml");
+      const before = "key: value\n  bad indent: oops\n";
+      writeFileSync(filePath, before, "utf-8");
+      const rt = createTestRuntime();
+      await pathSetCommand(
+        "oc://workflow.yaml/key",
+        "new-value",
+        { cwd: workspaceDir, json: true },
+        rt,
+      );
+      expect(rt.exitCode).toBe(1);
+      const out = JSON.parse(stdoutText(rt));
+      expect(out).toMatchObject({ ok: false, reason: "parse-error" });
+      expect(readFileSync(filePath, "utf-8")).toBe(before);
     });
   });
 
@@ -329,6 +399,18 @@ describe("openclaw path CLI", () => {
       expect(rt.exitCode).toBe(0);
       const out = JSON.parse(stdoutText(rt));
       expect(out.kind).toBe("md");
+      expect(out.bytes).toBe(before);
+    });
+
+    it("CLI-E04 round-trips yaml verbatim", async () => {
+      const filePath = join(workspaceDir, "workflow.yaml");
+      const before = "# keep comment\nname: inbox-triage\nsteps:\n  - id: fetch\n";
+      writeFileSync(filePath, before, "utf-8");
+      const rt = createTestRuntime();
+      await pathEmitCommand(filePath, { json: true }, rt);
+      expect(rt.exitCode).toBe(0);
+      const out = JSON.parse(stdoutText(rt));
+      expect(out.kind).toBe("yaml");
       expect(out.bytes).toBe(before);
     });
 

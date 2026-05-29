@@ -1,9 +1,9 @@
-import type { Api, Context, Model } from "@earendil-works/pi-ai";
+import type { Api, Context, Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { transformTransportMessages } from "./transport-message-transform.js";
 
-function makeModel(api: Api, provider: string, id: string): Model<Api> {
-  return { api, provider, id, input: [], output: [] } as unknown as Model<Api>;
+function makeModel(api: Api, provider: string, id: string): Model {
+  return { api, provider, id, input: [], output: [] } as unknown as Model;
 }
 
 type ToolResultMessage = Extract<Context["messages"][number], { role: "toolResult" }>;
@@ -45,6 +45,40 @@ function assistantToolCall(
 }
 
 describe("transformTransportMessages synthetic tool-result policy", () => {
+  it("normalizes malformed assistant content before transport conversion", () => {
+    const objectContentMessages = [
+      {
+        ...assistantToolCall("call_object"),
+        stopReason: "stop",
+        content: { type: "text", text: "legacy object" },
+      },
+      { role: "user", content: "continue", timestamp: Date.now() },
+    ] as unknown as Context["messages"];
+    const objectResult = transformTransportMessages(
+      objectContentMessages,
+      makeModel("openai-responses", "openai", "gpt-5.4"),
+    );
+    expect(objectResult[0]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "legacy object" }],
+    });
+
+    const nullContentMessages = [
+      {
+        ...assistantToolCall("call_null"),
+        stopReason: "stop",
+        content: null,
+      },
+      { role: "user", content: "continue", timestamp: Date.now() },
+    ] as unknown as Context["messages"];
+    const nullResult = transformTransportMessages(
+      nullContentMessages,
+      makeModel("openai-responses", "openai", "gpt-5.4"),
+    );
+    expect(nullResult[0]).toMatchObject({ role: "assistant", content: [] });
+    expect(nullResult[1]).toMatchObject({ role: "user" });
+  });
+
   it("synthesizes Codex-style aborted tool results for OpenAI Responses transports", () => {
     const messages: Context["messages"] = [
       assistantToolCall("call_openai_1"),

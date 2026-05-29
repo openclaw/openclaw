@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { normalizeChannelId as normalizeBundledChannelId } from "../../channels/registry.js";
+import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import { getResolvedLoggerSettings } from "../../logging.js";
 import { resolveLogFile } from "../../logging/log-tail.js";
 import { parseLogLine } from "../../logging/parse-log-line.js";
@@ -54,6 +55,17 @@ function matchesChannel(line: NonNullable<LogLine>, channel: string) {
   return false;
 }
 
+function parseLinesOption(value: unknown): number {
+  if (value === undefined || value === null || value === "") {
+    return DEFAULT_LIMIT;
+  }
+  const parsed = parseStrictPositiveInteger(value);
+  if (parsed === undefined) {
+    throw new Error("--lines must be a positive integer.");
+  }
+  return parsed;
+}
+
 async function readTailLines(file: string, limit: number): Promise<string[]> {
   const stat = await fs.stat(file).catch(() => null);
   if (!stat) {
@@ -63,6 +75,12 @@ async function readTailLines(file: string, limit: number): Promise<string[]> {
   const start = Math.max(0, size - MAX_BYTES);
   const handle = await fs.open(file, "r");
   try {
+    let prefix = "";
+    if (start > 0) {
+      const prefixBuf = Buffer.alloc(1);
+      const prefixRead = await handle.read(prefixBuf, 0, 1, start - 1);
+      prefix = prefixBuf.toString("utf8", 0, prefixRead.bytesRead);
+    }
     const length = Math.max(0, size - start);
     if (length === 0) {
       return [];
@@ -71,7 +89,7 @@ async function readTailLines(file: string, limit: number): Promise<string[]> {
     const readResult = await handle.read(buffer, 0, length, start);
     const text = buffer.toString("utf8", 0, readResult.bytesRead);
     let lines = text.split("\n");
-    if (start > 0) {
+    if (start > 0 && prefix !== "\n") {
       lines = lines.slice(1);
     }
     if (lines.length && lines[lines.length - 1] === "") {
@@ -91,11 +109,7 @@ export async function channelsLogsCommand(
   runtime: RuntimeEnv = defaultRuntime,
 ) {
   const channel = parseChannelFilter(opts.channel);
-  const limitRaw = typeof opts.lines === "string" ? Number(opts.lines) : opts.lines;
-  const limit =
-    typeof limitRaw === "number" && Number.isFinite(limitRaw) && limitRaw > 0
-      ? Math.floor(limitRaw)
-      : DEFAULT_LIMIT;
+  const limit = parseLinesOption(opts.lines);
 
   const file = await resolveLogFile(getResolvedLoggerSettings().file);
   const rawLines = await readTailLines(file, limit * 4);

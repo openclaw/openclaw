@@ -34,7 +34,7 @@ script aliases; both forms are supported.
 | `qa run`                                            | Bundled QA self-check; writes a Markdown report.                                                                                                                                                                                                                        |
 | `qa suite`                                          | Run repo-backed scenarios against the QA gateway lane. Aliases: `pnpm openclaw qa suite --runner multipass` for a disposable Linux VM.                                                                                                                                  |
 | `qa coverage`                                       | Print the markdown scenario-coverage inventory (`--json` for machine output).                                                                                                                                                                                           |
-| `qa parity-report`                                  | Compare two `qa-suite-summary.json` files and write the agentic parity report.                                                                                                                                                                                          |
+| `qa parity-report`                                  | Compare two `qa-suite-summary.json` files and write the agentic parity report, or use `--runtime-axis --token-efficiency` to write Codex-vs-OpenClaw runtime parity and token-efficiency reports from one runtime-pair summary.                                         |
 | `qa character-eval`                                 | Run the character QA scenario across multiple live models with a judged report. See [Reporting](#reporting).                                                                                                                                                            |
 | `qa manual`                                         | Run a one-off prompt against the selected provider/model lane.                                                                                                                                                                                                          |
 | `qa ui`                                             | Start the QA debugger UI and local QA bus (alias: `pnpm qa:lab:ui`).                                                                                                                                                                                                    |
@@ -83,25 +83,66 @@ pnpm qa:lab:watch
 rebuilds that bundle on change, and the browser auto-reloads when the QA Lab
 asset hash changes.
 
-For a local OpenTelemetry trace smoke, run:
+For a local OpenTelemetry signal smoke, run:
 
 ```bash
 pnpm qa:otel:smoke
 ```
 
-That script starts a local OTLP/HTTP trace receiver, runs the
-`otel-trace-smoke` QA scenario with the `diagnostics-otel` plugin enabled, then
-decodes the exported protobuf spans and asserts the release-critical shape:
-`openclaw.run`, `openclaw.harness.run`, `openclaw.model.call`,
-`openclaw.context.assembled`, and `openclaw.message.delivery` must be present;
+That script starts a local OTLP/HTTP receiver, runs the `otel-trace-smoke` QA
+scenario with the `diagnostics-otel` plugin enabled, then asserts traces,
+metrics, and logs are exported. It decodes the exported protobuf trace spans
+and checks the release-critical shape:
+`openclaw.run`, `openclaw.harness.run`, a latest GenAI semantic-convention
+model-call span, `openclaw.context.assembled`, and `openclaw.message.delivery`
+must be present. The smoke forces
+`OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental`, so the model-call
+span must use the `{gen_ai.operation.name} {gen_ai.request.model}` name;
 model calls must not export `StreamAbandoned` on successful turns; raw diagnostic IDs and
-`openclaw.content.*` attributes must stay out of the trace. It writes
-`otel-smoke-summary.json` next to the QA suite artifacts.
+`openclaw.content.*` attributes must stay out of the trace. The raw OTLP
+payloads must not contain the prompt sentinel, response sentinel, or QA session
+key. It writes `otel-smoke-summary.json` next to the QA suite artifacts.
+
+For a collector-backed OpenTelemetry smoke, run:
+
+```bash
+pnpm qa:otel:collector-smoke
+```
+
+That lane puts a real OpenTelemetry Collector Docker container in front of the
+same local receiver. Use it when changing endpoint wiring, collector
+compatibility, or OTLP export behavior that the in-process receiver could mask.
+
+For the protected Prometheus scrape smoke, run:
+
+```bash
+pnpm qa:prometheus:smoke
+```
+
+That alias runs the `docker-prometheus-smoke` QA scenario with
+`diagnostics-prometheus` enabled, verifies unauthenticated scrapes are rejected,
+then checks the authenticated scrape includes release-critical metric families
+without prompt content, response content, raw diagnostic identifiers, auth
+tokens, or local paths.
+
+To run both observability smokes back to back, use:
+
+```bash
+pnpm qa:observability:smoke
+```
+
+For the collector-backed OpenTelemetry lane plus the protected Prometheus scrape
+smoke, use:
+
+```bash
+pnpm qa:observability:collector-smoke
+```
 
 Observability QA stays source-checkout only. The npm tarball intentionally omits
 QA Lab, so package Docker release lanes do not run `qa` commands. Use
-`pnpm qa:otel:smoke` from a built source checkout when changing diagnostics
-instrumentation.
+`pnpm qa:otel:smoke`, `pnpm qa:prometheus:smoke`, or
+`pnpm qa:observability:smoke` from a built source checkout when changing
+diagnostics instrumentation.
 
 For a transport-real Matrix smoke lane, run:
 
@@ -165,6 +206,25 @@ With `--gateway-setup`, Mantis leaves a persistent OpenClaw Slack gateway
 running inside the VM on port `38973`; without it, the command runs the normal
 bot-to-bot Slack QA lane and exits after artifact capture.
 
+To prove native Slack approval UI with desktop evidence, run the Mantis approval
+checkpoint mode:
+
+```bash
+pnpm openclaw qa mantis slack-desktop-smoke \
+  --approval-checkpoints \
+  --credential-source convex \
+  --credential-role maintainer
+```
+
+This mode is mutually exclusive with `--gateway-setup`. It runs the Slack
+approval scenarios, rejects non-approval scenario ids, waits at each pending and
+resolved approval state, renders the observed Slack API message into
+`approval-checkpoints/<scenario>-pending.png` and
+`approval-checkpoints/<scenario>-resolved.png`, then fails if any checkpoint,
+message evidence, acknowledgement, or rendered screenshot is missing or empty.
+Cold CI leases may still show Slack sign-in in `slack-desktop-smoke.png`; the
+approval checkpoint images are the visual proof for this lane.
+
 The operator checklist, GitHub workflow dispatch command, evidence-comment
 contract, hydrate-mode decision table, timing interpretation, and failure
 handling steps live in [Mantis Slack Desktop Runbook](/concepts/mantis-slack-desktop-runbook).
@@ -175,7 +235,7 @@ For an agent/CV style desktop task, run:
 pnpm openclaw qa mantis visual-task \
   --browser-url https://example.net \
   --expect-text "Example Domain" \
-  --vision-model openai/gpt-5.4
+  --vision-model openai/gpt-5.5
 ```
 
 `visual-task` leases or reuses a Crabbox desktop/browser machine, starts
@@ -231,6 +291,12 @@ Host and Multipass suite runs execute multiple selected scenarios in parallel
 with isolated gateway workers by default. `qa-channel` defaults to concurrency
 4, capped by the selected scenario count. Use `--concurrency <count>` to tune
 the worker count, or `--concurrency 1` for serial execution.
+Use `--pack personal-agent` to run the personal assistant benchmark pack. The
+pack selector is additive with repeated `--scenario` flags: explicit scenarios
+run first, then pack scenarios run in pack order with duplicates removed.
+Use `--pack observability` when a custom QA runner already supplies the
+OpenTelemetry collector setup and wants the OpenTelemetry and Prometheus
+diagnostics smoke scenarios selected together.
 The command exits non-zero when any scenario fails. Use `--allow-failures` when
 you want artifacts without a failing exit code.
 Live runs forward the supported QA auth inputs that are practical for the
@@ -305,6 +371,25 @@ Output artifacts:
 - `telegram-qa-summary.json` - includes per-reply RTT (driver send → observed SUT reply) starting with the canary.
 - `telegram-qa-observed-messages.json` - bodies redacted unless `OPENCLAW_QA_TELEGRAM_CAPTURE_CONTENT=1`.
 
+Package RTT comparison uses the same Telegram credential contract while keeping
+its RTT sample controls on the RTT harness path:
+
+```bash
+pnpm rtt openclaw@beta \
+  --credential-source convex \
+  --credential-role maintainer \
+  --samples 20 \
+  --sample-timeout-ms 30000
+```
+
+When `--credential-source convex` is set, the RTT Docker wrapper leases a
+`kind: "telegram"` credential, exports the leased group/driver/SUT bot env into
+the installed-package run, heartbeats the lease, and releases it on shutdown.
+`--samples` and `--sample-timeout-ms` still feed
+`OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES` and
+`OPENCLAW_NPM_TELEGRAM_SAMPLE_TIMEOUT_MS`, so `result.json` remains comparable
+across env-backed and Convex-backed RTT runs.
+
 ### Discord QA
 
 ```bash
@@ -348,8 +433,8 @@ Run the Mantis status-reaction scenario explicitly:
 pnpm openclaw qa discord \
   --scenario discord-status-reactions-tool-only \
   --provider-mode live-frontier \
-  --model openai/gpt-5.4 \
-  --alt-model openai/gpt-5.4 \
+  --model openai/gpt-5.5 \
+  --alt-model openai/gpt-5.5 \
   --fast
 ```
 
@@ -378,8 +463,13 @@ Required env when `--credential-source env`:
 Optional:
 
 - `OPENCLAW_QA_SLACK_CAPTURE_CONTENT=1` keeps message bodies in observed-message artifacts.
+- `OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_DIR` enables visual approval
+  checkpoints for Mantis. The runner writes `<scenario>.pending.json` and
+  `<scenario>.resolved.json`, then waits for matching `.ack.json` files.
+- `OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_TIMEOUT_MS` overrides the checkpoint
+  acknowledgement timeout. The default is `120000`.
 
-Scenarios (`extensions/qa-lab/src/live-transports/slack/slack-live.runtime.ts:39`):
+Scenarios (`extensions/qa-lab/src/live-transports/slack/slack-live.runtime.ts`):
 
 - `slack-canary`
 - `slack-mention-gating`
@@ -388,12 +478,22 @@ Scenarios (`extensions/qa-lab/src/live-transports/slack/slack-live.runtime.ts:39
 - `slack-restart-resume`
 - `slack-thread-follow-up`
 - `slack-thread-isolation`
+- `slack-approval-exec-native` - opt-in native Slack exec approval scenario.
+  Requests an exec approval through the gateway, verifies the Slack message has
+  native approval buttons, resolves it, and verifies the resolved Slack update.
+- `slack-approval-plugin-native` - opt-in native Slack plugin approval scenario.
+  Enables exec and plugin approval forwarding together so plugin events are not
+  suppressed by exec approval routing, then verifies the same pending/resolved
+  native Slack UI path.
 
 Output artifacts:
 
 - `slack-qa-report.md`
 - `slack-qa-summary.json`
 - `slack-qa-observed-messages.json` - bodies redacted unless `OPENCLAW_QA_SLACK_CAPTURE_CONTENT=1`.
+- `approval-checkpoints/` - only when Mantis sets
+  `OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_DIR`; contains checkpoint JSON,
+  acknowledgement JSON, and pending/resolved screenshots.
 
 #### Setting up the Slack workspace
 
@@ -565,6 +665,48 @@ pnpm openclaw qa slack \
 
 A green run completes in well under 30 seconds and `slack-qa-report.md` shows both `slack-canary` and `slack-mention-gating` at status `pass`. If the lane hangs for ~90 seconds and exits with `Convex credential pool exhausted for kind "slack"`, either the pool is empty or every row is leased - `qa credentials list --kind slack --status all --json` will tell you which.
 
+### WhatsApp QA
+
+```bash
+pnpm openclaw qa whatsapp
+```
+
+Targets two dedicated WhatsApp Web accounts: a driver account controlled by
+the harness and a SUT account started by the child OpenClaw gateway through the
+bundled WhatsApp plugin.
+
+Required env when `--credential-source env`:
+
+- `OPENCLAW_QA_WHATSAPP_DRIVER_PHONE_E164`
+- `OPENCLAW_QA_WHATSAPP_SUT_PHONE_E164`
+- `OPENCLAW_QA_WHATSAPP_DRIVER_AUTH_ARCHIVE_BASE64`
+- `OPENCLAW_QA_WHATSAPP_SUT_AUTH_ARCHIVE_BASE64`
+
+Optional:
+
+- `OPENCLAW_QA_WHATSAPP_GROUP_JID` enables `whatsapp-mention-gating`.
+- `OPENCLAW_QA_WHATSAPP_CAPTURE_CONTENT=1` keeps message bodies in
+  observed-message artifacts.
+
+Scenarios (`extensions/qa-lab/src/live-transports/whatsapp/whatsapp-live.runtime.ts`):
+
+- `whatsapp-canary`
+- `whatsapp-pairing-block`
+- `whatsapp-mention-gating`
+- `whatsapp-approval-exec-native` - opt-in native WhatsApp exec approval
+  scenario. Requests an exec approval through the gateway, verifies the
+  WhatsApp message has native reaction approval affordances, resolves it, and
+  verifies the resolved WhatsApp follow-up.
+- `whatsapp-approval-plugin-native` - opt-in native WhatsApp plugin approval
+  scenario. Enables exec and plugin approval forwarding together, then verifies
+  the same pending/resolved native WhatsApp path.
+
+Output artifacts:
+
+- `whatsapp-qa-report.md`
+- `whatsapp-qa-summary.json`
+- `whatsapp-qa-observed-messages.json` - bodies redacted unless `OPENCLAW_QA_WHATSAPP_CAPTURE_CONTENT=1`.
+
 ### Convex credential pool
 
 Telegram, Discord, Slack, and WhatsApp lanes can lease credentials from a shared Convex pool instead of reading the env vars above. Pass `--credential-source convex` (or set `OPENCLAW_QA_CREDENTIAL_SOURCE=convex`); QA Lab acquires an exclusive lease, heartbeats it for the duration of the run, and releases it on shutdown. Pool kinds are `"telegram"`, `"discord"`, `"slack"`, and `"whatsapp"`.
@@ -572,34 +714,20 @@ Telegram, Discord, Slack, and WhatsApp lanes can lease credentials from a shared
 Payload shapes the broker validates on `admin/add`:
 
 - Telegram (`kind: "telegram"`): `{ groupId: string, driverToken: string, sutToken: string }` - `groupId` must be a numeric chat-id string.
-- Telegram real user (`kind: "telegram-user"`): `{ groupId: string, sutToken: string, testerUserId: string, testerUsername: string, telegramApiId: string, telegramApiHash: string, tdlibDatabaseEncryptionKey: string, tdlibArchiveBase64: string, tdlibArchiveSha256: string, desktopTdataArchiveBase64: string, desktopTdataArchiveSha256: string }` - one exclusive burner-account lease used by both the TDLib CLI driver and Telegram Desktop visual witness.
+- Telegram real user (`kind: "telegram-user"`): `{ groupId: string, sutToken: string, testerUserId: string, testerUsername: string, telegramApiId: string, telegramApiHash: string, tdlibDatabaseEncryptionKey: string, tdlibArchiveBase64: string, tdlibArchiveSha256: string, desktopTdataArchiveBase64: string, desktopTdataArchiveSha256: string }` - Mantis Telegram Desktop proof only. Generic QA Lab lanes must not acquire this kind.
 - Discord (`kind: "discord"`): `{ guildId: string, channelId: string, driverBotToken: string, sutBotToken: string, sutApplicationId: string }`.
 - WhatsApp (`kind: "whatsapp"`): `{ driverPhoneE164: string, sutPhoneE164: string, driverAuthArchiveBase64: string, sutAuthArchiveBase64: string, groupJid?: string }` - phone numbers must be distinct E.164 strings.
 
-For visual real-user Telegram proof, prefer a held Crabbox session:
+The Mantis Telegram Desktop proof workflow holds one exclusive Convex
+`telegram-user` lease for both the TDLib CLI driver and Telegram Desktop
+witness, then releases it after publishing proof.
 
-```bash
-pnpm qa:telegram-user:crabbox -- start --tdlib-url http://artifacts.openclaw.ai/tdlib-v1.8.0-linux-x64.tgz --output-dir .artifacts/qa-e2e/telegram-user-crabbox/pr-review
-pnpm qa:telegram-user:crabbox -- send --session .artifacts/qa-e2e/telegram-user-crabbox/pr-review/session.json --text /status
-pnpm qa:telegram-user:crabbox -- finish --session .artifacts/qa-e2e/telegram-user-crabbox/pr-review/session.json
-```
-
-`start` holds one exclusive Convex `telegram-user` lease for both the TDLib CLI
-driver and Telegram Desktop witness, starts desktop recording, and leaves the
-Crabbox alive for arbitrary agent-driven repro steps. Agents can use `send`,
-`run`, `screenshot`, and `status` until they are satisfied, then `finish`
-collects the screenshot, video, motion-trimmed video/GIF, TDLib probe outputs,
-and logs before releasing the credential. `publish --session <file> --pr
-<number>` comments only the motion GIF by default; `--full-artifacts` is the
-explicit opt-in for logs and JSON output. The default `probe` command remains a
-one-command shorthand for quick `/status` smoke checks.
-
-Use `--mock-response-file <path>` when a PR needs a deterministic visual diff:
-the same mock model reply can be run on `main` and on the PR head while the
-Telegram formatter or delivery layer changes. Capture defaults are tuned for PR
-comments: standard Crabbox class, 24fps desktop recording, 24fps motion GIF, and
-1920px preview width. Before/after comments should publish a clean bundle that
-contains only the intended GIFs.
+When a PR needs a deterministic visual diff, Mantis can use the same mock model
+reply on `main` and on the PR head while the Telegram formatter or delivery
+layer changes. Capture defaults are tuned for PR comments: standard Crabbox
+class, 24fps desktop recording, 24fps motion GIF, and 1920px preview width.
+Before/after comments should publish a clean bundle that contains only the
+intended GIFs.
 
 Slack lanes can also use the pool. Slack payload shape checks currently live in the Slack QA runner rather than the broker; use `{ channelId: string, driverBotToken: string, sutBotToken: string, sutAppToken: string }`, with a Slack channel id like `Cxxxxxxxxxx`. See [Setting up the Slack workspace](#setting-up-the-slack-workspace) for app and scope provisioning.
 
@@ -749,6 +877,9 @@ The report should answer:
 - What follow-up scenarios are worth adding
 
 For the inventory of available scenarios - useful when sizing follow-up work or wiring a new transport - run `pnpm openclaw qa coverage` (add `--json` for machine-readable output).
+When choosing focused proof for a touched behavior or file path, run `pnpm openclaw qa coverage --match <query>`.
+The match report searches scenario metadata, docs refs, code refs, coverage IDs, plugins, and provider requirements, then prints matching `qa suite --scenario ...` targets.
+Treat it as a discovery aid, not a gate replacement; the selected scenario still needs the right provider mode, live transport, Multipass, Testbox, or release lane for the behavior under test.
 
 For character and style checks, run the same scenario across multiple live model
 refs and write a judged Markdown report:
@@ -758,13 +889,13 @@ pnpm openclaw qa character-eval \
   --model openai/gpt-5.5,thinking=medium,fast \
   --model openai/gpt-5.2,thinking=xhigh \
   --model openai/gpt-5,thinking=xhigh \
-  --model anthropic/claude-opus-4-6,thinking=high \
+  --model anthropic/claude-opus-4-8,thinking=high \
   --model anthropic/claude-sonnet-4-6,thinking=high \
   --model zai/glm-5.1,thinking=high \
   --model moonshot/kimi-k2.5,thinking=high \
   --model google/gemini-3.1-pro-preview,thinking=high \
   --judge-model openai/gpt-5.5,thinking=xhigh,fast \
-  --judge-model anthropic/claude-opus-4-6,thinking=high \
+  --judge-model anthropic/claude-opus-4-8,thinking=high \
   --blind-judge-models \
   --concurrency 16 \
   --judge-concurrency 16
@@ -795,17 +926,18 @@ Candidate and judge model runs both default to concurrency 16. Lower
 `--concurrency` or `--judge-concurrency` when provider limits or local gateway
 pressure make a run too noisy.
 When no candidate `--model` is passed, the character eval defaults to
-`openai/gpt-5.5`, `openai/gpt-5.2`, `openai/gpt-5`, `anthropic/claude-opus-4-6`,
+`openai/gpt-5.5`, `openai/gpt-5.2`, `openai/gpt-5`, `anthropic/claude-opus-4-8`,
 `anthropic/claude-sonnet-4-6`, `zai/glm-5.1`,
 `moonshot/kimi-k2.5`, and
 `google/gemini-3.1-pro-preview` when no `--model` is passed.
 When no `--judge-model` is passed, the judges default to
 `openai/gpt-5.5,thinking=xhigh,fast` and
-`anthropic/claude-opus-4-6,thinking=high`.
+`anthropic/claude-opus-4-8,thinking=high`.
 
 ## Related docs
 
 - [Matrix QA](/concepts/qa-matrix)
+- [Personal agent benchmark pack](/concepts/personal-agent-benchmark-pack)
 - [QA Channel](/channels/qa-channel)
 - [Testing](/help/testing)
 - [Dashboard](/web/dashboard)

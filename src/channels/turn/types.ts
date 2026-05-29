@@ -15,13 +15,13 @@ import type {
   DurableFinalDeliveryRequirements,
   OutboundDeliveryQueuePolicy,
 } from "../../infra/outbound/deliver.js";
+import type { InboundEventKind } from "../inbound-event/kind.js";
 import type { CreateChannelReplyPipelineParams } from "../message/reply-pipeline.js";
 import type { MessageReceipt } from "../message/types.js";
 import type { InboundLastRouteUpdate, RecordInboundSession } from "../session.types.js";
 import type { ChannelBotLoopProtectionFacts } from "./bot-loop-protection.js";
-import type { InboundTurnKind } from "./kind.js";
 
-export type { InboundTurnKind } from "./kind.js";
+export type { InboundEventKind } from "../inbound-event/kind.js";
 
 export type ChannelTurnAdmission =
   | { kind: "dispatch"; reason?: string }
@@ -63,7 +63,7 @@ export type ConversationFacts = {
   parentId?: string;
   threadId?: string;
   nativeChannelId?: string;
-  routePeer: {
+  routePeer?: {
     kind: "direct" | "group" | "channel";
     id: string;
   };
@@ -83,7 +83,7 @@ export type RouteFacts = {
 
 export type ReplyPlanFacts = {
   to: string;
-  originatingTo: string;
+  originatingTo?: string;
   nativeChannelId?: string;
   replyTarget?: string;
   deliveryTarget?: string;
@@ -178,12 +178,12 @@ export type AccessFacts = {
 };
 
 export type MessageFacts = {
-  inboundTurnKind?: InboundTurnKind;
+  inboundEventKind?: InboundEventKind;
   body?: string;
   rawBody: string;
   bodyForAgent?: string;
   commandBody?: string;
-  envelopeFrom: string;
+  envelopeFrom?: string;
   senderLabel?: string;
   preview?: string;
   inboundHistory?: HistoryEntry[];
@@ -224,6 +224,8 @@ export type SupplementalContextFacts = {
   };
   untrustedContext?: Array<{ label: string; source?: string; type?: string; payload: unknown }>;
   groupSystemPrompt?: string;
+  /** Prompt-like group metadata from user-controlled sources; never enters the system prompt. */
+  untrustedGroupSystemPrompt?: string;
 };
 
 export type InboundMediaFacts = {
@@ -278,7 +280,7 @@ export type ChannelTurnDurableDeliveryOptions = Pick<
   requiredCapabilities?: DurableFinalDeliveryRequirements;
 };
 
-export type ChannelTurnDeliveryAdapter = {
+export type ChannelEventDeliveryAdapter = {
   preparePayload?: (
     payload: ReplyPayload,
     info: ChannelDeliveryInfo,
@@ -349,7 +351,7 @@ export type AssembledChannelTurn = {
   ctxPayload: FinalizedMsgContext;
   recordInboundSession: RecordInboundSession;
   dispatchReplyWithBufferedBlockDispatcher: DispatchReplyWithBufferedBlockDispatcher;
-  delivery: ChannelTurnDeliveryAdapter;
+  delivery: ChannelEventDeliveryAdapter;
   replyPipeline?: ChannelTurnReplyPipelineOptions;
   dispatcherOptions?: ChannelTurnDispatcherOptions;
   replyOptions?: Omit<GetReplyOptions, "onBlockReply">;
@@ -453,20 +455,5 @@ export type RunChannelTurnParams<TRaw, TDispatchResult = DispatchFromConfigResul
   accountId?: string;
   raw: TRaw;
   adapter: ChannelTurnAdapter<TRaw, TDispatchResult>;
-  log?: (event: ChannelTurnLogEvent) => void;
-};
-
-export type RunResolvedChannelTurnParams<TRaw, TDispatchResult = DispatchFromConfigResult> = {
-  channel: string;
-  accountId?: string;
-  raw: TRaw;
-  input:
-    | NormalizedTurnInput
-    | ((raw: TRaw) => Promise<NormalizedTurnInput | null> | NormalizedTurnInput | null);
-  resolveTurn: (
-    input: NormalizedTurnInput,
-    eventClass: ChannelEventClass,
-    preflight: PreflightFacts,
-  ) => Promise<ChannelTurnResolved<TDispatchResult>> | ChannelTurnResolved<TDispatchResult>;
   log?: (event: ChannelTurnLogEvent) => void;
 };

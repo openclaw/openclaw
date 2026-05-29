@@ -1,6 +1,6 @@
-import type { StreamFn } from "@earendil-works/pi-agent-core";
-import type { Context, Model } from "@earendil-works/pi-ai";
-import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import type { Context, Model } from "openclaw/plugin-sdk/llm";
+import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import {
   registerSingleProviderPlugin,
   resolveProviderPluginChoice,
@@ -240,6 +240,22 @@ describe("xiaomi provider plugin", () => {
     expect(replayPolicy?.toolCallIdMode).toBe("strict");
     expect(replayPolicy?.validateGeminiTurns).toBe(true);
     expect(replayPolicy?.validateAnthropicTurns).toBe(true);
+  });
+
+  it("marks resolved MiMo models for empty array items omission", async () => {
+    const provider = await registerSingleProviderPlugin(xiaomiPlugin);
+    const model = mimoReasoningModel("mimo-v2.5");
+
+    const normalized = provider.normalizeResolvedModel?.({
+      provider: "xiaomi",
+      modelId: model.id,
+      modelApi: model.api,
+      model,
+    } as never);
+
+    expect(
+      (normalized?.compat as { omitEmptyArrayItems?: unknown } | undefined)?.omitEmptyArrayItems,
+    ).toBe(true);
   });
 
   it("advertises thinking profiles for MiMo reasoning models only", async () => {

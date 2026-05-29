@@ -2,6 +2,7 @@ import {
   loadOpenClawProviderIndex,
   type OpenClawProviderIndexProvider,
 } from "../model-catalog/index.js";
+import { isRecord } from "../shared/record-coerce.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import {
@@ -60,10 +61,6 @@ function isPreferredOrigin(candidate: PluginOrigin, current: PluginOrigin | unde
 
 function normalizeDefaultChoice(value: unknown): PluginPackageInstall["defaultChoice"] | undefined {
   return value === "clawhub" || value === "npm" || value === "local" ? value : undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function resolveInstallInfoFromInstallRecord(
@@ -262,13 +259,15 @@ function resolveProviderIndexInstallCatalogEntries(params: {
   return entries;
 }
 
-function isProviderFlowScope(value: unknown): value is "text-inference" | "image-generation" {
-  return value === "text-inference" || value === "image-generation";
+function isProviderFlowScope(
+  value: unknown,
+): value is "text-inference" | "image-generation" | "music-generation" {
+  return value === "text-inference" || value === "image-generation" || value === "music-generation";
 }
 
 function normalizeProviderAuthChoiceScopes(
   scopes: OfficialExternalProviderAuthChoice["onboardingScopes"],
-): ("text-inference" | "image-generation")[] | undefined {
+): ("text-inference" | "image-generation" | "music-generation")[] | undefined {
   if (!Array.isArray(scopes)) {
     return undefined;
   }

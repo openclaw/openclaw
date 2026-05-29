@@ -1,5 +1,10 @@
 import crypto from "node:crypto";
-import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeOptionalString,
+  normalizeStringEntries,
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveMSTeamsStorePath } from "./storage.js";
 import { readJsonFile, withFileLock, writeJsonFile } from "./store-fs.js";
 
@@ -68,10 +73,7 @@ function extractSelections(value: unknown): string[] {
     return [];
   }
   if (normalized.includes(",")) {
-    return normalized
-      .split(",")
-      .map((entry) => entry.trim())
-      .filter(Boolean);
+    return normalizeStringEntries(normalized.split(","));
   }
   return [normalized];
 }
@@ -105,7 +107,10 @@ export function extractMSTeamsPollVote(
     readNestedString(value, ["openclaw", "poll", "id"]) ??
     readNestedString(value, ["data", "openclawPollId"]) ??
     readNestedString(value, ["data", "pollId"]) ??
-    readNestedString(value, ["data", "openclaw", "pollId"]);
+    readNestedString(value, ["data", "openclaw", "pollId"]) ??
+    // Action.Execute (Universal Action Model) payload shape: value.action.data
+    readNestedString(value, ["action", "data", "openclawPollId"]) ??
+    readNestedString(value, ["action", "data", "pollId"]);
   if (!pollId) {
     return null;
   }
@@ -113,12 +118,17 @@ export function extractMSTeamsPollVote(
   const directSelections = extractSelections(value.choices);
   const nestedSelections = extractSelections(readNestedValue(value, ["choices"]));
   const dataSelections = extractSelections(readNestedValue(value, ["data", "choices"]));
+  const actionDataSelections = extractSelections(
+    readNestedValue(value, ["action", "data", "choices"]),
+  );
   const selections =
     directSelections.length > 0
       ? directSelections
       : nestedSelections.length > 0
         ? nestedSelections
-        : dataSelections;
+        : dataSelections.length > 0
+          ? dataSelections
+          : actionDataSelections;
 
   if (selections.length === 0) {
     return null;
@@ -179,17 +189,12 @@ export function buildMSTeamsPollCard(params: {
     ],
     actions: [
       {
-        type: "Action.Submit",
+        type: "Action.Execute",
         title: "Vote",
+        verb: "openclaw.poll.vote",
         data: {
           openclawPollId: pollId,
           pollId,
-        },
-        msteams: {
-          type: "messageBack",
-          text: "openclaw poll vote",
-          displayText: "Vote recorded",
-          value: { openclawPollId: pollId, pollId },
         },
       },
     ],
@@ -251,12 +256,15 @@ function pruneToLimit(polls: Record<string, MSTeamsPoll>) {
 export function normalizeMSTeamsPollSelections(poll: MSTeamsPoll, selections: string[]) {
   const maxSelections = Math.max(1, poll.maxSelections);
   const mapped = selections
-    .map((entry) => Number.parseInt(entry, 10))
-    .filter((value) => Number.isFinite(value))
+    .map((entry) => {
+      const trimmed = entry.trim();
+      return /^\d+$/.test(trimmed) ? Number(trimmed) : Number.NaN;
+    })
+    .filter((value) => Number.isSafeInteger(value))
     .filter((value) => value >= 0 && value < poll.options.length)
     .map((value) => String(value));
   const limited = maxSelections > 1 ? mapped.slice(0, maxSelections) : mapped.slice(0, 1);
-  return Array.from(new Set(limited));
+  return uniqueStrings(limited);
 }
 
 export function createMSTeamsPollStoreFs(params?: MSTeamsPollStoreFsOptions): MSTeamsPollStore {

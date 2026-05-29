@@ -8,6 +8,7 @@
   },
   "rules": {
     "curly": "error",
+    "eslint/no-underscore-dangle": "error",
     "eslint-plugin-unicorn/prefer-array-find": "error",
     "eslint/no-array-constructor": "error",
     "eslint/no-await-in-loop": "off",
@@ -181,6 +182,7 @@
     "dist-runtime/",
     "docs/_layouts/",
     "extensions/diffs/assets/viewer-runtime.js",
+    "extensions/diffs-language-pack/assets/viewer-runtime.js",
     "node_modules/",
     "patches/",
     "pnpm-lock.yaml",
