@@ -633,6 +633,7 @@ export function createCliJsonlStreamingParser(params: {
   let lineBuffer = "";
   let assistantText = "";
   let thinkingText = "";
+  let sawToolUseSinceLastText = false;
   let sessionId: string | undefined;
   let usage: CliUsage | undefined;
   let output: CliOutput | null = null;
@@ -672,6 +673,18 @@ export function createCliJsonlStreamingParser(params: {
       const type = normalizeLowercaseStringOrEmpty(item.type);
       if (!type || type.includes("message")) {
         texts.push(item.text);
+      }
+    }
+
+    if (parsed.type === "stream_event" && isRecord(parsed.event)) {
+      const evt = parsed.event;
+      if (evt.type === "content_block_start" && isRecord(evt.content_block)) {
+        if (isClaudeToolUseBlockType(evt.content_block.type)) {
+          sawToolUseSinceLastText = true;
+        } else if (evt.content_block.type === "text" && sawToolUseSinceLastText && assistantText) {
+          assistantText += "\n\n";
+          sawToolUseSinceLastText = false;
+        }
       }
     }
 
