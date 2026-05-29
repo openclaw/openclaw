@@ -1069,6 +1069,10 @@
       "types": "./dist/plugin-sdk/qa-runner-runtime.d.ts",
       "default": "./dist/plugin-sdk/qa-runner-runtime.js"
     },
+    "./plugin-sdk/qa-live-transport-scenarios": {
+      "types": "./dist/plugin-sdk/qa-live-transport-scenarios.d.ts",
+      "default": "./dist/plugin-sdk/qa-live-transport-scenarios.js"
+    },
     "./plugin-sdk/memory-core": {
       "types": "./dist/plugin-sdk/memory-core.d.ts",
       "default": "./dist/plugin-sdk/memory-core.js"
