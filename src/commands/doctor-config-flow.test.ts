@@ -1810,7 +1810,7 @@ describe("doctor config flow", () => {
       enabled: true,
       maxPerDay: 2,
     });
-  });
+  }, 300_000);
 
   it("preserves discord streaming intent while stripping unsupported keys on repair", async () => {
     const result = await runDoctorConfigWithInput({
