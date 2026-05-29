@@ -728,7 +728,7 @@ describe("subagent registry seam flow", () => {
     });
   });
 
-  it("allows in-flight cleanup timeout to be corrected by observed lifecycle start", async () => {
+  it("keeps in-flight explicit deadline timeout stable during cleanup", async () => {
     const createdAt = Date.parse("2026-03-24T11:59:00Z");
     mod.registerSubagentRun({
       runId: "run-cleanup-lock-observed-success",
@@ -777,16 +777,16 @@ describe("subagent registry seam flow", () => {
       const correctedRun = mod
         .listSubagentRunsForRequester("agent:main:main")
         .find((entry) => entry.runId === "run-cleanup-lock-observed-success");
-      expect(correctedRun?.endedAt).toBe(createdAt + 65_000);
+      expect(correctedRun?.endedAt).toBe(createdAt + 60_000);
       expectRecordFields(
         correctedRun?.outcome,
         {
-          status: "ok",
-          startedAt: createdAt + 10_000,
-          endedAt: createdAt + 65_000,
-          elapsedMs: 55_000,
+          status: "timeout",
+          startedAt: createdAt,
+          endedAt: createdAt + 60_000,
+          elapsedMs: 60_000,
         },
-        "cleanup lock corrected lifecycle outcome",
+        "in-flight cleanup timeout outcome",
       );
     });
     expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();

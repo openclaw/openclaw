@@ -111,6 +111,7 @@ function shouldPreservePublishedExplicitRunTimeout(params: { entry: SubagentRunR
     return false;
   }
   if (
+    params.entry.cleanupHandled ||
     typeof params.entry.cleanupCompletedAt === "number" ||
     typeof params.entry.endedHookEmittedAt === "number" ||
     params.entry.delivery?.status === "delivered" ||
