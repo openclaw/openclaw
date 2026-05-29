@@ -6,6 +6,10 @@
  * globals, fully supporting multi-account concurrent operation.
  */
 
+import {
+  fetchWithSsrFGuard,
+  ssrfPolicyFromHttpBaseUrlAllowedHostname,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 import type { EngineLogger } from "../types.js";
 import { formatErrorMessage } from "../utils/format.js";
 
@@ -206,15 +210,20 @@ export class TokenManager {
   private async doFetchToken(appId: string, clientSecret: string): Promise<string> {
     this.logger?.debug?.(`[qqbot:token:${appId}] >>> POST ${TOKEN_URL}`);
 
-    let response: Response;
+    let guardedFetchResult: Awaited<ReturnType<typeof fetchWithSsrFGuard>>;
     try {
-      response = await fetch(TOKEN_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "User-Agent": this.resolveUserAgent(),
+      guardedFetchResult = await fetchWithSsrFGuard({
+        url: TOKEN_URL,
+        init: {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "User-Agent": this.resolveUserAgent(),
+          },
+          body: JSON.stringify({ appId, clientSecret }),
         },
-        body: JSON.stringify({ appId, clientSecret }),
+        policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(TOKEN_URL),
+        auditContext: "qqbot.token",
       });
     } catch (err) {
       this.logger?.error?.(`[qqbot:token:${appId}] Network error: ${formatErrorMessage(err)}`);
@@ -223,18 +232,21 @@ export class TokenManager {
       });
     }
 
-    const traceId = response.headers.get("x-tps-trace-id") ?? "";
-    this.logger?.debug?.(
-      `[qqbot:token:${appId}] <<< ${response.status}${traceId ? ` | TraceId: ${traceId}` : ""}`,
-    );
-
+    const { response, release } = guardedFetchResult;
     let rawBody: string;
     try {
+      const traceId = response.headers.get("x-tps-trace-id") ?? "";
+      this.logger?.debug?.(
+        `[qqbot:token:${appId}] <<< ${response.status}${traceId ? ` | TraceId: ${traceId}` : ""}`,
+      );
+
       rawBody = await response.text();
     } catch (err) {
       throw new Error(`Failed to read access_token response: ${formatErrorMessage(err)}`, {
         cause: err,
       });
+    } finally {
+      await release();
     }
     const logBody = rawBody.replace(/"access_token"\s*:\s*"[^"]+"/g, '"access_token": "***"');
     this.logger?.debug?.(`[qqbot:token:${appId}] <<< Body: ${logBody}`);
