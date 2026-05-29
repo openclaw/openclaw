@@ -2241,6 +2241,7 @@ export async function runAgentTurnWithFallback(params: {
                             await params.opts?.onReasoningStream?.({
                               text: payload.text,
                               mediaUrls: payload.mediaUrls,
+                              isReasoningSnapshot: payload.isReasoningSnapshot,
                             });
                           }
                         : undefined,
