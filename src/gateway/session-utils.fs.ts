@@ -249,7 +249,7 @@ async function readRecentTranscriptTailLinesAsync(
   stat: fs.Stats,
   opts: ReadRecentSessionMessagesOptions,
 ): Promise<string[]> {
-  const { maxMessages, maxBytes, maxLines } = normalizeRecentSessionReadOptions(opts);
+  const { maxBytes, maxLines } = normalizeRecentSessionReadOptions(opts);
   const readLen = Math.min(stat.size, maxBytes);
   const readStart = Math.max(0, stat.size - readLen);
   const handle = await fs.promises.open(filePath, "r");
