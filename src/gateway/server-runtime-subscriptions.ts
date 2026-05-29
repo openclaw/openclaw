@@ -46,7 +46,8 @@ export function startGatewayEventSubscriptions(params: {
         sessionEventSubscribers: params.sessionEventSubscribers,
         sessionMessageSubscribers: params.sessionMessageSubscribers,
         clearTrackedActiveRun: ({ runId, clientRunId }) => {
-          for (const candidateRunId of new Set([runId, clientRunId])) {
+          const candidateRunIds = runId === clientRunId ? [runId] : [runId, clientRunId];
+          for (const candidateRunId of candidateRunIds) {
             const entry = params.chatAbortControllers.get(candidateRunId);
             // Chat abort entries can hold the requested key while chat run
             // state holds the canonical key; the run ids are the scoped match.
