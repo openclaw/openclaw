@@ -68,6 +68,12 @@
       "help": "Literal phrases that should make auto-capture consider a message memory-worthy",
       "advanced": true
     },
+    "captureMinChars": {
+      "label": "Capture Min Chars",
+      "help": "Minimum message length eligible for auto-capture",
+      "advanced": true,
+      "placeholder": "4"
+    },
     "recallMaxChars": {
       "label": "Recall Query Max Chars",
       "help": "Maximum prompt/query length embedded for memory recall. Lower for small local embedding models.",
@@ -132,6 +138,11 @@
           "minLength": 1,
           "maxLength": 100
         }
+      },
+      "captureMinChars": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 10000
       },
       "recallMaxChars": {
         "type": "number",

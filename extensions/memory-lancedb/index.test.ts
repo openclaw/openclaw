@@ -41,6 +41,7 @@ type MemoryPluginTestConfig = {
   };
   dbPath?: string;
   captureMaxChars?: number;
+  captureMinChars?: number;
   recallMaxChars?: number;
   autoCapture?: boolean;
   autoRecall?: boolean;
@@ -199,6 +200,7 @@ describe("memory plugin e2e", () => {
     expect(config?.embedding?.apiKey).toBe(OPENAI_API_KEY);
     expect(config?.dbPath).toBe(getDbPath());
     expect(config?.captureMaxChars).toBe(500);
+    expect(config?.captureMinChars).toBe(4);
     expect(config?.recallMaxChars).toBe(1000);
   });
 
@@ -256,7 +258,36 @@ describe("memory plugin e2e", () => {
     expect(config?.captureMaxChars).toBe(1800);
   });
 
-  test("config schema validates recallMaxChars range", () => {
+  test("config schema validates captureMinChars range", async () => {
+    expect(() => {
+      memoryPlugin.configSchema?.parse?.({
+        embedding: { apiKey: OPENAI_API_KEY },
+        dbPath: getDbPath(),
+        captureMinChars: 19000,
+      });
+    }).toThrow("captureMinChars must be between 1 and 1000");
+  });
+
+  test("config schema validates captureMinChars against captureMaxChars", async () => {
+    expect(() => {
+      memoryPlugin.configSchema?.parse?.({
+        embedding: { apiKey: OPENAI_API_KEY },
+        dbPath: getDbPath(),
+        captureMinChars: 1000,
+        captureMaxChars: 500,
+      });
+    }).toThrow("captureMinChars cannot be greater than captureMaxChars");
+  });
+
+  test("config schema accepts captureMinChars override", async () => {
+    const config = parseConfig({
+      captureMinChars: 10,
+    });
+
+    expect(config?.captureMinChars).toBe(10);
+  });
+
+  test("config schema validates recallMaxChars range", async () => {
     expect(() => {
       memoryPlugin.configSchema?.parse?.({
         embedding: { apiKey: OPENAI_API_KEY },

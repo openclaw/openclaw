@@ -27,6 +27,7 @@ import { Type } from "typebox";
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
 import {
   DEFAULT_CAPTURE_MAX_CHARS,
+  DEFAULT_CAPTURE_MIN_CHARS,
   DEFAULT_RECALL_MAX_CHARS,
   MEMORY_CATEGORIES,
   type MemoryConfig,
@@ -570,10 +571,11 @@ function matchesCustomTrigger(text: string, customTriggers?: string[]): boolean 
 
 export function shouldCapture(
   text: string,
-  options?: { customTriggers?: string[]; maxChars?: number },
+  options?: { customTriggers?: string[]; minChars?: number; maxChars?: number },
 ): boolean {
   const maxChars = options?.maxChars ?? DEFAULT_CAPTURE_MAX_CHARS;
-  if (text.length > maxChars) {
+  const minChars = options?.minChars ?? DEFAULT_CAPTURE_MIN_CHARS;
+  if (text.length < minChars || text.length > maxChars) {
     return false;
   }
   // Skip injected context from memory recall
@@ -1117,6 +1119,7 @@ export default definePluginEntry({
                 !text ||
                 !shouldCapture(text, {
                   customTriggers: currentCfg.customTriggers,
+                  minChars: currentCfg.captureMinChars,
                   maxChars: currentCfg.captureMaxChars,
                 })
               ) {
