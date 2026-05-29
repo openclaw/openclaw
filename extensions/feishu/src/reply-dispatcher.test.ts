@@ -1594,5 +1594,71 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expectMockArgFields(sendMediaFeishuMock, "media send params", {
       mediaUrl: "https://example.com/reply.opus?download=1",
     });
+  it("does not send fallback text when voice degrades with preserveText enabled", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "auto",
+        streaming: false,
+        tts: { preserveText: true },
+      },
+    });
+    sendMediaFeishuMock.mockResolvedValueOnce({
+      voiceIntentDegradedToFile: true,
+    });
+
+    const options = setupNonStreamingAutoDispatcher();
+    await options.deliver(
+      {
+        text: "spoken reply",
+        mediaUrl: "https://example.com/reply.mp3",
+        audioAsVoice: true,
+      },
+      { kind: "final" },
+    );
+
+    // Text should be sent exactly once (preserved), not duplicated as fallback
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expectMockArgFields(sendMessageFeishuMock, "message send params", {
+      text: "spoken reply",
+    });
+    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not send fallback text when media fails with preserveText enabled", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "auto",
+        streaming: false,
+        tts: { preserveText: true },
+      },
+    });
+    sendMediaFeishuMock.mockRejectedValueOnce(new Error("upload failed"));
+
+    const options = setupNonStreamingAutoDispatcher();
+    await expect(
+      options.deliver(
+        {
+          text: "spoken reply",
+          mediaUrl: "https://example.com/reply.mp3",
+          audioAsVoice: true,
+        },
+        { kind: "final" },
+      ),
+    ).rejects.toThrow("upload failed");
+    await options.onError?.(new Error("upload failed"), { kind: "final" });
+
+    // Text sent once (preserved), fallback should not send it again
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expectMockArgFields(sendMessageFeishuMock, "message send params", {
+      text: "spoken reply",
+    });
   });
 });
