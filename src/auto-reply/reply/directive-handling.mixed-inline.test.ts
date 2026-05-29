@@ -239,7 +239,7 @@ describe("mixed inline directives", () => {
     });
 
     expect(fastLane.directiveAck).toEqual({
-      text: "⚙️ Reasoning stream enabled.",
+      text: "⚙️ Reasoning stream enabled when this channel supports reasoning previews.",
     });
   });
 

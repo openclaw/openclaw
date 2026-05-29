@@ -580,7 +580,9 @@ export async function handleDirectiveOnly(
       directives.reasoningLevel === "off"
         ? formatDirectiveAck("Reasoning visibility disabled.")
         : directives.reasoningLevel === "stream"
-          ? formatDirectiveAck("Reasoning stream enabled.")
+          ? formatDirectiveAck(
+              "Reasoning stream enabled when this channel supports reasoning previews.",
+            )
           : formatDirectiveAck("Reasoning visibility enabled."),
     );
   }
