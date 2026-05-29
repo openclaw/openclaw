@@ -36,7 +36,12 @@ const SessionsSendToolSchema = Type.Object({
   sessionKey: Type.Optional(Type.String()),
   label: Type.Optional(Type.String({ minLength: 1, maxLength: SESSION_LABEL_MAX_LENGTH })),
   agentId: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
-  message: Type.String(),
+  message: Type.Optional(Type.String()),
+  // Non-canonical body aliases emitted by some models (e.g. Anthropic, Pi).
+  // Normalised to `message` in execute before validation. See #88146.
+  SendMessage: Type.Optional(Type.String()),
+  content: Type.Optional(Type.String()),
+  text: Type.Optional(Type.String()),
   timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
 });
 
@@ -88,7 +93,20 @@ export function createSessionsSendTool(opts?: {
     description: describeSessionsSendTool(),
     parameters: SessionsSendToolSchema,
     execute: async (_toolCallId, args) => {
-      const params = args as Record<string, unknown>;
+      const params = { ...(args as Record<string, unknown>) };
+      // Normalise non-canonical body aliases to `message` before validation.
+      // Some model families (Anthropic, Pi) reliably emit SendMessage/content/text
+      // instead of the canonical key, causing schema rejection.  Mirror the same
+      // coalescing done for the `message` tool after #84079. (#88146)
+      if (typeof params.message !== "string" || !params.message.trim()) {
+        for (const alias of ["SendMessage", "content", "text"] as const) {
+          const v = params[alias];
+          if (typeof v === "string" && v.trim()) {
+            params.message = v;
+            break;
+          }
+        }
+      }
       const gatewayCall = opts?.callGateway ?? callGateway;
       const message = readStringParam(params, "message", { required: true });
       const { cfg, mainKey, alias, effectiveRequesterKey, restrictToSpawned } =
