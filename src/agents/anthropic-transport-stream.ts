@@ -113,8 +113,13 @@ type MutableAssistantOutput = {
 
 const EMPTY_ANTHROPIC_MESSAGES_FALLBACK_TEXT = ".";
 
-function isClaudeOpus47Model(modelId: string): boolean {
-  return modelId.includes("opus-4-7") || modelId.includes("opus-4.7");
+function isClaudeOpus47OrNewerModel(modelId: string): boolean {
+  return (
+    modelId.includes("opus-4-8") ||
+    modelId.includes("opus-4.8") ||
+    modelId.includes("opus-4-7") ||
+    modelId.includes("opus-4.7")
+  );
 }
 
 function isClaudeOpus46Model(modelId: string): boolean {
@@ -123,7 +128,7 @@ function isClaudeOpus46Model(modelId: string): boolean {
 
 function supportsAdaptiveThinking(modelId: string): boolean {
   return (
-    isClaudeOpus47Model(modelId) ||
+    isClaudeOpus47OrNewerModel(modelId) ||
     isClaudeOpus46Model(modelId) ||
     modelId.includes("sonnet-4-6") ||
     modelId.includes("sonnet-4.6")
@@ -138,17 +143,19 @@ function mapThinkingLevelToEffort(level: ThinkingLevel, modelId: string): Anthro
     case "medium":
       return "medium";
     case "xhigh":
-      if (isClaudeOpus47Model(modelId)) {
+      if (isClaudeOpus47OrNewerModel(modelId)) {
         return "xhigh";
       }
       return isClaudeOpus46Model(modelId) ? "max" : "high";
+    case "max":
+      return "max";
     default:
       return "high";
   }
 }
 
 function clampReasoningLevel(level: ThinkingLevel): "minimal" | "low" | "medium" | "high" {
-  return level === "xhigh" ? "high" : level;
+  return level === "xhigh" || level === "max" ? "high" : level;
 }
 
 function resolvePositiveAnthropicMaxTokens(value: unknown): number | undefined {

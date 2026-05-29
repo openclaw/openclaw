@@ -96,6 +96,7 @@ const ThinkingLevelMapSchema = Type.Object({
   medium: Type.Optional(ThinkingLevelMapValueSchema),
   high: Type.Optional(ThinkingLevelMapValueSchema),
   xhigh: Type.Optional(ThinkingLevelMapValueSchema),
+  max: Type.Optional(ThinkingLevelMapValueSchema),
 });
 
 const OpenAICompletionsCompatSchema = Type.Object({

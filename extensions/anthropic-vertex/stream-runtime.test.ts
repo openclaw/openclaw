@@ -182,16 +182,28 @@ describe("createAnthropicVertexStreamFn", () => {
     expect(transportOptions.effort).toBe("max");
   });
 
-  it("maps xhigh reasoning to xhigh effort for Opus 4.7", () => {
+  it("maps xhigh reasoning to xhigh effort for Opus 4.8", () => {
     const { deps, streamAnthropicMock } = createStreamDeps();
     const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
-    const model = makeModel({ id: "claude-opus-4-7", maxTokens: 64000 });
+    const model = makeModel({ id: "claude-opus-4-8", maxTokens: 128000 });
 
     void streamFn(model, { messages: [] }, { reasoning: "xhigh" });
 
     const transportOptions = streamTransportOptions(streamAnthropicMock);
     expect(transportOptions.thinkingEnabled).toBe(true);
     expect(transportOptions.effort).toBe("xhigh");
+  });
+
+  it("preserves max reasoning for Opus 4.8", () => {
+    const { deps, streamAnthropicMock } = createStreamDeps();
+    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
+    const model = makeModel({ id: "claude-opus-4-8", maxTokens: 128000 });
+
+    void streamFn(model, { messages: [] }, { reasoning: "max" });
+
+    const transportOptions = streamTransportOptions(streamAnthropicMock);
+    expect(transportOptions.thinkingEnabled).toBe(true);
+    expect(transportOptions.effort).toBe("max");
   });
 
   it("applies Anthropic cache-boundary shaping before forwarding payload hooks", async () => {

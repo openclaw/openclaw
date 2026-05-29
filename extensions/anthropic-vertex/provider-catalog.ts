@@ -30,6 +30,14 @@ function buildAnthropicVertexModel(params: {
 function buildAnthropicVertexCatalog(): ModelDefinitionConfig[] {
   return [
     buildAnthropicVertexModel({
+      id: "claude-opus-4-8",
+      name: "Claude Opus 4.8",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+      maxTokens: 128000,
+    }),
+    buildAnthropicVertexModel({
       id: "claude-opus-4-6",
       name: "Claude Opus 4.6",
       reasoning: true,

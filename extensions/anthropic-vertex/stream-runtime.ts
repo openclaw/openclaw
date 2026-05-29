@@ -36,8 +36,13 @@ const defaultAnthropicVertexStreamDeps: AnthropicVertexStreamDeps = {
   streamAnthropic: streamDefault,
 };
 
-function isClaudeOpus47Model(modelId: string): boolean {
-  return modelId.includes("opus-4-7") || modelId.includes("opus-4.7");
+function isClaudeOpus47OrNewerModel(modelId: string): boolean {
+  return (
+    modelId.includes("opus-4-8") ||
+    modelId.includes("opus-4.8") ||
+    modelId.includes("opus-4-7") ||
+    modelId.includes("opus-4.7")
+  );
 }
 
 function isClaudeOpus46Model(modelId: string): boolean {
@@ -46,7 +51,7 @@ function isClaudeOpus46Model(modelId: string): boolean {
 
 function supportsAdaptiveThinking(modelId: string): boolean {
   return (
-    isClaudeOpus47Model(modelId) ||
+    isClaudeOpus47OrNewerModel(modelId) ||
     isClaudeOpus46Model(modelId) ||
     modelId.includes("sonnet-4-6") ||
     modelId.includes("sonnet-4.6")
@@ -62,7 +67,12 @@ function mapAnthropicAdaptiveEffort(
     low: "low",
     medium: "medium",
     high: "high",
-    xhigh: isClaudeOpus47Model(modelId) ? "xhigh" : isClaudeOpus46Model(modelId) ? "max" : "high",
+    xhigh: isClaudeOpus47OrNewerModel(modelId)
+      ? "xhigh"
+      : isClaudeOpus46Model(modelId)
+        ? "max"
+        : "high",
+    max: "max",
   };
   return effortMap[reasoning] ?? "high";
 }

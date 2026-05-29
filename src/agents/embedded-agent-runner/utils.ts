@@ -8,12 +8,9 @@ export function normalizeContextTokenBudget(value: unknown): number | undefined 
 }
 
 export function mapThinkingLevel(level?: ThinkLevel): ThinkingLevel {
-  // agent runtime supports "xhigh"; OpenClaw enables it for specific models.
+  // agent runtime supports elevated levels; OpenClaw enables them for specific models.
   if (!level) {
     return "off";
-  }
-  if (level === "max") {
-    return "xhigh";
   }
   // "adaptive" maps to "medium" at the agent runtime layer.  The provider adapter
   // provider then translates this to `thinking.type: "adaptive"` with

@@ -61,7 +61,7 @@ Anthropic's current public docs:
     ```json5
     {
       env: { ANTHROPIC_API_KEY: "example-anthropic-key-not-real" },
-      agents: { defaults: { model: { primary: "anthropic/claude-opus-4-6" } } },
+      agents: { defaults: { model: { primary: "anthropic/claude-opus-4-8" } } },
     }
     ```
 
@@ -113,9 +113,9 @@ Anthropic's current public docs:
     {
       agents: {
         defaults: {
-          model: { primary: "anthropic/claude-opus-4-7" },
+          model: { primary: "anthropic/claude-opus-4-8" },
           models: {
-            "anthropic/claude-opus-4-7": {
+            "anthropic/claude-opus-4-8": {
               agentRuntime: { id: "claude-cli" },
             },
           },
@@ -135,9 +135,9 @@ Anthropic's current public docs:
   </Tab>
 </Tabs>
 
-## Thinking defaults (Claude 4.6)
+## Thinking defaults (Claude 4.8 and 4.6)
 
-Claude 4.6 models default to `adaptive` thinking in OpenClaw when no explicit thinking level is set.
+Claude Opus 4.8 keeps thinking off by default in OpenClaw. When you explicitly enable adaptive thinking with `/think high|xhigh|max`, OpenClaw sends Anthropic's Opus 4.8 effort values; Claude 4.6 models default to `adaptive`.
 
 Override per-message with `/think:<level>` or in model params:
 
@@ -146,8 +146,8 @@ Override per-message with `/think:<level>` or in model params:
   agents: {
     defaults: {
       models: {
-        "anthropic/claude-opus-4-6": {
-          params: { thinking: "adaptive" },
+        "anthropic/claude-opus-4-8": {
+          params: { thinking: "high" },
         },
       },
     },
@@ -267,7 +267,7 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
 
     | Property        | Value                 |
     | --------------- | --------------------- |
-    | Default model   | `claude-opus-4-7`     |
+    | Default model   | `claude-opus-4-8`     |
     | Supported input | Images, PDF documents |
 
     When an image or PDF is attached to a conversation, OpenClaw automatically
@@ -277,7 +277,7 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
 
   <Accordion title="1M context window">
     Anthropic's 1M context window is available on GA-capable Claude 4.x models
-    such as Opus 4.6, Opus 4.7, and Sonnet 4.6. OpenClaw sizes those models at
+    such as Opus 4.8, Opus 4.7, Opus 4.6, and Sonnet 4.6. OpenClaw sizes those models at
     1M automatically:
 
     ```json5
@@ -308,8 +308,8 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
 
   </Accordion>
 
-  <Accordion title="Claude Opus 4.7 1M context">
-    `anthropic/claude-opus-4-7` and its `claude-cli` variant have a 1M context
+  <Accordion title="Claude Opus 4.8 1M context">
+    `anthropic/claude-opus-4-8` and its `claude-cli` variant have a 1M context
     window by default — no `params.context1m: true` needed.
   </Accordion>
 </AccordionGroup>

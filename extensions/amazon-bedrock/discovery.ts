@@ -46,6 +46,7 @@ const DEFAULT_MAX_TOKENS = 4096;
 const KNOWN_CONTEXT_WINDOWS: Record<string, number> = {
   // Anthropic Claude
   "anthropic.claude-3-7-sonnet-20250219-v1:0": 200_000,
+  "anthropic.claude-opus-4-8": 1_000_000,
   "anthropic.claude-opus-4-7": 1_000_000,
   "anthropic.claude-opus-4-6-v1": 1_000_000,
   "anthropic.claude-opus-4-6-v1:0": 1_000_000,
@@ -121,6 +122,9 @@ function resolveKnownContextWindow(modelId: string): number | undefined {
   const stripped = modelId.replace(/^(?:us|eu|ap|apac|au|jp|global)\./, "");
   const candidates = [modelId, stripped];
   for (const candidate of candidates) {
+    if (/(?:^|[/.:])anthropic\.claude-opus-4[.-]8(?:$|[-.:/])/i.test(candidate)) {
+      return 1_000_000;
+    }
     if (KNOWN_CONTEXT_WINDOWS[candidate] !== undefined) {
       return KNOWN_CONTEXT_WINDOWS[candidate];
     }
