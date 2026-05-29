@@ -1628,16 +1628,29 @@ export async function handleFeishuMessage(params: {
             log(
               `feishu[${account.accountId}]: broadcast dispatch failed for agent=${agentId}: ${String(err)}`,
             );
+            // Re-throw runtime-not-ready errors for webhook retry
+            if (err instanceof Error && err.message.includes("channel runtime not ready")) {
+              throw err;
+            }
           }
         }
       } else {
         const results = await Promise.allSettled(broadcastAgents.map(dispatchForAgent));
+        const runtimeErrors: Error[] = [];
         for (let i = 0; i < results.length; i++) {
           if (results[i].status === "rejected") {
+            const reason = (results[i] as PromiseRejectedResult).reason;
             log(
-              `feishu[${account.accountId}]: broadcast dispatch failed for agent=${broadcastAgents[i]}: ${String((results[i] as PromiseRejectedResult).reason)}`,
+              `feishu[${account.accountId}]: broadcast dispatch failed for agent=${broadcastAgents[i]}: ${String(reason)}`,
             );
+            if (reason instanceof Error && reason.message.includes("channel runtime not ready")) {
+              runtimeErrors.push(reason);
+            }
           }
+        }
+        // If ALL agents failed due to runtime-not-ready, propagate the error
+        if (runtimeErrors.length > 0 && runtimeErrors.length === broadcastAgents.length) {
+          throw runtimeErrors[0];
         }
       }
 

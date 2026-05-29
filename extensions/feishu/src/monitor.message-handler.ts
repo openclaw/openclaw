@@ -338,6 +338,11 @@ export function createFeishuMessageReceiveHandler({
     } catch (err) {
       releaseFeishuMessageProcessing(messageDedupeKey, accountId);
       error(`feishu[${accountId}]: error handling message: ${String(err)}`);
+      // Re-throw runtime-not-ready errors so the webhook handler can return
+      // a non-2xx response and Feishu can retry delivery.
+      if (err instanceof Error && err.message.includes("channel runtime not ready")) {
+        throw err;
+      }
     }
   };
 }
