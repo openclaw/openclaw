@@ -255,9 +255,9 @@ If `openclaw memory status` reports `Dreaming status: blocked`, the managed cron
 
 ### LanceDB and dreaming
 
-OpenClaw exposes **one active memory backend** at a time. Built-in **dreaming** (Light / REM / Deep, narrative, promotion) is implemented under **memory-core** and operates on core-backed memories—not on a **memory-lancedb** / **lancedb-pro** vector index.
+When **memory-lancedb** (or another plugin) owns `plugins.slots.memory`, OpenClaw may read **dreaming settings** from that slot plugin's config. That is separate from consolidating your **LanceDB vector index** with the full Light / REM / Deep pipeline and narrative output.
 
-If your memory slot is LanceDB, browse [ClawHub](https://clawhub.ai/) for community dreaming plugins designed for LanceDB-backed memory. Install and trust configuration are provided on the plugin page.
+For **LanceDB-vector-native** dreaming (themes, promotion, dream diary, optional daily report), browse community plugins on [ClawHub](https://clawhub.ai/).
 
 ## Related
 
