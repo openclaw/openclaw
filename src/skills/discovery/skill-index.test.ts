@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
-import type { SkillEntry } from "../types.js";
+import { createFixtureSkillEntry } from "../test-support/test-helpers.js";
 import {
   buildSkillIndex,
   buildSkillIndexEntries,
@@ -21,8 +20,8 @@ describe("skill index", () => {
 
   it("indexes entries by exact and normalized name without changing input order", () => {
     const entries = [
-      createEntry("Excel XLSX", { skillKey: "excel_xlsx" }),
-      createEntry("GitHub Review"),
+      createFixtureSkillEntry("Excel XLSX", { skillKey: "excel_xlsx" }),
+      createFixtureSkillEntry("GitHub Review"),
     ];
 
     const index = buildSkillIndex(entries);
@@ -39,8 +38,8 @@ describe("skill index", () => {
 
   it("keeps ambiguous normalized names as multiple index entries", () => {
     const entries = [
-      createEntry("Excel/XLSX", { skillKey: "excel-slash" }),
-      createEntry("Excel_XLSX", { skillKey: "excel-underscore" }),
+      createFixtureSkillEntry("Excel/XLSX", { skillKey: "excel-slash" }),
+      createFixtureSkillEntry("Excel_XLSX", { skillKey: "excel-underscore" }),
     ];
 
     const index = buildSkillIndex(entries);
@@ -52,28 +51,28 @@ describe("skill index", () => {
   });
 
   it("centralizes runtime, prompt, and command exposure policy", () => {
-    const runtimeHidden = createEntry("runtime-hidden", {
+    const runtimeHidden = createFixtureSkillEntry("runtime-hidden", {
       exposure: {
         includeInRuntimeRegistry: false,
         includeInAvailableSkillsPrompt: true,
         userInvocable: true,
       },
     });
-    const promptHidden = createEntry("prompt-hidden", {
+    const promptHidden = createFixtureSkillEntry("prompt-hidden", {
       exposure: {
         includeInRuntimeRegistry: true,
         includeInAvailableSkillsPrompt: false,
         userInvocable: true,
       },
     });
-    const commandHidden = createEntry("command-hidden", {
+    const commandHidden = createFixtureSkillEntry("command-hidden", {
       exposure: {
         includeInRuntimeRegistry: true,
         includeInAvailableSkillsPrompt: true,
         userInvocable: false,
       },
     });
-    const legacyPromptHidden = createEntry("legacy-prompt-hidden", {
+    const legacyPromptHidden = createFixtureSkillEntry("legacy-prompt-hidden", {
       invocation: { disableModelInvocation: true, userInvocable: true },
     });
 
@@ -108,9 +107,9 @@ describe("skill index", () => {
   });
 
   it("records source, bundled state, skill key, and agent filter state", () => {
-    const bundled = createEntry("bundle", { source: "openclaw-bundled" });
-    const unknownBundled = createEntry("unknown-bundle", { source: "unknown" });
-    const workspace = createEntry("workspace", {
+    const bundled = createFixtureSkillEntry("bundle", { source: "openclaw-bundled" });
+    const unknownBundled = createFixtureSkillEntry("unknown-bundle", { source: "unknown" });
+    const workspace = createFixtureSkillEntry("workspace", {
       source: "openclaw-workspace",
       skillKey: "workspace-key",
     });
@@ -148,30 +147,3 @@ describe("skill index", () => {
     ]);
   });
 });
-
-function createEntry(
-  name: string,
-  opts?: {
-    source?: string;
-    skillKey?: string;
-    exposure?: SkillEntry["exposure"];
-    invocation?: SkillEntry["invocation"];
-  },
-): SkillEntry {
-  return {
-    skill: createCanonicalFixtureSkill({
-      name,
-      description: `${name} description`,
-      filePath: `/skills/${name}/SKILL.md`,
-      baseDir: `/skills/${name}`,
-      source: opts?.source ?? "openclaw-workspace",
-    }),
-    frontmatter: {},
-    metadata: opts?.skillKey ? { skillKey: opts.skillKey } : undefined,
-    invocation: opts?.invocation ?? {
-      userInvocable: true,
-      disableModelInvocation: false,
-    },
-    exposure: opts?.exposure,
-  };
-}

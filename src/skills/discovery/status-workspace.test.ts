@@ -39,7 +39,7 @@ function makeEntry(params: {
   const filePath = `/tmp/${params.name}/SKILL.md`;
   const baseDir = `/tmp/${params.name}`;
   return {
-    skill: createFixtureSkill({
+    skill: createCanonicalFixtureSkill({
       name: params.name,
       description: `desc:${params.name}`,
       filePath,
@@ -54,16 +54,6 @@ function makeEntry(params: {
       ...(params.requires?.env?.[0] ? { primaryEnv: params.requires.env[0] } : {}),
     },
   };
-}
-
-function createFixtureSkill(params: {
-  name: string;
-  description: string;
-  filePath: string;
-  baseDir: string;
-  source: string;
-}): SkillEntry["skill"] {
-  return createCanonicalFixtureSkill(params);
 }
 
 type WorkspaceSkillStatus = ReturnType<typeof buildWorkspaceSkillStatus>["skills"][number];
