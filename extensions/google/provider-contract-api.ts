@@ -97,6 +97,9 @@ export function createGoogleVertexProvider(): ProviderPlugin {
               ? locationPrompt.trim()
               : VERTEX_DEFAULT_LOCATION;
 
+          // Onboarding writes are additive: env vars, marker profile, and
+          // default model. Reruns preserve existing google-vertex models
+          // via the configPatch merge below.
           return {
             profiles: [
               {
