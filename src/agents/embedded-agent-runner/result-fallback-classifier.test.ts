@@ -89,4 +89,24 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
 
     expect(result).toBeNull();
   });
+
+  it("does not retry non-business transport error payloads", () => {
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "custom",
+      model: "llama-3.1",
+      result: {
+        payloads: [
+          {
+            isError: true,
+            text: "HTTP 500: internal server error",
+          },
+        ],
+        meta: {
+          durationMs: 42,
+        },
+      },
+    });
+
+    expect(result).toBeNull();
+  });
 });
