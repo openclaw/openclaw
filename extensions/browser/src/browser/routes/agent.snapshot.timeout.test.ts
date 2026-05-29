@@ -64,6 +64,7 @@ vi.mock("../../media/store.js", () => ({
 }));
 
 vi.mock("./agent.shared.js", () => ({
+  browserNavigationPolicyForProfile: vi.fn(() => ({})),
   getPwAiModule: vi.fn(async () => null),
   handleRouteError: vi.fn((_ctx, _res, err) => {
     throw err;
@@ -168,5 +169,19 @@ describe("browser agent snapshot timeout routing", () => {
         timeoutMs: 2_147_483_647,
       }),
     );
+  });
+
+  it("rejects loose screenshot timeoutMs values before dispatching", async () => {
+    const handler = getScreenshotHandler();
+    const response = createBrowserRouteResponse();
+
+    await handler?.(
+      { params: {}, query: {}, body: { type: "png", timeoutMs: "1e3" } },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(400);
+    expect(response.body).toEqual({ error: "timeoutMs must be a positive integer." });
+    expect(cdpMocks.captureScreenshot).not.toHaveBeenCalled();
   });
 });

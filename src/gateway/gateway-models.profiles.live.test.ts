@@ -48,6 +48,7 @@ import type { ModelsConfig, ModelProviderConfig, OpenClawConfig } from "../confi
 import { isTruthyEnvValue } from "../infra/env.js";
 import { normalizeGoogleModelId } from "../plugin-sdk/google-model-id.js";
 import { resolveProviderThinkingProfile } from "../plugins/provider-runtime.js";
+import type { ProviderThinkingModelCompat } from "../plugins/provider-thinking.types.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { stripAssistantInternalScaffolding } from "../shared/text/assistant-visible-text.js";
 import { containsFinalTag, stripFinalTags } from "../shared/text/final-tags.js";
@@ -78,6 +79,7 @@ const THINKING_TAG_RE = /<\s*\/?\s*(?:(?:antml:)?(?:think(?:ing)?|thought)|antth
 const ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
 const GATEWAY_LIVE_DEFAULT_TIMEOUT_MS = 20 * 60 * 1000;
 const GATEWAY_LIVE_UNBOUNDED_TIMEOUT_MS = 60 * 60 * 1000;
+const EXPLICIT_LIVE_FALLBACK_CONTEXT_WINDOW = 128_000;
 const GATEWAY_LIVE_MAX_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 const GATEWAY_LIVE_PROBE_TIMEOUT_MS = Math.max(
   30_000,
@@ -308,6 +310,7 @@ function formatGatewayLiveFilterSet(filter: ReadonlySet<string> | null): string 
 }
 
 function assertGatewayLiveSelectedSomeModels(params: {
+  allowProviderDriftSkip: boolean;
   label: string;
   modelFilter: ReadonlySet<string> | null;
   providerFilter: ReadonlySet<string> | null;
@@ -316,6 +319,15 @@ function assertGatewayLiveSelectedSomeModels(params: {
   wantedCount: number;
 }): void {
   if (params.wantedCount > 0 || (!params.modelFilter && !params.providerFilter)) {
+    return;
+  }
+  if (
+    params.allowProviderDriftSkip &&
+    params.providerFilter &&
+    [...params.providerFilter].every((provider) =>
+      shouldSkipEmptyResponseForLiveModel({ provider, allowNotFoundSkip: true }),
+    )
+  ) {
     return;
   }
   const mode = params.useExplicit ? "explicit" : "high-signal";
@@ -572,6 +584,7 @@ function shouldSkipEmptyResponseForLiveModel(params: {
   return (
     params.provider === "google-antigravity" ||
     params.provider === "minimax" ||
+    params.provider === "minimax-portal" ||
     params.provider === "openai-codex" ||
     params.provider === "zai"
   );
@@ -786,6 +799,7 @@ describe("assertGatewayLiveSelectedSomeModels", () => {
   it("allows unfiltered sweeps with no high-signal models", () => {
     expect(() =>
       assertGatewayLiveSelectedSomeModels({
+        allowProviderDriftSkip: false,
         label: "all-models",
         modelFilter: null,
         providerFilter: null,
@@ -799,6 +813,7 @@ describe("assertGatewayLiveSelectedSomeModels", () => {
   it("fails filtered sweeps that select no models", () => {
     expect(() =>
       assertGatewayLiveSelectedSomeModels({
+        allowProviderDriftSkip: false,
         label: "all-models",
         modelFilter: null,
         providerFilter: new Set(["openai"]),
@@ -807,6 +822,20 @@ describe("assertGatewayLiveSelectedSomeModels", () => {
         wantedCount: 0,
       }),
     ).toThrow(/selected no high-signal live models/);
+  });
+
+  it("allows modern provider-drift skips for empty MiniMax provider sweeps", () => {
+    expect(() =>
+      assertGatewayLiveSelectedSomeModels({
+        allowProviderDriftSkip: true,
+        label: "all-models",
+        modelFilter: null,
+        providerFilter: new Set(["minimax", "minimax-portal"]),
+        total: 0,
+        useExplicit: false,
+        wantedCount: 0,
+      }),
+    ).not.toThrow();
   });
 });
 
@@ -876,6 +905,14 @@ function createGatewayLiveTestModel(provider: string, id: string): Model {
   } as Model;
 }
 
+function createExplicitLiveFallbackModel(provider: string, id: string): Model {
+  return {
+    ...createGatewayLiveTestModel(provider, id),
+    contextWindow: EXPLICIT_LIVE_FALLBACK_CONTEXT_WINDOW,
+    maxTokens: 4_096,
+  };
+}
+
 describe("resolveExplicitLiveModelCandidates", () => {
   it("uses targeted registry lookup for explicit provider/model filters", () => {
     const model = createGatewayLiveTestModel("xai", "grok-4.3");
@@ -927,6 +964,35 @@ describe("resolveExplicitLiveModelCandidates", () => {
     });
 
     expect(candidates).toEqual([model]);
+  });
+
+  it("keeps provider-qualified explicit refs usable when the registry is empty", () => {
+    const matcher = createLiveTargetMatcher({
+      providerFilter: new Set(["openai"]),
+      modelFilter: new Set(["openai/gpt-5.5"]),
+      env: {},
+    });
+    const candidates = resolveExplicitLiveModelCandidates({
+      modelRegistry: {
+        find(provider, modelId) {
+          expect(provider).toBe("openai");
+          expect(modelId).toBe("gpt-5.5");
+          return undefined;
+        },
+        getAll() {
+          throw new Error("explicit model lookup should not enumerate registry");
+        },
+      },
+      modelFilter: new Set(["openai/gpt-5.5"]),
+      providerFilter: new Set(["openai"]),
+      targetMatcher: matcher,
+    });
+
+    if (!candidates) {
+      throw new Error("expected explicit fallback candidates");
+    }
+    expect(candidates).toEqual([createExplicitLiveFallbackModel("openai", "gpt-5.5")]);
+    expect(candidates[0]?.contextWindow).toBeGreaterThanOrEqual(4_000);
   });
 
   it("falls back to enumeration for ambiguous model-only filters", () => {
@@ -1039,6 +1105,16 @@ describe("resolveGatewayLiveModelThinkingLevel", () => {
       }),
     ).toBe("off");
   });
+
+  it("does not let provider profiles override model-level thinking support", () => {
+    expect(
+      resolveGatewayLiveModelThinkingLevel({
+        cfg: {},
+        model: createGatewayLiveTestModel("openai", "gpt-5.5"),
+        requestedLevel: "high",
+      }),
+    ).toBe("off");
+  });
 });
 
 describe("buildLiveGatewayConfig", () => {
@@ -1051,6 +1127,39 @@ describe("buildLiveGatewayConfig", () => {
     expect(cfg.agents?.defaults?.models?.["openai/gpt-5.5"]).toEqual({
       agentRuntime: { id: "openclaw" },
     });
+  });
+
+  it("keeps discovered live model metadata ahead of stale configured model rows", () => {
+    const discovered = {
+      ...createGatewayLiveTestModel("google", "gemini-3-flash-preview"),
+      contextWindow: 128_000,
+    };
+    const cfg = buildLiveGatewayConfig({
+      cfg: {
+        models: {
+          providers: {
+            google: {
+              api: "google-generative-ai",
+              baseUrl: "https://generativelanguage.googleapis.com",
+              models: [
+                {
+                  id: "gemini-3-flash-preview",
+                  name: "gemini-3-flash-preview",
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 1_000,
+                  maxTokens: 100,
+                  reasoning: false,
+                },
+              ],
+            },
+          },
+        },
+      },
+      candidates: [discovered],
+    });
+
+    expect(cfg.models?.providers?.google?.models?.[0]?.contextWindow).toBe(128_000);
   });
 });
 
@@ -1214,10 +1323,10 @@ describe("getHighSignalLiveModelPriorityIndex", () => {
   it("prefers curated Google replacements over big-pickle", () => {
     expect(
       getHighSignalLiveModelPriorityIndex({ provider: "google", id: "gemini-3.1-pro-preview" }),
-    ).toBe(2);
+    ).toBe(3);
     expect(
       getHighSignalLiveModelPriorityIndex({ provider: "google", id: "gemini-3-flash-preview" }),
-    ).toBe(3);
+    ).toBe(4);
     expect(getHighSignalLiveModelPriorityIndex({ provider: "opencode", id: "big-pickle" })).toBe(
       null,
     );
@@ -1233,6 +1342,7 @@ describe("shouldSkipEmptyResponseForLiveModel", () => {
     { provider: "opencode-go", allowNotFoundSkip: false, expected: true },
     { provider: "minimax", allowNotFoundSkip: false, expected: false },
     { provider: "minimax", allowNotFoundSkip: true, expected: true },
+    { provider: "minimax-portal", allowNotFoundSkip: true, expected: true },
     { provider: "zai", allowNotFoundSkip: true, expected: true },
     { provider: "openai-codex", allowNotFoundSkip: true, expected: true },
     { provider: "xai", allowNotFoundSkip: true, expected: false },
@@ -1979,12 +2089,12 @@ function mergeLiveProviderConfig(params: {
   const baseModels = params.base?.models ?? [];
   const discoveredModels = params.discovered.models ?? [];
   const mergedModels = new Map<string, NonNullable<ModelProviderConfig["models"]>[number]>();
-  for (const model of discoveredModels) {
+  for (const model of baseModels) {
     if (model.id) {
       mergedModels.set(model.id, model);
     }
   }
-  for (const model of baseModels) {
+  for (const model of discoveredModels) {
     if (model.id) {
       mergedModels.set(model.id, model);
     }
@@ -2057,10 +2167,9 @@ function resolveExplicitLiveModelCandidates(params: {
     if (!ref) {
       return null;
     }
-    const model = params.modelRegistry.find(ref.provider, ref.modelId);
-    if (!model) {
-      return null;
-    }
+    const model =
+      params.modelRegistry.find(ref.provider, ref.modelId) ??
+      createExplicitLiveFallbackModel(ref.provider, ref.modelId);
     if (
       !params.targetMatcher.matchesProvider(model.provider) ||
       !params.targetMatcher.matchesModel(model.provider, model.id)
@@ -2093,21 +2202,36 @@ function resolveGatewayLiveModelThinkingLevel(params: {
       provider: model.provider,
       modelId: model.id,
       reasoning: model.reasoning,
+      compat: getProviderThinkingModelCompat(model),
     },
   });
   if (profile) {
     const levelIds = profile.levels.map((level) => level.id);
     if (levelIds.includes(normalized)) {
-      return normalized;
+      return clampThinkingLevel(model, normalized);
     }
     if (profile.defaultLevel) {
-      return profile.defaultLevel;
+      return clampThinkingLevel(model, profile.defaultLevel as ModelThinkingLevel);
     }
     if (levelIds.length === 1) {
-      return levelIds[0] ?? requestedLevel;
+      const [onlyLevel] = levelIds;
+      return onlyLevel
+        ? clampThinkingLevel(model, onlyLevel as ModelThinkingLevel)
+        : requestedLevel;
     }
   }
   return clampThinkingLevel(model, normalized);
+}
+
+function getProviderThinkingModelCompat(model: Model): ProviderThinkingModelCompat | undefined {
+  const compat = model.compat;
+  if (!compat || typeof compat !== "object") {
+    return undefined;
+  }
+  if ("thinkingFormat" in compat || "supportedReasoningEfforts" in compat) {
+    return compat as ProviderThinkingModelCompat;
+  }
+  return undefined;
 }
 
 function resolveGatewayLiveThinkingLevel(params: { raw?: string; smoke: boolean }): string {
@@ -3143,6 +3267,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         }
         logProgress(`[all-models] wanted=${wanted.length} total=${all.length}`);
         assertGatewayLiveSelectedSomeModels({
+          allowProviderDriftSkip: useModern,
           label: "all-models",
           modelFilter: filter,
           providerFilter: PROVIDERS,

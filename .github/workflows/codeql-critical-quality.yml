@@ -33,6 +33,7 @@ on:
       - "packages/plugin-package-contract/**"
       - "packages/plugin-sdk/**"
       - "packages/memory-host-sdk/**"
+      - "packages/net-policy/**"
       - "src/*.ts"
       - "src/**/*.ts"
       - "src/config/**"
@@ -301,7 +302,7 @@ jobs:
               esac
 
               case "${file}" in
-                src/*.ts|src/**/*.ts|extensions/*.ts|extensions/**/*.ts)
+                src/*.ts|src/**/*.ts|extensions/*.ts|extensions/**/*.ts|packages/net-policy/src/*|packages/net-policy/src/**/*)
                   network_runtime=true
                   ;;
               esac

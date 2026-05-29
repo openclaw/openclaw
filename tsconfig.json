@@ -44,6 +44,14 @@
       ],
       "@openclaw/gateway-protocol/version": ["./packages/gateway-protocol/src/version.ts"],
       "@openclaw/gateway-protocol/*": ["./packages/gateway-protocol/src/*"],
+      "@openclaw/net-policy": ["./packages/net-policy/src/index.ts"],
+      "@openclaw/net-policy/ip": ["./packages/net-policy/src/ip.ts"],
+      "@openclaw/net-policy/ipv4": ["./packages/net-policy/src/ipv4.ts"],
+      "@openclaw/net-policy/redact-sensitive-url": [
+        "./packages/net-policy/src/redact-sensitive-url.ts"
+      ],
+      "@openclaw/net-policy/url-userinfo": ["./packages/net-policy/src/url-userinfo.ts"],
+      "@openclaw/net-policy/*": ["./packages/net-policy/src/*"],
       "@openclaw/speech-core": ["./packages/speech-core/runtime-api.ts"],
       "@openclaw/speech-core/api": ["./packages/speech-core/api.ts"],
       "@openclaw/speech-core/runtime-api": ["./packages/speech-core/runtime-api.ts"],

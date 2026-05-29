@@ -1228,6 +1228,7 @@
                   "plugins/codex-native-plugins",
                   "plugins/codex-computer-use",
                   "plugins/google-meet",
+                  "plugins/workboard",
                   "plugins/webhooks",
                   "plugins/admin-http-rpc",
                   "plugins/voice-call",

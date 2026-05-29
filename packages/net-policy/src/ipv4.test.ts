@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { validateDottedDecimalIPv4Input, validateIPv4AddressInput } from "./ipv4.js";
 
-describe("shared/net/ipv4", () => {
+describe("net-policy/ipv4", () => {
   it("requires a value for custom bind mode", () => {
     expect(validateDottedDecimalIPv4Input(undefined)).toBe(
       "IP address is required for custom bind mode",

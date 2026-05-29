@@ -11,6 +11,7 @@
 import { Buffer } from "node:buffer";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { Command } from "commander";
 import {
   clearMemoryPluginState,
   getMemoryCapabilityRegistration,
@@ -704,6 +705,73 @@ describe("memory plugin e2e", () => {
             limit: "3.5",
           }),
         ).rejects.toThrow("limit must be a positive integer");
+      },
+    });
+  });
+
+  test("normalizes signed decimal CLI limits through the shared parser", async () => {
+    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const toArray = vi.fn(async () => []);
+    const limit = vi.fn(() => ({ toArray }));
+    const select = vi.fn(() => ({ limit, toArray }));
+    const query = vi.fn(() => ({ select }));
+    const loadLanceDbModule = vi.fn(async () => ({
+      connect: vi.fn(async () => ({
+        tableNames: vi.fn(async () => ["memories"]),
+        openTable: vi.fn(async () => ({
+          query,
+          countRows: vi.fn(async () => 0),
+          add: vi.fn(async () => undefined),
+          delete: vi.fn(async () => undefined),
+        })),
+      })),
+    }));
+
+    await withMockedOpenAiMemoryPlugin({
+      ensureGlobalUndiciEnvProxyDispatcher,
+      loadLanceDbModule,
+      run: async (dynamicMemoryPlugin) => {
+        const registerCli = vi.fn();
+        const mockApi = {
+          id: "memory-lancedb",
+          name: "Memory (LanceDB)",
+          source: "test",
+          config: {},
+          pluginConfig: {
+            embedding: {
+              apiKey: OPENAI_API_KEY,
+              model: "text-embedding-3-small",
+            },
+            dbPath: getDbPath(),
+            autoCapture: false,
+            autoRecall: false,
+          },
+          runtime: {},
+          logger: {
+            info: vi.fn(),
+            warn: vi.fn(),
+            error: vi.fn(),
+            debug: vi.fn(),
+          },
+          registerTool: vi.fn(),
+          registerCli,
+          registerService: vi.fn(),
+          on: vi.fn(),
+          resolvePath: (filePath: string) => filePath,
+        };
+        const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+        try {
+          dynamicMemoryPlugin.register(mockApi as any);
+          const registrar = firstMockArg(registerCli as unknown as MockCallSource, "cli registrar");
+          const program = new Command();
+          (registrar as (params: { program: Command }) => void)({ program });
+
+          await program.parseAsync(["node", "openclaw", "ltm", "list", "--limit", "+03"]);
+
+          expect(limit).toHaveBeenCalledWith(3);
+        } finally {
+          log.mockRestore();
+        }
       },
     });
   });

@@ -53,6 +53,7 @@ const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
   "thread-ownership",
   "voice-call",
   "webhooks",
+  "workboard",
 ] as const;
 const EXPECTED_EMPTY_CONFIG_GATEWAY_STARTUP_PLUGIN_IDS = [
   "acpx",

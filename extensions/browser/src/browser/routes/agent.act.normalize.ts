@@ -13,6 +13,11 @@ import {
   parseClickButton,
   parseClickModifiers,
 } from "./agent.act.shared.js";
+import {
+  readRouteInteger,
+  readRouteNonNegativeInteger,
+  readRoutePositiveInteger,
+} from "./route-numeric.js";
 import { toBoolean, toNumber, toStringArray, toStringOrEmpty } from "./utils.js";
 
 function normalizeActKind(raw: unknown): ActKind {
@@ -71,6 +76,44 @@ function normalizeBatchAction(value: unknown): BrowserActRequest {
   return normalizeActRequest(value as Record<string, unknown>, { source: "batch" });
 }
 
+function readActionPositiveInteger(body: Record<string, unknown>, key: string): number | undefined {
+  return readRoutePositiveInteger(body[key], key);
+}
+
+function readActionNonNegativeInteger(
+  body: Record<string, unknown>,
+  key: string,
+): number | undefined {
+  return readRouteNonNegativeInteger(body[key], key);
+}
+
+function readActionTimeoutMs(body: Record<string, unknown>): number | undefined {
+  return readActionPositiveInteger(body, "timeoutMs");
+}
+
+function readBoundedActionDurationMs(
+  body: Record<string, unknown>,
+  key: string,
+  fieldName: string,
+  maxMs: number,
+): number | undefined {
+  return normalizeActBoundedNonNegativeMs(
+    readActionNonNegativeInteger(body, key),
+    fieldName,
+    maxMs,
+  );
+}
+
+function readResizeDimension(body: Record<string, unknown>, key: "width" | "height") {
+  const value = readRouteInteger(body[key], key, {
+    invalidMessage: "resize requires positive width and height",
+  });
+  if (value === undefined && Object.hasOwn(body, key)) {
+    throw new Error("resize requires positive width and height");
+  }
+  return value;
+}
+
 export function normalizeActRequest(
   body: Record<string, unknown>,
   options?: { source?: "request" | "batch" },
@@ -96,12 +139,13 @@ export function normalizeActRequest(
         throw new Error(parsedModifiers.error);
       }
       const doubleClick = toBoolean(body.doubleClick);
-      const delayMs = normalizeActBoundedNonNegativeMs(
-        toNumber(body.delayMs),
+      const delayMs = readBoundedActionDurationMs(
+        body,
+        "delayMs",
         "click delayMs",
         ACT_MAX_CLICK_DELAY_MS,
       );
-      const timeoutMs = toNumber(body.timeoutMs);
+      const timeoutMs = readActionTimeoutMs(body);
       const targetId = toStringOrEmpty(body.targetId) || undefined;
       return {
         kind,
@@ -127,12 +171,13 @@ export function normalizeActRequest(
         throw new Error("clickCoords button must be left|right|middle");
       }
       const doubleClick = toBoolean(body.doubleClick);
-      const delayMs = normalizeActBoundedNonNegativeMs(
-        toNumber(body.delayMs),
+      const delayMs = readBoundedActionDurationMs(
+        body,
+        "delayMs",
         "clickCoords delayMs",
         ACT_MAX_CLICK_DELAY_MS,
       );
-      const timeoutMs = toNumber(body.timeoutMs);
+      const timeoutMs = readActionTimeoutMs(body);
       const targetId = toStringOrEmpty(body.targetId) || undefined;
       return {
         kind,
@@ -158,7 +203,7 @@ export function normalizeActRequest(
       const targetId = toStringOrEmpty(body.targetId) || undefined;
       const submit = toBoolean(body.submit);
       const slowly = toBoolean(body.slowly);
-      const timeoutMs = toNumber(body.timeoutMs);
+      const timeoutMs = readActionTimeoutMs(body);
       return {
         kind,
         ...(ref ? { ref } : {}),
@@ -176,7 +221,7 @@ export function normalizeActRequest(
         throw new Error("press requires key");
       }
       const targetId = toStringOrEmpty(body.targetId) || undefined;
-      const delayMs = toNumber(body.delayMs);
+      const delayMs = readActionNonNegativeInteger(body, "delayMs");
       return {
         kind,
         key,
@@ -192,7 +237,7 @@ export function normalizeActRequest(
         throw new Error(`${kind} requires ref or selector`);
       }
       const targetId = toStringOrEmpty(body.targetId) || undefined;
-      const timeoutMs = toNumber(body.timeoutMs);
+      const timeoutMs = readActionTimeoutMs(body);
       return {
         kind,
         ...(ref ? { ref } : {}),
@@ -213,7 +258,7 @@ export function normalizeActRequest(
         throw new Error("drag requires endRef or endSelector");
       }
       const targetId = toStringOrEmpty(body.targetId) || undefined;
-      const timeoutMs = toNumber(body.timeoutMs);
+      const timeoutMs = readActionTimeoutMs(body);
       return {
         kind,
         ...(startRef ? { startRef } : {}),
@@ -232,7 +277,7 @@ export function normalizeActRequest(
         throw new Error("select requires ref/selector and values");
       }
       const targetId = toStringOrEmpty(body.targetId) || undefined;
-      const timeoutMs = toNumber(body.timeoutMs);
+      const timeoutMs = readActionTimeoutMs(body);
       return {
         kind,
         ...(ref ? { ref } : {}),
@@ -248,7 +293,7 @@ export function normalizeActRequest(
         throw new Error("fill requires fields");
       }
       const targetId = toStringOrEmpty(body.targetId) || undefined;
-      const timeoutMs = toNumber(body.timeoutMs);
+      const timeoutMs = readActionTimeoutMs(body);
       return {
         kind,
         fields,
@@ -257,8 +302,8 @@ export function normalizeActRequest(
       };
     }
     case "resize": {
-      const width = toNumber(body.width);
-      const height = toNumber(body.height);
+      const width = readResizeDimension(body, "width");
+      const height = readResizeDimension(body, "height");
       if (width === undefined || height === undefined || width <= 0 || height <= 0) {
         throw new Error("resize requires positive width and height");
       }
@@ -281,8 +326,9 @@ export function normalizeActRequest(
         loadStateRaw === "networkidle"
           ? loadStateRaw
           : undefined;
-      const timeMs = normalizeActBoundedNonNegativeMs(
-        toNumber(body.timeMs),
+      const timeMs = readBoundedActionDurationMs(
+        body,
+        "timeMs",
         "wait timeMs",
         ACT_MAX_WAIT_TIME_MS,
       );
@@ -297,7 +343,7 @@ export function normalizeActRequest(
         );
       }
       const targetId = toStringOrEmpty(body.targetId) || undefined;
-      const timeoutMs = toNumber(body.timeoutMs);
+      const timeoutMs = readActionTimeoutMs(body);
       return {
         kind,
         ...(timeMs !== undefined ? { timeMs } : {}),
@@ -318,7 +364,7 @@ export function normalizeActRequest(
       }
       const ref = toStringOrEmpty(body.ref) || undefined;
       const targetId = toStringOrEmpty(body.targetId) || undefined;
-      const timeoutMs = toNumber(body.timeoutMs);
+      const timeoutMs = readActionTimeoutMs(body);
       return {
         kind,
         fn,

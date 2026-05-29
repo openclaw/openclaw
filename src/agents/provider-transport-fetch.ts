@@ -1,4 +1,9 @@
 import {
+  isCloudMetadataIpAddress,
+  isLinkLocalIpAddress,
+  parseCanonicalIpAddress,
+} from "@openclaw/net-policy/ip";
+import {
   fetchWithSsrFGuard,
   withTrustedEnvProxyGuardedFetchMode,
 } from "../infra/net/fetch-guard.js";
@@ -12,11 +17,6 @@ import {
 import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveDebugProxySettings } from "../proxy-capture/env.js";
-import {
-  isCloudMetadataIpAddress,
-  isLinkLocalIpAddress,
-  parseCanonicalIpAddress,
-} from "../shared/net/ip.js";
 import { emitModelTransportDebug } from "./model-transport-debug.js";
 import { formatModelTransportDebugUrl } from "./model-transport-url.js";
 import {

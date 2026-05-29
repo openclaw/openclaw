@@ -730,6 +730,17 @@ export function createFollowupRunner(params: {
                   emitLifecycleTerminal: false,
                   onAgentRunStart: () => opts?.onAgentRunStart?.(runId),
                   suppressAssistantBridge: run.silentExpected,
+                  onToolEvent: async ({ name, phase, args }) => {
+                    await forwardFollowupProgressEvent({
+                      evt: {
+                        stream: "tool",
+                        data: { name, phase, args },
+                      },
+                      opts,
+                      detailMode: toolProgressDetail,
+                      emitChannelProgress: shouldEmitToolResultProgress(),
+                    });
+                  },
                   runParams: {
                     replyOperation,
                     sessionId: run.sessionId,

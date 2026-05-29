@@ -1000,6 +1000,15 @@ describe("google-meet CLI", () => {
     expect(testListen).not.toHaveBeenCalled();
   });
 
+  it.each(["0", "-1", "1e3"])("rejects invalid auth callback timeouts: %s", async (timeoutSec) => {
+    await expect(
+      setupCli({}).parseAsync(
+        ["googlemeet", "auth", "login", "--client-id", "client-id", "--timeout-sec", timeoutSec],
+        { from: "user" },
+      ),
+    ).rejects.toThrow("timeout-sec must be a positive number");
+  });
+
   it("prints a dry-run export manifest without writing files", async () => {
     stubMeetArtifactsApi();
     const stdout = captureStdout();

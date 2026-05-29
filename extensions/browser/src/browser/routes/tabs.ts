@@ -1,5 +1,3 @@
-import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
-import { resolveBrowserNavigationProxyMode } from "../browser-proxy-mode.js";
 import {
   BrowserProfileUnavailableError,
   BrowserTabNotFoundError,
@@ -12,30 +10,10 @@ import {
 } from "../navigation-guard.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import { resolveTargetIdFromTabs } from "../target-id.js";
+import { browserNavigationPolicyForProfile, resolveProfileContext } from "./agent.shared.js";
+import { readRouteNonNegativeInteger } from "./route-numeric.js";
 import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
-import { asyncBrowserRoute, getProfileContext, jsonError, toStringOrEmpty } from "./utils.js";
-
-function resolveTabsProfileContext(
-  req: BrowserRequest,
-  res: BrowserResponse,
-  ctx: BrowserRouteContext,
-) {
-  const profileCtx = getProfileContext(req, ctx);
-  if ("error" in profileCtx) {
-    jsonError(res, profileCtx.status, profileCtx.error);
-    return null;
-  }
-  return profileCtx;
-}
-
-function browserNavigationPolicyForProfile(ctx: BrowserRouteContext, profileCtx: ProfileContext) {
-  return withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy, {
-    browserProxyMode: resolveBrowserNavigationProxyMode({
-      resolved: ctx.state().resolved,
-      profile: profileCtx.profile,
-    }),
-  });
-}
+import { asyncBrowserRoute, jsonError, toStringOrEmpty } from "./utils.js";
 
 function handleTabsRouteError(
   ctx: BrowserRouteContext,
@@ -59,7 +37,7 @@ async function withTabsProfileRoute(params: {
   mapTabError?: boolean;
   run: (profileCtx: ProfileContext) => Promise<void>;
 }) {
-  const profileCtx = resolveTabsProfileContext(params.req, params.res, params.ctx);
+  const profileCtx = resolveProfileContext(params.req, params.res, params.ctx);
   if (!profileCtx) {
     return;
   }
@@ -144,12 +122,18 @@ function readTabIndex(
     }
     return undefined;
   }
-  const index = parseStrictNonNegativeInteger(record.index);
-  if (index === undefined) {
+  if (record.index == null) {
     jsonError(res, 400, "index must be a non-negative integer");
     return null;
   }
-  return index;
+  try {
+    return readRouteNonNegativeInteger(record.index, "index", {
+      invalidMessage: "index must be a non-negative integer",
+    });
+  } catch (error) {
+    jsonError(res, 400, error instanceof Error ? error.message : String(error));
+    return null;
+  }
 }
 
 async function runTabTargetMutation(params: {
