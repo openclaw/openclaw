@@ -1,5 +1,29 @@
 import { describe, expect, it } from "vitest";
-import { splitTelegramReasoningText } from "./reasoning-lane-coordinator.js";
+import {
+  splitTelegramReasoningText,
+  stripReasoningTagsForInterleaved,
+} from "./reasoning-lane-coordinator.js";
+
+describe("stripReasoningTagsForInterleaved", () => {
+  it("unwraps think tags, keeping the inner content as plain text", () => {
+    expect(stripReasoningTagsForInterleaved("<think>planning</think>Done")).toBe("planningDone");
+  });
+
+  it("keeps content from multiple/closing tag variants without leaving raw tags", () => {
+    const out = stripReasoningTagsForInterleaved("<thinking>a</thinking> b <thought>c</thought>");
+    expect(out).toBe("a b c");
+    expect(out).not.toMatch(/<\/?(?:think|thinking|thought)/u);
+  });
+
+  it("is a no-op for tag-free text (interactive backend thinking_delta)", () => {
+    expect(stripReasoningTagsForInterleaved("clean reasoning text")).toBe("clean reasoning text");
+  });
+
+  it("preserves literal tags inside inline code (they are content, not markers)", () => {
+    const text = "Use `<think>x</think>` literally.";
+    expect(stripReasoningTagsForInterleaved(text)).toBe(text);
+  });
+});
 
 describe("splitTelegramReasoningText", () => {
   it("splits real tagged reasoning and answer", () => {

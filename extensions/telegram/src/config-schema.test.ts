@@ -84,6 +84,38 @@ describe("telegram custom commands schema", () => {
     expectTelegramConfigIssue({ mediaGroupFlushMs: 60_001 }, "mediaGroupFlushMs");
   });
 
+  it("accepts the opt-in interleaved progress flag", () => {
+    expectTelegramConfigValid({
+      streaming: { preview: { toolProgress: true, interleavedProgress: true } },
+    });
+    expectTelegramConfigValid({
+      accounts: { ops: { streaming: { preview: { interleavedProgress: true } } } },
+    });
+  });
+
+  it("accepts the opt-in interleaved tool-args flag", () => {
+    expectTelegramConfigValid({
+      streaming: { preview: { interleavedProgress: true, interleavedToolArgs: true } },
+    });
+    expectTelegramConfigValid({
+      accounts: { ops: { streaming: { preview: { interleavedToolArgs: true } } } },
+    });
+  });
+
+  // Upgrade safety: a pre-existing config that predates the interleaved-progress
+  // keys must still validate, and their absence must leave the feature OFF — so
+  // upgrading the binary changes nothing for users who never opted in.
+  it("accepts an existing config without the interleaved keys (upgrade-safe, defaults off)", () => {
+    const res = TelegramConfigSchema.safeParse({
+      streaming: { mode: "partial", preview: { toolProgress: true } },
+    });
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.streaming?.preview?.interleavedProgress).toBeUndefined();
+      expect(res.data.streaming?.preview?.interleavedToolArgs).toBeUndefined();
+    }
+  });
+
   it("accepts Telegram native tool-progress draft config only on Telegram", () => {
     expectTelegramConfigValid({
       streaming: {

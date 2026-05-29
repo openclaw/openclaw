@@ -65,6 +65,14 @@ export const telegramChannelConfigUiHints = {
     label: "Telegram Draft Tool Progress",
     help: "Show tool/progress activity in the live draft preview message (default: true when preview streaming is active). Set false to keep tool updates out of the edited Telegram preview.",
   },
+  "streaming.preview.interleavedProgress": {
+    label: "Telegram Interleaved Progress",
+    help: "Opt-in (default false): render reasoning and structured runtime events (tool/plan/approval/command/patch) into one durable live message instead of the separate tool-progress lane. Requires preview tool progress to be enabled. Projection-only — never changes prompts, routing, tools, or auth.",
+  },
+  "streaming.preview.interleavedToolArgs": {
+    label: "Telegram Interleaved Tool Args",
+    help: "Opt-in (default false; requires interleavedProgress): include each tool call's sanitized args/detail in the interleaved lane instead of the tool name only. Secret-looking values stay redacted and commandText is honoured; never surfaces raw command output.",
+  },
   "streaming.preview.commandText": {
     label: "Telegram Draft Command Text",
     help: 'Command/exec detail in preview tool-progress lines: "raw" preserves released behavior; "status" shows only the tool label.',

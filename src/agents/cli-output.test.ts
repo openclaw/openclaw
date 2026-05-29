@@ -518,6 +518,55 @@ describe("createCliJsonlStreamingParser", () => {
     ]);
   });
 
+  it("folds the post-tool paragraph break into the emitted delta (delta sum == snapshot)", () => {
+    const deltas: Array<{ text: string; delta: string }> = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: (delta) => deltas.push({ text: delta.text, delta: delta.delta }),
+    });
+
+    parser.push(
+      [
+        JSON.stringify({ type: "init", session_id: "s" }),
+        JSON.stringify({
+          type: "stream_event",
+          event: { type: "content_block_delta", delta: { type: "text_delta", text: "Site A" } },
+        }),
+        // a tool runs, then a NEW text block starts — this is where the "\n\n"
+        // paragraph break belongs.
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            content_block: { type: "tool_use", id: "t1", name: "Bash", input: {} },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: { type: "content_block_start", content_block: { type: "text" } },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: { type: "content_block_delta", delta: { type: "text_delta", text: "Site B" } },
+        }),
+      ].join("\n"),
+    );
+    parser.finish();
+
+    // The separator rides on the next delta (the content_block_start emits none),
+    // so the increment carries it instead of it only appearing in the snapshot.
+    expect(deltas.map((d) => d.delta)).toEqual(["Site A", "\n\nSite B"]);
+    expect(deltas.at(-1)?.text).toBe("Site A\n\nSite B");
+    // Consistency: concatenating the deltas reconstructs the cumulative snapshot.
+    expect(deltas.map((d) => d.delta).join("")).toBe(deltas.at(-1)?.text);
+  });
+
   it("ignores cumulative usage from result events to avoid cache_read inflation", () => {
     const parser = createCliJsonlStreamingParser({
       backend: {

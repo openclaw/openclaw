@@ -45,6 +45,33 @@ function extractThinkingFromTaggedStreamOutsideCode(text: string): string {
   return result.trim();
 }
 
+// Unwrap reasoning tag markers for the interleaved progress lane: remove the
+// `<think>` / `</think>` (and friends) tokens while KEEPING their inner content,
+// so the lane renders the model's prose as a plain CLI-style transcript instead
+// of showing raw tags. Tags inside code regions are preserved (a literal
+// `<think>` in a fenced block is content, not a marker). This is the
+// plain-text analogue of splitTelegramReasoningText, which the default lane
+// uses to format the same payloads as `Thinking\n\n_..._`.
+export function stripReasoningTagsForInterleaved(text: string): string {
+  if (!text) {
+    return text;
+  }
+  const codeRegions = findCodeRegions(text);
+  let result = "";
+  let lastIndex = 0;
+  THINKING_TAG_RE.lastIndex = 0;
+  for (const match of text.matchAll(THINKING_TAG_RE)) {
+    const idx = match.index ?? 0;
+    if (isInsideCode(idx, codeRegions)) {
+      continue;
+    }
+    result += text.slice(lastIndex, idx);
+    lastIndex = idx + match[0].length;
+  }
+  result += text.slice(lastIndex);
+  return result;
+}
+
 function isPartialReasoningTagPrefix(text: string): boolean {
   const trimmed = normalizeLowercaseStringOrEmpty(text.trimStart());
   if (!trimmed.startsWith("<")) {
