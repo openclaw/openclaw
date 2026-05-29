@@ -2,7 +2,7 @@ name: Dependency Guard
 
 on:
   pull_request_target: # zizmor: ignore[dangerous-triggers] checks trusted base script only; never checks out PR head
-    types: [opened, reopened, synchronize, ready_for_review, labeled]
+    types: [opened, reopened, synchronize, ready_for_review]
 
 permissions:
   contents: read
@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   dependency-guard:
-    if: ${{ !github.event.pull_request.draft && (github.event.action != 'labeled' || github.event.label.name == 'dependency-guard-backfill') }}
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
