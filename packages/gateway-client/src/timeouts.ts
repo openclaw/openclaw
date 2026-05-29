@@ -6,9 +6,30 @@ function parseStrictPositiveInteger(value: string): number | undefined {
   return Number.isSafeInteger(parsed) ? parsed : undefined;
 }
 
+export const MAX_SAFE_TIMEOUT_DELAY_MS = 2_147_483_647;
 export const DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS = 15_000;
 export const MIN_CONNECT_CHALLENGE_TIMEOUT_MS = 250;
 export const MAX_CONNECT_CHALLENGE_TIMEOUT_MS = DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS;
+
+export function resolveSafeTimeoutDelayMs(delayMs: number, opts?: { minMs?: number }): number {
+  const rawMinMs = opts?.minMs ?? 1;
+  const minMs = Math.min(
+    MAX_SAFE_TIMEOUT_DELAY_MS,
+    Math.max(0, Number.isFinite(rawMinMs) ? Math.floor(rawMinMs) : 1),
+  );
+  const candidateMs = Number.isFinite(delayMs) ? Math.floor(delayMs) : minMs;
+  return Math.min(MAX_SAFE_TIMEOUT_DELAY_MS, Math.max(minMs, candidateMs));
+}
+
+export function resolveFiniteTimeoutDelayMs(
+  delayMs: number | null | undefined,
+  fallbackMs: number,
+  opts?: { minMs?: number },
+): number {
+  const candidateMs =
+    typeof delayMs === "number" && Number.isFinite(delayMs) ? delayMs : fallbackMs;
+  return resolveSafeTimeoutDelayMs(candidateMs, opts);
+}
 
 export function clampConnectChallengeTimeoutMs(
   timeoutMs: number,

@@ -1,24 +1,23 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   MAX_SAFE_TIMEOUT_DELAY_MS,
   resolveFiniteTimeoutDelayMs,
   resolveSafeTimeoutDelayMs,
-  setSafeTimeout,
-} from "./timer-delay.js";
+} from "./timeouts.js";
 
 describe("resolveSafeTimeoutDelayMs", () => {
   it("clamps to Node's signed-32-bit timer ceiling", () => {
     expect(resolveSafeTimeoutDelayMs(3_000_000_000)).toBe(MAX_SAFE_TIMEOUT_DELAY_MS);
   });
 
-  it("respects custom minimums", () => {
-    expect(resolveSafeTimeoutDelayMs(10, { minMs: 250 })).toBe(250);
-    expect(resolveSafeTimeoutDelayMs(10, { minMs: 0 })).toBe(10);
+  it("falls back to the minimum for non-finite delays", () => {
+    expect(resolveSafeTimeoutDelayMs(Number.NaN)).toBe(1);
+    expect(resolveSafeTimeoutDelayMs(Number.POSITIVE_INFINITY, { minMs: 250 })).toBe(250);
   });
 
-  it("falls back to the minimum for non-finite input", () => {
-    expect(resolveSafeTimeoutDelayMs(Number.POSITIVE_INFINITY, { minMs: 250 })).toBe(250);
-    expect(resolveSafeTimeoutDelayMs(Number.NaN)).toBe(1);
+  it("preserves callers that intentionally allow zero-delay timers", () => {
+    expect(resolveSafeTimeoutDelayMs(Number.NaN, { minMs: 0 })).toBe(0);
+    expect(resolveSafeTimeoutDelayMs(-5, { minMs: 0 })).toBe(0);
   });
 });
 
@@ -34,18 +33,5 @@ describe("resolveFiniteTimeoutDelayMs", () => {
   it("still clamps finite overrides through safe timer bounds", () => {
     expect(resolveFiniteTimeoutDelayMs(3_000_000_000, 10_000)).toBe(MAX_SAFE_TIMEOUT_DELAY_MS);
     expect(resolveFiniteTimeoutDelayMs(-5, 10_000, { minMs: 0 })).toBe(0);
-  });
-});
-
-describe("setSafeTimeout", () => {
-  it("arms setTimeout with the clamped delay", () => {
-    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    const callback = () => undefined;
-
-    const timer = setSafeTimeout(callback, 3_000_000_000);
-    clearTimeout(timer);
-
-    expect(timeoutSpy).toHaveBeenCalledWith(callback, MAX_SAFE_TIMEOUT_DELAY_MS);
-    timeoutSpy.mockRestore();
   });
 });
