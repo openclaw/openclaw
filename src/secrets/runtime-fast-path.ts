@@ -15,6 +15,7 @@ import { resolveOAuthPath } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import { resolveUserPath } from "../utils.js";
 import type {
   PreparedSecretsRuntimeSnapshot,
@@ -31,7 +32,6 @@ const RUNTIME_PATH_ENV_KEYS = [
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_CONFIG_PATH",
   "OPENCLAW_AGENT_DIR",
-  "PI_CODING_AGENT_DIR",
   "OPENCLAW_TEST_FAST",
 ] as const;
 
@@ -71,7 +71,7 @@ export function resolveRefreshAgentDirs(
   if (!context.explicitAgentDirs || context.explicitAgentDirs.length === 0) {
     return configDerived;
   }
-  return [...new Set([...context.explicitAgentDirs, ...configDerived])];
+  return uniqueStrings([...context.explicitAgentDirs, ...configDerived]);
 }
 
 function resolveCandidateAgentDirs(params: {
@@ -80,7 +80,7 @@ function resolveCandidateAgentDirs(params: {
   agentDirs?: string[];
 }): string[] {
   return params.agentDirs?.length
-    ? [...new Set(params.agentDirs.map((entry) => resolveUserPath(entry, params.env)))]
+    ? uniqueStrings(params.agentDirs.map((entry) => resolveUserPath(entry, params.env)))
     : collectCandidateAgentDirs(params.config, params.env);
 }
 
@@ -303,6 +303,7 @@ export function prepareSecretsRuntimeFastPathSnapshot(params: {
     refreshContext: {
       env: runtimeEnv,
       explicitAgentDirs: params.agentDirs?.length ? [...candidateDirs] : null,
+      includeAuthStoreRefs,
       loadablePluginOrigins: params.loadablePluginOrigins ?? new Map<string, PluginOrigin>(),
       ...(params.loadAuthStore ? { loadAuthStore: params.loadAuthStore } : {}),
     },

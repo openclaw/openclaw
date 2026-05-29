@@ -414,6 +414,37 @@ const listRequiredBundledPluginRuntimeOverlayOutputs = (deps) => {
   return [...new Set(runtimePaths)].toSorted((left, right) => left.localeCompare(right));
 };
 
+const isSafePluginSdkSubpathSegment = (subpath) => /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(subpath);
+
+const readPackageJsonPluginSdkAliasFileNames = (deps) => {
+  let packageJson;
+  try {
+    packageJson = JSON.parse(deps.fs.readFileSync(path.join(deps.cwd, "package.json"), "utf8"));
+  } catch {
+    return null;
+  }
+  const packageExports = packageJson?.exports;
+  if (!packageExports || typeof packageExports !== "object" || Array.isArray(packageExports)) {
+    return null;
+  }
+
+  const fileNames = new Set();
+  for (const exportKey of Object.keys(packageExports)) {
+    if (exportKey === "./plugin-sdk") {
+      fileNames.add("index.js");
+      continue;
+    }
+    if (!exportKey.startsWith("./plugin-sdk/")) {
+      continue;
+    }
+    const subpath = exportKey.slice("./plugin-sdk/".length);
+    if (isSafePluginSdkSubpathSegment(subpath)) {
+      fileNames.add(`${subpath}.js`);
+    }
+  }
+  return fileNames.size > 0 ? fileNames : null;
+};
+
 const listRequiredOpenClawExtensionAliasOutputs = (deps) => {
   const distRoot = resolveRuntimePostBuildDistRoot(deps);
   const distExtensionsRoot = path.join(distRoot, "extensions");
@@ -428,11 +459,15 @@ const listRequiredOpenClawExtensionAliasOutputs = (deps) => {
     return [];
   }
 
+  const exportedPluginSdkFileNames = readPackageJsonPluginSdkAliasFileNames(deps);
   const aliasDir = path.join(distRoot, "extensions", "node_modules", "openclaw");
   return [
     path.join(aliasDir, "package.json"),
     ...dirents
       .filter((dirent) => dirent.isFile() && path.extname(dirent.name) === ".js")
+      .filter(
+        (dirent) => !exportedPluginSdkFileNames || exportedPluginSdkFileNames.has(dirent.name),
+      )
       .map((dirent) => path.join(aliasDir, "plugin-sdk", dirent.name)),
   ].toSorted((left, right) => left.localeCompare(right));
 };
@@ -613,10 +648,12 @@ const getSignalExitCode = (signal) => (isSignalKey(signal) ? SIGNAL_EXIT_CODES[s
 
 const RUN_NODE_OUTPUT_LOG_ENV = "OPENCLAW_RUN_NODE_OUTPUT_LOG";
 const RUN_NODE_CPU_PROF_DIR_ENV = "OPENCLAW_RUN_NODE_CPU_PROF_DIR";
+const RUN_NODE_CPU_PROF_MAX_FILES_ENV = "OPENCLAW_RUN_NODE_CPU_PROF_MAX_FILES";
 const RUN_NODE_FILTER_SYNC_IO_STDERR_ENV = "OPENCLAW_RUN_NODE_FILTER_SYNC_IO_STDERR";
 const RUN_NODE_BUILD_LOCK_TIMEOUT_ENV = "OPENCLAW_RUN_NODE_BUILD_LOCK_TIMEOUT_MS";
 const RUN_NODE_BUILD_LOCK_POLL_ENV = "OPENCLAW_RUN_NODE_BUILD_LOCK_POLL_MS";
 const RUN_NODE_BUILD_LOCK_STALE_ENV = "OPENCLAW_RUN_NODE_BUILD_LOCK_STALE_MS";
+const RUN_NODE_SKIP_DTS_BUILD_ENV = "OPENCLAW_RUN_NODE_SKIP_DTS_BUILD";
 const DEFAULT_BUILD_LOCK_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_BUILD_LOCK_POLL_MS = 100;
 const DEFAULT_BUILD_LOCK_STALE_MS = 10 * 60 * 1000;
@@ -644,6 +681,28 @@ const createRunNodeOutputTee = (deps) => {
   const outputLogPath = resolveRunNodeOutputLogPath(deps);
   if (!outputLogPath) {
     return null;
+  }
+  try {
+    const existing = deps.fs.statSync(outputLogPath);
+    if (existing.isDirectory()) {
+      return {
+        outputLogPath,
+        write() {},
+        async close() {
+          throw new Error(`output log path is a directory: ${outputLogPath}`);
+        },
+      };
+    }
+  } catch (error) {
+    if (error?.code && error.code !== "ENOENT") {
+      return {
+        outputLogPath,
+        write() {},
+        async close() {
+          throw error;
+        },
+      };
+    }
   }
   deps.fs.mkdirSync(path.dirname(outputLogPath), { recursive: true });
   const stream = deps.fs.createWriteStream(outputLogPath, {
@@ -773,6 +832,52 @@ const sanitizeCpuProfileNamePart = (value) => {
   return normalized || "command";
 };
 
+const parsePositiveInteger = (value) => {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+};
+
+const listRunNodeCpuProfiles = (deps, absoluteProfileDir, commandName) => {
+  let entries = [];
+  try {
+    entries = deps.fs.readdirSync(absoluteProfileDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const prefix = `openclaw-${commandName}-`;
+  return entries
+    .filter(
+      (entry) =>
+        entry.isFile() && entry.name.startsWith(prefix) && entry.name.endsWith(".cpuprofile"),
+    )
+    .flatMap((entry) => {
+      const filePath = path.join(absoluteProfileDir, entry.name);
+      try {
+        const stat = deps.fs.statSync(filePath);
+        return [{ filePath, mtimeMs: stat.mtimeMs }];
+      } catch {
+        return [];
+      }
+    })
+    .toSorted((left, right) => left.mtimeMs - right.mtimeMs);
+};
+
+const pruneRunNodeCpuProfiles = (deps, absoluteProfileDir, commandName) => {
+  const maxFiles = parsePositiveInteger(deps.env[RUN_NODE_CPU_PROF_MAX_FILES_ENV]);
+  if (!maxFiles) {
+    return;
+  }
+  const profiles = listRunNodeCpuProfiles(deps, absoluteProfileDir, commandName);
+  const deleteCount = Math.max(0, profiles.length - maxFiles + 1);
+  for (const profile of profiles.slice(0, deleteCount)) {
+    try {
+      deps.fs.rmSync(profile.filePath, { force: true });
+    } catch {
+      // Best-effort artifact rotation; profiling should not fail the command.
+    }
+  }
+};
+
 const resolveRunNodeCpuProfileArgs = (deps) => {
   const profileDir = deps.env[RUN_NODE_CPU_PROF_DIR_ENV]?.trim();
   if (!profileDir) {
@@ -784,6 +889,7 @@ const resolveRunNodeCpuProfileArgs = (deps) => {
   deps.env[RUN_NODE_CPU_PROF_DIR_ENV] = absoluteProfileDir;
 
   const commandName = sanitizeCpuProfileNamePart(deps.args[0]);
+  pruneRunNodeCpuProfiles(deps, absoluteProfileDir, commandName);
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
   const pid = Number.isInteger(deps.process.pid) && deps.process.pid > 0 ? deps.process.pid : "pid";
   const profileName = `openclaw-${commandName}-${pid}-${timestamp}.cpuprofile`;
@@ -887,8 +993,9 @@ const runOpenClaw = async (deps) => {
   return res.exitCode ?? 1;
 };
 
-const pipeSpawnedOutput = (childProcess, deps) => {
-  if (!shouldPipeSpawnedOutput(deps)) {
+const pipeSpawnedOutput = (childProcess, deps, options = {}) => {
+  const stdoutTarget = options.stdoutTarget ?? "stdout";
+  if (!shouldPipeSpawnedOutput(deps) && stdoutTarget !== "stderr") {
     return;
   }
   const stderrFilter =
@@ -896,7 +1003,8 @@ const pipeSpawnedOutput = (childProcess, deps) => {
       ? createSyncIoTraceStderrFilter(deps)
       : null;
   childProcess.stdout?.on("data", (chunk) => {
-    writeRunnerStream(deps, deps.stdout, chunk);
+    const target = stdoutTarget === "stderr" ? deps.stderr : deps.stdout;
+    writeRunnerStream(deps, target, chunk);
     deps.outputTee?.write(chunk);
   });
   childProcess.stderr?.on("data", (chunk) => {
@@ -1169,13 +1277,44 @@ const shouldSkipWatchRuntimeSync = (deps, requirement) =>
   !hasMissingRequiredRuntimePostBuildOutput(deps);
 
 const isGatewayClientCommand = (args) =>
-  args[0] === "gateway" && (args[1] === "call" || args[1] === "status");
+  (args[0] === "gateway" && (args[1] === "call" || args[1] === "status")) ||
+  (args[0] === "agent" && !args.includes("--local"));
 
-const shouldUseExistingDistForGatewayClient = (deps, buildRequirement) =>
-  buildRequirement.reason === "dirty_watched_tree" &&
+const shouldFastPathExistingDistForGatewayClient = (deps) =>
   isGatewayClientCommand(deps.args) &&
   deps.env.OPENCLAW_FORCE_BUILD !== "1" &&
-  statMtime(deps.distEntry, deps.fs) != null;
+  statMtime(deps.distEntry, deps.fs) != null &&
+  canUseStampedGatewayClientDist(deps);
+
+const canUseStampedGatewayClientDist = (deps) => {
+  const currentHead = resolveGitHead(deps);
+  if (!currentHead) {
+    return false;
+  }
+  const buildStamp = readBuildStamp(deps);
+  if (buildStamp.mtime == null || buildStamp.head !== currentHead) {
+    return false;
+  }
+  for (const filePath of deps.configFiles) {
+    const mtime = statMtime(filePath, deps.fs);
+    if (mtime != null && mtime > buildStamp.mtime) {
+      return false;
+    }
+  }
+  if (hasMissingBuiltBundledPluginRuntimeEntryOutput(deps)) {
+    return false;
+  }
+  const runtimeStamp = readRuntimePostBuildStamp(deps);
+  if (
+    runtimeStamp.mtime == null ||
+    runtimeStamp.mtime < buildStamp.mtime ||
+    runtimeStamp.head !== currentHead ||
+    deps.env.OPENCLAW_FORCE_RUNTIME_POSTBUILD === "1"
+  ) {
+    return false;
+  }
+  return !resolveRuntimePostBuildRequirement(deps).shouldSync;
+};
 
 const isQaParityReportCommand = (args) => args[0] === "qa" && args[1] === "parity-report";
 const isQaCoverageReportCommand = (args) => args[0] === "qa" && args[1] === "coverage";
@@ -1266,16 +1405,13 @@ export async function runNodeMain(params = {}) {
 
   try {
     let exitCode = 1;
-    let buildRequirement = resolveBuildRequirement(deps);
-    const useExistingGatewayClientDist = shouldUseExistingDistForGatewayClient(
-      deps,
-      buildRequirement,
-    );
+    if (shouldFastPathExistingDistForGatewayClient(deps)) {
+      exitCode = await runOpenClaw(deps);
+      return await closeRunNodeOutputTee(deps, exitCode);
+    }
+    const buildRequirement = resolveBuildRequirement(deps);
     const useQaParityReportSource = shouldRunQaParityReportFromSource(deps, buildRequirement);
     const useQaCoverageReportSource = shouldRunQaCoverageReportFromSource(deps, buildRequirement);
-    if (useExistingGatewayClientDist) {
-      buildRequirement = { shouldBuild: false, reason: "gateway_client_existing_dist" };
-    }
     if (useQaParityReportSource) {
       logRunner("Running QA parity report from source without rebuilding private QA dist.", deps);
       exitCode = await runQaParityReportFromSource(deps);
@@ -1287,26 +1423,24 @@ export async function runNodeMain(params = {}) {
       return await closeRunNodeOutputTee(deps, exitCode);
     }
     if (!buildRequirement.shouldBuild) {
-      if (!useExistingGatewayClientDist) {
-        const runtimePostBuildRequirement = resolveRuntimePostBuildRequirement(deps);
-        if (
-          runtimePostBuildRequirement.shouldSync &&
-          !shouldSkipWatchRuntimeSync(deps, runtimePostBuildRequirement)
-        ) {
-          const synced = await withRunNodeBuildLock(deps, async () => {
-            const lockedRuntimePostBuildRequirement = resolveRuntimePostBuildRequirement(deps);
-            if (!lockedRuntimePostBuildRequirement.shouldSync) {
-              return true;
-            }
-            logRunner(
-              `Syncing runtime artifacts (${lockedRuntimePostBuildRequirement.reason} - ${formatRuntimePostBuildReason(lockedRuntimePostBuildRequirement.reason)}).`,
-              deps,
-            );
-            return await syncRuntimeArtifactsAndStamp(deps);
-          });
-          if (!synced) {
-            return await closeRunNodeOutputTee(deps, 1);
+      const runtimePostBuildRequirement = resolveRuntimePostBuildRequirement(deps);
+      if (
+        runtimePostBuildRequirement.shouldSync &&
+        !shouldSkipWatchRuntimeSync(deps, runtimePostBuildRequirement)
+      ) {
+        const synced = await withRunNodeBuildLock(deps, async () => {
+          const lockedRuntimePostBuildRequirement = resolveRuntimePostBuildRequirement(deps);
+          if (!lockedRuntimePostBuildRequirement.shouldSync) {
+            return true;
           }
+          logRunner(
+            `Syncing runtime artifacts (${lockedRuntimePostBuildRequirement.reason} - ${formatRuntimePostBuildReason(lockedRuntimePostBuildRequirement.reason)}).`,
+            deps,
+          );
+          return await syncRuntimeArtifactsAndStamp(deps);
+        });
+        if (!synced) {
+          return await closeRunNodeOutputTee(deps, 1);
         }
       }
       exitCode = await runOpenClaw(deps);
@@ -1340,9 +1474,9 @@ export async function runNodeMain(params = {}) {
           const assetBuild = deps.spawn(buildCmd, bundledPluginAssetBuildArgs, {
             cwd: deps.cwd,
             env: deps.env,
-            stdio: shouldPipeSpawnedOutput(deps) ? ["inherit", "pipe", "pipe"] : "inherit",
+            stdio: ["inherit", "pipe", "pipe"],
           });
-          pipeSpawnedOutput(assetBuild, deps);
+          pipeSpawnedOutput(assetBuild, deps, { stdoutTarget: "stderr" });
           const assetBuildRes = await waitForSpawnedProcess(assetBuild, deps);
           const assetBuildInterruptedExitCode = getInterruptedSpawnExitCode(assetBuildRes);
           if (assetBuildInterruptedExitCode !== null) {
@@ -1354,10 +1488,13 @@ export async function runNodeMain(params = {}) {
 
           const build = deps.spawn(buildCmd, compilerArgs, {
             cwd: deps.cwd,
-            env: deps.env,
-            stdio: shouldPipeSpawnedOutput(deps) ? ["inherit", "pipe", "pipe"] : "inherit",
+            env: {
+              ...deps.env,
+              [RUN_NODE_SKIP_DTS_BUILD_ENV]: deps.env[RUN_NODE_SKIP_DTS_BUILD_ENV] ?? "1",
+            },
+            stdio: ["inherit", "pipe", "pipe"],
           });
-          pipeSpawnedOutput(build, deps);
+          pipeSpawnedOutput(build, deps, { stdoutTarget: "stderr" });
 
           const buildRes = await waitForSpawnedProcess(build, deps);
           const interruptedExitCode = getInterruptedSpawnExitCode(buildRes);

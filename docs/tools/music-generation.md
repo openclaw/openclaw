@@ -16,10 +16,11 @@ For session-backed agent runs, OpenClaw starts music generation as a
 background task, tracks it in the task ledger, then wakes the agent again
 when the track is ready so the agent can tell the user and attach the
 finished audio. Generated-media completions are delivered by the agent through
-the message tool; OpenClaw does not auto-post the file as a fallback if the
-completion agent writes only a private final reply. The completion wake
-explicitly warns the agent that normal final replies are private for this
-route.
+the message tool. If the requester session is inactive or its active wake
+fails, and some generated audio is still missing from message-tool delivery,
+OpenClaw sends an idempotent direct fallback with only the missing audio. The
+completion wake explicitly warns the agent that normal final replies are
+private for this route.
 
 <Note>
 The built-in shared tool only appears when at least one music-generation
@@ -94,13 +95,13 @@ Generate an energetic chiptune loop about launching a rocket at sunrise.
 
 ## Supported providers
 
-| Provider   | Default model                | Reference inputs | Supported controls                                        | Auth                                   |
-| ---------- | ---------------------------- | ---------------- | --------------------------------------------------------- | -------------------------------------- |
-| ComfyUI    | `workflow`                   | Up to 1 image    | Workflow-defined music or audio                           | `COMFY_API_KEY`, `COMFY_CLOUD_API_KEY` |
-| fal        | `fal-ai/minimax-music/v2.6`  | None             | `lyrics`, `instrumental`, `durationSeconds`, `format`     | `FAL_KEY` or `FAL_API_KEY`             |
-| Google     | `lyria-3-clip-preview`       | Up to 10 images  | `lyrics`, `instrumental`, `format`                        | `GEMINI_API_KEY`, `GOOGLE_API_KEY`     |
-| MiniMax    | `music-2.6`                  | None             | `lyrics`, `instrumental`, `durationSeconds`, `format=mp3` | `MINIMAX_API_KEY` or MiniMax OAuth     |
-| OpenRouter | `google/lyria-3-pro-preview` | Up to 1 image    | `lyrics`, `instrumental`, `durationSeconds`, `format`     | `OPENROUTER_API_KEY`                   |
+| Provider   | Default model                | Reference inputs | Supported controls                                    | Auth                                   |
+| ---------- | ---------------------------- | ---------------- | ----------------------------------------------------- | -------------------------------------- |
+| ComfyUI    | `workflow`                   | Up to 1 image    | Workflow-defined music or audio                       | `COMFY_API_KEY`, `COMFY_CLOUD_API_KEY` |
+| fal        | `fal-ai/minimax-music/v2.6`  | None             | `lyrics`, `instrumental`, `durationSeconds`, `format` | `FAL_KEY` or `FAL_API_KEY`             |
+| Google     | `lyria-3-clip-preview`       | Up to 10 images  | `lyrics`, `instrumental`, `format`                    | `GEMINI_API_KEY`, `GOOGLE_API_KEY`     |
+| MiniMax    | `music-2.6`                  | None             | `lyrics`, `instrumental`, `format=mp3`                | `MINIMAX_API_KEY` or MiniMax OAuth     |
+| OpenRouter | `google/lyria-3-pro-preview` | Up to 1 image    | `lyrics`, `instrumental`, `durationSeconds`, `format` | `OPENROUTER_API_KEY`                   |
 
 ### Capability matrix
 
@@ -274,8 +275,8 @@ explicit `model`, `primary`, and `fallbacks` entries.
   </Accordion>
   <Accordion title="MiniMax">
     Uses the batch `music_generation` endpoint. Supports prompt, optional
-    lyrics, instrumental mode, duration steering, and mp3 output through
-    either `minimax` API-key auth or `minimax-portal` OAuth.
+    lyrics, instrumental mode, and mp3 output through either `minimax`
+    API-key auth or `minimax-portal` OAuth.
   </Accordion>
   <Accordion title="OpenRouter">
     Uses OpenRouter chat completions audio output with streaming enabled. The

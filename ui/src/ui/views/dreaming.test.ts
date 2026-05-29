@@ -142,8 +142,16 @@ function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
     wikiMemoryPalaceLoading: false,
     wikiMemoryPalaceError: null,
     wikiMemoryPalace: {
-      totalItems: 2,
-      totalClaims: 3,
+      totalItems: 1,
+      totalPages: 2,
+      pageCounts: {
+        synthesis: 1,
+        entity: 0,
+        concept: 0,
+        source: 1,
+        report: 0,
+      },
+      totalClaims: 2,
       totalQuestions: 1,
       totalContradictions: 1,
       clusters: [
@@ -398,7 +406,13 @@ describe("dreaming view", () => {
     setDreamDiarySubTab("palace");
     const container = renderInto(buildProps());
     expect(compactText(container.querySelector(".dreams-diary__date"))).toBe(
-      "Syntheses · 1 pages · 2 claims · 1 questions · 1 contradictions",
+      "Vault · 2 pages · 2 claim rows · 1 open question · 1 contradiction",
+    );
+    expect(compactText(container.querySelectorAll(".dreams-diary__para")[0])).toBe(
+      "Full vault breakdown: Sources · 1 page; Syntheses · 1 page.",
+    );
+    expect(compactText(container.querySelectorAll(".dreams-diary__para")[1])).toContain(
+      "Selected section: Syntheses: 1 page · 2 claim rows · 1 open question on 1 page · 1 contradiction.",
     );
     const insight = container.querySelector(".dreams-diary__insight-card");
     expect(insight?.querySelector(".dreams-diary__insight-title")?.textContent).toBe(
@@ -410,6 +424,106 @@ describe("dreaming view", () => {
     expect(compactText(container.querySelector(".dreams-diary__explainer"))).toBe(
       "This is the compiled memory wiki surface the system can search and reason over; use it to inspect actual memory pages, claims, open questions, and contradictions rather than raw imported source chats.",
     );
+    setDreamDiarySubTab("dreams");
+    setDreamSubTab("scene");
+  });
+
+  it("keeps non-report memory palace card clicks on details", () => {
+    setDreamSubTab("diary");
+    setDreamDiarySubTab("palace");
+    const container = document.createElement("div");
+    let props: DreamingProps;
+    const rerender = () => render(renderDreaming(props), container);
+    props = buildProps({ onRequestUpdate: rerender });
+    rerender();
+
+    const card = expectElement(container, "[data-palace-page='syntheses/travel-system.md']");
+    card.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(textItems(container, ".dreams-diary__insight-list strong")).toContain("Page details");
+    setDreamDiarySubTab("dreams");
+    setDreamSubTab("scene");
+  });
+
+  it("opens report memory palace cards on primary click", async () => {
+    setDreamSubTab("diary");
+    setDreamDiarySubTab("palace");
+    const onOpenWikiPage = vi.fn().mockResolvedValue({
+      title: "Weekly stock report",
+      path: "reports/weekly-stock.md",
+      content: "# Weekly stock report\n\nSummary content.",
+      totalLines: 2,
+      truncated: false,
+    });
+    const container = document.createElement("div");
+    let props: DreamingProps;
+    const rerender = () => render(renderDreaming(props), container);
+    props = buildProps({
+      onOpenWikiPage,
+      onRequestUpdate: rerender,
+      wikiMemoryPalace: {
+        totalItems: 1,
+        totalPages: 1,
+        pageCounts: {
+          synthesis: 0,
+          entity: 0,
+          concept: 0,
+          source: 1,
+          report: 0,
+        },
+        totalClaims: 0,
+        totalQuestions: 0,
+        totalContradictions: 0,
+        clusters: [
+          {
+            key: "report",
+            label: "Reports",
+            itemCount: 1,
+            claimCount: 0,
+            questionCount: 0,
+            contradictionCount: 0,
+            items: [
+              {
+                pagePath: "reports/weekly-stock.md",
+                title: "Weekly stock report",
+                kind: "report",
+                claimCount: 0,
+                questionCount: 0,
+                contradictionCount: 0,
+                claims: [],
+                questions: [],
+                contradictions: [],
+                snippet: "Weekly stock summary.",
+                updatedAt: "2026-04-12T10:00:00.000Z",
+              },
+            ],
+          },
+        ],
+      },
+    });
+    rerender();
+
+    const card = expectElement(container, "[data-palace-page='reports/weekly-stock.md']");
+    card.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(onOpenWikiPage).toHaveBeenCalledWith("reports/weekly-stock.md");
+    expect(textItems(container, ".dreams-diary__insight-list strong")).not.toContain(
+      "Page details",
+    );
+    expect(compactText(container.querySelector(".dreams-diary__preview-title"))).toBe(
+      "Weekly stock report",
+    );
+    expect(compactText(container.querySelector(".dreams-diary__preview-body"))).toBe(
+      "# Weekly stock report Summary content.",
+    );
+
+    const closePreviewButton = container.querySelector<HTMLButtonElement>(
+      ".dreams-diary__preview-header .btn",
+    );
+    expect(closePreviewButton).toBeInstanceOf(HTMLButtonElement);
+    closePreviewButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     setDreamDiarySubTab("dreams");
     setDreamSubTab("scene");
   });

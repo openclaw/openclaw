@@ -1,3 +1,4 @@
+import { asOptionalRecord as toRecord } from "../shared/record-coerce.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -33,6 +34,8 @@ export type MessagePresentationButton = {
   priority?: number;
   /** Disable the button when the target channel supports disabled controls. */
   disabled?: boolean;
+  /** Keep this action available after a successful interaction when the target channel supports it. */
+  reusable?: boolean;
   /** Optional visual style hint; unsupported channels ignore or normalize it. */
   style?: InteractiveButtonStyle;
 };
@@ -173,13 +176,6 @@ function normalizePresentationTone(value: unknown): MessagePresentationTone | un
     : undefined;
 }
 
-function toRecord(raw: unknown): Record<string, unknown> | undefined {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    return undefined;
-  }
-  return raw as Record<string, unknown>;
-}
-
 function normalizeButton(raw: unknown): InteractiveReplyButton | undefined {
   const record = toRecord(raw);
   if (!record) {
@@ -207,6 +203,7 @@ function normalizeButton(raw: unknown): InteractiveReplyButton | undefined {
     ...(webAppUrl ? { webApp: { url: webAppUrl } } : {}),
     ...(priority !== undefined ? { priority } : {}),
     ...(record.disabled === true ? { disabled: true } : {}),
+    ...(record.reusable === true ? { reusable: true } : {}),
     style: normalizeButtonStyle(record.style),
   };
 }
@@ -365,6 +362,9 @@ export function presentationToInteractiveReply(
           }
           if (button.disabled === true) {
             interactiveButton.disabled = true;
+          }
+          if (button.reusable === true) {
+            interactiveButton.reusable = true;
           }
           return interactiveButton;
         });

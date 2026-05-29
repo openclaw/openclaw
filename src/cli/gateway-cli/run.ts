@@ -9,9 +9,15 @@ import type {
   GatewayTailscaleMode,
   ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "../../config/config.js";
-import { CONFIG_PATH, resolveGatewayPort, resolveStateDir } from "../../config/paths.js";
+import {
+  CONFIG_PATH,
+  normalizeStateDirEnv,
+  resolveGatewayPort,
+  resolveStateDir,
+} from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
+import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../../daemon/constants.js";
 import {
   defaultGatewayBindMode,
   isContainerEnvironment,
@@ -464,7 +470,11 @@ async function maybeWriteGatewayStartupFailureBundle(err: unknown): Promise<void
 }
 
 export async function runGatewayCommand(opts: GatewayRunOpts) {
+  normalizeStateDirEnv(process.env);
   installQaParentWatchdog();
+  if (process.env.OPENCLAW_SERVICE_MARKER?.trim()) {
+    process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV] = String(process.pid);
+  }
   const isDevProfile = normalizeOptionalLowercaseString(process.env.OPENCLAW_PROFILE) === "dev";
   const devMode = Boolean(opts.dev) || isDevProfile;
   if (opts.reset && !devMode) {
@@ -797,6 +807,9 @@ export async function runGatewayCommand(opts: GatewayRunOpts) {
   gatewayLog.info("starting...");
   startupTrace.mark("cli.gateway-loop");
   let startupConfigSnapshotReadForNextStart = startupConfigSnapshotRead;
+  const deferStartupSidecars =
+    isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
+    isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS);
   const startLoop = async () =>
     await runGatewayLoop({
       runtime: defaultRuntime,
@@ -813,6 +826,7 @@ export async function runGatewayCommand(opts: GatewayRunOpts) {
           ...(startupConfigSnapshotReadForThisStart
             ? { startupConfigSnapshotRead: startupConfigSnapshotReadForThisStart }
             : {}),
+          ...(deferStartupSidecars ? { deferStartupSidecars: true } : {}),
         });
       },
     });
@@ -857,8 +871,9 @@ export async function runGatewayCommand(opts: GatewayRunOpts) {
   }
 }
 
-export const __testing = {
+export const testing = {
   normalizeGatewayHealthProbeHost,
   resolveGatewayLockErrorExitCode,
   runGatewayLoopWithSupervisedLockRecovery,
 };
+export { testing as __testing };

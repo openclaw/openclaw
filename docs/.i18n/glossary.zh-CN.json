@@ -4,6 +4,14 @@
     "target": "OpenClaw"
   },
   {
+    "source": "macOS platform notes",
+    "target": "macOS 平台说明"
+  },
+  {
+    "source": "Logging",
+    "target": "日志"
+  },
+  {
     "source": "iMessage",
     "target": "iMessage"
   },
@@ -101,7 +109,7 @@
   },
   {
     "source": "Status",
-    "target": "Status"
+    "target": "状态"
   },
   {
     "source": "Gateway",
@@ -166,6 +174,26 @@
   {
     "source": "Agent harness plugins",
     "target": "Agent harness plugins"
+  },
+  {
+    "source": "Agent harness plugins (SDK reference)",
+    "target": "Agent harness plugins (SDK reference)"
+  },
+  {
+    "source": "Copilot SDK harness",
+    "target": "Copilot SDK harness"
+  },
+  {
+    "source": "Copilot plugin",
+    "target": "Copilot plugin"
+  },
+  {
+    "source": "GitHub Copilot agent runtime",
+    "target": "GitHub Copilot agent runtime"
+  },
+  {
+    "source": "copilot",
+    "target": "copilot"
   },
   {
     "source": "Agent loop",
@@ -996,7 +1024,87 @@
     "target": "ACP Agents 设置"
   },
   {
+    "source": "Policy CLI",
+    "target": "Policy CLI"
+  },
+  {
+    "source": "Doctor lint mode",
+    "target": "Doctor lint mode"
+  },
+  {
     "source": "ds4 (local DeepSeek V4)",
     "target": "ds4（本地 DeepSeek V4）"
+  },
+  {
+    "source": "Dynamic Agent Creation",
+    "target": "动态 Agent 创建"
+  },
+  {
+    "source": "dynamic agent creation",
+    "target": "动态 Agent 创建"
+  },
+  {
+    "source": "multi-user isolation",
+    "target": "多用户隔离"
+  },
+  {
+    "source": "workspaceTemplate",
+    "target": "工作空间模板"
+  },
+  {
+    "source": "agentDirTemplate",
+    "target": "Agent 目录模板"
+  },
+  {
+    "source": "Per-user agent isolation",
+    "target": "每用户 Agent 隔离"
+  },
+  {
+    "source": "Gateway exposure runbook",
+    "target": "Gateway 暴露运行手册"
+  },
+  {
+    "source": "Meeting Notes CLI",
+    "target": "Meeting Notes CLI"
+  },
+  {
+    "source": "Discord voice",
+    "target": "Discord 语音"
+  },
+  {
+    "source": "Plugin management",
+    "target": "插件管理"
+  },
+  {
+    "source": "Plugin architecture",
+    "target": "插件架构"
+  },
+  {
+    "source": "Agent runtime architecture",
+    "target": "Agent runtime architecture"
+  },
+  {
+    "source": "OpenClaw agent runtime workflow",
+    "target": "OpenClaw agent runtime workflow"
+  },
+  {
+    "source": "OpenClaw agent runtime architecture",
+    "target": "OpenClaw agent runtime architecture"
+  },
+  {
+    "source": "Install and Configure Plugins",
+    "target": "安装和配置插件"
+  },
+  {
+    "source": "Building Plugins",
+    "target": "Building Plugins"
+  },
+  {
+    "source": "Plugin Manifest",
+    "target": "Plugin Manifest"
+  },
+  {
+    "source": "Z.AI (GLM)",
+    "target": "Z.AI (GLM)"
   }
 ]

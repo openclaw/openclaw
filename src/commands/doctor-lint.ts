@@ -1,5 +1,6 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { readConfigFileSnapshot } from "../config/config.js";
+import { registerBundledHealthChecks } from "../flows/bundled-health-checks.js";
 import {
   configValidationIssuesToHealthFindings,
   registerCoreHealthChecks,
@@ -22,6 +23,7 @@ export interface DoctorLintCliOptions {
   readonly severityMin?: string;
   readonly skipIds?: readonly string[];
   readonly onlyIds?: readonly string[];
+  readonly allowExec?: boolean;
 }
 
 function detectMode(opts: DoctorLintCliOptions): "human" | "json" {
@@ -68,8 +70,10 @@ export async function runDoctorLintCli(
     runtime,
     cfg: snapshot.config,
     cwd: resolveAgentWorkspaceDir(snapshot.config, resolveDefaultAgentId(snapshot.config)),
+    allowExecSecretRefs: opts.allowExec === true,
     ...(snapshot.path !== undefined ? { configPath: snapshot.path } : {}),
   };
+  registerBundledHealthChecks({ cfg: snapshot.config, cwd: ctx.cwd });
 
   const runOpts: DoctorLintRunOptions = {
     ...(opts.skipIds && opts.skipIds.length > 0 ? { skipIds: opts.skipIds } : {}),
@@ -133,6 +137,8 @@ function toJsonFinding(f: HealthFinding): Record<string, unknown> {
     ...(f.line !== undefined ? { line: f.line } : {}),
     ...(f.column !== undefined ? { column: f.column } : {}),
     ...(f.ocPath !== undefined ? { ocPath: f.ocPath } : {}),
+    ...(f.target !== undefined ? { target: f.target } : {}),
+    ...(f.requirement !== undefined ? { requirement: f.requirement } : {}),
     ...(f.fixHint !== undefined ? { fixHint: f.fixHint } : {}),
   };
 }

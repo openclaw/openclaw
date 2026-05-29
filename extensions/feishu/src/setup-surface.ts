@@ -13,6 +13,7 @@ import {
   type OpenClawConfig,
   type SecretInput,
 } from "openclaw/plugin-sdk/setup";
+import { normalizeOptionalString as normalizeString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDefaultFeishuAccountId, resolveFeishuAccount } from "./accounts.js";
 import type { AppRegistrationResult } from "./app-registration.js";
 import type { FeishuConfig, FeishuDomain } from "./types.js";
@@ -21,18 +22,11 @@ const t = createSetupTranslator();
 
 const channel = "feishu" as const;
 const SCAN_TO_CREATE_TP = "ob_cli_app";
+const FEISHU_SETUP_FLOW_KEY = "_flow";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function normalizeString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
-}
 
 function isFeishuConfigured(cfg: OpenClawConfig): boolean {
   const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
@@ -579,12 +573,12 @@ export const feishuSetupWizard: ChannelSetupWizard = {
 
     if (alreadyConfigured) {
       return {
-        credentialValues: { ...credentialValues, _flow: "edit" },
+        credentialValues: { ...credentialValues, [FEISHU_SETUP_FLOW_KEY]: "edit" },
       };
     }
 
     return {
-      credentialValues: { ...credentialValues, _flow: "new" },
+      credentialValues: { ...credentialValues, [FEISHU_SETUP_FLOW_KEY]: "new" },
     };
   },
 
@@ -594,7 +588,7 @@ export const feishuSetupWizard: ChannelSetupWizard = {
   // finalize: run the appropriate flow
   // -------------------------------------------------------------------------
   finalize: async ({ cfg, prompter, options, credentialValues }) => {
-    const flow = credentialValues._flow ?? "new";
+    const flow = credentialValues[FEISHU_SETUP_FLOW_KEY] ?? "new";
 
     if (flow === "edit") {
       const result = await runEditFlow({ cfg, prompter, options });

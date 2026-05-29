@@ -54,6 +54,7 @@ import { loadPresence, type PresenceState } from "./controllers/presence.ts";
 import { loadSessions, type SessionsState } from "./controllers/sessions.ts";
 import { loadSkills, type SkillsState } from "./controllers/skills.ts";
 import { loadUsage, type UsageState } from "./controllers/usage.ts";
+import { resolveCronJobLastRunStatus } from "./cron-status.ts";
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
 import { isMonitoredAuthProvider } from "./model-auth-helpers.ts";
 import {
@@ -209,14 +210,14 @@ declare global {
 }
 
 function applyNativeControlAuth(host: SettingsHost) {
-  const nativeAuth = window.__OPENCLAW_NATIVE_CONTROL_AUTH__;
+  const nativeAuth = window["__OPENCLAW_NATIVE_CONTROL_AUTH__"];
   if (!nativeAuth) {
     return;
   }
   try {
-    delete window.__OPENCLAW_NATIVE_CONTROL_AUTH__;
+    delete window["__OPENCLAW_NATIVE_CONTROL_AUTH__"];
   } catch {
-    window.__OPENCLAW_NATIVE_CONTROL_AUTH__ = undefined;
+    window["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = undefined;
   }
 
   const gatewayUrl = normalizeOptionalString(nativeAuth.gatewayUrl);
@@ -423,6 +424,8 @@ export async function refreshActiveTab(host: SettingsHost) {
       case "overview":
         await loadOverview(host);
         break;
+      case "activity":
+        break;
       case "channels":
         await loadChannelsTab(host);
         break;
@@ -488,7 +491,7 @@ export function inferBasePath() {
   if (typeof window === "undefined") {
     return "";
   }
-  const configured = window.__OPENCLAW_CONTROL_UI_BASE_PATH__;
+  const configured = window["__OPENCLAW_CONTROL_UI_BASE_PATH__"];
   const normalizedConfigured = normalizeOptionalString(configured);
   if (normalizedConfigured) {
     return normalizeBasePath(normalizedConfigured);
@@ -703,7 +706,11 @@ export function syncUrlWithTab(host: SettingsHost, tab: Tab, replace: boolean) {
   updateBrowserHistory(url, replace);
 }
 
-export function syncUrlWithSessionKey(_host: SettingsHost, sessionKey: string, replace: boolean) {
+export function syncUrlWithSessionKey(
+  _hostValue: SettingsHost,
+  sessionKey: string,
+  replace: boolean,
+) {
   const href = typeof window === "undefined" ? undefined : window.location?.href;
   if (!href) {
     return;
@@ -735,7 +742,9 @@ export async function loadOverview(host: SettingsHost, opts?: { refresh?: boolea
   void Promise.allSettled([
     loadDebug(app),
     loadSkills(app),
-    loadUsage(app),
+    // The primary overview loaders can finish after the user has navigated away.
+    // Avoid starting the expensive usage RPC for stale overview refreshes.
+    isCurrentOverviewRefresh() ? loadUsage(app) : Promise.resolve(),
     loadOverviewLogs(app),
     // `refresh: true` bypasses the gateway's 60s auth-status cache so a
     // user-initiated refresh surfaces post-re-auth state immediately.
@@ -857,7 +866,7 @@ function buildAttentionItems(host: SettingsAppHost) {
   }
 
   const cronJobs = host.cronJobs ?? [];
-  const failedCron = cronJobs.filter((j) => j.state?.lastStatus === "error");
+  const failedCron = cronJobs.filter((j) => resolveCronJobLastRunStatus(j) === "error");
   if (failedCron.length > 0) {
     items.push({
       severity: "error",
@@ -934,6 +943,7 @@ export async function loadCron(host: SettingsHost) {
   host.controlUiCronRefreshSeq = cronSeq;
   const isCurrentCronRefresh = () =>
     host.controlUiCronRefreshSeq === cronSeq && host.tab === "cron";
+  const useTableFilters = host.tab === "cron";
   const runsStartedAtMs = controlUiNowMs();
   const runsRefresh = loadCronRuns(app, activeCronJobId)
     .catch(() => "error" as const)
@@ -953,5 +963,9 @@ export async function loadCron(host: SettingsHost) {
       );
     });
   void runsRefresh;
-  await Promise.all([loadChannels(app, false), loadCronStatus(app), loadCronJobsPage(app)]);
+  await Promise.all([
+    loadChannels(app, false),
+    loadCronStatus(app),
+    loadCronJobsPage(app, { tableFilters: useTableFilters }),
+  ]);
 }

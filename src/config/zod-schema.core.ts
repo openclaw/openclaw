@@ -1,5 +1,6 @@
 import path from "node:path";
 import { z } from "zod";
+import { normalizeProviderId } from "../agents/provider-id.js";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
 import {
   formatExecSecretRefIdValidationMessage,
@@ -8,7 +9,7 @@ import {
 } from "../secrets/ref-contract.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
 import type { ModelCompatConfig } from "./types.models.js";
-import { MODEL_APIS } from "./types.models.js";
+import { MODEL_APIS, MODEL_THINKING_FORMATS } from "./types.models.js";
 import type { MediaToolsConfig } from "./types.tools.js";
 import { createAllowDenyChannelRulesSchema } from "./zod-schema.allowdeny.js";
 import { sensitive } from "./zod-schema.sensitive.js";
@@ -201,17 +202,7 @@ const ModelCompatSchema = z
     maxTokensField: z
       .union([z.literal("max_completion_tokens"), z.literal("max_tokens")])
       .optional(),
-    thinkingFormat: z
-      .union([
-        z.literal("openai"),
-        z.literal("openrouter"),
-        z.literal("deepseek"),
-        z.literal("together"),
-        z.literal("qwen"),
-        z.literal("qwen-chat-template"),
-        z.literal("zai"),
-      ])
-      .optional(),
+    thinkingFormat: z.enum(MODEL_THINKING_FORMATS).optional(),
     requiresToolResultName: z.boolean().optional(),
     requiresAssistantAfterToolResult: z.boolean().optional(),
     requiresThinkingAsText: z.boolean().optional(),
@@ -316,6 +307,22 @@ const ModelAgentRuntimePolicySchema = z
   .strict()
   .optional();
 
+const ModelImageInputSchema = z
+  .object({
+    maxBytes: z.number().int().positive().optional(),
+    maxPixels: z.number().int().positive().optional(),
+    maxSidePx: z.number().int().positive().optional(),
+    preferredSidePx: z.number().int().positive().optional(),
+    tokenMode: z.union([z.literal("tile"), z.literal("detail"), z.literal("provider")]).optional(),
+  })
+  .strict();
+
+const ModelMediaInputSchema = z
+  .object({
+    image: ModelImageInputSchema.optional(),
+  })
+  .strict();
+
 const ModelDefinitionSchema = z
   .object({
     id: z.string().min(1),
@@ -357,6 +364,7 @@ const ModelDefinitionSchema = z
     agentRuntime: ModelAgentRuntimePolicySchema,
     headers: z.record(z.string(), z.string()).optional(),
     compat: ModelCompatSchema,
+    mediaInput: ModelMediaInputSchema.optional(),
     metadataSource: z.literal("models-add").optional(),
   })
   .strict();
@@ -374,9 +382,77 @@ const ModelProviderLocalServiceSchema = z
   .strict()
   .optional();
 
+const BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS = new Set([
+  "amazon-bedrock",
+  "amazon-bedrock-mantle",
+  "anthropic",
+  "anthropic-vertex",
+  "arcee",
+  "byteplus",
+  "byteplus-plan",
+  "cerebras",
+  "chutes",
+  "cloudflare-ai-gateway",
+  "codex",
+  "comfy",
+  "copilot-proxy",
+  "dashscope",
+  "deepinfra",
+  "deepseek",
+  "fal",
+  "fireworks",
+  "github-copilot",
+  "google",
+  "google-antigravity",
+  "google-gemini-cli",
+  "google-vertex",
+  "groq",
+  "huggingface",
+  "kilocode",
+  "kimi",
+  "kimi-coding",
+  "litellm",
+  "lmstudio",
+  "microsoft-foundry",
+  "minimax",
+  "minimax-portal",
+  "mistral",
+  "modelstudio",
+  "moonshot",
+  "nvidia",
+  "ollama",
+  "openai",
+  "openai-codex",
+  "opencode",
+  "opencode-go",
+  "openrouter",
+  "qianfan",
+  "qwen",
+  "qwencloud",
+  "sglang",
+  "stepfun",
+  "stepfun-plan",
+  "synthetic",
+  "tencent-tokenhub",
+  "together",
+  "venice",
+  "vercel-ai-gateway",
+  "vllm",
+  "volcengine",
+  "volcengine-plan",
+  "vydra",
+  "xai",
+  "xiaomi",
+  "zai",
+]);
+
+export function isBuiltInModelProviderOverlayId(providerId: string): boolean {
+  return BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS.has(normalizeProviderId(providerId));
+}
+
 const ModelProviderSchema = z
   .object({
-    baseUrl: z.string().min(1),
+    baseUrl: z.string().min(1).optional(),
     apiKey: SecretInputSchema.optional().register(sensitive),
     auth: z
       .union([z.literal("api-key"), z.literal("aws-sdk"), z.literal("oauth"), z.literal("token")])
@@ -386,6 +462,7 @@ const ModelProviderSchema = z
     contextTokens: z.number().int().positive().optional(),
     maxTokens: z.number().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
+    region: z.string().min(1).optional(),
     injectNumCtxForOpenAICompat: z.boolean().optional(),
     params: z.record(z.string(), z.unknown()).optional(),
     agentRuntime: ModelAgentRuntimePolicySchema,
@@ -393,9 +470,35 @@ const ModelProviderSchema = z
     headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
     authHeader: z.boolean().optional(),
     request: ConfiguredModelProviderRequestSchema,
-    models: z.array(ModelDefinitionSchema),
+    models: z.array(ModelDefinitionSchema).optional(),
   })
   .strict();
+
+const ModelProvidersSchema = z
+  .record(z.string(), ModelProviderSchema)
+  .superRefine((providers, ctx) => {
+    for (const [providerId, provider] of Object.entries(providers)) {
+      if (isBuiltInModelProviderOverlayId(providerId)) {
+        continue;
+      }
+      if (!provider.baseUrl) {
+        ctx.addIssue({
+          code: "custom",
+          path: [providerId, "baseUrl"],
+          message:
+            "custom model providers must declare baseUrl; provider overlays without baseUrl are only supported for bundled providers",
+        });
+      }
+      if (!Array.isArray(provider.models)) {
+        ctx.addIssue({
+          code: "custom",
+          path: [providerId, "models"],
+          message:
+            "custom model providers must declare models; provider overlays without models are only supported for bundled providers",
+        });
+      }
+    }
+  });
 
 const ModelPricingConfigSchema = z
   .object({
@@ -407,7 +510,7 @@ const ModelPricingConfigSchema = z
 export const ModelsConfigSchema = z
   .object({
     mode: z.union([z.literal("merge"), z.literal("replace")]).optional(),
-    providers: z.record(z.string(), ModelProviderSchema).optional(),
+    providers: ModelProvidersSchema.optional(),
     pricing: ModelPricingConfigSchema,
   })
   .strict()
@@ -742,12 +845,14 @@ const QueueModeBySurfaceSchema = z
     telegram: QueueModeSchema.optional(),
     discord: QueueModeSchema.optional(),
     irc: QueueModeSchema.optional(),
+    googlechat: QueueModeSchema.optional(),
     slack: QueueModeSchema.optional(),
     mattermost: QueueModeSchema.optional(),
     signal: QueueModeSchema.optional(),
     imessage: QueueModeSchema.optional(),
     msteams: QueueModeSchema.optional(),
     webchat: QueueModeSchema.optional(),
+    matrix: QueueModeSchema.optional(),
   })
   .strict()
   .optional();

@@ -160,7 +160,7 @@ describe("cli session history", () => {
         role: "user",
       });
       expect(String(messages[0]?.content)).toContain("[Thu 2026-03-26 16:29 GMT] hi");
-      expectFields(messages[0]?.__openclaw, {
+      expectFields(messages[0]?.["__openclaw"], {
         importedFrom: "claude-cli",
         externalId: "user-1",
         cliSessionId: sessionId,
@@ -176,7 +176,7 @@ describe("cli session history", () => {
         output: 7,
         cacheRead: 22,
       });
-      expectFields(messages[1]?.__openclaw, {
+      expectFields(messages[1]?.["__openclaw"], {
         importedFrom: "claude-cli",
         externalId: "assistant-1",
         cliSessionId: sessionId,
@@ -275,6 +275,45 @@ describe("cli session history", () => {
     });
   });
 
+  it("does not dedupe external ids from different imported sessions", () => {
+    const localMessages = [
+      {
+        role: "user",
+        content: "hello from first session",
+        __openclaw: {
+          importedFrom: "claude-cli",
+          externalId: "same-id",
+          cliSessionId: "session-1",
+        },
+      },
+    ];
+    const importedMessages = [
+      {
+        role: "user",
+        content: "hello from second session",
+        __openclaw: {
+          importedFrom: "claude-cli",
+          externalId: "same-id",
+          cliSessionId: "session-2",
+        },
+      },
+    ];
+
+    const merged = mergeImportedChatHistoryMessages({ localMessages, importedMessages });
+    expect(merged).toHaveLength(2);
+  });
+
+  it("keeps untimestamped local messages in place when importing timestamped history", () => {
+    const localMessages = [{ role: "user", content: "local without timestamp" }];
+    const importedMessages = [
+      { role: "assistant", content: "older imported", timestamp: Date.parse("2020-01-01") },
+    ];
+
+    const merged = mergeImportedChatHistoryMessages({ localMessages, importedMessages });
+    expect(merged[0]).toBe(localMessages[0]);
+    expect(merged[1]).toBe(importedMessages[0]);
+  });
+
   it("augments chat history when a session has a claude-cli binding", async () => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId }) => {
       const messages = augmentChatHistoryWithCliSessionImports({
@@ -333,7 +372,8 @@ describe("cli session history", () => {
         const record = readRecord(message);
         return (
           record.role === "user" &&
-          (record.__openclaw as { cliSessionId?: unknown } | undefined)?.cliSessionId === sessionId
+          (record["__openclaw"] as { cliSessionId?: unknown } | undefined)?.cliSessionId ===
+            sessionId
         );
       });
       if (!importedUser) {

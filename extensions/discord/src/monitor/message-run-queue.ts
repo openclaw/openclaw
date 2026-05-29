@@ -1,4 +1,4 @@
-import { createChannelRunQueue } from "openclaw/plugin-sdk/channel-lifecycle";
+import { createChannelRunQueue } from "openclaw/plugin-sdk/channel-outbound";
 import type { ClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -19,7 +19,7 @@ type DiscordMessageRunQueueParams = {
   setStatus?: DiscordMonitorStatusSink;
   abortSignal?: AbortSignal;
   replayGuard?: ClaimableDedupe;
-  __testing?: DiscordMessageRunQueueTestingHooks;
+  testing?: DiscordMessageRunQueueTestingHooks;
 };
 
 type DiscordMessageRunQueue = {
@@ -81,7 +81,7 @@ export function createDiscordMessageRunQueue(
     setStatus: params.setStatus,
     abortSignal: params.abortSignal,
     onError: (error) => {
-      params.runtime.error?.(danger(`discord message run failed: ${String(error)}`));
+      params.runtime.error(danger(`discord message run failed: ${String(error)}`));
     },
   });
 
@@ -92,7 +92,7 @@ export function createDiscordMessageRunQueue(
           job,
           lifecycleSignal,
           replayGuard,
-          testing: params.__testing,
+          testing: params.testing,
         });
       });
     },

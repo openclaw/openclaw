@@ -13,7 +13,8 @@ import {
   waitProviderOperationPollInterval,
   type ProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   GeneratedVideoAsset,
   VideoGenerationProvider,
@@ -22,7 +23,7 @@ import type {
 
 const DEFAULT_XAI_VIDEO_BASE_URL = "https://api.x.ai/v1";
 const DEFAULT_XAI_VIDEO_MODEL = "grok-imagine-video";
-const DEFAULT_TIMEOUT_MS = 120_000;
+const DEFAULT_TIMEOUT_MS = 600_000;
 const POLL_INTERVAL_MS = 5_000;
 const MAX_POLL_ATTEMPTS = 120;
 const XAI_VIDEO_ASPECT_RATIOS = new Set(["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"]);
@@ -33,6 +34,7 @@ const XAI_VIDEO_TERMINAL_FAILURE_STATUSES = new Set(["failed", "error", "expired
 const XAI_VIDEO_DEFAULT_DURATION_SECONDS = 8;
 const XAI_VIDEO_DEFAULT_ASPECT_RATIO = "16:9";
 const XAI_VIDEO_DEFAULT_RESOLUTION = "720p";
+const DEFAULT_GENERATED_VIDEO_MAX_BYTES = 16 * 1024 * 1024;
 
 type XaiVideoCreateResponse = {
   request_id?: string;
@@ -62,10 +64,6 @@ type VideoGenerationSourceInput = {
   mimeType?: string;
   role?: string;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
 
 async function readXaiVideoJson(response: Response): Promise<Record<string, unknown>> {
   let payload: unknown;
@@ -115,6 +113,14 @@ function resolveXaiVideoBaseUrl(req: VideoGenerationRequest): string {
   return (
     normalizeOptionalString(req.cfg?.models?.providers?.xai?.baseUrl) ?? DEFAULT_XAI_VIDEO_BASE_URL
   );
+}
+
+function resolveGeneratedVideoMaxBytes(req: VideoGenerationRequest): number {
+  const configured = req.cfg.agents?.defaults?.mediaMaxMb;
+  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
+    return Math.floor(configured * 1024 * 1024);
+  }
+  return DEFAULT_GENERATED_VIDEO_MAX_BYTES;
 }
 
 function toDataUrl(buffer: Buffer, mimeType: string): string {
@@ -346,6 +352,7 @@ async function downloadXaiVideo(params: {
   url: string;
   timeoutMs?: ProviderOperationTimeoutMs;
   fetchFn: typeof fetch;
+  maxBytes: number;
 }): Promise<GeneratedVideoAsset> {
   const response = await fetchProviderDownloadResponse({
     url: params.url,
@@ -356,9 +363,12 @@ async function downloadXaiVideo(params: {
     requestFailedMessage: "xAI generated video download failed",
   });
   const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
-  const arrayBuffer = await response.arrayBuffer();
+  const buffer = await readResponseWithLimit(response, params.maxBytes, {
+    onOverflow: ({ maxBytes }) =>
+      new Error(`xAI generated video download exceeds ${maxBytes} bytes`),
+  });
   return {
-    buffer: Buffer.from(arrayBuffer),
+    buffer,
     mimeType,
     fileName: `video-1.${extensionForMime(mimeType)?.slice(1) ?? "mp4"}`,
   };
@@ -369,6 +379,7 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
     id: "xai",
     label: "xAI",
     defaultModel: DEFAULT_XAI_VIDEO_MODEL,
+    defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
     models: [DEFAULT_XAI_VIDEO_MODEL],
     isConfigured: ({ agentDir }) =>
       isProviderApiKeyConfigured({
@@ -479,6 +490,7 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
             defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
           }),
           fetchFn,
+          maxBytes: resolveGeneratedVideoMaxBytes(req),
         });
         return {
           videos: [video],

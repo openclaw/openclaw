@@ -8,6 +8,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 import { parseStrictIntegerOption } from "./lib/dev-tooling-safety.ts";
+import { delay, stopChild, type StopChildResult } from "./lib/gateway-bench-child.ts";
 
 type GatewayBenchCase = {
   config: Record<string, unknown>;
@@ -98,6 +99,7 @@ type GatewayRestartSample = {
   childExitCode: number | null;
   childSignal: string | null;
   events: BenchmarkEvent[];
+  exitedBeforeTeardown: boolean;
   failureCode: GatewayRestartFailureCode | null;
   firstOutputMs: number | null;
   initialGatewayReadyLogLine: string | null;
@@ -144,6 +146,7 @@ type PluginFixtureResult = {
 };
 
 type CliOptions = {
+  allowFailures: boolean;
   cases: GatewayBenchCase[];
   entry: string;
   json: boolean;
@@ -294,6 +297,7 @@ function resolveCases(caseIds: string[]): GatewayBenchCase[] {
 
 function parseOptions(): CliOptions {
   return {
+    allowFailures: hasFlag("--allow-failures"),
     cases: resolveCases(parseRepeatableFlag("--case")),
     entry: resolveEntry(parseFlagValue("--entry")),
     json: hasFlag("--json"),
@@ -323,10 +327,11 @@ Options:
   --runs <n>               Measured process samples per case (default: ${DEFAULT_RUNS})
   --warmup <n>             Warmup process samples per case (default: ${DEFAULT_WARMUP})
   --restarts <n>           In-process restarts per process sample (default: ${DEFAULT_RESTARTS})
-  --timeout-ms <ms>        Per-process timeout (default: ${DEFAULT_TIMEOUT_MS})
+  --timeout-ms <ms>        Timeout for initial startup and each restart (default: ${DEFAULT_TIMEOUT_MS})
   --post-ready-delay-ms <ms> Resource snapshot delay after next ready (default: ${DEFAULT_POST_READY_DELAY_MS})
   --output <path>          Write machine-readable JSON to a file
   --json                   Emit machine-readable JSON
+  --allow-failures         Exit 0 even when restart failures are measured
   --help, -h               Show this text
 
 Case ids:
@@ -754,10 +759,6 @@ function requestStatus(port: number, pathname: string): Promise<number> {
   });
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 function writePluginFixtures(
   root: string,
   count: number,
@@ -864,38 +865,6 @@ function writeRestartIntent(env: NodeJS.ProcessEnv, targetPid: number, reason: s
   } catch {
     return false;
   }
-}
-
-async function stopChild(child: ChildProcessWithoutNullStreams): Promise<{
-  exitCode: number | null;
-  signal: string | null;
-}> {
-  if (child.exitCode != null || child.signalCode != null) {
-    return { exitCode: child.exitCode, signal: child.signalCode };
-  }
-  const exited = new Promise<{ exitCode: number | null; signal: string | null }>((resolve) => {
-    child.once("exit", (exitCode, signal) => resolve({ exitCode, signal }));
-  });
-  killProcessTree(child, "SIGTERM");
-  const timeout = delay(2000).then(() => {
-    if (child.exitCode == null && child.signalCode == null) {
-      killProcessTree(child, "SIGKILL");
-    }
-    return exited;
-  });
-  return Promise.race([exited, timeout]);
-}
-
-function killProcessTree(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): void {
-  if (process.platform !== "win32" && child.pid !== undefined) {
-    try {
-      process.kill(-child.pid, signal);
-      return;
-    } catch {
-      // Fall back to the direct child below.
-    }
-  }
-  child.kill(signal);
 }
 
 function readProcessRssMb(pid: number | undefined): number | null {
@@ -1194,6 +1163,15 @@ function resolveRestartDeadlineFailure(childExited: boolean): GatewayRestartFail
   return childExited ? "restart_child_exited" : "restart_deadline_timeout";
 }
 
+function resolveSampleExitFailure(exit: StopChildResult): GatewayRestartFailureCode | null {
+  if (!exit.exitedBeforeTeardown) {
+    return null;
+  }
+  return exit.exitCode !== null && exit.exitCode !== 0
+    ? "child_nonzero_exit"
+    : "restart_child_exited";
+}
+
 function computeResourceSlope(iterations: RestartIteration[]): ResourceSlope {
   return {
     activeHandlesCountPerRestart: slope(
@@ -1254,6 +1232,10 @@ async function waitForIterationCondition(
   return predicate();
 }
 
+function resolvePhaseDeadlineAt(startedAt: number, timeoutMs: number): number {
+  return startedAt + timeoutMs;
+}
+
 async function runGatewaySample(options: {
   benchCase: GatewayBenchCase;
   entry: string;
@@ -1267,7 +1249,7 @@ async function runGatewaySample(options: {
   const configPath = writeConfig(root, options.benchCase);
   const env = sanitizedEnv(root, configPath, options.benchCase);
   const sampleStartAt = performance.now();
-  const deadlineAt = sampleStartAt + options.timeoutMs;
+  const initialDeadlineAt = resolvePhaseDeadlineAt(sampleStartAt, options.timeoutMs);
   const initialStartupTrace: Record<string, number> = {};
   const events: BenchmarkEvent[] = [{ ms: 0, type: "process.spawn.start" }];
   const output: string[] = [];
@@ -1385,7 +1367,7 @@ async function runGatewaySample(options: {
 
   let failureCode: GatewayRestartFailureCode | null = null;
   const initialHealthz = await waitForProbeReady({
-    deadlineAt,
+    deadlineAt: initialDeadlineAt,
     isDone: () => childExited,
     path: "/healthz",
     port,
@@ -1397,7 +1379,7 @@ async function runGatewaySample(options: {
   const initialReadyz =
     failureCode === null
       ? await waitForProbeReady({
-          deadlineAt,
+          deadlineAt: initialDeadlineAt,
           isDone: () => childExited,
           path: "/readyz",
           port,
@@ -1412,7 +1394,7 @@ async function runGatewaySample(options: {
     flushOutputLineBuffers(outputBuffers, onLine, performance.now() - sampleStartAt);
     await waitForIterationCondition(
       () => hasInitialReadyLogs({ initialGatewayReadyLogMs, initialHttpListenLogMs }),
-      deadlineAt,
+      initialDeadlineAt,
     );
     flushOutputLineBuffers(outputBuffers, onLine, performance.now() - sampleStartAt);
     if (!hasInitialReadyLogs({ initialGatewayReadyLogMs, initialHttpListenLogMs })) {
@@ -1423,7 +1405,7 @@ async function runGatewaySample(options: {
   const iterations: RestartIteration[] = [];
   if (failureCode === null) {
     for (let index = 1; index <= options.restarts; index += 1) {
-      if (performance.now() >= deadlineAt || childExited) {
+      if (childExited) {
         failureCode = resolveRestartDeadlineFailure(childExited);
         break;
       }
@@ -1453,10 +1435,11 @@ async function runGatewaySample(options: {
       }
       const signalSentAt = performance.now();
       iteration.signalSentMs = signalSentAt - sampleStartAt;
+      const iterationDeadlineAt = resolvePhaseDeadlineAt(signalSentAt, options.timeoutMs);
       events.push({ iteration: index, ms: iteration.signalSentMs, type: "restart-signal-sent" });
 
       const healthzPromise = waitForRestartProbe({
-        deadlineAt,
+        deadlineAt: iterationDeadlineAt,
         events,
         isDone: () => hasRestartReadySignal(iteration),
         isProcessDone: () => childExited,
@@ -1467,7 +1450,7 @@ async function runGatewaySample(options: {
         signalSentAt,
       });
       const readyzPromise = waitForRestartProbe({
-        deadlineAt,
+        deadlineAt: iterationDeadlineAt,
         events,
         isDone: () => hasRestartReadySignal(iteration),
         isProcessDone: () => childExited,
@@ -1481,10 +1464,10 @@ async function runGatewaySample(options: {
       iteration.healthz = healthz;
       iteration.readyz = readyz;
       iteration.resourceSnapshots.push(snapshotResources(child, sampleStartAt, "after-next-ready"));
-      await waitForIterationCondition(() => hasRestartReadySignal(iteration), deadlineAt);
-      if (options.postReadyDelayMs > 0 && performance.now() < deadlineAt) {
+      await waitForIterationCondition(() => hasRestartReadySignal(iteration), iterationDeadlineAt);
+      if (options.postReadyDelayMs > 0 && performance.now() < iterationDeadlineAt) {
         await delay(
-          Math.min(options.postReadyDelayMs, Math.max(0, deadlineAt - performance.now())),
+          Math.min(options.postReadyDelayMs, Math.max(0, iterationDeadlineAt - performance.now())),
         );
       }
       iteration.resourceSnapshots.push(
@@ -1516,13 +1499,12 @@ async function runGatewaySample(options: {
   const exit = await stopChild(child);
   clearInterval(rssTimer);
   sampleRss();
-  await childExitPromise.catch(() => null);
+  // stopChild is the bounded teardown wait; the raw exit promise may never settle.
+  void childExitPromise.catch(() => null);
   flushOutputLineBuffers(outputBuffers, onLine, performance.now() - sampleStartAt, {
     flushPartial: true,
   });
-  if (exit.exitCode !== null && exit.exitCode !== 0 && failureCode === null) {
-    failureCode = "child_nonzero_exit";
-  }
+  failureCode ??= resolveSampleExitFailure(exit);
   try {
     rmSync(root, { force: true, maxRetries: 3, recursive: true, retryDelay: 100 });
   } catch {
@@ -1533,6 +1515,7 @@ async function runGatewaySample(options: {
     childExitCode: exit.exitCode,
     childSignal: exit.signal,
     events,
+    exitedBeforeTeardown: exit.exitedBeforeTeardown,
     failureCode,
     firstOutputMs,
     initialGatewayReadyLogLine,
@@ -1605,6 +1588,16 @@ function printResult(result: CaseResult): void {
   }
 }
 
+function hasBenchmarkFailures(results: CaseResult[]): boolean {
+  return results.some(
+    (result) => result.summary.failureRate > 0 || result.summary.firstFailureCode !== null,
+  );
+}
+
+function shouldFailBenchmark(results: CaseResult[], options: { allowFailures: boolean }): boolean {
+  return !options.allowFailures && hasBenchmarkFailures(results);
+}
+
 async function main() {
   if (hasHelpFlag()) {
     printUsage();
@@ -1644,14 +1637,20 @@ async function main() {
   }
   if (options.json) {
     console.log(JSON.stringify(payload, null, 2));
+    if (shouldFailBenchmark(results, options)) {
+      process.exitCode = 1;
+    }
     return;
   }
   for (const result of results) {
     printResult(result);
   }
+  if (shouldFailBenchmark(results, options)) {
+    process.exitCode = 1;
+  }
 }
 
-export const __testing = {
+export const testing = {
   classifyGatewayReadyLog,
   classifyProbeErrorKind,
   collectOutputLines,
@@ -1663,11 +1662,16 @@ export const __testing = {
   finalizeRestartIteration,
   flushOutputLineBuffers,
   hasInitialReadyLogs,
+  hasBenchmarkFailures,
   parseNonNegativeInt,
   parsePositiveInt,
   resolveRestartDeadlineFailure,
   resolveEntry,
+  resolvePhaseDeadlineAt,
+  resolveSampleExitFailure,
   sanitizedEnv,
+  shouldFailBenchmark,
+  stopChild,
   summarizeCase,
   waitForRestartProbe,
   writeConfig,
@@ -1680,3 +1684,4 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     process.exitCode = 1;
   });
 }
+export { testing as __testing };

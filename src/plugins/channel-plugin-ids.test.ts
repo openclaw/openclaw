@@ -166,6 +166,9 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
         providers: ["openai", "openai-codex"],
         cliBackends: [],
         contracts: {
+          speechProviders: ["openai"],
+          realtimeTranscriptionProviders: ["openai"],
+          realtimeVoiceProviders: ["openai"],
           imageGenerationProviders: ["openai"],
           videoGenerationProviders: ["openai"],
         },
@@ -178,10 +181,19 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
         providers: ["google", "google-gemini-cli"],
         cliBackends: ["google-gemini-cli"],
         contracts: {
+          realtimeVoiceProviders: ["google"],
           imageGenerationProviders: ["google"],
           videoGenerationProviders: ["google"],
           musicGenerationProviders: ["google"],
         },
+      },
+      {
+        id: "amazon-bedrock",
+        channels: [],
+        origin: "bundled",
+        enabledByDefault: true,
+        providers: ["amazon-bedrock"],
+        cliBackends: [],
       },
       {
         id: "brave",
@@ -319,6 +331,18 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
         },
         origin: "global",
         enabledByDefault: undefined,
+        providers: [],
+        cliBackends: [],
+      },
+      {
+        id: "demo-config-startup",
+        channels: [],
+        activation: {
+          onStartup: false,
+          onConfigPaths: ["plugins.entries.demo-config-startup.config.autoStart"],
+        },
+        origin: "bundled",
+        enabledByDefault: true,
         providers: [],
         cliBackends: [],
       },
@@ -674,6 +698,25 @@ describe("resolveGatewayStartupPluginIds", () => {
       ["demo-channel", "browser", "memory-core"],
     ],
     [
+      "includes bundled model providers selected by agent defaults at startup",
+      createStartupConfig({
+        modelId: "amazon-bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+      }),
+      ["demo-channel", "browser", "amazon-bedrock", "memory-core"],
+    ],
+    [
+      "honors explicit plugin disablement for selected model providers",
+      {
+        agents: {
+          defaults: {
+            model: { primary: "amazon-bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0" },
+          },
+        },
+        plugins: { entries: { "amazon-bedrock": { enabled: false } } },
+      } as OpenClawConfig,
+      ["demo-channel", "browser", "memory-core"],
+    ],
+    [
       "includes configured bundled speech providers at startup",
       {
         channels: {},
@@ -830,6 +873,34 @@ describe("resolveGatewayStartupPluginIds", () => {
           },
         },
         plugins: { entries: { google: { enabled: false } } },
+      } as OpenClawConfig,
+      ["browser", "memory-core"],
+    ],
+    [
+      "includes bundled voice providers configured by voice defaults at startup",
+      {
+        channels: {},
+        agents: {
+          defaults: {
+            voiceModel: {
+              primary: "openai/gpt-4o-mini-tts",
+              fallbacks: ["google/gemini-live-2.5-flash-preview"],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      ["browser", "openai", "google", "memory-core"],
+    ],
+    [
+      "honors explicit plugin disablement for configured voice providers",
+      {
+        channels: {},
+        agents: {
+          defaults: {
+            voiceModel: { primary: "openai/gpt-4o-mini-tts" },
+          },
+        },
+        plugins: { entries: { openai: { enabled: false } } },
       } as OpenClawConfig,
       ["browser", "memory-core"],
     ],
@@ -1058,6 +1129,34 @@ describe("resolveGatewayStartupPluginIds", () => {
         memorySlot: "none",
       }),
       expected: ["demo-global-explicit-startup"],
+    });
+  });
+
+  it("loads startup-lazy bundled plugins only when their activation config is present", () => {
+    expectStartupPluginIdsCase({
+      config: createStartupConfig({
+        noConfiguredChannels: true,
+        memorySlot: "none",
+      }),
+      expected: ["browser"],
+    });
+
+    expectStartupPluginIdsCase({
+      config: {
+        channels: {},
+        plugins: {
+          slots: { memory: "none" },
+          entries: {
+            "demo-config-startup": {
+              enabled: true,
+              config: {
+                autoStart: [{ providerId: "demo" }],
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      expected: ["browser", "demo-config-startup"],
     });
   });
 
@@ -1364,7 +1463,7 @@ describe("resolveGatewayStartupPluginIds", () => {
   it("does not treat persisted auth alone as gateway startup intent", () => {
     listPotentialConfiguredChannelIds.mockImplementation(
       (
-        _config: OpenClawConfig,
+        configForTest: OpenClawConfig,
         _env: NodeJS.ProcessEnv,
         options?: { includePersistedAuthState?: boolean },
       ) => (options?.includePersistedAuthState === false ? [] : ["demo-channel"]),
@@ -1383,7 +1482,7 @@ describe("resolveGatewayStartupPluginIds", () => {
     useManifestRegistryFixture(createManifestRegistryFixtureWithWorkspaceDemoChannel());
     listPotentialConfiguredChannelIds.mockImplementation(
       (
-        _config: OpenClawConfig,
+        configForTest: OpenClawConfig,
         _env: NodeJS.ProcessEnv,
         options?: { includePersistedAuthState?: boolean },
       ) => (options?.includePersistedAuthState === false ? [] : ["demo-channel"]),
@@ -1549,7 +1648,7 @@ describe("resolveGatewayStartupPluginIds", () => {
           },
         },
       } as OpenClawConfig,
-      expected: ["demo-channel", "browser", "codex", "memory-core"],
+      expected: ["demo-channel", "browser", "openai", "codex", "memory-core"],
     });
   });
 
@@ -1558,7 +1657,7 @@ describe("resolveGatewayStartupPluginIds", () => {
       config: createStartupConfig({
         modelId: "openai/gpt-5.5",
       }),
-      expected: ["demo-channel", "browser", "codex", "memory-core"],
+      expected: ["demo-channel", "browser", "openai", "codex", "memory-core"],
     });
   });
 
@@ -1574,23 +1673,23 @@ describe("resolveGatewayStartupPluginIds", () => {
           },
         },
       } as OpenClawConfig,
-      expected: ["demo-channel", "browser", "codex", "memory-core"],
+      expected: ["demo-channel", "browser", "anthropic", "openai", "codex", "memory-core"],
     });
   });
 
-  it("does not include Codex when an OpenAI model is manually pinned to PI", () => {
+  it("does not include Codex when an OpenAI model is manually pinned to OpenClaw", () => {
     expectStartupPluginIdsCase({
       config: {
         agents: {
           defaults: {
             model: { primary: "openai/gpt-5.5" },
             models: {
-              "openai/gpt-5.5": { agentRuntime: { id: "pi" } },
+              "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } },
             },
           },
         },
       } as OpenClawConfig,
-      expected: ["demo-channel", "browser", "memory-core"],
+      expected: ["demo-channel", "browser", "openai", "memory-core"],
     });
   });
 
@@ -1715,7 +1814,7 @@ describe("resolveGatewayStartupPluginIds", () => {
           },
         },
       } as OpenClawConfig,
-      expected: ["demo-channel", "browser", "memory-core"],
+      expected: ["demo-channel", "browser", "openai", "memory-core"],
     });
   });
 });

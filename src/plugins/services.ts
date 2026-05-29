@@ -1,10 +1,11 @@
 import { STATE_DIR } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  emitTrustedDiagnosticEvent,
-  onInternalDiagnosticEvent,
+  emitTrustedDiagnosticEventWithPrivateData,
+  onTrustedInternalDiagnosticEvent,
 } from "../infra/diagnostic-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { withPluginHttpRouteRegistry } from "./http-registry.js";
 import type { PluginServiceRegistration } from "./registry-types.js";
 import type { PluginRegistry } from "./registry.js";
 import { encodeStartupTraceSegment } from "./startup-trace-segment.js";
@@ -50,8 +51,8 @@ function createServiceContext(params: {
     ...(grantsInternalDiagnostics
       ? {
           internalDiagnostics: {
-            emit: emitTrustedDiagnosticEvent,
-            onEvent: onInternalDiagnosticEvent,
+            emit: emitTrustedDiagnosticEventWithPrivateData,
+            onEvent: onTrustedInternalDiagnosticEvent,
           },
         }
       : {}),
@@ -111,7 +112,8 @@ export async function startPluginServices(params: {
       service: entry,
     });
     try {
-      const startService = () => service.start(serviceContext);
+      const startService = () =>
+        withPluginHttpRouteRegistry(params.registry, () => service.start(serviceContext));
       if (params.startupTrace) {
         await params.startupTrace.measure(traceName, startService);
       } else {
@@ -142,7 +144,7 @@ export async function startPluginServices(params: {
           continue;
         }
         try {
-          await entry.stop();
+          await withPluginHttpRouteRegistry(params.registry, () => entry.stop?.());
         } catch (err) {
           log.warn(`plugin service stop failed (${entry.id}): ${String(err)}`);
         }

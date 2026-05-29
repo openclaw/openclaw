@@ -134,6 +134,52 @@ describe("handleChatEvent", () => {
     expect(state.chatRunId).toBe("run-1");
   });
 
+  it("adopts the run id for selected-session live deltas observed from another channel", () => {
+    const state = createState({
+      sessionKey: "agent:main:feishu:direct:peer-1",
+      chatRunId: null,
+      chatStream: null,
+      chatStreamStartedAt: null,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-feishu-1",
+      sessionKey: "agent:main:feishu:direct:peer-1",
+      state: "delta",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Observed reply" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("delta");
+    expect(state.chatRunId).toBe("run-feishu-1");
+    expect(state.chatStream).toBe("Observed reply");
+    expect(state.chatStreamStartedAt).toEqual(expect.any(Number));
+  });
+
+  it("adopts the run id when the selected main alias receives canonical live deltas", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: null,
+      chatStream: null,
+      chatStreamStartedAt: null,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-canonical-main",
+      sessionKey: "agent:main:main",
+      state: "delta",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Canonical reply" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("delta");
+    expect(state.chatRunId).toBe("run-canonical-main");
+    expect(state.chatStream).toBe("Canonical reply");
+    expect(state.chatStreamStartedAt).toEqual(expect.any(Number));
+  });
+
   it("accepts final events for the active run when gateway emits a canonical session key", () => {
     const state = createState({
       sessionKey: "main",
@@ -997,6 +1043,21 @@ describe("sendChatMessage", () => {
     expect(sendParams.sessionKey).toBe("main");
     expect(sendParams.sessionId).toBe("session-before-reconnect");
     expect(sendParams.message).toBe("continue");
+  });
+
+  it("adopts the run id and terminal status from the chat.send ack", async () => {
+    const request = vi.fn().mockResolvedValue({ runId: "gateway-complete-run", status: "ok" });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const result = await sendChatMessage(state, "already handled");
+
+    expect(result).toBe("gateway-complete-run");
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatStream).toBeNull();
+    expect(state.chatStreamStartedAt).toBeNull();
   });
 
   it("serializes non-image chat attachments as files", async () => {

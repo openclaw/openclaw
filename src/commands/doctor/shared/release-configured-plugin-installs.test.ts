@@ -202,6 +202,60 @@ describe("configured plugin install release step", () => {
     expect(result.channelIds).toStrictEqual([]);
   });
 
+  it("collects provider plugins from channel-only model overrides", async () => {
+    mocks.resolveProviderInstallCatalogEntries.mockReturnValue([
+      {
+        pluginId: "anthropic-provider",
+        providerId: "anthropic",
+      },
+    ]);
+
+    const { collectReleaseConfiguredPluginIds } =
+      await import("./release-configured-plugin-installs.js");
+    const result = collectReleaseConfiguredPluginIds({
+      cfg: {
+        channels: {
+          modelByChannel: {
+            discord: {
+              default: "anthropic/claude-opus-4-7",
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(result.pluginIds).toEqual(["anthropic-provider"]);
+    expect(result.channelIds).toStrictEqual([]);
+  });
+
+  it("collects provider plugins from provider-keyed channel model aliases", async () => {
+    mocks.resolveProviderInstallCatalogEntries.mockReturnValue([
+      {
+        pluginId: "anthropic-provider",
+        providerId: "anthropic",
+      },
+    ]);
+
+    const { collectReleaseConfiguredPluginIds } =
+      await import("./release-configured-plugin-installs.js");
+    const result = collectReleaseConfiguredPluginIds({
+      cfg: {
+        channels: {
+          modelByChannel: {
+            anthropic: {
+              discord: "claude-opus-4-7",
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(result.pluginIds).toEqual(["anthropic-provider"]);
+    expect(result.channelIds).toStrictEqual([]);
+  });
+
   it("collects Codex from selectable OpenAI agent models even without integration discovery", async () => {
     const { collectReleaseConfiguredPluginIds } =
       await import("./release-configured-plugin-installs.js");
@@ -374,11 +428,9 @@ describe("configured plugin install release step", () => {
     });
   });
 
-  it("defers package-manager plugins for writable legacy parents without explicit deferral", async () => {
+  it("defers package-manager plugin release completion for writable legacy parents", async () => {
     mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
-      changes: [
-        'Skipped package-manager repair for configured plugin "discord" during package update; rerun "openclaw doctor --fix" after the update completes.',
-      ],
+      changes: ['Installed missing configured plugin "discord".'],
       warnings: [],
     });
 
@@ -405,9 +457,7 @@ describe("configured plugin install release step", () => {
       OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
     });
     expect(result).toEqual({
-      changes: [
-        'Skipped package-manager repair for configured plugin "discord" during package update; rerun "openclaw doctor --fix" after the update completes.',
-      ],
+      changes: ['Installed missing configured plugin "discord".'],
       warnings: [],
       completed: false,
       touchedConfig: false,

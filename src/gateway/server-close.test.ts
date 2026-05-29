@@ -9,7 +9,7 @@ const mocks = {
   listChannelPlugins: vi.fn((): Array<{ id: "telegram" | "discord" }> => []),
   disposeAgentHarnesses: vi.fn(async () => undefined),
   disposeAllSessionMcpRuntimes: vi.fn(async () => undefined),
-  triggerInternalHook: vi.fn<TriggerInternalHookMock>(async (_event) => undefined),
+  triggerInternalHook: vi.fn<TriggerInternalHookMock>(async (eventValue) => undefined),
   disposeAllBundleLspRuntimes: vi.fn(async () => undefined),
 };
 const WEBSOCKET_CLOSE_GRACE_MS = 1_000;
@@ -44,16 +44,16 @@ vi.mock("../agents/harness/registry.js", () => ({
   disposeRegisteredAgentHarnesses: mocks.disposeAgentHarnesses,
 }));
 
-vi.mock("../agents/pi-bundle-mcp-tools.js", async () => ({
-  ...(await vi.importActual<typeof import("../agents/pi-bundle-mcp-tools.js")>(
-    "../agents/pi-bundle-mcp-tools.js",
+vi.mock("../agents/agent-bundle-mcp-tools.js", async () => ({
+  ...(await vi.importActual<typeof import("../agents/agent-bundle-mcp-tools.js")>(
+    "../agents/agent-bundle-mcp-tools.js",
   )),
   disposeAllSessionMcpRuntimes: mocks.disposeAllSessionMcpRuntimes,
 }));
 
-vi.mock("../agents/pi-bundle-lsp-runtime.js", async () => ({
-  ...(await vi.importActual<typeof import("../agents/pi-bundle-lsp-runtime.js")>(
-    "../agents/pi-bundle-lsp-runtime.js",
+vi.mock("../agents/agent-bundle-lsp-runtime.js", async () => ({
+  ...(await vi.importActual<typeof import("../agents/agent-bundle-lsp-runtime.js")>(
+    "../agents/agent-bundle-lsp-runtime.js",
   )),
   disposeAllBundleLspRuntimes: mocks.disposeAllBundleLspRuntimes,
 }));
@@ -171,6 +171,72 @@ describe("createGatewayCloseHandler", () => {
     expect(deps.cron.stop).toHaveBeenCalledTimes(1);
     expect(deps.heartbeatRunner.stop).toHaveBeenCalledTimes(1);
     expect(deps.chatRunState.clear).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops plugin services before channel runtimes", async () => {
+    const events: string[] = [];
+    const pluginServices = {
+      stop: vi.fn(async () => {
+        events.push("plugin-services");
+      }),
+    };
+    const stopChannel = vi.fn(async (channelId: string) => {
+      events.push(`channel:${channelId}`);
+    });
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        channelIds: ["discord"],
+        pluginServices: pluginServices as never,
+        stopChannel,
+      }),
+    );
+
+    await close({ reason: "test" });
+
+    expect(events).toEqual(["plugin-services", "channel:discord"]);
+    expect(pluginServices.stop).toHaveBeenCalledTimes(1);
+    expect(stopChannel).toHaveBeenCalledWith("discord");
+  });
+
+  it("awaits post-ready sidecars before plugin services and channels", async () => {
+    const events: string[] = [];
+    let releaseSidecar!: () => void;
+    const sidecarReleased = new Promise<void>((resolve) => {
+      releaseSidecar = resolve;
+    });
+    const postReadySidecar = {
+      stop: vi.fn(async () => {
+        events.push("sidecar:start");
+        await sidecarReleased;
+        events.push("sidecar:end");
+      }),
+    };
+    const pluginServices = {
+      stop: vi.fn(async () => {
+        events.push("plugin-services");
+      }),
+    };
+    const stopChannel = vi.fn(async (channelId: string) => {
+      events.push(`channel:${channelId}`);
+    });
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        channelIds: ["discord"],
+        postReadySidecars: [postReadySidecar],
+        pluginServices: pluginServices as never,
+        stopChannel,
+      }),
+    );
+
+    const closePromise = close({ reason: "test" });
+    await vi.waitFor(() => {
+      expect(events).toEqual(["sidecar:start"]);
+    });
+    releaseSidecar();
+    await closePromise;
+
+    expect(events).toEqual(["sidecar:start", "sidecar:end", "plugin-services", "channel:discord"]);
+    expect(postReadySidecar.stop).toHaveBeenCalledTimes(1);
   });
 
   it("emits gateway shutdown and pre-restart hooks", async () => {
@@ -425,7 +491,7 @@ describe("createGatewayCloseHandler", () => {
     ).toBe(true);
   });
 
-  it("aborts active chat runs when restart reply drain times out", async () => {
+  it("aborts active runs when restart reply drain times out", async () => {
     vi.useFakeTimers();
     const controller = new AbortController();
     const agentController = new AbortController();
@@ -484,9 +550,9 @@ describe("createGatewayCloseHandler", () => {
 
     expect(result.warnings).toContain("restart-reply-drain");
     expect(controller.signal.aborted).toBe(true);
-    expect(agentController.signal.aborted).toBe(false);
+    expect(agentController.signal.aborted).toBe(true);
     expect(chatAbortControllers.has("run-1")).toBe(false);
-    expect(chatAbortControllers.has("agent-run-1")).toBe(true);
+    expect(chatAbortControllers.has("agent-run-1")).toBe(false);
     expect(chatRunState.buffers.has("run-1")).toBe(false);
     expect(chatRunState.deltaSentAt.has("run-1")).toBe(false);
     expect(chatRunState.deltaLastBroadcastLen.has("run-1")).toBe(false);
@@ -496,13 +562,13 @@ describe("createGatewayCloseHandler", () => {
     expect(
       mocks.logWarn.mock.calls.some(([message]) =>
         String(message).includes(
-          "restart reply drain timed out after 100ms with 1 active chat run(s) still active",
+          "restart reply drain timed out after 100ms with 2 active run(s) still active",
         ),
       ),
     ).toBe(true);
     expect(
       mocks.logWarn.mock.calls.some(([message]) =>
-        String(message).includes("aborted 1 active chat run(s) during restart shutdown"),
+        String(message).includes("aborted 2 active run(s) during restart shutdown"),
       ),
     ).toBe(true);
     expect(broadcast).toHaveBeenCalledWith(
@@ -514,9 +580,26 @@ describe("createGatewayCloseHandler", () => {
       "chat",
       expect.objectContaining({ runId: "run-1", state: "aborted", stopReason: "restart" }),
     );
+    expect(broadcast).toHaveBeenCalledWith(
+      "chat",
+      expect.objectContaining({
+        runId: "agent-run-1",
+        state: "aborted",
+        stopReason: "restart",
+      }),
+    );
+    expect(nodeSendToSession).toHaveBeenCalledWith(
+      "session-1",
+      "chat",
+      expect.objectContaining({
+        runId: "agent-run-1",
+        state: "aborted",
+        stopReason: "restart",
+      }),
+    );
   });
 
-  it("does not drain or abort active chat runs for normal shutdown", async () => {
+  it("does not drain or abort active runs for normal shutdown", async () => {
     const controller = new AbortController();
     const chatAbortControllers = new Map([
       [
@@ -543,7 +626,7 @@ describe("createGatewayCloseHandler", () => {
     expect(chatAbortControllers.size).toBe(1);
   });
 
-  it("aborts active chat runs immediately when restart drain budget is exhausted", async () => {
+  it("aborts active runs immediately when restart drain budget is exhausted", async () => {
     const controller = new AbortController();
     const chatAbortControllers = new Map([
       [

@@ -59,6 +59,82 @@ describe("boolean config validation", () => {
 });
 
 describe("model provider localService config", () => {
+  it("accepts standalone timeout overlays for bundled model providers", () => {
+    const result = OpenClawSchema.safeParse({
+      models: {
+        providers: {
+          openai: {
+            timeoutSeconds: 600,
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.models?.providers?.openai?.timeoutSeconds).toBe(600);
+    }
+  });
+
+  it("rejects standalone timeout overlays for unknown model providers", () => {
+    const result = OpenClawSchema.safeParse({
+      models: {
+        providers: {
+          anyManifestProvider: {
+            timeoutSeconds: 600,
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const paths = result.error.issues.map((issue) => issue.path.join("."));
+      expect(paths).toEqual(
+        expect.arrayContaining([
+          "models.providers.anyManifestProvider.baseUrl",
+          "models.providers.anyManifestProvider.models",
+        ]),
+      );
+    }
+  });
+
+  it("requires models when a model provider declaration sets baseUrl", () => {
+    const result = OpenClawSchema.safeParse({
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "https://example.test/v1",
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const paths = result.error.issues.map((issue) => issue.path.join("."));
+      expect(paths).toContain("models.providers.custom.models");
+    }
+  });
+
+  it("requires baseUrl when a model provider declaration sets models", () => {
+    const result = OpenClawSchema.safeParse({
+      models: {
+        providers: {
+          custom: {
+            models: [{ id: "custom-model", name: "Custom model", api: "openai-completions" }],
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const paths = result.error.issues.map((issue) => issue.path.join("."));
+      expect(paths).toContain("models.providers.custom.baseUrl");
+    }
+  });
+
   it("accepts on-demand local provider service settings", () => {
     const result = OpenClawSchema.safeParse({
       models: {
@@ -82,6 +158,60 @@ describe("model provider localService config", () => {
     });
 
     expect(result.success).toBe(true);
+  });
+
+  it("accepts bundled provider timeout overlays without custom provider fields", () => {
+    const result = validateConfigObjectRaw({
+      models: {
+        providers: {
+          openai: {
+            timeoutSeconds: 600,
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts bundled provider timeout overlays without custom provider fields", () => {
+    const result = validateConfigObjectRaw({
+      models: {
+        providers: {
+          zai: {
+            timeoutSeconds: 600,
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.config.models?.providers?.zai?.models).toEqual([]);
+      expect(result.config.models?.providers?.zai?.baseUrl).toBe("");
+    }
+  });
+
+  it("still requires baseUrl and models for custom provider declarations", () => {
+    const result = validateConfigObjectRaw({
+      models: {
+        providers: {
+          custom: {
+            timeoutSeconds: 600,
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(issuePaths(result.issues)).toEqual(
+        expect.arrayContaining([
+          "models.providers.custom.baseUrl",
+          "models.providers.custom.models",
+        ]),
+      );
+    }
   });
 });
 
@@ -295,6 +425,7 @@ describe("diagnostics.otel.captureContent", () => {
         toolInputs: true,
         toolOutputs: true,
         systemPrompt: false,
+        toolDefinitions: true,
       },
     ]) {
       const result = OpenClawSchema.safeParse({
@@ -1012,7 +1143,7 @@ describe("config paths", () => {
 describe("config strict validation", () => {
   it("rejects unknown fields", () => {
     const res = validateConfigObject({
-      agents: { list: [{ id: "pi" }] },
+      agents: { list: [{ id: "openclaw" }] },
       customUnknownField: { nested: "value" },
     });
     expect(res.ok).toBe(false);
@@ -1137,6 +1268,24 @@ describe("config strict validation", () => {
     expect(raw.messages.tts).not.toHaveProperty("providers");
   });
 
+  it("reports retired plugin model refs without an agents section", () => {
+    const raw = {
+      plugins: {
+        entries: {
+          "lossless-claw": {
+            config: {
+              summaryModel: "anthropic/claude-opus-4-5",
+            },
+          },
+        },
+      },
+    };
+    const issues = findLegacyConfigIssues(raw);
+
+    expect(issuePaths(issues)).toContain("plugins");
+    expect(issuePaths(issues)).not.toContain("agents");
+  });
+
   it("reports retired queue steering modes without read-time auto-migration", async () => {
     const raw = {
       messages: {
@@ -1168,7 +1317,7 @@ describe("config strict validation", () => {
           },
           list: [
             {
-              id: "pi",
+              id: "openclaw",
               sandbox: {
                 perSession: false,
               },

@@ -3,10 +3,14 @@ import { splitSandboxBindSpec } from "../agents/sandbox/bind-spec.js";
 import { isSandboxHostPathAbsolute } from "../agents/sandbox/host-paths.js";
 import { getBlockedNetworkModeReason } from "../agents/sandbox/network-mode.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
+import { isRecord as isPlainRecord } from "../shared/record-coerce.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
+import { isBlockedObjectKey } from "./prototype-keys.js";
+import { LEGACY_WEB_SEARCH_PROVIDER_CONFIG_KEYS } from "./web-search-legacy-provider-keys.js";
 import { AgentModelSchema, AgentToolModelSchema } from "./zod-schema.agent-model.js";
 import {
   GroupChatSchema,
@@ -18,6 +22,38 @@ import {
   TtsConfigSchema,
 } from "./zod-schema.core.js";
 import { sensitive } from "./zod-schema.sensitive.js";
+
+function validateSandboxBindEntries(
+  binds: readonly string[] | undefined,
+  ctx: z.RefinementCtx,
+): void {
+  if (!binds) {
+    return;
+  }
+  for (let i = 0; i < binds.length; i += 1) {
+    const bind = normalizeOptionalString(binds[i]) ?? "";
+    if (!bind) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["binds", i],
+        message: "Sandbox security: bind mount entry must be a non-empty string.",
+      });
+      continue;
+    }
+
+    const parsed = splitSandboxBindSpec(bind);
+    const source = (parsed ? parsed.host : bind).trim();
+    if (!isSandboxHostPathAbsolute(source)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["binds", i],
+        message:
+          `Sandbox security: bind mount "${bind}" uses a non-absolute source path "${source}". ` +
+          "Only absolute POSIX or Windows drive-letter paths are supported for sandbox binds.",
+      });
+    }
+  }
+}
 
 export const AgentRunRetriesConfigSchema = z
   .object({
@@ -36,6 +72,12 @@ export const AgentRunRetriesConfigSchema = z
     },
     { message: "max must be greater than or equal to min", path: ["max"] },
   );
+
+const AgentEntryEmbeddedAgentConfigSchema = z
+  .object({
+    executionContract: z.union([z.literal("default"), z.literal("strict-agentic")]).optional(),
+  })
+  .strict();
 
 export const HeartbeatSchema = z
   .object({
@@ -135,6 +177,7 @@ const SandboxDockerSchema = z
     setupCommand: z
       .union([z.string(), z.array(z.string())])
       .transform((value) => (Array.isArray(value) ? value.join("\n") : value))
+      .pipe(z.string())
       .optional(),
     pidsLimit: z.number().int().positive().optional(),
     memory: z.union([z.string(), z.number()]).optional(),
@@ -167,31 +210,7 @@ const SandboxDockerSchema = z
   })
   .strict()
   .superRefine((data, ctx) => {
-    if (data.binds) {
-      for (let i = 0; i < data.binds.length; i += 1) {
-        const bind = normalizeOptionalString(data.binds[i]) ?? "";
-        if (!bind) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: ["binds", i],
-            message: "Sandbox security: bind mount entry must be a non-empty string.",
-          });
-          continue;
-        }
-
-        const parsed = splitSandboxBindSpec(bind);
-        const source = (parsed ? parsed.host : bind).trim();
-        if (!isSandboxHostPathAbsolute(source)) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: ["binds", i],
-            message:
-              `Sandbox security: bind mount "${bind}" uses a non-absolute source path "${source}". ` +
-              "Only absolute POSIX or Windows drive-letter paths are supported for sandbox binds.",
-          });
-        }
-      }
-    }
+    validateSandboxBindEntries(data.binds, ctx);
     const blockedNetworkReason = getBlockedNetworkModeReason({
       network: data.network,
       allowContainerNamespaceJoin: data.dangerouslyAllowContainerNamespaceJoin === true,
@@ -252,6 +271,7 @@ const SandboxBrowserSchema = z
     binds: z.array(z.string()).optional(),
   })
   .superRefine((data, ctx) => {
+    validateSandboxBindEntries(data.binds, ctx);
     if (normalizeLowercaseStringOrEmpty(data.network ?? "") === "host") {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -320,9 +340,9 @@ const TrimmedOptionalConfigStringSchema = z
 const CodexAllowedDomainsSchema = z
   .array(z.string())
   .transform((values) => {
-    const deduped = [
-      ...new Set(values.map((value) => value.trim()).filter((value) => value.length > 0)),
-    ];
+    const deduped = uniqueStrings(
+      values.map((value) => value.trim()).filter((value) => value.length > 0),
+    );
     return deduped.length > 0 ? deduped : undefined;
   })
   .optional();
@@ -340,26 +360,76 @@ const CodexUserLocationSchema = z
   })
   .optional();
 
+const BLOCKED_WEB_SEARCH_KEYS_ISSUE_FIELD = "__openclawBlockedWebSearchKeys";
+
 const ToolsWebSearchSchema = z
-  .object({
-    enabled: z.boolean().optional(),
-    provider: z.string().optional(),
-    maxResults: z.number().int().positive().optional(),
-    timeoutSeconds: z.number().int().positive().optional(),
-    cacheTtlMinutes: z.number().nonnegative().optional(),
-    apiKey: SecretInputSchema.optional().register(sensitive),
-    openaiCodex: z
+  .preprocess(
+    (value) => {
+      if (!isPlainRecord(value)) {
+        return value;
+      }
+      const blockedKeys = Object.getOwnPropertyNames(value).filter((key) =>
+        isBlockedObjectKey(key),
+      );
+      if (blockedKeys.length === 0) {
+        return value;
+      }
+      return {
+        ...value,
+        [BLOCKED_WEB_SEARCH_KEYS_ISSUE_FIELD]: blockedKeys,
+      };
+    },
+    z
       .object({
         enabled: z.boolean().optional(),
-        mode: z.union([z.literal("cached"), z.literal("live")]).optional(),
-        allowedDomains: CodexAllowedDomainsSchema,
-        contextSize: z.union([z.literal("low"), z.literal("medium"), z.literal("high")]).optional(),
-        userLocation: CodexUserLocationSchema,
+        provider: z.string().optional(),
+        maxResults: z.number().int().positive().optional(),
+        timeoutSeconds: z.number().int().positive().optional(),
+        cacheTtlMinutes: z.number().nonnegative().optional(),
+        apiKey: SecretInputSchema.optional().register(sensitive),
+        openaiCodex: z
+          .object({
+            enabled: z.boolean().optional(),
+            mode: z.union([z.literal("cached"), z.literal("live")]).optional(),
+            allowedDomains: CodexAllowedDomainsSchema,
+            contextSize: z
+              .union([z.literal("low"), z.literal("medium"), z.literal("high")])
+              .optional(),
+            userLocation: CodexUserLocationSchema,
+          })
+          .strict()
+          .optional(),
       })
-      .strict()
-      .optional(),
-  })
-  .strict()
+      .catchall(z.unknown())
+      .superRefine((value, ctx) => {
+        const blockedKeys = value[BLOCKED_WEB_SEARCH_KEYS_ISSUE_FIELD];
+        if (Array.isArray(blockedKeys)) {
+          for (const key of blockedKeys) {
+            if (typeof key !== "string") {
+              continue;
+            }
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: [key],
+              message: "tools.web.search must not contain blocked object keys",
+            });
+          }
+        }
+        for (const [key, entry] of Object.entries(value)) {
+          if (key === BLOCKED_WEB_SEARCH_KEYS_ISSUE_FIELD || isBlockedObjectKey(key)) {
+            continue;
+          }
+          if (LEGACY_WEB_SEARCH_PROVIDER_CONFIG_KEYS.has(key) && isPlainRecord(entry)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: [key],
+              message:
+                "legacy web_search provider config must use plugins.entries.<plugin>.config.webSearch",
+            });
+          }
+        }
+      }),
+  )
   .optional();
 
 const ToolsWebFetchSchema = z
@@ -703,6 +773,7 @@ const MessageToolConfigSchema = z
 const AgentToolsSchema = z
   .object({
     ...CommonToolPolicyFields,
+    codeMode: CodeModeSchema,
     elevated: z
       .object({
         enabled: z.boolean().optional(),
@@ -930,6 +1001,15 @@ export const AgentRuntimePolicySchema = z
   .strict()
   .optional();
 
+export const AgentModelRuntimeEntrySchema = z
+  .object({
+    alias: z.string().optional(),
+    params: z.record(z.string(), z.unknown()).optional(),
+    agentRuntime: AgentRuntimePolicySchema,
+    streaming: z.boolean().optional(),
+  })
+  .strict();
+
 export const AgentEntrySchema = z
   .object({
     id: z.string(),
@@ -938,23 +1018,8 @@ export const AgentEntrySchema = z
     description: z.string().optional(),
     workspace: z.string().optional(),
     agentDir: z.string().optional(),
-    systemPromptOverride: z.string().optional(),
-    agentRuntime: AgentRuntimePolicySchema,
-    embeddedHarness: AgentEmbeddedHarnessSchema,
     model: AgentModelSchema.optional(),
-    models: z
-      .record(
-        z.string(),
-        z
-          .object({
-            alias: z.string().optional(),
-            params: z.record(z.string(), z.unknown()).optional(),
-            agentRuntime: AgentRuntimePolicySchema,
-            streaming: z.boolean().optional(),
-          })
-          .strict(),
-      )
-      .optional(),
+    models: z.record(z.string(), AgentModelRuntimeEntrySchema).optional(),
     thinkingDefault: z
       .enum(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"])
       .optional(),
@@ -967,6 +1032,12 @@ export const AgentEntrySchema = z
       .optional(),
     bootstrapMaxChars: z.number().int().positive().optional(),
     bootstrapTotalMaxChars: z.number().int().positive().optional(),
+    experimental: z
+      .object({
+        localModelLean: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     skills: z.array(z.string()).optional(),
     memorySearch: MemorySearchSchema,
     humanDelay: HumanDelaySchema.optional(),
@@ -988,12 +1059,7 @@ export const AgentEntrySchema = z
       .strict()
       .optional(),
     runRetries: AgentRunRetriesConfigSchema.optional(),
-    embeddedPi: z
-      .object({
-        executionContract: z.union([z.literal("default"), z.literal("strict-agentic")]).optional(),
-      })
-      .strict()
-      .optional(),
+    embeddedAgent: AgentEntryEmbeddedAgentConfigSchema.optional(),
     sandbox: AgentSandboxSchema,
     params: z.record(z.string(), z.unknown()).optional(),
     tools: AgentToolsSchema,

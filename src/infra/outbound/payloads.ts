@@ -12,11 +12,14 @@ import {
   hasMessagePresentationBlocks,
   hasReplyChannelData,
   hasReplyPayloadContent,
+  normalizeInteractiveReply,
+  normalizeMessagePresentation,
   type InteractiveReply,
   type MessagePresentation,
   type ReplyPayloadDelivery,
 } from "../../interactive/payload.js";
 import { type SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
+import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
 
 export type NormalizedOutboundPayload = {
   text: string;
@@ -62,6 +65,86 @@ export type OutboundPayloadMirror = {
   text: string;
   mediaUrls: string[];
 };
+
+function collectPresentationMirrorText(presentation: MessagePresentation | undefined): string[] {
+  if (!presentation) {
+    return [];
+  }
+  const lines: string[] = [];
+  if (presentation.title?.trim()) {
+    lines.push(presentation.title.trim());
+  }
+  for (const block of presentation.blocks) {
+    if ((block.type === "text" || block.type === "context") && block.text.trim()) {
+      lines.push(block.text.trim());
+      continue;
+    }
+    if (block.type === "buttons") {
+      for (const button of block.buttons) {
+        if (button.label.trim()) {
+          lines.push(button.label.trim());
+        }
+      }
+      continue;
+    }
+    if (block.type === "select") {
+      if (block.placeholder?.trim()) {
+        lines.push(block.placeholder.trim());
+      }
+      for (const option of block.options) {
+        if (option.label.trim()) {
+          lines.push(option.label.trim());
+        }
+      }
+    }
+  }
+  return lines;
+}
+
+function collectInteractiveMirrorText(interactive: InteractiveReply | undefined): string[] {
+  if (!interactive) {
+    return [];
+  }
+  const lines: string[] = [];
+  for (const block of interactive.blocks) {
+    if (block.type === "text" && block.text.trim()) {
+      lines.push(block.text.trim());
+      continue;
+    }
+    if (block.type === "buttons") {
+      for (const button of block.buttons) {
+        if (button.label.trim()) {
+          lines.push(button.label.trim());
+        }
+      }
+      continue;
+    }
+    if (block.type === "select") {
+      if (block.placeholder?.trim()) {
+        lines.push(block.placeholder.trim());
+      }
+      for (const option of block.options) {
+        if (option.label.trim()) {
+          lines.push(option.label.trim());
+        }
+      }
+    }
+  }
+  return lines;
+}
+
+function resolveOutboundMirrorText(entry: OutboundPayloadPlan): string {
+  const text = entry.parts.text.trim() ? entry.parts.text : entry.payload.text;
+  if (text?.trim()) {
+    return text;
+  }
+  const presentation = normalizeMessagePresentation(entry.payload.presentation);
+  const interactive = normalizeInteractiveReply(entry.payload.interactive);
+  return [
+    ...collectPresentationMirrorText(presentation),
+    ...collectInteractiveMirrorText(interactive),
+  ].join("\n");
+}
 
 function isSuppressedRelayStatusText(text: string): boolean {
   const normalized = text.trim();
@@ -138,11 +221,14 @@ function createOutboundPayloadPlanEntry(
     explicitMediaUrls,
     explicitMediaUrl ? [explicitMediaUrl] : undefined,
   );
-  const parsedText = parsed.text ?? "";
+  const strippedText = stripUnsupportedCitationControlMarkers(parsed.text ?? "");
+  const strippedParsed =
+    strippedText === (parsed.text ?? "") ? parsed : parseReplyDirectives(strippedText);
+  const parsedText = strippedParsed.text ?? "";
   if (isSuppressedRelayStatusText(parsedText) && mergedMedia.length === 0) {
     return null;
   }
-  const isSilent = parsed.isSilent && mergedMedia.length === 0;
+  const isSilent = strippedParsed.isSilent && mergedMedia.length === 0;
   const hasMultipleMedia = (explicitMediaUrls?.length ?? 0) > 1;
   const resolvedMediaUrl = hasMultipleMedia ? undefined : explicitMediaUrl;
   const normalizedPayload: ReplyPayload = {
@@ -265,7 +351,7 @@ export function projectOutboundPayloadPlanForMirror(
 ): OutboundPayloadMirror {
   return {
     text: plan
-      .map((entry) => entry.payload.text)
+      .map(resolveOutboundMirrorText)
       .filter((text): text is string => Boolean(text))
       .join("\n"),
     mediaUrls: plan.flatMap((entry) => entry.parts.mediaUrls),
@@ -276,16 +362,21 @@ export function summarizeOutboundPayloadForTransport(
   payload: ReplyPayload,
 ): NormalizedOutboundPayload {
   const parts = resolveSendableOutboundReplyParts(payload);
-  const spokenText = payload.spokenText?.trim() ? payload.spokenText : undefined;
+  const text = stripUnsupportedCitationControlMarkers(parts.text);
+  const strippedSpokenText =
+    typeof payload.spokenText === "string"
+      ? stripUnsupportedCitationControlMarkers(payload.spokenText)
+      : undefined;
+  const spokenText = strippedSpokenText?.trim() ? strippedSpokenText : undefined;
   return {
-    text: parts.text,
+    text,
     mediaUrls: parts.mediaUrls,
     audioAsVoice: payload.audioAsVoice === true ? true : undefined,
     presentation: payload.presentation,
     delivery: payload.delivery,
     interactive: payload.interactive,
     channelData: payload.channelData,
-    ...(parts.text || !spokenText ? {} : { hookContent: spokenText }),
+    ...(text || !spokenText ? {} : { hookContent: spokenText }),
   };
 }
 

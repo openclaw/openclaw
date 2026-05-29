@@ -15,6 +15,8 @@ type SuppressionEntry = {
   rule: string;
 };
 
+let productionLintSuppressionsCache: SuppressionEntry[] | null = null;
+
 function isProductionCodeFile(relativePath: string): boolean {
   const basename = path.posix.basename(relativePath);
   if (!CODE_EXTENSIONS.has(path.extname(relativePath))) {
@@ -72,6 +74,9 @@ function walkCodeFiles(dir: string, files: string[] = []): string[] {
 }
 
 function collectProductionLintSuppressions(): SuppressionEntry[] {
+  if (productionLintSuppressionsCache) {
+    return [...productionLintSuppressionsCache];
+  }
   const entries: SuppressionEntry[] = [];
   const files = ROOTS.flatMap((root) => walkCodeFiles(path.join(repoRoot, root))).toSorted();
   for (const relativePath of files) {
@@ -87,7 +92,8 @@ function collectProductionLintSuppressions(): SuppressionEntry[] {
       });
     }
   }
-  return entries;
+  productionLintSuppressionsCache = entries;
+  return [...entries];
 }
 
 function summarizeSuppressions(entries: readonly SuppressionEntry[]): string[] {
@@ -121,12 +127,13 @@ describe("production lint suppressions", () => {
       "extensions/slack/src/monitor/provider-support.ts|typescript/no-unnecessary-type-parameters|1",
       "extensions/telegram/src/telegram-ingress-worker.runtime.ts|unicorn/require-post-message-target-origin|1",
       "extensions/telegram/src/telegram-ingress-worker.ts|unicorn/require-post-message-target-origin|1",
+      "extensions/whatsapp/src/document-filename.ts|no-control-regex|1",
       "scripts/e2e/mcp-channels-harness.ts|unicorn/prefer-add-event-listener|1",
       "scripts/lib/extension-package-boundary.ts|typescript/no-unnecessary-type-parameters|1",
       "scripts/lib/plugin-npm-release.ts|typescript/no-unnecessary-type-parameters|1",
       "src/agents/agent-scope.ts|no-control-regex|1",
       "src/agents/code-mode.worker.ts|unicorn/require-post-message-target-origin|1",
-      "src/agents/pi-embedded-runner/run/images.ts|no-control-regex|1",
+      "src/agents/embedded-agent-runner/run/images.ts|no-control-regex|1",
       "src/agents/subagent-attachments.ts|no-control-regex|1",
       "src/agents/subagent-spawn.ts|no-control-regex|1",
       "src/channels/plugins/channel-runtime-surface.types.ts|typescript/no-unnecessary-type-parameters|1",
@@ -162,11 +169,11 @@ describe("production lint suppressions", () => {
       "src/plugins/runtime/runtime-plugin-boundary.ts|typescript/no-unnecessary-type-parameters|1",
       "src/plugins/runtime/types-channel.ts|typescript/no-unnecessary-type-parameters|1",
       "src/plugins/trusted-tool-policy.ts|typescript/no-unnecessary-type-parameters|1",
-      "src/tasks/task-flow-registry.store.sqlite.ts|typescript/no-unnecessary-type-parameters|1",
-      "src/tasks/task-registry.store.sqlite.ts|typescript/no-unnecessary-type-parameters|1",
+      "src/tasks/task-registry.sqlite.shared.ts|typescript/no-unnecessary-type-parameters|1",
       "src/test-utils/bundled-plugin-public-surface.ts|typescript/no-unnecessary-type-parameters|2",
       "src/test-utils/vitest-mock-fn.ts|typescript/no-explicit-any|1",
       "src/utils.ts|typescript/no-unnecessary-type-parameters|1",
+      "src/version.ts|eslint/no-underscore-dangle|1",
       "ui/src/ui/views/overview-log-tail.ts|no-control-regex|1",
     ]);
   });

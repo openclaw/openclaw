@@ -1,12 +1,33 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig, type Plugin } from "vite";
+import { controlUiManualChunk } from "./config/control-ui-chunking.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
 const outDir = path.resolve(here, "../dist/control-ui");
+const require = createRequire(import.meta.url);
+const json5EsmPath = require.resolve("json5/dist/index.mjs");
+const commonJsOptimizeDeps = [
+  "highlight.js/lib/core",
+  "highlight.js/lib/languages/bash",
+  "highlight.js/lib/languages/cpp",
+  "highlight.js/lib/languages/css",
+  "highlight.js/lib/languages/diff",
+  "highlight.js/lib/languages/go",
+  "highlight.js/lib/languages/java",
+  "highlight.js/lib/languages/javascript",
+  "highlight.js/lib/languages/json",
+  "highlight.js/lib/languages/markdown",
+  "highlight.js/lib/languages/python",
+  "highlight.js/lib/languages/rust",
+  "highlight.js/lib/languages/typescript",
+  "highlight.js/lib/languages/xml",
+  "highlight.js/lib/languages/yaml",
+] as const;
 
 function normalizeBase(input: string): string {
   const trimmed = input.trim();
@@ -68,12 +89,14 @@ function controlUiServiceWorkerBuildIdPlugin(buildId: string): Plugin {
     apply: "build",
     closeBundle() {
       const swPath = path.join(outDir, "sw.js");
-      const source = fs.readFileSync(swPath, "utf8");
+      const publicSwPath = path.join(here, "public/sw.js");
+      const source = fs.readFileSync(fs.existsSync(swPath) ? swPath : publicSwPath, "utf8");
       const placeholder = '"__OPENCLAW_CONTROL_UI_BUILD_ID__"';
       const updated = source.replace(placeholder, JSON.stringify(buildId));
       if (updated === source) {
         throw new Error(`Control UI service worker build id placeholder missing in ${swPath}`);
       }
+      fs.mkdirSync(outDir, { recursive: true });
       fs.writeFileSync(swPath, updated);
     },
   };
@@ -86,17 +109,32 @@ export default defineConfig(() => {
   return {
     base,
     define: {
-      __OPENCLAW_CONTROL_UI_BUILD_ID__: JSON.stringify(controlUiBuildId),
+      OPENCLAW_CONTROL_UI_BUILD_ID: JSON.stringify(controlUiBuildId),
     },
     publicDir: path.resolve(here, "public"),
     optimizeDeps: {
-      include: ["lit/directives/repeat.js"],
+      include: [
+        "ipaddr.js",
+        "lit/directives/repeat.js",
+        "markdown-it-task-lists",
+        ...commonJsOptimizeDeps,
+      ],
+    },
+    resolve: {
+      alias: {
+        json5: json5EsmPath,
+      },
     },
     build: {
       outDir,
       emptyOutDir: true,
       sourcemap: true,
-      // Keep CI/onboard logs clean; current control UI chunking is intentionally above 500 kB.
+      rollupOptions: {
+        output: {
+          manualChunks: controlUiManualChunk,
+        },
+      },
+      // Keep CI/onboard logs clean; the app chunk is split into stable runtime buckets above.
       chunkSizeWarningLimit: 1024,
     },
     server: {

@@ -9,7 +9,7 @@ import * as configSessions from "../config/sessions.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import * as gatewayCall from "../gateway/call.js";
 import {
-  __testing as sessionBindingServiceTesting,
+  testing as sessionBindingServiceTesting,
   registerSessionBindingAdapter,
 } from "../infra/outbound/session-binding-service.js";
 import * as hookRunnerGlobal from "../plugins/hook-runner-global.js";
@@ -20,9 +20,10 @@ import {
   buildAnnounceIdFromChildRun,
   buildAnnounceIdempotencyKey,
 } from "./announce-idempotency.js";
-import * as piEmbedded from "./pi-embedded-runner/runs.js";
-import { __testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.js";
+import * as embeddedRuns from "./embedded-agent-runner/runs.js";
+import { testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.js";
 import { runSubagentAnnounceDispatch } from "./subagent-announce-dispatch.js";
+import { testing as subagentAnnounceOutputTesting } from "./subagent-announce-output.js";
 import * as agentStep from "./tools/agent-step.js";
 
 type AgentCallRequest = {
@@ -127,38 +128,38 @@ const resolveMainSessionKeySpy = vi.spyOn(configSessions, "resolveMainSessionKey
 const callGatewaySpy = vi.spyOn(gatewayCall, "callGateway");
 const getGlobalHookRunnerSpy = vi.spyOn(hookRunnerGlobal, "getGlobalHookRunner");
 const readLatestAssistantReplySpy = vi.spyOn(agentStep, "readLatestAssistantReply");
-const isEmbeddedPiRunActiveSpy = vi.spyOn(piEmbedded, "isEmbeddedPiRunActive");
-const isEmbeddedPiRunStreamingSpy = vi.spyOn(piEmbedded, "isEmbeddedPiRunStreaming");
-const queueEmbeddedPiMessageWithOutcomeSpy = vi.spyOn(
-  piEmbedded,
-  "queueEmbeddedPiMessageWithOutcome",
+const isEmbeddedAgentRunActiveSpy = vi.spyOn(embeddedRuns, "isEmbeddedAgentRunActive");
+const isEmbeddedAgentRunStreamingSpy = vi.spyOn(embeddedRuns, "isEmbeddedAgentRunStreaming");
+const queueEmbeddedAgentMessageWithOutcomeSpy = vi.spyOn(
+  embeddedRuns,
+  "queueEmbeddedAgentMessageWithOutcome",
 );
-const waitForEmbeddedPiRunEndSpy = vi.spyOn(piEmbedded, "waitForEmbeddedPiRunEnd");
+const waitForEmbeddedAgentRunEndSpy = vi.spyOn(embeddedRuns, "waitForEmbeddedAgentRunEnd");
 const readLatestAssistantReplyMock = vi.fn(
   async (_sessionKey?: string): Promise<string | undefined> => "raw subagent reply",
 );
-const embeddedPiRunActiveMock = vi.fn<typeof piEmbedded.isEmbeddedPiRunActive>(
+const embeddedAgentRunActiveMock = vi.fn<typeof embeddedRuns.isEmbeddedAgentRunActive>(
   (_sessionId: string) => false,
 );
-const embeddedPiRunStreamingMock = vi.fn<typeof piEmbedded.isEmbeddedPiRunStreaming>(
+const embeddedAgentRunStreamingMock = vi.fn<typeof embeddedRuns.isEmbeddedAgentRunStreaming>(
   (_sessionId: string) => false,
 );
-const queueEmbeddedPiMessageWithOutcomeMock = vi.fn<
-  typeof piEmbedded.queueEmbeddedPiMessageWithOutcome
+const queueEmbeddedAgentMessageWithOutcomeMock = vi.fn<
+  typeof embeddedRuns.queueEmbeddedAgentMessageWithOutcome
 >((sessionId: string) => ({
   queued: false,
   sessionId,
   reason: "not_streaming",
   gatewayHealth: "live",
 }));
-const waitForEmbeddedPiRunEndMock = vi.fn<typeof piEmbedded.waitForEmbeddedPiRunEnd>(
+const waitForEmbeddedAgentRunEndMock = vi.fn<typeof embeddedRuns.waitForEmbeddedAgentRunEnd>(
   async (_sessionId: string, _timeoutMs?: number) => true,
 );
 const embeddedRunMock = {
-  isEmbeddedPiRunActive: embeddedPiRunActiveMock,
-  isEmbeddedPiRunStreaming: embeddedPiRunStreamingMock,
-  queueEmbeddedPiMessageWithOutcome: queueEmbeddedPiMessageWithOutcomeMock,
-  waitForEmbeddedPiRunEnd: waitForEmbeddedPiRunEndMock,
+  isEmbeddedAgentRunActive: embeddedAgentRunActiveMock,
+  isEmbeddedAgentRunStreaming: embeddedAgentRunStreamingMock,
+  queueEmbeddedAgentMessageWithOutcome: queueEmbeddedAgentMessageWithOutcomeMock,
+  waitForEmbeddedAgentRunEnd: waitForEmbeddedAgentRunEndMock,
 };
 const { subagentRegistryMock } = vi.hoisted(() => ({
   subagentRegistryMock: {
@@ -180,7 +181,7 @@ const { subagentRegistryMock } = vi.hoisted(() => ({
   },
 }));
 const subagentDeliveryTargetHookMock = vi.fn(
-  async (_event?: unknown, _ctx?: unknown): Promise<SubagentDeliveryTargetResult | undefined> =>
+  async (eventValue?: unknown, _ctx?: unknown): Promise<SubagentDeliveryTargetResult | undefined> =>
     undefined,
 );
 let hasSubagentDeliveryTargetHook = false;
@@ -268,6 +269,13 @@ function setConfigOverride(next: OpenClawConfig): void {
   setRuntimeConfigSnapshot(configOverride);
 }
 
+function setMessageToolGroupReplyConfig(): void {
+  setConfigOverride({
+    session: { mainKey: "main", scope: "per-sender" },
+    messages: { groupChat: { visibleReplies: "message_tool" } },
+  });
+}
+
 function toSessionEntry(
   sessionKey: string,
   entry?: Partial<SessionEntry>,
@@ -306,7 +314,7 @@ vi.mock("./subagent-registry-runtime.js", () => subagentRegistryMock);
 describe("subagent announce formatting", () => {
   let previousFastTestEnv: string | undefined;
   let runSubagentAnnounceFlow: (typeof import("./subagent-announce.js"))["runSubagentAnnounceFlow"];
-  let subagentAnnounceTesting: (typeof import("./subagent-announce.js"))["__testing"];
+  let subagentAnnounceTesting: (typeof import("./subagent-announce.js"))["testing"];
 
   beforeAll(async () => {
     // Set FAST_TEST_MODE before importing the module to ensure the module-level
@@ -315,12 +323,13 @@ describe("subagent announce formatting", () => {
     // See: https://github.com/openclaw/openclaw/issues/31298
     previousFastTestEnv = process.env.OPENCLAW_TEST_FAST;
     process.env.OPENCLAW_TEST_FAST = "1";
-    ({ runSubagentAnnounceFlow, __testing: subagentAnnounceTesting } =
+    ({ runSubagentAnnounceFlow, testing: subagentAnnounceTesting } =
       await import("./subagent-announce.js"));
   });
 
   afterAll(() => {
     subagentAnnounceTesting.setDepsForTest();
+    subagentAnnounceOutputTesting.setDepsForTest();
     subagentAnnounceDeliveryTesting.setDepsForTest();
     clearRuntimeConfigSnapshot();
     if (previousFastTestEnv === undefined) {
@@ -378,17 +387,26 @@ describe("subagent announce formatting", () => {
         const sessionId = entry?.sessionId;
         return {
           sessionId,
-          isActive: Boolean(sessionId && embeddedRunMock.isEmbeddedPiRunActive(sessionId)),
+          isActive: Boolean(sessionId && embeddedRunMock.isEmbeddedAgentRunActive(sessionId)),
         };
       },
-      queueEmbeddedPiMessageWithOutcome: (sessionId, text, options) =>
-        embeddedRunMock.queueEmbeddedPiMessageWithOutcome(sessionId, text, options),
+      queueEmbeddedAgentMessageWithOutcome: (sessionId, text, options) =>
+        embeddedRunMock.queueEmbeddedAgentMessageWithOutcome(sessionId, text, options),
     });
     subagentAnnounceTesting.setDepsForTest({
       callGateway: async <T = Record<string, unknown>>(
         req: Parameters<typeof gatewayCall.callGateway>[0],
       ) => (await callGatewaySpy(req)) as T,
       getRuntimeConfig: () => configOverride,
+    });
+    subagentAnnounceOutputTesting.setDepsForTest({
+      callGateway: async <T = Record<string, unknown>>(
+        req: Parameters<typeof gatewayCall.callGateway>[0],
+      ) => (await callGatewaySpy(req)) as T,
+      getRuntimeConfig: () => configOverride,
+      readSessionEntry: (_storePath, sessionKey) => loadSessionStoreFixture()[sessionKey],
+      resolveAgentIdFromSessionKey: () => "main",
+      resolveStorePath: () => "/tmp/sessions.json",
     });
     loadSessionStoreSpy.mockReset().mockImplementation(() => loadSessionStoreFixture());
     resolveAgentIdFromSessionKeySpy.mockReset().mockImplementation(() => "main");
@@ -402,26 +420,26 @@ describe("subagent announce formatting", () => {
     readLatestAssistantReplySpy
       .mockReset()
       .mockImplementation(async (params) => await readLatestAssistantReplyMock(params?.sessionKey));
-    isEmbeddedPiRunActiveSpy
+    isEmbeddedAgentRunActiveSpy
       .mockReset()
-      .mockImplementation((sessionId) => embeddedRunMock.isEmbeddedPiRunActive(sessionId));
-    isEmbeddedPiRunStreamingSpy
+      .mockImplementation((sessionId) => embeddedRunMock.isEmbeddedAgentRunActive(sessionId));
+    isEmbeddedAgentRunStreamingSpy
       .mockReset()
-      .mockImplementation((sessionId) => embeddedRunMock.isEmbeddedPiRunStreaming(sessionId));
-    queueEmbeddedPiMessageWithOutcomeSpy
+      .mockImplementation((sessionId) => embeddedRunMock.isEmbeddedAgentRunStreaming(sessionId));
+    queueEmbeddedAgentMessageWithOutcomeSpy
       .mockReset()
       .mockImplementation((sessionId, text, options) =>
-        embeddedRunMock.queueEmbeddedPiMessageWithOutcome(sessionId, text, options),
+        embeddedRunMock.queueEmbeddedAgentMessageWithOutcome(sessionId, text, options),
       );
-    waitForEmbeddedPiRunEndSpy
+    waitForEmbeddedAgentRunEndSpy
       .mockReset()
       .mockImplementation(
         async (sessionId, timeoutMs) =>
-          await embeddedRunMock.waitForEmbeddedPiRunEnd(sessionId, timeoutMs),
+          await embeddedRunMock.waitForEmbeddedAgentRunEnd(sessionId, timeoutMs),
       );
-    embeddedRunMock.isEmbeddedPiRunActive.mockClear().mockReturnValue(false);
-    embeddedRunMock.isEmbeddedPiRunStreaming.mockClear().mockReturnValue(false);
-    embeddedRunMock.queueEmbeddedPiMessageWithOutcome
+    embeddedRunMock.isEmbeddedAgentRunActive.mockClear().mockReturnValue(false);
+    embeddedRunMock.isEmbeddedAgentRunStreaming.mockClear().mockReturnValue(false);
+    embeddedRunMock.queueEmbeddedAgentMessageWithOutcome
       .mockClear()
       .mockImplementation((sessionId) => ({
         queued: false,
@@ -429,7 +447,7 @@ describe("subagent announce formatting", () => {
         reason: "not_streaming",
         gatewayHealth: "live",
       }));
-    embeddedRunMock.waitForEmbeddedPiRunEnd.mockClear().mockResolvedValue(true);
+    embeddedRunMock.waitForEmbeddedAgentRunEnd.mockClear().mockResolvedValue(true);
     subagentRegistryMock.isSubagentSessionRunActive.mockClear().mockReturnValue(true);
     subagentRegistryMock.shouldIgnorePostCompletionAnnounceForSession
       .mockClear()
@@ -618,7 +636,7 @@ describe("subagent announce formatting", () => {
     { role: "toolResult", toolOutput: "tool output line 1", childRunId: "run-tool-fallback-1" },
     { role: "tool", toolOutput: "tool output line 2", childRunId: "run-tool-fallback-2" },
   ] as const)(
-    "falls back to latest $role output when assistant reply is empty",
+    "does not fall back to latest $role output when assistant reply is empty",
     async (testCase) => {
       chatHistoryMock.mockResolvedValueOnce({
         messages: [
@@ -645,7 +663,8 @@ describe("subagent announce formatting", () => {
 
       const call = getAgentCall() as { params?: { message?: string } };
       const msg = call?.params?.message as string;
-      expect(msg).toContain(testCase.toolOutput);
+      expect(msg).toContain("(no output)");
+      expect(msg).not.toContain(testCase.toolOutput);
     },
   );
 
@@ -780,6 +799,7 @@ describe("subagent announce formatting", () => {
   });
 
   it("keeps direct completion announce delivery immediate even when sibling counters are non-zero", async () => {
+    setMessageToolGroupReplyConfig();
     sessionStore = {
       "agent:main:subagent:test": {
         sessionId: "child-session-self-pending",
@@ -977,6 +997,7 @@ describe("subagent announce formatting", () => {
   });
 
   it("delivers completion-mode announces immediately even when sibling runs are still active", async () => {
+    setMessageToolGroupReplyConfig();
     sessionStore = {
       "agent:main:subagent:test": {
         sessionId: "child-session-coordinated",
@@ -1377,7 +1398,7 @@ describe("subagent announce formatting", () => {
           threadId: 99,
         },
         requesterSessionMeta: {},
-        expectedThreadId: 99,
+        expectedThreadId: "99",
       },
     ] as const;
 
@@ -1785,8 +1806,8 @@ describe("subagent announce formatting", () => {
   });
 
   it("keeps direct announce idempotency unique for same-ms distinct child runs", async () => {
-    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
-    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+    embeddedRunMock.isEmbeddedAgentRunActive.mockReturnValue(false);
+    embeddedRunMock.isEmbeddedAgentRunStreaming.mockReturnValue(false);
     sessionStore = {
       "agent:main:main": {
         sessionId: "session-followup",
@@ -1842,8 +1863,8 @@ describe("subagent announce formatting", () => {
   });
 
   it("falls back to steering when an active completion wake cannot be injected", async () => {
-    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
-    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+    embeddedRunMock.isEmbeddedAgentRunActive.mockReturnValue(false);
+    embeddedRunMock.isEmbeddedAgentRunStreaming.mockReturnValue(false);
     sessionStore = {
       "agent:main:main": {
         sessionId: "session-collect",
@@ -1870,8 +1891,8 @@ describe("subagent announce formatting", () => {
   });
 
   it("falls back to internal requester-session injection when completion route is missing", async () => {
-    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
-    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+    embeddedRunMock.isEmbeddedAgentRunActive.mockReturnValue(false);
+    embeddedRunMock.isEmbeddedAgentRunStreaming.mockReturnValue(false);
     sessionStore = {
       "agent:main:main": {
         sessionId: "requester-session-no-route",
@@ -1905,6 +1926,7 @@ describe("subagent announce formatting", () => {
   });
 
   it("uses direct completion delivery when explicit channel+to route is available", async () => {
+    setMessageToolGroupReplyConfig();
     sessionStore = {
       "agent:main:main": {
         sessionId: "requester-session-direct-route",
@@ -1934,8 +1956,8 @@ describe("subagent announce formatting", () => {
   });
 
   it("returns failure for completion-mode when direct delivery fails and steering fallback is unavailable", async () => {
-    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
-    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+    embeddedRunMock.isEmbeddedAgentRunActive.mockReturnValue(false);
+    embeddedRunMock.isEmbeddedAgentRunStreaming.mockReturnValue(false);
     sessionStore = {
       "agent:main:main": {
         sessionId: "session-direct-only",
@@ -1993,7 +2015,7 @@ describe("subagent announce formatting", () => {
     expect(msg).not.toContain("old tool output");
   });
 
-  it("falls back to latest tool output for completion-mode when assistant output is empty", async () => {
+  it("does not fall back to latest tool output for completion-mode when assistant output is empty", async () => {
     chatHistoryMock.mockResolvedValueOnce({
       messages: [
         {
@@ -2023,7 +2045,8 @@ describe("subagent announce formatting", () => {
     expect(agentSpy).toHaveBeenCalledTimes(1);
     const call = getAgentCall() as { params?: { message?: string } };
     const msg = call?.params?.message as string;
-    expect(msg).toContain("tool output only");
+    expect(msg).toContain("(no output)");
+    expect(msg).not.toContain("tool output only");
   });
 
   it("ignores user text when deriving fallback completion output", async () => {
@@ -2057,8 +2080,8 @@ describe("subagent announce formatting", () => {
   });
 
   it("keeps announce delivery inside requester subagent session", async () => {
-    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
-    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+    embeddedRunMock.isEmbeddedAgentRunActive.mockReturnValue(false);
+    embeddedRunMock.isEmbeddedAgentRunStreaming.mockReturnValue(false);
     sessionStore = {
       "agent:main:subagent:orchestrator": {
         sessionId: "session-orchestrator",
@@ -2114,8 +2137,8 @@ describe("subagent announce formatting", () => {
   });
 
   it("preserves account routing for separate collect-mode announcements", async () => {
-    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
-    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+    embeddedRunMock.isEmbeddedAgentRunActive.mockReturnValue(false);
+    embeddedRunMock.isEmbeddedAgentRunStreaming.mockReturnValue(false);
     sessionStore = {
       "agent:main:main": {
         sessionId: "session-acc-split",
@@ -2169,8 +2192,8 @@ describe("subagent announce formatting", () => {
       expectedAccountId: "acct-987",
     },
   ] as const)("direct announce: $testName", async (testCase) => {
-    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
-    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+    embeddedRunMock.isEmbeddedAgentRunActive.mockReturnValue(false);
+    embeddedRunMock.isEmbeddedAgentRunStreaming.mockReturnValue(false);
 
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:test",
@@ -2192,8 +2215,8 @@ describe("subagent announce formatting", () => {
   });
 
   it("keeps direct announce delivery enabled for extension channels", async () => {
-    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
-    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+    embeddedRunMock.isEmbeddedAgentRunActive.mockReturnValue(false);
+    embeddedRunMock.isEmbeddedAgentRunStreaming.mockReturnValue(false);
 
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:test",
@@ -2219,8 +2242,8 @@ describe("subagent announce formatting", () => {
   });
 
   it("injects direct announce into requester subagent session as a user-turn agent call", async () => {
-    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
-    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+    embeddedRunMock.isEmbeddedAgentRunActive.mockReturnValue(false);
+    embeddedRunMock.isEmbeddedAgentRunStreaming.mockReturnValue(false);
 
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:worker",
@@ -2242,8 +2265,8 @@ describe("subagent announce formatting", () => {
   });
 
   it("keeps completion-mode announce internal for nested requester subagent sessions", async () => {
-    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
-    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+    embeddedRunMock.isEmbeddedAgentRunActive.mockReturnValue(false);
+    embeddedRunMock.isEmbeddedAgentRunStreaming.mockReturnValue(false);
 
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:orchestrator:subagent:worker",
@@ -2270,8 +2293,8 @@ describe("subagent announce formatting", () => {
   });
 
   it("retries reading subagent output when early lifecycle completion had no text", async () => {
-    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValueOnce(true).mockReturnValue(false);
-    embeddedRunMock.waitForEmbeddedPiRunEnd.mockResolvedValue(true);
+    embeddedRunMock.isEmbeddedAgentRunActive.mockReturnValueOnce(true).mockReturnValue(false);
+    embeddedRunMock.waitForEmbeddedAgentRunEnd.mockResolvedValue(true);
     readLatestAssistantReplyMock
       .mockResolvedValueOnce(undefined)
       .mockResolvedValueOnce("Read #12 complete.");
@@ -2298,7 +2321,10 @@ describe("subagent announce formatting", () => {
       outcome: { status: "ok" },
     });
 
-    expect(embeddedRunMock.waitForEmbeddedPiRunEnd).toHaveBeenCalledWith("child-session-1", 1000);
+    expect(embeddedRunMock.waitForEmbeddedAgentRunEnd).toHaveBeenCalledWith(
+      "child-session-1",
+      1000,
+    );
     const call = getAgentCall() as { params?: { message?: string } };
     expect(call?.params?.message).toContain("Read #12 complete.");
     expect(call?.params?.message).not.toContain("(no output)");
@@ -2970,8 +2996,8 @@ describe("subagent announce formatting", () => {
     for (const testCase of cases) {
       agentSpy.mockClear();
       sendSpy.mockClear();
-      embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
-      embeddedRunMock.waitForEmbeddedPiRunEnd.mockResolvedValue(false);
+      embeddedRunMock.isEmbeddedAgentRunActive.mockReturnValue(true);
+      embeddedRunMock.waitForEmbeddedAgentRunEnd.mockResolvedValue(false);
       sessionStore = {
         "agent:main:subagent:test": {
           sessionId: "child-session-active",
@@ -2995,8 +3021,8 @@ describe("subagent announce formatting", () => {
   });
 
   it("prefers requesterOrigin channel over stale session lastChannel in direct announce", async () => {
-    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
-    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+    embeddedRunMock.isEmbeddedAgentRunActive.mockReturnValue(false);
+    embeddedRunMock.isEmbeddedAgentRunStreaming.mockReturnValue(false);
     // Session store has stale whatsapp channel, but the requesterOrigin says imessage.
     sessionStore = {
       "agent:main:main": {
@@ -3093,8 +3119,8 @@ describe("subagent announce formatting", () => {
 
     for (const testCase of cases) {
       agentSpy.mockClear();
-      embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
-      embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+      embeddedRunMock.isEmbeddedAgentRunActive.mockReturnValue(false);
+      embeddedRunMock.isEmbeddedAgentRunStreaming.mockReturnValue(false);
       subagentRegistryMock.isSubagentSessionRunActive.mockReturnValue(false);
       sessionStore = testCase.sessionStoreFixture as SessionStoreFixture;
       subagentRegistryMock.resolveRequesterForChildSession.mockReturnValue({

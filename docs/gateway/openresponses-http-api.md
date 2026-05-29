@@ -175,9 +175,9 @@ Current behavior:
   rasterized into images and passed to the model, and the injected file block uses
   the placeholder `[PDF content rendered to images]`.
 
-PDF parsing is provided by the bundled `document-extract` plugin, which uses the
-Node-friendly `pdfjs-dist` legacy build (no worker). The modern PDF.js build
-expects browser workers/DOM globals, so it is not used in the Gateway.
+PDF parsing is provided by the bundled `document-extract` plugin, which uses
+`clawpdf` and its packaged PDFium WebAssembly runtime for text extraction and
+page rendering.
 
 URL fetch defaults:
 
@@ -261,7 +261,7 @@ Defaults when omitted:
 - `images.maxBytes`: 10MB
 - `images.maxRedirects`: 3
 - `images.timeoutMs`: 10s
-- HEIC/HEIF `input_image` sources are accepted and normalized to JPEG before provider delivery.
+- HEIC/HEIF `input_image` sources are accepted when a system converter is available and are normalized to JPEG before provider delivery. Supported converters are macOS `sips`, ImageMagick, GraphicsMagick, or ffmpeg.
 
 Security note:
 

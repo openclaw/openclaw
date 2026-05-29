@@ -4,6 +4,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SkillCommandSpec } from "../../agents/skills.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { handleInlineActions } from "./get-reply-inline-actions.js";
@@ -648,7 +649,7 @@ describe("handleInlineActions", () => {
     expect(toolExecute).toHaveBeenCalledTimes(1);
   });
 
-  it("passes senderIsOwner into inline tool runtimes before owner-only filtering", async () => {
+  it("passes sender identity into inline tool runtimes", async () => {
     const typing = createTypingController();
     const toolExecute = vi.fn(async () => ({ text: "updated" }));
     createOpenClawToolsMock.mockReturnValue([
@@ -667,6 +668,7 @@ describe("handleInlineActions", () => {
         name: "set_profile",
         skillName: "matrix-profile",
         description: "Set Matrix profile",
+        skillSource: "workspace",
         dispatch: {
           kind: "tool",
           toolName: "message",
@@ -698,7 +700,18 @@ describe("handleInlineActions", () => {
     );
 
     expect(result).toEqual({ kind: "reply", reply: { text: "✅ Done." } });
-    expect(mockObjectArg(createOpenClawToolsMock, "createOpenClawTools").senderIsOwner).toBe(true);
+    const toolsArgs = mockObjectArg(createOpenClawToolsMock, "createOpenClawTools");
+    expect(toolsArgs).not.toHaveProperty("senderIsOwner");
+    expect(toolsArgs.beforeToolCallHookContext).toMatchObject({
+      cwd: "/tmp",
+      workspaceDir: "/tmp",
+      skillCommand: {
+        commandName: "set_profile",
+        skillName: "matrix-profile",
+        skillSource: "workspace",
+        toolName: "message",
+      },
+    });
     const toolCall = mockCallArgs(toolExecute, "toolExecute");
     expect(toolCall?.[0]).toMatch(/^cmd_/);
     expect(toolCall?.[1]).toEqual({
@@ -1118,5 +1131,50 @@ describe("handleInlineActions", () => {
       }),
     );
     expect(toolExecute).toHaveBeenCalled();
+  });
+
+  it("marks command-handler terminal replies with deliverDespiteSourceReplySuppression so they are not dropped under message_tool_only delivery (#87107)", async () => {
+    const typing = createTypingController();
+    handleCommandsMock.mockResolvedValueOnce({
+      shouldContinue: false,
+      reply: { text: "⚙️ Compacted (76k → 934 tokens)" },
+    });
+
+    const ctx = buildTestCtx({
+      Body: "/compact",
+      CommandBody: "/compact",
+    });
+
+    const result = await handleInlineActions(
+      createHandleInlineActionsInput({
+        ctx,
+        typing,
+        cleanedBody: "/compact",
+        command: {
+          isAuthorizedSender: true,
+          senderId: "sender-1",
+          senderIsOwner: true,
+          abortKey: "sender-1",
+          rawBodyNormalized: "/compact",
+          commandBodyNormalized: "/compact",
+        },
+        overrides: {
+          cfg: { commands: { text: true } },
+          allowTextCommands: true,
+        },
+      }),
+    );
+
+    expect(result.kind).toBe("reply");
+    if (result.kind !== "reply") {
+      throw new Error("expected reply");
+    }
+    expect(result.reply).toEqual({ text: "⚙️ Compacted (76k → 934 tokens)" });
+    // Reply must carry deliverDespiteSourceReplySuppression so dispatch-from-config
+    // does not silently `continue` past it when sourceReplyDeliveryMode is
+    // "message_tool_only" (Feishu group / WebChat default).
+    expect(
+      getReplyPayloadMetadata(result.reply as object)?.deliverDespiteSourceReplySuppression,
+    ).toBe(true);
   });
 });
