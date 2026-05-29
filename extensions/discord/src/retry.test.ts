@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { isRetryableDiscordDeliveryError } from "./delivery-retry.js";
+import {
+  getDiscordDeliveryRetryAfterMs,
+  isRetryableDiscordDeliveryError,
+} from "./delivery-retry.js";
 import { DiscordError, RateLimitError } from "./internal/discord.js";
 import { createDiscordRetryRunner, isRetryableDiscordTransientError } from "./retry.js";
 
@@ -84,5 +87,19 @@ describe("isRetryableDiscordDeliveryError", () => {
     });
 
     expect(isRetryableDiscordDeliveryError(err)).toBe(false);
+  });
+});
+
+describe("getDiscordDeliveryRetryAfterMs", () => {
+  it("reads finite retry delays from delivery errors", () => {
+    expect(getDiscordDeliveryRetryAfterMs({ retryAfter: 0.25 })).toBe(250);
+    expect(getDiscordDeliveryRetryAfterMs({ headers: { "retry-after": "0.25" } })).toBe(250);
+  });
+
+  it("rejects unsafe retry delay magnitudes", () => {
+    expect(getDiscordDeliveryRetryAfterMs({ retryAfter: 9_007_199_254_741 })).toBeUndefined();
+    expect(
+      getDiscordDeliveryRetryAfterMs({ headers: { "retry-after": "9007199254741" } }),
+    ).toBeUndefined();
   });
 });

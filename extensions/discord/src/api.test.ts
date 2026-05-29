@@ -103,6 +103,8 @@ describe("fetchDiscord", () => {
   it.each([
     ["hex", "0x10"],
     ["fractional", "1.5"],
+    ["unsafe-ms", "9007199254741"],
+    ["unsafe-integer", "9007199254740993"],
     ["overflow", `1${"0".repeat(309)}`],
   ])("rejects invalid Retry-After header values: %s", async (_label, header) => {
     const fetcher = withFetchPreconnect(
@@ -124,6 +126,33 @@ describe("fetchDiscord", () => {
 
     expect(error).toBeInstanceOf(DiscordApiError);
     expect((error as DiscordApiError).retryAfter).toBe(60);
+  });
+
+  it("ignores unsafe retry_after body values and falls back to Retry-After", async () => {
+    const fetcher = withFetchPreconnect(
+      async () =>
+        new Response(
+          JSON.stringify({
+            message: "You are being rate limited.",
+            retry_after: 9_007_199_254_741,
+            global: false,
+          }),
+          { status: 429, headers: { "retry-after": "7" } },
+        ),
+    );
+
+    let error: unknown;
+    try {
+      await fetchDiscord("/users/@me/guilds", "test", fetcher, {
+        retry: { attempts: 1 },
+      });
+    } catch (err) {
+      error = err;
+    }
+
+    expect(error).toBeInstanceOf(DiscordApiError);
+    expect((error as DiscordApiError).retryAfter).toBe(7);
+    expect(String(error)).not.toContain("retry after");
   });
 
   it("retries rate limits before succeeding", async () => {
