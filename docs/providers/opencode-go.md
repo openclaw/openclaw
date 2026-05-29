@@ -11,11 +11,11 @@ It prefers its own `OPENCODE_GO_API_KEY`, with fallback to the shared
 `OPENCODE_API_KEY` and `OPENCODE_ZEN_API_KEY`. The runtime provider id
 `opencode-go` keeps upstream per-model routing correct.
 
-| Property         | Value                                                                   |
-| ---------------- | ----------------------------------------------------------------------- |
-| Runtime provider | `opencode-go`                                                           |
-| Auth             | `OPENCODE_GO_API_KEY` → `OPENCODE_API_KEY` → `OPENCODE_ZEN_API_KEY`     |
-| Parent setup     | [OpenCode](/providers/opencode)                                         |
+| Property         | Value                                                               |
+| ---------------- | ------------------------------------------------------------------- |
+| Runtime provider | `opencode-go`                                                       |
+| Auth             | `OPENCODE_GO_API_KEY` → `OPENCODE_API_KEY` → `OPENCODE_ZEN_API_KEY` |
+| Parent setup     | [OpenCode](/providers/opencode)                                     |
 
 ## Built-in catalog
 
