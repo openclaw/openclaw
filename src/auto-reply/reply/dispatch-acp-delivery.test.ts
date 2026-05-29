@@ -13,7 +13,16 @@ const ttsMocks = vi.hoisted(() => ({
 }));
 
 const deliveryMocks = vi.hoisted(() => ({
-  routeReply: vi.fn(async (_params: unknown) => ({ ok: true, messageId: "mock-message" })),
+  routeReply: vi.fn(
+    async (
+      _params: unknown,
+    ): Promise<{
+      ok: boolean;
+      messageId?: string;
+      suppressed?: boolean;
+      reason?: string;
+    }> => ({ ok: true, messageId: "mock-message" }),
+  ),
   runMessageAction: vi.fn(async (_params: unknown) => ({ ok: true as const })),
 }));
 
