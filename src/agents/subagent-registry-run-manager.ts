@@ -206,6 +206,10 @@ export function createSubagentRunManager(params: {
     fallbackEndedAt: number;
     notBeforeMs?: number;
   }): SubagentSessionCompletion | null;
+  resolveSubagentSessionStartedAt(args: {
+    childSessionKey: string;
+    notBeforeMs?: number;
+  }): number | undefined;
   notifyContextEngineSubagentEnded(args: {
     childSessionKey: string;
     reason: "completed" | "deleted" | "released";
@@ -325,7 +329,10 @@ export function createSubagentRunManager(params: {
         const observedStartedAt =
           typeof wait.startedAt === "number" && Number.isFinite(wait.startedAt)
             ? wait.startedAt
-            : undefined;
+            : params.resolveSubagentSessionStartedAt({
+                childSessionKey: entry.childSessionKey,
+                notBeforeMs: entry.startedAt ?? entry.createdAt,
+              });
         if (observedStartedAt !== undefined && entry.startedAt !== observedStartedAt) {
           entry.startedAt = observedStartedAt;
           if (typeof entry.sessionStartedAt !== "number") {

@@ -490,7 +490,7 @@ describe("subagent registry seam flow", () => {
       runTimeoutSeconds: 1,
     });
 
-    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(10_000);
     await waitForFast(() => {
       const completedRun = mod
         .listSubagentRunsForRequester("agent:main:main")
@@ -1145,6 +1145,72 @@ describe("subagent registry seam flow", () => {
           elapsedMs: 60_000,
         },
         "observed start plain wait timeout outcome",
+      );
+    });
+    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses running session-store start time for plain agent.wait timeouts", async () => {
+    const createdAt = Date.parse("2026-03-24T11:59:00Z");
+    const sessionStartedAt = createdAt + 10_000;
+    vi.setSystemTime(createdAt);
+    let waitAttempts = 0;
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        waitAttempts += 1;
+        if (waitAttempts === 1) {
+          vi.setSystemTime(createdAt + 61_000);
+        }
+        return { status: "timeout" };
+      }
+      return {};
+    });
+    mocks.loadSessionStore.mockReturnValue({
+      "agent:main:subagent:child": {
+        sessionId: "sess-child",
+        updatedAt: createdAt + 61_000,
+        status: "running",
+        startedAt: sessionStartedAt,
+      },
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-plain-timeout-session-store-start",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "do not timeout before session store start deadline",
+      cleanup: "keep",
+      runTimeoutSeconds: 60,
+    });
+
+    await waitForFast(() => {
+      const run = mod
+        .listSubagentRunsForRequester("agent:main:main")
+        .find((entry) => entry.runId === "run-plain-timeout-session-store-start");
+      expect(waitAttempts).toBeGreaterThanOrEqual(1);
+      expect(run?.endedAt).toBeUndefined();
+      expect(run?.outcome).toBeUndefined();
+      expect(run?.startedAt).toBe(sessionStartedAt);
+    });
+
+    vi.setSystemTime(sessionStartedAt + 60_000);
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    await waitForFast(() => {
+      const run = mod
+        .listSubagentRunsForRequester("agent:main:main")
+        .find((entry) => entry.runId === "run-plain-timeout-session-store-start");
+      expect(run?.endedAt).toBe(sessionStartedAt + 60_000);
+      expectRecordFields(
+        run?.outcome,
+        {
+          status: "timeout",
+          startedAt: sessionStartedAt,
+          endedAt: sessionStartedAt + 60_000,
+          elapsedMs: 60_000,
+        },
+        "session store start plain wait timeout outcome",
       );
     });
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);

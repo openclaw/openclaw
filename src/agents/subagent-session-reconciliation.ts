@@ -164,3 +164,19 @@ export function resolveSubagentSessionCompletion(params: {
     { notBeforeMs: params.notBeforeMs },
   );
 }
+
+export function resolveSubagentSessionStartedAt(params: {
+  childSessionKey: string;
+  notBeforeMs?: number;
+  storeCache?: SubagentSessionStoreCache;
+  cfg?: OpenClawConfig;
+}): number | undefined {
+  const sessionEntry = loadSubagentSessionEntry({
+    childSessionKey: params.childSessionKey,
+    storeCache: params.storeCache,
+    cfg: params.cfg,
+  });
+  return isFreshForRun(sessionEntry, params.notBeforeMs)
+    ? finiteTimestamp(sessionEntry?.startedAt)
+    : undefined;
+}
