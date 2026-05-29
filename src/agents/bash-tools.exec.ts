@@ -1,7 +1,6 @@
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { buildCommandPayloadCandidates } from "../infra/command-analysis/risks.js";
 import { analyzeShellCommand } from "../infra/exec-approvals-analysis.js";
 import {
@@ -26,6 +25,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { splitShellArgs } from "../utils/shell-argv.js";
 import { markBackgrounded } from "./bash-process-registry.js";
@@ -57,6 +57,7 @@ import {
   resolveWorkdir,
   truncateMiddle,
 } from "./bash-tools.shared.js";
+import type { AgentToolResult } from "./runtime/index.js";
 import { EXEC_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 import { type AgentToolWithMeta, failedTextResult, textResult } from "./tools/common.js";
 
@@ -1190,14 +1191,10 @@ function rejectUnsafeControlShellCommand(command: string): void {
   const analysis = analyzeShellCommand({ command: rawCommand });
   const candidates = analysis.ok
     ? analysis.segments.flatMap((segment) => buildCommandPayloadCandidates(segment.argv))
-    : rawCommand
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .flatMap((line) => {
-          const argv = splitShellArgs(line);
-          return argv ? buildCommandPayloadCandidates(argv) : [line];
-        });
+    : normalizeStringEntries(rawCommand.split(/\r?\n/)).flatMap((line) => {
+        const argv = splitShellArgs(line);
+        return argv ? buildCommandPayloadCandidates(argv) : [line];
+      });
   for (const candidate of candidates) {
     if (parseExecApprovalShellCommand(candidate)) {
       throw new Error(
@@ -1222,7 +1219,7 @@ export function createExecTool(
   defaults?: ExecToolDefaults,
 ): AgentToolWithMeta<typeof execSchema, ExecToolDetails> {
   const defaultBackgroundMs = clampWithDefault(
-    defaults?.backgroundMs ?? readEnvInt("PI_BASH_YIELD_MS"),
+    defaults?.backgroundMs ?? readEnvInt("OPENCLAW_BASH_YIELD_MS", "PI_BASH_YIELD_MS"),
     10_000,
     10,
     120_000,
@@ -1560,6 +1557,7 @@ export function createExecTool(
           command: params.command,
           workdir,
           env,
+          pathPrepend: defaultPathPrepend,
           requestedEnv: params.env,
           pty: params.pty === true && !sandbox,
           timeoutSec: params.timeout,
@@ -1592,6 +1590,9 @@ export function createExecTool(
         if (gatewayResult.pendingResult) {
           return gatewayResult.pendingResult;
         }
+        if (gatewayResult.deniedResult) {
+          return gatewayResult.deniedResult;
+        }
         execCommandOverride = gatewayResult.execCommandOverride;
         if (gatewayResult.allowWithoutEnforcedCommand) {
           execCommandOverride = undefined;
@@ -1614,6 +1615,7 @@ export function createExecTool(
         execCommand: execCommandOverride,
         workdir,
         env,
+        pathPrepend: defaultPathPrepend,
         sandbox,
         containerWorkdir,
         usePty,
@@ -1626,6 +1628,7 @@ export function createExecTool(
         sessionKey: notifySessionKey,
         mainKey: defaults?.mainKey,
         sessionScope: defaults?.sessionScope,
+        eventRouting: defaults?.eventRouting,
         notifyDeliveryContext,
         timeoutSec: effectiveTimeout,
         onUpdate,
@@ -1633,12 +1636,13 @@ export function createExecTool(
 
       let yielded = false;
       let yieldTimer: NodeJS.Timeout | null = null;
+      let registeredAbortSignal: AbortSignal | null = null;
 
       // Tool-call abort should not kill backgrounded sessions; timeouts still must.
       const onAbortSignal = () => {
         // Immediately suppress onUpdate calls so that any late stdout/stderr
         // from the still-running process cannot push a rejected Promise into
-        // pi-agent-core's updateEvents after the agent run has ended (#62520).
+        // agent runtime's updateEvents after the agent run has ended (#62520).
         // Intentionally placed *before* the yielded/backgrounded guard: the
         // agent run is ending regardless, so no consumer exists for further
         // tool_execution_update events even for backgrounded sessions (which
@@ -1650,14 +1654,27 @@ export function createExecTool(
         run.kill();
       };
 
+      const cleanupToolRunListeners = () => {
+        if (registeredAbortSignal) {
+          registeredAbortSignal.removeEventListener("abort", onAbortSignal);
+          registeredAbortSignal = null;
+        }
+        if (yieldTimer) {
+          clearTimeout(yieldTimer);
+          yieldTimer = null;
+        }
+      };
+
       if (signal?.aborted) {
         onAbortSignal();
       } else if (signal) {
         signal.addEventListener("abort", onAbortSignal, { once: true });
+        registeredAbortSignal = signal;
       }
 
       return new Promise<AgentToolResult<ExecToolDetails>>((resolve, reject) => {
-        const resolveRunning = () =>
+        const resolveRunning = () => {
+          cleanupToolRunListeners();
           resolve({
             content: [
               {
@@ -1676,11 +1693,9 @@ export function createExecTool(
               tail: run.session.tail,
             },
           });
+        };
 
         const onYieldNow = () => {
-          if (yieldTimer) {
-            clearTimeout(yieldTimer);
-          }
           if (yielded) {
             return;
           }
@@ -1706,9 +1721,7 @@ export function createExecTool(
 
         run.promise
           .then((outcome) => {
-            if (yieldTimer) {
-              clearTimeout(yieldTimer);
-            }
+            cleanupToolRunListeners();
             if (yielded || run.session.backgrounded) {
               return;
             }
@@ -1721,9 +1734,7 @@ export function createExecTool(
             );
           })
           .catch((err) => {
-            if (yieldTimer) {
-              clearTimeout(yieldTimer);
-            }
+            cleanupToolRunListeners();
             if (yielded || run.session.backgrounded) {
               return;
             }

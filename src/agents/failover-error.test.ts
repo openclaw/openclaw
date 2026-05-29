@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { classifyFailoverSignal } from "./embedded-agent-helpers/errors.js";
 import {
   coerceToFailoverError,
   describeFailoverError,
@@ -8,7 +9,6 @@ import {
   resolveFailoverReasonFromError,
   resolveFailoverStatus,
 } from "./failover-error.js";
-import { classifyFailoverSignal } from "./pi-embedded-helpers/errors.js";
 import { SessionWriteLockTimeoutError } from "./session-write-lock-error.js";
 
 // OpenAI 429 example shape: https://help.openai.com/en/articles/5955604-how-can-i-solve-429-too-many-requests-errors
@@ -77,6 +77,8 @@ describe("failover-error", () => {
       }),
     ).toBe("billing");
     expect(resolveFailoverReasonFromError({ statusCode: "429" })).toBe("rate_limit");
+    expect(resolveFailoverReasonFromError({ statusCode: "+429" })).toBe("rate_limit");
+    expect(resolveFailoverReasonFromError({ statusCode: "0x1ad" })).toBeNull();
     expect(resolveFailoverReasonFromError({ status: 403 })).toBe("auth");
     expect(resolveFailoverReasonFromError({ status: 408 })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ status: 410 })).toBe("timeout");
@@ -488,7 +490,7 @@ describe("failover-error", () => {
     ).toBeNull();
   });
 
-  it("classifies bare pi-ai stream wrapper as timeout regardless of provider (#71620)", () => {
+  it("classifies bare shared model runtime stream wrapper as timeout regardless of provider (#71620)", () => {
     expect(
       resolveFailoverReasonFromError({
         message: "An unknown error occurred",
@@ -542,6 +544,49 @@ describe("failover-error", () => {
       resolveFailoverReasonFromError({
         status: 400,
         message: INSUFFICIENT_QUOTA_PAYLOAD,
+      }),
+    ).toBe("billing");
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "openai",
+        status: 429,
+        message: INSUFFICIENT_QUOTA_PAYLOAD,
+      }),
+    ).toBe("billing");
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "openai",
+        status: 429,
+        message: '{"error":"insufficient_balance","message":"Your credit balance is too low."}',
+      }),
+    ).toBe("billing");
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "openai",
+        status: 429,
+        message: '{"error":"insufficient_balance","message":"Insufficient account balance"}',
+      }),
+    ).toBe("billing");
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "openai",
+        status: 429,
+        message:
+          'HTTP 429: {"error":"insufficient_balance","message":"Insufficient account balance"}',
+      }),
+    ).toBe("billing");
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "openai",
+        status: 429,
+        message: "This model requires more credits to use",
+      }),
+    ).toBe("billing");
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "openrouter",
+        status: 429,
+        message: "Key limit exceeded",
       }),
     ).toBe("billing");
   });
@@ -941,6 +986,37 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ status: 403, message: "api key revoked" })).toBe(
       "auth_permanent",
     );
+  });
+
+  it("Codex deactivated workspace marker returns auth_permanent", () => {
+    expect(resolveFailoverReasonFromError({ message: "deactivated_workspace" })).toBe(
+      "auth_permanent",
+    );
+    expect(resolveFailoverReasonFromError({ message: "deactivated workspace" })).toBe(
+      "auth_permanent",
+    );
+    expect(resolveFailoverReasonFromError({ code: "deactivated_workspace" })).toBe(
+      "auth_permanent",
+    );
+    expect(
+      resolveFailoverReasonFromError({
+        detail: { code: "deactivated_workspace" },
+      }),
+    ).toBe("auth_permanent");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 403,
+        message: "Forbidden",
+        detail: { code: "deactivated_workspace" },
+      }),
+    ).toBe("auth_permanent");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 400,
+        message: "Bad request",
+        detail: { code: "deactivated_workspace" },
+      }),
+    ).toBe("auth_permanent");
   });
 
   it("403 OpenRouter 'Key limit exceeded' returns billing (model fallback trigger)", () => {

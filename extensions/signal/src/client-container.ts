@@ -10,6 +10,7 @@ import fs from "node:fs/promises";
 import nodePath from "node:path";
 import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import { detectMime } from "openclaw/plugin-sdk/media-runtime";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import WebSocket from "ws";
 
@@ -420,9 +421,8 @@ function parseContainerSendTimestamp(raw: unknown): number | undefined {
   if (raw == null) {
     return undefined;
   }
-  const timestamp =
-    typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : Number.NaN;
-  if (!Number.isFinite(timestamp)) {
+  const timestamp = parseStrictNonNegativeInteger(raw);
+  if (timestamp === undefined) {
     throw new Error("Signal REST send returned invalid timestamp");
   }
   return timestamp;

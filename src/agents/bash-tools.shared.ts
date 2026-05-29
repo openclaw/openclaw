@@ -2,6 +2,7 @@ import { existsSync, statSync } from "node:fs";
 import fs from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
+import { parseStrictInteger } from "../shared/number-coercion.js";
 import { sliceUtf16Safe } from "../utils.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxBackendExecSpec } from "./sandbox/backend-handle.types.js";
@@ -207,13 +208,9 @@ export function clampWithDefault(
   return Math.min(Math.max(value, min), max);
 }
 
-export function readEnvInt(key: string) {
-  const raw = process.env[key];
-  if (!raw) {
-    return undefined;
-  }
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) ? parsed : undefined;
+export function readEnvInt(key: string, legacyKey?: string) {
+  const raw = process.env[key] || (legacyKey ? process.env[legacyKey] : undefined);
+  return parseStrictInteger(raw);
 }
 
 export function chunkString(input: string, limit = CHUNK_LIMIT) {

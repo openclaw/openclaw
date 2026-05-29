@@ -3,7 +3,8 @@ import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-s
 import {
   asToolParamsRecord,
   jsonResult,
-  readNumberParam,
+  readFiniteNumberParam,
+  readPositiveIntegerParam,
   readStringParam,
   type MemoryCorpusSearchResult,
   type OpenClawConfig,
@@ -79,6 +80,16 @@ function mergeMemorySearchCorpusResults(params: {
   }
 
   return sortMemorySearchToolResults(selected).slice(0, params.maxResults);
+}
+
+function isClosedMemoryStoreError(error: unknown): boolean {
+  const message = formatErrorMessage(error).toLowerCase();
+  return (
+    message.includes("database is not open") ||
+    message.includes("database connection is not open") ||
+    message.includes("database handle is closed") ||
+    message.includes("memory search manager is closed")
+  );
 }
 
 function buildRecallKey(
@@ -245,8 +256,8 @@ export function createMemorySearchTool(options: {
       async (_toolCallId, params) => {
         const rawParams = asToolParamsRecord(params);
         const query = readStringParam(rawParams, "query", { required: true });
-        const maxResults = readNumberParam(rawParams, "maxResults");
-        const minScore = readNumberParam(rawParams, "minScore");
+        const maxResults = readPositiveIntegerParam(rawParams, "maxResults");
+        const minScore = readFiniteNumberParam(rawParams, "minScore");
         const requestedCorpus = readStringParam(rawParams, "corpus") as
           | "memory"
           | "wiki"
@@ -293,6 +304,7 @@ export function createMemorySearchTool(options: {
               }
             | undefined;
           if (shouldQueryMemory && memory && !("error" in memory)) {
+            let activeMemory = memory;
             const runtimeDebug: MemorySearchRuntimeDebug[] = [];
             const qmdSearchModeOverride = resolveActiveMemoryQmdSearchModeOverride(
               cfg,
@@ -304,16 +316,33 @@ export function createMemorySearchTool(options: {
                 : requestedCorpus === "memory"
                   ? (["memory"] as MemorySource[])
                   : undefined;
-            rawResults = await memory.manager.search(query, {
+            const searchOptions = {
               maxResults,
               minScore,
               sessionKey: options.agentSessionKey,
               qmdSearchModeOverride,
-              onDebug: (debug) => {
+              onDebug: (debug: MemorySearchRuntimeDebug) => {
                 runtimeDebug.push(debug);
               },
               ...(searchSources ? { sources: searchSources } : {}),
-            });
+            };
+            try {
+              rawResults = await activeMemory.manager.search(query, searchOptions);
+            } catch (error) {
+              if (!isClosedMemoryStoreError(error)) {
+                throw error;
+              }
+              const refreshed = await getMemoryManagerContext({ cfg, agentId });
+              if ("error" in refreshed) {
+                throw error;
+              }
+              activeMemory = refreshed;
+              rawResults = await activeMemory.manager.search(query, searchOptions);
+            }
+            if (rawResults.length === 0 && activeMemory.manager.sync) {
+              await activeMemory.manager.sync({ reason: "search", force: true });
+              rawResults = await activeMemory.manager.search(query, searchOptions);
+            }
             rawResults = await filterMemorySearchHitsBySessionVisibility({
               cfg,
               agentId,
@@ -326,7 +355,7 @@ export function createMemorySearchTool(options: {
             } else if (requestedCorpus === "memory") {
               rawResults = rawResults.filter((hit) => hit.source === "memory");
             }
-            const status = memory.manager.status();
+            const status = activeMemory.manager.status();
             const decorated = decorateCitations(rawResults, includeCitations);
             const resolved = resolveMemoryBackendConfig({ cfg, agentId });
             const memoryResults =
@@ -415,8 +444,8 @@ export function createMemoryGetTool(options: {
       async (_toolCallId, params) => {
         const rawParams = asToolParamsRecord(params);
         const relPath = readStringParam(rawParams, "path", { required: true });
-        const from = readNumberParam(rawParams, "from", { integer: true });
-        const lines = readNumberParam(rawParams, "lines", { integer: true });
+        const from = readPositiveIntegerParam(rawParams, "from");
+        const lines = readPositiveIntegerParam(rawParams, "lines");
         const requestedCorpus = readStringParam(rawParams, "corpus") as
           | "memory"
           | "wiki"

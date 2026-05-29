@@ -120,6 +120,13 @@ describe("telegram live qa runtime", () => {
         OPENCLAW_QA_TELEGRAM_CANARY_TIMEOUT_MS: "nope",
       }),
     ).toBe(30_000);
+    for (const value of ["0x10", "1e3", "10.5"]) {
+      expect(
+        testing.resolveTelegramQaCanaryTimeoutMs({
+          OPENCLAW_QA_TELEGRAM_CANARY_TIMEOUT_MS: value,
+        }),
+      ).toBe(30_000);
+    }
   });
 
   it("normalizes the Telegram QA scenario timeout env", () => {
@@ -134,6 +141,13 @@ describe("telegram live qa runtime", () => {
         OPENCLAW_QA_TELEGRAM_SCENARIO_TIMEOUT_MS: "nope",
       }),
     ).toBe(45_000);
+    for (const value of ["0x10", "1e3", "10.5"]) {
+      expect(
+        testing.resolveTelegramQaScenarioTimeoutMs(45_000, {
+          OPENCLAW_QA_TELEGRAM_SCENARIO_TIMEOUT_MS: value,
+        }),
+      ).toBe(45_000);
+    }
   });
 
   it("sanitizes and truncates Telegram live progress details", () => {
@@ -199,7 +213,9 @@ describe("telegram live qa runtime", () => {
     });
 
     expect(next.agents?.defaults?.skipBootstrap).toBe(true);
-    expect(next.agents?.defaults?.models?.["openai/gpt-5.5"]?.agentRuntime).toEqual({ id: "pi" });
+    expect(next.agents?.defaults?.models?.["openai/gpt-5.5"]?.agentRuntime).toEqual({
+      id: "openclaw",
+    });
     expect(next.plugins?.allow).toContain("telegram");
     expect(next.plugins?.entries?.telegram).toEqual({ enabled: true });
     expect(next.messages?.groupChat?.visibleReplies).toBe("automatic");
@@ -331,6 +347,23 @@ describe("telegram live qa runtime", () => {
     expect(() => testing.findScenario(["telegram-help-command", "typo-scenario"])).toThrow(
       "unknown Telegram QA scenario id(s): typo-scenario",
     );
+  });
+
+  it("recognizes Telegram observation timeouts with retry details", () => {
+    expect(
+      testing.isTelegramObservedMessageTimeoutError(
+        new Error(
+          "timed out after 8000ms waiting for Telegram message; last polling error: The operation was aborted due to timeout",
+        ),
+        8000,
+      ),
+    ).toBe(true);
+    expect(
+      testing.isTelegramObservedMessageTimeoutError(
+        new Error("timed out after 9000ms waiting for Telegram message"),
+        8000,
+      ),
+    ).toBe(false);
   });
 
   it("includes mention gating in the Telegram live scenario catalog", () => {

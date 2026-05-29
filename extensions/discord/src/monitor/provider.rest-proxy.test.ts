@@ -26,10 +26,7 @@ const { undiciFetchMock, agentSpy, envHttpProxyAgentSpy, proxyAgentSpy, createMo
             ("httpsProxy" in options || "httpProxy" in options)
           ) {
             const proxyOptions = options as { httpsProxy?: unknown; httpProxy?: unknown };
-            if (
-              proxyOptions.httpsProxy === "bad-proxy" ||
-              proxyOptions.httpProxy === "bad-proxy"
-            ) {
+            if (proxyOptions.httpsProxy === "bad-proxy" || proxyOptions.httpProxy === "bad-proxy") {
               throw new Error("bad env proxy");
             }
           }
@@ -68,7 +65,10 @@ const { undiciFetchMock, agentSpy, envHttpProxyAgentSpy, proxyAgentSpy, createMo
 
 const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
 
-vi.mock("undici", () => createMockUndiciRuntime());
+vi.mock("undici", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("undici")>()),
+  ...createMockUndiciRuntime(),
+}));
 
 let resolveDiscordRestFetch: typeof import("./rest-fetch.js").resolveDiscordRestFetch;
 

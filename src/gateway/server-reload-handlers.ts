@@ -1,10 +1,14 @@
-import { resetModelCatalogCache } from "../agents/model-catalog.js";
-import { disposeAllSessionMcpRuntimes } from "../agents/pi-bundle-mcp-tools.js";
+import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-tools.js";
 import {
   getActiveEmbeddedRunCount,
   listActiveEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys,
-} from "../agents/pi-embedded-runner/run-state.js";
+} from "../agents/embedded-agent-runner/run-state.js";
+import { resetModelCatalogCache } from "../agents/model-catalog.js";
+import {
+  clearCurrentProviderAuthState,
+  warmCurrentProviderAuthStateOffMainThread,
+} from "../agents/model-provider-auth.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { isRestartEnabled } from "../config/commands.flags.js";
@@ -86,6 +90,12 @@ const MCP_RUNTIME_RELOAD_DISPOSE_TIMEOUT_MS = 5_000;
 const CHANNEL_RELOAD_DEFERRAL_POLL_MS = 500;
 const CHANNEL_RELOAD_STILL_PENDING_WARN_MS = 30_000;
 
+function resetPreparedModelRuntimeStateForHotReload(): void {
+  resetModelCatalogCache();
+  clearCurrentProviderAuthState();
+  markGatewayModelCatalogStaleForReload();
+}
+
 async function disposeMcpRuntimesWithTimeout(params: {
   dispose: () => Promise<void>;
   timeoutMs: number;
@@ -133,7 +143,7 @@ type GatewayReloadHandlerParams = {
   setState: (state: GatewayHotReloadState) => void;
   startChannel: GatewayChannelManager["startChannel"];
   stopChannel: GatewayChannelManager["stopChannel"];
-  stopPostReadySidecars?: () => void;
+  stopPostReadySidecars?: () => Promise<void> | void;
   reloadPlugins: (params: {
     nextConfig: OpenClawConfig;
     changedPaths: readonly string[];
@@ -302,20 +312,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     const state = params.getState();
     const nextState = { ...state };
 
-    if (
-      plan.changedPaths.some(
-        (path) =>
-          path === "models" ||
-          path.startsWith("models.") ||
-          path === "agents.defaults.model" ||
-          path.startsWith("agents.defaults.model.") ||
-          path === "agents.defaults.models" ||
-          path.startsWith("agents.defaults.models."),
-      )
-    ) {
-      resetModelCatalogCache();
-      markGatewayModelCatalogStaleForReload();
-    }
+    resetPreparedModelRuntimeStateForHotReload();
 
     if (plan.reloadHooks) {
       try {
@@ -401,6 +398,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         channelsToRestart.add(channel);
       }
       activePluginChannelsAfterReload = pluginReloadResult.activeChannels;
+      resetPreparedModelRuntimeStateForHotReload();
     }
 
     if (plan.restartCron) {
@@ -432,7 +430,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     }
 
     if (plan.restartGmailWatcher) {
-      params.stopPostReadySidecars?.();
+      await params.stopPostReadySidecars?.();
       const restartAbortController =
         params.createGmailRestartAbortController?.() ?? new AbortController();
       try {
@@ -502,6 +500,10 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
 
     applyGatewayLaneConcurrency(nextConfig);
 
+    void warmCurrentProviderAuthStateOffMainThread(nextConfig).catch((err) => {
+      params.logReload.warn(`provider auth state rewarm failed: ${String(err)}`);
+    });
+
     if (plan.hotReasons.length > 0) {
       params.logReload.info(`config hot reload applied (${plan.hotReasons.join(", ")})`);
     } else if (plan.noopPaths.length > 0) {
@@ -549,6 +551,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         maxWaitMs: resolveGatewayRestartDeferralTimeoutMs(
           nextConfig.gateway?.reload?.deferralTimeoutMs,
         ),
+        timeoutIntent: { force: true, reason: "config reload forced restart" },
         emitHooks: {
           beforeEmit: () =>
             markActiveMainSessionsForRestart(nextConfig, "config reload forced restart"),

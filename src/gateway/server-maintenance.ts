@@ -36,7 +36,12 @@ export function startGatewayMaintenanceTimers(params: {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   chatRunState: Pick<
     ChatRunState,
-    "abortedRuns" | "deltaLastBroadcastText" | "agentDeltaSentAt" | "bufferedAgentEvents"
+    | "abortedRuns"
+    | "bufferUpdatedAt"
+    | "clearRun"
+    | "deltaLastBroadcastText"
+    | "agentDeltaSentAt"
+    | "bufferedAgentEvents"
   >;
   chatRunBuffers: Map<string, string>;
   chatDeltaSentAt: Map<string, number>;
@@ -72,16 +77,17 @@ export function startGatewayMaintenanceTimers(params: {
     params.nodeSendToAllSubscribed("tick", payload);
   }, TICK_INTERVAL_MS);
 
-  // periodic health refresh to keep cached snapshot warm
+  // Keep cached health warm without request-time live channel probes. Explicit
+  // status/doctor probe paths still pass probe=true when the operator asks.
   const healthInterval = setInterval(() => {
     void params
-      .refreshGatewayHealthSnapshot({ probe: true })
+      .refreshGatewayHealthSnapshot({ probe: false })
       .catch((err) => params.logHealth.error(`refresh failed: ${formatError(err)}`));
   }, HEALTH_REFRESH_INTERVAL_MS);
 
   // Prime cache so first client gets a snapshot without waiting.
   void params
-    .refreshGatewayHealthSnapshot({ probe: true })
+    .refreshGatewayHealthSnapshot({ probe: false })
     .catch((err) => params.logHealth.error(`initial refresh failed: ${formatError(err)}`));
 
   // dedupe cache cleanup
@@ -106,6 +112,20 @@ export function startGatewayMaintenanceTimers(params: {
           : undefined
         : undefined;
     };
+    const isPendingAcceptedAgentDedupeKey = (key: string, dedupeEntry: DedupeEntry) => {
+      if (!key.startsWith("agent:")) {
+        return false;
+      }
+      const payload = dedupeEntry.payload;
+      if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+        return false;
+      }
+      if ((payload as { status?: unknown }).status !== "accepted") {
+        return false;
+      }
+      const expiresAtMs = (payload as { expiresAtMs?: unknown }).expiresAtMs;
+      return typeof expiresAtMs === "number" && Number.isFinite(expiresAtMs) && expiresAtMs > now;
+    };
     const isActiveRunDedupeKey = (key: string, dedupeEntry: DedupeEntry) => {
       if (!key.startsWith("agent:") && !key.startsWith("chat:")) {
         return false;
@@ -118,7 +138,7 @@ export function startGatewayMaintenanceTimers(params: {
       return key.startsWith("agent:") ? entry.kind === "agent" : entry.kind !== "agent";
     };
     for (const [k, v] of params.dedupe) {
-      if (isActiveRunDedupeKey(k, v)) {
+      if (isActiveRunDedupeKey(k, v) || isPendingAcceptedAgentDedupeKey(k, v)) {
         continue;
       }
       if (now - v.ts > DEDUPE_TTL_MS) {
@@ -128,7 +148,10 @@ export function startGatewayMaintenanceTimers(params: {
     if (params.dedupe.size > DEDUPE_MAX) {
       const excess = params.dedupe.size - DEDUPE_MAX;
       const oldestKeys = [...params.dedupe.entries()]
-        .filter(([key, entry]) => !isActiveRunDedupeKey(key, entry))
+        .filter(
+          ([key, entry]) =>
+            !isActiveRunDedupeKey(key, entry) && !isPendingAcceptedAgentDedupeKey(key, entry),
+        )
         .toSorted(([, left], [, right]) => left.ts - right.ts)
         .slice(0, excess)
         .map(([key]) => key);
@@ -149,15 +172,6 @@ export function startGatewayMaintenanceTimers(params: {
       }
     }
 
-    const clearAgentThrottleStateForRun = (runId: string) => {
-      params.chatRunState.agentDeltaSentAt.delete(runId);
-      params.chatRunState.agentDeltaSentAt.delete(`${runId}:assistant`);
-      params.chatRunState.agentDeltaSentAt.delete(`${runId}:thinking`);
-      params.chatRunState.bufferedAgentEvents.delete(runId);
-      params.chatRunState.bufferedAgentEvents.delete(`${runId}:assistant`);
-      params.chatRunState.bufferedAgentEvents.delete(`${runId}:thinking`);
-    };
-
     const resolveAgentThrottleRunId = (key: string) => {
       if (key.endsWith(":assistant")) {
         return key.slice(0, -":assistant".length);
@@ -176,12 +190,8 @@ export function startGatewayMaintenanceTimers(params: {
         {
           chatAbortControllers: params.chatAbortControllers,
           chatRunBuffers: params.chatRunBuffers,
-          chatDeltaSentAt: params.chatDeltaSentAt,
-          chatDeltaLastBroadcastLen: params.chatDeltaLastBroadcastLen,
-          chatDeltaLastBroadcastText: params.chatRunState.deltaLastBroadcastText,
-          agentDeltaSentAt: params.chatRunState.agentDeltaSentAt,
-          bufferedAgentEvents: params.chatRunState.bufferedAgentEvents,
           chatAbortedRuns: params.chatRunState.abortedRuns,
+          clearChatRunState: params.chatRunState.clearRun,
           removeChatRun: params.removeChatRun,
           agentRunSeq: params.agentRunSeq,
           broadcast: params.broadcast,
@@ -197,11 +207,7 @@ export function startGatewayMaintenanceTimers(params: {
         continue;
       }
       params.chatRunState.abortedRuns.delete(runId);
-      params.chatRunBuffers.delete(runId);
-      params.chatDeltaSentAt.delete(runId);
-      params.chatDeltaLastBroadcastLen.delete(runId);
-      params.chatRunState.deltaLastBroadcastText.delete(runId);
-      clearAgentThrottleStateForRun(runId);
+      params.chatRunState.clearRun(runId);
     }
 
     // Prune expired control-plane rate-limit buckets to prevent unbounded
@@ -221,11 +227,19 @@ export function startGatewayMaintenanceTimers(params: {
       if (now - lastSentAt <= ABORTED_RUN_TTL_MS) {
         continue;
       }
-      params.chatRunBuffers.delete(runId);
-      params.chatDeltaSentAt.delete(runId);
-      params.chatDeltaLastBroadcastLen.delete(runId);
-      params.chatRunState.deltaLastBroadcastText.delete(runId);
-      clearAgentThrottleStateForRun(runId);
+      params.chatRunState.clearRun(runId);
+    }
+    for (const [runId, lastUpdatedAt] of params.chatRunState.bufferUpdatedAt) {
+      if (params.chatRunState.abortedRuns.has(runId)) {
+        continue;
+      }
+      if (params.chatAbortControllers.has(runId)) {
+        continue;
+      }
+      if (now - lastUpdatedAt <= ABORTED_RUN_TTL_MS) {
+        continue;
+      }
+      params.chatRunState.clearRun(runId);
     }
     for (const [key, lastSentAt] of params.chatRunState.agentDeltaSentAt) {
       const runId = resolveAgentThrottleRunId(key);
@@ -238,8 +252,7 @@ export function startGatewayMaintenanceTimers(params: {
       if (now - lastSentAt <= ABORTED_RUN_TTL_MS) {
         continue;
       }
-      params.chatRunState.agentDeltaSentAt.delete(key);
-      params.chatRunState.bufferedAgentEvents.delete(key);
+      params.chatRunState.clearRun(runId);
     }
     // Sweep stale agent run contexts (orphaned when lifecycle end/error is missed).
     sweepStaleRunContexts();

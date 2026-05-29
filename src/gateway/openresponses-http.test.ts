@@ -2,8 +2,8 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import { FailoverError } from "../agents/failover-error.js";
-import { createClientToolNameConflictError } from "../agents/pi-tool-definition-adapter.js";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
@@ -33,6 +33,7 @@ let openResponsesTesting: {
     scope?: { authSubject: string; agentId: string; requestedSessionKey?: string },
   ): string | undefined;
   getResponseSessionIds(): string[];
+  resolveResponsesLimits(config: { maxUrlParts?: number } | undefined): { maxUrlParts: number };
 };
 
 beforeAll(async () => {
@@ -231,6 +232,14 @@ function buildResponsesUrlPolicyConfig(maxUrlParts: number) {
     },
   };
 }
+
+it("uses default URL part limits for non-finite OpenResponses config caps", () => {
+  const limits = openResponsesTesting.resolveResponsesLimits({
+    maxUrlParts: Number.POSITIVE_INFINITY,
+  });
+
+  expect(limits.maxUrlParts).toBe(8);
+});
 
 async function expectInvalidRequest(
   res: Response,

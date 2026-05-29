@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
-import { GATEWAY_CLIENT_IDS } from "../protocol/client-info.js";
 import {
   handleApprovalResolve,
   handleApprovalWaitDecision,
@@ -272,6 +272,51 @@ describe("handlePendingApprovalRequest", () => {
 
     await Promise.resolve();
     expect(hasApprovalTurnSourceRouteMock).not.toHaveBeenCalled();
+
+    expect(manager.resolve(record.id, "allow-once")).toBe(true);
+    await requestPromise;
+  });
+
+  it("checks plugin turn-source routes with plugin approval kind", async () => {
+    const manager = new ExecApprovalManager();
+    const record = manager.create(
+      {
+        command: "plugin approval",
+        turnSourceChannel: "whatsapp",
+        turnSourceAccountId: "default",
+      },
+      60_000,
+      "plugin-turn-source-kind",
+    );
+    const decisionPromise = manager.register(record, 60_000);
+    const respond = vi.fn();
+    const requestPromise = handlePendingApprovalRequest({
+      manager,
+      record,
+      decisionPromise,
+      respond,
+      context: {
+        broadcast: vi.fn(),
+        hasExecApprovalClients: () => false,
+      } as unknown as GatewayRequestContext,
+      requestEventName: "plugin.approval.requested",
+      requestEvent: {
+        id: record.id,
+        request: record.request,
+        createdAtMs: record.createdAtMs,
+        expiresAtMs: record.expiresAtMs,
+      },
+      twoPhase: true,
+      approvalKind: "plugin",
+      deliverRequest: () => false,
+    });
+
+    await Promise.resolve();
+    expect(hasApprovalTurnSourceRouteMock).toHaveBeenCalledWith({
+      turnSourceChannel: "whatsapp",
+      turnSourceAccountId: "default",
+      approvalKind: "plugin",
+    });
 
     expect(manager.resolve(record.id, "allow-once")).toBe(true);
     await requestPromise;

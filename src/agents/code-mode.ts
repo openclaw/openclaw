@@ -2,13 +2,21 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
-import type { AgentToolUpdateCallback } from "@earendil-works/pi-agent-core";
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isRecord } from "../shared/record-coerce.js";
+import { uniqueValues } from "../shared/string-normalization.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
-import type { HookContext } from "./pi-tools.before-tool-call.js";
+import type { HookContext } from "./agent-tools.before-tool-call.js";
+import {
+  CODE_MODE_EXEC_TOOL_NAME,
+  CODE_MODE_WAIT_TOOL_NAME,
+  isCodeModeControlTool,
+  markCodeModeControlTool,
+} from "./code-mode-control-tools.js";
+import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import { optionalStringEnum } from "./schema/typebox.js";
+import type { ToolDefinition } from "./sessions/index.js";
 import {
   addClientToolsToToolCatalog,
   applyToolCatalogCompaction,
@@ -27,11 +35,11 @@ import {
   ToolInputError,
   type AnyAgentTool,
 } from "./tools/common.js";
-
-export const CODE_MODE_EXEC_TOOL_NAME = "exec";
-export const CODE_MODE_WAIT_TOOL_NAME = "wait";
-
-const codeModeControlTools = new WeakSet<AnyAgentTool>();
+export {
+  CODE_MODE_EXEC_TOOL_NAME,
+  CODE_MODE_WAIT_TOOL_NAME,
+  isCodeModeControlTool,
+} from "./code-mode-control-tools.js";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_MEMORY_LIMIT_BYTES = 64 * 1024 * 1024;
@@ -95,6 +103,14 @@ type CodeModeRunState = {
 
 type CodeModeToolContext = ToolSearchToolContext;
 
+type CodeModeFailureCode =
+  | "invalid_input"
+  | "runtime_unavailable"
+  | "timeout"
+  | "output_limit_exceeded"
+  | "snapshot_limit_exceeded"
+  | "internal_error";
+
 type CodeModeWorkerResult =
   | {
       status: "completed";
@@ -110,17 +126,14 @@ type CodeModeWorkerResult =
   | {
       status: "failed";
       error: string;
-      code: "invalid_input" | "internal_error";
+      code: CodeModeFailureCode;
       output: unknown[];
     };
 
 const activeRuns = new Map<string, CodeModeRunState>();
 const resumingRunIds = new Set<string>();
 let typescriptRuntimePromise: Promise<typeof import("typescript")> | null = null;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
+let typescriptRuntimeForTest: typeof import("typescript") | null = null;
 
 function normalizeCodeModeRawConfig(value: unknown): Record<string, unknown> | undefined {
   const codeMode = value;
@@ -162,7 +175,7 @@ function readLanguages(value: unknown): CodeModeLanguage[] {
   const languages = value.filter(
     (entry): entry is CodeModeLanguage => entry === "javascript" || entry === "typescript",
   );
-  return languages.length > 0 ? [...new Set(languages)] : ["javascript", "typescript"];
+  return languages.length > 0 ? uniqueValues(languages) : ["javascript", "typescript"];
 }
 
 export function resolveCodeModeConfig(config?: OpenClawConfig, agentId?: string): CodeModeConfig {
@@ -222,15 +235,6 @@ function toToolSearchConfig(config: CodeModeConfig): ToolSearchConfig {
   };
 }
 
-export function isCodeModeControlTool(tool: AnyAgentTool): boolean {
-  return codeModeControlTools.has(tool);
-}
-
-function markCodeModeControlTool<T extends AnyAgentTool>(tool: T): T {
-  codeModeControlTools.add(tool);
-  return tool;
-}
-
 function removeExpiredRuns(now = Date.now()): void {
   for (const [runId, state] of activeRuns) {
     if (state.expiresAt <= now) {
@@ -279,9 +283,29 @@ function jsonByteLength(value: unknown): number {
   return Buffer.byteLength(JSON.stringify(toJsonSafe(value)) ?? "null", "utf8");
 }
 
+class CodeModeLimitError extends ToolInputError {
+  readonly code: Extract<CodeModeFailureCode, "output_limit_exceeded" | "snapshot_limit_exceeded">;
+
+  constructor(
+    code: Extract<CodeModeFailureCode, "output_limit_exceeded" | "snapshot_limit_exceeded">,
+    message: string,
+  ) {
+    super(message);
+    this.name = "CodeModeLimitError";
+    this.code = code;
+  }
+}
+
+function codeModeFailureCode(error: unknown): CodeModeFailureCode {
+  if (error instanceof CodeModeLimitError) {
+    return error.code;
+  }
+  return error instanceof ToolInputError ? "invalid_input" : "internal_error";
+}
+
 function enforceOutputLimit(output: unknown[], config: CodeModeConfig): void {
   if (jsonByteLength(output) > config.maxOutputBytes) {
-    throw new ToolInputError("code mode output limit exceeded");
+    throw new CodeModeLimitError("output_limit_exceeded", "code mode output limit exceeded");
   }
 }
 
@@ -292,15 +316,24 @@ function enforceResultLimit(params: {
 }): void {
   enforceOutputLimit(params.output, params.config);
   if (params.value !== undefined && jsonByteLength(params.value) > params.config.maxOutputBytes) {
-    throw new ToolInputError("code mode output limit exceeded");
+    throw new CodeModeLimitError("output_limit_exceeded", "code mode output limit exceeded");
   }
 }
 
 function readCode(args: unknown): { code: string; language?: CodeModeLanguage } {
   const params = asToolParamsRecord(args);
-  const code = params.code;
+  const codeParam = params.code;
+  const commandParam = params.command;
+  if (
+    typeof codeParam === "string" &&
+    typeof commandParam === "string" &&
+    codeParam !== commandParam
+  ) {
+    throw new ToolInputError("code and command must match when both are provided.");
+  }
+  const code = typeof commandParam === "string" ? commandParam : codeParam;
   if (typeof code !== "string" || !code.trim()) {
-    throw new ToolInputError("code must be a non-empty string.");
+    throw new ToolInputError("code or command must be a non-empty string.");
   }
   const language = params.language;
   if (language !== undefined && language !== "javascript" && language !== "typescript") {
@@ -380,6 +413,9 @@ function rejectsModuleAccess(code: string): boolean {
 }
 
 async function loadTypeScriptRuntime(): Promise<typeof import("typescript")> {
+  if (typescriptRuntimeForTest) {
+    return typescriptRuntimeForTest;
+  }
   typescriptRuntimePromise ??= import("typescript");
   return await typescriptRuntimePromise;
 }
@@ -434,7 +470,7 @@ async function runBridgeRequest(params: {
   parentToolCallId: string;
   request: PendingBridgeRequest;
   signal?: AbortSignal;
-  onUpdate?: AgentToolUpdateCallback<unknown>;
+  onUpdate?: AgentToolUpdateCallback;
 }): Promise<SettledBridgeRequest> {
   try {
     const values = Array.isArray(params.request.args) ? params.request.args : [];
@@ -498,13 +534,41 @@ function codeModeWorkerUrl(): URL {
   return resolveCodeModeWorkerUrl(import.meta.url);
 }
 
+function failedCodeModeWorkerResult(
+  error: unknown,
+  code: CodeModeFailureCode,
+): Extract<CodeModeWorkerResult, { status: "failed" }> {
+  return {
+    status: "failed",
+    error: errorMessage(error),
+    code,
+    output: [],
+  };
+}
+
+function normalizeCodeModeWorkerResult(result: CodeModeWorkerResult): CodeModeWorkerResult {
+  if (result.status === "failed" && result.code === "timeout" && result.error === "interrupted") {
+    return {
+      ...result,
+      error: "code mode timeout exceeded",
+    };
+  }
+  return result;
+}
+
 async function runCodeModeWorker(
   workerData: unknown,
   timeoutMs: number,
+  workerUrl?: URL,
 ): Promise<CodeModeWorkerResult> {
-  const worker = new Worker(codeModeWorkerUrl(), {
-    workerData,
-  });
+  let worker: Worker;
+  try {
+    worker = new Worker(workerUrl ?? codeModeWorkerUrl(), {
+      workerData,
+    });
+  } catch (error) {
+    return failedCodeModeWorkerResult(error, "runtime_unavailable");
+  }
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await new Promise<CodeModeWorkerResult>((resolve) => {
@@ -521,39 +585,33 @@ async function runCodeModeWorker(
         finish({
           status: "failed",
           error: "code mode worker timeout exceeded",
-          code: "internal_error",
+          code: "timeout",
           output: [],
         });
       }, timeoutMs);
       worker.once("message", (message: unknown) => {
         void worker.terminate();
-        finish(
-          isRecord(message)
-            ? (message as CodeModeWorkerResult)
-            : {
-                status: "failed",
-                error: "invalid code mode worker response",
-                code: "internal_error",
-                output: [],
-              },
-        );
+        const result = isRecord(message)
+          ? (message as CodeModeWorkerResult)
+          : ({
+              status: "failed",
+              error: "invalid code mode worker response",
+              code: "internal_error",
+              output: [],
+            } satisfies CodeModeWorkerResult);
+        finish(normalizeCodeModeWorkerResult(result));
       });
       worker.once("error", (error) => {
-        finish({
-          status: "failed",
-          error: errorMessage(error),
-          code: "internal_error",
-          output: [],
-        });
+        finish(failedCodeModeWorkerResult(error, "runtime_unavailable"));
       });
       worker.once("exit", (code) => {
         if (code !== 0) {
-          finish({
-            status: "failed",
-            error: `code mode worker exited with code ${code}`,
-            code: "internal_error",
-            output: [],
-          });
+          finish(
+            failedCodeModeWorkerResult(
+              new Error(`code mode worker exited with code ${code}`),
+              "runtime_unavailable",
+            ),
+          );
         }
       });
     });
@@ -573,11 +631,11 @@ function snapshotState(params: {
   runtime: ToolSearchRuntime;
   output: unknown[];
   signal?: AbortSignal;
-  onUpdate?: AgentToolUpdateCallback<unknown>;
+  onUpdate?: AgentToolUpdateCallback;
 }) {
   enforceActiveRunLimit();
   if (params.snapshotBytes.byteLength > params.config.maxSnapshotBytes) {
-    throw new ToolInputError("code mode snapshot limit exceeded");
+    throw new CodeModeLimitError("snapshot_limit_exceeded", "code mode snapshot limit exceeded");
   }
   enforceOutputLimit(params.output, params.config);
   const runId = `cm_${randomUUID()}`;
@@ -641,7 +699,7 @@ async function runExec(params: {
   code: string;
   language?: CodeModeLanguage;
   signal?: AbortSignal;
-  onUpdate?: AgentToolUpdateCallback<unknown>;
+  onUpdate?: AgentToolUpdateCallback;
 }) {
   removeExpiredRuns();
   const config = resolveCodeModeConfig(
@@ -659,7 +717,7 @@ async function runExec(params: {
     return {
       status: "failed" as const,
       error: errorMessage(error),
-      code: error instanceof ToolInputError ? "invalid_input" : "internal_error",
+      code: codeModeFailureCode(error),
       output: [],
       telemetry: telemetry(runtime),
     };
@@ -700,7 +758,7 @@ async function runExec(params: {
     return {
       status: "failed" as const,
       error: errorMessage(error),
-      code: error instanceof ToolInputError ? "invalid_input" : "internal_error",
+      code: codeModeFailureCode(error),
       output: [],
       telemetry: telemetry(runtime),
     };
@@ -732,7 +790,7 @@ async function runWait(params: {
   ctx: CodeModeToolContext;
   runId: string;
   signal?: AbortSignal;
-  onUpdate?: AgentToolUpdateCallback<unknown>;
+  onUpdate?: AgentToolUpdateCallback;
 }) {
   removeExpiredRuns();
   const state = activeRuns.get(params.runId);
@@ -812,7 +870,7 @@ async function runWait(params: {
     return {
       status: "failed" as const,
       error: errorMessage(error),
-      code: error instanceof ToolInputError ? "invalid_input" : "internal_error",
+      code: codeModeFailureCode(error),
       output: state.output,
       telemetry: telemetry(state.runtime),
     };
@@ -828,10 +886,17 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
     description:
       'Run JavaScript or TypeScript in OpenClaw code mode. Node.js modules and `require`/`import` are NOT available; for any shell, file, network, or external action, use enabled catalog tools allowed by policy from inside your code: `tools.search(query)` to find catalog entries, `tools.describe(entry.id)` for the input schema, then `tools.call(entry.id, args)`. The `language` field accepts only "javascript" or "typescript"; do not pass "bash", "shell", or other values.',
     parameters: Type.Object({
-      code: Type.String({
-        description:
-          "JavaScript or TypeScript source to run. The `tools` object (search/describe/call) and `ALL_TOOLS` are available in scope; Node built-in modules are not.",
-      }),
+      code: Type.Optional(
+        Type.String({
+          description:
+            "JavaScript or TypeScript source to run. The `tools` object (search/describe/call) and `ALL_TOOLS` are available in scope; Node built-in modules are not.",
+        }),
+      ),
+      command: Type.Optional(
+        Type.String({
+          description: "Alias for code, provided for exec-compatible hook policies.",
+        }),
+      ),
       language: optionalStringEnum(["javascript", "typescript"] as const, {
         description:
           'Source language. Must be "javascript" or "typescript". Defaults to javascript.',
@@ -841,7 +906,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
       toolCallId: string,
       args: unknown,
       signal?: AbortSignal,
-      onUpdate?: AgentToolUpdateCallback<unknown>,
+      onUpdate?: AgentToolUpdateCallback,
     ) => {
       const input = readCode(args);
       return jsonResult(
@@ -867,7 +932,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
       toolCallId: string,
       args: unknown,
       signal?: AbortSignal,
-      onUpdate?: AgentToolUpdateCallback<unknown>,
+      onUpdate?: AgentToolUpdateCallback,
     ) =>
       jsonResult(
         await runWait({
@@ -936,8 +1001,13 @@ export const testing = {
   activeRuns,
   resumingRunIds,
   codeModeWorkerUrl,
+  normalizeCodeModeWorkerResult,
+  runCodeModeWorker,
   resolveCodeModeWorkerUrl,
   resolveCodeModeConfig,
   getTypescriptRuntimePromise: () => typescriptRuntimePromise,
+  setTypescriptRuntimeForTest: (runtime: typeof import("typescript") | null) => {
+    typescriptRuntimeForTest = runtime;
+  },
 };
 export { testing as __testing };

@@ -5,10 +5,10 @@ import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { safeParseWithSchema } from "../utils/zod-parse.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
-import { clearCurrentPluginMetadataSnapshotState } from "./current-plugin-metadata-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
 import { resolveCompatRegistryVersion } from "./installed-plugin-index-policy.js";
+import { clearLoadInstalledPluginIndexInstallRecordsCache } from "./installed-plugin-index-record-reader.js";
 import {
   resolveInstalledPluginIndexStorePath,
   type InstalledPluginIndexStoreOptions,
@@ -28,6 +28,7 @@ import {
   type LoadInstalledPluginIndexParams,
   type RefreshInstalledPluginIndexParams,
 } from "./installed-plugin-index.js";
+import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 export {
   resolveInstalledPluginIndexStorePath,
   type InstalledPluginIndexStoreOptions,
@@ -186,7 +187,8 @@ export async function writePersistedInstalledPluginIndex(
       mode: 0o600,
     },
   );
-  clearCurrentPluginMetadataSnapshotState();
+  clearPluginMetadataLifecycleCaches();
+  clearLoadInstalledPluginIndexInstallRecordsCache();
   return filePath;
 }
 
@@ -196,7 +198,8 @@ export function writePersistedInstalledPluginIndexSync(
 ): string {
   const filePath = resolveInstalledPluginIndexStorePath(options);
   saveJsonFile(filePath, { ...index, warning: INSTALLED_PLUGIN_INDEX_WARNING });
-  clearCurrentPluginMetadataSnapshotState();
+  clearPluginMetadataLifecycleCaches();
+  clearLoadInstalledPluginIndexInstallRecordsCache();
   return filePath;
 }
 

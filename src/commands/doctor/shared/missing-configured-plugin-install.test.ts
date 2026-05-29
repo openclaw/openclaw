@@ -3,11 +3,21 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveRegistryUpdateChannel } from "../../../infra/update-channels.js";
-import { resolveNpmInstallSpecsForUpdateChannel } from "../../../plugins/install-channel-specs.js";
+import {
+  resolveClawHubInstallSpecsForUpdateChannel,
+  resolveNpmInstallSpecsForUpdateChannel,
+} from "../../../plugins/install-channel-specs.js";
 import { VERSION } from "../../../version.js";
 
 function expectedNpmInstallSpec(spec: string): string {
   return resolveNpmInstallSpecsForUpdateChannel({
+    spec,
+    updateChannel: resolveRegistryUpdateChannel({ currentVersion: VERSION }),
+  }).installSpec;
+}
+
+function expectedClawHubInstallSpec(spec: string): string {
+  return resolveClawHubInstallSpecsForUpdateChannel({
     spec,
     updateChannel: resolveRegistryUpdateChannel({ currentVersion: VERSION }),
   }).installSpec;
@@ -52,6 +62,16 @@ const mocks = vi.hoisted(() => ({
   ),
   resolveDefaultPluginExtensionsDir: vi.fn(() => "/tmp/openclaw-plugins"),
   resolveDefaultPluginNpmDir: vi.fn(() => "/tmp/openclaw-npm"),
+  resolvePluginNpmPackageDir: vi.fn(
+    ({ npmDir, packageName }: { npmDir?: string; packageName: string }) =>
+      path.join(
+        npmDir ?? "/tmp/openclaw-npm",
+        "projects",
+        packageName.replace(/[^a-zA-Z0-9._-]+/g, "-"),
+        "node_modules",
+        ...packageName.split("/"),
+      ),
+  ),
   resolvePluginInstallDir: vi.fn(
     (pluginId: string, extensionsDir = "/tmp/openclaw-plugins") => `${extensionsDir}/${pluginId}`,
   ),
@@ -104,6 +124,7 @@ vi.mock("../../../plugins/installed-plugin-index.js", async (importOriginal) => 
 vi.mock("../../../plugins/install-paths.js", () => ({
   resolveDefaultPluginExtensionsDir: mocks.resolveDefaultPluginExtensionsDir,
   resolveDefaultPluginNpmDir: mocks.resolveDefaultPluginNpmDir,
+  resolvePluginNpmPackageDir: mocks.resolvePluginNpmPackageDir,
   resolvePluginInstallDir: mocks.resolvePluginInstallDir,
   validatePluginId: mocks.validatePluginId,
 }));
@@ -124,6 +145,7 @@ vi.mock("../../../plugins/clawhub.js", () => ({
 
 vi.mock("../../../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: mocks.loadPluginMetadataSnapshot,
+  resolvePluginMetadataSnapshot: mocks.loadPluginMetadataSnapshot,
 }));
 
 vi.mock("../../../plugins/official-external-plugin-catalog.js", () => ({
@@ -1264,7 +1286,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     });
 
     expectRecordFields(mockCallArg(mocks.installPluginFromClawHub), {
-      spec: "clawhub:@openclaw/whatsapp",
+      spec: expectedClawHubInstallSpec("clawhub:@openclaw/whatsapp"),
       env: {
         OPENCLAW_COMPATIBILITY_HOST_VERSION: "2026.5.19",
         OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",

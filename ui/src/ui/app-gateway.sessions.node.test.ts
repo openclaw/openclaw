@@ -12,6 +12,7 @@ const handleSessionOperationEventMock = vi.fn();
 vi.mock("./app-chat.ts", () => ({
   CHAT_SESSIONS_ACTIVE_MINUTES: 10,
   CHAT_SESSIONS_REFRESH_LIMIT: 25,
+  createChatSessionsLoadOverrides: () => ({ activeMinutes: 10, limit: 25 }),
   clearPendingQueueItemsForRun: clearPendingQueueItemsForRunMock,
   flushChatQueueForEvent: flushChatQueueForEventMock,
   refreshChatAvatar: vi.fn(),
@@ -43,8 +44,11 @@ vi.mock("./controllers/devices.ts", () => ({
 }));
 vi.mock("./controllers/exec-approval.ts", () => ({
   addExecApproval: vi.fn(),
+  clearResolvedExecApprovalPrompt: vi.fn(),
+  enqueueExecApprovalPrompt: vi.fn(),
   parseExecApprovalRequested: vi.fn(() => null),
   parseExecApprovalResolved: vi.fn(() => null),
+  parsePluginApprovalRequested: vi.fn(() => null),
   pruneExecApprovalQueue: vi.fn((queue) => queue),
   removeExecApproval: vi.fn(),
 }));
@@ -55,6 +59,7 @@ vi.mock("./controllers/sessions.ts", () => ({
   applySessionsChangedEvent: applySessionsChangedEventMock,
   loadSessions: loadSessionsMock,
   subscribeSessions: vi.fn(),
+  syncSelectedSessionMessageSubscription: vi.fn(),
 }));
 vi.mock("./gateway.ts", () => ({
   GatewayBrowserClient: function GatewayBrowserClient() {},
@@ -141,7 +146,7 @@ describe("handleGatewayEvent sessions.changed", () => {
     vi.useRealTimers();
   });
 
-  it("scopes post-chat final session refreshes to the run's agent", () => {
+  it("refreshes the full chat session list after a completed chat run", () => {
     loadSessionsMock.mockReset();
     handleChatEventMock.mockReset().mockReturnValue("final");
     const host = createHost();
@@ -157,7 +162,6 @@ describe("handleGatewayEvent sessions.changed", () => {
 
     expect(loadSessionsMock).toHaveBeenCalledWith(host, {
       activeMinutes: 10,
-      agentId: "ops",
       limit: 25,
     });
   });
@@ -191,10 +195,20 @@ describe("handleGatewayEvent sessions.changed", () => {
     flushChatQueueForEventMock.mockReset();
     applySessionsChangedEventMock
       .mockReset()
-      .mockImplementation((state: { chatRunId: string | null }) => {
-        state.chatRunId = null;
-        return { applied: true, change: "updated", clearedChatRun: true };
-      });
+      .mockImplementation(
+        (state: { chatRunId: string | null; sessionKey: string; chatRunStatus?: unknown }) => {
+          const runId = state.chatRunId;
+          const sessionKey = state.sessionKey;
+          state.chatRunStatus = null;
+          state.chatRunId = null;
+          return {
+            applied: true,
+            change: "updated",
+            clearedChatRun: true,
+            clearedChatRunStatus: { phase: "done", runId, sessionKey },
+          };
+        },
+      );
     const host = createHost();
     host.chatRunId = "run-1";
     const payload = {
@@ -223,9 +237,16 @@ describe("handleGatewayEvent sessions.changed", () => {
     flushChatQueueForEventMock.mockReset();
     applySessionsChangedEventMock
       .mockReset()
-      .mockImplementation((state: { chatRunId: string | null }) => {
+      .mockImplementation((state: { chatRunId: string | null; sessionKey: string }) => {
+        const runId = state.chatRunId;
+        const sessionKey = state.sessionKey;
         state.chatRunId = null;
-        return { applied: true, change: "updated", clearedChatRun: true };
+        return {
+          applied: true,
+          change: "updated",
+          clearedChatRun: true,
+          clearedChatRunStatus: { phase: "done", runId, sessionKey },
+        };
       });
     let resolveHistory!: () => void;
     loadChatHistoryMock.mockReturnValue(
@@ -255,10 +276,16 @@ describe("handleGatewayEvent sessions.changed", () => {
         .pendingSessionMessageReloadSessionKey,
     ).toBeNull();
     expect(flushChatQueueForEventMock).not.toHaveBeenCalled();
+    expect((host as typeof host & { chatRunStatus?: unknown }).chatRunStatus).toBeUndefined();
 
     resolveHistory();
     await Promise.resolve();
 
+    expect((host as typeof host & { chatRunStatus?: unknown }).chatRunStatus).toMatchObject({
+      phase: "done",
+      runId: "run-1",
+      sessionKey: "agent:main:main",
+    });
     expect(flushChatQueueForEventMock).toHaveBeenCalledWith(host);
     expect(loadSessionsMock).not.toHaveBeenCalled();
   });
@@ -270,9 +297,16 @@ describe("handleGatewayEvent sessions.changed", () => {
     flushChatQueueForEventMock.mockReset();
     applySessionsChangedEventMock
       .mockReset()
-      .mockImplementation((state: { chatRunId: string | null }) => {
+      .mockImplementation((state: { chatRunId: string | null; sessionKey: string }) => {
+        const runId = state.chatRunId;
+        const sessionKey = state.sessionKey;
         state.chatRunId = null;
-        return { applied: true, change: "updated", clearedChatRun: true };
+        return {
+          applied: true,
+          change: "updated",
+          clearedChatRun: true,
+          clearedChatRunStatus: { phase: "done", runId, sessionKey },
+        };
       });
     let resolveHistory!: () => void;
     loadChatHistoryMock.mockReturnValue(
@@ -498,15 +532,39 @@ describe("handleGatewayEvent session.message", () => {
     expect(loadChatHistoryMock).toHaveBeenCalledWith(host);
   });
 
+  it("reloads chat history when the selected main session receives canonical session messages", () => {
+    loadChatHistoryMock.mockReset();
+    applySessionsChangedEventMock.mockReset().mockReturnValue({ applied: false });
+    const host = createHost();
+    host.sessionKey = "main";
+
+    handleGatewayEvent(host, {
+      type: "event",
+      event: "session.message",
+      payload: { sessionKey: "agent:main:main" },
+      seq: 1,
+    });
+
+    expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
+    expect(loadChatHistoryMock).toHaveBeenCalledWith(host);
+  });
+
   it("reloads history before flushing queue when session.message clears the run", async () => {
     loadChatHistoryMock.mockReset();
     clearPendingQueueItemsForRunMock.mockReset();
     flushChatQueueForEventMock.mockReset();
     applySessionsChangedEventMock
       .mockReset()
-      .mockImplementation((state: { chatRunId: string | null }) => {
+      .mockImplementation((state: { chatRunId: string | null; sessionKey: string }) => {
+        const runId = state.chatRunId;
+        const sessionKey = state.sessionKey;
         state.chatRunId = null;
-        return { applied: true, change: "updated", clearedChatRun: true };
+        return {
+          applied: true,
+          change: "updated",
+          clearedChatRun: true,
+          clearedChatRunStatus: { phase: "done", runId, sessionKey },
+        };
       });
     let resolveHistory!: () => void;
     loadChatHistoryMock.mockReturnValue(
@@ -532,10 +590,16 @@ describe("handleGatewayEvent session.message", () => {
     expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
     expect(loadChatHistoryMock).toHaveBeenCalledWith(host);
     expect(flushChatQueueForEventMock).not.toHaveBeenCalled();
+    expect((host as typeof host & { chatRunStatus?: unknown }).chatRunStatus).toBeUndefined();
 
     resolveHistory();
     await Promise.resolve();
 
+    expect((host as typeof host & { chatRunStatus?: unknown }).chatRunStatus).toMatchObject({
+      phase: "done",
+      runId: "run-1",
+      sessionKey: "agent:qa:main",
+    });
     expect(flushChatQueueForEventMock).toHaveBeenCalledWith(host);
   });
 
@@ -557,8 +621,8 @@ describe("handleGatewayEvent session.message", () => {
     expect(loadChatHistoryMock).not.toHaveBeenCalled();
     expect(loadSessionsMock).toHaveBeenCalledWith(host, {
       activeMinutes: 10,
-      agentId: "qa",
       limit: 25,
+      publishChatRunStatus: false,
     });
     await Promise.resolve();
     expect(loadChatHistoryMock).not.toHaveBeenCalled();
@@ -571,6 +635,21 @@ describe("handleGatewayEvent session.message", () => {
     flushChatQueueForEventMock.mockReset();
     loadSessionsMock.mockReset().mockImplementation(async (state) => {
       state.chatRunId = null;
+      state.sessionsResult = {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          {
+            key: "agent:qa:main",
+            kind: "direct",
+            updatedAt: 1,
+            hasActiveRun: false,
+            status: "done",
+          },
+        ],
+      };
     });
     const host = createHost();
     host.sessionKey = "agent:qa:main";
@@ -587,6 +666,11 @@ describe("handleGatewayEvent session.message", () => {
     await Promise.resolve();
 
     expect(host.chatRunId).toBeNull();
+    expect((host as typeof host & { chatRunStatus?: unknown }).chatRunStatus).toMatchObject({
+      phase: "done",
+      runId: "run-stale",
+      sessionKey: "agent:qa:main",
+    });
     expect(clearPendingQueueItemsForRunMock).toHaveBeenCalledWith(host, "run-stale");
     expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
     expect(loadChatHistoryMock).toHaveBeenCalledWith(host);

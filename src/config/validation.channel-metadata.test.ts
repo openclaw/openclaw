@@ -153,6 +153,9 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: () => ({
     manifestRegistry: mockLoadPluginManifestRegistry(),
   }),
+  resolvePluginMetadataSnapshot: () => ({
+    manifestRegistry: mockLoadPluginManifestRegistry(),
+  }),
 }));
 
 vi.mock("../plugins/doctor-contract-registry.js", () => ({
@@ -201,6 +204,31 @@ describe("validateConfigObjectWithPlugins channel metadata (applyDefaults: true)
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.config.channels?.telegram?.dmPolicy).toBe("pairing");
+    }
+  });
+
+  it("accepts Discord agent component TTL in generated bundled channel metadata", () => {
+    const result = validateConfigObjectWithPlugins({
+      channels: {
+        discord: {
+          agentComponents: {
+            ttlMs: 120_000,
+          },
+          accounts: {
+            work: {
+              agentComponents: {
+                ttlMs: 60_000,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.config.channels?.discord?.agentComponents?.ttlMs).toBe(120_000);
+      expect(result.config.channels?.discord?.accounts?.work?.agentComponents?.ttlMs).toBe(60_000);
     }
   });
 });
@@ -292,6 +320,20 @@ describe("validateConfigObjectRawWithPlugins plugin config defaults", () => {
 });
 
 describe("validateConfigObjectWithPlugins bundled allowlist compatibility", () => {
+  it("accepts the shipped deprecated bundledDiscovery marker", () => {
+    const result = validateConfigObjectWithPlugins({
+      plugins: {
+        allow: ["telegram"],
+        bundledDiscovery: "compat",
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.config.plugins?.bundledDiscovery).toBe("compat");
+    }
+  });
+
   it("reuses the manifest registry loaded for compatibility during plugin validation", () => {
     mockLoadPluginManifestRegistry.mockReturnValue(createCompatPluginConfigSchemaRegistry());
 

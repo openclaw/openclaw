@@ -64,6 +64,9 @@ export function parseConnectTarget(rawTarget: string | undefined): {
   }
   const hostname = trimmed.slice(0, lastColon).trim() || "127.0.0.1";
   const portText = trimmed.slice(lastColon + 1).trim();
+  if (!/^\d+$/.test(portText)) {
+    throw new Error("Invalid CONNECT target port");
+  }
   const port = Number(portText);
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
     throw new Error("Invalid CONNECT target port");
@@ -298,6 +301,22 @@ export async function startDebugProxyServer(params: {
       clientSocket.pipe(upstreamSocket);
       upstreamSocket.pipe(clientSocket);
     });
+    clientSocket.on("error", (error) => {
+      store.recordEvent({
+        sessionId: params.settings.sessionId,
+        ts: Date.now(),
+        sourceScope: "openclaw",
+        sourceProcess: params.settings.sourceProcess,
+        protocol: "connect",
+        direction: "local",
+        kind: "error",
+        flowId,
+        host: hostname,
+        path: req.url ?? "",
+        errorText: error.message,
+      });
+      upstreamSocket.destroy();
+    });
     upstreamSocket.on("error", (error) => {
       store.recordEvent({
         sessionId: params.settings.sessionId,
@@ -312,7 +331,7 @@ export async function startDebugProxyServer(params: {
         path: req.url ?? "",
         errorText: error.message,
       });
-      clientSocket.end();
+      clientSocket.destroy();
     });
   });
 

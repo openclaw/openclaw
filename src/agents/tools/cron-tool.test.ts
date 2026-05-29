@@ -39,8 +39,8 @@ describe("cron tool", () => {
     opts?: Parameters<typeof createCronTool>[0],
   ): ReturnType<typeof createCronTool> {
     return createCronTool(opts, {
-      callGatewayTool: async (method, _gatewayOpts, params) =>
-        await callGatewayMock({ method, params }),
+      callGatewayTool: async (method, gatewayOpts, params) =>
+        await callGatewayMock({ method, params }, gatewayOpts),
     });
   }
 
@@ -50,6 +50,10 @@ describe("cron tool", () => {
         | { method?: string; params?: Record<string, unknown> }
         | undefined) ?? { method: undefined, params: undefined }
     );
+  }
+
+  function readGatewayOpts(index = 0): Record<string, unknown> | undefined {
+    return callGatewayMock.mock.calls[index]?.[1] as Record<string, unknown> | undefined;
   }
 
   function readCronPayloadText(index = 0): string {
@@ -254,6 +258,19 @@ describe("cron tool", () => {
     const params = expectSingleGatewayCallMethod("cron.status");
     expect(params).toStrictEqual({});
     expect(result.details).toEqual({ enabled: true });
+  });
+
+  it("passes parsed string timeoutMs values through to gateway calls", async () => {
+    callGatewayMock.mockResolvedValueOnce({ enabled: true });
+    const tool = createTestCronTool();
+
+    await tool.execute("call-status-timeout", {
+      action: "status",
+      timeoutMs: "5000",
+    });
+
+    expectSingleGatewayCallMethod("cron.status");
+    expect(readGatewayOpts(0)?.timeoutMs).toBe(5000);
   });
 
   it("allows scoped isolated cron runs to get the current job", async () => {
@@ -630,6 +647,25 @@ describe("cron tool", () => {
     expect(sessionKey).toBe("agent:main:telegram:group:-100123:topic:99");
   });
 
+  it("does not stamp caller sessionKey when add targets isolated session", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createTestCronTool({ agentSessionKey: "agent:main:webchat:dm:dashboard" });
+    await tool.execute("call-isolated-no-stamp", {
+      action: "add",
+      job: {
+        name: "isolated run",
+        schedule: { at: new Date(123).toISOString() },
+        sessionTarget: "isolated",
+        payload: { kind: "agentTurn", message: "hello" },
+      },
+    });
+    const call = readGatewayCall();
+    const payload = call.params as { sessionKey?: string; sessionTarget?: string } | undefined;
+    expect(payload?.sessionTarget).toBe("isolated");
+    expect(payload).not.toHaveProperty("sessionKey");
+  });
+
   it("adds recent context for systemEvent reminders when contextMessages > 0", async () => {
     callGatewayMock
       .mockResolvedValueOnce({
@@ -680,6 +716,26 @@ describe("cron tool", () => {
     expect(text).toContain("Message 3");
     expect(text).toContain("Message 12");
   });
+
+  it.each([1.5, -1, "2messages"])(
+    "rejects invalid contextMessages value %s",
+    async (contextMessages) => {
+      const tool = createTestCronTool({ agentSessionKey: "main" });
+
+      await expect(
+        tool.execute("call-invalid-context", {
+          action: "add",
+          contextMessages,
+          job: {
+            name: "reminder",
+            schedule: { at: new Date(123).toISOString() },
+            payload: { kind: "systemEvent", text: "Reminder: the thing." },
+          },
+        }),
+      ).rejects.toThrow("contextMessages must be a non-negative integer");
+      expect(callGatewayMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not add context when contextMessages is 0 (default)", async () => {
     callGatewayMock.mockResolvedValueOnce({ ok: true });

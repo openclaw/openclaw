@@ -1,6 +1,8 @@
 import { createHmac, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { hostname as readHostName } from "node:os";
+import { normalizeTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { detectWindowsSpawnCommandInlineArgs } from "openclaw/plugin-sdk/windows-spawn";
 import { z } from "zod";
 import type { CodexSandboxPolicy, CodexServiceTier } from "./protocol.js";
 
@@ -8,6 +10,7 @@ const START_OPTIONS_KEY_SECRET_SYMBOL = Symbol.for("openclaw.codexAppServerStart
 const START_OPTIONS_KEY_SECRET = getStartOptionsKeySecret();
 const UNIX_CODEX_REQUIREMENTS_PATH = "/etc/codex/requirements.toml";
 const WINDOWS_CODEX_REQUIREMENTS_SUFFIX = "\\OpenAI\\Codex\\requirements.toml";
+const PLAIN_DECIMAL_NUMBER_RE = /^[+-]?(?:(?:\d+\.?\d*)|(?:\.\d+))$/;
 
 type CodexAppServerTransportMode = "stdio" | "websocket";
 type CodexAppServerPolicyMode = "yolo" | "guardian";
@@ -18,6 +21,7 @@ type CodexAppServerDefaultPolicy = {
   sandbox?: CodexAppServerSandboxMode;
 };
 export type CodexAppServerApprovalPolicy = "never" | "on-request" | "on-failure" | "untrusted";
+export type CodexAppServerApprovalPolicySource = "config" | "env" | "requirements" | "implicit";
 export type CodexAppServerEffectiveApprovalPolicy =
   | CodexAppServerApprovalPolicy
   | {
@@ -72,6 +76,10 @@ export type CodexPluginsConfig = {
   plugins?: Record<string, CodexPluginEntryConfig>;
 };
 
+export type CodexAppServerExperimentalConfig = {
+  sandboxExecServer?: boolean;
+};
+
 export type ResolvedCodexPluginPolicy = {
   configKey: string;
   marketplaceName: typeof CODEX_PLUGINS_MARKETPLACE_NAME;
@@ -104,7 +112,9 @@ export type CodexAppServerRuntimeOptions = {
   codeModeOnly: boolean;
   requestTimeoutMs: number;
   turnCompletionIdleTimeoutMs: number;
+  postToolRawAssistantCompletionIdleTimeoutMs?: number;
   approvalPolicy: CodexAppServerEffectiveApprovalPolicy;
+  approvalPolicySource?: CodexAppServerApprovalPolicySource;
   sandbox: CodexAppServerSandboxMode;
   approvalsReviewer: CodexAppServerApprovalsReviewer;
   serviceTier?: CodexServiceTier;
@@ -131,13 +141,21 @@ export type CodexPluginConfig = {
     codeModeOnly?: boolean;
     requestTimeoutMs?: number;
     turnCompletionIdleTimeoutMs?: number;
+    postToolRawAssistantCompletionIdleTimeoutMs?: number;
     approvalPolicy?: CodexAppServerApprovalPolicy;
     sandbox?: CodexAppServerSandboxMode;
     approvalsReviewer?: CodexAppServerApprovalsReviewer;
     serviceTier?: CodexServiceTier | null;
     defaultWorkspaceDir?: string;
+    experimental?: CodexAppServerExperimentalConfig;
   };
 };
+
+export function shouldAutoApproveCodexAppServerApprovals(
+  appServer: Pick<CodexAppServerRuntimeOptions, "approvalPolicy" | "sandbox">,
+): boolean {
+  return appServer.approvalPolicy === "never" && appServer.sandbox === "danger-full-access";
+}
 
 export const CODEX_APP_SERVER_CONFIG_KEYS = [
   "mode",
@@ -151,12 +169,16 @@ export const CODEX_APP_SERVER_CONFIG_KEYS = [
   "codeModeOnly",
   "requestTimeoutMs",
   "turnCompletionIdleTimeoutMs",
+  "postToolRawAssistantCompletionIdleTimeoutMs",
   "approvalPolicy",
   "sandbox",
   "approvalsReviewer",
   "serviceTier",
   "defaultWorkspaceDir",
+  "experimental",
 ] as const;
+
+export const CODEX_APP_SERVER_EXPERIMENTAL_CONFIG_KEYS = ["sandboxExecServer"] as const;
 
 export const CODEX_COMPUTER_USE_CONFIG_KEYS = [
   "enabled",
@@ -203,6 +225,11 @@ const codexAppServerServiceTierSchema = z
     z.string().trim().min(1).nullable().optional(),
   )
   .optional();
+const codexAppServerExperimentalSchema = z
+  .object({
+    sandboxExecServer: z.boolean().optional(),
+  })
+  .strict();
 
 const codexPluginEntryConfigSchema = z
   .object({
@@ -259,11 +286,13 @@ const codexPluginConfigSchema = z
         codeModeOnly: z.boolean().optional(),
         requestTimeoutMs: z.number().positive().optional(),
         turnCompletionIdleTimeoutMs: z.number().positive().optional(),
+        postToolRawAssistantCompletionIdleTimeoutMs: z.number().positive().optional(),
         approvalPolicy: codexAppServerApprovalPolicySchema.optional(),
         sandbox: codexAppServerSandboxSchema.optional(),
         approvalsReviewer: codexAppServerApprovalsReviewerSchema.optional(),
         serviceTier: codexAppServerServiceTierSchema,
         defaultWorkspaceDir: z.string().optional(),
+        experimental: codexAppServerExperimentalSchema.optional(),
       })
       .strict()
       .optional(),
@@ -281,6 +310,31 @@ export function readCodexPluginConfig(value: unknown): CodexPluginConfig {
     return config;
   }
   return { ...config, ...(plugins.data ? { codexPlugins: plugins.data } : {}) };
+}
+
+export function isCodexSandboxExecServerEnabled(pluginConfig?: unknown): boolean {
+  return readCodexPluginConfig(pluginConfig).appServer?.experimental?.sandboxExecServer === true;
+}
+
+function assertCodexAppServerCommandHasNoInlineArgs(params: {
+  command: string;
+  source: CodexAppServerCommandSource;
+}): void {
+  const inlineArgs = detectWindowsSpawnCommandInlineArgs(params.command);
+  if (!inlineArgs) {
+    return;
+  }
+  const sourceLabel =
+    params.source === "env"
+      ? "OPENCLAW_CODEX_APP_SERVER_BIN"
+      : "plugins.entries.codex.config.appServer.command";
+  const argsLabel =
+    params.source === "env"
+      ? "OPENCLAW_CODEX_APP_SERVER_ARGS"
+      : "plugins.entries.codex.config.appServer.args";
+  throw new Error(
+    `${sourceLabel} must be only the Codex app-server executable path; "${inlineArgs.executable}" was configured with inline arguments "${inlineArgs.arguments}". Move those arguments to ${argsLabel}, or remove the override to use the managed Codex startup path.`,
+  );
 }
 
 export function resolveCodexPluginsPolicy(pluginConfig?: unknown): ResolvedCodexPluginsPolicy {
@@ -334,6 +388,9 @@ export function resolveCodexAppServerRuntimeOptions(
     : envCommand
       ? "env"
       : "managed";
+  if (commandSource === "config" || commandSource === "env") {
+    assertCodexAppServerCommandHasNoInlineArgs({ command, source: commandSource });
+  }
   const args = resolveArgs(config.args, env.OPENCLAW_CODEX_APP_SERVER_ARGS);
   const headers = normalizeHeaders(config.headers);
   const clearEnv = normalizeStringList(config.clearEnv);
@@ -360,6 +417,21 @@ export function resolveCodexAppServerRuntimeOptions(
     );
   }
 
+  const configApprovalPolicy = resolveApprovalPolicy(config.approvalPolicy);
+  const envApprovalPolicy = resolveApprovalPolicy(env.OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY);
+  const approvalPolicy =
+    configApprovalPolicy ??
+    envApprovalPolicy ??
+    defaultPolicy?.approvalPolicy ??
+    (policyMode === "guardian" ? "on-request" : "never");
+  const approvalPolicySource: CodexAppServerApprovalPolicySource = configApprovalPolicy
+    ? "config"
+    : envApprovalPolicy
+      ? "env"
+      : defaultPolicy?.approvalPolicy
+        ? "requirements"
+        : "implicit";
+
   return {
     start: {
       transport,
@@ -377,11 +449,16 @@ export function resolveCodexAppServerRuntimeOptions(
       config.turnCompletionIdleTimeoutMs,
       60_000,
     ),
-    approvalPolicy:
-      resolveApprovalPolicy(config.approvalPolicy) ??
-      resolveApprovalPolicy(env.OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY) ??
-      defaultPolicy?.approvalPolicy ??
-      (policyMode === "guardian" ? "on-request" : "never"),
+    ...(config.postToolRawAssistantCompletionIdleTimeoutMs !== undefined
+      ? {
+          postToolRawAssistantCompletionIdleTimeoutMs: normalizePositiveNumber(
+            config.postToolRawAssistantCompletionIdleTimeoutMs,
+            60_000,
+          ),
+        }
+      : {}),
+    approvalPolicy,
+    approvalPolicySource,
     sandbox:
       resolveSandbox(config.sandbox) ??
       resolveSandbox(env.OPENCLAW_CODEX_APP_SERVER_SANDBOX) ??
@@ -473,7 +550,11 @@ export function resolveCodexComputerUseConfig(
 
 export function codexAppServerStartOptionsKey(
   options: CodexAppServerStartOptions,
-  params: { authProfileId?: string; agentDir?: string } = {},
+  params: {
+    authProfileId?: string;
+    agentDir?: string;
+    fallbackApiKeyCacheKey?: string;
+  } = {},
 ): string {
   return JSON.stringify({
     transport: options.transport,
@@ -491,6 +572,7 @@ export function codexAppServerStartOptionsKey(
     clearEnv: [...(options.clearEnv ?? [])].toSorted(),
     authProfileId: params.authProfileId ?? null,
     agentDir: params.agentDir ?? null,
+    fallbackApiKeyCacheKey: params.fallbackApiKeyCacheKey ?? null,
   });
 }
 
@@ -936,12 +1018,7 @@ function normalizeHeaders(value: unknown): Record<string, string> {
 }
 
 function normalizeStringList(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value
-    .map((entry) => readNonEmptyString(entry))
-    .filter((entry): entry is string => entry !== undefined);
+  return normalizeTrimmedStringList(value);
 }
 
 function readBooleanEnv(value: string | undefined): boolean | undefined {
@@ -959,10 +1036,11 @@ function readBooleanEnv(value: string | undefined): boolean | undefined {
 }
 
 function readNumberEnv(value: string | undefined): number | undefined {
-  if (value === undefined) {
+  const trimmed = value?.trim();
+  if (!trimmed || !PLAIN_DECIMAL_NUMBER_RE.test(trimmed)) {
     return undefined;
   }
-  const parsed = Number(value);
+  const parsed = Number(trimmed);
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { TestRunner, type RunnerTestSuite, vi } from "vitest";
+import { TestRunner, type RunnerTask, type RunnerTestSuite, vi } from "vitest";
 
 type EvaluatedModuleNode = {
   promise?: unknown;
@@ -53,21 +53,37 @@ function restoreSharedTestHomeAfterEnvUnstub(testHomeRaw: string | undefined): v
   delete process.env.OPENCLAW_CONFIG_PATH;
   delete process.env.OPENCLAW_STATE_DIR;
   delete process.env.OPENCLAW_AGENT_DIR;
-  delete process.env.PI_CODING_AGENT_DIR;
   process.env.XDG_CONFIG_HOME = path.join(testHome, ".config");
   process.env.XDG_DATA_HOME = path.join(testHome, ".local", "share");
   process.env.XDG_STATE_HOME = path.join(testHome, ".local", "state");
   process.env.XDG_CACHE_HOME = path.join(testHome, ".cache");
 }
 
+function restoreRealTimers(): void {
+  if (vi.isFakeTimers()) {
+    vi.useRealTimers();
+  }
+}
+
 export default class OpenClawNonIsolatedRunner extends TestRunner {
   override onCollectStart(file: { filepath: string }) {
     super.onCollectStart(file);
+    restoreRealTimers();
     restoreSharedTestHomeAfterEnvUnstub(getSharedTestHome());
     const orderLogPath = process.env.OPENCLAW_VITEST_FILE_ORDER_LOG?.trim();
     if (orderLogPath) {
       fs.appendFileSync(orderLogPath, `START ${file.filepath}\n`);
     }
+  }
+
+  override async onBeforeRunTask(test: RunnerTask) {
+    restoreRealTimers();
+    await super.onBeforeRunTask(test);
+  }
+
+  override onBeforeTryTask(test: RunnerTask) {
+    restoreRealTimers();
+    super.onBeforeTryTask(test);
   }
 
   override async onAfterRunSuite(suite: RunnerTestSuite) {
@@ -84,9 +100,7 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     // Mirror the missing cleanup from Vitest isolate mode so shared workers do
     // not carry file-scoped timers, stubs, spies, or stale module state
     // forward into the next file.
-    if (vi.isFakeTimers()) {
-      vi.useRealTimers();
-    }
+    restoreRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     const testHome = getSharedTestHome();

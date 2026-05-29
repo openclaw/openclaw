@@ -12,6 +12,7 @@ import {
   failTaskRunByRunId,
   startTaskRunByRunId,
 } from "../../tasks/detached-task-runtime.js";
+import { resolveRequiredCompletionTerminalResult } from "../../tasks/task-completion-contract.js";
 import type { DeliveryContext } from "../../utils/delivery-context.js";
 import {
   AcpRuntimeError,
@@ -72,7 +73,8 @@ import {
   resolveMissingMetaError,
   resolveRuntimeIdleTtlMs,
 } from "./manager.utils.js";
-import { CachedRuntimeState, RuntimeCache } from "./runtime-cache.js";
+import { RuntimeCache } from "./runtime-cache.js";
+import type { CachedRuntimeState } from "./runtime-cache.js";
 import {
   inferRuntimeOptionPatchFromConfigOption,
   mergeRuntimeOptions,
@@ -125,6 +127,10 @@ function resolveBackgroundTaskTerminalResult(progressSummary: string): {
   terminalOutcome?: "blocked";
   terminalSummary?: string;
 } {
+  const requiredCompletionResult = resolveRequiredCompletionTerminalResult(progressSummary);
+  if (requiredCompletionResult.terminalOutcome) {
+    return requiredCompletionResult;
+  }
   const normalized = normalizeText(progressSummary)?.replace(/\s+/g, " ").trim();
   if (!normalized) {
     return {};
@@ -174,8 +180,11 @@ export class AcpSessionManager {
   private readonly errorCountsByCode = new Map<string, number>();
   private evictedRuntimeCount = 0;
   private lastEvictedAt: number | undefined;
+  private readonly deps: AcpSessionManagerDeps;
 
-  constructor(private readonly deps: AcpSessionManagerDeps = DEFAULT_DEPS) {}
+  constructor(deps: AcpSessionManagerDeps = DEFAULT_DEPS) {
+    this.deps = deps;
+  }
 
   resolveSession(params: { cfg: OpenClawConfig; sessionKey: string }): AcpSessionResolution {
     const sessionKey = canonicalizeAcpSessionKey(params);
@@ -188,6 +197,7 @@ export class AcpSessionManager {
     const acp = this.deps.readSessionEntry({
       cfg: params.cfg,
       sessionKey,
+      clone: false,
     })?.acp;
     if (acp) {
       return {
@@ -2013,6 +2023,8 @@ export class AcpSessionManager {
     await this.writeSessionMeta({
       cfg: params.cfg,
       sessionKey: params.sessionKey,
+      skipMaintenance: true,
+      takeCacheOwnership: true,
       mutate: (current, entry) => {
         if (!entry) {
           return null;
@@ -2077,12 +2089,16 @@ export class AcpSessionManager {
       entry: SessionEntry | undefined,
     ) => SessionAcpMeta | null | undefined;
     failOnError?: boolean;
+    skipMaintenance?: boolean;
+    takeCacheOwnership?: boolean;
   }): Promise<SessionEntry | null> {
     try {
       return await this.deps.upsertSessionMeta({
         cfg: params.cfg,
         sessionKey: params.sessionKey,
         mutate: params.mutate,
+        ...(params.skipMaintenance === true ? { skipMaintenance: true } : {}),
+        ...(params.takeCacheOwnership === true ? { takeCacheOwnership: true } : {}),
       });
     } catch (error) {
       if (params.failOnError) {

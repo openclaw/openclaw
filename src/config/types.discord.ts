@@ -1,5 +1,6 @@
 import type {
   ChannelPreviewStreamingConfig,
+  ChannelStreamingProgressConfig,
   ContextVisibilityMode,
   DmPolicy,
   GroupPolicy,
@@ -17,6 +18,13 @@ import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./typ
 import type { TtsConfig } from "./types.tts.js";
 
 export type DiscordStreamMode = "off" | "partial" | "block" | "progress";
+export type DiscordStreamingProgressConfig = ChannelStreamingProgressConfig & {
+  /** Include assistant commentary/preamble text in the progress draft. Default: false. */
+  commentary?: boolean;
+};
+export type DiscordChannelStreamingConfig = Omit<ChannelPreviewStreamingConfig, "progress"> & {
+  progress?: DiscordStreamingProgressConfig;
+};
 
 export type DiscordPluralKitConfig = {
   enabled?: boolean;
@@ -149,7 +157,11 @@ export type DiscordVoiceRealtimeConfig = {
   provider?: string;
   /** Provider realtime session model, for example "gpt-realtime-2". */
   model?: string;
-  /** Provider realtime output voice, for example "cedar". */
+  /** Provider realtime output voice name, for example "cedar". */
+  speakerVoice?: string;
+  /** Provider realtime output voice id. */
+  speakerVoiceId?: string;
+  /** @deprecated Use speakerVoice. */
   voice?: string;
   /** System instructions passed to the realtime provider. */
   instructions?: string;
@@ -157,6 +169,10 @@ export type DiscordVoiceRealtimeConfig = {
   toolPolicy?: DiscordVoiceRealtimeToolPolicy;
   /** Whether bidi should force the OpenClaw agent brain for every substantive turn. */
   consultPolicy?: DiscordVoiceRealtimeConsultPolicy;
+  /** Require a wake name before OpenAI agent-proxy realtime Discord voice responds. */
+  requireWakeName?: boolean;
+  /** Wake names that allow OpenAI agent-proxy realtime Discord voice to respond. Defaults to the routed agent name, then agent id. */
+  wakeNames?: string[];
   /** Agent profile bootstrap files to include in realtime provider instructions. Defaults to IDENTITY.md, USER.md, and SOUL.md; set [] to disable. */
   bootstrapContextFiles?: DiscordVoiceRealtimeBootstrapContextFile[];
   /** Allow Discord speaker-start events to interrupt active realtime playback. */
@@ -203,7 +219,7 @@ export type DiscordVoiceConfig = {
   connectTimeoutMs?: number;
   /** Grace period for Discord voice reconnect signalling after a disconnect (default: 15000). */
   reconnectGraceMs?: number;
-  /** Silence grace after Discord reports a speaker ended before finalizing STT capture (default: 2500). */
+  /** Silence grace after Discord reports a speaker ended before finalizing STT capture (default: 2000). */
   captureSilenceGraceMs?: number;
   /** Optional TTS overrides for Discord voice output. */
   tts?: TtsConfig;
@@ -229,6 +245,8 @@ export type DiscordExecApprovalConfig = {
 export type DiscordAgentComponentsConfig = {
   /** Enable agent-controlled interactive components (buttons, select menus). Default: true. */
   enabled?: boolean;
+  /** Time in milliseconds before sent Discord component callbacks expire. Default: 1800000. */
+  ttlMs?: number;
 };
 
 export type DiscordUiComponentsConfig = {
@@ -369,7 +387,7 @@ export type DiscordAccountConfig = {
    */
   suppressEmbeds?: boolean;
   /** Streaming + chunking settings. Prefer this nested shape over legacy flat keys. */
-  streaming?: ChannelPreviewStreamingConfig;
+  streaming?: DiscordChannelStreamingConfig;
   /**
    * Soft max line count per Discord message.
    * Discord clients can clip/collapse very tall messages; splitting by lines

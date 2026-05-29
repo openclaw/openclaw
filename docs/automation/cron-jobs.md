@@ -15,9 +15,8 @@ Cron is the Gateway's built-in scheduler. It persists jobs, wakes the agent at t
 <Steps>
   <Step title="Add a one-shot reminder">
     ```bash
-    openclaw cron add \
+    openclaw cron create "2026-02-01T16:00:00Z" \
       --name "Reminder" \
-      --at "2026-02-01T16:00:00Z" \
       --session main \
       --system-event "Reminder: check the cron docs draft" \
       --wake now \
@@ -43,6 +42,7 @@ Cron is the Gateway's built-in scheduler. It persists jobs, wakes the agent at t
 - Cron runs **inside the Gateway** process (not inside the model).
 - Job definitions persist at `~/.openclaw/cron/jobs.json` so restarts do not lose schedules.
 - Runtime execution state persists next to it in `~/.openclaw/cron/jobs-state.json`. If you track cron definitions in git, track `jobs.json` and gitignore `jobs-state.json`.
+- If `jobs.json` contains malformed rows, the Gateway keeps valid jobs running, removes the malformed rows from the active store, and saves the raw rows beside it in `jobs-quarantine.json` for later repair or review.
 - After the split, older OpenClaw versions can read `jobs.json` but may treat jobs as fresh because runtime fields now live in `jobs-state.json`.
 - When `jobs.json` is edited while the Gateway is running or stopped, OpenClaw compares the changed schedule fields with pending runtime slot metadata and clears stale `nextRunAtMs` values. Pure formatting or key-order-only rewrites preserve the pending slot.
 - All cron executions create [background task](/automation/tasks) records.
@@ -55,6 +55,7 @@ Cron is the Gateway's built-in scheduler. It persists jobs, wakes the agent at t
 - Isolated cron runs also treat run-level agent failures as job errors even when no reply payload is produced, so model/provider failures increment error counters and trigger failure notifications instead of clearing the job as successful.
 - When an isolated agent-turn job reaches `timeoutSeconds`, cron aborts the underlying agent run and gives it a short cleanup window. If the run does not drain, Gateway-owned cleanup force-clears that run's session ownership before cron records the timeout, so queued chat work is not left behind a stale processing session.
 - If an isolated agent-turn stalls before the runner starts or before the first model call, cron records a phase-specific timeout such as `setup timed out before runner start` or `stalled before first model call (last phase: context-engine)`. These watchdogs cover embedded providers and CLI-backed providers before their external CLI process is actually started, and are capped independently from long `timeoutSeconds` values so cold-start/auth/context failures surface quickly instead of waiting for the full job budget.
+- If you use system cron or another external scheduler to run `openclaw agent`, wrap it with a hard-kill escalation even though the CLI handles `SIGTERM`/`SIGINT`. Gateway-backed runs ask the Gateway to abort accepted runs; local and embedded fallback runs receive the same abort signal. For GNU `timeout`, prefer `timeout -k 60 600 openclaw agent ...` over plain `timeout 600 ...`; the `-k` value is the supervisor backstop if the process cannot drain. For systemd units, keep the same shape by using a `SIGTERM` stop signal plus a grace window such as `TimeoutStopSec` before any final kill. If a retry reuses a `--run-id` while the original Gateway run is still active, the duplicate is reported as in-flight instead of starting a second run.
 
 <a id="maintenance"></a>
 
@@ -98,6 +99,13 @@ This fires ~5–6 times per month instead of 0–1 times per month. OpenClaw use
 <AccordionGroup>
   <Accordion title="Main session vs isolated vs custom">
     **Main session** jobs enqueue a system event into a cron-owned run lane and optionally wake the heartbeat (`--wake now` or `--wake next-heartbeat`). They can use the target main session's last delivery context for replies, but they do not append routine cron turns to the human chat lane and do not extend daily/idle reset freshness for the target session. **Isolated** jobs run a dedicated agent turn with a fresh session. **Custom sessions** (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on previous summaries.
+
+    Main-session cron events are self-contained system-event reminders. They do
+    not automatically include the default heartbeat prompt's "Read
+    HEARTBEAT.md" instruction. If a recurring reminder should consult
+    `HEARTBEAT.md`, say that explicitly in the cron event text or in the
+    agent's own instructions.
+
   </Accordion>
   <Accordion title="What 'fresh session' means for isolated jobs">
     For isolated jobs, "fresh session" means a new transcript/session id for each run. OpenClaw may carry safe preferences such as thinking/fast/verbose settings, labels, and explicit user-selected model/auth overrides, but it does not inherit ambient conversation context from an older cron row: channel/group routing, send or queue policy, elevation, origin, or ACP runtime binding. Use `current` or `session:<id>` when a recurring job should deliberately build on the same conversation context.
@@ -138,6 +146,8 @@ This fires ~5–6 times per month instead of 0–1 times per month. OpenClaw use
 
 Cron jobs can also carry payload-level `fallbacks`. When present, that list replaces the configured fallback chain for the job. Use `fallbacks: []` in the job payload/API when you want a strict cron run that tries only the selected model. If a job has `--model` but neither payload nor configured fallbacks, OpenClaw passes an explicit empty fallback override so the agent primary is not appended as a hidden extra retry target.
 
+Local-provider preflight checks walk configured fallbacks before marking a cron run `skipped`; `fallbacks: []` keeps that preflight path strict.
+
 Model-selection precedence for isolated jobs is:
 
 1. Gmail hook model override (when the run came from Gmail and that override is allowed)
@@ -159,7 +169,7 @@ Before an isolated cron run enters the agent runner, OpenClaw checks reachable l
 | `webhook`  | POST finished event payload to a URL                                |
 | `none`     | No runner fallback delivery                                         |
 
-Use `--announce --channel telegram --to "-1001234567890"` for channel delivery. For Telegram forum topics, use `-1001234567890:topic:123`; direct RPC/config callers may also pass `delivery.threadId` as a string or number. Slack/Discord/Mattermost targets should use explicit prefixes (`channel:<id>`, `user:<id>`). Matrix room IDs are case-sensitive; use the exact room ID or `room:!room:server` form from Matrix.
+Use `--announce --channel telegram --to "-1001234567890"` for channel delivery. For Telegram forum topics, use `-1001234567890:topic:123`; OpenClaw also accepts the Telegram-owned `-1001234567890:123` shorthand. Direct RPC/config callers may pass `delivery.threadId` as a string or number. Slack/Discord/Mattermost targets should use explicit prefixes (`channel:<id>`, `user:<id>`). Matrix room IDs are case-sensitive; use the exact room ID or `room:!room:server` form from Matrix.
 
 When announce delivery uses `channel: "last"` or omits `channel`, a provider-prefixed target such as `telegram:123` can select the channel before cron falls back to session history or a single configured channel. Only prefixes advertised by the loaded plugin are provider selectors. If `delivery.channel` is explicit, the target prefix must name the same provider; for example, `channel: "whatsapp"` with `to: "telegram:123"` is rejected instead of letting WhatsApp interpret the Telegram ID as a phone number. Target-kind and service prefixes such as `channel:<id>`, `user:<id>`, `imessage:<handle>`, and `sms:<number>` remain channel-owned target syntax, not provider selectors.
 
@@ -168,6 +178,21 @@ For isolated jobs, chat delivery is shared. If a chat route is available, the ag
 When an agent creates an isolated reminder from an active chat, OpenClaw stores the preserved live delivery target for the fallback announce route. Internal session keys may be lowercase; provider delivery targets are not reconstructed from those keys when current chat context is available.
 
 Implicit announce delivery uses configured channel allowlists to validate and reroute stale targets. DM pairing-store approvals are not fallback automation recipients; set `delivery.to` or configure the channel `allowFrom` entry when a scheduled job should proactively send to a DM.
+
+## Output language
+
+Cron jobs do not infer a reply language from channel, locale, or previous
+messages. Put the language rule in the scheduled message or template:
+
+```bash
+openclaw cron edit <jobId> \
+  --message "Summarize the updates. Respond in Chinese; keep URLs, code, and product names unchanged."
+```
+
+For template files, keep the language instruction in the rendered prompt and
+verify placeholders such as `{{language}}` are filled before the job runs. If
+the output mixes languages, make the rule explicit, for example: "Use Chinese
+for narrative text and keep technical terms in English."
 
 Failure notifications follow a separate destination path:
 
@@ -192,12 +217,11 @@ Failure notifications follow a separate destination path:
   </Tab>
   <Tab title="Recurring isolated job">
     ```bash
-    openclaw cron add \
+    openclaw cron create "0 7 * * *" \
+      "Summarize overnight updates." \
       --name "Morning brief" \
-      --cron "0 7 * * *" \
       --tz "America/Los_Angeles" \
       --session isolated \
-      --message "Summarize overnight updates." \
       --announce \
       --channel slack \
       --to "channel:C1234567890"
@@ -214,6 +238,14 @@ Failure notifications follow a separate destination path:
       --model "opus" \
       --thinking high \
       --announce
+    ```
+  </Tab>
+  <Tab title="Webhook output">
+    ```bash
+    openclaw cron create "0 18 * * 1-5" \
+      "Summarize today's deploys as JSON." \
+      --name "Deploy digest" \
+      --webhook "https://example.invalid/openclaw/cron"
     ```
   </Tab>
 </Tabs>
@@ -283,7 +315,7 @@ Keep hook endpoints behind loopback, tailnet, or trusted reverse proxy.
 
 - Use a dedicated hook token; do not reuse gateway auth tokens.
 - Keep `hooks.path` on a dedicated subpath; `/` is rejected.
-- Set `hooks.allowedAgentIds` to limit explicit `agentId` routing.
+- Set `hooks.allowedAgentIds` to limit which effective agent a hook can target, including the default agent when `agentId` is omitted.
 - Keep `hooks.allowRequestSessionKey=false` unless you require caller-selected sessions.
 - If you enable `hooks.allowRequestSessionKey`, also set `hooks.allowedSessionKeyPrefixes` to constrain allowed session key shapes.
 - Hook payloads are wrapped with safety boundaries by default.
@@ -388,11 +420,13 @@ openclaw cron runs --id <jobId> --run-id <runId>
 openclaw cron remove <jobId>
 
 # Agent selection (multi-agent setups)
-openclaw cron add --name "Ops sweep" --cron "0 6 * * *" --session isolated --message "Check ops queue" --agent ops
+openclaw cron create "0 6 * * *" "Check ops queue" --name "Ops sweep" --session isolated --agent ops
 openclaw cron edit <jobId> --clear-agent
 ```
 
 `openclaw cron run <jobId>` returns after enqueueing the manual run. Use `--wait` for shutdown hooks, maintenance scripts, or other automation that must block until the queued run finishes. Wait mode polls the exact returned `runId`; it exits `0` for status `ok` and non-zero for `error`, `skipped`, or a wait timeout.
+
+`openclaw cron create` is an alias for `openclaw cron add`, and new jobs can use a positional schedule (`"0 9 * * 1"`, `"every 1h"`, `"20m"`, or an ISO timestamp) followed by a positional agent prompt. Use `--webhook <url>` on `cron add|create` or `cron edit` to POST the finished run payload to an HTTP endpoint. Webhook delivery cannot be combined with chat delivery flags such as `--announce`, `--channel`, `--to`, `--thread-id`, or `--account`.
 
 <Note>
 Model override note:
@@ -413,7 +447,7 @@ Model override note:
   cron: {
     enabled: true,
     store: "~/.openclaw/cron/jobs.json",
-    maxConcurrentRuns: 1,
+    maxConcurrentRuns: 8,
     retry: {
       maxAttempts: 3,
       backoffMs: [60000, 120000, 300000],
@@ -426,7 +460,7 @@ Model override note:
 }
 ```
 
-`maxConcurrentRuns` limits both scheduled cron dispatch and isolated agent-turn execution. Isolated cron agent turns use the queue's dedicated `cron-nested` execution lane internally, so raising this value lets independent cron LLM runs progress in parallel instead of only starting their outer cron wrappers. The shared non-cron `nested` lane is not widened by this setting.
+`maxConcurrentRuns` limits both scheduled cron dispatch and isolated agent-turn execution, and defaults to 8. Isolated cron agent turns use the queue's dedicated `cron-nested` execution lane internally, so raising this value lets independent cron LLM runs progress in parallel instead of only starting their outer cron wrappers. The shared non-cron `nested` lane is not widened by this setting.
 
 The runtime state sidecar is derived from `cron.store`: a `.json` store such as `~/clawd/cron/jobs.json` uses `~/clawd/cron/jobs-state.json`, while a store path without a `.json` suffix appends `-state.json`.
 
