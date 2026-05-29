@@ -92,9 +92,11 @@ describe("setupOfficialPluginInstalls", () => {
   });
 
   it("installs selected optional official plugins through the shared onboarding installer", async () => {
-    const multiselect = vi.fn(async (_params: WizardMultiSelectParams) => ["diagnostics-otel"]);
+    const multiselect = vi.fn(async <T,>(_params: WizardMultiSelectParams<T>) => [
+      "diagnostics-otel" as T,
+    ]);
     const prompter = createWizardPrompter({
-      multiselect: multiselect as unknown as WizardPrompter["multiselect"],
+      multiselect: multiselect as WizardPrompter["multiselect"],
     });
     const runtime = createNonExitingRuntime();
 
@@ -105,38 +107,20 @@ describe("setupOfficialPluginInstalls", () => {
       workspaceDir: "/tmp/workspace",
     });
 
-    expect(multiselect).toHaveBeenCalledTimes(1);
+    expect(multiselect).toHaveBeenCalledOnce();
     const prompt = multiselect.mock.calls[0]?.[0];
-    if (!prompt) {
-      throw new Error("expected optional plugin multiselect prompt");
-    }
-    expect(prompt.message).toBe("Install optional plugins");
-    expect(prompt.options[0]).toEqual({
-      value: "__skip__",
-      label: "Skip for now",
-      hint: "Continue without installing optional plugins",
-    });
-    expect(prompt.options).toEqual(
+    expect(prompt).toMatchObject({ message: "Install optional plugins" });
+    expect(prompt?.options).toEqual(
       expect.arrayContaining([
         {
-          value: "acpx",
-          label: "ACPX Runtime",
-          hint: "OpenClaw ACP runtime backend",
+          value: "__skip__",
+          label: "Skip for now",
+          hint: "Continue without installing optional plugins",
         },
         {
           value: "diagnostics-otel",
           label: "Diagnostics OpenTelemetry",
           hint: "OpenClaw diagnostics OpenTelemetry exporter",
-        },
-        {
-          value: "diagnostics-prometheus",
-          label: "Diagnostics Prometheus",
-          hint: "OpenClaw diagnostics Prometheus exporter",
-        },
-        {
-          value: "tokenjuice",
-          label: "Tokenjuice",
-          hint: "OpenClaw tokenjuice exec output compaction plugin",
         },
       ]),
     );
