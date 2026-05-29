@@ -1,3 +1,4 @@
+import path from "node:path";
 import {
   createMessageReceiptFromOutboundResults,
   type MessageReceipt,
@@ -35,6 +36,14 @@ import {
 import { loadOutboundMediaFromUrl, type OpenClawConfig } from "./runtime-api.js";
 import { isMattermostId, resolveMattermostOpaqueTarget } from "./target-resolution.js";
 
+export type MattermostAttachment = {
+  mediaUrl?: string;
+  filePath?: string;
+  buffer?: string;
+  filename?: string;
+  contentType?: string;
+};
+
 export type MattermostSendOpts = {
   cfg: OpenClawConfig;
   botToken?: string;
@@ -49,6 +58,11 @@ export type MattermostSendOpts = {
   attachmentText?: string;
   /** Retry options for DM channel creation */
   dmRetryOptions?: CreateDmChannelRetryOptions;
+  filePath?: string;
+  buffer?: string;
+  filename?: string;
+  contentType?: string;
+  attachments?: MattermostAttachment[];
 };
 
 export type MattermostSendResult = {
@@ -464,19 +478,21 @@ export async function sendMessageMattermost(
   let fileIds: string[] | undefined;
   let uploadError: Error | undefined;
   const mediaUrl = opts.mediaUrl?.trim();
+
+  type PendingUpload = { buffer: Buffer; fileName: string; contentType?: string };
+  const pendingUploads: PendingUpload[] = [];
+
   if (mediaUrl) {
     try {
       const media = await loadOutboundMediaFromUrl(mediaUrl, {
         mediaLocalRoots: opts.mediaLocalRoots,
         mediaReadFile: opts.mediaReadFile,
       });
-      const fileInfo = await uploadMattermostFile(client, {
-        channelId,
+      pendingUploads.push({
         buffer: media.buffer,
-        fileName: media.fileName ?? "upload",
-        contentType: media.contentType ?? undefined,
+        fileName: media.fileName ?? opts.filename ?? "upload",
+        contentType: media.contentType ?? opts.contentType,
       });
-      fileIds = [fileInfo.id];
     } catch (err) {
       uploadError = err instanceof Error ? err : new Error(String(err));
       if (core.logging.shouldLogVerbose()) {
@@ -485,6 +501,94 @@ export async function sendMessageMattermost(
         );
       }
       message = normalizeMessage(message, isHttpUrl(mediaUrl) ? mediaUrl : "");
+    }
+  }
+
+  // Handle explicit filePath (only when mediaUrl did not produce uploads)
+  if (!uploadError && !mediaUrl && opts.filePath) {
+    try {
+      const readFile = opts.mediaReadFile;
+      if (!readFile) {
+        throw new Error("mediaReadFile is required to send filePath attachments");
+      }
+      const buffer = await readFile(opts.filePath);
+      const fileName = opts.filename ?? path.basename(opts.filePath);
+      pendingUploads.push({ buffer, fileName, contentType: opts.contentType });
+    } catch (err) {
+      throw new Error(
+        `Mattermost file upload failed for ${opts.filePath}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  // Handle direct base64 buffer
+  if (!uploadError && !mediaUrl && opts.buffer) {
+    try {
+      const buffer = Buffer.from(opts.buffer, "base64");
+      pendingUploads.push({
+        buffer,
+        fileName: opts.filename ?? "upload",
+        contentType: opts.contentType,
+      });
+    } catch (err) {
+      throw new Error(
+        `Mattermost buffer upload failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  // Handle attachments array
+  if (!uploadError && opts.attachments && opts.attachments.length > 0) {
+    for (const att of opts.attachments) {
+      if (!att) continue;
+      try {
+        if (att.buffer) {
+          pendingUploads.push({
+            buffer: Buffer.from(att.buffer, "base64"),
+            fileName: att.filename ?? "upload",
+            contentType: att.contentType,
+          });
+        } else if (att.filePath) {
+          const readFile = opts.mediaReadFile;
+          if (!readFile) {
+            throw new Error("mediaReadFile is required to send filePath attachments");
+          }
+          const buffer = await readFile(att.filePath);
+          pendingUploads.push({
+            buffer,
+            fileName: att.filename ?? path.basename(att.filePath),
+            contentType: att.contentType,
+          });
+        } else if (att.mediaUrl) {
+          const media = await loadOutboundMediaFromUrl(att.mediaUrl, {
+            mediaLocalRoots: opts.mediaLocalRoots,
+            mediaReadFile: opts.mediaReadFile,
+          });
+          pendingUploads.push({
+            buffer: media.buffer,
+            fileName: att.filename ?? media.fileName ?? "upload",
+            contentType: att.contentType ?? media.contentType,
+          });
+        }
+      } catch (err) {
+        throw new Error(
+          `Mattermost attachment upload failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+  }
+
+  // Execute uploads
+  if (pendingUploads.length > 0) {
+    fileIds = [];
+    for (const upload of pendingUploads) {
+      const fileInfo = await uploadMattermostFile(client, {
+        channelId,
+        buffer: upload.buffer,
+        fileName: upload.fileName,
+        contentType: upload.contentType,
+      });
+      fileIds.push(fileInfo.id);
     }
   }
 

@@ -192,7 +192,7 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
   supportsAction: ({ action }) => {
     return action === "send" || action === "react";
   },
-  handleAction: async ({ action, params, cfg, accountId }) => {
+  handleAction: async ({ action, params, cfg, accountId, mediaLocalRoots, mediaReadFile }) => {
     if (action === "react") {
       const resolvedAccountId = accountId ?? resolveDefaultMattermostAccountId(cfg);
       const mattermostConfig = cfg.channels?.mattermost as MattermostConfig | undefined;
@@ -272,8 +272,53 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
       normalizeOptionalString(params.replyToId) ?? normalizeOptionalString(params.replyTo);
     const resolvedAccountId = accountId || undefined;
 
+    // Support media, path, and filePath for media URL (consistent with Discord)
     const mediaUrl =
-      typeof params.media === "string" ? params.media.trim() || undefined : undefined;
+      typeof params.media === "string"
+        ? params.media.trim() || undefined
+        : typeof params.path === "string"
+          ? params.path.trim() || undefined
+          : typeof params.filePath === "string"
+            ? params.filePath.trim() || undefined
+            : undefined;
+
+    const buffer = typeof params.buffer === "string" ? params.buffer : undefined;
+    const filename = typeof params.filename === "string" ? params.filename : undefined;
+    const contentType =
+      typeof params.contentType === "string"
+        ? params.contentType
+        : typeof params.mimeType === "string"
+          ? params.mimeType
+          : undefined;
+
+    const attachments = Array.isArray(params.attachments)
+      ? params.attachments
+          .map((att) => {
+            if (!att || typeof att !== "object") return undefined;
+            const a = att as Record<string, unknown>;
+            const attMedia =
+              typeof a.media === "string" ? a.media.trim() || undefined : undefined;
+            const attPath = typeof a.path === "string" ? a.path.trim() || undefined : undefined;
+            const attFilePath =
+              typeof a.filePath === "string" ? a.filePath.trim() || undefined : undefined;
+            const attBuffer = typeof a.buffer === "string" ? a.buffer : undefined;
+            const attFilename = typeof a.filename === "string" ? a.filename : undefined;
+            const attContentType =
+              typeof a.contentType === "string"
+                ? a.contentType
+                : typeof a.mimeType === "string"
+                  ? a.mimeType
+                  : undefined;
+            return {
+              mediaUrl: attMedia,
+              filePath: attPath ?? attFilePath,
+              buffer: attBuffer,
+              filename: attFilename,
+              contentType: attContentType,
+            };
+          })
+          .filter((a): a is NonNullable<typeof a> => a != null)
+      : undefined;
 
     const result = await (
       await loadMattermostChannelRuntime()
@@ -284,6 +329,12 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
       buttons: presentation ? buildMattermostPresentationButtons(presentation) : undefined,
       attachmentText: typeof params.attachmentText === "string" ? params.attachmentText : undefined,
       mediaUrl,
+      mediaLocalRoots,
+      mediaReadFile,
+      buffer,
+      filename,
+      contentType,
+      attachments,
     });
 
     return {
@@ -414,6 +465,7 @@ const mattermostOutbound: ChannelOutboundAdapter = {
       text,
       mediaUrl,
       mediaLocalRoots,
+      mediaReadFile,
       accountId,
       replyToId,
       threadId,
@@ -425,6 +477,7 @@ const mattermostOutbound: ChannelOutboundAdapter = {
         accountId: accountId ?? undefined,
         mediaUrl,
         mediaLocalRoots,
+        mediaReadFile,
         replyToId: replyToId ?? (threadId != null ? String(threadId) : undefined),
       }),
   }),

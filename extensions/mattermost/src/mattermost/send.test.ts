@@ -700,4 +700,149 @@ describe("sendMessageMattermost user-first resolution", () => {
     expect(retryCall?.[2]?.timeoutMs).toBe(overrideOptions.timeoutMs);
     expect(retryCall?.[2]?.initialDelayMs).toBe(1000);
   });
+
+  it("uploads filePath via mediaReadFile", async () => {
+    mockState.resolveMattermostAccount.mockReturnValue({
+      accountId: "default",
+      botToken: "bot-token",
+      baseUrl: "https://mattermost.example.com",
+      config: {},
+    });
+    const readFile = vi.fn(async () => Buffer.from("file-bytes"));
+
+    await sendMessageMattermost("channel:town-square", "hello", {
+      cfg: TEST_CFG,
+      filePath: "/tmp/report.md",
+      filename: "report.md",
+      contentType: "text/markdown",
+      mediaReadFile: readFile,
+    });
+
+    expect(readFile).toHaveBeenCalledWith("/tmp/report.md");
+    const uploadParams = uploadMattermostFileCall()[1];
+    expect(uploadParams?.channelId).toBe("town-square");
+    expect(uploadParams?.fileName).toBe("report.md");
+    expect(uploadParams?.contentType).toBe("text/markdown");
+    const postParams = createMattermostPostParams();
+    expect(postParams.file_ids).toEqual(["file-1"]);
+  });
+
+  it("uploads base64 buffer with filename", async () => {
+    mockState.resolveMattermostAccount.mockReturnValue({
+      accountId: "default",
+      botToken: "bot-token",
+      baseUrl: "https://mattermost.example.com",
+      config: {},
+    });
+
+    await sendMessageMattermost("channel:town-square", "hello", {
+      cfg: TEST_CFG,
+      buffer: Buffer.from("buffer-bytes").toString("base64"),
+      filename: "data.txt",
+      contentType: "text/plain",
+    });
+
+    const uploadParams = uploadMattermostFileCall()[1];
+    expect(uploadParams?.fileName).toBe("data.txt");
+    expect(uploadParams?.contentType).toBe("text/plain");
+    const postParams = createMattermostPostParams();
+    expect(postParams.file_ids).toEqual(["file-1"]);
+  });
+
+  it("uploads attachments array", async () => {
+    mockState.resolveMattermostAccount.mockReturnValue({
+      accountId: "default",
+      botToken: "bot-token",
+      baseUrl: "https://mattermost.example.com",
+      config: {},
+    });
+    mockState.uploadMattermostFile
+      .mockResolvedValueOnce({ id: "file-a" })
+      .mockResolvedValueOnce({ id: "file-b" });
+    const readFile = vi.fn(async (p: string) => Buffer.from(`${p}-bytes`));
+
+    await sendMessageMattermost("channel:town-square", "hello", {
+      cfg: TEST_CFG,
+      attachments: [
+        { filePath: "/tmp/one.md", filename: "one.md" },
+        { buffer: Buffer.from("two-bytes").toString("base64"), filename: "two.txt" },
+      ],
+      mediaReadFile: readFile,
+    });
+
+    expect(readFile).toHaveBeenCalledWith("/tmp/one.md");
+    expect(mockState.uploadMattermostFile).toHaveBeenCalledTimes(2);
+    const postParams = createMattermostPostParams();
+    expect(postParams.file_ids).toEqual(["file-a", "file-b"]);
+  });
+
+  it("throws when filePath is provided without mediaReadFile", async () => {
+    mockState.resolveMattermostAccount.mockReturnValue({
+      accountId: "default",
+      botToken: "bot-token",
+      baseUrl: "https://mattermost.example.com",
+      config: {},
+    });
+
+    await expect(
+      sendMessageMattermost("channel:town-square", "hello", {
+        cfg: TEST_CFG,
+        filePath: "/tmp/report.md",
+      }),
+    ).rejects.toThrow(/mediaReadFile is required/i);
+  });
+
+  it("throws when filePath read fails", async () => {
+    mockState.resolveMattermostAccount.mockReturnValue({
+      accountId: "default",
+      botToken: "bot-token",
+      baseUrl: "https://mattermost.example.com",
+      config: {},
+    });
+    const readFile = vi.fn(async () => {
+      throw new Error("ENOENT: no such file");
+    });
+
+    await expect(
+      sendMessageMattermost("channel:town-square", "hello", {
+        cfg: TEST_CFG,
+        filePath: "/tmp/missing.md",
+        mediaReadFile: readFile,
+      }),
+    ).rejects.toThrow(/file upload failed/i);
+  });
+
+  it("combines mediaUrl and attachments when both provided", async () => {
+    mockState.resolveMattermostAccount.mockReturnValue({
+      accountId: "default",
+      botToken: "bot-token",
+      baseUrl: "https://mattermost.example.com",
+      config: {},
+    });
+    mockState.loadOutboundMediaFromUrl.mockResolvedValue({
+      buffer: Buffer.from("media-bytes"),
+      fileName: "photo.png",
+      contentType: "image/png",
+      kind: "image",
+    });
+    mockState.uploadMattermostFile
+      .mockResolvedValueOnce({ id: "file-media" })
+      .mockResolvedValueOnce({ id: "file-att" });
+
+    await sendMessageMattermost("channel:town-square", "hello", {
+      cfg: TEST_CFG,
+      mediaUrl: "https://example.com/photo.png",
+      attachments: [
+        { buffer: Buffer.from("att-bytes").toString("base64"), filename: "att.txt" },
+      ],
+    });
+
+    expect(mockState.loadOutboundMediaFromUrl).toHaveBeenCalledWith(
+      "https://example.com/photo.png",
+      expect.any(Object),
+    );
+    expect(mockState.uploadMattermostFile).toHaveBeenCalledTimes(2);
+    const postParams = createMattermostPostParams();
+    expect(postParams.file_ids).toEqual(["file-media", "file-att"]);
+  });
 });
