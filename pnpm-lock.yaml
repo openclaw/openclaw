@@ -134,9 +134,6 @@ importers:
       ignore:
         specifier: 7.0.5
         version: 7.0.5
-      ipaddr.js:
-        specifier: 2.4.0
-        version: 2.4.0
       jiti:
         specifier: 2.7.0
         version: 2.7.0

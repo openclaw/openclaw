@@ -41,7 +41,6 @@
         "highlight.js": "11.11.1",
         "hosted-git-info": "9.0.3",
         "ignore": "7.0.5",
-        "ipaddr.js": "2.4.0",
         "jiti": "2.7.0",
         "json5": "2.2.3",
         "jszip": "3.10.1",
@@ -2331,12 +2330,12 @@
       }
     },
     "node_modules/ipaddr.js": {
-      "version": "2.4.0",
-      "resolved": "https://registry.npmjs.org/ipaddr.js/-/ipaddr.js-2.4.0.tgz",
-      "integrity": "sha512-9VGk3HGanVE6JoZXHiCpnGy5X0jYDnN4EA4lntFPj+1vIWlFhIylq2CrrCOJH9EAhc5CYhq18F2Av2tgoAPsYQ==",
+      "version": "1.9.1",
+      "resolved": "https://registry.npmjs.org/ipaddr.js/-/ipaddr.js-1.9.1.tgz",
+      "integrity": "sha512-0KI/607xoxSToH7GjN1FfSbLoU0+btTicjsQSWQlh/hZykN8KpmMf7uYwPW3R+akZ6R/w18ZlXSHBYXiYUPO3g==",
       "license": "MIT",
       "engines": {
-        "node": ">= 10"
+        "node": ">= 0.10"
       }
     },
     "node_modules/is-fullwidth-code-point": {
@@ -3046,15 +3045,6 @@
         "forwarded": "0.2.0",
         "ipaddr.js": "1.9.1"
       },
-      "engines": {
-        "node": ">= 0.10"
-      }
-    },
-    "node_modules/proxy-addr/node_modules/ipaddr.js": {
-      "version": "1.9.1",
-      "resolved": "https://registry.npmjs.org/ipaddr.js/-/ipaddr.js-1.9.1.tgz",
-      "integrity": "sha512-0KI/607xoxSToH7GjN1FfSbLoU0+btTicjsQSWQlh/hZykN8KpmMf7uYwPW3R+akZ6R/w18ZlXSHBYXiYUPO3g==",
-      "license": "MIT",
       "engines": {
         "node": ">= 0.10"
       }

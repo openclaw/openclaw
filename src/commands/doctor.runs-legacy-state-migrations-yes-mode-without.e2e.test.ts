@@ -164,13 +164,12 @@ describe("doctor command", () => {
       }
     }
 
-    const written = writeConfigFile.mock.calls
-      .map((call) => call[0] as Record<string, unknown>)
-      .filter((candidate) => {
-        const auth = candidate.auth as { profiles?: unknown } | undefined;
-        return Boolean(auth?.profiles);
-      })
-      .at(-1);
+    const writtenCall = writeConfigFile.mock.calls.findLast((call) => {
+      const candidate = call[0] as Record<string, unknown>;
+      const auth = candidate.auth as { profiles?: unknown } | undefined;
+      return Boolean(auth?.profiles);
+    });
+    const written = writtenCall?.[0] as Record<string, unknown> | undefined;
     if (!written) {
       throw new Error("Expected doctor to write migrated auth profiles");
     }
