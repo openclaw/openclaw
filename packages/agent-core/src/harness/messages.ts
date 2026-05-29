@@ -1,11 +1,11 @@
 import type { ImageContent, Message, TextContent } from "../../../llm-core/src/index.js";
-import type { AgentMessage } from "../types.js";
 import type {
+  AgentMessage,
   BashExecutionMessage,
   BranchSummaryMessage,
   CompactionSummaryMessage,
   CustomMessage,
-} from "./message-types.js";
+} from "../types.js";
 import { parseSessionTimestampMs, requireSessionTimestampMs } from "./session/timestamps.js";
 
 export type {
@@ -13,7 +13,20 @@ export type {
   BranchSummaryMessage,
   CompactionSummaryMessage,
   CustomMessage,
-} from "./message-types.js";
+} from "../types.js";
+
+export type HarnessMessage =
+  | AgentMessage
+  | BashExecutionMessage
+  | CustomMessage
+  | BranchSummaryMessage
+  | CompactionSummaryMessage;
+
+// Internal session paths keep call sites explicit about this harness-owned
+// boundary even though these message roles are part of AgentMessage.
+export function asAgentMessage(message: HarnessMessage): AgentMessage {
+  return message as AgentMessage;
+}
 
 export const COMPACTION_SUMMARY_PREFIX = `The conversation history before this point was compacted into the following summary:
 
@@ -103,25 +116,26 @@ function normalizeCompactionSummaryTimestamp(timestamp: number | string): number
 export function convertToLlm(messages: AgentMessage[]): Message[] {
   return messages
     .map((m): Message | undefined => {
-      switch (m.role) {
+      const message = m as HarnessMessage;
+      switch (message.role) {
         case "bashExecution":
-          if (m.excludeFromContext) {
+          if (message.excludeFromContext) {
             return undefined;
           }
           return {
             role: "user",
-            content: [{ type: "text", text: bashExecutionToText(m) }],
-            timestamp: m.timestamp,
+            content: [{ type: "text", text: bashExecutionToText(message) }],
+            timestamp: message.timestamp,
           };
         case "custom": {
           const content =
-            typeof m.content === "string"
-              ? [{ type: "text" as const, text: m.content }]
-              : m.content;
+            typeof message.content === "string"
+              ? [{ type: "text" as const, text: message.content }]
+              : message.content;
           return {
             role: "user",
             content,
-            timestamp: m.timestamp,
+            timestamp: message.timestamp,
           };
         }
         case "branchSummary":
@@ -130,10 +144,10 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
             content: [
               {
                 type: "text" as const,
-                text: BRANCH_SUMMARY_PREFIX + m.summary + BRANCH_SUMMARY_SUFFIX,
+                text: BRANCH_SUMMARY_PREFIX + message.summary + BRANCH_SUMMARY_SUFFIX,
               },
             ],
-            timestamp: m.timestamp,
+            timestamp: message.timestamp,
           };
         case "compactionSummary":
           return {
@@ -141,15 +155,15 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
             content: [
               {
                 type: "text" as const,
-                text: COMPACTION_SUMMARY_PREFIX + m.summary + COMPACTION_SUMMARY_SUFFIX,
+                text: COMPACTION_SUMMARY_PREFIX + message.summary + COMPACTION_SUMMARY_SUFFIX,
               },
             ],
-            timestamp: normalizeCompactionSummaryTimestamp(m.timestamp),
+            timestamp: normalizeCompactionSummaryTimestamp(message.timestamp),
           };
         case "user":
         case "assistant":
         case "toolResult":
-          return m;
+          return message;
         default:
           return undefined;
       }

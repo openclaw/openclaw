@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "./lib/bundled-plugin-paths.mjs";
+import { TSDOWN_PACKAGE_OUTPUT_ROOTS } from "./lib/tsdown-output-roots.mjs";
 import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 import {
   isSourceCheckoutRoot,
@@ -28,7 +29,7 @@ const CGROUP_MEMORY_LIMIT_PATHS = [
 ];
 const PROC_MEMINFO_PATH = "/proc/meminfo";
 const TERMINATION_GRACE_MS = 5_000;
-const TSDOWN_OUTPUT_ROOTS = ["dist", "dist-runtime"];
+const ROOT_TSDOWN_OUTPUT_ROOTS = ["dist", "dist-runtime"];
 const GENERATED_SOURCE_DECLARATION_PATHSPEC = ":(glob)extensions/**/*.d.ts";
 const SOURCE_DECLARATION_SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs"];
 
@@ -65,7 +66,7 @@ function pruneStaleRuntimeSymlinks() {
 export function cleanTsdownOutputRoots(params = {}) {
   const cwd = params.cwd ?? process.cwd();
   const fsImpl = params.fs ?? fs;
-  for (const root of TSDOWN_OUTPUT_ROOTS) {
+  for (const root of listTsdownOutputRoots({ cwd, fs: fsImpl })) {
     const rootPath = path.join(cwd, root);
     try {
       fsImpl.rmSync(rootPath, { force: true, recursive: true });
@@ -78,7 +79,7 @@ export function cleanTsdownOutputRoots(params = {}) {
 export function pruneStaleRootChunkFiles(params = {}) {
   const cwd = params.cwd ?? process.cwd();
   const fsImpl = params.fs ?? fs;
-  const roots = TSDOWN_OUTPUT_ROOTS.map((root) => path.join(cwd, root));
+  const roots = listTsdownOutputRoots({ cwd, fs: fsImpl }).map((root) => path.join(cwd, root));
   for (const root of roots) {
     let entries = [];
     try {
@@ -101,6 +102,10 @@ export function pruneStaleRootChunkFiles(params = {}) {
       }
     }
   }
+}
+
+export function listTsdownOutputRoots() {
+  return [...ROOT_TSDOWN_OUTPUT_ROOTS, ...TSDOWN_PACKAGE_OUTPUT_ROOTS];
 }
 
 export function pruneUntrackedGeneratedSourceDeclarations(params = {}) {

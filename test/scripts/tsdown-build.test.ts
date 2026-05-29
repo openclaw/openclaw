@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   cleanTsdownOutputRoots,
   createTsdownOutputScanner,
+  listTsdownOutputRoots,
   parseTsdownBuildArgs,
   pruneSourceCheckoutBundledPluginNodeModules,
   pruneStaleRootChunkFiles,
@@ -276,21 +277,46 @@ describe("resolveTsdownBuildInvocation", () => {
     const distFile = path.join(rootDir, "dist", "stale.js");
     const pluginGeneratedFile = path.join(rootDir, "dist", "extensions", "telegram", "index.js");
     const distRuntimeFile = path.join(rootDir, "dist-runtime", "stale.js");
+    const agentCorePackageFile = path.join(rootDir, "packages", "agent-core", "dist", "stale.js");
+    const netPolicyPackageFile = path.join(rootDir, "packages", "net-policy", "dist", "stale.js");
+    const pluginSdkPackageFile = path.join(rootDir, "packages", "plugin-sdk", "dist", "keep.js");
+    const packageSourceFile = path.join(rootDir, "packages", "agent-core", "src", "keep.ts");
     const unrelatedFile = path.join(rootDir, "tmp", "keep.js");
     await fsPromises.mkdir(path.dirname(distFile), { recursive: true });
     await fsPromises.mkdir(path.dirname(pluginGeneratedFile), { recursive: true });
     await fsPromises.mkdir(path.dirname(distRuntimeFile), { recursive: true });
+    await fsPromises.mkdir(path.dirname(agentCorePackageFile), { recursive: true });
+    await fsPromises.mkdir(path.dirname(netPolicyPackageFile), { recursive: true });
+    await fsPromises.mkdir(path.dirname(pluginSdkPackageFile), { recursive: true });
+    await fsPromises.mkdir(path.dirname(packageSourceFile), { recursive: true });
     await fsPromises.mkdir(path.dirname(unrelatedFile), { recursive: true });
     await fsPromises.writeFile(distFile, "stale\n");
     await fsPromises.writeFile(pluginGeneratedFile, "generated\n");
     await fsPromises.writeFile(distRuntimeFile, "stale\n");
+    await fsPromises.writeFile(agentCorePackageFile, "stale\n");
+    await fsPromises.writeFile(netPolicyPackageFile, "stale\n");
+    await fsPromises.writeFile(pluginSdkPackageFile, "keep\n");
+    await fsPromises.writeFile(packageSourceFile, "keep\n");
     await fsPromises.writeFile(unrelatedFile, "keep\n");
+
+    const outputRoots = listTsdownOutputRoots();
+    expect(outputRoots).toEqual(
+      expect.arrayContaining([
+        path.join("packages", "agent-core", "dist"),
+        path.join("packages", "net-policy", "dist"),
+      ]),
+    );
+    expect(outputRoots).not.toContain(path.join("packages", "plugin-sdk", "dist"));
 
     cleanTsdownOutputRoots({ cwd: rootDir });
 
     await expectPathMissing(distFile);
     await expectPathMissing(pluginGeneratedFile);
     await expectPathMissing(path.join(rootDir, "dist-runtime"));
+    await expectPathMissing(path.join(rootDir, "packages", "agent-core", "dist"));
+    await expectPathMissing(path.join(rootDir, "packages", "net-policy", "dist"));
+    await expect(fsPromises.readFile(pluginSdkPackageFile, "utf8")).resolves.toBe("keep\n");
+    await expect(fsPromises.readFile(packageSourceFile, "utf8")).resolves.toBe("keep\n");
     await expect(fsPromises.readFile(unrelatedFile, "utf8")).resolves.toBe("keep\n");
   });
 
