@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { GATEWAY_EVENT_UPDATE_AVAILABLE } from "../../../src/gateway/events.js";
-import { ConnectErrorDetailCodes } from "../../../src/gateway/protocol/connect-error-details.js";
 import type { ActivityEntry } from "./activity-model.ts";
 import { connectGateway, resolveControlUiClientVersion } from "./app-gateway.ts";
 import type { GatewayHelloOk } from "./gateway.ts";
@@ -118,6 +118,8 @@ vi.mock("./controllers/control-ui-bootstrap.ts", () => ({
 
 type TestGatewayHost = Parameters<typeof connectGateway>[0] & {
   chatMessages: unknown[];
+  chatQueue: import("./ui-types.ts").ChatQueueItem[];
+  chatQueueBySession: Record<string, import("./ui-types.ts").ChatQueueItem[]>;
   chatSideResult: unknown;
   chatSideResultTerminalRuns: Set<string>;
   chatStream: string | null;
@@ -169,6 +171,7 @@ function createHost(): TestGatewayHost {
     sessionKey: "main",
     chatMessages: [],
     chatQueue: [],
+    chatQueueBySession: {},
     chatToolMessages: [],
     activityEntries: [],
     chatStreamSegments: [],
@@ -183,6 +186,7 @@ function createHost(): TestGatewayHost {
     refreshSessionsAfterChat: new Set<string>(),
     chatSideResultTerminalRuns: new Set<string>(),
     execApprovalQueue: [],
+    execApprovalBusy: false,
     execApprovalError: null,
     updateAvailable: null,
     updateComplete: new Promise(() => undefined),
@@ -540,6 +544,77 @@ describe("connectGateway", () => {
     ]);
   });
 
+  it("clears stale approval modal errors without interrupting an in-flight local resolve", () => {
+    const { host, client } = connectHostGateway();
+
+    client.emitEvent({
+      event: "exec.approval.requested",
+      payload: {
+        id: "approval-external-1",
+        request: {
+          command: "pnpm test",
+          host: "gateway",
+        },
+        createdAtMs: Date.now(),
+        expiresAtMs: Date.now() + 60_000,
+      },
+    });
+    host.execApprovalError = "Approval failed: approval already resolved";
+    host.execApprovalBusy = true;
+
+    client.emitEvent({
+      event: "exec.approval.resolved",
+      payload: { id: "approval-external-1", decision: "allow-once" },
+    });
+
+    expect(host.execApprovalQueue).toHaveLength(0);
+    expect(host.execApprovalError).toBeNull();
+    expect(host.execApprovalBusy).toBe(true);
+  });
+
+  it("clears active approval errors when event-enqueued approvals expire", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-25T00:00:00.000Z"));
+    try {
+      const { host, client } = connectHostGateway();
+      const queuedExpiresAtMs = Date.now() + 60_000;
+      const activeExpiresAtMs = Date.now() + 1_000;
+
+      client.emitEvent({
+        event: "exec.approval.requested",
+        payload: {
+          id: "approval-queued",
+          request: {
+            command: "pnpm test",
+            host: "gateway",
+          },
+          createdAtMs: Date.now(),
+          expiresAtMs: queuedExpiresAtMs,
+        },
+      });
+      client.emitEvent({
+        event: "exec.approval.requested",
+        payload: {
+          id: "approval-active-expiring",
+          request: {
+            command: "pnpm check:changed",
+            host: "gateway",
+          },
+          createdAtMs: Date.now() + 1,
+          expiresAtMs: activeExpiresAtMs,
+        },
+      });
+      host.execApprovalError = "Approval failed: Error: gateway unavailable";
+
+      vi.advanceTimersByTime(1_500);
+
+      expect(host.execApprovalQueue.map((entry) => entry.id)).toEqual(["approval-queued"]);
+      expect(host.execApprovalError).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("clears pending session reload timers when the active client closes", () => {
     vi.useFakeTimers();
     try {
@@ -872,6 +947,76 @@ describe("connectGateway", () => {
       sessionKey: "main",
     });
     expect(host.pendingAbort).toBeNull();
+  });
+
+  it("retries reconnectable queued chat sends after reconnect hello", async () => {
+    const host = createHost();
+    host.chatQueue = [
+      {
+        id: "pending-send",
+        text: "retry this prompt",
+        createdAt: 1,
+        sendRunId: "run-retry-1",
+        sendState: "waiting-reconnect",
+        sessionKey: "main",
+      },
+    ];
+
+    connectGateway(host);
+    const client = requireGatewayClient();
+
+    client.emitHello();
+
+    await vi.waitFor(() => {
+      expect(client.request).toHaveBeenCalledWith("chat.send", {
+        sessionKey: "main",
+        message: "retry this prompt",
+        deliver: false,
+        idempotencyKey: "run-retry-1",
+        attachments: undefined,
+      });
+    });
+    await vi.waitFor(() => {
+      expect(host.chatQueue).toStrictEqual([]);
+      expect(host.chatRunId).toBe("run-retry-1");
+    });
+  });
+
+  it("retries saved-session queued chat sends after reconnect hello", async () => {
+    const host = createHost();
+    host.sessionKey = "other";
+    host.chatQueueBySession = {
+      main: [
+        {
+          id: "pending-send-main",
+          text: "retry main prompt",
+          createdAt: 1,
+          sendRunId: "run-retry-main",
+          sendState: "waiting-reconnect",
+          sessionKey: "main",
+        },
+      ],
+    };
+
+    connectGateway(host);
+    const client = requireGatewayClient();
+
+    client.emitHello();
+
+    await vi.waitFor(() => {
+      expect(client.request).toHaveBeenCalledWith("chat.send", {
+        sessionKey: "main",
+        message: "retry main prompt",
+        deliver: false,
+        idempotencyKey: "run-retry-main",
+        attachments: undefined,
+      });
+    });
+    await vi.waitFor(() => {
+      expect(host.chatQueueBySession.main).toBeUndefined();
+      expect(host.chatMessages).toStrictEqual([]);
+      expect(host.chatRunId).toBeNull();
+    });
   });
 
   it("logs and drops stale queued chat abort failures after reconnect", async () => {

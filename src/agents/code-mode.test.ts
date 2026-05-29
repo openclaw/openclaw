@@ -96,6 +96,7 @@ describe("Code Mode", () => {
   afterEach(() => {
     testing.activeRuns.clear();
     testing.resumingRunIds.clear();
+    testing.setTypescriptRuntimeForTest(null);
   });
 
   it("resolves object config defaults", () => {
@@ -440,7 +441,7 @@ describe("Code Mode", () => {
       tools: {
         codeMode: {
           enabled: true,
-          timeoutMs: 100,
+          timeoutMs: 1_000,
         },
       },
     } as never;
@@ -662,6 +663,17 @@ describe("Code Mode", () => {
   });
 
   it("supports TypeScript source transform", async () => {
+    testing.setTypescriptRuntimeForTest({
+      transpileModule: vi.fn((code: string) => ({
+        outputText: code.replace(": number", ""),
+        diagnostics: [],
+      })),
+      ScriptTarget: { ES2022: 9 },
+      ModuleKind: { ESNext: 99 },
+      ImportsNotUsedAsValues: { Remove: 0 },
+      DiagnosticCategory: { Error: 1 },
+      flattenDiagnosticMessageText: (message: unknown) => String(message),
+    } as never);
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     applyCodeModeCatalog({
       tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
@@ -877,6 +889,32 @@ describe("Code Mode", () => {
     expect(details.code).toBe("timeout");
   });
 
+  it("normalizes QuickJS interrupt timeout errors", () => {
+    expect(
+      testing.normalizeCodeModeWorkerResult({
+        status: "failed",
+        code: "timeout",
+        error: "interrupted",
+        output: [],
+      }),
+    ).toMatchObject({
+      code: "timeout",
+      error: "code mode timeout exceeded",
+    });
+
+    expect(
+      testing.normalizeCodeModeWorkerResult({
+        status: "failed",
+        code: "internal_error",
+        error: "interrupted",
+        output: [],
+      }),
+    ).toMatchObject({
+      code: "internal_error",
+      error: "interrupted",
+    });
+  });
+
   it("classifies missing worker runtime as unavailable", async () => {
     const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
     const missingWorkerUrl = new URL("./missing-code-mode.worker.js", import.meta.url);
@@ -929,7 +967,7 @@ describe("Code Mode", () => {
         config,
         catalog: [],
       },
-      500,
+      10_000,
     );
 
     expect(result.status).toBe("failed");

@@ -19,7 +19,7 @@ OpenClaw assembles its own system prompt on every run. It includes:
   with optional per-agent override at
   `agents.list[].skillsLimits.maxSkillsPromptChars`.
 - Self-update instructions
-- Workspace + bootstrap files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md` when new, plus `MEMORY.md` when present). Lowercase root `memory.md` is not injected; it is legacy repair input for `openclaw doctor --fix` when paired with `MEMORY.md`. Large files are truncated by `agents.defaults.bootstrapMaxChars` (default: 12000), and total bootstrap injection is capped by `agents.defaults.bootstrapTotalMaxChars` (default: 60000). `memory/*.md` daily files are not part of the normal bootstrap prompt; they remain on-demand via memory tools on ordinary turns, but reset/startup model runs can prepend a one-shot startup-context block with recent daily memory for that first turn. Bare chat `/new` and `/reset` commands are acknowledged without invoking the model. The startup prelude is controlled by `agents.defaults.startupContext`. Post-compaction AGENTS.md excerpts are separate and require explicit `agents.defaults.compaction.postCompactionSections` opt-in.
+- Workspace + bootstrap files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md` when new, plus `MEMORY.md` when present). Native Codex turns do not paste raw `MEMORY.md` from the configured agent workspace when memory tools are available for that workspace; they include a small memory pointer and use memory tools on demand. If tools are disabled, memory search is unavailable, or the active workspace differs from the agent memory workspace, `MEMORY.md` uses the normal bounded turn-context path. Lowercase root `memory.md` is not injected; it is legacy repair input for `openclaw doctor --fix` when paired with `MEMORY.md`. Large injected files are truncated by `agents.defaults.bootstrapMaxChars` (default: 12000), and total bootstrap injection is capped by `agents.defaults.bootstrapTotalMaxChars` (default: 60000). `memory/*.md` daily files are not part of the normal bootstrap prompt; they remain on-demand via memory tools on ordinary turns, but reset/startup model runs can prepend a one-shot startup-context block with recent daily memory for that first turn. Bare chat `/new` and `/reset` commands are acknowledged without invoking the model. The startup prelude is controlled by `agents.defaults.startupContext`. Post-compaction AGENTS.md excerpts are separate and require explicit `agents.defaults.compaction.postCompactionSections` opt-in.
 - Time (UTC + user timezone)
 - Reply tags + heartbeat behavior
 - Runtime metadata (host/OS/model/thinking)
@@ -52,6 +52,11 @@ Per-agent overrides live under `agents.list[].contextLimits`. These knobs are
 for bounded runtime excerpts and injected runtime-owned blocks. They are
 separate from bootstrap limits, startup-context limits, and skills prompt
 limits.
+
+`toolResultMaxChars` is an advanced ceiling. When it is unset, OpenClaw chooses
+the live tool-result cap from the effective model context window: `16000` chars
+below 100K tokens, `32000` chars at 100K+ tokens, and `64000` chars at 200K+
+tokens, still bounded by the runtime context-share guard.
 
 For images, OpenClaw downscales transcript/tool image payloads before provider calls.
 Use `agents.defaults.imageMaxDimensionPx` (default: `1200`) to tune this:
@@ -200,7 +205,7 @@ override only `cacheRetention` and inherit other model defaults unchanged.
 
 ### Anthropic 1M context
 
-OpenClaw sizes GA-capable Claude 4.x models such as Opus 4.6, Opus 4.7, and
+OpenClaw sizes GA-capable Claude 4.x models such as Opus 4.8, Opus 4.7, Opus 4.6, and
 Sonnet 4.6 with Anthropic's 1M context window. You do not need
 `params.context1m: true` for those models.
 

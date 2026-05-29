@@ -291,6 +291,8 @@ export type PluginManifestConfigContracts = {
 export type PluginManifest = {
   id: string;
   configSchema: JsonSchemaObject;
+  /** Plugin ids that must also be installed for this plugin to have effect. */
+  requiresPlugins?: string[];
   enabledByDefault?: boolean;
   enabledByDefaultOnPlatforms?: PluginManifestDefaultPlatform[];
   /** Legacy plugin ids that should normalize to this plugin id. */
@@ -305,8 +307,6 @@ export type PluginManifest = {
    * auth/catalog discovery. It should not import the full plugin runtime.
    */
   providerCatalogEntry?: string;
-  /** @deprecated Use providerCatalogEntry. */
-  providerDiscoveryEntry?: string;
   /**
    * Cheap model-family ownership metadata used before plugin runtime loads.
    * Use this for shorthand model refs that omit an explicit provider prefix.
@@ -408,7 +408,7 @@ export type PluginManifestContracts = {
   realtimeTranscriptionProviders?: string[];
   realtimeVoiceProviders?: string[];
   mediaUnderstandingProviders?: string[];
-  meetingNotesSourceProviders?: string[];
+  transcriptSourceProviders?: string[];
   documentExtractors?: string[];
   imageGenerationProviders?: string[];
   videoGenerationProviders?: string[];
@@ -840,7 +840,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
   );
   const realtimeVoiceProviders = normalizeTrimmedStringList(value.realtimeVoiceProviders);
   const mediaUnderstandingProviders = normalizeTrimmedStringList(value.mediaUnderstandingProviders);
-  const meetingNotesSourceProviders = normalizeTrimmedStringList(value.meetingNotesSourceProviders);
+  const transcriptSourceProviders = normalizeTrimmedStringList(value.transcriptSourceProviders);
   const documentExtractors = normalizeTrimmedStringList(value.documentExtractors);
   const imageGenerationProviders = normalizeTrimmedStringList(value.imageGenerationProviders);
   const videoGenerationProviders = normalizeTrimmedStringList(value.videoGenerationProviders);
@@ -861,7 +861,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
     ...(realtimeTranscriptionProviders.length > 0 ? { realtimeTranscriptionProviders } : {}),
     ...(realtimeVoiceProviders.length > 0 ? { realtimeVoiceProviders } : {}),
     ...(mediaUnderstandingProviders.length > 0 ? { mediaUnderstandingProviders } : {}),
-    ...(meetingNotesSourceProviders.length > 0 ? { meetingNotesSourceProviders } : {}),
+    ...(transcriptSourceProviders.length > 0 ? { transcriptSourceProviders } : {}),
     ...(documentExtractors.length > 0 ? { documentExtractors } : {}),
     ...(imageGenerationProviders.length > 0 ? { imageGenerationProviders } : {}),
     ...(videoGenerationProviders.length > 0 ? { videoGenerationProviders } : {}),
@@ -1630,6 +1630,7 @@ export function loadPluginManifest(
     return cacheResult({ ok: false, error: "plugin manifest requires configSchema", manifestPath });
   }
 
+  const requiresPlugins = normalizeTrimmedStringList(raw.requiresPlugins);
   const kind = parsePluginKind(raw.kind);
   const enabledByDefault = raw.enabledByDefault === true;
   const enabledByDefaultOnPlatforms = normalizeManifestDefaultPlatforms(
@@ -1646,7 +1647,6 @@ export function loadPluginManifest(
   const providers = normalizeTrimmedStringList(raw.providers);
   const cliBackends = normalizeTrimmedStringList(raw.cliBackends);
   const providerCatalogEntry = normalizeOptionalString(raw.providerCatalogEntry);
-  const providerDiscoveryEntry = normalizeOptionalString(raw.providerDiscoveryEntry);
   const modelSupport = normalizeManifestModelSupport(raw.modelSupport);
   const modelCatalog = normalizeModelCatalog(raw.modelCatalog, {
     ownedProviders: new Set([...providers, ...cliBackends]),
@@ -1699,6 +1699,7 @@ export function loadPluginManifest(
     manifest: {
       id,
       configSchema,
+      ...(requiresPlugins.length > 0 ? { requiresPlugins } : {}),
       ...(enabledByDefault ? { enabledByDefault } : {}),
       ...(enabledByDefaultOnPlatforms.length > 0 ? { enabledByDefaultOnPlatforms } : {}),
       ...(legacyPluginIds.length > 0 ? { legacyPluginIds } : {}),
@@ -1709,7 +1710,6 @@ export function loadPluginManifest(
       channels,
       providers,
       providerCatalogEntry,
-      providerDiscoveryEntry,
       modelSupport,
       modelCatalog,
       modelPricing,
@@ -1826,6 +1826,10 @@ export type OpenClawPackageSetupFeatures = {
   legacySessionSurfaces?: boolean;
 };
 
+export type OpenClawPackageCompat = {
+  pluginApi?: string;
+};
+
 export type OpenClawPackageManifest = {
   extensions?: string[];
   runtimeExtensions?: string[];
@@ -1837,6 +1841,7 @@ export type OpenClawPackageManifest = {
     label?: string;
   };
   channel?: PluginPackageChannel;
+  compat?: OpenClawPackageCompat;
   install?: PluginPackageInstall;
   startup?: OpenClawPackageStartup;
 };

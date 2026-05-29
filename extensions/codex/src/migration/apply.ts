@@ -14,6 +14,7 @@ import {
   withCachedMigrationConfigRuntime,
   writeMigrationReport,
 } from "openclaw/plugin-sdk/migration-runtime";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import type {
   MigrationApplyResult,
   MigrationItem,
@@ -25,7 +26,7 @@ import { defaultCodexAppInventoryCache } from "../app-server/app-inventory-cache
 import {
   resolveCodexAppServerAuthAccountCacheKey,
   resolveCodexAppServerAuthProfileIdForAgent,
-  resolveCodexAppServerEnvApiKeyCacheKey,
+  resolveCodexAppServerFallbackApiKeyCacheKey,
 } from "../app-server/auth-bridge.js";
 import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
@@ -42,7 +43,8 @@ import type { v2 } from "../app-server/protocol.js";
 import { requestCodexAppServerJson } from "../app-server/request.js";
 import {
   clearSharedCodexAppServerClientIfCurrentAndWait,
-  getSharedCodexAppServerClient,
+  getLeasedSharedCodexAppServerClient,
+  releaseLeasedSharedCodexAppServerClient,
 } from "../app-server/shared-client.js";
 import { applyCodexAuthItem, buildCodexAuthConfigPatchItems } from "./auth.js";
 import { buildCodexMigrationPlan } from "./plan.js";
@@ -86,8 +88,8 @@ export function prepareTargetCodexAppServer(
 ): CodexMigrationTargetAppServerPreparation {
   const appServer = resolveTargetCodexAppServer(ctx);
   const targets = resolveCodexMigrationTargets(ctx);
-  let warmedClient: Awaited<ReturnType<typeof getSharedCodexAppServerClient>> | undefined;
-  const ready = getSharedCodexAppServerClient({
+  let warmedClient: Awaited<ReturnType<typeof getLeasedSharedCodexAppServerClient>> | undefined;
+  const ready = getLeasedSharedCodexAppServerClient({
     startOptions: appServer.start,
     timeoutMs: 60_000,
     agentDir: targets.agentDir,
@@ -101,6 +103,9 @@ export function prepareTargetCodexAppServer(
   return {
     async dispose() {
       await ready;
+      if (warmedClient) {
+        releaseLeasedSharedCodexAppServerClient(warmedClient);
+      }
       await clearSharedCodexAppServerClientIfCurrentAndWait(warmedClient, {
         exitTimeoutMs: 2_000,
         forceKillDelayMs: 250,
@@ -358,9 +363,13 @@ function hasOpenAiCuratedMarketplace(response: unknown): boolean {
   );
 }
 
-function targetCodexMarketplaceDiscoveryTimeoutMs(): number {
-  const configured = Number(process.env[TARGET_CODEX_MARKETPLACE_DISCOVERY_TIMEOUT_ENV]);
-  if (Number.isFinite(configured) && configured >= 0) {
+export function targetCodexMarketplaceDiscoveryTimeoutMs(
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  const configured = parseStrictNonNegativeInteger(
+    env[TARGET_CODEX_MARKETPLACE_DISCOVERY_TIMEOUT_ENV],
+  );
+  if (configured !== undefined) {
     return configured;
   }
   return TARGET_CODEX_MARKETPLACE_DISCOVERY_TIMEOUT_MS;
@@ -393,7 +402,7 @@ async function buildTargetCodexPluginAppCacheKey(ctx: MigrationProviderContext):
   });
   const envApiKeyFingerprint = authProfileId
     ? undefined
-    : resolveCodexAppServerEnvApiKeyCacheKey({
+    : resolveCodexAppServerFallbackApiKeyCacheKey({
         startOptions: appServer.start,
       });
   return buildCodexPluginAppCacheKey({

@@ -6,10 +6,12 @@
  * globals, fully supporting multi-account concurrent operation.
  */
 
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { EngineLogger } from "../types.js";
 import { formatErrorMessage } from "../utils/format.js";
 
 const TOKEN_URL = "https://bots.qq.com/app/getAppAccessToken";
+const DEFAULT_TOKEN_EXPIRES_IN_SECONDS = 7200;
 
 interface CachedToken {
   token: string;
@@ -22,6 +24,17 @@ interface BackgroundRefreshOptions {
   randomOffsetMs?: number;
   minRefreshIntervalMs?: number;
   retryDelayMs?: number;
+}
+
+function resolveTokenExpiresInSeconds(value: unknown): number {
+  const parsed = parseStrictPositiveInteger(value);
+  if (parsed !== undefined) {
+    return parsed;
+  }
+  if (value == null || (typeof value === "number" && !Number.isFinite(value))) {
+    return DEFAULT_TOKEN_EXPIRES_IN_SECONDS;
+  }
+  return 0;
 }
 
 /**
@@ -239,7 +252,7 @@ export class TokenManager {
     const logBody = rawBody.replace(/"access_token"\s*:\s*"[^"]+"/g, '"access_token": "***"');
     this.logger?.debug?.(`[qqbot:token:${appId}] <<< Body: ${logBody}`);
 
-    let data: { access_token?: string; expires_in?: number };
+    let data: { access_token?: string; expires_in?: unknown };
     try {
       data = JSON.parse(rawBody);
     } catch {
@@ -250,7 +263,7 @@ export class TokenManager {
       throw new Error(`Failed to get access_token: ${JSON.stringify(data)}`);
     }
 
-    const expiresAt = Date.now() + (data.expires_in ?? 7200) * 1000;
+    const expiresAt = Date.now() + resolveTokenExpiresInSeconds(data.expires_in) * 1000;
     this.cache.set(appId, { token: data.access_token, expiresAt, appId });
     this.logger?.debug?.(
       `[qqbot:token:${appId}] Cached, expires at: ${new Date(expiresAt).toISOString()}`,

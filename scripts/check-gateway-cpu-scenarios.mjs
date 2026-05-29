@@ -5,6 +5,11 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import {
+  parseNonNegativeInt,
+  parsePositiveInt,
+  parsePositiveNumber,
+} from "./lib/numeric-options.mjs";
 import { collectGatewayCpuObservations } from "./lib/plugin-gateway-gauntlet.mjs";
 import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mjs";
 
@@ -86,31 +91,10 @@ function parseArgs(argv) {
   if (options.qaScenarios.length === 0) {
     options.qaScenarios = [...DEFAULT_QA_SCENARIOS];
   }
+  if (options.skipStartup && options.skipQa) {
+    throw new Error("--skip-startup and --skip-qa cannot be used together");
+  }
   return options;
-}
-
-function parsePositiveInt(raw, label) {
-  const value = Number(raw);
-  if (!Number.isInteger(value) || value < 1) {
-    throw new Error(`${label} must be a positive integer`);
-  }
-  return value;
-}
-
-function parseNonNegativeInt(raw, label) {
-  const value = Number(raw);
-  if (!Number.isInteger(value) || value < 0) {
-    throw new Error(`${label} must be a non-negative integer`);
-  }
-  return value;
-}
-
-function parsePositiveNumber(raw, label) {
-  const value = Number(raw);
-  if (!Number.isFinite(value) || value <= 0) {
-    throw new Error(`${label} must be a positive number`);
-  }
-  return value;
 }
 
 function printHelp() {
@@ -223,9 +207,7 @@ async function runGatewayCpuScenarios(options, params = {}) {
       qaOutputArg,
       ...options.qaScenarios.flatMap((id) => ["--scenario", id]),
     ]);
-    steps.push(
-      runStep("qa suite", qaCommand.command, qaCommand.args, qaCommand.options, params),
-    );
+    steps.push(runStep("qa suite", qaCommand.command, qaCommand.args, qaCommand.options, params));
   }
 
   const startup = readJsonIfExists(startupOutput);
@@ -259,8 +241,15 @@ async function runGatewayCpuScenarios(options, params = {}) {
   if (!params.silent) {
     console.log(JSON.stringify(summary, null, 2));
   }
+  if (observations.length > 0) {
+    console.error(
+      `[gateway-cpu] fail hot CPU observations: ${observations
+        .map((observation) => `${observation.kind}:${observation.id}`)
+        .join(", ")}`,
+    );
+  }
 
-  const exitCode = steps.some((step) => step.status !== 0) ? 1 : 0;
+  const exitCode = steps.some((step) => step.status !== 0) || observations.length > 0 ? 1 : 0;
   return { exitCode, summary };
 }
 

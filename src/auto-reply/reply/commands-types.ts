@@ -1,4 +1,4 @@
-import type { BlockReplyChunking } from "../../agents/pi-embedded-block-chunker.js";
+import type { BlockReplyChunking } from "../../agents/embedded-agent-block-chunker.js";
 import type { SkillCommandSpec } from "../../agents/skills.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions.js";
@@ -65,6 +65,7 @@ export type HandleCommandsParams = {
   contextTokens: number;
   isGroup: boolean;
   skillCommands?: SkillCommandSpec[];
+  loadSkillCommands?: () => Promise<SkillCommandSpec[]>;
   typing?: TypingController;
 };
 

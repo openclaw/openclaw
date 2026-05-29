@@ -14,11 +14,13 @@ import {
 } from "../commands/doctor-completion.js";
 import { disableUnavailableSkillsInConfig } from "../commands/doctor-skills-core.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveSecretInputRef } from "../config/types.secrets.js";
+import { resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
 import { hasAmbiguousGatewayAuthModeConfig } from "../gateway/auth-mode-policy.js";
+import { resolveGatewayAuthToken } from "../gateway/auth-token-resolution.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
+import { getSkippedExecRefStaticError } from "../secrets/exec-resolution-policy.js";
 import { registerHealthCheck } from "./health-check-registry.js";
-import type { HealthCheck, HealthFinding } from "./health-checks.js";
+import type { HealthCheck, HealthCheckContext, HealthFinding } from "./health-checks.js";
 
 const BROWSER_CLAWD_PROFILE_RESIDUE_CHECK_ID = "core/doctor/browser-clawd-profile-residue";
 const FINAL_CONFIG_VALIDATION_CHECK_ID = "core/doctor/final-config-validation";
@@ -27,6 +29,9 @@ export type CoreHealthCheckDeps = {
   readonly detectUnavailableSkills: (cfg: OpenClawConfig) => Promise<readonly SkillStatusEntry[]>;
   readonly collectSecurityWarnings: (cfg: OpenClawConfig) => Promise<readonly string[]>;
   readonly collectWorkspaceSuggestionNotes: (workspaceDir: string) => Promise<readonly string[]>;
+  readonly collectRuntimeToolSchemaFindings: (
+    ctx: HealthCheckContext,
+  ) => Promise<readonly HealthFinding[]>;
 };
 
 async function detectUnavailableSkillsWithRuntime(
@@ -58,10 +63,18 @@ async function collectWorkspaceSuggestionNotesWithRuntime(
   return notes;
 }
 
+async function collectRuntimeToolSchemaFindingsWithRuntime(
+  ctx: HealthCheckContext,
+): Promise<readonly HealthFinding[]> {
+  const runtime = await import("./doctor-core-checks.runtime.js");
+  return runtime.collectRuntimeToolSchemaFindings(ctx.cfg);
+}
+
 const defaultCoreHealthCheckDeps: CoreHealthCheckDeps = {
   detectUnavailableSkills: detectUnavailableSkillsWithRuntime,
   collectSecurityWarnings: collectSecurityWarningsWithRuntime,
   collectWorkspaceSuggestionNotes: collectWorkspaceSuggestionNotesWithRuntime,
+  collectRuntimeToolSchemaFindings: collectRuntimeToolSchemaFindingsWithRuntime,
 };
 
 export function configValidationIssuesToHealthFindings(
@@ -136,6 +149,31 @@ function resolveDoctorMode(cfg: OpenClawConfig): "local" | "remote" {
   return cfg.gateway?.mode === "remote" ? "remote" : "local";
 }
 
+export function buildGatewayTokenSecretRefUnavailableMessage(params: {
+  cfg: OpenClawConfig;
+  ref: SecretRef;
+  unresolvedRefReason?: string;
+}): string {
+  if (params.unresolvedRefReason) {
+    return `Gateway token SecretRef could not be resolved: ${params.unresolvedRefReason}`;
+  }
+  if (params.ref.source === "exec") {
+    const staticError = getSkippedExecRefStaticError({ ref: params.ref, config: params.cfg });
+    if (staticError) {
+      return `Gateway token SecretRef could not be verified: ${staticError}`;
+    }
+    return "Gateway token SecretRef uses an exec provider and did not resolve.";
+  }
+  return "Gateway token is managed via SecretRef and is currently unavailable.";
+}
+
+export function buildGatewayTokenSecretRefFixHint(ref: SecretRef): string {
+  if (ref.source === "exec") {
+    return "Run `openclaw doctor --allow-exec` to verify exec SecretRefs during doctor, or `openclaw secrets audit --allow-exec` to audit all exec SecretRefs.";
+  }
+  return "Resolve or rotate the external secret source, then rerun doctor.";
+}
+
 const gatewayAuthCheck: HealthCheck = {
   id: "core/doctor/gateway-auth",
   kind: "core",
@@ -153,22 +191,58 @@ const gatewayAuthCheck: HealthCheck = {
       authConfig: ctx.cfg.gateway?.auth,
       tailscaleMode: ctx.cfg.gateway?.tailscale?.mode ?? "off",
     });
+    const hasInlineToken = typeof auth.token === "string" && auth.token.trim() !== "";
     const needsToken =
       auth.mode !== "password" &&
       auth.mode !== "none" &&
       auth.mode !== "trusted-proxy" &&
-      (auth.mode !== "token" || !auth.token);
+      (auth.mode !== "token" || !hasInlineToken || Boolean(gatewayTokenRef));
     if (!needsToken) {
       return [];
+    }
+    let unresolvedRefReason: string | undefined;
+    if (gatewayTokenRef && gatewayTokenRef.source === "exec") {
+      const staticError = getSkippedExecRefStaticError({ ref: gatewayTokenRef, config: ctx.cfg });
+      if (staticError) {
+        unresolvedRefReason = undefined;
+      } else if (ctx.allowExecSecretRefs !== true) {
+        return [];
+      } else {
+        const resolvedToken = await resolveGatewayAuthToken({
+          cfg: ctx.cfg,
+          env: process.env,
+          unresolvedReasonStyle: "detailed",
+          envFallback: "never",
+        });
+        if (resolvedToken.source === "secretRef") {
+          return [];
+        }
+        unresolvedRefReason = resolvedToken.unresolvedRefReason;
+      }
+    } else {
+      const resolvedToken = await resolveGatewayAuthToken({
+        cfg: ctx.cfg,
+        env: process.env,
+        unresolvedReasonStyle: "detailed",
+        envFallback: gatewayTokenRef ? "never" : "always",
+      });
+      if (gatewayTokenRef ? resolvedToken.source === "secretRef" : resolvedToken.token) {
+        return [];
+      }
+      unresolvedRefReason = resolvedToken.unresolvedRefReason;
     }
     if (gatewayTokenRef) {
       return [
         {
           checkId: "core/doctor/gateway-auth",
           severity: "warning",
-          message: "Gateway token is managed via SecretRef and is currently unavailable.",
+          message: buildGatewayTokenSecretRefUnavailableMessage({
+            cfg: ctx.cfg,
+            ref: gatewayTokenRef,
+            unresolvedRefReason,
+          }),
           path: "gateway.auth.token",
-          fixHint: "Resolve or rotate the external secret source, then rerun doctor.",
+          fixHint: buildGatewayTokenSecretRefFixHint(gatewayTokenRef),
         },
       ];
     }
@@ -216,7 +290,7 @@ const hooksModelCheck: HealthCheck = {
       defaultProvider: DEFAULT_PROVIDER,
       defaultModel: DEFAULT_MODEL,
     });
-    const catalog = await loadModelCatalog({ config: ctx.cfg });
+    const catalog = await loadModelCatalog({ config: ctx.cfg, readOnly: true });
     const status = getModelRefStatus({
       cfg: ctx.cfg,
       catalog,
@@ -277,7 +351,7 @@ const bootstrapSizeCheck: HealthCheck = {
       await import("../agents/bootstrap-budget.js");
     const { resolveBootstrapContextForRun } = await import("../agents/bootstrap-files.js");
     const { resolveBootstrapMaxChars, resolveBootstrapTotalMaxChars } =
-      await import("../agents/pi-embedded-helpers.js");
+      await import("../agents/embedded-agent-helpers.js");
     const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));
     const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForRun({
       workspaceDir,
@@ -325,6 +399,18 @@ const bootstrapSizeCheck: HealthCheck = {
     return findings;
   },
 };
+
+function createRuntimeToolSchemaCheck(deps: CoreHealthCheckDeps): HealthCheck {
+  return {
+    id: "core/doctor/runtime-tool-schemas",
+    kind: "core",
+    description: "Active agent tool schemas project into model/runtime-compatible tool inputs.",
+    source: "doctor",
+    async detect(ctx) {
+      return deps.collectRuntimeToolSchemaFindings(ctx);
+    },
+  };
+}
 
 function normalizeDoctorNoteLine(line: string): string {
   return line.replace(/^- /, "").trim();
@@ -777,6 +863,7 @@ function createConvertedWorkflowChecks(deps: CoreHealthCheckDeps): readonly Heal
     openAIOAuthTlsCheck,
     hooksModelCheck,
     bootstrapSizeCheck,
+    createRuntimeToolSchemaCheck(deps),
     createWorkspaceSuggestionsCheck(deps),
   ];
 }

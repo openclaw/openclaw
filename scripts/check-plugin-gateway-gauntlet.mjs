@@ -7,6 +7,11 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import {
+  parseNonNegativeInt,
+  parsePositiveInt,
+  parsePositiveNumber,
+} from "./lib/numeric-options.mjs";
+import {
   buildGauntletPrebuildEnv,
   collectGatewayCpuObservations,
   collectMetricObservations,
@@ -58,6 +63,7 @@ function parseArgs(argv) {
     commandTimeoutMs: 120_000,
     buildTimeoutMs: 600_000,
     qaTimeoutMs: 900_000,
+    allowEmpty: false,
     keepRunRoot: process.env.OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_KEEP_RUN_ROOT === "1",
   };
   const envIds = normalizeCsv(process.env.OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_IDS);
@@ -156,6 +162,9 @@ function parseArgs(argv) {
       case "--keep-run-root":
         options.keepRunRoot = true;
         break;
+      case "--allow-empty":
+        options.allowEmpty = true;
+        break;
       case "--help":
         printHelp();
         process.exit(0);
@@ -191,6 +200,7 @@ Options:
   --skip-lifecycle              Skip plugin install/inspect/disable/enable/doctor/uninstall
   --skip-qa                     Skip QA Lab RPC conversation runs
   --skip-slash-help             Skip CLI help probes for plugin-declared command aliases
+  --allow-empty                 Allow zero-command runs when every active phase is skipped
   --keep-run-root               Preserve isolated HOME/state/log temp root after success
 `);
 }
@@ -212,30 +222,6 @@ function readOptionalPositiveIntEnv(name) {
 function readOptionalNonNegativeIntEnv(name) {
   const raw = process.env[name];
   return raw ? parseNonNegativeInt(raw, name) : undefined;
-}
-
-function parsePositiveInt(raw, label) {
-  const value = Number(raw);
-  if (!Number.isInteger(value) || value < 1) {
-    throw new Error(`${label} must be a positive integer`);
-  }
-  return value;
-}
-
-function parseNonNegativeInt(raw, label) {
-  const value = Number(raw);
-  if (!Number.isInteger(value) || value < 0) {
-    throw new Error(`${label} must be a non-negative integer`);
-  }
-  return value;
-}
-
-function parsePositiveNumber(raw, label) {
-  const value = Number(raw);
-  if (!Number.isFinite(value) || value <= 0) {
-    throw new Error(`${label} must be a positive number`);
-  }
-  return value;
 }
 
 export function createGauntletPrebuildCommand(repoRoot) {
@@ -448,13 +434,18 @@ export function runMeasuredCommandLive(params) {
     let stderr = "";
     let stdoutBytes = 0;
     let stderrBytes = 0;
+    let stdoutRelayBytes = 0;
+    let stderrRelayBytes = 0;
     let stdoutTruncated = false;
     let stderrTruncated = false;
+    let stdoutRelayTruncated = false;
+    let stderrRelayTruncated = false;
     let spawnError = null;
     let timedOut = false;
     let settled = false;
     let forceKillTimeout = null;
     const maxBufferBytes = params.maxBufferBytes ?? COMMAND_OUTPUT_MAX_BUFFER_BYTES;
+    const maxRelayBytes = params.consoleOutputMaxBytes ?? maxBufferBytes;
     const timeoutKillGraceMs = params.timeoutKillGraceMs ?? 5_000;
     const spawnOptions = mode === "none" ? (params.spawnOptions ?? {}) : {};
     const useProcessGroup =
@@ -529,13 +520,47 @@ export function runMeasuredCommandLive(params) {
         appendTruncation();
       }
     };
-    const appendOutput = (streamName, chunk) => {
-      const text = chunk.toString("utf8");
-      if (streamName === "stdout") {
-        process.stdout.write(text);
-      } else {
-        process.stderr.write(text);
+    const relayOutput = (streamName, chunk) => {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      const currentBytes = streamName === "stdout" ? stdoutRelayBytes : stderrRelayBytes;
+      const alreadyTruncated =
+        streamName === "stdout" ? stdoutRelayTruncated : stderrRelayTruncated;
+      if (alreadyTruncated) {
+        return;
       }
+      const write =
+        streamName === "stdout"
+          ? process.stdout.write.bind(process.stdout)
+          : process.stderr.write.bind(process.stderr);
+      const markTruncated = () => {
+        write(`\n[${streamName} relay truncated after ${maxRelayBytes} bytes]\n`);
+        if (streamName === "stdout") {
+          stdoutRelayTruncated = true;
+        } else {
+          stderrRelayTruncated = true;
+        }
+      };
+      const remainingBytes = maxRelayBytes - currentBytes;
+      if (remainingBytes <= 0) {
+        markTruncated();
+        return;
+      }
+      const relayedBuffer =
+        buffer.length > remainingBytes ? buffer.subarray(0, remainingBytes) : buffer;
+      if (relayedBuffer.length > 0) {
+        write(relayedBuffer.toString("utf8"));
+      }
+      if (streamName === "stdout") {
+        stdoutRelayBytes += relayedBuffer.length;
+      } else {
+        stderrRelayBytes += relayedBuffer.length;
+      }
+      if (buffer.length > remainingBytes) {
+        markTruncated();
+      }
+    };
+    const appendOutput = (streamName, chunk) => {
+      relayOutput(streamName, chunk);
       appendCapturedOutput(streamName, chunk);
     };
     child.stdout?.on("data", (chunk) => appendOutput("stdout", chunk));
@@ -609,6 +634,10 @@ export function runMeasuredCommandLive(params) {
     });
     child.on("close", (status, signal) => finish(status, signal));
   });
+}
+
+export function hasGauntletWorkRows(rows) {
+  return rows.some((row) => row.phase !== "prebuild");
 }
 
 function runPluginLifecycle(params) {
@@ -737,6 +766,7 @@ async function main() {
     const commandEnv = buildGauntletPrebuildEnv(env, {
       includePrivateQa: !options.skipQa,
       buildIds: selectedPlugins.map((plugin) => plugin.buildId),
+      skipDeclarationBuild: true,
     });
     if (!options.skipPrebuild && (selectedPlugins.length > 0 || !options.skipQa)) {
       process.stderr.write("[plugin-gauntlet] prebuild\n");
@@ -813,7 +843,18 @@ async function main() {
     const failures = rows.filter(
       (row) => row.status !== 0 || row.timedOut || row.diagnosticFailure,
     );
-    preserveRunRoot = preserveRunRoot || failures.length > 0;
+    const guardFailures =
+      !hasGauntletWorkRows(rows) && !options.allowEmpty
+        ? [
+            {
+              kind: "empty-run",
+              message:
+                "No lifecycle, slash-help, or QA gauntlet commands ran; remove a skip flag or pass --allow-empty for intentional dry runs.",
+            },
+          ]
+        : [];
+    const hasFailures = failures.length > 0 || guardFailures.length > 0;
+    preserveRunRoot = preserveRunRoot || hasFailures;
     let cleanupError = null;
     if (!preserveRunRoot) {
       try {
@@ -840,6 +881,7 @@ async function main() {
         qaScenarios: options.qaScenarios,
         qaPluginChunkSize: options.qaPluginChunkSize,
         qaBaseline: options.qaBaseline,
+        allowEmpty: options.allowEmpty,
         keepRunRoot: options.keepRunRoot,
         skipLifecycle: options.skipLifecycle,
         skipQa: options.skipQa,
@@ -860,6 +902,7 @@ async function main() {
       rows,
       observations: [...metricObservations, ...qaBaselineObservations, ...gatewayObservations],
       failures,
+      guardFailures,
     };
     const summaryPath = path.join(options.outputDir, "plugin-gateway-gauntlet-summary.json");
     fs.writeFileSync(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
@@ -875,10 +918,13 @@ async function main() {
         `[plugin-gauntlet] failure phase=${failure.phase} plugin=${failure.pluginId ?? "<none>"} status=${failure.status} timedOut=${failure.timedOut} diagnostic=${failure.diagnosticFailure ?? ""} wallMs=${Math.round(failure.wallMs)} log=${failure.logPath}\n`,
       );
     }
+    for (const failure of guardFailures) {
+      process.stdout.write(`[plugin-gauntlet] failure ${failure.kind}: ${failure.message}\n`);
+    }
     for (const observation of summary.observations.slice(0, 20)) {
       process.stdout.write(`[plugin-gauntlet] observation ${JSON.stringify(observation)}\n`);
     }
-    if (failures.length > 0) {
+    if (hasFailures) {
       process.exitCode = 1;
     }
   } catch (error) {

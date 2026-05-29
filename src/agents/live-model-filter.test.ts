@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { shouldExcludeProviderFromDefaultHighSignalLiveSweep } from "./live-model-filter.js";
+import {
+  resolveHighSignalLiveModelLimit,
+  shouldExcludeProviderFromDefaultHighSignalLiveSweep,
+} from "./live-model-filter.js";
 
 function resolveProviderOwners(provider: string): readonly string[] | undefined {
   if (provider === "openai" || provider === "openai-codex") {
@@ -85,5 +88,37 @@ describe("shouldExcludeProviderFromDefaultHighSignalLiveSweep", () => {
         resolveProviderOwners,
       }),
     ).toBe(false);
+  });
+});
+
+describe("resolveHighSignalLiveModelLimit", () => {
+  it("accepts signed decimal max model limits", () => {
+    expect(
+      resolveHighSignalLiveModelLimit({
+        rawMaxModels: "+3",
+        useExplicitModels: false,
+        defaultLimit: 5,
+      }),
+    ).toBe(3);
+  });
+
+  it("does not coerce partial max model limits", () => {
+    expect(
+      resolveHighSignalLiveModelLimit({
+        rawMaxModels: "3models",
+        useExplicitModels: false,
+        defaultLimit: 5,
+      }),
+    ).toBe(0);
+  });
+
+  it("does not coerce non-decimal max model limits", () => {
+    expect(
+      resolveHighSignalLiveModelLimit({
+        rawMaxModels: "0x3",
+        useExplicitModels: false,
+        defaultLimit: 5,
+      }),
+    ).toBe(0);
   });
 });

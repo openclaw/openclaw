@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import {
   describeInterpreterInlineEval,
   type InterpreterInlineEvalHit,
@@ -10,17 +9,22 @@ import {
   type ExecAsk,
   type ExecSecurity,
   type SystemRunApprovalPlan,
+  commandRequiresSecurityAuditSuppressionApproval,
   evaluateShellAllowlist,
   hasDurableExecApproval,
   resolveExecApprovalsFromFile,
 } from "../infra/exec-approvals.js";
 import { buildNodeShellCommand } from "../infra/node-shell.js";
-import { parsePreparedSystemRunPayload } from "../infra/system-run-approval-context.js";
+import {
+  parsePreparedSystemRunPayload,
+  type PreparedRunExecPolicy,
+} from "../infra/system-run-approval-context.js";
 import { formatExecCommand, resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
 import { normalizeNullableString } from "../shared/string-coerce.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
 import { renderExecOutputText } from "./bash-tools.exec-output.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
+import type { AgentToolResult } from "./runtime/index.js";
 import { callGatewayTool } from "./tools/gateway.js";
 import { listNodes, resolveNodeIdFromList } from "./tools/nodes-utils.js";
 
@@ -41,13 +45,19 @@ type PreparedNodeRun = {
   cwd: string | undefined;
   agentId: string | undefined;
   sessionKey: string | undefined;
+  execPolicy?: PreparedRunExecPolicy;
 };
 
 type NodeApprovalAnalysis = {
   analysisOk: boolean;
   allowlistSatisfied: boolean;
   durableApprovalSatisfied: boolean;
+  nodeApprovalPolicyKnown: boolean;
+  nodeSecurity?: ExecSecurity;
+  nodeAsk?: ExecAsk;
   inlineEvalHit: InterpreterInlineEvalHit | null;
+  requiresSecurityAuditSuppressionApproval: boolean;
+  autoReviewArgv?: string[];
 };
 
 export function shouldSkipNodeApprovalPrepare(params: {
@@ -253,6 +263,7 @@ export async function prepareNodeSystemRun(params: {
     cwd: prepared.plan.cwd ?? params.request.workdir,
     agentId: prepared.plan.agentId ?? params.request.agentId,
     sessionKey: prepared.plan.sessionKey ?? params.request.sessionKey,
+    ...(prepared.execPolicy ? { execPolicy: prepared.execPolicy } : {}),
   };
 }
 
@@ -311,18 +322,31 @@ export async function analyzeNodeApprovalRequirement(params: {
   let analysisOk = baseAllowlistEval.analysisOk;
   let allowlistSatisfied = false;
   let durableApprovalSatisfied = false;
+  let nodeApprovalsFileKnown = false;
   const inlineEvalHit =
     params.request.strictInlineEval === true
       ? detectPolicyInlineEval(baseAllowlistEval.segments)
       : null;
   if (inlineEvalHit) {
     params.request.warnings.push(
-      `Warning: strict inline-eval mode requires explicit approval for ${describeInterpreterInlineEval(
+      `Warning: strict inline-eval mode requires reviewer or explicit approval for ${describeInterpreterInlineEval(
         inlineEvalHit,
       )}.`,
     );
   }
-  if ((params.hostAsk === "always" || params.hostSecurity === "allowlist") && analysisOk) {
+  const requiresSecurityAuditSuppressionApproval =
+    commandRequiresSecurityAuditSuppressionApproval({
+      command: params.request.command,
+      cwd: params.request.workdir,
+      env: params.request.env,
+      segments: baseAllowlistEval.segments,
+    }) && !(params.hostSecurity === "full" && params.hostAsk === "off");
+  if (
+    (params.hostAsk === "always" ||
+      params.hostSecurity === "allowlist" ||
+      params.request.autoReview === true) &&
+    analysisOk
+  ) {
     try {
       const approvalsSnapshot = await callGatewayTool<{ file: string }>(
         "exec.approvals.node.get",
@@ -334,6 +358,7 @@ export async function analyzeNodeApprovalRequirement(params: {
           ? approvalsSnapshot.file
           : undefined;
       if (approvalsFile && typeof approvalsFile === "object") {
+        nodeApprovalsFileKnown = true;
         const resolved = resolveExecApprovalsFromFile({
           file: approvalsFile as ExecApprovalsFile,
           agentId: params.request.agentId,
@@ -366,6 +391,16 @@ export async function analyzeNodeApprovalRequirement(params: {
     analysisOk,
     allowlistSatisfied,
     durableApprovalSatisfied,
+    nodeApprovalPolicyKnown: nodeApprovalsFileKnown && params.prepared.execPolicy !== undefined,
+    nodeSecurity: params.prepared.execPolicy?.security,
+    nodeAsk: params.prepared.execPolicy?.ask,
     inlineEvalHit,
+    requiresSecurityAuditSuppressionApproval,
+    autoReviewArgv:
+      baseAllowlistEval.segments.length === 1 &&
+      (baseAllowlistEval.segments[0]?.raw === undefined ||
+        baseAllowlistEval.segments[0].raw.trim() === params.request.command.trim())
+        ? baseAllowlistEval.segments[0].argv
+        : undefined,
   };
 }

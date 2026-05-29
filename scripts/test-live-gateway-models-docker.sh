@@ -94,11 +94,7 @@ if [[ -n "${DOCKER_HOME_DIR:-}" ]]; then
   openclaw_live_stage_auth_into_home "$DOCKER_HOME_DIR" "${AUTH_DIRS[@]}" --files "${AUTH_FILES[@]}"
   DOCKER_AUTH_PRESTAGED=1
 fi
-CONTAINER_NODE_OPTIONS="${OPENCLAW_DOCKER_NODE_OPTIONS:-${NODE_OPTIONS:-}}"
-if [[ -z "$(openclaw_live_trim "$CONTAINER_NODE_OPTIONS")" ]]; then
-  CONTAINER_NODE_OPTIONS="--max-old-space-size=4096"
-fi
-CONTAINER_NODE_OPTIONS="$CONTAINER_NODE_OPTIONS --disable-warning=ExperimentalWarning"
+CONTAINER_NODE_OPTIONS="$(openclaw_live_container_node_options)"
 
 EXTERNAL_AUTH_MOUNTS=()
 if ((${#AUTH_DIRS[@]} > 0)); then
@@ -172,7 +168,9 @@ echo "==> Target: src/gateway/gateway-models.profiles.live.test.ts"
 echo "==> Profile file: $PROFILE_STATUS"
 echo "==> External auth dirs: ${AUTH_DIRS_CSV:-none}"
 echo "==> External auth files: ${AUTH_FILES_CSV:-none}"
-DOCKER_RUN_ARGS=(docker run --rm -t \
+DOCKER_RUN_ARGS=()
+openclaw_live_init_docker_run_args DOCKER_RUN_ARGS "${OPENCLAW_LIVE_GATEWAY_DOCKER_RUN_TIMEOUT:-2100s}"
+DOCKER_RUN_ARGS+=(--rm -t \
   -u "$DOCKER_USER" \
   --entrypoint bash \
   -e OPENAI_API_KEY \

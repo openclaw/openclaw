@@ -1,3 +1,4 @@
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { hasApprovalTurnSourceRoute } from "../../infra/approval-turn-source.js";
 import type { ExecApprovalDecision } from "../../infra/exec-approvals.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -7,7 +8,6 @@ import type {
   ExecApprovalRecord,
 } from "../exec-approval-manager.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../method-scopes.js";
-import { ErrorCodes, errorShape } from "../protocol/index.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 const APPROVAL_NOT_FOUND_DETAILS = {
@@ -287,30 +287,39 @@ export async function handlePendingApprovalRequest<
     requestEvent: RequestedApprovalEvent<TPayload>,
   ) => Promise<void> | void;
   afterDecisionErrorLabel?: string;
+  keepPendingWithoutRoute?: boolean;
+  requireDeliveryRoute?: boolean;
+  suppressDelivery?: boolean;
 }): Promise<void> {
-  const approvalClientConnIds = resolveApprovalRequestRecipientConnIds({
-    context: params.context,
-    record: params.record,
-    excludeConnId: params.clientConnId,
-  });
-  if (approvalClientConnIds) {
-    params.context.broadcastToConnIds(
-      params.requestEventName,
-      params.requestEvent,
-      approvalClientConnIds,
-      {
-        dropIfSlow: true,
-      },
-    );
-  } else {
-    params.context.broadcast(params.requestEventName, params.requestEvent, { dropIfSlow: true });
+  const suppressDelivery = params.suppressDelivery === true;
+  const approvalClientConnIds = suppressDelivery
+    ? null
+    : resolveApprovalRequestRecipientConnIds({
+        context: params.context,
+        record: params.record,
+        excludeConnId: params.clientConnId,
+      });
+  if (!suppressDelivery) {
+    if (approvalClientConnIds) {
+      params.context.broadcastToConnIds(
+        params.requestEventName,
+        params.requestEvent,
+        approvalClientConnIds,
+        {
+          dropIfSlow: true,
+        },
+      );
+    } else {
+      params.context.broadcast(params.requestEventName, params.requestEvent, { dropIfSlow: true });
+    }
   }
 
-  const hasApprovalClients =
-    approvalClientConnIds !== null
+  const hasApprovalClients = suppressDelivery
+    ? false
+    : approvalClientConnIds !== null
       ? approvalClientConnIds.size > 0
       : (params.context.hasExecApprovalClients?.(params.clientConnId) ?? false);
-  const deliveredResult = params.deliverRequest();
+  const deliveredResult = suppressDelivery ? false : params.deliverRequest();
   const delivered = isPromiseLike(deliveredResult) ? await deliveredResult : deliveredResult;
   const hasTurnSourceRoute =
     !hasApprovalClients &&
@@ -321,7 +330,13 @@ export async function handlePendingApprovalRequest<
       approvalKind: params.approvalKind ?? "exec",
     });
 
-  if (!hasApprovalClients && !hasTurnSourceRoute && !delivered) {
+  if (
+    params.requireDeliveryRoute !== false &&
+    !params.keepPendingWithoutRoute &&
+    !hasApprovalClients &&
+    !hasTurnSourceRoute &&
+    !delivered
+  ) {
     params.manager.expire(params.record.id, "no-approval-route");
     params.respond(
       true,

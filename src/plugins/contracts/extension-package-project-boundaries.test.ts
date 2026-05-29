@@ -221,6 +221,9 @@ describe("opt-in extension package boundaries", () => {
     expect(packageJson.exports?.["./error-runtime"]?.types).toBe(
       "./dist/src/plugin-sdk/error-runtime.d.ts",
     );
+    expect(packageJson.exports?.["./exec-approvals-runtime"]?.types).toBe(
+      "./dist/src/plugin-sdk/exec-approvals-runtime.d.ts",
+    );
     expect(packageJson.exports?.["./plugin-entry"]?.types).toBe(
       "./dist/src/plugin-sdk/plugin-entry.d.ts",
     );

@@ -1,27 +1,9 @@
-import { appendFileSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import * as nodePty from "@lydell/node-pty";
-import type { PtyExitEvent, PtyHandle } from "@lydell/node-pty";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-
-type NodePtyRuntimeModule = typeof nodePty & {
-  default?: Partial<typeof nodePty>;
-};
-
-type KillablePtyHandle = PtyHandle & {
-  kill?: (signal?: string) => void;
-};
-
-type PtyRun = {
-  output: () => string;
-  write: (data: string, opts?: { delay?: boolean }) => Promise<void>;
-  waitForOutput: (needle: string, timeoutMs?: number) => Promise<string>;
-  waitForExit: (timeoutMs?: number) => Promise<PtyExitEvent>;
-  dispose: () => void;
-};
+import { sleep, startPty, type PtyRun } from "./tui-pty-test-support.js";
 
 type FixtureLogEntry = {
   method: string;
@@ -34,146 +16,6 @@ const OUTPUT_TIMEOUT_MS = 2_000;
 const EXIT_TIMEOUT_MS = 4_000;
 const TEST_TIMEOUT_MS = 5_000;
 const STARTUP_TEST_TIMEOUT_MS = 10_000;
-
-function resolveSpawnPty() {
-  const runtime = nodePty as NodePtyRuntimeModule;
-  if (typeof runtime.spawn === "function") {
-    return runtime.spawn;
-  }
-  if (typeof runtime.default?.spawn === "function") {
-    return runtime.default.spawn;
-  }
-  throw new TypeError("@lydell/node-pty spawn export is unavailable");
-}
-
-const spawnPty = resolveSpawnPty();
-
-function waitFor<T>(params: {
-  timeoutMs: number;
-  read: () => T | null;
-  onTimeout: () => Error;
-}): Promise<T> {
-  const start = Date.now();
-  return new Promise((resolve, reject) => {
-    const tick = () => {
-      let result: T | null;
-      try {
-        result = params.read();
-      } catch (error) {
-        reject(error);
-        return;
-      }
-      if (result !== null) {
-        resolve(result);
-        return;
-      }
-      if (Date.now() - start >= params.timeoutMs) {
-        reject(params.onTimeout());
-        return;
-      }
-      setTimeout(tick, 25);
-    };
-    tick();
-  });
-}
-
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function readPositiveIntegerEnv(name: string): number | null {
-  const value = Number.parseInt(process.env[name] ?? "", 10);
-  return Number.isFinite(value) && value > 0 ? value : null;
-}
-
-function readPtyDimensionEnv(name: string, fallback: number): number {
-  return readPositiveIntegerEnv(name) ?? fallback;
-}
-
-async function writePtyInput(
-  pty: PtyHandle,
-  data: string,
-  opts: { delay?: boolean } = {},
-): Promise<void> {
-  const delayMs = readPositiveIntegerEnv("OPENCLAW_TUI_PTY_TYPE_DELAY_MS");
-  if (!delayMs || opts.delay === false) {
-    pty.write(data);
-    return;
-  }
-  const chunkSize = readPositiveIntegerEnv("OPENCLAW_TUI_PTY_TYPE_CHUNK_SIZE") ?? 1;
-  for (let idx = 0; idx < data.length; idx += chunkSize) {
-    pty.write(data.slice(idx, idx + chunkSize));
-    if (idx + chunkSize < data.length) {
-      await sleep(delayMs);
-    }
-  }
-}
-
-function mirrorPtyOutput(data: string) {
-  const mirrorPath = process.env.OPENCLAW_TUI_PTY_MIRROR_PATH;
-  if (!mirrorPath) {
-    return;
-  }
-  appendFileSync(mirrorPath, data, "utf8");
-}
-
-function startPty(command: string, args: string[], opts: { cwd: string; env: NodeJS.ProcessEnv }) {
-  let output = "";
-  let exitEvent: PtyExitEvent | null = null;
-  const pty = spawnPty(command, args, {
-    name: "xterm-256color",
-    cols: readPtyDimensionEnv("OPENCLAW_TUI_PTY_COLS", 100),
-    rows: readPtyDimensionEnv("OPENCLAW_TUI_PTY_ROWS", 30),
-    cwd: opts.cwd,
-    env: {
-      ...process.env,
-      ...opts.env,
-      TERM: "xterm-256color",
-    } as Record<string, string>,
-  }) as KillablePtyHandle;
-
-  pty.onData((data) => {
-    output += data;
-    mirrorPtyOutput(data);
-  });
-  pty.onExit((event) => {
-    exitEvent = event;
-  });
-
-  const run: PtyRun = {
-    output: () => output,
-    write: async (data, writeOpts) => await writePtyInput(pty, data, writeOpts),
-    waitForOutput: async (needle, timeoutMs = OUTPUT_TIMEOUT_MS) =>
-      await waitFor({
-        timeoutMs,
-        read: () => {
-          if (output.includes(needle)) {
-            return output;
-          }
-          if (exitEvent) {
-            throw new Error(
-              `PTY exited before ${JSON.stringify(needle)}\nexit=${JSON.stringify(exitEvent)}\n${output}`,
-            );
-          }
-          return null;
-        },
-        onTimeout: () => new Error(`timed out waiting for ${JSON.stringify(needle)}\n${output}`),
-      }),
-    waitForExit: async (timeoutMs = EXIT_TIMEOUT_MS) =>
-      await waitFor({
-        timeoutMs,
-        read: () => exitEvent,
-        onTimeout: () => new Error(`timed out waiting for PTY exit\n${output}`),
-      }),
-    dispose: () => {
-      if (!exitEvent) {
-        pty.kill?.("SIGTERM");
-      }
-    },
-  };
-  activeRuns.push(run);
-  return run;
-}
 
 async function readFixtureLog(logPath: string): Promise<FixtureLogEntry[]> {
   try {
@@ -220,7 +62,7 @@ async function writeTuiPtyFixtureScript(dir: string) {
   const scriptPath = path.join(dir, "run-tui-pty-fixture.ts");
   const tuiModuleUrl = pathToFileURL(path.join(process.cwd(), "src/tui/tui.ts")).href;
   const payloadsModuleUrl = pathToFileURL(
-    path.join(process.cwd(), "src/agents/pi-embedded-runner/run/payloads.ts"),
+    path.join(process.cwd(), "src/agents/embedded-agent-runner/run/payloads.ts"),
   ).href;
   const replyPayloadModuleUrl = pathToFileURL(
     path.join(process.cwd(), "src/auto-reply/reply-payload.ts"),
@@ -240,6 +82,7 @@ async function writeTuiPtyFixtureScript(dir: string) {
 
       const actionLogPath = process.env.OPENCLAW_TUI_PTY_LOG_PATH;
       const gatewayStatus = process.env.OPENCLAW_TUI_PTY_GATEWAY_STATUS ?? "fixture gateway ok";
+      const xaiLimitError = '403 {"code":"The caller does not have permission to execute the specified operation","error":"Your team team-redacted has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit."}';
       let currentModel = "fixture-provider/fixture-model";
       let fastMode = process.env.OPENCLAW_TUI_PTY_FAST_MODE === "true";
 
@@ -309,9 +152,40 @@ async function writeTuiPtyFixtureScript(dir: string) {
             thinking: opts.thinking,
           });
           const runId = opts.runId ?? "run-pty-fixture";
-          const responseDelayMs = opts.message === "slow prompt" ? 500 : 20;
+          const responseDelayMs =
+            opts.message === "slow prompt" || opts.message === "streaming prompt" ? 500 : 20;
+          if (opts.message === "streaming prompt") {
+            setTimeout(() => {
+              this.onEvent?.({
+                event: "chat",
+                payload: {
+                  runId,
+                  sessionKey: opts.sessionKey,
+                  state: "delta",
+                  message: {
+                    role: "assistant",
+                    content: [{ type: "text", text: "PTY_STREAMING: streaming prompt" }],
+                    timestamp: Date.now(),
+                  },
+                },
+              });
+            }, 5);
+          }
           const isSourceReplyProof = opts.message === "message tool only source reply proof";
+          const isXaiLimitProof = opts.message === "xai limit proof";
           setTimeout(() => {
+            if (isXaiLimitProof) {
+              this.onEvent?.({
+                event: "chat",
+                payload: {
+                  runId,
+                  sessionKey: opts.sessionKey,
+                  state: "error",
+                  errorMessage: xaiLimitError,
+                },
+              });
+              return;
+            }
             const sourceReplyPayloads = isSourceReplyProof
               ? buildEmbeddedRunPayloads({
                   assistantTexts: [],
@@ -447,6 +321,7 @@ async function startTuiFixture(opts: { env?: NodeJS.ProcessEnv } = {}) {
   const scriptPath = await writeTuiPtyFixtureScript(tempDir);
   const logPath = path.join(tempDir, "fixture-log.jsonl");
   const run = startPty(process.execPath, ["--import", "tsx", scriptPath], {
+    activeRuns,
     cwd: process.cwd(),
     env: {
       OPENCLAW_THEME: "dark",
@@ -454,6 +329,8 @@ async function startTuiFixture(opts: { env?: NodeJS.ProcessEnv } = {}) {
       NO_COLOR: undefined,
       ...opts.env,
     },
+    exitTimeoutMs: EXIT_TIMEOUT_MS,
+    outputTimeoutMs: OUTPUT_TIMEOUT_MS,
   });
 
   return {
@@ -536,6 +413,20 @@ describe.sequential("TUI PTY harness", () => {
   );
 
   it(
+    "preserves xAI account limit errors in terminal output",
+    async () => {
+      await fixture.run.write("xai limit proof\r");
+      await fixture.run.waitForOutput("monthly spending limit");
+      expect(fixture.run.output()).not.toContain("Run /auth");
+      await fixture.waitForLogEntry(
+        (entry) =>
+          entry.method === "sendChat" && objectFieldEquals(entry, "message", "xai limit proof"),
+      );
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
     "blocks overlapping normal messages while a run is busy",
     async () => {
       await fixture.run.write("slow prompt\r");
@@ -552,6 +443,23 @@ describe.sequential("TUI PTY harness", () => {
       expect(slowPromptCalls).toHaveLength(1);
       expect(slowPromptCalls[0]?.payload).toMatchObject({ message: "slow prompt" });
       await fixture.run.write("\x15", { delay: false });
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "submits a follow-up prompt while a run is streaming",
+    async () => {
+      await fixture.run.write("\x15", { delay: false });
+      await fixture.run.write("streaming prompt\r");
+      await fixture.run.waitForOutput("PTY_STREAMING: streaming prompt");
+      await fixture.run.write("queued while streaming\r");
+      await fixture.waitForLogEntry(
+        (entry) =>
+          entry.method === "sendChat" &&
+          objectFieldEquals(entry, "message", "queued while streaming"),
+      );
+      await fixture.run.waitForOutput("PTY_RESPONSE: streaming prompt");
     },
     TEST_TIMEOUT_MS,
   );
