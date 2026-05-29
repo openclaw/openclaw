@@ -122,6 +122,11 @@ function stripSelectedProviderPrefix(params: {
   const stripped = stripTargetProviderPrefix(trimmed, params.channel).trim();
   return stripped || undefined;
 }
+
+function shouldStripResolvedTargetProviderPrefix(target: ResolvedMessagingTarget): boolean {
+  return target.resolutionSource === "normalized";
+}
+
 export async function resolveDeliveryTarget(
   cfg: OpenClawConfig,
   agentId: string,
@@ -329,10 +334,12 @@ export async function resolveDeliveryTarget(
     resolvedTarget.source === "directory"
       ? resolvedTarget.to
       : (preResolvedRouteTargetCandidate ?? toCandidate);
-  const selectedTarget = stripSelectedProviderPrefix({
-    channel,
-    to: resolvedTarget.to,
-  });
+  const selectedTarget = shouldStripResolvedTargetProviderPrefix(resolvedTarget)
+    ? stripSelectedProviderPrefix({
+        channel,
+        to: resolvedTarget.to,
+      })
+    : resolvedTarget.to.trim();
   if (!selectedTarget) {
     return {
       ok: false,

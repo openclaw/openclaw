@@ -432,6 +432,7 @@ describe("resolveDeliveryTarget", () => {
       to: "user:123456789",
       kind: "user",
       source: "directory",
+      resolutionSource: "plugin",
     });
 
     const cfg = makeCfg({ bindings: [] });
@@ -585,6 +586,88 @@ describe("resolveDeliveryTarget", () => {
 
     expect(result.ok).toBe(true);
     expect(result.to).toBe("room-b");
+    expect(result.threadId).toBeUndefined();
+  });
+
+  it("preserves plugin-canonical targets that begin with the selected channel prefix", async () => {
+    setMainSessionEntry(undefined);
+    const canonicalTarget = "Bncr:tgBot:-1003891624016:6278285192";
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "bncr",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "bncr",
+            outbound: createStubOutbound("Bncr"),
+            messaging: {
+              targetPrefixes: ["bncr"],
+              targetResolver: {
+                resolveTarget: async ({ input }) =>
+                  input === canonicalTarget
+                    ? { to: canonicalTarget, kind: "group" as const, source: "normalized" as const }
+                    : null,
+              },
+            },
+          }),
+        },
+      ]),
+    );
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "bncr",
+      to: canonicalTarget,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.to).toBe(canonicalTarget);
+    expect(result.threadId).toBeUndefined();
+  });
+
+  it("uses plugin-resolved directory targets for route parsing", async () => {
+    setMainSessionEntry(undefined);
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "alpha",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "alpha",
+            outbound: createStubOutbound("Alpha"),
+            messaging: {
+              targetPrefixes: ["alpha"],
+              targetResolver: {
+                resolveTarget: async ({ input }) =>
+                  input === "alice"
+                    ? { to: "user:123", kind: "user" as const, source: "directory" as const }
+                    : null,
+              },
+              resolveOutboundSessionRoute: ({ cfg, agentId, accountId, target }) => {
+                const isUser = target.startsWith("user:");
+                return buildChannelOutboundSessionRoute({
+                  cfg,
+                  agentId,
+                  channel: "alpha",
+                  accountId,
+                  peer: { kind: isUser ? "direct" : "channel", id: target },
+                  chatType: isUser ? "direct" : "channel",
+                  from: target,
+                  to: isUser ? target : `channel:${target}`,
+                });
+              },
+            },
+          }),
+        },
+      ]),
+    );
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "alpha",
+      to: "alice",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.to).toBe("user:123");
     expect(result.threadId).toBeUndefined();
   });
 
