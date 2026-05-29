@@ -1014,3 +1014,131 @@ describe("buildInboundUserContextPrefix", () => {
     expect(text).not.toContain("private-token");
   });
 });
+
+describe("sanitizeTranscriptBody — head+tail truncation for reply context", () => {
+  it("passes a body under the cap through unchanged (apart from whitespace collapse)", () => {
+    const body = "Short bot reply with HEAD_MARK and TAIL_MARK.";
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      UntrustedStructuredContext: [
+        {
+          label: "Conversation context",
+          source: "telegram",
+          type: "chat_window",
+          payload: {
+            order: "chronological",
+            relation: "before_current_message",
+            messages: [
+              {
+                message_id: "m1",
+                sender: "bot",
+                body,
+                is_reply_target: true,
+              },
+            ],
+          },
+        },
+      ],
+    } as TemplateContext);
+
+    expect(text).toContain(body);
+    expect(text).not.toContain("chars omitted");
+  });
+
+  it("preserves both head and tail when body exceeds cap, with explicit omission marker", () => {
+    // Head padding exceeds BODY_HEAD_CHARS (2000) so MIDDLE never reaches the head window;
+    // tail padding exceeds BODY_TAIL_CHARS (3500) so MIDDLE never reaches the tail window.
+    const headPart = "HEAD_MARKER ".repeat(400); // ~4800 chars
+    const middlePart = "MIDDLE_ONLY_SENTINEL ".repeat(800); // ~16800 chars, must be dropped
+    const tailPart = " TAIL_MARKER".repeat(500); // ~6000 chars
+    const longBody = headPart + middlePart + tailPart;
+    expect(longBody.length).toBeGreaterThan(6000);
+
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      UntrustedStructuredContext: [
+        {
+          label: "Conversation context",
+          source: "telegram",
+          type: "chat_window",
+          payload: {
+            order: "chronological",
+            relation: "before_current_message",
+            messages: [
+              {
+                message_id: "m1",
+                sender: "bot",
+                body: longBody,
+                is_reply_target: true,
+              },
+            ],
+          },
+        },
+      ],
+    } as TemplateContext);
+
+    // Head and tail content survive
+    expect(text).toContain("HEAD_MARKER");
+    expect(text).toContain("TAIL_MARKER");
+    // Middle is dropped, replaced by omission marker
+    expect(text).toContain("chars omitted");
+    expect(text).not.toContain("MIDDLE_ONLY_SENTINEL");
+    // Reply target framing is intact
+    expect(text).toContain("[reply target]");
+  });
+
+  it("does not relax the 500-char cap on short metadata fields like sender", () => {
+    const longSender = "x".repeat(900);
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      UntrustedStructuredContext: [
+        {
+          label: "Conversation context",
+          source: "telegram",
+          type: "chat_window",
+          payload: {
+            order: "chronological",
+            relation: "before_current_message",
+            messages: [
+              {
+                message_id: "m1",
+                sender: longSender,
+                body: "hi",
+              },
+            ],
+          },
+        },
+      ],
+    } as TemplateContext);
+
+    // Sender is still capped, not extended to body-size budget
+    expect(text).not.toContain("x".repeat(600));
+    expect(text).toContain("…[truncated]");
+  });
+
+  it("uses head+tail cap for Telegram inline ReplyToBody quote", () => {
+    // Padding exceeds BODY_HEAD_CHARS / BODY_TAIL_CHARS so middle sentinel is strictly inside dropped zone.
+    const head = "OPENING_CONTEXT ".repeat(400); // ~6400 chars
+    const middle = "FILLER_ONLY_SENTINEL ".repeat(800); // ~16800 chars, must be dropped
+    const tail = " CLOSING_OPTIONS".repeat(400); // ~6400 chars
+    const longReplyBody = head + middle + tail;
+    expect(longReplyBody.length).toBeGreaterThan(6000);
+
+    const text = buildInboundUserContextPrefix({
+      Provider: "telegram",
+      Surface: "telegram",
+      OriginatingChannel: "telegram",
+      ChatType: "group",
+      MessageSid: "u-1",
+      ReplyToId: "b-1",
+      ReplyToBody: longReplyBody,
+      SenderName: "user",
+    } as TemplateContext);
+
+    expect(text).toContain("[Replying to:");
+    expect(text).toContain("OPENING_CONTEXT");
+    expect(text).toContain("CLOSING_OPTIONS");
+    expect(text).toContain("chars omitted");
+    expect(text).not.toContain("FILLER_ONLY_SENTINEL");
+  });
+});

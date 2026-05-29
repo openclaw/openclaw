@@ -14,6 +14,12 @@ import type { TemplateContext } from "../templating.js";
 const MAX_UNTRUSTED_JSON_STRING_CHARS = 2_000;
 const MAX_UNTRUSTED_HISTORY_ENTRIES = 20;
 const MAX_UNTRUSTED_TRANSCRIPT_FIELD_CHARS = 500;
+// Body-specific caps — long-form bot replies need head+tail preservation,
+// not a simple prefix truncation that silently drops actionable content
+// (options, conclusions, next steps) at the tail of multi-paragraph messages.
+const MAX_UNTRUSTED_TRANSCRIPT_BODY_CHARS = 6000;
+const BODY_HEAD_CHARS = 2000;
+const BODY_TAIL_CHARS = 3500;
 const MESSAGE_TOOL_DELIVERY_HINT =
   "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.";
 
@@ -98,6 +104,30 @@ function sanitizeTranscriptField(value: unknown): string | undefined {
     .trim();
 }
 
+// Sanitize a long-form message body for use in reply-context injection.
+// Unlike sanitizeTranscriptField (designed for short metadata fields),
+// this preserves both opening context and the trailing actionable content
+// (options, conclusions, next steps) typical of multi-paragraph bot replies.
+// When the body exceeds the cap, the middle is replaced with an explicit
+// "[N chars omitted]" marker so the model knows truncation occurred rather
+// than silently receiving a truncated prefix.
+function sanitizeTranscriptBody(value: unknown): string | undefined {
+  const body = sanitizePromptBody(value);
+  if (!body) {
+    return undefined;
+  }
+  if (body.length <= MAX_UNTRUSTED_TRANSCRIPT_BODY_CHARS) {
+    return neutralizeMarkdownFences(body).replace(/\s+/g, " ").trim();
+  }
+  const head = truncateUtf16Safe(body, BODY_HEAD_CHARS).trimEnd();
+  const tail = body.slice(-BODY_TAIL_CHARS).trimStart();
+  const omittedChars = body.length - head.length - tail.length;
+  const middle = ` …[${omittedChars} chars omitted]… `;
+  return neutralizeMarkdownFences(head + middle + tail)
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function formatUntrustedStructuredContextLabel(label: unknown): string {
   const normalized = normalizePromptMetadataString(label);
   return normalized
@@ -154,7 +184,7 @@ function formatChatWindowMessage(
   const replyToId = sanitizeTranscriptField(value["reply_to_id"]);
   const mediaType = sanitizeTranscriptField(value["media_type"]);
   const mediaRef = sanitizeTranscriptField(value["media_ref"]);
-  const body = sanitizeTranscriptField(value["body"]);
+  const body = sanitizeTranscriptBody(value["body"]);
   const details = [
     messageId ? `#${messageId}` : undefined,
     timestamp,
@@ -310,7 +340,7 @@ function isTelegramInboundContext(ctx: TemplateContext): boolean {
 }
 
 function resolveInlineReplyQuote(ctx: TemplateContext): string | undefined {
-  return sanitizeTranscriptField(ctx.ReplyToQuoteText) ?? sanitizeTranscriptField(ctx.ReplyToBody);
+  return sanitizeTranscriptBody(ctx.ReplyToQuoteText) ?? sanitizeTranscriptBody(ctx.ReplyToBody);
 }
 
 function formatTelegramCurrentMessageContext(ctx: TemplateContext): string | undefined {
