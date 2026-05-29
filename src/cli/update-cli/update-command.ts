@@ -3518,16 +3518,47 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
         : undefined,
     );
     postUpdateConfigSnapshot = restoredConfig.snapshot;
-    postCorePluginUpdate = await runPostCorePluginUpdate({
-      root: postUpdateRoot,
-      channel,
-      configSnapshot: postUpdateConfigSnapshot,
-      configChanged: restoredConfig.changed,
-      restoredAuthoredChannels: restoredConfig.authoredChannels,
-      opts,
-      timeoutMs: updateStepTimeoutMs,
-      pluginInstallRecords: preUpdatePluginInstallRecords,
-    });
+    // Post-core plugin convergence runs here in the current (pre-restart)
+    // process, which still reports the old, pre-update VERSION. On a downgrade
+    // the freshly installed core on disk is OLDER than the running VERSION, so
+    // resolving plugin compatibility against VERSION leaves an incompatible
+    // newer plugin enabled; it then loads against the downgraded core after
+    // restart and storms log.record handlers. Pin the compatibility host
+    // version to the freshly installed target so such plugins are disabled
+    // before restart. (Not gated on downgradeRisk: that flag only tracks the
+    // requested package target, and a downgrade can also reach this path with
+    // --no-restart or a bare version tag.) (#87914)
+    const postUpdateInstalledVersion = await readPackageVersion(postUpdateRoot);
+    const versionComparison =
+      postUpdateInstalledVersion && VERSION
+        ? compareSemverStrings(VERSION, postUpdateInstalledVersion)
+        : null;
+    const compatibilityDowngradeTarget =
+      versionComparison != null && versionComparison > 0 ? postUpdateInstalledVersion : null;
+    const previousCompatibilityHostVersion = process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
+    if (compatibilityDowngradeTarget) {
+      process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = compatibilityDowngradeTarget;
+    }
+    try {
+      postCorePluginUpdate = await runPostCorePluginUpdate({
+        root: postUpdateRoot,
+        channel,
+        configSnapshot: postUpdateConfigSnapshot,
+        configChanged: restoredConfig.changed,
+        restoredAuthoredChannels: restoredConfig.authoredChannels,
+        opts,
+        timeoutMs: updateStepTimeoutMs,
+        pluginInstallRecords: preUpdatePluginInstallRecords,
+      });
+    } finally {
+      if (compatibilityDowngradeTarget) {
+        if (previousCompatibilityHostVersion === undefined) {
+          delete process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
+        } else {
+          process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = previousCompatibilityHostVersion;
+        }
+      }
+    }
   }
 
   const resultWithPostUpdate: UpdateRunResult = postCorePluginUpdate

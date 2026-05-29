@@ -1212,6 +1212,47 @@ describe("update-cli", () => {
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   });
 
+  it("pins the compatibility host version to the downgraded target during current-process post-core plugin convergence (#87914)", async () => {
+    const downgradedRoot = createCaseDir("openclaw-downgraded-compat-root");
+    setupUpdatedRootRefresh({
+      gatewayUpdateImpl: async () =>
+        makeOkUpdateResult({
+          mode: "npm",
+          root: downgradedRoot,
+          before: { version: "2026.4.14" },
+          after: { version: "2026.4.10" },
+        }),
+    });
+    // The old core is still installed at the invocation root; the freshly
+    // installed downgraded target lives at the post-update root.
+    readPackageVersion.mockImplementation(async (pkgRoot: string) =>
+      pkgRoot === downgradedRoot ? "2026.4.10" : "2026.4.14",
+    );
+    vi.mocked(resolveNpmChannelTag).mockResolvedValue({ tag: "latest", version: "2026.4.10" });
+
+    delete process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
+    let hostVersionDuringPluginUpdate: string | undefined = "unset";
+    updateNpmInstalledPlugins.mockImplementation(async () => {
+      hostVersionDuringPluginUpdate = process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
+      return { changed: false, config: baseConfig, outcomes: [] };
+    });
+
+    try {
+      await updateCommand({ yes: true, tag: "2026.4.10", restart: false });
+
+      expect(spawn).not.toHaveBeenCalled();
+      expect(updateNpmInstalledPlugins).toHaveBeenCalledTimes(1);
+      // Compatibility is evaluated against the downgraded target core, not the
+      // still-running old VERSION, so incompatible newer plugins are disabled
+      // before restart.
+      expect(hostVersionDuringPluginUpdate).toBe("2026.4.10");
+      // The override is scoped to the plugin convergence and restored afterward.
+      expect(process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBeUndefined();
+    } finally {
+      delete process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
+    }
+  });
+
   it("fails the update when the fresh process exits non-zero", async () => {
     setupUpdatedRootRefresh();
     spawn.mockImplementationOnce(() => {
