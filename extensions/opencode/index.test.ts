@@ -127,10 +127,12 @@ describe("opencode provider plugin", () => {
     });
     expect(model).toBeDefined();
     expect(model!.id).toBe("claude-opus-4-6");
-    expect(model!.api).toBe("openai-responses");
+    expect(model!.api).toBe("anthropic-messages");
     expect(model!.reasoning).toBe(true);
     expect(model!.input).toContain("text");
     expect(model!.input).toContain("image");
+    expect(model!.contextWindow).toBe(1_000_000);
+    expect(model!.maxTokens).toBe(128_000);
   });
 
   it("returns undefined for unknown models via resolveDynamicModel", async () => {

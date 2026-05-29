@@ -4,10 +4,14 @@ import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-model-shared"
 
 const PROVIDER_ID = "opencode";
 
+const OPENCODE_ZEN_ANTHROPIC_BASE_URL = "https://opencode.ai/zen";
 const OPENCODE_ZEN_OPENAI_BASE_URL = "https://opencode.ai/zen/v1";
+
+const FREE_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 
 const OPENCODE_ZEN_MODELS = (
   [
+    // DeepSeek — uses OpenAI Chat Completions format via the Zen proxy
     {
       id: "deepseek-v4-flash-free",
       name: "DeepSeek V4 Flash (Free)",
@@ -16,82 +20,58 @@ const OPENCODE_ZEN_MODELS = (
       baseUrl: OPENCODE_ZEN_OPENAI_BASE_URL,
       reasoning: true,
       input: ["text"],
-      cost: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-      },
+      cost: FREE_COST,
       contextWindow: 65_536,
       maxTokens: 8_192,
     },
+    // Claude models — use native Anthropic Messages format via the Zen proxy
     {
       id: "claude-opus-4-6",
       name: "Claude Opus 4.6 (via Zen)",
-      api: "openai-responses",
+      api: "anthropic-messages",
       provider: PROVIDER_ID,
-      baseUrl: OPENCODE_ZEN_OPENAI_BASE_URL,
+      baseUrl: OPENCODE_ZEN_ANTHROPIC_BASE_URL,
       reasoning: true,
       input: ["text", "image"],
-      cost: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-      },
-      contextWindow: 200_000,
-      maxTokens: 8_192,
+      cost: FREE_COST,
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
     },
     {
       id: "claude-opus-4-7",
       name: "Claude Opus 4.7 (via Zen)",
-      api: "openai-responses",
+      api: "anthropic-messages",
       provider: PROVIDER_ID,
-      baseUrl: OPENCODE_ZEN_OPENAI_BASE_URL,
+      baseUrl: OPENCODE_ZEN_ANTHROPIC_BASE_URL,
       reasoning: true,
       input: ["text", "image"],
-      cost: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-      },
-      contextWindow: 200_000,
-      maxTokens: 8_192,
+      cost: FREE_COST,
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
     },
     {
       id: "claude-sonnet-4-6",
       name: "Claude Sonnet 4.6 (via Zen)",
-      api: "openai-responses",
+      api: "anthropic-messages",
       provider: PROVIDER_ID,
-      baseUrl: OPENCODE_ZEN_OPENAI_BASE_URL,
+      baseUrl: OPENCODE_ZEN_ANTHROPIC_BASE_URL,
       reasoning: true,
       input: ["text", "image"],
-      cost: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-      },
-      contextWindow: 200_000,
-      maxTokens: 8_192,
+      cost: FREE_COST,
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
     },
     {
-      id: "gemini-2.5-pro",
-      name: "Gemini 2.5 Pro (via Zen)",
-      api: "openai-responses",
+      id: "claude-haiku-4-5",
+      name: "Claude Haiku 4.5 (via Zen)",
+      api: "anthropic-messages",
       provider: PROVIDER_ID,
-      baseUrl: OPENCODE_ZEN_OPENAI_BASE_URL,
+      baseUrl: OPENCODE_ZEN_ANTHROPIC_BASE_URL,
       reasoning: true,
       input: ["text", "image"],
-      cost: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-      },
+      cost: FREE_COST,
       contextWindow: 1_000_000,
-      maxTokens: 64_000,
+      maxTokens: 128_000,
     },
   ] satisfies ProviderRuntimeModel[]
 ).map((model) => normalizeModelCompat(model));
@@ -116,6 +96,14 @@ function normalizeBaseUrl(baseUrl: string | undefined): string {
   return (baseUrl ?? "").trim().replace(/\/+$/, "");
 }
 
+function isAnthropicApi(api: string | null | undefined): boolean {
+  return api?.toLowerCase() === "anthropic-messages";
+}
+
+function zenBaseUrlForApi(api: string | null | undefined): string | undefined {
+  return isAnthropicApi(api) ? OPENCODE_ZEN_ANTHROPIC_BASE_URL : OPENCODE_ZEN_OPENAI_BASE_URL;
+}
+
 export function normalizeOpencodeZenBaseUrl(params: {
   api?: string | null;
   baseUrl?: string;
@@ -124,14 +112,16 @@ export function normalizeOpencodeZenBaseUrl(params: {
   if (!normalized) {
     return undefined;
   }
-  if (normalized === OPENCODE_ZEN_OPENAI_BASE_URL) {
-    return OPENCODE_ZEN_OPENAI_BASE_URL;
+  const target = zenBaseUrlForApi(params.api);
+  if (!target) {
+    return undefined;
   }
-  if (normalized === "https://opencode.ai/zen") {
-    return OPENCODE_ZEN_OPENAI_BASE_URL;
+  if (normalized === target) {
+    return target;
   }
-  if (normalized === "https://opencode.ai") {
-    return OPENCODE_ZEN_OPENAI_BASE_URL;
+  // Accept bare domain or alias
+  if (normalized === "https://opencode.ai" || normalized === "https://opencode.ai/zen") {
+    return zenBaseUrlForApi(params.api);
   }
   return undefined;
 }
