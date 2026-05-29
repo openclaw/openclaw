@@ -5,8 +5,14 @@ import { resolveInlineAgentImageAttachments } from "./agent-turn-attachments.js"
 const VALID_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
 
-const isAsciiOnly = (value: string): boolean =>
-  [...value].every((ch) => ch.charCodeAt(0) <= 0x7f);
+const isAsciiOnly = (value: string): boolean => {
+  for (let i = 0; i < value.length; i += 1) {
+    if (value.charCodeAt(i) > 0x7f) {
+      return false;
+    }
+  }
+  return true;
+};
 
 describe("resolveInlineAgentImageAttachments base64 safety", () => {
   it("re-encodes raw latin1/binary data into ASCII base64", () => {
