@@ -5,7 +5,7 @@ import { getLoadedChannelPluginById } from "../../channels/plugins/registry-load
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { resolveSenderLabel } from "../../channels/sender-label.js";
-import { truncateUtf16Safe } from "../../utils.js";
+import { sliceUtf16Safe, truncateUtf16Safe } from "../../utils.js";
 import type { EnvelopeFormatOptions } from "../envelope.js";
 import { formatEnvelopeTimestamp } from "../envelope.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
@@ -120,7 +120,10 @@ function sanitizeTranscriptBody(value: unknown): string | undefined {
     return neutralizeMarkdownFences(body).replace(/\s+/g, " ").trim();
   }
   const head = truncateUtf16Safe(body, BODY_HEAD_CHARS).trimEnd();
-  const tail = body.slice(-BODY_TAIL_CHARS).trimStart();
+  // sliceUtf16Safe (not raw .slice) so an emoji or other surrogate pair that
+  // straddles the tail window boundary cannot leave a lone low surrogate at
+  // the start of the preserved tail.
+  const tail = sliceUtf16Safe(body, -BODY_TAIL_CHARS).trimStart();
   const omittedChars = body.length - head.length - tail.length;
   const middle = ` …[${omittedChars} chars omitted]… `;
   return neutralizeMarkdownFences(head + middle + tail)

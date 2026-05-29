@@ -1141,4 +1141,60 @@ describe("sanitizeTranscriptBody — head+tail truncation for reply context", ()
     expect(text).toContain("chars omitted");
     expect(text).not.toContain("FILLER_ONLY_SENTINEL");
   });
+
+  it("does not leave a lone surrogate when an emoji straddles the tail window boundary", () => {
+    // Build a body whose surrogate pair straddles the tail-window boundary at
+    // body.length - BODY_TAIL_CHARS (3500): the high surrogate sits just
+    // outside the tail window, the low surrogate sits just inside it. Without
+    // surrogate-safe slicing, the preserved tail would begin with a lone low
+    // surrogate, producing invalid UTF-16 in the injected prompt.
+    const LOBSTER_HIGH = String.fromCharCode(0xd83e);
+    const LOBSTER_LOW = String.fromCharCode(0xdd9e); // pair = "🦞" U+1F99E
+    const headFiller = "h".repeat(2500); // > BODY_HEAD_CHARS so head window is pure
+    const middleFiller = "m".repeat(7000) + LOBSTER_HIGH;
+    const tailMarker = "TAIL_AFTER_LOBSTER";
+    const tailFiller = LOBSTER_LOW + tailMarker + "t".repeat(3500 - 1 - tailMarker.length);
+    const longBody = headFiller + middleFiller + tailFiller;
+    expect(longBody.length).toBeGreaterThan(6000);
+    // Sanity: surrogate pair really straddles the boundary at length - 3500.
+    expect(longBody.charCodeAt(longBody.length - 3501)).toBe(0xd83e);
+    expect(longBody.charCodeAt(longBody.length - 3500)).toBe(0xdd9e);
+
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      UntrustedStructuredContext: [
+        {
+          label: "Conversation context",
+          source: "telegram",
+          type: "chat_window",
+          payload: {
+            order: "chronological",
+            relation: "before_current_message",
+            messages: [
+              {
+                message_id: "m1",
+                sender: "bot",
+                body: longBody,
+                is_reply_target: true,
+              },
+            ],
+          },
+        },
+      ],
+    } as TemplateContext);
+
+    // No lone surrogate anywhere in the rendered output.
+    for (let i = 0; i < text.length; i += 1) {
+      const c = text.charCodeAt(i);
+      if (c >= 0xd800 && c <= 0xdbff) {
+        const next = text.charCodeAt(i + 1);
+        expect(next >= 0xdc00 && next <= 0xdfff).toBe(true);
+        i += 1;
+      } else {
+        expect(c >= 0xdc00 && c <= 0xdfff).toBe(false);
+      }
+    }
+    // Tail content immediately following the would-be-split boundary survives.
+    expect(text).toContain(tailMarker);
+  });
 });
