@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { runEmbeddedAgent, type EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { FailoverError } from "../failover-error.js";
 import { persistCliTurnTranscript, runAgentAttempt } from "./attempt-execution.js";
+import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
 
 const runCliAgentMock = vi.hoisted(() => vi.fn());
 const runEmbeddedAgentMock = vi.hoisted(() => vi.fn());
@@ -153,10 +154,6 @@ function firstEmbeddedAgentArg(callIndex = 0) {
   return requireMockArg(runEmbeddedAgentMock, callIndex, "embedded OpenClaw agent argument");
 }
 
-function encodeWorkspaceDirName(workspaceDir: string): string {
-  return workspaceDir.replace(/[^a-zA-Z0-9]/g, "-");
-}
-
 describe("CLI attempt execution", () => {
   let tmpDir: string;
   let storePath: string;
@@ -217,7 +214,10 @@ describe("CLI attempt execution", () => {
 
   async function writeClaudeCliAssistantTranscript(cliSessionId: string) {
     const homeDir = path.join(tmpDir, `home-${cliSessionId}`);
-    const projectsDir = path.join(homeDir, ".claude", "projects", "demo-workspace");
+    const projectsDir = resolveClaudeCliProjectDirForWorkspace({
+      workspaceDir: tmpDir,
+      homeDir,
+    });
     process.env.HOME = homeDir;
     await fs.mkdir(projectsDir, { recursive: true });
     await fs.writeFile(
@@ -251,10 +251,10 @@ describe("CLI attempt execution", () => {
   it("clears stale Claude CLI session IDs before retrying after session expiration", async () => {
     const sessionKey = "agent:main:subagent:cli-expired";
     const homeDir = path.join(tmpDir, "home");
-    // v4 computes the JSONL path from workspaceDir; runClaudeCliAttempt below
-    // passes workspaceDir: tmpDir, so the probe walks
-    //   $HOME/.claude/projects/<encoded(tmpDir)>/<sessionId>.jsonl
-    const projectsDir = path.join(homeDir, ".claude", "projects", encodeWorkspaceDirName(tmpDir));
+    const projectsDir = resolveClaudeCliProjectDirForWorkspace({
+      workspaceDir: tmpDir,
+      homeDir,
+    });
     process.env.HOME = homeDir;
     await fs.mkdir(projectsDir, { recursive: true });
     await fs.writeFile(
@@ -444,8 +444,10 @@ describe("CLI attempt execution", () => {
     const sessionKey = "agent:main:direct:claude-transcript-present";
     const cliSessionId = "existing-claude-session";
     const homeDir = path.join(tmpDir, "home");
-    // v4 deterministic path lives under encoded(tmpDir), not a fixed name.
-    const projectsDir = path.join(homeDir, ".claude", "projects", encodeWorkspaceDirName(tmpDir));
+    const projectsDir = resolveClaudeCliProjectDirForWorkspace({
+      workspaceDir: tmpDir,
+      homeDir,
+    });
     process.env.HOME = homeDir;
     await fs.mkdir(projectsDir, { recursive: true });
     await fs.writeFile(

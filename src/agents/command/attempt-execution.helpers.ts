@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 import {
@@ -14,10 +13,9 @@ import {
   readClaudeCliFallbackSeed,
 } from "../../gateway/cli-session-history.js";
 import { cliBackendLog } from "../cli-runner/log.js";
+import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
 
-/** Maximum number of JSONL records to inspect before giving up. */
 const SESSION_FILE_MAX_RECORDS = 500;
-const CLAUDE_PROJECTS_RELATIVE_DIR = path.join(".claude", "projects");
 
 function normalizeClaudeCliSessionId(sessionId: string | undefined): string | undefined {
   const trimmed = sessionId?.trim();
@@ -84,23 +82,6 @@ export async function sessionFileHasContent(sessionFile: string | undefined): Pr
   return await jsonlFileHasAssistantMessage(sessionFile);
 }
 
-/**
- * Compute the on-disk JSONL path claude-cli uses for a given session. The CLI
- * is now invoked with an orchestrator-minted `--session-id <uuid>` and `cwd
- * <workspaceDir>`, which together determine the path:
- *
- *   `<homeDir>/.claude/projects/<encoded(workspaceDir)>/<sessionId>.jsonl`
- *
- * The encoding rule was verified live: claude-cli replaces every non-
- * alphanumeric character in the absolute cwd with a hyphen (so
- * `/home/faris/.openclaw/workspace` becomes `-home-faris--openclaw-workspace`
- * and `/tmp/foo_bar.baz` becomes `-tmp-foo-bar-baz`). The rule is documented
- * by behavior alone, so we keep the encoding regexp localized to this helper
- * — if upstream Claude Code ever changes it, the probe stops finding the file
- * and v4 fails loud (see `claudeCliSessionTranscriptHasContent` below).
- *
- * Returns `null` when the session id is malformed or the workspace is empty.
- */
 export function claudeCliSessionTranscriptPath(params: {
   sessionId: string | undefined;
   workspaceDir: string | undefined;
@@ -114,23 +95,15 @@ export function claudeCliSessionTranscriptPath(params: {
   if (!workspaceDir) {
     return null;
   }
-  const homeDir = params.homeDir?.trim() || process.env.HOME || os.homedir();
-  const encodedWorkspace = workspaceDir.replace(/[^a-zA-Z0-9]/g, "-");
-  return path.join(homeDir, CLAUDE_PROJECTS_RELATIVE_DIR, encodedWorkspace, `${sessionId}.jsonl`);
+  return path.join(
+    resolveClaudeCliProjectDirForWorkspace({
+      workspaceDir,
+      homeDir: params.homeDir,
+    }),
+    `${sessionId}.jsonl`,
+  );
 }
 
-/**
- * Single grace window between the first and second probe of the on-disk
- * claude-cli transcript. v3 used a 0/250/500/1000/1500ms back-off ladder
- * (3250ms total) and still raced the JSONL flush — at 12:37:58 EDT 2026-05-13
- * a live user turn hit `transcript probe negative after 3250ms (no matching
- * jsonl)`, immediately followed by `cli session reset reason=missing-
- * transcript`. v4 abandons the ladder-widening dead-end: the orchestrator now
- * mints the session id (`--session-id <uuid>`), so the JSONL path is fully
- * determined by data we own. A miss past one short grace window is no longer
- * "we lost the race for picking the path" but "the file genuinely isn't
- * there", and we want that to fail loud instead of silently widening forever.
- */
 const CLAUDE_CLI_TRANSCRIPT_FLUSH_GRACE_MS = 250;
 
 export async function claudeCliSessionTranscriptHasContent(params: {
@@ -157,12 +130,6 @@ export async function claudeCliSessionTranscriptHasContent(params: {
   if (second.hasAssistant) {
     return true;
   }
-  // Loud, structured warn — distinct prefix from v1/v2/v3 so log readers can
-  // tell which strategy is live. Missing the orchestrator-owned path after a
-  // grace window means either the prior turn's claude-cli never flushed (real
-  // crash/FS-failure) or the cwd-encoding rule shifted upstream; both are
-  // worth investigating individually instead of being papered over by a wider
-  // back-off ladder.
   const sessionId = normalizeClaudeCliSessionId(params.sessionId);
   cliBackendLog.warn(
     `claude-cli transcript probe v4 miss (sessionId-deterministic path, grace ${CLAUDE_CLI_TRANSCRIPT_FLUSH_GRACE_MS}ms): sessionId=${sessionId ?? ""} expectedPath=${expectedPath} fileExists=${second.fileExists}`,

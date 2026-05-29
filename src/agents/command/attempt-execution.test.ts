@@ -12,6 +12,7 @@ import {
   resolveFallbackRetryPrompt,
   sessionFileHasContent,
 } from "./attempt-execution.helpers.js";
+import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
 
 describe("resolveFallbackRetryPrompt", () => {
   const originalBody = "Summarize the quarterly earnings report and highlight key trends.";
@@ -400,9 +401,7 @@ describe("claudeCliSessionTranscriptPath", () => {
     ).toBeNull();
   });
 
-  it("encodes the cwd by replacing every non-alphanumeric character with a hyphen", () => {
-    // Live-verified rule: /home/faris/.openclaw/workspace →
-    // -home-faris--openclaw-workspace, /tmp/foo_bar.baz → -tmp-foo-bar-baz.
+  it("uses the canonical Claude project dir resolver", () => {
     expect(
       claudeCliSessionTranscriptPath({
         sessionId: "11111111-2222-3333-4444-555555555555",
@@ -426,6 +425,31 @@ describe("claudeCliSessionTranscriptPath", () => {
       }),
     ).toBe(path.join("/home/x", ".claude", "projects", "-tmp-foo-bar-baz", "session-x.jsonl"));
   });
+
+  it("canonicalizes symlinked workspaces before resolving the Claude project dir", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "oc-claude-project-link-"));
+    try {
+      const workspaceDir = path.join(root, "workspace");
+      const linkDir = path.join(root, "workspace-link");
+      await fs.mkdir(workspaceDir);
+      await fs.symlink(workspaceDir, linkDir, "dir");
+
+      expect(
+        claudeCliSessionTranscriptPath({
+          sessionId: "session-link",
+          workspaceDir: linkDir,
+          homeDir: root,
+        }),
+      ).toBe(
+        path.join(
+          resolveClaudeCliProjectDirForWorkspace({ workspaceDir, homeDir: root }),
+          "session-link.jsonl",
+        ),
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("claudeCliSessionTranscriptHasContent", () => {
@@ -439,32 +463,19 @@ describe("claudeCliSessionTranscriptHasContent", () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  // v4 mints the session id and computes the JSONL path deterministically from
-  // the workspaceDir; helpers below mirror that path so tests stay readable.
-  function encodeWorkspaceDirName(workspaceDir: string) {
-    return workspaceDir.replace(/[^a-zA-Z0-9]/g, "-");
-  }
-
   async function makeWorkspace() {
     const workspaceDir = await fs.mkdtemp(path.join(tmpDir, "ws-"));
     return workspaceDir;
   }
 
   async function writeClaudeProjectFile(workspaceDir: string, sessionId: string, content: string) {
-    const projectDir = path.join(
-      tmpDir,
-      ".claude",
-      "projects",
-      encodeWorkspaceDirName(workspaceDir),
-    );
+    const projectDir = resolveClaudeCliProjectDirForWorkspace({ workspaceDir, homeDir: tmpDir });
     await fs.mkdir(projectDir, { recursive: true });
     const file = path.join(projectDir, `${sessionId}.jsonl`);
     await fs.writeFile(file, content, "utf-8");
     return file;
   }
 
-  // Mirrors CLAUDE_CLI_TRANSCRIPT_FLUSH_GRACE_MS in the source so tests fail
-  // loudly if the grace window is retuned.
   const GRACE_MS = 250;
 
   it("returns false when the Claude project transcript is missing or empty", async () => {
@@ -552,8 +563,6 @@ describe("claudeCliSessionTranscriptHasContent", () => {
           homeDir: tmpDir,
         }),
       ).toBe(true);
-      // The grace sleep must NOT fire when the first scan already succeeds —
-      // v4's fast path is supposed to be allocation-free on healthy resumes.
       const graceCalls = setTimeoutSpy.mock.calls.filter(([, delay]) => delay === GRACE_MS);
       expect(graceCalls).toHaveLength(0);
     } finally {
@@ -604,8 +613,6 @@ describe("claudeCliSessionTranscriptHasContent", () => {
           homeDir: tmpDir,
         }),
       ).toBe(true);
-      // Exactly one grace-window sleep should fire (first scan miss → grace →
-      // second scan hits).
       expect(graceFires).toBe(1);
     } finally {
       setTimeoutSpy.mockRestore();
@@ -642,7 +649,13 @@ describe("claudeCliSessionTranscriptHasContent", () => {
       expect(message).toContain("sessionId=ghost-session");
       expect(message).toContain(`grace ${GRACE_MS}ms`);
       expect(message).toContain("fileExists=false");
-      expect(message).toContain(encodeWorkspaceDirName(workspaceDir));
+      expect(message).toContain(
+        `expectedPath=${claudeCliSessionTranscriptPath({
+          sessionId: "ghost-session",
+          workspaceDir,
+          homeDir: tmpDir,
+        })}`,
+      );
     } finally {
       setTimeoutSpy.mockRestore();
       warnSpy.mockRestore();

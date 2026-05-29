@@ -750,8 +750,6 @@ export function parseCliJsonl(
   const texts: string[] = [];
   for (const line of lines) {
     for (const parsed of parseJsonRecordCandidates(line)) {
-      // Last-wins so claude-cli mid-turn session_id rotations land in the captured
-      // sessionId. Matches parseCliJson and createCliJsonlStreamingParser.
       sessionId = pickCliSessionId(parsed, backend) ?? sessionId;
       if (!sessionId && typeof parsed.thread_id === "string") {
         sessionId = parsed.thread_id.trim();
