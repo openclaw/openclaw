@@ -168,6 +168,14 @@ const config = {
       entry: ["src/index.ts!", "src/*.ts!", "src/harness/**/*.ts!"],
       project: ["src/**/*.ts!"],
     },
+    "packages/gateway-client": {
+      entry: ["src/index.ts!"],
+      project: ["src/**/*.ts!"],
+    },
+    "packages/gateway-protocol": {
+      entry: ["src/index.ts!", "src/schema.ts!"],
+      project: ["src/**/*.ts!"],
+    },
     "packages/*": {
       entry: ["index.js!", "scripts/postinstall.js!"],
       project: ["index.js!", "scripts/**/*.js!"],
