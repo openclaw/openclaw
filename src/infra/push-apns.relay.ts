@@ -45,6 +45,7 @@ export type ApnsRelayRequestSender = (params: {
   payload: object;
 }) => Promise<ApnsRelayPushResponse>;
 
+export const DEFAULT_APNS_RELAY_BASE_URL = "https://ios-push-relay.openclaw.ai";
 const DEFAULT_APNS_RELAY_TIMEOUT_MS = 10_000;
 const GATEWAY_DEVICE_ID_HEADER = "x-openclaw-gateway-device-id";
 const GATEWAY_SIGNATURE_HEADER = "x-openclaw-gateway-signature";
@@ -113,17 +114,12 @@ export function resolveApnsRelayConfigFromEnv(
   const configuredRelay = gatewayConfig?.push?.apns?.relay;
   const envBaseUrl = normalizeNonEmptyString(env.OPENCLAW_APNS_RELAY_BASE_URL);
   const configBaseUrl = normalizeNonEmptyString(configuredRelay?.baseUrl);
-  const baseUrl = envBaseUrl ?? configBaseUrl;
+  const baseUrl = envBaseUrl ?? configBaseUrl ?? DEFAULT_APNS_RELAY_BASE_URL;
   const baseUrlSource = envBaseUrl
     ? "OPENCLAW_APNS_RELAY_BASE_URL"
-    : "gateway.push.apns.relay.baseUrl";
-  if (!baseUrl) {
-    return {
-      ok: false,
-      error:
-        "APNs relay config missing: set gateway.push.apns.relay.baseUrl or OPENCLAW_APNS_RELAY_BASE_URL",
-    };
-  }
+    : configBaseUrl
+      ? "gateway.push.apns.relay.baseUrl"
+      : "default APNs relay base URL";
 
   try {
     const parsed = new URL(baseUrl);
