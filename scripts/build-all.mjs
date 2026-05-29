@@ -9,7 +9,7 @@ import { pathToFileURL } from "node:url";
 import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 
 const nodeBin = process.execPath;
-const WINDOWS_BUILD_MAX_OLD_SPACE_MB = 4096;
+const WINDOWS_BUILD_MAX_OLD_SPACE_MB = 8192;
 const BUILD_CACHE_VERSION = 2;
 const PNPM_STEP_NODE_FALLBACKS = new Map([
   ["plugins:assets:build", ["scripts/bundled-plugin-assets.mjs", "--phase", "build"]],

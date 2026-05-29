@@ -150,6 +150,7 @@ type GoogleMeetGatewayMethod =
 type GoogleMeetGatewayCallResult = { ok: true; payload: unknown } | { ok: false; error: unknown };
 
 const GOOGLE_MEET_GATEWAY_DEFAULT_TIMEOUT_MS = 5000;
+const PLAIN_DECIMAL_NUMBER_RE = /^\d+(?:\.\d+)?$/;
 
 type DoctorOptions = {
   json?: boolean;
@@ -237,7 +238,8 @@ function parseOptionalNumber(value: string | undefined): number | undefined {
   if (!value?.trim()) {
     return undefined;
   }
-  const parsed = Number(value);
+  const trimmed = value.trim();
+  const parsed = PLAIN_DECIMAL_NUMBER_RE.test(trimmed) ? Number(trimmed) : Number.NaN;
   if (!Number.isFinite(parsed)) {
     throw new Error(`Expected a numeric value, received ${value}`);
   }
@@ -263,7 +265,8 @@ function parsePositiveNumber(value: string | undefined, label: string): number |
   if (value === undefined) {
     return undefined;
   }
-  const parsed = Number(value);
+  const trimmed = value.trim();
+  const parsed = PLAIN_DECIMAL_NUMBER_RE.test(trimmed) ? Number(trimmed) : Number.NaN;
   if (!Number.isFinite(parsed) || parsed <= 0) {
     throw new Error(`${label} must be a positive number`);
   }

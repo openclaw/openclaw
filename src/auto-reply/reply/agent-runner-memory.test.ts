@@ -929,6 +929,57 @@ describe("runMemoryFlushIfNeeded", () => {
     },
   );
 
+  it("continues after an unstructured thread-not-found preflight compaction failure", async () => {
+    const sessionFile = path.join(rootDir, "session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify({ message: { role: "user", content: "x".repeat(5_000) } })}\n`,
+      "utf8",
+    );
+    registerMemoryFlushPlanResolverForTest(() => ({
+      softThresholdTokens: 1,
+      forceFlushTranscriptBytes: 1_000_000_000,
+      reserveTokensFloor: 0,
+      prompt: "Pre-compaction memory flush.\nNO_REPLY",
+      systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+      relativePath: "memory/2023-11-14.md",
+    }));
+    compactEmbeddedAgentSessionMock.mockResolvedValueOnce({
+      ok: false,
+      compacted: false,
+      reason: "thread not found: <codex-thread-id>",
+    });
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile,
+      updatedAt: Date.now(),
+      totalTokens: 120,
+      totalTokensFresh: true,
+    };
+    const sessionStore = { "agent:main:telegram:group:redacted": sessionEntry };
+
+    const entry = await runPreflightCompactionIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun({
+        sessionId: "session",
+        sessionFile,
+        sessionKey: "agent:main:telegram:group:redacted",
+      }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100,
+      sessionEntry,
+      sessionStore,
+      sessionKey: "agent:main:telegram:group:redacted",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(entry).toBe(sessionEntry);
+    expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
+    expect(incrementCompactionCountMock).not.toHaveBeenCalled();
+  });
+
   it("still fails preflight compaction for non-binding native harness failures", async () => {
     const sessionFile = path.join(rootDir, "session.jsonl");
     await fs.writeFile(
@@ -1150,6 +1201,7 @@ describe("runMemoryFlushIfNeeded", () => {
       totalTokensFresh: false,
     };
 
+    let directTranscriptStats: unknown[] = [];
     try {
       await runMemoryFlushIfNeeded({
         cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
@@ -1169,13 +1221,13 @@ describe("runMemoryFlushIfNeeded", () => {
         isHeartbeat: false,
         replyOperation: createReplyOperation(),
       });
+      directTranscriptStats = statSpy.mock.calls.filter(
+        ([target]) => String(target) === sessionFile,
+      );
     } finally {
       statSpy.mockRestore();
     }
 
-    const directTranscriptStats = statSpy.mock.calls.filter(
-      ([target]) => String(target) === sessionFile,
-    );
     expect(directTranscriptStats).toEqual([]);
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
   });
@@ -1540,7 +1592,7 @@ describe("runMemoryFlushIfNeeded", () => {
             usage: { input: 40_000, output: 2_000 },
           },
         }),
-      ].join("\n"),
+      ].join("\n") + "\n",
       "utf8",
     );
     registerMemoryFlushPlanResolverForTest(() => ({
@@ -1557,7 +1609,6 @@ describe("runMemoryFlushIfNeeded", () => {
       updatedAt: Date.now(),
       totalTokensFresh: false,
     };
-
     const entry = await runPreflightCompactionIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun: createTestFollowupRun({
@@ -1599,7 +1650,7 @@ describe("runMemoryFlushIfNeeded", () => {
             usage: { input: 40_000, output: 2_000 },
           },
         }),
-      ].join("\n"),
+      ].join("\n") + "\n",
       "utf8",
     );
     registerMemoryFlushPlanResolverForTest(() => ({
@@ -1616,36 +1667,50 @@ describe("runMemoryFlushIfNeeded", () => {
       updatedAt: Date.now(),
       totalTokensFresh: false,
     };
+    const originalStat = fsCore.promises.stat.bind(fsCore.promises);
+    const statSpy = vi
+      .spyOn(fsCore.promises, "stat")
+      .mockImplementation(async (target, options) => originalStat(target, options));
 
-    const entry = await runPreflightCompactionIfNeeded({
-      cfg: {
-        agents: {
-          defaults: {
-            compaction: {
-              memoryFlush: {},
-              truncateAfterCompaction: true,
-              maxActiveTranscriptBytes: "10mb",
+    let entry: SessionEntry | undefined;
+    let directTranscriptStats: unknown[] = [];
+    try {
+      entry = await runPreflightCompactionIfNeeded({
+        cfg: {
+          agents: {
+            defaults: {
+              compaction: {
+                memoryFlush: {},
+                truncateAfterCompaction: true,
+                maxActiveTranscriptBytes: "10mb",
+              },
             },
           },
         },
-      },
-      followupRun: createTestFollowupRun({
-        sessionId: "session",
-        sessionFile,
+        followupRun: createTestFollowupRun({
+          sessionId: "session",
+          sessionFile,
+          sessionKey: "main",
+        }),
+        defaultModel: "anthropic/claude-opus-4-6",
+        agentCfgContextTokens: 100_000,
+        sessionEntry,
+        sessionStore: { main: sessionEntry },
         sessionKey: "main",
-      }),
-      defaultModel: "anthropic/claude-opus-4-6",
-      agentCfgContextTokens: 100_000,
-      sessionEntry,
-      sessionStore: { main: sessionEntry },
-      sessionKey: "main",
-      storePath: path.join(rootDir, "sessions.json"),
-      isHeartbeat: false,
-      replyOperation: createReplyOperation(),
-    });
+        storePath: path.join(rootDir, "sessions.json"),
+        isHeartbeat: false,
+        replyOperation: createReplyOperation(),
+      });
+      directTranscriptStats = statSpy.mock.calls.filter(
+        ([target]) => String(target) === sessionFile,
+      );
+    } finally {
+      statSpy.mockRestore();
+    }
 
     expect(entry).toBe(sessionEntry);
     expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+    expect(directTranscriptStats).toEqual([]);
   });
 
   it("triggers preflight compaction when the active transcript exceeds the configured byte threshold", async () => {

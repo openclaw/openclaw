@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { writeExecutable } from "./bundle-mcp-shared.test-harness.js";
 import { createBundleMcpJsonSchemaValidator } from "./agent-bundle-mcp-runtime.js";
 import { cleanupBundleMcpHarness } from "./agent-bundle-mcp-test-harness.js";
 import {
@@ -13,6 +12,7 @@ import {
   retireSessionMcpRuntimeForSessionKey,
 } from "./agent-bundle-mcp-tools.js";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
+import { writeExecutable } from "./bundle-mcp-shared.test-harness.js";
 
 vi.mock("./embedded-agent-mcp.js", () => ({
   loadEmbeddedAgentMcpConfig: (params: {
@@ -168,6 +168,7 @@ function makeRuntime(
     markUsed: () => {
       lastUsedAt = Date.now();
     },
+    peekCatalog: () => null,
     getCatalog: async () => ({
       version: 1,
       generatedAt: 0,
@@ -722,6 +723,46 @@ describe("session MCP runtime", () => {
 
     expect(disposed).toEqual(["session-a", "session-a"]);
     expect(manager.listSessionIds()).not.toContain("session-a");
+  });
+
+  it("peeks existing runtimes and populated catalogs without creating new runtimes", async () => {
+    let catalogReady = false;
+    const createRuntime: RuntimeFactory = (params) => {
+      const base = makeRuntime([{ toolName: "bundle_probe", description: "Bundle MCP probe" }]);
+      let cachedCatalog: ReturnType<SessionMcpRuntime["peekCatalog"]> = null;
+      return {
+        ...base,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: params.configFingerprint ?? "fingerprint",
+        peekCatalog: () => cachedCatalog,
+        getCatalog: async () => {
+          const catalog = await base.getCatalog();
+          cachedCatalog = catalog;
+          catalogReady = true;
+          return catalog;
+        },
+      };
+    };
+    const manager = testing.createSessionMcpRuntimeManager({ createRuntime });
+
+    expect(manager.peekSession({ sessionId: "session-peek" })).toBeUndefined();
+
+    const runtime = await manager.getOrCreate({
+      sessionId: "session-peek",
+      sessionKey: "agent:test:session-peek",
+      workspaceDir: "/workspace",
+    });
+    expect(manager.peekSession({ sessionId: "session-peek" })).toBe(runtime);
+    expect(manager.peekSession({ sessionKey: "agent:test:session-peek" })).toBe(runtime);
+    expect(runtime.peekCatalog()).toBeNull();
+    expect(catalogReady).toBe(false);
+
+    await runtime.getCatalog();
+
+    expect(catalogReady).toBe(true);
+    expect(runtime.peekCatalog()?.tools.map((tool) => tool.toolName)).toEqual(["bundle_probe"]);
   });
 
   it("recreates the session runtime when MCP config changes", async () => {

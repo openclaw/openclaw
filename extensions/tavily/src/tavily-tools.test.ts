@@ -109,6 +109,33 @@ describe("tavily tools", () => {
     });
   });
 
+  it("normalizes generic Tavily search count before dispatch", async () => {
+    const provider = createTavilyWebSearchProvider();
+    const tool = provider.createTool({
+      config: { test: true },
+    } as never);
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    await tool.execute({
+      query: "weather sf",
+      count: "7",
+    });
+
+    expect(runTavilySearch).toHaveBeenCalledWith({
+      cfg: { test: true },
+      query: "weather sf",
+      maxResults: 7,
+    });
+    await expect(
+      tool.execute({
+        query: "weather sf",
+        count: "7.5",
+      }),
+    ).rejects.toThrow("count must be an integer from 1 to 20");
+  });
+
   it("normalizes optional parameters before invoking Tavily", async () => {
     runTavilySearch.mockImplementationOnce(async (params: Record<string, unknown>) => ({
       ok: true,
@@ -294,6 +321,41 @@ describe("tavily tools", () => {
       }),
     ).rejects.toThrow("tavily_extract requires query when chunks_per_source is set.");
 
+    expect(runTavilyExtract).not.toHaveBeenCalled();
+  });
+
+  it("rejects fractional and out-of-range integer options before Tavily calls", async () => {
+    const searchTool = createTavilySearchTool(fakeApi());
+    await expect(
+      searchTool.execute("search-call", {
+        query: "openclaw",
+        max_results: 5.5,
+      }),
+    ).rejects.toThrow("max_results must be an integer from 1 to 20.");
+    await expect(
+      searchTool.execute("search-call", {
+        query: "openclaw",
+        max_results: 21,
+      }),
+    ).rejects.toThrow("max_results must be an integer from 1 to 20.");
+
+    const extractTool = createTavilyExtractTool(fakeApi());
+    await expect(
+      extractTool.execute("extract-call", {
+        urls: ["https://example.com"],
+        query: "pricing",
+        chunks_per_source: 2.5,
+      }),
+    ).rejects.toThrow("chunks_per_source must be an integer from 1 to 5.");
+    await expect(
+      extractTool.execute("extract-call", {
+        urls: ["https://example.com"],
+        query: "pricing",
+        chunks_per_source: 6,
+      }),
+    ).rejects.toThrow("chunks_per_source must be an integer from 1 to 5.");
+
+    expect(runTavilySearch).not.toHaveBeenCalled();
     expect(runTavilyExtract).not.toHaveBeenCalled();
   });
 

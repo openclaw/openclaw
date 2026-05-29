@@ -6812,7 +6812,6 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       To: "telegram:-1001234567890",
       AccountId: "default",
       MessageThreadId: 11,
-      SessionKey: "agent:main:telegram:group:-1001234567890:topic:11",
       ChatType: "group",
       GroupSubject: "Dev",
       Body: "observed message",
@@ -6834,17 +6833,18 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       sourceReplyDeliveryMode: "message_tool_only",
     });
     expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-message-tool-only");
-    expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledWith(
-      "openclaw-codex-app-server",
-      expect.objectContaining({
-        channel: "telegram",
-        content: "observed message",
-        threadId: 11,
-      }),
-      expect.objectContaining({
-        pluginBinding: expect.objectContaining({ bindingId: "binding-message-tool-only" }),
-      }),
+    const claimCall = firstMockCall(
+      hookMocks.runner.runInboundClaimForPluginOutcome,
+      "plugin inbound claim",
     );
+    expect(claimCall[0]).toBe("openclaw-codex-app-server");
+    expect(claimCall[1]).toMatchObject({
+      channel: "telegram",
+      content: "observed message",
+      threadId: 11,
+    });
+    const claimContext = claimCall[2] as { pluginBinding?: { bindingId?: string } };
+    expect(claimContext.pluginBinding).toMatchObject({ bindingId: "binding-message-tool-only" });
     expect(replyResolver).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
@@ -6893,7 +6893,6 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       To: "telegram:-1001234567890",
       AccountId: "default",
       MessageThreadId: 11,
-      SessionKey: "agent:main:telegram:group:-1001234567890:topic:11",
       ChatType: "group",
       GroupSubject: "Dev",
       Body: "observed message",
@@ -6915,17 +6914,20 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       counts: { tool: 0, block: 0, final: 0 },
       sourceReplyDeliveryMode: "message_tool_only",
     });
-    expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledWith(
-      "openclaw-codex-app-server",
-      expect.objectContaining({
-        channel: "telegram",
-        content: "observed message",
-        threadId: 11,
-      }),
-      expect.objectContaining({
-        pluginBinding: expect.objectContaining({ bindingId: "binding-message-tool-fallback" }),
-      }),
+    const claimCall = firstMockCall(
+      hookMocks.runner.runInboundClaimForPluginOutcome,
+      "plugin inbound claim",
     );
+    expect(claimCall[0]).toBe("openclaw-codex-app-server");
+    expect(claimCall[1]).toMatchObject({
+      channel: "telegram",
+      content: "observed message",
+      threadId: 11,
+    });
+    const claimContext = claimCall[2] as { pluginBinding?: { bindingId?: string } };
+    expect(claimContext.pluginBinding).toMatchObject({
+      bindingId: "binding-message-tool-fallback",
+    });
     expect(replyResolver).not.toHaveBeenCalled();
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
@@ -6976,7 +6978,6 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       To: "telegram:-1001234567890",
       AccountId: "default",
       MessageThreadId: 11,
-      SessionKey: "agent:main:telegram:group:-1001234567890:topic:11",
       ChatType: "group",
       GroupSubject: "Dev",
       Body: "/reset@openclaw",
@@ -7045,7 +7046,6 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       To: "telegram:-1001234567890",
       AccountId: "default",
       MessageThreadId: 11,
-      SessionKey: "agent:main:telegram:group:-1001234567890:topic:11",
       ChatType: "group",
       GroupSubject: "Dev",
       Body: "/status",
@@ -7063,16 +7063,17 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       replyResolver,
     });
 
-    expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledWith(
-      "openclaw-codex-app-server",
-      expect.objectContaining({
-        channel: "telegram",
-        content: "/status",
-      }),
-      expect.objectContaining({
-        pluginBinding: expect.objectContaining({ bindingId: "binding-native-unauthorized" }),
-      }),
+    const claimCall = firstMockCall(
+      hookMocks.runner.runInboundClaimForPluginOutcome,
+      "plugin inbound claim",
     );
+    expect(claimCall[0]).toBe("openclaw-codex-app-server");
+    expect(claimCall[1]).toMatchObject({
+      channel: "telegram",
+      content: "/status",
+    });
+    const claimContext = claimCall[2] as { pluginBinding?: { bindingId?: string } };
+    expect(claimContext.pluginBinding).toMatchObject({ bindingId: "binding-native-unauthorized" });
     expect(replyResolver).not.toHaveBeenCalled();
   });
 
@@ -7121,7 +7122,6 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       To: "telegram:-1001234567890",
       AccountId: "default",
       MessageThreadId: 11,
-      SessionKey: "agent:main:telegram:group:-1001234567890:topic:11",
       ChatType: "group",
       GroupSubject: "Dev",
       Body: "through this",
@@ -7144,16 +7144,19 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       replyResolver,
     });
 
-    expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledWith(
-      "openclaw-codex-app-server",
-      expect.objectContaining({
-        channel: "telegram",
-        content: "/think high through this",
-      }),
-      expect.objectContaining({
-        pluginBinding: expect.objectContaining({ bindingId: "binding-structured-normal-turn" }),
-      }),
+    const claimCall = firstMockCall(
+      hookMocks.runner.runInboundClaimForPluginOutcome,
+      "plugin inbound claim",
     );
+    expect(claimCall[0]).toBe("openclaw-codex-app-server");
+    expect(claimCall[1]).toMatchObject({
+      channel: "telegram",
+      content: "/think high through this",
+    });
+    const claimContext = claimCall[2] as { pluginBinding?: { bindingId?: string } };
+    expect(claimContext.pluginBinding).toMatchObject({
+      bindingId: "binding-structured-normal-turn",
+    });
     expect(replyResolver).not.toHaveBeenCalled();
   });
 

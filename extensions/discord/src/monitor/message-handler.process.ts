@@ -955,7 +955,9 @@ export async function processDiscordMessage(
         onReasoningStream: async (payload) => {
           await statusReactions.setThinking();
           const formattedText = payload?.text ? formatReasoningMessage(payload.text) : undefined;
-          await draftPreview.pushReasoningProgress(formattedText);
+          await draftPreview.pushReasoningProgress(formattedText, {
+            snapshot: payload?.isReasoningSnapshot === true,
+          });
         },
         onToolStart: async (payload) => {
           if (isProcessAborted(abortSignal)) {

@@ -162,4 +162,37 @@ describe("bench-cli-startup", () => {
       "--warmup must be an integer >= 0",
     );
   });
+
+  it("writes a config fixture for config get benchmarks", () => {
+    expect(
+      testing.buildConfigFixture({
+        id: "configGetGatewayPort",
+        name: "config get gateway.port",
+        args: ["config", "get", "gateway.port"],
+        presets: ["real"],
+      }),
+    ).toEqual({
+      gateway: {
+        auth: { mode: "none" },
+        bind: "loopback",
+        mode: "local",
+        port: 32123,
+      },
+    });
+    expect(
+      testing.buildConfigFixture({
+        id: "gatewayHealthJson",
+        name: "gateway health --json",
+        args: ["gateway", "health", "--json"],
+        presets: ["real"],
+      }),
+    ).toEqual({
+      gateway: {
+        auth: { mode: "none" },
+        bind: "loopback",
+        mode: "local",
+        port: 32123,
+      },
+    });
+  });
 });
