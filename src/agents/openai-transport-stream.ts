@@ -83,12 +83,15 @@ const OPENAI_CODEX_RESPONSES_EMPTY_INPUT_TEXT = " ";
 const OPENAI_CODEX_RESPONSES_DEFAULT_INSTRUCTIONS = "Follow the user request.";
 const GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP = "skip_thought_signature_validator";
 const AZURE_RESPONSES_FIRST_EVENT_TIMEOUT_MS = 30_000;
-const DEEPSEEK_DSML_TOOL_CALLS_END = /<[/]?[｜|]DSML[｜|]tool_calls>/giu;
+const DEEPSEEK_DSML_OPEN_RE = /<[｜|]DSML[｜|]tool_calls>/iu;
+const DEEPSEEK_DSML_CLOSE_RE = /<\/[｜|]DSML[｜|]tool_calls>/iu;
+const DEEPSEEK_DSML_END_RE = /<\/[｜|]DSML[｜|]tool_calls>/giu;
 const DEEPSEEK_DSML_INVOKE_RE =
   /<[｜|]DSML[｜|]invoke\s+name="([^"]+)"\s*>\s*([\s\S]*?)\s*<\/[｜|]DSML[｜|]invoke>/giu;
 const DEEPSEEK_DSML_PARAMETER_RE =
   /<[｜|]DSML[｜|]parameter\s+name="([^"]+)"(?:\s+[^>]*)?>([\s\S]*?)<\/[｜|]DSML[｜|]parameter>/giu;
 const DEEPSEEK_DSML_JSON_FENCE_RE = /^```(?:json)?\s*([\s\S]*?)\s*```$/iu;
+const MAX_DEEPSEEK_DSML_BUFFER_BYTES = 64_000;
 const MODEL_STREAM_COOPERATIVE_YIELD_INTERVAL_MS = 12;
 const MODEL_STREAM_COOPERATIVE_YIELD_MAX_EVENTS = 64;
 const RESPONSE_FAILED_NO_DETAILS_MESSAGE = "Unknown error (no error details in response)";
@@ -2489,7 +2492,7 @@ async function processOpenAICompletionsStream(
   const deepSeekTextFilter = shouldFilterDeepSeekDsmlText(compat)
     ? createDeepSeekTextFilter()
     : null;
-  let pendingDeepSeekDsmlText = "";
+  let deepSeekDsmlBuffer = "";
   let deepSeekDsmlSyntheticCallCount = 0;
   let hasSeenNativeToolCalls = false;
   type ToolCallBlock = {
@@ -2622,7 +2625,16 @@ async function processOpenAICompletionsStream(
   };
   const appendFilteredVisibleTextDelta = (text: string) => {
     if (deepSeekTextFilter) {
-      pendingDeepSeekDsmlText += text;
+      if (!hasSeenNativeToolCalls) {
+        deepSeekDsmlBuffer += text;
+        if (measureUtf8Bytes(deepSeekDsmlBuffer) > MAX_DEEPSEEK_DSML_BUFFER_BYTES) {
+          const openMatch = deepSeekDsmlBuffer.match(DEEPSEEK_DSML_OPEN_RE);
+          deepSeekDsmlBuffer = openMatch ? deepSeekDsmlBuffer.slice(openMatch.index ?? 0) : "";
+          if (measureUtf8Bytes(deepSeekDsmlBuffer) > MAX_DEEPSEEK_DSML_BUFFER_BYTES) {
+            deepSeekDsmlBuffer = "";
+          }
+        }
+      }
       const parts = deepSeekTextFilter.push(text);
       for (const part of parts) {
         appendVisibleTextDelta(part);
@@ -2660,48 +2672,62 @@ async function processOpenAICompletionsStream(
     return true;
   };
   const tryFlushDeepSeekDsmlToolText = (final: boolean) => {
-    if (hasSeenNativeToolCalls) {
+    if (hasSeenNativeToolCalls || !deepSeekDsmlBuffer) {
       return false;
     }
-    if (!pendingDeepSeekDsmlText) {
-      return false;
-    }
-    const closeMatches = [...pendingDeepSeekDsmlText.matchAll(DEEPSEEK_DSML_TOOL_CALLS_END)];
-    const hasClosingTag = closeMatches.some((match) => match[0].startsWith("</"));
-    if (!final && !hasClosingTag) {
-      return false;
-    }
-    const source = pendingDeepSeekDsmlText;
-    pendingDeepSeekDsmlText = "";
+
     let matched = false;
-    for (const invokeMatch of source.matchAll(DEEPSEEK_DSML_INVOKE_RE)) {
-      const name = invokeMatch[1]?.trim();
-      const body = invokeMatch[2] ?? "";
-      if (!name) {
-        continue;
+    while (deepSeekDsmlBuffer) {
+      const openIndex = deepSeekDsmlBuffer.search(DEEPSEEK_DSML_OPEN_RE);
+      if (openIndex === -1) {
+        deepSeekDsmlBuffer = "";
+        return matched;
       }
-      let argsText = "";
-      const params = [...body.matchAll(DEEPSEEK_DSML_PARAMETER_RE)];
-      if (params.length > 0) {
-        const args: Record<string, unknown> = {};
-        for (const paramMatch of params) {
-          const paramName = paramMatch[1]?.trim();
-          const rawValue = (paramMatch[2] ?? "").trim();
-          if (!paramName) {
-            continue;
-          }
-          args[paramName] = rawValue;
+      if (openIndex > 0) {
+        deepSeekDsmlBuffer = deepSeekDsmlBuffer.slice(openIndex);
+      }
+      const closeMatch = DEEPSEEK_DSML_CLOSE_RE.exec(deepSeekDsmlBuffer);
+      if (!closeMatch || closeMatch.index === undefined) {
+        if (final || !deepSeekDsmlBuffer.match(DEEPSEEK_DSML_END_RE)) {
+          deepSeekDsmlBuffer = final ? "" : deepSeekDsmlBuffer;
         }
-        argsText = JSON.stringify(args);
-      } else {
-        const trimmedBody = body.trim();
-        const fenceMatch = trimmedBody.match(DEEPSEEK_DSML_JSON_FENCE_RE);
-        argsText = (fenceMatch?.[1] ?? trimmedBody).trim();
+        return matched;
       }
-      if (emitDeepSeekDsmlToolCall(name, argsText)) {
-        matched = true;
+
+      const endIndex = closeMatch.index + closeMatch[0].length;
+      const source = deepSeekDsmlBuffer.slice(0, endIndex);
+      deepSeekDsmlBuffer = deepSeekDsmlBuffer.slice(endIndex);
+
+      for (const invokeMatch of source.matchAll(DEEPSEEK_DSML_INVOKE_RE)) {
+        const name = invokeMatch[1]?.trim();
+        const body = invokeMatch[2] ?? "";
+        if (!name) {
+          continue;
+        }
+        let argsText = "";
+        const params = [...body.matchAll(DEEPSEEK_DSML_PARAMETER_RE)];
+        if (params.length > 0) {
+          const args: Record<string, unknown> = {};
+          for (const paramMatch of params) {
+            const paramName = paramMatch[1]?.trim();
+            const rawValue = (paramMatch[2] ?? "").trim();
+            if (!paramName) {
+              continue;
+            }
+            args[paramName] = rawValue;
+          }
+          argsText = JSON.stringify(args);
+        } else {
+          const trimmedBody = body.trim();
+          const fenceMatch = trimmedBody.match(DEEPSEEK_DSML_JSON_FENCE_RE);
+          argsText = (fenceMatch?.[1] ?? trimmedBody).trim();
+        }
+        if (emitDeepSeekDsmlToolCall(name, argsText)) {
+          matched = true;
+        }
       }
     }
+
     if (matched) {
       output.stopReason = "toolUse";
     }
@@ -2714,7 +2740,11 @@ async function processOpenAICompletionsStream(
         appendVisibleTextDelta(part);
       }
     }
-    tryFlushDeepSeekDsmlToolText(true);
+    const matched = tryFlushDeepSeekDsmlToolText(true);
+    if (matched) {
+      output.stopReason = "toolUse";
+    }
+    deepSeekDsmlBuffer = "";
   };
   const cooperativeScheduler = createModelStreamCooperativeScheduler(options?.signal);
   for await (const rawChunk of responseStream as AsyncIterable<unknown>) {
@@ -2857,6 +2887,9 @@ async function processOpenAICompletionsStream(
   const hasToolCalls = output.content.some((block) => block.type === "toolCall");
   if (output.stopReason === "toolUse" && !hasToolCalls) {
     output.stopReason = "stop";
+  }
+  if (output.stopReason === "stop" && hasToolCalls && deepSeekDsmlSyntheticCallCount > 0) {
+    output.stopReason = "toolUse";
   }
 }
 

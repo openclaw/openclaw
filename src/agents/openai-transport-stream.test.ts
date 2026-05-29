@@ -1903,6 +1903,63 @@ describe("openai transport stream", () => {
     expect(output.stopReason).toBe("toolUse");
   });
 
+  it("does not accumulate unbounded non-DSML visible text while waiting for a tool block", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+    const largeVisiblePrefix = "x".repeat(80_000);
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-deepseek-large-prefix",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: { content: largeVisiblePrefix },
+              logprobs: null,
+              finish_reason: null,
+            },
+          ],
+        },
+        {
+          id: "chatcmpl-deepseek-large-prefix",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content:
+                  '<｜DSML｜tool_calls>\n<｜DSML｜invoke name="session_status">\n<｜DSML｜parameter name="sessionKey" string="true">current</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜tool_calls>',
+              },
+              logprobs: null,
+              finish_reason: "stop",
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push() {} },
+    );
+
+    expect(output.content).toEqual([
+      { type: "text", text: largeVisiblePrefix },
+      {
+        type: "toolCall",
+        id: "deepseek_dsml_1",
+        name: "session_status",
+        arguments: { sessionKey: "current" },
+        partialArgs: '{"sessionKey":"current"}',
+      },
+    ]);
+    expect(output.stopReason).toBe("toolUse");
+  });
+
   it("preserves DeepSeek visible content before same-chunk native tool calls", async () => {
     const model = createDeepSeekCompletionsModel();
     const output = createAssistantOutput(model);
