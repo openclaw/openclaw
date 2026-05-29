@@ -1265,7 +1265,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
   });
 
-  it("does not directly deliver failed subagent placeholder output", async () => {
+  it("delivers failure notice for failed subagent instead of staying silent", async () => {
     const callGateway = createGatewayMock({
       result: {
         payloads: [],
@@ -1292,13 +1292,16 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       ],
     });
 
+    // The user should receive a failure notice instead of silence.
     expectRecordFields(result, {
-      delivered: false,
+      delivered: true,
       path: "direct",
-      reason: "visible_reply_missing",
-      error: "completion agent did not produce a visible reply",
     });
-    expect(sendMessage).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: expect.stringContaining("direct completion smoke"),
+      }),
+    );
   });
 
   it("directly delivers unprefixed direct targets recognized by the channel grammar", async () => {
@@ -4342,11 +4345,15 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
 });
 
 describe("deliverSubagentAnnouncement delivery context preservation (#67502)", () => {
-  it("recovers delivery channel from requester session entry when completion origin has internal channel", async () => {
+  it("recovers delivery channel when completion origin has internal channel stripped", async () => {
+    registerDirectTargetTestChannel("telegram");
     const callGateway = createGatewayMock();
-    // completionDirectOrigin has an internal channel that will be stripped,
-    // and directOrigin/requesterSessionOrigin also lack a deliverable channel.
-    // The fix should recover the channel from the requester session entry.
+    // completionDirectOrigin carries an internal (webchat) channel that will
+    // be stripped by stripNonDeliverableChannelForCompletionOrigin. The
+    // directOrigin has no channel either. The requesterSessionOrigin carries
+    // the real Telegram channel as fallback — after stripping webchat from
+    // the completion origin, the merge with requesterSessionOrigin should
+    // recover the external channel for delivery.
     testing.setDepsForTest({
       callGateway,
       getRequesterSessionActivity: () => ({
@@ -4363,15 +4370,20 @@ describe("deliverSubagentAnnouncement delivery context preservation (#67502)", (
       triggerMessage: "child done",
       steerMessage: "child done",
       requesterOrigin: { channel: "telegram", to: "8617738177", accountId: "default" },
+      // requesterSessionOrigin provides the external channel as fallback.
       requesterSessionOrigin: { channel: "telegram", to: "8617738177", accountId: "default" },
-      completionDirectOrigin: { channel: "telegram", to: "8617738177", accountId: "default" },
-      directOrigin: { channel: "telegram", to: "8617738177", accountId: "default" },
+      // completionDirectOrigin has an internal channel that will be stripped.
+      completionDirectOrigin: { channel: "webchat", to: "8617738177", accountId: "default" },
+      // directOrigin has no channel — simulates the nested ACP case where
+      // the spawning context did not propagate the external channel.
+      directOrigin: { to: "8617738177", accountId: "default" },
       requesterIsSubagent: false,
       expectsCompletionMessage: true,
       directIdempotencyKey: "announce-context-recovery",
     });
 
-    // The delivery should succeed with the telegram channel preserved
+    // The delivery should succeed with the telegram channel recovered from
+    // requesterSessionOrigin after the internal webchat channel was stripped.
     expectGatewayAgentParams(callGateway, {
       deliver: true,
       channel: "telegram",
@@ -4382,7 +4394,7 @@ describe("deliverSubagentAnnouncement delivery context preservation (#67502)", (
 
   it("preserves channel through nested ACP run when wake fails and falls back to direct", async () => {
     const callGateway = createGatewayMock();
-    const queueEmbeddedPiMessageWithOutcome = createQueueOutcomeMock(false);
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(false);
     testing.setDepsForTest({
       callGateway,
       getRequesterSessionActivity: () => ({
@@ -4391,7 +4403,7 @@ describe("deliverSubagentAnnouncement delivery context preservation (#67502)", (
       }),
       getRuntimeConfig: () => ({}) as never,
       sendMessage: runtimeSendMessage,
-      queueEmbeddedPiMessageWithOutcome,
+      queueEmbeddedAgentMessageWithOutcome,
     });
 
     const result = await deliverSubagentAnnouncement({
@@ -4409,7 +4421,7 @@ describe("deliverSubagentAnnouncement delivery context preservation (#67502)", (
     });
 
     // Wake failed, should fall back to direct with channel preserved
-    expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenCalled();
+    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalled();
     expectGatewayAgentParams(callGateway, {
       deliver: true,
       channel: "telegram",

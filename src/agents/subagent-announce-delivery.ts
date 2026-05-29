@@ -879,6 +879,24 @@ function resolveTextCompletionDirectFallback(events: readonly AgentInternalEvent
   return undefined;
 }
 
+function resolveFailedCompletionFallbackText(
+  events: readonly AgentInternalEvent[] | undefined,
+): string | undefined {
+  for (let index = (events?.length ?? 0) - 1; index >= 0; index -= 1) {
+    const event = events?.[index];
+    if (event?.type !== "task_completion") {
+      continue;
+    }
+    if (event.status === "ok") {
+      continue;
+    }
+    const label = event.taskLabel ?? "task";
+    const status = event.statusLabel ?? event.status ?? "unknown error";
+    return `⚠️ Subagent "${label}" ${status}`;
+  }
+  return undefined;
+}
+
 function hasFailedSubagentNoOutputCompletion(events: readonly AgentInternalEvent[] | undefined) {
   return (
     events?.some(
@@ -1386,6 +1404,31 @@ async function sendSubagentAnnounceDirectly(params: {
           path: "none",
         };
       }
+      // Log redacted delivery state for cron subagent diagnostics. (#67502)
+      defaultRuntime.log(
+        `[warn] Cron subagent completion delivery fallback: hasDeliveryTarget=${deliveryTarget.deliver} hasEffectiveChannel=${Boolean(effectiveDirectOrigin?.channel)} hasSessionChannel=${Boolean(requesterSessionOrigin?.channel)} agentMediated=${agentMediatedCompletion}`,
+      );
+      // When the cron runner is inactive and the delivery target has no
+      // external channel, attempt direct text delivery as a last resort
+      // using whatever delivery context is available. (#67502)
+      const cronFallbackTarget = deliveryTarget.deliver
+        ? deliveryTarget
+        : resolveExternalBestEffortDeliveryTarget({
+            channel: effectiveDirectOrigin?.channel ?? requesterSessionOrigin?.channel,
+            to: effectiveDirectOrigin?.to ?? requesterSessionOrigin?.to,
+            accountId: effectiveDirectOrigin?.accountId ?? requesterSessionOrigin?.accountId,
+            threadId: effectiveDirectOrigin?.threadId ?? requesterSessionOrigin?.threadId,
+          });
+      const cronTextFallback = await deliverTextCompletionDirect({
+        cfg,
+        requesterSessionKey: canonicalRequesterSessionKey,
+        directIdempotencyKey: params.directIdempotencyKey ?? `cron-fallback-${Date.now()}`,
+        deliveryTarget: cronFallbackTarget,
+        internalEvents: params.internalEvents,
+      });
+      if (cronTextFallback) {
+        return cronTextFallback;
+      }
     }
     if (params.signal?.aborted) {
       return {
@@ -1559,6 +1602,34 @@ async function sendSubagentAnnounceDirectly(params: {
         return textDelivery;
       }
       if (hasFailedSubagentNoOutputCompletion(params.internalEvents)) {
+        // When the subagent failed without producing output, deliver a
+        // human-readable failure notice instead of staying silent. The user
+        // should know the task was attempted but failed. (#67502)
+        const failureText = resolveFailedCompletionFallbackText(params.internalEvents);
+        if (failureText && deliveryTarget.deliver && deliveryTarget.channel && deliveryTarget.to) {
+          const agentId = resolveAgentIdFromSessionKey(canonicalRequesterSessionKey);
+          try {
+            await subagentAnnounceDeliveryDeps.sendMessage({
+              cfg,
+              channel: deliveryTarget.channel,
+              to: deliveryTarget.to,
+              accountId: deliveryTarget.accountId,
+              threadId: deliveryTarget.threadId,
+              requesterSessionKey: canonicalRequesterSessionKey,
+              agentId,
+              content: failureText,
+              idempotencyKey: `${params.directIdempotencyKey}:failure-notice`,
+              mirror: {
+                sessionKey: canonicalRequesterSessionKey,
+                agentId,
+                idempotencyKey: `${params.directIdempotencyKey}:failure-notice`,
+              },
+            });
+            return { delivered: true, path: "direct" };
+          } catch {
+            // Best-effort: if sending fails, fall through to the original error.
+          }
+        }
         return {
           delivered: false,
           path: "direct",
@@ -1581,6 +1652,7 @@ async function sendSubagentAnnounceDirectly(params: {
           error: "completion agent did not produce a visible reply",
         };
       }
+      // DM-target subagent completions: narrow check from main (#88182)
       if (subagentDirectMessageCompletionRequiresMessageTool) {
         const textDelivery = await deliverTextCompletionDirect({
           cfg,
@@ -1591,6 +1663,53 @@ async function sendSubagentAnnounceDirectly(params: {
         });
         if (textDelivery) {
           return textDelivery;
+        }
+      }
+      // Broader subagent completion fallback: covers non-DM channel targets
+      // that subagentDirectMessageCompletionRequiresMessageTool misses. (#67502)
+      const textFallback = isSubagentCompletion
+        ? await deliverTextCompletionDirect({
+            cfg,
+            requesterSessionKey: canonicalRequesterSessionKey,
+            directIdempotencyKey: params.directIdempotencyKey,
+            deliveryTarget,
+            internalEvents: params.internalEvents,
+          })
+        : undefined;
+      if (textFallback) {
+        const deliveryChannel =
+          effectiveDirectOrigin?.channel ?? sessionOnlyOriginChannel ?? "unknown";
+        defaultRuntime.log(
+          `[warn] Subagent completion delivered via direct text fallback (message-tool-only policy); channel=${deliveryChannel}`,
+        );
+        return textFallback;
+      }
+      // Failure notice for subagent completions that produced no output.
+      const failedFallback = isSubagentCompletion
+        ? resolveFailedCompletionFallbackText(params.internalEvents)
+        : undefined;
+      if (failedFallback && deliveryTarget.deliver && deliveryTarget.channel && deliveryTarget.to) {
+        const agentId = resolveAgentIdFromSessionKey(canonicalRequesterSessionKey);
+        try {
+          await subagentAnnounceDeliveryDeps.sendMessage({
+            cfg,
+            channel: deliveryTarget.channel,
+            to: deliveryTarget.to,
+            accountId: deliveryTarget.accountId,
+            threadId: deliveryTarget.threadId,
+            requesterSessionKey: canonicalRequesterSessionKey,
+            agentId,
+            content: failedFallback,
+            idempotencyKey: `${params.directIdempotencyKey}:failure-notice`,
+            mirror: {
+              sessionKey: canonicalRequesterSessionKey,
+              agentId,
+              idempotencyKey: `${params.directIdempotencyKey}:failure-notice`,
+            },
+          });
+          return { delivered: true, path: "direct" };
+        } catch {
+          // Best-effort: fall through to the original error.
         }
       }
       const deliveryChannel =

@@ -491,14 +491,24 @@ export async function runSubagentAnnounceFlow(params: {
         if (!parentSessionAlive) {
           const fallback = resolveRequesterForChildSession(targetRequesterSessionKey);
           if (!fallback?.requesterSessionKey) {
-            shouldDeleteChildSession = false;
-            return false;
+            // For cron jobs, the requester session is ephemeral and may be
+            // pruned before the subagent completes. Instead of giving up,
+            // continue the announce flow as a non-subagent request so that
+            // deliverSubagentAnnouncement can attempt direct delivery to the
+            // cron's configured delivery target (e.g. Telegram). (#67502)
+            if (isCronSessionKey(targetRequesterSessionKey)) {
+              requesterIsSubagent = false;
+            } else {
+              shouldDeleteChildSession = false;
+              return false;
+            }
+          } else {
+            targetRequesterSessionKey = fallback.requesterSessionKey;
+            targetRequesterOrigin =
+              normalizeDeliveryContext(fallback.requesterOrigin) ?? targetRequesterOrigin;
+            requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey);
+            requesterIsSubagent = requesterIsInternalSession();
           }
-          targetRequesterSessionKey = fallback.requesterSessionKey;
-          targetRequesterOrigin =
-            normalizeDeliveryContext(fallback.requesterOrigin) ?? targetRequesterOrigin;
-          requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey);
-          requesterIsSubagent = requesterIsInternalSession();
         }
       }
     }
