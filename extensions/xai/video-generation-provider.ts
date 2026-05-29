@@ -13,7 +13,8 @@ import {
   waitProviderOperationPollInterval,
   type ProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   GeneratedVideoAsset,
   VideoGenerationProvider,
@@ -22,11 +23,18 @@ import type {
 
 const DEFAULT_XAI_VIDEO_BASE_URL = "https://api.x.ai/v1";
 const DEFAULT_XAI_VIDEO_MODEL = "grok-imagine-video";
-const DEFAULT_TIMEOUT_MS = 120_000;
+const DEFAULT_TIMEOUT_MS = 600_000;
 const POLL_INTERVAL_MS = 5_000;
 const MAX_POLL_ATTEMPTS = 120;
 const XAI_VIDEO_ASPECT_RATIOS = new Set(["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"]);
 const XAI_VIDEO_MALFORMED_RESPONSE = "xAI video generation response malformed";
+// xAI documents these as the only meaningful values; everything else (queued,
+// processing, submitted, pending, in_progress, ...) means "keep polling".
+const XAI_VIDEO_TERMINAL_FAILURE_STATUSES = new Set(["failed", "error", "expired", "cancelled"]);
+const XAI_VIDEO_DEFAULT_DURATION_SECONDS = 8;
+const XAI_VIDEO_DEFAULT_ASPECT_RATIO = "16:9";
+const XAI_VIDEO_DEFAULT_RESOLUTION = "720p";
+const DEFAULT_GENERATED_VIDEO_MAX_BYTES = 16 * 1024 * 1024;
 
 type XaiVideoCreateResponse = {
   request_id?: string;
@@ -38,7 +46,9 @@ type XaiVideoCreateResponse = {
 
 type XaiVideoStatusResponse = {
   request_id?: string;
-  status?: "queued" | "processing" | "done" | "failed" | "expired";
+  // Free-form: xAI returns whatever string it wants here. The caller decides
+  // which strings are terminal vs continue-polling.
+  status: string;
   video?: {
     url?: string;
   } | null;
@@ -54,10 +64,6 @@ type VideoGenerationSourceInput = {
   mimeType?: string;
   role?: string;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
 
 async function readXaiVideoJson(response: Response): Promise<Record<string, unknown>> {
   let payload: unknown;
@@ -91,17 +97,13 @@ function readXaiCreateResponse(payload: Record<string, unknown>): XaiVideoCreate
 }
 
 function readXaiStatusResponse(payload: Record<string, unknown>): XaiVideoStatusResponse {
-  const status = normalizeOptionalString(payload.status);
-  if (!status || !["queued", "processing", "done", "failed", "expired"].includes(status)) {
-    throw new Error(XAI_VIDEO_MALFORMED_RESPONSE);
-  }
   const video = payload.video;
   if (video !== undefined && video !== null && !isRecord(video)) {
     throw new Error(XAI_VIDEO_MALFORMED_RESPONSE);
   }
   return {
     request_id: normalizeOptionalString(payload.request_id),
-    status: status as XaiVideoStatusResponse["status"],
+    status: normalizeOptionalString(payload.status) ?? "",
     video: isRecord(video) ? { url: normalizeOptionalString(video.url) } : null,
     error: xaiErrorMessage(payload) ? { message: xaiErrorMessage(payload) } : null,
   };
@@ -111,6 +113,14 @@ function resolveXaiVideoBaseUrl(req: VideoGenerationRequest): string {
   return (
     normalizeOptionalString(req.cfg?.models?.providers?.xai?.baseUrl) ?? DEFAULT_XAI_VIDEO_BASE_URL
   );
+}
+
+function resolveGeneratedVideoMaxBytes(req: VideoGenerationRequest): number {
+  const configured = req.cfg.agents?.defaults?.mediaMaxMb;
+  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
+    return Math.floor(configured * 1024 * 1024);
+  }
+  return DEFAULT_GENERATED_VIDEO_MAX_BYTES;
 }
 
 function toDataUrl(buffer: Buffer, mimeType: string): string {
@@ -178,10 +188,14 @@ function resolveAspectRatio(value: string | undefined): string | undefined {
 }
 
 function resolveResolution(value: string | undefined): "480p" | "720p" | undefined {
-  if (value === "480P") {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "480p") {
     return "480p";
   }
-  if (value === "720P" || value === "1080P") {
+  if (normalized === "720p" || normalized === "1080p") {
     return "720p";
   }
   return undefined;
@@ -238,43 +252,27 @@ function buildCreateBody(req: VideoGenerationRequest): Record<string, unknown> {
     if (imageUrl) {
       body.image = { url: imageUrl };
     }
-    const duration = resolveDurationSeconds({
-      durationSeconds: req.durationSeconds,
-      min: 1,
-      max: 15,
-    });
-    if (typeof duration === "number") {
-      body.duration = duration;
-    }
-    const aspectRatio = resolveAspectRatio(req.aspectRatio);
-    if (aspectRatio) {
-      body.aspect_ratio = aspectRatio;
-    }
-    const resolution = resolveResolution(req.resolution);
-    if (resolution) {
-      body.resolution = resolution;
-    }
+    body.duration =
+      resolveDurationSeconds({
+        durationSeconds: req.durationSeconds,
+        min: 1,
+        max: 15,
+      }) ?? XAI_VIDEO_DEFAULT_DURATION_SECONDS;
+    body.aspect_ratio = resolveAspectRatio(req.aspectRatio) ?? XAI_VIDEO_DEFAULT_ASPECT_RATIO;
+    body.resolution = resolveResolution(req.resolution) ?? XAI_VIDEO_DEFAULT_RESOLUTION;
     return body;
   }
 
   if (mode === "referenceToVideo") {
     body.reference_images = inputImages.map((image) => ({ url: resolveRequiredImageUrl(image) }));
-    const duration = resolveDurationSeconds({
-      durationSeconds: req.durationSeconds,
-      min: 1,
-      max: 10,
-    });
-    if (typeof duration === "number") {
-      body.duration = duration;
-    }
-    const aspectRatio = resolveAspectRatio(req.aspectRatio);
-    if (aspectRatio) {
-      body.aspect_ratio = aspectRatio;
-    }
-    const resolution = resolveResolution(req.resolution);
-    if (resolution) {
-      body.resolution = resolution;
-    }
+    body.duration =
+      resolveDurationSeconds({
+        durationSeconds: req.durationSeconds,
+        min: 1,
+        max: 10,
+      }) ?? XAI_VIDEO_DEFAULT_DURATION_SECONDS;
+    body.aspect_ratio = resolveAspectRatio(req.aspectRatio) ?? XAI_VIDEO_DEFAULT_ASPECT_RATIO;
+    body.resolution = resolveResolution(req.resolution) ?? XAI_VIDEO_DEFAULT_RESOLUTION;
     return body;
   }
 
@@ -333,21 +331,19 @@ async function pollXaiVideo(params: {
       requestFailedMessage: "xAI video status request failed",
     });
     const payload = readXaiStatusResponse(await readXaiVideoJson(response));
-    switch (payload.status) {
-      case "done":
-        return payload;
-      case "failed":
-      case "expired":
-        throw new Error(
-          normalizeOptionalString(payload.error?.message) ??
-            `xAI video generation ${payload.status}`,
-        );
-      case "queued":
-      case "processing":
-      default:
-        await waitProviderOperationPollInterval({ deadline, pollIntervalMs: POLL_INTERVAL_MS });
-        break;
+    const normalizedStatus = payload.status.toLowerCase();
+    if (normalizedStatus === "done") {
+      return payload;
     }
+    if (XAI_VIDEO_TERMINAL_FAILURE_STATUSES.has(normalizedStatus)) {
+      throw new Error(
+        normalizeOptionalString(payload.error?.message) ??
+          `xAI video generation ${normalizedStatus}`,
+      );
+    }
+    // Any other status (queued, processing, submitted, pending, in_progress,
+    // empty, …) is non-terminal: keep polling.
+    await waitProviderOperationPollInterval({ deadline, pollIntervalMs: POLL_INTERVAL_MS });
   }
   throw new Error(`xAI video generation task ${params.requestId} did not finish in time`);
 }
@@ -356,6 +352,7 @@ async function downloadXaiVideo(params: {
   url: string;
   timeoutMs?: ProviderOperationTimeoutMs;
   fetchFn: typeof fetch;
+  maxBytes: number;
 }): Promise<GeneratedVideoAsset> {
   const response = await fetchProviderDownloadResponse({
     url: params.url,
@@ -366,9 +363,12 @@ async function downloadXaiVideo(params: {
     requestFailedMessage: "xAI generated video download failed",
   });
   const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
-  const arrayBuffer = await response.arrayBuffer();
+  const buffer = await readResponseWithLimit(response, params.maxBytes, {
+    onOverflow: ({ maxBytes }) =>
+      new Error(`xAI generated video download exceeds ${maxBytes} bytes`),
+  });
   return {
-    buffer: Buffer.from(arrayBuffer),
+    buffer,
     mimeType,
     fileName: `video-1.${extensionForMime(mimeType)?.slice(1) ?? "mp4"}`,
   };
@@ -379,6 +379,7 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
     id: "xai",
     label: "xAI",
     defaultModel: DEFAULT_XAI_VIDEO_MODEL,
+    defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
     models: [DEFAULT_XAI_VIDEO_MODEL],
     isConfigured: ({ agentDir }) =>
       isProviderApiKeyConfigured({
@@ -442,9 +443,13 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
           capability: "video",
           transport: "http",
         });
+      // Per-submit idempotency key prevents accidental double-charging if
+      // the request is replayed. Polls intentionally reuse `headers` without it.
+      const submitHeaders = new Headers(headers);
+      submitHeaders.set("x-idempotency-key", crypto.randomUUID());
       const { response, release } = await postJsonRequest({
         url: `${baseUrl}${resolveCreateEndpoint(req)}`,
-        headers,
+        headers: submitHeaders,
         body: buildCreateBody(req),
         timeoutMs: resolveProviderOperationTimeoutMs({
           deadline,
@@ -485,6 +490,7 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
             defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
           }),
           fetchFn,
+          maxBytes: resolveGeneratedVideoMaxBytes(req),
         });
         return {
           videos: [video],

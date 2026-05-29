@@ -3,19 +3,7 @@ import { isCommandEnabled } from "../commands-registry-list.js";
 import { maybeResolveTextAlias } from "../commands-registry-normalize.js";
 import { shouldHandleTextCommands } from "../commands-text-routing.js";
 import type { FinalizedMsgContext } from "../templating.js";
-
-function resolveFirstContextText(
-  ctx: FinalizedMsgContext,
-  keys: Array<"BodyForAgent" | "BodyForCommands" | "CommandBody" | "RawBody" | "Body">,
-): string {
-  for (const key of keys) {
-    const value = ctx[key];
-    if (typeof value === "string") {
-      return value;
-    }
-  }
-  return "";
-}
+import { resolveFirstContextText } from "./context-text.js";
 
 function resolveCommandCandidateText(ctx: FinalizedMsgContext): string {
   return resolveFirstContextText(ctx, ["CommandBody", "BodyForCommands", "RawBody", "Body"]).trim();
@@ -30,7 +18,7 @@ function isAcpCommandCandidate(text: string): boolean {
 }
 
 function isLocalCommandCandidate(text: string): boolean {
-  return /^\/(?:status|unfocus)(?:\s|$)/i.test(text);
+  return /^\/(?:status|unfocus)(?:\s|$)/i.test(text) || /^\/(?:verbose|v)(?:[\s:]|$)/i.test(text);
 }
 
 export function shouldBypassAcpDispatchForCommand(

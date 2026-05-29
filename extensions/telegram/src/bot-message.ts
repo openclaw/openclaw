@@ -47,6 +47,10 @@ type TelegramMessageProcessorDeps = Omit<
   opts: Pick<TelegramBotOptions, "token">;
 };
 
+export type TelegramMessageProcessorLifecycle = {
+  onDispatchStart?: () => Promise<void> | void;
+};
+
 export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDeps) => {
   const {
     bot,
@@ -73,8 +77,8 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     opts,
   } = deps;
   const sessionRuntime = {
-    ...(telegramDeps.buildChannelTurnContext
-      ? { buildChannelTurnContext: telegramDeps.buildChannelTurnContext }
+    ...(telegramDeps.buildChannelInboundEventContext
+      ? { buildChannelInboundEventContext: telegramDeps.buildChannelInboundEventContext }
       : {}),
     ...(telegramDeps.readSessionUpdatedAt
       ? { readSessionUpdatedAt: telegramDeps.readSessionUpdatedAt }
@@ -104,6 +108,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     replyMedia?: TelegramMediaRef[],
     replyChain?: TelegramReplyChainEntry[],
     promptContext?: TelegramPromptContextEntry[],
+    lifecycle?: TelegramMessageProcessorLifecycle,
   ) => {
     const ingressReceivedAtMs =
       typeof options?.receivedAtMs === "number" && Number.isFinite(options.receivedAtMs)
@@ -146,7 +151,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
             (options?.ingressBuffer ? ` buffer=${options.ingressBuffer}` : ""),
         );
       }
-      return;
+      return false;
     }
     if (ingressDebugEnabled && ingressReceivedAtMs && ingressContextStartMs) {
       logVerbose(
@@ -155,7 +160,10 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
           (options?.ingressBuffer ? ` buffer=${options.ingressBuffer}` : ""),
       );
     }
-    if (context.ctxPayload.InboundTurnKind !== "room_event") {
+    if (
+      context.ctxPayload.InboundEventKind !== "room_event" &&
+      context.initialTypingCueSent !== true
+    ) {
       void context.sendTyping().catch((err) => {
         logVerbose(`telegram early typing cue failed for chat ${context.chatId}: ${String(err)}`);
       });
@@ -171,6 +179,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
         mediaType: allMedia[0]?.contentType,
       }),
     );
+    await lifecycle?.onDispatchStart?.();
     try {
       await dispatchTelegramMessage({
         context,
@@ -200,5 +209,6 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
         );
       } catch {}
     }
+    return true;
   };
 };

@@ -76,7 +76,7 @@ vi.mock("../../agents/subagent-registry-read.js", () => ({
   countActiveDescendantRuns: countActiveDescendantRunsMock,
 }));
 
-vi.mock("../../agents/pi-bundle-mcp-tools.js", () => ({
+vi.mock("../../agents/agent-bundle-mcp-tools.js", () => ({
   retireSessionMcpRuntime: retireSessionMcpRuntimeMock,
 }));
 
@@ -137,7 +137,7 @@ vi.mock("./subagent-followup.runtime.js", () => ({
   waitForDescendantSubagentSummary: vi.fn().mockResolvedValue(undefined),
 }));
 
-import { retireSessionMcpRuntime } from "../../agents/pi-bundle-mcp-tools.js";
+import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 // Import after mocks
 import { countActiveDescendantRuns } from "../../agents/subagent-registry-read.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.runtime.js";
@@ -231,6 +231,12 @@ function makeBaseParams(overrides: {
     resolvedDelivery,
     deliveryRequested: overrides.deliveryRequested ?? true,
     skipHeartbeatDelivery: false,
+    sourceDeliveryOutcome: {
+      visibleDeliveries: [],
+      verifiedMessageToolDelivery: false,
+      satisfiesSourceDelivery: false,
+      unverifiedMessageToolDelivery: false,
+    },
     deliveryBestEffort: overrides.deliveryBestEffort ?? false,
     deliveryPayloadHasStructuredContent: false,
     deliveryPayloads: overrides.synthesizedText ? [{ text: overrides.synthesizedText }] : [],
@@ -330,6 +336,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
     // deliveryAttempted must be true so timer does NOT fire enqueueSystemEvent
     expect(state.deliveryAttempted).toBe(true);
+    expect(waitForDescendantSubagentSummary).toHaveBeenCalledTimes(1);
 
     // Verify timer guard agrees: shouldEnqueueCronMainSummary returns false
     expect(
@@ -344,6 +351,132 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     ).toBe(false);
 
     // No announce should have been attempted (subagents still running)
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
+  it("bestEffort delivery skips active subagent wait and sends the cron reply", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(2);
+    vi.mocked(waitForDescendantSubagentSummary).mockResolvedValue(undefined);
+    vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue(undefined);
+
+    const params = makeBaseParams({
+      synthesizedText: "Parent cron summary is ready.",
+      deliveryBestEffort: true,
+    });
+    const state = await dispatchCronDelivery(params);
+
+    expect(waitForDescendantSubagentSummary).not.toHaveBeenCalled();
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expectDeliveryCall(0, {
+      channel: "telegram",
+      to: "123456",
+      payloads: [{ text: "Parent cron summary is ready." }],
+      skipQueue: true,
+    });
+    expect(state.deliveryAttempted).toBe(true);
+    expect(state.delivered).toBe(true);
+  });
+
+  it("sends announce fallback when source delivery is not satisfied", async () => {
+    const params = makeBaseParams({ synthesizedText: "Fallback cron summary." });
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expectDeliveryCall(0, {
+      channel: "telegram",
+      to: "123456",
+      payloads: [{ text: "Fallback cron summary." }],
+      skipQueue: true,
+    });
+    expect(state.deliveryAttempted).toBe(true);
+    expect(state.delivered).toBe(true);
+  });
+
+  it("skips announce fallback after verified message-tool source delivery", async () => {
+    const params = makeBaseParams({ synthesizedText: "Fallback cron summary." });
+    params.sourceDeliveryOutcome = {
+      visibleDeliveries: [
+        {
+          via: "message_tool",
+          target: { tool: "message", provider: "telegram", to: "123456" },
+          verifiedTarget: true,
+        },
+      ],
+      verifiedMessageToolDelivery: true,
+      satisfiesSourceDelivery: true,
+      unverifiedMessageToolDelivery: false,
+    };
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(state.deliveryAttempted).toBe(true);
+    expect(state.delivered).toBe(true);
+  });
+
+  it("keeps announce fallback when message-tool delivery is not verified for the target", async () => {
+    const params = makeBaseParams({ synthesizedText: "Fallback cron summary." });
+    params.sourceDeliveryOutcome = {
+      visibleDeliveries: [
+        {
+          via: "message_tool",
+          target: { tool: "message", provider: "telegram", to: "999999" },
+          verifiedTarget: false,
+        },
+      ],
+      verifiedMessageToolDelivery: false,
+      satisfiesSourceDelivery: false,
+      unverifiedMessageToolDelivery: true,
+    };
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expectDeliveryCall(0, {
+      channel: "telegram",
+      to: "123456",
+      payloads: [{ text: "Fallback cron summary." }],
+      skipQueue: true,
+    });
+    expect(state.deliveryAttempted).toBe(true);
+    expect(state.delivered).toBe(true);
+  });
+
+  it("bestEffort delivery skips expected subagent follow-up waits", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(expectsSubagentFollowup).mockReturnValue(true);
+    vi.mocked(waitForDescendantSubagentSummary).mockResolvedValue(undefined);
+
+    const params = makeBaseParams({
+      synthesizedText: "Spawned a subagent and returning the parent summary now.",
+      deliveryBestEffort: true,
+    });
+    const state = await dispatchCronDelivery(params);
+
+    expect(waitForDescendantSubagentSummary).not.toHaveBeenCalled();
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expectDeliveryCall(0, {
+      payloads: [{ text: "Spawned a subagent and returning the parent summary now." }],
+    });
+    expect(state.delivered).toBe(true);
+  });
+
+  it("bestEffort delivery still suppresses stale interim text while descendants run", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(2);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(true);
+    vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue(undefined);
+    vi.mocked(waitForDescendantSubagentSummary).mockResolvedValue(undefined);
+
+    const params = makeBaseParams({
+      synthesizedText: "on it, pulling everything together",
+      deliveryBestEffort: true,
+    });
+    const state = await dispatchCronDelivery(params);
+
+    expect(waitForDescendantSubagentSummary).not.toHaveBeenCalled();
+    expect(state.deliveryAttempted).toBe(true);
+    expect(state.delivered).toBe(false);
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
@@ -576,8 +709,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(enqueueSystemEvent).toHaveBeenCalledWith("Redacted cron update.", {
       sessionKey: "agent:main:main",
       contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
-      forceSenderIsOwnerFalse: true,
-      trusted: false,
     });
   });
 
@@ -613,8 +744,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(enqueueSystemEvent).toHaveBeenCalledWith("Morning briefing complete.", {
       sessionKey: "agent:main:main",
       contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
-      forceSenderIsOwnerFalse: true,
-      trusted: false,
     });
   });
 
@@ -643,8 +772,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       {
         sessionKey: "agent:main:main",
         contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
-        forceSenderIsOwnerFalse: true,
-        trusted: false,
       },
     );
   });
@@ -678,8 +805,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(enqueueSystemEvent).toHaveBeenCalledWith("main-chart.png", {
       sessionKey: "agent:main:main",
       contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
-      forceSenderIsOwnerFalse: true,
-      trusted: false,
     });
   });
 
@@ -770,8 +895,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(enqueueSystemEvent).toHaveBeenCalledWith("Custom main session briefing complete.", {
       sessionKey: "agent:main:work",
       contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
-      forceSenderIsOwnerFalse: true,
-      trusted: false,
     });
   });
 
@@ -819,8 +942,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       {
         sessionKey: "agent:main:work",
         contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
-        forceSenderIsOwnerFalse: true,
-        trusted: false,
       },
     );
   });
@@ -1331,7 +1452,18 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       mode: "implicit",
       error: new Error("sessionKey is required to resolve delivery.channel=last"),
     };
-    params.unverifiedMessagingToolDelivery = true;
+    params.sourceDeliveryOutcome = {
+      visibleDeliveries: [
+        {
+          via: "message_tool",
+          target: { tool: "message", provider: "messagechat", to: "123" },
+          verifiedTarget: false,
+        },
+      ],
+      verifiedMessageToolDelivery: false,
+      satisfiesSourceDelivery: false,
+      unverifiedMessageToolDelivery: true,
+    };
 
     const state = await dispatchCronDelivery(params);
 

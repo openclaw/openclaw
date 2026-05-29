@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
 import {
   projectContextEngineAssemblyForCodex,
@@ -151,6 +151,32 @@ describe("projectContextEngineAssemblyForCodex", () => {
     });
 
     expect(result.promptText).toContain("[truncated ");
+    expect(result.promptText.length).toBeLessThan(25_000);
+  });
+
+  it("keeps recent context when the rendered conversation overflows", () => {
+    const result = projectContextEngineAssemblyForCodex({
+      assembledMessages: [
+        textMessage("assistant", `old discrawl setup from previous day ${"x".repeat(5_850)}`),
+        ...Array.from({ length: 5 }, (_, index) =>
+          textMessage("assistant", `stale filler ${index}:${"x".repeat(5_850)}`),
+        ),
+        textMessage(
+          "user",
+          "have Codex CLI do it via /goal. tell it in a SEPARATE repo; create recrawl",
+        ),
+        textMessage("assistant", "codex exec -C /tmp/recrawl started"),
+      ],
+      originalHistoryMessages: [],
+      prompt: "?",
+    });
+
+    expect(result.promptText).toContain("[truncated ");
+    expect(result.promptText).toContain("from older context");
+    expect(result.promptText).not.toContain("old discrawl setup from previous day");
+    expect(result.promptText).toContain("create recrawl");
+    expect(result.promptText).toContain("codex exec -C /tmp/recrawl started");
+    expect(result.promptText).toContain("Current user request:\n?");
     expect(result.promptText.length).toBeLessThan(25_000);
   });
 

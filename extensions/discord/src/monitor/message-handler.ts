@@ -40,7 +40,7 @@ type DiscordMessageHandlerParams = Omit<
 > & {
   setStatus?: DiscordMonitorStatusSink;
   abortSignal?: AbortSignal;
-  __testing?: DiscordMessageHandlerTestingHooks;
+  testing?: DiscordMessageHandlerTestingHooks;
 };
 
 type DiscordMessageHandlerTestingHooks = DiscordMessageRunQueueTestingHooks & {
@@ -106,14 +106,14 @@ export function createDiscordMessageHandler(
     params.discordConfig?.ackReactionScope ??
     params.cfg.messages?.ackReactionScope ??
     "group-mentions";
-  const preflightDiscordMessageImpl = params.__testing?.preflightDiscordMessage;
+  const preflightDiscordMessageImpl = params.testing?.preflightDiscordMessage;
   const replayGuard = createDiscordInboundReplayGuard();
   const messageRunQueue = createDiscordMessageRunQueue({
     runtime: params.runtime,
     setStatus: params.setStatus,
     abortSignal: params.abortSignal,
     replayGuard,
-    __testing: params.__testing,
+    testing: params.testing,
   });
 
   const { debouncer } = createChannelInboundDebouncer<{
@@ -261,7 +261,7 @@ export function createDiscordMessageHandler(
       }
     },
     onError: (err) => {
-      params.runtime.error?.(danger(`discord debounce flush failed: ${String(err)}`));
+      params.runtime.error(danger(`discord debounce flush failed: ${String(err)}`));
     },
   });
 
@@ -299,7 +299,7 @@ export function createDiscordMessageHandler(
         replayKey: replayKey ?? undefined,
       });
     } catch (err) {
-      params.runtime.error?.(danger(`handler failed: ${String(err)}`));
+      params.runtime.error(danger(`handler failed: ${String(err)}`));
     }
   };
 

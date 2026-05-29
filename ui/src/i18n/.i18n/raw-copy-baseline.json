@@ -90,7 +90,7 @@
       "kind": "object-property",
       "name": "description",
       "path": "ui/src/ui/chat/build-chat-items.ts",
-      "text": "Earlier turns are preserved in a compaction checkpoint. Open session checkpoints to branch or restore that pre-compaction view."
+      "text": "The compacted transcript is preserved as a checkpoint. Open session checkpoints to branch or restore from that compacted view."
     },
     {
       "count": 1,
@@ -172,6 +172,13 @@
     {
       "count": 1,
       "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/chat/grouped-render.ts",
+      "text": "Tool returned an error"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
       "name": "title",
       "path": "ui/src/ui/chat/grouped-render.ts",
       "text": "Delete"
@@ -196,6 +203,13 @@
       "name": "text",
       "path": "ui/src/ui/chat/grouped-render.ts",
       "text": "Context"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/chat/grouped-render.ts",
+      "text": "Error"
     },
     {
       "count": 2,
@@ -305,16 +319,23 @@
     {
       "count": 1,
       "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/chat/tool-cards.ts",
+      "text": "Tool returned an error"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
       "name": "title",
       "path": "ui/src/ui/chat/tool-cards.ts",
       "text": "Open in the side panel"
     },
     {
-      "count": 1,
+      "count": 2,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/chat/tool-cards.ts",
-      "text": "Completed"
+      "text": "Error"
     },
     {
       "count": 1,
@@ -331,7 +352,7 @@
       "text": "Tool input"
     },
     {
-      "count": 2,
+      "count": 1,
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/ui/chat/tool-cards.ts",
@@ -1427,7 +1448,7 @@
       "kind": "html-attribute",
       "name": "placeholder",
       "path": "ui/src/ui/views/chat.ts",
-      "text": "gpt-realtime-2"
+      "text": "Auto"
     },
     {
       "count": 1,
@@ -1472,6 +1493,13 @@
       "text": "&times;"
     },
     {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Advanced"
+    },
+    {
       "count": 2,
       "kind": "html-text",
       "name": "text",
@@ -1486,7 +1514,14 @@
       "text": "close"
     },
     {
-      "count": 2,
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Custom"
+    },
+    {
+      "count": 3,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/chat.ts",
@@ -1505,6 +1540,13 @@
       "name": "text",
       "path": "ui/src/ui/views/chat.ts",
       "text": "Esc"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Exact VAD"
     },
     {
       "count": 2,
@@ -1528,7 +1570,7 @@
       "text": "Google"
     },
     {
-      "count": 1,
+      "count": 2,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/chat.ts",
@@ -1546,10 +1588,17 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/chat.ts",
+      "text": "Lead-in"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/chat.ts",
       "text": "Low"
     },
     {
-      "count": 1,
+      "count": 2,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/chat.ts",
@@ -1595,7 +1644,7 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/chat.ts",
-      "text": "Prefix ms"
+      "text": "Pause before send"
     },
     {
       "count": 1,
@@ -1637,7 +1686,7 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/chat.ts",
-      "text": "Silence ms"
+      "text": "Sensitivity"
     },
     {
       "count": 2,
@@ -1652,13 +1701,6 @@
       "name": "text",
       "path": "ui/src/ui/views/chat.ts",
       "text": "Transport"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/chat.ts",
-      "text": "VAD"
     },
     {
       "count": 1,
@@ -3345,13 +3387,6 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/cron.ts",
-      "text": "+ New"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/cron.ts",
       "text": "Announce (via channel)"
     },
     {
@@ -4388,7 +4423,21 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/skills.ts",
+      "text": "ClawHub link invalid"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/skills.ts",
       "text": "Close"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/skills.ts",
+      "text": "Full security report"
     },
     {
       "count": 1,
@@ -4423,6 +4472,20 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/skills.ts",
+      "text": "Overview"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/skills.ts",
+      "text": "Refreshing…"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/skills.ts",
       "text": "Save key"
     },
     {
@@ -4438,6 +4501,13 @@
       "name": "text",
       "path": "ui/src/ui/views/skills.ts",
       "text": "Searching…"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/skills.ts",
+      "text": "Skill Card"
     },
     {
       "count": 1,
@@ -4585,6 +4655,41 @@
       "name": "aria-label",
       "path": "ui/src/ui/views/usage-render-overview.ts",
       "text": "Remove session filter"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/workboard.ts",
+      "text": "Docs:"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/workboard.ts",
+      "text": "Fix:"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/workboard.ts",
+      "text": "Plugin:"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/workboard.ts",
+      "text": "Release:"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/workboard.ts",
+      "text": "Review PR"
     }
   ]
 }

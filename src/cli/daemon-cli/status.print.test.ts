@@ -9,6 +9,8 @@ const runtime = vi.hoisted(() => ({
 const resolveControlUiLinksMock = vi.hoisted(() =>
   vi.fn((_opts?: unknown) => ({ httpUrl: "http://127.0.0.1:18789" })),
 );
+const isSystemdUnavailableDetailMock = vi.hoisted(() => vi.fn(() => false));
+const renderSystemdUnavailableHintsMock = vi.hoisted(() => vi.fn<() => string[]>(() => []));
 
 vi.mock("../../runtime.js", () => ({
   defaultRuntime: runtime,
@@ -37,12 +39,17 @@ vi.mock("../../daemon/restart-logs.js", () => ({
     stdoutPath: "/tmp/gateway.out.log",
     stderrPath: "/tmp/gateway.err.log",
   }),
+  resolveGatewaySupervisorLogPaths: () => ({
+    logDir: "/Users/test/Library/Logs/openclaw",
+    stdoutPath: "/Users/test/Library/Logs/openclaw/gateway.log",
+    stderrPath: "/Users/test/Library/Logs/openclaw/gateway.err.log",
+  }),
   resolveGatewayRestartLogPath: () => "/tmp/gateway-restart.log",
 }));
 
 vi.mock("../../daemon/systemd-hints.js", () => ({
-  isSystemdUnavailableDetail: () => false,
-  renderSystemdUnavailableHints: () => [],
+  isSystemdUnavailableDetail: isSystemdUnavailableDetailMock,
+  renderSystemdUnavailableHints: renderSystemdUnavailableHintsMock,
 }));
 
 vi.mock("../../infra/wsl.js", () => ({
@@ -82,6 +89,8 @@ describe("printDaemonStatus", () => {
     runtime.log.mockReset();
     runtime.error.mockReset();
     resolveControlUiLinksMock.mockClear();
+    isSystemdUnavailableDetailMock.mockReset().mockReturnValue(false);
+    renderSystemdUnavailableHintsMock.mockReset().mockReturnValue([]);
   });
 
   it("prints stale gateway pid guidance when runtime does not own the listener", () => {
@@ -126,6 +135,48 @@ describe("printDaemonStatus", () => {
     expectMockLineContains(runtime.error, formatCliCommand("openclaw gateway restart"));
   });
 
+  it("prints established gateway client guidance gathered by deep status", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          runtime: { status: "running", pid: 8000 },
+        },
+        gateway: {
+          bindMode: "loopback",
+          bindHost: "127.0.0.1",
+          port: 18789,
+          portSource: "env/config",
+          probeUrl: "ws://127.0.0.1:18789",
+        },
+        connections: {
+          port: 18789,
+          established: [
+            {
+              pid: 4242,
+              ppid: 1,
+              command: "node",
+              commandLine: "/tmp/newer-openclaw/bin/openclaw logs --follow",
+              address: "TCP 127.0.0.1:50123->127.0.0.1:18789 (ESTABLISHED)",
+              direction: "client",
+            },
+          ],
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    expectMockLineContains(runtime.log, "Established clients: 1");
+    expectMockLineContains(runtime.log, "pid=4242");
+    expectMockLineContains(runtime.log, "newer-openclaw");
+    expectMockLineContains(runtime.log, "client");
+    expectMockLineContains(runtime.log, "protocol mismatch after rollback");
+  });
+
   it("prints stale updater launchd job guidance", () => {
     printDaemonStatus(
       {
@@ -158,6 +209,46 @@ describe("printDaemonStatus", () => {
     expectMockLineContains(runtime.error, "ai.openclaw.update.2026.5.12");
     expectMockLineContains(runtime.error, "launchctl remove <label>");
     expectMockLineContains(runtime.error, formatCliCommand("openclaw gateway restart"));
+  });
+
+  it("prints macOS launchd stdout and suppressed stderr when gateway is not listening", () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    try {
+      printDaemonStatus(
+        {
+          service: {
+            label: "LaunchAgent",
+            loaded: true,
+            loadedText: "loaded",
+            notLoadedText: "not loaded",
+            runtime: { status: "running", pid: 8000 },
+            command: { programArguments: [], environment: { HOME: "/Users/test" } },
+          },
+          gateway: {
+            bindMode: "loopback",
+            bindHost: "127.0.0.1",
+            port: 18789,
+            portSource: "env/config",
+            probeUrl: "ws://127.0.0.1:18789",
+          },
+          port: {
+            port: 18789,
+            status: "free",
+            listeners: [],
+            hints: [],
+          },
+          extraServices: [],
+        },
+        { json: false },
+      );
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform });
+    }
+
+    expectMockLineContains(runtime.error, "Gateway port 18789 is not listening");
+    expectMockLineContains(runtime.error, "/Users/test/Library/Logs/openclaw/gateway.log");
+    expectMockLineContains(runtime.error, "Errors: suppressed");
   });
 
   it("prints probe kind and capability separately", () => {
@@ -232,6 +323,44 @@ describe("printDaemonStatus", () => {
       runtime.error,
       "if this mismatch is unexpected, update PATH so `openclaw` points to the version you want",
     );
+  });
+
+  it("prints gateway version from gathered gateway status when probe server metadata is absent", () => {
+    printDaemonStatus(
+      {
+        cli: {
+          version: "2026.4.23",
+          entrypoint: "/usr/local/bin/openclaw",
+        },
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          runtime: { status: "running", pid: 8000 },
+        },
+        gateway: {
+          bindMode: "loopback",
+          bindHost: "127.0.0.1",
+          port: 18789,
+          portSource: "env/config",
+          probeUrl: "ws://127.0.0.1:18789",
+          version: "2026.5.7",
+        },
+        rpc: {
+          ok: true,
+          kind: "read",
+          capability: "read_only",
+          url: "ws://127.0.0.1:18789",
+          version: "2026.5.7",
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    expectMockLineContains(runtime.log, "Gateway version: 2026.5.7");
+    expectMockLineContains(runtime.error, "this OpenClaw command is version 2026.4.23");
   });
 
   it("prints restart handoff diagnostics when deep status gathered one", () => {
@@ -349,5 +478,75 @@ describe("printDaemonStatus", () => {
 
     expectMockLineContains(runtime.error, "Config warnings:");
     expectMockLineContains(runtime.error, "without channelConfigs metadata");
+  });
+
+  it("prints extra gateway-like services as warnings instead of errors", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          runtime: { status: "running", pid: 8000 },
+        },
+        rpc: {
+          ok: true,
+          url: "ws://127.0.0.1:18789",
+          server: { version: "2026.5.12" },
+        },
+        port: {
+          port: 18789,
+          status: "busy",
+          listeners: [],
+          hints: [],
+        },
+        extraServices: [{ label: "ai.openclaw.gateway.rescue", scope: "user", detail: "loaded" }],
+      },
+      { json: false },
+    );
+
+    expectMockLineContains(runtime.log, "Other gateway-like services detected");
+    expectMockLineContains(runtime.log, "ai.openclaw.gateway.rescue");
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
+
+  it("does not print systemd user-service hints when a gateway responds", () => {
+    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    isSystemdUnavailableDetailMock.mockReturnValue(true);
+    renderSystemdUnavailableHintsMock.mockReturnValue(["run loginctl enable-linger"]);
+
+    try {
+      printDaemonStatus(
+        {
+          service: {
+            label: "systemd user",
+            loaded: false,
+            loadedText: "not loaded",
+            notLoadedText: "not loaded",
+            runtime: { status: "unknown", detail: "systemd user services unavailable" },
+          },
+          rpc: {
+            ok: true,
+            url: "ws://127.0.0.1:18789",
+            server: { version: "2026.5.12" },
+          },
+          port: {
+            port: 18789,
+            status: "busy",
+            listeners: [],
+            hints: [],
+          },
+          extraServices: [],
+        },
+        { json: false },
+      );
+    } finally {
+      platform.mockRestore();
+    }
+
+    const errors = runtime.error.mock.calls.map(([line]) => line).join("\n");
+    expect(errors).not.toContain("systemd user services unavailable");
+    expect(errors).not.toContain("run loginctl enable-linger");
   });
 });

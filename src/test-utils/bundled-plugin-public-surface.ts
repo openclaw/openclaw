@@ -10,8 +10,13 @@ import {
   findBundledPluginMetadataById,
   type BundledPluginMetadata,
 } from "../plugins/bundled-plugin-metadata.js";
+import {
+  getCachedPluginSourceModuleLoader,
+  type PluginModuleLoaderCache,
+} from "../plugins/plugin-module-loader-cache.js";
 import { normalizeBundledPluginArtifactSubpath } from "../plugins/public-surface-runtime.js";
 import { resolveLoaderPackageRoot } from "../plugins/sdk-alias.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 
 const OPENCLAW_PACKAGE_ROOT =
   resolveLoaderPackageRoot({
@@ -20,6 +25,7 @@ const OPENCLAW_PACKAGE_ROOT =
   }) ?? fileURLToPath(new URL("../..", import.meta.url));
 
 type BundledPluginPublicSurfaceMetadata = Pick<BundledPluginMetadata, "dirName">;
+const sourceModuleLoaders: PluginModuleLoaderCache = new Map();
 
 function isSafeBundledPluginDirName(pluginId: string): boolean {
   return /^[a-z0-9][a-z0-9._-]*$/u.test(pluginId);
@@ -41,14 +47,13 @@ function findBundledPluginMetadataFast(
   if (!isSafeBundledPluginDirName(pluginId)) {
     return undefined;
   }
-  const roots = [
+  const rawRoots = [
     resolveBundledPluginsDir(),
     path.resolve(OPENCLAW_PACKAGE_ROOT, "extensions"),
     path.resolve(OPENCLAW_PACKAGE_ROOT, "dist-runtime", "extensions"),
     path.resolve(OPENCLAW_PACKAGE_ROOT, "dist", "extensions"),
-  ].filter(
-    (entry, index, values): entry is string => Boolean(entry) && values.indexOf(entry) === index,
-  );
+  ].filter((entry): entry is string => Boolean(entry));
+  const roots = uniqueStrings(rawRoots);
 
   for (const root of roots) {
     const pluginDir = path.join(root, pluginId);
@@ -79,14 +84,13 @@ function readPackageName(packageDir: string): string | undefined {
 }
 
 function resolveWorkspacePackageDir(packageName: string): string {
-  const roots = [
+  const rawRoots = [
     resolveBundledPluginsDir(),
     path.resolve(OPENCLAW_PACKAGE_ROOT, "extensions"),
     path.resolve(OPENCLAW_PACKAGE_ROOT, "dist-runtime", "extensions"),
     path.resolve(OPENCLAW_PACKAGE_ROOT, "dist", "extensions"),
-  ].filter(
-    (entry, index, values): entry is string => Boolean(entry) && values.indexOf(entry) === index,
-  );
+  ].filter((entry): entry is string => Boolean(entry));
+  const roots = uniqueStrings(rawRoots);
 
   for (const root of roots) {
     let entries: string[];
@@ -126,6 +130,26 @@ export const loadBundledPluginPublicSurfaceSync: BundledPluginPublicSurfaceLoade
     artifactBasename: normalizeBundledPluginArtifactSubpath(params.artifactBasename),
   });
 };
+
+export function loadBundledPluginPublicSurfaceSourceSync(params: {
+  pluginId: string;
+  artifactBasename: string;
+}): object {
+  const modulePath = resolveVitestSourceModulePath(
+    resolveBundledPluginPublicModulePath({
+      pluginId: params.pluginId,
+      artifactBasename: params.artifactBasename,
+    }),
+  );
+  const loader = getCachedPluginSourceModuleLoader({
+    cache: sourceModuleLoaders,
+    modulePath,
+    importerUrl: import.meta.url,
+    loaderFilename: import.meta.url,
+    pluginSdkResolution: "src",
+  });
+  return loader(modulePath) as object;
+}
 
 export const loadBundledPluginPublicSurface: AsyncBundledPluginPublicSurfaceLoader = (params) => {
   const metadata = findBundledPluginMetadata(params.pluginId);

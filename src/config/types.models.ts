@@ -2,7 +2,8 @@ import type {
   AnthropicMessagesCompat,
   OpenAICompletionsCompat,
   OpenAIResponsesCompat,
-} from "@earendil-works/pi-ai";
+  ThinkingLevelMap,
+} from "../llm/types.js";
 import type { AgentRuntimePolicyConfig } from "./types.agents-shared.js";
 import type { ConfiguredModelProviderRequest } from "./types.provider-request.js";
 import type { SecretInput } from "./types.secrets.js";
@@ -13,6 +14,7 @@ export const MODEL_APIS = [
   "openai-codex-responses",
   "anthropic-messages",
   "google-generative-ai",
+  "google-vertex",
   "github-copilot",
   "bedrock-converse-stream",
   "ollama",
@@ -50,10 +52,25 @@ type SupportedAnthropicMessagesCompatFields = Pick<
   "supportsEagerToolInputStreaming" | "supportsLongCacheRetention"
 >;
 
-type SupportedThinkingFormat =
+export type SupportedThinkingFormat =
   | NonNullable<OpenAICompletionsCompat["thinkingFormat"]>
   | "deepseek"
-  | "openrouter";
+  | "openrouter"
+  | "together";
+
+export const MODEL_THINKING_FORMATS = [
+  "openai",
+  "openrouter",
+  "deepseek",
+  "together",
+  "qwen",
+  "qwen-chat-template",
+  "zai",
+] as const satisfies readonly SupportedThinkingFormat[];
+
+export function isModelThinkingFormat(value: string): value is SupportedThinkingFormat {
+  return (MODEL_THINKING_FORMATS as readonly string[]).includes(value);
+}
 
 export type ModelCompatConfig = SupportedOpenAICompatFields &
   SupportedOpenAIResponsesCompatFields &
@@ -73,6 +90,23 @@ export type ModelCompatConfig = SupportedOpenAICompatFields &
     requiresMistralToolIds?: boolean;
     requiresOpenAiAnthropicToolPayload?: boolean;
   };
+
+export type ModelImageInputConfig = {
+  /** Provider-documented maximum encoded image payload size. */
+  maxBytes?: number;
+  /** Provider-documented maximum accepted input pixels. */
+  maxPixels?: number;
+  /** Provider-documented maximum accepted width/height in pixels. */
+  maxSidePx?: number;
+  /** Preferred resize side for the default balanced compression policy. */
+  preferredSidePx?: number;
+  /** Token accounting style, used as documentation for provider-owned policy. */
+  tokenMode?: "tile" | "detail" | "provider";
+};
+
+export type ModelMediaInputConfig = {
+  image?: ModelImageInputConfig;
+};
 
 export type ModelProviderAuthMode = "api-key" | "aws-sdk" | "oauth" | "token";
 
@@ -119,12 +153,15 @@ export type ModelDefinitionConfig = {
    */
   contextTokens?: number;
   maxTokens: number;
+  /** Maps OpenClaw thinking levels to provider/model-specific values. */
+  thinkingLevelMap?: ThinkingLevelMap;
   /** Provider-specific request/runtime parameters passed through to provider plugins. */
   params?: Record<string, unknown>;
   /** Optional agent execution runtime override for this provider/model pair. */
   agentRuntime?: AgentRuntimePolicyConfig;
   headers?: Record<string, string>;
   compat?: ModelCompatConfig;
+  mediaInput?: ModelMediaInputConfig;
   metadataSource?: "models-add";
 };
 
@@ -137,6 +174,8 @@ export type ModelProviderConfig = {
   contextTokens?: number;
   maxTokens?: number;
   timeoutSeconds?: number;
+  /** Optional provider deployment/API region used by provider plugins that expose regional endpoints. */
+  region?: string;
   injectNumCtxForOpenAICompat?: boolean;
   /** Provider-specific runtime parameters interpreted by provider plugins. */
   params?: Record<string, unknown>;
@@ -148,6 +187,12 @@ export type ModelProviderConfig = {
   authHeader?: boolean;
   request?: ConfiguredModelProviderRequest;
   models: ModelDefinitionConfig[];
+};
+
+export type ModelProviderDeclarationConfig = ModelProviderConfig;
+
+export type ModelProviderConfigInput = Omit<Partial<ModelProviderConfig>, "models"> & {
+  models?: ModelDefinitionConfig[];
 };
 
 export type BedrockDiscoveryConfig = {
@@ -171,24 +216,8 @@ export type ModelsConfig = {
   mode?: "merge" | "replace";
   providers?: Record<string, ModelProviderConfig>;
   pricing?: ModelPricingConfig;
-  /**
-   * @deprecated Legacy compat alias. Kept so doctor/runtime fallbacks can read
-   * older configs until migration completes.
-   */
-  bedrockDiscovery?: BedrockDiscoveryConfig;
-  /**
-   * @deprecated Legacy compat alias. Kept so doctor/runtime fallbacks can read
-   * older configs until migration completes.
-   */
-  copilotDiscovery?: DiscoveryToggleConfig;
-  /**
-   * @deprecated Legacy compat alias. Kept so doctor/runtime fallbacks can read
-   * older configs until migration completes.
-   */
-  huggingfaceDiscovery?: DiscoveryToggleConfig;
-  /**
-   * @deprecated Legacy compat alias. Kept so doctor/runtime fallbacks can read
-   * older configs until migration completes.
-   */
-  ollamaDiscovery?: DiscoveryToggleConfig;
+};
+
+export type ModelsConfigInput = Omit<ModelsConfig, "providers"> & {
+  providers?: Record<string, ModelProviderConfigInput>;
 };

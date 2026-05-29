@@ -13,7 +13,7 @@ export type GatewayAgentModel = {
 
 export type GatewayAgentRuntime = {
   id: string;
-  fallback?: "pi" | "none";
+  fallback?: "openclaw" | "none";
   source: "env" | "agent" | "defaults" | "model" | "provider" | "implicit" | "session-key";
 };
 
@@ -32,6 +32,8 @@ export type SessionsListResultBase<TDefaults, TRow> = {
   count: number;
   totalCount?: number;
   limitApplied?: number;
+  offset?: number;
+  nextOffset?: number | null;
   hasMore?: boolean;
   defaults: TDefaults;
   sessions: TRow[];

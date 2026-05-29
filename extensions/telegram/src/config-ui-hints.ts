@@ -17,14 +17,6 @@ export const telegramChannelConfigUiHints = {
     label: "Telegram DM Policy",
     help: 'Direct message access control ("pairing" recommended). "open" requires channels.telegram.allowFrom=["*"].',
   },
-  "dm.threadReplies": {
-    label: "Telegram DM Thread Replies",
-    help: 'Controls whether Telegram DMs with message_thread_id use flat sessions ("off", default) or thread-scoped sessions ("inbound" or "always"). Thread IDs are still preserved for replies when sessions stay flat.',
-  },
-  "direct.*.threadReplies": {
-    label: "Telegram Per-DM Thread Replies",
-    help: 'Per-DM override for message_thread_id session threading. Use "inbound" only when a specific direct chat intentionally uses Telegram DM topics as separate sessions.',
-  },
   configWrites: {
     label: "Telegram Config Writes",
     help: "Allow Telegram to write config in response to channel events/commands (default: true).",
@@ -88,6 +80,10 @@ export const telegramChannelConfigUiHints = {
   "streaming.progress.maxLines": {
     label: "Telegram Progress Max Lines",
     help: "Maximum number of compact progress lines to keep below the draft label (default: 8).",
+  },
+  "streaming.progress.maxLineChars": {
+    label: "Telegram Progress Max Line Chars",
+    help: "Maximum characters per compact progress line before truncation (default: 120). Prose cuts at word boundaries; commands and paths keep useful suffixes.",
   },
   "streaming.progress.toolProgress": {
     label: "Telegram Progress Tool Lines",

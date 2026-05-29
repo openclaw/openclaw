@@ -1,6 +1,5 @@
 import { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
-import type { BufferedAgentEvent } from "./server-chat-state.js";
 
 const DEFAULT_CHAT_RUN_ABORT_GRACE_MS = 60_000;
 
@@ -14,6 +13,13 @@ export type ChatAbortControllerEntry = {
   ownerDeviceId?: string;
   providerId?: string;
   authProviderId?: string;
+  abortStopReason?: string;
+  /**
+   * Controls only the sessions.list active-run projection. Terminal lifecycle
+   * clears this before chat.send settles, while the entry stays as the retry
+   * idempotency guard until normal cleanup removes it.
+   */
+  projectSessionActive?: boolean;
   /**
    * Which RPC owns this registration. Absent (undefined) is treated as
    * `"chat-send"` so pre-existing callers that constructed entries without
@@ -32,6 +38,15 @@ type RegisteredChatAbortController = {
 
 export function isChatStopCommandText(text: string): boolean {
   return isAbortRequestText(text);
+}
+
+function createChatAbortSignalReason(stopReason: string | undefined): Error | undefined {
+  if (stopReason !== "timeout") {
+    return undefined;
+  }
+  const reason = new Error("chat run timed out");
+  reason.name = "TimeoutError";
+  return reason;
 }
 
 function resolveChatRunExpiresAtMs(params: {
@@ -108,6 +123,7 @@ export function registerChatAbortController(params: {
     ownerDeviceId: params.ownerDeviceId,
     providerId: normalizeProviderIdForActiveRun(params.providerId),
     authProviderId: normalizeProviderIdForActiveRun(params.authProviderId),
+    projectSessionActive: true,
     kind: params.kind,
   };
   params.chatAbortControllers.set(params.runId, entry);
@@ -122,12 +138,8 @@ function normalizeProviderIdForActiveRun(providerId: string | undefined): string
 export type ChatAbortOps = {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   chatRunBuffers: Map<string, string>;
-  chatDeltaSentAt: Map<string, number>;
-  chatDeltaLastBroadcastLen: Map<string, number>;
-  chatDeltaLastBroadcastText: Map<string, string>;
-  agentDeltaSentAt: Map<string, number>;
-  bufferedAgentEvents: Map<string, BufferedAgentEvent>;
   chatAbortedRuns: Map<string, number>;
+  clearChatRunState: (runId: string) => void;
   removeChatRun: (
     sessionId: string,
     clientRunId: string,
@@ -186,18 +198,12 @@ export function abortChatRunById(
   const bufferedText = ops.chatRunBuffers.get(runId);
   const partialText = bufferedText && bufferedText.trim() ? bufferedText : undefined;
   ops.chatAbortedRuns.set(runId, Date.now());
-  active.controller.abort();
+  if (stopReason) {
+    active.abortStopReason = stopReason;
+  }
+  active.controller.abort(createChatAbortSignalReason(stopReason));
   ops.chatAbortControllers.delete(runId);
-  ops.chatRunBuffers.delete(runId);
-  ops.chatDeltaSentAt.delete(runId);
-  ops.chatDeltaLastBroadcastLen.delete(runId);
-  ops.chatDeltaLastBroadcastText.delete(runId);
-  ops.agentDeltaSentAt.delete(runId);
-  ops.agentDeltaSentAt.delete(`${runId}:assistant`);
-  ops.agentDeltaSentAt.delete(`${runId}:thinking`);
-  ops.bufferedAgentEvents.delete(runId);
-  ops.bufferedAgentEvents.delete(`${runId}:assistant`);
-  ops.bufferedAgentEvents.delete(`${runId}:thinking`);
+  ops.clearChatRunState(runId);
   const removed = ops.removeChatRun(runId, runId, sessionKey);
   broadcastChatAborted(ops, { runId, sessionKey, stopReason, partialText });
   emitAgentEvent({

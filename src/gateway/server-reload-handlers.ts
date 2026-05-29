@@ -1,11 +1,21 @@
+import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-tools.js";
+import {
+  getActiveEmbeddedRunCount,
+  listActiveEmbeddedRunSessionIds,
+  listActiveEmbeddedRunSessionKeys,
+} from "../agents/embedded-agent-runner/run-state.js";
 import { resetModelCatalogCache } from "../agents/model-catalog.js";
-import { disposeAllSessionMcpRuntimes } from "../agents/pi-bundle-mcp-tools.js";
-import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/run-state.js";
+import {
+  clearCurrentProviderAuthState,
+  warmCurrentProviderAuthStateOffMainThread,
+} from "../agents/model-provider-auth.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { isRestartEnabled } from "../config/commands.flags.js";
+import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import {
@@ -16,10 +26,10 @@ import {
 } from "../infra/restart.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
 import {
-  activateSecretsRuntimeSnapshot,
   clearSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshot,
-} from "../secrets/runtime.js";
+  type PreparedSecretsRuntimeSnapshot,
+} from "../secrets/runtime-state.js";
 import {
   getInspectableActiveTaskRestartBlockers,
   type ActiveTaskRestartBlocker,
@@ -54,6 +64,13 @@ type GatewayHotReloadState = {
   channelHealthMonitor: ChannelHealthMonitor | null;
 };
 
+async function activateSecretsRuntimeSnapshot(
+  snapshot: PreparedSecretsRuntimeSnapshot,
+): Promise<void> {
+  const runtime = await import("../secrets/runtime.js");
+  runtime.activateSecretsRuntimeSnapshot(snapshot);
+}
+
 type GatewayReloadLog = {
   info: (msg: string) => void;
   warn: (msg: string) => void;
@@ -72,6 +89,12 @@ export type GatewayPluginReloadResult = {
 const MCP_RUNTIME_RELOAD_DISPOSE_TIMEOUT_MS = 5_000;
 const CHANNEL_RELOAD_DEFERRAL_POLL_MS = 500;
 const CHANNEL_RELOAD_STILL_PENDING_WARN_MS = 30_000;
+
+function resetPreparedModelRuntimeStateForHotReload(): void {
+  resetModelCatalogCache();
+  clearCurrentProviderAuthState();
+  markGatewayModelCatalogStaleForReload();
+}
 
 async function disposeMcpRuntimesWithTimeout(params: {
   dispose: () => Promise<void>;
@@ -96,14 +119,31 @@ async function disposeMcpRuntimesWithTimeout(params: {
   }
 }
 
+async function collectChannelOperationFailures(params: {
+  channels: Iterable<ChannelKind>;
+  run: (channel: ChannelKind) => Promise<void>;
+  onFailure: (channel: ChannelKind, err: unknown) => void;
+}): Promise<ChannelKind[]> {
+  const failures: ChannelKind[] = [];
+  for (const channel of params.channels) {
+    try {
+      await params.run(channel);
+    } catch (err) {
+      failures.push(channel);
+      params.onFailure(channel, err);
+    }
+  }
+  return failures;
+}
+
 type GatewayReloadHandlerParams = {
   deps: CliDeps;
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
   getState: () => GatewayHotReloadState;
   setState: (state: GatewayHotReloadState) => void;
-  startChannel: (name: ChannelKind) => Promise<void>;
-  stopChannel: (name: ChannelKind) => Promise<void>;
-  stopPostReadySidecars?: () => void;
+  startChannel: GatewayChannelManager["startChannel"];
+  stopChannel: GatewayChannelManager["stopChannel"];
+  stopPostReadySidecars?: () => Promise<void> | void;
   reloadPlugins: (params: {
     nextConfig: OpenClawConfig;
     changedPaths: readonly string[];
@@ -195,6 +235,28 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     const omitted = blockers.length - shown.length;
     return omitted > 0 ? `${shown.join("; ")}; +${omitted} more` : shown.join("; ");
   };
+  const collectActiveRestartSessionKeys = () => {
+    return new Set<string>(listActiveEmbeddedRunSessionKeys());
+  };
+  const collectActiveRestartSessionIds = () => {
+    return new Set<string>(listActiveEmbeddedRunSessionIds());
+  };
+  const markActiveMainSessionsForRestart = async (nextConfig: OpenClawConfig, reason: string) => {
+    const sessionKeys = collectActiveRestartSessionKeys();
+    const sessionIds = collectActiveRestartSessionIds();
+    if (sessionKeys.size === 0 && sessionIds.size === 0) {
+      return;
+    }
+    const { markRestartAbortedMainSessions } =
+      await import("../agents/main-session-restart-recovery.js");
+    await markRestartAbortedMainSessions({
+      cfg: nextConfig,
+      additionalCfgs: [getRuntimeConfig()],
+      sessionKeys,
+      sessionIds,
+      reason,
+    });
+  };
   const waitForActiveWorkBeforeChannelReload = async (
     channels: Iterable<ChannelKind>,
     nextConfig: OpenClawConfig,
@@ -250,20 +312,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     const state = params.getState();
     const nextState = { ...state };
 
-    if (
-      plan.changedPaths.some(
-        (path) =>
-          path === "models" ||
-          path.startsWith("models.") ||
-          path === "agents.defaults.model" ||
-          path.startsWith("agents.defaults.model.") ||
-          path === "agents.defaults.models" ||
-          path.startsWith("agents.defaults.models."),
-      )
-    ) {
-      resetModelCatalogCache();
-      markGatewayModelCatalogStaleForReload();
-    }
+    resetPreparedModelRuntimeStateForHotReload();
 
     if (plan.reloadHooks) {
       try {
@@ -295,13 +344,49 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           return;
         }
         await waitForActiveWorkBeforeChannelReload(channelsToRestart, nextConfig);
-        for (const channel of channelsToRestart) {
-          if (channelsStoppedBeforePluginReload.has(channel)) {
-            continue;
-          }
-          params.logChannels.info(`stopping ${channel} channel before plugin reload`);
-          await params.stopChannel(channel);
-          channelsStoppedBeforePluginReload.add(channel);
+        const stoppedChannels: ChannelKind[] = [];
+        const stopFailures = await collectChannelOperationFailures({
+          channels: channelsToRestart,
+          run: async (channel) => {
+            if (channelsStoppedBeforePluginReload.has(channel)) {
+              return;
+            }
+            params.logChannels.info(`stopping ${channel} channel before plugin reload`);
+            stoppedChannels.push(channel);
+            await params.stopChannel(channel, undefined, { manual: false });
+            channelsStoppedBeforePluginReload.add(channel);
+          },
+          onFailure: (channel, err) => {
+            params.logChannels.error(
+              `failed to stop ${channel} channel before plugin reload: ${formatErrorMessage(err)}`,
+            );
+          },
+        });
+        if (stopFailures.length > 0) {
+          const rollbackFailures = await collectChannelOperationFailures({
+            channels: stoppedChannels,
+            run: async (channel) => {
+              params.logChannels.info(
+                `restarting ${channel} channel after failed plugin reload pre-stop`,
+              );
+              await params.startChannel(channel);
+              channelsStoppedBeforePluginReload.delete(channel);
+            },
+            onFailure: (channel, err) => {
+              params.logChannels.error(
+                `failed to restart ${channel} channel after failed plugin reload pre-stop: ${formatErrorMessage(
+                  err,
+                )}`,
+              );
+            },
+          });
+          const rollbackSuffix =
+            rollbackFailures.length > 0
+              ? `; rollback restart failed for: ${rollbackFailures.join(", ")}`
+              : "";
+          throw new Error(
+            `failed to stop channels before plugin reload: ${stopFailures.join(", ")}${rollbackSuffix}`,
+          );
         }
       };
       const pluginReloadResult = await params.reloadPlugins({
@@ -313,6 +398,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         channelsToRestart.add(channel);
       }
       activePluginChannelsAfterReload = pluginReloadResult.activeChannels;
+      resetPreparedModelRuntimeStateForHotReload();
     }
 
     if (plan.restartCron) {
@@ -344,7 +430,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     }
 
     if (plan.restartGmailWatcher) {
-      params.stopPostReadySidecars?.();
+      await params.stopPostReadySidecars?.();
       const restartAbortController =
         params.createGmailRestartAbortController?.() ?? new AbortController();
       try {
@@ -391,17 +477,32 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           }
           params.logChannels.info(`restarting ${name} channel`);
           if (!channelsStoppedBeforePluginReload.has(name)) {
-            await params.stopChannel(name);
+            await params.stopChannel(name, undefined, { manual: false });
           }
           await params.startChannel(name);
         };
-        for (const channel of channelsToRestart) {
-          await restartChannel(channel);
+        const restartFailures = await collectChannelOperationFailures({
+          channels: channelsToRestart,
+          run: restartChannel,
+          onFailure: (channel, err) => {
+            params.logChannels.error(
+              `failed to restart ${channel} channel during hot reload: ${formatErrorMessage(err)}`,
+            );
+          },
+        });
+        if (restartFailures.length > 0) {
+          throw new Error(
+            `failed to restart channels during hot reload: ${restartFailures.join(", ")}`,
+          );
         }
       }
     }
 
     applyGatewayLaneConcurrency(nextConfig);
+
+    void warmCurrentProviderAuthStateOffMainThread(nextConfig).catch((err) => {
+      params.logReload.warn(`provider auth state rewarm failed: ${String(err)}`);
+    });
 
     if (plan.hotReasons.length > 0) {
       params.logReload.info(`config hot reload applied (${plan.hotReasons.join(", ")})`);
@@ -450,6 +551,11 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         maxWaitMs: resolveGatewayRestartDeferralTimeoutMs(
           nextConfig.gateway?.reload?.deferralTimeoutMs,
         ),
+        timeoutIntent: { force: true, reason: "config reload forced restart" },
+        emitHooks: {
+          beforeEmit: () =>
+            markActiveMainSessionsForRestart(nextConfig, "config reload forced restart"),
+        },
         hooks: {
           onReady: () => {
             restartPending = false;
@@ -574,7 +680,7 @@ export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigRe
         await applyHotReload(plan, prepared.config);
       } catch (err) {
         if (previousSnapshot) {
-          activateSecretsRuntimeSnapshot(previousSnapshot);
+          await activateSecretsRuntimeSnapshot(previousSnapshot);
         } else {
           clearSecretsRuntimeSnapshot();
         }
@@ -607,7 +713,7 @@ export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigRe
         const restartQueued = requestGatewayRestart(plan, nextConfig);
         if (!restartQueued) {
           if (previousSharedGatewaySessionGeneration !== nextSharedGatewaySessionGeneration) {
-            activateSecretsRuntimeSnapshot(prepared);
+            await activateSecretsRuntimeSnapshot(prepared);
             setCurrentSharedGatewaySessionGeneration(
               params.sharedGatewaySessionGenerationState,
               nextSharedGatewaySessionGeneration,

@@ -370,7 +370,7 @@ function buildStructuredFileLogFields(logObj: TsLogRecord): Record<string, strin
 }
 
 function buildDiagnosticLogRecord(logObj: TsLogRecord) {
-  const meta = logObj._meta as
+  const meta = logObj["_meta"] as
     | {
         logLevelName?: string;
         date?: Date;
@@ -473,6 +473,18 @@ function canUseSilentVitestFileLogFastPath(envLevel: LogLevel | undefined): bool
   );
 }
 
+function resolveDefaultActiveLogFile(): string {
+  if (process.env.VITEST === "true" && process.env.OPENCLAW_TEST_FILE_LOG === "1") {
+    return path.join(
+      process.cwd(),
+      ".artifacts",
+      "test-logs",
+      `${LOG_PREFIX}-vitest-${process.pid}-${formatLocalDate(new Date())}${LOG_SUFFIX}`,
+    );
+  }
+  return defaultRollingPathForToday();
+}
+
 function resolveSettings(): ResolvedSettings {
   if (!canUseNodeFs()) {
     return {
@@ -499,7 +511,7 @@ function resolveSettings(): ResolvedSettings {
     process.env.VITEST === "true" && process.env.OPENCLAW_TEST_FILE_LOG !== "1" ? "silent" : "info";
   const fromConfig = normalizeLogLevel(cfg?.level, defaultLevel);
   const level = envLevel ?? fromConfig;
-  const file = cfg?.file ?? defaultRollingPathForToday();
+  const file = cfg?.file ?? resolveDefaultActiveLogFile();
   const maxFileBytes = resolveMaxLogFileBytes(cfg?.maxFileBytes);
   return { level, file, maxFileBytes };
 }
@@ -695,10 +707,11 @@ export function resetLogger() {
   loadLoggerConfig = loadLoggerConfigDefault;
 }
 
-export const __test__ = {
+export const testApi = {
   resolveActiveLogFile,
   shouldSkipMutatingLoggingConfigRead,
 };
+export { testApi as __test__ };
 
 function formatLocalDate(date: Date): string {
   const year = date.getFullYear();

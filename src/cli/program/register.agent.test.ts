@@ -36,17 +36,29 @@ vi.mock("../../commands/agent-via-gateway.js", () => ({
   agentCliCommand: mocks.agentCliCommandMock,
 }));
 
-vi.mock("../../commands/agents.js", () => ({
+vi.mock("../../commands/agents.commands.add.js", () => ({
   agentsAddCommand: mocks.agentsAddCommandMock,
+}));
+
+vi.mock("../../commands/agents.commands.bind.js", () => ({
   agentsBindingsCommand: mocks.agentsBindingsCommandMock,
   agentsBindCommand: mocks.agentsBindCommandMock,
-  agentsDeleteCommand: mocks.agentsDeleteCommandMock,
-  agentsListCommand: mocks.agentsListCommandMock,
-  agentsSetIdentityCommand: mocks.agentsSetIdentityCommandMock,
   agentsUnbindCommand: mocks.agentsUnbindCommandMock,
 }));
 
-vi.mock("../../globals.js", () => ({
+vi.mock("../../commands/agents.commands.delete.js", () => ({
+  agentsDeleteCommand: mocks.agentsDeleteCommandMock,
+}));
+
+vi.mock("../../commands/agents.commands.identity.js", () => ({
+  agentsSetIdentityCommand: mocks.agentsSetIdentityCommandMock,
+}));
+
+vi.mock("../../commands/agents.commands.list.js", () => ({
+  agentsListCommand: mocks.agentsListCommandMock,
+}));
+
+vi.mock("../../global-state.js", () => ({
   setVerbose: mocks.setVerboseMock,
 }));
 
@@ -118,6 +130,16 @@ describe("registerAgentCommands", () => {
     expect((options as { message?: string }).message).toBe("hi");
     expect((options as { agent?: string }).agent).toBe("ops");
     expect((options as { model?: string }).model).toBe("openai/gpt-5.4");
+    expect(callRuntime).toBe(runtime);
+    expect(deps).toEqual({ deps: true });
+  });
+
+  it("forwards an explicit session key to the agent command", async () => {
+    await runCli(["agent", "--message", "hi", "--session-key", "agent:ops:incident-42"]);
+
+    const [options, callRuntime, deps] = commandCall(agentCliCommandMock);
+    expect((options as { message?: string }).message).toBe("hi");
+    expect((options as { sessionKey?: string }).sessionKey).toBe("agent:ops:incident-42");
     expect(callRuntime).toBe(runtime);
     expect(deps).toEqual({ deps: true });
   });

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, test, vi } from "vitest";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import { buildSessionHistorySnapshot, SessionHistorySseState } from "./session-history-state.js";
@@ -38,7 +39,7 @@ describe("SessionHistorySseState", () => {
           state.snapshot().messages[0] as {
             __openclaw?: { seq?: number };
           }
-        ).__openclaw?.seq,
+        )["__openclaw"]?.seq,
       ).toBe(2);
 
       const appended = state.appendInlineMessage({
@@ -73,7 +74,7 @@ describe("SessionHistorySseState", () => {
     });
 
     expect(snapshot.history.items).toBe(snapshot.history.messages);
-    expect(snapshot.history.messages[0]?.__openclaw?.seq).toBe(2);
+    expect(snapshot.history.messages[0]?.["__openclaw"]?.seq).toBe(2);
     expect(snapshot.rawTranscriptSeq).toBe(2);
   });
 
@@ -98,7 +99,297 @@ describe("SessionHistorySseState", () => {
     });
 
     expect(appended?.messageSeq).toBe(9);
-    expect(state.snapshot().messages.at(-1)?.__openclaw?.seq).toBe(9);
+    expect(state.snapshot().messages.at(-1)?.["__openclaw"]?.seq).toBe(9);
+  });
+
+  test("emits message-tool mirror when silent control reply completes inline append", () => {
+    const state = SessionHistorySseState.fromRawSnapshot({
+      target: { sessionId: "sess-main" },
+      rawMessages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "reply here" }],
+          __openclaw: { seq: 1 },
+        },
+      ],
+    });
+
+    expect(
+      state.appendInlineMessage({
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call-message-channel-hint",
+              name: "message",
+              arguments: {
+                action: "send",
+                channel: "telegram",
+                message: "Still the current chat.",
+              },
+            },
+          ],
+        },
+        messageSeq: 2,
+      })?.messageSeq,
+    ).toBe(2);
+    expect(
+      state.appendInlineMessage({
+        message: {
+          role: "toolResult",
+          toolName: "message",
+          toolCallId: "call-message-channel-hint",
+          content: { ok: true, messageId: "24270", chatId: "current-run" },
+        },
+        messageSeq: 3,
+      })?.messageSeq,
+    ).toBe(3);
+
+    const appended = state.appendInlineMessage({
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "NO_REPLY" }],
+      },
+      messageSeq: 4,
+    });
+
+    expect(appended?.messageSeq).toBe(4);
+    expect(
+      (
+        appended?.message as {
+          content?: Array<{ text?: string }>;
+          openclawMessageToolMirror?: unknown;
+        }
+      )?.content?.[0]?.text,
+    ).toBe("Still the current chat.");
+    expect(
+      Boolean(
+        (appended?.message as { openclawMessageToolMirror?: unknown } | undefined)
+          ?.openclawMessageToolMirror,
+      ),
+    ).toBe(true);
+  });
+
+  test("keeps cursors when a paginated history page starts with a message-tool mirror", () => {
+    const snapshot = buildSessionHistorySnapshot({
+      rawMessages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "reply here" }],
+          __openclaw: { seq: 1 },
+        },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call-message-cursor",
+              name: "message",
+              arguments: {
+                action: "send",
+                message: "Cursor-visible reply.",
+              },
+            },
+          ],
+          __openclaw: { seq: 2 },
+        },
+        {
+          role: "toolResult",
+          toolName: "message",
+          toolCallId: "call-message-cursor",
+          content: { ok: true, messageId: "cursor" },
+          __openclaw: { seq: 3 },
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "NO_REPLY" }],
+          __openclaw: { seq: 4 },
+        },
+      ],
+      limit: 1,
+    });
+
+    expect(snapshot.history.nextCursor).toBe("3");
+    expect(snapshot.history.messages[0]?.["__openclaw"]?.seq).toBe(3);
+    expect(
+      (snapshot.history.messages[0] as { content?: Array<{ text?: string }> }).content?.[0]?.text,
+    ).toBe("Cursor-visible reply.");
+  });
+
+  test("does not coerce partial cursor values", () => {
+    const snapshot = buildSessionHistorySnapshot({
+      rawMessages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "first" }],
+          __openclaw: { seq: 1 },
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "second" }],
+          __openclaw: { seq: 2 },
+        },
+      ],
+      cursor: "seq:2next",
+    });
+
+    expect(snapshot.history.messages.map((message) => message["__openclaw"]?.seq)).toEqual([1, 2]);
+  });
+
+  test("requests refresh when silent control reply completes multiple message-tool mirrors", () => {
+    const state = SessionHistorySseState.fromRawSnapshot({
+      target: { sessionId: "sess-main" },
+      rawMessages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "send both here" }],
+          __openclaw: { seq: 1 },
+        },
+      ],
+    });
+
+    state.appendInlineMessage({
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call-message-first",
+            name: "message",
+            arguments: {
+              action: "send",
+              message: "First visible reply.",
+            },
+          },
+          {
+            type: "toolCall",
+            id: "call-message-second",
+            name: "message",
+            arguments: {
+              action: "send",
+              message: "Second visible reply.",
+            },
+          },
+        ],
+      },
+      messageSeq: 2,
+    });
+    state.appendInlineMessage({
+      message: {
+        role: "toolResult",
+        toolName: "message",
+        toolCallId: "call-message-first",
+        content: { ok: true, messageId: "first" },
+      },
+      messageSeq: 3,
+    });
+    state.appendInlineMessage({
+      message: {
+        role: "toolResult",
+        toolName: "message",
+        toolCallId: "call-message-second",
+        content: { ok: true, messageId: "second" },
+      },
+      messageSeq: 4,
+    });
+
+    const appended = state.appendInlineMessage({
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "NO_REPLY" }],
+      },
+      messageSeq: 5,
+    });
+
+    expect(appended).toEqual({ shouldRefresh: true });
+    expect(
+      state
+        .snapshot()
+        .messages.flatMap(
+          (message) => (message as { content?: Array<{ text?: string }> }).content?.[0]?.text,
+        )
+        .filter((text): text is string => typeof text === "string"),
+    ).toEqual(["send both here", "First visible reply.", "Second visible reply."]);
+  });
+
+  test("does not emit a no-op hidden inline control reply", () => {
+    const state = SessionHistorySseState.fromRawSnapshot({
+      target: { sessionId: "sess-main" },
+      rawMessages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "reply here" }],
+          __openclaw: { seq: 1 },
+        },
+      ],
+    });
+
+    const appended = state.appendInlineMessage({
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "NO_REPLY" }],
+      },
+      messageSeq: 2,
+    });
+
+    expect(appended).toBeNull();
+    expect(state.snapshot().messages).toHaveLength(1);
+  });
+
+  test("requests refresh when inline TTS supplement merges into an existing assistant message", () => {
+    const visibleText = "Here is the answer.";
+    const textSha256 = createHash("sha256").update(visibleText).digest("hex");
+    const state = SessionHistorySseState.fromRawSnapshot({
+      target: { sessionId: "sess-main" },
+      rawMessages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: visibleText }],
+          __openclaw: { seq: 2 },
+        },
+      ],
+    });
+
+    const appended = state.appendInlineMessage({
+      message: {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Audio reply" },
+          {
+            type: "attachment",
+            attachment: {
+              url: "/tmp/tts.mp3",
+              kind: "audio",
+              label: "tts.mp3",
+              mimeType: "audio/mpeg",
+            },
+          },
+        ],
+        openclawTtsSupplement: { textSha256, spokenText: visibleText },
+      },
+      messageSeq: 3,
+    });
+
+    expect(appended).toEqual({ shouldRefresh: true });
+    expect(state.snapshot().messages).toEqual([
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: visibleText },
+          {
+            type: "attachment",
+            attachment: {
+              url: "/tmp/tts.mp3",
+              kind: "audio",
+              label: "tts.mp3",
+              mimeType: "audio/mpeg",
+            },
+          },
+        ],
+        __openclaw: { seq: 2 },
+      },
+    ]);
   });
 
   test("requests refresh for non-monotonic carried inline sequence", () => {
@@ -123,7 +414,7 @@ describe("SessionHistorySseState", () => {
 
     expect(appended).toEqual({ shouldRefresh: true });
     expect(state.snapshot().messages).toHaveLength(1);
-    expect(state.snapshot().messages.at(-1)?.__openclaw?.seq).toBe(5);
+    expect(state.snapshot().messages.at(-1)?.["__openclaw"]?.seq).toBe(5);
   });
 
   test("marks bounded tail snapshots as having older history", () => {
@@ -174,12 +465,12 @@ describe("SessionHistorySseState", () => {
         limit: 1,
       });
 
-      expect(state.snapshot().messages[0]?.__openclaw?.seq).toBe(7);
+      expect(state.snapshot().messages[0]?.["__openclaw"]?.seq).toBe(7);
       const refreshed = await state.refreshAsync();
 
       expect(refreshed.hasMore).toBe(true);
       expect(refreshed.nextCursor).toBe("8");
-      expect(refreshed.messages[0]?.__openclaw?.seq).toBe(8);
+      expect(refreshed.messages[0]?.["__openclaw"]?.seq).toBe(8);
       expect(tailReadSpy).toHaveBeenCalledTimes(1);
       expect(fullReadSpy).not.toHaveBeenCalled();
     } finally {
@@ -252,6 +543,34 @@ describe("SessionHistorySseState", () => {
         __openclaw: { seq: 2 },
       },
     ]);
+  });
+
+  test("drops hidden runtime-context custom messages from projected history", () => {
+    const snapshot = buildSessionHistorySnapshot({
+      rawMessages: [
+        {
+          role: "custom",
+          customType: "openclaw.runtime-context",
+          content: "secret runtime context",
+          display: false,
+          __openclaw: { seq: 1 },
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "visible answer" }],
+          __openclaw: { seq: 2 },
+        },
+      ],
+    });
+
+    expect(snapshot.history.messages).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "visible answer" }],
+        __openclaw: { seq: 2 },
+      },
+    ]);
+    expect(snapshot.rawTranscriptSeq).toBe(2);
   });
 
   test("drops subagent announce inter-session user messages from projected history", () => {
@@ -356,6 +675,16 @@ describe("SessionHistorySseState", () => {
         message: {
           role: "assistant",
           content: [{ type: "text", text: "HEARTBEAT_OK" }],
+        },
+      }),
+    ).toBeNull();
+    expect(
+      state.appendInlineMessage({
+        message: {
+          role: "custom",
+          customType: "openclaw.runtime-context",
+          content: "secret runtime context",
+          display: false,
         },
       }),
     ).toBeNull();

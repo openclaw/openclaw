@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
-import { ConnectErrorDetailCodes } from "../gateway/protocol/connect-error-details.js";
+import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
@@ -280,6 +280,39 @@ describe("gateway auth browser hardening", () => {
     });
   });
 
+  test("rate-limits non-browser remote auth failures by default", async () => {
+    const { writeConfigFile } = await import("../config/config.js");
+    testState.gatewayAuth = { mode: "token", token: "secret" };
+    await writeConfigFile({
+      gateway: {
+        trustedProxies: ["127.0.0.1"],
+      },
+    });
+
+    await withGatewayServer(async ({ port }) => {
+      const remoteHeaders = { "x-forwarded-for": "203.0.113.50" };
+      for (let attempt = 1; attempt <= 10; attempt += 1) {
+        const ws = await openWs(port, remoteHeaders);
+        try {
+          const res = await connectReq(ws, { token: "wrong", device: null });
+          expect(res.ok).toBe(false);
+          expect(res.error?.message ?? "").not.toContain("retry later");
+        } finally {
+          ws.close();
+        }
+      }
+
+      const lockedWs = await openWs(port, remoteHeaders);
+      try {
+        const locked = await connectReq(lockedWs, { token: "wrong", device: null });
+        expect(locked.ok).toBe(false);
+        expect(locked.error?.message ?? "").toContain("retry later");
+      } finally {
+        lockedWs.close();
+      }
+    });
+  });
+
   test("isolates loopback browser-origin auth lockouts per origin", async () => {
     testState.gatewayAuth = {
       mode: "token",
@@ -391,7 +424,7 @@ describe("gateway auth browser hardening", () => {
     });
   });
 
-  test("does not silently auto-pair control-ui browser clients on loopback", async () => {
+  test("silently auto-pairs control-ui browser clients on loopback with a valid gateway token", async () => {
     const { listDevicePairing } = await import("../infra/device-pairing.js");
     testState.gatewayAuth = { mode: "token", token: "secret" };
 
@@ -414,15 +447,11 @@ describe("gateway auth browser hardening", () => {
           client: CONTROL_UI_CLIENT,
           device,
         });
-        expect(res.ok).toBe(false);
-        expect(res.error?.message ?? "").toContain("pairing required");
+        expect(res.ok).toBe(true);
 
         const pairing = await listDevicePairing();
-        const pending = pairing.pending.find((entry) => entry.deviceId === identity.deviceId);
-        if (!pending) {
-          throw new Error("expected control ui browser client to create pending pairing request");
-        }
-        expect(pending.silent).toBe(false);
+        expect(pairing.pending.some((entry) => entry.deviceId === identity.deviceId)).toBe(false);
+        expect(pairing.paired.some((entry) => entry.deviceId === identity.deviceId)).toBe(true);
       } finally {
         browserWs.close();
       }
@@ -430,10 +459,19 @@ describe("gateway auth browser hardening", () => {
   });
 
   test("rejects forged loopback origin for control-ui when proxy headers make client non-local", async () => {
+    const { writeConfigFile } = await import("../config/config.js");
+    await writeConfigFile({
+      gateway: {
+        trustedProxies: ["127.0.0.1"],
+        controlUi: {
+          allowedOrigins: [],
+        },
+      },
+    });
     testState.gatewayAuth = { mode: "token", token: "secret" };
     await withGatewayServer(async ({ port }) => {
       const ws = await openWs(port, {
-        origin: originForPort(port),
+        origin: "http://localhost:5173",
         "x-forwarded-for": "203.0.113.50",
       });
       try {
@@ -444,6 +482,7 @@ describe("gateway auth browser hardening", () => {
             id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
             mode: GATEWAY_CLIENT_MODES.UI,
           },
+          device: null,
         });
         expect(res.ok).toBe(false);
         expect(res.error?.message ?? "").toContain("origin not allowed");

@@ -1,9 +1,14 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import {
   createPluginRuntimeMock,
   createStartAccountContext,
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readCachedTelegramBotInfo, writeCachedTelegramBotInfo } from "./bot-info-cache.js";
+import type { TelegramBotInfo } from "./bot-info.js";
 import { telegramPlugin } from "./channel.js";
 import type { TelegramMonitorFn } from "./monitor.types.js";
 import {
@@ -13,15 +18,122 @@ import {
 import { clearTelegramRuntime, setTelegramRuntime } from "./runtime.js";
 import type { TelegramProbeFn } from "./runtime.types.js";
 import type { TelegramRuntime } from "./runtime.types.js";
-import { resetTelegramStartupProbeLimiterForTests } from "./startup-probe-limiter.js";
+import {
+  resetTelegramStartupProbeLimiterForTests,
+  withTelegramStartupProbeSlot,
+} from "./startup-probe-limiter.js";
 
 const probeTelegram = vi.fn();
 const monitorTelegramProvider = vi.fn();
 const sendMessageTelegram = vi.fn();
+const tempRoots: string[] = [];
+
+const startupBotInfo: TelegramBotInfo = {
+  id: 123456,
+  is_bot: true,
+  first_name: "OpenClaw",
+  username: "openclaw_bot",
+  can_join_groups: true,
+  can_read_all_group_messages: false,
+  can_manage_bots: false,
+  supports_inline_queries: false,
+  can_connect_to_business: false,
+  has_main_web_app: false,
+  has_topics_enabled: false,
+  allows_users_to_create_topics: false,
+};
+
+async function useTempStateDir(): Promise<string> {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tg-channel-"));
+  tempRoots.push(stateDir);
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  return stateDir;
+}
+
+type MemoryPluginStateEntry<T> = { key: string; value: T; createdAt: number; expiresAt?: number };
+
+function createMemoryPluginStateStore<T>(
+  maxEntries: number,
+  defaultTtlMs: number | undefined,
+  entries: Map<string, MemoryPluginStateEntry<unknown>>,
+) {
+  type Entry = { key: string; value: T; createdAt: number; expiresAt?: number };
+  const typedEntries = entries as Map<string, Entry>;
+  const readEntry = (key: string): Entry | undefined => {
+    const entry = typedEntries.get(key);
+    if (!entry) {
+      return undefined;
+    }
+    if (entry.expiresAt !== undefined && entry.expiresAt <= Date.now()) {
+      typedEntries.delete(key);
+      return undefined;
+    }
+    return entry;
+  };
+  const writeEntry = (key: string, value: T, opts?: { ttlMs?: number }): void => {
+    const createdAt = Date.now();
+    const entry: Entry = { key, value, createdAt };
+    const ttlMs = opts?.ttlMs ?? defaultTtlMs;
+    if (ttlMs !== undefined) {
+      entry.expiresAt = createdAt + ttlMs;
+    }
+    typedEntries.set(key, entry);
+    while (typedEntries.size > maxEntries) {
+      const oldestKey = typedEntries.keys().next().value;
+      if (oldestKey === undefined) {
+        break;
+      }
+      typedEntries.delete(oldestKey);
+    }
+  };
+  return {
+    async register(key: string, value: T, opts?: { ttlMs?: number }) {
+      writeEntry(key, value, opts);
+    },
+    async registerIfAbsent(key: string, value: T, opts?: { ttlMs?: number }) {
+      if (readEntry(key)) {
+        return false;
+      }
+      writeEntry(key, value, opts);
+      return true;
+    },
+    async lookup(key: string) {
+      return readEntry(key)?.value;
+    },
+    async consume(key: string) {
+      const value = readEntry(key)?.value;
+      typedEntries.delete(key);
+      return value;
+    },
+    async delete(key: string) {
+      return typedEntries.delete(key);
+    },
+    async entries() {
+      return [...typedEntries.keys()]
+        .map((key) => readEntry(key))
+        .filter((entry): entry is Entry => Boolean(entry));
+    },
+    async clear() {
+      typedEntries.clear();
+    },
+  };
+}
 
 function installTelegramRuntime() {
-  const runtime = createPluginRuntimeMock();
-  setTelegramRuntime({
+  const keyedStores = new Map<string, Map<string, MemoryPluginStateEntry<unknown>>>();
+  const runtime = createPluginRuntimeMock({
+    state: {
+      openKeyedStore: ((options) => {
+        let entries = keyedStores.get(options.namespace);
+        if (!entries) {
+          entries = new Map();
+          keyedStores.set(options.namespace, entries);
+        }
+        return createMemoryPluginStateStore(options.maxEntries, options.defaultTtlMs, entries);
+      }) as TelegramRuntime["state"]["openKeyedStore"],
+    },
+  });
+  const telegramRuntime = {
     ...runtime,
     channel: {
       ...runtime.channel,
@@ -31,7 +143,17 @@ function installTelegramRuntime() {
         sendMessageTelegram,
       },
     },
-  } as unknown as TelegramRuntime);
+  } as unknown as TelegramRuntime;
+  setTelegramRuntime(telegramRuntime);
+  return telegramRuntime;
+}
+
+function createRuntimeEnvMock() {
+  return {
+    log: vi.fn(),
+    error: vi.fn(),
+    exit: vi.fn(),
+  };
 }
 
 function createTelegramConfig(
@@ -107,8 +229,20 @@ function sendMessageOptionsAt(index: number): Record<string, unknown> {
   return options;
 }
 
-async function waitForCondition(check: () => boolean, message: string, attempts = 100) {
-  for (let i = 0; i < attempts; i += 1) {
+async function waitForCondition(check: () => boolean, message: string, timeoutMs = 5_000) {
+  vi.useRealTimers();
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (check()) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+  throw new Error(message);
+}
+
+async function waitForMicrotaskCondition(check: () => boolean, message: string, attempts = 100) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
     if (check()) {
       return;
     }
@@ -117,13 +251,39 @@ async function waitForCondition(check: () => boolean, message: string, attempts 
   throw new Error(message);
 }
 
-afterEach(() => {
+async function releaseStartupProbeControls(releaseProbe: Array<() => void>) {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const releases = releaseProbe.splice(0);
+    for (const release of releases) {
+      release();
+    }
+    await Promise.resolve();
+    if (releaseProbe.length === 0) {
+      return;
+    }
+  }
+  for (const release of releaseProbe.splice(0)) {
+    release();
+  }
+}
+
+beforeEach(() => {
+  vi.useRealTimers();
+  resetTelegramStartupProbeLimiterForTests();
+});
+
+afterEach(async () => {
+  vi.useRealTimers();
   clearTelegramRuntime();
   resetTelegramPollingLeasesForTests();
   resetTelegramStartupProbeLimiterForTests();
   probeTelegram.mockReset();
   monitorTelegramProvider.mockReset();
   sendMessageTelegram.mockReset();
+  vi.unstubAllEnvs();
+  await Promise.all(
+    tempRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
+  );
 });
 
 describe("telegramPlugin gateway startup", () => {
@@ -200,37 +360,209 @@ describe("telegramPlugin gateway startup", () => {
 
   it("passes successful startup probe botInfo into the polling monitor", async () => {
     installTelegramRuntime();
-    const botInfo = {
-      id: 123456,
-      is_bot: true,
-      first_name: "OpenClaw",
-      username: "openclaw_bot",
-      can_join_groups: true,
-      can_read_all_group_messages: false,
-      can_manage_bots: false,
-      supports_inline_queries: false,
-      can_connect_to_business: false,
-      has_main_web_app: false,
-      has_topics_enabled: false,
-      allows_users_to_create_topics: false,
-    } as const;
     probeTelegram.mockResolvedValue({
       ok: true,
       status: null,
       error: null,
       elapsedMs: 12,
       bot: {
-        id: botInfo.id,
-        username: botInfo.username,
+        id: startupBotInfo.id,
+        username: startupBotInfo.username,
       },
-      botInfo,
+      botInfo: startupBotInfo,
     });
     monitorTelegramProvider.mockResolvedValue(undefined);
 
     const { task } = startTelegramAccount();
 
     await expect(task).resolves.toBeUndefined();
-    expect(latestMonitorOptions().botInfo).toBe(botInfo);
+    expect(latestMonitorOptions().botInfo).toBe(startupBotInfo);
+  });
+
+  it("caches successful startup probe botInfo for later restarts", async () => {
+    await useTempStateDir();
+    installTelegramRuntime();
+    probeTelegram.mockResolvedValue({
+      ok: true,
+      status: null,
+      error: null,
+      elapsedMs: 12,
+      bot: {
+        id: startupBotInfo.id,
+        username: startupBotInfo.username,
+      },
+      botInfo: startupBotInfo,
+    });
+    monitorTelegramProvider.mockResolvedValue(undefined);
+
+    const { task } = startTelegramAccount("ops");
+
+    await expect(task).resolves.toBeUndefined();
+    await expect(
+      readCachedTelegramBotInfo({
+        accountId: "ops",
+        botToken: "123456:bad-token",
+      }),
+    ).resolves.toMatchObject({ botInfo: startupBotInfo });
+  });
+
+  it("refreshes cached startup botInfo before monitor startup", async () => {
+    await useTempStateDir();
+    installTelegramRuntime();
+    const refreshedBotInfo = {
+      ...startupBotInfo,
+      username: "fresh_openclaw_bot",
+      has_topics_enabled: true,
+    };
+    await writeCachedTelegramBotInfo({
+      accountId: "ops",
+      botToken: "123456:bad-token",
+      botInfo: startupBotInfo,
+    });
+    probeTelegram.mockResolvedValue({
+      ok: true,
+      status: null,
+      error: null,
+      elapsedMs: 12,
+      bot: {
+        id: refreshedBotInfo.id,
+        username: refreshedBotInfo.username,
+      },
+      botInfo: refreshedBotInfo,
+    });
+    monitorTelegramProvider.mockResolvedValue(undefined);
+
+    const { task } = startTelegramAccount("ops");
+
+    await expect(task).resolves.toBeUndefined();
+    expect(probeTelegram).toHaveBeenCalledOnce();
+    expect(latestMonitorOptions().botInfo).toEqual(refreshedBotInfo);
+    await expect(
+      readCachedTelegramBotInfo({
+        accountId: "ops",
+        botToken: "123456:bad-token",
+      }),
+    ).resolves.toMatchObject({ botInfo: refreshedBotInfo });
+  });
+
+  it("falls back to cached startup botInfo when refresh fails without auth failure", async () => {
+    await useTempStateDir();
+    installTelegramRuntime();
+    await writeCachedTelegramBotInfo({
+      accountId: "ops",
+      botToken: "123456:bad-token",
+      botInfo: startupBotInfo,
+    });
+    probeTelegram.mockResolvedValue({
+      ok: false,
+      status: 500,
+      error: "Bad Gateway",
+      elapsedMs: 12,
+    });
+    monitorTelegramProvider.mockResolvedValue(undefined);
+
+    const { task } = startTelegramAccount("ops");
+
+    await expect(task).resolves.toBeUndefined();
+    expect(probeTelegram).toHaveBeenCalledOnce();
+    expect(latestMonitorOptions().botInfo).toEqual(startupBotInfo);
+  });
+
+  it("deletes cached startup botInfo when the account token changes", async () => {
+    await useTempStateDir();
+    installTelegramRuntime();
+    await writeCachedTelegramBotInfo({
+      accountId: "ops",
+      botToken: "123456:bad-token",
+      botInfo: startupBotInfo,
+    });
+
+    await telegramPlugin.lifecycle?.onAccountConfigChanged?.({
+      accountId: "ops",
+      prevCfg: createTelegramConfig("ops"),
+      nextCfg: createTelegramConfig("ops", { botToken: "123456:new-token" }),
+      runtime: createRuntimeEnvMock(),
+    });
+
+    await expect(
+      readCachedTelegramBotInfo({
+        accountId: "ops",
+        botToken: "123456:bad-token",
+      }),
+    ).resolves.toBeNull();
+  });
+
+  it("keeps cached startup botInfo when unrelated Telegram config changes", async () => {
+    await useTempStateDir();
+    installTelegramRuntime();
+    await writeCachedTelegramBotInfo({
+      accountId: "ops",
+      botToken: "123456:bad-token",
+      botInfo: startupBotInfo,
+    });
+
+    await telegramPlugin.lifecycle?.onAccountConfigChanged?.({
+      accountId: "ops",
+      prevCfg: createTelegramConfig("ops"),
+      nextCfg: createTelegramConfig("ops", { timeoutSeconds: 60 }),
+      runtime: createRuntimeEnvMock(),
+    });
+
+    await expect(
+      readCachedTelegramBotInfo({
+        accountId: "ops",
+        botToken: "123456:bad-token",
+      }),
+    ).resolves.toMatchObject({ botInfo: startupBotInfo });
+  });
+
+  it("deletes cached startup botInfo when the account is removed", async () => {
+    await useTempStateDir();
+    installTelegramRuntime();
+    await writeCachedTelegramBotInfo({
+      accountId: "ops",
+      botToken: "123456:bad-token",
+      botInfo: startupBotInfo,
+    });
+
+    await telegramPlugin.lifecycle?.onAccountRemoved?.({
+      accountId: "ops",
+      prevCfg: createTelegramConfig("ops"),
+      runtime: createRuntimeEnvMock(),
+    });
+
+    await expect(
+      readCachedTelegramBotInfo({
+        accountId: "ops",
+        botToken: "123456:bad-token",
+      }),
+    ).resolves.toBeNull();
+  });
+
+  it("deletes cached startup botInfo when logout clears the account token", async () => {
+    await useTempStateDir();
+    installTelegramRuntime();
+    const cfg = createTelegramConfig("ops");
+    const account = telegramPlugin.config.resolveAccount(cfg, "ops");
+    await writeCachedTelegramBotInfo({
+      accountId: "ops",
+      botToken: "123456:bad-token",
+      botInfo: startupBotInfo,
+    });
+
+    await telegramPlugin.gateway?.logoutAccount?.({
+      accountId: "ops",
+      account,
+      cfg,
+      runtime: createRuntimeEnvMock(),
+    });
+
+    await expect(
+      readCachedTelegramBotInfo({
+        accountId: "ops",
+        botToken: "123456:bad-token",
+      }),
+    ).resolves.toBeNull();
   });
 
   it("honors higher per-account timeoutSeconds for startup probe", async () => {
@@ -256,87 +588,77 @@ describe("telegramPlugin gateway startup", () => {
   });
 
   it("limits concurrent startup probes across Telegram accounts", async () => {
-    installTelegramRuntime();
     const releaseProbe: Array<() => void> = [];
     let activeProbes = 0;
     let maxActiveProbes = 0;
-    probeTelegram.mockImplementation(async () => {
-      activeProbes += 1;
-      maxActiveProbes = Math.max(maxActiveProbes, activeProbes);
-      await new Promise<void>((resolve) => {
-        releaseProbe.push(resolve);
+    const runProbe = async () =>
+      await withTelegramStartupProbeSlot(undefined, async () => {
+        activeProbes += 1;
+        maxActiveProbes = Math.max(maxActiveProbes, activeProbes);
+        await new Promise<void>((resolve) => {
+          releaseProbe.push(resolve);
+        });
+        activeProbes -= 1;
       });
-      activeProbes -= 1;
-      return {
-        ok: true,
-        status: null,
-        error: null,
-        elapsedMs: 12,
-      };
-    });
-    monitorTelegramProvider.mockResolvedValue(undefined);
 
-    const first = startTelegramAccount("alpha");
-    const second = startTelegramAccount("bravo");
-    const third = startTelegramAccount("charlie");
+    const first = runProbe();
+    const second = runProbe();
+    const third = runProbe();
+    const tasks = [first, second, third];
+    try {
+      await waitForMicrotaskCondition(
+        () => releaseProbe.length === 2,
+        "expected two startup probes to begin",
+      );
+      expect(maxActiveProbes).toBe(2);
 
-    await waitForCondition(
-      () => probeTelegram.mock.calls.length === 2,
-      "expected two startup probes to begin",
-    );
-    expect(maxActiveProbes).toBe(2);
-    expect(releaseProbe).toHaveLength(2);
-
-    releaseProbe.shift()?.();
-    await waitForCondition(
-      () => probeTelegram.mock.calls.length === 3,
-      "expected queued startup probe to begin after a slot opens",
-    );
-    expect(maxActiveProbes).toBe(2);
-
-    for (const release of releaseProbe.splice(0)) {
-      release();
+      releaseProbe.shift()?.();
+      await waitForMicrotaskCondition(
+        () => releaseProbe.length === 2,
+        "expected queued startup probe to begin after a slot opens",
+      );
+      expect(maxActiveProbes).toBe(2);
+    } finally {
+      await releaseStartupProbeControls(releaseProbe);
     }
-    await Promise.all([first.task, second.task, third.task]);
-    expect(monitorTelegramProvider).toHaveBeenCalledTimes(3);
+    await Promise.all(tasks);
   });
 
   it("abandons a queued startup probe when the account aborts", async () => {
-    installTelegramRuntime();
     const releaseProbe: Array<() => void> = [];
-    probeTelegram.mockImplementation(
-      async () =>
-        await new Promise((resolve) => {
-          releaseProbe.push(() =>
-            resolve({
-              ok: true,
-              status: null,
-              error: null,
-              elapsedMs: 12,
-            }),
-          );
-        }),
-    );
-    monitorTelegramProvider.mockResolvedValue(undefined);
+    let startedProbes = 0;
+    const runProbe = async (abortSignal?: AbortSignal) =>
+      await withTelegramStartupProbeSlot(abortSignal, async () => {
+        startedProbes += 1;
+        if (startedProbes <= 2) {
+          await new Promise<void>((resolve) => {
+            releaseProbe.push(resolve);
+          });
+        }
+      });
 
-    const first = startTelegramAccount("alpha");
-    const second = startTelegramAccount("bravo");
+    const first = runProbe();
+    const second = runProbe();
     const abortQueued = new AbortController();
-    const queued = startTelegramAccount("charlie", {}, abortQueued.signal);
-
-    await waitForCondition(
-      () => probeTelegram.mock.calls.length === 2,
-      "expected startup probe slots to fill",
+    const queued = runProbe(abortQueued.signal).then(
+      () => undefined,
+      (error: unknown) => error,
     );
-    abortQueued.abort();
-    await expect(queued.task).resolves.toBeUndefined();
-
-    for (const release of releaseProbe.splice(0)) {
-      release();
+    try {
+      await waitForMicrotaskCondition(
+        () => releaseProbe.length === 2,
+        "expected startup probe slots to fill",
+      );
+      abortQueued.abort();
+    } finally {
+      abortQueued.abort();
+      await releaseStartupProbeControls(releaseProbe);
     }
-    await Promise.all([first.task, second.task]);
-    expect(probeTelegram).toHaveBeenCalledTimes(2);
-    expect(monitorTelegramProvider).toHaveBeenCalledTimes(2);
+    await Promise.all([first, second]);
+    await expect(queued).resolves.toMatchObject({
+      message: "telegram startup probe wait aborted",
+    });
+    expect(startedProbes).toBe(2);
   });
 
   it("releases a stopped stale polling lease for the account token", async () => {

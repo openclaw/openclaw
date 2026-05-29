@@ -6,22 +6,72 @@ read_when:
 title: "xAI"
 ---
 
-OpenClaw ships a bundled `xai` provider plugin for Grok models.
+OpenClaw ships a bundled `xai` provider plugin for Grok models. For most
+users, the recommended path is Grok OAuth with an eligible SuperGrok or X Premium
+subscription. OpenClaw stays local-first: the Gateway, config, routing, and
+tools run on your machine, while Grok model requests authenticate through xAI
+and are sent to xAI's API.
 
-## Getting started
+OAuth does not require an xAI API key, and it does not require the Grok Build
+app. xAI may still show Grok Build on the consent screen because OpenClaw uses
+xAI's shared OAuth client.
+
+## Choose your setup path
+
+Use the path that matches your OpenClaw install state:
 
 <Steps>
-  <Step title="Choose auth">
-    Use either an API key from the [xAI console](https://console.x.ai/) or
-    xAI Grok OAuth with a SuperGrok subscription.
-  </Step>
-  <Step title="Sign in">
-    Set `XAI_API_KEY`, run the API-key wizard, or start the OAuth flow:
+  <Step title="New OpenClaw install">
+    Run onboarding with daemon install when you are setting up a new local
+    Gateway, then choose the xAI/Grok OAuth option in the model/auth step:
 
     ```bash
-    openclaw onboard --auth-choice xai-api-key
-    openclaw onboard --auth-choice xai-oauth
+    openclaw onboard --install-daemon
+    ```
+
+    On a VPS or over SSH, use device-code during onboarding:
+
+    ```bash
+    openclaw onboard --install-daemon --auth-choice xai-device-code
+    ```
+
+    OAuth does not require an xAI API key. OpenClaw does not require the Grok
+    Build app. xAI may still label the consent app as Grok Build because
+    OpenClaw uses xAI's shared OAuth client.
+
+  </Step>
+  <Step title="Existing OpenClaw install">
+    If OpenClaw is already configured, sign in to xAI only. Do not rerun full
+    onboarding or reinstall the daemon just to connect Grok:
+
+    ```bash
     openclaw models auth login --provider xai --method oauth
+    ```
+
+    Use the device-code flow instead when the Gateway runs over SSH, Docker, or
+    a VPS and a localhost browser callback is awkward:
+
+    ```bash
+    openclaw models auth login --provider xai --device-code
+    ```
+
+    To make Grok the default model after signing in, apply it separately:
+
+    ```bash
+    openclaw models set xai/grok-4.3
+    ```
+
+    Rerun full onboarding only if you intentionally want to change Gateway,
+    daemon, channel, workspace, or other setup choices.
+
+  </Step>
+  <Step title="API-key path">
+    API-key setup still works for xAI Console keys and for media surfaces that
+    require key-backed provider config:
+
+    ```bash
+    openclaw models auth login --provider xai --method api-key
+    export XAI_API_KEY=xai-...
     ```
 
   </Step>
@@ -36,11 +86,13 @@ OpenClaw ships a bundled `xai` provider plugin for Grok models.
 
 <Note>
 OpenClaw uses the xAI Responses API as the bundled xAI transport. The same
-credential from `openclaw onboard --auth-choice xai-api-key` or
-`openclaw onboard --auth-choice xai-oauth` can also power first-class
-`x_search`, remote `code_execution`, and xAI image/video generation.
+credential from `openclaw models auth login --provider xai --method oauth`,
+`openclaw models auth login --provider xai --device-code`, or
+`openclaw models auth login --provider xai --method api-key` can also power first-class
+`web_search`, `x_search`, remote `code_execution`, and xAI image/video generation.
 Speech and transcription currently require `XAI_API_KEY` or provider config.
-`XAI_API_KEY` or plugin web-search config can power Grok-backed `web_search` too.
+Grok-backed `web_search` prefers xAI OAuth and falls back to `XAI_API_KEY` or
+plugin web-search config.
 If you store an xAI key under `plugins.entries.xai.config.webSearch.apiKey`,
 the bundled xAI model provider reuses that key as a fallback too.
 Set `plugins.entries.xai.config.webSearch.baseUrl` to route Grok `web_search`
@@ -48,26 +100,47 @@ and, by default, `x_search` through an operator xAI Responses proxy.
 `code_execution` tuning lives under `plugins.entries.xai.config.codeExecution`.
 </Note>
 
+## OAuth troubleshooting
+
+- If browser OAuth cannot reach `127.0.0.1:56121`, use
+  `openclaw models auth login --provider xai --device-code`.
+- If sign-in succeeds but Grok is not the default model, run
+  `openclaw models set xai/grok-4.3`.
+- To inspect saved xAI auth profiles, run:
+
+  ```bash
+  openclaw models auth list --provider xai
+  openclaw models status
+  ```
+
+- xAI decides which accounts can receive OAuth API tokens. If an account is not
+  eligible, try the API-key path or check the subscription on xAI's side.
+
+<Tip>
+Use `xai-device-code` when signing in from SSH, Docker, or a VPS. OpenClaw
+prints an xAI URL and short code; finish sign-in in any local browser while the
+remote process polls xAI for the completed token exchange.
+</Tip>
+
 ## Built-in catalog
 
-OpenClaw includes these xAI model families out of the box:
+OpenClaw includes the current xAI chat models out of the box, ordered newest
+first in model pickers:
 
 | Family         | Model ids                                                                |
 | -------------- | ------------------------------------------------------------------------ |
-| Grok 3         | `grok-3`, `grok-3-fast`, `grok-3-mini`, `grok-3-mini-fast`               |
+| Grok Build 0.1 | `grok-build-0.1`                                                         |
 | Grok 4.3       | `grok-4.3`                                                               |
-| Grok 4         | `grok-4`, `grok-4-0709`                                                  |
-| Grok 4 Fast    | `grok-4-fast`, `grok-4-fast-non-reasoning`                               |
-| Grok 4.1 Fast  | `grok-4-1-fast`, `grok-4-1-fast-non-reasoning`                           |
 | Grok 4.20 Beta | `grok-4.20-beta-latest-reasoning`, `grok-4.20-beta-latest-non-reasoning` |
-| Grok Code      | `grok-code-fast-1`                                                       |
 
-The plugin also forward-resolves newer `grok-4*` and `grok-code-fast*` ids when
-they follow the same API shape.
+The plugin still forward-resolves older Grok 3, Grok 4, Grok 4 Fast, Grok 4.1
+Fast, and Grok Code slugs for existing configs. Official Grok Code Fast aliases
+normalize to `grok-build-0.1`; OpenClaw no longer shows the other retired
+upstream slugs in the selectable catalog.
 
 <Tip>
-`grok-4.3`, `grok-4-fast`, `grok-4-1-fast`, and the `grok-4.20-beta-*`
-variants are the current image-capable Grok refs in the bundled catalog.
+Use `grok-4.3` for general chat and `grok-build-0.1` for build/coding-focused
+workloads unless you explicitly need a Grok 4.20 beta alias.
 </Tip>
 
 ## OpenClaw feature coverage
@@ -119,6 +192,9 @@ Legacy aliases still normalize to the canonical bundled ids:
 
 | Legacy alias              | Canonical id                          |
 | ------------------------- | ------------------------------------- |
+| `grok-code-fast-1`        | `grok-build-0.1`                      |
+| `grok-code-fast`          | `grok-build-0.1`                      |
+| `grok-code-fast-1-0825`   | `grok-build-0.1`                      |
 | `grok-4-fast-reasoning`   | `grok-4-fast`                         |
 | `grok-4-1-fast-reasoning` | `grok-4-1-fast`                       |
 | `grok-4.20-reasoning`     | `grok-4.20-beta-latest-reasoning`     |
@@ -128,10 +204,11 @@ Legacy aliases still normalize to the canonical bundled ids:
 
 <AccordionGroup>
   <Accordion title="Web search">
-    The bundled `grok` web-search provider can use `XAI_API_KEY` or a plugin
-    web-search key:
+    The bundled `grok` web-search provider prefers xAI OAuth, then falls back
+    to `XAI_API_KEY` or a plugin web-search key:
 
     ```bash
+    openclaw models auth login --provider xai --method oauth
     openclaw config set tools.web.search.provider grok
     ```
 
@@ -150,6 +227,8 @@ Legacy aliases still normalize to the canonical bundled ids:
       using `reference_image` roles, 2-10 seconds for extension
     - Reference-image generation: set `imageRoles` to `reference_image` for
       every supplied image; xAI accepts up to 7 such images
+    - Default operation timeout: 600 seconds unless `video_generate.timeoutMs`
+      or `agents.defaults.videoGenerationModel.timeoutMs` is set
 
     <Warning>
     Local video buffers are not accepted. Use remote `http(s)` URLs for
@@ -183,12 +262,14 @@ Legacy aliases still normalize to the canonical bundled ids:
     `image_generate` tool.
 
     - Default image model: `xai/grok-imagine-image`
-    - Additional model: `xai/grok-imagine-image-pro`
+    - Additional model: `xai/grok-imagine-image-quality`
     - Modes: text-to-image and reference-image edit
     - Reference inputs: one `image` or up to five `images`
     - Aspect ratios: `1:1`, `16:9`, `9:16`, `4:3`, `3:4`, `2:3`, `3:2`
     - Resolutions: `1K`, `2K`
     - Count: up to 4 images
+    - Default operation timeout: 600 seconds unless `image_generate.timeoutMs`
+      or `agents.defaults.imageGenerationModel.timeoutMs` is set
 
     OpenClaw asks xAI for `b64_json` image responses so generated media can be
     stored and delivered through the normal channel attachment path. Local
@@ -238,7 +319,7 @@ Legacy aliases still normalize to the canonical bundled ids:
           provider: "xai",
           providers: {
             xai: {
-              voiceId: "eve",
+              speakerVoiceId: "eve",
             },
           },
         },
@@ -417,9 +498,12 @@ Legacy aliases still normalize to the canonical bundled ids:
 
   <Accordion title="Known limits">
     - xAI auth can use an API key, environment variable, plugin config fallback,
-      or xAI Grok OAuth with a SuperGrok subscription. OAuth uses a local
-      callback on `127.0.0.1:56121`; for remote hosts, forward that port before
-      opening the sign-in URL.
+      browser OAuth, or device-code OAuth with an eligible xAI account. Browser
+      OAuth uses a local callback on `127.0.0.1:56121`; for remote hosts, use
+      `xai-device-code` unless you want to forward that port before opening the
+      sign-in URL. xAI decides which accounts can receive OAuth API tokens, and
+      the consent page may show Grok Build even though OpenClaw does not require
+      the Grok Build app.
     - `grok-4.20-multi-agent-experimental-beta-0304` is not supported on the
       normal xAI provider path because it requires a different upstream API
       surface than the standard OpenClaw xAI transport.

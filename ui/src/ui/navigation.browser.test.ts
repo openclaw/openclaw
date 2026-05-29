@@ -37,6 +37,20 @@ function expectButtonWithText(app: ReturnType<typeof mountApp>, text: string): H
   return button;
 }
 
+function createSessionsResult(sessions: Array<Record<string, unknown>>) {
+  return {
+    ts: 0,
+    path: "",
+    count: sessions.length,
+    defaults: { modelProvider: "openai", model: "gpt-5.5", contextTokens: null },
+    sessions: sessions.map((session) => ({
+      kind: "direct",
+      updatedAt: Date.now(),
+      ...session,
+    })),
+  };
+}
+
 async function confirmPendingGatewayChange(app: ReturnType<typeof mountApp>) {
   const confirmButton = expectButtonWithText(app, "Confirm");
   confirmButton.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
@@ -406,11 +420,11 @@ describe("control UI routing", () => {
     expect([...nav.classList]).toEqual(["shell-nav"]);
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
 
-    const link = expectElement(app, 'a.nav-item[href="/channels"]', HTMLAnchorElement);
+    const link = expectElement(app, 'a.nav-item[href="/config"]', HTMLAnchorElement);
     link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
 
     await app.updateComplete;
-    expect(app.tab).toBe("channels");
+    expect(app.tab).toBe("config");
     expect([...shell.classList]).toEqual(["shell"]);
 
     app.applySettings({ ...app.settings, navCollapsed: true });
@@ -431,6 +445,101 @@ describe("control UI routing", () => {
     expect(item.querySelector(".nav-item__text")).toBeNull();
     expect(app.querySelector(".sidebar-brand__copy")).toBeNull();
     expectElement(header, ".nav-collapse-toggle", HTMLElement);
+  });
+
+  it("hides child nav items when the active group is collapsed", async () => {
+    const app = mountApp("/chat");
+    await app.updateComplete;
+
+    app.applySettings({
+      ...app.settings,
+      navGroupsCollapsed: { ...app.settings.navGroupsCollapsed, chat: true },
+    });
+    await app.updateComplete;
+
+    const chatLink = expectElement(app, 'a.nav-item[href="/chat"]', HTMLAnchorElement);
+    const section = chatLink.closest(".nav-section");
+    expect(section).toBeInstanceOf(HTMLElement);
+    if (!(section instanceof HTMLElement)) {
+      throw new Error("Expected chat link to be inside a nav section");
+    }
+
+    expect([...section.classList]).toContain("nav-section--collapsed");
+    expect(
+      section
+        .querySelector<HTMLButtonElement>(".nav-section__label")
+        ?.getAttribute("aria-expanded"),
+    ).toBe("false");
+  });
+
+  it("shows recent sessions in the sidebar and switches through them", async () => {
+    const app = mountApp("/overview");
+    app.sessionKey = "agent:main:second";
+    app.sessionsResult = createSessionsResult([
+      { key: "global", kind: "global", label: "Global", updatedAt: Date.now() },
+      { key: "unknown", kind: "unknown", label: "Unknown", updatedAt: Date.now() - 10_000 },
+      { key: "cron:daily", kind: "cron", label: "Daily cron", updatedAt: Date.now() - 20_000 },
+      {
+        key: "agent:main:subagent:task",
+        label: "Subagent",
+        spawnedBy: "agent:main:second",
+        updatedAt: Date.now() - 25_000,
+      },
+      { key: "agent:main:first", label: "First workspace", updatedAt: Date.now() - 5 * 60_000 },
+      { key: "agent:main:second", label: "Second workspace", updatedAt: Date.now() - 30_000 },
+    ]) as typeof app.sessionsResult;
+    await app.updateComplete;
+
+    const recent = Array.from(app.querySelectorAll<HTMLAnchorElement>(".sidebar-recent-session"));
+    expect(recent.map((entry) => entry.textContent?.replace(/\s+/g, " ").trim())).toEqual([
+      "Second workspace just now",
+      "First workspace 5m ago",
+    ]);
+
+    recent[1]?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    await app.updateComplete;
+
+    expect(app.tab).toBe("chat");
+    expect(app.sessionKey).toBe("agent:main:first");
+    expect(window.location.pathname).toBe("/chat");
+    expect(window.location.search).toBe("?session=agent%3Amain%3Afirst");
+  });
+
+  it("creates a new chat session from the sidebar", async () => {
+    const app = mountApp("/overview");
+    app.sessionKey = "agent:main:main";
+    app.sessionsResult = createSessionsResult([
+      { key: "agent:main:main", label: "Main Session" },
+    ]) as typeof app.sessionsResult;
+    app.client = {
+      stop: vi.fn(),
+      request: vi.fn(async (method: string) => {
+        if (method === "sessions.create") {
+          return { key: "agent:main:fresh" };
+        }
+        if (method === "sessions.list") {
+          return createSessionsResult([
+            { key: "agent:main:fresh", label: "Fresh session" },
+            { key: "agent:main:main", label: "Main Session" },
+          ]);
+        }
+        return null;
+      }),
+    } as unknown as typeof app.client;
+    await app.updateComplete;
+
+    expectButtonWithText(app, "New session").click();
+
+    await vi.waitFor(() => {
+      expect(app.sessionKey).toBe("agent:main:fresh");
+    });
+    expect(app.tab).toBe("chat");
+    expect(window.location.pathname).toBe("/chat");
+    expect(app.client?.request).toHaveBeenCalledWith("sessions.create", {
+      agentId: "main",
+      parentSessionKey: "agent:main:main",
+      emitCommandHooks: true,
+    });
   });
 
   it("closes mobile chat controls on Escape, outside pointerdown, and tab changes", async () => {
@@ -502,22 +611,34 @@ describe("control UI routing", () => {
     expect(window.location.search).toBe("?session=agent%3Amain%3Asubagent%3Atask-123");
 
     const shell = expectElement(app, ".shell", HTMLElement);
+    const topbar = expectElement(app, ".topbar", HTMLElement);
+    const contentHeader = expectElement(app, ".content-header", HTMLElement);
     expect([...shell.classList]).toEqual(["shell", "shell--chat"]);
+    expect(topbar.hasAttribute("inert")).toBe(false);
+    expect(topbar.hasAttribute("aria-hidden")).toBe(false);
+    expect(contentHeader.hasAttribute("inert")).toBe(false);
+    expect(contentHeader.hasAttribute("aria-hidden")).toBe(false);
 
     const toggle = expectElement(app, 'button[title^="Toggle focus mode"]', HTMLButtonElement);
     toggle.click();
 
     await app.updateComplete;
     expect([...shell.classList]).toEqual(["shell", "shell--chat", "shell--chat-focus"]);
+    expect(topbar.hasAttribute("inert")).toBe(true);
+    expect(topbar.getAttribute("aria-hidden")).toBe("true");
+    expect(contentHeader.hasAttribute("inert")).toBe(true);
+    expect(contentHeader.getAttribute("aria-hidden")).toBe("true");
 
-    const channelsLink = expectElement(app, 'a.nav-item[href="/channels"]', HTMLAnchorElement);
-    channelsLink.dispatchEvent(
-      new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }),
-    );
+    app.setTab("channels");
 
     await app.updateComplete;
     expect(app.tab).toBe("channels");
     expect([...shell.classList]).toEqual(["shell"]);
+    expect(topbar.hasAttribute("inert")).toBe(false);
+    expect(topbar.hasAttribute("aria-hidden")).toBe(false);
+    const channelsContentHeader = expectElement(app, ".content-header", HTMLElement);
+    expect(channelsContentHeader.hasAttribute("inert")).toBe(false);
+    expect(channelsContentHeader.hasAttribute("aria-hidden")).toBe(false);
 
     const chatLink = expectElement(app, 'a.nav-item[href="/chat"]', HTMLAnchorElement);
     chatLink.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
@@ -525,6 +646,11 @@ describe("control UI routing", () => {
     await app.updateComplete;
     expect(app.tab).toBe("chat");
     expect([...shell.classList]).toEqual(["shell", "shell--chat", "shell--chat-focus"]);
+    expect(topbar.hasAttribute("inert")).toBe(true);
+    expect(topbar.getAttribute("aria-hidden")).toBe("true");
+    const focusedContentHeader = expectElement(app, ".content-header", HTMLElement);
+    expect(focusedContentHeader.hasAttribute("inert")).toBe(true);
+    expect(focusedContentHeader.getAttribute("aria-hidden")).toBe("true");
   });
 
   it("auto-scrolls chat history to the latest message", async () => {

@@ -1,10 +1,12 @@
 import { execFile, spawnSync } from "node:child_process";
 import fs, { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, test } from "vitest";
 import { isScannable, scanDirectoryWithSummary } from "../security/skill-scanner.js";
+import { expectNoReaddirSyncDuring } from "../test-utils/fs-scan-assertions.js";
+import { listGitTrackedFiles, toRepoPath, toRepoRelativePath } from "../test-utils/repo-files.js";
 
 type NpmPackFile = {
   path?: unknown;
@@ -20,13 +22,14 @@ type PublishablePluginPackage = {
 };
 
 const execFileAsync = promisify(execFile);
-const PACKAGE_SCAN_CONCURRENCY = 12;
-
 const REQUIRED_REVIEWED_PUBLISHABLE_CRITICAL_FINDINGS = new Set([
   "@openclaw/acpx:dangerous-exec:src/codex-auth-bridge.ts",
   "@openclaw/acpx:dangerous-exec:src/runtime-internals/mcp-proxy.mjs",
+  "@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server/http.ts",
+  "@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server/processes.ts",
   "@openclaw/codex:dangerous-exec:src/app-server/transport-stdio.ts",
   "@openclaw/codex:dangerous-exec:src/node-cli-sessions.ts",
+  "@openclaw/discord:dangerous-exec:src/voice/audio.ts",
   "@openclaw/google-meet:dangerous-exec:src/node-host.ts",
   "@openclaw/google-meet:dangerous-exec:src/realtime.ts",
   "@openclaw/matrix:dangerous-exec:src/matrix/deps.ts",
@@ -42,14 +45,6 @@ const OPTIONAL_REVIEWED_PUBLISHABLE_DIST_CRITICAL_FINDINGS = new Set([
   "@openclaw/slack:dynamic-code-execution:dist/outbound-payload.test-harness-<hash>.js",
   "@openclaw/voice-call:dangerous-exec:dist/runtime-entry-<hash>.js",
 ]);
-
-const tempDirs: string[] = [];
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
 
 function parseNpmPackFiles(raw: string, packageName: string): string[] {
   const parsed = JSON.parse(raw) as unknown;
@@ -114,7 +109,6 @@ function stageScannerRelevantPackedFiles(
   packedFiles: readonly string[],
 ): string {
   const stageDir = mkdtempSync(join(tmpdir(), "openclaw-plugin-npm-scan-"));
-  tempDirs.push(stageDir);
 
   for (const packedPath of packedFiles) {
     if (!isScannerWalkedPackedPath(packedPath)) {
@@ -156,20 +150,7 @@ function listExternalPluginPackageDirs(): string[] | null {
 }
 
 function listGitExtensionPackageFiles(): string[] | null {
-  const result = spawnSync("git", ["ls-files", "--", "extensions/*/package.json"], {
-    cwd: process.cwd(),
-    encoding: "utf8",
-    maxBuffer: 1024 * 1024,
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  if (result.status !== 0) {
-    return null;
-  }
-  return result.stdout
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .toSorted();
+  return listGitTrackedFiles({ pathspecs: "extensions/*/package.json" });
 }
 
 function listFindExtensionPackageFiles(): string[] | null {
@@ -190,7 +171,7 @@ function listFindExtensionPackageFiles(): string[] | null {
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.length > 0)
-    .map((file) => relative(process.cwd(), file).split(sep).join("/"))
+    .map((file) => toRepoRelativePath(process.cwd(), file))
     .toSorted();
 }
 
@@ -223,27 +204,6 @@ function collectPublishablePluginPackages(): PublishablePluginPackage[] {
     .toSorted((left, right) => left.packageName.localeCompare(right.packageName));
 }
 
-async function mapWithConcurrency<T, U>(
-  items: readonly T[],
-  concurrency: number,
-  fn: (item: T) => Promise<U>,
-): Promise<U[]> {
-  const results: U[] = [];
-  results.length = items.length;
-  let nextIndex = 0;
-  const workerCount = Math.min(concurrency, items.length);
-  await Promise.all(
-    Array.from({ length: workerCount }, async () => {
-      while (nextIndex < items.length) {
-        const index = nextIndex;
-        nextIndex += 1;
-        results[index] = await fn(items[index]);
-      }
-    }),
-  );
-  return results;
-}
-
 async function scanPublishablePluginPackage(plugin: PublishablePluginPackage): Promise<{
   reviewedCriticalFindings: string[];
   expectedReviewedCriticalFindings: string[];
@@ -262,18 +222,21 @@ async function scanPublishablePluginPackage(plugin: PublishablePluginPackage): P
     }
   }
   const stageDir = stageScannerRelevantPackedFiles(plugin.packageDir, packedFiles);
-  const summary = await scanDirectoryWithSummary(stageDir, {
-    excludeTestFiles: true,
-    maxFiles: 10_000,
-  });
+  let summary: Awaited<ReturnType<typeof scanDirectoryWithSummary>>;
+  try {
+    summary = await scanDirectoryWithSummary(stageDir, {
+      excludeTestFiles: true,
+      maxFiles: 10_000,
+    });
+  } finally {
+    rmSync(stageDir, { recursive: true, force: true });
+  }
 
   for (const finding of summary.findings) {
     if (finding.severity !== "critical") {
       continue;
     }
-    const packedPath = normalizePackedFindingPath(
-      relative(stageDir, finding.file).split(sep).join("/"),
-    );
+    const packedPath = normalizePackedFindingPath(toRepoPath(relative(stageDir, finding.file)));
     const key = `${plugin.packageName}:${finding.ruleId}:${packedPath}`;
     if (
       REQUIRED_REVIEWED_PUBLISHABLE_CRITICAL_FINDINGS.has(key) ||
@@ -293,46 +256,70 @@ async function scanPublishablePluginPackage(plugin: PublishablePluginPackage): P
 }
 
 describe("publishable plugin npm package install security scan", () => {
+  const publishablePluginPackages = collectPublishablePluginPackages();
+  const scanResultsByPackageName = new Map<
+    string,
+    Awaited<ReturnType<typeof scanPublishablePluginPackage>>
+  >();
+
+  beforeAll(async () => {
+    const results = await Promise.all(
+      publishablePluginPackages.map(async (plugin) => ({
+        packageName: plugin.packageName,
+        result: await scanPublishablePluginPackage(plugin),
+      })),
+    );
+    for (const { packageName, result } of results) {
+      scanResultsByPackageName.set(packageName, result);
+    }
+  });
+
+  it("covers every package with required reviewed critical findings", () => {
+    const publishablePackageNames = new Set(
+      publishablePluginPackages.map((plugin) => plugin.packageName),
+    );
+    const missingPackages = [
+      ...new Set(
+        [...REQUIRED_REVIEWED_PUBLISHABLE_CRITICAL_FINDINGS].map((key) =>
+          key.slice(0, key.indexOf(":")),
+        ),
+      ),
+    ].filter((packageName) => !publishablePackageNames.has(packageName));
+
+    expect(missingPackages.toSorted()).toStrictEqual([]);
+  });
+
   it("lists publishable plugin packages without scanning extension directories in-process", () => {
-    const readDir = vi.spyOn(fs, "readdirSync");
-    try {
+    expectNoReaddirSyncDuring(() => {
       const packages = collectPublishablePluginPackages();
 
       expect(packages.length).toBeGreaterThan(0);
       expect(
-        packages.every((plugin) => plugin.packageDir.split(sep).join("/").startsWith("extensions/")),
+        packages.every((plugin) => toRepoPath(plugin.packageDir).startsWith("extensions/")),
       ).toBe(true);
-      expect(readDir).not.toHaveBeenCalled();
-    } finally {
-      readDir.mockRestore();
-    }
+    });
   });
 
-  it("keeps npm-published plugin files clear of unexpected critical hits", async () => {
-    const unexpectedCriticalFindings: string[] = [];
-    const reviewedCriticalFindings = new Set<string>();
-    const expectedReviewedCriticalFindings = new Set(
-      REQUIRED_REVIEWED_PUBLISHABLE_CRITICAL_FINDINGS,
-    );
-
-    const packageResults = await mapWithConcurrency(
-      collectPublishablePluginPackages(),
-      PACKAGE_SCAN_CONCURRENCY,
-      scanPublishablePluginPackage,
-    );
-    for (const result of packageResults) {
+  test.concurrent.each(publishablePluginPackages)(
+    "keeps $packageName files clear of unexpected critical hits",
+    async (plugin) => {
+      const result = scanResultsByPackageName.get(plugin.packageName);
+      if (!result) {
+        throw new Error(`Missing package scan result for ${plugin.packageName}`);
+      }
+      const expectedReviewedCriticalFindings = new Set(
+        [...REQUIRED_REVIEWED_PUBLISHABLE_CRITICAL_FINDINGS].filter((key) =>
+          key.startsWith(`${plugin.packageName}:`),
+        ),
+      );
       for (const key of result.expectedReviewedCriticalFindings) {
         expectedReviewedCriticalFindings.add(key);
       }
-      for (const key of result.reviewedCriticalFindings) {
-        reviewedCriticalFindings.add(key);
-      }
-      unexpectedCriticalFindings.push(...result.unexpectedCriticalFindings);
-    }
 
-    expect(unexpectedCriticalFindings.toSorted()).toStrictEqual([]);
-    expect([...reviewedCriticalFindings].toSorted()).toEqual(
-      [...expectedReviewedCriticalFindings].toSorted(),
-    );
-  });
+      expect(result.unexpectedCriticalFindings.toSorted()).toStrictEqual([]);
+      expect(result.reviewedCriticalFindings.toSorted()).toEqual(
+        [...expectedReviewedCriticalFindings].toSorted(),
+      );
+    },
+  );
 });

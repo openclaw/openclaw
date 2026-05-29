@@ -5,13 +5,15 @@ import { loadPersistedAuthProfileStore } from "../../agents/auth-profiles/persis
 import { listProfilesForProvider } from "../../agents/auth-profiles/profiles.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { resolveProfileUnusableUntilForDisplay } from "../../agents/auth-profiles/usage.js";
-import { isNonSecretApiKeyMarker } from "../../agents/model-auth-markers.js";
+import { isNonSecretApiKeyMarker, isOAuthApiKeyMarker } from "../../agents/model-auth-markers.js";
 import {
   getCustomProviderApiKey,
   resolveEnvApiKey,
   resolveUsableCustomProviderApiKey,
 } from "../../agents/model-auth.js";
+import { normalizeProviderIdForAuth } from "../../agents/provider-id.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ProviderAuthEvidence } from "../../secrets/provider-env-vars.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -68,6 +70,9 @@ export function resolveProviderAuthOverview(params: {
   agentDir?: string;
   workspaceDir?: string;
   syntheticAuth?: { value: string; source: string };
+  aliasMap?: Readonly<Record<string, string>>;
+  envCandidateMap?: Readonly<Record<string, readonly string[]>>;
+  authEvidenceMap?: Readonly<Record<string, readonly ProviderAuthEvidence[]>>;
 }): ProviderAuthOverview {
   const { provider, cfg, store } = params;
   const now = Date.now();
@@ -123,10 +128,22 @@ export function resolveProviderAuthOverview(params: {
   const oauthCount = profiles.filter((id) => store.profiles[id]?.type === "oauth").length;
   const tokenCount = profiles.filter((id) => store.profiles[id]?.type === "token").length;
   const apiKeyCount = profiles.filter((id) => store.profiles[id]?.type === "api_key").length;
+  const normalizedProvider = normalizeProviderIdForAuth(provider);
+  const authLookupProvider = params.aliasMap?.[normalizedProvider] ?? normalizedProvider;
+  const hasPrecomputedCandidates =
+    params.envCandidateMap !== undefined &&
+    Object.hasOwn(params.envCandidateMap, authLookupProvider);
+  const hasPrecomputedEvidence =
+    params.authEvidenceMap !== undefined &&
+    Object.hasOwn(params.authEvidenceMap, authLookupProvider);
 
   const envKey = resolveEnvApiKey(provider, process.env, {
     config: cfg,
     workspaceDir: params.workspaceDir,
+    aliasMap: params.aliasMap,
+    candidateMap: params.envCandidateMap,
+    authEvidenceMap: params.authEvidenceMap,
+    skipSetupProviderFallback: hasPrecomputedCandidates || hasPrecomputedEvidence,
   });
   const customKey = getCustomProviderApiKey(cfg, provider);
   const usableCustomKey = resolveUsableCustomProviderApiKey({ cfg, provider });
@@ -159,6 +176,9 @@ export function resolveProviderAuthOverview(params: {
     }
     if (params.syntheticAuth) {
       return { kind: "synthetic", detail: params.syntheticAuth.source };
+    }
+    if (customKey && isOAuthApiKeyMarker(customKey)) {
+      return { kind: "models.json", detail: formatMarkerOrSecret(customKey) };
     }
     return { kind: "missing", detail: "missing" };
   })();
