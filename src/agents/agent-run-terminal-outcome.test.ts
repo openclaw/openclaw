@@ -72,6 +72,24 @@ describe("agent run terminal outcome", () => {
     });
   });
 
+  it("prefers hard timeout evidence over default rpc cancellation metadata", () => {
+    const timeout = buildAgentRunTerminalOutcome({
+      status: "timeout",
+      stopReason: "rpc",
+      timeoutPhase: "provider",
+      providerStarted: true,
+      endedAt: 200,
+    });
+    const earlierCompletion = buildAgentRunTerminalOutcome({
+      status: "ok",
+      endedAt: 190,
+    });
+
+    expect(timeout.reason).toBe("hard_timeout");
+    expect(timeout.status).toBe("timeout");
+    expect(mergeAgentRunTerminalOutcome(timeout, earlierCompletion)).toBe(earlierCompletion);
+  });
+
   it("keeps a hard timeout over later aborts or failures for the same run", () => {
     const timeout = buildAgentRunTerminalOutcome({
       status: "timeout",

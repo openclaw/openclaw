@@ -79,16 +79,16 @@ export function buildAgentRunTerminalOutcome(
   const timeoutPhase = normalizeAgentRunTimeoutPhase(input.timeoutPhase);
   const providerStarted = normalizeProviderStarted(input.providerStarted);
   const rawError = asNonEmptyString(input.error);
-  const aborted = isAbortedAgentStopReason(stopReason);
-  // ACP/model `stop` can be a normal successful finish. Treat rpc/stop as
-  // cancellation only for non-success terminal payloads from abort paths.
-  const cancelled = input.status !== "ok" && isCancellationStopReason(stopReason);
-  const blocked = isBlockedLivenessState(livenessState);
   // Queue and gateway-draining timeouts are wait-layer uncertainty. Only
   // provider-started or provider-phase timeouts are sticky child-run facts.
   const hardTimeout =
     input.status === "timeout" &&
     (isHardAgentRunTimeoutPhase(timeoutPhase) || providerStarted === true);
+  const aborted = isAbortedAgentStopReason(stopReason);
+  // ACP/model `stop` can be a normal successful finish. Treat rpc/stop as
+  // cancellation only for non-success terminal payloads from abort paths.
+  const cancelled = input.status !== "ok" && isCancellationStopReason(stopReason);
+  const blocked = isBlockedLivenessState(livenessState);
   const error = blocked
     ? formatBlockedLivenessError(rawError)
     : aborted && !rawError
@@ -96,17 +96,17 @@ export function buildAgentRunTerminalOutcome(
       : rawError;
   const reason: AgentRunTerminalReason = blocked
     ? "blocked"
-    : aborted
-      ? "aborted"
-      : cancelled
-        ? "cancelled"
-        : input.status === "timeout"
-          ? hardTimeout
-            ? "hard_timeout"
-            : "timed_out"
-          : input.status === "error"
-            ? "failed"
-            : "completed";
+    : hardTimeout
+      ? "hard_timeout"
+      : aborted
+        ? "aborted"
+        : cancelled
+          ? "cancelled"
+          : input.status === "timeout"
+            ? "timed_out"
+            : input.status === "error"
+              ? "failed"
+              : "completed";
   return {
     reason,
     status:
