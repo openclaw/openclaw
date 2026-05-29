@@ -178,4 +178,39 @@ describe("reply_payload_sending hook runner", () => {
     expect((result?.payload as ReplyPayload | undefined)?.trustedLocalMedia).toBe(true);
     expect(result?.payload).toMatchObject({ text: "plugin changed" });
   });
+
+  it("drops trusted local media when plugins change media refs", async () => {
+    const handler = vi
+      .fn()
+      .mockImplementation(async (event: { payload: PluginHookReplyPayload }) => {
+        expect("trustedLocalMedia" in event.payload).toBe(false);
+        return {
+          payload: {
+            ...event.payload,
+            mediaUrl: "file:///tmp/plugin-replaced.wav",
+          },
+        };
+      });
+    const { runner } = createHookRunnerWithRegistry([
+      { hookName: "reply_payload_sending", handler },
+    ]);
+
+    const result = await runner.runReplyPayloadSending(
+      {
+        ...replyPayloadSendingEvent,
+        payload: {
+          text: "hello",
+          mediaUrl: "file:///tmp/runtime-owned.wav",
+          trustedLocalMedia: true,
+        } as unknown as PluginHookReplyPayload,
+      },
+      replyPayloadSendingCtx,
+    );
+
+    expect((result?.payload as ReplyPayload | undefined)?.trustedLocalMedia).toBeUndefined();
+    expect(result?.payload).toMatchObject({
+      text: "hello",
+      mediaUrl: "file:///tmp/plugin-replaced.wav",
+    });
+  });
 });

@@ -314,16 +314,38 @@ export function createHookRunner(
     prev === true || next === true ? true : undefined;
   const toPluginReplyPayload = (payload: ReplyPayload): PluginHookReplyPayload => {
     const { trustedLocalMedia: _trustedLocalMedia, ...visiblePayload } = payload;
-    return visiblePayload;
+    return structuredClone(visiblePayload);
+  };
+  const areMediaUrlArraysEqual = (
+    left: readonly string[] | undefined,
+    right: readonly string[] | undefined,
+  ): boolean => {
+    const normalizedLeft = left ?? [];
+    const normalizedRight = right ?? [];
+    return (
+      normalizedLeft.length === normalizedRight.length &&
+      normalizedLeft.every((value, index) => value === normalizedRight[index])
+    );
+  };
+  const preservesTrustedMediaRefs = (
+    previous: ReplyPayload,
+    next: PluginHookReplyPayload,
+  ): boolean => {
+    return (
+      previous.trustedLocalMedia === true &&
+      previous.mediaUrl === next.mediaUrl &&
+      areMediaUrlArraysEqual(previous.mediaUrls, next.mediaUrls)
+    );
   };
   const acceptPluginReplyPayload = (
     previous: ReplyPayload,
     next: PluginHookReplyPayload,
   ): ReplyPayload => {
     const { trustedLocalMedia: _trustedLocalMedia, ...safePayload } = next as ReplyPayload;
-    return previous.trustedLocalMedia === true
-      ? { ...safePayload, trustedLocalMedia: true }
-      : safePayload;
+    const clonedPayload = structuredClone(safePayload);
+    return preservesTrustedMediaRefs(previous, clonedPayload)
+      ? { ...clonedPayload, trustedLocalMedia: true }
+      : clonedPayload;
   };
 
   const mergeBeforeModelResolve = (
