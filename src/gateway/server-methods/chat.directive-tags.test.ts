@@ -1012,6 +1012,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     const [ok] = lastRespondCall(respond) ?? [];
     expect(ok).toBe(true);
+    expect(mockState.lastDispatchCtx).toMatchObject({
+      SessionKey: "global",
+      AgentId: "work",
+    });
     expect(mockState.loadSessionEntryCalls[0]).toEqual({
       rawKey: "main",
       opts: { agentId: "work" },
