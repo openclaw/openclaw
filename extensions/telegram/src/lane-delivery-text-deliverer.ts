@@ -76,6 +76,7 @@ type DeliverLaneTextParams = {
   payload: ReplyPayload;
   infoKind: string;
   buttons?: TelegramInlineButtons;
+  requireExistingPreviewFinalization?: boolean;
 };
 
 function result(
@@ -265,18 +266,25 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     payload: ReplyPayload,
     isFinal: boolean,
     buttons?: TelegramInlineButtons,
+    options?: { requireExistingPreviewFinalization?: boolean },
   ): Promise<LaneDeliveryResult | undefined> => {
     const stream = lane.stream;
     if (!stream || text.length === 0 || payload.isError) {
       return undefined;
     }
+    const requireExistingPreviewFinalization =
+      isFinal && options?.requireExistingPreviewFinalization === true;
 
     const chunks =
       text.length > params.draftMaxChars
         ? compactChunks(params.splitFinalTextForStream?.(text) ?? [])
         : [text];
     const [firstChunk, ...remainingChunks] = chunks;
-    if (!firstChunk || firstChunk.length > params.draftMaxChars) {
+    if (
+      !firstChunk ||
+      firstChunk.length > params.draftMaxChars ||
+      (requireExistingPreviewFinalization && remainingChunks.length > 0)
+    ) {
       return undefined;
     }
     const finalText = text.trimEnd();
@@ -292,7 +300,11 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     const finalizeDeliveredPrefix = async (
       deliveredStreamText: string,
       messageId: number,
-    ): Promise<LaneDeliveryResult> => {
+    ): Promise<LaneDeliveryResult | undefined> => {
+      const suffix = finalText.slice(deliveredStreamText.length);
+      if (suffix.trim().length > 0 && requireExistingPreviewFinalization) {
+        return undefined;
+      }
       lane.finalized = true;
       params.markDelivered();
       let buttonsAttached = false;
@@ -310,7 +322,6 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
           }
         }
       }
-      const suffix = finalText.slice(deliveredStreamText.length);
       if (suffix.trim().length > 0) {
         for (const chunk of compactChunks(params.splitFinalTextForStream?.(suffix) ?? [])) {
           if (chunk.trim().length === 0) {
@@ -456,15 +467,21 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     payload,
     infoKind,
     buttons,
+    requireExistingPreviewFinalization,
   }: DeliverLaneTextParams): Promise<LaneDeliveryResult> => {
     const lane = params.lanes[laneName];
     const reply = resolveSendableOutboundReplyParts(payload, { text });
     const isFinal = infoKind === "final";
     const streamed = !reply.hasMedia
-      ? await streamText(laneName, lane, text, payload, isFinal, buttons)
+      ? await streamText(laneName, lane, text, payload, isFinal, buttons, {
+          requireExistingPreviewFinalization,
+        })
       : undefined;
     if (streamed) {
       return streamed;
+    }
+    if (isFinal && requireExistingPreviewFinalization) {
+      return result("skipped");
     }
 
     if (
@@ -482,6 +499,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         textOnlyPayload(payload),
         true,
         buttons,
+        { requireExistingPreviewFinalization: false },
       );
       if (finalizedPreview) {
         const stripButtons =

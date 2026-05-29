@@ -19,6 +19,10 @@ import { dispatchTelegramMessage } from "./bot-message-dispatch.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import { buildTelegramThreadParams } from "./bot/helpers.js";
 import type { TelegramContext, TelegramStreamMode } from "./bot/types.js";
+import {
+  createTelegramLongTurnProgressState,
+  TELEGRAM_LONG_TURN_SOFT_DEADLINE_MS,
+} from "./long-turn-progress.js";
 import type { TelegramReplyChainEntry } from "./message-cache.js";
 
 const telegramInboundLog = createSubsystemLogger("gateway/channels/telegram").child("inbound");
@@ -50,6 +54,8 @@ type TelegramMessageProcessorDeps = Omit<
 export type TelegramMessageProcessorLifecycle = {
   onDispatchStart?: () => Promise<void> | void;
 };
+
+type TelegramDispatchOutcome = { status: "completed" } | { status: "failed"; error: unknown };
 
 export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDeps) => {
   const {
@@ -180,19 +186,85 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       }),
     );
     await lifecycle?.onDispatchStart?.();
+    const dispatchParams = {
+      context,
+      bot,
+      cfg,
+      runtime,
+      replyToMode,
+      streamMode,
+      textLimit,
+      telegramCfg,
+      telegramDeps,
+      opts,
+    };
     try {
-      await dispatchTelegramMessage({
-        context,
-        bot,
-        cfg,
-        runtime,
-        replyToMode,
-        streamMode,
-        textLimit,
-        telegramCfg,
-        telegramDeps,
-        opts,
-      });
+      const longTurnProgressState = createTelegramLongTurnProgressState();
+      const dispatchPromise = Promise.resolve().then(() =>
+        dispatchTelegramMessage({
+          ...dispatchParams,
+          longTurnProgressState,
+        }),
+      );
+      const dispatchOutcome: Promise<TelegramDispatchOutcome> = dispatchPromise.then(
+        () => ({ status: "completed" }),
+        (error: unknown) => ({ status: "failed", error }),
+      );
+      const canDetachForLongTurn =
+        context.ctxPayload.InboundEventKind !== "room_event" && !context.isGroup;
+      let softDeadlineTimer: ReturnType<typeof setTimeout> | undefined;
+      const softDeadline = canDetachForLongTurn
+        ? new Promise<"soft-deadline">((resolve) => {
+            softDeadlineTimer = setTimeout(
+              () => resolve("soft-deadline"),
+              TELEGRAM_LONG_TURN_SOFT_DEADLINE_MS,
+            );
+          })
+        : undefined;
+      const firstOutcome = softDeadline
+        ? await Promise.race([dispatchOutcome, softDeadline])
+        : await dispatchOutcome;
+      if (softDeadlineTimer) {
+        clearTimeout(softDeadlineTimer);
+      }
+      if (firstOutcome === "soft-deadline") {
+        if (
+          longTurnProgressState.hasFinalDeliveryStarted() ||
+          !longTurnProgressState.canCreateProgressPreview()
+        ) {
+          const finalOutcome = await dispatchOutcome;
+          if (finalOutcome.status === "failed") {
+            throw finalOutcome.error;
+          }
+        } else {
+          longTurnProgressState.requestProgressPreview();
+          const progressOutcome = await Promise.race([
+            longTurnProgressState.waitForProgressPreview(),
+            dispatchOutcome,
+          ]);
+          if (progressOutcome === "ready") {
+            void dispatchOutcome.then(async (outcome) => {
+              if (outcome.status === "completed") {
+                return;
+              }
+              runtime.error?.(
+                danger(`telegram detached dispatch failed: ${String(outcome.error)}`),
+              );
+            });
+            return true;
+          }
+          if (progressOutcome === "unavailable") {
+            const finalOutcome = await dispatchOutcome;
+            if (finalOutcome.status === "failed") {
+              throw finalOutcome.error;
+            }
+          } else if (progressOutcome.status === "failed") {
+            throw progressOutcome.error;
+          }
+        }
+      } else if (firstOutcome.status === "failed") {
+        throw firstOutcome.error;
+      }
       if (ingressDebugEnabled && ingressReceivedAtMs) {
         logVerbose(
           `telegram ingress: chatId=${context.chatId} dispatchCompleteMs=${Date.now() - ingressReceivedAtMs}` +
